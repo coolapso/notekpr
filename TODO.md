@@ -18,8 +18,7 @@ phase has an *interim* fix and the track owns the real one.
 ## Status (end of 2026-10-19)
 
 Phases 1–3 are done, and Phase 4 except the OS keyring for CLI secrets
-[C-H9] (deferred) and partial acceptance of rejected push
-batches (left to R1). Redesign tracks: R5 mostly (encrypted IndexedDB copy,
+[C-H9] (deferred). Redesign tracks: R5 mostly (encrypted IndexedDB copy,
 per-tab unsent changes, opt-in offline start; shared notes not cached yet),
 R6 started (`state/` split),
 R7 done apart from a nightly fuzz job. R1, R2 and R3 are next, each in its
@@ -318,9 +317,9 @@ Nobody's notes may be locked in because a server or an app is unavailable.
       recipients even in exact-e-mail directory mode.
       (e-mail no longer shared; vault head_seq and member ids remain until R2)
 - [x] Store `email_verified`; only verified e-mails are searchable [S-L9].
-- [ ] `push` rejects a whole batch on the first bad update (too large, purged
+- [x] `push` rejects a whole batch on the first bad update (too large, purged
       note): accept the rest or name the failing update, so clients can set
-      exactly that one aside.
+      exactly that one aside — single refusals in `rejected` (R1).
 - [x] If the account-key upload succeeded but its response was lost and the
       page reloaded, the recovery key is never shown — kept in the tab's
       `sessionStorage` until confirmed and shown again after a reload, once
@@ -360,7 +359,7 @@ Suggested order: **R7 → R4 → R1 → R6 + R5 → R2 → R3** (R7 and R4 are c
 and independent; R1 first so R5, R6, R2 and R3 are implemented once instead
 of in two clients).
 
-### R1. One sync engine for all clients — separate session
+### R1. One sync engine for all clients
 
 The web client (`state/`) and the CLI (`session.rs`, `livesync.rs`)
 implement the same protocol twice; note sharing had to be built twice and
@@ -368,10 +367,20 @@ several review bugs exist twice. Build a platform-neutral sync crate (async,
 with traits for storage, transport and timers) used by the browser (wasm) and
 the desktop client, with one test suite.
 
-- [ ] Design the crate boundary: replica state, pending queue, catch-up,
-      live subscription, acks, key reloads, deferred content, snapshots,
-      presence.
-- [ ] Move the CLI onto it, then the web client.
+- [x] Design the crate boundary: `crates/sync` (`coolpsonotes-sync`), a
+      sans-IO engine next to `VaultReplica` (which keeps replica state, keys,
+      deferred content and acks): the outbox (merge unsent per object
+      [W-M9], hold oversized, size/count-bounded pushes, one push per
+      connection), acknowledgements and single refusals (server: `rejected`
+      in push answers [W-M3]), an older server's refused batch retried one by
+      one, rollback recovery, snapshot readiness, edit splitting. Sans-IO
+      instead of async traits: identical on wasm and tokio, tested without a
+      network (unit tests + a no-loss property test).
+- [x] Move the CLI onto it, then the web client.
+- [ ] Catch-up paging, live subscription bookkeeping, key-reload flows and
+      presence still live in each client (their transports differ: the CLI
+      catches up over REST and pushes over REST, the web does both over the
+      socket); move them once a second transport per client exists.
 - Resolves: oversized pushes [W-H5, C-H5], rejected batches [W-M3], pending
   persistence and key-reload edge cases [W-L9], connection handling [C-M1,
   C-H4, C-M10], document-epoch handling [C-L10], pending merge per object

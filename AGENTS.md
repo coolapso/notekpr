@@ -64,6 +64,8 @@ crates/core     crypto.rs (envelopes, HPKE, signatures) · keys.rs (account/devi
                 recovery/vault/document keys) · engine.rs (VaultReplica: apply,
                 encrypt, defer, snapshot; sharing helpers) · doc.rs (yrs CRDT index
                 + notes) · protocol.rs (every API/WS type) · markdown, search, paths, textdiff
+crates/sync     the client sync engine both clients use (sans-IO): outbox (merge, hold,
+                batch pushes, acks and refusals), rollback recovery, edit splitting
 crates/server   axum + SQLite. routes/ (REST) · ws.rs (WebSocket, subscriptions) ·
                 sync.rs (encrypted log, snapshots, key checks) · access.rs (who may
                 do what) · hub.rs (pub/sub) · auth.rs, oidc.rs · migrations/

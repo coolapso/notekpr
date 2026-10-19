@@ -30,6 +30,7 @@ alternatives were considered. The wire protocol is in
 | Crate | Role |
 |---|---|
 | `crates/core` | Everything security-sensitive or shared: cryptographic formats, key hierarchy, the CRDT document model (vault index + notes), protocol types, client engine logic (`engine.rs`), Markdown link/tag analysis, search, path rules. Compiled natively and to wasm32. |
+| `crates/sync` | The client sync engine both clients use (`coolpsonotes-sync`): what to upload next (unsent updates merged per object, held back when too large, size-bounded pushes), what acknowledgements and refusals mean, rollback recovery, snapshot readiness, splitting large edits. *Sans-IO*: clients do the networking, storage and timers and feed it what happened, so it is identical on wasm and tokio and tested without a network. |
 | `crates/server` | Headless sync server: OIDC relying party, sessions, OAuth device and client-credentials grants, users/devices/agents, vaults/members/key envelopes, the ordered encrypted log, snapshots, attachments, WebSocket fan-out, rate limiting, metrics, backup/restore. Works without the web client. |
 | `crates/web` | Browser client compiled to WebAssembly; served as static files by the server. Custom Markdown editor, all decryption in the browser. |
 | `crates/client` | Desktop/CLI client: login (device flow), enrollment, encrypted local replica, live sync daemon with plaintext Markdown mirror, export/import, agent gateway (local HTTP API). |
@@ -131,6 +132,16 @@ sequence they applied, receive a catch-up (`changes` pages) and then live
 updates. Local edits are batched (~120 ms), encrypted and pushed; the server's
 `ack` arrives in log order. Presence (cursor, open note) is relayed as
 encrypted ephemeral messages.
+
+**Uploads.** Both clients upload through the shared engine (`crates/sync`).
+Queued updates of one note that were never sent are merged (an offline
+session stays a handful of updates instead of one per keystroke), within the
+edit budget so a deliberately split paste stays split. Updates larger than the
+server's `max_update_bytes` are held back locally — never blocking the rest —
+and released once the limit allows. The server refuses single bad updates of
+a push (too large, purged object, outdated key) and stores the rest; the
+engine turns each refusal into the follow-up (hold, drop and keep a copy,
+reload keys and re-send).
 
 **Offline.** Unacknowledged updates are kept (browser: local storage, already
 encrypted; desktop: encrypted local store) and re-sent with the same ids after

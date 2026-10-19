@@ -1081,7 +1081,13 @@ pub async fn export_vault(vault: &str) {
             }),
         }
     }
-    let zip = zipfile::write(&entries);
+    let zip = match zipfile::write(&entries) {
+        Ok(z) => z,
+        Err(e) => {
+            error(format!("Export failed: {e}"));
+            return;
+        }
+    };
     let safe: String = name
         .chars()
         .map(|c| {

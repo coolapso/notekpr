@@ -2273,10 +2273,7 @@ async fn notes_have_own_keys_and_recipients_never_get_the_history_before_sharing
         )
         .collect();
     assert!(!epochs.is_empty());
-    assert!(
-        epochs.iter().all(|&e| e > FIRST_DOC_EPOCH),
-        "{epochs:x?}"
-    );
+    assert!(epochs.iter().all(|&e| e > FIRST_DOC_EPOCH), "{epochs:x?}");
     let n = NoteDoc::new();
     for s in &ch.snapshots {
         n.apply_update(&ring.decrypt(Purpose::Snapshot, "n", &s.payload).unwrap())

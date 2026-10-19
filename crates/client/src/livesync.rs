@@ -14,6 +14,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Result, anyhow};
 use coolpsonotes_core::crypto::{self, CryptoError};
 use coolpsonotes_core::engine::EngineError;
+use coolpsonotes_core::keys;
 use coolpsonotes_core::protocol::*;
 use futures::{SinkExt, StreamExt};
 use tokio::sync::watch;
@@ -322,13 +323,25 @@ fn spawn_push(hub: &Arc<Hub>, vault_id: &str) {
     });
 }
 
-/// Whether a ciphertext uses an epoch we do not hold yet (keys rotated).
-fn missing_epoch<'a>(
-    hub_vault: &crate::vault::Vault,
-    mut payloads: impl Iterator<Item = &'a [u8]>,
+/// Whether a ciphertext uses a key we do not hold yet: a newer vault-key
+/// epoch (rotated), or a document-key epoch (top bit set, an individually
+/// shared note) missing from that note's keyring. Document epochs are always
+/// "greater" than vault epochs, so comparing them with the vault's current
+/// epoch made every page with a shared note refetch all keys.
+pub(crate) fn missing_epoch<'a>(
+    v: &crate::vault::Vault,
+    mut items: impl Iterator<Item = (&'a str, &'a [u8])>,
 ) -> bool {
-    let current = hub_vault.replica.keyring.current_epoch().unwrap_or(0);
-    payloads.any(|p| crypto::sym_epoch(p).map(|e| e > current).unwrap_or(false))
+    let current = v.replica.keyring.current_epoch().unwrap_or(0);
+    items.any(|(object_id, payload)| match crypto::sym_epoch(payload) {
+        Ok(e) if keys::is_doc_epoch(e) => v
+            .replica
+            .doc_keys
+            .get(object_id)
+            .is_none_or(|ring| ring.get(e).is_none()),
+        Ok(e) => e > current,
+        Err(_) => false,
+    })
 }
 
 fn is_missing_epoch(e: &anyhow::Error) -> bool {
@@ -355,8 +368,13 @@ async fn handle(
                 let it = changes
                     .updates
                     .iter()
-                    .map(|u| u.payload.as_slice())
-                    .chain(changes.snapshots.iter().map(|s| s.payload.as_slice()));
+                    .map(|u| (u.object_id.as_str(), u.payload.as_slice()))
+                    .chain(
+                        changes
+                            .snapshots
+                            .iter()
+                            .map(|s| (s.object_id.as_str(), s.payload.as_slice())),
+                    );
                 missing_epoch(&g, it)
             };
             if needs_keys && let Err(e) = session.refresh_keys(&v).await {
@@ -573,4 +591,52 @@ async fn handle(
         | ServerMessage::Awareness { .. } => {}
     }
     Ok(None)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use coolpsonotes_core::crypto::Purpose;
+    use coolpsonotes_core::engine::{VaultMeta, VaultReplica};
+    use coolpsonotes_core::keys::{AccountSecret, FIRST_DOC_EPOCH, VaultKey, VaultKeyring};
+
+    #[test]
+    fn document_key_epochs_are_not_mistaken_for_rotations() {
+        let d = tempfile::tempdir().unwrap();
+        let account = AccountSecret::generate();
+        let meta = VaultMeta::named("T");
+        let (req, ring) = coolpsonotes_core::engine::new_vault(&account, "u1", &meta).unwrap();
+        let key = Arc::new(crate::secrets::LocalKey::load_or_create(d.path()).unwrap());
+        let store = crate::store::VaultStore::new(d.path().join("vaults"), key, &req.id).unwrap();
+        let mut replica = VaultReplica::new(&req.id, Role::Owner, ring, meta);
+        let mut doc = VaultKeyring::new(req.id.clone());
+        doc.insert(FIRST_DOC_EPOCH, VaultKey(crypto::random_bytes::<32>()));
+        replica.doc_keys.insert("shared".into(), doc);
+        let v = crate::vault::Vault::new(store, replica, "u1", false);
+        let shared = v
+            .replica
+            .encrypt_object(Purpose::Update, "shared", b"x")
+            .unwrap();
+        let plain = v
+            .replica
+            .encrypt_object(Purpose::Update, "plain", b"x")
+            .unwrap();
+        assert!(keys::is_doc_epoch(crypto::sym_epoch(&shared).unwrap()));
+        // Keys we hold: nothing to fetch (this used to refetch every page).
+        assert!(!missing_epoch(
+            &v,
+            [("shared", shared.as_slice()), ("plain", plain.as_slice())].into_iter()
+        ));
+        // A document key we lack, or a newer vault epoch: fetch.
+        assert!(missing_epoch(
+            &v,
+            [("other", shared.as_slice())].into_iter()
+        ));
+        let mut rotated = plain.clone();
+        rotated[1..5].copy_from_slice(&2u32.to_be_bytes());
+        assert!(missing_epoch(
+            &v,
+            [("plain", rotated.as_slice())].into_iter()
+        ));
+    }
 }

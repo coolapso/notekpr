@@ -19,7 +19,7 @@ use crate::cli::*;
 use crate::gateway::{self, Gateway};
 use crate::hub::{Hub, HubOptions};
 use crate::manage;
-use crate::mirror::Mirror;
+use crate::mirror::{Mirror, MirrorOptions};
 use crate::note_shares;
 use crate::ops;
 use crate::profile::{Dirs, ProfileStore};
@@ -1039,6 +1039,24 @@ async fn sync(ctx: &Ctx, a: SyncArgs) -> Result<()> {
         }
         None => None,
     };
+    // A remembered mirror directory that is gone is never re-created
+    // silently: every note in it would look deleted.
+    if a.dir.is_none()
+        && !a.restore_missing
+        && let Some(d) = &dir
+        && d.symlink_metadata().is_err()
+    {
+        bail!(
+            "the remembered mirror directory {} does not exist (moved, renamed or not mounted?). Nothing was \
+             changed. Put it back and start again, use --dir to mirror somewhere else, --restore-missing to write \
+             a fresh copy there, or `coolpsonotes sync --no-dir` to stop mirroring",
+            d.display()
+        );
+    }
+    let mirror_opts = MirrorOptions {
+        allow_mass_delete: a.allow_mass_delete,
+        restore_missing: a.restore_missing,
+    };
     if let Some(d) = &dir {
         if !profile.sync.plaintext_ok && !a.plaintext_ok {
             eprintln!("{}\n", plaintext_note(d));
@@ -1072,12 +1090,30 @@ async fn sync(ctx: &Ctx, a: SyncArgs) -> Result<()> {
     .await?;
     if a.once {
         if let Some(d) = &dir {
-            let mut m = Mirror::new(hub.clone(), d).await?;
-            let r = m.reconcile_all(true).await?;
+            let mut m = Mirror::with_options(hub.clone(), d, mirror_opts).await?;
+            let mut r = m.reconcile_all(true).await?;
+            if r.held > 0
+                && ui::confirm(&format!(
+                    "{} mirrored file(s) disappeared at once (see above). Move the notes to the trash?",
+                    r.held
+                ))
+            {
+                m.set_options(MirrorOptions {
+                    allow_mass_delete: true,
+                    ..mirror_opts
+                });
+                r = m.reconcile_all(true).await?;
+            }
             ui::status(&format!(
                 "mirror: {} edit(s) and {} new file(s) uploaded, {} moved, {} trashed, {} file(s) written, {} conflict copies",
                 r.ingested, r.created, r.renamed, r.trashed, r.written, r.conflicts
             ));
+            if r.held > 0 {
+                ui::warn(&format!(
+                    "{} missing file(s) were NOT moved to the trash (held for safety)",
+                    r.held
+                ));
+            }
         }
         let mut pending = 0;
         for id in hub.vault_ids() {
@@ -1111,7 +1147,7 @@ async fn sync(ctx: &Ctx, a: SyncArgs) -> Result<()> {
     let live = tokio::spawn(livesync::run(hub.clone(), stop_rx.clone()));
     let mirror_task = match &dir {
         Some(d) => {
-            let mut m = Mirror::new(hub.clone(), d).await?;
+            let mut m = Mirror::with_options(hub.clone(), d, mirror_opts).await?;
             m.reconcile_all(false).await?;
             ui::status(&format!(
                 "mirroring {} vault(s) into {}",

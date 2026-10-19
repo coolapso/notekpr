@@ -170,6 +170,8 @@ coolpsonotes sync --dir ~/Notes         # + plaintext Markdown mirror, live
 coolpsonotes sync --dir ~/Notes --once  # catch up, ingest disk changes, push, exit
 coolpsonotes sync --vault Family        # restrict to some vaults (repeatable)
 coolpsonotes sync --no-dir              # forget the remembered mirror directory
+coolpsonotes sync --once --allow-mass-delete   # confirm that many files were deleted on purpose (§7)
+coolpsonotes sync --once --restore-missing     # write vanished files (or a missing mirror) back
 ```
 
 `sync` subscribes to every vault over the WebSocket (`since` = the local
@@ -305,6 +307,23 @@ the remote edit.
 * **Deleting a file** moves the note to the vault's **trash** (never a
   permanent delete). `coolpsonotes trash list|restore` or the web app bring it
   back, and the mirror writes it again.
+* **Many files vanishing at once is not a deletion.** If a vault's whole
+  folder disappears, or more than 10 of its mirrored files and more than half
+  of them are missing at the same time (a moved, renamed or unmounted folder,
+  a sync tool gone wrong), nothing is moved to the trash — not even by
+  `--once` — and the folder is not re-created; the client warns and waits for
+  the files to come back. If you really deleted them, stop the daemon and run
+  `coolpsonotes sync --once --allow-mass-delete` (asked interactively with
+  `--once` on a terminal); `--restore-missing` writes them back from the local
+  copies instead.
+* **A missing mirror directory** is never re-created silently: `sync` refuses
+  to start when the remembered (or given) directory is gone although notes
+  were mirrored into it, and a running daemon pauses while it is gone (an
+  unmounted drive). Put it back, or start with `--restore-missing` for a fresh
+  copy at that place.
+* **A file replaced by a symlink, folder or special file** is not a deletion
+  either: the note is kept and that path is no longer synced (the link is
+  never written through).
 * **Renaming or moving a file** (`mv`, or delete + create of identical content
   within 1.5 s) moves the entry, keeping its identity and history. A directory
   left empty becomes an explicit folder.

@@ -100,6 +100,12 @@ reload on change pick up remote edits cleanly.
   while you edit the file, both changes are merged. Conflicting renames,
   duplicates and deletes are handled as described in
   [desktop-client.md §7](desktop-client.md#7-conflicts-duplicates-deletes-and-renames).
+* **Moving, renaming or unmounting the folder** doesn't delete anything: when
+  a vault folder (or most of its files) vanishes at once, the daemon warns and
+  waits instead of trashing the notes, and it never re-creates a missing mirror
+  folder by itself. See
+  [desktop-client.md §7](desktop-client.md#7-conflicts-duplicates-deletes-and-renames)
+  for confirming a deliberate mass deletion.
 * **Phones and tablets:** there is no mobile client yet; use the web app.
 
 ## Known limitations (being fixed)
@@ -107,9 +113,6 @@ reload on change pick up remote edits cleanly.
 Until these are fixed (tracked in [TODO.md](../TODO.md), "Markdown mirror
 safety"), be careful with:
 
-* **Moving, renaming or unmounting the mirror folder while the daemon runs** —
-  the daemon treats missing files as deleted and moves the notes to the trash
-  (you can restore them from the trash). Stop the daemon first.
 * **Reverting a file to an older version** (editor undo after saving,
   `git checkout`): the daemon may write the newer text back.
 * **Running one-off commands (`coolpsonotes write …`) while the daemon runs** —

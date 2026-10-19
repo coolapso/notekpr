@@ -45,11 +45,17 @@ pub const RENAME_WINDOW: Duration = Duration::from_millis(1500);
 const DEBOUNCE: Duration = Duration::from_millis(300);
 const REMOTE_DEBOUNCE: Duration = Duration::from_millis(150);
 const FULL_SCAN_EVERY: Duration = Duration::from_secs(30);
+/// Scan interval while the directory cannot be watched.
+const POLL_EVERY: Duration = Duration::from_secs(5);
 /// Files whose mtime is this close to when we recorded them are re-hashed,
 /// since a same-size edit within the timestamp granularity is invisible to stat.
 const RACY_NS: i64 = 2_000_000_000;
 /// Temporary files of ours older than this are leftovers of a crash.
 const STALE_TEMP_AGE: Duration = Duration::from_secs(60);
+/// More than this many mirrored files of a vault missing at the same time —
+/// and more than half of them — looks like a moved or unmounted folder, not
+/// like deletions: nothing is trashed until confirmed.
+pub const MASS_DELETE_MIN_FILES: usize = 10;
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 struct Base {
@@ -89,6 +95,8 @@ struct MirrorVault {
     dirty: bool,
     /// Recorded files missing on disk, and since when (rename detection).
     missing_since: BTreeMap<String, Instant>,
+    /// Deletions are held: too many files (or the whole folder) vanished.
+    held: bool,
     warned: BTreeSet<String>,
 }
 
@@ -102,6 +110,11 @@ pub struct Report {
     pub written: usize,
     pub removed: usize,
     pub conflicts: usize,
+    /// Missing files *not* moved to the trash because too many vanished at
+    /// once (see [`MASS_DELETE_MIN_FILES`]).
+    pub held: usize,
+    /// Missing files that are written again ([`MirrorOptions::restore_missing`]).
+    pub restored: usize,
 }
 
 impl Report {
@@ -113,6 +126,8 @@ impl Report {
         self.written += o.written;
         self.removed += o.removed;
         self.conflicts += o.conflicts;
+        self.held += o.held;
+        self.restored += o.restored;
     }
 
     pub fn local_changes(&self) -> usize {
@@ -131,11 +146,69 @@ pub enum Scope {
     Objects(BTreeSet<String>),
 }
 
+/// How the mirror treats files that vanished in bulk.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct MirrorOptions {
+    /// Move them to the trash anyway (the user confirmed the deletion).
+    pub allow_mass_delete: bool,
+    /// Write them again from the replica (and re-create a missing mirror
+    /// directory), instead of holding.
+    pub restore_missing: bool,
+}
+
 pub struct Mirror {
     hub: Arc<Hub>,
     root: PathBuf,
     vaults: BTreeMap<String, MirrorVault>,
     warned: BTreeSet<String>,
+    opts: MirrorOptions,
+}
+
+/// `p` made absolute, with its longest existing ancestor canonicalised (works
+/// for paths that do not exist).
+fn resolve_lenient(p: &Path) -> PathBuf {
+    let abs = std::path::absolute(p).unwrap_or_else(|_| p.to_path_buf());
+    let mut base = abs.as_path();
+    let mut rest = Vec::new();
+    while base.symlink_metadata().is_err() {
+        match (base.parent(), base.file_name()) {
+            (Some(parent), Some(name)) => {
+                rest.push(name.to_os_string());
+                base = parent;
+            }
+            _ => return abs,
+        }
+    }
+    let mut out = base.canonicalize().unwrap_or_else(|_| base.to_path_buf());
+    for n in rest.iter().rev() {
+        out.push(n);
+    }
+    out
+}
+
+/// Identity of a directory (device, inode), to notice it being replaced.
+/// `Some(_)` while it exists.
+fn dir_ident(p: &Path) -> Option<(u64, u64)> {
+    let m = std::fs::metadata(p).ok().filter(|m| m.is_dir())?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        Some((m.dev(), m.ino()))
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = m;
+        Some((0, 0))
+    }
+}
+
+async fn stored_state(v: &crate::session::SharedVault) -> Result<Option<MirrorState>> {
+    let g = v.lock().await;
+    Ok(g.store().load_aux("mirror")?.and_then(|b| {
+        serde_json::from_slice(&b)
+            .map_err(|e| tracing::warn!("mirror state unreadable: {e}"))
+            .ok()
+    }))
 }
 
 // ---------------------------------------------------------------- pure helpers
@@ -1193,6 +1266,30 @@ fn write_download(
 impl Mirror {
     /// Prepare the mirror for every vault open on the hub.
     pub async fn new(hub: Arc<Hub>, root: &Path) -> Result<Mirror> {
+        Self::with_options(hub, root, MirrorOptions::default()).await
+    }
+
+    /// [`Mirror::new`] with options. A mirror directory that is missing
+    /// although files were mirrored into it before (moved, renamed, an
+    /// unmounted drive) is not re-created — every note would look deleted —
+    /// unless `restore_missing` asks for a fresh copy.
+    pub async fn with_options(hub: Arc<Hub>, root: &Path, opts: MirrorOptions) -> Result<Mirror> {
+        if root.symlink_metadata().is_err() && !opts.restore_missing {
+            let want = resolve_lenient(root);
+            for v in hub.vaults() {
+                if let Some(s) = stored_state(&v).await?
+                    && s.root == want
+                    && !s.files.is_empty()
+                {
+                    bail!(
+                        "the mirror directory {} is missing, but notes were mirrored into it before (moved, \
+                         renamed or not mounted?). Nothing was changed. Put it back and start again; to write a \
+                         fresh copy there instead, add --restore-missing",
+                        root.display()
+                    );
+                }
+            }
+        }
         fsutil::create_private_dir(root)?;
         let root = root
             .canonicalize()
@@ -1202,6 +1299,7 @@ impl Mirror {
             root,
             vaults: BTreeMap::new(),
             warned: BTreeSet::new(),
+            opts,
         };
         for id in m.hub.vault_ids() {
             m.attach_or_warn(&id).await;
@@ -1211,6 +1309,10 @@ impl Mirror {
 
     pub fn root(&self) -> &Path {
         &self.root
+    }
+
+    pub fn set_options(&mut self, opts: MirrorOptions) {
+        self.opts = opts;
     }
 
     /// Directory of a vault's files.
@@ -1235,15 +1337,11 @@ impl Mirror {
         let Some(v) = self.hub.get(vault_id) else {
             return Ok(());
         };
-        let (name, stored) = {
-            let g = v.lock().await;
-            let stored: Option<MirrorState> = g.store().load_aux("mirror")?.and_then(|b| {
-                serde_json::from_slice(&b)
-                    .map_err(|e| tracing::warn!("mirror state unreadable: {e}"))
-                    .ok()
-            });
-            (g.name().to_string(), stored)
-        };
+        if !self.root.is_dir() {
+            bail!("the mirror directory is missing");
+        }
+        let stored = stored_state(&v).await?;
+        let name = v.lock().await.name().to_string();
         let taken: BTreeSet<String> = self
             .vaults
             .values()
@@ -1265,8 +1363,12 @@ impl Mirror {
             }
         };
         let dir = disk_path(&self.root, &state.dir_name)?;
-        fsutil::create_private_dir(&dir)?;
-        fsutil::remove_stale_temp_files(&dir, 64, STALE_TEMP_AGE);
+        // A vault folder that vanished is not re-created (that would make
+        // every note look deleted): the passes hold and report it instead.
+        if state.files.is_empty() || dir.is_dir() || self.opts.restore_missing {
+            fsutil::create_private_dir(&dir)?;
+            fsutil::remove_stale_temp_files(&dir, 64, STALE_TEMP_AGE);
+        }
         self.vaults.insert(
             vault_id.to_string(),
             MirrorVault {
@@ -1274,10 +1376,33 @@ impl Mirror {
                 state,
                 dirty: true,
                 missing_since: BTreeMap::new(),
+                held: false,
                 warned: BTreeSet::new(),
             },
         );
         Ok(())
+    }
+
+    /// The mirror directory itself vanished while running (unmounted, moved):
+    /// say so once and do nothing until it is back.
+    fn root_missing(&mut self) -> bool {
+        if self.root.is_dir() {
+            if self.warned.remove("root-missing") {
+                ui::status(&format!(
+                    "mirror: {} is back; syncing files again",
+                    self.root.display()
+                ));
+            }
+            return false;
+        }
+        if self.warned.insert("root-missing".into()) {
+            ui::warn(&format!(
+                "the mirror directory {} disappeared (moved, renamed or unmounted?). Nothing is deleted or \
+                 written while it is gone; put it back to resume",
+                self.root.display()
+            ));
+        }
+        true
     }
 
     async fn save_state(&mut self, vault_id: &str) -> Result<()> {
@@ -1315,7 +1440,9 @@ impl Mirror {
     async fn reconcile_vault(&mut self, id: &str, final_pass: bool) -> Result<Report> {
         let mut r = self.ingest(id, false).await?;
         r.add(self.write_remote(id, &Scope::All).await?);
-        r.add(self.ingest(id, final_pass).await?);
+        let second = self.ingest(id, final_pass).await?;
+        r.add(second);
+        r.held = second.held;
         r.add(self.write_remote(id, &Scope::All).await?);
         self.save_state(id).await?;
         Ok(r)
@@ -1324,9 +1451,13 @@ impl Mirror {
     /// Disk → CRDT for one vault.
     pub async fn ingest(&mut self, vault_id: &str, final_pass: bool) -> Result<Report> {
         let mut report = Report::default();
+        if self.root_missing() {
+            return Ok(report);
+        }
         let Some(shared) = self.hub.get(vault_id) else {
             return Ok(report);
         };
+        let opts = self.opts;
         let Some(mv) = self.vaults.get_mut(vault_id) else {
             return Ok(report);
         };
@@ -1381,13 +1512,53 @@ impl Mirror {
             }
         }
 
-        // 3. Missing long enough (or final pass): move to the trash.
-        let expired: Vec<String> = mv
+        // 3. Missing long enough (or final pass): move to the trash — unless
+        // so many vanished at once that it looks like a moved or unmounted
+        // folder rather than deletions (never applied without confirmation,
+        // not even in a final pass).
+        let total = mv.state.files.len();
+        let missing = mv.missing_since.len();
+        let dir_gone = total > 0 && !mv.dir.is_dir();
+        let mass =
+            missing > 0 && (dir_gone || (missing > MASS_DELETE_MIN_FILES && missing * 2 > total));
+        let mut expired: Vec<String> = mv
             .missing_since
             .iter()
             .filter(|(_, t)| final_pass || t.elapsed() >= RENAME_WINDOW)
             .map(|(id, _)| id.clone())
             .collect();
+        if mass && !opts.allow_mass_delete {
+            if opts.restore_missing {
+                // Forget them: write_remote writes them again.
+                for id in std::mem::take(&mut mv.missing_since).into_keys() {
+                    mv.state.files.remove(&id);
+                    report.restored += 1;
+                }
+                mv.dirty = true;
+            } else {
+                if !mv.held {
+                    let what = if dir_gone {
+                        format!("its folder {} is gone", mv.dir.display())
+                    } else {
+                        format!("{missing} of {total} mirrored files disappeared at once")
+                    };
+                    ui::warn(&format!(
+                        "vault '{name}': {what}. Nothing was moved to the trash. If the folder was moved, renamed \
+                         or unmounted, put it back. If you deleted the files on purpose, stop `coolpsonotes sync` \
+                         and run `coolpsonotes sync --once --allow-mass-delete` (moves them to the trash), or \
+                         `--restore-missing` to get the files back"
+                    ));
+                }
+                mv.held = true;
+                report.held = missing;
+            }
+            expired.clear();
+        } else if mv.held {
+            mv.held = false;
+            ui::status(&format!(
+                "vault '{name}': the missing files are back; deletions are synced again"
+            ));
+        }
         for id in expired {
             mv.missing_since.remove(&id);
             if writable && v.entry(&id).is_some_and(|e| e.is_live()) {
@@ -1404,7 +1575,7 @@ impl Mirror {
         }
 
         // 4. Explicit folders: new empty directories, removed folder entries.
-        if writable {
+        if writable && !mv.held {
             for d in &empty_dirs {
                 let known = mv.state.folders.values().any(|p| p == d)
                     || live.keys().any(|p| p == d || paths::is_within(p, d));
@@ -1459,12 +1630,24 @@ impl Mirror {
     /// CRDT → disk for one vault.
     pub async fn write_remote(&mut self, vault_id: &str, scope: &Scope) -> Result<Report> {
         let mut report = Report::default();
+        if self.root_missing() {
+            return Ok(report);
+        }
         let Some(shared) = self.hub.get(vault_id) else {
             return Ok(report);
         };
+        let restore = self.opts.restore_missing;
         let Some(mv) = self.vaults.get_mut(vault_id) else {
             return Ok(report);
         };
+        if !mv.dir.is_dir() {
+            // A vault folder that vanished is not re-created behind the
+            // user's back (ingest holds its deletions and says why).
+            if !mv.state.files.is_empty() && !restore {
+                return Ok(report);
+            }
+            fsutil::create_private_dir(&mv.dir)?;
+        }
         let mut downloads: Vec<(String, String)> = Vec::new();
         let mut touched: BTreeSet<String> = BTreeSet::new();
         let name;
@@ -1614,24 +1797,87 @@ impl Mirror {
         Ok(report)
     }
 
+    /// Start (or restart) watching the mirror directory. On failure (the
+    /// inotify watch limit, an unsupported file system, the directory is
+    /// gone) the mirror keeps working by scanning every few seconds.
+    fn watch_root(&mut self, watcher: &mut Option<notify::RecommendedWatcher>) -> bool {
+        use notify::{RecursiveMode, Watcher};
+        let Some(w) = watcher.as_mut() else {
+            return false;
+        };
+        if !self.root.is_dir() {
+            return false;
+        }
+        let _ = w.unwatch(&self.root);
+        match w.watch(&self.root, RecursiveMode::Recursive) {
+            Ok(()) => {
+                if self.warned.remove("watch") {
+                    ui::status("mirror: watching the directory for changes again");
+                }
+                true
+            }
+            Err(e) => {
+                self.watch_failed(&e.to_string());
+                false
+            }
+        }
+    }
+
+    fn watch_failed(&mut self, e: &str) {
+        if self.warned.insert("watch".into()) {
+            ui::warn(&format!(
+                "mirror: cannot watch {} for changes ({e}); scanning it every {}s instead. On Linux, raising \
+                 fs.inotify.max_user_watches usually helps",
+                self.root.display(),
+                POLL_EVERY.as_secs()
+            ));
+        }
+    }
+
+    async fn local_pass(&mut self) {
+        for id in self.vaults.keys().cloned().collect::<Vec<_>>() {
+            if let Err(e) = self.ingest(&id, false).await {
+                ui::warn(&format!("mirror: {e:#}"));
+            }
+            if let Err(e) = self
+                .write_remote(&id, &Scope::Objects(BTreeSet::new()))
+                .await
+            {
+                ui::warn(&format!("mirror: {e:#}"));
+            }
+            if let Err(e) = self.save_state(&id).await {
+                ui::warn(&format!("mirror: saving the mirror state: {e:#}"));
+            }
+        }
+    }
+
     /// Watch the directory and the hub until `shutdown`.
     pub async fn run(mut self, mut shutdown: watch::Receiver<bool>) -> Result<()> {
-        use notify::{RecursiveMode, Watcher};
-        let (tx, mut fs_rx) = mpsc::unbounded_channel::<()>();
+        let (tx, mut fs_rx) = mpsc::unbounded_channel::<std::result::Result<(), String>>();
         let mut watcher =
-            notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
-                if let Ok(ev) = res {
+            match notify::recommended_watcher(move |res: notify::Result<notify::Event>| match res {
+                Ok(ev) => {
                     let relevant = ev.paths.iter().any(|p| {
                         p.file_name()
                             .and_then(|n| n.to_str())
                             .is_some_and(|n| !is_ignored_name(n))
                     });
                     if relevant && !matches!(ev.kind, notify::EventKind::Access(_)) {
-                        let _ = tx.send(());
+                        let _ = tx.send(Ok(()));
                     }
                 }
-            })?;
-        watcher.watch(&self.root, RecursiveMode::Recursive)?;
+                Err(e) => {
+                    let _ = tx.send(Err(e.to_string()));
+                }
+            }) {
+                Ok(w) => Some(w),
+                Err(e) => {
+                    self.watch_failed(&e.to_string());
+                    None
+                }
+            };
+        let mut watching = self.watch_root(&mut watcher);
+        let mut watched = dir_ident(&self.root);
         let mut events = self.hub.subscribe();
         // Close the gap between the caller's initial pass and the watch starting.
         if let Err(e) = self.reconcile_all(false).await {
@@ -1639,6 +1885,8 @@ impl Mirror {
         }
         let mut full = tokio::time::interval(FULL_SCAN_EVERY);
         full.tick().await;
+        let mut poll = tokio::time::interval(POLL_EVERY);
+        poll.tick().await;
         let mut pending_remote: BTreeMap<String, Scope> = BTreeMap::new();
         let mut remote_deadline: Option<tokio::time::Instant> = None;
         let mut deletion_check = tokio::time::interval(RENAME_WINDOW);
@@ -1650,19 +1898,17 @@ impl Mirror {
                 }
             };
             tokio::select! {
-                Some(()) = fs_rx.recv() => {
+                Some(change) = fs_rx.recv() => {
+                    if let Err(e) = change {
+                        // Events may be missing from now on: scan instead.
+                        self.watch_failed(&e);
+                        watching = false;
+                        continue;
+                    }
                     tracing::debug!("mirror: file system change");
                     tokio::time::sleep(DEBOUNCE).await;
-                    while fs_rx.try_recv().is_ok() {}
-                    for id in self.vaults.keys().cloned().collect::<Vec<_>>() {
-                        if let Err(e) = self.ingest(&id, false).await {
-                            ui::warn(&format!("mirror: {e:#}"));
-                        }
-                        if let Err(e) = self.write_remote(&id, &Scope::Objects(BTreeSet::new())).await {
-                            ui::warn(&format!("mirror: {e:#}"));
-                        }
-                        let _ = self.save_state(&id).await;
-                    }
+                    while let Ok(Ok(())) = fs_rx.try_recv() {}
+                    self.local_pass().await;
                 }
                 ev = events.recv() => match ev {
                     Ok(HubEvent::Changed { vault_id, objects, index_changed, purged, .. }) => {
@@ -1675,9 +1921,7 @@ impl Mirror {
                         remote_deadline.get_or_insert_with(|| tokio::time::Instant::now() + REMOTE_DEBOUNCE);
                     }
                     Ok(HubEvent::VaultAdded { vault_id }) => {
-                        if let Err(e) = self.attach(&vault_id).await {
-                            ui::warn(&format!("mirror: {e:#}"));
-                        }
+                        self.attach_or_warn(&vault_id).await;
                         pending_remote.insert(vault_id, Scope::All);
                         remote_deadline.get_or_insert_with(|| tokio::time::Instant::now() + REMOTE_DEBOUNCE);
                     }
@@ -1696,11 +1940,14 @@ impl Mirror {
                         if let Err(e) = self.write_remote(&id, &scope).await {
                             ui::warn(&format!("mirror: {e:#}"));
                         }
-                        let _ = self.save_state(&id).await;
+                        if let Err(e) = self.save_state(&id).await {
+                            ui::warn(&format!("mirror: saving the mirror state: {e:#}"));
+                        }
                     }
                 }
                 _ = deletion_check.tick() => {
-                    let has_missing = self.vaults.values().any(|m| !m.missing_since.is_empty());
+                    // Held vaults (mass disappearance) are re-checked by the full scan.
+                    let has_missing = self.vaults.values().any(|m| !m.held && !m.missing_since.is_empty());
                     if has_missing {
                         for id in self.vaults.keys().cloned().collect::<Vec<_>>() {
                             if let Err(e) = self.ingest(&id, false).await {
@@ -1710,7 +1957,23 @@ impl Mirror {
                         }
                     }
                 }
+                _ = poll.tick() => {
+                    if !watching {
+                        watching = self.watch_root(&mut watcher);
+                        watched = dir_ident(&self.root);
+                        self.local_pass().await;
+                    }
+                }
                 _ = full.tick() => {
+                    // The directory may have been removed and re-created
+                    // (remounted): its old watch is gone.
+                    let ident = dir_ident(&self.root);
+                    if ident.is_none() {
+                        watching = false;
+                    } else if !watching || ident != watched {
+                        watching = self.watch_root(&mut watcher);
+                        watched = ident;
+                    }
                     if let Err(e) = self.reconcile_all(false).await {
                         ui::warn(&format!("mirror: {e:#}"));
                     }

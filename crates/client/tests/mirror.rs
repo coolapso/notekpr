@@ -427,3 +427,101 @@ async fn a_file_replaced_by_a_symlink_is_not_trashed() {
     assert_eq!(read(&outside), "outside\n");
     assert_eq!(note(&h, &vid, "A.md").await.as_deref(), Some("a2\n"));
 }
+
+async fn note_count(h: &coolpsonotes_client::hub::Hub, vid: &str) -> usize {
+    h.get(vid).unwrap().lock().await.notes().len()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_vanished_folder_or_mass_deletion_is_held_not_trashed() {
+    use coolpsonotes_client::mirror::MirrorOptions;
+    let srv = start().await;
+    let alice = login(&srv, "alice").await;
+    manage::create_vault(&alice, "Many").await.unwrap();
+    let h = hub(&alice).await;
+    let vid = h
+        .resolve("Many")
+        .await
+        .unwrap()
+        .lock()
+        .await
+        .id()
+        .to_string();
+    for i in 0..12 {
+        ops::put_document(&h, &vid, &format!("N{i}.md"), &format!("{i}\n"), None)
+            .await
+            .unwrap();
+    }
+    let root = srv.path("mirror");
+    let mut m = Mirror::new(h.clone(), &root).await.unwrap();
+    m.reconcile_all(true).await.unwrap();
+    let dir = m.vault_dir(&vid).unwrap().to_path_buf();
+    assert_eq!(read(&dir.join("N3.md")), "3\n");
+
+    // 1. Most files vanish at once (even in a final pass): nothing is trashed.
+    let aside = srv.path("aside");
+    std::fs::create_dir_all(&aside).unwrap();
+    for i in 0..11 {
+        let n = format!("N{i}.md");
+        std::fs::rename(dir.join(&n), aside.join(&n)).unwrap();
+    }
+    let r = m.reconcile_all(true).await.unwrap();
+    assert_eq!((r.trashed, r.held), (0, 11), "{r:?}");
+    assert_eq!(note_count(&h, &vid).await, 12);
+    assert!(!dir.join("N0.md").exists(), "held files are not re-created");
+    // They come back: everything is as before.
+    for i in 0..11 {
+        let n = format!("N{i}.md");
+        std::fs::rename(aside.join(&n), dir.join(&n)).unwrap();
+    }
+    let r = m.reconcile_all(true).await.unwrap();
+    assert_eq!((r.trashed, r.held, r.local_changes()), (0, 0, 0), "{r:?}");
+
+    // 2. The whole vault folder vanishes (moved away): held, not re-created.
+    std::fs::rename(&dir, srv.path("moved-away")).unwrap();
+    let r = m.reconcile_all(true).await.unwrap();
+    assert_eq!((r.trashed, r.held), (0, 12), "{r:?}");
+    assert!(!dir.exists(), "a vanished vault folder is not re-created");
+    std::fs::rename(srv.path("moved-away"), &dir).unwrap();
+    let r = m.reconcile_all(true).await.unwrap();
+    assert_eq!((r.trashed, r.held), (0, 0), "{r:?}");
+
+    // 3. The mirror root vanishes while running: nothing happens.
+    std::fs::rename(&root, srv.path("unmounted")).unwrap();
+    let r = m.reconcile_all(true).await.unwrap();
+    assert_eq!(r.trashed, 0, "{r:?}");
+    assert!(!root.exists(), "a vanished mirror root is not re-created");
+    drop(m);
+    // ... and a restart refuses to re-create it.
+    let err = Mirror::new(h.clone(), &root).await.err().expect("refused");
+    assert!(format!("{err:#}").contains("missing"), "{err:#}");
+    assert!(!root.exists());
+    assert_eq!(note_count(&h, &vid).await, 12);
+    // --restore-missing writes a fresh copy instead.
+    let mut m = Mirror::with_options(
+        h.clone(),
+        &root,
+        MirrorOptions {
+            restore_missing: true,
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let r = m.reconcile_all(true).await.unwrap();
+    assert_eq!((r.trashed, r.restored), (0, 12), "{r:?}");
+    assert_eq!(read(&dir.join("N7.md")), "7\n");
+    assert_eq!(note_count(&h, &vid).await, 12);
+
+    // 4. Confirmed mass deletion: --allow-mass-delete trashes them.
+    for i in 0..11 {
+        std::fs::remove_file(dir.join(format!("N{i}.md"))).unwrap();
+    }
+    m.set_options(MirrorOptions {
+        allow_mass_delete: true,
+        ..Default::default()
+    });
+    let r = m.reconcile_all(true).await.unwrap();
+    assert_eq!((r.trashed, r.held), (11, 0), "{r:?}");
+    assert_eq!(note_count(&h, &vid).await, 1);
+}

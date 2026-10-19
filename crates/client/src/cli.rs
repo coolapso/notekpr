@@ -327,6 +327,14 @@ pub struct SyncArgs {
     /// Stop mirroring to the remembered directory (keeps the files).
     #[arg(long, conflicts_with = "dir")]
     pub no_dir: bool,
+    /// Move mirrored files that disappeared to the trash even when many (or a
+    /// whole vault folder) vanished at once; normally that is held for safety.
+    #[arg(long, conflicts_with = "restore_missing")]
+    pub allow_mass_delete: bool,
+    /// Write mirrored files that disappeared in bulk (or a missing mirror
+    /// directory) again from the local copies instead of holding.
+    #[arg(long)]
+    pub restore_missing: bool,
 }
 
 #[derive(Subcommand, Debug)]

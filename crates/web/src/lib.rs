@@ -9,6 +9,7 @@ pub mod api;
 pub mod editor;
 pub mod knowledge;
 pub mod render;
+pub mod sizes;
 pub mod state;
 pub mod storage;
 pub mod util;

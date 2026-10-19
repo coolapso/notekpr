@@ -522,6 +522,19 @@ def test_editor_safety(env):
         time.sleep(0.3)
         check(b.js("return window.__opened") == ["https://example.org/"] and not b.js("return !!window.__pwned"),
               "the editor opens web links but not javascript: links")
+        # A paste larger than the server accepts in one change is refused; syncing goes on.
+        end = "const ed=document.querySelector('.ed'); ed.focus(); const s=getSelection(); s.selectAllChildren(ed); s.collapseToEnd();"
+        b.js(end)
+        b.js("const dt = new DataTransfer(); dt.setData('text/plain', 'x'.repeat(2200000)); document.querySelector('.ed').dispatchEvent(new ClipboardEvent('paste', {clipboardData: dt, bubbles: true, cancelable: true}));")
+        b.find_text(".toast", "too large to add at once", 15)
+        check(len(editor_text(b)) < 1000, "a paste over the server's update limit is refused")
+        b.js(end)
+        b.keys(" after")
+        b.wait("return (document.querySelector('.sync .lbl')||{}).textContent == 'Synced'", 20, "synced")
+        path = b.js("return location.pathname")
+        b.go(env.url.rstrip("/") + path)
+        b.wait("return document.querySelector('.ed') && document.querySelector('.ed').textContent.includes('after')", 20, "edit after the refused paste")
+        check(True, "later edits still sync")
         check(not severe_logs(b), "no browser errors")
     finally:
         b.close()

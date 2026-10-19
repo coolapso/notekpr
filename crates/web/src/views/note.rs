@@ -172,15 +172,7 @@ fn toggle_task(vault: &str, note: &str, line: usize) {
         }
     }
     let new = lines.join("\n");
-    let up = with(|c| {
-        c.replicas
-            .get_mut(vault)?
-            .notes
-            .get_mut(note)?
-            .set_text(&new)
-    });
-    if let Some(u) = up {
-        state::local_update(vault, note, u);
+    if state::set_note_text(vault, note, &new) > 0 {
         if let Some(ed) = editor() {
             ed.set_text(new, false);
         }

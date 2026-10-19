@@ -14,16 +14,16 @@ use coolpsonotes_core::doc::{EntryKind, NoteDoc};
 use coolpsonotes_core::engine::{self, ObjectMeta, Presence, VaultMeta, VaultReplica};
 use coolpsonotes_core::keys::{AccountSecret, DeviceKey, RecoveryKey};
 use coolpsonotes_core::protocol::*;
-use coolpsonotes_core::{paths, random_id};
+use coolpsonotes_core::{paths, random_id, textdiff};
 use leptos::prelude::Update;
 use leptos::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::api;
 use crate::editor::{Editor, RemoteCursor};
 use crate::storage::{self, DeviceRecord, UiPrefs};
 use crate::util::{self, now_ms};
 use crate::ws::{ConnState, Socket};
+use crate::{api, sizes};
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Phase {
@@ -380,6 +380,10 @@ pub struct Core {
     pub presence_debounce: util::Debounce,
     pub content_debounce: util::Debounce,
     pub cursor: Option<(usize, usize)>,
+    /// Unsent updates too large for the server that the user was told about.
+    pub oversized_reported: HashSet<String>,
+    /// When we last told the user that local storage is full.
+    pub storage_warned_at: i64,
 }
 
 impl Core {
@@ -1777,6 +1781,10 @@ fn on_server_message(m: ServerMessage) {
                     refresh_vaults().await;
                     refresh_shares().await;
                 });
+            } else if code == "too_large" {
+                if let Some(v) = vault_id {
+                    leptos::task::spawn_local(on_too_large(v));
+                }
             } else if code == "forbidden" {
                 error(format!("Not allowed: {message}"));
             } else if code == "conflict" {
@@ -1933,13 +1941,93 @@ fn resend_pending(vault_id: &str) {
             .and_then(|r| r.pending_pushes().ok())
             .unwrap_or_default()
     });
-    for chunk in ups.chunks(200) {
+    push_all(vault_id, ups);
+    update_pending_count();
+}
+
+/// The server's limit for one update (from `/info`).
+pub fn max_update_bytes() -> usize {
+    ui().server
+        .get_untracked()
+        .map(|s| s.max_update_bytes as usize)
+        .unwrap_or(sizes::DEFAULT_MAX_UPDATE)
+}
+
+/// Send updates in pushes the server accepts. Updates too large to ever be
+/// stored are held back (they stay pending on this device) and reported,
+/// instead of making every push of the vault fail.
+fn push_all(vault_id: &str, ups: Vec<PushUpdate>) {
+    let (pushes, oversized) = sizes::batches(ups, max_update_bytes());
+    for updates in pushes {
+        // If the socket is down, updates stay in the replica's pending
+        // queue and are re-sent after reconnecting.
         send(&ClientMessage::Push {
             vault_id: vault_id.to_string(),
-            updates: chunk.to_vec(),
+            updates,
         });
     }
-    update_pending_count();
+    if !oversized.is_empty() {
+        report_oversized(vault_id, &oversized);
+    }
+}
+
+fn report_oversized(vault_id: &str, ups: &[PushUpdate]) {
+    let new: Vec<&PushUpdate> = with(|c| {
+        ups.iter()
+            .filter(|u| c.oversized_reported.insert(u.client_update_id.clone()))
+            .collect()
+    });
+    let Some(biggest) = new.iter().max_by_key(|u| u.payload.len()) else {
+        return;
+    };
+    let title = with(|c| {
+        c.replicas
+            .get(vault_id)
+            .and_then(|r| r.index.get(&biggest.object_id))
+            .map(|e| e.title().to_string())
+            .or_else(|| {
+                c.shares
+                    .get(&(vault_id.to_string(), biggest.object_id.clone()))
+                    .map(|s| s.title.clone())
+            })
+    });
+    let what = match title {
+        Some(t) => format!("A change to “{t}”"),
+        None => "A change".to_string(),
+    };
+    util::warn(&format!(
+        "holding back {} update(s) larger than the server limit",
+        new.len()
+    ));
+    error(format!(
+        "{what} is too large to sync ({}; the server accepts {} at a time). It is kept on this device only.",
+        util::human_bytes(biggest.payload.len() as u64),
+        util::human_bytes(max_update_bytes() as u64)
+    ));
+}
+
+/// The server refused a push as too large: its limit may have gone down
+/// since we asked. Refresh it and re-send what still fits.
+async fn on_too_large(vault_id: String) {
+    let before = max_update_bytes();
+    if let Ok(info) = api::get::<ServerInfo>("/info").await {
+        ui().server.set(Some(info));
+    }
+    if max_update_bytes() < before {
+        resend_pending(&vault_id);
+    } else {
+        error("The server refused some changes as too large; they are kept on this device.");
+    }
+}
+
+/// Total payload bytes waiting in the outbox of a vault.
+pub fn outbox_bytes(vault_id: &str) -> usize {
+    with(|c| {
+        c.outbox
+            .get(vault_id)
+            .map(|v| v.iter().map(|u| u.payload.len()).sum())
+            .unwrap_or(0)
+    })
 }
 
 fn on_vault_event(vault_id: String, event: VaultEventKind) {
@@ -2050,14 +2138,7 @@ pub fn flush_now() {
     let batches: Vec<(String, Vec<PushUpdate>)> =
         with(|c| std::mem::take(&mut c.outbox).into_iter().collect());
     for (v, ups) in batches {
-        for chunk in ups.chunks(200) {
-            // If the socket is down, updates stay in the replica's pending
-            // queue and are re-sent after reconnecting.
-            send(&ClientMessage::Push {
-                vault_id: v.clone(),
-                updates: chunk.to_vec(),
-            });
-        }
+        push_all(&v, ups);
         persist_pending(&v);
     }
     update_pending_count();
@@ -2073,7 +2154,44 @@ fn persist_pending(vault_id: &str) {
                 .unwrap_or_default(),
         )
     });
-    storage::set_pending(&uid, vault_id, &ups);
+    if let Err(e) = storage::set_pending(&uid, vault_id, &ups) {
+        util::warn(&format!("could not store unsent changes: {e}"));
+        storage_full();
+    }
+}
+
+/// Tell the user (at most once a minute) that unsent changes can't be kept.
+fn storage_full() {
+    let now = now_ms();
+    if with(|c| std::mem::replace(&mut c.storage_warned_at, now)) > now - 60_000 {
+        return;
+    }
+    error(
+        "This browser's storage is full, so changes that are not synced yet would be lost if you close or reload this tab. Stay online until they are synced.",
+    );
+}
+
+/// Replace a note's text through its CRDT (diffing against the current
+/// text) and queue the change, split into updates small enough for the
+/// server. Returns how many updates were made (0: unchanged or no such note).
+pub fn set_note_text(vault: &str, note: &str, text: &str) -> usize {
+    let budget = sizes::insert_budget(max_update_bytes());
+    let ups = with(|c| {
+        let n = c.replicas.get_mut(vault)?.notes.get_mut(note)?;
+        let edits = textdiff::diff(&n.text(), text);
+        Some(
+            sizes::split_edits(edits, budget)
+                .iter()
+                .filter_map(|g| n.apply_edits(g))
+                .collect::<Vec<_>>(),
+        )
+    })
+    .unwrap_or_default();
+    let n = ups.len();
+    for u in ups {
+        local_update(vault, note, u);
+    }
+    n
 }
 
 fn update_pending_count() {

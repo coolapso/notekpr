@@ -23,8 +23,12 @@ use crate::util::document;
 use syntax::{Block, Target};
 
 pub trait Host {
-    /// Local edits, already applied to the editor's text.
-    fn edit(&self, edits: &[Edit]);
+    /// Local edits, already applied to the editor's text. Returns `false` if
+    /// the host did not take them (e.g. too large to sync); the editor then
+    /// reloads the document's text.
+    fn edit(&self, edits: &[Edit]) -> bool;
+    /// The document's current text.
+    fn text(&self) -> Option<String>;
     fn undo(&self) -> Option<String>;
     fn redo(&self) -> Option<String>;
     /// Start a new undo group.
@@ -158,6 +162,26 @@ fn next_char(s: &str, i: usize) -> usize {
         .next()
         .map(|c| i + c.len_utf8())
         .unwrap_or(s.len())
+}
+
+/// Map an offset through sequential edits. An insertion exactly at the
+/// offset moves it past the inserted text unless `stay` is set.
+fn map_pos(mut p: usize, edits: &[Edit], stay: bool) -> usize {
+    for e in edits {
+        match e {
+            Edit::Insert { at, text } => {
+                if *at < p || (*at == p && !stay) {
+                    p += text.len();
+                }
+            }
+            Edit::Delete { at, len } => {
+                if p > *at {
+                    p -= (*len).min(p - at);
+                }
+            }
+        }
+    }
+    p
 }
 
 /// Edits that toggle `open`/`close` around the selection `[a, b)` (or the
@@ -644,10 +668,10 @@ impl Editor {
             return;
         }
         let mut edits = Vec::with_capacity(2);
-        {
+        let from = {
             let mut st = self.st.borrow_mut();
-            let to = to.min(st.text.len());
-            let from = from.min(to);
+            let to = floor_char(&st.text, to);
+            let from = floor_char(&st.text, from).min(to);
             if to > from {
                 edits.push(Edit::Delete {
                     at: from,
@@ -666,13 +690,16 @@ impl Editor {
             let mut t = std::mem::take(&mut st.text);
             t.replace_range(from..to, insert);
             st.text = t;
-        }
-        self.host.edit(&edits);
-        self.render(false);
+            from
+        };
         let (a, h) = caret.unwrap_or_else(|| {
             let p = from + insert.len();
             (p, p)
         });
+        if !self.commit(&edits, (a, h)) {
+            return;
+        }
+        self.render(false);
         self.set_selection(a, h);
         self.host.selection_changed(a, h);
     }
@@ -685,10 +712,46 @@ impl Editor {
             let mut st = self.st.borrow_mut();
             st.text = textdiff::apply(&st.text, &edits);
         }
-        self.host.edit(&edits);
+        if !self.commit(&edits, caret) {
+            return;
+        }
         self.render(false);
         self.set_selection(caret.0, caret.1);
         self.host.selection_changed(caret.0, caret.1);
+    }
+
+    /// Hand local edits (already applied to our text) to the host. If it
+    /// refuses them, go back to the document's text and return `false`.
+    fn commit(&self, edits: &[Edit], caret: (usize, usize)) -> bool {
+        if self.host.edit(edits) {
+            return true;
+        }
+        self.resync(caret);
+        false
+    }
+
+    /// Replace our text with the document's, after local edits were refused.
+    /// `caret` is a position in our current text; it is mapped through the change.
+    fn resync(&self, caret: (usize, usize)) {
+        let Some(t) = self.host.text() else { return };
+        let edits = textdiff::diff(&self.st.borrow().text, &t);
+        let (a, h) = (
+            map_pos(caret.0, &edits, false),
+            map_pos(caret.1, &edits, false),
+        );
+        {
+            let mut st = self.st.borrow_mut();
+            st.text = t;
+            st.pending_remote = None;
+        }
+        self.render(true);
+        if self.has_focus() {
+            self.set_selection(a, h);
+        } else {
+            let mut st = self.st.borrow_mut();
+            st.sel = (floor_char(&st.text, a), floor_char(&st.text, h));
+        }
+        self.host.selection_changed(a, h);
     }
 
     pub fn insert_text(&self, s: &str) {
@@ -708,31 +771,17 @@ impl Editor {
             return;
         }
         let focused = self.has_focus();
-        let (mut a, mut h) = self.read_selection().unwrap_or(self.st.borrow().sel);
-        let mut changed_at = None;
-        for e in &edits {
-            match e {
-                Edit::Insert { at, text } => {
-                    changed_at = Some(at + text.len());
-                    if *at < a || (*at == a && !caret_to_change) {
-                        a += text.len();
-                    }
-                    if *at < h || (*at == h && !caret_to_change) {
-                        h += text.len();
-                    }
-                }
-                Edit::Delete { at, len } => {
-                    changed_at = Some(*at);
-                    if a > *at {
-                        a -= (*len).min(a - at);
-                    }
-                    if h > *at {
-                        h -= (*len).min(h - at);
-                    }
-                }
-            }
-        }
-        if caret_to_change && let Some(c) = changed_at {
+        let (a, h) = self.read_selection().unwrap_or(self.st.borrow().sel);
+        let (mut a, mut h) = (
+            map_pos(a, &edits, caret_to_change),
+            map_pos(h, &edits, caret_to_change),
+        );
+        if caret_to_change
+            && let Some(c) = edits.last().map(|e| match e {
+                Edit::Insert { at, text } => at + text.len(),
+                Edit::Delete { at, .. } => *at,
+            })
+        {
             a = c;
             h = c;
         }
@@ -740,26 +789,8 @@ impl Editor {
         {
             let mut st = self.st.borrow_mut();
             for c in &mut st.cursors {
-                for e in &edits {
-                    match e {
-                        Edit::Insert { at, text } => {
-                            if *at < c.head {
-                                c.head += text.len();
-                            }
-                            if *at < c.anchor {
-                                c.anchor += text.len();
-                            }
-                        }
-                        Edit::Delete { at, len } => {
-                            if c.head > *at {
-                                c.head -= (*len).min(c.head - at);
-                            }
-                            if c.anchor > *at {
-                                c.anchor -= (*len).min(c.anchor - at);
-                            }
-                        }
-                    }
-                }
+                c.head = map_pos(c.head, &edits, true);
+                c.anchor = map_pos(c.anchor, &edits, true);
             }
             st.text = new_text;
         }
@@ -1192,7 +1223,6 @@ impl Editor {
         }
         let edits = textdiff::diff(&old, &dom_text);
         self.st.borrow_mut().text = dom_text;
-        self.host.edit(&edits);
         let caret = sel.unwrap_or_else(|| {
             let p = match edits.last() {
                 Some(Edit::Insert { at, text }) => at + text.len(),
@@ -1201,6 +1231,9 @@ impl Editor {
             };
             (p, p)
         });
+        if !self.commit(&edits, caret) {
+            return;
+        }
         self.render(true);
         self.set_selection(caret.0, caret.1);
     }
@@ -1746,6 +1779,30 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn positions_follow_edits() {
+        // "hello world" → "hello brave new world!"
+        let edits = vec![
+            Edit::Insert {
+                at: 6,
+                text: "brave new ".into(),
+            },
+            Edit::Insert {
+                at: 21,
+                text: "!".into(),
+            },
+        ];
+        assert_eq!(map_pos(0, &edits, false), 0);
+        assert_eq!(map_pos(6, &edits, false), 16);
+        assert_eq!(map_pos(6, &edits, true), 6);
+        assert_eq!(map_pos(11, &edits, false), 22);
+        // "one two three" → "one three"
+        let edits = vec![Edit::Delete { at: 4, len: 4 }];
+        assert_eq!(map_pos(5, &edits, false), 4);
+        assert_eq!(map_pos(13, &edits, false), 9);
+        assert_eq!(map_pos(2, &edits, false), 2);
     }
 
     #[test]

@@ -608,16 +608,10 @@ pub async fn create_note_with(
     if let Some(u) = up {
         local_update(vault, INDEX_OBJECT_ID, u);
     }
+    state::ensure_note_loaded(vault, &id);
     if !text.is_empty() {
-        let up = with(|c| {
-            let r = c.replicas.get_mut(vault)?;
-            r.notes.entry(id.clone()).or_default().set_text(text)
-        });
-        if let Some(u) = up {
-            local_update(vault, &id, u);
-        }
-    } else {
-        state::ensure_note_loaded(vault, &id);
+        // Large texts become several updates, each within the server's limit.
+        state::set_note_text(vault, &id, text);
     }
     state::ui().tree_rev.update(|v| *v += 1);
     Some(id)
@@ -728,18 +722,10 @@ fn update_links_after_rename(vault: &str, id: &str, old_path: &str, new_title: &
         let rewritten = markdown::rewrite_links(&text, new_title, |l| {
             markdown::resolve(l, &path, &cands) == Some(id)
         });
-        if let Some(new_text) = rewritten {
-            let up = with(|c| {
-                c.replicas
-                    .get_mut(vault)?
-                    .notes
-                    .get_mut(&nid)?
-                    .set_text(&new_text)
-            });
-            if let Some(u) = up {
-                local_update(vault, &nid, u);
-                changed += 1;
-            }
+        if let Some(new_text) = rewritten
+            && state::set_note_text(vault, &nid, &new_text) > 0
+        {
+            changed += 1;
         }
     }
     if changed > 0 {
@@ -1128,7 +1114,15 @@ pub async fn import(vault: &str, mut files: Vec<(String, Vec<u8>)>) {
     let total = files.len();
     let mut notes = 0;
     let mut atts = 0;
-    for (path, data) in files {
+    let max = state::max_update_bytes();
+    for (i, (path, data)) in files.into_iter().enumerate() {
+        // Send in pushes of bounded size as we go, and let the page breathe.
+        if state::outbox_bytes(vault) >= max {
+            state::flush_now();
+        }
+        if i % 20 == 19 {
+            util::sleep(0).await;
+        }
         if paths::is_note(&path) {
             let text = String::from_utf8_lossy(&data).replace("\r\n", "\n");
             let folder = paths::parent(&path).to_string();
@@ -1175,15 +1169,7 @@ pub async fn files_to_import(files: Vec<web_sys::File>) -> Vec<(String, Vec<u8>)
 // ------------------------------------------------------------------ history
 
 pub fn restore_revision(vault: &str, note: &str, text: &str) {
-    let up = with(|c| {
-        c.replicas
-            .get_mut(vault)?
-            .notes
-            .get_mut(note)?
-            .set_text(text)
-    });
-    if let Some(u) = up {
-        local_update(vault, note, u);
+    if state::set_note_text(vault, note, text) > 0 {
         refresh_open_editor(vault);
         success("Restored this version. The previous text remains in history.");
     }
@@ -1245,7 +1231,19 @@ impl NoteHost {
 }
 
 impl Host for NoteHost {
-    fn edit(&self, edits: &[Edit]) {
+    fn edit(&self, edits: &[Edit]) -> bool {
+        // One edit is one update; refuse what the server could never store
+        // rather than block the vault's sync with it.
+        let inserted = crate::sizes::inserted_bytes(edits);
+        let max = state::max_update_bytes();
+        if inserted > crate::sizes::insert_budget(max) {
+            error(format!(
+                "This is too large to add at once ({}; the server accepts {} per change). Add it in smaller parts, or attach it as a file.",
+                util::human_bytes(inserted as u64),
+                util::human_bytes(max as u64)
+            ));
+            return false;
+        }
         let res = with(|c| {
             let n = c.replicas.get_mut(&self.vault)?.notes.get_mut(&self.note)?;
             let u = n.apply_edits(edits)?;
@@ -1258,6 +1256,17 @@ impl Host for NoteHost {
             let d = with(|c| c.content_debounce.clone());
             d.run(400, move || ui.content_rev.update(|v| *v += 1));
         }
+        true
+    }
+
+    fn text(&self) -> Option<String> {
+        with(|c| {
+            c.replicas
+                .get(&self.vault)?
+                .notes
+                .get(&self.note)
+                .map(|n| n.text())
+        })
     }
 
     fn undo(&self) -> Option<String> {

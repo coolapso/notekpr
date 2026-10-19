@@ -79,8 +79,11 @@ pub async fn authenticate(state: &AppState, token: &str) -> AppResult<Principal>
     let hash = db::sha256(token.as_bytes());
     let row = sqlx::query(
         "SELECT s.id, s.user_id, s.device_id, s.kind AS skind, s.expires_at, s.revoked_at, s.last_used_at,
-                u.kind AS ukind, u.display_name, u.is_admin, u.disabled, u.owner_id
-         FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token_hash = ?",
+                u.kind AS ukind, u.display_name, u.is_admin, u.disabled, u.owner_id,
+                COALESCE(o.disabled, 0) AS owner_disabled
+         FROM sessions s JOIN users u ON u.id = s.user_id
+         LEFT JOIN users o ON o.id = u.owner_id
+         WHERE s.token_hash = ?",
     )
     .bind(&hash)
     .fetch_optional(&state.db)
@@ -89,7 +92,8 @@ pub async fn authenticate(state: &AppState, token: &str) -> AppResult<Principal>
     let now = db::now();
     let revoked: Option<i64> = row.get("revoked_at");
     let expires: i64 = row.get("expires_at");
-    let disabled: bool = row.get("disabled");
+    // An agent stops working when its owner's account is disabled.
+    let disabled: bool = row.get::<bool, _>("disabled") || row.get::<bool, _>("owner_disabled");
     if revoked.is_some() || expires <= now || disabled {
         return Err(AppError::Unauthorized);
     }

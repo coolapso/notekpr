@@ -153,6 +153,16 @@ pub async fn delete(
             .bind(&id)
             .fetch_all(&state.db)
             .await?;
+    let notes: Vec<(String, String)> =
+        sqlx::query_as("SELECT vault_id, object_id FROM object_shares WHERE user_id = ?")
+            .bind(&id)
+            .fetch_all(&state.db)
+            .await?;
+    let sessions: Vec<String> =
+        sqlx::query_scalar("SELECT id FROM sessions WHERE user_id = ? AND revoked_at IS NULL")
+            .bind(&id)
+            .fetch_all(&state.db)
+            .await?;
     {
         let _w = state.write_lock.lock().await;
         sqlx::query("DELETE FROM users WHERE id = ? AND kind = 'agent' AND owner_id = ?")
@@ -161,8 +171,15 @@ pub async fn delete(
             .execute(&state.db)
             .await?;
     }
+    // End its live connections now, not at the next session check.
     for v in vaults {
         state.hub.control(&id, Control::RevokeVault(v));
+    }
+    for (v, o) in notes {
+        state.hub.control(&id, Control::RevokeObject(v, o));
+    }
+    for s in sessions {
+        state.hub.control(&id, Control::SessionRevoked(s));
     }
     db::audit(
         &state.db,

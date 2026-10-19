@@ -77,6 +77,18 @@ pub async fn update_user(
             for s in sessions {
                 state.hub.control(&id, Control::SessionRevoked(s));
             }
+            // Their agents stop too (authentication checks the owner); close
+            // the agents' live connections right away.
+            let agent_sessions: Vec<(String, String)> = sqlx::query_as(
+                "SELECT s.user_id, s.id FROM sessions s JOIN users u ON u.id = s.user_id
+                 WHERE u.owner_id = ? AND s.revoked_at IS NULL",
+            )
+            .bind(&id)
+            .fetch_all(&state.db)
+            .await?;
+            for (agent, s) in agent_sessions {
+                state.hub.control(&agent, Control::SessionRevoked(s));
+            }
         }
     }
     if let Some(a) = req.is_admin {

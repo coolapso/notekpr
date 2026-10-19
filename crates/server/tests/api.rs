@@ -1756,3 +1756,55 @@ async fn writes_with_a_replaced_vault_key_are_refused() {
         .await
         .unwrap();
 }
+
+#[tokio::test]
+async fn agents_stop_when_their_owner_is_disabled() {
+    let srv = start().await;
+    let admin = new_user(&srv.base, "admin").await; // first user: administrator
+    let bob = new_user(&srv.base, "bob").await;
+    let created: CreateAgentResponse = bob
+        .api
+        .post(
+            "/agents",
+            &CreateAgentRequest {
+                name: "Helper".into(),
+            },
+        )
+        .await;
+    let tok: TokenResponse = reqwest::Client::new()
+        .post(format!("{}/oauth/token", srv.base))
+        .basic_auth(
+            &created.credential.client_id,
+            Some(&created.credential.client_secret),
+        )
+        .form(&[("grant_type", "client_credentials")])
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let mut agent_api = Api::new(&srv.base);
+    agent_api.token = Some(tok.access_token);
+    assert_eq!(
+        agent_api.status::<()>(Method::GET, "/vaults", None).await,
+        200
+    );
+
+    let st = admin
+        .api
+        .status(
+            Method::PATCH,
+            &format!("/admin/users/{}", bob.id),
+            Some(&AdminUpdateUser {
+                disabled: Some(true),
+                is_admin: None,
+            }),
+        )
+        .await;
+    assert_eq!(st, 200);
+    assert_eq!(
+        agent_api.status::<()>(Method::GET, "/vaults", None).await,
+        401
+    );
+}

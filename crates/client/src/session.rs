@@ -7,7 +7,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
-use coolpsonotes_core::crypto::Purpose;
 use coolpsonotes_core::engine::{self, Applied, PinStatus, VaultMeta, VaultReplica};
 use coolpsonotes_core::keys::{AccountSecret, VaultKeyring};
 use coolpsonotes_core::protocol::*;
@@ -24,10 +23,6 @@ pub type SharedVault = Arc<Mutex<Vault>>;
 
 /// Server pages are capped at 5000; 1000 keeps responses small.
 const PAGE: i64 = 1000;
-/// Updates per push request (server maximum is 500).
-const PUSH_BATCH: usize = 200;
-/// Approximate payload bytes per push request.
-const PUSH_BYTES: usize = 4 * 1024 * 1024;
 
 pub struct Session {
     pub profiles: ProfileStore,
@@ -353,127 +348,118 @@ impl Session {
                 Err(e) => return Err(anyhow!(e).context("uploading an attachment")),
             }
         }
-        let mut individually = false;
         let mut rekeyed = false;
         // Known even offline (remembered), never "unlimited".
-        let max = self.limits().max_update_bytes as usize;
+        let max = self.limits().max_update_bytes;
         {
-            // Changes kept back as too large go out again once they fit (the
-            // administrator raised the limit).
             let mut v = vault.lock().await;
-            if !v.quarantined.is_empty() {
-                let fit: Vec<String> = v
-                    .quarantined
-                    .iter()
-                    .filter(|p| {
-                        v.replica
-                            .encrypt_object(Purpose::Update, &p.object_id, &p.update)
-                            .is_ok_and(|c| c.len() <= max)
-                    })
-                    .map(|p| p.client_update_id.clone())
-                    .collect();
-                if v.release_quarantine(|p| fit.contains(&p.client_update_id)) > 0 {
-                    v.save()?;
-                }
-            }
+            v.set_update_limit(max);
+            v.new_push_session();
         }
-        loop {
-            let batch = {
+        'rounds: loop {
+            let plan = {
                 let mut v = vault.lock().await;
-                let all = v.replica.pending_pushes()?;
-                // One change the server can never accept must not block all
-                // the others behind it: keep it aside (locally) and go on.
-                let too_big: Vec<String> = all
-                    .iter()
-                    .filter(|p| p.payload.len() > max)
-                    .map(|p| p.client_update_id.clone())
-                    .collect();
-                if !too_big.is_empty() {
-                    let n = v.quarantine(&too_big);
-                    v.save()?;
-                    out.quarantined += n;
-                    warn_too_large(v.name(), n, max);
+                let plan = v.plan_push();
+                if !plan.held.is_empty() {
+                    out.quarantined += plan.held.len();
+                    warn_too_large(v.name(), plan.held.len(), max as usize);
                 }
-                let mut batch = Vec::new();
-                let mut bytes = 0;
-                let limit = if individually { 1 } else { PUSH_BATCH };
-                for p in all
-                    .into_iter()
-                    .filter(|p| !too_big.contains(&p.client_update_id))
-                {
-                    if !batch.is_empty()
-                        && (batch.len() >= limit || bytes + p.payload.len() > PUSH_BYTES)
-                    {
-                        break;
-                    }
-                    bytes += p.payload.len();
-                    batch.push(p);
-                }
-                batch
+                v.save()?;
+                plan
             };
-            if batch.is_empty() {
+            if plan.is_empty() {
                 break;
             }
-            let ids: Vec<String> = batch.iter().map(|p| p.client_update_id.clone()).collect();
-            match self.api.push(&id, batch).await {
-                Ok(resp) => {
-                    let mut v = vault.lock().await;
-                    v.check_rollback(resp.head_seq);
-                    out.pushed += resp.results.len();
-                    v.ack(&resp.results, false);
-                    v.save()?;
-                }
-                Err(e) if e.is_offline() => {
-                    out.offline = true;
-                    break;
-                }
-                Err(e) if e.status() == Some(409) || e.status() == Some(413) => {
-                    if !individually {
-                        // Find the offending update(s) by pushing one at a time.
-                        individually = true;
+            let mut pushes = plan.pushes.into_iter();
+            while let Some(batch) = pushes.next() {
+                let ids: Vec<String> = batch.iter().map(|p| p.client_update_id.clone()).collect();
+                // Whatever was not delivered goes out in a later round.
+                let not_sent =
+                    |v: &mut crate::vault::Vault, rest: std::vec::IntoIter<Vec<PushUpdate>>| {
+                        v.not_sent(&ids);
+                        for b in rest {
+                            let rest_ids: Vec<String> =
+                                b.iter().map(|p| p.client_update_id.clone()).collect();
+                            v.not_sent(&rest_ids);
+                        }
+                    };
+                match self.api.push(&id, batch).await {
+                    Ok(resp) => {
+                        let mut v = vault.lock().await;
+                        v.check_rollback(resp.head_seq);
+                        out.pushed += resp.results.len();
+                        let reaction = v.push_answered(&resp.results, &resp.rejected);
+                        v.save()?;
+                        if !reaction.held.is_empty() {
+                            out.quarantined += reaction.held.len();
+                            warn_too_large(v.name(), reaction.held.len(), max as usize);
+                        }
+                        if !reaction.purged.is_empty() {
+                            tracing::warn!(vault = %id, "dropped changes to {} document(s) permanently deleted elsewhere", reaction.purged.len());
+                        }
+                        if reaction.reload_keys {
+                            not_sent(&mut v, pushes);
+                            drop(v);
+                            if rekeyed {
+                                // Still refused with fresh keys: try again later.
+                                break 'rounds;
+                            }
+                            // A note became individually shared (or its key
+                            // rotated): fetch the new keys; the next round
+                            // re-encrypts.
+                            rekeyed = true;
+                            self.refresh_keys(vault).await?;
+                            continue 'rounds;
+                        }
+                    }
+                    Err(e) if e.is_offline() => {
+                        not_sent(&mut *vault.lock().await, pushes);
+                        out.offline = true;
+                        break 'rounds;
+                    }
+                    // Older servers refuse a whole batch for one bad update.
+                    Err(e) if e.status() == Some(409) || e.status() == Some(413) => {
+                        let mut v = vault.lock().await;
+                        let reaction = v.push_refused(&ids, e.status() == Some(413));
+                        not_sent(&mut v, pushes);
+                        v.save()?;
+                        if !reaction.held.is_empty() {
+                            out.quarantined += reaction.held.len();
+                            warn_too_large(v.name(), reaction.held.len(), max as usize);
+                        }
+                        drop(v);
                         if e.status() == Some(409) {
                             let _ = self.catch_up(vault).await;
                         }
-                        continue;
+                        continue 'rounds;
                     }
-                    let mut v = vault.lock().await;
-                    if e.status() == Some(409) {
-                        // Writing to a document that was permanently deleted elsewhere.
-                        v.drop_pending(&ids);
-                        v.save()?;
-                        tracing::warn!(vault = %id, "dropped a change to a document that was permanently deleted");
-                    } else {
-                        // Refused although it is within the limit we know of
-                        // (the limit changed): keep it aside, push the rest.
-                        let n = v.quarantine(&ids);
-                        v.save()?;
-                        out.quarantined += n;
-                        warn_too_large(v.name(), n, max);
+                    Err(e) if e.status() == Some(412) && !rekeyed => {
+                        not_sent(&mut *vault.lock().await, pushes);
+                        rekeyed = true;
+                        self.refresh_keys(vault).await?;
+                        continue 'rounds;
+                    }
+                    Err(e) if e.status() == Some(403) => {
+                        not_sent(&mut *vault.lock().await, pushes);
+                        let _ = self.refresh_vault(vault).await;
+                        out.remaining = vault.lock().await.replica.pending.len();
+                        ui::warn(&format!(
+                            "you no longer have write access to vault '{}'; {} local change(s) kept but not uploaded",
+                            vault.lock().await.name(),
+                            out.remaining
+                        ));
+                        return Ok(out);
+                    }
+                    Err(e) if e.status() == Some(404) => {
+                        not_sent(&mut *vault.lock().await, pushes);
+                        return Err(anyhow!(e)
+                            .context("the vault no longer exists or you lost access to it"));
+                    }
+                    Err(e) => {
+                        not_sent(&mut *vault.lock().await, pushes);
+                        return Err(anyhow!(e).context("uploading changes"));
                     }
                 }
-                // A note became individually shared (or its key rotated): fetch
-                // the new keys; pending changes are re-encrypted on the next pass.
-                Err(e) if e.status() == Some(412) && !rekeyed => {
-                    rekeyed = true;
-                    self.refresh_keys(vault).await?;
-                    continue;
-                }
-                Err(e) if e.status() == Some(403) => {
-                    let _ = self.refresh_vault(vault).await;
-                    out.remaining = vault.lock().await.replica.pending.len();
-                    ui::warn(&format!(
-                        "you no longer have write access to vault '{}'; {} local change(s) kept but not uploaded",
-                        vault.lock().await.name(),
-                        out.remaining
-                    ));
-                    return Ok(out);
-                }
-                Err(e) if e.status() == Some(404) => {
-                    return Err(
-                        anyhow!(e).context("the vault no longer exists or you lost access to it")
-                    );
-                }
-                Err(e) => return Err(anyhow!(e).context("uploading changes")),
             }
         }
         out.remaining = vault.lock().await.replica.pending.len();
@@ -513,18 +499,10 @@ impl Session {
         }
         let req = {
             let v = vault.lock().await;
-            if v.replica.pending.iter().any(|p| p.object_id == oid)
-                || v.replica.purged.contains(oid)
-            {
-                return Ok(false);
+            match coolpsonotes_sync::snapshot_now(&v.replica, &v.outbox, oid, None) {
+                Some(req) => req,
+                None => return Ok(false),
             }
-            if oid != INDEX_OBJECT_ID && !v.replica.notes.contains_key(oid) {
-                return Ok(false);
-            }
-            if v.replica.seq < 1 {
-                return Ok(false);
-            }
-            v.replica.snapshot_request(oid)?
         };
         match self.api.create_snapshot(id, oid, &req).await {
             Ok(_) => {

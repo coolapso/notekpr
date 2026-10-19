@@ -50,6 +50,19 @@ fn unsent_updates_of_one_note_are_merged_into_one() {
 }
 
 #[test]
+fn merging_never_undoes_a_split_paste() {
+    let (mut r, mut o) = (replica(), Outbox::default());
+    let limits = Limits::new(64 * 1024);
+    // Parts of one big paste, each just under the edit budget.
+    for _ in 0..6 {
+        edit(&mut r, "n1", &"z".repeat(limits.edit_budget() - 200));
+    }
+    let plan = o.plan(&mut r, &limits);
+    assert!(plan.held.is_empty(), "nothing became too large");
+    assert_eq!(plan.ids().len(), 6);
+}
+
+#[test]
 fn sent_updates_are_not_merged_or_sent_twice() {
     let (mut r, mut o) = (replica(), Outbox::default());
     edit(&mut r, "n1", "a");

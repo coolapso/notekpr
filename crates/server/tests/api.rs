@@ -1909,7 +1909,10 @@ async fn one_bad_update_does_not_block_its_batch() {
         .collect();
     assert_eq!(
         stored,
-        vec![good1.client_update_id.as_str(), good2.client_update_id.as_str()]
+        vec![
+            good1.client_update_id.as_str(),
+            good2.client_update_id.as_str()
+        ]
     );
     assert_eq!(resp.rejected.len(), 1);
     assert_eq!(resp.rejected[0].client_update_id, big_id);

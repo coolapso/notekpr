@@ -150,6 +150,15 @@ pub struct Reaction {
 }
 
 impl Outbox {
+    /// An outbox with updates held back by an earlier session (loaded from
+    /// local storage).
+    pub fn with_held(held: Vec<Pending>) -> Outbox {
+        Outbox {
+            held,
+            ..Default::default()
+        }
+    }
+
     /// Number of updates kept back.
     pub fn held_count(&self) -> usize {
         self.held.len()
@@ -175,20 +184,34 @@ impl Outbox {
         }
     }
 
-    /// Merge queued updates of the same object that were never sent into one
-    /// [W-M9]. Applying the merged update equals applying the originals.
-    pub fn merge_unsent(&mut self, r: &mut VaultReplica) {
+    /// Merge queued updates of the same object that were never sent [W-M9],
+    /// as long as a merged update stays within `limits.edit_budget()` (a big
+    /// paste was split on purpose). Applying a merged update equals applying
+    /// the originals.
+    pub fn merge_unsent(&mut self, r: &mut VaultReplica, limits: &Limits) {
+        let budget = limits.edit_budget();
         let mut out: Vec<Pending> = Vec::with_capacity(r.pending.len());
-        let mut groups: Vec<(String, Vec<usize>)> = Vec::new();
+        // Open groups by object: (object, member indices, bytes).
+        let mut groups: Vec<(String, Vec<usize>, usize)> = Vec::new();
+        let mut open: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
         for (i, p) in r.pending.iter().enumerate() {
             if self.sent.contains(&p.client_update_id) {
                 continue;
             }
-            match groups.iter_mut().find(|(o, _)| *o == p.object_id) {
-                Some((_, v)) => v.push(i),
-                None => groups.push((p.object_id.clone(), vec![i])),
+            let n = p.update.len();
+            match open.get(&p.object_id) {
+                Some(&g) if groups[g].2 + n <= budget => {
+                    groups[g].1.push(i);
+                    groups[g].2 += n;
+                }
+                _ => {
+                    open.insert(p.object_id.clone(), groups.len());
+                    groups.push((p.object_id.clone(), vec![i], n));
+                }
             }
         }
+        let groups: Vec<(String, Vec<usize>)> =
+            groups.into_iter().map(|(o, v, _)| (o, v)).collect();
         let mut replace: std::collections::HashMap<usize, Option<Pending>> =
             std::collections::HashMap::new();
         for (object_id, idx) in groups.into_iter().filter(|(_, v)| v.len() > 1) {
@@ -230,7 +253,7 @@ impl Outbox {
             return plan;
         }
         plan.released = self.release_fitting(r, limits);
-        self.merge_unsent(r);
+        self.merge_unsent(r, limits);
         let max = limits.max_update_bytes;
         let mut ready: Vec<PushUpdate> = Vec::new();
         let mut hold_ids = Vec::new();

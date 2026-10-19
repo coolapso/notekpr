@@ -431,7 +431,7 @@ async fn oversized_changes_are_split_or_set_aside_and_never_block_the_rest() {
     {
         let g = v.lock().await;
         assert!(g.replica.pending.is_empty(), "nothing is blocked");
-        assert_eq!(g.quarantined.len(), 1);
+        assert_eq!(g.outbox.held_count(), 1);
     }
     bob_hub.sync_vault(&vid).await.unwrap();
     assert_eq!(

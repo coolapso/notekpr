@@ -633,7 +633,7 @@ pub fn summary(v: &Vault) -> VaultSummary {
         archived: v.archived,
         documents: v.notes().len(),
         pending_changes: v.replica.pending.len(),
-        too_large_changes: v.quarantined.len(),
+        too_large_changes: v.outbox.held_count(),
         read_only: v.read_only.clone(),
         seq: v.replica.seq,
         last_sync: v.last_sync,

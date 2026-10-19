@@ -13,10 +13,11 @@ use coolpsonotes_core::doc::{self, Entry, EntryKind, NoteDoc};
 use coolpsonotes_core::engine::{Applied, Pending, VaultMeta, VaultReplica};
 use coolpsonotes_core::keys::{VaultKey, VaultKeyring};
 use coolpsonotes_core::protocol::{
-    ChangesResponse, INDEX_OBJECT_ID, PushResult, Role, Snapshot, Update,
+    ChangesResponse, INDEX_OBJECT_ID, PushResult, RejectedUpdate, Role, Snapshot, Update,
 };
 use coolpsonotes_core::textdiff::{self, Edit};
 use coolpsonotes_core::{markdown, now_ms, paths, random_id, search};
+use coolpsonotes_sync::{Limits, Outbox, Plan, Reaction};
 
 use crate::store::{StoredState, VaultStore};
 
@@ -72,12 +73,12 @@ pub struct Vault {
     pub read_only: Option<String>,
     pub pending_blobs: BTreeSet<String>,
     pub last_sync: Option<i64>,
-    /// Local updates too large for the server: kept (and applied locally),
-    /// not uploaded, so they never block the rest of the queue.
-    pub quarantined: Vec<Pending>,
-    /// Largest plaintext a single local edit update may carry (half the
-    /// server's update limit; larger text edits are split).
-    update_budget: usize,
+    /// What to upload next (`coolpsonotes_sync`). Its `held` updates — too
+    /// large for the server — are kept (and applied locally), not uploaded,
+    /// so they never block the rest of the queue; stored as `quarantine`.
+    pub outbox: Outbox,
+    /// The server's limits as far as known (sizes edits and pushes).
+    limits: Limits,
     store: VaultStore,
     dirty_objects: BTreeSet<String>,
     dirty_state: bool,
@@ -86,64 +87,10 @@ pub struct Vault {
     detached: bool,
 }
 
-/// Update budget for the server's default limit.
-const DEFAULT_UPDATE_BUDGET: usize = 1024 * 1024;
-
-/// Per-edit overhead assumed when sizing updates (ids, clocks, encoding).
-const EDIT_OVERHEAD: usize = 64;
-
-/// Apply text edits to a note as one or more updates, each carrying at most
-/// about `budget` bytes: a huge paste or import becomes several updates
-/// instead of one the server rejects forever. Offsets in `edits` refer to
-/// the text after the previous edits, so applying them in order in several
-/// transactions gives the same result as one.
+/// Apply text edits to a note as one or more updates within `budget`
+/// bytes each (see `coolpsonotes_sync::edits`).
 pub fn apply_edits_chunked(doc: &NoteDoc, edits: &[Edit], budget: usize) -> Vec<Vec<u8>> {
-    let budget = budget.max(1024);
-    let mut out = Vec::new();
-    let mut group: Vec<Edit> = Vec::new();
-    let mut size = 0;
-    let flush = |group: &mut Vec<Edit>, size: &mut usize, out: &mut Vec<Vec<u8>>| {
-        if !group.is_empty() {
-            out.extend(doc.apply_edits(group));
-            group.clear();
-            *size = 0;
-        }
-    };
-    for e in edits {
-        match e {
-            Edit::Insert { at, text } if text.len() > budget => {
-                flush(&mut group, &mut size, &mut out);
-                let (mut pos, mut rest) = (*at, text.as_str());
-                while !rest.is_empty() {
-                    let mut cut = budget.min(rest.len());
-                    while !rest.is_char_boundary(cut) {
-                        cut -= 1;
-                    }
-                    let (piece, tail) = rest.split_at(cut);
-                    out.extend(doc.apply_edits(&[Edit::Insert {
-                        at: pos,
-                        text: piece.to_string(),
-                    }]));
-                    pos += piece.len();
-                    rest = tail;
-                }
-            }
-            e => {
-                let cost = EDIT_OVERHEAD
-                    + match e {
-                        Edit::Insert { text, .. } => text.len(),
-                        Edit::Delete { .. } => 0,
-                    };
-                if size + cost > budget {
-                    flush(&mut group, &mut size, &mut out);
-                }
-                group.push(e.clone());
-                size += cost;
-            }
-        }
-    }
-    flush(&mut group, &mut size, &mut out);
-    out
+    coolpsonotes_sync::edits::apply_chunked(doc, edits, budget)
 }
 
 impl Vault {
@@ -155,8 +102,8 @@ impl Vault {
             read_only: None,
             pending_blobs: BTreeSet::new(),
             last_sync: None,
-            quarantined: Vec::new(),
-            update_budget: DEFAULT_UPDATE_BUDGET,
+            outbox: Outbox::default(),
+            limits: Limits::default(),
             store,
             dirty_objects: BTreeSet::new(),
             dirty_state: true,
@@ -166,53 +113,81 @@ impl Vault {
         }
     }
 
-    /// Size local edit updates for a server accepting `max_update_bytes`.
+    /// Size local edits and pushes for a server accepting `max_update_bytes`.
     pub fn set_update_limit(&mut self, max_update_bytes: u64) {
-        self.update_budget = (max_update_bytes / 2).clamp(1024, usize::MAX as u64) as usize;
+        self.limits = Limits::new(max_update_bytes.min(usize::MAX as u64) as usize);
     }
 
+    pub fn limits(&self) -> Limits {
+        self.limits
+    }
+
+    /// Largest change one local edit update may carry (larger text edits are split).
     pub fn update_budget(&self) -> usize {
-        self.update_budget
+        self.limits.edit_budget()
     }
 
-    /// Move queued updates the server can never accept (too large) out of
-    /// the upload queue. They stay applied locally and are kept on disk.
-    pub fn quarantine(&mut self, client_update_ids: &[String]) -> usize {
-        let (bad, keep): (Vec<Pending>, Vec<Pending>) = std::mem::take(&mut self.replica.pending)
-            .into_iter()
-            .partition(|p| client_update_ids.contains(&p.client_update_id));
-        self.replica.pending = keep;
-        let n = bad.len();
-        for p in bad {
-            if !self
-                .quarantined
+    /// Run an outbox operation, noting what has to be saved.
+    fn with_outbox<T>(
+        &mut self,
+        f: impl FnOnce(&mut Outbox, &mut VaultReplica, &Limits) -> T,
+    ) -> T {
+        let held: Vec<String> = self
+            .outbox
+            .held
+            .iter()
+            .map(|p| p.client_update_id.clone())
+            .collect();
+        let pending = self.replica.pending.len();
+        let limits = self.limits;
+        let out = f(&mut self.outbox, &mut self.replica, &limits);
+        if self.outbox.held.len() != held.len()
+            || self
+                .outbox
+                .held
                 .iter()
-                .any(|q| q.client_update_id == p.client_update_id)
-            {
-                self.quarantined.push(p);
-            }
-        }
-        if n > 0 {
-            self.dirty_pending = true;
+                .any(|p| !held.contains(&p.client_update_id))
+        {
             self.dirty_quarantine = true;
         }
-        n
+        // Merging or holding changes the queue even at the same length.
+        if self.replica.pending.len() != pending || !held.is_empty() || pending > 0 {
+            self.dirty_pending = true;
+        }
+        out
     }
 
-    /// Queue quarantined updates again (the server's limit grew); returns
-    /// how many.
-    pub fn release_quarantine(&mut self, fits: impl Fn(&Pending) -> bool) -> usize {
-        let (ok, keep): (Vec<Pending>, Vec<Pending>) = std::mem::take(&mut self.quarantined)
-            .into_iter()
-            .partition(fits);
-        self.quarantined = keep;
-        let n = ok.len();
-        if n > 0 {
-            self.replica.pending.extend(ok);
-            self.dirty_pending = true;
-            self.dirty_quarantine = true;
-        }
-        n
+    /// The pushes to send now (merged, size-bounded, oversized ones held).
+    pub fn plan_push(&mut self) -> Plan {
+        self.with_outbox(|o, r, l| o.plan(r, l))
+    }
+
+    /// The server answered a REST push: stored `results`, refused `rejected`.
+    pub fn push_answered(
+        &mut self,
+        results: &[PushResult],
+        rejected: &[RejectedUpdate],
+    ) -> Reaction {
+        self.dirty_state = true;
+        self.with_outbox(|o, r, l| {
+            o.on_ack(r, results, false);
+            o.on_rejected(r, rejected, l)
+        })
+    }
+
+    /// An older server refused a whole batch (`too_large`: 413, else 409).
+    pub fn push_refused(&mut self, ids: &[String], too_large: bool) -> Reaction {
+        self.with_outbox(|o, r, l| o.on_batch_refused(r, ids, too_large, l))
+    }
+
+    /// These updates were not delivered (offline, error): plan them again later.
+    pub fn not_sent(&mut self, ids: &[String]) {
+        self.outbox.not_sent(ids);
+    }
+
+    /// A new upload session: everything unacknowledged may be sent again.
+    pub fn new_push_session(&mut self) {
+        self.outbox.connection_reset();
     }
 
     /// Load the local replica, re-applying unacknowledged updates.
@@ -247,7 +222,7 @@ impl Vault {
         }
         r.deferred = s.deferred.clone();
         r.pending = store.load_pending()?;
-        let quarantined = store.load_quarantine()?;
+        let quarantined: Vec<Pending> = store.load_quarantine()?;
         // (A crash while moving one into quarantine can leave it in both.)
         r.pending.retain(|p| {
             !quarantined
@@ -274,8 +249,8 @@ impl Vault {
             read_only: s.read_only,
             pending_blobs: s.pending_blobs,
             last_sync: s.last_sync,
-            quarantined,
-            update_budget: DEFAULT_UPDATE_BUDGET,
+            outbox: Outbox::with_held(quarantined),
+            limits: Limits::default(),
             store,
             dirty_objects: BTreeSet::new(),
             dirty_state: false,
@@ -329,7 +304,7 @@ impl Vault {
         }
         // Quarantine first: an update moved there is never in neither file.
         if self.dirty_quarantine {
-            self.store.save_quarantine(&self.quarantined)?;
+            self.store.save_quarantine(&self.outbox.held)?;
             self.dirty_quarantine = false;
         }
         if self.dirty_pending {
@@ -444,9 +419,9 @@ impl Vault {
     }
 
     pub fn apply_purge(&mut self, object_id: &str, seq: i64) -> Applied {
-        let before = self.quarantined.len();
-        self.quarantined.retain(|p| p.object_id != object_id);
-        self.dirty_quarantine |= self.quarantined.len() != before;
+        let before = self.outbox.held.len();
+        self.outbox.drop_object(&mut self.replica, object_id);
+        self.dirty_quarantine |= self.outbox.held.len() != before;
         let a = self.replica.apply_purge(object_id, seq);
         self.mark_applied(&a);
         a
@@ -457,18 +432,18 @@ impl Vault {
         self.dirty_state = true;
     }
 
-    pub fn ack(&mut self, results: &[PushResult], in_order: bool) {
-        self.replica.ack(results, in_order);
-        self.dirty_pending = true;
+    /// WebSocket acknowledgements (in log order) and refusals.
+    pub fn ack(
+        &mut self,
+        results: &[PushResult],
+        rejected: &[RejectedUpdate],
+        in_order: bool,
+    ) -> Reaction {
         self.dirty_state = true;
-    }
-
-    /// Discard queued updates the server can never accept.
-    pub fn drop_pending(&mut self, client_update_ids: &[String]) {
-        self.replica
-            .pending
-            .retain(|p| !client_update_ids.contains(&p.client_update_id));
-        self.dirty_pending = true;
+        self.with_outbox(|o, r, l| {
+            o.on_ack(r, results, in_order);
+            o.on_rejected(r, rejected, l)
+        })
     }
 
     pub fn set_keyring(&mut self, ring: VaultKeyring) {
@@ -511,35 +486,21 @@ impl Vault {
             "vault '{}': the server's history went backwards (possible restore or rollback); re-uploading local state",
             self.name()
         ));
-        self.replica.seq = self.replica.seq.min(head);
-        self.replica.max_head_seen = head;
-        if let Err(e) = self.repush_all() {
-            tracing::warn!("could not queue the local state for re-upload: {e}");
+        if self.read_only.is_some() {
+            self.replica.seq = self.replica.seq.min(head);
+            self.replica.max_head_seen = head;
+        } else {
+            let queued = coolpsonotes_sync::recover_from_rollback(&mut self.replica, head);
+            if queued > 0 {
+                self.dirty_pending = true;
+                self.dirty_objects.extend(
+                    std::iter::once(INDEX_OBJECT_ID.to_string())
+                        .chain(self.replica.notes.keys().cloned()),
+                );
+            }
         }
         self.dirty_state = true;
         true
-    }
-
-    /// Queue the complete state of every object as updates.
-    pub fn repush_all(&mut self) -> Result<usize> {
-        if self.read_only.is_some() || !self.replica.can_write() {
-            return Ok(0);
-        }
-        let mut n = 0;
-        let index = self.replica.index.encode_state();
-        self.record(INDEX_OBJECT_ID, index)?;
-        n += 1;
-        let notes: Vec<(String, Vec<u8>)> = self
-            .replica
-            .notes
-            .iter()
-            .map(|(id, d)| (id.clone(), d.encode_state()))
-            .collect();
-        for (id, state) in notes {
-            self.record(&id, state)?;
-            n += 1;
-        }
-        Ok(n)
     }
 
     // ------------------------------------------------------------ local edits
@@ -812,7 +773,7 @@ impl Vault {
             bail!("'{p}' already exists");
         }
         let id = random_id();
-        let budget = self.update_budget;
+        let budget = self.update_budget();
         let note = self.replica.notes.entry(id.clone()).or_default();
         let updates = apply_edits_chunked(note, &textdiff::diff("", text), budget);
         if updates.is_empty() {
@@ -841,7 +802,7 @@ impl Vault {
     /// Replace a note's text via a diff. Returns false if nothing changed.
     pub fn set_note_text(&mut self, id: &str, text: &str) -> Result<bool> {
         self.require_writable()?;
-        let budget = self.update_budget;
+        let budget = self.update_budget();
         let note = self.replica.notes.entry(id.to_string()).or_default();
         let old = note.text();
         if old == text {
@@ -891,7 +852,7 @@ impl Vault {
         self.require_writable()?;
         match self.find(path) {
             Some((p, e)) if e.kind == EntryKind::Note => {
-                let budget = self.update_budget;
+                let budget = self.update_budget();
                 let note = self.replica.notes.entry(e.id.clone()).or_default();
                 let len = note.len();
                 let insert = Edit::Insert {

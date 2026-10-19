@@ -172,7 +172,7 @@ async fn push_and_count_unsynced(ctx: &Ctx, vault: Option<&str>) -> Option<usize
     let mut n = 0;
     for v in hub.vaults() {
         let g = v.lock().await;
-        n += g.replica.pending.len() + g.quarantined.len() + g.pending_blobs.len();
+        n += g.replica.pending.len() + g.outbox.held_count() + g.pending_blobs.len();
     }
     Some(n)
 }
@@ -1117,7 +1117,7 @@ async fn vault(ctx: &Ctx, c: VaultCmd) -> Result<()> {
                 (
                     g.name().to_string(),
                     g.id().to_string(),
-                    g.replica.pending.len() + g.quarantined.len() + g.pending_blobs.len(),
+                    g.replica.pending.len() + g.outbox.held_count() + g.pending_blobs.len(),
                 )
             };
             let mut prompt = format!("Leave '{name}' and delete its local copy?");

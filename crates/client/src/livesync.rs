@@ -529,9 +529,21 @@ async fn handle(
                 hub.emit_applied(&vault_id, &a, false);
             }
         }
-        ServerMessage::Ack { vault_id, results } => {
+        ServerMessage::Ack {
+            vault_id,
+            results,
+            rejected,
+        } => {
             if let Some(v) = hub.get(&vault_id) {
-                v.lock().await.ack(&results, true);
+                let reaction = v.lock().await.ack(&results, &rejected, true);
+                if reaction.reload_keys
+                    && let Err(e) = session.refresh_keys(&v).await
+                {
+                    tracing::warn!("refreshing vault keys: {e:#}");
+                }
+                if reaction.resend || reaction.reload_keys {
+                    spawn_push(hub, &vault_id);
+                }
             }
         }
         ServerMessage::VaultEvent { vault_id, event } => {

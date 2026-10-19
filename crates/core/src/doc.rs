@@ -197,10 +197,30 @@ impl NoteDoc {
     }
 
     /// Full state encoded as a single update (used for snapshots and caches).
+    ///
+    /// Never contains deleted text. The undo manager keeps deleted items
+    /// alive in this document so they can be restored, and encoding them as
+    /// they are would hand text the user deleted to whoever reads the result,
+    /// e.g. people a note is shared with later. Re-encoding through a fresh
+    /// document lets yrs garbage-collect them.
     pub fn encode_state(&self) -> Vec<u8> {
-        self.doc
+        let raw = self
+            .doc
             .transact()
-            .encode_state_as_update_v1(&StateVector::default())
+            .encode_state_as_update_v1(&StateVector::default());
+        if self.undo.is_none() {
+            return raw;
+        }
+        let fresh = Doc::new();
+        match apply(&fresh, &raw) {
+            Ok(()) => fresh
+                .transact()
+                .encode_state_as_update_v1(&StateVector::default()),
+            Err(_) => {
+                debug_assert!(false, "own state must re-apply");
+                raw
+            }
+        }
     }
 
     pub fn state_vector(&self) -> StateVector {
@@ -658,6 +678,29 @@ mod tests {
         assert_eq!(a.text(), "one");
         assert!(a.redo().is_some());
         assert_eq!(a.text(), "one two");
+    }
+
+    #[test]
+    fn encoded_state_never_contains_deleted_text() {
+        let contains = |hay: &[u8], needle: &[u8]| hay.windows(needle.len()).any(|w| w == needle);
+        let mut a = NoteDoc::new();
+        a.enable_undo();
+        a.set_text("hello SECRETPASSWORD world");
+        a.undo_boundary();
+        a.set_text("hello world");
+        let state = a.encode_state();
+        assert!(!contains(&state, b"SECRETPASSWORD"));
+        // The state is still complete: it rebuilds the text and merges with
+        // replicas that saw the deletion.
+        let b = NoteDoc::from_updates([state.as_slice()]).unwrap();
+        assert_eq!(b.text(), "hello world");
+        let c = NoteDoc::new();
+        c.apply_update(&a.encode_state()).unwrap();
+        c.set_text("hello world!");
+        a.apply_update(&c.encode_state()).unwrap();
+        assert_eq!(a.text(), "hello world!");
+        // Undo still restores the deleted text locally.
+        assert!(a.undo().is_some());
     }
 
     #[test]

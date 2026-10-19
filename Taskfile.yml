@@ -180,7 +180,7 @@ tasks:
       - cargo test -p coolpsonotes-server
 
   test:cli:
-    desc: Sync engine, Markdown mirror, gateway and MCP against an in-process server
+    desc: Sync engine, Markdown mirror and gateway against an in-process server
     deps: [rust]
     cmds:
       - cargo test -p coolpsonotes-client

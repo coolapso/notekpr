@@ -3,11 +3,13 @@
 //! A random 256-bit *local key* (`local.key`, mode 0600) is created per
 //! profile. The account secret, the device secret and every cached replica are
 //! sealed with it (`keys::seal_local`, XChaCha20-Poly1305 bound to a context
-//! string), so copying the data directory alone — a backup, a synced folder,
-//! another user on the machine — reveals nothing.
+//! string).
 //!
-//! This does **not** protect against malware or anyone running as the same OS
-//! user: they can read `local.key` too. Full-disk encryption is the right
+//! The key file sits in the same profile directory, so this protects against
+//! other OS users (file permissions) and stray copies of single files, but
+//! **not** against a copy of the whole directory (a backup, a synced folder);
+//! moving the key to the OS keyring is planned (TODO.md). Nor does it protect
+//! against malware or anyone running as the same OS user. Full-disk encryption is the right
 //! defence for a lost laptop; see `docs/desktop-client.md`.
 
 use std::path::{Path, PathBuf};

@@ -1,5 +1,5 @@
 //! One vault's local replica plus the document operations every front end
-//! (CLI, file mirror, gateway, MCP) shares.
+//! (CLI, file mirror, gateway) shares.
 //!
 //! [`Vault`] wraps the core [`VaultReplica`] with persistence (dirty tracking
 //! for [`VaultStore`]) and path-level operations. Nothing here touches the

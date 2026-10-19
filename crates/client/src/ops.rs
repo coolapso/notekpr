@@ -1,7 +1,7 @@
 //! Plaintext document operations on a [`Hub`], shared by the CLI, the local
-//! HTTP gateway and the MCP server. Enforces the hub's vault allow-list and
+//! HTTP gateway. Enforces the hub's vault allow-list and
 //! read-only flag; errors carry a category that front ends map to HTTP status
-//! codes or MCP tool errors.
+//! codes.
 
 use std::collections::BTreeSet;
 

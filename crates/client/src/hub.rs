@@ -2,7 +2,7 @@
 //! session, change notifications, and pushing local edits.
 //!
 //! One-shot CLI commands use a hub for a single catch-up + edit + push. The
-//! sync daemon, gateway and MCP server keep one alive, with
+//! sync daemon and gateway keep one alive, with
 //! [`crate::livesync`] streaming remote changes into it over the WebSocket.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -42,7 +42,7 @@ pub enum HubEvent {
 pub struct HubOptions {
     /// Restrict to these vaults (ids or unique names). Empty = all.
     pub vaults: Vec<String>,
-    /// Refuse every write (gateway/MCP `--read-only`).
+    /// Refuse every write (gateway `--read-only`).
     pub read_only: bool,
     /// Fall back to the local replicas when the server is unreachable.
     pub offline_ok: bool,

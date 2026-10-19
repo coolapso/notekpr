@@ -1,6 +1,6 @@
 //! coolpsonotes desktop client library: profiles and local key storage, the
 //! sync engine (REST catch-up + live WebSocket), the plaintext file mirror,
-//! the local agent gateway (HTTP) and the MCP server. The `coolpsonotes`
+//! and the local agent gateway (HTTP). The `coolpsonotes`
 //! binary is a thin CLI over these modules; integration tests drive them
 //! directly against an in-process server.
 
@@ -14,7 +14,6 @@ pub mod gateway;
 pub mod hub;
 pub mod livesync;
 pub mod manage;
-pub mod mcp;
 pub mod mirror;
 pub mod note_shares;
 pub mod ops;

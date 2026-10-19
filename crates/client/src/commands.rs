@@ -19,7 +19,6 @@ use crate::cli::*;
 use crate::gateway::{self, Gateway};
 use crate::hub::{Hub, HubOptions};
 use crate::manage;
-use crate::mcp::McpServer;
 use crate::mirror::Mirror;
 use crate::note_shares;
 use crate::ops;
@@ -348,7 +347,6 @@ pub async fn run(cli: Cli) -> Result<()> {
         Command::Sync(a) => sync(&ctx, a).await,
         Command::Agent(c) => agent(&ctx, c).await,
         Command::Gateway(a) => gateway_cmd(&ctx, a).await,
-        Command::Mcp(a) => mcp(&ctx, a).await,
     }
 }
 
@@ -1324,7 +1322,7 @@ async fn agent(ctx: &Ctx, c: AgentCmd) -> Result<()> {
     }
 }
 
-// ---------------------------------------------------------------- gateway & MCP
+// ---------------------------------------------------------------- gateway
 
 fn gateway_token(store: &ProfileStore, rotate: bool) -> Result<(String, bool)> {
     store.update(|p| match (&p.gateway.token, rotate) {
@@ -1398,34 +1396,4 @@ async fn gateway_cmd(ctx: &Ctx, a: GatewayArgs) -> Result<()> {
         .await;
     hub.save_all().await;
     Ok(())
-}
-
-async fn mcp(ctx: &Ctx, a: McpArgs) -> Result<()> {
-    let session = ctx.session()?;
-    let audit = Arc::new(AuditLog::open(&session.data_dir()));
-    let hub = Hub::start(
-        session,
-        HubOptions {
-            vaults: a.vaults.clone(),
-            read_only: a.read_only,
-            offline_ok: true,
-            catch_up: true,
-        },
-    )
-    .await?;
-    let (stop_tx, stop_rx) = watch::channel(false);
-    let live = tokio::spawn(livesync::run(hub.clone(), stop_rx));
-    let server = McpServer::new(hub.clone(), a.read_only, audit);
-    tracing::info!("MCP server ready on stdio");
-    let r = server.serve_stdio().await;
-    let _ = stop_tx.send(true);
-    let _ = tokio::time::timeout(Duration::from_secs(5), live).await;
-    for id in hub.vault_ids() {
-        let _ = tokio::time::timeout(Duration::from_secs(10), hub.push(&id)).await;
-    }
-    // The editing session ends with the process: keep a revision of what changed.
-    hub.snapshot_idle(Duration::ZERO, livesync::SESSION_MIN_UPDATES)
-        .await;
-    hub.save_all().await;
-    r
 }

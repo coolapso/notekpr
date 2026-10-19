@@ -243,7 +243,7 @@ fn Agents() -> impl IntoView {
     reload();
     let origin = util::window().location().origin().unwrap_or_default();
     view! {
-        <p>"An agent is a separate identity for an AI assistant or automation. It has its own keys and only sees the vaults you explicitly share with it (as viewer or editor), through the local agent gateway or MCP server."</p>
+        <p>"An agent is a separate identity for an AI assistant or automation. It has its own keys and only sees the vaults you explicitly share with it (as viewer or editor), through the coolpsonotes CLI, the local agent gateway or a Markdown folder it edits."</p>
         <form class="row" on:submit=move |ev| {
             ev.prevent_default();
             let n = name.get_untracked();

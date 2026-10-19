@@ -1,5 +1,5 @@
 //! Terminal interaction. Status and warnings go to **stderr** so stdout stays
-//! clean for command output and for the MCP protocol stream.
+//! clean for command output.
 
 use std::io::{BufRead, IsTerminal, Write};
 use std::sync::atomic::{AtomicBool, Ordering};

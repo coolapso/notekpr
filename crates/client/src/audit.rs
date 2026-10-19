@@ -1,4 +1,4 @@
-//! Append-only audit log of plaintext-API writes (gateway and MCP).
+//! Append-only audit log of plaintext-API writes (the gateway).
 //!
 //! One JSON object per line in `<data>/<profile>/audit.jsonl`: time, channel,
 //! operation, vault id, document id and byte count — never content, titles or

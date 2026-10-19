@@ -5,7 +5,7 @@ use tracing_subscriber::EnvFilter;
 
 fn main() {
     let cli = coolpsonotes_client::cli::Cli::parse();
-    // Logs go to stderr (stdout carries command output and the MCP protocol).
+    // Logs go to stderr (stdout carries command output).
     // The default level only shows warnings; COOLPSONOTES_LOG=debug for more.
     let filter =
         EnvFilter::try_from_env("COOLPSONOTES_LOG").unwrap_or_else(|_| EnvFilter::new("warn"));

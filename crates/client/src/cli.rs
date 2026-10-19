@@ -9,7 +9,7 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 #[command(
     name = "coolpsonotes",
     version,
-    about = "End-to-end encrypted, local-first Markdown notes: desktop sync, file mirror, agent gateway and MCP server",
+    about = "End-to-end encrypted, local-first Markdown notes: desktop sync, file mirror and agent gateway",
     after_help = "Use several profiles side by side, e.g. `--profile alice` and `--profile bob`.\n\
                   Documentation: docs/desktop-client.md and docs/agents.md"
 )]
@@ -157,8 +157,6 @@ pub enum Command {
     Agent(AgentCmd),
     /// Local plaintext HTTP API for agents and scripts.
     Gateway(GatewayArgs),
-    /// MCP server on stdio for AI agents.
-    Mcp(McpArgs),
 }
 
 #[derive(Args, Debug)]
@@ -398,14 +396,4 @@ pub enum GatewayCmd {
         #[arg(long)]
         rotate: bool,
     },
-}
-
-#[derive(Args, Debug)]
-pub struct McpArgs {
-    /// Offer read tools only.
-    #[arg(long)]
-    pub read_only: bool,
-    /// Only expose these vaults (id or name; repeatable).
-    #[arg(long = "vault")]
-    pub vaults: Vec<String>,
 }

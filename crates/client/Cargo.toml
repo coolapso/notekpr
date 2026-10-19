@@ -1,6 +1,6 @@
 [package]
 name = "coolpsonotes-client"
-description = "coolpsonotes desktop sync client, agent gateway and MCP server"
+description = "coolpsonotes desktop sync client and agent gateway"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

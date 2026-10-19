@@ -348,7 +348,7 @@ of in two clients).
 
 ### R1. One sync engine for all clients — separate session
 
-The web client (`state.rs`) and the CLI (`session.rs`, `livesync.rs`)
+The web client (`state/`) and the CLI (`session.rs`, `livesync.rs`)
 implement the same protocol twice; note sharing had to be built twice and
 several review bugs exist twice. Build a platform-neutral sync crate (async,
 with traits for storage, transport and timers) used by the browser (wasm) and
@@ -433,9 +433,14 @@ with SQLite; no SQL-dialect abstraction.
 
 ### R6. Web client structure and an editor crate
 
-- [ ] Split `crates/web/src/state.rs` (2,000+ lines of global `RefCell`
-      state) into services with Leptos contexts/stores — no more re-entrancy
-      footgun.
+- [x] Split `crates/web/src/state.rs` into modules by concern
+      (`state/{session,prefs,vaults,shares,sync,presence,nav}.rs`, shared
+      types in `state/mod.rs`) — mechanical, no behaviour change.
+- [ ] Then turn them into services with Leptos contexts/stores instead of one
+      global `RefCell` — no more re-entrancy footgun.
+- [ ] The editor holds its own `RefCell` state across DOM calls that can fire
+      events synchronously (one such panic fixed: `apply_mode_classes`);
+      the editor crate's document model should make that impossible.
 - [ ] Move the editor into its own crate with a document model (rope +
       transactions + decorations) instead of per-line re-render and DOM
       diffing; browser-level tests (`wasm-bindgen-test`).

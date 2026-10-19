@@ -22,7 +22,7 @@
 //! them (deleted by another tab while this one wrote) is not trusted.
 //!
 //! Layout (one object store, out-of-line keys):
-//! * `{user}\u{1}{vault}` → encrypted [`Meta`]
+//! * `{user}\u{1}{vault}` → encrypted `Meta`
 //! * `{user}\u{1}{vault}\u{1}{object}` → encrypted state
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};

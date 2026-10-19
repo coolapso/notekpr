@@ -163,7 +163,7 @@ pub fn focus_on_mount(el: web_sys::Element) {
     });
 }
 
-/// Close the menu `open` controls when [`install_menu_closer`] says so.
+/// Close the menu `open` controls on a click outside any menu (or Escape).
 pub fn close_on_outside(open: RwSignal<bool>) {
     let ui = ui();
     Effect::new(move |_| {

@@ -49,7 +49,7 @@ task setup                    # check the toolchain and say what's missing
 task dev                      # dev server on http://localhost:8080 (no OIDC), data in ./data
 task web:watch                # in a 2nd terminal: rebuild the web client on change, then reload the browser
 task cli:login DEV_USER=bob   # sign the CLI in as a test user (profile "bob")
-task cli -- --profile bob ls  # run any CLI command
+task cli -- --profile bob ls Family   # run any CLI command
 task test                     # all Rust tests;  task test:e2e -- -k collab  for browser tests
 task fmt                      # rustfmt (default style); CI checks it with task fmt:check
 task lint                     # clippy, warnings are errors
@@ -79,7 +79,9 @@ cargo run -p coolpsonotes-client -- --profile bob   login --server http://localh
 ```
 
 With Docker: `docker compose -f docker-compose.dev.yml up --build`
-(add `--profile oidc` to also run a local Dex OIDC provider on port 8081).
+(add `--profile oidc` to also run a local Dex OIDC provider on port 5556 and
+an OIDC-enabled coolpsonotes on <http://localhost:8081>; this profile uses host
+networking, so it works on Linux only).
 
 ## Tests
 

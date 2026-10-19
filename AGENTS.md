@@ -75,7 +75,8 @@ crates/client   `coolpsonotes` CLI: session.rs + livesync.rs (sync), mirror.rs
 tests/e2e       browser tests: suite.py, cross_client.py, wd.py (stdlib WebDriver)
 site/           project website: static HTML + CSS, no build step, no third-party
                 requests (fonts, scripts, analytics) — keep it that way
-deploy/         Caddy, Dex (dev OIDC), Kubernetes · Dockerfile, compose files
+deploy/         Caddyfiles, Dex (dev OIDC), Kubernetes, compose overrides
+(root)          Dockerfile, docker-compose.yml, docker-compose.dev.yml, Taskfile.yml
 ```
 
 ## Commands
@@ -88,11 +89,11 @@ rustup is not required. `task setup` checks everything.
 ```sh
 task dev                         # build + run a dev-mode server on http://localhost:8080
 task web:watch                   # rebuild the web client on change (then reload the browser)
-task cli -- --profile alice ls   # run the CLI;  task cli:login DEV_USER=alice
+task cli -- --profile alice ls Family   # run the CLI;  task cli:login DEV_USER=alice
 task fmt / task lint             # rustfmt; clippy with warnings as errors
 task test                        # all Rust tests
 task test:e2e -- -k sharing      # browser tests (chromium + chromedriver + python3)
-task ci                          # everything CI runs
+task ci                          # what CI runs (CI also runs cargo-deny: task audit)
 ```
 
 Without go-task, see the plain commands in the [Taskfile](Taskfile.yml) or

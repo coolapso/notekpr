@@ -373,6 +373,8 @@ pub struct Core {
     pub shares_restored: BTreeSet<String>,
     /// Vaults / shared notes whose keys are being reloaded.
     pub reloading: HashSet<String>,
+    /// Reloads asked for while one was running: run once more afterwards.
+    pub reload_again: HashSet<String>,
     /// The shared note we last announced our presence on.
     pub presence_note: Option<(String, String)>,
     pub flush: util::Debounce,
@@ -966,14 +968,34 @@ pub async fn load_vault(info: VaultInfo) {
 
 /// Reload a vault's keys, e.g. after a note in it got its own key.
 pub async fn reload_vault_keys(vault_id: String) {
-    if !with(|c| c.reloading.insert(vault_id.clone())) {
+    if !begin_reload(&vault_id).await {
         return;
     }
-    if let Ok(info) = api::get::<VaultInfo>(&format!("/vaults/{vault_id}")).await {
-        load_vault_with(info, true).await;
-        publish_vaults();
+    loop {
+        if let Ok(info) = api::get::<VaultInfo>(&format!("/vaults/{vault_id}")).await {
+            load_vault_with(info, true).await;
+            publish_vaults();
+        }
+        if !with(|c| c.reload_again.remove(&vault_id)) {
+            break;
+        }
     }
     with(|c| c.reloading.remove(&vault_id));
+}
+
+/// Start reloading the keys behind `tag`. If a reload is already running,
+/// it may have fetched the keys before they changed: ask it to run once
+/// more, wait until it is done and return `false`.
+async fn begin_reload(tag: &str) -> bool {
+    if with(|c| c.reloading.insert(tag.to_string())) {
+        with(|c| c.reload_again.remove(tag));
+        return true;
+    }
+    with(|c| c.reload_again.insert(tag.to_string()));
+    while with(|c| c.reloading.contains(tag)) {
+        util::sleep(50).await;
+    }
+    false
 }
 
 async fn load_vault_with(info: VaultInfo, force: bool) {
@@ -1263,13 +1285,22 @@ async fn load_share(info: SharedNote) {
 
 /// (Re)load the document key of a note shared with us.
 pub async fn reload_share_keys(vault: &str, note: &str) {
-    let key = (vault.to_string(), note.to_string());
     let tag = format!("{vault}/{note}");
-    if !with(|c| c.reloading.insert(tag.clone())) {
+    if !begin_reload(&tag).await {
         return;
     }
-    let res = api::get::<ObjectKeysResponse>(&format!("/vaults/{vault}/objects/{note}/keys")).await;
+    loop {
+        reload_share_keys_once(vault, note).await;
+        if !with(|c| c.reload_again.remove(&tag)) {
+            break;
+        }
+    }
     with(|c| c.reloading.remove(&tag));
+}
+
+async fn reload_share_keys_once(vault: &str, note: &str) {
+    let key = (vault.to_string(), note.to_string());
+    let res = api::get::<ObjectKeysResponse>(&format!("/vaults/{vault}/objects/{note}/keys")).await;
     let keys = match res {
         Ok(k) => k,
         Err(e) if e.status == 404 => {
@@ -1952,11 +1983,36 @@ fn resend_pending(vault_id: &str) {
     let ups = with(|c| {
         c.replicas
             .get(vault_id)
-            .and_then(|r| r.pending_pushes().ok())
+            .map(|r| {
+                encrypt_pending(r)
+                    .into_iter()
+                    .filter_map(|(_, u)| u)
+                    .collect::<Vec<_>>()
+            })
             .unwrap_or_default()
     });
     push_all(vault_id, ups);
     update_pending_count();
+}
+
+/// Every unacknowledged update with its id, encrypted with the current keys.
+/// One that can't be encrypted right now (`None`, e.g. its note's key is
+/// being reloaded) doesn't keep the others from being sent or stored.
+fn encrypt_pending(r: &VaultReplica) -> Vec<(String, Option<PushUpdate>)> {
+    r.pending
+        .iter()
+        .map(|p| {
+            let u = r
+                .encrypt_object(Purpose::Update, &p.object_id, &p.update)
+                .ok()
+                .map(|payload| PushUpdate {
+                    object_id: p.object_id.clone(),
+                    client_update_id: p.client_update_id.clone(),
+                    payload,
+                });
+            (p.client_update_id.clone(), u)
+        })
+        .collect()
 }
 
 /// The server's limit for one update (from `/info`).
@@ -2159,15 +2215,39 @@ pub fn flush_now() {
 }
 
 fn persist_pending(vault_id: &str) {
-    let (uid, ups) = with(|c| {
+    let (uid, items) = with(|c| {
         (
             c.user_id.clone(),
-            c.replicas
-                .get(vault_id)
-                .and_then(|r| r.pending_pushes().ok())
-                .unwrap_or_default(),
+            c.replicas.get(vault_id).map(encrypt_pending),
         )
     });
+    let Some(items) = items else {
+        // The replica is gone (e.g. the last note shared with us from this vault).
+        let _ = storage::set_pending(&uid, vault_id, &[]);
+        return;
+    };
+    let failed = items.iter().filter(|(_, u)| u.is_none()).count();
+    let ups: Vec<PushUpdate> = if failed == 0 {
+        items.into_iter().filter_map(|(_, u)| u).collect()
+    } else {
+        // Keep what was stored before for updates we can't encrypt now.
+        util::warn(&format!("{failed} unsent update(s) could not be encrypted"));
+        let mut stored = storage::pending(&uid, vault_id);
+        let ups: Vec<PushUpdate> = items
+            .into_iter()
+            .filter_map(|(id, u)| {
+                u.or_else(|| {
+                    let i = stored.iter().position(|s| s.client_update_id == id)?;
+                    Some(stored.swap_remove(i))
+                })
+            })
+            .collect();
+        if ups.is_empty() {
+            // Never replace stored changes with nothing because of an error.
+            return;
+        }
+        ups
+    };
     if let Err(e) = storage::set_pending(&uid, vault_id, &ups) {
         util::warn(&format!("could not store unsent changes: {e}"));
         storage_full();

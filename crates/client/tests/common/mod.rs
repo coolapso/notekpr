@@ -153,3 +153,73 @@ pub async fn note(hub: &Hub, vault: &str, path: &str) -> Option<String> {
     let (_, e) = g.find(path)?;
     Some(g.note_text(&e.id))
 }
+
+/// What a [`proxy`] does to a request instead of forwarding it normally.
+#[derive(Clone, Copy, Debug)]
+pub enum Fault {
+    /// Answer with this status (empty body) without forwarding.
+    Reply(u16),
+    /// Forward it, but answer with this status: the response is "lost".
+    LoseResponse(u16),
+}
+
+/// Decides the fate of a request passing through a [`proxy`].
+pub type Rule = Arc<dyn Fn(&axum::http::Method, &str) -> Option<Fault> + Send + Sync>;
+
+/// An HTTP proxy in front of `target` (REST only, no WebSocket) that can
+/// fail chosen requests — a reverse proxy answering 502, a lost upload.
+pub async fn proxy(target: &str, rule: Rule) -> String {
+    use axum::body::Body;
+    use axum::extract::Request;
+    use axum::response::Response;
+    let target = target.to_string();
+    let http = reqwest::Client::new();
+    let app = axum::Router::new().fallback(move |req: Request| {
+        let (target, http, rule) = (target.clone(), http.clone(), rule.clone());
+        async move {
+            let method = req.method().clone();
+            let path = req
+                .uri()
+                .path_and_query()
+                .map(|p| p.as_str().to_string())
+                .unwrap_or_default();
+            let fault = rule(&method, req.uri().path());
+            if let Some(Fault::Reply(status)) = fault {
+                return Response::builder()
+                    .status(status)
+                    .body(Body::empty())
+                    .unwrap();
+            }
+            let headers = req.headers().clone();
+            let body = axum::body::to_bytes(req.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            let mut out = http.request(method, format!("{target}{path}"));
+            for (k, v) in headers.iter() {
+                if k != axum::http::header::HOST {
+                    out = out.header(k, v);
+                }
+            }
+            let resp = out.body(body.to_vec()).send().await.unwrap();
+            if let Some(Fault::LoseResponse(status)) = fault {
+                return Response::builder()
+                    .status(status)
+                    .body(Body::empty())
+                    .unwrap();
+            }
+            let mut b = Response::builder().status(resp.status().as_u16());
+            for (k, v) in resp.headers().iter() {
+                if !matches!(k.as_str(), "transfer-encoding" | "connection") {
+                    b = b.header(k, v);
+                }
+            }
+            b.body(Body::from(resp.bytes().await.unwrap())).unwrap()
+        }
+    });
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    format!("http://{addr}")
+}

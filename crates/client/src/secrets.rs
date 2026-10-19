@@ -179,6 +179,31 @@ impl SecretStore {
         })?))
     }
 
+    /// Remember a first-device setup until it is uploaded and its recovery
+    /// key was shown (sealed like the account secret, which it contains the
+    /// equivalent of).
+    pub fn save_bootstrap(&self, user_id: &str, data: &[u8]) -> Result<()> {
+        self.key.write_sealed(
+            &self.dir.join(BOOTSTRAP_FILE),
+            &format!("bootstrap/{user_id}"),
+            data,
+        )
+    }
+
+    pub fn load_bootstrap(&self, user_id: &str) -> Result<Option<Zeroizing<Vec<u8>>>> {
+        self.key.read_sealed(
+            &self.dir.join(BOOTSTRAP_FILE),
+            &format!("bootstrap/{user_id}"),
+        )
+    }
+
+    pub fn forget_bootstrap(&self) -> Result<()> {
+        match std::fs::remove_file(self.dir.join(BOOTSTRAP_FILE)) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.into()),
+            _ => Ok(()),
+        }
+    }
+
     /// Delete the sealed account and device secrets (device was revoked).
     pub fn forget_account(&self) -> Result<()> {
         for f in [ACCOUNT_FILE, DEVICE_FILE] {

@@ -92,6 +92,11 @@ Store it in a password manager or on paper. It is the only way back in if you
 lose every device; nobody, including the server administrator, can recover
 your notes without it. Replace it any time with `coolpsonotes recovery rotate`.
 
+The keys are saved (sealed) on this device before anything is uploaded. If
+the setup is interrupted — the network fails, the process is killed — run
+`login` again: it uploads the same keys and shows the recovery key again, as
+long as it was never displayed.
+
 ### Additional devices
 
 If your account already has keys (you use the web app or another computer),

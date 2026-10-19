@@ -420,6 +420,9 @@ async fn login(ctx: &Ctx, a: LoginArgs) -> Result<()> {
     .await?;
     if let Some(rk) = &out.recovery_key {
         show_recovery_key(rk);
+        if let Err(e) = account::recovery_key_shown(&ctx.dirs, &ctx.profile) {
+            tracing::warn!("could not clear the pending account setup: {e:#}");
+        }
     }
     let how = if out.recovery_key.is_some() {
         "account keys created on this device"

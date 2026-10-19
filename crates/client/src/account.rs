@@ -54,6 +54,31 @@ pub struct LoginOutcome {
     pub recovered: bool,
 }
 
+/// A first-device setup: kept (sealed) from before the upload until the
+/// recovery key was shown, so neither can be lost to a failure in between.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct PendingBootstrap {
+    device_id: String,
+    request: AccountSetupRequest,
+    recovery_key: String,
+}
+
+fn pending_bootstrap(secrets: &SecretStore, user_id: &str) -> Result<Option<PendingBootstrap>> {
+    match secrets.load_bootstrap(user_id)? {
+        Some(b) => Ok(Some(
+            serde_json::from_slice(&b).context("reading the pending account setup")?,
+        )),
+        None => Ok(None),
+    }
+}
+
+/// Call once the recovery key of a new account (`LoginOutcome::recovery_key`)
+/// was shown: until then, every `login` shows it again.
+pub fn recovery_key_shown(dirs: &Dirs, profile: &str) -> Result<()> {
+    let ps = ProfileStore::new(dirs, profile)?;
+    SecretStore::open(&ps.data_dir())?.forget_bootstrap()
+}
+
 pub fn host_name() -> String {
     #[cfg(unix)]
     {
@@ -187,9 +212,23 @@ pub async fn login(dirs: &Dirs, profile: &str, opts: LoginOptions) -> Result<Log
 
     // 2. Already enrolled on this device: renew the session only.
     if let Some(account) = secrets.load_account(&user.id)? {
-        let key = me.account_key.as_ref().ok_or_else(|| {
-            anyhow!("the server has no account key for you but this device has one; the account may have been reset")
-        })?;
+        let pending = pending_bootstrap(&secrets, &user.id)?;
+        let key = match (&me.account_key, &pending) {
+            (Some(k), _) => k.clone(),
+            // A first-device setup whose upload did not finish (network,
+            // crash): upload the same keys again.
+            (None, Some(pb)) => {
+                api.put::<_, ()>("/me/account-key", &pb.request)
+                    .await
+                    .context("uploading the new account key")?;
+                pb.request.key.clone()
+            }
+            (None, None) => bail!(
+                "the server has no account key for you but this device has one; the account may have been reset"
+            ),
+        };
+        // Not shown yet (the process ended before): show it now.
+        let recovery_key = pending.map(|p| p.recovery_key);
         if key.verify()? != account.public() {
             bail!(
                 "the account key on the server differs from the one on this device. This can mean the server was \
@@ -211,8 +250,8 @@ pub async fn login(dirs: &Dirs, profile: &str, opts: LoginOptions) -> Result<Log
                         user,
                         device_id: dev,
                         fingerprint: account.public().fingerprint(),
-                        recovery_key: None,
-                        reused_device: true,
+                        reused_device: recovery_key.is_none(),
+                        recovery_key,
                         recovered: false,
                     });
                 }
@@ -238,9 +277,16 @@ pub async fn login(dirs: &Dirs, profile: &str, opts: LoginOptions) -> Result<Log
     // 3. First device of the account.
     let Some(key) = me.account_key.clone() else {
         let b = engine::bootstrap_account(&user.id, &device_name)?;
-        api.put::<_, ()>("/me/account-key", &b.request)
-            .await
-            .context("uploading the new account key")?;
+        // Everything is kept locally *before* the upload: if the upload or
+        // this process fails, the next login uploads the same keys and shows
+        // the recovery key then. (Uploading first could leave an account
+        // whose only secret was never saved anywhere.)
+        let pending = PendingBootstrap {
+            device_id: b.device_id.clone(),
+            request: b.request.clone(),
+            recovery_key: b.recovery.to_display(),
+        };
+        secrets.save_bootstrap(&user.id, &serde_json::to_vec(&pending)?)?;
         secrets.save_device(&user.id, &b.device_id, &b.device)?;
         secrets.save_account(&user.id, &b.account)?;
         ps.update(|p| {
@@ -248,11 +294,14 @@ pub async fn login(dirs: &Dirs, profile: &str, opts: LoginOptions) -> Result<Log
             p.device_name = Some(device_name.clone());
             p.device_pending = false;
         })?;
+        api.put::<_, ()>("/me/account-key", &b.request)
+            .await
+            .context("uploading the new account key (run `coolpsonotes login` again to retry)")?;
         return Ok(LoginOutcome {
             user,
             device_id: b.device_id,
             fingerprint: b.account.public().fingerprint(),
-            recovery_key: Some(b.recovery.to_display()),
+            recovery_key: Some(pending.recovery_key),
             reused_device: false,
             recovered: false,
         });
@@ -521,10 +570,12 @@ pub async fn agent_setup(
         ),
         (None, None) => {
             let (a, req) = engine::bootstrap_agent(&agent_id);
+            // Saved first: if the upload fails, running `agent setup` again
+            // uploads this key (the case above) instead of being locked out.
+            secrets.save_account(&agent_id, &a)?;
             api.put::<_, ()>("/me/account-key", &req)
                 .await
-                .context("uploading the agent key")?;
-            secrets.save_account(&agent_id, &a)?;
+                .context("uploading the agent key (run `agent setup` again to retry)")?;
             (a, true)
         }
     };

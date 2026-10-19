@@ -3,7 +3,7 @@
 //! a vault stays usable without coolpsonotes.
 
 use std::io::{Read, Write};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 use coolpsonotes_core::doc::EntryKind;
@@ -11,7 +11,7 @@ use coolpsonotes_core::paths;
 
 use crate::fsutil;
 use crate::hub::Hub;
-use crate::mirror::{is_ignored_name, is_safe_vault_path};
+use crate::mirror::{disk_path, is_ignored_name, is_safe_vault_path};
 use crate::session::SharedVault;
 
 #[derive(Debug, Default, Clone)]
@@ -132,10 +132,11 @@ pub async fn export(
         }
         std::fs::create_dir_all(out)?;
         for d in &folders {
-            std::fs::create_dir_all(disk_join(out, d))?;
+            std::fs::create_dir_all(disk_path(out, d)?)?;
         }
         for (p, data) in &files {
-            let target = disk_join(out, p);
+            // Every segment is checked again: nothing may land outside `out`.
+            let target = disk_path(out, p)?;
             if let Some(parent) = target.parent() {
                 std::fs::create_dir_all(parent)?;
             }
@@ -144,14 +145,6 @@ pub async fn export(
         }
     }
     Ok(report)
-}
-
-fn disk_join(root: &Path, vault_path: &str) -> PathBuf {
-    let mut p = root.to_path_buf();
-    for s in vault_path.split('/') {
-        p.push(s);
-    }
-    p
 }
 
 /// Files to import as (vault-relative path, bytes), plus empty folders.

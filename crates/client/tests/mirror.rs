@@ -266,3 +266,164 @@ async fn concurrent_offline_creation_gives_two_files_not_a_lost_note() {
             .all(|e| e.path == "Idea.md")
     );
 }
+
+/// A vault owned by alice and shared with bob (editor), plus bob's mirror.
+async fn shared_mirror(
+    srv: &TestServer,
+    name: &str,
+) -> (
+    std::sync::Arc<coolpsonotes_client::hub::Hub>,
+    String,
+    std::sync::Arc<coolpsonotes_client::hub::Hub>,
+    Mirror,
+    std::path::PathBuf,
+) {
+    let alice = login(srv, "alice").await;
+    let bob = login(srv, "bob").await;
+    manage::create_vault(&alice, name).await.unwrap();
+    let alice_hub = hub(&alice).await;
+    let v = alice_hub.resolve(name).await.unwrap();
+    let vid = v.lock().await.id().to_string();
+    manage::share(&alice, &v, "bob", Role::Editor, false)
+        .await
+        .unwrap();
+    let bob_hub = hub(&bob).await;
+    let mirror = Mirror::new(bob_hub.clone(), &srv.path("bob-mirror"))
+        .await
+        .unwrap();
+    let dir = mirror.vault_dir(&vid).unwrap().to_path_buf();
+    (alice_hub, vid, bob_hub, mirror, dir)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn one_bad_file_does_not_stop_the_mirror() {
+    use coolpsonotes_core::doc::EntryKind;
+    use coolpsonotes_core::protocol::INDEX_OBJECT_ID;
+    let srv = start().await;
+    let alice = login(&srv, "alice").await;
+    manage::create_vault(&alice, "Long").await.unwrap();
+    let h = hub(&alice).await;
+    let v = h.resolve("Long").await.unwrap();
+    let vid = v.lock().await.id().to_string();
+    ops::put_document(&h, &vid, "Good.md", "good\n", None)
+        .await
+        .unwrap();
+    // Two notes with the same 255-byte name: the second is shown as
+    // "… 2.md", which no file system accepts.
+    let long = format!("{}.md", "x".repeat(252));
+    {
+        let mut g = v.lock().await;
+        g.create_note(&long, "first\n").unwrap();
+        let id = coolpsonotes_core::random_id();
+        let u = g
+            .replica
+            .index
+            .create_with(
+                &id,
+                &long,
+                EntryKind::Note,
+                coolpsonotes_core::now_ms() + 1000,
+                Some(7),
+                None,
+            )
+            .unwrap();
+        g.record(INDEX_OBJECT_ID, u).unwrap();
+        let u = g
+            .replica
+            .notes
+            .entry(id.clone())
+            .or_default()
+            .set_text("second\n")
+            .unwrap();
+        g.record(&id, u).unwrap();
+        g.save().unwrap();
+    }
+    let mut m = Mirror::new(h.clone(), &srv.path("mirror")).await.unwrap();
+    m.reconcile_all(true).await.unwrap();
+    let dir = m.vault_dir(&vid).unwrap().to_path_buf();
+    assert_eq!(read(&dir.join("Good.md")), "good\n");
+    // A name at the limit is written (its temporary file name used to be too long).
+    assert_eq!(read(&dir.join(&long)), "first\n");
+    // The other files keep syncing.
+    write(&dir.join("Good.md"), "good, edited\n");
+    let r = m.reconcile_all(true).await.unwrap();
+    assert_eq!(r.ingested, 1, "{r:?}");
+    assert_eq!(
+        note(&h, &vid, "Good.md").await.as_deref(),
+        Some("good, edited\n")
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_file_edited_here_while_trashed_elsewhere_is_kept() {
+    let srv = start().await;
+    let (alice_hub, vid, bob_hub, mut m, dir) = shared_mirror(&srv, "Plans").await;
+    ops::put_document(&alice_hub, &vid, "Trip.md", "day 1\n", None)
+        .await
+        .unwrap();
+    bob_hub.sync_vault(&vid).await.unwrap();
+    m.reconcile_all(true).await.unwrap();
+    let trip = dir.join("Trip.md");
+    assert_eq!(read(&trip), "day 1\n");
+
+    // Bob edits the file (not picked up yet) while Alice trashes the note.
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    write(&trip, "day 1\nday 2 (bob)\n");
+    ops::delete_document(&alice_hub, &vid, "Trip.md")
+        .await
+        .unwrap();
+    bob_hub.sync_vault(&vid).await.unwrap();
+    let r = m.reconcile_all(true).await.unwrap();
+    assert_eq!(
+        read(&trip),
+        "day 1\nday 2 (bob)\n",
+        "the local edit is kept"
+    );
+    assert!(r.conflicts >= 1, "{r:?}");
+    // ... and synced again as a note.
+    alice_hub.sync_vault(&vid).await.unwrap();
+    assert_eq!(
+        note(&alice_hub, &vid, "Trip.md").await.as_deref(),
+        Some("day 1\nday 2 (bob)\n")
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_file_replaced_by_a_symlink_is_not_trashed() {
+    let srv = start().await;
+    let alice = login(&srv, "alice").await;
+    manage::create_vault(&alice, "Links").await.unwrap();
+    let h = hub(&alice).await;
+    let vid = h
+        .resolve("Links")
+        .await
+        .unwrap()
+        .lock()
+        .await
+        .id()
+        .to_string();
+    ops::put_document(&h, &vid, "A.md", "a\n", None)
+        .await
+        .unwrap();
+    let mut m = Mirror::new(h.clone(), &srv.path("mirror")).await.unwrap();
+    m.reconcile_all(true).await.unwrap();
+    let dir = m.vault_dir(&vid).unwrap().to_path_buf();
+    let outside = srv.path("elsewhere.md");
+    write(&outside, "outside\n");
+    std::fs::remove_file(dir.join("A.md")).unwrap();
+    std::os::unix::fs::symlink(&outside, dir.join("A.md")).unwrap();
+
+    let r = m.reconcile_all(true).await.unwrap();
+    assert_eq!(r.trashed, 0, "{r:?}");
+    assert_eq!(note(&h, &vid, "A.md").await.as_deref(), Some("a\n"));
+    // A remote edit neither replaces the link nor writes through it.
+    ops::put_document(&h, &vid, "A.md", "a2\n", None)
+        .await
+        .unwrap();
+    m.reconcile_all(true).await.unwrap();
+    let meta = std::fs::symlink_metadata(dir.join("A.md")).unwrap();
+    assert!(meta.file_type().is_symlink());
+    assert_eq!(read(&outside), "outside\n");
+    assert_eq!(note(&h, &vid, "A.md").await.as_deref(), Some("a2\n"));
+}

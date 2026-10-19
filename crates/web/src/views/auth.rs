@@ -41,13 +41,23 @@ pub fn Login(error: Option<String>) -> impl IntoView {
     let server = ui.server.get_untracked();
     let oidc = server.as_ref().map(|s| s.oidc_enabled).unwrap_or(false);
     let dev = server.as_ref().map(|s| s.dev_mode).unwrap_or(false);
-    let sso_name = server.as_ref().and_then(|s| s.oidc_display_name.clone()).unwrap_or_else(|| "Single sign-on".into());
+    let sso_name = server
+        .as_ref()
+        .and_then(|s| s.oidc_display_name.clone())
+        .unwrap_or_else(|| "Single sign-on".into());
     let username = RwSignal::new(String::new());
     let busy = RwSignal::new(false);
     let start_sso = move |_| {
         let route = state::current_route();
-        let rt = if matches!(route, state::Route::Home) { "/".to_string() } else { route.path() };
-        let _ = util::window().location().set_href(&format!("/api/v1/auth/oidc/start?return_to={}", crate::api::q(&rt)));
+        let rt = if matches!(route, state::Route::Home) {
+            "/".to_string()
+        } else {
+            route.path()
+        };
+        let _ = util::window().location().set_href(&format!(
+            "/api/v1/auth/oidc/start?return_to={}",
+            crate::api::q(&rt)
+        ));
     };
     let dev_login = move |name: String| {
         if name.trim().is_empty() {
@@ -90,7 +100,11 @@ pub fn Login(error: Option<String>) -> impl IntoView {
 #[component]
 pub fn Setup() -> impl IntoView {
     let busy = RwSignal::new(false);
-    let name = ui().user.get_untracked().map(|u| u.display_name).unwrap_or_default();
+    let name = ui()
+        .user
+        .get_untracked()
+        .map(|u| u.display_name)
+        .unwrap_or_default();
     view! {
         <Card>
             <h1>{format!("Welcome, {name}!")}</h1>
@@ -191,7 +205,9 @@ pub fn phase_view(p: Phase) -> AnyView {
         Phase::SignedOut { error } => view! { <Login error=error/> }.into_any(),
         Phase::Setup => view! { <Setup/> }.into_any(),
         Phase::ShowRecovery { key } => view! { <ShowRecovery key=key/> }.into_any(),
-        Phase::Enroll { pending, error } => view! { <Enroll pending=pending error=error/> }.into_any(),
+        Phase::Enroll { pending, error } => {
+            view! { <Enroll pending=pending error=error/> }.into_any()
+        }
         Phase::Ready => view! { <crate::views::Shell/> }.into_any(),
     }
 }

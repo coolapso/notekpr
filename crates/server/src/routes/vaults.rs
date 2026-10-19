@@ -5,13 +5,13 @@
 
 use std::collections::HashSet;
 
+use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
-use axum::Json;
 use coolpsonotes_core::protocol::{
-    AddMemberRequest, AuditEntry, ChainLink, ObjectChainLink, ObjectKeyEnvelope, CreateVaultRequest, GrantKeysRequest, KeyEnvelope, MemberInfo, Role,
-    RotateKeysRequest, UpdateMemberRequest, UpdateVaultRequest, UserEventKind, VaultEventKind, VaultInfo,
-    VaultKeysResponse,
+    AddMemberRequest, AuditEntry, ChainLink, CreateVaultRequest, GrantKeysRequest, KeyEnvelope,
+    MemberInfo, ObjectChainLink, ObjectKeyEnvelope, Role, RotateKeysRequest, UpdateMemberRequest,
+    UpdateVaultRequest, UserEventKind, VaultEventKind, VaultInfo, VaultKeysResponse,
 };
 use sqlx::Row;
 
@@ -42,7 +42,10 @@ fn vault_row(r: &sqlx::sqlite::SqliteRow) -> VaultInfo {
     }
 }
 
-pub async fn list(State(state): State<AppState>, who: Principal) -> AppResult<Json<Vec<VaultInfo>>> {
+pub async fn list(
+    State(state): State<AppState>,
+    who: Principal,
+) -> AppResult<Json<Vec<VaultInfo>>> {
     let rows = sqlx::query(
         "SELECT v.id, v.owner_id, m.role, v.encrypted_meta, v.key_epoch, v.head_seq, v.archived,
                 v.created_at, v.updated_at,
@@ -72,7 +75,11 @@ async fn load(state: &AppState, who: &Principal, vault_id: &str) -> AppResult<Va
     Ok(vault_row(&row))
 }
 
-pub async fn get(State(state): State<AppState>, who: Principal, Path(v): Path<String>) -> AppResult<Json<VaultInfo>> {
+pub async fn get(
+    State(state): State<AppState>,
+    who: Principal,
+    Path(v): Path<String>,
+) -> AppResult<Json<VaultInfo>> {
     Ok(Json(load(&state, &who, &v).await?))
 }
 
@@ -89,8 +96,14 @@ pub async fn create(
         return Err(bad("invalid vault metadata"));
     }
     let env = &req.key_envelope;
-    if env.user_id != who.user_id || env.epoch != 1 || env.envelope.is_empty() || env.envelope.len() > MAX_ENVELOPE_BYTES {
-        return Err(bad("the initial key envelope must be for yourself at epoch 1"));
+    if env.user_id != who.user_id
+        || env.epoch != 1
+        || env.envelope.is_empty()
+        || env.envelope.len() > MAX_ENVELOPE_BYTES
+    {
+        return Err(bad(
+            "the initial key envelope must be for yourself at epoch 1",
+        ));
     }
     if account_key(&state.db, &who.user_id).await?.is_none() {
         return Err(conflict("set up account keys first"));
@@ -111,9 +124,10 @@ pub async fn create(
         .execute(&mut *tx)
         .await;
         if let Err(sqlx::Error::Database(e)) = &r
-            && e.is_unique_violation() {
-                return Err(conflict("vault id already exists"));
-            }
+            && e.is_unique_violation()
+        {
+            return Err(conflict("vault id already exists"));
+        }
         r?;
         sqlx::query("INSERT INTO vault_members (vault_id, user_id, role, added_by, added_at) VALUES (?, ?, 'owner', ?, ?)")
             .bind(&req.id)
@@ -134,9 +148,21 @@ pub async fn create(
         .await?;
         tx.commit().await?;
     }
-    db::audit(&state.db, Some(&who.user_id), None, Some(&req.id), "vault.create", None, serde_json::json!({})).await;
+    db::audit(
+        &state.db,
+        Some(&who.user_id),
+        None,
+        Some(&req.id),
+        "vault.create",
+        None,
+        serde_json::json!({}),
+    )
+    .await;
     notify_user(&state, &who.user_id, UserEventKind::VaultsChanged);
-    Ok((StatusCode::CREATED, Json(load(&state, &who, &req.id).await?)))
+    Ok((
+        StatusCode::CREATED,
+        Json(load(&state, &who, &req.id).await?),
+    ))
 }
 
 pub async fn update(
@@ -165,63 +191,104 @@ pub async fn update(
             .execute(&state.db)
             .await?;
     }
-    db::audit(&state.db, Some(&who.user_id), None, Some(&v), "vault.update", None, serde_json::json!({ "archived": req.archived, "meta": req.encrypted_meta.is_some() })).await;
-    state.hub.publish(&v, VaultEvent::Event(VaultEventKind::MetaChanged));
+    db::audit(
+        &state.db,
+        Some(&who.user_id),
+        None,
+        Some(&v),
+        "vault.update",
+        None,
+        serde_json::json!({ "archived": req.archived, "meta": req.encrypted_meta.is_some() }),
+    )
+    .await;
+    state
+        .hub
+        .publish(&v, VaultEvent::Event(VaultEventKind::MetaChanged));
     Ok(Json(load(&state, &who, &v).await?))
 }
 
-pub async fn delete(State(state): State<AppState>, who: Principal, Path(v): Path<String>) -> AppResult<StatusCode> {
+pub async fn delete(
+    State(state): State<AppState>,
+    who: Principal,
+    Path(v): Path<String>,
+) -> AppResult<StatusCode> {
     access::require_owner(&state.db, &v, &who.user_id).await?;
-    let members: Vec<String> = sqlx::query_scalar("SELECT user_id FROM vault_members WHERE vault_id = ?")
-        .bind(&v)
-        .fetch_all(&state.db)
-        .await?;
-    let recipients: Vec<(String, String)> = sqlx::query_as("SELECT user_id, object_id FROM object_shares WHERE vault_id = ?")
-        .bind(&v)
-        .fetch_all(&state.db)
-        .await?;
+    let members: Vec<String> =
+        sqlx::query_scalar("SELECT user_id FROM vault_members WHERE vault_id = ?")
+            .bind(&v)
+            .fetch_all(&state.db)
+            .await?;
+    let recipients: Vec<(String, String)> =
+        sqlx::query_as("SELECT user_id, object_id FROM object_shares WHERE vault_id = ?")
+            .bind(&v)
+            .fetch_all(&state.db)
+            .await?;
     {
         let _w = state.write_lock.lock().await;
-        sqlx::query("DELETE FROM vaults WHERE id = ?").bind(&v).execute(&state.db).await?;
+        sqlx::query("DELETE FROM vaults WHERE id = ?")
+            .bind(&v)
+            .execute(&state.db)
+            .await?;
     }
     for (u, o) in recipients {
         state.hub.control(&u, Control::RevokeObject(v.clone(), o));
         notify_user(&state, &u, UserEventKind::SharesChanged);
     }
-    state.hub.publish(&v, VaultEvent::Event(VaultEventKind::Deleted));
+    state
+        .hub
+        .publish(&v, VaultEvent::Event(VaultEventKind::Deleted));
     for m in members {
         state.hub.control(&m, Control::RevokeVault(v.clone()));
         notify_user(&state, &m, UserEventKind::VaultsChanged);
     }
-    db::audit(&state.db, Some(&who.user_id), Some(&who.user_id), Some(&v), "vault.delete", None, serde_json::json!({})).await;
+    db::audit(
+        &state.db,
+        Some(&who.user_id),
+        Some(&who.user_id),
+        Some(&v),
+        "vault.delete",
+        None,
+        serde_json::json!({}),
+    )
+    .await;
     Ok(StatusCode::NO_CONTENT)
 }
 
-pub async fn keys(State(state): State<AppState>, who: Principal, Path(v): Path<String>) -> AppResult<Json<VaultKeysResponse>> {
+pub async fn keys(
+    State(state): State<AppState>,
+    who: Principal,
+    Path(v): Path<String>,
+) -> AppResult<Json<VaultKeysResponse>> {
     access::member_role(&state.db, &v, &who.user_id).await?;
     let current: i64 = sqlx::query_scalar("SELECT key_epoch FROM vaults WHERE id = ?")
         .bind(&v)
         .fetch_one(&state.db)
         .await?;
-    let envelopes = sqlx::query("SELECT epoch, envelope FROM vault_keys WHERE vault_id = ? AND user_id = ? ORDER BY epoch")
-        .bind(&v)
-        .bind(&who.user_id)
-        .fetch_all(&state.db)
-        .await?
-        .iter()
-        .map(|r| KeyEnvelope {
-            user_id: who.user_id.clone(),
-            epoch: r.get::<i64, _>("epoch") as u32,
-            envelope: r.get("envelope"),
-        })
-        .collect();
-    let chain = sqlx::query("SELECT epoch, link FROM vault_key_chain WHERE vault_id = ? ORDER BY epoch")
-        .bind(&v)
-        .fetch_all(&state.db)
-        .await?
-        .iter()
-        .map(|r| ChainLink { epoch: r.get::<i64, _>("epoch") as u32, link: r.get("link") })
-        .collect();
+    let envelopes = sqlx::query(
+        "SELECT epoch, envelope FROM vault_keys WHERE vault_id = ? AND user_id = ? ORDER BY epoch",
+    )
+    .bind(&v)
+    .bind(&who.user_id)
+    .fetch_all(&state.db)
+    .await?
+    .iter()
+    .map(|r| KeyEnvelope {
+        user_id: who.user_id.clone(),
+        epoch: r.get::<i64, _>("epoch") as u32,
+        envelope: r.get("envelope"),
+    })
+    .collect();
+    let chain =
+        sqlx::query("SELECT epoch, link FROM vault_key_chain WHERE vault_id = ? ORDER BY epoch")
+            .bind(&v)
+            .fetch_all(&state.db)
+            .await?
+            .iter()
+            .map(|r| ChainLink {
+                epoch: r.get::<i64, _>("epoch") as u32,
+                link: r.get("link"),
+            })
+            .collect();
     // Document keys of individually shared notes, wrapped under vault keys.
     let objects = sqlx::query("SELECT object_id, epoch, envelope FROM object_keys WHERE vault_id = ? AND user_id = '' ORDER BY object_id, epoch")
         .bind(&v)
@@ -237,10 +304,20 @@ pub async fn keys(State(state): State<AppState>, who: Principal, Path(v): Path<S
         .iter()
         .map(|r| ObjectChainLink { object_id: r.get("object_id"), epoch: r.get::<i64, _>("epoch") as u32, link: r.get("link") })
         .collect();
-    Ok(Json(VaultKeysResponse { current_epoch: current as u32, envelopes, chain, objects, object_chain }))
+    Ok(Json(VaultKeysResponse {
+        current_epoch: current as u32,
+        envelopes,
+        chain,
+        objects,
+        object_chain,
+    }))
 }
 
-pub async fn members(State(state): State<AppState>, who: Principal, Path(v): Path<String>) -> AppResult<Json<Vec<MemberInfo>>> {
+pub async fn members(
+    State(state): State<AppState>,
+    who: Principal,
+    Path(v): Path<String>,
+) -> AppResult<Json<Vec<MemberInfo>>> {
     access::member_role(&state.db, &v, &who.user_id).await?;
     let rows = sqlx::query(
         "SELECT m.user_id, m.role, m.added_at, m.added_by,
@@ -303,9 +380,15 @@ pub async fn add_member(
     }
     let epoch = current_epoch(&state, &v).await?;
     if let Some(env) = &req.key_envelope
-        && (env.user_id != req.user_id || env.epoch != epoch || env.envelope.is_empty() || env.envelope.len() > MAX_ENVELOPE_BYTES) {
-            return Err(bad("key envelope must be for the new member at the current epoch"));
-        }
+        && (env.user_id != req.user_id
+            || env.epoch != epoch
+            || env.envelope.is_empty()
+            || env.envelope.len() > MAX_ENVELOPE_BYTES)
+    {
+        return Err(bad(
+            "key envelope must be for the new member at the current epoch",
+        ));
+    }
     {
         let _w = state.write_lock.lock().await;
         let now = db::now();
@@ -319,9 +402,10 @@ pub async fn add_member(
             .execute(&mut *tx)
             .await;
         if let Err(sqlx::Error::Database(e)) = &r
-            && e.is_unique_violation() {
-                return Err(conflict("already a member"));
-            }
+            && e.is_unique_violation()
+        {
+            return Err(conflict("already a member"));
+        }
         r?;
         if let Some(env) = &req.key_envelope {
             sqlx::query(
@@ -338,8 +422,19 @@ pub async fn add_member(
         }
         tx.commit().await?;
     }
-    db::audit(&state.db, Some(&who.user_id), None, Some(&v), "member.add", Some(&req.user_id), serde_json::json!({ "role": req.role })).await;
-    state.hub.publish(&v, VaultEvent::Event(VaultEventKind::MembersChanged));
+    db::audit(
+        &state.db,
+        Some(&who.user_id),
+        None,
+        Some(&v),
+        "member.add",
+        Some(&req.user_id),
+        serde_json::json!({ "role": req.role }),
+    )
+    .await;
+    state
+        .hub
+        .publish(&v, VaultEvent::Event(VaultEventKind::MembersChanged));
     notify_user(&state, &req.user_id, UserEventKind::VaultsChanged);
     let info = MemberInfo {
         user: public_user(&state.db, &req.user_id).await?,
@@ -372,8 +467,19 @@ pub async fn update_member(
     if n == 0 {
         return Err(AppError::NotFound);
     }
-    db::audit(&state.db, Some(&who.user_id), None, Some(&v), "member.role", Some(&u), serde_json::json!({ "role": req.role })).await;
-    state.hub.publish(&v, VaultEvent::Event(VaultEventKind::RoleChanged));
+    db::audit(
+        &state.db,
+        Some(&who.user_id),
+        None,
+        Some(&v),
+        "member.role",
+        Some(&u),
+        serde_json::json!({ "role": req.role }),
+    )
+    .await;
+    state
+        .hub
+        .publish(&v, VaultEvent::Event(VaultEventKind::RoleChanged));
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -396,12 +502,14 @@ pub async fn remove_member(
     {
         let _w = state.write_lock.lock().await;
         let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
-        let n = sqlx::query("DELETE FROM vault_members WHERE vault_id = ? AND user_id = ? AND role != 'owner'")
-            .bind(&v)
-            .bind(&u)
-            .execute(&mut *tx)
-            .await?
-            .rows_affected();
+        let n = sqlx::query(
+            "DELETE FROM vault_members WHERE vault_id = ? AND user_id = ? AND role != 'owner'",
+        )
+        .bind(&v)
+        .bind(&u)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
         if n == 0 {
             return Err(AppError::NotFound);
         }
@@ -412,9 +520,20 @@ pub async fn remove_member(
             .await?;
         tx.commit().await?;
     }
-    db::audit(&state.db, Some(&who.user_id), None, Some(&v), "member.remove", Some(&u), serde_json::json!({})).await;
+    db::audit(
+        &state.db,
+        Some(&who.user_id),
+        None,
+        Some(&v),
+        "member.remove",
+        Some(&u),
+        serde_json::json!({}),
+    )
+    .await;
     state.hub.control(&u, Control::RevokeVault(v.clone()));
-    state.hub.publish(&v, VaultEvent::Event(VaultEventKind::MembersChanged));
+    state
+        .hub
+        .publish(&v, VaultEvent::Event(VaultEventKind::MembersChanged));
     notify_user(&state, &u, UserEventKind::VaultsChanged);
     Ok(StatusCode::NO_CONTENT)
 }
@@ -429,15 +548,22 @@ pub async fn grant_keys(
     who.require_human()?;
     access::require_owner(&state.db, &v, &who.user_id).await?;
     let epoch = current_epoch(&state, &v).await?;
-    let members: HashSet<String> = sqlx::query_scalar("SELECT user_id FROM vault_members WHERE vault_id = ?")
-        .bind(&v)
-        .fetch_all(&state.db)
-        .await?
-        .into_iter()
-        .collect();
+    let members: HashSet<String> =
+        sqlx::query_scalar("SELECT user_id FROM vault_members WHERE vault_id = ?")
+            .bind(&v)
+            .fetch_all(&state.db)
+            .await?
+            .into_iter()
+            .collect();
     for e in &req.envelopes {
-        if e.epoch != epoch || !members.contains(&e.user_id) || e.envelope.is_empty() || e.envelope.len() > MAX_ENVELOPE_BYTES {
-            return Err(bad("envelopes must be for current members at the current epoch"));
+        if e.epoch != epoch
+            || !members.contains(&e.user_id)
+            || e.envelope.is_empty()
+            || e.envelope.len() > MAX_ENVELOPE_BYTES
+        {
+            return Err(bad(
+                "envelopes must be for current members at the current epoch",
+            ));
         }
     }
     {
@@ -462,8 +588,19 @@ pub async fn grant_keys(
     for e in &req.envelopes {
         notify_user(&state, &e.user_id, UserEventKind::VaultsChanged);
     }
-    db::audit(&state.db, Some(&who.user_id), None, Some(&v), "keys.grant", None, serde_json::json!({ "count": req.envelopes.len() })).await;
-    state.hub.publish(&v, VaultEvent::Event(VaultEventKind::MembersChanged));
+    db::audit(
+        &state.db,
+        Some(&who.user_id),
+        None,
+        Some(&v),
+        "keys.grant",
+        None,
+        serde_json::json!({ "count": req.envelopes.len() }),
+    )
+    .await;
+    state
+        .hub
+        .publish(&v, VaultEvent::Event(VaultEventKind::MembersChanged));
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -477,7 +614,11 @@ pub async fn rotate_keys(
 ) -> AppResult<StatusCode> {
     who.require_human()?;
     access::require_owner(&state.db, &v, &who.user_id).await?;
-    if req.encrypted_meta.is_empty() || req.encrypted_meta.len() > MAX_META_BYTES || req.chain_link.is_empty() || req.chain_link.len() > MAX_ENVELOPE_BYTES {
+    if req.encrypted_meta.is_empty()
+        || req.encrypted_meta.len() > MAX_META_BYTES
+        || req.chain_link.is_empty()
+        || req.chain_link.len() > MAX_ENVELOPE_BYTES
+    {
         return Err(bad("invalid rotation payload"));
     }
     let _w = state.write_lock.lock().await;
@@ -495,9 +636,13 @@ pub async fn rotate_keys(
     .collect();
     let got: HashSet<String> = req.envelopes.iter().map(|e| e.user_id.clone()).collect();
     if got != need || got.len() != req.envelopes.len() {
-        return Err(conflict("envelopes must cover exactly the current members with keys"));
+        return Err(conflict(
+            "envelopes must cover exactly the current members with keys",
+        ));
     }
-    if req.envelopes.iter().any(|e| e.epoch != req.new_epoch || e.envelope.is_empty() || e.envelope.len() > MAX_ENVELOPE_BYTES) {
+    if req.envelopes.iter().any(|e| {
+        e.epoch != req.new_epoch || e.envelope.is_empty() || e.envelope.len() > MAX_ENVELOPE_BYTES
+    }) {
         return Err(bad("invalid envelope"));
     }
     let now = db::now();
@@ -527,13 +672,28 @@ pub async fn rotate_keys(
         .execute(&mut *tx)
         .await?;
     tx.commit().await?;
-    state.hub.publish(&v, VaultEvent::Event(VaultEventKind::KeyRotated));
+    state
+        .hub
+        .publish(&v, VaultEvent::Event(VaultEventKind::KeyRotated));
     drop(_w);
-    db::audit(&state.db, Some(&who.user_id), None, Some(&v), "keys.rotate", None, serde_json::json!({ "epoch": req.new_epoch })).await;
+    db::audit(
+        &state.db,
+        Some(&who.user_id),
+        None,
+        Some(&v),
+        "keys.rotate",
+        None,
+        serde_json::json!({ "epoch": req.new_epoch }),
+    )
+    .await;
     Ok(StatusCode::NO_CONTENT)
 }
 
-pub async fn audit(State(state): State<AppState>, who: Principal, Path(v): Path<String>) -> AppResult<Json<Vec<AuditEntry>>> {
+pub async fn audit(
+    State(state): State<AppState>,
+    who: Principal,
+    Path(v): Path<String>,
+) -> AppResult<Json<Vec<AuditEntry>>> {
     access::require_owner(&state.db, &v, &who.user_id).await?;
     let rows = sqlx::query(
         "SELECT a.id, a.at, a.actor_id, u.display_name, a.action, a.target, a.details

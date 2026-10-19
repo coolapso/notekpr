@@ -9,13 +9,14 @@
 
 use std::collections::HashSet;
 
+use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
-use axum::Json;
 use coolpsonotes_core::keys::{FIRST_DOC_EPOCH, is_doc_epoch};
 use coolpsonotes_core::protocol::{
-    AddObjectShareRequest, ChainLink, INDEX_OBJECT_ID, KeyEnvelope, ObjectEventKind, ObjectKeyUpdate, ObjectKeysResponse,
-    ObjectMetaUpdate, ObjectShareInfo, Role, SharedNote, UpdateMemberRequest, UserEventKind,
+    AddObjectShareRequest, ChainLink, INDEX_OBJECT_ID, KeyEnvelope, ObjectEventKind,
+    ObjectKeyUpdate, ObjectKeysResponse, ObjectMetaUpdate, ObjectShareInfo, Role, SharedNote,
+    UpdateMemberRequest, UserEventKind,
 };
 use sqlx::Row;
 
@@ -59,11 +60,20 @@ async fn object_key_epoch(state: &AppState, v: &str, o: &str) -> AppResult<Optio
 }
 
 fn publish(state: &AppState, v: &str, o: &str, event: ObjectEventKind) {
-    state.hub.publish(v, VaultEvent::Object { object_id: o.to_string(), event });
+    state.hub.publish(
+        v,
+        VaultEvent::Object {
+            object_id: o.to_string(),
+            event,
+        },
+    );
 }
 
 /// Notes shared with the caller individually.
-pub async fn shared_with_me(State(state): State<AppState>, who: Principal) -> AppResult<Json<Vec<SharedNote>>> {
+pub async fn shared_with_me(
+    State(state): State<AppState>,
+    who: Principal,
+) -> AppResult<Json<Vec<SharedNote>>> {
     let rows = sqlx::query(
         "SELECT s.vault_id, s.object_id, s.role, s.added_by, s.added_at, o.key_epoch, o.encrypted_meta, v.owner_id
          FROM object_shares s
@@ -104,7 +114,9 @@ pub async fn object_keys(
             .bind(&o)
             .fetch_optional(&state.db)
             .await?;
-    let Some((Some(epoch), meta)) = row else { return Err(AppError::NotFound) };
+    let Some((Some(epoch), meta)) = row else {
+        return Err(AppError::NotFound);
+    };
     let envelopes = sqlx::query("SELECT epoch, envelope FROM object_keys WHERE vault_id = ? AND object_id = ? AND user_id = ? ORDER BY epoch")
         .bind(&v)
         .bind(&o)
@@ -122,7 +134,14 @@ pub async fn object_keys(
         .iter()
         .map(|r| ChainLink { epoch: r.get::<i64, _>("epoch") as u32, link: r.get("link") })
         .collect();
-    Ok(Json(ObjectKeysResponse { object_id: o, role, current_epoch: epoch as u32, envelopes, chain, encrypted_meta: meta }))
+    Ok(Json(ObjectKeysResponse {
+        object_id: o,
+        role,
+        current_epoch: epoch as u32,
+        envelopes,
+        chain,
+        encrypted_meta: meta,
+    }))
 }
 
 /// Start sharing a note (first document key + covering snapshot) or rotate its key.
@@ -141,41 +160,61 @@ pub async fn set_key(
     if req.vault_envelope.is_empty() || req.vault_envelope.len() > MAX_ENVELOPE_BYTES {
         return Err(bad("invalid vault envelope"));
     }
-    if req.encrypted_meta.is_empty() || req.encrypted_meta.len() > MAX_META_BYTES || epoch_of(&req.encrypted_meta)? != req.epoch {
+    if req.encrypted_meta.is_empty()
+        || req.encrypted_meta.len() > MAX_META_BYTES
+        || epoch_of(&req.encrypted_meta)? != req.epoch
+    {
         return Err(bad("metadata must be encrypted with the new document key"));
     }
     let _w = state.write_lock.lock().await;
-    let vault_epoch: i64 = sqlx::query_scalar("SELECT key_epoch FROM vaults WHERE id = ?").bind(&v).fetch_one(&state.db).await?;
+    let vault_epoch: i64 = sqlx::query_scalar("SELECT key_epoch FROM vaults WHERE id = ?")
+        .bind(&v)
+        .fetch_one(&state.db)
+        .await?;
     if epoch_of(&req.vault_envelope)? as i64 != vault_epoch {
-        return Err(AppError::StaleKey("wrap the document key with the vault's current key".into()));
+        return Err(AppError::StaleKey(
+            "wrap the document key with the vault's current key".into(),
+        ));
     }
     let current = object_key_epoch(&state, &v, &o).await?;
     match current {
         None => {
             if req.epoch != FIRST_DOC_EPOCH || req.chain_link.is_some() {
-                return Err(bad("the first document key has epoch FIRST_DOC_EPOCH and no chain link"));
+                return Err(bad(
+                    "the first document key has epoch FIRST_DOC_EPOCH and no chain link",
+                ));
             }
-            let Some(snap) = &req.snapshot else { return Err(bad("sharing a note needs a snapshot under its new key")) };
+            let Some(snap) = &req.snapshot else {
+                return Err(bad("sharing a note needs a snapshot under its new key"));
+            };
             if epoch_of(&snap.payload)? != req.epoch {
-                return Err(bad("the snapshot must be encrypted with the new document key"));
+                return Err(bad(
+                    "the snapshot must be encrypted with the new document key",
+                ));
             }
             // Every existing update of the note must be covered, otherwise
             // recipients would receive content they cannot decrypt.
-            let last: Option<i64> = sqlx::query_scalar("SELECT MAX(seq) FROM updates WHERE vault_id = ? AND object_id = ?")
-                .bind(&v)
-                .bind(&o)
-                .fetch_one(&state.db)
-                .await?;
+            let last: Option<i64> = sqlx::query_scalar(
+                "SELECT MAX(seq) FROM updates WHERE vault_id = ? AND object_id = ?",
+            )
+            .bind(&v)
+            .bind(&o)
+            .fetch_one(&state.db)
+            .await?;
             let head = sync::head_seq(&state.db, &v).await?;
             if snap.covers_seq < last.unwrap_or(0) || snap.covers_seq > head {
-                return Err(AppError::StaleKey("the snapshot does not cover the latest changes; catch up and retry".into()));
+                return Err(AppError::StaleKey(
+                    "the snapshot does not cover the latest changes; catch up and retry".into(),
+                ));
             }
         }
         Some(cur) => {
             if req.epoch as i64 != cur + 1 {
                 return Err(conflict(format!("expected document key epoch {}", cur + 1)));
             }
-            let Some(link) = &req.chain_link else { return Err(bad("a chain link is required when rotating")) };
+            let Some(link) = &req.chain_link else {
+                return Err(bad("a chain link is required when rotating"));
+            };
             if epoch_of(link)? != req.epoch {
                 return Err(bad("invalid chain link"));
             }
@@ -193,9 +232,13 @@ pub async fn set_key(
     .collect();
     let got: HashSet<String> = req.envelopes.iter().map(|e| e.user_id.clone()).collect();
     if got != need || got.len() != req.envelopes.len() {
-        return Err(conflict("envelopes must cover exactly the people the note is shared with"));
+        return Err(conflict(
+            "envelopes must cover exactly the people the note is shared with",
+        ));
     }
-    if req.envelopes.iter().any(|e| e.epoch != req.epoch || e.envelope.is_empty() || e.envelope.len() > MAX_ENVELOPE_BYTES) {
+    if req.envelopes.iter().any(|e| {
+        e.epoch != req.epoch || e.envelope.is_empty() || e.envelope.len() > MAX_ENVELOPE_BYTES
+    }) {
         return Err(bad("invalid envelope"));
     }
     let now = db::now();
@@ -233,13 +276,15 @@ pub async fn set_key(
             .await?;
     }
     if let Some(link) = &req.chain_link {
-        sqlx::query("INSERT INTO object_key_chain (vault_id, object_id, epoch, link) VALUES (?, ?, ?, ?)")
-            .bind(&v)
-            .bind(&o)
-            .bind(req.epoch as i64)
-            .bind(link)
-            .execute(&mut *tx)
-            .await?;
+        sqlx::query(
+            "INSERT INTO object_key_chain (vault_id, object_id, epoch, link) VALUES (?, ?, ?, ?)",
+        )
+        .bind(&v)
+        .bind(&o)
+        .bind(req.epoch as i64)
+        .bind(link)
+        .execute(&mut *tx)
+        .await?;
     }
     sqlx::query("UPDATE objects SET key_epoch = ?, encrypted_meta = ?, updated_at = ? WHERE vault_id = ? AND id = ?")
         .bind(req.epoch as i64)
@@ -250,17 +295,51 @@ pub async fn set_key(
         .execute(&mut *tx)
         .await?;
     if let Some(snap) = &req.snapshot {
-        if !db::valid_id(&snap.snapshot_id) || snap.payload.len() as u64 > state.config.max_snapshot_bytes() {
+        if !db::valid_id(&snap.snapshot_id)
+            || snap.payload.len() as u64 > state.config.max_snapshot_bytes()
+        {
             return Err(bad("invalid snapshot"));
         }
-        sync::insert_snapshot(&mut tx, &state.config, &who.user_id, &v, &o, &snap.snapshot_id, snap.covers_seq.max(0), &snap.payload, now)
-            .await?;
+        sync::insert_snapshot(
+            &mut tx,
+            &state.config,
+            &who.user_id,
+            &v,
+            &o,
+            &snap.snapshot_id,
+            snap.covers_seq.max(0),
+            &snap.payload,
+            now,
+        )
+        .await?;
     }
     tx.commit().await?;
     drop(_w);
     let first = current.is_none();
-    publish(&state, &v, &o, if first { ObjectEventKind::Shared } else { ObjectEventKind::KeyRotated });
-    db::audit(&state.db, Some(&who.user_id), None, Some(&v), if first { "object.share_start" } else { "object.key_rotate" }, Some(&o), serde_json::json!({ "epoch": req.epoch })).await;
+    publish(
+        &state,
+        &v,
+        &o,
+        if first {
+            ObjectEventKind::Shared
+        } else {
+            ObjectEventKind::KeyRotated
+        },
+    );
+    db::audit(
+        &state.db,
+        Some(&who.user_id),
+        None,
+        Some(&v),
+        if first {
+            "object.share_start"
+        } else {
+            "object.key_rotate"
+        },
+        Some(&o),
+        serde_json::json!({ "epoch": req.epoch }),
+    )
+    .await;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -272,13 +351,17 @@ pub async fn set_meta(
     Json(req): Json<ObjectMetaUpdate>,
 ) -> AppResult<StatusCode> {
     access::require_writer(&state.db, &v, &who.user_id).await?;
-    let Some(cur) = object_key_epoch(&state, &v, &o).await? else { return Err(AppError::NotFound) };
+    let Some(cur) = object_key_epoch(&state, &v, &o).await? else {
+        return Err(AppError::NotFound);
+    };
     if req.encrypted_meta.is_empty() || req.encrypted_meta.len() > MAX_META_BYTES {
         return Err(bad("invalid metadata"));
     }
     let e = epoch_of(&req.encrypted_meta)?;
     if !is_doc_epoch(e) || e as i64 != cur {
-        return Err(AppError::StaleKey("encrypt the title with the note's current key".into()));
+        return Err(AppError::StaleKey(
+            "encrypt the title with the note's current key".into(),
+        ));
     }
     sqlx::query("UPDATE objects SET encrypted_meta = ? WHERE vault_id = ? AND id = ?")
         .bind(&req.encrypted_meta)
@@ -346,16 +429,27 @@ pub async fn add(
     if disabled || (kind == "agent" && owner.as_deref() != Some(who.user_id.as_str())) {
         return Err(AppError::NotFound);
     }
-    if access::member_role_opt(&state.db, &v, &req.user_id).await?.is_some() {
+    if access::member_role_opt(&state.db, &v, &req.user_id)
+        .await?
+        .is_some()
+    {
         return Err(conflict("this person already has access through the vault"));
     }
     let _w = state.write_lock.lock().await;
     let Some(cur) = object_key_epoch(&state, &v, &o).await? else {
-        return Err(conflict("start sharing the note (set its document key) first"));
+        return Err(conflict(
+            "start sharing the note (set its document key) first",
+        ));
     };
     let env = &req.envelope;
-    if env.user_id != req.user_id || env.epoch as i64 != cur || env.envelope.is_empty() || env.envelope.len() > MAX_ENVELOPE_BYTES {
-        return Err(AppError::StaleKey("the key envelope must be for this person at the note's current key epoch".into()));
+    if env.user_id != req.user_id
+        || env.epoch as i64 != cur
+        || env.envelope.is_empty()
+        || env.envelope.len() > MAX_ENVELOPE_BYTES
+    {
+        return Err(AppError::StaleKey(
+            "the key envelope must be for this person at the note's current key epoch".into(),
+        ));
     }
     let now = db::now();
     let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
@@ -388,7 +482,16 @@ pub async fn add(
     .await?;
     tx.commit().await?;
     drop(_w);
-    db::audit(&state.db, Some(&who.user_id), None, Some(&v), "object.share", Some(&o), serde_json::json!({ "user": req.user_id, "role": req.role })).await;
+    db::audit(
+        &state.db,
+        Some(&who.user_id),
+        None,
+        Some(&v),
+        "object.share",
+        Some(&o),
+        serde_json::json!({ "user": req.user_id, "role": req.role }),
+    )
+    .await;
     publish(&state, &v, &o, ObjectEventKind::SharesChanged);
     notify_user(&state, &req.user_id, UserEventKind::SharesChanged);
     let info = ObjectShareInfo {
@@ -412,18 +515,29 @@ pub async fn update(
     if req.role == Role::Owner {
         return Err(bad("notes can be shared as editor or viewer"));
     }
-    let n = sqlx::query("UPDATE object_shares SET role = ? WHERE vault_id = ? AND object_id = ? AND user_id = ?")
-        .bind(req.role.as_str())
-        .bind(&v)
-        .bind(&o)
-        .bind(&u)
-        .execute(&state.db)
-        .await?
-        .rows_affected();
+    let n = sqlx::query(
+        "UPDATE object_shares SET role = ? WHERE vault_id = ? AND object_id = ? AND user_id = ?",
+    )
+    .bind(req.role.as_str())
+    .bind(&v)
+    .bind(&o)
+    .bind(&u)
+    .execute(&state.db)
+    .await?
+    .rows_affected();
     if n == 0 {
         return Err(AppError::NotFound);
     }
-    db::audit(&state.db, Some(&who.user_id), None, Some(&v), "object.share_role", Some(&o), serde_json::json!({ "user": u, "role": req.role })).await;
+    db::audit(
+        &state.db,
+        Some(&who.user_id),
+        None,
+        Some(&v),
+        "object.share_role",
+        Some(&o),
+        serde_json::json!({ "user": u, "role": req.role }),
+    )
+    .await;
     publish(&state, &v, &o, ObjectEventKind::SharesChanged);
     notify_user(&state, &u, UserEventKind::SharesChanged);
     Ok(StatusCode::NO_CONTENT)
@@ -438,21 +552,30 @@ pub async fn remove(
 ) -> AppResult<StatusCode> {
     if u != who.user_id {
         access::require_owner(&state.db, &v, &who.user_id).await?;
-    } else if access::share_role(&state.db, &v, &o, &who.user_id).await?.is_none() {
+    } else if access::share_role(&state.db, &v, &o, &who.user_id)
+        .await?
+        .is_none()
+    {
         return Err(AppError::NotFound);
     }
     {
         let _w = state.write_lock.lock().await;
         let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
-        let n = sqlx::query("DELETE FROM object_shares WHERE vault_id = ? AND object_id = ? AND user_id = ?")
-            .bind(&v)
-            .bind(&o)
-            .bind(&u)
-            .execute(&mut *tx)
-            .await?
-            .rows_affected();
+        let n = sqlx::query(
+            "DELETE FROM object_shares WHERE vault_id = ? AND object_id = ? AND user_id = ?",
+        )
+        .bind(&v)
+        .bind(&o)
+        .bind(&u)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
         if n == 0 {
-            return Err(if u == who.user_id { AppError::NotFound } else { forbidden("the note is not shared with this person") });
+            return Err(if u == who.user_id {
+                AppError::NotFound
+            } else {
+                forbidden("the note is not shared with this person")
+            });
         }
         sqlx::query("DELETE FROM object_keys WHERE vault_id = ? AND object_id = ? AND user_id = ?")
             .bind(&v)
@@ -462,8 +585,19 @@ pub async fn remove(
             .await?;
         tx.commit().await?;
     }
-    db::audit(&state.db, Some(&who.user_id), None, Some(&v), "object.unshare", Some(&o), serde_json::json!({ "user": u })).await;
-    state.hub.control(&u, Control::RevokeObject(v.clone(), o.clone()));
+    db::audit(
+        &state.db,
+        Some(&who.user_id),
+        None,
+        Some(&v),
+        "object.unshare",
+        Some(&o),
+        serde_json::json!({ "user": u }),
+    )
+    .await;
+    state
+        .hub
+        .control(&u, Control::RevokeObject(v.clone(), o.clone()));
     publish(&state, &v, &o, ObjectEventKind::SharesChanged);
     notify_user(&state, &u, UserEventKind::SharesChanged);
     Ok(StatusCode::NO_CONTENT)

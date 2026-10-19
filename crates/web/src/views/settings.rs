@@ -423,7 +423,9 @@ pub fn DeviceCodePage(code: Option<String>) -> impl IntoView {
     let lookup = move || {
         let c = code_in.get_untracked();
         leptos::task::spawn_local(async move {
-            match api::get::<DeviceCodeLookup>(&format!("/oauth/device?user_code={}", api::q(&c))).await {
+            match api::get::<DeviceCodeLookup>(&format!("/oauth/device?user_code={}", api::q(&c)))
+                .await
+            {
                 Ok(l) => {
                     found.set(Some(l));
                     msg.set(None);
@@ -439,9 +441,19 @@ pub fn DeviceCodePage(code: Option<String>) -> impl IntoView {
         lookup();
     }
     let decide = move |approve: bool| {
-        let Some(l) = found.get_untracked() else { return };
+        let Some(l) = found.get_untracked() else {
+            return;
+        };
         leptos::task::spawn_local(async move {
-            match api::post::<_, ()>("/oauth/device/decision", &DeviceCodeDecision { user_code: l.user_code, approve }).await {
+            match api::post::<_, ()>(
+                "/oauth/device/decision",
+                &DeviceCodeDecision {
+                    user_code: l.user_code,
+                    approve,
+                },
+            )
+            .await
+            {
                 Ok(()) => {
                     found.set(None);
                     msg.set(Some(if approve {

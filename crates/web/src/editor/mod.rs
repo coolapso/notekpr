@@ -93,7 +93,13 @@ pub struct Editor {
     overlay: HtmlElement,
     host: Rc<dyn Host>,
     st: RefCell<State>,
-    listeners: RefCell<Vec<(web_sys::EventTarget, &'static str, Closure<dyn FnMut(web_sys::Event)>)>>,
+    listeners: RefCell<
+        Vec<(
+            web_sys::EventTarget,
+            &'static str,
+            Closure<dyn FnMut(web_sys::Event)>,
+        )>,
+    >,
 }
 
 fn utf16_to_byte(s: &str, u: usize) -> usize {
@@ -127,16 +133,31 @@ fn line_starts(text: &str) -> Vec<usize> {
 }
 
 fn prev_char(s: &str, i: usize) -> usize {
-    s[..i].char_indices().next_back().map(|(p, _)| p).unwrap_or(0)
+    s[..i]
+        .char_indices()
+        .next_back()
+        .map(|(p, _)| p)
+        .unwrap_or(0)
 }
 
 fn next_char(s: &str, i: usize) -> usize {
-    s[i..].chars().next().map(|c| i + c.len_utf8()).unwrap_or(s.len())
+    s[i..]
+        .chars()
+        .next()
+        .map(|c| i + c.len_utf8())
+        .unwrap_or(s.len())
 }
 
 impl Editor {
     /// Build an editor inside `container` (which should be empty).
-    pub fn new(container: &Element, text: String, host: Rc<dyn Host>, mode: Mode, readonly: bool, vim: bool) -> Rc<Editor> {
+    pub fn new(
+        container: &Element,
+        text: String,
+        host: Rc<dyn Host>,
+        mode: Mode,
+        readonly: bool,
+        vim: bool,
+    ) -> Rc<Editor> {
         let doc = document();
         let wrap: HtmlElement = doc.create_element("div").unwrap().unchecked_into();
         wrap.set_class_name("ed-wrap");
@@ -189,15 +210,26 @@ impl Editor {
     fn apply_mode_classes(&self) {
         let st = self.st.borrow();
         let mut c = String::from("ed");
-        c.push_str(if st.mode == Mode::Source { " source" } else { " live" });
+        c.push_str(if st.mode == Mode::Source {
+            " source"
+        } else {
+            " live"
+        });
         if st.readonly {
             c.push_str(" readonly");
         }
         if let Some(v) = &st.vim {
-            c.push_str(if v.insert { " vim vim-insert" } else { " vim vim-normal" });
+            c.push_str(if v.insert {
+                " vim vim-insert"
+            } else {
+                " vim vim-normal"
+            });
         }
         self.root.set_class_name(&c);
-        let _ = self.root.set_attribute("contenteditable", if st.readonly { "false" } else { "true" });
+        let _ = self.root.set_attribute(
+            "contenteditable",
+            if st.readonly { "false" } else { "true" },
+        );
     }
 
     pub fn set_mode(&self, mode: Mode) {
@@ -223,7 +255,9 @@ impl Editor {
     }
 
     pub fn has_focus(&self) -> bool {
-        document().active_element().is_some_and(|e| e.is_same_node(Some(self.root.unchecked_ref())))
+        document()
+            .active_element()
+            .is_some_and(|e| e.is_same_node(Some(self.root.unchecked_ref())))
     }
 
     pub fn selection(&self) -> (usize, usize) {
@@ -237,9 +271,10 @@ impl Editor {
         let sel = self.read_selection();
         self.render(true);
         if let Some((a, h)) = sel
-            && self.has_focus() {
-                self.set_selection(a, h);
-            }
+            && self.has_focus()
+        {
+            self.set_selection(a, h);
+        }
     }
 
     fn render(&self, force: bool) {
@@ -257,17 +292,27 @@ impl Editor {
                 let mut html = syntax::line_html(line, &styled);
                 let mut img = String::new();
                 if let Some(t) = &styled.image
-                    && let Some(url) = self.host.image_url(t) {
-                        img = url;
-                        html.push_str("<span class=\"w\" contenteditable=\"false\" data-w=\"1\"><img src=\"");
-                        syntax::escape(&img, &mut html);
-                        html.push_str("\" alt=\"\" draggable=\"false\"></span>");
-                    }
+                    && let Some(url) = self.host.image_url(t)
+                {
+                    img = url;
+                    html.push_str(
+                        "<span class=\"w\" contenteditable=\"false\" data-w=\"1\"><img src=\"",
+                    );
+                    syntax::escape(&img, &mut html);
+                    html.push_str("\" alt=\"\" draggable=\"false\"></span>");
+                }
                 let lang = match &blocks[i] {
                     Block::Fence { lang } | Block::Code { lang } => lang.clone(),
                     _ => String::new(),
                 };
-                keys.push(format!("{}\u{1}{}\u{1}{}\u{1}{}\u{1}{}", blocks[i].class(), line, img, lang, html.len()));
+                keys.push(format!(
+                    "{}\u{1}{}\u{1}{}\u{1}{}\u{1}{}",
+                    blocks[i].class(),
+                    line,
+                    img,
+                    lang,
+                    html.len()
+                ));
                 htmls.push(html);
             }
             (lines, blocks, keys, htmls)
@@ -278,7 +323,10 @@ impl Editor {
             while p < old.len() && p < keys.len() && old[p] == keys[p] {
                 p += 1;
             }
-            while s < old.len() - p && s < keys.len() - p && old[old.len() - 1 - s] == keys[keys.len() - 1 - s] {
+            while s < old.len() - p
+                && s < keys.len() - p
+                && old[old.len() - 1 - s] == keys[keys.len() - 1 - s]
+            {
                 s += 1;
             }
         }
@@ -299,7 +347,9 @@ impl Editor {
                 let el = doc.create_element("div").unwrap();
                 el.set_class_name(blocks[p + k].class());
                 el.set_inner_html(&htmls[p + k]);
-                let _ = self.root.insert_before(&el, before.as_ref().map(|b| b.unchecked_ref::<Node>()));
+                let _ = self
+                    .root
+                    .insert_before(&el, before.as_ref().map(|b| b.unchecked_ref::<Node>()));
             }
         } else if old_mid > new_mid {
             for k in (new_mid..old_mid).rev() {
@@ -317,9 +367,10 @@ impl Editor {
         let children = self.root.children();
         for i in 0..children.length() {
             if let Some(el) = children.item(i)
-                && el.get_attribute("data-l").as_deref() != Some(i.to_string().as_str()) {
-                    let _ = el.set_attribute("data-l", &i.to_string());
-                }
+                && el.get_attribute("data-l").as_deref() != Some(i.to_string().as_str())
+            {
+                let _ = el.set_attribute("data-l", &i.to_string());
+            }
         }
         {
             let mut st = self.st.borrow_mut();
@@ -366,7 +417,10 @@ impl Editor {
         let mut cur = Some(node.clone());
         while let Some(n) = cur {
             let parent = n.parent_node();
-            if parent.as_ref().is_some_and(|p| p == self.root.unchecked_ref::<Node>()) {
+            if parent
+                .as_ref()
+                .is_some_and(|p| p == self.root.unchecked_ref::<Node>())
+            {
                 let el: Element = n.dyn_into().ok()?;
                 let idx = el.get_attribute("data-l")?.parse().ok()?;
                 return Some((idx, el));
@@ -382,11 +436,19 @@ impl Editor {
         if node == root_node {
             let n_lines = st.starts.len();
             let idx = offset as usize;
-            return Some(if idx >= n_lines { st.text.len() } else { st.starts[idx] });
+            return Some(if idx >= n_lines {
+                st.text.len()
+            } else {
+                st.starts[idx]
+            });
         }
         let (idx, el) = self.line_element(node)?;
         let start = *st.starts.get(idx)?;
-        let end = st.starts.get(idx + 1).map(|e| e - 1).unwrap_or(st.text.len());
+        let end = st
+            .starts
+            .get(idx + 1)
+            .map(|e| e - 1)
+            .unwrap_or(st.text.len());
         let line = &st.text[start..end];
         let range = document().create_range().ok()?;
         range.set_start(&el, 0).ok()?;
@@ -401,18 +463,29 @@ impl Editor {
         let idx = self.line_of(offset);
         let st = self.st.borrow();
         let start = st.starts[idx];
-        let end = st.starts.get(idx + 1).map(|e| e - 1).unwrap_or(st.text.len());
+        let end = st
+            .starts
+            .get(idx + 1)
+            .map(|e| e - 1)
+            .unwrap_or(st.text.len());
         let line = &st.text[start..end];
         let target = byte_to_utf16(line, offset.saturating_sub(start).min(line.len()));
         let el = self.root.children().item(idx as u32)?;
-        let walker = document().create_tree_walker_with_what_to_show(&el, 4).ok()?; // SHOW_TEXT
+        let walker = document()
+            .create_tree_walker_with_what_to_show(&el, 4)
+            .ok()?; // SHOW_TEXT
         let mut acc = 0usize;
         let mut last: Option<(Node, u32)> = None;
         while let Ok(Some(n)) = walker.next_node() {
-            if n.parent_element().is_some_and(|p| p.closest("[data-w]").ok().flatten().is_some()) {
+            if n.parent_element()
+                .is_some_and(|p| p.closest("[data-w]").ok().flatten().is_some())
+            {
                 continue;
             }
-            let len = n.node_value().map(|v| v.encode_utf16().count()).unwrap_or(0);
+            let len = n
+                .node_value()
+                .map(|v| v.encode_utf16().count())
+                .unwrap_or(0);
             if acc + len >= target && len > 0 {
                 return Some((n, (target - acc) as u32));
             }
@@ -438,7 +511,11 @@ impl Editor {
         let len = self.st.borrow().text.len();
         let (anchor, head) = (anchor.min(len), head.min(len));
         self.st.borrow_mut().sel = (anchor, head);
-        let (Some((an, ao)), Some((hn, ho))) = (self.offset_to_dom(anchor), self.offset_to_dom(head)) else { return };
+        let (Some((an, ao)), Some((hn, ho))) =
+            (self.offset_to_dom(anchor), self.offset_to_dom(head))
+        else {
+            return;
+        };
         if let Ok(Some(sel)) = document().get_selection() {
             let _ = sel.set_base_and_extent(&an, ao, &hn, ho);
         }
@@ -451,7 +528,11 @@ impl Editor {
         let idx = self.line_of(head);
         if let Some(el) = self.root.children().item(idx as u32) {
             let r = el.get_bounding_client_rect();
-            let vh = crate::util::window().inner_height().ok().and_then(|v| v.as_f64()).unwrap_or(800.0);
+            let vh = crate::util::window()
+                .inner_height()
+                .ok()
+                .and_then(|v| v.as_f64())
+                .unwrap_or(800.0);
             if r.bottom() > vh - 24.0 || r.top() < 56.0 {
                 let opts = web_sys::ScrollIntoViewOptions::new();
                 opts.set_block(web_sys::ScrollLogicalPosition::Nearest);
@@ -478,10 +559,16 @@ impl Editor {
             let to = to.min(st.text.len());
             let from = from.min(to);
             if to > from {
-                edits.push(Edit::Delete { at: from, len: to - from });
+                edits.push(Edit::Delete {
+                    at: from,
+                    len: to - from,
+                });
             }
             if !insert.is_empty() {
-                edits.push(Edit::Insert { at: from, text: insert.to_string() });
+                edits.push(Edit::Insert {
+                    at: from,
+                    text: insert.to_string(),
+                });
             }
             if edits.is_empty() {
                 return;
@@ -555,11 +642,10 @@ impl Editor {
                 }
             }
         }
-        if caret_to_change
-            && let Some(c) = changed_at {
-                a = c;
-                h = c;
-            }
+        if caret_to_change && let Some(c) = changed_at {
+            a = c;
+            h = c;
+        }
         // Shift remote cursors as well.
         {
             let mut st = self.st.borrow_mut();
@@ -599,7 +685,11 @@ impl Editor {
         let idx = self.line_of(offset);
         let st = self.st.borrow();
         let start = st.starts[idx];
-        let end = st.starts.get(idx + 1).map(|e| e - 1).unwrap_or(st.text.len());
+        let end = st
+            .starts
+            .get(idx + 1)
+            .map(|e| e - 1)
+            .unwrap_or(st.text.len());
         (idx, start, end)
     }
 
@@ -615,7 +705,10 @@ impl Editor {
         };
         self.host.boundary();
         if in_code {
-            let indent: String = line.chars().take_while(|c| *c == ' ' || *c == '\t').collect();
+            let indent: String = line
+                .chars()
+                .take_while(|c| *c == ' ' || *c == '\t')
+                .collect();
             self.replace(a, b, &format!("\n{indent}"), None);
             return;
         }
@@ -626,7 +719,12 @@ impl Editor {
         if let Some((indent, mlen, ordered)) = syntax::list_marker(line) {
             let content_start = indent + mlen;
             let task = syntax::task_box(&line[content_start..]);
-            let body_start = content_start + if task.is_some() { 4.min(line.len() - content_start) } else { 0 };
+            let body_start = content_start
+                + if task.is_some() {
+                    4.min(line.len() - content_start)
+                } else {
+                    0
+                };
             if line[body_start..].trim().is_empty() && a >= ls + body_start {
                 // Empty item: end the list (or outdent one level).
                 if indent > 0 {
@@ -643,18 +741,29 @@ impl Editor {
             }
             let marker = &line[indent..indent + mlen];
             let next = if ordered {
-                let n: u64 = marker.trim_end_matches([' ', '.', ')']).parse().unwrap_or(1);
+                let n: u64 = marker
+                    .trim_end_matches([' ', '.', ')'])
+                    .parse()
+                    .unwrap_or(1);
                 let sep = if marker.contains(')') { ")" } else { "." };
                 format!("{}{sep} ", n + 1)
             } else {
                 marker.to_string()
             };
             let task_part = if task.is_some() { "[ ] " } else { "" };
-            self.replace(a, b, &format!("\n{}{next}{task_part}", &line[..indent]), None);
+            self.replace(
+                a,
+                b,
+                &format!("\n{}{next}{task_part}", &line[..indent]),
+                None,
+            );
             return;
         }
         if block == Block::Quote {
-            let prefix: String = line.chars().take_while(|c| *c == '>' || *c == ' ').collect();
+            let prefix: String = line
+                .chars()
+                .take_while(|c| *c == '>' || *c == ' ')
+                .collect();
             if line[prefix.len()..].trim().is_empty() {
                 self.replace(ls, le, "", Some((ls, ls)));
             } else {
@@ -671,7 +780,12 @@ impl Editor {
                 self.set_selection(o, o);
                 self.update_active();
             }
-            syntax::TableKey::Edit { from, to, insert, caret } => self.replace(from, to, &insert, Some((caret, caret))),
+            syntax::TableKey::Edit {
+                from,
+                to,
+                insert,
+                caret,
+            } => self.replace(from, to, &insert, Some((caret, caret))),
         }
     }
 
@@ -685,7 +799,9 @@ impl Editor {
         let line_to_caret = &text[ls..a];
         if let Some((indent, mlen, _)) = syntax::list_marker(&text[ls..]) {
             let content_start = indent + mlen;
-            let task = syntax::task_box(&text[ls + content_start..]).map(|_| 4).unwrap_or(0);
+            let task = syntax::task_box(&text[ls + content_start..])
+                .map(|_| 4)
+                .unwrap_or(0);
             if line_to_caret.len() == content_start + task {
                 // Backspace right after a list marker removes the marker.
                 self.host.boundary();
@@ -694,10 +810,11 @@ impl Editor {
             }
         }
         if let Some(rest) = line_to_caret.strip_prefix('>')
-            && rest.trim().is_empty() {
-                self.replace(ls, a, "", Some((ls, ls)));
-                return true;
-            }
+            && rest.trim().is_empty()
+        {
+            self.replace(ls, a, "", Some((ls, ls)));
+            return true;
+        }
         false
     }
 
@@ -705,26 +822,60 @@ impl Editor {
         let (a, b) = self.sel_sorted();
         let text = self.st.borrow().text.clone();
         let (ol, cl) = (open.len(), close.len());
-        if a >= ol && b + cl <= text.len() && &text[a - ol..a] == open && &text[b..b + cl] == close {
-            let edits = vec![Edit::Delete { at: b, len: cl }, Edit::Delete { at: a - ol, len: ol }];
+        if a >= ol && b + cl <= text.len() && &text[a - ol..a] == open && &text[b..b + cl] == close
+        {
+            let edits = vec![
+                Edit::Delete { at: b, len: cl },
+                Edit::Delete {
+                    at: a - ol,
+                    len: ol,
+                },
+            ];
             self.apply_edits_local(edits, (a - ol, b - ol));
             return;
         }
         if a == b {
             // Wrap the word under the caret, or insert an empty pair.
             let is_word = |c: char| c.is_alphanumeric() || c == '_' || c == '-';
-            let ws = text[..a].char_indices().rev().take_while(|(_, c)| is_word(*c)).last().map(|(i, _)| i).unwrap_or(a);
-            let we = a + text[a..].chars().take_while(|c| is_word(*c)).map(char::len_utf8).sum::<usize>();
+            let ws = text[..a]
+                .char_indices()
+                .rev()
+                .take_while(|(_, c)| is_word(*c))
+                .last()
+                .map(|(i, _)| i)
+                .unwrap_or(a);
+            let we = a + text[a..]
+                .chars()
+                .take_while(|c| is_word(*c))
+                .map(char::len_utf8)
+                .sum::<usize>();
             if ws < we {
-                let edits =
-                    vec![Edit::Insert { at: we, text: close.into() }, Edit::Insert { at: ws, text: open.into() }];
+                let edits = vec![
+                    Edit::Insert {
+                        at: we,
+                        text: close.into(),
+                    },
+                    Edit::Insert {
+                        at: ws,
+                        text: open.into(),
+                    },
+                ];
                 self.apply_edits_local(edits, (a + ol, a + ol));
             } else {
                 self.replace(a, a, &format!("{open}{close}"), Some((a + ol, a + ol)));
             }
             return;
         }
-        let edits = vec![Edit::Insert { at: b, text: close.into() }, Edit::Insert { at: a, text: open.into() }];
+        let edits = vec![
+            Edit::Insert {
+                at: b,
+                text: close.into(),
+            },
+            Edit::Insert {
+                at: a,
+                text: open.into(),
+            },
+        ];
         self.apply_edits_local(edits, (a + ol, b + ol));
     }
 
@@ -735,14 +886,22 @@ impl Editor {
         let (l1, _, e1) = self.current_line(b);
         let text = self.st.borrow().text.clone();
         let old = &text[s0..e1];
-        let new: Vec<String> = old.split('\n').enumerate().map(|(i, l)| f(l, l0 + i)).collect();
+        let new: Vec<String> = old
+            .split('\n')
+            .enumerate()
+            .map(|(i, l)| f(l, l0 + i))
+            .collect();
         let new = new.join("\n");
         if new == old {
             return;
         }
         self.host.boundary();
         let delta = new.len() as isize - old.len() as isize;
-        let caret = if l0 == l1 { ((b as isize + delta).max(s0 as isize)) as usize } else { s0 + new.len() };
+        let caret = if l0 == l1 {
+            ((b as isize + delta).max(s0 as isize)) as usize
+        } else {
+            s0 + new.len()
+        };
         self.replace(s0, e1, &new, Some((caret, caret)));
     }
 
@@ -783,7 +942,12 @@ impl Editor {
                 } else if sel.is_empty() {
                     self.replace(a, b, "[[]]", Some((a + 2, a + 2)));
                 } else {
-                    self.replace(a, b, &format!("[{sel}](https://)"), Some((a + sel.len() + 3, a + sel.len() + 11)));
+                    self.replace(
+                        a,
+                        b,
+                        &format!("[{sel}](https://)"),
+                        Some((a + sel.len() + 3, a + sel.len() + 11)),
+                    );
                 }
             }
             Command::CodeBlock => {
@@ -798,11 +962,17 @@ impl Editor {
             Command::Heading(n) => self.map_lines(|l, _| {
                 let (_, body) = Editor::strip_prefix(l);
                 let cur = coolpsonotes_core::markdown::heading(l).map(|h| h.0);
-                if n == 0 || cur == Some(n) { body.to_string() } else { format!("{} {body}", "#".repeat(n as usize)) }
+                if n == 0 || cur == Some(n) {
+                    body.to_string()
+                } else {
+                    format!("{} {body}", "#".repeat(n as usize))
+                }
             }),
             Command::Bullet => self.map_lines(|l, _| {
                 let (indent, body) = Editor::strip_prefix(l);
-                if syntax::list_marker(l).is_some_and(|m| !m.2) && syntax::task_box(&l[syntax::list_marker(l).unwrap().0 + 2..]).is_none() {
+                if syntax::list_marker(l).is_some_and(|m| !m.2)
+                    && syntax::task_box(&l[syntax::list_marker(l).unwrap().0 + 2..]).is_none()
+                {
                     format!("{indent}{body}")
                 } else {
                     format!("{indent}- {body}")
@@ -822,15 +992,28 @@ impl Editor {
             }
             Command::Task => self.map_lines(|l, _| {
                 let (indent, body) = Editor::strip_prefix(l);
-                let is_task = syntax::list_marker(l).is_some_and(|(i, m, _)| syntax::task_box(&l[i + m..]).is_some());
-                if is_task { format!("{indent}{body}") } else { format!("{indent}- [ ] {body}") }
+                let is_task = syntax::list_marker(l)
+                    .is_some_and(|(i, m, _)| syntax::task_box(&l[i + m..]).is_some());
+                if is_task {
+                    format!("{indent}{body}")
+                } else {
+                    format!("{indent}- [ ] {body}")
+                }
             }),
             Command::Quote => self.map_lines(|l, _| {
-                if let Some(r) = l.strip_prefix("> ").or_else(|| l.strip_prefix('>')) { r.to_string() } else { format!("> {l}") }
+                if let Some(r) = l.strip_prefix("> ").or_else(|| l.strip_prefix('>')) {
+                    r.to_string()
+                } else {
+                    format!("> {l}")
+                }
             }),
             Command::Indent => self.map_lines(|l, _| format!("  {l}")),
             Command::Outdent => self.map_lines(|l, _| {
-                l.strip_prefix("  ").or_else(|| l.strip_prefix('\t')).or_else(|| l.strip_prefix(' ')).unwrap_or(l).to_string()
+                l.strip_prefix("  ")
+                    .or_else(|| l.strip_prefix('\t'))
+                    .or_else(|| l.strip_prefix(' '))
+                    .unwrap_or(l)
+                    .to_string()
             }),
             Command::Rule => {
                 let (a, b) = self.sel_sorted();
@@ -863,7 +1046,11 @@ impl Editor {
         let (start, line) = {
             let st = self.st.borrow();
             let Some(&s) = st.starts.get(idx) else { return };
-            let e = st.starts.get(idx + 1).map(|e| e - 1).unwrap_or(st.text.len());
+            let e = st
+                .starts
+                .get(idx + 1)
+                .map(|e| e - 1)
+                .unwrap_or(st.text.len());
             (s, st.text[s..e].to_string())
         };
         if let Some((indent, mlen, _)) = syntax::list_marker(&line) {
@@ -872,12 +1059,30 @@ impl Editor {
                 Some(true) => {
                     let sel = self.st.borrow().sel;
                     self.host.boundary();
-                    self.apply_edits_local(vec![Edit::Delete { at, len: 1 }, Edit::Insert { at, text: " ".into() }], sel)
+                    self.apply_edits_local(
+                        vec![
+                            Edit::Delete { at, len: 1 },
+                            Edit::Insert {
+                                at,
+                                text: " ".into(),
+                            },
+                        ],
+                        sel,
+                    )
                 }
                 Some(false) => {
                     let sel = self.st.borrow().sel;
                     self.host.boundary();
-                    self.apply_edits_local(vec![Edit::Delete { at, len: 1 }, Edit::Insert { at, text: "x".into() }], sel)
+                    self.apply_edits_local(
+                        vec![
+                            Edit::Delete { at, len: 1 },
+                            Edit::Insert {
+                                at,
+                                text: "x".into(),
+                            },
+                        ],
+                        sel,
+                    )
                 }
                 None => {}
             }
@@ -893,14 +1098,18 @@ impl Editor {
             let t = match n.dyn_ref::<Element>() {
                 Some(el) => {
                     // Exclude widget text and treat nested block children as line breaks.
-                    let clone = el.clone_node_with_deep(true).ok().and_then(|c| c.dyn_into::<Element>().ok());
+                    let clone = el
+                        .clone_node_with_deep(true)
+                        .ok()
+                        .and_then(|c| c.dyn_into::<Element>().ok());
                     if let Some(c) = &clone {
                         if let Ok(ws) = c.query_selector_all("[data-w]") {
                             for k in 0..ws.length() {
                                 if let Some(w) = ws.item(k)
-                                    && let Some(p) = w.parent_node() {
-                                        let _ = p.remove_child(&w);
-                                    }
+                                    && let Some(p) = w.parent_node()
+                                {
+                                    let _ = p.remove_child(&w);
+                                }
                             }
                         }
                         if let Ok(divs) = c.query_selector_all("div, br + *") {
@@ -978,8 +1187,12 @@ impl Editor {
         let doc = document();
         let len = self.st.borrow().text.len();
         for c in cursors {
-            let Some((node, off)) = self.offset_to_dom(c.head.min(len)) else { continue };
-            let Ok(range) = doc.create_range() else { continue };
+            let Some((node, off)) = self.offset_to_dom(c.head.min(len)) else {
+                continue;
+            };
+            let Ok(range) = doc.create_range() else {
+                continue;
+            };
             if range.set_start(&node, off).is_err() || range.set_end(&node, off).is_err() {
                 continue;
             }
@@ -1007,7 +1220,12 @@ impl Editor {
 
     // ------------------------------------------------------------ events
 
-    fn listen(this: &Rc<Editor>, target: &web_sys::EventTarget, name: &'static str, f: impl Fn(&Rc<Editor>, web_sys::Event) + 'static) {
+    fn listen(
+        this: &Rc<Editor>,
+        target: &web_sys::EventTarget,
+        name: &'static str,
+        f: impl Fn(&Rc<Editor>, web_sys::Event) + 'static,
+    ) {
         let weak: Weak<Editor> = Rc::downgrade(this);
         let cb = Closure::wrap(Box::new(move |e: web_sys::Event| {
             if let Some(ed) = weak.upgrade() {
@@ -1020,14 +1238,18 @@ impl Editor {
 
     fn attach(this: &Rc<Editor>) {
         let root: web_sys::EventTarget = this.root.clone().unchecked_into();
-        Editor::listen(this, &root, "beforeinput", |ed, e| ed.on_beforeinput(e.unchecked_into()));
+        Editor::listen(this, &root, "beforeinput", |ed, e| {
+            ed.on_beforeinput(e.unchecked_into())
+        });
         Editor::listen(this, &root, "input", |ed, e| {
             let ie: InputEvent = e.unchecked_into();
             if !ed.st.borrow().composing && !ie.is_composing() {
                 ed.sync_from_dom();
             }
         });
-        Editor::listen(this, &root, "compositionstart", |ed, _| ed.st.borrow_mut().composing = true);
+        Editor::listen(this, &root, "compositionstart", |ed, _| {
+            ed.st.borrow_mut().composing = true
+        });
         Editor::listen(this, &root, "compositionend", |ed, _| {
             ed.st.borrow_mut().composing = false;
             ed.sync_from_dom();
@@ -1035,13 +1257,23 @@ impl Editor {
                 ed.set_text(t, false);
             }
         });
-        Editor::listen(this, &root, "keydown", |ed, e| ed.on_keydown(e.unchecked_into()));
-        Editor::listen(this, &root, "copy", |ed, e| ed.on_copy(e.unchecked_into(), false));
-        Editor::listen(this, &root, "cut", |ed, e| ed.on_copy(e.unchecked_into(), true));
-        Editor::listen(this, &root, "paste", |ed, e| ed.on_paste(e.unchecked_into()));
+        Editor::listen(this, &root, "keydown", |ed, e| {
+            ed.on_keydown(e.unchecked_into())
+        });
+        Editor::listen(this, &root, "copy", |ed, e| {
+            ed.on_copy(e.unchecked_into(), false)
+        });
+        Editor::listen(this, &root, "cut", |ed, e| {
+            ed.on_copy(e.unchecked_into(), true)
+        });
+        Editor::listen(this, &root, "paste", |ed, e| {
+            ed.on_paste(e.unchecked_into())
+        });
         Editor::listen(this, &root, "drop", |ed, e| ed.on_drop(e.unchecked_into()));
         Editor::listen(this, &root, "dragover", |_ed, e| e.prevent_default());
-        Editor::listen(this, &root, "mousedown", |ed, e| ed.on_mousedown(e.unchecked_into()));
+        Editor::listen(this, &root, "mousedown", |ed, e| {
+            ed.on_mousedown(e.unchecked_into())
+        });
         Editor::listen(this, &root, "focus", |ed, _| ed.update_active());
         Editor::listen(this, &root, "blur", |ed, _| ed.update_active());
         let doc: web_sys::EventTarget = document().unchecked_into();
@@ -1076,7 +1308,10 @@ impl Editor {
             return;
         }
         let it = ev.input_type();
-        let sel = self.read_selection().map(|(a, h)| (a.min(h), a.max(h))).unwrap_or_else(|| self.sel_sorted());
+        let sel = self
+            .read_selection()
+            .map(|(a, h)| (a.min(h), a.max(h)))
+            .unwrap_or_else(|| self.sel_sorted());
         self.st.borrow_mut().sel = sel;
         match it.as_str() {
             "insertText" => {
@@ -1092,7 +1327,10 @@ impl Editor {
                 ev.prevent_default();
                 let data = ev
                     .data()
-                    .or_else(|| ev.data_transfer().and_then(|d| d.get_data("text/plain").ok()))
+                    .or_else(|| {
+                        ev.data_transfer()
+                            .and_then(|d| d.get_data("text/plain").ok())
+                    })
                     .unwrap_or_default();
                 let (a, b) = self.target_range(&ev).unwrap_or(sel);
                 self.replace(a, b, &data, None);
@@ -1109,10 +1347,12 @@ impl Editor {
                 let (a, b) = if sel.0 != sel.1 {
                     sel
                 } else {
-                    self.target_range(&ev).filter(|(x, y)| x != y).unwrap_or_else(|| {
-                        let t = &self.st.borrow().text;
-                        (prev_char(t, sel.0), sel.0)
-                    })
+                    self.target_range(&ev)
+                        .filter(|(x, y)| x != y)
+                        .unwrap_or_else(|| {
+                            let t = &self.st.borrow().text;
+                            (prev_char(t, sel.0), sel.0)
+                        })
                 };
                 self.replace(a, b, "", None);
             }
@@ -1121,24 +1361,36 @@ impl Editor {
                 let (a, b) = if sel.0 != sel.1 {
                     sel
                 } else {
-                    self.target_range(&ev).filter(|(x, y)| x != y).unwrap_or_else(|| {
-                        let t = &self.st.borrow().text;
-                        (sel.0, next_char(t, sel.0))
-                    })
+                    self.target_range(&ev)
+                        .filter(|(x, y)| x != y)
+                        .unwrap_or_else(|| {
+                            let t = &self.st.borrow().text;
+                            (sel.0, next_char(t, sel.0))
+                        })
                 };
                 self.replace(a, b, "", None);
             }
             t if t.starts_with("delete") => {
                 ev.prevent_default();
-                let (a, b) = if sel.0 != sel.1 { sel } else { self.target_range(&ev).unwrap_or(sel) };
+                let (a, b) = if sel.0 != sel.1 {
+                    sel
+                } else {
+                    self.target_range(&ev).unwrap_or(sel)
+                };
                 if a != b {
                     self.host.boundary();
                     self.replace(a, b, "", None);
                 }
             }
-            "insertFromPaste" | "insertFromDrop" | "insertFromYank" | "insertFromPasteAsQuotation" => {
+            "insertFromPaste"
+            | "insertFromDrop"
+            | "insertFromYank"
+            | "insertFromPasteAsQuotation" => {
                 ev.prevent_default();
-                if let Some(t) = ev.data_transfer().and_then(|d| d.get_data("text/plain").ok()) {
+                if let Some(t) = ev
+                    .data_transfer()
+                    .and_then(|d| d.get_data("text/plain").ok())
+                {
                     let (a, b) = sel;
                     self.replace(a, b, &t.replace("\r\n", "\n"), None);
                 }
@@ -1205,7 +1457,11 @@ impl Editor {
                 let (_, ls, le) = self.current_line(a);
                 let line = self.st.borrow().text[ls..le].to_string();
                 if syntax::list_marker(&line).is_some() || shift {
-                    Some(if shift { Command::Outdent } else { Command::Indent })
+                    Some(if shift {
+                        Command::Outdent
+                    } else {
+                        Command::Indent
+                    })
                 } else {
                     ev.prevent_default();
                     self.insert_text("\t");
@@ -1231,7 +1487,9 @@ impl Editor {
     }
 
     fn on_copy(&self, ev: web_sys::ClipboardEvent, cut: bool) {
-        let Some((a, h)) = self.read_selection() else { return };
+        let Some((a, h)) = self.read_selection() else {
+            return;
+        };
         let (a, b) = (a.min(h), a.max(h));
         if a == b {
             return;
@@ -1252,14 +1510,20 @@ impl Editor {
         if self.st.borrow().readonly {
             return;
         }
-        let Some(dt) = ev.clipboard_data() else { return };
-        let (a, b) = self.read_selection().map(|(a, h)| (a.min(h), a.max(h))).unwrap_or_else(|| self.sel_sorted());
+        let Some(dt) = ev.clipboard_data() else {
+            return;
+        };
+        let (a, b) = self
+            .read_selection()
+            .map(|(a, h)| (a.min(h), a.max(h)))
+            .unwrap_or_else(|| self.sel_sorted());
         if let Some(files) = dt.files()
-            && files.length() > 0 {
-                let v: Vec<web_sys::File> = (0..files.length()).filter_map(|i| files.get(i)).collect();
-                self.host.insert_files(v, a);
-                return;
-            }
+            && files.length() > 0
+        {
+            let v: Vec<web_sys::File> = (0..files.length()).filter_map(|i| files.get(i)).collect();
+            self.host.insert_files(v, a);
+            return;
+        }
         if let Ok(t) = dt.get_data("text/plain") {
             self.host.boundary();
             self.replace(a, b, &t.replace("\r\n", "\n"), None);
@@ -1275,36 +1539,51 @@ impl Editor {
         let Some(dt) = ev.data_transfer() else { return };
         let (a, b) = self.sel_sorted();
         if let Some(files) = dt.files()
-            && files.length() > 0 {
-                let v: Vec<web_sys::File> = (0..files.length()).filter_map(|i| files.get(i)).collect();
-                self.host.insert_files(v, a);
-                return;
-            }
+            && files.length() > 0
+        {
+            let v: Vec<web_sys::File> = (0..files.length()).filter_map(|i| files.get(i)).collect();
+            self.host.insert_files(v, a);
+            return;
+        }
         if let Ok(t) = dt.get_data("text/plain") {
             self.replace(a, b, &t.replace("\r\n", "\n"), None);
         }
     }
 
     fn on_mousedown(&self, ev: MouseEvent) {
-        let Some(target) = ev.target().and_then(|t| t.dyn_into::<Element>().ok()) else { return };
+        let Some(target) = ev.target().and_then(|t| t.dyn_into::<Element>().ok()) else {
+            return;
+        };
         let line = target.closest(".ln").ok().flatten();
-        let line_idx: Option<usize> = line.as_ref().and_then(|l| l.get_attribute("data-l")).and_then(|s| s.parse().ok());
-        let line_active = line.as_ref().is_some_and(|l| l.class_list().contains("active"));
+        let line_idx: Option<usize> = line
+            .as_ref()
+            .and_then(|l| l.get_attribute("data-l"))
+            .and_then(|s| s.parse().ok());
+        let line_active = line
+            .as_ref()
+            .is_some_and(|l| l.class_list().contains("active"));
         if target.class_list().contains("tk") {
             ev.prevent_default();
             if let Some(i) = line_idx
-                && !self.st.borrow().readonly {
-                    self.toggle_task_at_line(i);
-                }
+                && !self.st.borrow().readonly
+            {
+                self.toggle_task_at_line(i);
+            }
             return;
         }
         if let Some(link_el) = target.closest("[data-link]").ok().flatten() {
-            let follow = ev.ctrl_key() || ev.meta_key() || !line_active || self.st.borrow().readonly;
+            let follow =
+                ev.ctrl_key() || ev.meta_key() || !line_active || self.st.borrow().readonly;
             if !follow {
                 return;
             }
             let Some(i) = line_idx else { return };
-            let Some(k) = link_el.get_attribute("data-link").and_then(|s| s.parse::<usize>().ok()) else { return };
+            let Some(k) = link_el
+                .get_attribute("data-link")
+                .and_then(|s| s.parse::<usize>().ok())
+            else {
+                return;
+            };
             let text = self.st.borrow().text.clone();
             let lines: Vec<&str> = text.split('\n').collect();
             let blocks = syntax::classify(&lines);
@@ -1322,7 +1601,9 @@ impl Editor {
         let sel = self.read_selection().unwrap_or(self.st.borrow().sel);
         let action = {
             let mut st = self.st.borrow_mut();
-            let Some(v) = st.vim.as_mut() else { return false };
+            let Some(v) = st.vim.as_mut() else {
+                return false;
+            };
             v.key(ev, &text, sel)
         };
         let Some(action) = action else { return false };
@@ -1330,7 +1611,12 @@ impl Editor {
         match action {
             vim::Action::Consumed => {}
             vim::Action::Move(a, h) => self.set_selection(a, h),
-            vim::Action::Edit { from, to, insert, caret } => {
+            vim::Action::Edit {
+                from,
+                to,
+                insert,
+                caret,
+            } => {
                 self.host.boundary();
                 self.replace(from, to, &insert, Some((caret, caret)));
             }

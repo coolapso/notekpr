@@ -74,7 +74,10 @@ pub fn analyze(text: &str) -> NoteInfo {
         let first_nl = text.find('\n').map(|i| i + 1).unwrap_or(len);
         let inner = &text[first_nl..len];
         let inner = inner.trim_end_matches(['\n', '\r']);
-        let inner = inner.strip_suffix("---").or_else(|| inner.strip_suffix("...")).unwrap_or(inner);
+        let inner = inner
+            .strip_suffix("---")
+            .or_else(|| inner.strip_suffix("..."))
+            .unwrap_or(inner);
         info.frontmatter = Some(inner.to_string());
         info.tags.extend(frontmatter_tags(inner));
         body_start = len;
@@ -100,7 +103,11 @@ pub fn analyze(text: &str) -> NoteInfo {
             continue;
         }
         if let Some(h) = heading(line) {
-            info.headings.push(Heading { level: h.0, text: h.1.to_string(), offset: line_off });
+            info.headings.push(Heading {
+                level: h.0,
+                text: h.1.to_string(),
+                offset: line_off,
+            });
         }
         let masked = mask_inline_code(line);
         scan_links(&masked, line, line_off, &mut info.links);
@@ -171,62 +178,68 @@ fn scan_links(masked: &str, orig: &str, line_off: usize, out: &mut Vec<Link>) {
     let b = masked.as_bytes();
     let mut i = 0;
     while i < b.len() {
-        if b[i] == b'[' && b.get(i + 1) == Some(&b'[')
-            && let Some(close) = masked[i + 2..].find("]]") {
-                let inner = &orig[i + 2..i + 2 + close];
-                if !inner.is_empty() && !inner.contains('\n') && !inner.contains('[') {
-                    let embed = i > 0 && b[i - 1] == b'!';
-                    let (target_part, alias) = match inner.split_once('|') {
-                        Some((t, a)) => (t, Some(a.trim().to_string())),
-                        None => (inner, None),
-                    };
-                    let (target, heading) = match target_part.split_once('#') {
-                        Some((t, h)) => (t.trim().to_string(), Some(h.trim().to_string())),
-                        None => (target_part.trim().to_string(), None),
-                    };
-                    let start = if embed { i - 1 } else { i };
-                    out.push(Link {
-                        kind: LinkKind::Wiki,
-                        target,
-                        heading,
-                        alias,
-                        embed,
-                        start: line_off + start,
-                        end: line_off + i + 2 + close + 2,
-                    });
-                    i = i + 2 + close + 2;
-                    continue;
-                }
+        if b[i] == b'['
+            && b.get(i + 1) == Some(&b'[')
+            && let Some(close) = masked[i + 2..].find("]]")
+        {
+            let inner = &orig[i + 2..i + 2 + close];
+            if !inner.is_empty() && !inner.contains('\n') && !inner.contains('[') {
+                let embed = i > 0 && b[i - 1] == b'!';
+                let (target_part, alias) = match inner.split_once('|') {
+                    Some((t, a)) => (t, Some(a.trim().to_string())),
+                    None => (inner, None),
+                };
+                let (target, heading) = match target_part.split_once('#') {
+                    Some((t, h)) => (t.trim().to_string(), Some(h.trim().to_string())),
+                    None => (target_part.trim().to_string(), None),
+                };
+                let start = if embed { i - 1 } else { i };
+                out.push(Link {
+                    kind: LinkKind::Wiki,
+                    target,
+                    heading,
+                    alias,
+                    embed,
+                    start: line_off + start,
+                    end: line_off + i + 2 + close + 2,
+                });
+                i = i + 2 + close + 2;
+                continue;
             }
+        }
         if b[i] == b']' && b.get(i + 1) == Some(&b'(') {
             // Find matching '[' backwards on this line.
             if let Some(open) = masked[..i].rfind('[')
-                && let Some(close_rel) = masked[i + 2..].find(')') {
-                    let raw_target = orig[i + 2..i + 2 + close_rel].trim();
-                    let raw_target = raw_target.split_once(' ').map(|(t, _)| t).unwrap_or(raw_target);
-                    let raw_target = raw_target.trim_start_matches('<').trim_end_matches('>');
-                    if is_internal_target(raw_target) {
-                        let embed = open > 0 && b[open - 1] == b'!';
-                        let decoded = percent_decode(raw_target);
-                        let (target, heading) = match decoded.split_once('#') {
-                            Some((t, h)) => (t.to_string(), Some(h.to_string())),
-                            None => (decoded, None),
-                        };
-                        if !target.is_empty() {
-                            out.push(Link {
-                                kind: LinkKind::Markdown,
-                                target,
-                                heading,
-                                alias: Some(orig[open + 1..i].to_string()),
-                                embed,
-                                start: line_off + if embed { open - 1 } else { open },
-                                end: line_off + i + 2 + close_rel + 1,
-                            });
-                        }
+                && let Some(close_rel) = masked[i + 2..].find(')')
+            {
+                let raw_target = orig[i + 2..i + 2 + close_rel].trim();
+                let raw_target = raw_target
+                    .split_once(' ')
+                    .map(|(t, _)| t)
+                    .unwrap_or(raw_target);
+                let raw_target = raw_target.trim_start_matches('<').trim_end_matches('>');
+                if is_internal_target(raw_target) {
+                    let embed = open > 0 && b[open - 1] == b'!';
+                    let decoded = percent_decode(raw_target);
+                    let (target, heading) = match decoded.split_once('#') {
+                        Some((t, h)) => (t.to_string(), Some(h.to_string())),
+                        None => (decoded, None),
+                    };
+                    if !target.is_empty() {
+                        out.push(Link {
+                            kind: LinkKind::Markdown,
+                            target,
+                            heading,
+                            alias: Some(orig[open + 1..i].to_string()),
+                            embed,
+                            start: line_off + if embed { open - 1 } else { open },
+                            end: line_off + i + 2 + close_rel + 1,
+                        });
                     }
-                    i = i + 2 + close_rel + 1;
-                    continue;
                 }
+                i = i + 2 + close_rel + 1;
+                continue;
+            }
         }
         i += 1;
     }
@@ -240,7 +253,11 @@ pub fn is_internal_target(t: &str) -> bool {
     // Any URI scheme ("https:", "mailto:", "javascript:") is external.
     if let Some(colon) = t.find(':') {
         let scheme = &t[..colon];
-        if !scheme.is_empty() && scheme.chars().all(|c| c.is_ascii_alphanumeric() || "+-.".contains(c)) {
+        if !scheme.is_empty()
+            && scheme
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || "+-.".contains(c))
+        {
             return false;
         }
     }
@@ -252,12 +269,14 @@ pub fn percent_decode(s: &str) -> String {
     let mut out = Vec::with_capacity(b.len());
     let mut i = 0;
     while i < b.len() {
-        if b[i] == b'%' && i + 2 < b.len()
-            && let Ok(v) = u8::from_str_radix(&s[i + 1..i + 3], 16) {
-                out.push(v);
-                i += 3;
-                continue;
-            }
+        if b[i] == b'%'
+            && i + 2 < b.len()
+            && let Ok(v) = u8::from_str_radix(&s[i + 1..i + 3], 16)
+        {
+            out.push(v);
+            i += 3;
+            continue;
+        }
         out.push(b[i]);
         i += 1;
     }
@@ -308,13 +327,19 @@ fn frontmatter_tags(fm: &str) -> Vec<String> {
             }
             in_list = false;
         }
-        let Some(rest) = t.strip_prefix("tags:").or_else(|| t.strip_prefix("tag:")) else { continue };
+        let Some(rest) = t.strip_prefix("tags:").or_else(|| t.strip_prefix("tag:")) else {
+            continue;
+        };
         let rest = rest.trim();
         if rest.is_empty() {
             in_list = true;
         } else {
             let rest = rest.trim_start_matches('[').trim_end_matches(']');
-            tags.extend(rest.split([',', ' ']).filter(|s| !s.trim().is_empty()).map(clean_tag));
+            tags.extend(
+                rest.split([',', ' '])
+                    .filter(|s| !s.trim().is_empty())
+                    .map(clean_tag),
+            );
         }
     }
     tags.retain(|t| !t.is_empty());
@@ -322,13 +347,20 @@ fn frontmatter_tags(fm: &str) -> Vec<String> {
 }
 
 fn clean_tag(s: &str) -> String {
-    s.trim().trim_matches(['"', '\'']).trim_start_matches('#').to_string()
+    s.trim()
+        .trim_matches(['"', '\''])
+        .trim_start_matches('#')
+        .to_string()
 }
 
 /// Normalised key for link resolution: lower-case, without `.md`.
 fn link_key(s: &str) -> String {
     let s = s.trim().trim_start_matches("./").trim_start_matches('/');
-    let s = if paths::is_note(s) { &s[..s.len() - 3] } else { s };
+    let s = if paths::is_note(s) {
+        &s[..s.len() - 3]
+    } else {
+        s
+    };
     s.to_lowercase()
 }
 
@@ -336,10 +368,17 @@ fn link_key(s: &str) -> String {
 /// (`(id, path)` pairs). Wiki links resolve like Obsidian: exact path first,
 /// then by file name with the shortest path winning. Markdown links are
 /// resolved relative to the linking note's folder first.
-pub fn resolve<'a>(link: &Link, from_path: &str, candidates: &'a [(String, String)]) -> Option<&'a str> {
+pub fn resolve<'a>(
+    link: &Link,
+    from_path: &str,
+    candidates: &'a [(String, String)],
+) -> Option<&'a str> {
     if link.target.is_empty() {
         // `[[#Heading]]` refers to the current note.
-        return candidates.iter().find(|(_, p)| p == from_path).map(|(id, _)| id.as_str());
+        return candidates
+            .iter()
+            .find(|(_, p)| p == from_path)
+            .map(|(id, _)| id.as_str());
     }
     if link.kind == LinkKind::Markdown {
         let folder = paths::parent(from_path);
@@ -360,7 +399,9 @@ pub fn resolve<'a>(link: &Link, from_path: &str, candidates: &'a [(String, Strin
         let k = link_key(&c.1);
         if k.ends_with(&format!("/{key}")) {
             best = match best {
-                Some(b) if b.1.len() < c.1.len() || (b.1.len() == c.1.len() && b.1 <= c.1) => Some(b),
+                Some(b) if b.1.len() < c.1.len() || (b.1.len() == c.1.len() && b.1 <= c.1) => {
+                    Some(b)
+                }
                 _ => Some(c),
             };
         }
@@ -369,7 +410,11 @@ pub fn resolve<'a>(link: &Link, from_path: &str, candidates: &'a [(String, Strin
 }
 
 fn join_relative(folder: &str, target: &str) -> Option<String> {
-    let mut segs: Vec<&str> = if folder.is_empty() { vec![] } else { folder.split('/').collect() };
+    let mut segs: Vec<&str> = if folder.is_empty() {
+        vec![]
+    } else {
+        folder.split('/').collect()
+    };
     for s in target.split('/') {
         match s {
             "" | "." => {}
@@ -439,13 +484,27 @@ mod tests {
         let src = "---\ntags: [project, \"home\"]\n---\n# Title #notatag\nSee [[Other Note|alias]] and [[Folder/Deep#Sec]].\n![[image.png]] [doc](../Docs/My%20Doc.md) [web](https://x.y)\nA #tag and #nested/tag but not#this or #123.\n`[[code]] #code`\n```\n[[fenced]] #fenced\n```\n";
         let info = analyze(src);
         let targets: Vec<_> = info.links.iter().map(|l| l.target.as_str()).collect();
-        assert_eq!(targets, vec!["Other Note", "Folder/Deep", "image.png", "../Docs/My Doc.md"]);
+        assert_eq!(
+            targets,
+            vec![
+                "Other Note",
+                "Folder/Deep",
+                "image.png",
+                "../Docs/My Doc.md"
+            ]
+        );
         assert_eq!(info.links[0].alias.as_deref(), Some("alias"));
         assert_eq!(info.links[1].heading.as_deref(), Some("Sec"));
         assert!(info.links[2].embed);
-        assert_eq!(info.tags, vec!["project", "home", "notatag", "tag", "nested/tag"]);
+        assert_eq!(
+            info.tags,
+            vec!["project", "home", "notatag", "tag", "nested/tag"]
+        );
         assert_eq!(info.headings[0].text, "Title #notatag");
-        assert_eq!(&src[info.links[0].start..info.links[0].end], "[[Other Note|alias]]");
+        assert_eq!(
+            &src[info.links[0].start..info.links[0].end],
+            "[[Other Note|alias]]"
+        );
     }
 
     #[test]
@@ -469,7 +528,11 @@ mod tests {
         assert_eq!(resolve(&wl("Folder/Note"), "x.md", &c), Some("b"));
         assert_eq!(resolve(&wl("Other"), "x.md", &c), Some("c"));
         assert_eq!(resolve(&wl("Missing"), "x.md", &c), None);
-        let ml = Link { kind: LinkKind::Markdown, target: "../Docs/My Doc.md".into(), ..wl("") };
+        let ml = Link {
+            kind: LinkKind::Markdown,
+            target: "../Docs/My Doc.md".into(),
+            ..wl("")
+        };
         assert_eq!(resolve(&ml, "Folder/Other.md", &c), Some("d"));
     }
 

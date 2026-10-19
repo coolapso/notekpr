@@ -17,7 +17,11 @@ use tokio::sync::Mutex;
 pub enum ApiError {
     /// The server answered with an error status.
     #[error("{message} (HTTP {status})")]
-    Status { status: u16, code: String, message: String },
+    Status {
+        status: u16,
+        code: String,
+        message: String,
+    },
     #[error("cannot reach the server: {0}")]
     Network(String),
     #[error("unexpected response from the server: {0}")]
@@ -96,11 +100,18 @@ fn net(e: reqwest::Error) -> ApiError {
 }
 
 pub fn read_secret_file(path: &std::path::Path) -> Result<String, ApiError> {
-    let s = std::fs::read_to_string(path)
-        .map_err(|e| ApiError::Auth(format!("cannot read the client secret file {}: {e}", path.display())))?;
+    let s = std::fs::read_to_string(path).map_err(|e| {
+        ApiError::Auth(format!(
+            "cannot read the client secret file {}: {e}",
+            path.display()
+        ))
+    })?;
     let s = s.trim().to_string();
     if s.is_empty() {
-        return Err(ApiError::Auth(format!("the client secret file {} is empty", path.display())));
+        return Err(ApiError::Auth(format!(
+            "the client secret file {} is empty",
+            path.display()
+        )));
     }
     Ok(s)
 }
@@ -128,7 +139,10 @@ impl Api {
     }
 
     pub fn ws_url(&self) -> String {
-        let rest = self.base.strip_prefix("https://").map(|r| format!("wss://{r}"));
+        let rest = self
+            .base
+            .strip_prefix("https://")
+            .map(|r| format!("wss://{r}"));
         rest.unwrap_or_else(|| self.base.replacen("http://", "ws://", 1)) + "/ws"
     }
 
@@ -141,7 +155,10 @@ impl Api {
         match &self.creds {
             Credentials::None => Err(ApiError::Auth("not signed in".into())),
             Credentials::Session(t) => Ok(t.clone()),
-            Credentials::Agent { client_id, secret_file } => {
+            Credentials::Agent {
+                client_id,
+                secret_file,
+            } => {
                 let mut cache = self.agent_token.lock().await;
                 if let Some((t, exp)) = &*cache
                     && *exp - coolpsonotes_core::now_ms() > 60_000
@@ -166,18 +183,30 @@ impl Api {
         format!("{}{}", self.base, path)
     }
 
-    async fn send(&self, method: Method, path: &str, body: Body<'_>) -> ApiResult<reqwest::Response> {
+    async fn send(
+        &self,
+        method: Method,
+        path: &str,
+        body: Body<'_>,
+    ) -> ApiResult<reqwest::Response> {
         let mut retried = false;
         loop {
             let token = self.token().await?;
-            let mut req = self.http.request(method.clone(), self.url(path)).bearer_auth(&token);
+            let mut req = self
+                .http
+                .request(method.clone(), self.url(path))
+                .bearer_auth(&token);
             req = match &body {
                 Body::None => req,
                 Body::Json(v) => req.json(v),
-                Body::Bytes(b) => req.header("content-type", "application/octet-stream").body(b.to_vec()),
+                Body::Bytes(b) => req
+                    .header("content-type", "application/octet-stream")
+                    .body(b.to_vec()),
             };
             let resp = req.send().await.map_err(net)?;
-            if resp.status() == StatusCode::UNAUTHORIZED && matches!(self.creds, Credentials::Agent { .. }) && !retried
+            if resp.status() == StatusCode::UNAUTHORIZED
+                && matches!(self.creds, Credentials::Agent { .. })
+                && !retried
             {
                 // The agent token may have expired early or been rotated.
                 self.invalidate_token().await;
@@ -195,7 +224,9 @@ impl Api {
         body: Option<&impl Serialize>,
     ) -> ApiResult<T> {
         let body = match body {
-            Some(b) => Body::Json(serde_json::to_value(b).map_err(|e| ApiError::Decode(e.to_string()))?),
+            Some(b) => {
+                Body::Json(serde_json::to_value(b).map_err(|e| ApiError::Decode(e.to_string()))?)
+            }
             None => Body::None,
         };
         let resp = self.send(method, path, body).await?;
@@ -206,15 +237,27 @@ impl Api {
         self.request(Method::GET, path, None::<&()>).await
     }
 
-    pub async fn post<B: Serialize, T: DeserializeOwned>(&self, path: &str, body: &B) -> ApiResult<T> {
+    pub async fn post<B: Serialize, T: DeserializeOwned>(
+        &self,
+        path: &str,
+        body: &B,
+    ) -> ApiResult<T> {
         self.request(Method::POST, path, Some(body)).await
     }
 
-    pub async fn put<B: Serialize, T: DeserializeOwned>(&self, path: &str, body: &B) -> ApiResult<T> {
+    pub async fn put<B: Serialize, T: DeserializeOwned>(
+        &self,
+        path: &str,
+        body: &B,
+    ) -> ApiResult<T> {
         self.request(Method::PUT, path, Some(body)).await
     }
 
-    pub async fn patch<B: Serialize, T: DeserializeOwned>(&self, path: &str, body: &B) -> ApiResult<T> {
+    pub async fn patch<B: Serialize, T: DeserializeOwned>(
+        &self,
+        path: &str,
+        body: &B,
+    ) -> ApiResult<T> {
         self.request(Method::PATCH, path, Some(body)).await
     }
 
@@ -240,16 +283,31 @@ impl Api {
     }
 
     pub async fn dev_login(&self, username: &str) -> ApiResult<SessionResponse> {
-        let req = DevLoginRequest { username: username.to_string(), display_name: None };
-        let resp = self.http.post(self.url("/auth/dev-login")).json(&req).send().await.map_err(net)?;
+        let req = DevLoginRequest {
+            username: username.to_string(),
+            display_name: None,
+        };
+        let resp = self
+            .http
+            .post(self.url("/auth/dev-login"))
+            .json(&req)
+            .send()
+            .await
+            .map_err(net)?;
         decode(check(resp).await?).await
     }
 
-    pub async fn device_authorization(&self, client_name: &str) -> ApiResult<DeviceAuthorizationResponse> {
+    pub async fn device_authorization(
+        &self,
+        client_name: &str,
+    ) -> ApiResult<DeviceAuthorizationResponse> {
         let resp = self
             .http
             .post(self.url("/oauth/device_authorization"))
-            .form(&[("client_id", "coolpsonotes-cli"), ("client_name", client_name)])
+            .form(&[
+                ("client_id", "coolpsonotes-cli"),
+                ("client_name", client_name),
+            ])
             .send()
             .await
             .map_err(net)?;
@@ -260,7 +318,10 @@ impl Api {
         let resp = self
             .http
             .post(self.url("/oauth/token"))
-            .form(&[("grant_type", "urn:ietf:params:oauth:grant-type:device_code"), ("device_code", device_code)])
+            .form(&[
+                ("grant_type", "urn:ietf:params:oauth:grant-type:device_code"),
+                ("device_code", device_code),
+            ])
             .send()
             .await
             .map_err(net)?;
@@ -268,7 +329,10 @@ impl Api {
             return Ok(DevicePoll::Token(decode(resp).await?));
         }
         let status = resp.status().as_u16();
-        let err: OAuthError = resp.json().await.map_err(|e| ApiError::Decode(e.to_string()))?;
+        let err: OAuthError = resp
+            .json()
+            .await
+            .map_err(|e| ApiError::Decode(e.to_string()))?;
         Ok(match err.error.as_str() {
             "authorization_pending" => DevicePoll::Pending,
             "slow_down" => DevicePoll::SlowDown,
@@ -284,7 +348,11 @@ impl Api {
         })
     }
 
-    pub async fn client_credentials(&self, client_id: &str, client_secret: &str) -> ApiResult<TokenResponse> {
+    pub async fn client_credentials(
+        &self,
+        client_id: &str,
+        client_secret: &str,
+    ) -> ApiResult<TokenResponse> {
         let resp = self
             .http
             .post(self.url("/oauth/token"))
@@ -300,7 +368,8 @@ impl Api {
         let err: Option<OAuthError> = resp.json().await.ok();
         let code = err.map(|e| e.error).unwrap_or_else(|| "error".into());
         Err(ApiError::Auth(if code == "invalid_client" {
-            "the server rejected the agent credentials (wrong, revoked or rotated client secret)".into()
+            "the server rejected the agent credentials (wrong, revoked or rotated client secret)"
+                .into()
         } else {
             format!("token request failed: {code} (HTTP {status})")
         }))
@@ -328,16 +397,32 @@ impl Api {
         self.get(&format!("/vaults/{v}/members")).await
     }
 
-    pub async fn changes(&self, v: &str, since: i64, limit: i64, snapshots: bool) -> ApiResult<ChangesResponse> {
-        self.get(&format!("/vaults/{v}/changes?since={since}&limit={limit}&snapshots={snapshots}")).await
+    pub async fn changes(
+        &self,
+        v: &str,
+        since: i64,
+        limit: i64,
+        snapshots: bool,
+    ) -> ApiResult<ChangesResponse> {
+        self.get(&format!(
+            "/vaults/{v}/changes?since={since}&limit={limit}&snapshots={snapshots}"
+        ))
+        .await
     }
 
     pub async fn push(&self, v: &str, updates: Vec<PushUpdate>) -> ApiResult<PushResponse> {
-        self.post(&format!("/vaults/{v}/updates"), &PushRequest { updates }).await
+        self.post(&format!("/vaults/{v}/updates"), &PushRequest { updates })
+            .await
     }
 
-    pub async fn create_snapshot(&self, v: &str, o: &str, req: &CreateSnapshotRequest) -> ApiResult<SnapshotInfo> {
-        self.post(&format!("/vaults/{v}/objects/{o}/snapshots"), req).await
+    pub async fn create_snapshot(
+        &self,
+        v: &str,
+        o: &str,
+        req: &CreateSnapshotRequest,
+    ) -> ApiResult<SnapshotInfo> {
+        self.post(&format!("/vaults/{v}/objects/{o}/snapshots"), req)
+            .await
     }
 
     pub async fn user(&self, id: &str) -> ApiResult<PublicUser> {
@@ -365,9 +450,19 @@ async fn check(resp: reqwest::Response) -> ApiResult<reqwest::Response> {
     let text = resp.text().await.unwrap_or_default();
     let (err, message) = match serde_json::from_str::<ApiError2>(&text) {
         Ok(e) => (e.error, e.message),
-        Err(_) => ("http_error".to_string(), status.canonical_reason().unwrap_or("request failed").to_string()),
+        Err(_) => (
+            "http_error".to_string(),
+            status
+                .canonical_reason()
+                .unwrap_or("request failed")
+                .to_string(),
+        ),
     };
-    Err(ApiError::Status { status: code, code: err, message })
+    Err(ApiError::Status {
+        status: code,
+        code: err,
+        message,
+    })
 }
 
 #[derive(serde::Deserialize)]

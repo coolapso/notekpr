@@ -30,13 +30,19 @@ async fn mirror_syncs_both_ways_and_merges_external_edits() {
     let alice_hub = hub(&alice).await;
     let v = alice_hub.resolve("Shared").await.unwrap();
     let vid = v.lock().await.id().to_string();
-    manage::share(&alice, &v, "bob", Role::Editor, false).await.unwrap();
-    ops::put_document(&alice_hub, &vid, "Notes/Plan.md", "alpha\nbeta\n", None).await.unwrap();
+    manage::share(&alice, &v, "bob", Role::Editor, false)
+        .await
+        .unwrap();
+    ops::put_document(&alice_hub, &vid, "Notes/Plan.md", "alpha\nbeta\n", None)
+        .await
+        .unwrap();
 
     // ---- live daemon: watcher + websocket
     let mirror_root = srv.path("bob-mirror");
     let bob_live = live(hub(&bob).await).await;
-    let mut mirror = Mirror::new(bob_live.hub.clone(), &mirror_root).await.unwrap();
+    let mut mirror = Mirror::new(bob_live.hub.clone(), &mirror_root)
+        .await
+        .unwrap();
     mirror.reconcile_all(false).await.unwrap();
     let dir = mirror.vault_dir(&vid).unwrap().to_path_buf();
     assert_eq!(dir.file_name().unwrap(), "Shared");
@@ -54,8 +60,19 @@ async fn mirror_syncs_both_ways_and_merges_external_edits() {
     .await;
 
     // A remote edit updates Bob's file.
-    ops::put_document(&alice_hub, &vid, "Notes/Plan.md", "alpha\nbeta\ngamma\n", None).await.unwrap();
-    eventually(15, "bob's file receives alice's edit", || async { read(&plan) == "alpha\nbeta\ngamma\n" }).await;
+    ops::put_document(
+        &alice_hub,
+        &vid,
+        "Notes/Plan.md",
+        "alpha\nbeta\ngamma\n",
+        None,
+    )
+    .await
+    .unwrap();
+    eventually(15, "bob's file receives alice's edit", || async {
+        read(&plan) == "alpha\nbeta\ngamma\n"
+    })
+    .await;
     let _ = stop.send(true);
     task.await.unwrap().unwrap();
     bob_live.stop().await;
@@ -69,7 +86,15 @@ async fn mirror_syncs_both_ways_and_merges_external_edits() {
     // Race 1: the editor still holds V1 when a remote edit (V2) is written
     // to disk; it then saves V1 + its own change over V2.
     let v1 = read(&plan);
-    ops::put_document(&alice_hub, &vid, "Notes/Plan.md", "ALPHA\nbeta\ngamma\n", None).await.unwrap();
+    ops::put_document(
+        &alice_hub,
+        &vid,
+        "Notes/Plan.md",
+        "ALPHA\nbeta\ngamma\n",
+        None,
+    )
+    .await
+    .unwrap();
     bob_hub.sync_vault(&vid).await.unwrap();
     mirror.reconcile_all(false).await.unwrap();
     assert_eq!(read(&plan), "ALPHA\nbeta\ngamma\n");
@@ -77,24 +102,48 @@ async fn mirror_syncs_both_ways_and_merges_external_edits() {
     write(&plan, &format!("{v1}delta (bob)\n"));
     mirror.reconcile_all(true).await.unwrap();
     let both = "ALPHA\nbeta\ngamma\ndelta (bob)\n";
-    assert_eq!(read(&plan), both, "the stale save must not revert the remote edit");
+    assert_eq!(
+        read(&plan),
+        both,
+        "the stale save must not revert the remote edit"
+    );
     alice_hub.sync_vault(&vid).await.unwrap();
-    assert_eq!(note(&alice_hub, &vid, "Notes/Plan.md").await.as_deref(), Some(both));
+    assert_eq!(
+        note(&alice_hub, &vid, "Notes/Plan.md").await.as_deref(),
+        Some(both)
+    );
 
     // Race 2: a remote edit arrives while a local edit is not ingested yet.
     write(&plan, &format!("{both}epsilon (bob)\n"));
-    ops::put_document(&alice_hub, &vid, "Notes/Plan.md", "ALPHA\nBETA (alice)\ngamma\ndelta (bob)\n", None)
-        .await
-        .unwrap();
+    ops::put_document(
+        &alice_hub,
+        &vid,
+        "Notes/Plan.md",
+        "ALPHA\nBETA (alice)\ngamma\ndelta (bob)\n",
+        None,
+    )
+    .await
+    .unwrap();
     bob_hub.sync_vault(&vid).await.unwrap();
     mirror.reconcile_all(true).await.unwrap();
     let all = "ALPHA\nBETA (alice)\ngamma\ndelta (bob)\nepsilon (bob)\n";
     assert_eq!(read(&plan), all);
     alice_hub.sync_vault(&vid).await.unwrap();
-    assert_eq!(note(&alice_hub, &vid, "Notes/Plan.md").await.as_deref(), Some(all));
+    assert_eq!(
+        note(&alice_hub, &vid, "Notes/Plan.md").await.as_deref(),
+        Some(all)
+    );
 
     // Deleting a file moves the entry to the trash (restorable).
-    let new_id = bob_hub.get(&vid).unwrap().lock().await.find("Ideas/new.md").unwrap().1.id;
+    let new_id = bob_hub
+        .get(&vid)
+        .unwrap()
+        .lock()
+        .await
+        .find("Ideas/new.md")
+        .unwrap()
+        .1
+        .id;
     std::fs::remove_file(dir.join("Ideas/new.md")).unwrap();
     let r = mirror.reconcile_all(true).await.unwrap();
     assert_eq!(r.trashed, 1);
@@ -109,10 +158,22 @@ async fn mirror_syncs_both_ways_and_merges_external_edits() {
     alice_hub.push(&vid).await.unwrap();
     bob_hub.sync_vault(&vid).await.unwrap();
     mirror.reconcile_all(true).await.unwrap();
-    assert_eq!(read(&dir.join("Ideas/new.md")), "from bob's editor\n", "restored note is written back");
+    assert_eq!(
+        read(&dir.join("Ideas/new.md")),
+        "from bob's editor\n",
+        "restored note is written back"
+    );
 
     // Renaming a file moves the entry (same id, same content).
-    let plan_id = bob_hub.get(&vid).unwrap().lock().await.find("Notes/Plan.md").unwrap().1.id;
+    let plan_id = bob_hub
+        .get(&vid)
+        .unwrap()
+        .lock()
+        .await
+        .find("Notes/Plan.md")
+        .unwrap()
+        .1
+        .id;
     std::fs::create_dir_all(dir.join("Archive")).unwrap();
     std::fs::rename(&plan, dir.join("Archive/Old plan.md")).unwrap();
     let r = mirror.reconcile_all(true).await.unwrap();
@@ -135,7 +196,9 @@ async fn mirror_syncs_both_ways_and_merges_external_edits() {
     assert_eq!(r.local_changes(), 0, "{r:?}");
 
     // A remote rename moves Bob's file.
-    ops::move_document(&alice_hub, &vid, "Archive/Old plan.md", "Plan.md", false).await.unwrap();
+    ops::move_document(&alice_hub, &vid, "Archive/Old plan.md", "Plan.md", false)
+        .await
+        .unwrap();
     bob_hub.sync_vault(&vid).await.unwrap();
     mirror.reconcile_all(true).await.unwrap();
     assert_eq!(read(&dir.join("Plan.md")), all);
@@ -151,7 +214,9 @@ async fn concurrent_offline_creation_gives_two_files_not_a_lost_note() {
     let alice_hub = hub(&alice).await;
     let v = alice_hub.resolve("Ideas").await.unwrap();
     let vid = v.lock().await.id().to_string();
-    manage::share(&alice, &v, "bob", Role::Editor, false).await.unwrap();
+    manage::share(&alice, &v, "bob", Role::Editor, false)
+        .await
+        .unwrap();
 
     // Bob is offline (uploads deferred) while both create the same path.
     let bob_hub = hub(&bob).await;
@@ -162,7 +227,9 @@ async fn concurrent_offline_creation_gives_two_files_not_a_lost_note() {
     let dir = mirror.vault_dir(&vid).unwrap().to_path_buf();
     write(&dir.join("Idea.md"), "bob's idea\n");
     mirror.reconcile_all(true).await.unwrap();
-    ops::put_document(&alice_hub, &vid, "Idea.md", "alice's idea\n", None).await.unwrap();
+    ops::put_document(&alice_hub, &vid, "Idea.md", "alice's idea\n", None)
+        .await
+        .unwrap();
 
     // Reconnect: both entries exist; the older keeps the name.
     bob_hub.set_push_now(true);
@@ -171,16 +238,31 @@ async fn concurrent_offline_creation_gives_two_files_not_a_lost_note() {
     alice_hub.sync_vault(&vid).await.unwrap();
     let mut texts = vec![read(&dir.join("Idea.md")), read(&dir.join("Idea 2.md"))];
     texts.sort();
-    assert_eq!(texts, vec!["alice's idea\n".to_string(), "bob's idea\n".to_string()]);
+    assert_eq!(
+        texts,
+        vec!["alice's idea\n".to_string(), "bob's idea\n".to_string()]
+    );
     let a_paths: Vec<String> = v.lock().await.paths().into_keys().collect();
-    assert_eq!(a_paths, vec!["Idea 2.md".to_string(), "Idea.md".to_string()]);
+    assert_eq!(
+        a_paths,
+        vec!["Idea 2.md".to_string(), "Idea.md".to_string()]
+    );
 
     // Editing the suffixed file edits that entry; nothing is renamed in the shared state.
     let second = read(&dir.join("Idea 2.md"));
     write(&dir.join("Idea 2.md"), &format!("{second}more\n"));
     mirror.reconcile_all(true).await.unwrap();
     alice_hub.sync_vault(&vid).await.unwrap();
-    assert_eq!(note(&alice_hub, &vid, "Idea 2.md").await.unwrap(), format!("{second}more\n"));
+    assert_eq!(
+        note(&alice_hub, &vid, "Idea 2.md").await.unwrap(),
+        format!("{second}more\n")
+    );
     let g = v.lock().await;
-    assert!(g.replica.index.entries().iter().all(|e| e.path == "Idea.md"));
+    assert!(
+        g.replica
+            .index
+            .entries()
+            .iter()
+            .all(|e| e.path == "Idea.md")
+    );
 }

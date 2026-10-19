@@ -15,7 +15,13 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 )]
 pub struct Cli {
     /// Profile to use (one signed-in identity on one server).
-    #[arg(long, short = 'p', global = true, env = "COOLPSONOTES_PROFILE", default_value = "default")]
+    #[arg(
+        long,
+        short = 'p',
+        global = true,
+        env = "COOLPSONOTES_PROFILE",
+        default_value = "default"
+    )]
     pub profile: String,
     /// Only print results and warnings.
     #[arg(long, short = 'q', global = true)]
@@ -134,7 +140,11 @@ pub enum Command {
         accept_new_key: bool,
     },
     /// Stop sharing a note with someone (rotates the note's key).
-    UnshareNote { vault: String, path: String, user: String },
+    UnshareNote {
+        vault: String,
+        path: String,
+        user: String,
+    },
     /// Who a note is shared with individually.
     NoteShares { vault: String, path: String },
     /// Notes other people shared with you individually.
@@ -289,9 +299,17 @@ pub struct HistoryArgs {
 #[derive(Subcommand, Debug)]
 pub enum HistoryCmd {
     /// Print one revision.
-    Show { vault: String, path: String, revision: String },
+    Show {
+        vault: String,
+        path: String,
+        revision: String,
+    },
     /// Make a revision the current content (merged as an edit).
-    Restore { vault: String, path: String, revision: String },
+    Restore {
+        vault: String,
+        path: String,
+        revision: String,
+    },
 }
 
 #[derive(Args, Debug)]

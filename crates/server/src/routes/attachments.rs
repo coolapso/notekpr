@@ -41,12 +41,17 @@ pub async fn put(
     match r {
         // Attachments are immutable; re-uploading the same id is a no-op retry.
         Err(sqlx::Error::Database(e)) if e.is_unique_violation() => {
-            let size: i64 = sqlx::query_scalar("SELECT size FROM attachments WHERE vault_id = ? AND id = ?")
-                .bind(&v)
-                .bind(&id)
-                .fetch_one(&state.db)
-                .await?;
-            if size == body.len() as i64 { Ok(StatusCode::OK) } else { Err(conflict("attachment id already used")) }
+            let size: i64 =
+                sqlx::query_scalar("SELECT size FROM attachments WHERE vault_id = ? AND id = ?")
+                    .bind(&v)
+                    .bind(&id)
+                    .fetch_one(&state.db)
+                    .await?;
+            if size == body.len() as i64 {
+                Ok(StatusCode::OK)
+            } else {
+                Err(conflict("attachment id already used"))
+            }
         }
         r => {
             r?;
@@ -62,17 +67,27 @@ pub async fn get(
     Path((v, id)): Path<(String, String)>,
 ) -> AppResult<Response> {
     access::member_role(&state.db, &v, &who.user_id).await?;
-    let data: Vec<u8> = sqlx::query_scalar("SELECT data FROM attachments WHERE vault_id = ? AND id = ?")
-        .bind(&v)
-        .bind(&id)
-        .fetch_optional(&state.db)
-        .await?
-        .ok_or(AppError::NotFound)?;
+    let data: Vec<u8> =
+        sqlx::query_scalar("SELECT data FROM attachments WHERE vault_id = ? AND id = ?")
+            .bind(&v)
+            .bind(&id)
+            .fetch_optional(&state.db)
+            .await?
+            .ok_or(AppError::NotFound)?;
     let mut resp = data.into_response();
     let h = resp.headers_mut();
-    h.insert(header::CONTENT_TYPE, HeaderValue::from_static("application/octet-stream"));
-    h.insert(header::CONTENT_DISPOSITION, HeaderValue::from_static("attachment"));
-    h.insert(header::CACHE_CONTROL, HeaderValue::from_static("private, max-age=31536000, immutable"));
+    h.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/octet-stream"),
+    );
+    h.insert(
+        header::CONTENT_DISPOSITION,
+        HeaderValue::from_static("attachment"),
+    );
+    h.insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("private, max-age=31536000, immutable"),
+    );
     Ok(resp)
 }
 

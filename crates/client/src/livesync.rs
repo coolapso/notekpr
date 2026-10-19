@@ -95,7 +95,10 @@ pub async fn run(hub: Arc<Hub>, mut shutdown: watch::Receiver<bool>) -> Result<(
         hub.set_push_now(false);
         hub.save_all().await;
         let delay = backoff.next();
-        ui::status(&format!("offline ({reason}); retrying in {}s — local changes are kept", delay.as_secs().max(1)));
+        ui::status(&format!(
+            "offline ({reason}); retrying in {}s — local changes are kept",
+            delay.as_secs().max(1)
+        ));
         tokio::select! {
             _ = tokio::time::sleep(delay) => {}
             _ = shutdown.changed() => {}
@@ -125,8 +128,14 @@ async fn connect(hub: &Hub) -> Result<Ws> {
         Err(e) if e.is_network() => return Err(anyhow!(e)),
         Err(e) => return Err(Fatal(format!("{e}")).into()),
     };
-    let connector = if url.starts_with("wss://") { Some(Connector::Rustls(tls_config()?)) } else { None };
-    let cfg = WebSocketConfig::default().max_message_size(Some(256 << 20)).max_frame_size(Some(64 << 20));
+    let connector = if url.starts_with("wss://") {
+        Some(Connector::Rustls(tls_config()?))
+    } else {
+        None
+    };
+    let cfg = WebSocketConfig::default()
+        .max_message_size(Some(256 << 20))
+        .max_frame_size(Some(64 << 20));
     let (mut ws, _) = tokio::time::timeout(
         Duration::from_secs(15),
         tokio_tungstenite::connect_async_tls_with_config(url.as_str(), Some(cfg), true, connector),
@@ -162,12 +171,15 @@ async fn connect(hub: &Hub) -> Result<Ws> {
 }
 
 async fn send(sink: &mut Sink, m: &ClientMessage) -> Result<()> {
-    sink.send(Message::Text(serde_json::to_string(m)?.into())).await?;
+    sink.send(Message::Text(serde_json::to_string(m)?.into()))
+        .await?;
     Ok(())
 }
 
 async fn subscribe(hub: &Hub, sink: &mut Sink, vault_id: &str) -> Result<()> {
-    let Some(v) = hub.get(vault_id) else { return Ok(()) };
+    let Some(v) = hub.get(vault_id) else {
+        return Ok(());
+    };
     let since = {
         let g = v.lock().await;
         if g.read_only.is_some() {
@@ -175,7 +187,15 @@ async fn subscribe(hub: &Hub, sink: &mut Sink, vault_id: &str) -> Result<()> {
         }
         g.replica.seq
     };
-    send(sink, &ClientMessage::Subscribe { vault_id: vault_id.to_string(), since: Some(since), object_id: None }).await
+    send(
+        sink,
+        &ClientMessage::Subscribe {
+            vault_id: vault_id.to_string(),
+            since: Some(since),
+            object_id: None,
+        },
+    )
+    .await
 }
 
 struct Conn {
@@ -186,9 +206,18 @@ struct Conn {
     nonce: u64,
 }
 
-async fn session_loop(hub: &Arc<Hub>, ws: Ws, shutdown: &mut watch::Receiver<bool>) -> Result<Exit> {
+async fn session_loop(
+    hub: &Arc<Hub>,
+    ws: Ws,
+    shutdown: &mut watch::Receiver<bool>,
+) -> Result<Exit> {
     let (mut sink, mut stream) = ws.split();
-    let mut conn = Conn { synced: BTreeSet::new(), subscribed: BTreeSet::new(), announced: false, nonce: 0 };
+    let mut conn = Conn {
+        synced: BTreeSet::new(),
+        subscribed: BTreeSet::new(),
+        announced: false,
+        nonce: 0,
+    };
     hub.set_online(true);
     // Pick up vaults shared while we were away before subscribing.
     if let Ok(list) = hub.session.api.vaults().await
@@ -294,20 +323,33 @@ fn spawn_push(hub: &Arc<Hub>, vault_id: &str) {
 }
 
 /// Whether a ciphertext uses an epoch we do not hold yet (keys rotated).
-fn missing_epoch<'a>(hub_vault: &crate::vault::Vault, mut payloads: impl Iterator<Item = &'a [u8]>) -> bool {
+fn missing_epoch<'a>(
+    hub_vault: &crate::vault::Vault,
+    mut payloads: impl Iterator<Item = &'a [u8]>,
+) -> bool {
     let current = hub_vault.replica.keyring.current_epoch().unwrap_or(0);
     payloads.any(|p| crypto::sym_epoch(p).map(|e| e > current).unwrap_or(false))
 }
 
 fn is_missing_epoch(e: &anyhow::Error) -> bool {
-    matches!(e.downcast_ref::<EngineError>(), Some(EngineError::Crypto(CryptoError::MissingEpoch(_))))
+    matches!(
+        e.downcast_ref::<EngineError>(),
+        Some(EngineError::Crypto(CryptoError::MissingEpoch(_)))
+    )
 }
 
-async fn handle(hub: &Arc<Hub>, msg: ServerMessage, sink: &mut Sink, conn: &mut Conn) -> Result<Option<Exit>> {
+async fn handle(
+    hub: &Arc<Hub>,
+    msg: ServerMessage,
+    sink: &mut Sink,
+    conn: &mut Conn,
+) -> Result<Option<Exit>> {
     let session = &hub.session;
     match msg {
         ServerMessage::Changes { vault_id, changes } => {
-            let Some(v) = hub.get(&vault_id) else { return Ok(None) };
+            let Some(v) = hub.get(&vault_id) else {
+                return Ok(None);
+            };
             let needs_keys = {
                 let g = v.lock().await;
                 let it = changes
@@ -326,8 +368,12 @@ async fn handle(hub: &Arc<Hub>, msg: ServerMessage, sink: &mut Sink, conn: &mut 
             drop(g);
             hub.emit_applied(&vault_id, &a, false);
         }
-        ServerMessage::Synced { vault_id, head_seq, .. } => {
-            let Some(v) = hub.get(&vault_id) else { return Ok(None) };
+        ServerMessage::Synced {
+            vault_id, head_seq, ..
+        } => {
+            let Some(v) = hub.get(&vault_id) else {
+                return Ok(None);
+            };
             {
                 let mut g = v.lock().await;
                 g.check_rollback(head_seq);
@@ -350,7 +396,9 @@ async fn handle(hub: &Arc<Hub>, msg: ServerMessage, sink: &mut Sink, conn: &mut 
             }
         }
         ServerMessage::Update { vault_id, update } => {
-            let Some(v) = hub.get(&vault_id) else { return Ok(None) };
+            let Some(v) = hub.get(&vault_id) else {
+                return Ok(None);
+            };
             let mut res = v.lock().await.apply_update(&update);
             if let Err(e) = &res
                 && is_missing_epoch(e)
@@ -360,11 +408,15 @@ async fn handle(hub: &Arc<Hub>, msg: ServerMessage, sink: &mut Sink, conn: &mut 
             }
             match res {
                 Ok(a) => hub.emit_applied(&vault_id, &a, false),
-                Err(e) => tracing::warn!(vault = %vault_id, "skipped an update that could not be applied: {e:#}"),
+                Err(e) => {
+                    tracing::warn!(vault = %vault_id, "skipped an update that could not be applied: {e:#}")
+                }
             }
         }
         ServerMessage::Snapshot { vault_id, snapshot } => {
-            let Some(v) = hub.get(&vault_id) else { return Ok(None) };
+            let Some(v) = hub.get(&vault_id) else {
+                return Ok(None);
+            };
             let mut res = v.lock().await.apply_snapshot(&snapshot);
             if let Err(e) = &res
                 && is_missing_epoch(e)
@@ -374,17 +426,27 @@ async fn handle(hub: &Arc<Hub>, msg: ServerMessage, sink: &mut Sink, conn: &mut 
             }
             match res {
                 Ok(a) => hub.emit_applied(&vault_id, &a, false),
-                Err(e) => tracing::warn!(vault = %vault_id, "skipped a snapshot that could not be applied: {e:#}"),
+                Err(e) => {
+                    tracing::warn!(vault = %vault_id, "skipped a snapshot that could not be applied: {e:#}")
+                }
             }
         }
-        ServerMessage::SnapshotCreated { vault_id, object_id, .. } => {
+        ServerMessage::SnapshotCreated {
+            vault_id,
+            object_id,
+            ..
+        } => {
             if let Some(v) = hub.get(&vault_id) {
                 let mut g = v.lock().await;
                 g.replica.snapshot_created(&object_id);
                 g.mark_state_dirty();
             }
         }
-        ServerMessage::Purged { vault_id, object_id, seq } => {
+        ServerMessage::Purged {
+            vault_id,
+            object_id,
+            seq,
+        } => {
             if let Some(v) = hub.get(&vault_id) {
                 let a = v.lock().await.apply_purge(&object_id, seq);
                 hub.emit_applied(&vault_id, &a, false);
@@ -396,7 +458,9 @@ async fn handle(hub: &Arc<Hub>, msg: ServerMessage, sink: &mut Sink, conn: &mut 
             }
         }
         ServerMessage::VaultEvent { vault_id, event } => {
-            let Some(v) = hub.get(&vault_id) else { return Ok(None) };
+            let Some(v) = hub.get(&vault_id) else {
+                return Ok(None);
+            };
             match event {
                 VaultEventKind::KeyRotated => {
                     if let Err(e) = session.refresh_keys(&v).await {
@@ -415,21 +479,28 @@ async fn handle(hub: &Arc<Hub>, msg: ServerMessage, sink: &mut Sink, conn: &mut 
                     let h = hub.clone();
                     tokio::spawn(async move {
                         match h.session.grant_missing_keys(&v).await {
-                            Ok(names) if !names.is_empty() => {
-                                ui::status(&format!("shared the vault key with {}", names.join(", ")))
-                            }
+                            Ok(names) if !names.is_empty() => ui::status(&format!(
+                                "shared the vault key with {}",
+                                names.join(", ")
+                            )),
                             Ok(_) => {}
                             Err(e) => tracing::warn!("granting keys: {e:#}"),
                         }
                     });
                 }
-                VaultEventKind::Deleted => hub.close_vault(&vault_id, "the vault was deleted by its owner").await,
+                VaultEventKind::Deleted => {
+                    hub.close_vault(&vault_id, "the vault was deleted by its owner")
+                        .await
+                }
                 VaultEventKind::AccessRevoked => {
-                    hub.close_vault(&vault_id, "your access to this vault was revoked").await
+                    hub.close_vault(&vault_id, "your access to this vault was revoked")
+                        .await
                 }
             }
         }
-        ServerMessage::ObjectEvent { vault_id, event, .. } => {
+        ServerMessage::ObjectEvent {
+            vault_id, event, ..
+        } => {
             // A note of a vault we sync got (or rotated) its own key.
             if matches!(event, ObjectEventKind::Shared | ObjectEventKind::KeyRotated)
                 && let Some(v) = hub.get(&vault_id)
@@ -471,7 +542,11 @@ async fn handle(hub: &Arc<Hub>, msg: ServerMessage, sink: &mut Sink, conn: &mut 
                 ui::status("a note was shared with you (or unshared): `coolpsonotes shared list`")
             }
         },
-        ServerMessage::Error { code, message, vault_id } => {
+        ServerMessage::Error {
+            code,
+            message,
+            vault_id,
+        } => {
             if code == "unauthorized" {
                 if session.kind == PrincipalKind::Agent {
                     session.api.invalidate_token().await;
@@ -485,12 +560,17 @@ async fn handle(hub: &Arc<Hub>, msg: ServerMessage, sink: &mut Sink, conn: &mut 
                         let _ = session.refresh_keys(&sv).await;
                     }
                 }
-                Some(v) if code == "not_found" => hub.close_vault(&v, "the vault is no longer accessible").await,
+                Some(v) if code == "not_found" => {
+                    hub.close_vault(&v, "the vault is no longer accessible")
+                        .await
+                }
                 Some(v) => tracing::warn!(vault = %v, code, "server error: {message}"),
                 None => tracing::warn!(code, "server error: {message}"),
             }
         }
-        ServerMessage::Ready { .. } | ServerMessage::Pong { .. } | ServerMessage::Awareness { .. } => {}
+        ServerMessage::Ready { .. }
+        | ServerMessage::Pong { .. }
+        | ServerMessage::Awareness { .. } => {}
     }
     Ok(None)
 }

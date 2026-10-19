@@ -146,9 +146,19 @@ pub fn is_ignored_name(name: &str) -> bool {
         || name == "4913"
         || name.starts_with("~$")
         || (name.starts_with('#') && name.ends_with('#'))
-        || [".swp", ".swo", ".swx", ".swn", ".tmp", ".part", ".crdownload", ".kate-swp", ".bak"]
-            .iter()
-            .any(|s| lower.ends_with(s))
+        || [
+            ".swp",
+            ".swo",
+            ".swx",
+            ".swn",
+            ".tmp",
+            ".part",
+            ".crdownload",
+            ".kate-swp",
+            ".bak",
+        ]
+        .iter()
+        .any(|s| lower.ends_with(s))
         || lower == "thumbs.db"
         || lower == "desktop.ini"
 }
@@ -156,7 +166,9 @@ pub fn is_ignored_name(name: &str) -> bool {
 /// Whether a vault path may be materialised on disk: canonical, and no
 /// hidden segment (a collaborator must not be able to plant `.git/hooks/...`).
 pub fn is_safe_vault_path(p: &str) -> bool {
-    paths::normalize(p).is_ok_and(|n| n == p) && p.split('/').all(|s| !is_ignored_name(s) && !s.contains('\0'))
+    paths::normalize(p).is_ok_and(|n| n == p)
+        && p.split('/')
+            .all(|s| !is_ignored_name(s) && !s.contains('\0'))
 }
 
 /// Directory name for a vault: its name with path separators and characters
@@ -170,7 +182,11 @@ pub fn sanitize_dir_name(name: &str, fallback: &str) -> String {
             c => c,
         })
         .collect();
-    s = s.trim().trim_start_matches('.').trim_end_matches(['.', ' ']).to_string();
+    s = s
+        .trim()
+        .trim_start_matches('.')
+        .trim_end_matches(['.', ' '])
+        .to_string();
     if s.is_empty() || s == ".." {
         s = fallback.to_string();
     }
@@ -209,7 +225,9 @@ fn line_cost(from: &str, to: &str) -> usize {
             DiffOp::Equal { .. } => 0,
             DiffOp::Delete { old_len, .. } => old_len,
             DiffOp::Insert { new_len, .. } => new_len,
-            DiffOp::Replace { old_len, new_len, .. } => old_len + new_len,
+            DiffOp::Replace {
+                old_len, new_len, ..
+            } => old_len + new_len,
         })
         .sum()
 }
@@ -229,7 +247,10 @@ pub fn choose_base(bases: &[String], disk: &str) -> Option<usize> {
 }
 
 fn now_ns() -> i64 {
-    std::time::SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos() as i64).unwrap_or(0)
+    std::time::SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos() as i64)
+        .unwrap_or(0)
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -242,7 +263,11 @@ fn stat(path: &Path) -> std::io::Result<Option<Stat>> {
     match std::fs::symlink_metadata(path) {
         Ok(m) if m.is_file() => Ok(Some(Stat {
             size: m.len(),
-            mtime_ns: m.modified()?.duration_since(UNIX_EPOCH).map(|d| d.as_nanos() as i64).unwrap_or(0),
+            mtime_ns: m
+                .modified()?
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_nanos() as i64)
+                .unwrap_or(0),
         })),
         Ok(_) => Ok(None),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
@@ -258,7 +283,9 @@ enum DiskState {
 
 /// Compare the file with its record (cheap stat first, then content).
 fn disk_state(path: &Path, rec: &mut FileRecord) -> std::io::Result<DiskState> {
-    let Some(st) = stat(path)? else { return Ok(DiskState::Missing) };
+    let Some(st) = stat(path)? else {
+        return Ok(DiskState::Missing);
+    };
     let racy = rec.checked_ns - rec.mtime_ns < RACY_NS;
     if st.size == rec.size && st.mtime_ns == rec.mtime_ns && !racy {
         return Ok(DiskState::Unchanged);
@@ -297,8 +324,15 @@ fn scan_dir(dir: &Path) -> (BTreeMap<String, Stat>, BTreeSet<String>) {
         .into_iter()
         .filter_entry(|e| e.file_name().to_str().is_some_and(|n| !is_ignored_name(n)));
     for e in walker.filter_map(|e| e.ok()) {
-        let Ok(rel) = e.path().strip_prefix(dir) else { continue };
-        let Some(rel) = rel.to_str().map(|s| s.replace(std::path::MAIN_SEPARATOR, "/")) else { continue };
+        let Ok(rel) = e.path().strip_prefix(dir) else {
+            continue;
+        };
+        let Some(rel) = rel
+            .to_str()
+            .map(|s| s.replace(std::path::MAIN_SEPARATOR, "/"))
+        else {
+            continue;
+        };
         if !is_safe_vault_path(&rel) {
             continue;
         }
@@ -340,14 +374,20 @@ fn replace_if_unchanged(path: &Path, data: &[u8], expected: Option<Stat>) -> Res
 }
 
 fn conflict_name(path: &str, taken: impl Fn(&str) -> bool) -> String {
-    let stamp = ui::fmt_time(coolpsonotes_core::now_ms()).replace(':', "").replace('T', " ").replace('Z', "");
+    let stamp = ui::fmt_time(coolpsonotes_core::now_ms())
+        .replace(':', "")
+        .replace('T', " ")
+        .replace('Z', "");
     let parent = paths::parent(path);
     let name = paths::file_name(path);
     let (stem, ext) = match name.rfind('.') {
         Some(i) if i > 0 => (&name[..i], &name[i..]),
         _ => (name, ""),
     };
-    paths::unique(&paths::join(parent, &format!("{stem} (conflict {stamp}){ext}")), taken)
+    paths::unique(
+        &paths::join(parent, &format!("{stem} (conflict {stamp}){ext}")),
+        taken,
+    )
 }
 
 /// Remove now-empty parent directories of `path` up to (excluding) `stop`.
@@ -367,7 +407,10 @@ fn push_base(rec: &mut FileRecord, state: Vec<u8>, hash: &str) {
     {
         rec.bases.pop();
     }
-    rec.bases.push(Base { state, hash: hash.to_string() });
+    rec.bases.push(Base {
+        state,
+        hash: hash.to_string(),
+    });
     let excess = rec.bases.len().saturating_sub(MAX_BASES);
     rec.bases.drain(..excess);
 }
@@ -375,11 +418,20 @@ fn push_base(rec: &mut FileRecord, state: Vec<u8>, hash: &str) {
 /// Apply an external edit of a note relative to the best base. Returns the
 /// state of the fork (a valid base for what is on disk now).
 fn ingest_note(v: &mut Vault, id: &str, rec: &FileRecord, disk: &str) -> Result<Vec<u8>> {
-    let live_state = v.replica.notes.entry(id.to_string()).or_default().encode_state();
+    let live_state = v
+        .replica
+        .notes
+        .entry(id.to_string())
+        .or_default()
+        .encode_state();
     if v.note_text(id) == disk {
         return Ok(live_state);
     }
-    let mut candidates: Vec<NoteDoc> = rec.bases.iter().filter_map(|b| fork_note(&b.state).ok()).collect();
+    let mut candidates: Vec<NoteDoc> = rec
+        .bases
+        .iter()
+        .filter_map(|b| fork_note(&b.state).ok())
+        .collect();
     let texts: Vec<String> = candidates.iter().map(|f| f.text()).collect();
     let fork = match choose_base(&texts, disk) {
         Some(i) => candidates.swap_remove(i),
@@ -413,8 +465,14 @@ impl Mirror {
     /// Prepare the mirror for every vault open on the hub.
     pub async fn new(hub: Arc<Hub>, root: &Path) -> Result<Mirror> {
         fsutil::create_private_dir(root)?;
-        let root = root.canonicalize().with_context(|| format!("resolving {}", root.display()))?;
-        let mut m = Mirror { hub, root, vaults: BTreeMap::new() };
+        let root = root
+            .canonicalize()
+            .with_context(|| format!("resolving {}", root.display()))?;
+        let mut m = Mirror {
+            hub,
+            root,
+            vaults: BTreeMap::new(),
+        };
         for id in m.hub.vault_ids() {
             m.attach(&id).await?;
         }
@@ -434,15 +492,23 @@ impl Mirror {
         if self.vaults.contains_key(vault_id) {
             return Ok(());
         }
-        let Some(v) = self.hub.get(vault_id) else { return Ok(()) };
+        let Some(v) = self.hub.get(vault_id) else {
+            return Ok(());
+        };
         let (name, stored) = {
             let g = v.lock().await;
             let stored: Option<MirrorState> = g.store().load_aux("mirror")?.and_then(|b| {
-                serde_json::from_slice(&b).map_err(|e| tracing::warn!("mirror state unreadable: {e}")).ok()
+                serde_json::from_slice(&b)
+                    .map_err(|e| tracing::warn!("mirror state unreadable: {e}"))
+                    .ok()
             });
             (g.name().to_string(), stored)
         };
-        let taken: BTreeSet<String> = self.vaults.values().map(|m| m.state.dir_name.clone()).collect();
+        let taken: BTreeSet<String> = self
+            .vaults
+            .values()
+            .map(|m| m.state.dir_name.clone())
+            .collect();
         let state = match stored {
             Some(s) if s.root == self.root && !taken.contains(&s.dir_name) => s,
             _ => {
@@ -450,20 +516,33 @@ impl Mirror {
                 if taken.contains(&dir_name) {
                     dir_name = format!("{dir_name} ({})", &vault_id[..vault_id.len().min(6)]);
                 }
-                MirrorState { root: self.root.clone(), dir_name, files: BTreeMap::new(), folders: BTreeMap::new() }
+                MirrorState {
+                    root: self.root.clone(),
+                    dir_name,
+                    files: BTreeMap::new(),
+                    folders: BTreeMap::new(),
+                }
             }
         };
         let dir = self.root.join(&state.dir_name);
         fsutil::create_private_dir(&dir)?;
         self.vaults.insert(
             vault_id.to_string(),
-            MirrorVault { dir, state, dirty: true, missing_since: BTreeMap::new(), warned: BTreeSet::new() },
+            MirrorVault {
+                dir,
+                state,
+                dirty: true,
+                missing_since: BTreeMap::new(),
+                warned: BTreeSet::new(),
+            },
         );
         Ok(())
     }
 
     async fn save_state(&mut self, vault_id: &str) -> Result<()> {
-        let (Some(mv), Some(v)) = (self.vaults.get_mut(vault_id), self.hub.get(vault_id)) else { return Ok(()) };
+        let (Some(mv), Some(v)) = (self.vaults.get_mut(vault_id), self.hub.get(vault_id)) else {
+            return Ok(());
+        };
         if !mv.dirty {
             return Ok(());
         }
@@ -496,15 +575,23 @@ impl Mirror {
     /// Disk → CRDT for one vault.
     pub async fn ingest(&mut self, vault_id: &str, final_pass: bool) -> Result<Report> {
         let mut report = Report::default();
-        let Some(shared) = self.hub.get(vault_id) else { return Ok(report) };
-        let Some(mv) = self.vaults.get_mut(vault_id) else { return Ok(report) };
+        let Some(shared) = self.hub.get(vault_id) else {
+            return Ok(report);
+        };
+        let Some(mv) = self.vaults.get_mut(vault_id) else {
+            return Ok(report);
+        };
         let (disk, empty_dirs) = scan_dir(&mv.dir);
         let mut v = shared.lock().await;
         let writable = !self.hub.read_only && v.require_writable().is_ok();
         let mut touched: BTreeSet<String> = BTreeSet::new();
         let live = v.paths();
-        let known_paths: BTreeMap<String, String> =
-            mv.state.files.iter().map(|(id, r)| (r.path.clone(), id.clone())).collect();
+        let known_paths: BTreeMap<String, String> = mv
+            .state
+            .files
+            .iter()
+            .map(|(id, r)| (r.path.clone(), id.clone()))
+            .collect();
 
         // 1. Recorded files: modified or missing?
         let ids: Vec<String> = mv.state.files.keys().cloned().collect();
@@ -517,7 +604,9 @@ impl Mirror {
                     mv.missing_since.remove(id);
                 }
                 DiskState::Missing => {
-                    mv.missing_since.entry(id.clone()).or_insert_with(Instant::now);
+                    mv.missing_since
+                        .entry(id.clone())
+                        .or_insert_with(Instant::now);
                 }
                 DiskState::Modified(data) => {
                     mv.missing_since.remove(id);
@@ -594,14 +683,25 @@ impl Mirror {
         if writable {
             for (path, st) in new_files {
                 let full = disk_path(&mv.dir, &path);
-                let Ok(data) = std::fs::read(&full) else { continue };
+                let Ok(data) = std::fs::read(&full) else {
+                    continue;
+                };
                 let hash = content_hash(&data);
                 let is_note = paths::is_note(&path);
-                let kind = if is_note { EntryKind::Note } else { EntryKind::Attachment };
+                let kind = if is_note {
+                    EntryKind::Note
+                } else {
+                    EntryKind::Attachment
+                };
                 let moved = mv
                     .missing_since
                     .keys()
-                    .find(|id| mv.state.files.get(*id).is_some_and(|r| r.hash == hash && r.kind == kind))
+                    .find(|id| {
+                        mv.state
+                            .files
+                            .get(*id)
+                            .is_some_and(|r| r.hash == hash && r.kind == kind)
+                    })
                     .cloned();
                 if let Some(id) = moved
                     && v.entry(&id).is_some_and(|e| e.is_live())
@@ -625,32 +725,54 @@ impl Mirror {
                 }
                 let res = if is_note {
                     let Ok(text) = String::from_utf8(data.clone()) else {
-                        mv.warn_once(&format!("utf8:{path}"), "a Markdown file is not valid UTF-8; it is not synced");
+                        mv.warn_once(
+                            &format!("utf8:{path}"),
+                            "a Markdown file is not valid UTF-8; it is not synced",
+                        );
                         continue;
                     };
                     match v.create_note(&path, &text) {
                         Ok(r) => {
-                            let state = v.replica.notes.get(&r.id).map(|n| n.encode_state()).unwrap_or_default();
+                            let state = v
+                                .replica
+                                .notes
+                                .get(&r.id)
+                                .map(|n| n.encode_state())
+                                .unwrap_or_default();
                             (r, Some(state))
                         }
                         Err(e) => {
-                            mv.warn_once(&format!("create:{path}"), &format!("cannot sync a new file: {e:#}"));
+                            mv.warn_once(
+                                &format!("create:{path}"),
+                                &format!("cannot sync a new file: {e:#}"),
+                            );
                             continue;
                         }
                     }
                 } else {
-                    let max = self.hub.session.server_info().await.map(|i| i.max_attachment_bytes).unwrap_or(u64::MAX);
+                    let max = self
+                        .hub
+                        .session
+                        .server_info()
+                        .await
+                        .map(|i| i.max_attachment_bytes)
+                        .unwrap_or(u64::MAX);
                     if data.len() as u64 > max {
                         mv.warn_once(
                             &format!("big:{path}"),
-                            &format!("a file is larger than the server limit ({max} bytes); not synced"),
+                            &format!(
+                                "a file is larger than the server limit ({max} bytes); not synced"
+                            ),
                         );
                         continue;
                     }
                     match v.add_attachment(&path, &data, None) {
                         Ok(r) => (r, None),
                         Err(e) => {
-                            mv.warn_once(&format!("create:{path}"), &format!("cannot sync a new file: {e:#}"));
+                            mv.warn_once(
+                                &format!("create:{path}"),
+                                &format!("cannot sync a new file: {e:#}"),
+                            );
                             continue;
                         }
                     }
@@ -697,8 +819,8 @@ impl Mirror {
         // 4. Explicit folders: new empty directories, removed folder entries.
         if writable {
             for d in &empty_dirs {
-                let known =
-                    mv.state.folders.values().any(|p| p == d) || live.keys().any(|p| p == d || paths::is_within(p, d));
+                let known = mv.state.folders.values().any(|p| p == d)
+                    || live.keys().any(|p| p == d || paths::is_within(p, d));
                 if !known && let Ok(id) = v.create_folder(d) {
                     mv.state.folders.insert(id.clone(), d.clone());
                     mv.dirty = true;
@@ -732,7 +854,9 @@ impl Mirror {
         let vault_name = v.name().to_string();
         drop(v);
         if changed {
-            self.hub.local_changed(vault_id, touched.into_iter().collect(), true).await;
+            self.hub
+                .local_changed(vault_id, touched.into_iter().collect(), true)
+                .await;
         }
         if report.local_changes() > 0 {
             ui::status(&format!(
@@ -746,8 +870,12 @@ impl Mirror {
     /// CRDT → disk for one vault.
     pub async fn write_remote(&mut self, vault_id: &str, scope: &Scope) -> Result<Report> {
         let mut report = Report::default();
-        let Some(shared) = self.hub.get(vault_id) else { return Ok(report) };
-        let Some(mv) = self.vaults.get_mut(vault_id) else { return Ok(report) };
+        let Some(shared) = self.hub.get(vault_id) else {
+            return Ok(report);
+        };
+        let Some(mv) = self.vaults.get_mut(vault_id) else {
+            return Ok(report);
+        };
         let mut downloads: Vec<(String, String)> = Vec::new();
         let mut touched: BTreeSet<String> = BTreeSet::new();
         {
@@ -756,7 +884,8 @@ impl Mirror {
                 return Ok(report);
             }
             let writable = !self.hub.read_only && v.require_writable().is_ok();
-            let mut live: BTreeMap<String, (String, coolpsonotes_core::doc::Entry)> = BTreeMap::new();
+            let mut live: BTreeMap<String, (String, coolpsonotes_core::doc::Entry)> =
+                BTreeMap::new();
             for (p, e) in v.paths() {
                 if !is_safe_vault_path(&p) {
                     mv.warn_once(
@@ -776,11 +905,16 @@ impl Mirror {
                 .state
                 .files
                 .keys()
-                .filter(|id| live.get(*id).is_none_or(|(_, e)| e.kind == EntryKind::Folder))
+                .filter(|id| {
+                    live.get(*id)
+                        .is_none_or(|(_, e)| e.kind == EntryKind::Folder)
+                })
                 .cloned()
                 .collect();
             for id in gone {
-                let Some(mut rec) = mv.state.files.remove(&id) else { continue };
+                let Some(mut rec) = mv.state.files.remove(&id) else {
+                    continue;
+                };
                 mv.dirty = true;
                 mv.missing_since.remove(&id);
                 let path = disk_path(&mv.dir, &rec.path);
@@ -814,7 +948,9 @@ impl Mirror {
 
             // b. Moves/renames done elsewhere.
             for (id, (p, _)) in &live {
-                let Some(rec) = mv.state.files.get(id) else { continue };
+                let Some(rec) = mv.state.files.get(id) else {
+                    continue;
+                };
                 if rec.path == *p {
                     continue;
                 }
@@ -894,7 +1030,9 @@ impl Mirror {
                                         if !writable {
                                             continue;
                                         }
-                                        let Ok(disk_text) = String::from_utf8(data.clone()) else { continue };
+                                        let Ok(disk_text) = String::from_utf8(data.clone()) else {
+                                            continue;
+                                        };
                                         let base = ingest_note(&mut v, id, &rec, &disk_text)?;
                                         push_base(&mut rec, base, &content_hash(&data));
                                         rec.hash = content_hash(&data);
@@ -915,7 +1053,12 @@ impl Mirror {
                                     rec.hash = hash.clone();
                                     report.written += 1;
                                 }
-                                let state = v.replica.notes.get(id).map(|n| n.encode_state()).unwrap_or_default();
+                                let state = v
+                                    .replica
+                                    .notes
+                                    .get(id)
+                                    .map(|n| n.encode_state())
+                                    .unwrap_or_default();
                                 push_base(&mut rec, state, &hash);
                                 mv.state.files.insert(id.clone(), rec);
                                 mv.record_stat(id, &path);
@@ -927,7 +1070,8 @@ impl Mirror {
                                     let data = std::fs::read(&path)?;
                                     if content_hash(&data) != hash {
                                         let taken = |q: &str| {
-                                            disk_path(&mv.dir, q).exists() || live.values().any(|(lp, _)| lp == q)
+                                            disk_path(&mv.dir, q).exists()
+                                                || live.values().any(|(lp, _)| lp == q)
                                         };
                                         let cpath = conflict_name(p, taken);
                                         let cfull = disk_path(&mv.dir, &cpath);
@@ -952,7 +1096,12 @@ impl Mirror {
                                     }
                                     report.written += 1;
                                 }
-                                let state = v.replica.notes.get(id).map(|n| n.encode_state()).unwrap_or_default();
+                                let state = v
+                                    .replica
+                                    .notes
+                                    .get(id)
+                                    .map(|n| n.encode_state())
+                                    .unwrap_or_default();
                                 let mut rec = FileRecord {
                                     path: p.clone(),
                                     kind: EntryKind::Note,
@@ -972,8 +1121,11 @@ impl Mirror {
             }
 
             // d. Folder entries removed elsewhere: drop their directory if empty.
-            let live_folders: BTreeSet<&String> =
-                live.iter().filter(|(_, (_, e))| e.kind == EntryKind::Folder).map(|(id, _)| id).collect();
+            let live_folders: BTreeSet<&String> = live
+                .iter()
+                .filter(|(_, (_, e))| e.kind == EntryKind::Folder)
+                .map(|(id, _)| id)
+                .collect();
             let stale: Vec<(String, String)> = mv
                 .state
                 .folders
@@ -1041,7 +1193,9 @@ impl Mirror {
         }
 
         if !touched.is_empty() {
-            self.hub.local_changed(vault_id, touched.into_iter().collect(), true).await;
+            self.hub
+                .local_changed(vault_id, touched.into_iter().collect(), true)
+                .await;
         }
         let written = report.written + report.removed + report.renamed;
         if written > 0 {
@@ -1058,17 +1212,19 @@ impl Mirror {
     pub async fn run(mut self, mut shutdown: watch::Receiver<bool>) -> Result<()> {
         use notify::{RecursiveMode, Watcher};
         let (tx, mut fs_rx) = mpsc::unbounded_channel::<()>();
-        let mut watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
-            if let Ok(ev) = res {
-                let relevant = ev
-                    .paths
-                    .iter()
-                    .any(|p| p.file_name().and_then(|n| n.to_str()).is_some_and(|n| !is_ignored_name(n)));
-                if relevant && !matches!(ev.kind, notify::EventKind::Access(_)) {
-                    let _ = tx.send(());
+        let mut watcher =
+            notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
+                if let Ok(ev) = res {
+                    let relevant = ev.paths.iter().any(|p| {
+                        p.file_name()
+                            .and_then(|n| n.to_str())
+                            .is_some_and(|n| !is_ignored_name(n))
+                    });
+                    if relevant && !matches!(ev.kind, notify::EventKind::Access(_)) {
+                        let _ = tx.send(());
+                    }
                 }
-            }
-        })?;
+            })?;
         watcher.watch(&self.root, RecursiveMode::Recursive)?;
         let mut events = self.hub.subscribe();
         // Close the gap between the caller's initial pass and the watch starting.
@@ -1220,8 +1376,14 @@ mod tests {
         assert_eq!(choose_base(&[v1.clone(), v2.clone()], disk), Some(1));
         // A remote edit of another line.
         let v3 = "line ONE\nline two\n".to_string();
-        assert_eq!(choose_base(&[v1.clone(), v3.clone()], "line one\nline 2\n"), Some(0));
-        assert_eq!(choose_base(&[v1.clone(), v3.clone()], "line ONE\nline 2\n"), Some(1));
+        assert_eq!(
+            choose_base(&[v1.clone(), v3.clone()], "line one\nline 2\n"),
+            Some(0)
+        );
+        assert_eq!(
+            choose_base(&[v1.clone(), v3.clone()], "line ONE\nline 2\n"),
+            Some(1)
+        );
         // Ties go to the newest.
         assert_eq!(choose_base(&[v1.clone(), v1.clone()], "x"), Some(1));
         assert_eq!(choose_base(&[], "x"), None);
@@ -1243,7 +1405,9 @@ mod tests {
         let i = choose_base(&bases, disk).unwrap();
         assert_eq!(i, 0);
         let fork = fork_note(&base_state).unwrap();
-        let up = fork.apply_edits(&textdiff::diff(&fork.text(), disk)).unwrap();
+        let up = fork
+            .apply_edits(&textdiff::diff(&fork.text(), disk))
+            .unwrap();
         live.apply_update(&up).unwrap();
         assert_eq!(live.text(), "alpha (local)\nbeta\ngamma (remote)\n");
     }

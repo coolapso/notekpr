@@ -9,8 +9,8 @@
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
-use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::State;
+use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::response::Response;
 use coolpsonotes_core::protocol::{
     ClientMessage, ObjectEventKind, PushResult, ServerMessage, UserEventKind, VaultEventKind,
@@ -39,12 +39,18 @@ enum Out {
 
 pub async fn handler(State(state): State<AppState>, ws: WebSocketUpgrade) -> Response {
     let max = (state.config.max_update_bytes() as usize) * 2 + 1024 * 1024;
-    ws.max_message_size(max).max_frame_size(max).on_upgrade(move |socket| connection(socket, state))
+    ws.max_message_size(max)
+        .max_frame_size(max)
+        .on_upgrade(move |socket| connection(socket, state))
 }
 
 fn error_msg(e: &AppError, vault_id: Option<&str>) -> ServerMessage {
     let body = e.body();
-    ServerMessage::Error { code: body.error, message: body.message, vault_id: vault_id.map(str::to_string) }
+    ServerMessage::Error {
+        code: body.error,
+        message: body.message,
+        vault_id: vault_id.map(str::to_string),
+    }
 }
 
 async fn connection(socket: WebSocket, state: AppState) {
@@ -100,7 +106,16 @@ async fn connection(socket: WebSocket, state: AppState) {
         }))
         .await;
 
-    let mut conn = Conn { state: state.clone(), who, token, conn_id, out: out_tx.clone(), subs: HashMap::new(), announced: Default::default(), awareness: Bucket::new(30.0, 60.0) };
+    let mut conn = Conn {
+        state: state.clone(),
+        who,
+        token,
+        conn_id,
+        out: out_tx.clone(),
+        subs: HashMap::new(),
+        announced: Default::default(),
+        awareness: Bucket::new(30.0, 60.0),
+    };
     let mut keepalive = tokio::time::interval(Duration::from_secs(30));
     let mut revalidate = tokio::time::interval(Duration::from_secs(60));
     keepalive.tick().await;
@@ -165,7 +180,12 @@ async fn connection(socket: WebSocket, state: AppState) {
     for (vault_id, object_id) in vaults.into_iter().map(|v| (v, String::new())).chain(notes) {
         state.hub.publish(
             &vault_id,
-            VaultEvent::Awareness { object_id, from_user: conn.who.user_id.clone(), from_conn: conn_id, payload: vec![] },
+            VaultEvent::Awareness {
+                object_id,
+                from_user: conn.who.user_id.clone(),
+                from_conn: conn_id,
+                payload: vec![],
+            },
         );
     }
     state.hub.unregister_user(&conn.who.user_id, conn_id);
@@ -198,19 +218,33 @@ impl Conn {
         let msg: ClientMessage = match serde_json::from_str(text) {
             Ok(m) => m,
             Err(e) => {
-                self.send(error_msg(&AppError::BadRequest(format!("invalid message: {e}")), None)).await;
+                self.send(error_msg(
+                    &AppError::BadRequest(format!("invalid message: {e}")),
+                    None,
+                ))
+                .await;
                 return true;
             }
         };
         match msg {
             ClientMessage::Auth { .. } => {}
             ClientMessage::Ping { nonce } => self.send(ServerMessage::Pong { nonce }).await,
-            ClientMessage::Subscribe { vault_id, since, object_id } => {
+            ClientMessage::Subscribe {
+                vault_id,
+                since,
+                object_id,
+            } => {
                 // Returns whether the caller is a vault member (not only a note recipient).
                 let allowed = match &object_id {
-                    None => access::member_role(&self.state.db, &vault_id, &self.who.user_id).await.map(|_| true),
+                    None => access::member_role(&self.state.db, &vault_id, &self.who.user_id)
+                        .await
+                        .map(|_| true),
                     Some(o) => match sync::validate_object_id(o) {
-                        Ok(()) => access::object_access(&self.state.db, &vault_id, o, &self.who.user_id).await.map(|(_, m)| m),
+                        Ok(()) => {
+                            access::object_access(&self.state.db, &vault_id, o, &self.who.user_id)
+                                .await
+                                .map(|(_, m)| m)
+                        }
                         Err(e) => Err(e),
                     },
                 };
@@ -226,39 +260,69 @@ impl Conn {
                     h.abort();
                 }
                 if self.subs.len() >= MAX_SUBSCRIPTIONS {
-                    self.send(error_msg(&AppError::BadRequest("too many subscriptions".into()), Some(&vault_id))).await;
+                    self.send(error_msg(
+                        &AppError::BadRequest("too many subscriptions".into()),
+                        Some(&vault_id),
+                    ))
+                    .await;
                     return true;
                 }
                 let rx = self.state.hub.subscribe(&vault_id);
-                let task =
-                    tokio::spawn(forward(self.state.clone(), vault_id, object_id, !member, since, self.conn_id, rx, self.out.clone()));
+                let task = tokio::spawn(forward(
+                    self.state.clone(),
+                    vault_id,
+                    object_id,
+                    !member,
+                    since,
+                    self.conn_id,
+                    rx,
+                    self.out.clone(),
+                ));
                 self.subs.insert(key, task);
             }
-            ClientMessage::Unsubscribe { vault_id, object_id } => {
+            ClientMessage::Unsubscribe {
+                vault_id,
+                object_id,
+            } => {
                 if let Some(h) = self.subs.remove(&(vault_id, object_id)) {
                     h.abort();
                 }
             }
             ClientMessage::Push { vault_id, updates } => {
                 if !self.subs.keys().any(|(v, _)| *v == vault_id) {
-                    self.send(error_msg(&AppError::BadRequest("subscribe to the vault before pushing".into()), Some(&vault_id))).await;
+                    self.send(error_msg(
+                        &AppError::BadRequest("subscribe to the vault before pushing".into()),
+                        Some(&vault_id),
+                    ))
+                    .await;
                     return true;
                 }
                 match sync::push(&self.state, &self.who, &vault_id, updates, self.conn_id).await {
                     // Fresh updates are acknowledged in log order by the
                     // subscription; retries of known updates are acked here.
                     Ok(out) if !out.duplicates.is_empty() => {
-                        self.send(ServerMessage::Ack { vault_id, results: out.duplicates }).await;
+                        self.send(ServerMessage::Ack {
+                            vault_id,
+                            results: out.duplicates,
+                        })
+                        .await;
                     }
                     Ok(_) => {}
                     Err(e) => self.send(error_msg(&e, Some(&vault_id))).await,
                 }
             }
-            ClientMessage::Awareness { vault_id, object_id, payload } => {
+            ClientMessage::Awareness {
+                vault_id,
+                object_id,
+                payload,
+            } => {
                 // Vault subscribers may announce anywhere in the vault; people a
                 // single note is shared with only on that note.
                 let allowed = self.subs.contains_key(&(vault_id.clone(), None))
-                    || (!object_id.is_empty() && self.subs.contains_key(&(vault_id.clone(), Some(object_id.clone()))));
+                    || (!object_id.is_empty()
+                        && self
+                            .subs
+                            .contains_key(&(vault_id.clone(), Some(object_id.clone()))));
                 if !allowed || payload.len() > MAX_AWARENESS_BYTES || object_id.len() > 64 {
                     return true;
                 }
@@ -270,7 +334,12 @@ impl Conn {
                 }
                 self.state.hub.publish(
                     &vault_id,
-                    VaultEvent::Awareness { object_id, from_user: self.who.user_id.clone(), from_conn: self.conn_id, payload },
+                    VaultEvent::Awareness {
+                        object_id,
+                        from_user: self.who.user_id.clone(),
+                        from_conn: self.conn_id,
+                        payload,
+                    },
                 );
             }
         }
@@ -289,13 +358,25 @@ async fn catch_up(
 ) -> Result<i64, AppError> {
     let mut first = true;
     loop {
-        let changes = sync::changes_since(&state.db, vault_id, object, since, sync::DEFAULT_PAGE, first, doc_only).await?;
+        let changes = sync::changes_since(
+            &state.db,
+            vault_id,
+            object,
+            since,
+            sync::DEFAULT_PAGE,
+            first,
+            doc_only,
+        )
+        .await?;
         first = false;
         since = changes.next_since;
         let more = changes.has_more;
-        out.send(Out::Msg(ServerMessage::Changes { vault_id: vault_id.to_string(), changes }))
-            .await
-            .map_err(|_| AppError::Internal(anyhow::anyhow!("connection closed")))?;
+        out.send(Out::Msg(ServerMessage::Changes {
+            vault_id: vault_id.to_string(),
+            changes,
+        }))
+        .await
+        .map_err(|_| AppError::Internal(anyhow::anyhow!("connection closed")))?;
         if !more {
             return Ok(since);
         }
@@ -318,7 +399,17 @@ async fn forward(
         async move { out.send(Out::Msg(m)).await.is_ok() }
     };
     let start = match since {
-        Some(s) => catch_up(&state, &vault_id, object.as_deref(), doc_only, s.max(0), &out).await,
+        Some(s) => {
+            catch_up(
+                &state,
+                &vault_id,
+                object.as_deref(),
+                doc_only,
+                s.max(0),
+                &out,
+            )
+            .await
+        }
         None => sync::head_seq(&state.db, &vault_id).await,
     };
     let mut last = match start {
@@ -328,7 +419,13 @@ async fn forward(
             return;
         }
     };
-    if !send(ServerMessage::Synced { vault_id: vault_id.clone(), head_seq: last, object_id: object.clone() }).await {
+    if !send(ServerMessage::Synced {
+        vault_id: vault_id.clone(),
+        head_seq: last,
+        object_id: object.clone(),
+    })
+    .await
+    {
         return;
     }
     loop {
@@ -339,7 +436,13 @@ async fn forward(
                 match catch_up(&state, &vault_id, object.as_deref(), doc_only, last, &out).await {
                     Ok(h) => {
                         last = h;
-                        if !send(ServerMessage::Synced { vault_id: vault_id.clone(), head_seq: last, object_id: object.clone() }).await {
+                        if !send(ServerMessage::Synced {
+                            vault_id: vault_id.clone(),
+                            head_seq: last,
+                            object_id: object.clone(),
+                        })
+                        .await
+                        {
                             return;
                         }
                         continue;
@@ -353,7 +456,12 @@ async fn forward(
         if let Some(o) = &object {
             match (&*ev, ev.object_id()) {
                 (VaultEvent::Event(VaultEventKind::Deleted), _) => {
-                    send(ServerMessage::ObjectEvent { vault_id: vault_id.clone(), object_id: o.clone(), event: ObjectEventKind::Deleted }).await;
+                    send(ServerMessage::ObjectEvent {
+                        vault_id: vault_id.clone(),
+                        object_id: o.clone(),
+                        event: ObjectEventKind::Deleted,
+                    })
+                    .await;
                     return;
                 }
                 (_, Some(id)) if id == o => {}
@@ -368,25 +476,51 @@ async fn forward(
         }
         let v = vault_id.clone();
         let msg = match &*ev {
-            VaultEvent::Update { update, client_update_id, origin_conn } => {
+            VaultEvent::Update {
+                update,
+                client_update_id,
+                origin_conn,
+            } => {
                 if *origin_conn == conn_id {
                     ServerMessage::Ack {
                         vault_id: v,
-                        results: vec![PushResult { client_update_id: client_update_id.clone(), seq: update.seq }],
+                        results: vec![PushResult {
+                            client_update_id: client_update_id.clone(),
+                            seq: update.seq,
+                        }],
                     }
                 } else {
-                    ServerMessage::Update { vault_id: v, update: update.clone() }
+                    ServerMessage::Update {
+                        vault_id: v,
+                        update: update.clone(),
+                    }
                 }
             }
-            VaultEvent::Snapshot { snapshot } => ServerMessage::Snapshot { vault_id: v, snapshot: snapshot.clone() },
-            VaultEvent::SnapshotCreated { object_id, snapshot_id, covers_seq } => ServerMessage::SnapshotCreated {
+            VaultEvent::Snapshot { snapshot } => ServerMessage::Snapshot {
+                vault_id: v,
+                snapshot: snapshot.clone(),
+            },
+            VaultEvent::SnapshotCreated {
+                object_id,
+                snapshot_id,
+                covers_seq,
+            } => ServerMessage::SnapshotCreated {
                 vault_id: v,
                 object_id: object_id.clone(),
                 snapshot_id: snapshot_id.clone(),
                 covers_seq: *covers_seq,
             },
-            VaultEvent::Purged { object_id, seq } => ServerMessage::Purged { vault_id: v, object_id: object_id.clone(), seq: *seq },
-            VaultEvent::Awareness { object_id, from_user, from_conn, payload } => {
+            VaultEvent::Purged { object_id, seq } => ServerMessage::Purged {
+                vault_id: v,
+                object_id: object_id.clone(),
+                seq: *seq,
+            },
+            VaultEvent::Awareness {
+                object_id,
+                from_user,
+                from_conn,
+                payload,
+            } => {
                 if *from_conn == conn_id {
                     continue;
                 }
@@ -398,8 +532,15 @@ async fn forward(
                     payload: payload.clone(),
                 }
             }
-            VaultEvent::Event(event) => ServerMessage::VaultEvent { vault_id: v, event: *event },
-            VaultEvent::Object { object_id, event } => ServerMessage::ObjectEvent { vault_id: v, object_id: object_id.clone(), event: *event },
+            VaultEvent::Event(event) => ServerMessage::VaultEvent {
+                vault_id: v,
+                event: *event,
+            },
+            VaultEvent::Object { object_id, event } => ServerMessage::ObjectEvent {
+                vault_id: v,
+                object_id: object_id.clone(),
+                event: *event,
+            },
         };
         if !send(msg).await {
             return;
@@ -417,12 +558,18 @@ struct Bucket {
 
 impl Bucket {
     fn new(rate: f64, cap: f64) -> Self {
-        Bucket { rate, cap, tokens: cap, at: Instant::now() }
+        Bucket {
+            rate,
+            cap,
+            tokens: cap,
+            at: Instant::now(),
+        }
     }
 
     fn take(&mut self) -> bool {
         let now = Instant::now();
-        self.tokens = (self.tokens + now.duration_since(self.at).as_secs_f64() * self.rate).min(self.cap);
+        self.tokens =
+            (self.tokens + now.duration_since(self.at).as_secs_f64() * self.rate).min(self.cap);
         self.at = now;
         if self.tokens >= 1.0 {
             self.tokens -= 1.0;

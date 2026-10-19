@@ -1,7 +1,7 @@
 //! Finding people to share with and fetching their public keys.
 
-use axum::extract::{Path, Query, State};
 use axum::Json;
+use axum::extract::{Path, Query, State};
 use coolpsonotes_core::protocol::{PrincipalKind, PublicAccountKey, PublicUser};
 use serde::Deserialize;
 use sqlx::Row;
@@ -58,7 +58,12 @@ pub async fn search(
     if term.chars().count() < 2 {
         return Ok(Json(vec![]));
     }
-    let like = format!("{}%", term.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_"));
+    let like = format!(
+        "{}%",
+        term.replace('\\', "\\\\")
+            .replace('%', "\\%")
+            .replace('_', "\\_")
+    );
     let ids: Vec<String> = match state.config.user_directory {
         UserDirectory::Search => {
             sqlx::query_scalar(
@@ -100,7 +105,11 @@ pub async fn search(
 /// Public profile and key of a user the caller may interact with: themselves,
 /// anyone sharing a vault with them, their own agents, or (with the search
 /// directory) any active human.
-pub async fn get_user(State(state): State<AppState>, who: Principal, Path(id): Path<String>) -> AppResult<Json<PublicUser>> {
+pub async fn get_user(
+    State(state): State<AppState>,
+    who: Principal,
+    Path(id): Path<String>,
+) -> AppResult<Json<PublicUser>> {
     let row = sqlx::query("SELECT kind, owner_id, disabled FROM users WHERE id = ?")
         .bind(&id)
         .fetch_optional(&state.db)
@@ -132,7 +141,10 @@ pub async fn get_user(State(state): State<AppState>, who: Principal, Path(id): P
         || shares_vault.is_some()
         || shares_note.is_some()
         || owner.as_deref() == Some(who.user_id.as_str())
-        || (kind == "human" && !disabled && who.is_human() && state.config.user_directory == UserDirectory::Search);
+        || (kind == "human"
+            && !disabled
+            && who.is_human()
+            && state.config.user_directory == UserDirectory::Search);
     if !allowed {
         return Err(AppError::NotFound);
     }

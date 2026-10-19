@@ -42,7 +42,11 @@ pub struct AccountPublic {
 impl AccountSecret {
     pub fn generate() -> Self {
         let (enc_secret, _) = crypto::x25519_generate();
-        AccountSecret { enc_secret, sign_secret: crypto::random_bytes(), sym: crypto::random_bytes() }
+        AccountSecret {
+            enc_secret,
+            sign_secret: crypto::random_bytes(),
+            sym: crypto::random_bytes(),
+        }
     }
 
     pub fn public(&self) -> AccountPublic {
@@ -85,8 +89,17 @@ impl AccountSecret {
     }
 
     /// Signature authorising a device to receive this account's secret.
-    pub fn sign_device_approval(&self, user_id: &str, device_id: &str, device_public: &Key32) -> [u8; 64] {
-        self.sign(&device_approval_statement(user_id, device_id, device_public))
+    pub fn sign_device_approval(
+        &self,
+        user_id: &str,
+        device_id: &str,
+        device_public: &Key32,
+    ) -> [u8; 64] {
+        self.sign(&device_approval_statement(
+            user_id,
+            device_id,
+            device_public,
+        ))
     }
 
     /// Signature authorising replacement of the recovery envelope.
@@ -96,7 +109,13 @@ impl AccountSecret {
 
     /// Encrypt private per-user data (preferences, favourites, TOFU pins).
     pub fn seal_private(&self, user_id: &str, plaintext: &[u8]) -> Vec<u8> {
-        crypto::seal_sym(&self.sym, 0, Purpose::Prefs, &[user_id.as_bytes()], plaintext)
+        crypto::seal_sym(
+            &self.sym,
+            0,
+            Purpose::Prefs,
+            &[user_id.as_bytes()],
+            plaintext,
+        )
     }
 
     pub fn open_private(&self, user_id: &str, ciphertext: &[u8]) -> Result<Vec<u8>> {
@@ -113,16 +132,33 @@ impl AccountPublic {
         m.extend_from_slice(&self.enc_public);
         let h = crypto::kdf_hash("coolpsonotes v1 account fingerprint", &m);
         let hex = data_encoding::HEXUPPER.encode(&h[..16]);
-        hex.as_bytes().chunks(4).map(|c| std::str::from_utf8(c).unwrap()).collect::<Vec<_>>().join(" ")
+        hex.as_bytes()
+            .chunks(4)
+            .map(|c| std::str::from_utf8(c).unwrap())
+            .collect::<Vec<_>>()
+            .join(" ")
     }
 
     /// Verify the account's self-signature.
     pub fn verify(&self, user_id: &str, key_version: u32, signature: &[u8]) -> Result<()> {
-        crypto::ed25519_verify(&self.sign_public, &account_key_statement(user_id, key_version, self), signature)
+        crypto::ed25519_verify(
+            &self.sign_public,
+            &account_key_statement(user_id, key_version, self),
+            signature,
+        )
     }
 
-    pub fn verify_recovery_update(&self, user_id: &str, envelope: &[u8], signature: &[u8]) -> Result<()> {
-        crypto::ed25519_verify(&self.sign_public, &recovery_update_statement(user_id, envelope), signature)
+    pub fn verify_recovery_update(
+        &self,
+        user_id: &str,
+        envelope: &[u8],
+        signature: &[u8],
+    ) -> Result<()> {
+        crypto::ed25519_verify(
+            &self.sign_public,
+            &recovery_update_statement(user_id, envelope),
+            signature,
+        )
     }
 
     pub fn verify_device_approval(
@@ -141,13 +177,21 @@ impl AccountPublic {
 }
 
 pub fn recovery_update_statement(user_id: &str, envelope: &[u8]) -> Vec<u8> {
-    crypto::statement("coolpsonotes/v1/sig/recovery-update", &[user_id.as_bytes(), envelope])
+    crypto::statement(
+        "coolpsonotes/v1/sig/recovery-update",
+        &[user_id.as_bytes(), envelope],
+    )
 }
 
 pub fn account_key_statement(user_id: &str, key_version: u32, public: &AccountPublic) -> Vec<u8> {
     crypto::statement(
         "coolpsonotes/v1/sig/account-key",
-        &[user_id.as_bytes(), &key_version.to_be_bytes(), &public.enc_public, &public.sign_public],
+        &[
+            user_id.as_bytes(),
+            &key_version.to_be_bytes(),
+            &public.enc_public,
+            &public.sign_public,
+        ],
     )
 }
 
@@ -177,7 +221,12 @@ impl DeviceKey {
         Ok(DeviceKey { secret, public })
     }
 
-    pub fn unwrap_account(&self, sealed: &[u8], user_id: &str, device_id: &str) -> Result<AccountSecret> {
+    pub fn unwrap_account(
+        &self,
+        sealed: &[u8],
+        user_id: &str,
+        device_id: &str,
+    ) -> Result<AccountSecret> {
         let aad = crypto::statement("aad", &[user_id.as_bytes(), device_id.as_bytes()]);
         let mut pt = crypto::hpke_open(&self.secret, INFO_ACCOUNT_TO_DEVICE, &aad, sealed)?;
         let res = AccountSecret::from_bytes(&pt);
@@ -205,7 +254,10 @@ pub fn wrap_account_for_device(
 /// device key. 60 bits makes grinding a colliding key during the approval
 /// window impractical.
 pub fn device_verification_code(user_id: &str, device_id: &str, device_public: &Key32) -> String {
-    let m = crypto::statement("device-code", &[user_id.as_bytes(), device_id.as_bytes(), device_public]);
+    let m = crypto::statement(
+        "device-code",
+        &[user_id.as_bytes(), device_id.as_bytes(), device_public],
+    );
     let h = crypto::kdf_hash("coolpsonotes v1 device verification code", &m);
     // 60 bits -> 12 base32 characters.
     let s = data_encoding::BASE32_NOPAD.encode(&h[..8]);
@@ -228,7 +280,11 @@ impl RecoveryKey {
         b.extend_from_slice(&checksum(&self.0));
         let s = data_encoding::BASE32_NOPAD.encode(&b);
         b.zeroize();
-        s.as_bytes().chunks(5).map(|c| std::str::from_utf8(c).unwrap()).collect::<Vec<_>>().join("-")
+        s.as_bytes()
+            .chunks(5)
+            .map(|c| std::str::from_utf8(c).unwrap())
+            .collect::<Vec<_>>()
+            .join("-")
     }
 
     /// Parse a recovery key, ignoring case, whitespace and dashes and tolerating
@@ -288,7 +344,14 @@ impl VaultKey {
 }
 
 fn vault_key_aad(vault_id: &str, epoch: u32, user_id: &str) -> Vec<u8> {
-    crypto::statement("aad", &[vault_id.as_bytes(), &epoch.to_be_bytes(), user_id.as_bytes()])
+    crypto::statement(
+        "aad",
+        &[
+            vault_id.as_bytes(),
+            &epoch.to_be_bytes(),
+            user_id.as_bytes(),
+        ],
+    )
 }
 
 /// Encrypt a vault key to a member's account public key.
@@ -299,7 +362,12 @@ pub fn wrap_vault_key(
     recipient_user_id: &str,
     recipient_enc_public: &Key32,
 ) -> Result<Vec<u8>> {
-    crypto::hpke_seal(recipient_enc_public, INFO_VAULT_KEY, &vault_key_aad(vault_id, epoch, recipient_user_id), &key.0)
+    crypto::hpke_seal(
+        recipient_enc_public,
+        INFO_VAULT_KEY,
+        &vault_key_aad(vault_id, epoch, recipient_user_id),
+        &key.0,
+    )
 }
 
 pub fn unwrap_vault_key(
@@ -309,8 +377,16 @@ pub fn unwrap_vault_key(
     epoch: u32,
     user_id: &str,
 ) -> Result<VaultKey> {
-    let mut pt = crypto::hpke_open(&account.enc_secret, INFO_VAULT_KEY, &vault_key_aad(vault_id, epoch, user_id), sealed)?;
-    let key: Key32 = pt.as_slice().try_into().map_err(|_| CryptoError::Malformed)?;
+    let mut pt = crypto::hpke_open(
+        &account.enc_secret,
+        INFO_VAULT_KEY,
+        &vault_key_aad(vault_id, epoch, user_id),
+        sealed,
+    )?;
+    let key: Key32 = pt
+        .as_slice()
+        .try_into()
+        .map_err(|_| CryptoError::Malformed)?;
     pt.zeroize();
     Ok(VaultKey(key))
 }
@@ -324,7 +400,10 @@ pub struct VaultKeyring {
 
 impl VaultKeyring {
     pub fn new(vault_id: impl Into<String>) -> Self {
-        VaultKeyring { vault_id: vault_id.into(), keys: BTreeMap::new() }
+        VaultKeyring {
+            vault_id: vault_id.into(),
+            keys: BTreeMap::new(),
+        }
     }
 
     pub fn vault_id(&self) -> &str {
@@ -360,14 +439,24 @@ impl VaultKeyring {
 
     /// Like [`fill_from_chain`](Self::fill_from_chain) with an explicit link
     /// context (document keys use [`object_scope`]).
-    pub fn fill_from_chain_with(&mut self, chain: &BTreeMap<u32, Vec<u8>>, context: &str) -> Result<()> {
-        let Some(mut epoch) = self.current_epoch() else { return Ok(()) };
+    pub fn fill_from_chain_with(
+        &mut self,
+        chain: &BTreeMap<u32, Vec<u8>>,
+        context: &str,
+    ) -> Result<()> {
+        let Some(mut epoch) = self.current_epoch() else {
+            return Ok(());
+        };
         // Vault epochs start at 1, document key epochs at DOC_EPOCH_BIT | 1.
         let floor = (epoch & DOC_EPOCH_BIT) | 1;
         while epoch > floor {
             if !self.keys.contains_key(&(epoch - 1)) {
                 let Some(link) = chain.get(&epoch) else { break };
-                let newer = self.keys.get(&epoch).expect("walking from known key").clone();
+                let newer = self
+                    .keys
+                    .get(&epoch)
+                    .expect("walking from known key")
+                    .clone();
                 let older = decrypt_chain_link(&newer, epoch, link, context)?;
                 self.keys.insert(epoch - 1, older);
             }
@@ -378,13 +467,27 @@ impl VaultKeyring {
 
     pub fn encrypt(&self, purpose: Purpose, object_id: &str, plaintext: &[u8]) -> Result<Vec<u8>> {
         let (epoch, key) = self.current().ok_or(CryptoError::MissingEpoch(0))?;
-        Ok(crypto::seal_sym(&key.0, epoch, purpose, &[self.vault_id.as_bytes(), object_id.as_bytes()], plaintext))
+        Ok(crypto::seal_sym(
+            &key.0,
+            epoch,
+            purpose,
+            &[self.vault_id.as_bytes(), object_id.as_bytes()],
+            plaintext,
+        ))
     }
 
     pub fn decrypt(&self, purpose: Purpose, object_id: &str, ciphertext: &[u8]) -> Result<Vec<u8>> {
         let epoch = crypto::sym_epoch(ciphertext)?;
-        let key = self.keys.get(&epoch).ok_or(CryptoError::MissingEpoch(epoch))?;
-        crypto::open_sym(&key.0, purpose, &[self.vault_id.as_bytes(), object_id.as_bytes()], ciphertext)
+        let key = self
+            .keys
+            .get(&epoch)
+            .ok_or(CryptoError::MissingEpoch(epoch))?;
+        crypto::open_sym(
+            &key.0,
+            purpose,
+            &[self.vault_id.as_bytes(), object_id.as_bytes()],
+            ciphertext,
+        )
     }
 
     /// Vault metadata (name, description) is bound to the vault only.
@@ -416,49 +519,97 @@ pub fn object_scope(vault_id: &str, object_id: &str) -> String {
 }
 
 /// Wrap a note's document key under the vault's current key, for vault members.
-pub fn wrap_doc_key_for_vault(vault_ring: &VaultKeyring, object_id: &str, epoch: u32, doc_key: &VaultKey) -> Result<Vec<u8>> {
+pub fn wrap_doc_key_for_vault(
+    vault_ring: &VaultKeyring,
+    object_id: &str,
+    epoch: u32,
+    doc_key: &VaultKey,
+) -> Result<Vec<u8>> {
     let (vault_epoch, vk) = vault_ring.current().ok_or(CryptoError::MissingEpoch(0))?;
     Ok(crypto::seal_sym(
         &vk.0,
         vault_epoch,
         Purpose::DocKey,
-        &[vault_ring.vault_id().as_bytes(), object_id.as_bytes(), &epoch.to_be_bytes()],
+        &[
+            vault_ring.vault_id().as_bytes(),
+            object_id.as_bytes(),
+            &epoch.to_be_bytes(),
+        ],
         &doc_key.0,
     ))
 }
 
-pub fn unwrap_doc_key_for_vault(vault_ring: &VaultKeyring, object_id: &str, epoch: u32, envelope: &[u8]) -> Result<VaultKey> {
+pub fn unwrap_doc_key_for_vault(
+    vault_ring: &VaultKeyring,
+    object_id: &str,
+    epoch: u32,
+    envelope: &[u8],
+) -> Result<VaultKey> {
     let vault_epoch = crypto::sym_epoch(envelope)?;
-    let vk = vault_ring.get(vault_epoch).ok_or(CryptoError::MissingEpoch(vault_epoch))?;
+    let vk = vault_ring
+        .get(vault_epoch)
+        .ok_or(CryptoError::MissingEpoch(vault_epoch))?;
     let mut pt = crypto::open_sym(
         &vk.0,
         Purpose::DocKey,
-        &[vault_ring.vault_id().as_bytes(), object_id.as_bytes(), &epoch.to_be_bytes()],
+        &[
+            vault_ring.vault_id().as_bytes(),
+            object_id.as_bytes(),
+            &epoch.to_be_bytes(),
+        ],
         envelope,
     )?;
-    let key: Key32 = pt.as_slice().try_into().map_err(|_| CryptoError::Malformed)?;
+    let key: Key32 = pt
+        .as_slice()
+        .try_into()
+        .map_err(|_| CryptoError::Malformed)?;
     pt.zeroize();
     Ok(VaultKey(key))
 }
 
 /// Encrypt epoch `new_epoch - 1`'s key under the key of `new_epoch`.
-pub fn encrypt_chain_link(newer: &VaultKey, new_epoch: u32, older: &VaultKey, vault_id: &str) -> Vec<u8> {
-    crypto::seal_sym(&newer.0, new_epoch, Purpose::KeyChain, &[vault_id.as_bytes()], &older.0)
+pub fn encrypt_chain_link(
+    newer: &VaultKey,
+    new_epoch: u32,
+    older: &VaultKey,
+    vault_id: &str,
+) -> Vec<u8> {
+    crypto::seal_sym(
+        &newer.0,
+        new_epoch,
+        Purpose::KeyChain,
+        &[vault_id.as_bytes()],
+        &older.0,
+    )
 }
 
-pub fn decrypt_chain_link(newer: &VaultKey, new_epoch: u32, link: &[u8], vault_id: &str) -> Result<VaultKey> {
+pub fn decrypt_chain_link(
+    newer: &VaultKey,
+    new_epoch: u32,
+    link: &[u8],
+    vault_id: &str,
+) -> Result<VaultKey> {
     if crypto::sym_epoch(link)? != new_epoch {
         return Err(CryptoError::Malformed);
     }
     let mut pt = crypto::open_sym(&newer.0, Purpose::KeyChain, &[vault_id.as_bytes()], link)?;
-    let key: Key32 = pt.as_slice().try_into().map_err(|_| CryptoError::Malformed)?;
+    let key: Key32 = pt
+        .as_slice()
+        .try_into()
+        .map_err(|_| CryptoError::Malformed)?;
     pt.zeroize();
     Ok(VaultKey(key))
 }
 
 /// Key protecting a client's local cache at rest.
 pub fn seal_local(key: &Key32, context: &str, plaintext: &[u8]) -> Vec<u8> {
-    crypto::seal_sym(key, 0, Purpose::LocalCache, &[context.as_bytes()], plaintext)
+    crypto::seal_sym(
+        key,
+        0,
+        Purpose::LocalCache,
+        &[context.as_bytes()],
+        plaintext,
+    )
 }
 
 pub fn open_local(key: &Key32, context: &str, ciphertext: &[u8]) -> Result<Vec<u8>> {
@@ -492,8 +643,14 @@ mod tests {
         let code = device_verification_code("u1", "d1", &d.public);
         assert_eq!(code.len(), 14);
         let sig = a.sign_device_approval("u1", "d1", &d.public);
-        a.public().verify_device_approval("u1", "d1", &d.public, &sig).unwrap();
-        assert!(a.public().verify_device_approval("u1", "d2", &d.public, &sig).is_err());
+        a.public()
+            .verify_device_approval("u1", "d1", &d.public, &sig)
+            .unwrap();
+        assert!(
+            a.public()
+                .verify_device_approval("u1", "d2", &d.public, &sig)
+                .is_err()
+        );
     }
 
     #[test]
@@ -504,7 +661,10 @@ mod tests {
         let parsed = RecoveryKey::parse(&shown.to_lowercase().replace('-', " ")).unwrap();
         assert_eq!(parsed.0, rk.0);
         let env = rk.wrap_account(&a, "u1");
-        assert_eq!(parsed.unwrap_account(&env, "u1").unwrap().public(), a.public());
+        assert_eq!(
+            parsed.unwrap_account(&env, "u1").unwrap().public(),
+            a.public()
+        );
         assert!(parsed.unwrap_account(&env, "u2").is_err());
         // A single typo is caught by the checksum.
         let mut chars: Vec<char> = shown.chars().collect();
@@ -518,18 +678,29 @@ mod tests {
         vault.insert(1, VaultKey::generate());
         let d1 = VaultKey::generate();
         let env = wrap_doc_key_for_vault(&vault, "n", FIRST_DOC_EPOCH, &d1).unwrap();
-        assert_eq!(unwrap_doc_key_for_vault(&vault, "n", FIRST_DOC_EPOCH, &env).unwrap().0, d1.0);
+        assert_eq!(
+            unwrap_doc_key_for_vault(&vault, "n", FIRST_DOC_EPOCH, &env)
+                .unwrap()
+                .0,
+            d1.0
+        );
         assert!(unwrap_doc_key_for_vault(&vault, "other", FIRST_DOC_EPOCH, &env).is_err());
         assert!(unwrap_doc_key_for_vault(&vault, "n", FIRST_DOC_EPOCH + 1, &env).is_err());
         // Chains of document keys stop at the first document epoch.
         let d2 = VaultKey::generate();
         let scope = object_scope("v", "n");
         let mut chain = BTreeMap::new();
-        chain.insert(FIRST_DOC_EPOCH + 1, encrypt_chain_link(&d2, FIRST_DOC_EPOCH + 1, &d1, &scope));
+        chain.insert(
+            FIRST_DOC_EPOCH + 1,
+            encrypt_chain_link(&d2, FIRST_DOC_EPOCH + 1, &d1, &scope),
+        );
         let mut ring = VaultKeyring::new("v");
         ring.insert(FIRST_DOC_EPOCH + 1, d2);
         ring.fill_from_chain_with(&chain, &scope).unwrap();
-        assert_eq!(ring.epochs().collect::<Vec<_>>(), vec![FIRST_DOC_EPOCH, FIRST_DOC_EPOCH + 1]);
+        assert_eq!(
+            ring.epochs().collect::<Vec<_>>(),
+            vec![FIRST_DOC_EPOCH, FIRST_DOC_EPOCH + 1]
+        );
         let ct = ring.encrypt(Purpose::Update, "n", b"x").unwrap();
         assert!(is_doc_epoch(crypto::sym_epoch(&ct).unwrap()));
         // The vault key cannot read document-key content.
@@ -560,11 +731,17 @@ mod tests {
         ring.insert(3, k3);
         ring.fill_from_chain(&chain).unwrap();
         assert_eq!(ring.epochs().collect::<Vec<_>>(), vec![1, 2, 3]);
-        assert_eq!(ring.decrypt(Purpose::Update, "doc", &old_ct).unwrap(), b"old");
+        assert_eq!(
+            ring.decrypt(Purpose::Update, "doc", &old_ct).unwrap(),
+            b"old"
+        );
         assert!(ring.decrypt(Purpose::Update, "doc2", &old_ct).is_err());
         let new_ct = ring.encrypt(Purpose::Update, "doc", b"new").unwrap();
         assert_eq!(crypto::sym_epoch(&new_ct).unwrap(), 3);
         // The old keyring cannot read post-rotation content.
-        assert_eq!(ring1.decrypt(Purpose::Update, "doc", &new_ct), Err(CryptoError::MissingEpoch(3)));
+        assert_eq!(
+            ring1.decrypt(Purpose::Update, "doc", &new_ct),
+            Err(CryptoError::MissingEpoch(3))
+        );
     }
 }

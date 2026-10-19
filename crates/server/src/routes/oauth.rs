@@ -27,7 +27,14 @@ const DAY_MS: i64 = 24 * 3600 * 1000;
 pub const DEVICE_GRANT: &str = "urn:ietf:params:oauth:grant-type:device_code";
 
 fn oauth_error(status: StatusCode, error: &str, desc: Option<&str>) -> Response {
-    (status, Json(OAuthError { error: error.into(), error_description: desc.map(str::to_string) })).into_response()
+    (
+        status,
+        Json(OAuthError {
+            error: error.into(),
+            error_description: desc.map(str::to_string),
+        }),
+    )
+        .into_response()
 }
 
 #[derive(Deserialize)]
@@ -52,7 +59,10 @@ pub async fn device_authorization(
         .collect();
     let (device_code, hash) = db::new_secret("cpn_d_");
     let now = db::now();
-    sqlx::query("DELETE FROM device_grants WHERE expires_at < ?").bind(now - DAY_MS).execute(&state.db).await?;
+    sqlx::query("DELETE FROM device_grants WHERE expires_at < ?")
+        .bind(now - DAY_MS)
+        .execute(&state.db)
+        .await?;
     let mut user_code = db::new_user_code();
     for _ in 0..5 {
         let r = sqlx::query(
@@ -68,7 +78,9 @@ pub async fn device_authorization(
         .await;
         match r {
             Ok(_) => break,
-            Err(sqlx::Error::Database(e)) if e.is_unique_violation() => user_code = db::new_user_code(),
+            Err(sqlx::Error::Database(e)) if e.is_unique_violation() => {
+                user_code = db::new_user_code()
+            }
             Err(e) => return Err(e.into()),
         }
     }
@@ -95,7 +107,10 @@ pub struct TokenForm {
 }
 
 fn basic_credentials(headers: &HeaderMap) -> Option<(String, String)> {
-    let v = headers.get(axum::http::header::AUTHORIZATION)?.to_str().ok()?;
+    let v = headers
+        .get(axum::http::header::AUTHORIZATION)?
+        .to_str()
+        .ok()?;
     let (scheme, b64) = v.split_once(' ')?;
     if !scheme.eq_ignore_ascii_case("basic") {
         return None;
@@ -103,28 +118,50 @@ fn basic_credentials(headers: &HeaderMap) -> Option<(String, String)> {
     let raw = data_encoding::BASE64.decode(b64.trim().as_bytes()).ok()?;
     let s = String::from_utf8(raw).ok()?;
     let (id, secret) = s.split_once(':')?;
-    let dec = |x: &str| url::form_urlencoded::parse(format!("x={x}").as_bytes()).next().map(|(_, v)| v.into_owned());
+    let dec = |x: &str| {
+        url::form_urlencoded::parse(format!("x={x}").as_bytes())
+            .next()
+            .map(|(_, v)| v.into_owned())
+    };
     Some((dec(id)?, dec(secret)?))
 }
 
-pub async fn token(State(state): State<AppState>, headers: HeaderMap, Form(f): Form<TokenForm>) -> AppResult<Response> {
+pub async fn token(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Form(f): Form<TokenForm>,
+) -> AppResult<Response> {
     match f.grant_type.as_str() {
         DEVICE_GRANT => device_token(&state, f).await,
         "client_credentials" => {
             let (id, secret) = match (basic_credentials(&headers), f.client_id, f.client_secret) {
                 (Some(c), _, _) => c,
                 (None, Some(id), Some(secret)) => (id, secret),
-                _ => return Ok(oauth_error(StatusCode::UNAUTHORIZED, "invalid_client", None)),
+                _ => {
+                    return Ok(oauth_error(
+                        StatusCode::UNAUTHORIZED,
+                        "invalid_client",
+                        None,
+                    ));
+                }
             };
             client_credentials(&state, &id, &secret).await
         }
-        _ => Ok(oauth_error(StatusCode::BAD_REQUEST, "unsupported_grant_type", None)),
+        _ => Ok(oauth_error(
+            StatusCode::BAD_REQUEST,
+            "unsupported_grant_type",
+            None,
+        )),
     }
 }
 
 async fn device_token(state: &AppState, f: TokenForm) -> AppResult<Response> {
     let Some(code) = f.device_code else {
-        return Ok(oauth_error(StatusCode::BAD_REQUEST, "invalid_request", Some("device_code is required")));
+        return Ok(oauth_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            Some("device_code is required"),
+        ));
     };
     let hash = db::sha256(code.as_bytes());
     let _w = state.write_lock.lock().await;
@@ -154,7 +191,11 @@ async fn device_token(state: &AppState, f: TokenForm) -> AppResult<Response> {
             if last.is_some_and(|l| now - l < (POLL_INTERVAL_S * 1000) - 500) {
                 return Ok(oauth_error(StatusCode::BAD_REQUEST, "slow_down", None));
             }
-            Ok(oauth_error(StatusCode::BAD_REQUEST, "authorization_pending", None))
+            Ok(oauth_error(
+                StatusCode::BAD_REQUEST,
+                "authorization_pending",
+                None,
+            ))
         }
         "denied" => Ok(oauth_error(StatusCode::BAD_REQUEST, "access_denied", None)),
         "approved" => {
@@ -165,8 +206,18 @@ async fn device_token(state: &AppState, f: TokenForm) -> AppResult<Response> {
                 .execute(&state.db)
                 .await?;
             let ttl = state.config.device_session_ttl_days * DAY_MS;
-            let s = auth::create_session(&state.db, &user_id, "cli", Some(&client_name), ttl).await?;
-            db::audit(&state.db, Some(&user_id), Some(&user_id), None, "login.device_grant", None, serde_json::json!({ "client": client_name })).await;
+            let s =
+                auth::create_session(&state.db, &user_id, "cli", Some(&client_name), ttl).await?;
+            db::audit(
+                &state.db,
+                Some(&user_id),
+                Some(&user_id),
+                None,
+                "login.device_grant",
+                None,
+                serde_json::json!({ "client": client_name }),
+            )
+            .await;
             Ok(Json(TokenResponse {
                 access_token: s.token,
                 token_type: "Bearer".into(),
@@ -179,7 +230,11 @@ async fn device_token(state: &AppState, f: TokenForm) -> AppResult<Response> {
     }
 }
 
-async fn client_credentials(state: &AppState, client_id: &str, secret: &str) -> AppResult<Response> {
+async fn client_credentials(
+    state: &AppState,
+    client_id: &str,
+    secret: &str,
+) -> AppResult<Response> {
     let row = sqlx::query(
         "SELECT c.agent_id, c.secret_hash, c.revoked_at, a.disabled AS agent_disabled, o.disabled AS owner_disabled
          FROM agent_credentials c JOIN users a ON a.id = c.agent_id LEFT JOIN users o ON o.id = a.owner_id
@@ -190,14 +245,26 @@ async fn client_credentials(state: &AppState, client_id: &str, secret: &str) -> 
     .await?;
     let hash = db::sha256(secret.as_bytes());
     let Some(row) = row else {
-        return Ok(oauth_error(StatusCode::UNAUTHORIZED, "invalid_client", None));
+        return Ok(oauth_error(
+            StatusCode::UNAUTHORIZED,
+            "invalid_client",
+            None,
+        ));
     };
     let stored: Vec<u8> = row.get("secret_hash");
     let revoked: Option<i64> = row.get("revoked_at");
     let agent_disabled: bool = row.get("agent_disabled");
     let owner_disabled: Option<bool> = row.get("owner_disabled");
-    if !bool::from(stored.ct_eq(&hash)) || revoked.is_some() || agent_disabled || owner_disabled.unwrap_or(false) {
-        return Ok(oauth_error(StatusCode::UNAUTHORIZED, "invalid_client", None));
+    if !bool::from(stored.ct_eq(&hash))
+        || revoked.is_some()
+        || agent_disabled
+        || owner_disabled.unwrap_or(false)
+    {
+        return Ok(oauth_error(
+            StatusCode::UNAUTHORIZED,
+            "invalid_client",
+            None,
+        ));
     }
     let agent_id: String = row.get("agent_id");
     sqlx::query("UPDATE agent_credentials SET last_used_at = ? WHERE client_id = ?")
@@ -217,8 +284,16 @@ async fn client_credentials(state: &AppState, client_id: &str, secret: &str) -> 
 }
 
 fn normalize_user_code(s: &str) -> String {
-    let c: String = s.chars().filter(|c| c.is_ascii_alphanumeric()).map(|c| c.to_ascii_uppercase()).collect();
-    if c.len() == 8 { format!("{}-{}", &c[..4], &c[4..]) } else { c }
+    let c: String = s
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .map(|c| c.to_ascii_uppercase())
+        .collect();
+    if c.len() == 8 {
+        format!("{}-{}", &c[..4], &c[4..])
+    } else {
+        c
+    }
 }
 
 #[derive(Deserialize)]

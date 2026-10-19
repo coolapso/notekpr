@@ -36,7 +36,11 @@ pub struct Socket {
 
 fn ws_url() -> String {
     let loc = util::window().location();
-    let proto = if loc.protocol().unwrap_or_default() == "https:" { "wss" } else { "ws" };
+    let proto = if loc.protocol().unwrap_or_default() == "https:" {
+        "wss"
+    } else {
+        "ws"
+    };
     format!("{proto}://{}/api/v1/ws", loc.host().unwrap_or_default())
 }
 
@@ -81,7 +85,8 @@ impl Socket {
         if ws.ready_state() != WebSocket::OPEN {
             return false;
         }
-        ws.send_with_str(&serde_json::to_string(m).expect("serializable")).is_ok()
+        ws.send_with_str(&serde_json::to_string(m).expect("serializable"))
+            .is_ok()
     }
 
     pub fn stop(&self) {
@@ -140,8 +145,12 @@ impl Socket {
         let onmessage = Closure::wrap(Box::new(move |e: JsValue| {
             let Some(s) = me.upgrade() else { return };
             s.last_rx.set(now_ms());
-            let Ok(e) = e.dyn_into::<MessageEvent>() else { return };
-            let Some(text) = e.data().as_string() else { return };
+            let Ok(e) = e.dyn_into::<MessageEvent>() else {
+                return;
+            };
+            let Some(text) = e.data().as_string() else {
+                return;
+            };
             match serde_json::from_str::<ServerMessage>(&text) {
                 Ok(m) => {
                     if let ServerMessage::Ready { .. } = &m {
@@ -184,9 +193,10 @@ impl Socket {
         let me = Rc::downgrade(this);
         util::set_timeout(delay, move || {
             if let Some(s) = me.upgrade()
-                && s.ws.borrow().is_none() {
-                    Socket::connect(&s);
-                }
+                && s.ws.borrow().is_none()
+            {
+                Socket::connect(&s);
+            }
         });
     }
 
@@ -204,7 +214,9 @@ impl Socket {
                 }
                 return;
             }
-            s.send(&ClientMessage::Ping { nonce: now_ms() as u64 });
+            s.send(&ClientMessage::Ping {
+                nonce: now_ms() as u64,
+            });
         });
     }
 }

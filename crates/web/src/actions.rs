@@ -9,12 +9,12 @@ use coolpsonotes_core::engine::{self, ObjectMeta, PinStatus, VaultMeta, VaultRep
 use coolpsonotes_core::protocol::*;
 use coolpsonotes_core::textdiff::Edit;
 use coolpsonotes_core::{markdown, paths};
-use leptos::prelude::*;
 use leptos::prelude::Update;
+use leptos::prelude::*;
 use wasm_bindgen::JsCast;
 
-use crate::editor::syntax::Target;
 use crate::editor::Host;
+use crate::editor::syntax::Target;
 use crate::state::{self, Route, error, info, local_update, navigate, success, with};
 use crate::{api, knowledge, util, zipfile};
 
@@ -29,7 +29,11 @@ pub async fn create_vault(name: String) -> Option<String> {
     if name.is_empty() {
         return None;
     }
-    let made = with(|c| c.account.as_ref().map(|a| engine::new_vault(a, &c.user_id, &VaultMeta::named(&name))));
+    let made = with(|c| {
+        c.account
+            .as_ref()
+            .map(|a| engine::new_vault(a, &c.user_id, &VaultMeta::named(&name)))
+    });
     let (req, ring) = match made {
         Some(Ok(x)) => x,
         Some(Err(e)) => {
@@ -54,7 +58,11 @@ pub async fn create_vault(name: String) -> Option<String> {
         c.loaded.insert(id.clone());
     });
     if let Some(s) = with(|c| c.socket.clone()) {
-        s.send(&ClientMessage::Subscribe { vault_id: id.clone(), since: Some(0), object_id: None });
+        s.send(&ClientMessage::Subscribe {
+            vault_id: id.clone(),
+            since: Some(0),
+            object_id: None,
+        });
     }
     state::publish_vaults();
     Some(id)
@@ -67,7 +75,15 @@ pub async fn rename_vault(vault: &str, name: &str) {
         r.meta.encrypt(&r.keyring).ok()
     });
     let Some(ct) = ct else { return };
-    match api::patch::<_, VaultInfo>(&format!("/vaults/{vault}"), &UpdateVaultRequest { encrypted_meta: Some(ct), archived: None }).await {
+    match api::patch::<_, VaultInfo>(
+        &format!("/vaults/{vault}"),
+        &UpdateVaultRequest {
+            encrypted_meta: Some(ct),
+            archived: None,
+        },
+    )
+    .await
+    {
         Ok(i) => {
             with(|c| c.vault_infos.insert(vault.to_string(), i));
             state::publish_vaults();
@@ -77,7 +93,15 @@ pub async fn rename_vault(vault: &str, name: &str) {
 }
 
 pub async fn set_archived(vault: &str, archived: bool) {
-    match api::patch::<_, VaultInfo>(&format!("/vaults/{vault}"), &UpdateVaultRequest { encrypted_meta: None, archived: Some(archived) }).await {
+    match api::patch::<_, VaultInfo>(
+        &format!("/vaults/{vault}"),
+        &UpdateVaultRequest {
+            encrypted_meta: None,
+            archived: Some(archived),
+        },
+    )
+    .await
+    {
         Ok(i) => {
             with(|c| c.vault_infos.insert(vault.to_string(), i));
             state::publish_vaults();
@@ -119,7 +143,11 @@ pub async fn leave_vault(vault: &str) {
 // ------------------------------------------------------------------ sharing
 
 pub fn fingerprint(user: &PublicUser) -> Option<String> {
-    user.account_key.as_ref()?.verify().ok().map(|p| p.fingerprint())
+    user.account_key
+        .as_ref()?
+        .verify()
+        .ok()
+        .map(|p| p.fingerprint())
 }
 
 pub fn pin_status(user: &PublicUser) -> Option<PinStatus> {
@@ -140,7 +168,9 @@ pub fn trust_key(user: &PublicUser) {
 }
 
 fn check_trust(user: &PublicUser) -> Result<(), String> {
-    let Some(fp) = fingerprint(user) else { return Ok(()) };
+    let Some(fp) = fingerprint(user) else {
+        return Ok(());
+    };
     let st = with(|c| engine::check_pin(&mut c.prefs.pins, &user.id, &fp));
     match st {
         PinStatus::Changed => Err(format!(
@@ -158,7 +188,11 @@ fn check_trust(user: &PublicUser) -> Result<(), String> {
 pub async fn share(vault: &str, user: &PublicUser, role: Role) -> Result<(), String> {
     let envelope = if user.account_key.is_some() {
         check_trust(user)?;
-        let env = with(|c| c.replicas.get(vault).map(|r| engine::share_envelope(&r.keyring, user)));
+        let env = with(|c| {
+            c.replicas
+                .get(vault)
+                .map(|r| engine::share_envelope(&r.keyring, user))
+        });
         match env {
             Some(Ok(e)) => Some(e),
             Some(Err(e)) => return Err(e.to_string()),
@@ -168,12 +202,22 @@ pub async fn share(vault: &str, user: &PublicUser, role: Role) -> Result<(), Str
         None
     };
     let pending = envelope.is_none();
-    api::post::<_, MemberInfo>(&format!("/vaults/{vault}/members"), &AddMemberRequest { user_id: user.id.clone(), role, key_envelope: envelope })
-        .await
-        .map_err(|e| e.message)?;
+    api::post::<_, MemberInfo>(
+        &format!("/vaults/{vault}/members"),
+        &AddMemberRequest {
+            user_id: user.id.clone(),
+            role,
+            key_envelope: envelope,
+        },
+    )
+    .await
+    .map_err(|e| e.message)?;
     with(|c| c.users.insert(user.id.clone(), user.clone()));
     if pending {
-        info(format!("{} will get access after their first sign-in.", user.display_name));
+        info(format!(
+            "{} will get access after their first sign-in.",
+            user.display_name
+        ));
     } else {
         success(format!("Shared with {}.", user.display_name));
     }
@@ -181,7 +225,12 @@ pub async fn share(vault: &str, user: &PublicUser, role: Role) -> Result<(), Str
 }
 
 pub async fn set_role(vault: &str, user_id: &str, role: Role) {
-    if let Err(e) = api::patch::<_, ()>(&format!("/vaults/{vault}/members/{user_id}"), &UpdateMemberRequest { role }).await {
+    if let Err(e) = api::patch::<_, ()>(
+        &format!("/vaults/{vault}/members/{user_id}"),
+        &UpdateMemberRequest { role },
+    )
+    .await
+    {
         error(e.message);
     }
 }
@@ -208,10 +257,11 @@ pub async fn rotate_keys(vault: &str) -> bool {
     };
     for m in &members {
         if m.user.account_key.is_some()
-            && let Err(e) = check_trust(&m.user) {
-                error(e);
-                return false;
-            }
+            && let Err(e) = check_trust(&m.user)
+        {
+            error(e);
+            return false;
+        }
     }
     let prepared = with(|c| {
         let r = c.replicas.get(vault)?;
@@ -250,13 +300,29 @@ pub async fn rotate_keys(vault: &str) -> bool {
 
 /// Owner: give keys to members who were added before they had any.
 pub async fn grant_missing_keys(vault: &str) {
-    let Ok(members) = api::get::<Vec<MemberInfo>>(&format!("/vaults/{vault}/members")).await else { return };
-    let trusted: Vec<MemberInfo> = members.into_iter().filter(|m| m.user.account_key.is_none() || check_trust(&m.user).is_ok()).collect();
-    let env = with(|c| c.replicas.get(vault).map(|r| engine::missing_grants(&r.keyring, &trusted))).unwrap_or_default();
+    let Ok(members) = api::get::<Vec<MemberInfo>>(&format!("/vaults/{vault}/members")).await else {
+        return;
+    };
+    let trusted: Vec<MemberInfo> = members
+        .into_iter()
+        .filter(|m| m.user.account_key.is_none() || check_trust(&m.user).is_ok())
+        .collect();
+    let env = with(|c| {
+        c.replicas
+            .get(vault)
+            .map(|r| engine::missing_grants(&r.keyring, &trusted))
+    })
+    .unwrap_or_default();
     if env.is_empty() {
         return;
     }
-    if api::post::<_, ()>(&format!("/vaults/{vault}/keys/grant"), &GrantKeysRequest { envelopes: env }).await.is_ok() {
+    if api::post::<_, ()>(
+        &format!("/vaults/{vault}/keys/grant"),
+        &GrantKeysRequest { envelopes: env },
+    )
+    .await
+    .is_ok()
+    {
         info("Shared vault keys with new members.");
     }
 }
@@ -265,28 +331,54 @@ pub async fn grant_missing_keys(vault: &str) {
 
 /// Share one note (not the vault) with someone. The note first gets its own
 /// key; the person receives only that key.
-pub async fn share_note(vault: &str, note: &str, user: &PublicUser, role: Role) -> Result<(), String> {
+pub async fn share_note(
+    vault: &str,
+    note: &str,
+    user: &PublicUser,
+    role: Role,
+) -> Result<(), String> {
     if user.account_key.is_none() {
-        return Err(format!("{} hasn't set up encryption yet. Ask them to sign in once, then share again.", user.display_name));
+        return Err(format!(
+            "{} hasn't set up encryption yet. Ask them to sign in once, then share again.",
+            user.display_name
+        ));
     }
     check_trust(user)?;
     ensure_note_key(vault, note).await?;
-    let env = with(|c| c.replicas.get(vault)?.doc_keys.get(note).map(|ring| engine::object_share_envelope(ring, note, user)));
+    let env = with(|c| {
+        c.replicas
+            .get(vault)?
+            .doc_keys
+            .get(note)
+            .map(|ring| engine::object_share_envelope(ring, note, user))
+    });
     let envelope = match env {
         Some(Ok(e)) => e,
         Some(Err(e)) => return Err(e.to_string()),
         None => return Err("The note's key is not available.".into()),
     };
-    let req = AddObjectShareRequest { user_id: user.id.clone(), role, envelope };
-    match api::post::<_, ObjectShareInfo>(&format!("/vaults/{vault}/objects/{note}/shares"), &req).await {
+    let req = AddObjectShareRequest {
+        user_id: user.id.clone(),
+        role,
+        envelope,
+    };
+    match api::post::<_, ObjectShareInfo>(&format!("/vaults/{vault}/objects/{note}/shares"), &req)
+        .await
+    {
         Ok(_) => {}
         Err(e) if e.status == 409 && e.message.contains("already shared") => {
-            api::patch::<_, ()>(&format!("/vaults/{vault}/objects/{note}/shares/{}", user.id), &UpdateMemberRequest { role })
-                .await
-                .map_err(|e| e.message)?;
+            api::patch::<_, ()>(
+                &format!("/vaults/{vault}/objects/{note}/shares/{}", user.id),
+                &UpdateMemberRequest { role },
+            )
+            .await
+            .map_err(|e| e.message)?;
         }
         Err(e) if e.status == 409 && e.message.contains("through the vault") => {
-            return Err(format!("{} is a member of this vault and can already open the note.", user.display_name));
+            return Err(format!(
+                "{} is a member of this vault and can already open the note.",
+                user.display_name
+            ));
         }
         // The key changed meanwhile (someone removed a person): reload and let the user retry.
         Err(e) if e.status == 412 => {
@@ -297,7 +389,11 @@ pub async fn share_note(vault: &str, note: &str, user: &PublicUser, role: Role) 
     }
     with(|c| c.users.insert(user.id.clone(), user.clone()));
     state::ui().shares_rev.update(|v| *v += 1);
-    success(format!("Shared “{}” with {}.", state::note_title(vault, note).unwrap_or_default(), user.display_name));
+    success(format!(
+        "Shared “{}” with {}.",
+        state::note_title(vault, note).unwrap_or_default(),
+        user.display_name
+    ));
     Ok(())
 }
 
@@ -312,14 +408,22 @@ async fn ensure_note_key(vault: &str, note: &str) -> Result<(), String> {
         // note, including our own: send them and wait for the server.
         state::flush_now();
         for _ in 0..50 {
-            if !with(|c| c.replicas.get(vault).is_some_and(|r| r.pending.iter().any(|p| p.object_id == note))) {
+            if !with(|c| {
+                c.replicas
+                    .get(vault)
+                    .is_some_and(|r| r.pending.iter().any(|p| p.object_id == note))
+            }) {
                 break;
             }
             util::sleep(100).await;
         }
         let made = with(|c| {
             let r = c.replicas.get(vault)?;
-            let title = r.index.get(note).map(|e| e.title().to_string()).unwrap_or_default();
+            let title = r
+                .index
+                .get(note)
+                .map(|e| e.title().to_string())
+                .unwrap_or_default();
             let st = r.note(note).map(|n| n.encode_state()).unwrap_or_default();
             Some(engine::start_sharing(&r.keyring, note, &title, &st, r.seq))
         });
@@ -353,26 +457,47 @@ async fn ensure_note_key(vault: &str, note: &str) -> Result<(), String> {
 /// Stop sharing a note with someone, and give the note a new key so they
 /// can't read what is written from now on.
 pub async fn unshare_note(vault: &str, note: &str, user_id: &str) -> Result<(), String> {
-    api::delete(&format!("/vaults/{vault}/objects/{note}/shares/{user_id}")).await.map_err(|e| e.message)?;
+    api::delete(&format!("/vaults/{vault}/objects/{note}/shares/{user_id}"))
+        .await
+        .map_err(|e| e.message)?;
     rotate_note_key(vault, note).await?;
     state::ui().shares_rev.update(|v| *v += 1);
     Ok(())
 }
 
-pub async fn set_note_share_role(vault: &str, note: &str, user_id: &str, role: Role) -> Result<(), String> {
-    api::patch::<_, ()>(&format!("/vaults/{vault}/objects/{note}/shares/{user_id}"), &UpdateMemberRequest { role }).await.map_err(|e| e.message)
+pub async fn set_note_share_role(
+    vault: &str,
+    note: &str,
+    user_id: &str,
+    role: Role,
+) -> Result<(), String> {
+    api::patch::<_, ()>(
+        &format!("/vaults/{vault}/objects/{note}/shares/{user_id}"),
+        &UpdateMemberRequest { role },
+    )
+    .await
+    .map_err(|e| e.message)
 }
 
 /// New document key for a shared note, for its current recipients.
 pub async fn rotate_note_key(vault: &str, note: &str) -> Result<(), String> {
     for attempt in 0..2 {
-        let shares: Vec<ObjectShareInfo> = api::get(&format!("/vaults/{vault}/objects/{note}/shares")).await.map_err(|e| e.message)?;
+        let shares: Vec<ObjectShareInfo> =
+            api::get(&format!("/vaults/{vault}/objects/{note}/shares"))
+                .await
+                .map_err(|e| e.message)?;
         let users: Vec<PublicUser> = shares.into_iter().map(|s| s.user).collect();
         let made = with(|c| {
             let r = c.replicas.get(vault)?;
             let ring = r.doc_keys.get(note)?;
-            let title = r.index.get(note).map(|e| e.title().to_string()).unwrap_or_default();
-            Some(engine::rotate_object_key(&r.keyring, ring, note, &title, &users))
+            let title = r
+                .index
+                .get(note)
+                .map(|e| e.title().to_string())
+                .unwrap_or_default();
+            Some(engine::rotate_object_key(
+                &r.keyring, ring, note, &title, &users,
+            ))
         });
         let (next, req) = match made {
             Some(Ok(x)) => x,
@@ -389,7 +514,9 @@ pub async fn rotate_note_key(vault: &str, note: &str) -> Result<(), String> {
                 return Ok(());
             }
             // Recipients or keys changed meanwhile: reload and retry once.
-            Err(e) if (e.status == 409 || e.status == 412) && attempt == 0 => state::reload_vault_keys(vault.to_string()).await,
+            Err(e) if (e.status == 409 || e.status == 412) && attempt == 0 => {
+                state::reload_vault_keys(vault.to_string()).await
+            }
             Err(e) => return Err(e.message),
         }
     }
@@ -406,7 +533,12 @@ async fn update_note_meta(vault: String, note: String) {
             ObjectMeta { title }.encrypt(ring, &note).ok()
         });
         let Some(encrypted_meta) = ct else { return };
-        match api::put::<_, ()>(&format!("/vaults/{vault}/objects/{note}/meta"), &ObjectMetaUpdate { encrypted_meta }).await {
+        match api::put::<_, ()>(
+            &format!("/vaults/{vault}/objects/{note}/meta"),
+            &ObjectMetaUpdate { encrypted_meta },
+        )
+        .await
+        {
             Err(e) if e.status == 412 => state::reload_vault_keys(vault.clone()).await,
             _ => return,
         }
@@ -428,17 +560,38 @@ pub async fn leave_shared_note(vault: &str, note: &str) {
 // ------------------------------------------------------------------ notes & folders
 
 fn unique_path(vault: &str, path: &str) -> String {
-    let taken: Vec<String> = state::live_entries(vault).into_iter().map(|e| e.path.to_lowercase()).collect();
+    let taken: Vec<String> = state::live_entries(vault)
+        .into_iter()
+        .map(|e| e.path.to_lowercase())
+        .collect();
     paths::unique(path, |p| taken.contains(&p.to_lowercase()))
 }
 
-pub async fn create_note_with(vault: &str, folder: &str, title: &str, text: &str) -> Option<String> {
+pub async fn create_note_with(
+    vault: &str,
+    folder: &str,
+    title: &str,
+    text: &str,
+) -> Option<String> {
     if !state::can_write(vault) {
         error("You can only read this vault.");
         return None;
     }
-    let title = if title.trim().is_empty() { "Untitled" } else { title.trim() };
-    let safe: String = title.chars().map(|c| if matches!(c, '/' | '\\' | ':') { '-' } else { c }).collect();
+    let title = if title.trim().is_empty() {
+        "Untitled"
+    } else {
+        title.trim()
+    };
+    let safe: String = title
+        .chars()
+        .map(|c| {
+            if matches!(c, '/' | '\\' | ':') {
+                '-'
+            } else {
+                c
+            }
+        })
+        .collect();
     let path = match paths::normalize_note(&paths::join(folder, &safe)) {
         Ok(p) => unique_path(vault, &p),
         Err(e) => {
@@ -447,7 +600,11 @@ pub async fn create_note_with(vault: &str, folder: &str, title: &str, text: &str
         }
     };
     let id = state::new_id();
-    let up = with(|c| c.replicas.get(vault).and_then(|r| r.index.create(&id, &path, EntryKind::Note, now())));
+    let up = with(|c| {
+        c.replicas
+            .get(vault)
+            .and_then(|r| r.index.create(&id, &path, EntryKind::Note, now()))
+    });
     if let Some(u) = up {
         local_update(vault, INDEX_OBJECT_ID, u);
     }
@@ -483,7 +640,11 @@ pub fn create_folder(vault: &str, path: &str) {
     };
     let p = unique_path(vault, &p);
     let id = state::new_id();
-    let up = with(|c| c.replicas.get(vault).and_then(|r| r.index.create(&id, &p, EntryKind::Folder, now())));
+    let up = with(|c| {
+        c.replicas
+            .get(vault)
+            .and_then(|r| r.index.create(&id, &p, EntryKind::Folder, now()))
+    });
     if let Some(u) = up {
         local_update(vault, INDEX_OBJECT_ID, u);
         state::ui().tree_rev.update(|v| *v += 1);
@@ -508,18 +669,29 @@ pub fn rename_entry(vault: &str, id: &str, new_name: &str) -> Result<(), String>
     if new_path == e.path {
         return Ok(());
     }
-    if state::live_entries(vault).iter().any(|x| x.id != id && x.path.eq_ignore_ascii_case(&new_path)) {
+    if state::live_entries(vault)
+        .iter()
+        .any(|x| x.id != id && x.path.eq_ignore_ascii_case(&new_path))
+    {
         return Err("Something with that name already exists here.".into());
     }
     if e.kind == EntryKind::Folder {
-        let up = with(|c| c.replicas.get(vault).and_then(|r| r.index.rename_folder(&e.path, &new_path, now())));
+        let up = with(|c| {
+            c.replicas
+                .get(vault)
+                .and_then(|r| r.index.rename_folder(&e.path, &new_path, now()))
+        });
         if let Some(u) = up {
             local_update(vault, INDEX_OBJECT_ID, u);
         }
     } else {
         let old_title = e.title().to_string();
         let old_path = e.path.clone();
-        let up = with(|c| c.replicas.get(vault).and_then(|r| r.index.rename(id, &new_path, now())));
+        let up = with(|c| {
+            c.replicas
+                .get(vault)
+                .and_then(|r| r.index.rename(id, &new_path, now()))
+        });
         if let Some(u) = up {
             local_update(vault, INDEX_OBJECT_ID, u);
         }
@@ -536,7 +708,10 @@ pub fn rename_entry(vault: &str, id: &str, new_name: &str) -> Result<(), String>
 
 fn update_links_after_rename(vault: &str, id: &str, old_path: &str, new_title: &str) {
     // Resolve against the old tree so links that used the old name still match.
-    let mut cands: Vec<(String, String)> = state::live_entries(vault).into_iter().map(|e| (e.id, e.path)).collect();
+    let mut cands: Vec<(String, String)> = state::live_entries(vault)
+        .into_iter()
+        .map(|e| (e.id, e.path))
+        .collect();
     for c in &mut cands {
         if c.0 == id {
             c.1 = old_path.to_string();
@@ -545,10 +720,22 @@ fn update_links_after_rename(vault: &str, id: &str, old_path: &str, new_title: &
     let notes = knowledge::notes_with_text(vault);
     let mut changed = 0;
     for (nid, npath, text) in notes {
-        let path = if nid == id { old_path.to_string() } else { npath };
-        let rewritten = markdown::rewrite_links(&text, new_title, |l| markdown::resolve(l, &path, &cands) == Some(id));
+        let path = if nid == id {
+            old_path.to_string()
+        } else {
+            npath
+        };
+        let rewritten = markdown::rewrite_links(&text, new_title, |l| {
+            markdown::resolve(l, &path, &cands) == Some(id)
+        });
         if let Some(new_text) = rewritten {
-            let up = with(|c| c.replicas.get_mut(vault)?.notes.get_mut(&nid)?.set_text(&new_text));
+            let up = with(|c| {
+                c.replicas
+                    .get_mut(vault)?
+                    .notes
+                    .get_mut(&nid)?
+                    .set_text(&new_text)
+            });
             if let Some(u) = up {
                 local_update(vault, &nid, u);
                 changed += 1;
@@ -556,20 +743,28 @@ fn update_links_after_rename(vault: &str, id: &str, old_path: &str, new_title: &
         }
     }
     if changed > 0 {
-        info(format!("Updated links in {changed} note{}.", if changed == 1 { "" } else { "s" }));
+        info(format!(
+            "Updated links in {changed} note{}.",
+            if changed == 1 { "" } else { "s" }
+        ));
         refresh_open_editor(vault);
     }
 }
 
 fn refresh_open_editor(vault: &str) {
-    let open = with(|c| c.editor.as_ref().map(|(v, n, e)| (v.clone(), n.clone(), e.clone())));
+    let open = with(|c| {
+        c.editor
+            .as_ref()
+            .map(|(v, n, e)| (v.clone(), n.clone(), e.clone()))
+    });
     if let Some((v, n, ed)) = open
-        && v == vault {
-            let t = with(|c| c.replicas.get(&v).map(|r| r.note_text(&n)));
-            if let Some(t) = t {
-                ed.set_text(t, false);
-            }
+        && v == vault
+    {
+        let t = with(|c| c.replicas.get(&v).map(|r| r.note_text(&n)));
+        if let Some(t) = t {
+            ed.set_text(t, false);
         }
+    }
 }
 
 pub fn move_entry(vault: &str, id: &str, folder: &str) -> Result<(), String> {
@@ -582,7 +777,11 @@ pub fn move_entry(vault: &str, id: &str, folder: &str) -> Result<(), String> {
     let target = unique_path(vault, &target);
     let up = with(|c| {
         let r = c.replicas.get(vault)?;
-        if e.kind == EntryKind::Folder { r.index.rename_folder(&e.path, &target, now()) } else { r.index.rename(id, &target, now()) }
+        if e.kind == EntryKind::Folder {
+            r.index.rename_folder(&e.path, &target, now())
+        } else {
+            r.index.rename(id, &target, now())
+        }
     });
     if let Some(u) = up {
         local_update(vault, INDEX_OBJECT_ID, u);
@@ -593,8 +792,13 @@ pub fn move_entry(vault: &str, id: &str, folder: &str) -> Result<(), String> {
 
 /// Move a folder that only exists implicitly (no folder entry).
 pub fn rename_implicit_folder(vault: &str, old: &str, new_name: &str) -> Result<(), String> {
-    let new_path = paths::normalize(&paths::join(paths::parent(old), new_name)).map_err(|e| e.to_string())?;
-    let up = with(|c| c.replicas.get(vault).and_then(|r| r.index.rename_folder(old, &new_path, now())));
+    let new_path =
+        paths::normalize(&paths::join(paths::parent(old), new_name)).map_err(|e| e.to_string())?;
+    let up = with(|c| {
+        c.replicas
+            .get(vault)
+            .and_then(|r| r.index.rename_folder(old, &new_path, now()))
+    });
     if let Some(u) = up {
         local_update(vault, INDEX_OBJECT_ID, u);
         state::ui().tree_rev.update(|v| *v += 1);
@@ -612,7 +816,11 @@ pub fn trash(vault: &str, id: &str) {
 }
 
 pub fn trash_folder(vault: &str, folder: &str) {
-    let up = with(|c| c.replicas.get(vault).and_then(|r| r.index.trash_folder(folder, now())));
+    let up = with(|c| {
+        c.replicas
+            .get(vault)
+            .and_then(|r| r.index.trash_folder(folder, now()))
+    });
     if let Some(u) = up {
         local_update(vault, INDEX_OBJECT_ID, u);
         state::ui().tree_rev.update(|v| *v += 1);
@@ -633,7 +841,9 @@ pub fn restore(vault: &str, id: &str) {
 pub async fn purge(vault: &str, id: &str) {
     let kind = state::entry(vault, id).map(|e| e.kind);
     let r = match kind {
-        Some(EntryKind::Attachment) => api::delete(&format!("/vaults/{vault}/attachments/{id}")).await,
+        Some(EntryKind::Attachment) => {
+            api::delete(&format!("/vaults/{vault}/attachments/{id}")).await
+        }
         Some(EntryKind::Note) => api::delete(&format!("/vaults/{vault}/objects/{id}")).await,
         _ => Ok(()),
     };
@@ -650,9 +860,17 @@ pub async fn purge(vault: &str, id: &str) {
 }
 
 pub async fn empty_trash(vault: &str) {
-    let ids: Vec<String> =
-        with(|c| c.replicas.get(vault).map(|r| r.index.entries().into_iter().filter(|e| !e.is_live()).map(|e| e.id).collect()))
-            .unwrap_or_default();
+    let ids: Vec<String> = with(|c| {
+        c.replicas.get(vault).map(|r| {
+            r.index
+                .entries()
+                .into_iter()
+                .filter(|e| !e.is_live())
+                .map(|e| e.id)
+                .collect()
+        })
+    })
+    .unwrap_or_default();
     for id in ids {
         purge(vault, &id).await;
     }
@@ -672,7 +890,12 @@ pub fn toggle_favorite(vault: &str, note: &str) {
 }
 
 pub fn is_favorite(vault: &str, note: &str) -> bool {
-    with(|c| c.prefs.favorites.iter().any(|(v, n)| v == vault && n == note))
+    with(|c| {
+        c.prefs
+            .favorites
+            .iter()
+            .any(|(v, n)| v == vault && n == note)
+    })
 }
 
 /// Follow a wiki link; create the note if it doesn't exist yet.
@@ -692,9 +915,15 @@ pub fn open_wiki(vault: &str, target: &str, from_path: &str) {
         return;
     }
     let (folder, title) = if name.contains('/') {
-        (paths::parent(name).to_string(), paths::title(name).to_string())
+        (
+            paths::parent(name).to_string(),
+            paths::title(name).to_string(),
+        )
     } else {
-        (paths::parent(from_path).to_string(), paths::title(name).to_string())
+        (
+            paths::parent(from_path).to_string(),
+            paths::title(name).to_string(),
+        )
     };
     let v = vault.to_string();
     leptos::task::spawn_local(async move {
@@ -715,7 +944,9 @@ pub fn cached_attachment_url(vault: &str, id: &str) -> Option<String> {
 }
 
 pub async fn attachment_bytes(vault: &str, id: &str) -> Option<Vec<u8>> {
-    let ct = api::get_bytes(&format!("/vaults/{vault}/attachments/{id}")).await.ok()?;
+    let ct = api::get_bytes(&format!("/vaults/{vault}/attachments/{id}"))
+        .await
+        .ok()?;
     with(|c| c.replicas.get(vault)?.decrypt_attachment(id, &ct).ok())
 }
 
@@ -747,7 +978,9 @@ pub async fn open_attachment(vault: &str, id: &str) {
 }
 
 pub async fn download_attachment(vault: &str, id: &str) {
-    let name = state::entry(vault, id).map(|e| paths::file_name(&e.path).to_string()).unwrap_or_else(|| "file".into());
+    let name = state::entry(vault, id)
+        .map(|e| paths::file_name(&e.path).to_string())
+        .unwrap_or_else(|| "file".into());
     if let Some(b) = attachment_bytes(vault, id).await {
         util::download(&name, util::mime_for(&name), &b);
     } else {
@@ -757,19 +990,32 @@ pub async fn download_attachment(vault: &str, id: &str) {
 
 /// Encrypt and upload files, add them to the index and return embed snippets.
 pub async fn upload_files(vault: &str, files: Vec<web_sys::File>, folder: &str) -> Vec<String> {
-    let max = state::ui().server.get_untracked().map(|s| s.max_attachment_bytes).unwrap_or(25 << 20);
+    let max = state::ui()
+        .server
+        .get_untracked()
+        .map(|s| s.max_attachment_bytes)
+        .unwrap_or(25 << 20);
     let mut embeds = Vec::new();
     for f in files {
         let name = f.name();
         let size = f.size() as u64;
         if size > max {
-            error(format!("{name} is larger than {} and can't be uploaded.", util::human_bytes(max)));
+            error(format!(
+                "{name} is larger than {} and can't be uploaded.",
+                util::human_bytes(max)
+            ));
             continue;
         }
-        let Some(bytes) = util::read_file(&f).await else { continue };
+        let Some(bytes) = util::read_file(&f).await else {
+            continue;
+        };
         if let Some(path) = upload_bytes(vault, &paths::join(folder, &name), &bytes).await {
             let fname = paths::file_name(&path).to_string();
-            embeds.push(if util::is_image(&fname) { format!("![[{fname}]]") } else { format!("[[{fname}]]") });
+            embeds.push(if util::is_image(&fname) {
+                format!("![[{fname}]]")
+            } else {
+                format!("[[{fname}]]")
+            });
         }
     }
     embeds
@@ -784,7 +1030,18 @@ pub async fn upload_bytes(vault: &str, path: &str, bytes: &[u8]) -> Option<Strin
     }
     let path = unique_path(vault, &paths::normalize(path).ok()?);
     let mime = util::mime_for(&path);
-    let up = with(|c| c.replicas.get(vault).and_then(|r| r.index.create_with(&id, &path, EntryKind::Attachment, now(), Some(bytes.len() as u64), Some(mime))));
+    let up = with(|c| {
+        c.replicas.get(vault).and_then(|r| {
+            r.index.create_with(
+                &id,
+                &path,
+                EntryKind::Attachment,
+                now(),
+                Some(bytes.len() as u64),
+                Some(mime),
+            )
+        })
+    });
     if let Some(u) = up {
         local_update(vault, INDEX_OBJECT_ID, u);
     }
@@ -801,18 +1058,37 @@ pub async fn export_vault(vault: &str) {
     for e in state::live_entries(vault) {
         match e.kind {
             EntryKind::Note => {
-                let text = with(|c| c.replicas.get(vault).map(|r| r.note_text(&e.id))).unwrap_or_default();
-                entries.push(zipfile::Entry { name: e.path.clone(), data: text.into_bytes() });
+                let text =
+                    with(|c| c.replicas.get(vault).map(|r| r.note_text(&e.id))).unwrap_or_default();
+                entries.push(zipfile::Entry {
+                    name: e.path.clone(),
+                    data: text.into_bytes(),
+                });
             }
             EntryKind::Attachment => match attachment_bytes(vault, &e.id).await {
-                Some(b) => entries.push(zipfile::Entry { name: e.path.clone(), data: b }),
+                Some(b) => entries.push(zipfile::Entry {
+                    name: e.path.clone(),
+                    data: b,
+                }),
                 None => error(format!("Skipped {} (download failed)", e.path)),
             },
-            EntryKind::Folder => entries.push(zipfile::Entry { name: format!("{}/.keep", e.path), data: vec![] }),
+            EntryKind::Folder => entries.push(zipfile::Entry {
+                name: format!("{}/.keep", e.path),
+                data: vec![],
+            }),
         }
     }
     let zip = zipfile::write(&entries);
-    let safe: String = name.chars().map(|c| if c.is_alphanumeric() || c == ' ' || c == '-' { c } else { '_' }).collect();
+    let safe: String = name
+        .chars()
+        .map(|c| {
+            if c.is_alphanumeric() || c == ' ' || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
     util::download(&format!("{}.zip", safe.trim()), "application/zip", &zip);
     success(format!("Exported {} items.", entries.len()));
 }
@@ -821,13 +1097,17 @@ pub async fn export_vault(vault: &str) {
 pub async fn import(vault: &str, mut files: Vec<(String, Vec<u8>)>) {
     files.retain(|(p, _)| !p.split('/').any(|s| s.starts_with('.') || s == "__MACOSX"));
     // Drop a single common top-level folder (from folder uploads or zips).
-    let top: Option<String> = files.first().and_then(|(p, _)| p.split('/').next().map(str::to_string));
+    let top: Option<String> = files
+        .first()
+        .and_then(|(p, _)| p.split('/').next().map(str::to_string));
     if let Some(t) = top
-        && files.len() > 1 && files.iter().all(|(p, _)| p.starts_with(&format!("{t}/"))) {
-            for (p, _) in &mut files {
-                *p = p[t.len() + 1..].to_string();
-            }
+        && files.len() > 1
+        && files.iter().all(|(p, _)| p.starts_with(&format!("{t}/")))
+    {
+        for (p, _) in &mut files {
+            *p = p[t.len() + 1..].to_string();
         }
+    }
     let total = files.len();
     let mut notes = 0;
     let mut atts = 0;
@@ -836,7 +1116,10 @@ pub async fn import(vault: &str, mut files: Vec<(String, Vec<u8>)>) {
             let text = String::from_utf8_lossy(&data).replace("\r\n", "\n");
             let folder = paths::parent(&path).to_string();
             let title = paths::title(&path).to_string();
-            if create_note_with(vault, &folder, &title, &text).await.is_some() {
+            if create_note_with(vault, &folder, &title, &text)
+                .await
+                .is_some()
+            {
                 notes += 1;
             }
         } else if upload_bytes(vault, &path, &data).await.is_some() {
@@ -844,15 +1127,22 @@ pub async fn import(vault: &str, mut files: Vec<(String, Vec<u8>)>) {
         }
     }
     state::flush_now();
-    success(format!("Imported {notes} notes and {atts} files (of {total})."));
+    success(format!(
+        "Imported {notes} notes and {atts} files (of {total})."
+    ));
 }
 
 pub async fn files_to_import(files: Vec<web_sys::File>) -> Vec<(String, Vec<u8>)> {
     let mut out = Vec::new();
     for f in files {
-        let rel = js_sys::Reflect::get(&f, &"webkitRelativePath".into()).ok().and_then(|v| v.as_string()).filter(|s| !s.is_empty());
+        let rel = js_sys::Reflect::get(&f, &"webkitRelativePath".into())
+            .ok()
+            .and_then(|v| v.as_string())
+            .filter(|s| !s.is_empty());
         let name = rel.unwrap_or_else(|| f.name());
-        let Some(bytes) = util::read_file(&f).await else { continue };
+        let Some(bytes) = util::read_file(&f).await else {
+            continue;
+        };
         if name.to_lowercase().ends_with(".zip") {
             match zipfile::read(&bytes) {
                 Ok(entries) => out.extend(entries.into_iter().map(|e| (e.name, e.data))),
@@ -868,7 +1158,13 @@ pub async fn files_to_import(files: Vec<web_sys::File>) -> Vec<(String, Vec<u8>)
 // ------------------------------------------------------------------ history
 
 pub fn restore_revision(vault: &str, note: &str, text: &str) {
-    let up = with(|c| c.replicas.get_mut(vault)?.notes.get_mut(note)?.set_text(text));
+    let up = with(|c| {
+        c.replicas
+            .get_mut(vault)?
+            .notes
+            .get_mut(note)?
+            .set_text(text)
+    });
     if let Some(u) = up {
         local_update(vault, note, u);
         refresh_open_editor(vault);
@@ -898,16 +1194,26 @@ impl NoteHost {
     fn with_mode(vault: &str, note: &str, shared: bool) -> Rc<NoteHost> {
         state::ensure_note_loaded(vault, note);
         with(|c| {
-            if let Some(n) = c.replicas.get_mut(vault).and_then(|r| r.notes.get_mut(note))
-                && !n.undo_enabled() {
-                    n.enable_undo_with_clock(|| js_sys::Date::now() as u64);
-                }
+            if let Some(n) = c
+                .replicas
+                .get_mut(vault)
+                .and_then(|r| r.notes.get_mut(note))
+                && !n.undo_enabled()
+            {
+                n.enable_undo_with_clock(|| js_sys::Date::now() as u64);
+            }
         });
-        Rc::new(NoteHost { vault: vault.to_string(), note: note.to_string(), shared })
+        Rc::new(NoteHost {
+            vault: vault.to_string(),
+            note: note.to_string(),
+            shared,
+        })
     }
 
     fn path(&self) -> String {
-        state::entry(&self.vault, &self.note).map(|e| e.path).unwrap_or_default()
+        state::entry(&self.vault, &self.note)
+            .map(|e| e.path)
+            .unwrap_or_default()
     }
 
     fn take(&self, f: impl FnOnce(&mut NoteDoc) -> Option<Vec<u8>>) -> Option<String> {
@@ -947,7 +1253,11 @@ impl Host for NoteHost {
 
     fn boundary(&self) {
         with(|c| {
-            if let Some(n) = c.replicas.get_mut(&self.vault).and_then(|r| r.notes.get_mut(&self.note)) {
+            if let Some(n) = c
+                .replicas
+                .get_mut(&self.vault)
+                .and_then(|r| r.notes.get_mut(&self.note))
+            {
                 n.undo_boundary();
             }
         });
@@ -960,9 +1270,15 @@ impl Host for NoteHost {
     fn open_link(&self, target: &Target, _new_tab: bool) {
         match target {
             Target::Url(u) => {
-                let _ = util::window().open_with_url_and_target_and_features(u, "_blank", "noopener,noreferrer");
+                let _ = util::window().open_with_url_and_target_and_features(
+                    u,
+                    "_blank",
+                    "noopener,noreferrer",
+                );
             }
-            Target::Wiki(_) if self.shared => info("Only this note is shared with you, not the notes it links to."),
+            Target::Wiki(_) if self.shared => {
+                info("Only this note is shared with you, not the notes it links to.")
+            }
             Target::Wiki(t) => open_wiki(&self.vault, t, &self.path()),
         }
     }
@@ -978,7 +1294,12 @@ impl Host for NoteHost {
         let v = self.vault.clone();
         leptos::task::spawn_local(async move {
             if load_attachment(&v, &id).await.is_some() {
-                let ed = with(|c| c.editor.as_ref().filter(|(ev, _, _)| *ev == v).map(|(_, _, e)| e.clone()));
+                let ed = with(|c| {
+                    c.editor
+                        .as_ref()
+                        .filter(|(ev, _, _)| *ev == v)
+                        .map(|(_, _, e)| e.clone())
+                });
                 if let Some(ed) = ed {
                     ed.refresh();
                 }
@@ -1012,7 +1333,11 @@ impl Host for NoteHost {
 }
 
 /// Pick files with a hidden `<input type=file>`.
-pub fn pick_files(directory: bool, accept: &str, on_files: impl FnOnce(Vec<web_sys::File>) + 'static) {
+pub fn pick_files(
+    directory: bool,
+    accept: &str,
+    on_files: impl FnOnce(Vec<web_sys::File>) + 'static,
+) {
     let doc = util::document();
     let input: web_sys::HtmlInputElement = doc.create_element("input").unwrap().unchecked_into();
     input.set_type("file");
@@ -1026,7 +1351,10 @@ pub fn pick_files(directory: bool, accept: &str, on_files: impl FnOnce(Vec<web_s
     let cell = Rc::new(RefCell::new(Some(on_files)));
     let inp = input.clone();
     let cb = wasm_bindgen::closure::Closure::wrap(Box::new(move |_e: web_sys::Event| {
-        let files: Vec<web_sys::File> = inp.files().map(|l| (0..l.length()).filter_map(|i| l.get(i)).collect()).unwrap_or_default();
+        let files: Vec<web_sys::File> = inp
+            .files()
+            .map(|l| (0..l.length()).filter_map(|i| l.get(i)).collect())
+            .unwrap_or_default();
         if let Some(f) = cell.borrow_mut().take() {
             f(files);
         }

@@ -32,9 +32,10 @@ pub fn analysis(vault: &str, note: &str, text: &str) -> Rc<NoteInfo> {
     let h = hash(text);
     ANALYSIS.with(|a| {
         if let Some((hh, info)) = a.borrow().get(&key)
-            && *hh == h {
-                return info.clone();
-            }
+            && *hh == h
+        {
+            return info.clone();
+        }
         let info = Rc::new(markdown::analyze(text));
         a.borrow_mut().insert(key, (h, info.clone()));
         info
@@ -45,7 +46,9 @@ pub fn analysis(vault: &str, note: &str, text: &str) -> Rc<NoteInfo> {
 pub fn notes_with_text(vault: &str) -> Vec<(String, String, String)> {
     let entries = state::live_entries(vault);
     with(|c| {
-        let Some(r) = c.replicas.get(vault) else { return vec![] };
+        let Some(r) = c.replicas.get(vault) else {
+            return vec![];
+        };
         entries
             .into_iter()
             .filter(|e| e.kind == EntryKind::Note)
@@ -58,12 +61,23 @@ pub fn notes_with_text(vault: &str) -> Vec<(String, String, String)> {
 }
 
 fn candidates(vault: &str) -> Vec<(String, String)> {
-    state::live_entries(vault).into_iter().map(|e| (e.id, e.path)).collect()
+    state::live_entries(vault)
+        .into_iter()
+        .map(|e| (e.id, e.path))
+        .collect()
 }
 
 /// Resolve a wiki-link style target (note title or path) to an entry id.
 pub fn resolve_target(vault: &str, target: &str, from_path: &str) -> Option<String> {
-    let link = Link { kind: LinkKind::Wiki, target: target.to_string(), heading: None, alias: None, embed: false, start: 0, end: 0 };
+    let link = Link {
+        kind: LinkKind::Wiki,
+        target: target.to_string(),
+        heading: None,
+        alias: None,
+        embed: false,
+        start: 0,
+        end: 0,
+    };
     let c = candidates(vault);
     markdown::resolve(&link, from_path, &c).map(str::to_string)
 }
@@ -72,11 +86,16 @@ pub fn resolve_target(vault: &str, target: &str, from_path: &str) -> Option<Stri
 pub fn resolve_attachment(vault: &str, target: &str) -> Option<String> {
     let entries = state::live_entries(vault);
     let t = target.trim().trim_start_matches("./").to_lowercase();
-    let exact = entries.iter().find(|e| e.kind == EntryKind::Attachment && e.path.to_lowercase() == t);
+    let exact = entries
+        .iter()
+        .find(|e| e.kind == EntryKind::Attachment && e.path.to_lowercase() == t);
     let by_name = || {
         entries
             .iter()
-            .filter(|e| e.kind == EntryKind::Attachment && paths::file_name(&e.path).to_lowercase() == paths::file_name(&t))
+            .filter(|e| {
+                e.kind == EntryKind::Attachment
+                    && paths::file_name(&e.path).to_lowercase() == paths::file_name(&t)
+            })
             .min_by_key(|e| e.path.len())
     };
     exact.or_else(by_name).map(|e| e.id.clone())
@@ -98,18 +117,29 @@ pub fn link_exists(vault: &str, target: &str) -> bool {
     let key = {
         let t = target.trim().trim_start_matches("./").to_lowercase();
         let t = t.split('#').next().unwrap_or("").to_string();
-        if paths::is_note(&t) { t[..t.len() - 3].to_string() } else { t }
+        if paths::is_note(&t) {
+            t[..t.len() - 3].to_string()
+        } else {
+            t
+        }
     };
     if key.is_empty() {
         return true;
     }
     LINKS.with(|l| {
-        let stale = l.borrow().as_ref().is_none_or(|x| x.rev != rev || x.vault != vault);
+        let stale = l
+            .borrow()
+            .as_ref()
+            .is_none_or(|x| x.rev != rev || x.vault != vault);
         if stale {
             let mut keys = std::collections::HashSet::new();
             for (_, p) in candidates(vault) {
                 let lp = p.to_lowercase();
-                let lp = if paths::is_note(&lp) { lp[..lp.len() - 3].to_string() } else { lp };
+                let lp = if paths::is_note(&lp) {
+                    lp[..lp.len() - 3].to_string()
+                } else {
+                    lp
+                };
                 let mut cur = lp.as_str();
                 keys.insert(cur.to_string());
                 while let Some(i) = cur.find('/') {
@@ -117,7 +147,11 @@ pub fn link_exists(vault: &str, target: &str) -> bool {
                     keys.insert(cur.to_string());
                 }
             }
-            *l.borrow_mut() = Some(LinkIndex { rev, vault: vault.to_string(), keys });
+            *l.borrow_mut() = Some(LinkIndex {
+                rev,
+                vault: vault.to_string(),
+                keys,
+            });
         }
         l.borrow().as_ref().is_some_and(|x| x.keys.contains(&key))
     })
@@ -141,9 +175,16 @@ pub fn backlinks(vault: &str, note: &str) -> Vec<Backlink> {
         for l in &info.links {
             if markdown::resolve(l, path, &c) == Some(note) {
                 let line_start = text[..l.start].rfind('\n').map(|i| i + 1).unwrap_or(0);
-                let line_end = text[l.end..].find('\n').map(|i| l.end + i).unwrap_or(text.len());
+                let line_end = text[l.end..]
+                    .find('\n')
+                    .map(|i| l.end + i)
+                    .unwrap_or(text.len());
                 let snippet: String = text[line_start..line_end].chars().take(160).collect();
-                out.push(Backlink { id: id.clone(), path: path.clone(), snippet });
+                out.push(Backlink {
+                    id: id.clone(),
+                    path: path.clone(),
+                    snippet,
+                });
                 break;
             }
         }
@@ -195,7 +236,11 @@ pub fn tags(vault: &str) -> Vec<(String, usize)> {
 }
 
 pub fn outline(vault: &str, note: &str, text: &str) -> Vec<(u8, String, usize)> {
-    analysis(vault, note, text).headings.iter().map(|h| (h.level, h.text.clone(), h.offset)).collect()
+    analysis(vault, note, text)
+        .headings
+        .iter()
+        .map(|h| (h.level, h.text.clone(), h.offset))
+        .collect()
 }
 
 pub struct Hit {
@@ -214,17 +259,23 @@ pub fn search_all(query: &str, only_vault: Option<&str>) -> Vec<Hit> {
     if q.is_empty() {
         return vec![];
     }
-    let vaults: Vec<(String, String)> =
-        with(|c| c.replicas.iter().filter(|(_, r)| r.member).map(|(id, r)| (id.clone(), r.meta.name.clone())).collect());
+    let vaults: Vec<(String, String)> = with(|c| {
+        c.replicas
+            .iter()
+            .filter(|(_, r)| r.member)
+            .map(|(id, r)| (id.clone(), r.meta.name.clone()))
+            .collect()
+    });
     let mut hits = Vec::new();
     for (vid, vname) in vaults {
         if only_vault.is_some_and(|v| v != vid) {
             continue;
         }
         if let Some(want) = &q.vault
-            && !vname.to_lowercase().contains(want) {
-                continue;
-            }
+            && !vname.to_lowercase().contains(want)
+        {
+            continue;
+        }
         for (id, path, text) in notes_with_text(&vid) {
             let info = analysis(&vid, &id, &text);
             if let Some(h) = search::score(&q, &path, &text, &info.tags) {
@@ -240,16 +291,29 @@ pub fn search_all(query: &str, only_vault: Option<&str>) -> Vec<Hit> {
             }
         }
     }
-    hits.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    hits.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     hits.truncate(100);
     hits
 }
 
 /// Fuzzy title matching for the quick switcher.
 pub fn quick(query: &str) -> Vec<(String, String, String, String)> {
-    let q: Vec<char> = query.to_lowercase().chars().filter(|c| !c.is_whitespace()).collect();
-    let vaults: Vec<(String, String)> =
-        with(|c| c.replicas.iter().filter(|(_, r)| r.member).map(|(id, r)| (id.clone(), r.meta.name.clone())).collect());
+    let q: Vec<char> = query
+        .to_lowercase()
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect();
+    let vaults: Vec<(String, String)> = with(|c| {
+        c.replicas
+            .iter()
+            .filter(|(_, r)| r.member)
+            .map(|(id, r)| (id.clone(), r.meta.name.clone()))
+            .collect()
+    });
     let recent: Vec<(String, String)> = with(|c| c.prefs.recent.clone());
     let mut scored = Vec::new();
     for (vid, vname) in &vaults {
@@ -258,12 +322,28 @@ pub fn quick(query: &str) -> Vec<(String, String, String, String)> {
                 continue;
             }
             let score = if q.is_empty() {
-                recent.iter().position(|r| r.0 == *vid && r.1 == e.id).map(|p| 1000 - p as i64).unwrap_or(0)
+                recent
+                    .iter()
+                    .position(|r| r.0 == *vid && r.1 == e.id)
+                    .map(|p| 1000 - p as i64)
+                    .unwrap_or(0)
             } else {
-                let Some(s) = fuzzy(&q, &e.path, e.title()) else { continue };
-                s + if recent.iter().any(|r| r.0 == *vid && r.1 == e.id) { 5 } else { 0 }
+                let Some(s) = fuzzy(&q, &e.path, e.title()) else {
+                    continue;
+                };
+                s + if recent.iter().any(|r| r.0 == *vid && r.1 == e.id) {
+                    5
+                } else {
+                    0
+                }
             };
-            scored.push((score, vid.clone(), e.id.clone(), e.path.clone(), vname.clone()));
+            scored.push((
+                score,
+                vid.clone(),
+                e.id.clone(),
+                e.path.clone(),
+                vname.clone(),
+            ));
         }
     }
     // Notes shared with us individually.
@@ -271,13 +351,25 @@ pub fn quick(query: &str) -> Vec<(String, String, String, String)> {
         let score = if q.is_empty() {
             0
         } else {
-            let Some(x) = fuzzy(&q, &s.title, &s.title) else { continue };
+            let Some(x) = fuzzy(&q, &s.title, &s.title) else {
+                continue;
+            };
             x
         };
-        scored.push((score, s.vault, s.note, s.title, format!("Shared by {}", s.owner)));
+        scored.push((
+            score,
+            s.vault,
+            s.note,
+            s.title,
+            format!("Shared by {}", s.owner),
+        ));
     }
     scored.sort_by(|a, b| b.0.cmp(&a.0).then(a.3.len().cmp(&b.3.len())));
-    scored.into_iter().take(50).map(|(_, v, id, p, vn)| (v, id, p, vn)).collect()
+    scored
+        .into_iter()
+        .take(50)
+        .map(|(_, v, id, p, vn)| (v, id, p, vn))
+        .collect()
 }
 
 /// Subsequence match of `q` in `hay`, with bonuses for contiguous runs and

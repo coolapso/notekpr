@@ -6,7 +6,12 @@ use web_sys::KeyboardEvent;
 pub enum Action {
     Consumed,
     Move(usize, usize),
-    Edit { from: usize, to: usize, insert: String, caret: usize },
+    Edit {
+        from: usize,
+        to: usize,
+        insert: String,
+        caret: usize,
+    },
     Undo,
     Redo,
     Yank(String),
@@ -28,11 +33,19 @@ fn line_bounds(t: &str, i: usize) -> (usize, usize) {
 }
 
 fn next(t: &str, i: usize) -> usize {
-    t[i..].chars().next().map(|c| i + c.len_utf8()).unwrap_or(t.len())
+    t[i..]
+        .chars()
+        .next()
+        .map(|c| i + c.len_utf8())
+        .unwrap_or(t.len())
 }
 
 fn prev(t: &str, i: usize) -> usize {
-    t[..i].char_indices().next_back().map(|(p, _)| p).unwrap_or(0)
+    t[..i]
+        .char_indices()
+        .next_back()
+        .map(|(p, _)| p)
+        .unwrap_or(0)
 }
 
 fn class(c: char) -> u8 {
@@ -73,7 +86,12 @@ fn word_end(t: &str, mut i: usize) -> usize {
 }
 
 fn word_back(t: &str, mut i: usize) -> usize {
-    while i > 0 && t[..i].chars().next_back().is_some_and(|c| c.is_whitespace()) {
+    while i > 0
+        && t[..i]
+            .chars()
+            .next_back()
+            .is_some_and(|c| c.is_whitespace())
+    {
         i = prev(t, i);
     }
     let cl = t[..i].chars().next_back().map(class);
@@ -103,7 +121,11 @@ fn at_column(t: &str, line_start: usize, col: usize) -> usize {
 fn line_down(t: &str, i: usize) -> usize {
     let col = column(t, i);
     let (_, e) = line_bounds(t, i);
-    if e >= t.len() { i } else { at_column(t, e + 1, col) }
+    if e >= t.len() {
+        i
+    } else {
+        at_column(t, e + 1, col)
+    }
 }
 
 fn line_up(t: &str, i: usize) -> usize {
@@ -122,10 +144,18 @@ impl Vim {
         let (s, e) = line_bounds(t, i);
         Some(match key {
             "h" | "ArrowLeft" => {
-                if i > s { prev(t, i) } else { i }
+                if i > s {
+                    prev(t, i)
+                } else {
+                    i
+                }
             }
             "l" | "ArrowRight" => {
-                if i < e { next(t, i) } else { i }
+                if i < e {
+                    next(t, i)
+                } else {
+                    i
+                }
             }
             "j" | "ArrowDown" => line_down(t, i),
             "k" | "ArrowUp" => line_up(t, i),
@@ -133,7 +163,13 @@ impl Vim {
             "e" => word_end(t, i),
             "b" => word_back(t, i),
             "0" | "Home" => s,
-            "^" => s + t[s..e].chars().take_while(|c| c.is_whitespace()).map(char::len_utf8).sum::<usize>(),
+            "^" => {
+                s + t[s..e]
+                    .chars()
+                    .take_while(|c| c.is_whitespace())
+                    .map(char::len_utf8)
+                    .sum::<usize>()
+            }
             "$" | "End" => e,
             "G" => line_bounds(t, t.len()).0,
             "gg" => 0,
@@ -158,7 +194,19 @@ impl Vim {
         if ev.ctrl_key() || ev.meta_key() || ev.alt_key() {
             return None;
         }
-        if key.len() > 1 && !matches!(key.as_str(), "Escape" | "ArrowLeft" | "ArrowRight" | "ArrowUp" | "ArrowDown" | "Home" | "End" | "Backspace") {
+        if key.len() > 1
+            && !matches!(
+                key.as_str(),
+                "Escape"
+                    | "ArrowLeft"
+                    | "ArrowRight"
+                    | "ArrowUp"
+                    | "ArrowDown"
+                    | "Home"
+                    | "End"
+                    | "Backspace"
+            )
+        {
             return None;
         }
         let head = sel.1.min(t.len());
@@ -168,7 +216,10 @@ impl Vim {
             self.visual = None;
             return Some(Action::Move(head, head));
         }
-        if key.chars().all(|c| c.is_ascii_digit()) && !(key == "0" && self.count.is_empty()) && self.pending.is_empty() {
+        if key.chars().all(|c| c.is_ascii_digit())
+            && !(key == "0" && self.count.is_empty())
+            && self.pending.is_empty()
+        {
             self.count.push_str(&key);
             return Some(Action::Consumed);
         }
@@ -177,7 +228,11 @@ impl Vim {
 
         // Visual mode.
         if let Some(anchor) = self.visual {
-            let combo = if key == "g" && self.pending == "g" { "gg".to_string() } else { key.clone() };
+            let combo = if key == "g" && self.pending == "g" {
+                "gg".to_string()
+            } else {
+                key.clone()
+            };
             if key == "g" && self.pending.is_empty() {
                 self.pending = "g".into();
                 return Some(Action::Consumed);
@@ -194,12 +249,22 @@ impl Vim {
             return Some(match key.as_str() {
                 "d" | "x" => {
                     self.register = t[a..b].to_string();
-                    Action::Edit { from: a, to: b, insert: String::new(), caret: a }
+                    Action::Edit {
+                        from: a,
+                        to: b,
+                        insert: String::new(),
+                        caret: a,
+                    }
                 }
                 "c" => {
                     self.register = t[a..b].to_string();
                     self.insert = true;
-                    Action::Edit { from: a, to: b, insert: String::new(), caret: a }
+                    Action::Edit {
+                        from: a,
+                        to: b,
+                        insert: String::new(),
+                        caret: a,
+                    }
                 }
                 "y" => {
                     self.register = t[a..b].to_string();
@@ -224,15 +289,29 @@ impl Vim {
                     end = line_bounds(t, end + 1).1;
                 }
                 let full_end = if end < t.len() { end + 1 } else { end };
-                let start = if full_end == t.len() && s > 0 && op == 'd' { s - 1 } else { s };
+                let start = if full_end == t.len() && s > 0 && op == 'd' {
+                    s - 1
+                } else {
+                    s
+                };
                 self.register = format!("{}\n", &t[s..end]);
                 return Some(match op {
                     'y' => Action::Yank(self.register.clone()),
                     'c' => {
                         self.insert = true;
-                        Action::Edit { from: s, to: end, insert: String::new(), caret: s }
+                        Action::Edit {
+                            from: s,
+                            to: end,
+                            insert: String::new(),
+                            caret: s,
+                        }
                     }
-                    _ => Action::Edit { from: start, to: full_end, insert: String::new(), caret: start.min(t.len()) },
+                    _ => Action::Edit {
+                        from: start,
+                        to: full_end,
+                        insert: String::new(),
+                        caret: start.min(t.len()),
+                    },
                 });
             }
             let mkey = &combo[1..];
@@ -249,9 +328,19 @@ impl Vim {
                 'y' => Action::Yank(self.register.clone()),
                 'c' => {
                     self.insert = true;
-                    Action::Edit { from: a, to: b, insert: String::new(), caret: a }
+                    Action::Edit {
+                        from: a,
+                        to: b,
+                        insert: String::new(),
+                        caret: a,
+                    }
                 }
-                _ => Action::Edit { from: a, to: b, insert: String::new(), caret: a },
+                _ => Action::Edit {
+                    from: a,
+                    to: b,
+                    insert: String::new(),
+                    caret: a,
+                },
             });
         }
         if combo == "g" {
@@ -291,11 +380,21 @@ impl Vim {
             }
             "o" => {
                 self.insert = true;
-                Action::Edit { from: e, to: e, insert: "\n".into(), caret: e + 1 }
+                Action::Edit {
+                    from: e,
+                    to: e,
+                    insert: "\n".into(),
+                    caret: e + 1,
+                }
             }
             "O" => {
                 self.insert = true;
-                Action::Edit { from: s, to: s, insert: "\n".into(), caret: s }
+                Action::Edit {
+                    from: s,
+                    to: s,
+                    insert: "\n".into(),
+                    caret: s,
+                }
             }
             "x" => {
                 if head >= e {
@@ -308,21 +407,36 @@ impl Vim {
                     }
                 }
                 self.register = t[head..b].to_string();
-                Action::Edit { from: head, to: b, insert: String::new(), caret: head }
+                Action::Edit {
+                    from: head,
+                    to: b,
+                    insert: String::new(),
+                    caret: head,
+                }
             }
             "X" => {
                 if head <= s {
                     return Some(Action::Consumed);
                 }
                 let a = prev(t, head);
-                Action::Edit { from: a, to: head, insert: String::new(), caret: a }
+                Action::Edit {
+                    from: a,
+                    to: head,
+                    insert: String::new(),
+                    caret: a,
+                }
             }
             "D" | "C" => {
                 self.register = t[head..e].to_string();
                 if key == "C" {
                     self.insert = true;
                 }
-                Action::Edit { from: head, to: e, insert: String::new(), caret: head }
+                Action::Edit {
+                    from: head,
+                    to: e,
+                    insert: String::new(),
+                    caret: head,
+                }
             }
             "p" | "P" => {
                 let r = self.register.repeat(n);
@@ -332,16 +446,39 @@ impl Vim {
                 if r.ends_with('\n') {
                     if key == "p" {
                         let at = if e < t.len() { e + 1 } else { e };
-                        let ins = if e >= t.len() { format!("\n{}", r.trim_end_matches('\n')) } else { r.clone() };
+                        let ins = if e >= t.len() {
+                            format!("\n{}", r.trim_end_matches('\n'))
+                        } else {
+                            r.clone()
+                        };
                         let caret = if e >= t.len() { at + 1 } else { at };
-                        Action::Edit { from: at, to: at, insert: ins, caret }
+                        Action::Edit {
+                            from: at,
+                            to: at,
+                            insert: ins,
+                            caret,
+                        }
                     } else {
-                        Action::Edit { from: s, to: s, insert: r, caret: s }
+                        Action::Edit {
+                            from: s,
+                            to: s,
+                            insert: r,
+                            caret: s,
+                        }
                     }
                 } else {
-                    let at = if key == "p" && head < e { next(t, head) } else { head };
+                    let at = if key == "p" && head < e {
+                        next(t, head)
+                    } else {
+                        head
+                    };
                     let caret = at + r.len() - r.chars().last().map(char::len_utf8).unwrap_or(0);
-                    Action::Edit { from: at, to: at, insert: r, caret }
+                    Action::Edit {
+                        from: at,
+                        to: at,
+                        insert: r,
+                        caret,
+                    }
                 }
             }
             "u" => Action::Undo,

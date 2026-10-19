@@ -22,10 +22,22 @@ pub struct McpServer {
     audit: Arc<AuditLog>,
 }
 
-const WRITE_TOOLS: &[&str] =
-    &["create_document", "update_document", "append_to_document", "move_document", "delete_document"];
+const WRITE_TOOLS: &[&str] = &[
+    "create_document",
+    "update_document",
+    "append_to_document",
+    "move_document",
+    "delete_document",
+];
 
-fn tool(name: &str, title: &str, description: &str, props: Value, required: &[&str], read_only: bool) -> Value {
+fn tool(
+    name: &str,
+    title: &str,
+    description: &str,
+    props: Value,
+    required: &[&str],
+    read_only: bool,
+) -> Value {
     json!({
         "name": name,
         "title": title,
@@ -140,7 +152,10 @@ fn rpc_error(id: &Value, code: i64, message: &str) -> Value {
 }
 
 fn text_result(texts: Vec<String>) -> Value {
-    let content: Vec<Value> = texts.into_iter().map(|t| json!({ "type": "text", "text": t })).collect();
+    let content: Vec<Value> = texts
+        .into_iter()
+        .map(|t| json!({ "type": "text", "text": t }))
+        .collect();
     json!({ "content": content, "isError": false })
 }
 
@@ -153,11 +168,15 @@ fn pretty(v: &impl serde::Serialize) -> String {
 }
 
 fn arg<'a>(args: &'a Value, name: &str) -> Result<&'a str, String> {
-    args.get(name).and_then(|v| v.as_str()).ok_or_else(|| format!("missing string argument '{name}'"))
+    args.get(name)
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| format!("missing string argument '{name}'"))
 }
 
 fn opt<'a>(args: &'a Value, name: &str) -> Option<&'a str> {
-    args.get(name).and_then(|v| v.as_str()).filter(|s| !s.is_empty())
+    args.get(name)
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
 }
 
 fn op_msg(e: OpError) -> String {
@@ -170,7 +189,11 @@ fn op_msg(e: OpError) -> String {
 impl McpServer {
     pub fn new(hub: Arc<Hub>, read_only: bool, audit: Arc<AuditLog>) -> Self {
         let read_only = read_only || hub.read_only;
-        McpServer { hub, read_only, audit }
+        McpServer {
+            hub,
+            read_only,
+            audit,
+        }
     }
 
     pub fn tools(&self) -> Vec<Value> {
@@ -229,7 +252,9 @@ impl McpServer {
     /// Run a tool; the result is one or more text content items.
     async fn call(&self, name: &str, args: &Value) -> Result<Vec<String>, String> {
         if name == "read_document" {
-            let d = ops::read_document(&self.hub, arg(args, "vault")?, arg(args, "path")?).await.map_err(op_msg)?;
+            let d = ops::read_document(&self.hub, arg(args, "vault")?, arg(args, "path")?)
+                .await
+                .map_err(op_msg)?;
             let meta = json!({ "vault": d.info.vault, "path": d.info.path, "id": d.info.id, "hash": d.hash, "tags": d.info.tags, "links": d.links, "modified": d.info.modified });
             // The Markdown source first, untouched; metadata as a separate item.
             return Ok(vec![d.content, pretty(&meta)]);
@@ -243,19 +268,38 @@ impl McpServer {
             "list_vaults" => Ok(pretty(&ops::list_vaults(hub).await)),
             "list_documents" => {
                 let docs =
-                    ops::list_documents(hub, arg(args, "vault")?, opt(args, "folder"), false).await.map_err(op_msg)?;
+                    ops::list_documents(hub, arg(args, "vault")?, opt(args, "folder"), false)
+                        .await
+                        .map_err(op_msg)?;
                 Ok(pretty(&docs))
             }
             "search" => {
-                let limit = args.get("limit").and_then(|l| l.as_u64()).unwrap_or(20).clamp(1, 200) as usize;
-                let r = ops::search(hub, arg(args, "query")?, opt(args, "vault"), limit).await.map_err(op_msg)?;
+                let limit = args
+                    .get("limit")
+                    .and_then(|l| l.as_u64())
+                    .unwrap_or(20)
+                    .clamp(1, 200) as usize;
+                let r = ops::search(hub, arg(args, "query")?, opt(args, "vault"), limit)
+                    .await
+                    .map_err(op_msg)?;
                 Ok(pretty(&r))
             }
             "create_document" => {
-                let out = ops::create_document(hub, arg(args, "vault")?, arg(args, "path")?, arg(args, "content")?)
-                    .await
-                    .map_err(op_msg)?;
-                self.audit.record("mcp", "create_document", &out.vault, Some(&out.id), out.bytes);
+                let out = ops::create_document(
+                    hub,
+                    arg(args, "vault")?,
+                    arg(args, "path")?,
+                    arg(args, "content")?,
+                )
+                .await
+                .map_err(op_msg)?;
+                self.audit.record(
+                    "mcp",
+                    "create_document",
+                    &out.vault,
+                    Some(&out.id),
+                    out.bytes,
+                );
                 Ok(pretty(&out))
             }
             "update_document" => {
@@ -269,36 +313,67 @@ impl McpServer {
                 .await
                 .map_err(op_msg)?;
                 if out.changed {
-                    self.audit.record("mcp", "update_document", &out.vault, Some(&out.id), out.bytes);
+                    self.audit.record(
+                        "mcp",
+                        "update_document",
+                        &out.vault,
+                        Some(&out.id),
+                        out.bytes,
+                    );
                 }
                 Ok(pretty(&out))
             }
             "append_to_document" => {
-                let out = ops::append_document(hub, arg(args, "vault")?, arg(args, "path")?, arg(args, "content")?)
-                    .await
-                    .map_err(op_msg)?;
-                self.audit.record("mcp", "append_to_document", &out.vault, Some(&out.id), out.bytes);
+                let out = ops::append_document(
+                    hub,
+                    arg(args, "vault")?,
+                    arg(args, "path")?,
+                    arg(args, "content")?,
+                )
+                .await
+                .map_err(op_msg)?;
+                self.audit.record(
+                    "mcp",
+                    "append_to_document",
+                    &out.vault,
+                    Some(&out.id),
+                    out.bytes,
+                );
                 Ok(pretty(&out))
             }
             "move_document" => {
-                let update_links = args.get("update_links").and_then(|v| v.as_bool()).unwrap_or(false);
-                let out =
-                    ops::move_document(hub, arg(args, "vault")?, arg(args, "from")?, arg(args, "to")?, update_links)
-                        .await
-                        .map_err(op_msg)?;
-                self.audit.record("mcp", "move_document", &out.vault, out.id.as_deref(), 0);
+                let update_links = args
+                    .get("update_links")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                let out = ops::move_document(
+                    hub,
+                    arg(args, "vault")?,
+                    arg(args, "from")?,
+                    arg(args, "to")?,
+                    update_links,
+                )
+                .await
+                .map_err(op_msg)?;
+                self.audit
+                    .record("mcp", "move_document", &out.vault, out.id.as_deref(), 0);
                 Ok(pretty(&out))
             }
             "delete_document" => {
                 let (vault, ids) =
-                    ops::delete_document(hub, arg(args, "vault")?, arg(args, "path")?).await.map_err(op_msg)?;
+                    ops::delete_document(hub, arg(args, "vault")?, arg(args, "path")?)
+                        .await
+                        .map_err(op_msg)?;
                 for id in &ids {
-                    self.audit.record("mcp", "delete_document", &vault, Some(id), 0);
+                    self.audit
+                        .record("mcp", "delete_document", &vault, Some(id), 0);
                 }
                 Ok(pretty(&json!({ "vault": vault, "trashed": ids })))
             }
             "get_backlinks" => {
-                let r = ops::backlinks(hub, arg(args, "vault")?, arg(args, "path")?).await.map_err(op_msg)?;
+                let r = ops::backlinks(hub, arg(args, "vault")?, arg(args, "path")?)
+                    .await
+                    .map_err(op_msg)?;
                 Ok(pretty(&r))
             }
             "document_history" => {

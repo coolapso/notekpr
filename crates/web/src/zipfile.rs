@@ -24,7 +24,11 @@ pub fn write(entries: &[Entry]) -> Vec<u8> {
     for e in entries {
         let crc = crc32fast::hash(&e.data);
         let deflated = miniz_oxide::deflate::compress_to_vec(&e.data, 6);
-        let (method, body) = if deflated.len() < e.data.len() { (8u16, deflated) } else { (0u16, e.data.clone()) };
+        let (method, body) = if deflated.len() < e.data.len() {
+            (8u16, deflated)
+        } else {
+            (0u16, e.data.clone())
+        };
         let offset = out.len() as u32;
         let name = e.name.as_bytes();
         u32le(0x0403_4b50, &mut out);
@@ -83,7 +87,10 @@ fn r32(b: &[u8], o: usize) -> Option<u32> {
 }
 
 pub fn read(b: &[u8]) -> Result<Vec<Entry>, String> {
-    let eocd = (0..b.len().saturating_sub(21)).rev().find(|&i| r32(b, i) == Some(0x0605_4b50)).ok_or("not a zip file")?;
+    let eocd = (0..b.len().saturating_sub(21))
+        .rev()
+        .find(|&i| r32(b, i) == Some(0x0605_4b50))
+        .ok_or("not a zip file")?;
     let count = r16(b, eocd + 10).ok_or("truncated")? as usize;
     let mut p = r32(b, eocd + 16).ok_or("truncated")? as usize;
     let mut out = Vec::with_capacity(count);
@@ -98,7 +105,8 @@ pub fn read(b: &[u8]) -> Result<Vec<Entry>, String> {
         let xlen = r16(b, p + 30).ok_or("truncated")? as usize;
         let clen = r16(b, p + 32).ok_or("truncated")? as usize;
         let local = r32(b, p + 42).ok_or("truncated")? as usize;
-        let name = String::from_utf8_lossy(b.get(p + 46..p + 46 + nlen).ok_or("truncated")?).to_string();
+        let name =
+            String::from_utf8_lossy(b.get(p + 46..p + 46 + nlen).ok_or("truncated")?).to_string();
         p += 46 + nlen + xlen + clen;
         if r32(b, local) != Some(0x0403_4b50) {
             return Err("corrupt local header".into());
@@ -112,7 +120,8 @@ pub fn read(b: &[u8]) -> Result<Vec<Entry>, String> {
         }
         let data = match method {
             0 => raw.to_vec(),
-            8 => miniz_oxide::inflate::decompress_to_vec(raw).map_err(|_| format!("cannot inflate {name}"))?,
+            8 => miniz_oxide::inflate::decompress_to_vec(raw)
+                .map_err(|_| format!("cannot inflate {name}"))?,
             m => return Err(format!("{name}: unsupported compression method {m}")),
         };
         if data.len() != usize_ {
@@ -130,8 +139,14 @@ mod tests {
     #[test]
     fn roundtrip() {
         let e = vec![
-            Entry { name: "a.md".into(), data: b"hello hello hello hello".to_vec() },
-            Entry { name: "dir/ü.bin".into(), data: vec![1, 2, 3] },
+            Entry {
+                name: "a.md".into(),
+                data: b"hello hello hello hello".to_vec(),
+            },
+            Entry {
+                name: "dir/ü.bin".into(),
+                data: vec![1, 2, 3],
+            },
         ];
         let z = write(&e);
         let back = read(&z).unwrap();

@@ -75,7 +75,10 @@ impl AppError {
             AppError::Internal(_) => "internal server error".to_string(),
             e => e.to_string(),
         };
-        ApiError { error: self.code().to_string(), message }
+        ApiError {
+            error: self.code().to_string(),
+            message,
+        }
     }
 }
 

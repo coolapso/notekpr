@@ -63,7 +63,9 @@ impl Session {
         let profiles = ProfileStore::new(dirs, profile)?;
         let p = profiles.require()?;
         let user_id = p.user_id.clone().ok_or_else(|| {
-            anyhow!("profile '{profile}' is not signed in; run `coolpsonotes --profile {profile} login`")
+            anyhow!(
+                "profile '{profile}' is not signed in; run `coolpsonotes --profile {profile} login`"
+            )
         })?;
         if p.device_pending {
             bail!(
@@ -83,9 +85,10 @@ impl Session {
                 None => Credentials::None,
             },
             PrincipalKind::Agent => match &p.agent {
-                Some(a) => {
-                    Credentials::Agent { client_id: a.client_id.clone(), secret_file: a.client_secret_file.clone() }
-                }
+                Some(a) => Credentials::Agent {
+                    client_id: a.client_id.clone(),
+                    secret_file: a.client_secret_file.clone(),
+                },
                 None => Credentials::None,
             },
         };
@@ -132,7 +135,9 @@ impl Session {
 
     /// Ids of vaults with a local replica.
     pub fn local_vault_ids(&self) -> Vec<String> {
-        let Ok(rd) = std::fs::read_dir(self.vaults_dir()) else { return vec![] };
+        let Ok(rd) = std::fs::read_dir(self.vaults_dir()) else {
+            return vec![];
+        };
         let mut v: Vec<String> = rd
             .filter_map(|e| e.ok())
             .filter_map(|e| e.file_name().to_str().map(str::to_string))
@@ -144,7 +149,8 @@ impl Session {
     }
 
     pub fn load_local(&self, vault_id: &str) -> Result<Option<Vault>> {
-        Vault::load(self.vault_store(vault_id)?).with_context(|| format!("loading the local copy of vault {vault_id}"))
+        Vault::load(self.vault_store(vault_id)?)
+            .with_context(|| format!("loading the local copy of vault {vault_id}"))
     }
 
     // ------------------------------------------------------------ keys
@@ -155,7 +161,13 @@ impl Session {
     }
 
     /// Vault keyring plus the document keyrings of its individually shared notes.
-    pub async fn keys(&self, vault_id: &str) -> Result<(VaultKeyring, std::collections::HashMap<String, VaultKeyring>)> {
+    pub async fn keys(
+        &self,
+        vault_id: &str,
+    ) -> Result<(
+        VaultKeyring,
+        std::collections::HashMap<String, VaultKeyring>,
+    )> {
         let r = self.api.vault_keys(vault_id).await?;
         let ring = engine::keyring_from_response(&self.account, &self.user_id, vault_id, &r)?;
         let docs = engine::object_keyrings(&ring, &r);
@@ -263,7 +275,11 @@ impl Session {
         let mut out = PushOutcome::default();
         let (id, blobs, writable) = {
             let v = vault.lock().await;
-            (v.id().to_string(), v.pending_blobs.clone(), v.read_only.is_none() && v.replica.can_write())
+            (
+                v.id().to_string(),
+                v.pending_blobs.clone(),
+                v.read_only.is_none() && v.replica.can_write(),
+            )
         };
         if !writable {
             out.remaining = vault.lock().await.replica.pending.len();
@@ -276,7 +292,11 @@ impl Session {
                 vault.lock().await.pending_blobs.remove(&blob);
                 continue;
             };
-            match self.api.put_bytes(&format!("/vaults/{id}/attachments/{blob}"), &ct).await {
+            match self
+                .api
+                .put_bytes(&format!("/vaults/{id}/attachments/{blob}"), &ct)
+                .await
+            {
                 Ok(()) => {
                     let mut v = vault.lock().await;
                     v.pending_blobs.remove(&blob);
@@ -302,7 +322,9 @@ impl Session {
                 let mut bytes = 0;
                 let limit = if individually { 1 } else { PUSH_BATCH };
                 for p in all {
-                    if !batch.is_empty() && (batch.len() >= limit || bytes + p.payload.len() > PUSH_BYTES) {
+                    if !batch.is_empty()
+                        && (batch.len() >= limit || bytes + p.payload.len() > PUSH_BYTES)
+                    {
                         break;
                     }
                     bytes += p.payload.len();
@@ -366,7 +388,9 @@ impl Session {
                     return Ok(out);
                 }
                 Err(e) if e.status() == Some(404) => {
-                    return Err(anyhow!(e).context("the vault no longer exists or you lost access to it"));
+                    return Err(
+                        anyhow!(e).context("the vault no longer exists or you lost access to it")
+                    );
                 }
                 Err(e) => return Err(anyhow!(e).context("uploading changes")),
             }
@@ -408,7 +432,9 @@ impl Session {
         }
         let req = {
             let v = vault.lock().await;
-            if v.replica.pending.iter().any(|p| p.object_id == oid) || v.replica.purged.contains(oid) {
+            if v.replica.pending.iter().any(|p| p.object_id == oid)
+                || v.replica.purged.contains(oid)
+            {
                 return Ok(false);
             }
             if oid != INDEX_OBJECT_ID && !v.replica.notes.contains_key(oid) {
@@ -451,7 +477,10 @@ impl Session {
         if let Some(d) = cached {
             return Ok(d);
         }
-        let ct = self.api.get_bytes(&format!("/vaults/{id}/attachments/{attachment_id}")).await?;
+        let ct = self
+            .api
+            .get_bytes(&format!("/vaults/{id}/attachments/{attachment_id}"))
+            .await?;
         let v = vault.lock().await;
         let pt = v.replica.decrypt_attachment(attachment_id, &ct)?;
         v.store().save_blob(attachment_id, &ct)?;
@@ -463,19 +492,34 @@ impl Session {
     /// Verify a user's account key signature and check it against the pinned
     /// fingerprint (trust on first use). `None` if they have no keys yet.
     pub fn verify_user(&self, user: &PublicUser) -> Result<Option<VerifiedUser>> {
-        let Some(key) = &user.account_key else { return Ok(None) };
+        let Some(key) = &user.account_key else {
+            return Ok(None);
+        };
         if key.user_id != user.id {
             bail!("the server returned a key that belongs to a different user");
         }
-        let public =
-            key.verify().map_err(|e| anyhow!("the account key of {} failed verification: {e}", user.display_name))?;
+        let public = key.verify().map_err(|e| {
+            anyhow!(
+                "the account key of {} failed verification: {e}",
+                user.display_name
+            )
+        })?;
         let fingerprint = public.fingerprint();
         let pin = if user.id == self.user_id {
-            if public == self.account.public() { PinStatus::Match } else { PinStatus::Changed }
+            if public == self.account.public() {
+                PinStatus::Match
+            } else {
+                PinStatus::Changed
+            }
         } else {
-            self.profiles.update(|p| engine::check_pin(&mut p.pins, &user.id, &fingerprint))?
+            self.profiles
+                .update(|p| engine::check_pin(&mut p.pins, &user.id, &fingerprint))?
         };
-        Ok(Some(VerifiedUser { user: user.clone(), fingerprint, pin }))
+        Ok(Some(VerifiedUser {
+            user: user.clone(),
+            fingerprint,
+            pin,
+        }))
     }
 
     /// Replace a pin after the user confirmed a changed key out of band.
@@ -498,7 +542,10 @@ impl Session {
         };
         let members = self.api.members(&id).await?;
         let mut ok = Vec::new();
-        for m in members.iter().filter(|m| !m.has_current_key && m.user.account_key.is_some()) {
+        for m in members
+            .iter()
+            .filter(|m| !m.has_current_key && m.user.account_key.is_some())
+        {
             match self.verify_user(&m.user) {
                 Ok(Some(vu)) if vu.pin == PinStatus::Changed => ui::warn(&format!(
                     "NOT sharing keys with {}: their account key changed since it was pinned (now {}). \
@@ -507,7 +554,10 @@ impl Session {
                 )),
                 Ok(Some(vu)) => {
                     if vu.pin == PinStatus::New {
-                        ui::status(&format!("pinned the key of {} ({})", m.user.display_name, vu.fingerprint));
+                        ui::status(&format!(
+                            "pinned the key of {} ({})",
+                            m.user.display_name, vu.fingerprint
+                        ));
                     }
                     ok.push(m.clone());
                 }
@@ -521,9 +571,18 @@ impl Session {
         }
         let names: Vec<String> = envelopes
             .iter()
-            .filter_map(|e| ok.iter().find(|m| m.user.id == e.user_id).map(|m| m.user.display_name.clone()))
+            .filter_map(|e| {
+                ok.iter()
+                    .find(|m| m.user.id == e.user_id)
+                    .map(|m| m.user.display_name.clone())
+            })
             .collect();
-        self.api.post::<_, ()>(&format!("/vaults/{id}/keys/grant"), &GrantKeysRequest { envelopes }).await?;
+        self.api
+            .post::<_, ()>(
+                &format!("/vaults/{id}/keys/grant"),
+                &GrantKeysRequest { envelopes },
+            )
+            .await?;
         Ok(names)
     }
 
@@ -551,7 +610,11 @@ impl Session {
                 let req = engine::rotate(&mut ring, &members, &v.replica.meta)?;
                 (req, ring)
             };
-            match self.api.post::<_, ()>(&format!("/vaults/{id}/keys/rotate"), &req).await {
+            match self
+                .api
+                .post::<_, ()>(&format!("/vaults/{id}/keys/rotate"), &req)
+                .await
+            {
                 Ok(()) => {
                     {
                         let mut v = vault.lock().await;
@@ -579,18 +642,36 @@ impl Session {
     pub async fn rotate_document_keys(&self, vault: &SharedVault) -> Result<()> {
         let (id, notes) = {
             let v = vault.lock().await;
-            (v.id().to_string(), v.replica.doc_keys.keys().cloned().collect::<Vec<_>>())
+            (
+                v.id().to_string(),
+                v.replica.doc_keys.keys().cloned().collect::<Vec<_>>(),
+            )
         };
         for oid in notes {
-            let shares: Vec<coolpsonotes_core::protocol::ObjectShareInfo> =
-                self.api.get(&format!("/vaults/{id}/objects/{oid}/shares")).await?;
+            let shares: Vec<coolpsonotes_core::protocol::ObjectShareInfo> = self
+                .api
+                .get(&format!("/vaults/{id}/objects/{oid}/shares"))
+                .await?;
             let users: Vec<_> = shares.into_iter().map(|s| s.user).collect();
             let (next, req) = {
                 let v = vault.lock().await;
-                let title = v.replica.index.get(&oid).map(|e| e.title().to_string()).unwrap_or_default();
-                engine::rotate_object_key(&v.replica.keyring, &v.replica.doc_keys[&oid], &oid, &title, &users)?
+                let title = v
+                    .replica
+                    .index
+                    .get(&oid)
+                    .map(|e| e.title().to_string())
+                    .unwrap_or_default();
+                engine::rotate_object_key(
+                    &v.replica.keyring,
+                    &v.replica.doc_keys[&oid],
+                    &oid,
+                    &title,
+                    &users,
+                )?
             };
-            self.api.put::<_, ()>(&format!("/vaults/{id}/objects/{oid}/key"), &req).await?;
+            self.api
+                .put::<_, ()>(&format!("/vaults/{id}/objects/{oid}/key"), &req)
+                .await?;
             let mut v = vault.lock().await;
             v.replica.doc_keys.insert(oid, next);
             v.mark_state_dirty();

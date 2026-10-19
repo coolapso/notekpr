@@ -4,8 +4,8 @@ use coolpsonotes_core::doc::EntryKind;
 use coolpsonotes_core::engine::PinStatus;
 use coolpsonotes_core::protocol::*;
 use leptos::html;
-use leptos::prelude::*;
 use leptos::prelude::Update;
+use leptos::prelude::*;
 
 use crate::actions;
 use crate::state::{self, Modal, Route, ui, with};
@@ -15,7 +15,11 @@ use crate::views::icons::Icon;
 use crate::{api, knowledge, render};
 
 #[component]
-fn Dialog(#[prop(into)] title: String, #[prop(optional)] wide: bool, children: Children) -> impl IntoView {
+fn Dialog(
+    #[prop(into)] title: String,
+    #[prop(optional)] wide: bool,
+    children: Children,
+) -> impl IntoView {
     let ui = ui();
     let label = title.clone();
     view! {
@@ -72,7 +76,11 @@ fn QuickSwitch() -> impl IntoView {
         let r = results.get_untracked();
         if let Some((v, id, _, _)) = r.get(i) {
             ui.modal.set(None);
-            state::navigate(if state::is_member(v) { Route::Note(v.clone(), id.clone()) } else { Route::Shared(v.clone(), id.clone()) });
+            state::navigate(if state::is_member(v) {
+                Route::Note(v.clone(), id.clone())
+            } else {
+                Route::Shared(v.clone(), id.clone())
+            });
         } else if let Some(v) = current_vault.clone() {
             // No match: create a note with that title.
             let title = q.get_untracked();
@@ -165,7 +173,10 @@ fn SearchDialog(initial: String) -> impl IntoView {
     });
     let results = Memo::new(move |_| {
         ui.content_rev.get();
-        knowledge::search_all(&q.get(), scope.get().as_deref()).into_iter().map(|h| (h.vault, h.vault_name, h.id, h.path, h.snippet, h.highlights)).collect::<Vec<_>>()
+        knowledge::search_all(&q.get(), scope.get().as_deref())
+            .into_iter()
+            .map(|h| (h.vault, h.vault_name, h.id, h.path, h.snippet, h.highlights))
+            .collect::<Vec<_>>()
     });
     view! {
         <Dialog title="Search" wide=true>
@@ -364,7 +375,12 @@ fn Share(vault: String) -> impl IntoView {
 }
 
 /// Debounced people search shared by the sharing dialogs.
-fn search_people(text: String, q: RwSignal<String>, found: RwSignal<Vec<PublicUser>>, timer: StoredValue<Option<i32>>) {
+fn search_people(
+    text: String,
+    q: RwSignal<String>,
+    found: RwSignal<Vec<PublicUser>>,
+    timer: StoredValue<Option<i32>>,
+) {
     q.set(text.clone());
     if let Some(t) = timer.get_value() {
         util::clear_timeout(t);
@@ -375,7 +391,10 @@ fn search_people(text: String, q: RwSignal<String>, found: RwSignal<Vec<PublicUs
                 found.set(vec![]);
                 return;
             }
-            if let Ok(u) = api::get::<Vec<PublicUser>>(&format!("/users/search?q={}", api::q(text.trim()))).await {
+            if let Ok(u) =
+                api::get::<Vec<PublicUser>>(&format!("/users/search?q={}", api::q(text.trim())))
+                    .await
+            {
                 found.set(u);
             }
         });
@@ -399,7 +418,8 @@ fn ShareNote(vault: String, note: String) -> impl IntoView {
         ui.shares_rev.get();
         let (v, n) = (v.clone(), n.clone());
         leptos::task::spawn_local(async move {
-            match api::get::<Vec<ObjectShareInfo>>(&format!("/vaults/{v}/objects/{n}/shares")).await {
+            match api::get::<Vec<ObjectShareInfo>>(&format!("/vaults/{v}/objects/{n}/shares")).await
+            {
                 Ok(l) => {
                     with(|c| {
                         for x in &l {
@@ -535,9 +555,22 @@ fn VaultSettings(vault: String) -> impl IntoView {
     let archived = with(|c| c.vault_infos.get(&vault).map(|i| i.archived)).unwrap_or(false);
     let audit = RwSignal::new(Vec::<AuditEntry>::new());
     let show_audit = RwSignal::new(false);
-    let (v1, v2, v3, v4, v5, v6, v7, v8) =
-        (vault.clone(), vault.clone(), vault.clone(), vault.clone(), vault.clone(), vault.clone(), vault.clone(), vault.clone());
-    let epoch = with(|c| c.replicas.get(&vault).and_then(|r| r.keyring.current_epoch())).unwrap_or(0);
+    let (v1, v2, v3, v4, v5, v6, v7, v8) = (
+        vault.clone(),
+        vault.clone(),
+        vault.clone(),
+        vault.clone(),
+        vault.clone(),
+        vault.clone(),
+        vault.clone(),
+        vault.clone(),
+    );
+    let epoch = with(|c| {
+        c.replicas
+            .get(&vault)
+            .and_then(|r| r.keyring.current_epoch())
+    })
+    .unwrap_or(0);
     view! {
         <Dialog title="Vault settings" wide=true>
             <Show when=move || owner fallback=|| view! { <p class="muted">"Only the owner can change this vault's settings."</p> }>
@@ -638,7 +671,9 @@ fn History(vault: String, note: String) -> impl IntoView {
     let (v, n) = (vault.clone(), note.clone());
     leptos::task::spawn_local(async move {
         state::flush_now();
-        if let Ok(l) = api::get::<Vec<SnapshotInfo>>(&format!("/vaults/{v}/objects/{n}/snapshots")).await {
+        if let Ok(l) =
+            api::get::<Vec<SnapshotInfo>>(&format!("/vaults/{v}/objects/{n}/snapshots")).await
+        {
             list.set(l);
         }
         loading.set(false);
@@ -662,7 +697,15 @@ fn History(vault: String, note: String) -> impl IntoView {
     let (vr, nr) = (vault.clone(), note.clone());
     let writable = state::can_write_note(&vault, &note);
     let vv = vault.clone();
-    let names = move |uid: &str| with(|c| c.users.get(uid).map(|u| u.display_name.clone())).unwrap_or_else(|| if uid == with(|c| c.user_id.clone()) { "you".into() } else { "someone".into() });
+    let names = move |uid: &str| {
+        with(|c| c.users.get(uid).map(|u| u.display_name.clone())).unwrap_or_else(|| {
+            if uid == with(|c| c.user_id.clone()) {
+                "you".into()
+            } else {
+                "someone".into()
+            }
+        })
+    };
     view! {
         <Dialog title="Version history" wide=true>
             <div class="history">
@@ -716,7 +759,8 @@ fn History(vault: String, note: String) -> impl IntoView {
 fn ApproveDevice(device: DeviceInfo) -> impl IntoView {
     let ui = ui();
     let uid = with(|c| c.user_id.clone());
-    let code = coolpsonotes_core::engine::verification_code(&uid, &device.id, &device.enc_public).unwrap_or_default();
+    let code = coolpsonotes_core::engine::verification_code(&uid, &device.id, &device.enc_public)
+        .unwrap_or_default();
     let busy = RwSignal::new(false);
     let d1 = device.clone();
     let d2 = device.clone();
@@ -763,7 +807,10 @@ fn ApproveDevice(device: DeviceInfo) -> impl IntoView {
 fn Help() -> impl IntoView {
     let m = util::mod_key();
     let rows: Vec<(String, &str)> = vec![
-        (format!("{m}+K or {m}+O"), "Jump to a note / create one ({m}+O while editing)"),
+        (
+            format!("{m}+K or {m}+O"),
+            "Jump to a note / create one ({m}+O while editing)",
+        ),
         (format!("{m}+Shift+F"), "Search all notes"),
         (format!("{m}+Alt+N"), "New note"),
         (format!("{m}+E"), "Toggle reading view"),
@@ -772,11 +819,20 @@ fn Help() -> impl IntoView {
         (format!("{m}+K (in editor)"), "Insert link"),
         (format!("{m}+`"), "Inline code"),
         (format!("{m}+Shift+X / H"), "Strikethrough / highlight"),
-        (format!("{m}+Shift+8 / 7 / 9"), "Bullet / numbered / task list"),
+        (
+            format!("{m}+Shift+8 / 7 / 9"),
+            "Bullet / numbered / task list",
+        ),
         (format!("{m}+Alt+1…6, 0"), "Heading level / normal text"),
         (format!("{m}+Enter"), "Toggle checkbox"),
-        ("Tab / Shift+Tab".into(), "Indent / outdent list item; next / previous table cell"),
-        ("Enter (in a table)".into(), "New row; on an empty row, end the table"),
+        (
+            "Tab / Shift+Tab".into(),
+            "Indent / outdent list item; next / previous table cell",
+        ),
+        (
+            "Enter (in a table)".into(),
+            "New row; on an empty row, end the table",
+        ),
         (format!("{m}+Z / {m}+Shift+Z"), "Undo / redo"),
         ("[[".into(), "Link to another note"),
         ("#word".into(), "Add a tag"),
@@ -795,7 +851,11 @@ fn Help() -> impl IntoView {
 #[component]
 fn RenameDialog(vault: String, id: String) -> impl IntoView {
     let ui = ui();
-    let name = RwSignal::new(state::entry(&vault, &id).map(|e| e.title().to_string()).unwrap_or_default());
+    let name = RwSignal::new(
+        state::entry(&vault, &id)
+            .map(|e| e.title().to_string())
+            .unwrap_or_default(),
+    );
     view! {
         <Dialog title="Rename">
             <form class="stack" on:submit=move |ev| {
@@ -813,7 +873,11 @@ fn RenameDialog(vault: String, id: String) -> impl IntoView {
 fn NewFolder(vault: String, parent: String) -> impl IntoView {
     let ui = ui();
     let name = RwSignal::new(String::new());
-    let label = if parent.is_empty() { "New folder".to_string() } else { format!("New folder in {parent}") };
+    let label = if parent.is_empty() {
+        "New folder".to_string()
+    } else {
+        format!("New folder in {parent}")
+    };
     view! {
         <Dialog title=label>
             <form class="stack" on:submit=move |ev| {
@@ -834,7 +898,9 @@ fn NewFolder(vault: String, parent: String) -> impl IntoView {
 fn MoveDialog(vault: String, id: String) -> impl IntoView {
     let ui = ui();
     let folders = with(|c| c.replicas.get(&vault).map(|r| r.index.folders())).unwrap_or_default();
-    let current = state::entry(&vault, &id).map(|e| coolpsonotes_core::paths::parent(&e.path).to_string()).unwrap_or_default();
+    let current = state::entry(&vault, &id)
+        .map(|e| coolpsonotes_core::paths::parent(&e.path).to_string())
+        .unwrap_or_default();
     let mut all = vec![String::new()];
     all.extend(folders);
     view! {
@@ -862,15 +928,19 @@ fn ImportDialog(vault: String) -> impl IntoView {
     let ui = ui();
     let busy = RwSignal::new(false);
     let run = move |dir: bool, v: String| {
-        actions::pick_files(dir, if dir { "" } else { ".md,.markdown,.txt,.zip" }, move |files| {
-            busy.set(true);
-            leptos::task::spawn_local(async move {
-                let items = actions::files_to_import(files).await;
-                actions::import(&v, items).await;
-                busy.set(false);
-                ui.modal.set(None);
-            });
-        });
+        actions::pick_files(
+            dir,
+            if dir { "" } else { ".md,.markdown,.txt,.zip" },
+            move |files| {
+                busy.set(true);
+                leptos::task::spawn_local(async move {
+                    let items = actions::files_to_import(files).await;
+                    actions::import(&v, items).await;
+                    busy.set(false);
+                    ui.modal.set(None);
+                });
+            },
+        );
     };
     let run2 = run;
     let (v1, v2) = (vault.clone(), vault.clone());

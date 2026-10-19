@@ -116,7 +116,11 @@ fn info(vault_id: &str, path: &str, e: &Entry, tags: Vec<String>) -> DocInfo {
 }
 
 pub fn doc_info(v: &Vault, path: &str, e: &Entry) -> DocInfo {
-    let tags = if e.kind == EntryKind::Note { v.tags(&e.id) } else { vec![] };
+    let tags = if e.kind == EntryKind::Note {
+        v.tags(&e.id)
+    } else {
+        vec![]
+    };
     let mut i = info(v.id(), path, e, tags);
     if e.kind == EntryKind::Note {
         i.size = v.note_text(&e.id).len() as u64;
@@ -125,14 +129,17 @@ pub fn doc_info(v: &Vault, path: &str, e: &Entry) -> DocInfo {
 }
 
 async fn vault(hub: &Hub, reference: &str) -> OpResult<SharedVault> {
-    hub.resolve(reference).await.map_err(|e| OpError::NotFound(format!("{e:#}")))
+    hub.resolve(reference)
+        .await
+        .map_err(|e| OpError::NotFound(format!("{e:#}")))
 }
 
 fn check_write(hub: &Hub, v: &Vault) -> OpResult<()> {
     if hub.read_only {
         return Err(OpError::Forbidden("this endpoint is read-only".into()));
     }
-    v.require_writable().map_err(|e| OpError::Forbidden(format!("{e:#}")))
+    v.require_writable()
+        .map_err(|e| OpError::Forbidden(format!("{e:#}")))
 }
 
 fn bad(e: anyhow::Error) -> OpError {
@@ -144,11 +151,18 @@ pub async fn list_vaults(hub: &Hub) -> Vec<VaultSummary> {
 }
 
 /// Notes (and with `all`, attachments) below `folder`.
-pub async fn list_documents(hub: &Hub, vref: &str, folder: Option<&str>, all: bool) -> OpResult<Vec<DocInfo>> {
+pub async fn list_documents(
+    hub: &Hub,
+    vref: &str,
+    folder: Option<&str>,
+    all: bool,
+) -> OpResult<Vec<DocInfo>> {
     let v = vault(hub, vref).await?;
     let g = v.lock().await;
     let folder = folder.unwrap_or("");
-    let listing = g.list(folder, true).map_err(|e| OpError::NotFound(format!("{e:#}")))?;
+    let listing = g
+        .list(folder, true)
+        .map_err(|e| OpError::NotFound(format!("{e:#}")))?;
     Ok(listing
         .into_iter()
         .filter_map(|l| l.entry.map(|e| (l.path, e)))
@@ -160,13 +174,26 @@ pub async fn list_documents(hub: &Hub, vref: &str, folder: Option<&str>, all: bo
 pub async fn read_document(hub: &Hub, vref: &str, path: &str) -> OpResult<Document> {
     let v = vault(hub, vref).await?;
     let g = v.lock().await;
-    let (p, e) = g.find(path).ok_or_else(|| OpError::NotFound(format!("no document '{path}'")))?;
+    let (p, e) = g
+        .find(path)
+        .ok_or_else(|| OpError::NotFound(format!("no document '{path}'")))?;
     if e.kind != EntryKind::Note {
-        return Err(OpError::BadRequest(format!("'{p}' is an attachment; use the attachments endpoint")));
+        return Err(OpError::BadRequest(format!(
+            "'{p}' is an attachment; use the attachments endpoint"
+        )));
     }
     let content = g.note_text(&e.id);
-    let links = coolpsonotes_core::markdown::analyze(&content).links.into_iter().map(|l| l.target).collect();
-    Ok(Document { info: doc_info(&g, &p, &e), hash: content_hash(content.as_bytes()), links, content })
+    let links = coolpsonotes_core::markdown::analyze(&content)
+        .links
+        .into_iter()
+        .map(|l| l.target)
+        .collect();
+    Ok(Document {
+        info: doc_info(&g, &p, &e),
+        hash: content_hash(content.as_bytes()),
+        links,
+        content,
+    })
 }
 
 /// Create or diff-update a note. `if_match` is a content hash (`*` = must
@@ -187,7 +214,9 @@ pub async fn put_document(
             match &existing {
                 Some((_, e)) if e.kind == EntryKind::Note => {
                     let current = content_hash(g.note_text(&e.id).as_bytes());
-                    if expected != "*" && expected.trim_start_matches("W/").trim_matches('"') != current {
+                    if expected != "*"
+                        && expected.trim_start_matches("W/").trim_matches('"') != current
+                    {
                         return Err(OpError::Precondition(format!(
                             "the document changed since you read it (current hash {current}); re-read and retry"
                         )));
@@ -209,7 +238,12 @@ pub async fn put_document(
 }
 
 /// Create a note that must not exist yet.
-pub async fn create_document(hub: &Hub, vref: &str, path: &str, content: &str) -> OpResult<PutOutcome> {
+pub async fn create_document(
+    hub: &Hub,
+    vref: &str,
+    path: &str,
+    content: &str,
+) -> OpResult<PutOutcome> {
     let v = vault(hub, vref).await?;
     let (vault_id, res) = {
         let mut g = v.lock().await;
@@ -226,7 +260,12 @@ pub async fn create_document(hub: &Hub, vref: &str, path: &str, content: &str) -
     Ok(finish(hub, &vault_id, res, content.as_bytes()).await)
 }
 
-pub async fn append_document(hub: &Hub, vref: &str, path: &str, text: &str) -> OpResult<PutOutcome> {
+pub async fn append_document(
+    hub: &Hub,
+    vref: &str,
+    path: &str,
+    text: &str,
+) -> OpResult<PutOutcome> {
     let v = vault(hub, vref).await?;
     let (vault_id, res, full) = {
         let mut g = v.lock().await;
@@ -242,8 +281,12 @@ pub async fn append_document(hub: &Hub, vref: &str, path: &str, text: &str) -> O
 }
 
 async fn finish(hub: &Hub, vault_id: &str, res: WriteResult, content: &[u8]) -> PutOutcome {
-    let push =
-        if res.changed { hub.local_changed(vault_id, vec![res.id.clone()], true).await } else { Default::default() };
+    let push = if res.changed {
+        hub.local_changed(vault_id, vec![res.id.clone()], true)
+            .await
+    } else {
+        Default::default()
+    };
     PutOutcome {
         vault: vault_id.to_string(),
         path: res.path,
@@ -264,7 +307,13 @@ pub struct MoveOutcome {
     pub to: String,
 }
 
-pub async fn move_document(hub: &Hub, vref: &str, from: &str, to: &str, update_links: bool) -> OpResult<MoveOutcome> {
+pub async fn move_document(
+    hub: &Hub,
+    vref: &str,
+    from: &str,
+    to: &str,
+    update_links: bool,
+) -> OpResult<MoveOutcome> {
     let v = vault(hub, vref).await?;
     let (vault_id, id, new_path) = {
         let mut g = v.lock().await;
@@ -275,13 +324,22 @@ pub async fn move_document(hub: &Hub, vref: &str, from: &str, to: &str, update_l
         }
         let new_path = g.move_path(from, to, update_links).map_err(|e| {
             let msg = format!("{e:#}");
-            if msg.contains("already exists") { OpError::Conflict(msg) } else { OpError::BadRequest(msg) }
+            if msg.contains("already exists") {
+                OpError::Conflict(msg)
+            } else {
+                OpError::BadRequest(msg)
+            }
         })?;
         g.save()?;
         (g.id().to_string(), id, new_path)
     };
     hub.local_changed(&vault_id, vec![], true).await;
-    Ok(MoveOutcome { vault: vault_id, id, from: from.to_string(), to: new_path })
+    Ok(MoveOutcome {
+        vault: vault_id,
+        id,
+        from: from.to_string(),
+        to: new_path,
+    })
 }
 
 /// Move a document (or folder) to the trash. Returns the trashed entry ids.
@@ -301,7 +359,12 @@ pub async fn delete_document(hub: &Hub, vref: &str, path: &str) -> OpResult<(Str
     Ok((vault_id, ids))
 }
 
-pub async fn search(hub: &Hub, query: &str, vault_ref: Option<&str>, limit: usize) -> OpResult<Vec<SearchResult>> {
+pub async fn search(
+    hub: &Hub,
+    query: &str,
+    vault_ref: Option<&str>,
+    limit: usize,
+) -> OpResult<Vec<SearchResult>> {
     let q = search::parse_query(query);
     if q.is_empty() {
         return Err(OpError::BadRequest("empty search query".into()));
@@ -339,8 +402,13 @@ pub async fn search(hub: &Hub, query: &str, vault_ref: Option<&str>, limit: usiz
 pub async fn backlinks(hub: &Hub, vref: &str, path: &str) -> OpResult<Vec<DocInfo>> {
     let v = vault(hub, vref).await?;
     let g = v.lock().await;
-    let (_, e) = g.find(path).ok_or_else(|| OpError::NotFound(format!("no document '{path}'")))?;
-    Ok(g.backlinks(&e.id).into_iter().map(|(p, e)| doc_info(&g, &p, &e)).collect())
+    let (_, e) = g
+        .find(path)
+        .ok_or_else(|| OpError::NotFound(format!("no document '{path}'")))?;
+    Ok(g.backlinks(&e.id)
+        .into_iter()
+        .map(|(p, e)| doc_info(&g, &p, &e))
+        .collect())
 }
 
 /// Stored revisions (encrypted snapshots on the server), newest first.
@@ -348,12 +416,22 @@ pub async fn history(hub: &Hub, vref: &str, path: &str) -> OpResult<Vec<Revision
     let v = vault(hub, vref).await?;
     let (vid, oid) = {
         let g = v.lock().await;
-        let (_, e) = g.find_note(path).map_err(|e| OpError::NotFound(format!("{e:#}")))?;
+        let (_, e) = g
+            .find_note(path)
+            .map_err(|e| OpError::NotFound(format!("{e:#}")))?;
         (g.id().to_string(), e.id)
     };
-    let list: Vec<SnapshotInfo> =
-        hub.session.api.get(&format!("/vaults/{vid}/objects/{oid}/snapshots")).await.map_err(|e| {
-            if e.is_network() { OpError::Unavailable(e.to_string()) } else { OpError::Internal(e.into()) }
+    let list: Vec<SnapshotInfo> = hub
+        .session
+        .api
+        .get(&format!("/vaults/{vid}/objects/{oid}/snapshots"))
+        .await
+        .map_err(|e| {
+            if e.is_network() {
+                OpError::Unavailable(e.to_string())
+            } else {
+                OpError::Internal(e.into())
+            }
         })?;
     Ok(list
         .into_iter()
@@ -372,37 +450,52 @@ pub async fn revision(hub: &Hub, vref: &str, path: &str, snapshot_id: &str) -> O
     let v = vault(hub, vref).await?;
     let (vid, oid) = {
         let g = v.lock().await;
-        let (_, e) = g.find_note(path).map_err(|e| OpError::NotFound(format!("{e:#}")))?;
+        let (_, e) = g
+            .find_note(path)
+            .map_err(|e| OpError::NotFound(format!("{e:#}")))?;
         (g.id().to_string(), e.id)
     };
     if !crate::store::valid_id(snapshot_id) {
         return Err(OpError::BadRequest("invalid revision id".into()));
     }
-    let snap: Snapshot =
-        hub.session.api.get(&format!("/vaults/{vid}/objects/{oid}/snapshots/{snapshot_id}")).await.map_err(
-            |e| match e.status() {
-                Some(404) => OpError::NotFound("no such revision".into()),
-                _ if e.is_network() => OpError::Unavailable(e.to_string()),
-                _ => OpError::Internal(e.into()),
-            },
-        )?;
+    let snap: Snapshot = hub
+        .session
+        .api
+        .get(&format!(
+            "/vaults/{vid}/objects/{oid}/snapshots/{snapshot_id}"
+        ))
+        .await
+        .map_err(|e| match e.status() {
+            Some(404) => OpError::NotFound("no such revision".into()),
+            _ if e.is_network() => OpError::Unavailable(e.to_string()),
+            _ => OpError::Internal(e.into()),
+        })?;
     if snap.object_id != oid {
-        return Err(OpError::Internal(anyhow::anyhow!("the server returned a revision of another document")));
+        return Err(OpError::Internal(anyhow::anyhow!(
+            "the server returned a revision of another document"
+        )));
     }
     let g = v.lock().await;
-    g.replica.decrypt_revision(&snap).map_err(|e| OpError::Internal(e.into()))
+    g.replica
+        .decrypt_revision(&snap)
+        .map_err(|e| OpError::Internal(e.into()))
 }
 
 pub async fn get_attachment(hub: &Hub, vref: &str, path: &str) -> OpResult<(DocInfo, Vec<u8>)> {
     let v = vault(hub, vref).await?;
     let (p, e) = {
         let g = v.lock().await;
-        g.find(path).ok_or_else(|| OpError::NotFound(format!("no attachment '{path}'")))?
+        g.find(path)
+            .ok_or_else(|| OpError::NotFound(format!("no attachment '{path}'")))?
     };
     if e.kind != EntryKind::Attachment {
         return Err(OpError::BadRequest(format!("'{p}' is not an attachment")));
     }
-    let data = hub.session.attachment(&v, &e.id).await.map_err(|e| OpError::Unavailable(format!("{e:#}")))?;
+    let data = hub
+        .session
+        .attachment(&v, &e.id)
+        .await
+        .map_err(|e| OpError::Unavailable(format!("{e:#}")))?;
     let g = v.lock().await;
     Ok((doc_info(&g, &p, &e), data))
 }
@@ -415,12 +508,21 @@ pub async fn put_attachment(
     mime: Option<&str>,
 ) -> OpResult<PutOutcome> {
     let v = vault(hub, vref).await?;
-    let max = hub.session.server_info().await.map(|i| i.max_attachment_bytes).unwrap_or(25 * 1024 * 1024);
+    let max = hub
+        .session
+        .server_info()
+        .await
+        .map(|i| i.max_attachment_bytes)
+        .unwrap_or(25 * 1024 * 1024);
     if data.len() as u64 > max {
-        return Err(OpError::BadRequest(format!("attachment is larger than the server limit of {max} bytes")));
+        return Err(OpError::BadRequest(format!(
+            "attachment is larger than the server limit of {max} bytes"
+        )));
     }
     if paths::is_note(path) {
-        return Err(OpError::BadRequest("Markdown files are documents, not attachments".into()));
+        return Err(OpError::BadRequest(
+            "Markdown files are documents, not attachments".into(),
+        ));
     }
     let (vault_id, res) = {
         let mut g = v.lock().await;
@@ -445,14 +547,21 @@ pub async fn empty_trash(hub: &Hub, vref: &str) -> OpResult<usize> {
     for e in &entries {
         let res = match e.kind {
             EntryKind::Note => api.delete(&format!("/vaults/{vid}/objects/{}", e.id)).await,
-            EntryKind::Attachment => api.delete(&format!("/vaults/{vid}/attachments/{}", e.id)).await,
+            EntryKind::Attachment => {
+                api.delete(&format!("/vaults/{vid}/attachments/{}", e.id))
+                    .await
+            }
             EntryKind::Folder => Ok(()),
         };
         match res {
             Ok(()) => {}
             Err(err) if err.is_not_found() => {}
             Err(err) if err.is_network() => return Err(OpError::Unavailable(err.to_string())),
-            Err(err) => return Err(OpError::Internal(anyhow::anyhow!(err).context("deleting from the server"))),
+            Err(err) => {
+                return Err(OpError::Internal(
+                    anyhow::anyhow!(err).context("deleting from the server"),
+                ));
+            }
         }
         purged.insert(e.id.clone());
     }

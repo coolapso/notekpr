@@ -78,7 +78,10 @@ fn default_device_name() -> String {
 }
 
 async fn device_flow(api: &Api, client_name: &str) -> Result<TokenResponse> {
-    let da = api.device_authorization(client_name).await.context("starting the device login")?;
+    let da = api
+        .device_authorization(client_name)
+        .await
+        .context("starting the device login")?;
     ui::status(&format!(
         "\nTo sign in, open this address in a browser where you are signed in to coolpsonotes:\n\n    {}\n\n\
          and check that it shows the code  {}\n",
@@ -95,7 +98,9 @@ async fn device_flow(api: &Api, client_name: &str) -> Result<TokenResponse> {
             Ok(DevicePoll::Pending) => {}
             Ok(DevicePoll::SlowDown) => interval += Duration::from_secs(5),
             Ok(DevicePoll::Denied) => bail!("the login was declined in the browser"),
-            Ok(DevicePoll::Expired) => bail!("the login code expired; run `coolpsonotes login` again"),
+            Ok(DevicePoll::Expired) => {
+                bail!("the login code expired; run `coolpsonotes login` again")
+            }
             Ok(DevicePoll::Token(t)) => return Ok(t),
             Err(e) if e.is_network() => {}
             Err(e) => return Err(anyhow!(e).context("waiting for the login")),
@@ -113,30 +118,44 @@ pub async fn login(dirs: &Dirs, profile: &str, opts: LoginOptions) -> Result<Log
             bail!("profile '{profile}' is an agent profile; use another --profile for a person");
         }
         if p.server != server && p.user_id.is_some() {
-            bail!("profile '{profile}' belongs to {}; use another --profile, or `logout --forget` first", p.server);
+            bail!(
+                "profile '{profile}' belongs to {}; use another --profile, or `logout --forget` first",
+                p.server
+            );
         }
     }
     let anon = Api::new(&server, Credentials::None)?;
-    let info = anon.info().await.with_context(|| format!("contacting {server}"))?;
+    let info = anon
+        .info()
+        .await
+        .with_context(|| format!("contacting {server}"))?;
     let device_name = opts.device_name.clone().unwrap_or_else(default_device_name);
 
     // 1. Authenticate.
     let (token, expires_at, user) = match &opts.dev_user {
         Some(name) => {
             if !info.dev_mode {
-                bail!("{server} is not running in development mode; sign in without --dev-user (OIDC device login)");
+                bail!(
+                    "{server} is not running in development mode; sign in without --dev-user (OIDC device login)"
+                );
             }
             let s = anon.dev_login(name).await.context("development login")?;
             (s.token, s.expires_at, s.user)
         }
         None => {
             if !info.oidc_enabled && info.dev_mode {
-                ui::warn("this server has no OIDC provider configured; in development mode use --dev-user NAME");
+                ui::warn(
+                    "this server has no OIDC provider configured; in development mode use --dev-user NAME",
+                );
             }
             let t = device_flow(&anon, &device_name).await?;
             let api = Api::new(&server, Credentials::Session(t.access_token.clone()))?;
             let me = api.me().await?;
-            (t.access_token, coolpsonotes_core::now_ms() + t.expires_in as i64 * 1000, me.user)
+            (
+                t.access_token,
+                coolpsonotes_core::now_ms() + t.expires_in as i64 * 1000,
+                me.user,
+            )
         }
     };
     if user.kind != PrincipalKind::Human {
@@ -147,10 +166,13 @@ pub async fn login(dirs: &Dirs, profile: &str, opts: LoginOptions) -> Result<Log
     {
         bail!(
             "profile '{profile}' belongs to a different account; use another --profile (e.g. --profile {})",
-            user.display_name.to_lowercase().replace(|c: char| !c.is_ascii_alphanumeric(), "-")
+            user.display_name
+                .to_lowercase()
+                .replace(|c: char| !c.is_ascii_alphanumeric(), "-")
         );
     }
-    let mut p = existing.unwrap_or_else(|| Profile::new(&server, PrincipalKind::Human, opts.insecure_http));
+    let mut p =
+        existing.unwrap_or_else(|| Profile::new(&server, PrincipalKind::Human, opts.insecure_http));
     p.server = server.clone();
     p.insecure_http |= opts.insecure_http;
     p.session_token = Some(token.clone());
@@ -175,7 +197,15 @@ pub async fn login(dirs: &Dirs, profile: &str, opts: LoginOptions) -> Result<Log
             );
         }
         if let Some(dev) = p.device_id.clone().filter(|_| !p.device_pending) {
-            match api.put::<_, ()>("/me/session/device", &BindDeviceRequest { device_id: dev.clone() }).await {
+            match api
+                .put::<_, ()>(
+                    "/me/session/device",
+                    &BindDeviceRequest {
+                        device_id: dev.clone(),
+                    },
+                )
+                .await
+            {
                 Ok(()) => {
                     return Ok(LoginOutcome {
                         user,
@@ -189,7 +219,9 @@ pub async fn login(dirs: &Dirs, profile: &str, opts: LoginOptions) -> Result<Log
                 Err(e) if matches!(e.status(), Some(404 | 409 | 403)) => {
                     // Respect the removal: forget the secrets and enroll again
                     // (approval by another device, or the recovery key).
-                    ui::warn("this device was removed from your account; it has to be approved again");
+                    ui::warn(
+                        "this device was removed from your account; it has to be approved again",
+                    );
                     secrets.forget_account()?;
                     ps.update(|p| {
                         p.device_id = None;
@@ -206,7 +238,9 @@ pub async fn login(dirs: &Dirs, profile: &str, opts: LoginOptions) -> Result<Log
     // 3. First device of the account.
     let Some(key) = me.account_key.clone() else {
         let b = engine::bootstrap_account(&user.id, &device_name)?;
-        api.put::<_, ()>("/me/account-key", &b.request).await.context("uploading the new account key")?;
+        api.put::<_, ()>("/me/account-key", &b.request)
+            .await
+            .context("uploading the new account key")?;
         secrets.save_device(&user.id, &b.device_id, &b.device)?;
         secrets.save_account(&user.id, &b.account)?;
         ps.update(|p| {
@@ -226,25 +260,42 @@ pub async fn login(dirs: &Dirs, profile: &str, opts: LoginOptions) -> Result<Log
     if key.user_id != user.id {
         bail!("the server returned an account key for a different user");
     }
-    let public = key.verify().map_err(|e| anyhow!("your account key on the server failed verification: {e}"))?;
+    let public = key
+        .verify()
+        .map_err(|e| anyhow!("your account key on the server failed verification: {e}"))?;
 
     // 4. Additional device: resume a pending registration or start one.
     let devices: Vec<DeviceInfo> = api.get("/devices").await?;
     let resumed = match (p.device_pending, p.device_id.clone()) {
         (true, Some(id)) => match secrets.load_device(&user.id, &id)? {
-            Some(dev) if devices.iter().any(|d| d.id == id && d.status == DeviceStatus::Pending) => Some((dev, id)),
+            Some(dev)
+                if devices
+                    .iter()
+                    .any(|d| d.id == id && d.status == DeviceStatus::Pending) =>
+            {
+                Some((dev, id))
+            }
             _ => None,
         },
         _ => None,
     };
     let (device, device_id) = match resumed {
         Some(x) => {
-            api.put::<_, ()>("/me/session/device", &BindDeviceRequest { device_id: x.1.clone() }).await.ok();
+            api.put::<_, ()>(
+                "/me/session/device",
+                &BindDeviceRequest {
+                    device_id: x.1.clone(),
+                },
+            )
+            .await
+            .ok();
             x
         }
         None => {
             let (dev, reg) = engine::new_device(&device_name);
-            api.post::<_, ()>("/devices", &reg).await.context("registering this device")?;
+            api.post::<_, ()>("/devices", &reg)
+                .await
+                .context("registering this device")?;
             secrets.save_device(&user.id, &reg.device_id, &dev)?;
             ps.update(|p| {
                 p.device_id = Some(reg.device_id.clone());
@@ -257,14 +308,25 @@ pub async fn login(dirs: &Dirs, profile: &str, opts: LoginOptions) -> Result<Log
     let code = engine::verification_code(&user.id, &device_id, &device.public).unwrap_or_default();
 
     let (account, recovered) = match &opts.recovery_key {
-        Some(k) => (recover_with_key(&api, &user.id, &device_id, &device, k).await?, true),
+        Some(k) => (
+            recover_with_key(&api, &user.id, &device_id, &device, k).await?,
+            true,
+        ),
         None => {
             ui::status(&format!(
                 "\nThis device must be approved by one of your other devices.\n\
                  On a signed-in device run `coolpsonotes devices approve {device_id}` (or open Devices in the web app)\n\
                  and approve only if it shows this verification code:\n\n    {code}\n"
             ));
-            wait_for_approval(&api, &user.id, &device_id, &device, opts.interactive, opts.approval_timeout).await?
+            wait_for_approval(
+                &api,
+                &user.id,
+                &device_id,
+                &device,
+                opts.interactive,
+                opts.approval_timeout,
+            )
+            .await?
         }
     };
     if account.public() != public {
@@ -290,13 +352,19 @@ pub async fn recover_with_key(
     device: &DeviceKey,
     key: &str,
 ) -> Result<AccountSecret> {
-    let rk = RecoveryKey::parse(key).map_err(|_| anyhow!("that is not a valid recovery key (check for typos)"))?;
-    let env: RecoveryEnvelope = api.get("/me/recovery").await.context("fetching the recovery envelope")?;
+    let rk = RecoveryKey::parse(key)
+        .map_err(|_| anyhow!("that is not a valid recovery key (check for typos)"))?;
+    let env: RecoveryEnvelope = api
+        .get("/me/recovery")
+        .await
+        .context("fetching the recovery envelope")?;
     let account = rk
         .unwrap_account(&env.recovery_envelope, user_id)
         .map_err(|_| anyhow!("the recovery key does not unlock this account"))?;
     let req = engine::approve_device(&account, user_id, device_id, &device.public)?;
-    api.post::<_, ()>(&format!("/devices/{device_id}/activate"), &req).await.context("activating this device")?;
+    api.post::<_, ()>(&format!("/devices/{device_id}/activate"), &req)
+        .await
+        .context("activating this device")?;
     Ok(account)
 }
 
@@ -312,7 +380,9 @@ async fn wait_for_approval(
     // the runtime from shutting down.
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
     if interactive && ui::stdin_is_tty() {
-        ui::status("Waiting for approval… (or type your recovery key and press Enter to unlock this device yourself)");
+        ui::status(
+            "Waiting for approval… (or type your recovery key and press Enter to unlock this device yourself)",
+        );
         std::thread::spawn(move || {
             if let Ok(line) = rpassword::read_password() {
                 let _ = tx.send(line);
@@ -325,7 +395,10 @@ async fn wait_for_approval(
     let deadline = Instant::now() + timeout.unwrap_or(Duration::from_secs(30 * 60));
     let mut delay = Duration::from_secs(2);
     loop {
-        match api.get::<DeviceEnvelope>(&format!("/devices/{device_id}/envelope")).await {
+        match api
+            .get::<DeviceEnvelope>(&format!("/devices/{device_id}/envelope"))
+            .await
+        {
             Ok(env) => {
                 let account = device
                     .unwrap_account(&env.account_envelope, user_id, device_id)
@@ -333,7 +406,9 @@ async fn wait_for_approval(
                 return Ok((account, false));
             }
             Err(e) if e.status() == Some(409) || e.is_network() => {}
-            Err(e) if e.is_not_found() => bail!("this device was rejected or removed by another device"),
+            Err(e) if e.is_not_found() => {
+                bail!("this device was rejected or removed by another device")
+            }
             Err(e) => return Err(anyhow!(e).context("checking the approval")),
         }
         if Instant::now() > deadline {
@@ -370,13 +445,20 @@ pub struct AgentOutcome {
 }
 
 /// Configure a profile for an agent identity and create its key pair.
-pub async fn agent_setup(dirs: &Dirs, profile: &str, opts: AgentSetupOptions) -> Result<AgentOutcome> {
+pub async fn agent_setup(
+    dirs: &Dirs,
+    profile: &str,
+    opts: AgentSetupOptions,
+) -> Result<AgentOutcome> {
     let server = normalize_server_url(&opts.server, opts.insecure_http)?;
     let secret_file = std::path::absolute(&opts.client_secret_file)
         .with_context(|| format!("resolving {}", opts.client_secret_file.display()))?;
     crate::api::read_secret_file(&secret_file)?;
     if fsutil::is_shared_readable(&secret_file) {
-        ui::warn(&format!("{} is readable by other users; restrict it with `chmod 600`", secret_file.display()));
+        ui::warn(&format!(
+            "{} is readable by other users; restrict it with `chmod 600`",
+            secret_file.display()
+        ));
     }
     let ps = ProfileStore::new(dirs, profile)?;
     let existing = ps.load()?;
@@ -386,9 +468,17 @@ pub async fn agent_setup(dirs: &Dirs, profile: &str, opts: AgentSetupOptions) ->
     {
         bail!("profile '{profile}' belongs to a person; use another --profile for the agent");
     }
-    let api =
-        Api::new(&server, Credentials::Agent { client_id: opts.client_id.clone(), secret_file: secret_file.clone() })?;
-    let me = api.me().await.context("signing in with the agent credentials")?;
+    let api = Api::new(
+        &server,
+        Credentials::Agent {
+            client_id: opts.client_id.clone(),
+            secret_file: secret_file.clone(),
+        },
+    )?;
+    let me = api
+        .me()
+        .await
+        .context("signing in with the agent credentials")?;
     if me.user.kind != PrincipalKind::Agent {
         bail!("these credentials do not belong to an agent identity");
     }
@@ -403,17 +493,26 @@ pub async fn agent_setup(dirs: &Dirs, profile: &str, opts: AgentSetupOptions) ->
     let (account, created) = match (local, &me.account_key) {
         (Some(a), Some(k)) => {
             if k.verify()? != a.public() {
-                bail!("the agent's key on the server differs from the local one; refusing to continue");
+                bail!(
+                    "the agent's key on the server differs from the local one; refusing to continue"
+                );
             }
             (a, false)
         }
         (Some(a), None) => {
             let req = AccountSetupRequest {
-                key: PublicAccountKey::new(&agent_id, 1, &a.public(), &a.sign_account_key(&agent_id, 1)),
+                key: PublicAccountKey::new(
+                    &agent_id,
+                    1,
+                    &a.public(),
+                    &a.sign_account_key(&agent_id, 1),
+                ),
                 recovery_envelope: None,
                 device: None,
             };
-            api.put::<_, ()>("/me/account-key", &req).await.context("uploading the agent key")?;
+            api.put::<_, ()>("/me/account-key", &req)
+                .await
+                .context("uploading the agent key")?;
             (a, true)
         }
         (None, Some(_)) => bail!(
@@ -422,20 +521,26 @@ pub async fn agent_setup(dirs: &Dirs, profile: &str, opts: AgentSetupOptions) ->
         ),
         (None, None) => {
             let (a, req) = engine::bootstrap_agent(&agent_id);
-            api.put::<_, ()>("/me/account-key", &req).await.context("uploading the agent key")?;
+            api.put::<_, ()>("/me/account-key", &req)
+                .await
+                .context("uploading the agent key")?;
             secrets.save_account(&agent_id, &a)?;
             (a, true)
         }
     };
     secrets.save_account(&agent_id, &account)?;
-    let mut p = existing.unwrap_or_else(|| Profile::new(&server, PrincipalKind::Agent, opts.insecure_http));
+    let mut p =
+        existing.unwrap_or_else(|| Profile::new(&server, PrincipalKind::Agent, opts.insecure_http));
     p.kind = PrincipalKind::Agent;
     p.server = server;
     p.insecure_http |= opts.insecure_http;
     p.user_id = Some(agent_id.clone());
     p.display_name = Some(me.user.display_name.clone());
     p.session_token = None;
-    p.agent = Some(AgentCredentials { client_id: opts.client_id, client_secret_file: secret_file });
+    p.agent = Some(AgentCredentials {
+        client_id: opts.client_id,
+        client_secret_file: secret_file,
+    });
     ps.save(&p)?;
     Ok(AgentOutcome {
         agent_id,
@@ -449,16 +554,22 @@ pub async fn agent_setup(dirs: &Dirs, profile: &str, opts: AgentSetupOptions) ->
 /// remove this device from the account and wipe every local secret and copy.
 pub async fn logout(dirs: &Dirs, profile: &str, forget: bool) -> Result<()> {
     let ps = ProfileStore::new(dirs, profile)?;
-    let Some(p) = ps.load()? else { bail!("profile '{profile}' does not exist") };
+    let Some(p) = ps.load()? else {
+        bail!("profile '{profile}' does not exist")
+    };
     if let Some(token) = &p.session_token {
         let api = Api::new(&p.server, Credentials::Session(token.clone()))?;
         if forget
             && let Some(dev) = &p.device_id
             && let Err(e) = api.delete(&format!("/devices/{dev}")).await
         {
-            ui::warn(&format!("could not remove this device from the account: {e}"));
+            ui::warn(&format!(
+                "could not remove this device from the account: {e}"
+            ));
         }
-        if let Err(e) = api.post::<_, ()>("/auth/logout", &serde_json::json!({})).await
+        if let Err(e) = api
+            .post::<_, ()>("/auth/logout", &serde_json::json!({}))
+            .await
             && !e.is_unauthorized()
         {
             ui::warn(&format!("could not end the session on the server: {e}"));

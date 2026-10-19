@@ -12,12 +12,12 @@ pub mod vaults;
 
 use std::time::Instant;
 
+use axum::Router;
 use axum::extract::{DefaultBodyLimit, Request, State};
 use axum::http::{HeaderMap, HeaderName, HeaderValue, StatusCode, header};
 use axum::middleware::{Next, from_fn, from_fn_with_state};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, patch, post, put};
-use axum::Router;
 use tower_http::compression::CompressionLayer;
 use tower_http::services::{ServeDir, ServeFile};
 use tower_http::set_header::SetResponseHeaderLayer;
@@ -47,7 +47,10 @@ pub fn router(state: AppState) -> Router {
         .route("/auth/oidc/callback", get(auth::oidc_callback))
         .route("/auth/exchange", post(auth::exchange))
         .route("/auth/dev-login", post(auth::dev_login))
-        .route("/oauth/device_authorization", post(oauth::device_authorization))
+        .route(
+            "/oauth/device_authorization",
+            post(oauth::device_authorization),
+        )
         .route("/oauth/token", post(oauth::token))
         .layer(from_fn_with_state(state.clone(), ratelimit::auth_limit));
 
@@ -65,42 +68,79 @@ pub fn router(state: AppState) -> Router {
         .route("/me/sessions/{id}", delete(auth::delete_session))
         .route("/me/audit", get(me::my_audit))
         .route("/devices", get(devices::list).post(devices::register))
-        .route("/devices/{id}", patch(devices::rename).delete(devices::revoke))
+        .route(
+            "/devices/{id}",
+            patch(devices::rename).delete(devices::revoke),
+        )
         .route("/devices/{id}/envelope", get(devices::envelope))
         .route("/devices/{id}/activate", post(devices::activate))
         .route("/users/search", get(users::search))
         .route("/users/{id}", get(users::get_user))
         .route("/vaults", get(vaults::list).post(vaults::create))
-        .route("/vaults/{v}", get(vaults::get).patch(vaults::update).delete(vaults::delete))
+        .route(
+            "/vaults/{v}",
+            get(vaults::get)
+                .patch(vaults::update)
+                .delete(vaults::delete),
+        )
         .route("/vaults/{v}/keys", get(vaults::keys))
         .route("/vaults/{v}/keys/grant", post(vaults::grant_keys))
         .route("/vaults/{v}/keys/rotate", post(vaults::rotate_keys))
-        .route("/vaults/{v}/members", get(vaults::members).post(vaults::add_member))
-        .route("/vaults/{v}/members/{u}", patch(vaults::update_member).delete(vaults::remove_member))
+        .route(
+            "/vaults/{v}/members",
+            get(vaults::members).post(vaults::add_member),
+        )
+        .route(
+            "/vaults/{v}/members/{u}",
+            patch(vaults::update_member).delete(vaults::remove_member),
+        )
         .route("/vaults/{v}/audit", get(vaults::audit))
         .route("/vaults/{v}/changes", get(sync::changes))
         .route("/vaults/{v}/updates", post(sync::push).layer(push_limit))
-        .route("/vaults/{v}/objects/{o}", get(sync::object).delete(sync::purge))
+        .route(
+            "/vaults/{v}/objects/{o}",
+            get(sync::object).delete(sync::purge),
+        )
         .route(
             "/vaults/{v}/objects/{o}/snapshots",
-            get(sync::list_snapshots).post(sync::create_snapshot).layer(snapshot_limit),
+            get(sync::list_snapshots)
+                .post(sync::create_snapshot)
+                .layer(snapshot_limit),
         )
-        .route("/vaults/{v}/objects/{o}/snapshots/{id}", get(sync::get_snapshot))
+        .route(
+            "/vaults/{v}/objects/{o}/snapshots/{id}",
+            get(sync::get_snapshot),
+        )
         .route("/vaults/{v}/objects/{o}/changes", get(sync::object_changes))
         .route("/vaults/{v}/objects/{o}/keys", get(shares::object_keys))
-        .route("/vaults/{v}/objects/{o}/key", put(shares::set_key).layer(DefaultBodyLimit::max(b64(cfg.max_snapshot_bytes()))))
+        .route(
+            "/vaults/{v}/objects/{o}/key",
+            put(shares::set_key).layer(DefaultBodyLimit::max(b64(cfg.max_snapshot_bytes()))),
+        )
         .route("/vaults/{v}/objects/{o}/meta", put(shares::set_meta))
-        .route("/vaults/{v}/objects/{o}/shares", get(shares::list).post(shares::add))
-        .route("/vaults/{v}/objects/{o}/shares/{u}", patch(shares::update).delete(shares::remove))
+        .route(
+            "/vaults/{v}/objects/{o}/shares",
+            get(shares::list).post(shares::add),
+        )
+        .route(
+            "/vaults/{v}/objects/{o}/shares/{u}",
+            patch(shares::update).delete(shares::remove),
+        )
         .route("/shares", get(shares::shared_with_me))
         .route(
             "/vaults/{v}/attachments/{id}",
-            put(attachments::put).layer(attachment_limit).get(attachments::get).delete(attachments::delete),
+            put(attachments::put)
+                .layer(attachment_limit)
+                .get(attachments::get)
+                .delete(attachments::delete),
         )
         .route("/agents", get(agents::list).post(agents::create))
         .route("/agents/{id}", delete(agents::delete))
         .route("/agents/{id}/credentials", post(agents::create_credential))
-        .route("/agents/{id}/credentials/{client_id}", delete(agents::revoke_credential))
+        .route(
+            "/agents/{id}/credentials/{client_id}",
+            delete(agents::revoke_credential),
+        )
         .route("/admin/users", get(admin::users))
         .route("/admin/users/{id}", patch(admin::update_user))
         .route("/admin/stats", get(admin::stats))
@@ -109,7 +149,10 @@ pub fn router(state: AppState) -> Router {
         .fallback(api_not_found)
         .layer(from_fn_with_state(state.clone(), ratelimit::api_limit))
         .layer(DefaultBodyLimit::max(1024 * 1024))
-        .layer(SetResponseHeaderLayer::if_not_present(header::CACHE_CONTROL, HeaderValue::from_static("no-store")));
+        .layer(SetResponseHeaderLayer::if_not_present(
+            header::CACHE_CONTROL,
+            HeaderValue::from_static("no-store"),
+        ));
 
     let mut app = Router::new()
         .nest("/api/v1", api)
@@ -123,26 +166,45 @@ pub fn router(state: AppState) -> Router {
             let spa = ServeDir::new(dir).fallback(ServeFile::new(index));
             app.fallback_service(
                 tower::ServiceBuilder::new()
-                    .layer(SetResponseHeaderLayer::if_not_present(header::CACHE_CONTROL, HeaderValue::from_static("no-cache")))
+                    .layer(SetResponseHeaderLayer::if_not_present(
+                        header::CACHE_CONTROL,
+                        HeaderValue::from_static("no-cache"),
+                    ))
                     .service(spa),
             )
         }
-        None => app.fallback(|| async { (StatusCode::NOT_FOUND, "coolpsonotes server (API only)") }),
+        None => {
+            app.fallback(|| async { (StatusCode::NOT_FOUND, "coolpsonotes server (API only)") })
+        }
     };
 
     let hsts = cfg.public_url.starts_with("https://");
     let mut app = app
-        .layer(SetResponseHeaderLayer::overriding(header::CONTENT_SECURITY_POLICY, HeaderValue::from_static(CSP)))
-        .layer(SetResponseHeaderLayer::overriding(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff")))
-        .layer(SetResponseHeaderLayer::overriding(header::REFERRER_POLICY, HeaderValue::from_static("no-referrer")))
-        .layer(SetResponseHeaderLayer::overriding(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY")))
+        .layer(SetResponseHeaderLayer::overriding(
+            header::CONTENT_SECURITY_POLICY,
+            HeaderValue::from_static(CSP),
+        ))
+        .layer(SetResponseHeaderLayer::overriding(
+            header::X_CONTENT_TYPE_OPTIONS,
+            HeaderValue::from_static("nosniff"),
+        ))
+        .layer(SetResponseHeaderLayer::overriding(
+            header::REFERRER_POLICY,
+            HeaderValue::from_static("no-referrer"),
+        ))
+        .layer(SetResponseHeaderLayer::overriding(
+            header::X_FRAME_OPTIONS,
+            HeaderValue::from_static("DENY"),
+        ))
         .layer(SetResponseHeaderLayer::overriding(
             HeaderName::from_static("cross-origin-opener-policy"),
             HeaderValue::from_static("same-origin"),
         ))
         .layer(SetResponseHeaderLayer::overriding(
             HeaderName::from_static("permissions-policy"),
-            HeaderValue::from_static("camera=(), microphone=(), geolocation=(), interest-cohort=()"),
+            HeaderValue::from_static(
+                "camera=(), microphone=(), geolocation=(), interest-cohort=()",
+            ),
         ));
     if hsts {
         app = app.layer(SetResponseHeaderLayer::overriding(
@@ -150,7 +212,9 @@ pub fn router(state: AppState) -> Router {
             HeaderValue::from_static("max-age=31536000"),
         ));
     }
-    app.layer(CompressionLayer::new()).layer(from_fn(observe)).with_state(state)
+    app.layer(CompressionLayer::new())
+        .layer(from_fn(observe))
+        .with_state(state)
 }
 
 /// Request logging and metrics. Only method, path and status are recorded:
@@ -181,7 +245,8 @@ async fn observe(req: Request, next: Next) -> Response {
 fn redact_path(path: &str) -> String {
     path.split('/')
         .map(|seg| {
-            let id_like = seg.len() >= 16 && seg.bytes().all(|b| b.is_ascii_hexdigit() || b == b'-');
+            let id_like =
+                seg.len() >= 16 && seg.bytes().all(|b| b.is_ascii_hexdigit() || b == b'-');
             if id_like { ":id" } else { seg }
         })
         .collect::<Vec<_>>()
@@ -193,14 +258,19 @@ async fn healthz() -> &'static str {
 }
 
 async fn readyz(State(state): State<AppState>) -> Response {
-    match sqlx::query_scalar::<_, i64>("SELECT 1").fetch_one(&state.db).await {
+    match sqlx::query_scalar::<_, i64>("SELECT 1")
+        .fetch_one(&state.db)
+        .await
+    {
         Ok(_) => (StatusCode::OK, "ready").into_response(),
         Err(_) => (StatusCode::SERVICE_UNAVAILABLE, "database unavailable").into_response(),
     }
 }
 
 async fn metrics(State(state): State<AppState>, headers: HeaderMap) -> Response {
-    let Some(handle) = &state.metrics else { return StatusCode::NOT_FOUND.into_response() };
+    let Some(handle) = &state.metrics else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
     if let Some(expected) = &state.config.metrics_token {
         let ok = headers
             .get(header::AUTHORIZATION)
@@ -215,5 +285,9 @@ async fn metrics(State(state): State<AppState>, headers: HeaderMap) -> Response 
         }
     }
     metrics::gauge!("coolpsonotes_ws_connected_users").set(state.hub.connection_count() as f64);
-    ([(header::CONTENT_TYPE, "text/plain; version=0.0.4")], handle.render()).into_response()
+    (
+        [(header::CONTENT_TYPE, "text/plain; version=0.0.4")],
+        handle.render(),
+    )
+        .into_response()
 }

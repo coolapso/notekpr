@@ -40,16 +40,24 @@ pub fn client_ip(headers: &HeaderMap, peer: Option<SocketAddr>, trust_proxy: boo
             .and_then(|v| v.to_str().ok())
             .and_then(|v| v.split(',').next())
             .and_then(|v| v.trim().parse().ok())
-            .or_else(|| headers.get("x-real-ip").and_then(|v| v.to_str().ok()).and_then(|v| v.trim().parse().ok()));
+            .or_else(|| {
+                headers
+                    .get("x-real-ip")
+                    .and_then(|v| v.to_str().ok())
+                    .and_then(|v| v.trim().parse().ok())
+            });
         if let Some(ip) = forwarded {
             return ip;
         }
     }
-    peer.map(|p| p.ip()).unwrap_or(IpAddr::V4(Ipv4Addr::UNSPECIFIED))
+    peer.map(|p| p.ip())
+        .unwrap_or(IpAddr::V4(Ipv4Addr::UNSPECIFIED))
 }
 
 fn peer(req: &Request) -> Option<SocketAddr> {
-    req.extensions().get::<ConnectInfo<SocketAddr>>().map(|c| c.0)
+    req.extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .map(|c| c.0)
 }
 
 pub async fn api_limit(State(state): State<AppState>, req: Request, next: Next) -> Response {

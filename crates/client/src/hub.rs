@@ -23,7 +23,13 @@ use crate::vault::Vault;
 #[derive(Clone, Debug)]
 pub enum HubEvent {
     /// Documents or the index changed (`local` = made on this machine).
-    Changed { vault_id: String, objects: Vec<String>, index_changed: bool, purged: Vec<String>, local: bool },
+    Changed {
+        vault_id: String,
+        objects: Vec<String>,
+        index_changed: bool,
+        purged: Vec<String>,
+        local: bool,
+    },
     /// A vault became available (opened) on this hub.
     VaultAdded { vault_id: String },
     /// Access was revoked or the vault was deleted; the local copy is read-only.
@@ -115,16 +121,24 @@ impl Hub {
                 self.preresolve_allow_list(&list);
                 self.open_listed(&list).await?;
             }
-            Err(e) if (e.is_network() || e.is_unauthorized() || matches!(e, ApiError::Auth(_))) && opts.offline_ok => {
+            Err(e)
+                if (e.is_network() || e.is_unauthorized() || matches!(e, ApiError::Auth(_)))
+                    && opts.offline_ok =>
+            {
                 if !e.is_network() {
-                    ui::warn(&format!("{e}; showing local copies only (run `coolpsonotes login`)"));
+                    ui::warn(&format!(
+                        "{e}; showing local copies only (run `coolpsonotes login`)"
+                    ));
                 } else {
                     ui::warn("the server is unreachable; working offline with the local copies");
                 }
                 for id in self.session.local_vault_ids() {
                     match self.session.load_local(&id) {
                         Ok(Some(v)) => {
-                            self.vaults.write().unwrap().insert(id, Arc::new(Mutex::new(v)));
+                            self.vaults
+                                .write()
+                                .unwrap()
+                                .insert(id, Arc::new(Mutex::new(v)));
                         }
                         Ok(None) => {}
                         Err(e) => ui::warn(&format!("{e:#}")),
@@ -155,13 +169,21 @@ impl Hub {
             match self.session.open_vault(info).await {
                 Ok(v) => {
                     self.waiting_for_keys.write().unwrap().remove(&info.id);
-                    self.vaults.write().unwrap().insert(info.id.clone(), Arc::new(Mutex::new(v)));
+                    self.vaults
+                        .write()
+                        .unwrap()
+                        .insert(info.id.clone(), Arc::new(Mutex::new(v)));
                     added.push(info.id.clone());
                 }
                 Err(e) => {
                     let msg = format!("{e:#}");
                     if msg.contains("no key has been shared") {
-                        if self.waiting_for_keys.write().unwrap().insert(info.id.clone()) {
+                        if self
+                            .waiting_for_keys
+                            .write()
+                            .unwrap()
+                            .insert(info.id.clone())
+                        {
                             ui::status(&format!(
                                 "vault {} was shared with you but its key has not arrived yet; it will open once the \
                                  owner's client grants it",
@@ -192,13 +214,17 @@ impl Hub {
             };
             let mut v = shared.lock().await;
             if v.read_only.is_none() {
-                v.read_only = Some("you no longer have access to this vault (local copy kept read-only)".into());
+                v.read_only = Some(
+                    "you no longer have access to this vault (local copy kept read-only)".into(),
+                );
                 v.mark_state_dirty();
                 let _ = v.save();
             }
         }
         for id in &added {
-            self.emit(HubEvent::VaultAdded { vault_id: id.clone() });
+            self.emit(HubEvent::VaultAdded {
+                vault_id: id.clone(),
+            });
         }
         Ok(added)
     }
@@ -263,11 +289,19 @@ impl Hub {
             .read()
             .unwrap()
             .iter()
-            .map(|(id, v)| (id.clone(), v.try_lock().map(|g| g.name().to_string()).unwrap_or_default()))
+            .map(|(id, v)| {
+                (
+                    id.clone(),
+                    v.try_lock()
+                        .map(|g| g.name().to_string())
+                        .unwrap_or_default(),
+                )
+            })
             .collect();
         for r in &self.allow {
             let by_id = open.iter().find(|(id, _)| id == r);
-            let by_name: Vec<&(String, String)> = open.iter().filter(|(_, n)| lower(n) == lower(r)).collect();
+            let by_name: Vec<&(String, String)> =
+                open.iter().filter(|(_, n)| lower(n) == lower(r)).collect();
             match (by_id, by_name.as_slice()) {
                 (Some((id, _)), _) => {
                     ids.insert(id.clone());
@@ -279,7 +313,10 @@ impl Hub {
                 (None, _) => bail!("vault name '{r}' is ambiguous; use the vault id"),
             }
         }
-        self.vaults.write().unwrap().retain(|id, _| ids.contains(id));
+        self.vaults
+            .write()
+            .unwrap()
+            .retain(|id, _| ids.contains(id));
         *self.allowed.write().unwrap() = Some(ids);
         Ok(())
     }
@@ -338,13 +375,19 @@ impl Hub {
         if let Some(v) = self.get(id) {
             let mut g = v.lock().await;
             if g.read_only.is_none() {
-                ui::warn(&format!("vault '{}': {reason}; the local copy is kept read-only", g.name()));
+                ui::warn(&format!(
+                    "vault '{}': {reason}; the local copy is kept read-only",
+                    g.name()
+                ));
             }
             g.read_only = Some(reason.to_string());
             g.mark_state_dirty();
             let _ = g.save();
         }
-        self.emit(HubEvent::VaultClosed { vault_id: id.to_string(), reason: reason.to_string() });
+        self.emit(HubEvent::VaultClosed {
+            vault_id: id.to_string(),
+            reason: reason.to_string(),
+        });
     }
 
     /// Find an open vault by id or (unique, case-insensitive) name.
@@ -379,12 +422,19 @@ impl Hub {
     }
 
     fn push_lock(&self, vault_id: &str) -> Arc<Mutex<()>> {
-        self.push_locks.lock().unwrap().entry(vault_id.to_string()).or_default().clone()
+        self.push_locks
+            .lock()
+            .unwrap()
+            .entry(vault_id.to_string())
+            .or_default()
+            .clone()
     }
 
     /// Upload a vault's pending changes (serialised per vault).
     pub async fn push(&self, vault_id: &str) -> Result<PushOutcome> {
-        let Some(v) = self.get(vault_id) else { bail!("vault {vault_id} is not open") };
+        let Some(v) = self.get(vault_id) else {
+            bail!("vault {vault_id} is not open")
+        };
         let lock = self.push_lock(vault_id);
         let _g = lock.lock().await;
         let out = self.session.push(&v).await?;
@@ -396,7 +446,9 @@ impl Hub {
 
     /// Catch up over REST, push and compact one vault.
     pub async fn sync_vault(&self, vault_id: &str) -> Result<PushOutcome> {
-        let Some(v) = self.get(vault_id) else { bail!("vault {vault_id} is not open") };
+        let Some(v) = self.get(vault_id) else {
+            bail!("vault {vault_id} is not open")
+        };
         let applied = self.session.catch_up(&v).await?;
         self.emit_applied(vault_id, &applied, false);
         let out = self.push(vault_id).await?;
@@ -413,7 +465,12 @@ impl Hub {
 
     /// Call after a local edit was applied and saved: notifies listeners and
     /// uploads it unless the live loop is disconnected.
-    pub async fn local_changed(&self, vault_id: &str, objects: Vec<String>, index_changed: bool) -> PushOutcome {
+    pub async fn local_changed(
+        &self,
+        vault_id: &str,
+        objects: Vec<String>,
+        index_changed: bool,
+    ) -> PushOutcome {
         {
             let now = std::time::Instant::now();
             let mut edited = self.edited.lock().unwrap();
@@ -433,13 +490,22 @@ impl Hub {
                 Some(v) => v.lock().await.replica.pending.len(),
                 None => 0,
             };
-            return PushOutcome { remaining: pending, offline: true, ..Default::default() };
+            return PushOutcome {
+                remaining: pending,
+                offline: true,
+                ..Default::default()
+            };
         }
         match self.push(vault_id).await {
             Ok(o) => o,
             Err(e) => {
-                ui::warn(&format!("upload failed (changes are kept and retried): {e:#}"));
-                PushOutcome { offline: true, ..Default::default() }
+                ui::warn(&format!(
+                    "upload failed (changes are kept and retried): {e:#}"
+                ));
+                PushOutcome {
+                    offline: true,
+                    ..Default::default()
+                }
             }
         }
     }
@@ -451,7 +517,11 @@ impl Hub {
     pub async fn snapshot_idle(&self, idle: std::time::Duration, min_updates: u32) -> usize {
         let due: Vec<(String, String)> = {
             let edited = self.edited.lock().unwrap();
-            edited.iter().filter(|(_, t)| t.elapsed() >= idle).map(|(k, _)| k.clone()).collect()
+            edited
+                .iter()
+                .filter(|(_, t)| t.elapsed() >= idle)
+                .map(|(k, _)| k.clone())
+                .collect()
         };
         let mut n = 0;
         for key in due {
@@ -497,7 +567,12 @@ impl Hub {
     }
 
     pub fn waiting_for_keys(&self) -> Vec<String> {
-        self.waiting_for_keys.read().unwrap().iter().cloned().collect()
+        self.waiting_for_keys
+            .read()
+            .unwrap()
+            .iter()
+            .cloned()
+            .collect()
     }
 }
 

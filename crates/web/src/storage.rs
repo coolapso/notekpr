@@ -54,9 +54,10 @@ pub fn set_token(t: &str) {
 
 pub fn clear_token() {
     if let Some(t) = get(session(), TOKEN)
-        && get(local(), LAST_TOKEN).as_deref() == Some(t.as_str()) {
-            remove(local(), LAST_TOKEN);
-        }
+        && get(local(), LAST_TOKEN).as_deref() == Some(t.as_str())
+    {
+        remove(local(), LAST_TOKEN);
+    }
     remove(session(), TOKEN);
 }
 
@@ -75,7 +76,11 @@ pub fn device(user_id: &str) -> Option<DeviceRecord> {
 }
 
 pub fn set_device(user_id: &str, rec: &DeviceRecord) {
-    set(local(), &device_key(user_id), &serde_json::to_string(rec).unwrap());
+    set(
+        local(),
+        &device_key(user_id),
+        &serde_json::to_string(rec).unwrap(),
+    );
 }
 
 pub fn clear_device(user_id: &str) {
@@ -87,14 +92,20 @@ fn pending_key(user_id: &str, vault_id: &str) -> String {
 }
 
 pub fn pending(user_id: &str, vault_id: &str) -> Vec<PushUpdate> {
-    get(local(), &pending_key(user_id, vault_id)).and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default()
+    get(local(), &pending_key(user_id, vault_id))
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default()
 }
 
 pub fn set_pending(user_id: &str, vault_id: &str, p: &[PushUpdate]) {
     if p.is_empty() {
         remove(local(), &pending_key(user_id, vault_id));
     } else {
-        set(local(), &pending_key(user_id, vault_id), &serde_json::to_string(p).unwrap());
+        set(
+            local(),
+            &pending_key(user_id, vault_id),
+            &serde_json::to_string(p).unwrap(),
+        );
     }
 }
 
@@ -103,7 +114,10 @@ pub fn pending_vaults(user_id: &str) -> Vec<String> {
     let Some(s) = local() else { return vec![] };
     let prefix = format!("cpn.pending.{user_id}.");
     let n = s.length().unwrap_or(0);
-    (0..n).filter_map(|i| s.key(i).ok().flatten()).filter_map(|k| k.strip_prefix(&prefix).map(str::to_string)).collect()
+    (0..n)
+        .filter_map(|i| s.key(i).ok().flatten())
+        .filter_map(|k| k.strip_prefix(&prefix).map(str::to_string))
+        .collect()
 }
 
 fn head_key(user_id: &str, vault_id: &str) -> String {
@@ -111,7 +125,9 @@ fn head_key(user_id: &str, vault_id: &str) -> String {
 }
 
 pub fn head_seen(user_id: &str, vault_id: &str) -> i64 {
-    get(local(), &head_key(user_id, vault_id)).and_then(|s| s.parse().ok()).unwrap_or(0)
+    get(local(), &head_key(user_id, vault_id))
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0)
 }
 
 pub fn set_head_seen(user_id: &str, vault_id: &str, head: i64) {
@@ -139,12 +155,20 @@ fn default_mode() -> String {
 
 impl Default for UiPrefs {
     fn default() -> Self {
-        UiPrefs { theme: "system".into(), editor_mode: "live".into(), vim: false, right_panel: true, wide: false }
+        UiPrefs {
+            theme: "system".into(),
+            editor_mode: "live".into(),
+            vim: false,
+            right_panel: true,
+            wide: false,
+        }
     }
 }
 
 pub fn ui_prefs() -> UiPrefs {
-    get(local(), "cpn.ui").and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default()
+    get(local(), "cpn.ui")
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default()
 }
 
 pub fn set_ui_prefs(p: &UiPrefs) {

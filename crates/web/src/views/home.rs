@@ -25,7 +25,11 @@ fn PageHead(title: String) -> impl IntoView {
 #[component]
 pub fn Home() -> impl IntoView {
     let ui = ui();
-    let name = ui.user.get_untracked().map(|u| u.display_name).unwrap_or_default();
+    let name = ui
+        .user
+        .get_untracked()
+        .map(|u| u.display_name)
+        .unwrap_or_default();
     view! {
         <div class="page">
             <PageHead title=format!("Hi {name}")/>
@@ -89,16 +93,27 @@ pub fn VaultHome(vault: String) -> impl IntoView {
     });
     let recent = Memo::new(move |_| {
         ui.tree_rev.get();
-        let mut e: Vec<_> = state::live_entries(&vid.get_value()).into_iter().filter(|e| e.kind == EntryKind::Note).collect();
+        let mut e: Vec<_> = state::live_entries(&vid.get_value())
+            .into_iter()
+            .filter(|e| e.kind == EntryKind::Note)
+            .collect();
         e.sort_by_key(|x| std::cmp::Reverse(x.modified));
         e.truncate(12);
         e
     });
     let tags = Memo::new(move |_| {
         ui.content_rev.get();
-        knowledge::tags(&vid.get_value()).into_iter().take(30).collect::<Vec<_>>()
+        knowledge::tags(&vid.get_value())
+            .into_iter()
+            .take(30)
+            .collect::<Vec<_>>()
     });
-    let loaded = Memo::new(move |_| ui.vaults.get().iter().any(|x| x.id == vid.get_value() && x.loaded));
+    let loaded = Memo::new(move |_| {
+        ui.vaults
+            .get()
+            .iter()
+            .any(|x| x.id == vid.get_value() && x.loaded)
+    });
     let writable = Memo::new(move |_| {
         ui.vaults.get();
         state::can_write(&vid.get_value())
@@ -170,10 +185,15 @@ pub fn Trash(vault: String) -> impl IntoView {
     let v = vault.clone();
     let items = move || {
         ui.tree_rev.get();
-        let mut e: Vec<_> = with(|c| c.replicas.get(&v).map(|r| r.index.entries()).unwrap_or_default())
-            .into_iter()
-            .filter(|e| !e.is_live())
-            .collect();
+        let mut e: Vec<_> = with(|c| {
+            c.replicas
+                .get(&v)
+                .map(|r| r.index.entries())
+                .unwrap_or_default()
+        })
+        .into_iter()
+        .filter(|e| !e.is_live())
+        .collect();
         e.sort_by_key(|x| std::cmp::Reverse(x.trashed));
         e
     };

@@ -16,7 +16,10 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex};
 
 use yrs::updates::decoder::Decode;
-use yrs::{Any, Doc, GetString, Map, MapPrelim, MapRef, Out, ReadTxn, StateVector, Text, TextRef, Transact, Update};
+use yrs::{
+    Any, Doc, GetString, Map, MapPrelim, MapRef, Out, ReadTxn, StateVector, Text, TextRef,
+    Transact, Update,
+};
 
 use crate::paths;
 use crate::textdiff::{self, Edit};
@@ -57,7 +60,9 @@ impl LocalUpdates {
         match v.len() {
             0 => None,
             1 => v.pop(),
-            _ => Some(yrs::merge_updates_v1(v.iter().map(|u| u.as_slice())).expect("merging own updates")),
+            _ => Some(
+                yrs::merge_updates_v1(v.iter().map(|u| u.as_slice())).expect("merging own updates"),
+            ),
         }
     }
 }
@@ -72,12 +77,15 @@ fn decode(update: &[u8]) -> Result<Update> {
 
 fn apply(doc: &Doc, update: &[u8]) -> Result<()> {
     let u = decode(update)?;
-    doc.transact_mut_with(REMOTE_ORIGIN).apply_update(u).map_err(|e| DocError::BadUpdate(e.to_string()))
+    doc.transact_mut_with(REMOTE_ORIGIN)
+        .apply_update(u)
+        .map_err(|e| DocError::BadUpdate(e.to_string()))
 }
 
 /// Merge several updates (e.g. before encrypting a batch).
 pub fn merge_updates(updates: &[Vec<u8>]) -> Result<Vec<u8>> {
-    yrs::merge_updates_v1(updates.iter().map(|u| u.as_slice())).map_err(|e| DocError::BadUpdate(e.to_string()))
+    yrs::merge_updates_v1(updates.iter().map(|u| u.as_slice()))
+        .map_err(|e| DocError::BadUpdate(e.to_string()))
 }
 
 /// A Markdown note.
@@ -100,7 +108,12 @@ impl NoteDoc {
         let text = doc.get_or_insert_text(NOTE_TEXT);
         let local = LocalUpdates::default();
         local.attach(&doc);
-        NoteDoc { doc, text, local, undo: None }
+        NoteDoc {
+            doc,
+            text,
+            local,
+            undo: None,
+        }
     }
 
     /// Build from a full state (snapshot) and/or a series of updates.
@@ -153,7 +166,9 @@ impl NoteDoc {
             let mut txn = self.doc.transact_mut_with(LOCAL_ORIGIN);
             for e in edits {
                 match e {
-                    Edit::Delete { at, len } => self.text.remove_range(&mut txn, *at as u32, *len as u32),
+                    Edit::Delete { at, len } => {
+                        self.text.remove_range(&mut txn, *at as u32, *len as u32)
+                    }
                     Edit::Insert { at, text } => self.text.insert(&mut txn, *at as u32, text),
                 }
             }
@@ -168,7 +183,10 @@ impl NoteDoc {
             edits.push(Edit::Delete { at, len: delete });
         }
         if !insert.is_empty() {
-            edits.push(Edit::Insert { at, text: insert.to_string() });
+            edits.push(Edit::Insert {
+                at,
+                text: insert.to_string(),
+            });
         }
         self.apply_edits(&edits)
     }
@@ -180,7 +198,9 @@ impl NoteDoc {
 
     /// Full state encoded as a single update (used for snapshots and caches).
     pub fn encode_state(&self) -> Vec<u8> {
-        self.doc.transact().encode_state_as_update_v1(&StateVector::default())
+        self.doc
+            .transact()
+            .encode_state_as_update_v1(&StateVector::default())
     }
 
     pub fn state_vector(&self) -> StateVector {
@@ -244,8 +264,13 @@ impl NoteDoc {
     /// A position that survives concurrent edits (for cursors).
     pub fn sticky(&self, index: usize, assoc_after: bool) -> Option<yrs::StickyIndex> {
         use yrs::IndexedSequence;
-        let assoc = if assoc_after { yrs::Assoc::After } else { yrs::Assoc::Before };
-        self.text.sticky_index(&self.doc.transact(), index as u32, assoc)
+        let assoc = if assoc_after {
+            yrs::Assoc::After
+        } else {
+            yrs::Assoc::Before
+        };
+        self.text
+            .sticky_index(&self.doc.transact(), index as u32, assoc)
     }
 
     pub fn resolve_sticky(&self, s: &yrs::StickyIndex) -> Option<usize> {
@@ -353,7 +378,9 @@ impl IndexDoc {
     }
 
     pub fn encode_state(&self) -> Vec<u8> {
-        self.doc.transact().encode_state_as_update_v1(&StateVector::default())
+        self.doc
+            .transact()
+            .encode_state_as_update_v1(&StateVector::default())
     }
 
     pub fn take_local_update(&self) -> Option<Vec<u8>> {
@@ -369,7 +396,9 @@ impl IndexDoc {
             path,
             kind,
             created,
-            modified: any_num(m.get(txn, "modified")).map(|n| n as i64).unwrap_or(created),
+            modified: any_num(m.get(txn, "modified"))
+                .map(|n| n as i64)
+                .unwrap_or(created),
             trashed: any_num(m.get(txn, "trashed")).map(|n| n as i64),
             size: any_num(m.get(txn, "size")).map(|n| n as u64),
             mime: any_str(m.get(txn, "mime")),
@@ -387,7 +416,12 @@ impl IndexDoc {
                 _ => None,
             })
             .collect();
-        out.sort_by(|a, b| a.path.cmp(&b.path).then(a.created.cmp(&b.created)).then(a.id.cmp(&b.id)));
+        out.sort_by(|a, b| {
+            a.path
+                .cmp(&b.path)
+                .then(a.created.cmp(&b.created))
+                .then(a.id.cmp(&b.id))
+        });
         out
     }
 
@@ -401,7 +435,9 @@ impl IndexDoc {
 
     /// Live entry at exactly `path`, preferring the oldest one if there are duplicates.
     pub fn find_by_path(&self, path: &str) -> Option<Entry> {
-        self.entries().into_iter().find(|e| e.is_live() && e.path == path)
+        self.entries()
+            .into_iter()
+            .find(|e| e.is_live() && e.path == path)
     }
 
     /// Unique display paths for live entries. Concurrent offline creation can
@@ -412,7 +448,12 @@ impl IndexDoc {
         let mut taken: HashMap<String, ()> = HashMap::new();
         let mut out = BTreeMap::new();
         let mut live: Vec<Entry> = self.entries().into_iter().filter(|e| e.is_live()).collect();
-        live.sort_by(|a, b| a.path.cmp(&b.path).then(a.created.cmp(&b.created)).then(a.id.cmp(&b.id)));
+        live.sort_by(|a, b| {
+            a.path
+                .cmp(&b.path)
+                .then(a.created.cmp(&b.created))
+                .then(a.id.cmp(&b.id))
+        });
         for e in live {
             let p = paths::unique(&e.path, |p| taken.contains_key(p));
             taken.insert(p.clone(), ());
@@ -462,7 +503,10 @@ impl IndexDoc {
             if let Some(m) = mime {
                 fields.insert("mime".into(), Any::from(m));
             }
-            let prelim: MapPrelim = fields.into_iter().map(|(k, v)| (k, yrs::In::from(v))).collect();
+            let prelim: MapPrelim = fields
+                .into_iter()
+                .map(|(k, v)| (k, yrs::In::from(v)))
+                .collect();
             self.files.insert(txn, id, prelim);
         })
     }

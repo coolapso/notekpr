@@ -109,7 +109,8 @@ pub fn random_bytes<const N: usize>() -> [u8; N] {
 pub fn derive_key(root: &Key32, label: &[u8]) -> Key32 {
     let hk = Hkdf::<Sha256>::new(Some(HKDF_SALT), root);
     let mut out = [0u8; 32];
-    hk.expand(label, &mut out).expect("32 bytes is a valid HKDF-SHA256 output length");
+    hk.expand(label, &mut out)
+        .expect("32 bytes is a valid HKDF-SHA256 output length");
     out
 }
 
@@ -134,7 +135,13 @@ fn build_aad(purpose: Purpose, header: &[u8], context: &[&[u8]]) -> Vec<u8> {
 /// Layout: `version(1) || epoch(4, BE) || nonce(24) || ciphertext || tag(16)`.
 /// The header and every `context` element (e.g. vault id, object id) are
 /// authenticated as associated data.
-pub fn seal_sym(root: &Key32, epoch: u32, purpose: Purpose, context: &[&[u8]], plaintext: &[u8]) -> Vec<u8> {
+pub fn seal_sym(
+    root: &Key32,
+    epoch: u32,
+    purpose: Purpose,
+    context: &[&[u8]],
+    plaintext: &[u8],
+) -> Vec<u8> {
     let key = derive_key(root, purpose.label());
     let cipher = XChaCha20Poly1305::new(&key.into());
     let nonce: [u8; 24] = random_bytes();
@@ -146,7 +153,10 @@ pub fn seal_sym(root: &Key32, epoch: u32, purpose: Purpose, context: &[&[u8]], p
     let ct = cipher
         .encrypt(
             &XNonce::from(nonce),
-            chacha20poly1305::aead::Payload { msg: plaintext, aad: &aad },
+            chacha20poly1305::aead::Payload {
+                msg: plaintext,
+                aad: &aad,
+            },
         )
         .expect("XChaCha20-Poly1305 encryption cannot fail for in-memory buffers");
     let mut out = header;
@@ -166,7 +176,12 @@ pub fn sym_epoch(envelope: &[u8]) -> Result<u32> {
 }
 
 /// Decrypt and authenticate a symmetric envelope produced by [`seal_sym`].
-pub fn open_sym(root: &Key32, purpose: Purpose, context: &[&[u8]], envelope: &[u8]) -> Result<Vec<u8>> {
+pub fn open_sym(
+    root: &Key32,
+    purpose: Purpose,
+    context: &[&[u8]],
+    envelope: &[u8],
+) -> Result<Vec<u8>> {
     sym_epoch(envelope)?;
     let (header, ct) = envelope.split_at(SYM_HEADER_LEN);
     let nonce: [u8; 24] = header[5..].try_into().unwrap();
@@ -174,19 +189,26 @@ pub fn open_sym(root: &Key32, purpose: Purpose, context: &[&[u8]], envelope: &[u
     let cipher = XChaCha20Poly1305::new(&key.into());
     let aad = build_aad(purpose, header, context);
     cipher
-        .decrypt(&XNonce::from(nonce), chacha20poly1305::aead::Payload { msg: ct, aad: &aad })
+        .decrypt(
+            &XNonce::from(nonce),
+            chacha20poly1305::aead::Payload { msg: ct, aad: &aad },
+        )
         .map_err(|_| CryptoError::Decrypt)
 }
 
 /// Generate an X25519 key pair for HPKE. Returns `(secret, public)`.
 pub fn x25519_generate() -> (Key32, Key32) {
     let (sk, pk) = HpkeKem::gen_keypair();
-    (to_key32(sk.to_bytes().as_slice()), to_key32(pk.to_bytes().as_slice()))
+    (
+        to_key32(sk.to_bytes().as_slice()),
+        to_key32(pk.to_bytes().as_slice()),
+    )
 }
 
 /// Compute the X25519 public key for a secret key.
 pub fn x25519_public(secret: &Key32) -> Result<Key32> {
-    let sk = <HpkeKem as KemTrait>::PrivateKey::from_bytes(secret).map_err(|_| CryptoError::InvalidKey)?;
+    let sk = <HpkeKem as KemTrait>::PrivateKey::from_bytes(secret)
+        .map_err(|_| CryptoError::InvalidKey)?;
     Ok(to_key32(HpkeKem::sk_to_pk(&sk).to_bytes().as_slice()))
 }
 
@@ -197,10 +219,22 @@ fn to_key32(b: &[u8]) -> Key32 {
 /// HPKE base-mode single-shot seal to `recipient_public`.
 ///
 /// Layout: `version(1) || encapsulated_key(32) || ciphertext || tag(16)`.
-pub fn hpke_seal(recipient_public: &Key32, info: &[u8], aad: &[u8], plaintext: &[u8]) -> Result<Vec<u8>> {
-    let pk = <HpkeKem as KemTrait>::PublicKey::from_bytes(recipient_public).map_err(|_| CryptoError::InvalidKey)?;
-    let (enc, ct) = hpke::single_shot_seal::<HpkeAead, HpkeKdf, HpkeKem>(&OpModeS::Base, &pk, info, plaintext, aad)
+pub fn hpke_seal(
+    recipient_public: &Key32,
+    info: &[u8],
+    aad: &[u8],
+    plaintext: &[u8],
+) -> Result<Vec<u8>> {
+    let pk = <HpkeKem as KemTrait>::PublicKey::from_bytes(recipient_public)
         .map_err(|_| CryptoError::InvalidKey)?;
+    let (enc, ct) = hpke::single_shot_seal::<HpkeAead, HpkeKdf, HpkeKem>(
+        &OpModeS::Base,
+        &pk,
+        info,
+        plaintext,
+        aad,
+    )
+    .map_err(|_| CryptoError::InvalidKey)?;
     let mut out = Vec::with_capacity(1 + 32 + ct.len());
     out.push(HPKE_VERSION);
     out.extend_from_slice(enc.to_bytes().as_slice());
@@ -209,33 +243,52 @@ pub fn hpke_seal(recipient_public: &Key32, info: &[u8], aad: &[u8], plaintext: &
 }
 
 /// Open an HPKE sealed box produced by [`hpke_seal`].
-pub fn hpke_open(recipient_secret: &Key32, info: &[u8], aad: &[u8], sealed: &[u8]) -> Result<Vec<u8>> {
+pub fn hpke_open(
+    recipient_secret: &Key32,
+    info: &[u8],
+    aad: &[u8],
+    sealed: &[u8],
+) -> Result<Vec<u8>> {
     if sealed.len() < 1 + 32 + TAG_LEN {
         return Err(CryptoError::Malformed);
     }
     if sealed[0] != HPKE_VERSION {
         return Err(CryptoError::Version(sealed[0]));
     }
-    let sk = <HpkeKem as KemTrait>::PrivateKey::from_bytes(recipient_secret).map_err(|_| CryptoError::InvalidKey)?;
-    let enc = <HpkeKem as KemTrait>::EncappedKey::from_bytes(&sealed[1..33]).map_err(|_| CryptoError::Malformed)?;
-    hpke::single_shot_open::<HpkeAead, HpkeKdf, HpkeKem>(&OpModeR::Base, &sk, &enc, info, &sealed[33..], aad)
-        .map_err(|_| CryptoError::Decrypt)
+    let sk = <HpkeKem as KemTrait>::PrivateKey::from_bytes(recipient_secret)
+        .map_err(|_| CryptoError::InvalidKey)?;
+    let enc = <HpkeKem as KemTrait>::EncappedKey::from_bytes(&sealed[1..33])
+        .map_err(|_| CryptoError::Malformed)?;
+    hpke::single_shot_open::<HpkeAead, HpkeKdf, HpkeKem>(
+        &OpModeR::Base,
+        &sk,
+        &enc,
+        info,
+        &sealed[33..],
+        aad,
+    )
+    .map_err(|_| CryptoError::Decrypt)
 }
 
 /// Ed25519 public key for a 32-byte seed.
 pub fn ed25519_public(seed: &Key32) -> Key32 {
-    ed25519_dalek::SigningKey::from_bytes(seed).verifying_key().to_bytes()
+    ed25519_dalek::SigningKey::from_bytes(seed)
+        .verifying_key()
+        .to_bytes()
 }
 
 /// Ed25519 signature over `msg`.
 pub fn ed25519_sign(seed: &Key32, msg: &[u8]) -> [u8; 64] {
     use ed25519_dalek::Signer;
-    ed25519_dalek::SigningKey::from_bytes(seed).sign(msg).to_bytes()
+    ed25519_dalek::SigningKey::from_bytes(seed)
+        .sign(msg)
+        .to_bytes()
 }
 
 /// Strict Ed25519 verification (rejects malleable and small-order encodings).
 pub fn ed25519_verify(public: &Key32, msg: &[u8], sig: &[u8]) -> Result<()> {
-    let vk = ed25519_dalek::VerifyingKey::from_bytes(public).map_err(|_| CryptoError::InvalidKey)?;
+    let vk =
+        ed25519_dalek::VerifyingKey::from_bytes(public).map_err(|_| CryptoError::InvalidKey)?;
     let sig: [u8; 64] = sig.try_into().map_err(|_| CryptoError::BadSignature)?;
     vk.verify_strict(msg, &ed25519_dalek::Signature::from_bytes(&sig))
         .map_err(|_| CryptoError::BadSignature)
@@ -266,22 +319,43 @@ mod tests {
         let key: Key32 = random_bytes();
         let ct = seal_sym(&key, 7, Purpose::Update, &[b"vault", b"obj"], b"hello");
         assert_eq!(sym_epoch(&ct).unwrap(), 7);
-        assert_eq!(open_sym(&key, Purpose::Update, &[b"vault", b"obj"], &ct).unwrap(), b"hello");
+        assert_eq!(
+            open_sym(&key, Purpose::Update, &[b"vault", b"obj"], &ct).unwrap(),
+            b"hello"
+        );
         // Wrong purpose, context or key fail.
-        assert_eq!(open_sym(&key, Purpose::Snapshot, &[b"vault", b"obj"], &ct), Err(CryptoError::Decrypt));
-        assert_eq!(open_sym(&key, Purpose::Update, &[b"vault", b"other"], &ct), Err(CryptoError::Decrypt));
+        assert_eq!(
+            open_sym(&key, Purpose::Snapshot, &[b"vault", b"obj"], &ct),
+            Err(CryptoError::Decrypt)
+        );
+        assert_eq!(
+            open_sym(&key, Purpose::Update, &[b"vault", b"other"], &ct),
+            Err(CryptoError::Decrypt)
+        );
         // Context boundaries are unambiguous.
-        assert_eq!(open_sym(&key, Purpose::Update, &[b"vaul", b"tobj"], &ct), Err(CryptoError::Decrypt));
+        assert_eq!(
+            open_sym(&key, Purpose::Update, &[b"vaul", b"tobj"], &ct),
+            Err(CryptoError::Decrypt)
+        );
         let other: Key32 = random_bytes();
-        assert_eq!(open_sym(&other, Purpose::Update, &[b"vault", b"obj"], &ct), Err(CryptoError::Decrypt));
+        assert_eq!(
+            open_sym(&other, Purpose::Update, &[b"vault", b"obj"], &ct),
+            Err(CryptoError::Decrypt)
+        );
         // Tampering with the epoch in the header is detected.
         let mut tampered = ct.clone();
         tampered[4] ^= 1;
-        assert_eq!(open_sym(&key, Purpose::Update, &[b"vault", b"obj"], &tampered), Err(CryptoError::Decrypt));
+        assert_eq!(
+            open_sym(&key, Purpose::Update, &[b"vault", b"obj"], &tampered),
+            Err(CryptoError::Decrypt)
+        );
         let mut tampered = ct;
         let last = tampered.len() - 1;
         tampered[last] ^= 0x80;
-        assert_eq!(open_sym(&key, Purpose::Update, &[b"vault", b"obj"], &tampered), Err(CryptoError::Decrypt));
+        assert_eq!(
+            open_sym(&key, Purpose::Update, &[b"vault", b"obj"], &tampered),
+            Err(CryptoError::Decrypt)
+        );
     }
 
     #[test]

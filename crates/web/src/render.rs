@@ -45,7 +45,11 @@ fn text_with_tags(s: &str) -> String {
             if len > 0 && !s[i + 1..i + 1 + len].chars().all(|c| c.is_ascii_digit()) {
                 out.push_str(&esc(&s[last..i]));
                 let tag = &s[i + 1..i + 1 + len];
-                out.push_str(&format!("<a class=\"tg\" data-tag=\"{}\">#{}</a>", esc(tag), esc(tag)));
+                out.push_str(&format!(
+                    "<a class=\"tg\" data-tag=\"{}\">#{}</a>",
+                    esc(tag),
+                    esc(tag)
+                ));
                 last = i + 1 + len;
                 while k < chars.len() && chars[k].0 < last {
                     k += 1;
@@ -61,7 +65,9 @@ fn text_with_tags(s: &str) -> String {
 
 pub fn highlight_block(code: &str, lang: &str) -> String {
     let mut out = String::with_capacity(code.len() * 2);
-    let block = syntax::Block::Code { lang: lang.to_string() };
+    let block = syntax::Block::Code {
+        lang: lang.to_string(),
+    };
     for (i, line) in code.split('\n').enumerate() {
         if i > 0 {
             out.push('\n');
@@ -84,7 +90,12 @@ pub fn to_html(src: &str, ctx: &Ctx) -> String {
     opts.insert(Options::ENABLE_FOOTNOTES);
     opts.insert(Options::ENABLE_WIKILINKS);
     opts.insert(Options::ENABLE_YAML_STYLE_METADATA_BLOCKS);
-    let line_of = |off: usize| src[..off.min(src.len())].bytes().filter(|b| *b == b'\n').count();
+    let line_of = |off: usize| {
+        src[..off.min(src.len())]
+            .bytes()
+            .filter(|b| *b == b'\n')
+            .count()
+    };
 
     let mut out_events: Vec<Event> = Vec::new();
     let mut in_meta = false;
@@ -98,7 +109,9 @@ pub fn to_html(src: &str, ctx: &Ctx) -> String {
             match ev {
                 Event::End(TagEnd::Image) => {
                     let (target, alt, wiki) = image.take().unwrap();
-                    out_events.push(Event::Html(CowStr::from(image_html(&target, &alt, wiki, ctx))));
+                    out_events.push(Event::Html(CowStr::from(image_html(
+                        &target, &alt, wiki, ctx,
+                    ))));
                 }
                 Event::Text(t) | Event::Code(t) => alt.push_str(&t),
                 _ => {}
@@ -111,8 +124,14 @@ pub fn to_html(src: &str, ctx: &Ctx) -> String {
                 Event::End(TagEnd::CodeBlock) => {
                     let (lang, buf) = code.take().unwrap();
                     let body = highlight_block(buf.trim_end_matches('\n'), &lang);
-                    let label = if lang.is_empty() { String::new() } else { format!(" data-lang=\"{}\"", esc(&lang)) };
-                    out_events.push(Event::Html(CowStr::from(format!("<pre class=\"code\"{label}><code>{body}</code></pre>"))));
+                    let label = if lang.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" data-lang=\"{}\"", esc(&lang))
+                    };
+                    out_events.push(Event::Html(CowStr::from(format!(
+                        "<pre class=\"code\"{label}><code>{body}</code></pre>"
+                    ))));
                 }
                 _ => {}
             }
@@ -125,16 +144,26 @@ pub fn to_html(src: &str, ctx: &Ctx) -> String {
             Event::Html(h) | Event::InlineHtml(h) => out_events.push(Event::Text(h)),
             Event::Start(Tag::CodeBlock(kind)) => {
                 let lang = match kind {
-                    CodeBlockKind::Fenced(l) => l.split_whitespace().next().unwrap_or("").to_string(),
+                    CodeBlockKind::Fenced(l) => {
+                        l.split_whitespace().next().unwrap_or("").to_string()
+                    }
                     CodeBlockKind::Indented => String::new(),
                 };
                 code = Some((lang, String::new()));
             }
-            Event::Start(Tag::Image { link_type, dest_url, .. }) => {
+            Event::Start(Tag::Image {
+                link_type,
+                dest_url,
+                ..
+            }) => {
                 let wiki = matches!(link_type, LinkType::WikiLink { .. });
                 image = Some((dest_url.to_string(), String::new(), wiki));
             }
-            Event::Start(Tag::Link { link_type, dest_url, .. }) => {
+            Event::Start(Tag::Link {
+                link_type,
+                dest_url,
+                ..
+            }) => {
                 let dest = dest_url.to_string();
                 let html = if matches!(link_type, LinkType::WikiLink { .. })
                     || coolpsonotes_core::markdown::is_internal_target(&dest)
@@ -142,11 +171,19 @@ pub fn to_html(src: &str, ctx: &Ctx) -> String {
                     let target = coolpsonotes_core::markdown::percent_decode(&dest);
                     let name = target.split('#').next().unwrap_or(&target).to_string();
                     match (ctx.note)(&name) {
-                        Some(id) => format!("<a class=\"wl\" href=\"#\" data-note=\"{}\">", esc(&id)),
-                        None => format!("<a class=\"wl wlb\" href=\"#\" data-create=\"{}\" title=\"Create this note\">", esc(&name)),
+                        Some(id) => {
+                            format!("<a class=\"wl\" href=\"#\" data-note=\"{}\">", esc(&id))
+                        }
+                        None => format!(
+                            "<a class=\"wl wlb\" href=\"#\" data-create=\"{}\" title=\"Create this note\">",
+                            esc(&name)
+                        ),
                     }
                 } else if safe_external(&dest) {
-                    format!("<a href=\"{}\" target=\"_blank\" rel=\"noopener noreferrer nofollow\">", esc(dest.trim()))
+                    format!(
+                        "<a href=\"{}\" target=\"_blank\" rel=\"noopener noreferrer nofollow\">",
+                        esc(dest.trim())
+                    )
                 } else {
                     "<a>".to_string()
                 };
@@ -160,7 +197,9 @@ pub fn to_html(src: &str, ctx: &Ctx) -> String {
             }
             Event::Start(Tag::Heading { level, .. }) => {
                 let lvl = level as usize;
-                out_events.push(Event::Html(CowStr::from(format!("<h{lvl} data-h=\"{heading_n}\">"))));
+                out_events.push(Event::Html(CowStr::from(format!(
+                    "<h{lvl} data-h=\"{heading_n}\">"
+                ))));
                 heading_n += 1;
             }
             Event::End(TagEnd::Heading(level)) => {
@@ -169,7 +208,9 @@ pub fn to_html(src: &str, ctx: &Ctx) -> String {
             Event::TaskListMarker(checked) => {
                 let line = line_of(range.start);
                 let c = if checked { " checked" } else { "" };
-                out_events.push(Event::Html(CowStr::from(format!("<input type=\"checkbox\" class=\"task\" data-task=\"{line}\"{c}> "))));
+                out_events.push(Event::Html(CowStr::from(format!(
+                    "<input type=\"checkbox\" class=\"task\" data-task=\"{line}\"{c}> "
+                ))));
             }
             Event::Text(t) => {
                 if link_stack.is_empty() {
@@ -189,7 +230,11 @@ pub fn to_html(src: &str, ctx: &Ctx) -> String {
 fn image_html(target: &str, alt: &str, wiki: bool, ctx: &Ctx) -> String {
     let target = coolpsonotes_core::markdown::percent_decode(target);
     if !wiki && safe_external(&target) {
-        let label = if alt.is_empty() { "external image" } else { alt };
+        let label = if alt.is_empty() {
+            "external image"
+        } else {
+            alt
+        };
         return format!(
             "<a class=\"extimg\" href=\"{}\" target=\"_blank\" rel=\"noopener noreferrer nofollow\" title=\"External images are not loaded automatically\">🖼 {}</a>",
             esc(&target),
@@ -197,12 +242,23 @@ fn image_html(target: &str, alt: &str, wiki: bool, ctx: &Ctx) -> String {
         );
     }
     if let Some(id) = (ctx.attachment)(&target) {
-        return format!("<img class=\"att\" data-att=\"{}\" alt=\"{}\">", esc(&id), esc(alt));
+        return format!(
+            "<img class=\"att\" data-att=\"{}\" alt=\"{}\">",
+            esc(&id),
+            esc(alt)
+        );
     }
     if let Some(id) = (ctx.note)(&target) {
-        return format!("<a class=\"wl embed\" href=\"#\" data-note=\"{}\">{}</a>", esc(&id), esc(&target));
+        return format!(
+            "<a class=\"wl embed\" href=\"#\" data-note=\"{}\">{}</a>",
+            esc(&id),
+            esc(&target)
+        );
     }
-    format!("<span class=\"missing\">{}</span>", esc(&format!("missing: {target}")))
+    format!(
+        "<span class=\"missing\">{}</span>",
+        esc(&format!("missing: {target}"))
+    )
 }
 
 #[cfg(test)]
@@ -212,12 +268,20 @@ mod tests {
     fn render(s: &str) -> String {
         let note = |t: &str| (t == "Known").then(|| "id1".to_string());
         let att = |t: &str| (t == "pic.png").then(|| "a1".to_string());
-        to_html(s, &Ctx { note: &note, attachment: &att })
+        to_html(
+            s,
+            &Ctx {
+                note: &note,
+                attachment: &att,
+            },
+        )
     }
 
     #[test]
     fn neutralises_html_and_bad_links() {
-        let h = render("<script>alert(1)</script>\n\n[x](javascript:alert(1)) <img src=x onerror=alert(1)>");
+        let h = render(
+            "<script>alert(1)</script>\n\n[x](javascript:alert(1)) <img src=x onerror=alert(1)>",
+        );
         assert!(!h.contains("<script"));
         assert!(!h.contains("<img src=x"));
         assert!(!h.contains("javascript:"));
@@ -226,7 +290,9 @@ mod tests {
 
     #[test]
     fn wiki_tasks_tags_code() {
-        let h = render("- [ ] todo #home\n\n[[Known]] [[Missing]]\n\n![[pic.png]]\n\n```rust\nfn x() {}\n```\n");
+        let h = render(
+            "- [ ] todo #home\n\n[[Known]] [[Missing]]\n\n![[pic.png]]\n\n```rust\nfn x() {}\n```\n",
+        );
         assert!(h.contains("data-task=\"0\""));
         assert!(h.contains("data-tag=\"home\""));
         assert!(h.contains("data-note=\"id1\""));

@@ -5,11 +5,12 @@
 //! shares with it, with the role chosen at share time, and authenticates with
 //! revocable OAuth 2.0 client credentials.
 
+use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
-use axum::Json;
 use coolpsonotes_core::protocol::{
-    AgentInfo, CreateAgentRequest, CreateAgentResponse, CreatedCredential, CredentialInfo, UserEventKind,
+    AgentInfo, CreateAgentRequest, CreateAgentResponse, CreatedCredential, CredentialInfo,
+    UserEventKind,
 };
 use sqlx::Row;
 
@@ -63,15 +64,24 @@ async fn new_credential(state: &AppState, agent_id: &str) -> AppResult<CreatedCr
         .bind(db::now())
         .execute(&state.db)
         .await?;
-    Ok(CreatedCredential { agent_id: agent_id.to_string(), client_id, client_secret: secret })
+    Ok(CreatedCredential {
+        agent_id: agent_id.to_string(),
+        client_id,
+        client_secret: secret,
+    })
 }
 
-pub async fn list(State(state): State<AppState>, who: Principal) -> AppResult<Json<Vec<AgentInfo>>> {
+pub async fn list(
+    State(state): State<AppState>,
+    who: Principal,
+) -> AppResult<Json<Vec<AgentInfo>>> {
     who.require_human()?;
-    let ids: Vec<String> = sqlx::query_scalar("SELECT id FROM users WHERE kind = 'agent' AND owner_id = ? ORDER BY created_at")
-        .bind(&who.user_id)
-        .fetch_all(&state.db)
-        .await?;
+    let ids: Vec<String> = sqlx::query_scalar(
+        "SELECT id FROM users WHERE kind = 'agent' AND owner_id = ? ORDER BY created_at",
+    )
+    .bind(&who.user_id)
+    .fetch_all(&state.db)
+    .await?;
     let mut out = Vec::new();
     for id in ids {
         out.push(load(&state, &who.user_id, &id).await?);
@@ -85,14 +95,21 @@ pub async fn create(
     Json(req): Json<CreateAgentRequest>,
 ) -> AppResult<(StatusCode, Json<CreateAgentResponse>)> {
     who.require_human()?;
-    let name: String = req.name.trim().chars().filter(|c| !c.is_control()).take(80).collect();
+    let name: String = req
+        .name
+        .trim()
+        .chars()
+        .filter(|c| !c.is_control())
+        .take(80)
+        .collect();
     if name.is_empty() {
         return Err(bad("agent name must not be empty"));
     }
-    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users WHERE kind = 'agent' AND owner_id = ?")
-        .bind(&who.user_id)
-        .fetch_one(&state.db)
-        .await?;
+    let count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM users WHERE kind = 'agent' AND owner_id = ?")
+            .bind(&who.user_id)
+            .fetch_one(&state.db)
+            .await?;
     if count >= MAX_AGENTS {
         return Err(bad("too many agents"));
     }
@@ -105,17 +122,37 @@ pub async fn create(
         .execute(&state.db)
         .await?;
     let credential = new_credential(&state, &id).await?;
-    db::audit(&state.db, Some(&who.user_id), Some(&who.user_id), None, "agent.create", Some(&id), serde_json::json!({ "name": name })).await;
-    Ok((StatusCode::CREATED, Json(CreateAgentResponse { agent: load(&state, &who.user_id, &id).await?, credential })))
+    db::audit(
+        &state.db,
+        Some(&who.user_id),
+        Some(&who.user_id),
+        None,
+        "agent.create",
+        Some(&id),
+        serde_json::json!({ "name": name }),
+    )
+    .await;
+    Ok((
+        StatusCode::CREATED,
+        Json(CreateAgentResponse {
+            agent: load(&state, &who.user_id, &id).await?,
+            credential,
+        }),
+    ))
 }
 
-pub async fn delete(State(state): State<AppState>, who: Principal, Path(id): Path<String>) -> AppResult<StatusCode> {
+pub async fn delete(
+    State(state): State<AppState>,
+    who: Principal,
+    Path(id): Path<String>,
+) -> AppResult<StatusCode> {
     who.require_human()?;
     load(&state, &who.user_id, &id).await?;
-    let vaults: Vec<String> = sqlx::query_scalar("SELECT vault_id FROM vault_members WHERE user_id = ?")
-        .bind(&id)
-        .fetch_all(&state.db)
-        .await?;
+    let vaults: Vec<String> =
+        sqlx::query_scalar("SELECT vault_id FROM vault_members WHERE user_id = ?")
+            .bind(&id)
+            .fetch_all(&state.db)
+            .await?;
     {
         let _w = state.write_lock.lock().await;
         sqlx::query("DELETE FROM users WHERE id = ? AND kind = 'agent' AND owner_id = ?")
@@ -127,7 +164,16 @@ pub async fn delete(State(state): State<AppState>, who: Principal, Path(id): Pat
     for v in vaults {
         state.hub.control(&id, Control::RevokeVault(v));
     }
-    db::audit(&state.db, Some(&who.user_id), Some(&who.user_id), None, "agent.delete", Some(&id), serde_json::json!({})).await;
+    db::audit(
+        &state.db,
+        Some(&who.user_id),
+        Some(&who.user_id),
+        None,
+        "agent.delete",
+        Some(&id),
+        serde_json::json!({}),
+    )
+    .await;
     notify_user(&state, &who.user_id, UserEventKind::VaultsChanged);
     Ok(StatusCode::NO_CONTENT)
 }
@@ -140,7 +186,16 @@ pub async fn create_credential(
     who.require_human()?;
     load(&state, &who.user_id, &id).await?;
     let c = new_credential(&state, &id).await?;
-    db::audit(&state.db, Some(&who.user_id), Some(&who.user_id), None, "agent.credential_create", Some(&c.client_id), serde_json::json!({})).await;
+    db::audit(
+        &state.db,
+        Some(&who.user_id),
+        Some(&who.user_id),
+        None,
+        "agent.credential_create",
+        Some(&c.client_id),
+        serde_json::json!({}),
+    )
+    .await;
     Ok((StatusCode::CREATED, Json(c)))
 }
 
@@ -174,6 +229,15 @@ pub async fn revoke_credential(
     for s in sessions {
         state.hub.control(&id, Control::SessionRevoked(s));
     }
-    db::audit(&state.db, Some(&who.user_id), Some(&who.user_id), None, "agent.credential_revoke", Some(&client_id), serde_json::json!({})).await;
+    db::audit(
+        &state.db,
+        Some(&who.user_id),
+        Some(&who.user_id),
+        None,
+        "agent.credential_revoke",
+        Some(&client_id),
+        serde_json::json!({}),
+    )
+    .await;
     Ok(StatusCode::NO_CONTENT)
 }

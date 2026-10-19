@@ -27,7 +27,10 @@ pub fn RightPanel(vault: String, note: String) -> impl IntoView {
     let backlinks = Memo::new(move |_| {
         ui.content_rev.get();
         ui.tree_rev.get();
-        knowledge::backlinks(&v1, &n1).into_iter().map(|b| (b.id, b.path, b.snippet)).collect::<Vec<_>>()
+        knowledge::backlinks(&v1, &n1)
+            .into_iter()
+            .map(|b| (b.id, b.path, b.snippet))
+            .collect::<Vec<_>>()
     });
     let (v2, n2) = (vault.clone(), note.clone());
     let text2 = text.clone();

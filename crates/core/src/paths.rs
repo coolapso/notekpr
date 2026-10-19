@@ -49,7 +49,11 @@ pub fn normalize(input: &str) -> Result<String, PathError> {
 /// Normalise a note path, appending `.md` if missing.
 pub fn normalize_note(input: &str) -> Result<String, PathError> {
     let p = normalize(input)?;
-    if is_note(&p) { Ok(p) } else { Ok(format!("{p}.md")) }
+    if is_note(&p) {
+        Ok(p)
+    } else {
+        Ok(format!("{p}.md"))
+    }
 }
 
 pub fn is_note(path: &str) -> bool {
@@ -64,7 +68,11 @@ pub fn file_name(path: &str) -> &str {
 /// Display title: file name without `.md`.
 pub fn title(path: &str) -> &str {
     let name = file_name(path);
-    if is_note(name) { &name[..name.len() - 3] } else { name }
+    if is_note(name) {
+        &name[..name.len() - 3]
+    } else {
+        name
+    }
 }
 
 /// Parent folder ("" for the vault root).
@@ -76,12 +84,19 @@ pub fn parent(path: &str) -> &str {
 }
 
 pub fn join(folder: &str, name: &str) -> String {
-    if folder.is_empty() { name.to_string() } else { format!("{folder}/{name}") }
+    if folder.is_empty() {
+        name.to_string()
+    } else {
+        format!("{folder}/{name}")
+    }
 }
 
 /// Whether `path` lies inside `folder` (at any depth).
 pub fn is_within(path: &str, folder: &str) -> bool {
-    folder.is_empty() || (path.len() > folder.len() && path.starts_with(folder) && path.as_bytes()[folder.len()] == b'/')
+    folder.is_empty()
+        || (path.len() > folder.len()
+            && path.starts_with(folder)
+            && path.as_bytes()[folder.len()] == b'/')
 }
 
 /// Pick a path not in `taken` by appending " 2", " 3", ... before the extension.
@@ -119,7 +134,10 @@ mod tests {
         assert_eq!(parent("New.md"), "");
         assert!(is_within("a/b/c.md", "a"));
         assert!(!is_within("ab/c.md", "a"));
-        assert_eq!(unique("a/n.md", |p| p == "a/n.md" || p == "a/n 2.md"), "a/n 3.md");
+        assert_eq!(
+            unique("a/n.md", |p| p == "a/n.md" || p == "a/n 2.md"),
+            "a/n 3.md"
+        );
         assert_eq!(unique("folder", |p| p == "folder"), "folder 2");
     }
 }

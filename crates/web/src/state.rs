@@ -9,14 +9,14 @@ use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::rc::Rc;
 
-use coolpsonotes_core::doc::{EntryKind, NoteDoc};
 use coolpsonotes_core::crypto::Purpose;
+use coolpsonotes_core::doc::{EntryKind, NoteDoc};
 use coolpsonotes_core::engine::{self, ObjectMeta, Presence, VaultMeta, VaultReplica};
 use coolpsonotes_core::keys::{AccountSecret, DeviceKey, RecoveryKey};
 use coolpsonotes_core::protocol::*;
 use coolpsonotes_core::{paths, random_id};
-use leptos::prelude::*;
 use leptos::prelude::Update;
+use leptos::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::api;
@@ -28,10 +28,17 @@ use crate::ws::{ConnState, Socket};
 #[derive(Clone, Debug, PartialEq)]
 pub enum Phase {
     Loading,
-    SignedOut { error: Option<String> },
+    SignedOut {
+        error: Option<String>,
+    },
     Setup,
-    ShowRecovery { key: String },
-    Enroll { pending: Option<(String, String)>, error: Option<String> },
+    ShowRecovery {
+        key: String,
+    },
+    Enroll {
+        pending: Option<(String, String)>,
+        error: Option<String>,
+    },
     Ready,
     Fatal(String),
 }
@@ -63,7 +70,11 @@ impl Route {
     }
 
     pub fn parse(path: &str, search: &str) -> Route {
-        let parts: Vec<&str> = path.trim_matches('/').split('/').filter(|s| !s.is_empty()).collect();
+        let parts: Vec<&str> = path
+            .trim_matches('/')
+            .split('/')
+            .filter(|s| !s.is_empty())
+            .collect();
         match parts.as_slice() {
             ["v", v] => Route::Vault(v.to_string()),
             ["v", v, "trash"] => Route::Trash(v.to_string()),
@@ -72,9 +83,16 @@ impl Route {
             ["settings"] => Route::Settings("account".into()),
             ["settings", t] => Route::Settings(t.to_string()),
             ["device"] => {
-                let code = search.trim_start_matches('?').split('&').find_map(|kv| kv.strip_prefix("code=")).map(|c| {
-                    js_sys::decode_uri_component(c).ok().and_then(|s| s.as_string()).unwrap_or_else(|| c.to_string())
-                });
+                let code = search
+                    .trim_start_matches('?')
+                    .split('&')
+                    .find_map(|kv| kv.strip_prefix("code="))
+                    .map(|c| {
+                        js_sys::decode_uri_component(c)
+                            .ok()
+                            .and_then(|s| s.as_string())
+                            .unwrap_or_else(|| c.to_string())
+                    });
                 Route::Device(code)
             }
             _ => Route::Home,
@@ -268,7 +286,10 @@ pub fn with<R>(f: impl FnOnce(&mut Core) -> R) -> R {
 
 pub fn current_route() -> Route {
     let loc = util::window().location();
-    Route::parse(&loc.pathname().unwrap_or_default(), &loc.search().unwrap_or_default())
+    Route::parse(
+        &loc.pathname().unwrap_or_default(),
+        &loc.search().unwrap_or_default(),
+    )
 }
 
 pub fn toast(kind: ToastKind, text: impl Into<String>) {
@@ -278,7 +299,13 @@ pub fn toast(kind: ToastKind, text: impl Into<String>) {
         v
     });
     let ui = ui();
-    ui.toasts.update(|t| t.push(Toast { id, kind, text: text.into() }));
+    ui.toasts.update(|t| {
+        t.push(Toast {
+            id,
+            kind,
+            text: text.into(),
+        })
+    });
     let ms = if kind == ToastKind::Error { 8000 } else { 4000 };
     util::set_timeout(ms, move || ui.toasts.update(|t| t.retain(|x| x.id != id)));
 }
@@ -364,7 +391,13 @@ impl Core {
     pub fn pending_count(&self) -> usize {
         self.replicas
             .iter()
-            .map(|(v, r)| r.pending.iter().map(|p| (v, &p.object_id)).collect::<BTreeSet<_>>().len())
+            .map(|(v, r)| {
+                r.pending
+                    .iter()
+                    .map(|p| (v, &p.object_id))
+                    .collect::<BTreeSet<_>>()
+                    .len()
+            })
             .sum()
     }
 }
@@ -411,7 +444,8 @@ pub async fn boot() {
     match api::get::<ServerInfo>("/info").await {
         Ok(i) => ui.server.set(Some(i)),
         Err(e) => {
-            ui.phase.set(Phase::Fatal(format!("Cannot reach the server: {e}")));
+            ui.phase
+                .set(Phase::Fatal(format!("Cannot reach the server: {e}")));
             return;
         }
     }
@@ -431,7 +465,12 @@ pub async fn boot() {
 fn fragment_param(frag: &str, key: &str) -> Option<String> {
     frag.trim_start_matches('#').split('&').find_map(|kv| {
         let (k, v) = kv.split_once('=')?;
-        (k == key).then(|| js_sys::decode_uri_component(v).ok().and_then(|s| s.as_string()).unwrap_or_else(|| v.to_string()))
+        (k == key).then(|| {
+            js_sys::decode_uri_component(v)
+                .ok()
+                .and_then(|s| s.as_string())
+                .unwrap_or_else(|| v.to_string())
+        })
     })
 }
 
@@ -440,7 +479,9 @@ async fn complete_oidc() {
     let loc = util::window().location();
     let frag = loc.hash().unwrap_or_default();
     // Remove the one-time code from the address bar and history right away.
-    let _ = util::window().history().map(|h| h.replace_state_with_url(&wasm_bindgen::JsValue::NULL, "", Some("/")));
+    let _ = util::window()
+        .history()
+        .map(|h| h.replace_state_with_url(&wasm_bindgen::JsValue::NULL, "", Some("/")));
     if let Some(err) = fragment_param(&frag, "error") {
         let msg = match err.as_str() {
             "account_disabled" => "This account has been disabled by an administrator.".to_string(),
@@ -461,24 +502,38 @@ async fn complete_oidc() {
             storage::set_token(&s.token);
             api::set_token(Some(s.token));
             if return_to.starts_with('/') && !return_to.starts_with("//") {
-                let _ = util::window().history().map(|h| h.replace_state_with_url(&wasm_bindgen::JsValue::NULL, "", Some(&return_to)));
+                let _ = util::window().history().map(|h| {
+                    h.replace_state_with_url(&wasm_bindgen::JsValue::NULL, "", Some(&return_to))
+                });
                 ui.route.set(current_route());
             }
             after_login().await;
         }
-        Err(e) => ui.phase.set(Phase::SignedOut { error: Some(format!("Sign-in failed: {e}")) }),
+        Err(e) => ui.phase.set(Phase::SignedOut {
+            error: Some(format!("Sign-in failed: {e}")),
+        }),
     }
 }
 
 pub async fn dev_login(username: String) {
     let ui = ui();
-    match api::post::<_, SessionResponse>("/auth/dev-login", &DevLoginRequest { username, display_name: None }).await {
+    match api::post::<_, SessionResponse>(
+        "/auth/dev-login",
+        &DevLoginRequest {
+            username,
+            display_name: None,
+        },
+    )
+    .await
+    {
         Ok(s) => {
             storage::set_token(&s.token);
             api::set_token(Some(s.token));
             after_login().await;
         }
-        Err(e) => ui.phase.set(Phase::SignedOut { error: Some(e.message) }),
+        Err(e) => ui.phase.set(Phase::SignedOut {
+            error: Some(e.message),
+        }),
     }
 }
 
@@ -492,7 +547,8 @@ pub async fn after_login() {
             return;
         }
         Err(e) => {
-            ui.phase.set(Phase::Fatal(format!("Cannot load your account: {e}")));
+            ui.phase
+                .set(Phase::Fatal(format!("Cannot load your account: {e}")));
             return;
         }
     };
@@ -522,17 +578,25 @@ pub async fn after_login() {
             }
             Err(e) if e.status == 404 => storage::clear_device(&uid),
             Err(e) => {
-                ui.phase.set(Phase::Fatal(format!("Cannot check this device: {e}")));
+                ui.phase
+                    .set(Phase::Fatal(format!("Cannot check this device: {e}")));
                 return;
             }
         }
     }
-    ui.phase.set(Phase::Enroll { pending: None, error: None });
+    ui.phase.set(Phase::Enroll {
+        pending: None,
+        error: None,
+    });
 }
 
 fn unlock_with_device(uid: &str, rec: &DeviceRecord, envelope: &[u8]) -> bool {
-    let Some(secret) = coolpsonotes_core::b64::decode32(&rec.secret) else { return false };
-    let Ok(dev) = DeviceKey::from_secret(secret) else { return false };
+    let Some(secret) = coolpsonotes_core::b64::decode32(&rec.secret) else {
+        return false;
+    };
+    let Ok(dev) = DeviceKey::from_secret(secret) else {
+        return false;
+    };
     match dev.unwrap_account(envelope, uid, &rec.device_id) {
         Ok(acct) => {
             with(|c| {
@@ -547,10 +611,17 @@ fn unlock_with_device(uid: &str, rec: &DeviceRecord, envelope: &[u8]) -> bool {
 
 fn show_pending(uid: &str, rec: &DeviceRecord) {
     let ui = ui();
-    let Some(secret) = coolpsonotes_core::b64::decode32(&rec.secret) else { return };
-    let Ok(dev) = DeviceKey::from_secret(secret) else { return };
+    let Some(secret) = coolpsonotes_core::b64::decode32(&rec.secret) else {
+        return;
+    };
+    let Ok(dev) = DeviceKey::from_secret(secret) else {
+        return;
+    };
     let code = engine::verification_code(uid, &rec.device_id, &dev.public).unwrap_or_default();
-    ui.phase.set(Phase::Enroll { pending: Some((rec.device_id.clone(), code)), error: None });
+    ui.phase.set(Phase::Enroll {
+        pending: Some((rec.device_id.clone(), code)),
+        error: None,
+    });
     poll_approval(uid.to_string(), rec.clone());
 }
 
@@ -559,22 +630,35 @@ fn poll_approval(uid: String, rec: DeviceRecord) {
         loop {
             util::sleep(3000).await;
             let ui = ui();
-            if !matches!(ui.phase.get_untracked(), Phase::Enroll { pending: Some(_), .. }) {
+            if !matches!(
+                ui.phase.get_untracked(),
+                Phase::Enroll {
+                    pending: Some(_),
+                    ..
+                }
+            ) {
                 return;
             }
-            match api::get::<DeviceEnvelope>(&format!("/devices/{}/envelope", rec.device_id)).await {
+            match api::get::<DeviceEnvelope>(&format!("/devices/{}/envelope", rec.device_id)).await
+            {
                 Ok(env) => {
                     if unlock_with_device(&uid, &rec, &env.account_envelope) {
                         success("This browser was approved.");
                         enter_ready().await;
                     } else {
-                        ui.phase.set(Phase::Enroll { pending: None, error: Some("Approval data was invalid.".into()) });
+                        ui.phase.set(Phase::Enroll {
+                            pending: None,
+                            error: Some("Approval data was invalid.".into()),
+                        });
                     }
                     return;
                 }
                 Err(e) if e.status == 404 => {
                     storage::clear_device(&uid);
-                    ui.phase.set(Phase::Enroll { pending: None, error: Some("The request was declined or removed.".into()) });
+                    ui.phase.set(Phase::Enroll {
+                        pending: None,
+                        error: Some("The request was declined or removed.".into()),
+                    });
                     return;
                 }
                 Err(_) => {}
@@ -598,7 +682,13 @@ pub async fn setup_keys() {
         error(format!("Could not save your keys: {e}"));
         return;
     }
-    storage::set_device(&uid, &DeviceRecord { device_id: boot.device_id.clone(), secret: coolpsonotes_core::b64::encode(&boot.device.secret) });
+    storage::set_device(
+        &uid,
+        &DeviceRecord {
+            device_id: boot.device_id.clone(),
+            secret: coolpsonotes_core::b64::encode(&boot.device.secret),
+        },
+    );
     let key = boot.recovery.to_display();
     with(|c| {
         c.account = Some(boot.account);
@@ -611,12 +701,13 @@ pub async fn setup_keys() {
 pub async fn finish_setup() {
     enter_ready().await;
     if with(|c| c.replicas.is_empty())
-        && let Some(v) = crate::actions::create_vault("My notes".into()).await {
-            let id = crate::actions::create_note_with(&v, "", "Welcome", WELCOME).await;
-            if let Some(id) = id {
-                navigate(Route::Note(v, id));
-            }
+        && let Some(v) = crate::actions::create_vault("My notes".into()).await
+    {
+        let id = crate::actions::create_note_with(&v, "", "Welcome", WELCOME).await;
+        if let Some(id) = id {
+            navigate(Route::Note(v, id));
         }
+    }
 }
 
 const WELCOME: &str = "# Welcome to coolpsonotes 👋\n\nThis is your private vault. Everything you write is **encrypted on this device** before it is synced — the server never sees your notes.\n\n## Getting started\n\n- [ ] Write something here — just start typing\n- [ ] Create a new note with the **+** button (or Ctrl+Alt+N)\n- [ ] Link notes by typing `[[` and a note name, like [[Ideas]]\n- [ ] Add #tags anywhere\n- [ ] Share a vault with family from the vault menu\n\nUse the toolbar for formatting, or Markdown if you know it: `**bold**`, `*italic*`, `# Heading`, `- list`.\n\nPress **Ctrl+K** to jump to any note, and **?** for all keyboard shortcuts.\n";
@@ -627,10 +718,16 @@ pub async fn request_approval() {
     let uid = with(|c| c.user_id.clone());
     let (dev, reg) = engine::new_device(&device_name());
     if let Err(e) = api::post::<_, ()>("/devices", &reg).await {
-        ui.phase.set(Phase::Enroll { pending: None, error: Some(e.message) });
+        ui.phase.set(Phase::Enroll {
+            pending: None,
+            error: Some(e.message),
+        });
         return;
     }
-    let rec = DeviceRecord { device_id: reg.device_id.clone(), secret: coolpsonotes_core::b64::encode(&dev.secret) };
+    let rec = DeviceRecord {
+        device_id: reg.device_id.clone(),
+        secret: coolpsonotes_core::b64::encode(&dev.secret),
+    };
     storage::set_device(&uid, &rec);
     show_pending(&uid, &rec);
 }
@@ -638,7 +735,12 @@ pub async fn request_approval() {
 /// Unlock with the recovery key and enroll this browser without another device.
 pub async fn recover(input: String) {
     let ui = ui();
-    let fail = |m: String| ui.phase.set(Phase::Enroll { pending: None, error: Some(m) });
+    let fail = |m: String| {
+        ui.phase.set(Phase::Enroll {
+            pending: None,
+            error: Some(m),
+        })
+    };
     let Ok(rk) = RecoveryKey::parse(&input) else {
         fail("That doesn't look like a valid recovery key. Check for typos.".into());
         return;
@@ -660,18 +762,26 @@ pub async fn recover(input: String) {
             if let Err(e) = api::post::<_, ()>("/devices", &reg).await {
                 return fail(e.message);
             }
-            let r = DeviceRecord { device_id: reg.device_id.clone(), secret: coolpsonotes_core::b64::encode(&dev.secret) };
+            let r = DeviceRecord {
+                device_id: reg.device_id.clone(),
+                secret: coolpsonotes_core::b64::encode(&dev.secret),
+            };
             storage::set_device(&uid, &r);
             r
         }
     };
-    let Some(secret) = coolpsonotes_core::b64::decode32(&rec.secret) else { return fail("Corrupt device record".into()) };
-    let Ok(dev) = DeviceKey::from_secret(secret) else { return fail("Corrupt device record".into()) };
+    let Some(secret) = coolpsonotes_core::b64::decode32(&rec.secret) else {
+        return fail("Corrupt device record".into());
+    };
+    let Ok(dev) = DeviceKey::from_secret(secret) else {
+        return fail("Corrupt device record".into());
+    };
     let req = match engine::approve_device(&account, &uid, &rec.device_id, &dev.public) {
         Ok(r) => r,
         Err(e) => return fail(e.to_string()),
     };
-    if let Err(e) = api::post::<_, ()>(&format!("/devices/{}/activate", rec.device_id), &req).await {
+    if let Err(e) = api::post::<_, ()>(&format!("/devices/{}/activate", rec.device_id), &req).await
+    {
         return fail(e.message);
     }
     with(|c| {
@@ -724,7 +834,9 @@ async fn enter_ready() {
             let r = Route::parse(&last, "");
             let known = match &r {
                 Route::Shared(v, n) => with(|c| c.shares.contains_key(&(v.clone(), n.clone()))),
-                _ => r.vault().is_some_and(|v| with(|c| c.replicas.get(v).is_some_and(|x| x.member))),
+                _ => r
+                    .vault()
+                    .is_some_and(|v| with(|c| c.replicas.get(v).is_some_and(|x| x.member))),
             };
             if known {
                 navigate_replace(r);
@@ -737,14 +849,17 @@ async fn enter_ready() {
 // ------------------------------------------------------------------ prefs
 
 async fn load_prefs() {
-    let Ok(blob) = api::get::<PrefsBlob>("/me/prefs").await else { return };
+    let Ok(blob) = api::get::<PrefsBlob>("/me/prefs").await else {
+        return;
+    };
     with(|c| {
         c.prefs_version = blob.version;
         if let (Some(ct), Some(acct)) = (&blob.ciphertext, &c.account)
             && let Ok(pt) = acct.open_private(&c.user_id, ct)
-                && let Ok(p) = serde_json::from_slice::<Prefs>(&pt) {
-                    c.prefs = p;
-                }
+            && let Ok(p) = serde_json::from_slice::<Prefs>(&pt)
+        {
+            c.prefs = p;
+        }
     });
     ui().prefs_rev.update(|v| *v += 1);
 }
@@ -758,7 +873,10 @@ pub fn save_prefs() {
                 let req = with(|c| {
                     let acct = c.account.as_ref()?;
                     let pt = serde_json::to_vec(&c.prefs).ok()?;
-                    Some(PutPrefsRequest { ciphertext: acct.seal_private(&c.user_id, &pt), expected_version: c.prefs_version })
+                    Some(PutPrefsRequest {
+                        ciphertext: acct.seal_private(&c.user_id, &pt),
+                        expected_version: c.prefs_version,
+                    })
                 });
                 let Some(req) = req else { return };
                 match api::put::<_, PrefsBlob>("/me/prefs", &req).await {
@@ -817,8 +935,13 @@ pub async fn refresh_vaults() {
         }
     };
     let ids: BTreeSet<String> = infos.iter().map(|v| v.id.clone()).collect();
-    let removed: Vec<String> =
-        with(|c| c.replicas.iter().filter(|(k, r)| r.member && !ids.contains(*k)).map(|(k, _)| k.clone()).collect());
+    let removed: Vec<String> = with(|c| {
+        c.replicas
+            .iter()
+            .filter(|(k, r)| r.member && !ids.contains(*k))
+            .map(|(k, _)| k.clone())
+            .collect()
+    });
     for v in &removed {
         drop_vault(v);
     }
@@ -862,16 +985,30 @@ async fn load_vault_with(info: VaultInfo, force: bool) {
                 return;
             }
         };
-        let ring = with(|c| c.account.as_ref().map(|a| engine::keyring_from_response(a, &uid, &id, &keys)));
+        let ring = with(|c| {
+            c.account
+                .as_ref()
+                .map(|a| engine::keyring_from_response(a, &uid, &id, &keys))
+        });
         match ring {
             Some(Ok(ring)) => {
-                let meta = VaultMeta::decrypt(&ring, &info.encrypted_meta).unwrap_or_else(|_| VaultMeta::named("(unreadable)"));
+                let meta = VaultMeta::decrypt(&ring, &info.encrypted_meta)
+                    .unwrap_or_else(|_| VaultMeta::named("(unreadable)"));
                 let docs = engine::object_keyrings(&ring, &keys);
                 // Notes shared with us individually are now reachable through the vault.
                 let was_recipient = with(|c| c.replicas.get(&id).is_some_and(|r| !r.member));
                 if was_recipient {
-                    for (v, o) in with(|c| c.shares.keys().filter(|(v, _)| *v == id).cloned().collect::<Vec<_>>()) {
-                        send(&ClientMessage::Unsubscribe { vault_id: v.clone(), object_id: Some(o.clone()) });
+                    for (v, o) in with(|c| {
+                        c.shares
+                            .keys()
+                            .filter(|(v, _)| *v == id)
+                            .cloned()
+                            .collect::<Vec<_>>()
+                    }) {
+                        send(&ClientMessage::Unsubscribe {
+                            vault_id: v.clone(),
+                            object_id: Some(o.clone()),
+                        });
                         with(|c| c.shares.remove(&(v, o)));
                     }
                     with(|c| c.replicas.remove(&id));
@@ -881,7 +1018,11 @@ async fn load_vault_with(info: VaultInfo, force: bool) {
                     c.vault_errors.remove(&id);
                     match c.replicas.get_mut(&id) {
                         Some(r) => {
-                            let docs_changed = r.doc_keys.keys().ne(docs.keys()) || r.doc_keys.iter().any(|(o, k)| docs.get(o).map(|d| d.current_epoch()) != Some(k.current_epoch()));
+                            let docs_changed = r.doc_keys.keys().ne(docs.keys())
+                                || r.doc_keys.iter().any(|(o, k)| {
+                                    docs.get(o).map(|d| d.current_epoch())
+                                        != Some(k.current_epoch())
+                                });
                             r.keyring = ring;
                             r.meta = meta;
                             r.role = info.role;
@@ -952,7 +1093,9 @@ pub fn publish_vaults() {
                 let r = c.replicas.get(&i.id);
                 VaultView {
                     id: i.id.clone(),
-                    name: r.map(|r| r.meta.name.clone()).unwrap_or_else(|| "Locked vault".into()),
+                    name: r
+                        .map(|r| r.meta.name.clone())
+                        .unwrap_or_else(|| "Locked vault".into()),
                     role: i.role,
                     shared: i.member_count > 1,
                     archived: i.archived,
@@ -962,7 +1105,12 @@ pub fn publish_vaults() {
                 }
             })
             .collect();
-        v.sort_by(|a, b| a.archived.cmp(&b.archived).then(a.shared.cmp(&b.shared)).then(a.name.to_lowercase().cmp(&b.name.to_lowercase())));
+        v.sort_by(|a, b| {
+            a.archived
+                .cmp(&b.archived)
+                .then(a.shared.cmp(&b.shared))
+                .then(a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+        });
         v
     });
     ui().vaults.set(views);
@@ -991,9 +1139,22 @@ async fn refresh_shares_with(announce: bool) {
         }
     };
     // Notes of vaults we are a member of are reachable through the vault.
-    let list: Vec<SharedNote> = with(|c| list.into_iter().filter(|s| !c.replicas.get(&s.vault_id).is_some_and(|r| r.member)).collect());
-    let keep: BTreeSet<(String, String)> = list.iter().map(|s| (s.vault_id.clone(), s.object_id.clone())).collect();
-    let removed: Vec<(String, String)> = with(|c| c.shares.keys().filter(|k| !keep.contains(*k)).cloned().collect());
+    let list: Vec<SharedNote> = with(|c| {
+        list.into_iter()
+            .filter(|s| !c.replicas.get(&s.vault_id).is_some_and(|r| r.member))
+            .collect()
+    });
+    let keep: BTreeSet<(String, String)> = list
+        .iter()
+        .map(|s| (s.vault_id.clone(), s.object_id.clone()))
+        .collect();
+    let removed: Vec<(String, String)> = with(|c| {
+        c.shares
+            .keys()
+            .filter(|k| !keep.contains(*k))
+            .cloned()
+            .collect()
+    });
     for (v, o) in removed {
         drop_share(&v, &o);
     }
@@ -1011,14 +1172,20 @@ async fn refresh_shares_with(announce: bool) {
                 .collect()
         });
         for (owner, title) in new {
-            info(format!("{owner} shared “{title}” with you. It's under “Shared with me” in the sidebar."));
+            info(format!(
+                "{owner} shared “{title}” with you. It's under “Shared with me” in the sidebar."
+            ));
         }
     }
 }
 
 async fn load_share(info: SharedNote) {
     let key = (info.vault_id.clone(), info.object_id.clone());
-    let current = with(|c| c.shares.get(&key).map(|s| s.error.is_none() && s.info.key_epoch == info.key_epoch));
+    let current = with(|c| {
+        c.shares
+            .get(&key)
+            .map(|s| s.error.is_none() && s.info.key_epoch == info.key_epoch)
+    });
     if current == Some(true) {
         // Same key: only the title or role may have changed.
         with(|c| {
@@ -1026,7 +1193,11 @@ async fn load_share(info: SharedNote) {
                 .replicas
                 .get(&key.0)
                 .and_then(|r| r.doc_keys.get(&key.1))
-                .and_then(|ring| info.encrypted_meta.as_ref().and_then(|m| ObjectMeta::decrypt(ring, &key.1, m).ok()))
+                .and_then(|ring| {
+                    info.encrypted_meta
+                        .as_ref()
+                        .and_then(|m| ObjectMeta::decrypt(ring, &key.1, m).ok())
+                })
                 .map(|m| m.title);
             if let Some(s) = c.shares.get_mut(&key) {
                 if let Some(t) = title {
@@ -1041,7 +1212,16 @@ async fn load_share(info: SharedNote) {
     let unsubscribed = with(|c| c.shares.get(&key).is_none_or(|s| s.error.is_some()));
     if current.is_none() {
         with(|c| {
-            c.shares.insert(key.clone(), ShareState { info: info.clone(), title: "Shared note".into(), seq: 0, loaded: false, error: None })
+            c.shares.insert(
+                key.clone(),
+                ShareState {
+                    info: info.clone(),
+                    title: "Shared note".into(),
+                    seq: 0,
+                    loaded: false,
+                    error: None,
+                },
+            )
         });
     }
     reload_share_keys(&key.0, &key.1).await;
@@ -1076,7 +1256,11 @@ pub async fn reload_share_keys(vault: &str, note: &str) {
             return;
         }
     };
-    let ring = with(|c| c.account.as_ref().map(|a| engine::object_keyring_for_recipient(a, &c.user_id, vault, &keys)));
+    let ring = with(|c| {
+        c.account
+            .as_ref()
+            .map(|a| engine::object_keyring_for_recipient(a, &c.user_id, vault, &keys))
+    });
     let ring = match ring {
         Some(Ok(r)) => r,
         Some(Err(e)) => {
@@ -1091,7 +1275,11 @@ pub async fn reload_share_keys(vault: &str, note: &str) {
         None => return,
     };
     let applied = with(|c| {
-        let title = keys.encrypted_meta.as_ref().and_then(|m| ObjectMeta::decrypt(&ring, note, m).ok()).map(|m| m.title);
+        let title = keys
+            .encrypted_meta
+            .as_ref()
+            .and_then(|m| ObjectMeta::decrypt(&ring, note, m).ok())
+            .map(|m| m.title);
         if let Some(s) = c.shares.get_mut(&key) {
             s.error = None;
             s.info.role = keys.role;
@@ -1100,13 +1288,24 @@ pub async fn reload_share_keys(vault: &str, note: &str) {
                 s.title = t;
             }
         }
-        let r = c.replicas.entry(vault.to_string()).or_insert_with(|| VaultReplica::for_shared_notes(vault));
+        let r = c
+            .replicas
+            .entry(vault.to_string())
+            .or_insert_with(|| VaultReplica::for_shared_notes(vault));
         if r.member {
             return engine::Applied::default();
         }
         r.doc_keys.insert(note.to_string(), ring);
         // The replica's role only gates sending; each note's own role is checked by the server.
-        r.role = if c.shares.iter().any(|((v, _), s)| v == vault && s.info.role.can_write()) { Role::Editor } else { Role::Viewer };
+        r.role = if c
+            .shares
+            .iter()
+            .any(|((v, _), s)| v == vault && s.info.role.can_write())
+        {
+            Role::Editor
+        } else {
+            Role::Viewer
+        };
         r.retry_deferred().0
     });
     after_apply(vault, applied);
@@ -1115,8 +1314,13 @@ pub async fn reload_share_keys(vault: &str, note: &str) {
 
 fn drop_share(vault: &str, note: &str) {
     let key = (vault.to_string(), note.to_string());
-    let Some(_) = with(|c| c.shares.remove(&key)) else { return };
-    send(&ClientMessage::Unsubscribe { vault_id: vault.to_string(), object_id: Some(note.to_string()) });
+    let Some(_) = with(|c| c.shares.remove(&key)) else {
+        return;
+    };
+    send(&ClientMessage::Unsubscribe {
+        vault_id: vault.to_string(),
+        object_id: Some(note.to_string()),
+    });
     with(|c| {
         let last = !c.shares.keys().any(|(v, _)| v == vault);
         if let Some(r) = c.replicas.get_mut(vault).filter(|r| !r.member) {
@@ -1162,15 +1366,25 @@ pub fn publish_shares() {
 }
 
 fn subscribe_share(vault: &str, note: &str) {
-    let since = with(|c| c.shares.get(&(vault.to_string(), note.to_string())).map(|s| s.seq));
+    let since = with(|c| {
+        c.shares
+            .get(&(vault.to_string(), note.to_string()))
+            .map(|s| s.seq)
+    });
     if let Some(since) = since {
-        send(&ClientMessage::Subscribe { vault_id: vault.to_string(), since: Some(since), object_id: Some(note.to_string()) });
+        send(&ClientMessage::Subscribe {
+            vault_id: vault.to_string(),
+            since: Some(since),
+            object_id: Some(note.to_string()),
+        });
     }
 }
 
 fn on_share_synced(vault: &str, note: &str, head: i64) {
     let first = with(|c| {
-        let Some(s) = c.shares.get_mut(&(vault.to_string(), note.to_string())) else { return false };
+        let Some(s) = c.shares.get_mut(&(vault.to_string(), note.to_string())) else {
+            return false;
+        };
         s.seq = s.seq.max(head);
         let first = !s.loaded;
         s.loaded = true;
@@ -1180,7 +1394,10 @@ fn on_share_synced(vault: &str, note: &str, head: i64) {
         publish_shares();
         // Unsent changes from an earlier visit, once every shared note of this vault is loaded.
         let restore = with(|c| {
-            c.shares.iter().filter(|((v, _), _)| v == vault).all(|(_, s)| s.loaded || s.error.is_some())
+            c.shares
+                .iter()
+                .filter(|((v, _), _)| v == vault)
+                .all(|(_, s)| s.loaded || s.error.is_some())
                 && c.shares_restored.insert(vault.to_string())
         });
         if restore {
@@ -1201,14 +1418,21 @@ pub fn is_member(vault: &str) -> bool {
 
 /// Whether a note of a vault we are a member of has its own key (is shared individually).
 pub fn is_shared_note(vault: &str, note: &str) -> bool {
-    with(|c| c.replicas.get(vault).is_some_and(|r| r.member && r.is_shared_object(note)))
+    with(|c| {
+        c.replicas
+            .get(vault)
+            .is_some_and(|r| r.member && r.is_shared_object(note))
+    })
 }
 
 /// Whether we may edit a note (vault role, or the role of its individual share).
 pub fn can_write_note(vault: &str, note: &str) -> bool {
     with(|c| match c.replicas.get(vault) {
         Some(r) if r.member => r.can_write(),
-        _ => c.shares.get(&(vault.to_string(), note.to_string())).is_some_and(|s| s.info.role.can_write()),
+        _ => c
+            .shares
+            .get(&(vault.to_string(), note.to_string()))
+            .is_some_and(|s| s.info.role.can_write()),
     })
 }
 
@@ -1217,7 +1441,13 @@ fn keys_missing(vault: &str) {
     if is_member(vault) {
         leptos::task::spawn_local(reload_vault_keys(vault.to_string()));
     } else {
-        let notes: Vec<String> = with(|c| c.shares.keys().filter(|(v, _)| v == vault).map(|(_, n)| n.clone()).collect());
+        let notes: Vec<String> = with(|c| {
+            c.shares
+                .keys()
+                .filter(|(v, _)| v == vault)
+                .map(|(_, n)| n.clone())
+                .collect()
+        });
         let v = vault.to_string();
         leptos::task::spawn_local(async move {
             for n in notes {
@@ -1231,10 +1461,14 @@ fn keys_missing(vault: &str) {
 fn on_object_event(vault: String, note: String, event: ObjectEventKind) {
     if is_member(&vault) {
         match event {
-            ObjectEventKind::Shared | ObjectEventKind::KeyRotated => leptos::task::spawn_local(reload_vault_keys(vault)),
+            ObjectEventKind::Shared | ObjectEventKind::KeyRotated => {
+                leptos::task::spawn_local(reload_vault_keys(vault))
+            }
             ObjectEventKind::SharesChanged => ui().shares_rev.update(|v| *v += 1),
             // Members read titles from the vault index.
-            ObjectEventKind::MetaChanged | ObjectEventKind::AccessRevoked | ObjectEventKind::Deleted => {}
+            ObjectEventKind::MetaChanged
+            | ObjectEventKind::AccessRevoked
+            | ObjectEventKind::Deleted => {}
         }
         return;
     }
@@ -1245,13 +1479,23 @@ fn on_object_event(vault: String, note: String, event: ObjectEventKind) {
                 resend_pending(&vault);
             });
         }
-        ObjectEventKind::MetaChanged | ObjectEventKind::SharesChanged => leptos::task::spawn_local(refresh_shares()),
+        ObjectEventKind::MetaChanged | ObjectEventKind::SharesChanged => {
+            leptos::task::spawn_local(refresh_shares())
+        }
         ObjectEventKind::AccessRevoked | ObjectEventKind::Deleted => {
-            let title = with(|c| c.shares.get(&(vault.clone(), note.clone())).map(|s| s.title.clone()));
+            let title = with(|c| {
+                c.shares
+                    .get(&(vault.clone(), note.clone()))
+                    .map(|s| s.title.clone())
+            });
             drop_share(&vault, &note);
             publish_shares();
             if let Some(t) = title {
-                info(if event == ObjectEventKind::Deleted { format!("“{t}” was deleted.") } else { format!("“{t}” is no longer shared with you.") });
+                info(if event == ObjectEventKind::Deleted {
+                    format!("“{t}” was deleted.")
+                } else {
+                    format!("“{t}” is no longer shared with you.")
+                });
             }
         }
     }
@@ -1289,7 +1533,11 @@ fn send(m: &ClientMessage) -> bool {
 fn subscribe(vault_id: &str) {
     let since = with(|c| c.replicas.get(vault_id).map(|r| r.seq));
     if let Some(since) = since {
-        send(&ClientMessage::Subscribe { vault_id: vault_id.to_string(), since: Some(since), object_id: None });
+        send(&ClientMessage::Subscribe {
+            vault_id: vault_id.to_string(),
+            since: Some(since),
+            object_id: None,
+        });
     }
 }
 
@@ -1300,11 +1548,23 @@ fn on_server_message(m: ServerMessage) {
                 c.conn_id = conn_id;
                 c.presence_note = None;
             });
-            let vaults: Vec<String> = with(|c| c.replicas.iter().filter(|(_, r)| r.member).map(|(k, _)| k.clone()).collect());
+            let vaults: Vec<String> = with(|c| {
+                c.replicas
+                    .iter()
+                    .filter(|(_, r)| r.member)
+                    .map(|(k, _)| k.clone())
+                    .collect()
+            });
             for v in vaults {
                 subscribe(&v);
             }
-            let shares: Vec<(String, String)> = with(|c| c.shares.iter().filter(|(_, s)| s.error.is_none()).map(|(k, _)| k.clone()).collect());
+            let shares: Vec<(String, String)> = with(|c| {
+                c.shares
+                    .iter()
+                    .filter(|(_, s)| s.error.is_none())
+                    .map(|(k, _)| k.clone())
+                    .collect()
+            });
             for (v, n) in shares {
                 subscribe_share(&v, &n);
             }
@@ -1318,7 +1578,10 @@ fn on_server_message(m: ServerMessage) {
             });
             if let Some(((applied, errors), needs_keys)) = res {
                 if !errors.is_empty() {
-                    util::warn(&format!("{} items in vault could not be decrypted", errors.len()));
+                    util::warn(&format!(
+                        "{} items in vault could not be decrypted",
+                        errors.len()
+                    ));
                 }
                 after_apply(&vault_id, applied);
                 if needs_keys {
@@ -1326,17 +1589,28 @@ fn on_server_message(m: ServerMessage) {
                 }
             }
         }
-        ServerMessage::Synced { vault_id, head_seq, object_id } => match object_id {
+        ServerMessage::Synced {
+            vault_id,
+            head_seq,
+            object_id,
+        } => match object_id {
             Some(o) => on_share_synced(&vault_id, &o, head_seq),
             None => on_synced(&vault_id, head_seq),
         },
         ServerMessage::Update { vault_id, update } => {
             with(|c| {
-                if let Some(s) = c.shares.get_mut(&(vault_id.clone(), update.object_id.clone())) {
+                if let Some(s) = c
+                    .shares
+                    .get_mut(&(vault_id.clone(), update.object_id.clone()))
+                {
                     s.seq = s.seq.max(update.seq);
                 }
             });
-            let res = with(|c| c.replicas.get_mut(&vault_id).map(|r| r.apply_update(&update)));
+            let res = with(|c| {
+                c.replicas
+                    .get_mut(&vault_id)
+                    .map(|r| r.apply_update(&update))
+            });
             match res {
                 Some(Ok(applied)) => after_apply(&vault_id, applied),
                 Some(Err(e)) if engine::missing_key(&e) => keys_missing(&vault_id),
@@ -1354,14 +1628,22 @@ fn on_server_message(m: ServerMessage) {
             update_pending_count();
             maybe_compact(&vault_id);
         }
-        ServerMessage::SnapshotCreated { vault_id, object_id, .. } => {
+        ServerMessage::SnapshotCreated {
+            vault_id,
+            object_id,
+            ..
+        } => {
             with(|c| {
                 if let Some(r) = c.replicas.get_mut(&vault_id) {
                     r.snapshot_created(&object_id);
                 }
             });
         }
-        ServerMessage::Purged { vault_id, object_id, seq } => {
+        ServerMessage::Purged {
+            vault_id,
+            object_id,
+            seq,
+        } => {
             // Someone permanently deleted a note we still had unsent edits
             // for: keep our version as a new note rather than losing it.
             let rescue = with(|c| {
@@ -1369,7 +1651,11 @@ fn on_server_message(m: ServerMessage) {
                 if !r.pending.iter().any(|p| p.object_id == object_id) {
                     return None;
                 }
-                let title = r.index.get(&object_id).map(|e| e.title().to_string()).unwrap_or_else(|| "Untitled".into());
+                let title = r
+                    .index
+                    .get(&object_id)
+                    .map(|e| e.title().to_string())
+                    .unwrap_or_else(|| "Untitled".into());
                 Some((title, r.note_text(&object_id)))
             });
             if let Some((title, text)) = rescue {
@@ -1377,25 +1663,43 @@ fn on_server_message(m: ServerMessage) {
                 leptos::task::spawn_local(async move {
                     let name = format!("{title} (recovered)");
                     crate::actions::create_note_with(&v, "", &name, &text).await;
-                    info(format!("“{title}” was deleted by someone else; your unsent changes were saved as “{name}”."));
+                    info(format!(
+                        "“{title}” was deleted by someone else; your unsent changes were saved as “{name}”."
+                    ));
                 });
             }
-            let a = with(|c| c.replicas.get_mut(&vault_id).map(|r| r.apply_purge(&object_id, seq)));
+            let a = with(|c| {
+                c.replicas
+                    .get_mut(&vault_id)
+                    .map(|r| r.apply_purge(&object_id, seq))
+            });
             if let Some(a) = a {
                 after_apply(&vault_id, a);
             }
         }
         ServerMessage::Snapshot { vault_id, snapshot } => {
-            let res = with(|c| c.replicas.get_mut(&vault_id).map(|r| r.apply_snapshot(&snapshot)));
+            let res = with(|c| {
+                c.replicas
+                    .get_mut(&vault_id)
+                    .map(|r| r.apply_snapshot(&snapshot))
+            });
             if let Some(Ok(a)) = res {
                 after_apply(&vault_id, a);
             }
         }
-        ServerMessage::Awareness { vault_id, object_id, from_user, from_conn, payload } => {
-            on_awareness(&vault_id, &object_id, &from_user, from_conn, &payload)
-        }
+        ServerMessage::Awareness {
+            vault_id,
+            object_id,
+            from_user,
+            from_conn,
+            payload,
+        } => on_awareness(&vault_id, &object_id, &from_user, from_conn, &payload),
         ServerMessage::VaultEvent { vault_id, event } => on_vault_event(vault_id, event),
-        ServerMessage::ObjectEvent { vault_id, object_id, event } => on_object_event(vault_id, object_id, event),
+        ServerMessage::ObjectEvent {
+            vault_id,
+            object_id,
+            event,
+        } => on_object_event(vault_id, object_id, event),
         ServerMessage::UserEvent { event } => match event {
             UserEventKind::DevicePending | UserEventKind::DevicesChanged => {
                 leptos::task::spawn_local(refresh_pending_devices());
@@ -1405,10 +1709,18 @@ fn on_server_message(m: ServerMessage) {
                 refresh_shares().await;
             }),
             UserEventKind::SharesChanged => leptos::task::spawn_local(refresh_shares_announcing()),
-            UserEventKind::SessionRevoked => sign_out_local(Some("This session was signed out.".into())),
+            UserEventKind::SessionRevoked => {
+                sign_out_local(Some("This session was signed out.".into()))
+            }
         },
-        ServerMessage::Error { code, message, vault_id } => {
-            if code == "stale_key" && let Some(v) = vault_id {
+        ServerMessage::Error {
+            code,
+            message,
+            vault_id,
+        } => {
+            if code == "stale_key"
+                && let Some(v) = vault_id
+            {
                 // A note got its own key (or a new one): reload keys and re-send.
                 let v2 = v.clone();
                 leptos::task::spawn_local(async move {
@@ -1416,7 +1728,13 @@ fn on_server_message(m: ServerMessage) {
                     if is_member(&v2) {
                         reload_vault_keys(v2.clone()).await;
                     } else {
-                        let notes: Vec<String> = with(|c| c.shares.keys().filter(|(x, _)| *x == v2).map(|(_, n)| n.clone()).collect());
+                        let notes: Vec<String> = with(|c| {
+                            c.shares
+                                .keys()
+                                .filter(|(x, _)| *x == v2)
+                                .map(|(_, n)| n.clone())
+                                .collect()
+                        });
                         for n in notes {
                             reload_share_keys(&v2, &n).await;
                         }
@@ -1451,8 +1769,14 @@ fn on_server_message(m: ServerMessage) {
 /// Current key epochs of a replica (vault key and every document key).
 fn key_epochs(vault: &str) -> Vec<(String, Option<u32>)> {
     with(|c| {
-        let Some(r) = c.replicas.get(vault) else { return vec![] };
-        let mut v: Vec<(String, Option<u32>)> = r.doc_keys.iter().map(|(o, k)| (o.clone(), k.current_epoch())).collect();
+        let Some(r) = c.replicas.get(vault) else {
+            return vec![];
+        };
+        let mut v: Vec<(String, Option<u32>)> = r
+            .doc_keys
+            .iter()
+            .map(|(o, k)| (o.clone(), k.current_epoch()))
+            .collect();
         v.push((String::new(), r.keyring.current_epoch()));
         v.sort();
         v
@@ -1476,10 +1800,23 @@ fn on_synced(vault_id: &str, head: i64) {
     let (rolled_back, uid, first) = with(|c| {
         let uid = c.user_id.clone();
         let first = c.loaded.insert(vault_id.to_string());
-        let rb = c.replicas.get_mut(vault_id).map(|r| r.synced(head)).unwrap_or(false);
+        let rb = c
+            .replicas
+            .get_mut(vault_id)
+            .map(|r| r.synced(head))
+            .unwrap_or(false);
         (rb, uid, first)
     });
-    storage::set_head_seen(&uid, vault_id, with(|c| c.replicas.get(vault_id).map(|r| r.max_head_seen).unwrap_or(head)));
+    storage::set_head_seen(
+        &uid,
+        vault_id,
+        with(|c| {
+            c.replicas
+                .get(vault_id)
+                .map(|r| r.max_head_seen)
+                .unwrap_or(head)
+        }),
+    );
     if first {
         restore_stored_pending(vault_id);
         publish_vaults();
@@ -1509,9 +1846,14 @@ fn restore_stored_pending(vault_id: &str) {
     }
     let mut applied = engine::Applied::default();
     with(|c| {
-        let Some(r) = c.replicas.get_mut(vault_id) else { return };
+        let Some(r) = c.replicas.get_mut(vault_id) else {
+            return;
+        };
         for p in stored {
-            if r.pending.iter().any(|x| x.client_update_id == p.client_update_id) {
+            if r.pending
+                .iter()
+                .any(|x| x.client_update_id == p.client_update_id)
+            {
                 continue;
             }
             if let Ok(plain) = r.decrypt_object(Purpose::Update, &p.object_id, &p.payload) {
@@ -1519,10 +1861,18 @@ fn restore_stored_pending(vault_id: &str) {
                     let _ = r.index.apply_update(&plain);
                     applied.index_changed = true;
                 } else {
-                    let _ = r.notes.entry(p.object_id.clone()).or_default().apply_update(&plain);
+                    let _ = r
+                        .notes
+                        .entry(p.object_id.clone())
+                        .or_default()
+                        .apply_update(&plain);
                     applied.objects.insert(p.object_id.clone());
                 }
-                r.pending.push(engine::Pending { client_update_id: p.client_update_id, object_id: p.object_id, update: plain });
+                r.pending.push(engine::Pending {
+                    client_update_id: p.client_update_id,
+                    object_id: p.object_id,
+                    update: plain,
+                });
             }
         }
     });
@@ -1532,7 +1882,9 @@ fn restore_stored_pending(vault_id: &str) {
 
 fn repush_everything(vault_id: &str) {
     with(|c| {
-        let Some(r) = c.replicas.get_mut(vault_id) else { return };
+        let Some(r) = c.replicas.get_mut(vault_id) else {
+            return;
+        };
         if !r.can_write() || !r.member {
             return;
         }
@@ -1548,16 +1900,27 @@ fn repush_everything(vault_id: &str) {
 }
 
 fn resend_pending(vault_id: &str) {
-    let ups = with(|c| c.replicas.get(vault_id).and_then(|r| r.pending_pushes().ok()).unwrap_or_default());
+    let ups = with(|c| {
+        c.replicas
+            .get(vault_id)
+            .and_then(|r| r.pending_pushes().ok())
+            .unwrap_or_default()
+    });
     for chunk in ups.chunks(200) {
-        send(&ClientMessage::Push { vault_id: vault_id.to_string(), updates: chunk.to_vec() });
+        send(&ClientMessage::Push {
+            vault_id: vault_id.to_string(),
+            updates: chunk.to_vec(),
+        });
     }
     update_pending_count();
 }
 
 fn on_vault_event(vault_id: String, event: VaultEventKind) {
     match event {
-        VaultEventKind::KeyRotated | VaultEventKind::MetaChanged | VaultEventKind::RoleChanged | VaultEventKind::MembersChanged => {
+        VaultEventKind::KeyRotated
+        | VaultEventKind::MetaChanged
+        | VaultEventKind::RoleChanged
+        | VaultEventKind::MembersChanged => {
             leptos::task::spawn_local(async move {
                 if let Ok(info) = api::get::<VaultInfo>(&format!("/vaults/{vault_id}")).await {
                     let owner = info.role == Role::Owner;
@@ -1574,7 +1937,11 @@ fn on_vault_event(vault_id: String, event: VaultEventKind) {
             drop_vault(&vault_id);
             publish_vaults();
             if let Some(n) = name {
-                info(if event == VaultEventKind::Deleted { format!("Vault “{n}” was deleted.") } else { format!("You no longer have access to “{n}”.") });
+                info(if event == VaultEventKind::Deleted {
+                    format!("Vault “{n}” was deleted.")
+                } else {
+                    format!("You no longer have access to “{n}”.")
+                });
             }
         }
     }
@@ -1595,7 +1962,11 @@ pub fn after_apply(vault_id: &str, applied: engine::Applied) {
         d.run(250, move || ui.content_rev.update(|v| *v += 1));
     }
     // Push remote content into the open editor.
-    let open = with(|c| c.editor.as_ref().map(|(v, n, e)| (v.clone(), n.clone(), e.clone())));
+    let open = with(|c| {
+        c.editor
+            .as_ref()
+            .map(|(v, n, e)| (v.clone(), n.clone(), e.clone()))
+    });
     if let Some((v, n, ed)) = open {
         if v == vault_id && applied.objects.contains(&n) {
             let text = with(|c| c.replicas.get(&v).map(|r| r.note_text(&n)));
@@ -1605,7 +1976,11 @@ pub fn after_apply(vault_id: &str, applied: engine::Applied) {
         }
         if v == vault_id && applied.purged.contains(&n) {
             info("This note was permanently deleted by someone else.");
-            navigate(if is_member(&v) { Route::Vault(v.clone()) } else { Route::Home });
+            navigate(if is_member(&v) {
+                Route::Vault(v.clone())
+            } else {
+                Route::Home
+            });
         }
         if v == vault_id && applied.index_changed {
             // Link targets may have appeared or disappeared.
@@ -1619,7 +1994,9 @@ pub fn after_apply(vault_id: &str, applied: engine::Applied) {
 /// Record a local CRDT update and schedule sending it.
 pub fn local_update(vault_id: &str, object_id: &str, update: Vec<u8>) {
     let ok = with(|c| {
-        let Some(r) = c.replicas.get_mut(vault_id) else { return false };
+        let Some(r) = c.replicas.get_mut(vault_id) else {
+            return false;
+        };
         match r.local_change(object_id, update) {
             Ok(p) => {
                 c.outbox.entry(vault_id.to_string()).or_default().push(p);
@@ -1643,12 +2020,16 @@ pub fn schedule_flush() {
 }
 
 pub fn flush_now() {
-    let batches: Vec<(String, Vec<PushUpdate>)> = with(|c| std::mem::take(&mut c.outbox).into_iter().collect());
+    let batches: Vec<(String, Vec<PushUpdate>)> =
+        with(|c| std::mem::take(&mut c.outbox).into_iter().collect());
     for (v, ups) in batches {
         for chunk in ups.chunks(200) {
             // If the socket is down, updates stay in the replica's pending
             // queue and are re-sent after reconnecting.
-            send(&ClientMessage::Push { vault_id: v.clone(), updates: chunk.to_vec() });
+            send(&ClientMessage::Push {
+                vault_id: v.clone(),
+                updates: chunk.to_vec(),
+            });
         }
         persist_pending(&v);
     }
@@ -1656,7 +2037,15 @@ pub fn flush_now() {
 }
 
 fn persist_pending(vault_id: &str) {
-    let (uid, ups) = with(|c| (c.user_id.clone(), c.replicas.get(vault_id).and_then(|r| r.pending_pushes().ok()).unwrap_or_default()));
+    let (uid, ups) = with(|c| {
+        (
+            c.user_id.clone(),
+            c.replicas
+                .get(vault_id)
+                .and_then(|r| r.pending_pushes().ok())
+                .unwrap_or_default(),
+        )
+    });
     storage::set_pending(&uid, vault_id, &ups);
 }
 
@@ -1680,7 +2069,12 @@ pub fn touch(vault_id: &str, note_id: &str, size: usize) {
     });
     if due {
         // People a single note is shared with can't see (or change) the vault index.
-        let up = with(|c| c.replicas.get(vault_id).filter(|r| r.member).and_then(|r| r.index.touch(note_id, now, Some(size as u64))));
+        let up = with(|c| {
+            c.replicas
+                .get(vault_id)
+                .filter(|r| r.member)
+                .and_then(|r| r.index.touch(note_id, now, Some(size as u64)))
+        });
         if let Some(u) = up {
             local_update(vault_id, INDEX_OBJECT_ID, u);
         }
@@ -1690,7 +2084,12 @@ pub fn touch(vault_id: &str, note_id: &str, size: usize) {
 
 /// Compact objects with long update logs (and give history a revision).
 pub fn maybe_compact(vault_id: &str) {
-    let candidates = with(|c| c.replicas.get(vault_id).map(|r| r.compaction_candidates()).unwrap_or_default());
+    let candidates = with(|c| {
+        c.replicas
+            .get(vault_id)
+            .map(|r| r.compaction_candidates())
+            .unwrap_or_default()
+    });
     for o in candidates {
         snapshot(vault_id.to_string(), o);
     }
@@ -1722,7 +2121,11 @@ pub fn snapshot(vault_id: String, object_id: String) {
     leptos::task::spawn_local(async move {
         // Jitter so several clients don't compact the same object at once.
         util::sleep((js_sys::Math::random() * 1500.0) as i32).await;
-        let r = api::post::<_, SnapshotInfo>(&format!("/vaults/{vault_id}/objects/{object_id}/snapshots"), &req).await;
+        let r = api::post::<_, SnapshotInfo>(
+            &format!("/vaults/{vault_id}/objects/{object_id}/snapshots"),
+            &req,
+        )
+        .await;
         with(|c| {
             c.snapshotting.remove(&key);
             if r.is_ok() {
@@ -1738,7 +2141,10 @@ pub fn snapshot(vault_id: String, object_id: String) {
 /// Called when leaving a note: store a revision if it was edited.
 pub fn note_closed(vault_id: &str, note_id: &str) {
     flush_now();
-    let dirty = with(|c| c.dirty.contains(&(vault_id.to_string(), note_id.to_string())));
+    let dirty = with(|c| {
+        c.dirty
+            .contains(&(vault_id.to_string(), note_id.to_string()))
+    });
     if dirty {
         let (v, n) = (vault_id.to_string(), note_id.to_string());
         // Wait for acks so the snapshot can cover our own updates.
@@ -1753,7 +2159,11 @@ pub fn send_presence() {
     d.run(200, || {
         let ui = ui();
         let route = ui.route.get_untracked();
-        let name = ui.user.get_untracked().map(|u| u.display_name).unwrap_or_default();
+        let name = ui
+            .user
+            .get_untracked()
+            .map(|u| u.display_name)
+            .unwrap_or_default();
         let uid = with(|c| c.user_id.clone());
         let cursor = with(|c| c.cursor);
         let vaults: Vec<String> = with(|c| c.loaded.iter().cloned().collect());
@@ -1762,7 +2172,11 @@ pub fn send_presence() {
             let p = Presence {
                 name: name.clone(),
                 color: util::user_color(&uid),
-                object_id: if here { route.note().map(|(_, n)| n.to_string()) } else { None },
+                object_id: if here {
+                    route.note().map(|(_, n)| n.to_string())
+                } else {
+                    None
+                },
                 cursor: if here { cursor } else { None },
                 at: now_ms(),
             };
@@ -1772,16 +2186,38 @@ pub fn send_presence() {
         // itself, so people it is shared with (who see nothing else) see us.
         let target = match &route {
             Route::Note(v, n) if is_shared_note(v, n) => Some((v.clone(), n.clone())),
-            Route::Shared(v, n) if with(|c| c.shares.get(&(v.clone(), n.clone())).is_some_and(|s| s.loaded)) => Some((v.clone(), n.clone())),
+            Route::Shared(v, n)
+                if with(|c| {
+                    c.shares
+                        .get(&(v.clone(), n.clone()))
+                        .is_some_and(|s| s.loaded)
+                }) =>
+            {
+                Some((v.clone(), n.clone()))
+            }
             _ => None,
         };
         let prev = with(|c| std::mem::replace(&mut c.presence_note, target.clone()));
-        let base = Presence { name, color: util::user_color(&uid), object_id: None, cursor: None, at: now_ms() };
+        let base = Presence {
+            name,
+            color: util::user_color(&uid),
+            object_id: None,
+            cursor: None,
+            at: now_ms(),
+        };
         if let Some((v, n)) = prev.filter(|p| Some(p) != target.as_ref()) {
             announce(&v, &n, &base);
         }
         if let Some((v, n)) = target {
-            announce(&v, &n, &Presence { object_id: Some(n.clone()), cursor, ..base });
+            announce(
+                &v,
+                &n,
+                &Presence {
+                    object_id: Some(n.clone()),
+                    cursor,
+                    ..base
+                },
+            );
         }
     });
 }
@@ -1789,10 +2225,15 @@ pub fn send_presence() {
 fn announce(vault: &str, object_id: &str, p: &Presence) {
     let payload = with(|c| {
         let r = c.replicas.get(vault)?;
-        r.encrypt_awareness(object_id, &serde_json::to_vec(p).ok()?).ok()
+        r.encrypt_awareness(object_id, &serde_json::to_vec(p).ok()?)
+            .ok()
     });
     if let Some(payload) = payload {
-        send(&ClientMessage::Awareness { vault_id: vault.to_string(), object_id: object_id.to_string(), payload });
+        send(&ClientMessage::Awareness {
+            vault_id: vault.to_string(),
+            object_id: object_id.to_string(),
+            payload,
+        });
     }
 }
 
@@ -1801,15 +2242,25 @@ fn on_awareness(vault_id: &str, object_id: &str, from_user: &str, conn: u64, pay
     // note too; once we know a connection vault-wide, its note-level messages
     // add nothing (and may arrive out of order), so they are ignored.
     let scope = (!object_id.is_empty()).then(|| object_id.to_string());
-    let known_vault_wide = with(|c| c.presence.get(&conn).is_some_and(|e| e.scope.is_none() && now_ms() - e.seen < 45_000));
+    let known_vault_wide = with(|c| {
+        c.presence
+            .get(&conn)
+            .is_some_and(|e| e.scope.is_none() && now_ms() - e.seen < 45_000)
+    });
     if scope.is_some() && known_vault_wide {
         return;
     }
     if payload.is_empty() {
         with(|c| c.presence.remove(&conn));
     } else {
-        let p = with(|c| c.replicas.get(vault_id).and_then(|r| r.decrypt_awareness(object_id, payload).ok()));
-        let Some(mut p) = p.and_then(|pt| serde_json::from_slice::<Presence>(&pt).ok()) else { return };
+        let p = with(|c| {
+            c.replicas
+                .get(vault_id)
+                .and_then(|r| r.decrypt_awareness(object_id, payload).ok())
+        });
+        let Some(mut p) = p.and_then(|pt| serde_json::from_slice::<Presence>(&pt).ok()) else {
+            return;
+        };
         if let Some(o) = &scope {
             // A note-level announcement can only be about that note.
             if p.object_id.as_ref().is_some_and(|x| x != o) {
@@ -1818,7 +2269,16 @@ fn on_awareness(vault_id: &str, object_id: &str, from_user: &str, conn: u64, pay
         }
         let is_new = with(|c| {
             let new = !c.presence.contains_key(&conn);
-            c.presence.insert(conn, PresenceEntry { vault: vault_id.to_string(), scope, user_id: from_user.to_string(), presence: p, seen: now_ms() });
+            c.presence.insert(
+                conn,
+                PresenceEntry {
+                    vault: vault_id.to_string(),
+                    scope,
+                    user_id: from_user.to_string(),
+                    presence: p,
+                    seen: now_ms(),
+                },
+            );
             new
         });
         if is_new {
@@ -1835,7 +2295,10 @@ pub fn publish_presence() {
     let now = now_ms();
     let (views, cursors, ed) = with(|c| {
         c.presence.retain(|_, e| now - e.seen < 45_000);
-        let v = route.vault().or(route.shared().map(|(v, _)| v)).map(str::to_string);
+        let v = route
+            .vault()
+            .or(route.shared().map(|(v, _)| v))
+            .map(str::to_string);
         // On a note shared with us, only people on that note are relevant.
         let only = route.shared().map(|(_, n)| n.to_string());
         let views: Vec<PresenceView> = c
@@ -1855,10 +2318,19 @@ pub fn publish_presence() {
         let cursors: Vec<RemoteCursor> = c
             .presence
             .values()
-            .filter(|e| Some(&e.vault) == v.as_ref() && e.presence.object_id.is_some() && e.presence.object_id == open)
+            .filter(|e| {
+                Some(&e.vault) == v.as_ref()
+                    && e.presence.object_id.is_some()
+                    && e.presence.object_id == open
+            })
             .filter_map(|e| {
                 let (a, h) = e.presence.cursor?;
-                Some(RemoteCursor { name: e.presence.name.clone(), color: e.presence.color.clone(), anchor: a, head: h })
+                Some(RemoteCursor {
+                    name: e.presence.name.clone(),
+                    color: e.presence.color.clone(),
+                    anchor: a,
+                    head: h,
+                })
             })
             .collect();
         (views, cursors, c.editor.as_ref().map(|(_, _, e)| e.clone()))
@@ -1882,7 +2354,11 @@ pub fn start_presence_heartbeat() {
 
 pub async fn refresh_pending_devices() {
     if let Ok(devs) = api::get::<Vec<DeviceInfo>>("/devices").await {
-        ui().pending_devices.set(devs.into_iter().filter(|d| d.status == DeviceStatus::Pending).collect());
+        ui().pending_devices.set(
+            devs.into_iter()
+                .filter(|d| d.status == DeviceStatus::Pending)
+                .collect(),
+        );
     }
 }
 
@@ -1927,25 +2403,37 @@ fn push_route(route: Route, replace: bool) {
 
 pub fn listen_popstate() {
     use wasm_bindgen::JsCast;
-    let cb = wasm_bindgen::closure::Closure::wrap(Box::new(|| ui().route.set(current_route())) as Box<dyn FnMut()>);
-    let _ = util::window().add_event_listener_with_callback("popstate", cb.as_ref().unchecked_ref());
+    let cb = wasm_bindgen::closure::Closure::wrap(
+        Box::new(|| ui().route.set(current_route())) as Box<dyn FnMut()>
+    );
+    let _ =
+        util::window().add_event_listener_with_callback("popstate", cb.as_ref().unchecked_ref());
     cb.forget();
     let cb = wasm_bindgen::closure::Closure::wrap(Box::new(|e: web_sys::Event| {
         flush_now();
-        if with(|c| c.pending_count()) > 0 && with(|c| c.socket.as_ref().is_some_and(|s| !s.is_ready())) {
+        if with(|c| c.pending_count()) > 0
+            && with(|c| c.socket.as_ref().is_some_and(|s| !s.is_ready()))
+        {
             // Unsent changes are kept in local storage; warn anyway.
             e.prevent_default();
             let _ = js_sys::Reflect::set(&e, &"returnValue".into(), &"".into());
         }
     }) as Box<dyn FnMut(web_sys::Event)>);
-    let _ = util::window().add_event_listener_with_callback("beforeunload", cb.as_ref().unchecked_ref());
+    let _ = util::window()
+        .add_event_listener_with_callback("beforeunload", cb.as_ref().unchecked_ref());
     cb.forget();
 }
 
 // ------------------------------------------------------------------ helpers used by views
 
 pub fn note_title(vault: &str, note: &str) -> Option<String> {
-    with(|c| c.replicas.get(vault)?.index.get(note).map(|e| e.title().to_string()))
+    with(|c| {
+        c.replicas
+            .get(vault)?
+            .index
+            .get(note)
+            .map(|e| e.title().to_string())
+    })
 }
 
 pub fn entry(vault: &str, id: &str) -> Option<coolpsonotes_core::doc::Entry> {
@@ -1953,7 +2441,12 @@ pub fn entry(vault: &str, id: &str) -> Option<coolpsonotes_core::doc::Entry> {
 }
 
 pub fn vault_name(vault: &str) -> String {
-    with(|c| c.replicas.get(vault).map(|r| r.meta.name.clone()).unwrap_or_default())
+    with(|c| {
+        c.replicas
+            .get(vault)
+            .map(|r| r.meta.name.clone())
+            .unwrap_or_default()
+    })
 }
 
 pub fn role(vault: &str) -> Option<Role> {
@@ -1980,16 +2473,26 @@ pub fn live_entries(vault: &str) -> Vec<coolpsonotes_core::doc::Entry> {
     with(|c| {
         c.replicas
             .get(vault)
-            .map(|r| r.index.resolved_paths().into_iter().map(|(p, mut e)| {
-                e.path = p;
-                e
-            }).collect())
+            .map(|r| {
+                r.index
+                    .resolved_paths()
+                    .into_iter()
+                    .map(|(p, mut e)| {
+                        e.path = p;
+                        e
+                    })
+                    .collect()
+            })
             .unwrap_or_default()
     })
 }
 
 pub fn notes_of(vault: &str) -> Vec<(String, String)> {
-    live_entries(vault).into_iter().filter(|e| e.kind == EntryKind::Note).map(|e| (e.id, e.path)).collect()
+    live_entries(vault)
+        .into_iter()
+        .filter(|e| e.kind == EntryKind::Note)
+        .map(|e| (e.id, e.path))
+        .collect()
 }
 
 pub fn new_id() -> String {

@@ -19,9 +19,9 @@ use crate::cli::*;
 use crate::gateway::{self, Gateway};
 use crate::hub::{Hub, HubOptions};
 use crate::manage;
-use crate::note_shares;
 use crate::mcp::McpServer;
 use crate::mirror::Mirror;
+use crate::note_shares;
 use crate::ops;
 use crate::profile::{Dirs, ProfileStore};
 use crate::session::Session;
@@ -75,7 +75,11 @@ fn confirm_or_flag(yes: bool, prompt: &str) -> Result<()> {
 
 pub async fn run(cli: Cli) -> Result<()> {
     ui::set_quiet(cli.quiet);
-    let ctx = Ctx { dirs: Dirs::from_env()?, profile: cli.profile.clone(), json: cli.json };
+    let ctx = Ctx {
+        dirs: Dirs::from_env()?,
+        profile: cli.profile.clone(),
+        json: cli.json,
+    };
     match cli.command {
         Command::Login(a) => login(&ctx, a).await,
         Command::Logout { forget, yes } => {
@@ -88,7 +92,11 @@ pub async fn run(cli: Cli) -> Result<()> {
             account::logout(&ctx.dirs, &ctx.profile, forget).await?;
             println!(
                 "{}",
-                if forget { "Signed out; this device and its local data were removed." } else { "Signed out." }
+                if forget {
+                    "Signed out; this device and its local data were removed."
+                } else {
+                    "Signed out."
+                }
             );
             Ok(())
         }
@@ -111,29 +119,53 @@ pub async fn run(cli: Cli) -> Result<()> {
         Command::Devices(c) => devices(&ctx, c).await,
         Command::Recovery(RecoveryCmd::Rotate { yes }) => {
             let s = ctx.session()?;
-            confirm_or_flag(yes, "Create a new recovery key? The current one will stop working.")?;
+            confirm_or_flag(
+                yes,
+                "Create a new recovery key? The current one will stop working.",
+            )?;
             let rk = manage::rotate_recovery(&s).await?;
             show_recovery_key(&rk);
             Ok(())
         }
         Command::Vault(c) => vault(&ctx, c).await,
-        Command::Ls { vault, folder, recursive } => ls(&ctx, &vault, folder.as_deref(), recursive).await,
+        Command::Ls {
+            vault,
+            folder,
+            recursive,
+        } => ls(&ctx, &vault, folder.as_deref(), recursive).await,
         Command::Cat { vault, path } => cat(&ctx, &vault, &path).await,
-        Command::ShareNote { vault, path, user, role, accept_new_key } => {
+        Command::ShareNote {
+            vault,
+            path,
+            user,
+            role,
+            accept_new_key,
+        } => {
             let hub = ctx.hub(&[&vault]).await?;
             let v = hub.resolve(&vault).await?;
             let role = match role {
                 ShareRole::Editor => Role::Editor,
                 ShareRole::Viewer => Role::Viewer,
             };
-            let out = note_shares::share_note(&hub.session, &v, &path, &user, role, accept_new_key).await?;
+            let out = note_shares::share_note(&hub.session, &v, &path, &user, role, accept_new_key)
+                .await?;
             if out.updated_role {
-                println!("'{path}' is now shared with {} as {}", out.user.display_name, role.as_str());
+                println!(
+                    "'{path}' is now shared with {} as {}",
+                    out.user.display_name,
+                    role.as_str()
+                );
             } else {
-                println!("shared '{path}' with {} as {} (they cannot see anything else in the vault)", out.user.display_name, role.as_str());
+                println!(
+                    "shared '{path}' with {} as {} (they cannot see anything else in the vault)",
+                    out.user.display_name,
+                    role.as_str()
+                );
             }
             match (&out.fingerprint, out.pin) {
-                (Some(fp), Some(PinStatus::New)) => println!("Their key fingerprint: {fp} (now pinned; compare it with them over a trusted channel)"),
+                (Some(fp), Some(PinStatus::New)) => println!(
+                    "Their key fingerprint: {fp} (now pinned; compare it with them over a trusted channel)"
+                ),
                 (Some(fp), _) => println!("Their key fingerprint: {fp} (matches the pinned one)"),
                 _ => {}
             }
@@ -143,7 +175,10 @@ pub async fn run(cli: Cli) -> Result<()> {
             let hub = ctx.hub(&[&vault]).await?;
             let v = hub.resolve(&vault).await?;
             let u = note_shares::unshare_note(&hub.session, &v, &path, &user).await?;
-            println!("stopped sharing '{path}' with {}; the note's key was rotated", u.display_name);
+            println!(
+                "stopped sharing '{path}' with {}; the note's key was rotated",
+                u.display_name
+            );
             Ok(())
         }
         Command::NoteShares { vault, path } => {
@@ -152,7 +187,11 @@ pub async fn run(cli: Cli) -> Result<()> {
             let (vid, nid, shared) = {
                 let g = v.lock().await;
                 let (_, e) = g.find_note(&path)?;
-                (g.id().to_string(), e.id.clone(), g.replica.is_shared_object(&e.id))
+                (
+                    g.id().to_string(),
+                    e.id.clone(),
+                    g.replica.is_shared_object(&e.id),
+                )
             };
             if !shared {
                 println!("'{path}' is not shared individually");
@@ -163,7 +202,12 @@ pub async fn run(cli: Cli) -> Result<()> {
                 ctx.print_json(&list.iter().map(|s| json!({ "user_id": s.user.id, "name": s.user.display_name, "role": s.role })).collect::<Vec<_>>());
             } else {
                 for s in list {
-                    println!("{:<8} {}{}", s.role.as_str(), s.user.display_name, s.user.email.map(|e| format!(" <{e}>")).unwrap_or_default());
+                    println!(
+                        "{:<8} {}{}",
+                        s.role.as_str(),
+                        s.user.display_name,
+                        s.user.email.map(|e| format!(" <{e}>")).unwrap_or_default()
+                    );
                 }
             }
             Ok(())
@@ -179,7 +223,13 @@ pub async fn run(cli: Cli) -> Result<()> {
                         println!("no notes are shared with you individually");
                     } else {
                         for n in list {
-                            println!("{:<34} {:<6} {:<24} {}", n.info.object_id, n.info.role.as_str(), n.info.owner.display_name, n.title);
+                            println!(
+                                "{:<34} {:<6} {:<24} {}",
+                                n.info.object_id,
+                                n.info.role.as_str(),
+                                n.info.owner.display_name,
+                                n.title
+                            );
                         }
                     }
                 }
@@ -191,16 +241,22 @@ pub async fn run(cli: Cli) -> Result<()> {
                 }
                 SharedCmd::Write { note, append } => {
                     let mut data = String::new();
-                    std::io::stdin().read_to_string(&mut data).context("reading stdin")?;
+                    std::io::stdin()
+                        .read_to_string(&mut data)
+                        .context("reading stdin")?;
                     let n = note_shares::write_shared(&s, &note, &data, append).await?;
                     crate::ui::status(&format!("updated '{}'", n.title));
                 }
             }
             Ok(())
         }
-        Command::Write { vault, path, attachment, append, if_match } => {
-            write(&ctx, &vault, &path, attachment, append, if_match.as_deref()).await
-        }
+        Command::Write {
+            vault,
+            path,
+            attachment,
+            append,
+            if_match,
+        } => write(&ctx, &vault, &path, attachment, append, if_match.as_deref()).await,
         Command::Mkdir { vault, path } => {
             let hub = ctx.hub(&[&vault]).await?;
             let v = hub.resolve(&vault).await?;
@@ -213,7 +269,12 @@ pub async fn run(cli: Cli) -> Result<()> {
             report_push(hub.local_changed(&vid, vec![], true).await);
             Ok(())
         }
-        Command::Mv { vault, from, to, update_links } => {
+        Command::Mv {
+            vault,
+            from,
+            to,
+            update_links,
+        } => {
             let hub = ctx.hub(&[&vault]).await?;
             let out = op(ops::move_document(&hub, &vault, &from, &to, update_links).await)?;
             println!("moved to {}", out.to);
@@ -222,11 +283,18 @@ pub async fn run(cli: Cli) -> Result<()> {
         Command::Rm { vault, path } => {
             let hub = ctx.hub(&[&vault]).await?;
             let (_, ids) = op(ops::delete_document(&hub, &vault, &path).await)?;
-            println!("moved {} item(s) to the trash (restore with `coolpsonotes trash restore`)", ids.len());
+            println!(
+                "moved {} item(s) to the trash (restore with `coolpsonotes trash restore`)",
+                ids.len()
+            );
             Ok(())
         }
         Command::Trash(c) => trash(&ctx, c).await,
-        Command::Search { query, vault, limit } => {
+        Command::Search {
+            query,
+            vault,
+            limit,
+        } => {
             let q = query.join(" ");
             let refs: Vec<&str> = vault.as_deref().into_iter().collect();
             let hub = ctx.hub(&refs).await?;
@@ -237,7 +305,10 @@ pub async fn run(cli: Cli) -> Result<()> {
                 println!("no matches");
             } else {
                 for h in hits {
-                    println!("{}:{}  ({:.1})\n    {}", h.vault_name, h.path, h.score, h.snippet);
+                    println!(
+                        "{}:{}  ({:.1})\n    {}",
+                        h.vault_name, h.path, h.score, h.snippet
+                    );
                 }
             }
             Ok(())
@@ -262,7 +333,12 @@ pub async fn run(cli: Cli) -> Result<()> {
             print_transfer("exported", &r);
             Ok(())
         }
-        Command::Import { vault, source, into, skip_existing } => {
+        Command::Import {
+            vault,
+            source,
+            into,
+            skip_existing,
+        } => {
             let hub = ctx.hub(&[&vault]).await?;
             let v = hub.resolve(&vault).await?;
             let r = transfer::import(&hub, &v, &source, into.as_deref(), skip_existing).await?;
@@ -287,7 +363,10 @@ fn show_recovery_key(rk: &str) {
 
 fn report_push(o: crate::session::PushOutcome) {
     if o.offline || o.remaining > 0 {
-        ui::status(&format!("saved locally; {} change(s) will be uploaded when the server is reachable", o.remaining));
+        ui::status(&format!(
+            "saved locally; {} change(s) will be uploaded when the server is reachable",
+            o.remaining
+        ));
     }
 }
 
@@ -297,7 +376,11 @@ fn print_transfer(verb: &str, r: &transfer::TransferReport) {
         r.notes,
         r.attachments,
         r.folders,
-        if r.unchanged > 0 { format!(", {} unchanged", r.unchanged) } else { String::new() }
+        if r.unchanged > 0 {
+            format!(", {} unchanged", r.unchanged)
+        } else {
+            String::new()
+        }
     );
     for (p, why) in &r.skipped {
         ui::warn(&format!("skipped {p}: {why}"));
@@ -308,9 +391,15 @@ fn print_transfer(verb: &str, r: &transfer::TransferReport) {
 
 async fn login(ctx: &Ctx, a: LoginArgs) -> Result<()> {
     let store = ctx.store()?;
-    let server = match a.server.or_else(|| store.load().ok().flatten().map(|p| p.server)) {
+    let server = match a
+        .server
+        .or_else(|| store.load().ok().flatten().map(|p| p.server))
+    {
         Some(s) => s,
-        None => bail!("--server URL is required for the first login of profile '{}'", ctx.profile),
+        None => bail!(
+            "--server URL is required for the first login of profile '{}'",
+            ctx.profile
+        ),
     };
     let out = account::login(
         &ctx.dirs,
@@ -338,7 +427,10 @@ async fn login(ctx: &Ctx, a: LoginArgs) -> Result<()> {
     } else {
         "device approved"
     };
-    println!("Signed in as {} (profile '{}'): {how}.", out.user.display_name, ctx.profile);
+    println!(
+        "Signed in as {} (profile '{}'): {how}.",
+        out.user.display_name, ctx.profile
+    );
     println!("Account key fingerprint: {}", out.fingerprint);
     Ok(())
 }
@@ -354,7 +446,14 @@ async fn status(ctx: &Ctx) -> Result<()> {
             "mirror_dir": p.sync.mirror_dir,
         });
         if let Ok(s) = ctx.session() {
-            let hub = Hub::start(s.clone(), HubOptions { offline_ok: true, ..Default::default() }).await?;
+            let hub = Hub::start(
+                s.clone(),
+                HubOptions {
+                    offline_ok: true,
+                    ..Default::default()
+                },
+            )
+            .await?;
             out["online"] = json!(hub.is_online());
             out["fingerprint"] = json!(s.fingerprint());
             out["vaults"] = serde_json::to_value(hub.summaries().await)?;
@@ -364,7 +463,11 @@ async fn status(ctx: &Ctx) -> Result<()> {
     }
     println!("Profile:   {} ({})", ctx.profile, p.kind.as_str());
     println!("Server:    {}", p.server);
-    println!("User:      {} ({})", p.display_name.clone().unwrap_or_default(), p.user_id.clone().unwrap_or_default());
+    println!(
+        "User:      {} ({})",
+        p.display_name.clone().unwrap_or_default(),
+        p.user_id.clone().unwrap_or_default()
+    );
     if p.device_pending {
         println!("Device:    waiting for approval — run `coolpsonotes login` again to continue");
         return Ok(());
@@ -385,7 +488,14 @@ async fn status(ctx: &Ctx) -> Result<()> {
             }
         }
     }
-    let hub = Hub::start(session.clone(), HubOptions { offline_ok: true, ..Default::default() }).await?;
+    let hub = Hub::start(
+        session.clone(),
+        HubOptions {
+            offline_ok: true,
+            ..Default::default()
+        },
+    )
+    .await?;
     match session.server_info().await {
         Ok(i) => println!("Online:    yes ({} {})", i.name, i.version),
         Err(e) => println!("Online:    no ({e})"),
@@ -396,14 +506,25 @@ async fn status(ctx: &Ctx) -> Result<()> {
     {
         println!("Devices:");
         for d in devs {
-            let cur = if Some(&d.id) == p.device_id.as_ref() { " (this device)" } else { "" };
+            let cur = if Some(&d.id) == p.device_id.as_ref() {
+                " (this device)"
+            } else {
+                ""
+            };
             println!("  {:<10} {}{cur}  [{}]", d.status.as_str(), d.name, d.id);
         }
     }
     println!("Vaults:");
     for s in hub.summaries().await {
-        let ro = s.read_only.as_ref().map(|r| format!(" READ-ONLY: {r}")).unwrap_or_default();
-        let last = s.last_sync.map(ui::fmt_time).unwrap_or_else(|| "never".into());
+        let ro = s
+            .read_only
+            .as_ref()
+            .map(|r| format!(" READ-ONLY: {r}"))
+            .unwrap_or_default();
+        let last = s
+            .last_sync
+            .map(ui::fmt_time)
+            .unwrap_or_else(|| "never".into());
         println!(
             "  {:<24} {:<7} {:>4} docs  {:>3} pending  synced {last}{}{ro}  [{}]",
             s.name,
@@ -439,7 +560,11 @@ async fn devices(ctx: &Ctx, c: DevicesCmd) -> Result<()> {
                 return Ok(());
             }
             for d in &list {
-                let cur = if Some(&d.id) == s.profile.device_id.as_ref() { "  <- this device" } else { "" };
+                let cur = if Some(&d.id) == s.profile.device_id.as_ref() {
+                    "  <- this device"
+                } else {
+                    ""
+                };
                 println!(
                     "{:<10} {:<36} {:<30} added {}{cur}",
                     d.status.as_str(),
@@ -448,9 +573,15 @@ async fn devices(ctx: &Ctx, c: DevicesCmd) -> Result<()> {
                     ui::fmt_time(d.created_at)
                 );
             }
-            let pending: Vec<_> = list.iter().filter(|d| d.status == DeviceStatus::Pending).collect();
+            let pending: Vec<_> = list
+                .iter()
+                .filter(|d| d.status == DeviceStatus::Pending)
+                .collect();
             if !pending.is_empty() {
-                println!("\n{} device(s) waiting: `coolpsonotes devices approve <id>`", pending.len());
+                println!(
+                    "\n{} device(s) waiting: `coolpsonotes devices approve <id>`",
+                    pending.len()
+                );
             }
             Ok(())
         }
@@ -498,7 +629,9 @@ async fn vault(ctx: &Ctx, c: VaultCmd) -> Result<()> {
                     s.role.as_str(),
                     s.documents,
                     if s.archived { "  (archived)" } else { "" },
-                    s.read_only.map(|r| format!("  READ-ONLY: {r}")).unwrap_or_default(),
+                    s.read_only
+                        .map(|r| format!("  READ-ONLY: {r}"))
+                        .unwrap_or_default(),
                     s.id
                 );
             }
@@ -572,7 +705,11 @@ async fn vault(ctx: &Ctx, c: VaultCmd) -> Result<()> {
                     (None, Some(e)) => format!("KEY INVALID: {e}"),
                     (None, None) => "no keys yet".into(),
                 };
-                let key = if m.member.has_current_key { "" } else { "  [waiting for vault key]" };
+                let key = if m.member.has_current_key {
+                    ""
+                } else {
+                    "  [waiting for vault key]"
+                };
                 println!(
                     "{:<24} {:<6} {:<7} {fp}{key}",
                     m.member.user.display_name,
@@ -582,7 +719,12 @@ async fn vault(ctx: &Ctx, c: VaultCmd) -> Result<()> {
             }
             Ok(())
         }
-        VaultCmd::Share { vault, user, role, accept_new_key } => {
+        VaultCmd::Share {
+            vault,
+            user,
+            role,
+            accept_new_key,
+        } => {
             let hub = ctx.hub(&[&vault]).await?;
             let v = hub.resolve(&vault).await?;
             let role = match role {
@@ -667,9 +809,17 @@ async fn ls(ctx: &Ctx, vault: &str, folder: Option<&str>, recursive: bool) -> Re
         match (l.kind, &l.entry) {
             (ListKind::Folder, _) => println!("{:>10}  {:<20}  {}/", "", "", l.path),
             (_, Some(e)) => {
-                let size =
-                    if e.kind == EntryKind::Note { g.note_text(&e.id).len() as u64 } else { e.size.unwrap_or(0) };
-                println!("{:>10}  {:<20}  {}", ui::fmt_size(size), ui::fmt_time(e.modified), l.path)
+                let size = if e.kind == EntryKind::Note {
+                    g.note_text(&e.id).len() as u64
+                } else {
+                    e.size.unwrap_or(0)
+                };
+                println!(
+                    "{:>10}  {:<20}  {}",
+                    ui::fmt_size(size),
+                    ui::fmt_time(e.modified),
+                    l.path
+                )
             }
             _ => {}
         }
@@ -680,7 +830,11 @@ async fn ls(ctx: &Ctx, vault: &str, folder: Option<&str>, recursive: bool) -> Re
 async fn cat(ctx: &Ctx, vault: &str, path: &str) -> Result<()> {
     let hub = ctx.hub(&[vault]).await?;
     let v = hub.resolve(vault).await?;
-    let (_, e) = v.lock().await.find(path).ok_or_else(|| anyhow!("no document '{path}'"))?;
+    let (_, e) = v
+        .lock()
+        .await
+        .find(path)
+        .ok_or_else(|| anyhow!("no document '{path}'"))?;
     let mut out = std::io::stdout().lock();
     match e.kind {
         EntryKind::Note => {
@@ -710,7 +864,9 @@ async fn write(
     if_match: Option<&str>,
 ) -> Result<()> {
     let mut data = Vec::new();
-    std::io::stdin().read_to_end(&mut data).context("reading stdin")?;
+    std::io::stdin()
+        .read_to_end(&mut data)
+        .context("reading stdin")?;
     let hub = ctx.hub(&[vault]).await?;
     let out = if attachment {
         op(ops::put_attachment(&hub, vault, path, &data, None).await)?
@@ -723,7 +879,8 @@ async fn write(
             op(ops::put_document(&hub, vault, path, &text, if_match).await)?
         }
     };
-    hub.snapshot_idle(Duration::ZERO, livesync::SESSION_MIN_UPDATES).await;
+    hub.snapshot_idle(Duration::ZERO, livesync::SESSION_MIN_UPDATES)
+        .await;
     let what = if out.created {
         "created"
     } else if out.changed {
@@ -755,7 +912,13 @@ async fn trash(ctx: &Ctx, c: TrashCmd) -> Result<()> {
                 println!("the trash is empty");
             }
             for e in list {
-                println!("{}  {:<10}  {}  [{}]", ui::fmt_time(e.trashed.unwrap_or(0)), e.kind.as_str(), e.path, e.id);
+                println!(
+                    "{}  {:<10}  {}  [{}]",
+                    ui::fmt_time(e.trashed.unwrap_or(0)),
+                    e.kind.as_str(),
+                    e.path,
+                    e.id
+                );
             }
             Ok(())
         }
@@ -784,13 +947,21 @@ async fn trash(ctx: &Ctx, c: TrashCmd) -> Result<()> {
 
 async fn history(ctx: &Ctx, h: HistoryArgs) -> Result<()> {
     match h.cmd {
-        Some(HistoryCmd::Show { vault, path, revision }) => {
+        Some(HistoryCmd::Show {
+            vault,
+            path,
+            revision,
+        }) => {
             let hub = ctx.hub(&[&vault]).await?;
             let text = op(ops::revision(&hub, &vault, &path, &revision).await)?;
             print!("{text}");
             Ok(())
         }
-        Some(HistoryCmd::Restore { vault, path, revision }) => {
+        Some(HistoryCmd::Restore {
+            vault,
+            path,
+            revision,
+        }) => {
             let hub = ctx.hub(&[&vault]).await?;
             let text = op(ops::revision(&hub, &vault, &path, &revision).await)?;
             let out = op(ops::put_document(&hub, &vault, &path, &text, None).await)?;
@@ -799,7 +970,9 @@ async fn history(ctx: &Ctx, h: HistoryArgs) -> Result<()> {
         }
         None => {
             let (Some(vault), Some(path)) = (h.vault, h.path) else {
-                bail!("usage: coolpsonotes history <vault> <path>  |  history show <vault> <path> <revision>");
+                bail!(
+                    "usage: coolpsonotes history <vault> <path>  |  history show <vault> <path> <revision>"
+                );
             };
             let hub = ctx.hub(&[&vault]).await?;
             let revs = op(ops::history(&hub, &vault, &path).await)?;
@@ -808,10 +981,17 @@ async fn history(ctx: &Ctx, h: HistoryArgs) -> Result<()> {
                 return Ok(());
             }
             if revs.is_empty() {
-                println!("no stored revisions yet (they are created as a document accumulates edits)");
+                println!(
+                    "no stored revisions yet (they are created as a document accumulates edits)"
+                );
             }
             for r in revs {
-                println!("{}  {:>10}  {}", ui::fmt_time(r.created_at), ui::fmt_size(r.size as u64), r.id);
+                println!(
+                    "{}  {:>10}  {}",
+                    ui::fmt_time(r.created_at),
+                    ui::fmt_size(r.size as u64),
+                    r.id
+                );
             }
             Ok(())
         }
@@ -837,7 +1017,8 @@ async fn shutdown_signal() {
     };
     #[cfg(unix)]
     let term = async {
-        if let Ok(mut s) = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+        if let Ok(mut s) = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+        {
             s.recv().await;
         }
     };
@@ -855,7 +1036,9 @@ async fn sync(ctx: &Ctx, a: SyncArgs) -> Result<()> {
         return Ok(());
     }
     let dir = match a.dir.clone().or(profile.sync.mirror_dir.clone()) {
-        Some(d) => Some(std::path::absolute(&d).with_context(|| format!("resolving {}", d.display()))?),
+        Some(d) => {
+            Some(std::path::absolute(&d).with_context(|| format!("resolving {}", d.display()))?)
+        }
         None => None,
     };
     if let Some(d) = &dir {
@@ -866,7 +1049,9 @@ async fn sync(ctx: &Ctx, a: SyncArgs) -> Result<()> {
             }
             let answer = ui::prompt_line("Type 'yes' to enable the plaintext mirror: ")?;
             if answer != "yes" {
-                bail!("cancelled; run `coolpsonotes sync` without --dir to keep only encrypted local copies");
+                bail!(
+                    "cancelled; run `coolpsonotes sync` without --dir to keep only encrypted local copies"
+                );
             }
         } else if a.dir.is_some() || !profile.sync.plaintext_ok {
             ui::status(&plaintext_note(d));
@@ -879,7 +1064,12 @@ async fn sync(ctx: &Ctx, a: SyncArgs) -> Result<()> {
     let session = ctx.session()?;
     let hub = Hub::start(
         session,
-        HubOptions { vaults: a.vaults.clone(), read_only: false, offline_ok: true, catch_up: true },
+        HubOptions {
+            vaults: a.vaults.clone(),
+            read_only: false,
+            offline_ok: true,
+            catch_up: true,
+        },
     )
     .await?;
     if a.once {
@@ -898,16 +1088,23 @@ async fn sync(ctx: &Ctx, a: SyncArgs) -> Result<()> {
                 Err(e) => ui::warn(&format!("vault {id}: {e:#}")),
             }
         }
-        hub.snapshot_idle(Duration::ZERO, livesync::SESSION_MIN_UPDATES).await;
+        hub.snapshot_idle(Duration::ZERO, livesync::SESSION_MIN_UPDATES)
+            .await;
         hub.save_all().await;
         let n = hub.vault_ids().len();
         if hub.is_online() {
             println!(
                 "synced {n} vault(s){}",
-                if pending > 0 { format!("; {pending} change(s) still queued") } else { String::new() }
+                if pending > 0 {
+                    format!("; {pending} change(s) still queued")
+                } else {
+                    String::new()
+                }
             );
         } else {
-            println!("offline: {n} local vault(s) up to date with your edits; {pending} change(s) queued for upload");
+            println!(
+                "offline: {n} local vault(s) up to date with your edits; {pending} change(s) queued for upload"
+            );
         }
         return Ok(());
     }
@@ -918,11 +1115,17 @@ async fn sync(ctx: &Ctx, a: SyncArgs) -> Result<()> {
         Some(d) => {
             let mut m = Mirror::new(hub.clone(), d).await?;
             m.reconcile_all(false).await?;
-            ui::status(&format!("mirroring {} vault(s) into {}", hub.vault_ids().len(), d.display()));
+            ui::status(&format!(
+                "mirroring {} vault(s) into {}",
+                hub.vault_ids().len(),
+                d.display()
+            ));
             Some(tokio::spawn(m.run(stop_rx.clone())))
         }
         None => {
-            ui::status("keeping encrypted local copies in sync (no plaintext mirror; use --dir to add one)");
+            ui::status(
+                "keeping encrypted local copies in sync (no plaintext mirror; use --dir to add one)",
+            );
             None
         }
     };
@@ -945,7 +1148,8 @@ async fn sync(ctx: &Ctx, a: SyncArgs) -> Result<()> {
         let _ = tokio::time::timeout(Duration::from_secs(10), hub.push(&id)).await;
     }
     // The editing session ends with the process: keep a revision of what changed.
-    hub.snapshot_idle(Duration::ZERO, livesync::SESSION_MIN_UPDATES).await;
+    hub.snapshot_idle(Duration::ZERO, livesync::SESSION_MIN_UPDATES)
+        .await;
     hub.save_all().await;
     ui::status("stopped");
     result
@@ -955,16 +1159,24 @@ async fn sync(ctx: &Ctx, a: SyncArgs) -> Result<()> {
 
 fn write_secret_file(path: &Path, secret: &str) -> Result<()> {
     if path.exists() {
-        bail!("{} already exists; choose another --secret-out", path.display());
+        bail!(
+            "{} already exists; choose another --secret-out",
+            path.display()
+        );
     }
     crate::fsutil::create_private_file(path, format!("{secret}\n").as_bytes())
         .with_context(|| format!("writing {}", path.display()))
 }
 
-async fn resolve_agent(s: &Session, reference: &str) -> Result<coolpsonotes_core::protocol::AgentInfo> {
+async fn resolve_agent(
+    s: &Session,
+    reference: &str,
+) -> Result<coolpsonotes_core::protocol::AgentInfo> {
     let list = manage::agents(s).await?;
-    let mut found: Vec<_> =
-        list.into_iter().filter(|a| a.id == reference || a.display_name.eq_ignore_ascii_case(reference)).collect();
+    let mut found: Vec<_> = list
+        .into_iter()
+        .filter(|a| a.id == reference || a.display_name.eq_ignore_ascii_case(reference))
+        .collect();
     match found.len() {
         1 => Ok(found.remove(0)),
         0 => bail!("no agent '{reference}' (see `coolpsonotes agent list`)"),
@@ -974,18 +1186,32 @@ async fn resolve_agent(s: &Session, reference: &str) -> Result<coolpsonotes_core
 
 async fn agent(ctx: &Ctx, c: AgentCmd) -> Result<()> {
     match c {
-        AgentCmd::Setup { server, client_id, client_secret_file, insecure_http } => {
+        AgentCmd::Setup {
+            server,
+            client_id,
+            client_secret_file,
+            insecure_http,
+        } => {
             let out = account::agent_setup(
                 &ctx.dirs,
                 &ctx.profile,
-                AgentSetupOptions { server, insecure_http, client_id, client_secret_file },
+                AgentSetupOptions {
+                    server,
+                    insecure_http,
+                    client_id,
+                    client_secret_file,
+                },
             )
             .await?;
             println!(
                 "Agent '{}' is set up in profile '{}'{}.",
                 out.display_name,
                 ctx.profile,
-                if out.created_keys { " (new key pair created)" } else { "" }
+                if out.created_keys {
+                    " (new key pair created)"
+                } else {
+                    ""
+                }
             );
             println!("Agent key fingerprint: {}", out.fingerprint);
             println!(
@@ -999,9 +1225,15 @@ async fn agent(ctx: &Ctx, c: AgentCmd) -> Result<()> {
             let s = ctx.session()?;
             let created = manage::create_agent(&s, &name).await?;
             write_secret_file(&secret_out, &created.credential.client_secret)?;
-            println!("created agent '{}' [{}]", created.agent.display_name, created.agent.id);
+            println!(
+                "created agent '{}' [{}]",
+                created.agent.display_name, created.agent.id
+            );
             println!("client id:     {}", created.credential.client_id);
-            println!("client secret: written to {} (mode 0600)", secret_out.display());
+            println!(
+                "client secret: written to {} (mode 0600)",
+                secret_out.display()
+            );
             println!(
                 "On the agent's machine run:\n  coolpsonotes --profile <name> agent setup --server {} --client-id {} \
                  --client-secret-file <file>",
@@ -1018,12 +1250,24 @@ async fn agent(ctx: &Ctx, c: AgentCmd) -> Result<()> {
             }
             for a in list {
                 let fp = match &a.account_key {
-                    Some(k) => k.verify().map(|p| p.fingerprint()).unwrap_or_else(|_| "INVALID KEY".into()),
+                    Some(k) => k
+                        .verify()
+                        .map(|p| p.fingerprint())
+                        .unwrap_or_else(|_| "INVALID KEY".into()),
                     None => "not set up yet".into(),
                 };
-                let creds: Vec<&str> =
-                    a.credentials.iter().filter(|c| c.revoked_at.is_none()).map(|c| c.client_id.as_str()).collect();
-                println!("{:<24} {fp}  credentials: {}  [{}]", a.display_name, creds.join(", "), a.id);
+                let creds: Vec<&str> = a
+                    .credentials
+                    .iter()
+                    .filter(|c| c.revoked_at.is_none())
+                    .map(|c| c.client_id.as_str())
+                    .collect();
+                println!(
+                    "{:<24} {fp}  credentials: {}  [{}]",
+                    a.display_name,
+                    creds.join(", "),
+                    a.id
+                );
             }
             Ok(())
         }
@@ -1036,15 +1280,26 @@ async fn agent(ctx: &Ctx, c: AgentCmd) -> Result<()> {
             }
             Ok(())
         }
-        AgentCmd::RotateSecret { agent, secret_out, keep_old } => {
+        AgentCmd::RotateSecret {
+            agent,
+            secret_out,
+            keep_old,
+        } => {
             let s = ctx.session()?;
             let a = resolve_agent(&s, &agent).await?;
             if secret_out.exists() {
-                bail!("{} already exists; choose another --secret-out", secret_out.display());
+                bail!(
+                    "{} already exists; choose another --secret-out",
+                    secret_out.display()
+                );
             }
             let c = manage::rotate_agent_secret(&s, &a.id, !keep_old).await?;
             write_secret_file(&secret_out, &c.client_secret)?;
-            println!("new client id: {}\nclient secret written to {}", c.client_id, secret_out.display());
+            println!(
+                "new client id: {}\nclient secret written to {}",
+                c.client_id,
+                secret_out.display()
+            );
             if !keep_old {
                 println!(
                     "old credentials revoked; re-run `agent setup` on the agent's machine with the new id and file"
@@ -1055,7 +1310,10 @@ async fn agent(ctx: &Ctx, c: AgentCmd) -> Result<()> {
         AgentCmd::Delete { agent, yes } => {
             let s = ctx.session()?;
             let a = resolve_agent(&s, &agent).await?;
-            confirm_or_flag(yes, &format!("Delete agent '{}' and all its access?", a.display_name))?;
+            confirm_or_flag(
+                yes,
+                &format!("Delete agent '{}' and all its access?", a.display_name),
+            )?;
             manage::delete_agent(&s, &a.id).await?;
             println!(
                 "deleted '{}'. Rotate the keys of vaults it could read (`vault rotate`) if its machine may be compromised.",
@@ -1104,12 +1362,19 @@ async fn gateway_cmd(ctx: &Ctx, a: GatewayArgs) -> Result<()> {
     let audit = Arc::new(AuditLog::open(&session.data_dir()));
     let hub = Hub::start(
         session,
-        HubOptions { vaults: a.vaults.clone(), read_only: a.read_only, offline_ok: true, catch_up: true },
+        HubOptions {
+            vaults: a.vaults.clone(),
+            read_only: a.read_only,
+            offline_ok: true,
+            catch_up: true,
+        },
     )
     .await?;
     let (stop_tx, stop_rx) = watch::channel(false);
     let live = tokio::spawn(livesync::run(hub.clone(), stop_rx));
-    let listener = tokio::net::TcpListener::bind(a.listen).await.with_context(|| format!("binding {}", a.listen))?;
+    let listener = tokio::net::TcpListener::bind(a.listen)
+        .await
+        .with_context(|| format!("binding {}", a.listen))?;
     ui::status(&format!(
         "gateway listening on http://{} — {} vault(s){}; audit log: {}",
         listener.local_addr()?,
@@ -1117,7 +1382,11 @@ async fn gateway_cmd(ctx: &Ctx, a: GatewayArgs) -> Result<()> {
         if a.read_only { ", read-only" } else { "" },
         audit.path().display()
     ));
-    let gw = Arc::new(Gateway { hub: hub.clone(), token, audit });
+    let gw = Arc::new(Gateway {
+        hub: hub.clone(),
+        token,
+        audit,
+    });
     gateway::serve(listener, gw, shutdown_signal()).await?;
     let _ = stop_tx.send(true);
     let _ = tokio::time::timeout(Duration::from_secs(5), live).await;
@@ -1125,7 +1394,8 @@ async fn gateway_cmd(ctx: &Ctx, a: GatewayArgs) -> Result<()> {
         let _ = tokio::time::timeout(Duration::from_secs(10), hub.push(&id)).await;
     }
     // The editing session ends with the process: keep a revision of what changed.
-    hub.snapshot_idle(Duration::ZERO, livesync::SESSION_MIN_UPDATES).await;
+    hub.snapshot_idle(Duration::ZERO, livesync::SESSION_MIN_UPDATES)
+        .await;
     hub.save_all().await;
     Ok(())
 }
@@ -1135,7 +1405,12 @@ async fn mcp(ctx: &Ctx, a: McpArgs) -> Result<()> {
     let audit = Arc::new(AuditLog::open(&session.data_dir()));
     let hub = Hub::start(
         session,
-        HubOptions { vaults: a.vaults.clone(), read_only: a.read_only, offline_ok: true, catch_up: true },
+        HubOptions {
+            vaults: a.vaults.clone(),
+            read_only: a.read_only,
+            offline_ok: true,
+            catch_up: true,
+        },
     )
     .await?;
     let (stop_tx, stop_rx) = watch::channel(false);
@@ -1149,7 +1424,8 @@ async fn mcp(ctx: &Ctx, a: McpArgs) -> Result<()> {
         let _ = tokio::time::timeout(Duration::from_secs(10), hub.push(&id)).await;
     }
     // The editing session ends with the process: keep a revision of what changed.
-    hub.snapshot_idle(Duration::ZERO, livesync::SESSION_MIN_UPDATES).await;
+    hub.snapshot_idle(Duration::ZERO, livesync::SESSION_MIN_UPDATES)
+        .await;
     hub.save_all().await;
     r
 }

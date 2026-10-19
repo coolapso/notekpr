@@ -1,12 +1,12 @@
 //! The signed-in principal: profile, account keys, recovery envelope, private prefs.
 
+use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
-use axum::Json;
 use coolpsonotes_core::keys::AccountPublic;
 use coolpsonotes_core::protocol::{
-    AccountSetupRequest, AuditEntry, BindDeviceRequest, MeResponse, PrefsBlob, PutPrefsRequest, RecoveryEnvelope,
-    RecoveryUpdate, SessionInfo, UserEventKind,
+    AccountSetupRequest, AuditEntry, BindDeviceRequest, MeResponse, PrefsBlob, PutPrefsRequest,
+    RecoveryEnvelope, RecoveryUpdate, SessionInfo, UserEventKind,
 };
 use sqlx::Row;
 
@@ -22,12 +22,13 @@ const MAX_PREFS_BYTES: usize = 512 * 1024;
 pub async fn me(State(state): State<AppState>, who: Principal) -> AppResult<Json<MeResponse>> {
     let user = auth::user_info(&state.db, &who.user_id).await?;
     let key = account_key(&state.db, &who.user_id).await?;
-    let has_recovery: bool =
-        sqlx::query_scalar("SELECT recovery_envelope IS NOT NULL FROM account_keys WHERE user_id = ?")
-            .bind(&who.user_id)
-            .fetch_optional(&state.db)
-            .await?
-            .unwrap_or(false);
+    let has_recovery: bool = sqlx::query_scalar(
+        "SELECT recovery_envelope IS NOT NULL FROM account_keys WHERE user_id = ?",
+    )
+    .bind(&who.user_id)
+    .fetch_optional(&state.db)
+    .await?
+    .unwrap_or(false);
     let expires_at: i64 = sqlx::query_scalar("SELECT expires_at FROM sessions WHERE id = ?")
         .bind(&who.session_id)
         .fetch_one(&state.db)
@@ -46,7 +47,8 @@ pub async fn me(State(state): State<AppState>, who: Principal) -> AppResult<Json
 }
 
 fn key32(b: &[u8], what: &str) -> AppResult<[u8; 32]> {
-    b.try_into().map_err(|_| bad(format!("{what} must be 32 bytes")))
+    b.try_into()
+        .map_err(|_| bad(format!("{what} must be 32 bytes")))
 }
 
 /// One-time account key setup. Humans also register their first device and a
@@ -62,18 +64,32 @@ pub async fn setup_account_key(
     if req.key.key_version != 1 {
         return Err(bad("initial key_version must be 1"));
     }
-    let public = req.key.verify().map_err(|_| bad("invalid account key signature"))?;
+    let public = req
+        .key
+        .verify()
+        .map_err(|_| bad("invalid account key signature"))?;
     if who.is_human() {
-        if req.recovery_envelope.as_ref().is_none_or(|r| r.is_empty() || r.len() > 4096) {
+        if req
+            .recovery_envelope
+            .as_ref()
+            .is_none_or(|r| r.is_empty() || r.len() > 4096)
+        {
             return Err(bad("a recovery envelope is required"));
         }
-        let Some(dev) = &req.device else { return Err(bad("the first device must be registered")) };
+        let Some(dev) = &req.device else {
+            return Err(bad("the first device must be registered"));
+        };
         if !db::valid_id(&dev.registration.device_id) {
             return Err(bad("invalid device id"));
         }
         let dev_pub = key32(&dev.registration.enc_public, "device key")?;
         public
-            .verify_device_approval(&who.user_id, &dev.registration.device_id, &dev_pub, &dev.approval_signature)
+            .verify_device_approval(
+                &who.user_id,
+                &dev.registration.device_id,
+                &dev_pub,
+                &dev.approval_signature,
+            )
             .map_err(|_| bad("invalid device approval signature"))?;
     }
     let _w = state.write_lock.lock().await;
@@ -101,16 +117,33 @@ pub async fn setup_account_key(
     .execute(&mut *tx)
     .await?;
     if let Some(dev) = &req.device
-        && who.is_human() {
-            insert_device(&mut tx, &who.user_id, &dev.registration, Some(&dev.account_envelope), now).await?;
-            sqlx::query("UPDATE sessions SET device_id = ? WHERE id = ?")
-                .bind(&dev.registration.device_id)
-                .bind(&who.session_id)
-                .execute(&mut *tx)
-                .await?;
-        }
+        && who.is_human()
+    {
+        insert_device(
+            &mut tx,
+            &who.user_id,
+            &dev.registration,
+            Some(&dev.account_envelope),
+            now,
+        )
+        .await?;
+        sqlx::query("UPDATE sessions SET device_id = ? WHERE id = ?")
+            .bind(&dev.registration.device_id)
+            .bind(&who.session_id)
+            .execute(&mut *tx)
+            .await?;
+    }
     tx.commit().await?;
-    db::audit(&state.db, Some(&who.user_id), Some(&who.user_id), None, "account.keys_created", None, serde_json::json!({})).await;
+    db::audit(
+        &state.db,
+        Some(&who.user_id),
+        Some(&who.user_id),
+        None,
+        "account.keys_created",
+        None,
+        serde_json::json!({}),
+    )
+    .await;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -124,8 +157,18 @@ pub async fn insert_device(
     if reg.enc_public.len() != 32 {
         return Err(bad("device key must be 32 bytes"));
     }
-    let name: String = reg.name.trim().chars().filter(|c| !c.is_control()).take(100).collect();
-    let status = if envelope.is_some() { "active" } else { "pending" };
+    let name: String = reg
+        .name
+        .trim()
+        .chars()
+        .filter(|c| !c.is_control())
+        .take(100)
+        .collect();
+    let status = if envelope.is_some() {
+        "active"
+    } else {
+        "pending"
+    };
     let r = sqlx::query(
         "INSERT INTO devices (id, user_id, name, enc_public, status, account_envelope, created_at, approved_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
@@ -141,7 +184,9 @@ pub async fn insert_device(
     .execute(&mut **tx)
     .await;
     match r {
-        Err(sqlx::Error::Database(e)) if e.is_unique_violation() => Err(conflict("device id already registered")),
+        Err(sqlx::Error::Database(e)) if e.is_unique_violation() => {
+            Err(conflict("device id already registered"))
+        }
         r => {
             r?;
             Ok(())
@@ -149,7 +194,10 @@ pub async fn insert_device(
     }
 }
 
-pub async fn get_recovery(State(state): State<AppState>, who: Principal) -> AppResult<Json<RecoveryEnvelope>> {
+pub async fn get_recovery(
+    State(state): State<AppState>,
+    who: Principal,
+) -> AppResult<Json<RecoveryEnvelope>> {
     who.require_human()?;
     let env: Option<Option<Vec<u8>>> =
         sqlx::query_scalar("SELECT recovery_envelope FROM account_keys WHERE user_id = ?")
@@ -157,7 +205,9 @@ pub async fn get_recovery(State(state): State<AppState>, who: Principal) -> AppR
             .fetch_optional(&state.db)
             .await?;
     let env = env.flatten().ok_or(AppError::NotFound)?;
-    Ok(Json(RecoveryEnvelope { recovery_envelope: env }))
+    Ok(Json(RecoveryEnvelope {
+        recovery_envelope: env,
+    }))
 }
 
 pub async fn put_recovery(
@@ -169,8 +219,12 @@ pub async fn put_recovery(
     if req.recovery_envelope.is_empty() || req.recovery_envelope.len() > 4096 {
         return Err(bad("invalid recovery envelope"));
     }
-    let key = account_key(&state.db, &who.user_id).await?.ok_or(AppError::NotFound)?;
-    let public: AccountPublic = key.verify().map_err(|e| AppError::Internal(anyhow::anyhow!("stored key invalid: {e}")))?;
+    let key = account_key(&state.db, &who.user_id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    let public: AccountPublic = key
+        .verify()
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("stored key invalid: {e}")))?;
     public
         .verify_recovery_update(&who.user_id, &req.recovery_envelope, &req.signature)
         .map_err(|_| forbidden("invalid signature"))?;
@@ -180,18 +234,36 @@ pub async fn put_recovery(
         .bind(&who.user_id)
         .execute(&state.db)
         .await?;
-    db::audit(&state.db, Some(&who.user_id), Some(&who.user_id), None, "account.recovery_rotated", None, serde_json::json!({})).await;
+    db::audit(
+        &state.db,
+        Some(&who.user_id),
+        Some(&who.user_id),
+        None,
+        "account.recovery_rotated",
+        None,
+        serde_json::json!({}),
+    )
+    .await;
     Ok(StatusCode::NO_CONTENT)
 }
 
-pub async fn get_prefs(State(state): State<AppState>, who: Principal) -> AppResult<Json<PrefsBlob>> {
+pub async fn get_prefs(
+    State(state): State<AppState>,
+    who: Principal,
+) -> AppResult<Json<PrefsBlob>> {
     let row = sqlx::query("SELECT ciphertext, version FROM user_prefs WHERE user_id = ?")
         .bind(&who.user_id)
         .fetch_optional(&state.db)
         .await?;
     Ok(Json(match row {
-        Some(r) => PrefsBlob { ciphertext: Some(r.get("ciphertext")), version: r.get("version") },
-        None => PrefsBlob { ciphertext: None, version: 0 },
+        Some(r) => PrefsBlob {
+            ciphertext: Some(r.get("ciphertext")),
+            version: r.get("version"),
+        },
+        None => PrefsBlob {
+            ciphertext: None,
+            version: 0,
+        },
     }))
 }
 
@@ -224,7 +296,10 @@ pub async fn put_prefs(
     .bind(db::now())
     .execute(&state.db)
     .await?;
-    Ok(Json(PrefsBlob { ciphertext: Some(req.ciphertext), version }))
+    Ok(Json(PrefsBlob {
+        ciphertext: Some(req.ciphertext),
+        version,
+    }))
 }
 
 /// Label the current session with the device it runs on (shown in device lists).
@@ -234,10 +309,11 @@ pub async fn bind_session_device(
     Json(req): Json<BindDeviceRequest>,
 ) -> AppResult<StatusCode> {
     who.require_human()?;
-    let owner: Option<String> = sqlx::query_scalar("SELECT user_id FROM devices WHERE id = ? AND status != 'revoked'")
-        .bind(&req.device_id)
-        .fetch_optional(&state.db)
-        .await?;
+    let owner: Option<String> =
+        sqlx::query_scalar("SELECT user_id FROM devices WHERE id = ? AND status != 'revoked'")
+            .bind(&req.device_id)
+            .fetch_optional(&state.db)
+            .await?;
     if owner.as_deref() != Some(who.user_id.as_str()) {
         return Err(AppError::NotFound);
     }
@@ -249,7 +325,10 @@ pub async fn bind_session_device(
     Ok(StatusCode::NO_CONTENT)
 }
 
-pub async fn my_audit(State(state): State<AppState>, who: Principal) -> AppResult<Json<Vec<AuditEntry>>> {
+pub async fn my_audit(
+    State(state): State<AppState>,
+    who: Principal,
+) -> AppResult<Json<Vec<AuditEntry>>> {
     let rows = sqlx::query(
         "SELECT a.id, a.at, a.actor_id, u.display_name, a.action, a.target, a.details
          FROM audit_log a LEFT JOIN users u ON u.id = a.actor_id

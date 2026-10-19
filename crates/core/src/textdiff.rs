@@ -48,10 +48,16 @@ fn diff_region(old: &str, new: &str, pos: &mut usize, edits: &mut Vec<Edit>, all
 
 fn replace(old: &str, new: &str, pos: &mut usize, edits: &mut Vec<Edit>) {
     if !old.is_empty() {
-        edits.push(Edit::Delete { at: *pos, len: old.len() });
+        edits.push(Edit::Delete {
+            at: *pos,
+            len: old.len(),
+        });
     }
     if !new.is_empty() {
-        edits.push(Edit::Insert { at: *pos, text: new.to_string() });
+        edits.push(Edit::Insert {
+            at: *pos,
+            text: new.to_string(),
+        });
         *pos += new.len();
     }
 }
@@ -63,19 +69,40 @@ fn char_diff(old: &str, new: &str, pos: &mut usize, edits: &mut Vec<Edit>) {
     let b_off = byte_offsets(new);
     for op in capture_diff_slices(Algorithm::Myers, &a, &b) {
         match op {
-            DiffOp::Equal { old_index, len, .. } => *pos += a_off[old_index + len] - a_off[old_index],
-            DiffOp::Delete { old_index, old_len, .. } => {
-                edits.push(Edit::Delete { at: *pos, len: a_off[old_index + old_len] - a_off[old_index] })
+            DiffOp::Equal { old_index, len, .. } => {
+                *pos += a_off[old_index + len] - a_off[old_index]
             }
-            DiffOp::Insert { new_index, new_len, .. } => {
+            DiffOp::Delete {
+                old_index, old_len, ..
+            } => edits.push(Edit::Delete {
+                at: *pos,
+                len: a_off[old_index + old_len] - a_off[old_index],
+            }),
+            DiffOp::Insert {
+                new_index, new_len, ..
+            } => {
                 let text = &new[b_off[new_index]..b_off[new_index + new_len]];
-                edits.push(Edit::Insert { at: *pos, text: text.to_string() });
+                edits.push(Edit::Insert {
+                    at: *pos,
+                    text: text.to_string(),
+                });
                 *pos += text.len();
             }
-            DiffOp::Replace { old_index, old_len, new_index, new_len } => {
-                edits.push(Edit::Delete { at: *pos, len: a_off[old_index + old_len] - a_off[old_index] });
+            DiffOp::Replace {
+                old_index,
+                old_len,
+                new_index,
+                new_len,
+            } => {
+                edits.push(Edit::Delete {
+                    at: *pos,
+                    len: a_off[old_index + old_len] - a_off[old_index],
+                });
                 let text = &new[b_off[new_index]..b_off[new_index + new_len]];
-                edits.push(Edit::Insert { at: *pos, text: text.to_string() });
+                edits.push(Edit::Insert {
+                    at: *pos,
+                    text: text.to_string(),
+                });
                 *pos += text.len();
             }
         }
@@ -89,15 +116,23 @@ fn line_diff(old: &str, new: &str, pos: &mut usize, edits: &mut Vec<Edit>) {
     for op in capture_diff_slices(Algorithm::Myers, &a, &b) {
         match op {
             DiffOp::Equal { old_index, len, .. } => {
-                *pos += a[old_index..old_index + len].iter().map(|l| l.len()).sum::<usize>()
+                *pos += a[old_index..old_index + len]
+                    .iter()
+                    .map(|l| l.len())
+                    .sum::<usize>()
             }
-            DiffOp::Delete { old_index, old_len, .. } => {
-                replace(&join(&a[old_index..old_index + old_len]), "", pos, edits)
-            }
-            DiffOp::Insert { new_index, new_len, .. } => {
-                replace("", &join(&b[new_index..new_index + new_len]), pos, edits)
-            }
-            DiffOp::Replace { old_index, old_len, new_index, new_len } => {
+            DiffOp::Delete {
+                old_index, old_len, ..
+            } => replace(&join(&a[old_index..old_index + old_len]), "", pos, edits),
+            DiffOp::Insert {
+                new_index, new_len, ..
+            } => replace("", &join(&b[new_index..new_index + new_len]), pos, edits),
+            DiffOp::Replace {
+                old_index,
+                old_len,
+                new_index,
+                new_len,
+            } => {
                 let o = join(&a[old_index..old_index + old_len]);
                 let n = join(&b[new_index..new_index + new_len]);
                 diff_region(&o, &n, pos, edits, false);
@@ -176,6 +211,12 @@ mod tests {
 
     #[test]
     fn minimal_for_single_insert() {
-        assert_eq!(diff("abc", "abXc"), vec![Edit::Insert { at: 2, text: "X".into() }]);
+        assert_eq!(
+            diff("abc", "abXc"),
+            vec![Edit::Insert {
+                at: 2,
+                text: "X".into()
+            }]
+        );
     }
 }

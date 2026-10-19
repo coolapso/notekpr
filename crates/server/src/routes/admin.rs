@@ -1,8 +1,8 @@
 //! Service administration. Administrators manage accounts and see usage
 //! statistics; they gain no access to any vault or its keys.
 
-use axum::extract::{Path, State};
 use axum::Json;
+use axum::extract::{Path, State};
 use coolpsonotes_core::protocol::{AdminStats, AdminUpdateUser, AdminUser, PrincipalKind};
 use sqlx::Row;
 
@@ -12,7 +12,10 @@ use crate::error::{AppError, AppResult, bad};
 use crate::hub::Control;
 use crate::state::AppState;
 
-pub async fn users(State(state): State<AppState>, who: Principal) -> AppResult<Json<Vec<AdminUser>>> {
+pub async fn users(
+    State(state): State<AppState>,
+    who: Principal,
+) -> AppResult<Json<Vec<AdminUser>>> {
     who.require_admin()?;
     let rows = sqlx::query(
         "SELECT u.id, u.display_name, u.email, u.kind, u.owner_id, u.is_admin, u.disabled, u.created_at, u.last_login_at,
@@ -51,12 +54,19 @@ pub async fn update_user(
     if id == who.user_id && (req.disabled == Some(true) || req.is_admin == Some(false)) {
         return Err(bad("you cannot disable or demote yourself"));
     }
-    let exists: Option<i64> = sqlx::query_scalar("SELECT 1 FROM users WHERE id = ?").bind(&id).fetch_optional(&state.db).await?;
+    let exists: Option<i64> = sqlx::query_scalar("SELECT 1 FROM users WHERE id = ?")
+        .bind(&id)
+        .fetch_optional(&state.db)
+        .await?;
     if exists.is_none() {
         return Err(AppError::NotFound);
     }
     if let Some(d) = req.disabled {
-        sqlx::query("UPDATE users SET disabled = ? WHERE id = ?").bind(d).bind(&id).execute(&state.db).await?;
+        sqlx::query("UPDATE users SET disabled = ? WHERE id = ?")
+            .bind(d)
+            .bind(&id)
+            .execute(&state.db)
+            .await?;
         if d {
             let sessions: Vec<String> =
                 sqlx::query_scalar("UPDATE sessions SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL RETURNING id")
@@ -70,9 +80,22 @@ pub async fn update_user(
         }
     }
     if let Some(a) = req.is_admin {
-        sqlx::query("UPDATE users SET is_admin = ? WHERE id = ? AND kind = 'human'").bind(a).bind(&id).execute(&state.db).await?;
+        sqlx::query("UPDATE users SET is_admin = ? WHERE id = ? AND kind = 'human'")
+            .bind(a)
+            .bind(&id)
+            .execute(&state.db)
+            .await?;
     }
-    db::audit(&state.db, Some(&who.user_id), Some(&id), None, "admin.update_user", Some(&id), serde_json::json!({ "disabled": req.disabled, "is_admin": req.is_admin })).await;
+    db::audit(
+        &state.db,
+        Some(&who.user_id),
+        Some(&id),
+        None,
+        "admin.update_user",
+        Some(&id),
+        serde_json::json!({ "disabled": req.disabled, "is_admin": req.is_admin }),
+    )
+    .await;
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
@@ -82,8 +105,14 @@ pub async fn stats(State(state): State<AppState>, who: Principal) -> AppResult<J
         let db = state.db.clone();
         async move { sqlx::query_scalar::<_, i64>(q).fetch_one(&db).await }
     };
-    let page_count: i64 = sqlx::query_scalar("PRAGMA page_count").fetch_one(&state.db).await.unwrap_or(0);
-    let page_size: i64 = sqlx::query_scalar("PRAGMA page_size").fetch_one(&state.db).await.unwrap_or(0);
+    let page_count: i64 = sqlx::query_scalar("PRAGMA page_count")
+        .fetch_one(&state.db)
+        .await
+        .unwrap_or(0);
+    let page_size: i64 = sqlx::query_scalar("PRAGMA page_size")
+        .fetch_one(&state.db)
+        .await
+        .unwrap_or(0);
     Ok(Json(AdminStats {
         users: count("SELECT COUNT(*) FROM users WHERE kind = 'human'").await?,
         agents: count("SELECT COUNT(*) FROM users WHERE kind = 'agent'").await?,

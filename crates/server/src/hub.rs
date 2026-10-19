@@ -9,7 +9,9 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use coolpsonotes_core::protocol::{ObjectEventKind, Snapshot, Update, UserEventKind, VaultEventKind};
+use coolpsonotes_core::protocol::{
+    ObjectEventKind, Snapshot, Update, UserEventKind, VaultEventKind,
+};
 use dashmap::DashMap;
 use tokio::sync::{broadcast, mpsc};
 
@@ -17,13 +19,34 @@ const VAULT_CHANNEL_CAPACITY: usize = 2048;
 
 #[derive(Debug, Clone)]
 pub enum VaultEvent {
-    Update { update: Update, client_update_id: String, origin_conn: u64 },
-    Snapshot { snapshot: Snapshot },
-    SnapshotCreated { object_id: String, snapshot_id: String, covers_seq: i64 },
-    Purged { object_id: String, seq: i64 },
-    Awareness { object_id: String, from_user: String, from_conn: u64, payload: Vec<u8> },
+    Update {
+        update: Update,
+        client_update_id: String,
+        origin_conn: u64,
+    },
+    Snapshot {
+        snapshot: Snapshot,
+    },
+    SnapshotCreated {
+        object_id: String,
+        snapshot_id: String,
+        covers_seq: i64,
+    },
+    Purged {
+        object_id: String,
+        seq: i64,
+    },
+    Awareness {
+        object_id: String,
+        from_user: String,
+        from_conn: u64,
+        payload: Vec<u8>,
+    },
     Event(VaultEventKind),
-    Object { object_id: String, event: ObjectEventKind },
+    Object {
+        object_id: String,
+        event: ObjectEventKind,
+    },
 }
 
 impl VaultEvent {
@@ -71,7 +94,10 @@ pub struct Hub {
 
 impl Hub {
     pub fn new() -> Self {
-        Hub { next_conn: AtomicU64::new(1), ..Default::default() }
+        Hub {
+            next_conn: AtomicU64::new(1),
+            ..Default::default()
+        }
     }
 
     pub fn next_conn_id(&self) -> u64 {
@@ -91,13 +117,17 @@ impl Hub {
             empty = tx.send(Arc::new(event)).is_err();
         }
         if empty {
-            self.vaults.remove_if(vault_id, |_, tx| tx.receiver_count() == 0);
+            self.vaults
+                .remove_if(vault_id, |_, tx| tx.receiver_count() == 0);
         }
     }
 
     pub fn register_user(&self, user_id: &str, conn_id: u64) -> mpsc::UnboundedReceiver<Control> {
         let (tx, rx) = mpsc::unbounded_channel();
-        self.users.entry(user_id.to_string()).or_default().push((conn_id, tx));
+        self.users
+            .entry(user_id.to_string())
+            .or_default()
+            .push((conn_id, tx));
         rx
     }
 

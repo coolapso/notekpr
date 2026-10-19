@@ -22,8 +22,14 @@ pub struct Error {
 
 impl Error {
     fn network(e: JsValue) -> Self {
-        let message = e.as_string().unwrap_or_else(|| "network error — are you offline?".into());
-        Error { status: 0, code: "network".into(), message }
+        let message = e
+            .as_string()
+            .unwrap_or_else(|| "network error — are you offline?".into());
+        Error {
+            status: 0,
+            code: "network".into(),
+            message,
+        }
     }
 
     pub fn is_offline(&self) -> bool {
@@ -57,12 +63,19 @@ pub fn on_unauthorized(f: impl Fn() + 'static) {
     ON_UNAUTHORIZED.with(|x| *x.borrow_mut() = Some(Box::new(f)));
 }
 
-async fn send(method: &str, path: &str, body: Option<JsValue>, content_type: Option<&str>) -> Result<Response> {
+async fn send(
+    method: &str,
+    path: &str,
+    body: Option<JsValue>,
+    content_type: Option<&str>,
+) -> Result<Response> {
     let opts = RequestInit::new();
     opts.set_method(method);
     let headers = Headers::new().map_err(Error::network)?;
     if let Some(t) = token() {
-        headers.set("Authorization", &format!("Bearer {t}")).map_err(Error::network)?;
+        headers
+            .set("Authorization", &format!("Bearer {t}"))
+            .map_err(Error::network)?;
     }
     if let Some(ct) = content_type {
         headers.set("Content-Type", ct).map_err(Error::network)?;
@@ -83,7 +96,11 @@ async fn send(method: &str, path: &str, body: Option<JsValue>, content_type: Opt
     }
     let status = resp.status();
     let text = match resp.text() {
-        Ok(p) => JsFuture::from(p).await.ok().and_then(|v| v.as_string()).unwrap_or_default(),
+        Ok(p) => JsFuture::from(p)
+            .await
+            .ok()
+            .and_then(|v| v.as_string())
+            .unwrap_or_default(),
         Err(_) => String::new(),
     };
     let (code, message) = match serde_json::from_str::<ApiError>(&text) {
@@ -97,21 +114,41 @@ async fn send(method: &str, path: &str, body: Option<JsValue>, content_type: Opt
             }
         });
     }
-    Err(Error { status, code, message })
+    Err(Error {
+        status,
+        code,
+        message,
+    })
 }
 
 async fn text_of(resp: Response) -> Result<String> {
     let p = resp.text().map_err(Error::network)?;
-    Ok(JsFuture::from(p).await.map_err(Error::network)?.as_string().unwrap_or_default())
+    Ok(JsFuture::from(p)
+        .await
+        .map_err(Error::network)?
+        .as_string()
+        .unwrap_or_default())
 }
 
-async fn call<B: Serialize, T: DeserializeOwned>(method: &str, path: &str, body: Option<&B>) -> Result<T> {
+async fn call<B: Serialize, T: DeserializeOwned>(
+    method: &str,
+    path: &str,
+    body: Option<&B>,
+) -> Result<T> {
     let body = body.map(|b| JsValue::from_str(&serde_json::to_string(b).expect("serializable")));
     let ct = body.as_ref().map(|_| "application/json");
     let resp = send(method, path, body, ct).await?;
     let text = text_of(resp).await?;
-    let text = if text.trim().is_empty() { "null" } else { text.as_str() };
-    serde_json::from_str(text).map_err(|e| Error { status: 200, code: "decode".into(), message: format!("unexpected response: {e}") })
+    let text = if text.trim().is_empty() {
+        "null"
+    } else {
+        text.as_str()
+    };
+    serde_json::from_str(text).map_err(|e| Error {
+        status: 200,
+        code: "decode".into(),
+        message: format!("unexpected response: {e}"),
+    })
 }
 
 pub async fn get<T: DeserializeOwned>(path: &str) -> Result<T> {
@@ -140,13 +177,21 @@ pub async fn post_empty<T: DeserializeOwned>(path: &str) -> Result<T> {
 
 pub async fn get_bytes(path: &str) -> Result<Vec<u8>> {
     let resp = send("GET", path, None, None).await?;
-    let buf = JsFuture::from(resp.array_buffer().map_err(Error::network)?).await.map_err(Error::network)?;
+    let buf = JsFuture::from(resp.array_buffer().map_err(Error::network)?)
+        .await
+        .map_err(Error::network)?;
     Ok(js_sys::Uint8Array::new(&buf).to_vec())
 }
 
 pub async fn put_bytes(path: &str, data: &[u8]) -> Result<()> {
     let arr = js_sys::Uint8Array::from(data);
-    send("PUT", path, Some(arr.into()), Some("application/octet-stream")).await?;
+    send(
+        "PUT",
+        path,
+        Some(arr.into()),
+        Some("application/octet-stream"),
+    )
+    .await?;
     Ok(())
 }
 

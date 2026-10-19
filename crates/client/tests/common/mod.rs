@@ -32,9 +32,17 @@ pub async fn start() -> TestServer {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move {
-        axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>()).await.unwrap();
+        axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .await
+        .unwrap();
     });
-    TestServer { url: format!("http://{addr}"), dir }
+    TestServer {
+        url: format!("http://{addr}"),
+        dir,
+    }
 }
 
 impl TestServer {
@@ -75,7 +83,16 @@ pub async fn reopen(srv: &TestServer, dirs_name: &str, profile: &str) -> Arc<Ses
 }
 
 pub async fn hub(session: &Arc<Session>) -> Arc<Hub> {
-    Hub::start(session.clone(), HubOptions { catch_up: true, offline_ok: true, ..Default::default() }).await.unwrap()
+    Hub::start(
+        session.clone(),
+        HubOptions {
+            catch_up: true,
+            offline_ok: true,
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap()
 }
 
 pub struct Live {
@@ -101,7 +118,9 @@ pub async fn live(hub: Arc<Hub>) -> Live {
             let _ = ev.recv().await;
         }
     };
-    tokio::time::timeout(Duration::from_secs(5), connected).await.expect("live sync did not connect");
+    tokio::time::timeout(Duration::from_secs(5), connected)
+        .await
+        .expect("live sync did not connect");
     // Give the initial subscriptions a moment to reach `synced`.
     tokio::time::sleep(Duration::from_millis(200)).await;
     Live { hub, stop, task }

@@ -15,13 +15,23 @@ pub enum Block {
     Paragraph,
     Heading(u8),
     Quote,
-    List { ordered: bool, task: Option<bool> },
-    Fence { lang: String },
-    Code { lang: String },
+    List {
+        ordered: bool,
+        task: Option<bool>,
+    },
+    Fence {
+        lang: String,
+    },
+    Code {
+        lang: String,
+    },
     Hr,
     /// A row of a GFM table (header, delimiter row, body); `align` holds the
     /// alignment of every column, from the delimiter row.
-    Table { row: Row, align: Vec<Align> },
+    Table {
+        row: Row,
+        align: Vec<Align>,
+    },
     /// Lines starting with `|` that don't form a table (no delimiter row).
     PipeText,
     FrontmatterFence,
@@ -65,15 +75,24 @@ impl Block {
             Block::Heading(5) => "ln h5",
             Block::Heading(_) => "ln h6",
             Block::Quote => "ln quote",
-            Block::List { task: Some(true), .. } => "ln li task done",
-            Block::List { task: Some(false), .. } => "ln li task",
+            Block::List {
+                task: Some(true), ..
+            } => "ln li task done",
+            Block::List {
+                task: Some(false), ..
+            } => "ln li task",
             Block::List { ordered: true, .. } => "ln li ol",
             Block::List { .. } => "ln li",
             Block::Fence { .. } => "ln fence",
             Block::Code { .. } => "ln code",
             Block::Hr => "ln hr",
-            Block::Table { row: Row::Header, .. } => "ln table th",
-            Block::Table { row: Row::Delimiter, .. } => "ln table tdl",
+            Block::Table {
+                row: Row::Header, ..
+            } => "ln table th",
+            Block::Table {
+                row: Row::Delimiter,
+                ..
+            } => "ln table tdl",
             Block::Table { row: Row::Body, .. } => "ln table",
             Block::PipeText => "ln pipes",
             Block::FrontmatterFence => "ln fm fmf",
@@ -99,7 +118,10 @@ fn fence_of(line: &str) -> Option<(&str, &str)> {
 
 fn is_hr(line: &str) -> bool {
     let t: String = line.chars().filter(|c| !c.is_whitespace()).collect();
-    t.len() >= 3 && (t.chars().all(|c| c == '-') || t.chars().all(|c| c == '*') || t.chars().all(|c| c == '_'))
+    t.len() >= 3
+        && (t.chars().all(|c| c == '-')
+            || t.chars().all(|c| c == '*')
+            || t.chars().all(|c| c == '_'))
 }
 
 /// `(indent_bytes, marker_len_incl_space, ordered)` for list items.
@@ -111,7 +133,11 @@ pub fn list_marker(line: &str) -> Option<(usize, usize, bool)> {
         return Some((indent, 2, false));
     }
     let digits = rest.bytes().take_while(|c| c.is_ascii_digit()).count();
-    if (1..=9).contains(&digits) && b.len() > digits + 1 && matches!(b[digits], b'.' | b')') && b[digits + 1] == b' ' {
+    if (1..=9).contains(&digits)
+        && b.len() > digits + 1
+        && matches!(b[digits], b'.' | b')')
+        && b[digits + 1] == b' '
+    {
         return Some((indent, digits + 2, true));
     }
     None
@@ -134,16 +160,25 @@ pub fn task_box(after_marker: &str) -> Option<bool> {
 /// Byte offsets of the `|` that separate table cells (escaped `\|` don't).
 pub fn table_pipes(line: &str) -> Vec<usize> {
     let b = line.as_bytes();
-    (0..b.len()).filter(|&i| b[i] == b'|' && (i == 0 || b[i - 1] != b'\\')).collect()
+    (0..b.len())
+        .filter(|&i| b[i] == b'|' && (i == 0 || b[i - 1] != b'\\'))
+        .collect()
 }
 
 /// Byte ranges of a table row's cells, each starting at its leading `|`; the
 /// first also covers leading whitespace and the last any trailing `|`.
 pub fn table_cells(line: &str) -> Vec<(usize, usize)> {
     let pipes = table_pipes(line);
-    let Some(&last) = pipes.last() else { return vec![] };
+    let Some(&last) = pipes.last() else {
+        return vec![];
+    };
     let trailing_text = !line[last + 1..].trim().is_empty();
-    let n = if trailing_text { pipes.len() } else { pipes.len() - 1 }.max(1);
+    let n = if trailing_text {
+        pipes.len()
+    } else {
+        pipes.len() - 1
+    }
+    .max(1);
     (0..n)
         .map(|k| {
             let a = if k == 0 { 0 } else { pipes[k] };
@@ -160,7 +195,11 @@ pub fn table_cell_texts(line: &str) -> Vec<&str> {
         .map(|(a, b)| {
             let c = line[a..b].trim();
             let c = c.strip_prefix('|').unwrap_or(c);
-            let c = if c.ends_with('|') && !c.ends_with("\\|") { &c[..c.len() - 1] } else { c };
+            let c = if c.ends_with('|') && !c.ends_with("\\|") {
+                &c[..c.len() - 1]
+            } else {
+                c
+            };
             c.trim()
         })
         .collect()
@@ -198,7 +237,12 @@ fn is_table_line(line: &str) -> bool {
 #[derive(Debug, PartialEq, Eq)]
 pub enum TableKey {
     Move(usize),
-    Edit { from: usize, to: usize, insert: String, caret: usize },
+    Edit {
+        from: usize,
+        to: usize,
+        insert: String,
+        caret: usize,
+    },
 }
 
 struct TableCtx<'a> {
@@ -211,13 +255,20 @@ struct TableCtx<'a> {
 /// The table row containing `offset`, if any.
 fn table_ctx(text: &str, offset: usize) -> Option<TableCtx<'_>> {
     let lines: Vec<&str> = text.split('\n').collect();
-    let starts: Vec<usize> = std::iter::once(0).chain(text.match_indices('\n').map(|(i, _)| i + 1)).collect();
+    let starts: Vec<usize> = std::iter::once(0)
+        .chain(text.match_indices('\n').map(|(i, _)| i + 1))
+        .collect();
     let idx = match starts.binary_search(&offset) {
         Ok(i) => i,
         Err(i) => i.saturating_sub(1),
     };
     let blocks = classify(&lines);
-    matches!(blocks.get(idx), Some(Block::Table { .. })).then_some(TableCtx { lines, starts, blocks, idx })
+    matches!(blocks.get(idx), Some(Block::Table { .. })).then_some(TableCtx {
+        lines,
+        starts,
+        blocks,
+        idx,
+    })
 }
 
 /// Caret position inside a cell: after its pipe and one space.
@@ -236,25 +287,46 @@ fn new_row(cols: usize) -> String {
 /// with the next line) and the caret moves below it.
 pub fn table_enter(text: &str, offset: usize) -> Option<TableKey> {
     let c = table_ctx(text, offset)?;
-    let Block::Table { row, align } = &c.blocks[c.idx] else { return None };
+    let Block::Table { row, align } = &c.blocks[c.idx] else {
+        return None;
+    };
     let (ls, line) = (c.starts[c.idx], c.lines[c.idx]);
     if *row == Row::Body && table_cell_texts(line).iter().all(|t| t.is_empty()) {
-        return Some(TableKey::Edit { from: ls, to: ls + line.len(), insert: "\n".into(), caret: ls + 1 });
+        return Some(TableKey::Edit {
+            from: ls,
+            to: ls + line.len(),
+            insert: "\n".into(),
+            caret: ls + 1,
+        });
     }
-    let after = if *row == Row::Header { c.idx + 1 } else { c.idx };
+    let after = if *row == Row::Header {
+        c.idx + 1
+    } else {
+        c.idx
+    };
     let at = c.starts[after] + c.lines[after].len();
-    Some(TableKey::Edit { from: at, to: at, insert: new_row(align.len()), caret: at + 3 })
+    Some(TableKey::Edit {
+        from: at,
+        to: at,
+        insert: new_row(align.len()),
+        caret: at + 3,
+    })
 }
 
 /// Tab / Shift+Tab in a table: next / previous cell, continuing on the next or
 /// previous row. Tab in the last cell of the last row adds a row.
 pub fn table_tab(text: &str, offset: usize, back: bool) -> Option<TableKey> {
     let c = table_ctx(text, offset)?;
-    let Block::Table { align, .. } = &c.blocks[c.idx] else { return None };
+    let Block::Table { align, .. } = &c.blocks[c.idx] else {
+        return None;
+    };
     let (ls, line) = (c.starts[c.idx], c.lines[c.idx]);
     let cells = table_cells(line);
     let rel = offset - ls;
-    let k = cells.iter().position(|&(a, b)| rel >= a && rel < b).unwrap_or(cells.len().saturating_sub(1));
+    let k = cells
+        .iter()
+        .position(|&(a, b)| rel >= a && rel < b)
+        .unwrap_or(cells.len().saturating_sub(1));
     let row_at = |i: usize| match c.blocks.get(i) {
         Some(Block::Table { row, .. }) => Some(*row),
         _ => None,
@@ -277,7 +349,12 @@ pub fn table_tab(text: &str, offset: usize, back: bool) -> Option<TableKey> {
             return Some(caret_in(n, false));
         }
         let at = ls + line.len();
-        return Some(TableKey::Edit { from: at, to: at, insert: new_row(align.len()), caret: at + 3 });
+        return Some(TableKey::Edit {
+            from: at,
+            to: at,
+            insert: new_row(align.len()),
+            caret: at + 3,
+        });
     }
     if k > 0 {
         return Some(TableKey::Move(ls + cell_caret(line, cells[k - 1])));
@@ -318,17 +395,21 @@ pub fn classify(lines: &[&str]) -> Vec<Block> {
         }
         if let Some((f, lang)) = &fence {
             if let Some((g, rest)) = fence_of(line)
-                && g == f && rest.is_empty() {
-                    out.push(Block::Fence { lang: lang.clone() });
-                    fence = None;
-                    continue;
-                }
+                && g == f
+                && rest.is_empty()
+            {
+                out.push(Block::Fence { lang: lang.clone() });
+                fence = None;
+                continue;
+            }
             out.push(Block::Code { lang: lang.clone() });
             continue;
         }
         if let Some((f, lang)) = fence_of(line) {
             fence = Some((f.to_string(), lang.to_string()));
-            out.push(Block::Fence { lang: lang.to_string() });
+            out.push(Block::Fence {
+                lang: lang.to_string(),
+            });
             continue;
         }
         if line.trim().is_empty() {
@@ -340,21 +421,35 @@ pub fn classify(lines: &[&str]) -> Vec<Block> {
         } else if line.trim_start().starts_with('>') {
             out.push(Block::Quote);
         } else if let Some((indent, len, ordered)) = list_marker(line) {
-            out.push(Block::List { ordered, task: task_box(&line[indent + len..]) });
+            out.push(Block::List {
+                ordered,
+                task: task_box(&line[indent + len..]),
+            });
         } else if is_table_line(line) {
             // A table: consecutive `|` lines whose second is a delimiter row
             // with as many cells as the header.
-            let end = (i..lines.len()).find(|&j| !is_table_line(lines[j])).unwrap_or(lines.len());
+            let end = (i..lines.len())
+                .find(|&j| !is_table_line(lines[j]))
+                .unwrap_or(lines.len());
             let align = (i + 1 < end)
                 .then(|| delimiter_row(lines[i + 1]))
                 .flatten()
                 .filter(|a| a.len() == table_cell_texts(line).len());
             match align {
                 Some(align) => {
-                    out.push(Block::Table { row: Row::Header, align: align.clone() });
-                    queued.push_back(Block::Table { row: Row::Delimiter, align: align.clone() });
+                    out.push(Block::Table {
+                        row: Row::Header,
+                        align: align.clone(),
+                    });
+                    queued.push_back(Block::Table {
+                        row: Row::Delimiter,
+                        align: align.clone(),
+                    });
                     for _ in i + 2..end {
-                        queued.push_back(Block::Table { row: Row::Body, align: align.clone() });
+                        queued.push_back(Block::Table {
+                            row: Row::Body,
+                            align: align.clone(),
+                        });
                     }
                 }
                 None => {
@@ -451,13 +546,18 @@ fn set(flags: &mut [u32], a: usize, b: usize, f: u32) {
 }
 
 fn free(flags: &[u32], a: usize, b: usize) -> bool {
-    flags[a..b.min(flags.len())].iter().all(|f| f & (PROTECT | MK) == 0)
+    flags[a..b.min(flags.len())]
+        .iter()
+        .all(|f| f & (PROTECT | MK) == 0)
 }
 
 /// Style one line. `resolves(target)` reports whether a wiki link exists.
 pub fn style_line(line: &str, block: &Block, resolves: &dyn Fn(&str) -> bool) -> Styled {
     let n = line.len();
-    let mut s = Styled { flags: vec![0; n], ..Default::default() };
+    let mut s = Styled {
+        flags: vec![0; n],
+        ..Default::default()
+    };
     match block {
         Block::Code { lang } => {
             highlight_code(line, lang, &mut s.flags);
@@ -549,13 +649,15 @@ pub fn style_line(line: &str, block: &Block, resolves: &dyn Fn(&str) -> bool) ->
     if let Some(t) = body.strip_prefix("![[").and_then(|r| r.strip_suffix("]]")) {
         let t = t.split('|').next().unwrap_or(t);
         s.image = Some(t.to_string());
-    } else if body.starts_with("![") && body.ends_with(')')
-        && let Some(i) = body.find("](") {
-            let target = &body[i + 2..body.len() - 1];
-            if coolpsonotes_core::markdown::is_internal_target(target) {
-                s.image = Some(coolpsonotes_core::markdown::percent_decode(target));
-            }
+    } else if body.starts_with("![")
+        && body.ends_with(')')
+        && let Some(i) = body.find("](")
+    {
+        let target = &body[i + 2..body.len() - 1];
+        if coolpsonotes_core::markdown::is_internal_target(target) {
+            s.image = Some(coolpsonotes_core::markdown::percent_decode(target));
         }
+    }
     for f in &mut s.flags {
         *f &= !PROTECT;
     }
@@ -610,82 +712,112 @@ fn inline(line: &str, from: usize, s: &mut Styled, resolves: &dyn Fn(&str) -> bo
     // Wiki links and embeds.
     let mut i = from;
     while i + 1 < n {
-        if b[i] == b'[' && b[i + 1] == b'[' && s.flags[i] & PROTECT == 0
-            && let Some(rel) = line[i + 2..].find("]]") {
-                let inner = &line[i + 2..i + 2 + rel];
-                if !inner.is_empty() && !inner.contains('[') {
-                    let open = if i > from && b[i - 1] == b'!' { i - 1 } else { i };
-                    let close = i + 2 + rel;
-                    let (target, alias_at) = match inner.find('|') {
-                        Some(p) => (&inner[..p], Some(i + 2 + p)),
-                        None => (inner, None),
-                    };
-                    let tname = target.split('#').next().unwrap_or(target).trim();
-                    let ok = tname.is_empty() || resolves(tname);
-                    set(&mut s.flags, open, i + 2, MK | PROTECT);
-                    let vis_start = match alias_at {
-                        Some(p) => {
-                            set(&mut s.flags, i + 2, p + 1, MK | PROTECT);
-                            p + 1
-                        }
-                        None => i + 2,
-                    };
-                    set(&mut s.flags, vis_start, close, WIKI | PROTECT | if ok { 0 } else { BROKEN });
-                    set(&mut s.flags, close, close + 2, MK | PROTECT);
-                    s.links.push((vis_start, close, Target::Wiki(target.trim().to_string())));
-                    i = close + 2;
-                    continue;
-                }
+        if b[i] == b'['
+            && b[i + 1] == b'['
+            && s.flags[i] & PROTECT == 0
+            && let Some(rel) = line[i + 2..].find("]]")
+        {
+            let inner = &line[i + 2..i + 2 + rel];
+            if !inner.is_empty() && !inner.contains('[') {
+                let open = if i > from && b[i - 1] == b'!' {
+                    i - 1
+                } else {
+                    i
+                };
+                let close = i + 2 + rel;
+                let (target, alias_at) = match inner.find('|') {
+                    Some(p) => (&inner[..p], Some(i + 2 + p)),
+                    None => (inner, None),
+                };
+                let tname = target.split('#').next().unwrap_or(target).trim();
+                let ok = tname.is_empty() || resolves(tname);
+                set(&mut s.flags, open, i + 2, MK | PROTECT);
+                let vis_start = match alias_at {
+                    Some(p) => {
+                        set(&mut s.flags, i + 2, p + 1, MK | PROTECT);
+                        p + 1
+                    }
+                    None => i + 2,
+                };
+                set(
+                    &mut s.flags,
+                    vis_start,
+                    close,
+                    WIKI | PROTECT | if ok { 0 } else { BROKEN },
+                );
+                set(&mut s.flags, close, close + 2, MK | PROTECT);
+                s.links
+                    .push((vis_start, close, Target::Wiki(target.trim().to_string())));
+                i = close + 2;
+                continue;
             }
+        }
         i += 1;
     }
     // Markdown links [text](url) and images ![alt](url).
     let mut i = from;
     while i < n {
-        if b[i] == b'[' && s.flags[i] & PROTECT == 0
-            && let Some(close_rel) = line[i + 1..].find("](") {
-                let text_end = i + 1 + close_rel;
-                if let Some(paren_rel) = line[text_end + 2..].find(')') {
-                    let url_end = text_end + 2 + paren_rel;
-                    if free(&s.flags, i, url_end + 1) {
-                        let open = if i > from && b[i - 1] == b'!' { i - 1 } else { i };
-                        let url = line[text_end + 2..url_end].trim().to_string();
-                        set(&mut s.flags, open, i + 1, MK | PROTECT);
-                        set(&mut s.flags, i + 1, text_end, LINK);
-                        set(&mut s.flags, text_end, url_end + 1, MK | PROTECT);
-                        let target = if coolpsonotes_core::markdown::is_internal_target(&url) {
-                            Target::Wiki(coolpsonotes_core::markdown::percent_decode(&url))
-                        } else {
-                            Target::Url(url)
-                        };
-                        s.links.push((i + 1, text_end, target));
-                        i = url_end + 1;
-                        continue;
-                    }
+        if b[i] == b'['
+            && s.flags[i] & PROTECT == 0
+            && let Some(close_rel) = line[i + 1..].find("](")
+        {
+            let text_end = i + 1 + close_rel;
+            if let Some(paren_rel) = line[text_end + 2..].find(')') {
+                let url_end = text_end + 2 + paren_rel;
+                if free(&s.flags, i, url_end + 1) {
+                    let open = if i > from && b[i - 1] == b'!' {
+                        i - 1
+                    } else {
+                        i
+                    };
+                    let url = line[text_end + 2..url_end].trim().to_string();
+                    set(&mut s.flags, open, i + 1, MK | PROTECT);
+                    set(&mut s.flags, i + 1, text_end, LINK);
+                    set(&mut s.flags, text_end, url_end + 1, MK | PROTECT);
+                    let target = if coolpsonotes_core::markdown::is_internal_target(&url) {
+                        Target::Wiki(coolpsonotes_core::markdown::percent_decode(&url))
+                    } else {
+                        Target::Url(url)
+                    };
+                    s.links.push((i + 1, text_end, target));
+                    i = url_end + 1;
+                    continue;
                 }
             }
+        }
         i += 1;
     }
     // Bare URLs.
     let mut i = from;
     while i < n {
-        if (b[i..].starts_with(b"https://") || b[i..].starts_with(b"http://")) && s.flags[i] & (PROTECT | MK) == 0 {
-            let end = line[i..].find(|c: char| c.is_whitespace() || c == '<' || c == '>').map(|e| i + e).unwrap_or(n);
+        if (b[i..].starts_with(b"https://") || b[i..].starts_with(b"http://"))
+            && s.flags[i] & (PROTECT | MK) == 0
+        {
+            let end = line[i..]
+                .find(|c: char| c.is_whitespace() || c == '<' || c == '>')
+                .map(|e| i + e)
+                .unwrap_or(n);
             let mut end = end;
             while end > i && matches!(b[end - 1], b'.' | b',' | b')' | b';' | b':' | b'!' | b'?') {
                 end -= 1;
             }
             set(&mut s.flags, i, end, URL | PROTECT);
-            s.links.push((i, end, Target::Url(line[i..end].to_string())));
+            s.links
+                .push((i, end, Target::Url(line[i..end].to_string())));
             i = end;
             continue;
         }
         i += 1;
     }
     // Emphasis-like delimiters, longest first.
-    for (delim, flag, intraword) in
-        [("**", STRONG, true), ("__", STRONG, false), ("~~", STRIKE, true), ("==", HL, true), ("*", EM, true), ("_", EM, false)]
-    {
+    for (delim, flag, intraword) in [
+        ("**", STRONG, true),
+        ("__", STRONG, false),
+        ("~~", STRIKE, true),
+        ("==", HL, true),
+        ("*", EM, true),
+        ("_", EM, false),
+    ] {
         let d = delim.len();
         let mut i = from;
         while i + d <= n {
@@ -730,7 +862,8 @@ fn inline(line: &str, from: usize, s: &mut Styled, resolves: &dyn Fn(&str) -> bo
         if c != '#' || s.flags[i] & (PROTECT | MK) != 0 {
             continue;
         }
-        let prev_ok = i == from || k == 0 || chars[k - 1].1.is_whitespace() || chars[k - 1].1 == '(';
+        let prev_ok =
+            i == from || k == 0 || chars[k - 1].1.is_whitespace() || chars[k - 1].1 == '(';
         if !prev_ok {
             continue;
         }
@@ -748,42 +881,196 @@ fn inline(line: &str, from: usize, s: &mut Styled, resolves: &dyn Fn(&str) -> bo
 fn keywords(lang: &str) -> &'static [&'static str] {
     match lang.to_ascii_lowercase().as_str() {
         "rust" | "rs" => &[
-            "as", "async", "await", "break", "const", "continue", "crate", "dyn", "else", "enum", "extern", "false", "fn",
-            "for", "if", "impl", "in", "let", "loop", "match", "mod", "move", "mut", "pub", "ref", "return", "self",
-            "Self", "static", "struct", "super", "trait", "true", "type", "unsafe", "use", "where", "while",
+            "as", "async", "await", "break", "const", "continue", "crate", "dyn", "else", "enum",
+            "extern", "false", "fn", "for", "if", "impl", "in", "let", "loop", "match", "mod",
+            "move", "mut", "pub", "ref", "return", "self", "Self", "static", "struct", "super",
+            "trait", "true", "type", "unsafe", "use", "where", "while",
         ],
         "js" | "javascript" | "ts" | "typescript" | "jsx" | "tsx" => &[
-            "async", "await", "break", "case", "catch", "class", "const", "continue", "default", "delete", "do", "else",
-            "export", "extends", "false", "finally", "for", "from", "function", "if", "import", "in", "instanceof",
-            "interface", "let", "new", "null", "of", "return", "static", "super", "switch", "this", "throw", "true",
-            "try", "type", "typeof", "undefined", "var", "void", "while", "yield",
+            "async",
+            "await",
+            "break",
+            "case",
+            "catch",
+            "class",
+            "const",
+            "continue",
+            "default",
+            "delete",
+            "do",
+            "else",
+            "export",
+            "extends",
+            "false",
+            "finally",
+            "for",
+            "from",
+            "function",
+            "if",
+            "import",
+            "in",
+            "instanceof",
+            "interface",
+            "let",
+            "new",
+            "null",
+            "of",
+            "return",
+            "static",
+            "super",
+            "switch",
+            "this",
+            "throw",
+            "true",
+            "try",
+            "type",
+            "typeof",
+            "undefined",
+            "var",
+            "void",
+            "while",
+            "yield",
         ],
         "py" | "python" => &[
-            "and", "as", "assert", "async", "await", "break", "class", "continue", "def", "del", "elif", "else",
-            "except", "False", "finally", "for", "from", "global", "if", "import", "in", "is", "lambda", "None",
-            "nonlocal", "not", "or", "pass", "raise", "return", "True", "try", "while", "with", "yield",
+            "and", "as", "assert", "async", "await", "break", "class", "continue", "def", "del",
+            "elif", "else", "except", "False", "finally", "for", "from", "global", "if", "import",
+            "in", "is", "lambda", "None", "nonlocal", "not", "or", "pass", "raise", "return",
+            "True", "try", "while", "with", "yield",
         ],
         "go" | "golang" => &[
-            "break", "case", "chan", "const", "continue", "default", "defer", "else", "fallthrough", "false", "for",
-            "func", "go", "goto", "if", "import", "interface", "map", "nil", "package", "range", "return", "select",
-            "struct", "switch", "true", "type", "var",
+            "break",
+            "case",
+            "chan",
+            "const",
+            "continue",
+            "default",
+            "defer",
+            "else",
+            "fallthrough",
+            "false",
+            "for",
+            "func",
+            "go",
+            "goto",
+            "if",
+            "import",
+            "interface",
+            "map",
+            "nil",
+            "package",
+            "range",
+            "return",
+            "select",
+            "struct",
+            "switch",
+            "true",
+            "type",
+            "var",
         ],
         "sh" | "bash" | "shell" | "zsh" | "console" => &[
-            "case", "do", "done", "elif", "else", "esac", "export", "fi", "for", "function", "if", "in", "local",
-            "return", "then", "until", "while", "echo", "cd", "sudo",
+            "case", "do", "done", "elif", "else", "esac", "export", "fi", "for", "function", "if",
+            "in", "local", "return", "then", "until", "while", "echo", "cd", "sudo",
         ],
         "sql" => &[
-            "select", "from", "where", "insert", "into", "values", "update", "set", "delete", "create", "table",
-            "index", "join", "left", "right", "inner", "outer", "on", "and", "or", "not", "null", "group", "by",
-            "order", "limit", "as", "primary", "key", "references", "SELECT", "FROM", "WHERE", "INSERT", "INTO",
-            "VALUES", "UPDATE", "SET", "DELETE", "CREATE", "TABLE", "JOIN", "ON", "AND", "OR", "NOT", "NULL", "GROUP",
-            "BY", "ORDER", "LIMIT", "AS",
+            "select",
+            "from",
+            "where",
+            "insert",
+            "into",
+            "values",
+            "update",
+            "set",
+            "delete",
+            "create",
+            "table",
+            "index",
+            "join",
+            "left",
+            "right",
+            "inner",
+            "outer",
+            "on",
+            "and",
+            "or",
+            "not",
+            "null",
+            "group",
+            "by",
+            "order",
+            "limit",
+            "as",
+            "primary",
+            "key",
+            "references",
+            "SELECT",
+            "FROM",
+            "WHERE",
+            "INSERT",
+            "INTO",
+            "VALUES",
+            "UPDATE",
+            "SET",
+            "DELETE",
+            "CREATE",
+            "TABLE",
+            "JOIN",
+            "ON",
+            "AND",
+            "OR",
+            "NOT",
+            "NULL",
+            "GROUP",
+            "BY",
+            "ORDER",
+            "LIMIT",
+            "AS",
         ],
         "c" | "cpp" | "c++" | "h" | "java" | "kotlin" | "cs" | "csharp" | "swift" => &[
-            "auto", "bool", "break", "case", "char", "class", "const", "continue", "default", "do", "double", "else",
-            "enum", "extern", "false", "final", "float", "for", "if", "import", "int", "long", "namespace", "new",
-            "null", "nullptr", "private", "protected", "public", "return", "short", "static", "struct", "switch",
-            "this", "true", "typedef", "using", "var", "void", "while", "fun", "val", "let", "func",
+            "auto",
+            "bool",
+            "break",
+            "case",
+            "char",
+            "class",
+            "const",
+            "continue",
+            "default",
+            "do",
+            "double",
+            "else",
+            "enum",
+            "extern",
+            "false",
+            "final",
+            "float",
+            "for",
+            "if",
+            "import",
+            "int",
+            "long",
+            "namespace",
+            "new",
+            "null",
+            "nullptr",
+            "private",
+            "protected",
+            "public",
+            "return",
+            "short",
+            "static",
+            "struct",
+            "switch",
+            "this",
+            "true",
+            "typedef",
+            "using",
+            "var",
+            "void",
+            "while",
+            "fun",
+            "val",
+            "let",
+            "func",
         ],
         "yaml" | "yml" | "toml" | "json" | "ini" => &["true", "false", "null", "yes", "no"],
         _ => &[],
@@ -792,8 +1079,8 @@ fn keywords(lang: &str) -> &'static [&'static str] {
 
 fn comment_prefixes(lang: &str) -> &'static [&'static str] {
     match lang.to_ascii_lowercase().as_str() {
-        "py" | "python" | "sh" | "bash" | "shell" | "zsh" | "yaml" | "yml" | "toml" | "ruby" | "rb" | "ini"
-        | "dockerfile" | "make" | "makefile" | "r" | "console" => &["#"],
+        "py" | "python" | "sh" | "bash" | "shell" | "zsh" | "yaml" | "yml" | "toml" | "ruby"
+        | "rb" | "ini" | "dockerfile" | "make" | "makefile" | "r" | "console" => &["#"],
         "sql" | "lua" | "haskell" | "hs" => &["--"],
         "" | "text" | "txt" | "md" | "markdown" => &[],
         _ => &["//"],
@@ -825,7 +1112,8 @@ fn highlight_code(line: &str, lang: &str, flags: &mut [u32]) {
             i = end;
             continue;
         }
-        if c.is_ascii_digit() && (i == 0 || !(b[i - 1].is_ascii_alphanumeric() || b[i - 1] == b'_')) {
+        if c.is_ascii_digit() && (i == 0 || !(b[i - 1].is_ascii_alphanumeric() || b[i - 1] == b'_'))
+        {
             let mut j = i;
             while j < n && (b[j].is_ascii_alphanumeric() || b[j] == b'.' || b[j] == b'_') {
                 j += 1;
@@ -924,13 +1212,43 @@ mod tests {
 
     #[test]
     fn blocks() {
-        let lines = ["# T", "", "- a", "- [x] done", "1. one", "```rust", "let x = 1;", "```", "> q", "---", "| a | b |"];
+        let lines = [
+            "# T",
+            "",
+            "- a",
+            "- [x] done",
+            "1. one",
+            "```rust",
+            "let x = 1;",
+            "```",
+            "> q",
+            "---",
+            "| a | b |",
+        ];
         let k = classify(&lines);
         assert_eq!(k[0], Block::Heading(1));
         assert_eq!(k[1], Block::Blank);
-        assert_eq!(k[2], Block::List { ordered: false, task: None });
-        assert_eq!(k[3], Block::List { ordered: false, task: Some(true) });
-        assert_eq!(k[4], Block::List { ordered: true, task: None });
+        assert_eq!(
+            k[2],
+            Block::List {
+                ordered: false,
+                task: None
+            }
+        );
+        assert_eq!(
+            k[3],
+            Block::List {
+                ordered: false,
+                task: Some(true)
+            }
+        );
+        assert_eq!(
+            k[4],
+            Block::List {
+                ordered: true,
+                task: None
+            }
+        );
         assert!(matches!(k[5], Block::Fence { .. }));
         assert!(matches!(k[6], Block::Code { .. }));
         assert!(matches!(k[7], Block::Fence { .. }));
@@ -941,15 +1259,50 @@ mod tests {
 
     #[test]
     fn tables() {
-        let lines = ["| Name | Qty | Note |", "| :--- | --: | :-: |", "| a | 1 | x \\| y |", "| b | 2", "", "| not | a table |", "| x |"];
+        let lines = [
+            "| Name | Qty | Note |",
+            "| :--- | --: | :-: |",
+            "| a | 1 | x \\| y |",
+            "| b | 2",
+            "",
+            "| not | a table |",
+            "| x |",
+        ];
         let k = classify(&lines);
         let align = vec![Align::Left, Align::Right, Align::Center];
-        assert_eq!(k[0], Block::Table { row: Row::Header, align: align.clone() });
-        assert_eq!(k[1], Block::Table { row: Row::Delimiter, align: align.clone() });
-        assert_eq!(k[2], Block::Table { row: Row::Body, align: align.clone() });
-        assert_eq!(k[3], Block::Table { row: Row::Body, align });
+        assert_eq!(
+            k[0],
+            Block::Table {
+                row: Row::Header,
+                align: align.clone()
+            }
+        );
+        assert_eq!(
+            k[1],
+            Block::Table {
+                row: Row::Delimiter,
+                align: align.clone()
+            }
+        );
+        assert_eq!(
+            k[2],
+            Block::Table {
+                row: Row::Body,
+                align: align.clone()
+            }
+        );
+        assert_eq!(
+            k[3],
+            Block::Table {
+                row: Row::Body,
+                align
+            }
+        );
         assert_eq!(k[4], Block::Blank);
-        assert_eq!((k[5].clone(), k[6].clone()), (Block::PipeText, Block::PipeText));
+        assert_eq!(
+            (k[5].clone(), k[6].clone()),
+            (Block::PipeText, Block::PipeText)
+        );
         assert_eq!(table_cell_texts(lines[2]), vec!["a", "1", "x \\| y"]);
         assert_eq!(table_cell_texts(lines[3]), vec!["b", "2"]);
         assert_eq!(table_cells("| a | b |"), vec![(0, 4), (4, 9)]);
@@ -981,22 +1334,57 @@ mod tests {
         let t = "intro\n| A | B |\n| --- | --- |\n| a1 | b1 |\nafter";
         let at = |s: &str| t.find(s).unwrap();
         // Tab: next cell, then the first cell of the next row (skipping the delimiter row).
-        assert_eq!(table_tab(t, at("A |"), false), Some(TableKey::Move(at("B |"))));
-        assert_eq!(table_tab(t, at("B |"), false), Some(TableKey::Move(at("a1"))));
-        assert_eq!(table_tab(t, at("a1"), false), Some(TableKey::Move(at("b1"))));
+        assert_eq!(
+            table_tab(t, at("A |"), false),
+            Some(TableKey::Move(at("B |")))
+        );
+        assert_eq!(
+            table_tab(t, at("B |"), false),
+            Some(TableKey::Move(at("a1")))
+        );
+        assert_eq!(
+            table_tab(t, at("a1"), false),
+            Some(TableKey::Move(at("b1")))
+        );
         // Tab in the last cell adds a row.
         let end = at("b1 |") + 4;
-        assert_eq!(table_tab(t, at("b1"), false), Some(TableKey::Edit { from: end, to: end, insert: "\n|  |  |".into(), caret: end + 3 }));
+        assert_eq!(
+            table_tab(t, at("b1"), false),
+            Some(TableKey::Edit {
+                from: end,
+                to: end,
+                insert: "\n|  |  |".into(),
+                caret: end + 3
+            })
+        );
         // Shift+Tab goes back, across rows.
-        assert_eq!(table_tab(t, at("a1"), true), Some(TableKey::Move(at("B |"))));
-        assert_eq!(table_tab(t, at("B |"), true), Some(TableKey::Move(at("A |"))));
+        assert_eq!(
+            table_tab(t, at("a1"), true),
+            Some(TableKey::Move(at("B |")))
+        );
+        assert_eq!(
+            table_tab(t, at("B |"), true),
+            Some(TableKey::Move(at("A |")))
+        );
         // Enter on the header adds a row below the delimiter row; on a body row, below it.
         let delim_end = at("| --- | --- |") + "| --- | --- |".len();
-        assert!(matches!(table_enter(t, at("A")), Some(TableKey::Edit { from, .. }) if from == delim_end));
-        assert!(matches!(table_enter(t, at("a1")), Some(TableKey::Edit { from, .. }) if from == end));
+        assert!(
+            matches!(table_enter(t, at("A")), Some(TableKey::Edit { from, .. }) if from == delim_end)
+        );
+        assert!(
+            matches!(table_enter(t, at("a1")), Some(TableKey::Edit { from, .. }) if from == end)
+        );
         // Enter on an empty row ends the table.
         let t2 = "| A |\n| - |\n|  |";
-        assert_eq!(table_enter(t2, t2.len() - 1), Some(TableKey::Edit { from: 12, to: 16, insert: "\n".into(), caret: 13 }));
+        assert_eq!(
+            table_enter(t2, t2.len() - 1),
+            Some(TableKey::Edit {
+                from: 12,
+                to: 16,
+                insert: "\n".into(),
+                caret: 13
+            })
+        );
         // Outside tables nothing happens.
         assert_eq!(table_tab(t, 1, false), None);
         assert_eq!(table_enter(t, t.len()), None);
@@ -1030,14 +1418,23 @@ mod tests {
                     _ => {}
                 }
             }
-            out.replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"").replace("&#39;", "'")
+            out.replace("&amp;", "&")
+                .replace("&lt;", "<")
+                .replace("&gt;", ">")
+                .replace("&quot;", "\"")
+                .replace("&#39;", "'")
         };
         assert_eq!(stripped, line);
     }
 
     #[test]
     fn multibyte_text_never_panics() {
-        for line in ["# Welcome 👋 **bold** ✓", "é*à*ü https://x.y/ü 🎉", "- [ ] tâche *ital* `cödé` [[Ñote]]", "👋👋 ==hl== ~~s~~ _u_"] {
+        for line in [
+            "# Welcome 👋 **bold** ✓",
+            "é*à*ü https://x.y/ü 🎉",
+            "- [ ] tâche *ital* `cödé` [[Ñote]]",
+            "👋👋 ==hl== ~~s~~ _u_",
+        ] {
             let s = flags_of(line);
             assert_eq!(s.flags.len(), line.len());
             let _ = line_html(line, &s);

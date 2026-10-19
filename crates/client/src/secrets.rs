@@ -45,10 +45,14 @@ impl LocalKey {
     }
 
     fn load(path: &Path) -> Result<Option<LocalKey>> {
-        let Some(bytes) = fsutil::read_optional(path)? else { return Ok(None) };
+        let Some(bytes) = fsutil::read_optional(path)? else {
+            return Ok(None);
+        };
         let bytes = Zeroizing::new(bytes);
-        let key: [u8; 32] =
-            bytes.as_slice().try_into().map_err(|_| anyhow!("{} is corrupt (expected 32 bytes)", path.display()))?;
+        let key: [u8; 32] = bytes
+            .as_slice()
+            .try_into()
+            .map_err(|_| anyhow!("{} is corrupt (expected 32 bytes)", path.display()))?;
         if fsutil::is_shared_readable(path) {
             tracing::warn!("the local key file is readable by other users; run `chmod 600` on it");
         }
@@ -86,7 +90,10 @@ pub struct SecretStore {
 
 impl SecretStore {
     pub fn open(data_dir: &Path) -> Result<SecretStore> {
-        Ok(SecretStore { dir: data_dir.to_path_buf(), key: LocalKey::load_or_create(data_dir)? })
+        Ok(SecretStore {
+            dir: data_dir.to_path_buf(),
+            key: LocalKey::load_or_create(data_dir)?,
+        })
     }
 
     pub fn local_key(&self) -> &LocalKey {
@@ -99,27 +106,48 @@ impl SecretStore {
 
     pub fn save_account(&self, user_id: &str, account: &AccountSecret) -> Result<()> {
         let bytes = Zeroizing::new(account.to_bytes());
-        self.key.write_sealed(&self.dir.join(ACCOUNT_FILE), &format!("account/{user_id}"), &bytes)
+        self.key.write_sealed(
+            &self.dir.join(ACCOUNT_FILE),
+            &format!("account/{user_id}"),
+            &bytes,
+        )
     }
 
     pub fn load_account(&self, user_id: &str) -> Result<Option<AccountSecret>> {
-        let Some(pt) = self.key.read_sealed(&self.dir.join(ACCOUNT_FILE), &format!("account/{user_id}"))? else {
-            return Ok(None);
-        };
-        Ok(Some(AccountSecret::from_bytes(&pt).map_err(|e| anyhow!("stored account secret is invalid: {e}"))?))
-    }
-
-    pub fn save_device(&self, user_id: &str, device_id: &str, device: &DeviceKey) -> Result<()> {
-        self.key.write_sealed(&self.dir.join(DEVICE_FILE), &format!("device/{user_id}/{device_id}"), &device.secret)
-    }
-
-    pub fn load_device(&self, user_id: &str, device_id: &str) -> Result<Option<DeviceKey>> {
-        let Some(pt) = self.key.read_sealed(&self.dir.join(DEVICE_FILE), &format!("device/{user_id}/{device_id}"))?
+        let Some(pt) = self
+            .key
+            .read_sealed(&self.dir.join(ACCOUNT_FILE), &format!("account/{user_id}"))?
         else {
             return Ok(None);
         };
-        let secret: [u8; 32] = pt.as_slice().try_into().map_err(|_| anyhow!("stored device key is corrupt"))?;
-        Ok(Some(DeviceKey::from_secret(secret).map_err(|e| anyhow!("stored device key is invalid: {e}"))?))
+        Ok(Some(AccountSecret::from_bytes(&pt).map_err(|e| {
+            anyhow!("stored account secret is invalid: {e}")
+        })?))
+    }
+
+    pub fn save_device(&self, user_id: &str, device_id: &str, device: &DeviceKey) -> Result<()> {
+        self.key.write_sealed(
+            &self.dir.join(DEVICE_FILE),
+            &format!("device/{user_id}/{device_id}"),
+            &device.secret,
+        )
+    }
+
+    pub fn load_device(&self, user_id: &str, device_id: &str) -> Result<Option<DeviceKey>> {
+        let Some(pt) = self.key.read_sealed(
+            &self.dir.join(DEVICE_FILE),
+            &format!("device/{user_id}/{device_id}"),
+        )?
+        else {
+            return Ok(None);
+        };
+        let secret: [u8; 32] = pt
+            .as_slice()
+            .try_into()
+            .map_err(|_| anyhow!("stored device key is corrupt"))?;
+        Ok(Some(DeviceKey::from_secret(secret).map_err(|e| {
+            anyhow!("stored device key is invalid: {e}")
+        })?))
     }
 
     /// Delete the sealed account and device secrets (device was revoked).
@@ -140,10 +168,16 @@ impl SecretStore {
     /// Remove every secret and cache of this profile (logout --forget).
     pub fn wipe(data_dir: &Path) -> Result<()> {
         if data_dir.exists() {
-            if !data_dir.join(LOCAL_KEY_FILE).exists() && std::fs::read_dir(data_dir)?.next().is_some() {
-                bail!("{} does not look like a coolpsonotes data directory; not deleting it", data_dir.display());
+            if !data_dir.join(LOCAL_KEY_FILE).exists()
+                && std::fs::read_dir(data_dir)?.next().is_some()
+            {
+                bail!(
+                    "{} does not look like a coolpsonotes data directory; not deleting it",
+                    data_dir.display()
+                );
             }
-            std::fs::remove_dir_all(data_dir).with_context(|| format!("removing {}", data_dir.display()))?;
+            std::fs::remove_dir_all(data_dir)
+                .with_context(|| format!("removing {}", data_dir.display()))?;
         }
         Ok(())
     }
@@ -164,7 +198,10 @@ mod tests {
         assert!(s.load_account("u2").is_err());
         let dev = DeviceKey::generate();
         s.save_device("u1", "d1", &dev).unwrap();
-        assert_eq!(s.load_device("u1", "d1").unwrap().unwrap().public, dev.public);
+        assert_eq!(
+            s.load_device("u1", "d1").unwrap().unwrap().public,
+            dev.public
+        );
         // The same local key is reused by later opens.
         let s2 = SecretStore::open(d.path()).unwrap();
         assert!(s2.load_account("u1").unwrap().is_some());

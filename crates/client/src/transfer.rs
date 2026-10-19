@@ -31,11 +31,18 @@ enum Item {
 }
 
 fn is_zip(p: &Path) -> bool {
-    p.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("zip"))
+    p.extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case("zip"))
 }
 
 /// Export every live note, attachment and explicit folder of a vault.
-pub async fn export(hub: &Hub, vault: &SharedVault, out: &Path, force: bool) -> Result<TransferReport> {
+pub async fn export(
+    hub: &Hub,
+    vault: &SharedVault,
+    out: &Path,
+    force: bool,
+) -> Result<TransferReport> {
     let mut report = TransferReport::default();
     let zip = is_zip(out);
     let items: Vec<Item> = {
@@ -43,13 +50,22 @@ pub async fn export(hub: &Hub, vault: &SharedVault, out: &Path, force: bool) -> 
         v.paths()
             .into_iter()
             .filter_map(|(p, e)| {
-                let ok = if zip { paths::normalize(&p).is_ok_and(|n| n == p) } else { is_safe_vault_path(&p) };
+                let ok = if zip {
+                    paths::normalize(&p).is_ok_and(|n| n == p)
+                } else {
+                    is_safe_vault_path(&p)
+                };
                 if !ok {
-                    report.skipped.push((p, "hidden or unsupported path".into()));
+                    report
+                        .skipped
+                        .push((p, "hidden or unsupported path".into()));
                     return None;
                 }
                 Some(match e.kind {
-                    EntryKind::Note => Item::Note { text: v.note_text(&e.id), path: p },
+                    EntryKind::Note => Item::Note {
+                        text: v.note_text(&e.id),
+                        path: p,
+                    },
                     EntryKind::Attachment => Item::Attachment { path: p, id: e.id },
                     EntryKind::Folder => Item::Folder { path: p },
                 })
@@ -69,7 +85,9 @@ pub async fn export(hub: &Hub, vault: &SharedVault, out: &Path, force: bool) -> 
                     files.push((path, data));
                     report.attachments += 1;
                 }
-                Err(e) => report.skipped.push((path, format!("attachment not available: {e:#}"))),
+                Err(e) => report
+                    .skipped
+                    .push((path, format!("attachment not available: {e:#}"))),
             },
             Item::Folder { path } => {
                 folders.push(path);
@@ -79,10 +97,14 @@ pub async fn export(hub: &Hub, vault: &SharedVault, out: &Path, force: bool) -> 
     }
     if zip {
         if out.exists() && !force {
-            bail!("{} already exists (use --force to overwrite)", out.display());
+            bail!(
+                "{} already exists (use --force to overwrite)",
+                out.display()
+            );
         }
         let tmp = out.with_extension("zip.partial");
-        let f = std::fs::File::create(&tmp).with_context(|| format!("creating {}", tmp.display()))?;
+        let f =
+            std::fs::File::create(&tmp).with_context(|| format!("creating {}", tmp.display()))?;
         let mut w = zip::ZipWriter::new(f);
         let opts = zip::write::SimpleFileOptions::default()
             .compression_method(zip::CompressionMethod::Deflated)
@@ -98,9 +120,14 @@ pub async fn export(hub: &Hub, vault: &SharedVault, out: &Path, force: bool) -> 
         std::fs::rename(&tmp, out)?;
     } else {
         if out.exists() {
-            let nonempty = std::fs::read_dir(out).map(|mut r| r.next().is_some()).unwrap_or(true);
+            let nonempty = std::fs::read_dir(out)
+                .map(|mut r| r.next().is_some())
+                .unwrap_or(true);
             if nonempty && !force {
-                bail!("{} is not empty (use --force to write into it)", out.display());
+                bail!(
+                    "{} is not empty (use --force to write into it)",
+                    out.display()
+                );
             }
         }
         std::fs::create_dir_all(out)?;
@@ -112,7 +139,8 @@ pub async fn export(hub: &Hub, vault: &SharedVault, out: &Path, force: bool) -> 
             if let Some(parent) = target.parent() {
                 std::fs::create_dir_all(parent)?;
             }
-            fsutil::write_atomic(&target, data, false).with_context(|| format!("writing {}", target.display()))?;
+            fsutil::write_atomic(&target, data, false)
+                .with_context(|| format!("writing {}", target.display()))?;
         }
     }
     Ok(report)
@@ -141,8 +169,14 @@ fn collect_dir(src: &Path, report: &mut TransferReport) -> Result<Collected> {
     for e in walker {
         let e = e?;
         let rel = e.path().strip_prefix(src).unwrap_or(e.path());
-        let Some(rel) = rel.to_str().map(|s| s.replace(std::path::MAIN_SEPARATOR, "/")) else {
-            report.skipped.push((e.path().display().to_string(), "file name is not valid UTF-8".into()));
+        let Some(rel) = rel
+            .to_str()
+            .map(|s| s.replace(std::path::MAIN_SEPARATOR, "/"))
+        else {
+            report.skipped.push((
+                e.path().display().to_string(),
+                "file name is not valid UTF-8".into(),
+            ));
             continue;
         };
         if e.file_type().is_dir() {
@@ -168,12 +202,18 @@ fn collect_zip(src: &Path, report: &mut TransferReport) -> Result<Collected> {
     for i in 0..z.len() {
         let mut entry = z.by_index(i)?;
         let Some(name) = entry.enclosed_name() else {
-            report
-                .skipped
-                .push((entry.name().map(|n| n.into_owned()).unwrap_or_default(), "unsafe path in archive".into()));
+            report.skipped.push((
+                entry.name().map(|n| n.into_owned()).unwrap_or_default(),
+                "unsafe path in archive".into(),
+            ));
             continue;
         };
-        let Some(rel) = name.to_str().map(|s| s.replace('\\', "/").trim_end_matches('/').to_string()) else { continue };
+        let Some(rel) = name
+            .to_str()
+            .map(|s| s.replace('\\', "/").trim_end_matches('/').to_string())
+        else {
+            continue;
+        };
         if rel.is_empty() || rel.split('/').any(is_ignored_name) {
             continue;
         }
@@ -211,7 +251,12 @@ pub async fn import(
         Some(f) if !f.trim_matches('/').is_empty() => paths::normalize(f)?,
         _ => String::new(),
     };
-    let max = hub.session.server_info().await.map(|i| i.max_attachment_bytes).unwrap_or(u64::MAX);
+    let max = hub
+        .session
+        .server_info()
+        .await
+        .map(|i| i.max_attachment_bytes)
+        .unwrap_or(u64::MAX);
     let vault_id;
     {
         let mut v = vault.lock().await;
@@ -253,7 +298,9 @@ pub async fn import(
                 }
             } else {
                 if data.len() as u64 > max {
-                    report.skipped.push((norm, format!("larger than the server limit of {max} bytes")));
+                    report
+                        .skipped
+                        .push((norm, format!("larger than the server limit of {max} bytes")));
                     continue;
                 }
                 if data.is_empty() {

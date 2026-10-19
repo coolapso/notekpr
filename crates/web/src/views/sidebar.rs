@@ -25,7 +25,10 @@ fn VaultSwitcher() -> impl IntoView {
     let open = RwSignal::new(false);
     let current = move || {
         let v = ui.route.get().vault().map(str::to_string);
-        ui.vaults.get().into_iter().find(|x| Some(&x.id) == v.as_ref())
+        ui.vaults
+            .get()
+            .into_iter()
+            .find(|x| Some(&x.id) == v.as_ref())
     };
     view! {
         <div class="vault-switch">
@@ -189,7 +192,9 @@ fn Favorites() -> impl IntoView {
         ui.prefs_rev.get();
         ui.tree_rev.get();
         let favs = state::with(|c| c.prefs.favorites.clone());
-        favs.into_iter().filter_map(|(v, n)| state::note_title(&v, &n).map(|t| (v, n, t))).collect::<Vec<_>>()
+        favs.into_iter()
+            .filter_map(|(v, n)| state::note_title(&v, &n).map(|t| (v, n, t)))
+            .collect::<Vec<_>>()
     };
     view! {
         <Show when=move || !items().is_empty()>

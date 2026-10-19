@@ -123,7 +123,13 @@ fn in_text_input(e: &web_sys::KeyboardEvent) -> bool {
         .and_then(|t| t.dyn_into::<web_sys::Element>().ok())
         .is_some_and(|el| {
             let tag = el.tag_name().to_lowercase();
-            tag == "input" || tag == "textarea" || el.closest("[contenteditable=true]").ok().flatten().is_some()
+            tag == "input"
+                || tag == "textarea"
+                || el
+                    .closest("[contenteditable=true]")
+                    .ok()
+                    .flatten()
+                    .is_some()
         })
 }
 
@@ -149,14 +155,24 @@ fn install_shortcuts() {
             (true, false, true, "n") | (true, false, true, "N") => {
                 e.prevent_default();
                 if let Some(v) = route.vault() {
-                    let folder = route.note().and_then(|(v, n)| state::entry(v, n)).map(|e| coolpsonotes_core::paths::parent(&e.path).to_string()).unwrap_or_default();
+                    let folder = route
+                        .note()
+                        .and_then(|(v, n)| state::entry(v, n))
+                        .map(|e| coolpsonotes_core::paths::parent(&e.path).to_string())
+                        .unwrap_or_default();
                     crate::actions::new_note(v, &folder);
                 }
             }
             (true, false, false, "e") => {
                 if route.note().is_some() {
                     e.prevent_default();
-                    ui.mode.update(|m| *m = if *m == ViewMode::Reading { ViewMode::Live } else { ViewMode::Reading });
+                    ui.mode.update(|m| {
+                        *m = if *m == ViewMode::Reading {
+                            ViewMode::Live
+                        } else {
+                            ViewMode::Reading
+                        }
+                    });
                 }
             }
             (true, false, false, "\\") => {
@@ -183,7 +199,8 @@ fn install_shortcuts() {
             _ => {}
         }
     }) as Box<dyn FnMut(web_sys::KeyboardEvent)>);
-    let _ = util::document().add_event_listener_with_callback("keydown", cb.as_ref().unchecked_ref());
+    let _ =
+        util::document().add_event_listener_with_callback("keydown", cb.as_ref().unchecked_ref());
     cb.forget();
 }
 

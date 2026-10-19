@@ -12,7 +12,9 @@ use coolpsonotes_core::b64;
 use coolpsonotes_core::doc::{self, Entry, EntryKind, NoteDoc};
 use coolpsonotes_core::engine::{Applied, VaultMeta, VaultReplica};
 use coolpsonotes_core::keys::{VaultKey, VaultKeyring};
-use coolpsonotes_core::protocol::{ChangesResponse, INDEX_OBJECT_ID, PushResult, Role, Snapshot, Update};
+use coolpsonotes_core::protocol::{
+    ChangesResponse, INDEX_OBJECT_ID, PushResult, Role, Snapshot, Update,
+};
 use coolpsonotes_core::{markdown, now_ms, paths, random_id, search};
 
 use crate::store::{StoredState, VaultStore};
@@ -93,7 +95,9 @@ impl Vault {
 
     /// Load the local replica, re-applying unacknowledged updates.
     pub fn load(store: VaultStore) -> Result<Option<Vault>> {
-        let Some(s) = store.load_state()? else { return Ok(None) };
+        let Some(s) = store.load_state()? else {
+            return Ok(None);
+        };
         let mut ring = VaultKeyring::new(&s.vault_id);
         for (epoch, k) in &s.keys {
             let key = b64::decode32(k).ok_or_else(|| anyhow!("corrupt local vault key"))?;
@@ -125,7 +129,10 @@ impl Vault {
             let res = if p.object_id == INDEX_OBJECT_ID {
                 r.index.apply_update(&p.update)
             } else {
-                r.notes.entry(p.object_id.clone()).or_default().apply_update(&p.update)
+                r.notes
+                    .entry(p.object_id.clone())
+                    .or_default()
+                    .apply_update(&p.update)
             };
             if let Err(e) = res {
                 tracing::warn!("a queued local change could not be re-applied: {e}");
@@ -179,7 +186,8 @@ impl Vault {
         }
         for oid in std::mem::take(&mut self.dirty_objects) {
             if oid == INDEX_OBJECT_ID {
-                self.store.save_object(&oid, &self.replica.index.encode_state())?;
+                self.store
+                    .save_object(&oid, &self.replica.index.encode_state())?;
             } else if let Some(n) = self.replica.notes.get(&oid) {
                 self.store.save_object(&oid, &n.encode_state())?;
             } else {
@@ -196,7 +204,14 @@ impl Vault {
             .replica
             .doc_keys
             .iter()
-            .map(|(oid, ring)| (oid.clone(), ring.epochs().filter_map(|e| ring.get(e).map(|k| (e, b64::encode(&k.0)))).collect()))
+            .map(|(oid, ring)| {
+                (
+                    oid.clone(),
+                    ring.epochs()
+                        .filter_map(|e| ring.get(e).map(|k| (e, b64::encode(&k.0))))
+                        .collect(),
+                )
+            })
             .collect();
         self.store.save_state(&StoredState {
             format: 1,
@@ -210,7 +225,12 @@ impl Vault {
             deferred: self.replica.deferred.clone(),
             seq: self.replica.seq,
             max_head_seen: self.replica.max_head_seen,
-            since_snapshot: self.replica.since_snapshot.iter().map(|(k, v)| (k.clone(), *v)).collect(),
+            since_snapshot: self
+                .replica
+                .since_snapshot
+                .iter()
+                .map(|(k, v)| (k.clone(), *v))
+                .collect(),
             purged: self.replica.purged.clone(),
             pending_blobs: self.pending_blobs.clone(),
             read_only: self.read_only.clone(),
@@ -288,7 +308,9 @@ impl Vault {
 
     /// Discard queued updates the server can never accept.
     pub fn drop_pending(&mut self, client_update_ids: &[String]) {
-        self.replica.pending.retain(|p| !client_update_ids.contains(&p.client_update_id));
+        self.replica
+            .pending
+            .retain(|p| !client_update_ids.contains(&p.client_update_id));
         self.dirty_pending = true;
     }
 
@@ -298,7 +320,11 @@ impl Vault {
     }
 
     /// Replace the vault keyring and the document keyrings of shared notes.
-    pub fn set_keys(&mut self, ring: VaultKeyring, doc_keys: std::collections::HashMap<String, VaultKeyring>) {
+    pub fn set_keys(
+        &mut self,
+        ring: VaultKeyring,
+        doc_keys: std::collections::HashMap<String, VaultKeyring>,
+    ) {
         self.replica.keyring = ring;
         self.replica.doc_keys = doc_keys;
         self.dirty_state = true;
@@ -346,8 +372,12 @@ impl Vault {
         let index = self.replica.index.encode_state();
         self.record(INDEX_OBJECT_ID, index)?;
         n += 1;
-        let notes: Vec<(String, Vec<u8>)> =
-            self.replica.notes.iter().map(|(id, d)| (id.clone(), d.encode_state())).collect();
+        let notes: Vec<(String, Vec<u8>)> = self
+            .replica
+            .notes
+            .iter()
+            .map(|(id, d)| (id.clone(), d.encode_state()))
+            .collect();
         for (id, state) in notes {
             self.record(&id, state)?;
             n += 1;
@@ -386,7 +416,10 @@ impl Vault {
     pub fn record_index_batch(&mut self, updates: Vec<Vec<u8>>) -> Result<()> {
         match updates.len() {
             0 => Ok(()),
-            1 => self.record(INDEX_OBJECT_ID, updates.into_iter().next().unwrap_or_default()),
+            1 => self.record(
+                INDEX_OBJECT_ID,
+                updates.into_iter().next().unwrap_or_default(),
+            ),
             _ => {
                 let merged = doc::merge_updates(&updates)?;
                 self.record(INDEX_OBJECT_ID, merged)
@@ -407,7 +440,10 @@ impl Vault {
 
     /// Display path of a live entry.
     pub fn display_path(&self, id: &str) -> Option<String> {
-        self.paths().into_iter().find(|(_, e)| e.id == id).map(|(p, _)| p)
+        self.paths()
+            .into_iter()
+            .find(|(_, e)| e.id == id)
+            .map(|(p, _)| p)
     }
 
     /// Find a live entry by display path, normalised path, path without
@@ -425,7 +461,9 @@ impl Vault {
             }
             let lower = p.to_lowercase();
             let lower_md = format!("{lower}.md");
-            let mut ci = paths.iter().filter(|(k, _)| k.to_lowercase() == lower || k.to_lowercase() == lower_md);
+            let mut ci = paths
+                .iter()
+                .filter(|(k, _)| k.to_lowercase() == lower || k.to_lowercase() == lower_md);
             if let (Some((k, e)), None) = (ci.next(), ci.next()) {
                 return Some((k.clone(), e.clone()));
             }
@@ -442,7 +480,9 @@ impl Vault {
     }
 
     pub fn is_folder(&self, path: &str) -> bool {
-        let Ok(p) = paths::normalize(path) else { return path.trim_matches('/').is_empty() };
+        let Ok(p) = paths::normalize(path) else {
+            return path.trim_matches('/').is_empty();
+        };
         self.replica.index.folders().contains(&p)
     }
 
@@ -452,12 +492,19 @@ impl Vault {
 
     /// Live notes by display path.
     pub fn notes(&self) -> Vec<(String, Entry)> {
-        self.paths().into_iter().filter(|(_, e)| e.kind == EntryKind::Note).collect()
+        self.paths()
+            .into_iter()
+            .filter(|(_, e)| e.kind == EntryKind::Note)
+            .collect()
     }
 
     /// Entries directly inside `folder` ("" = root), or everything below it.
     pub fn list(&self, folder: &str, recursive: bool) -> Result<Vec<Listing>> {
-        let folder = if folder.trim_matches('/').is_empty() { String::new() } else { paths::normalize(folder)? };
+        let folder = if folder.trim_matches('/').is_empty() {
+            String::new()
+        } else {
+            paths::normalize(folder)?
+        };
         if !folder.is_empty() && !self.is_folder(&folder) {
             bail!("no folder '{folder}' in vault '{}'", self.name());
         }
@@ -465,7 +512,11 @@ impl Vault {
         let mut files = Vec::new();
         for f in self.replica.index.folders() {
             if paths::is_within(&f, &folder) && f != folder {
-                let rel = if folder.is_empty() { f.as_str() } else { &f[folder.len() + 1..] };
+                let rel = if folder.is_empty() {
+                    f.as_str()
+                } else {
+                    &f[folder.len() + 1..]
+                };
                 if recursive || !rel.contains('/') {
                     folders.insert(f.clone());
                 }
@@ -475,17 +526,37 @@ impl Vault {
             if e.kind == EntryKind::Folder || !paths::is_within(&p, &folder) {
                 continue;
             }
-            let rel = if folder.is_empty() { p.as_str() } else { &p[folder.len() + 1..] };
+            let rel = if folder.is_empty() {
+                p.as_str()
+            } else {
+                &p[folder.len() + 1..]
+            };
             if recursive || !rel.contains('/') {
-                let kind = if e.kind == EntryKind::Note { ListKind::Note } else { ListKind::Attachment };
-                files.push(Listing { path: p.clone(), kind, entry: Some(e) });
+                let kind = if e.kind == EntryKind::Note {
+                    ListKind::Note
+                } else {
+                    ListKind::Attachment
+                };
+                files.push(Listing {
+                    path: p.clone(),
+                    kind,
+                    entry: Some(e),
+                });
             }
         }
         let mut out: Vec<Listing> = folders
             .into_iter()
             .map(|f| {
-                let entry = self.paths().get(&f).filter(|e| e.kind == EntryKind::Folder).cloned();
-                Listing { path: f, kind: ListKind::Folder, entry }
+                let entry = self
+                    .paths()
+                    .get(&f)
+                    .filter(|e| e.kind == EntryKind::Folder)
+                    .cloned();
+                Listing {
+                    path: f,
+                    kind: ListKind::Folder,
+                    entry,
+                }
             })
             .collect();
         out.extend(files);
@@ -494,7 +565,11 @@ impl Vault {
 
     /// `(id, path)` of all live entries, for link resolution.
     pub fn link_candidates(&self) -> Vec<(String, String)> {
-        self.paths().into_iter().filter(|(_, e)| e.kind != EntryKind::Folder).map(|(p, e)| (e.id, p)).collect()
+        self.paths()
+            .into_iter()
+            .filter(|(_, e)| e.kind != EntryKind::Folder)
+            .map(|(p, e)| (e.id, p))
+            .collect()
     }
 
     /// Notes linking to the entry `target_id`.
@@ -523,15 +598,30 @@ impl Vault {
             .filter_map(|(p, e)| {
                 let text = self.note_text(&e.id);
                 let tags = markdown::analyze(&text).tags;
-                search::score(q, &p, &text, &tags).map(|hit| SearchHit { path: p, entry: e, hit })
+                search::score(q, &p, &text, &tags).map(|hit| SearchHit {
+                    path: p,
+                    entry: e,
+                    hit,
+                })
             })
             .collect();
-        hits.sort_by(|a, b| b.hit.score.total_cmp(&a.hit.score).then(a.path.cmp(&b.path)));
+        hits.sort_by(|a, b| {
+            b.hit
+                .score
+                .total_cmp(&a.hit.score)
+                .then(a.path.cmp(&b.path))
+        });
         hits
     }
 
     pub fn trashed(&self) -> Vec<Entry> {
-        let mut v: Vec<Entry> = self.replica.index.entries().into_iter().filter(|e| e.trashed.is_some()).collect();
+        let mut v: Vec<Entry> = self
+            .replica
+            .index
+            .entries()
+            .into_iter()
+            .filter(|e| e.trashed.is_some())
+            .collect();
         v.sort_by(|a, b| b.trashed.cmp(&a.trashed).then(a.path.cmp(&b.path)));
         v
     }
@@ -547,7 +637,12 @@ impl Vault {
                 bail!("'{p}' exists and is not a note");
             }
             let changed = self.set_note_text(&e.id, text)?;
-            return Ok(WriteResult { id: e.id, path: p, created: false, changed });
+            return Ok(WriteResult {
+                id: e.id,
+                path: p,
+                created: false,
+                changed,
+            });
         }
         self.create_note(path, text)
     }
@@ -566,16 +661,30 @@ impl Vault {
         } else {
             self.dirty_objects.insert(id.clone());
         }
-        let u = self.replica.index.create_with(&id, &p, EntryKind::Note, now_ms(), Some(text.len() as u64), None);
+        let u = self.replica.index.create_with(
+            &id,
+            &p,
+            EntryKind::Note,
+            now_ms(),
+            Some(text.len() as u64),
+            None,
+        );
         self.record_index(u)?;
-        Ok(WriteResult { id, path: p, created: true, changed: true })
+        Ok(WriteResult {
+            id,
+            path: p,
+            created: true,
+            changed: true,
+        })
     }
 
     /// Replace a note's text via a diff. Returns false if nothing changed.
     pub fn set_note_text(&mut self, id: &str, text: &str) -> Result<bool> {
         self.require_writable()?;
         let note = self.replica.notes.entry(id.to_string()).or_default();
-        let Some(u) = note.set_text(text) else { return Ok(false) };
+        let Some(u) = note.set_text(text) else {
+            return Ok(false);
+        };
         self.record(id, u)?;
         self.touch(id, text.len() as u64)?;
         Ok(true)
@@ -604,12 +713,22 @@ impl Vault {
                 let note = self.replica.notes.entry(e.id.clone()).or_default();
                 let len = note.len();
                 let Some(u) = note.splice(len, 0, text) else {
-                    return Ok(WriteResult { id: e.id, path: p, created: false, changed: false });
+                    return Ok(WriteResult {
+                        id: e.id,
+                        path: p,
+                        created: false,
+                        changed: false,
+                    });
                 };
                 let new_len = note.len() as u64;
                 self.record(&e.id, u)?;
                 self.touch(&e.id, new_len)?;
-                Ok(WriteResult { id: e.id, path: p, created: false, changed: true })
+                Ok(WriteResult {
+                    id: e.id,
+                    path: p,
+                    created: false,
+                    changed: true,
+                })
             }
             Some((p, _)) => bail!("'{p}' is not a note"),
             None => self.create_note(path, text),
@@ -626,7 +745,10 @@ impl Vault {
             bail!("'{p}' already exists");
         }
         let id = random_id();
-        let u = self.replica.index.create(&id, &p, EntryKind::Folder, now_ms());
+        let u = self
+            .replica
+            .index
+            .create(&id, &p, EntryKind::Folder, now_ms());
         self.record_index(u)?;
         Ok(id)
     }
@@ -651,9 +773,15 @@ impl Vault {
             self.record_index(u)?;
             return Ok(new);
         }
-        let (old_path, entry) = self.find(from).ok_or_else(|| anyhow!("no document or folder '{from}'"))?;
+        let (old_path, entry) = self
+            .find(from)
+            .ok_or_else(|| anyhow!("no document or folder '{from}'"))?;
         let target = if into_folder {
-            let base = if to.trim_matches('/').is_empty() { String::new() } else { paths::normalize(to)? };
+            let base = if to.trim_matches('/').is_empty() {
+                String::new()
+            } else {
+                paths::normalize(to)?
+            };
             paths::join(&base, paths::file_name(&old_path))
         } else {
             to.to_string()
@@ -681,7 +809,12 @@ impl Vault {
 
     /// Rewrite `[[links]]` that resolved to `target_id` (using the paths from
     /// before the rename) so they keep pointing at it.
-    fn rewrite_links_to(&mut self, target_id: &str, before: &[(String, String)], new_path: &str) -> Result<usize> {
+    fn rewrite_links_to(
+        &mut self,
+        target_id: &str,
+        before: &[(String, String)],
+        new_path: &str,
+    ) -> Result<usize> {
         let title = paths::title(new_path).to_string();
         let ambiguous = self
             .notes()
@@ -689,13 +822,21 @@ impl Vault {
             .filter(|(p, e)| e.id != target_id && paths::title(p).eq_ignore_ascii_case(&title))
             .count()
             > 0;
-        let new_target = if ambiguous { new_path.trim_end_matches(".md").to_string() } else { title };
+        let new_target = if ambiguous {
+            new_path.trim_end_matches(".md").to_string()
+        } else {
+            title
+        };
         let mut changed = 0;
         for (p, e) in self.notes() {
             if e.id == target_id {
                 continue;
             }
-            let from_path = before.iter().find(|(id, _)| *id == e.id).map(|(_, p)| p.clone()).unwrap_or(p);
+            let from_path = before
+                .iter()
+                .find(|(id, _)| *id == e.id)
+                .map(|(_, p)| p.clone())
+                .unwrap_or(p);
             let text = self.note_text(&e.id);
             let rewritten = markdown::rewrite_links(&text, &new_target, |l| {
                 markdown::resolve(l, &from_path, before) == Some(target_id)
@@ -751,10 +892,17 @@ impl Vault {
             .find(|e| e.id == reference)
             .or_else(|| {
                 let p = paths::normalize(reference).ok()?;
-                trashed.iter().find(|e| e.path == p || e.path == format!("{p}.md"))
+                trashed
+                    .iter()
+                    .find(|e| e.path == p || e.path == format!("{p}.md"))
             })
             .cloned()
-            .ok_or_else(|| anyhow!("nothing named '{reference}' in the trash of vault '{}'", self.name()))?;
+            .ok_or_else(|| {
+                anyhow!(
+                    "nothing named '{reference}' in the trash of vault '{}'",
+                    self.name()
+                )
+            })?;
         let u = self.replica.index.restore(&e.id);
         self.record_index(u)?;
         Ok(e)
@@ -769,7 +917,12 @@ impl Vault {
     /// Encrypt an attachment, cache the ciphertext for upload and create its
     /// index entry. An existing attachment at the same path is moved to the
     /// trash (attachment blobs are immutable, so a new version is a new entry).
-    pub fn add_attachment(&mut self, path: &str, data: &[u8], mime: Option<&str>) -> Result<WriteResult> {
+    pub fn add_attachment(
+        &mut self,
+        path: &str,
+        data: &[u8],
+        mime: Option<&str>,
+    ) -> Result<WriteResult> {
         self.require_writable()?;
         let p = paths::normalize(path)?;
         let mut created = true;
@@ -778,7 +931,12 @@ impl Vault {
                 bail!("'{existing}' exists and is not an attachment");
             }
             if self.attachment_hash(&e.id).as_deref() == Some(content_hash(data).as_str()) {
-                return Ok(WriteResult { id: e.id, path: existing, created: false, changed: false });
+                return Ok(WriteResult {
+                    id: e.id,
+                    path: existing,
+                    created: false,
+                    changed: false,
+                });
             }
             let u = self.replica.index.trash(&e.id, now_ms());
             self.record_index(u)?;
@@ -789,8 +947,11 @@ impl Vault {
         self.store.save_blob(&id, &ct)?;
         self.pending_blobs.insert(id.clone());
         self.dirty_state = true;
-        let mime =
-            mime.map(str::to_string).or_else(|| mime_guess::from_path(&p).first().map(|m| m.essence_str().to_string()));
+        let mime = mime.map(str::to_string).or_else(|| {
+            mime_guess::from_path(&p)
+                .first()
+                .map(|m| m.essence_str().to_string())
+        });
         let u = self.replica.index.create_with(
             &id,
             &p,
@@ -800,7 +961,12 @@ impl Vault {
             mime.as_deref(),
         );
         self.record_index(u)?;
-        Ok(WriteResult { id, path: p, created, changed: true })
+        Ok(WriteResult {
+            id,
+            path: p,
+            created,
+            changed: true,
+        })
     }
 
     /// Decrypt a cached attachment (None if it is not cached locally).
@@ -812,7 +978,10 @@ impl Vault {
     }
 
     fn attachment_hash(&self, id: &str) -> Option<String> {
-        self.cached_attachment(id).ok().flatten().map(|d| content_hash(&d))
+        self.cached_attachment(id)
+            .ok()
+            .flatten()
+            .map(|d| content_hash(&d))
     }
 }
 
@@ -829,10 +998,16 @@ mod tests {
 
     fn vault(dir: &std::path::Path) -> Vault {
         let account = AccountSecret::generate();
-        let (req, ring) = coolpsonotes_core::engine::new_vault(&account, "u1", &VaultMeta::named("T")).unwrap();
+        let (req, ring) =
+            coolpsonotes_core::engine::new_vault(&account, "u1", &VaultMeta::named("T")).unwrap();
         let key = std::sync::Arc::new(crate::secrets::LocalKey::load_or_create(dir).unwrap());
         let store = VaultStore::new(dir.join("vaults"), key, &req.id).unwrap();
-        Vault::new(store, VaultReplica::new(&req.id, Role::Owner, ring, VaultMeta::named("T")), "u1", false)
+        Vault::new(
+            store,
+            VaultReplica::new(&req.id, Role::Owner, ring, VaultMeta::named("T")),
+            "u1",
+            false,
+        )
     }
 
     #[test]
@@ -847,11 +1022,24 @@ mod tests {
         assert!(v.check_rollback(12));
         assert_eq!(v.replica.seq, 12);
         assert_eq!(v.replica.max_head_seen, 12);
-        let objects: BTreeSet<&str> = v.replica.pending.iter().map(|p| p.object_id.as_str()).collect();
+        let objects: BTreeSet<&str> = v
+            .replica
+            .pending
+            .iter()
+            .map(|p| p.object_id.as_str())
+            .collect();
         assert!(objects.contains(INDEX_OBJECT_ID) && objects.contains(w.id.as_str()));
         // The re-queued state reproduces the document on a fresh replica.
-        let p = v.replica.pending.iter().find(|p| p.object_id == w.id).unwrap();
-        assert_eq!(NoteDoc::from_updates([p.update.as_slice()]).unwrap().text(), "hello");
+        let p = v
+            .replica
+            .pending
+            .iter()
+            .find(|p| p.object_id == w.id)
+            .unwrap();
+        assert_eq!(
+            NoteDoc::from_updates([p.update.as_slice()]).unwrap().text(),
+            "hello"
+        );
     }
 
     #[test]
@@ -870,10 +1058,17 @@ mod tests {
         assert_eq!(back.note_text(&e.id), "one two");
         assert_eq!(back.replica.pending.len(), 4);
         // Nothing on disk is plaintext.
-        for f in walkdir::WalkDir::new(d.path()).into_iter().filter_map(|e| e.ok()).filter(|e| e.file_type().is_file())
+        for f in walkdir::WalkDir::new(d.path())
+            .into_iter()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_type().is_file())
         {
             let raw = std::fs::read(f.path()).unwrap();
-            assert!(!raw.windows(7).any(|w| w == b"one two"), "{}", f.path().display());
+            assert!(
+                !raw.windows(7).any(|w| w == b"one two"),
+                "{}",
+                f.path().display()
+            );
         }
     }
 }

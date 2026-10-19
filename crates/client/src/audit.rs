@@ -28,7 +28,10 @@ struct Line<'a> {
 
 impl AuditLog {
     pub fn open(data_dir: &Path) -> AuditLog {
-        AuditLog { path: data_dir.join("audit.jsonl"), lock: Mutex::new(()) }
+        AuditLog {
+            path: data_dir.join("audit.jsonl"),
+            lock: Mutex::new(()),
+        }
     }
 
     pub fn path(&self) -> &Path {
@@ -38,8 +41,17 @@ impl AuditLog {
     /// Record one write. Failures are reported but never block the write
     /// itself (it already happened locally).
     pub fn record(&self, via: &str, op: &str, vault: &str, document: Option<&str>, bytes: usize) {
-        let line = Line { at: coolpsonotes_core::now_ms(), via, op, vault, document, bytes };
-        let Ok(mut json) = serde_json::to_vec(&line) else { return };
+        let line = Line {
+            at: coolpsonotes_core::now_ms(),
+            via,
+            op,
+            vault,
+            document,
+            bytes,
+        };
+        let Ok(mut json) = serde_json::to_vec(&line) else {
+            return;
+        };
         json.push(b'\n');
         let _g = self.lock.lock().unwrap_or_else(|e| e.into_inner());
         let mut o = std::fs::OpenOptions::new();

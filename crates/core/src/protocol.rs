@@ -149,9 +149,20 @@ impl PublicAccountKey {
     /// Check sizes and the self-signature. Clients must call this before
     /// encrypting anything to a key fetched from the server.
     pub fn verify(&self) -> Result<AccountPublic, CryptoError> {
-        let enc_public: Key32 = self.enc_public.as_slice().try_into().map_err(|_| CryptoError::InvalidKey)?;
-        let sign_public: Key32 = self.sign_public.as_slice().try_into().map_err(|_| CryptoError::InvalidKey)?;
-        let public = AccountPublic { enc_public, sign_public };
+        let enc_public: Key32 = self
+            .enc_public
+            .as_slice()
+            .try_into()
+            .map_err(|_| CryptoError::InvalidKey)?;
+        let sign_public: Key32 = self
+            .sign_public
+            .as_slice()
+            .try_into()
+            .map_err(|_| CryptoError::InvalidKey)?;
+        let public = AccountPublic {
+            enc_public,
+            sign_public,
+        };
         public.verify(&self.user_id, self.key_version, &self.signature)?;
         Ok(public)
     }
@@ -771,7 +782,9 @@ pub enum UserEventKind {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ClientMessage {
     /// Must be the first message; browsers cannot set headers on WebSockets.
-    Auth { token: String },
+    Auth {
+        token: String,
+    },
     /// Start receiving a vault's updates. With `since`, the server first replays
     /// everything after that sequence number (including snapshots for compacted
     /// ranges) and then sends `synced`. Without it, only live updates are sent.
@@ -788,7 +801,10 @@ pub enum ClientMessage {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         object_id: Option<String>,
     },
-    Push { vault_id: String, updates: Vec<PushUpdate> },
+    Push {
+        vault_id: String,
+        updates: Vec<PushUpdate>,
+    },
     /// Ephemeral, encrypted presence data relayed to other subscribers.
     Awareness {
         vault_id: String,
@@ -796,20 +812,44 @@ pub enum ClientMessage {
         #[serde(with = "b64")]
         payload: Vec<u8>,
     },
-    Ping { nonce: u64 },
+    Ping {
+        nonce: u64,
+    },
 }
 
 /// WebSocket messages sent by the server.
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ServerMessage {
-    Ready { user_id: String, session_id: String, conn_id: u64 },
-    Update { vault_id: String, update: Update },
-    Snapshot { vault_id: String, snapshot: Snapshot },
-    SnapshotCreated { vault_id: String, object_id: String, snapshot_id: String, covers_seq: i64 },
-    Purged { vault_id: String, object_id: String, seq: i64 },
+    Ready {
+        user_id: String,
+        session_id: String,
+        conn_id: u64,
+    },
+    Update {
+        vault_id: String,
+        update: Update,
+    },
+    Snapshot {
+        vault_id: String,
+        snapshot: Snapshot,
+    },
+    SnapshotCreated {
+        vault_id: String,
+        object_id: String,
+        snapshot_id: String,
+        covers_seq: i64,
+    },
+    Purged {
+        vault_id: String,
+        object_id: String,
+        seq: i64,
+    },
     /// One page of catch-up after `subscribe` with `since`.
-    Changes { vault_id: String, changes: ChangesResponse },
+    Changes {
+        vault_id: String,
+        changes: ChangesResponse,
+    },
     Synced {
         vault_id: String,
         head_seq: i64,
@@ -817,7 +857,10 @@ pub enum ServerMessage {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         object_id: Option<String>,
     },
-    Ack { vault_id: String, results: Vec<PushResult> },
+    Ack {
+        vault_id: String,
+        results: Vec<PushResult>,
+    },
     Awareness {
         vault_id: String,
         object_id: String,
@@ -826,11 +869,26 @@ pub enum ServerMessage {
         #[serde(with = "b64")]
         payload: Vec<u8>,
     },
-    VaultEvent { vault_id: String, event: VaultEventKind },
-    ObjectEvent { vault_id: String, object_id: String, event: ObjectEventKind },
-    UserEvent { event: UserEventKind },
-    Error { code: String, message: String, vault_id: Option<String> },
-    Pong { nonce: u64 },
+    VaultEvent {
+        vault_id: String,
+        event: VaultEventKind,
+    },
+    ObjectEvent {
+        vault_id: String,
+        object_id: String,
+        event: ObjectEventKind,
+    },
+    UserEvent {
+        event: UserEventKind,
+    },
+    Error {
+        code: String,
+        message: String,
+        vault_id: Option<String>,
+    },
+    Pong {
+        nonce: u64,
+    },
 }
 
 #[cfg(test)]
@@ -841,7 +899,11 @@ mod tests {
     fn ws_messages_are_tagged() {
         let m = ClientMessage::Push {
             vault_id: "v".into(),
-            updates: vec![PushUpdate { object_id: "o".into(), client_update_id: "c".into(), payload: vec![1, 2, 3] }],
+            updates: vec![PushUpdate {
+                object_id: "o".into(),
+                client_update_id: "c".into(),
+                payload: vec![1, 2, 3],
+            }],
         };
         let s = serde_json::to_string(&m).unwrap();
         assert!(s.contains(r#""type":"push""#));

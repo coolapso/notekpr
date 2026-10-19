@@ -15,13 +15,18 @@ pub struct Query {
 
 impl Query {
     pub fn is_empty(&self) -> bool {
-        self.terms.is_empty() && self.tags.is_empty() && self.folder.is_none() && self.title.is_none()
+        self.terms.is_empty()
+            && self.tags.is_empty()
+            && self.folder.is_none()
+            && self.title.is_none()
     }
 }
 
 fn fold(s: &str) -> Vec<char> {
     // One-to-one char folding keeps char indices aligned with the original.
-    s.chars().map(|c| c.to_lowercase().next().unwrap_or(c)).collect()
+    s.chars()
+        .map(|c| c.to_lowercase().next().unwrap_or(c))
+        .collect()
 }
 
 fn fold_str(s: &str) -> String {
@@ -57,9 +62,15 @@ pub fn parse_query(q: &str) -> Query {
         tokens.push(cur);
     }
     for t in tokens {
-        if let Some(v) = t.strip_prefix("tag:").or_else(|| t.strip_prefix('#').filter(|v| !v.is_empty())) {
+        if let Some(v) = t
+            .strip_prefix("tag:")
+            .or_else(|| t.strip_prefix('#').filter(|v| !v.is_empty()))
+        {
             out.tags.push(fold_str(v.trim_start_matches('#')));
-        } else if let Some(v) = t.strip_prefix("folder:").or_else(|| t.strip_prefix("path:")) {
+        } else if let Some(v) = t
+            .strip_prefix("folder:")
+            .or_else(|| t.strip_prefix("path:"))
+        {
             out.folder = Some(fold_str(v.trim_matches('/')));
         } else if let Some(v) = t.strip_prefix("vault:") {
             out.vault = Some(fold_str(v));
@@ -107,9 +118,10 @@ fn count(hay: &[char], needle: &[char], cap: usize) -> usize {
 pub fn score(q: &Query, path: &str, text: &str, tags: &[String]) -> Option<Hit> {
     let path_f = fold_str(path);
     if let Some(folder) = &q.folder
-        && !(path_f.starts_with(&format!("{folder}/")) || path_f.starts_with(folder.as_str())) {
-            return None;
-        }
+        && !(path_f.starts_with(&format!("{folder}/")) || path_f.starts_with(folder.as_str()))
+    {
+        return None;
+    }
     let title = crate::paths::title(path);
     let title_f = fold(title);
     if let Some(t) = &q.title {
@@ -117,7 +129,10 @@ pub fn score(q: &Query, path: &str, text: &str, tags: &[String]) -> Option<Hit> 
     }
     let note_tags: Vec<String> = tags.iter().map(|t| fold_str(t)).collect();
     for want in &q.tags {
-        if !note_tags.iter().any(|t| t == want || t.starts_with(&format!("{want}/"))) {
+        if !note_tags
+            .iter()
+            .any(|t| t == want || t.starts_with(&format!("{want}/")))
+        {
             return None;
         }
     }
@@ -138,9 +153,10 @@ pub fn score(q: &Query, path: &str, text: &str, tags: &[String]) -> Option<Hit> 
             score += 5.0;
         }
         if first_match.is_none()
-            && let Some(p) = find(&text_f, &tc, 0) {
-                first_match = Some((p, tc.len()));
-            }
+            && let Some(p) = find(&text_f, &tc, 0)
+        {
+            first_match = Some((p, tc.len()));
+        }
     }
     let orig: Vec<char> = text.chars().collect();
     let (snippet, highlights) = match first_match {
@@ -163,15 +179,30 @@ pub fn score(q: &Query, path: &str, text: &str, tags: &[String]) -> Option<Hit> 
             let prefix = if start > 0 { "…" } else { "" };
             let shift = prefix.chars().count();
             let suffix = if end < orig.len() { "…" } else { "" };
-            (format!("{prefix}{s}{suffix}"), hl.into_iter().map(|(a, b)| (a + shift, b + shift)).collect())
+            (
+                format!("{prefix}{s}{suffix}"),
+                hl.into_iter()
+                    .map(|(a, b)| (a + shift, b + shift))
+                    .collect(),
+            )
         }
         None => {
-            let body = crate::markdown::frontmatter_len(text).map(|n| &text[n..]).unwrap_or(text);
-            let s: String = body.chars().take(140).collect::<String>().replace('\n', " ");
+            let body = crate::markdown::frontmatter_len(text)
+                .map(|n| &text[n..])
+                .unwrap_or(text);
+            let s: String = body
+                .chars()
+                .take(140)
+                .collect::<String>()
+                .replace('\n', " ");
             (s, vec![])
         }
     };
-    Some(Hit { score, snippet, highlights })
+    Some(Hit {
+        score,
+        snippet,
+        highlights,
+    })
 }
 
 #[cfg(test)]

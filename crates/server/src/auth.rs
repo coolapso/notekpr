@@ -34,16 +34,28 @@ impl Principal {
 
     /// Account, device, sharing and agent management is reserved for people.
     pub fn require_human(&self) -> AppResult<()> {
-        if self.is_human() { Ok(()) } else { Err(forbidden("not available to agent identities")) }
+        if self.is_human() {
+            Ok(())
+        } else {
+            Err(forbidden("not available to agent identities"))
+        }
     }
 
     pub fn require_admin(&self) -> AppResult<()> {
-        if self.is_admin && self.is_human() { Ok(()) } else { Err(forbidden("administrator access required")) }
+        if self.is_admin && self.is_human() {
+            Ok(())
+        } else {
+            Err(forbidden("administrator access required"))
+        }
     }
 }
 
 pub fn bearer(parts: &Parts) -> Option<&str> {
-    let v = parts.headers.get(axum::http::header::AUTHORIZATION)?.to_str().ok()?;
+    let v = parts
+        .headers
+        .get(axum::http::header::AUTHORIZATION)?
+        .to_str()
+        .ok()?;
     let (scheme, token) = v.split_once(' ')?;
     scheme.eq_ignore_ascii_case("bearer").then(|| token.trim())
 }
@@ -51,7 +63,10 @@ pub fn bearer(parts: &Parts) -> Option<&str> {
 impl FromRequestParts<AppState> for Principal {
     type Rejection = AppError;
 
-    async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, Self::Rejection> {
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
         let token = bearer(parts).ok_or(AppError::Unauthorized)?;
         authenticate(state, token).await
     }
@@ -136,7 +151,11 @@ pub async fn create_session(
     .bind(expires_at)
     .execute(db)
     .await?;
-    Ok(NewSession { token, id, expires_at })
+    Ok(NewSession {
+        token,
+        id,
+        expires_at,
+    })
 }
 
 /// Find or create the user for an authenticated OIDC identity (`iss` + `sub`).
@@ -151,11 +170,12 @@ pub async fn provision_user(
     let _w = state.write_lock.lock().await;
     let now = db::now();
     let configured_admin = state.config.is_admin_identity(issuer, subject);
-    let existing: Option<String> = sqlx::query_scalar("SELECT user_id FROM identities WHERE issuer = ? AND subject = ?")
-        .bind(issuer)
-        .bind(subject)
-        .fetch_optional(&state.db)
-        .await?;
+    let existing: Option<String> =
+        sqlx::query_scalar("SELECT user_id FROM identities WHERE issuer = ? AND subject = ?")
+            .bind(issuer)
+            .bind(subject)
+            .fetch_optional(&state.db)
+            .await?;
     let user_id = if let Some(id) = existing {
         let disabled: bool = sqlx::query_scalar("SELECT disabled FROM users WHERE id = ?")
             .bind(&id)
@@ -195,27 +215,40 @@ pub async fn provision_user(
         .bind(now)
         .execute(&mut *tx)
         .await?;
-        sqlx::query("INSERT INTO identities (issuer, subject, user_id, created_at) VALUES (?, ?, ?, ?)")
-            .bind(issuer)
-            .bind(subject)
-            .bind(&id)
-            .bind(now)
-            .execute(&mut *tx)
-            .await?;
+        sqlx::query(
+            "INSERT INTO identities (issuer, subject, user_id, created_at) VALUES (?, ?, ?, ?)",
+        )
+        .bind(issuer)
+        .bind(subject)
+        .bind(&id)
+        .bind(now)
+        .execute(&mut *tx)
+        .await?;
         tx.commit().await?;
         tracing::info!(user_id = %id, is_admin, "provisioned new user");
         id
     };
-    db::audit(&state.db, Some(&user_id), Some(&user_id), None, "login", None, serde_json::json!({})).await;
+    db::audit(
+        &state.db,
+        Some(&user_id),
+        Some(&user_id),
+        None,
+        "login",
+        None,
+        serde_json::json!({}),
+    )
+    .await;
     Ok(user_id)
 }
 
 pub async fn user_info(db: &Db, user_id: &str) -> AppResult<UserInfo> {
-    let row = sqlx::query("SELECT id, display_name, email, kind, is_admin, created_at FROM users WHERE id = ?")
-        .bind(user_id)
-        .fetch_optional(db)
-        .await?
-        .ok_or(AppError::NotFound)?;
+    let row = sqlx::query(
+        "SELECT id, display_name, email, kind, is_admin, created_at FROM users WHERE id = ?",
+    )
+    .bind(user_id)
+    .fetch_optional(db)
+    .await?
+    .ok_or(AppError::NotFound)?;
     Ok(UserInfo {
         id: row.get("id"),
         display_name: row.get("display_name"),

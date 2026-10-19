@@ -27,7 +27,9 @@ pub struct Dirs {
 }
 
 fn env_path(name: &str) -> Option<PathBuf> {
-    std::env::var_os(name).filter(|v| !v.is_empty()).map(PathBuf::from)
+    std::env::var_os(name)
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
 }
 
 fn home() -> Result<PathBuf> {
@@ -57,7 +59,10 @@ impl Dirs {
     }
 
     pub fn under(root: &Path) -> Dirs {
-        Dirs { config: root.join("config"), data: root.join("data") }
+        Dirs {
+            config: root.join("config"),
+            data: root.join("data"),
+        }
     }
 
     pub fn profiles_dir(&self) -> PathBuf {
@@ -74,10 +79,17 @@ impl Dirs {
 
     /// Names of all existing profiles.
     pub fn profiles(&self) -> Vec<String> {
-        let Ok(rd) = std::fs::read_dir(self.profiles_dir()) else { return vec![] };
+        let Ok(rd) = std::fs::read_dir(self.profiles_dir()) else {
+            return vec![];
+        };
         let mut v: Vec<String> = rd
             .filter_map(|e| e.ok())
-            .filter_map(|e| e.file_name().to_str().and_then(|n| n.strip_suffix(".json")).map(str::to_string))
+            .filter_map(|e| {
+                e.file_name()
+                    .to_str()
+                    .and_then(|n| n.strip_suffix(".json"))
+                    .map(str::to_string)
+            })
             .filter(|n| valid_profile_name(n))
             .collect();
         v.sort();
@@ -86,7 +98,11 @@ impl Dirs {
 }
 
 pub fn valid_profile_name(name: &str) -> bool {
-    !name.is_empty() && name.len() <= 64 && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+    !name.is_empty()
+        && name.len() <= 64
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -178,7 +194,10 @@ impl ProfileStore {
         if !valid_profile_name(name) {
             bail!("invalid profile name '{name}' (use letters, digits, '-' and '_')");
         }
-        Ok(ProfileStore { dirs: dirs.clone(), name: name.to_string() })
+        Ok(ProfileStore {
+            dirs: dirs.clone(),
+            name: name.to_string(),
+        })
     }
 
     pub fn path(&self) -> PathBuf {
@@ -190,8 +209,11 @@ impl ProfileStore {
     }
 
     pub fn load(&self) -> Result<Option<Profile>> {
-        let Some(bytes) = fsutil::read_optional(&self.path())? else { return Ok(None) };
-        let p = serde_json::from_slice(&bytes).with_context(|| format!("reading profile '{}'", self.name))?;
+        let Some(bytes) = fsutil::read_optional(&self.path())? else {
+            return Ok(None);
+        };
+        let p = serde_json::from_slice(&bytes)
+            .with_context(|| format!("reading profile '{}'", self.name))?;
         Ok(Some(p))
     }
 
@@ -209,7 +231,8 @@ impl ProfileStore {
     pub fn save(&self, p: &Profile) -> Result<()> {
         fsutil::create_private_dir(&self.dirs.profiles_dir())?;
         let json = serde_json::to_vec_pretty(p)?;
-        fsutil::write_atomic(&self.path(), &json, true).with_context(|| format!("saving profile '{}'", self.name))
+        fsutil::write_atomic(&self.path(), &json, true)
+            .with_context(|| format!("saving profile '{}'", self.name))
     }
 
     /// Read-modify-write, re-reading the file first so concurrent processes
@@ -235,9 +258,16 @@ impl ProfileStore {
 /// `insecure_http` is set.
 pub fn normalize_server_url(input: &str, insecure_http: bool) -> Result<String> {
     let input = input.trim();
-    let with_scheme = if input.contains("://") { input.to_string() } else { format!("https://{input}") };
-    let url = url::Url::parse(&with_scheme).with_context(|| format!("invalid server URL '{input}'"))?;
-    let host = url.host_str().ok_or_else(|| anyhow!("server URL '{input}' has no host"))?;
+    let with_scheme = if input.contains("://") {
+        input.to_string()
+    } else {
+        format!("https://{input}")
+    };
+    let url =
+        url::Url::parse(&with_scheme).with_context(|| format!("invalid server URL '{input}'"))?;
+    let host = url
+        .host_str()
+        .ok_or_else(|| anyhow!("server URL '{input}' has no host"))?;
     match url.scheme() {
         "https" => {}
         "http" => {
@@ -269,7 +299,10 @@ pub fn normalize_server_url(input: &str, insecure_http: bool) -> Result<String> 
 
 pub fn is_loopback_host(host: &str) -> bool {
     let h = host.trim_start_matches('[').trim_end_matches(']');
-    h.eq_ignore_ascii_case("localhost") || h.parse::<std::net::IpAddr>().map(|ip| ip.is_loopback()).unwrap_or(false)
+    h.eq_ignore_ascii_case("localhost")
+        || h.parse::<std::net::IpAddr>()
+            .map(|ip| ip.is_loopback())
+            .unwrap_or(false)
 }
 
 #[cfg(test)]
@@ -278,12 +311,30 @@ mod tests {
 
     #[test]
     fn server_urls() {
-        assert_eq!(normalize_server_url("notes.example.com", false).unwrap(), "https://notes.example.com");
-        assert_eq!(normalize_server_url("https://n.example.com/api/v1/", false).unwrap(), "https://n.example.com");
-        assert_eq!(normalize_server_url("https://n.example.com/sub/", false).unwrap(), "https://n.example.com/sub");
-        assert_eq!(normalize_server_url("http://localhost:8080", false).unwrap(), "http://localhost:8080");
-        assert_eq!(normalize_server_url("http://127.0.0.1:1234", false).unwrap(), "http://127.0.0.1:1234");
-        assert_eq!(normalize_server_url("http://[::1]:9", false).unwrap(), "http://[::1]:9");
+        assert_eq!(
+            normalize_server_url("notes.example.com", false).unwrap(),
+            "https://notes.example.com"
+        );
+        assert_eq!(
+            normalize_server_url("https://n.example.com/api/v1/", false).unwrap(),
+            "https://n.example.com"
+        );
+        assert_eq!(
+            normalize_server_url("https://n.example.com/sub/", false).unwrap(),
+            "https://n.example.com/sub"
+        );
+        assert_eq!(
+            normalize_server_url("http://localhost:8080", false).unwrap(),
+            "http://localhost:8080"
+        );
+        assert_eq!(
+            normalize_server_url("http://127.0.0.1:1234", false).unwrap(),
+            "http://127.0.0.1:1234"
+        );
+        assert_eq!(
+            normalize_server_url("http://[::1]:9", false).unwrap(),
+            "http://[::1]:9"
+        );
         assert!(normalize_server_url("http://notes.example.com", false).is_err());
         assert!(normalize_server_url("http://notes.example.com", true).is_ok());
         assert!(normalize_server_url("ftp://x", true).is_err());
@@ -295,8 +346,10 @@ mod tests {
         let dirs = Dirs::under(d.path());
         let ps = ProfileStore::new(&dirs, "alice").unwrap();
         assert!(ps.load().unwrap().is_none());
-        ps.save(&Profile::new("https://x", PrincipalKind::Human, false)).unwrap();
-        ps.update(|p| p.pins.insert("u".into(), "F".into())).unwrap();
+        ps.save(&Profile::new("https://x", PrincipalKind::Human, false))
+            .unwrap();
+        ps.update(|p| p.pins.insert("u".into(), "F".into()))
+            .unwrap();
         assert_eq!(ps.require().unwrap().pins["u"], "F");
         assert_eq!(dirs.profiles(), vec!["alice".to_string()]);
         assert!(!crate::fsutil::is_shared_readable(&ps.path()));

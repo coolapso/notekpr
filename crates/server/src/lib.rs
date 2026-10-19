@@ -27,7 +27,10 @@ use crate::config::Config;
 use crate::state::AppState;
 
 /// Open the database, apply migrations and build the application.
-pub async fn build(config: Config, metrics: Option<PrometheusHandle>) -> anyhow::Result<(axum::Router, AppState)> {
+pub async fn build(
+    config: Config,
+    metrics: Option<PrometheusHandle>,
+) -> anyhow::Result<(axum::Router, AppState)> {
     let path = config.db_path();
     let db = db::connect(&path).await?;
     db::migrate(&db, &path).await?;
@@ -51,7 +54,10 @@ fn spawn_maintenance(state: AppState) {
             ] {
                 let _ = sqlx::query(q).bind(now).execute(&state.db).await;
             }
-            let _ = sqlx::query("DELETE FROM device_grants WHERE expires_at < ?").bind(now - 86_400_000).execute(&state.db).await;
+            let _ = sqlx::query("DELETE FROM device_grants WHERE expires_at < ?")
+                .bind(now - 86_400_000)
+                .execute(&state.db)
+                .await;
             let _ = sqlx::query("DELETE FROM sessions WHERE expires_at < ? OR revoked_at < ?")
                 .bind(now - month)
                 .bind(now - month)

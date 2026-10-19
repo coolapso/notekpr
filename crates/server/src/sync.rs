@@ -7,8 +7,8 @@
 use std::collections::HashMap;
 
 use coolpsonotes_core::protocol::{
-    ChangesResponse, INDEX_OBJECT_ID, ObjectState, PurgedObject, PushResult, PushUpdate, Snapshot, SnapshotInfo,
-    Update,
+    ChangesResponse, INDEX_OBJECT_ID, ObjectState, PurgedObject, PushResult, PushUpdate, Snapshot,
+    SnapshotInfo, Update,
 };
 use sqlx::Row;
 
@@ -135,20 +135,38 @@ pub async fn changes_since(
         .iter()
         .map(|r| PurgedObject { object_id: r.get("id"), seq: r.get("purged_seq") })
         .collect();
-    Ok(ChangesResponse { updates, snapshots, purged, head_seq: head, has_more, next_since })
+    Ok(ChangesResponse {
+        updates,
+        snapshots,
+        purged,
+        head_seq: head,
+        has_more,
+        next_since,
+    })
 }
 
 /// Current state of one object: latest snapshot plus the updates after it.
-pub async fn object_state(db: &Db, vault_id: &str, object_id: &str, doc_only: bool) -> AppResult<ObjectState> {
+pub async fn object_state(
+    db: &Db,
+    vault_id: &str,
+    object_id: &str,
+    doc_only: bool,
+) -> AppResult<ObjectState> {
     let head = head_seq(db, vault_id).await?;
-    let purged: Option<Option<i64>> = sqlx::query_scalar("SELECT purged_at FROM objects WHERE vault_id = ? AND id = ?")
-        .bind(vault_id)
-        .bind(object_id)
-        .fetch_optional(db)
-        .await?;
+    let purged: Option<Option<i64>> =
+        sqlx::query_scalar("SELECT purged_at FROM objects WHERE vault_id = ? AND id = ?")
+            .bind(vault_id)
+            .bind(object_id)
+            .fetch_optional(db)
+            .await?;
     match purged {
         None => {
-            return Ok(ObjectState { object_id: object_id.to_string(), snapshot: None, updates: vec![], head_seq: head });
+            return Ok(ObjectState {
+                object_id: object_id.to_string(),
+                snapshot: None,
+                updates: vec![],
+                head_seq: head,
+            });
         }
         Some(Some(_)) => return Err(AppError::NotFound),
         Some(None) => {}
@@ -177,11 +195,20 @@ pub async fn object_state(db: &Db, vault_id: &str, object_id: &str, doc_only: bo
     .iter()
     .map(row_update)
     .collect();
-    Ok(ObjectState { object_id: object_id.to_string(), snapshot, updates, head_seq: head })
+    Ok(ObjectState {
+        object_id: object_id.to_string(),
+        snapshot,
+        updates,
+        head_seq: head,
+    })
 }
 
 pub fn validate_object_id(id: &str) -> AppResult<()> {
-    if id == INDEX_OBJECT_ID || db::valid_id(id) { Ok(()) } else { Err(bad("invalid object id")) }
+    if id == INDEX_OBJECT_ID || db::valid_id(id) {
+        Ok(())
+    } else {
+        Err(bad("invalid object id"))
+    }
 }
 
 /// Shared notes accept only content encrypted with their current document
@@ -189,11 +216,12 @@ pub fn validate_object_id(id: &str) -> AppResult<()> {
 /// (authenticated, but not secret) ciphertext header.
 pub fn check_payload_key(object_key_epoch: Option<i64>, payload: &[u8]) -> AppResult<()> {
     use coolpsonotes_core::keys::is_doc_epoch;
-    let epoch = coolpsonotes_core::crypto::sym_epoch(payload).map_err(|_| bad("malformed ciphertext"))?;
+    let epoch =
+        coolpsonotes_core::crypto::sym_epoch(payload).map_err(|_| bad("malformed ciphertext"))?;
     match object_key_epoch {
-        Some(cur) if !is_doc_epoch(epoch) || (epoch as i64) < cur => {
-            Err(AppError::StaleKey("this note now has its own key; reload keys and encrypt with it".into()))
-        }
+        Some(cur) if !is_doc_epoch(epoch) || (epoch as i64) < cur => Err(AppError::StaleKey(
+            "this note now has its own key; reload keys and encrypt with it".into(),
+        )),
         Some(cur) if (epoch as i64) > cur => Err(bad("unknown document key epoch")),
         None if is_doc_epoch(epoch) => Err(bad("document key used for a note that is not shared")),
         _ => Ok(()),
@@ -202,7 +230,13 @@ pub fn check_payload_key(object_key_epoch: Option<i64>, payload: &[u8]) -> AppRe
 
 /// May `who` write to `object_id`? Vault editors/owners, or people the note
 /// is shared with as editor.
-async fn write_access(db: &Db, member: Option<coolpsonotes_core::protocol::Role>, vault_id: &str, object_id: &str, user_id: &str) -> AppResult<()> {
+async fn write_access(
+    db: &Db,
+    member: Option<coolpsonotes_core::protocol::Role>,
+    vault_id: &str,
+    object_id: &str,
+    user_id: &str,
+) -> AppResult<()> {
     match member {
         Some(r) if r.can_write() => Ok(()),
         Some(_) => Err(forbidden("viewers cannot modify this vault")),
@@ -231,7 +265,11 @@ pub async fn push(
     origin_conn: u64,
 ) -> AppResult<PushOutcome> {
     if updates.is_empty() {
-        return Ok(PushOutcome { results: vec![], duplicates: vec![], head_seq: head_seq(&state.db, vault_id).await? });
+        return Ok(PushOutcome {
+            results: vec![],
+            duplicates: vec![],
+            head_seq: head_seq(&state.db, vault_id).await?,
+        });
     }
     if updates.len() > MAX_BATCH {
         return Err(bad(format!("at most {MAX_BATCH} updates per request")));
@@ -253,7 +291,8 @@ pub async fn push(
     if member.is_none() && head_seq(&state.db, vault_id).await.is_err() {
         return Err(AppError::NotFound);
     }
-    let objects: std::collections::BTreeSet<&str> = updates.iter().map(|u| u.object_id.as_str()).collect();
+    let objects: std::collections::BTreeSet<&str> =
+        updates.iter().map(|u| u.object_id.as_str()).collect();
     for o in objects {
         write_access(&state.db, member, vault_id, o, &who.user_id).await?;
     }
@@ -265,27 +304,37 @@ pub async fn push(
     let mut duplicates = Vec::new();
     let mut fresh: Vec<(Update, String)> = Vec::new();
     for u in updates {
-        let existing: Option<i64> =
-            sqlx::query_scalar("SELECT seq FROM updates WHERE vault_id = ? AND client_update_id = ?")
-                .bind(vault_id)
-                .bind(&u.client_update_id)
-                .fetch_optional(&mut *tx)
-                .await?;
+        let existing: Option<i64> = sqlx::query_scalar(
+            "SELECT seq FROM updates WHERE vault_id = ? AND client_update_id = ?",
+        )
+        .bind(vault_id)
+        .bind(&u.client_update_id)
+        .fetch_optional(&mut *tx)
+        .await?;
         if let Some(seq) = existing {
-            let r = PushResult { client_update_id: u.client_update_id, seq };
+            let r = PushResult {
+                client_update_id: u.client_update_id,
+                seq,
+            };
             duplicates.push(r.clone());
             results.push(r);
             continue;
         }
-        let obj: Option<(Option<i64>, Option<i64>)> =
-            sqlx::query_as("SELECT purged_at, key_epoch FROM objects WHERE vault_id = ? AND id = ?")
-                .bind(vault_id)
-                .bind(&u.object_id)
-                .fetch_optional(&mut *tx)
-                .await?;
+        let obj: Option<(Option<i64>, Option<i64>)> = sqlx::query_as(
+            "SELECT purged_at, key_epoch FROM objects WHERE vault_id = ? AND id = ?",
+        )
+        .bind(vault_id)
+        .bind(&u.object_id)
+        .fetch_optional(&mut *tx)
+        .await?;
         check_payload_key(obj.and_then(|o| o.1), &u.payload)?;
         match obj.map(|o| o.0) {
-            Some(Some(_)) => return Err(conflict(format!("object {} was permanently deleted", u.object_id))),
+            Some(Some(_)) => {
+                return Err(conflict(format!(
+                    "object {} was permanently deleted",
+                    u.object_id
+                )));
+            }
             Some(None) => {
                 sqlx::query("UPDATE objects SET updated_at = ? WHERE vault_id = ? AND id = ?")
                     .bind(now)
@@ -327,9 +376,18 @@ pub async fn push(
         .bind(now)
         .execute(&mut *tx)
         .await?;
-        results.push(PushResult { client_update_id: u.client_update_id.clone(), seq });
+        results.push(PushResult {
+            client_update_id: u.client_update_id.clone(),
+            seq,
+        });
         fresh.push((
-            Update { object_id: u.object_id, seq, author_id: who.user_id.clone(), payload: u.payload, created_at: now },
+            Update {
+                object_id: u.object_id,
+                seq,
+                author_id: who.user_id.clone(),
+                payload: u.payload,
+                created_at: now,
+            },
             u.client_update_id,
         ));
     }
@@ -340,9 +398,20 @@ pub async fn push(
     tx.commit().await?;
     metrics::counter!("coolpsonotes_updates_total").increment(fresh.len() as u64);
     for (update, client_update_id) in fresh {
-        state.hub.publish(vault_id, VaultEvent::Update { update, client_update_id, origin_conn });
+        state.hub.publish(
+            vault_id,
+            VaultEvent::Update {
+                update,
+                client_update_id,
+                origin_conn,
+            },
+        );
     }
-    Ok(PushOutcome { results, duplicates, head_seq: head })
+    Ok(PushOutcome {
+        results,
+        duplicates,
+        head_seq: head,
+    })
 }
 
 /// Store a client-produced compaction of an object. Updates covered by the
@@ -374,16 +443,30 @@ pub async fn create_snapshot(
     if covers_seq < 1 || covers_seq > head {
         return Err(bad("covers_seq out of range"));
     }
-    let obj: Option<(Option<i64>, Option<i64>)> = sqlx::query_as("SELECT purged_at, key_epoch FROM objects WHERE vault_id = ? AND id = ?")
-        .bind(vault_id)
-        .bind(object_id)
-        .fetch_optional(&state.db)
-        .await?;
-    let Some((None, key_epoch)) = obj else { return Err(AppError::NotFound) };
+    let obj: Option<(Option<i64>, Option<i64>)> =
+        sqlx::query_as("SELECT purged_at, key_epoch FROM objects WHERE vault_id = ? AND id = ?")
+            .bind(vault_id)
+            .bind(object_id)
+            .fetch_optional(&state.db)
+            .await?;
+    let Some((None, key_epoch)) = obj else {
+        return Err(AppError::NotFound);
+    };
     check_payload_key(key_epoch, &payload)?;
     let now = db::now();
     let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
-    insert_snapshot(&mut tx, &state.config, &who.user_id, vault_id, object_id, snapshot_id, covers_seq, &payload, now).await?;
+    insert_snapshot(
+        &mut tx,
+        &state.config,
+        &who.user_id,
+        vault_id,
+        object_id,
+        snapshot_id,
+        covers_seq,
+        &payload,
+        now,
+    )
+    .await?;
     tx.commit().await?;
     state.hub.publish(
         vault_id,
@@ -440,19 +523,21 @@ pub async fn insert_snapshot(
     .execute(&mut **tx)
     .await;
     if let Err(sqlx::Error::Database(e)) = &r
-        && e.is_unique_violation() {
-            return Err(conflict("snapshot id already exists"));
-        }
+        && e.is_unique_violation()
+    {
+        return Err(conflict("snapshot id already exists"));
+    }
     r?;
     if let Some(prev) = prev
-        && covers_seq > prev {
-            sqlx::query("DELETE FROM updates WHERE vault_id = ? AND object_id = ? AND seq <= ?")
-                .bind(vault_id)
-                .bind(object_id)
-                .bind(prev)
-                .execute(&mut **tx)
-                .await?;
-        }
+        && covers_seq > prev
+    {
+        sqlx::query("DELETE FROM updates WHERE vault_id = ? AND object_id = ? AND seq <= ?")
+            .bind(vault_id)
+            .bind(object_id)
+            .bind(prev)
+            .execute(&mut **tx)
+            .await?;
+    }
     // Revision history retention: keep the newest N snapshots.
     sqlx::query(
         "DELETE FROM snapshots WHERE vault_id = ? AND object_id = ? AND id NOT IN (
@@ -469,7 +554,12 @@ pub async fn insert_snapshot(
     Ok(())
 }
 
-pub async fn list_snapshots(db: &Db, vault_id: &str, object_id: &str, doc_only: bool) -> AppResult<Vec<SnapshotInfo>> {
+pub async fn list_snapshots(
+    db: &Db,
+    vault_id: &str,
+    object_id: &str,
+    doc_only: bool,
+) -> AppResult<Vec<SnapshotInfo>> {
     Ok(sqlx::query(
         "SELECT id, object_id, covers_seq, author_id, created_at, size FROM snapshots
          WHERE vault_id = ? AND object_id = ? AND (? = 0 OR hex(substr(payload, 2, 1)) >= '80') ORDER BY covers_seq DESC, created_at DESC",
@@ -491,7 +581,13 @@ pub async fn list_snapshots(db: &Db, vault_id: &str, object_id: &str, doc_only: 
     .collect())
 }
 
-pub async fn get_snapshot(db: &Db, vault_id: &str, object_id: &str, id: &str, doc_only: bool) -> AppResult<Snapshot> {
+pub async fn get_snapshot(
+    db: &Db,
+    vault_id: &str,
+    object_id: &str,
+    id: &str,
+    doc_only: bool,
+) -> AppResult<Snapshot> {
     sqlx::query(
         "SELECT id, object_id, covers_seq, author_id, payload, created_at FROM snapshots
          WHERE vault_id = ? AND object_id = ? AND id = ? AND (? = 0 OR hex(substr(payload, 2, 1)) >= '80')",
@@ -507,7 +603,12 @@ pub async fn get_snapshot(db: &Db, vault_id: &str, object_id: &str, id: &str, do
 }
 
 /// Permanently delete an object's data (e.g. emptying the trash).
-pub async fn purge(state: &AppState, who: &Principal, vault_id: &str, object_id: &str) -> AppResult<i64> {
+pub async fn purge(
+    state: &AppState,
+    who: &Principal,
+    vault_id: &str,
+    object_id: &str,
+) -> AppResult<i64> {
     validate_object_id(object_id)?;
     if object_id == INDEX_OBJECT_ID {
         return Err(bad("the vault index cannot be deleted"));
@@ -519,25 +620,29 @@ pub async fn purge(state: &AppState, who: &Principal, vault_id: &str, object_id:
     let _w = state.write_lock.lock().await;
     let now = db::now();
     let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
-    let exists: Option<Option<i64>> = sqlx::query_scalar("SELECT purged_at FROM objects WHERE vault_id = ? AND id = ?")
-        .bind(vault_id)
-        .bind(object_id)
-        .fetch_optional(&mut *tx)
-        .await?;
+    let exists: Option<Option<i64>> =
+        sqlx::query_scalar("SELECT purged_at FROM objects WHERE vault_id = ? AND id = ?")
+            .bind(vault_id)
+            .bind(object_id)
+            .fetch_optional(&mut *tx)
+            .await?;
     if !matches!(exists, Some(None)) {
         return Err(AppError::NotFound);
     }
-    let seq: i64 =
-        sqlx::query_scalar("UPDATE vaults SET head_seq = head_seq + 1, updated_at = ? WHERE id = ? RETURNING head_seq")
-            .bind(now)
-            .bind(vault_id)
-            .fetch_one(&mut *tx)
-            .await?;
-    let recipients: Vec<String> = sqlx::query_scalar("SELECT user_id FROM object_shares WHERE vault_id = ? AND object_id = ?")
-        .bind(vault_id)
-        .bind(object_id)
-        .fetch_all(&mut *tx)
-        .await?;
+    let seq: i64 = sqlx::query_scalar(
+        "UPDATE vaults SET head_seq = head_seq + 1, updated_at = ? WHERE id = ? RETURNING head_seq",
+    )
+    .bind(now)
+    .bind(vault_id)
+    .fetch_one(&mut *tx)
+    .await?;
+    let recipients: Vec<String> = sqlx::query_scalar(
+        "SELECT user_id FROM object_shares WHERE vault_id = ? AND object_id = ?",
+    )
+    .bind(vault_id)
+    .bind(object_id)
+    .fetch_all(&mut *tx)
+    .await?;
     for q in [
         "DELETE FROM updates WHERE vault_id = ? AND object_id = ?",
         "DELETE FROM snapshots WHERE vault_id = ? AND object_id = ?",
@@ -545,7 +650,11 @@ pub async fn purge(state: &AppState, who: &Principal, vault_id: &str, object_id:
         "DELETE FROM object_keys WHERE vault_id = ? AND object_id = ?",
         "DELETE FROM object_key_chain WHERE vault_id = ? AND object_id = ?",
     ] {
-        sqlx::query(q).bind(vault_id).bind(object_id).execute(&mut *tx).await?;
+        sqlx::query(q)
+            .bind(vault_id)
+            .bind(object_id)
+            .execute(&mut *tx)
+            .await?;
     }
     sqlx::query("UPDATE objects SET purged_at = ?, purged_seq = ? WHERE vault_id = ? AND id = ?")
         .bind(now)
@@ -555,13 +664,32 @@ pub async fn purge(state: &AppState, who: &Principal, vault_id: &str, object_id:
         .execute(&mut *tx)
         .await?;
     tx.commit().await?;
-    state.hub.publish(vault_id, VaultEvent::Purged { object_id: object_id.to_string(), seq });
+    state.hub.publish(
+        vault_id,
+        VaultEvent::Purged {
+            object_id: object_id.to_string(),
+            seq,
+        },
+    );
     for u in recipients {
-        state.hub.control(&u, Control::RevokeObject(vault_id.to_string(), object_id.to_string()));
-        state.hub.control(&u, Control::User(coolpsonotes_core::protocol::UserEventKind::SharesChanged));
+        state.hub.control(
+            &u,
+            Control::RevokeObject(vault_id.to_string(), object_id.to_string()),
+        );
+        state.hub.control(
+            &u,
+            Control::User(coolpsonotes_core::protocol::UserEventKind::SharesChanged),
+        );
     }
-    db::audit(&state.db, Some(&who.user_id), None, Some(vault_id), "object.purge", Some(object_id), serde_json::json!({}))
-        .await;
+    db::audit(
+        &state.db,
+        Some(&who.user_id),
+        None,
+        Some(vault_id),
+        "object.purge",
+        Some(object_id),
+        serde_json::json!({}),
+    )
+    .await;
     Ok(seq)
 }
-

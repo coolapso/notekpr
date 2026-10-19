@@ -40,7 +40,11 @@ pub fn prompt_line(prompt: &str) -> Result<String> {
 /// Read a secret without echoing it (falls back to a plain line if stdin is
 /// not a terminal).
 pub fn prompt_secret(prompt: &str) -> Result<String> {
-    if stdin_is_tty() { Ok(rpassword::prompt_password(prompt)?.trim().to_string()) } else { prompt_line(prompt) }
+    if stdin_is_tty() {
+        Ok(rpassword::prompt_password(prompt)?.trim().to_string())
+    } else {
+        prompt_line(prompt)
+    }
 }
 
 /// Ask a yes/no question; `false` when not interactive.
@@ -48,7 +52,10 @@ pub fn confirm(prompt: &str) -> bool {
     if !stdin_is_tty() {
         return false;
     }
-    matches!(prompt_line(&format!("{prompt} [y/N] ")).as_deref(), Ok("y" | "Y" | "yes" | "YES" | "Yes"))
+    matches!(
+        prompt_line(&format!("{prompt} [y/N] ")).as_deref(),
+        Ok("y" | "Y" | "yes" | "YES" | "Yes")
+    )
 }
 
 pub fn fmt_time(ms: i64) -> String {
@@ -68,7 +75,11 @@ pub fn fmt_size(bytes: u64) -> String {
         v /= 1024.0;
         u += 1;
     }
-    if u == 0 { format!("{bytes} B") } else { format!("{v:.1} {}", UNITS[u]) }
+    if u == 0 {
+        format!("{bytes} B")
+    } else {
+        format!("{v:.1} {}", UNITS[u])
+    }
 }
 
 #[cfg(test)]

@@ -24,7 +24,12 @@ pub async fn create_vault(session: &Session, name: &str) -> Result<Vault> {
     let (req, ring) = engine::new_vault(session.account(), &session.user_id, &meta)?;
     let info: VaultInfo = session.api.post("/vaults", &req).await?;
     let replica = VaultReplica::new(&info.id, info.role, ring, meta);
-    let mut v = Vault::new(session.vault_store(&info.id)?, replica, &info.owner_id, info.archived);
+    let mut v = Vault::new(
+        session.vault_store(&info.id)?,
+        replica,
+        &info.owner_id,
+        info.archived,
+    );
     v.save()?;
     Ok(v)
 }
@@ -50,7 +55,10 @@ pub async fn rename_vault(session: &Session, vault: &SharedVault, name: &str) ->
         }
         (v.id().to_string(), meta.encrypt(&v.replica.keyring)?, meta)
     };
-    let req = UpdateVaultRequest { encrypted_meta: Some(ct), archived: None };
+    let req = UpdateVaultRequest {
+        encrypted_meta: Some(ct),
+        archived: None,
+    };
     let _: VaultInfo = session.api.patch(&format!("/vaults/{id}"), &req).await?;
     let mut v = vault.lock().await;
     v.set_meta(meta);
@@ -63,7 +71,10 @@ pub async fn set_archived(session: &Session, vault: &SharedVault, archived: bool
         require_owner(&v)?;
         v.id().to_string()
     };
-    let req = UpdateVaultRequest { encrypted_meta: None, archived: Some(archived) };
+    let req = UpdateVaultRequest {
+        encrypted_meta: None,
+        archived: Some(archived),
+    };
     let _: VaultInfo = session.api.patch(&format!("/vaults/{id}"), &req).await?;
     let mut v = vault.lock().await;
     v.archived = archived;
@@ -91,7 +102,11 @@ pub async fn leave_vault(session: &Session, vault: &SharedVault) -> Result<()> {
     if role == Role::Owner {
         bail!("the owner cannot leave a vault; delete it instead");
     }
-    match session.api.delete(&format!("/vaults/{id}/members/{}", session.user_id)).await {
+    match session
+        .api
+        .delete(&format!("/vaults/{id}/members/{}", session.user_id))
+        .await
+    {
         Ok(()) => {}
         Err(e) if e.is_not_found() => {}
         Err(e) => return Err(e.into()),
@@ -111,8 +126,16 @@ pub async fn members(session: &Session, vault: &SharedVault) -> Result<Vec<Membe
     Ok(members
         .into_iter()
         .map(|m| match session.verify_user(&m.user) {
-            Ok(key) => MemberView { member: m, key, key_error: None },
-            Err(e) => MemberView { member: m, key: None, key_error: Some(format!("{e:#}")) },
+            Ok(key) => MemberView {
+                member: m,
+                key,
+                key_error: None,
+            },
+            Err(e) => MemberView {
+                member: m,
+                key: None,
+                key_error: Some(format!("{e:#}")),
+            },
         })
         .collect())
 }
@@ -135,7 +158,9 @@ pub async fn find_user(session: &Session, reference: &str) -> Result<PublicUser>
         .iter()
         .filter(|u| {
             u.display_name.eq_ignore_ascii_case(reference)
-                || u.email.as_deref().is_some_and(|e| e.eq_ignore_ascii_case(reference))
+                || u.email
+                    .as_deref()
+                    .is_some_and(|e| e.eq_ignore_ascii_case(reference))
                 || u.id == reference
         })
         .collect();
@@ -144,9 +169,14 @@ pub async fn find_user(session: &Session, reference: &str) -> Result<PublicUser>
         (_, [one]) => Ok(one.clone()),
         (_, []) => bail!("no user matches '{reference}'"),
         _ => {
-            let list: Vec<String> =
-                found.iter().map(|u| format!("  {}  {} ({})", u.id, u.display_name, u.kind.as_str())).collect();
-            bail!("'{reference}' matches several users; use an id:\n{}", list.join("\n"))
+            let list: Vec<String> = found
+                .iter()
+                .map(|u| format!("  {}  {} ({})", u.id, u.display_name, u.kind.as_str()))
+                .collect();
+            bail!(
+                "'{reference}' matches several users; use an id:\n{}",
+                list.join("\n")
+            )
         }
     }
 }
@@ -203,21 +233,37 @@ pub async fn share(
         None => None,
     };
     let key_shared = envelope.is_some();
-    let req = AddMemberRequest { user_id: user.id.clone(), role, key_envelope: envelope.clone() };
+    let req = AddMemberRequest {
+        user_id: user.id.clone(),
+        role,
+        key_envelope: envelope.clone(),
+    };
     let mut updated_role = false;
-    match session.api.post::<_, MemberInfo>(&format!("/vaults/{id}/members"), &req).await {
+    match session
+        .api
+        .post::<_, MemberInfo>(&format!("/vaults/{id}/members"), &req)
+        .await
+    {
         Ok(_) => {}
         Err(e) if e.status() == Some(409) => {
             // Already a member: update the role and make sure they have the key.
             session
                 .api
-                .patch::<_, ()>(&format!("/vaults/{id}/members/{}", user.id), &UpdateMemberRequest { role })
+                .patch::<_, ()>(
+                    &format!("/vaults/{id}/members/{}", user.id),
+                    &UpdateMemberRequest { role },
+                )
                 .await?;
             updated_role = true;
             if let Some(env) = envelope {
                 let _ = session
                     .api
-                    .post::<_, ()>(&format!("/vaults/{id}/keys/grant"), &GrantKeysRequest { envelopes: vec![env] })
+                    .post::<_, ()>(
+                        &format!("/vaults/{id}/keys/grant"),
+                        &GrantKeysRequest {
+                            envelopes: vec![env],
+                        },
+                    )
                     .await;
             }
         }
@@ -234,7 +280,11 @@ pub async fn share(
 
 /// Remove a member and rotate the vault key so they cannot read anything
 /// written afterwards. Returns the new epoch.
-pub async fn unshare(session: &Session, vault: &SharedVault, user_ref: &str) -> Result<(PublicUser, u32)> {
+pub async fn unshare(
+    session: &Session,
+    vault: &SharedVault,
+    user_ref: &str,
+) -> Result<(PublicUser, u32)> {
     let id = {
         let v = vault.lock().await;
         require_owner(&v)?;
@@ -244,7 +294,10 @@ pub async fn unshare(session: &Session, vault: &SharedVault, user_ref: &str) -> 
     let user = match members.iter().find(|m| {
         m.user.id == user_ref
             || m.user.display_name.eq_ignore_ascii_case(user_ref)
-            || m.user.email.as_deref().is_some_and(|e| e.eq_ignore_ascii_case(user_ref))
+            || m.user
+                .email
+                .as_deref()
+                .is_some_and(|e| e.eq_ignore_ascii_case(user_ref))
     }) {
         Some(m) => m.user.clone(),
         None => bail!("'{user_ref}' is not a member of this vault"),
@@ -252,7 +305,10 @@ pub async fn unshare(session: &Session, vault: &SharedVault, user_ref: &str) -> 
     if user.id == session.user_id {
         bail!("the owner cannot be removed");
     }
-    session.api.delete(&format!("/vaults/{id}/members/{}", user.id)).await?;
+    session
+        .api
+        .delete(&format!("/vaults/{id}/members/{}", user.id))
+        .await?;
     let epoch = session.rotate_keys(vault).await?;
     Ok((user, epoch))
 }
@@ -266,9 +322,16 @@ pub async fn devices(session: &Session) -> Result<Vec<DeviceInfo>> {
 /// The verification code to compare before approving a pending device.
 pub async fn pending_device(session: &Session, device_id: &str) -> Result<(DeviceInfo, String)> {
     let list = devices(session).await?;
-    let d = list.into_iter().find(|d| d.id == device_id).ok_or_else(|| anyhow!("no device '{device_id}'"))?;
+    let d = list
+        .into_iter()
+        .find(|d| d.id == device_id)
+        .ok_or_else(|| anyhow!("no device '{device_id}'"))?;
     if d.status != DeviceStatus::Pending {
-        bail!("device '{}' is not waiting for approval (status: {})", d.name, d.status.as_str());
+        bail!(
+            "device '{}' is not waiting for approval (status: {})",
+            d.name,
+            d.status.as_str()
+        );
     }
     let code = engine::verification_code(&session.user_id, &d.id, &d.enc_public)
         .ok_or_else(|| anyhow!("the device key is malformed"))?;
@@ -276,8 +339,16 @@ pub async fn pending_device(session: &Session, device_id: &str) -> Result<(Devic
 }
 
 pub async fn approve_device(session: &Session, device: &DeviceInfo) -> Result<()> {
-    let req = engine::approve_device(session.account(), &session.user_id, &device.id, &device.enc_public)?;
-    session.api.post::<_, ()>(&format!("/devices/{}/activate", device.id), &req).await?;
+    let req = engine::approve_device(
+        session.account(),
+        &session.user_id,
+        &device.id,
+        &device.enc_public,
+    )?;
+    session
+        .api
+        .post::<_, ()>(&format!("/devices/{}/activate", device.id), &req)
+        .await?;
     Ok(())
 }
 
@@ -288,7 +359,8 @@ pub async fn revoke_device(session: &Session, device_id: &str) -> Result<()> {
 
 /// Replace the recovery key; returns the new one (shown once).
 pub async fn rotate_recovery(session: &Session) -> Result<String> {
-    let (rk, req): (RecoveryKey, RecoveryUpdate) = engine::rotate_recovery(session.account(), &session.user_id);
+    let (rk, req): (RecoveryKey, RecoveryUpdate) =
+        engine::rotate_recovery(session.account(), &session.user_id);
     session.api.put::<_, ()>("/me/recovery", &req).await?;
     Ok(rk.to_display())
 }
@@ -300,7 +372,15 @@ pub async fn agents(session: &Session) -> Result<Vec<AgentInfo>> {
 }
 
 pub async fn create_agent(session: &Session, name: &str) -> Result<CreateAgentResponse> {
-    Ok(session.api.post("/agents", &CreateAgentRequest { name: name.to_string() }).await?)
+    Ok(session
+        .api
+        .post(
+            "/agents",
+            &CreateAgentRequest {
+                name: name.to_string(),
+            },
+        )
+        .await?)
 }
 
 pub async fn delete_agent(session: &Session, agent_id: &str) -> Result<()> {
@@ -308,7 +388,11 @@ pub async fn delete_agent(session: &Session, agent_id: &str) -> Result<()> {
 }
 
 /// New client secret for an agent; optionally revoke the old credentials.
-pub async fn rotate_agent_secret(session: &Session, agent_id: &str, revoke_old: bool) -> Result<CreatedCredential> {
+pub async fn rotate_agent_secret(
+    session: &Session,
+    agent_id: &str,
+    revoke_old: bool,
+) -> Result<CreatedCredential> {
     let before = agents(session).await?;
     let old: Vec<String> = before
         .iter()
@@ -319,11 +403,19 @@ pub async fn rotate_agent_secret(session: &Session, agent_id: &str, revoke_old: 
         .filter(|c| c.revoked_at.is_none())
         .map(|c| c.client_id.clone())
         .collect();
-    let created: CreatedCredential =
-        session.api.post(&format!("/agents/{agent_id}/credentials"), &serde_json::json!({})).await?;
+    let created: CreatedCredential = session
+        .api
+        .post(
+            &format!("/agents/{agent_id}/credentials"),
+            &serde_json::json!({}),
+        )
+        .await?;
     if revoke_old {
         for c in old {
-            session.api.delete(&format!("/agents/{agent_id}/credentials/{c}")).await?;
+            session
+                .api
+                .delete(&format!("/agents/{agent_id}/credentials/{c}"))
+                .await?;
         }
     }
     Ok(created)
@@ -357,7 +449,9 @@ pub fn pin_label(p: PinStatus) -> &'static str {
 pub async fn grant_pending(hub: &Hub) {
     for v in hub.vaults() {
         match hub.session.grant_missing_keys(&v).await {
-            Ok(names) if !names.is_empty() => ui::status(&format!("shared the vault key with {}", names.join(", "))),
+            Ok(names) if !names.is_empty() => {
+                ui::status(&format!("shared the vault key with {}", names.join(", ")))
+            }
             Ok(_) => {}
             Err(e) => tracing::debug!("granting keys: {e:#}"),
         }

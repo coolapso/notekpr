@@ -33,7 +33,10 @@ const FORMAT: u32 = 1;
 
 /// Ids we use as file names: the same alphabet the server accepts.
 pub fn valid_id(s: &str) -> bool {
-    !s.is_empty() && s.len() <= 64 && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+    !s.is_empty()
+        && s.len() <= 64
+        && s.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -95,7 +98,11 @@ impl VaultStore {
         if !valid_id(vault_id) {
             return Err(anyhow!("invalid vault id"));
         }
-        Ok(VaultStore { dir: vaults_dir.join(vault_id), key, vault_id: vault_id.to_string() })
+        Ok(VaultStore {
+            dir: vaults_dir.join(vault_id),
+            key,
+            vault_id: vault_id.to_string(),
+        })
     }
 
     pub fn dir(&self) -> &std::path::Path {
@@ -111,7 +118,10 @@ impl VaultStore {
     }
 
     pub fn load_state(&self) -> Result<Option<StoredState>> {
-        let Some(pt) = self.key.read_sealed(&self.dir.join("state.sealed"), &self.ctx("state"))? else {
+        let Some(pt) = self
+            .key
+            .read_sealed(&self.dir.join("state.sealed"), &self.ctx("state"))?
+        else {
             return Ok(None);
         };
         let s: StoredState = serde_json::from_slice(&pt).context("decoding local vault state")?;
@@ -128,17 +138,28 @@ impl VaultStore {
         fsutil::create_private_dir(&self.dir)?;
         let mut s = s.clone();
         s.format = FORMAT;
-        self.key.write_sealed(&self.dir.join("state.sealed"), &self.ctx("state"), &serde_json::to_vec(&s)?)
+        self.key.write_sealed(
+            &self.dir.join("state.sealed"),
+            &self.ctx("state"),
+            &serde_json::to_vec(&s)?,
+        )
     }
 
     pub fn load_pending(&self) -> Result<Vec<Pending>> {
-        let Some(pt) = self.key.read_sealed(&self.dir.join("pending.sealed"), &self.ctx("pending"))? else {
+        let Some(pt) = self
+            .key
+            .read_sealed(&self.dir.join("pending.sealed"), &self.ctx("pending"))?
+        else {
             return Ok(vec![]);
         };
         let p: StoredPending = serde_json::from_slice(&pt).context("decoding pending updates")?;
         Ok(p.updates
             .into_iter()
-            .map(|u| Pending { client_update_id: u.client_update_id, object_id: u.object_id, update: u.update })
+            .map(|u| Pending {
+                client_update_id: u.client_update_id,
+                object_id: u.object_id,
+                update: u.update,
+            })
             .collect())
     }
 
@@ -154,7 +175,11 @@ impl VaultStore {
                 })
                 .collect(),
         };
-        self.key.write_sealed(&self.dir.join("pending.sealed"), &self.ctx("pending"), &serde_json::to_vec(&p)?)
+        self.key.write_sealed(
+            &self.dir.join("pending.sealed"),
+            &self.ctx("pending"),
+            &serde_json::to_vec(&p)?,
+        )
     }
 
     fn object_path(&self, object_id: &str) -> Result<PathBuf> {
@@ -167,7 +192,8 @@ impl VaultStore {
     pub fn save_object(&self, object_id: &str, state: &[u8]) -> Result<()> {
         let p = self.object_path(object_id)?;
         fsutil::create_private_dir(&self.dir.join("objects"))?;
-        self.key.write_sealed(&p, &self.ctx(&format!("object/{object_id}")), state)
+        self.key
+            .write_sealed(&p, &self.ctx(&format!("object/{object_id}")), state)
     }
 
     pub fn delete_object(&self, object_id: &str) -> Result<()> {
@@ -181,12 +207,16 @@ impl VaultStore {
     /// All stored objects as (id, full state).
     pub fn load_objects(&self) -> Result<Vec<(String, Vec<u8>)>> {
         let dir = self.dir.join("objects");
-        let Ok(rd) = std::fs::read_dir(&dir) else { return Ok(vec![]) };
+        let Ok(rd) = std::fs::read_dir(&dir) else {
+            return Ok(vec![]);
+        };
         let mut out = Vec::new();
         for e in rd {
             let e = e?;
             let name = e.file_name();
-            let Some(id) = name.to_str().and_then(|n| n.strip_suffix(".sealed")) else { continue };
+            let Some(id) = name.to_str().and_then(|n| n.strip_suffix(".sealed")) else {
+                continue;
+            };
             if !valid_id(id) {
                 continue;
             }
@@ -226,11 +256,18 @@ impl VaultStore {
     /// Auxiliary sealed documents (mirror bookkeeping).
     pub fn save_aux(&self, name: &str, data: &[u8]) -> Result<()> {
         fsutil::create_private_dir(&self.dir)?;
-        self.key.write_sealed(&self.dir.join(format!("{name}.sealed")), &self.ctx(name), data)
+        self.key.write_sealed(
+            &self.dir.join(format!("{name}.sealed")),
+            &self.ctx(name),
+            data,
+        )
     }
 
     pub fn load_aux(&self, name: &str) -> Result<Option<Vec<u8>>> {
-        Ok(self.key.read_sealed(&self.dir.join(format!("{name}.sealed")), &self.ctx(name))?.map(|z| z.to_vec()))
+        Ok(self
+            .key
+            .read_sealed(&self.dir.join(format!("{name}.sealed")), &self.ctx(name))?
+            .map(|z| z.to_vec()))
     }
 
     pub fn wipe(&self) -> Result<()> {

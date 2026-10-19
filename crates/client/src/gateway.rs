@@ -43,7 +43,9 @@ type St = Arc<Gateway>;
 pub fn new_token() -> String {
     format!(
         "cpgw_{}",
-        data_encoding::BASE32_NOPAD.encode(&coolpsonotes_core::crypto::random_bytes::<20>()).to_lowercase()
+        data_encoding::BASE32_NOPAD
+            .encode(&coolpsonotes_core::crypto::random_bytes::<20>())
+            .to_lowercase()
     )
 }
 
@@ -52,13 +54,18 @@ pub fn router(gw: St) -> Router {
         .route("/v1/status", get(status))
         .route("/v1/vaults", get(list_vaults))
         .route("/v1/vaults/{v}/documents", get(list_documents))
-        .route("/v1/vaults/{v}/documents/{*path}", get(get_document).put(put_document).delete(delete_document))
+        .route(
+            "/v1/vaults/{v}/documents/{*path}",
+            get(get_document).put(put_document).delete(delete_document),
+        )
         .route("/v1/vaults/{v}/move", post(move_document))
         .route("/v1/vaults/{v}/backlinks/{*path}", get(backlinks))
         .route("/v1/vaults/{v}/history/{*path}", get(history))
         .route(
             "/v1/vaults/{v}/attachments/{*path}",
-            get(get_attachment).put(put_attachment).layer(DefaultBodyLimit::max(128 << 20)),
+            get(get_attachment)
+                .put(put_attachment)
+                .layer(DefaultBodyLimit::max(128 << 20)),
         )
         .route("/v1/search", get(search))
         .route("/v1/events", get(events))
@@ -75,14 +82,21 @@ pub async fn serve(
     shutdown: impl std::future::Future<Output = ()> + Send + 'static,
 ) -> anyhow::Result<()> {
     let app = router(gw);
-    axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
-        .with_graceful_shutdown(shutdown)
-        .await?;
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown)
+    .await?;
     Ok(())
 }
 
 fn error(status: StatusCode, code: &str, message: &str) -> Response {
-    (status, axum::Json(json!({ "error": code, "message": message }))).into_response()
+    (
+        status,
+        axum::Json(json!({ "error": code, "message": message })),
+    )
+        .into_response()
 }
 
 fn op_error(e: OpError) -> Response {
@@ -106,16 +120,27 @@ async fn auth(State(gw): State<St>, req: Request, next: Next) -> Response {
         .and_then(|v| v.strip_prefix("Bearer "))
         .is_some_and(|t| bool::from(t.trim().as_bytes().ct_eq(gw.token.as_bytes())));
     if !ok {
-        return error(StatusCode::UNAUTHORIZED, "unauthorized", "missing or wrong gateway token");
+        return error(
+            StatusCode::UNAUTHORIZED,
+            "unauthorized",
+            "missing or wrong gateway token",
+        );
     }
     let mut resp = next.run(req).await;
-    resp.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    resp.headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     resp
 }
 
 /// The refusal to send when the gateway is read-only.
 fn read_only_refusal(gw: &Gateway) -> Option<Response> {
-    gw.hub.read_only.then(|| error(StatusCode::FORBIDDEN, "read_only", "this gateway is read-only"))
+    gw.hub.read_only.then(|| {
+        error(
+            StatusCode::FORBIDDEN,
+            "read_only",
+            "this gateway is read-only",
+        )
+    })
 }
 
 async fn status(State(gw): State<St>) -> Response {
@@ -140,7 +165,11 @@ struct ListQuery {
     all: bool,
 }
 
-async fn list_documents(State(gw): State<St>, Path(v): Path<String>, Query(q): Query<ListQuery>) -> Response {
+async fn list_documents(
+    State(gw): State<St>,
+    Path(v): Path<String>,
+    Query(q): Query<ListQuery>,
+) -> Response {
     match ops::list_documents(&gw.hub, &v, q.folder.as_deref(), q.all).await {
         Ok(d) => axum::Json(d).into_response(),
         Err(e) => op_error(e),
@@ -161,7 +190,16 @@ async fn get_document(
         Ok(doc) if q.format.as_deref() == Some("json") => axum::Json(doc).into_response(),
         Ok(doc) => {
             let etag = format!("\"{}\"", doc.hash);
-            ([(header::CONTENT_TYPE, "text/markdown; charset=utf-8".to_string()), (header::ETAG, etag)], doc.content)
+            (
+                [
+                    (
+                        header::CONTENT_TYPE,
+                        "text/markdown; charset=utf-8".to_string(),
+                    ),
+                    (header::ETAG, etag),
+                ],
+                doc.content,
+            )
                 .into_response()
         }
         Err(e) => op_error(e),
@@ -178,10 +216,20 @@ async fn put_document(
         return r;
     }
     let Ok(text) = String::from_utf8(body.to_vec()) else {
-        return error(StatusCode::BAD_REQUEST, "bad_request", "the document must be UTF-8 Markdown");
+        return error(
+            StatusCode::BAD_REQUEST,
+            "bad_request",
+            "the document must be UTF-8 Markdown",
+        );
     };
-    let if_match = headers.get(header::IF_MATCH).and_then(|h| h.to_str().ok()).map(str::to_string);
-    let create_only = headers.get(header::IF_NONE_MATCH).and_then(|h| h.to_str().ok()) == Some("*");
+    let if_match = headers
+        .get(header::IF_MATCH)
+        .and_then(|h| h.to_str().ok())
+        .map(str::to_string);
+    let create_only = headers
+        .get(header::IF_NONE_MATCH)
+        .and_then(|h| h.to_str().ok())
+        == Some("*");
     let res = if create_only {
         ops::create_document(&gw.hub, &v, &path, &text).await
     } else {
@@ -190,9 +238,19 @@ async fn put_document(
     match res {
         Ok(out) => {
             if out.changed {
-                gw.audit.record("gateway", "put_document", &out.vault, Some(&out.id), out.bytes);
+                gw.audit.record(
+                    "gateway",
+                    "put_document",
+                    &out.vault,
+                    Some(&out.id),
+                    out.bytes,
+                );
             }
-            let status = if out.created { StatusCode::CREATED } else { StatusCode::OK };
+            let status = if out.created {
+                StatusCode::CREATED
+            } else {
+                StatusCode::OK
+            };
             let etag = format!("\"{}\"", out.hash);
             (status, [(header::ETAG, etag)], axum::Json(out)).into_response()
         }
@@ -200,14 +258,18 @@ async fn put_document(
     }
 }
 
-async fn delete_document(State(gw): State<St>, Path((v, path)): Path<(String, String)>) -> Response {
+async fn delete_document(
+    State(gw): State<St>,
+    Path((v, path)): Path<(String, String)>,
+) -> Response {
     if let Some(r) = read_only_refusal(&gw) {
         return r;
     }
     match ops::delete_document(&gw.hub, &v, &path).await {
         Ok((vault, ids)) => {
             for id in &ids {
-                gw.audit.record("gateway", "trash_document", &vault, Some(id), 0);
+                gw.audit
+                    .record("gateway", "trash_document", &vault, Some(id), 0);
             }
             axum::Json(json!({ "vault": vault, "trashed": ids })).into_response()
         }
@@ -228,11 +290,16 @@ async fn move_document(State(gw): State<St>, Path(v): Path<String>, body: Bytes)
         return r;
     }
     let Ok(m) = serde_json::from_slice::<MoveBody>(&body) else {
-        return error(StatusCode::BAD_REQUEST, "bad_request", "expected JSON {\"from\": ..., \"to\": ...}");
+        return error(
+            StatusCode::BAD_REQUEST,
+            "bad_request",
+            "expected JSON {\"from\": ..., \"to\": ...}",
+        );
     };
     match ops::move_document(&gw.hub, &v, &m.from, &m.to, m.update_links).await {
         Ok(out) => {
-            gw.audit.record("gateway", "move_document", &out.vault, out.id.as_deref(), 0);
+            gw.audit
+                .record("gateway", "move_document", &out.vault, out.id.as_deref(), 0);
             axum::Json(out).into_response()
         }
         Err(e) => op_error(e),
@@ -258,7 +325,11 @@ async fn history(
 ) -> Response {
     match q.revision {
         Some(rev) => match ops::revision(&gw.hub, &v, &path, &rev).await {
-            Ok(text) => ([(header::CONTENT_TYPE, "text/markdown; charset=utf-8")], text).into_response(),
+            Ok(text) => (
+                [(header::CONTENT_TYPE, "text/markdown; charset=utf-8")],
+                text,
+            )
+                .into_response(),
             Err(e) => op_error(e),
         },
         None => match ops::history(&gw.hub, &v, &path).await {
@@ -271,7 +342,9 @@ async fn history(
 async fn get_attachment(State(gw): State<St>, Path((v, path)): Path<(String, String)>) -> Response {
     match ops::get_attachment(&gw.hub, &v, &path).await {
         Ok((info, data)) => {
-            let mime = info.mime.unwrap_or_else(|| "application/octet-stream".into());
+            let mime = info
+                .mime
+                .unwrap_or_else(|| "application/octet-stream".into());
             (
                 [
                     (header::CONTENT_TYPE, mime),
@@ -307,9 +380,19 @@ async fn put_attachment(
     match ops::put_attachment(&gw.hub, &v, &path, &body, mime.as_deref()).await {
         Ok(out) => {
             if out.changed {
-                gw.audit.record("gateway", "put_attachment", &out.vault, Some(&out.id), out.bytes);
+                gw.audit.record(
+                    "gateway",
+                    "put_attachment",
+                    &out.vault,
+                    Some(&out.id),
+                    out.bytes,
+                );
             }
-            let status = if out.created { StatusCode::CREATED } else { StatusCode::OK };
+            let status = if out.created {
+                StatusCode::CREATED
+            } else {
+                StatusCode::OK
+            };
             (status, axum::Json(out)).into_response()
         }
         Err(e) => op_error(e),
@@ -324,7 +407,14 @@ struct SearchQuery {
 }
 
 async fn search(State(gw): State<St>, Query(q): Query<SearchQuery>) -> Response {
-    match ops::search(&gw.hub, &q.q, q.vault.as_deref(), q.limit.unwrap_or(50).min(500)).await {
+    match ops::search(
+        &gw.hub,
+        &q.q,
+        q.vault.as_deref(),
+        q.limit.unwrap_or(50).min(500),
+    )
+    .await
+    {
         Ok(r) => axum::Json(r).into_response(),
         Err(e) => op_error(e),
     }
@@ -333,7 +423,13 @@ async fn search(State(gw): State<St>, Query(q): Query<SearchQuery>) -> Response 
 /// Change notifications as JSON events (ids and paths, never content).
 pub async fn event_json(hub: &Hub, ev: HubEvent) -> Vec<serde_json::Value> {
     match ev {
-        HubEvent::Changed { vault_id, objects, index_changed, purged, local } => {
+        HubEvent::Changed {
+            vault_id,
+            objects,
+            index_changed,
+            purged,
+            local,
+        } => {
             let origin = if local { "local" } else { "remote" };
             let mut out = Vec::new();
             if let Some(v) = hub.get(&vault_id) {
@@ -352,7 +448,9 @@ pub async fn event_json(hub: &Hub, ev: HubEvent) -> Vec<serde_json::Value> {
             }
             out
         }
-        HubEvent::VaultAdded { vault_id } => vec![json!({ "type": "vault_added", "vault": vault_id })],
+        HubEvent::VaultAdded { vault_id } => {
+            vec![json!({ "type": "vault_added", "vault": vault_id })]
+        }
         HubEvent::VaultClosed { vault_id, reason } => {
             vec![json!({ "type": "vault_closed", "vault": vault_id, "reason": reason })]
         }
@@ -363,26 +461,31 @@ pub async fn event_json(hub: &Hub, ev: HubEvent) -> Vec<serde_json::Value> {
 async fn events(State(gw): State<St>) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
     let rx = gw.hub.subscribe();
     let hub = gw.hub.clone();
-    let stream = futures::stream::unfold((rx, hub, VecDeque::<Event>::new()), |(mut rx, hub, mut queue)| async move {
-        loop {
-            if let Some(ev) = queue.pop_front() {
-                return Some((Ok(ev), (rx, hub, queue)));
-            }
-            match rx.recv().await {
-                Ok(e) => {
-                    for j in event_json(&hub, e).await {
-                        let name = j["type"].as_str().unwrap_or("event").to_string();
-                        queue.push_back(Event::default().event(name).data(j.to_string()));
+    let stream = futures::stream::unfold(
+        (rx, hub, VecDeque::<Event>::new()),
+        |(mut rx, hub, mut queue)| async move {
+            loop {
+                if let Some(ev) = queue.pop_front() {
+                    return Some((Ok(ev), (rx, hub, queue)));
+                }
+                match rx.recv().await {
+                    Ok(e) => {
+                        for j in event_json(&hub, e).await {
+                            let name = j["type"].as_str().unwrap_or("event").to_string();
+                            queue.push_back(Event::default().event(name).data(j.to_string()));
+                        }
                     }
+                    Err(broadcast::error::RecvError::Lagged(n)) => {
+                        queue.push_back(
+                            Event::default()
+                                .event("lagged")
+                                .data(json!({ "type": "lagged", "missed": n }).to_string()),
+                        );
+                    }
+                    Err(broadcast::error::RecvError::Closed) => return None,
                 }
-                Err(broadcast::error::RecvError::Lagged(n)) => {
-                    queue.push_back(
-                        Event::default().event("lagged").data(json!({ "type": "lagged", "missed": n }).to_string()),
-                    );
-                }
-                Err(broadcast::error::RecvError::Closed) => return None,
             }
-        }
-    });
+        },
+    );
     Sse::new(stream).keep_alive(KeepAlive::default())
 }

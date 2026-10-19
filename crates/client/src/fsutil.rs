@@ -10,8 +10,14 @@ use std::path::Path;
 /// Write `data` to `path` atomically. With `private`, the file is created with
 /// mode 0600 (owner read/write only) on Unix.
 pub fn write_atomic(path: &Path, data: &[u8], private: bool) -> io::Result<()> {
-    let dir = path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
-    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let dir = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
     let suffix = data_encoding::HEXLOWER.encode(&coolpsonotes_core::crypto::random_bytes::<6>());
     // Dot-prefixed so the mirror watcher and editors ignore it.
     let tmp = dir.join(format!(".{name}.cpn-tmp-{suffix}"));
@@ -68,7 +74,10 @@ pub fn create_private_dir(path: &Path) -> io::Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::DirBuilderExt;
-        fs::DirBuilder::new().recursive(true).mode(0o700).create(path)
+        fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(path)
     }
     #[cfg(not(unix))]
     fs::create_dir_all(path)
@@ -87,7 +96,9 @@ pub fn is_shared_readable(path: &Path) -> bool {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        fs::metadata(path).map(|m| m.permissions().mode() & 0o077 != 0).unwrap_or(false)
+        fs::metadata(path)
+            .map(|m| m.permissions().mode() & 0o077 != 0)
+            .unwrap_or(false)
     }
     #[cfg(not(unix))]
     {

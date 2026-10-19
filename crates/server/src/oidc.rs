@@ -8,8 +8,8 @@ use std::time::{Duration, Instant};
 
 use openidconnect::core::{CoreAuthenticationFlow, CoreClient, CoreProviderMetadata};
 use openidconnect::{
-    AuthorizationCode, ClientId, ClientSecret, CsrfToken, IssuerUrl, Nonce, PkceCodeChallenge, PkceCodeVerifier,
-    RedirectUrl, Scope, TokenResponse,
+    AuthorizationCode, ClientId, ClientSecret, CsrfToken, IssuerUrl, Nonce, PkceCodeChallenge,
+    PkceCodeVerifier, RedirectUrl, Scope, TokenResponse,
 };
 use tokio::sync::RwLock;
 
@@ -60,7 +60,11 @@ impl Oidc {
             issuer,
             client_id,
             client_secret: cfg.oidc_client_secret.clone(),
-            scopes: cfg.oidc_scopes.split_whitespace().map(str::to_string).collect(),
+            scopes: cfg
+                .oidc_scopes
+                .split_whitespace()
+                .map(str::to_string)
+                .collect(),
             redirect_uri: format!("{}/api/v1/auth/oidc/callback", cfg.public_url()),
             http,
             meta: RwLock::new(None),
@@ -70,11 +74,14 @@ impl Oidc {
     async fn metadata(&self, force: bool) -> AppResult<CoreProviderMetadata> {
         if !force
             && let Some((m, at)) = &*self.meta.read().await
-                && at.elapsed() < METADATA_TTL {
-                    return Ok(m.clone());
-                }
+            && at.elapsed() < METADATA_TTL
+        {
+            return Ok(m.clone());
+        }
         let issuer = IssuerUrl::new(self.issuer.clone()).map_err(upstream)?;
-        let m = CoreProviderMetadata::discover_async(issuer, &self.http).await.map_err(upstream)?;
+        let m = CoreProviderMetadata::discover_async(issuer, &self.http)
+            .await
+            .map_err(upstream)?;
         *self.meta.write().await = Some((m.clone(), Instant::now()));
         Ok(m)
     }
@@ -88,7 +95,11 @@ impl Oidc {
         )
         .set_redirect_uri(RedirectUrl::new(self.redirect_uri.clone()).map_err(upstream)?);
         let (challenge, verifier) = PkceCodeChallenge::new_random_sha256();
-        let mut req = client.authorize_url(CoreAuthenticationFlow::AuthorizationCode, CsrfToken::new_random, Nonce::new_random);
+        let mut req = client.authorize_url(
+            CoreAuthenticationFlow::AuthorizationCode,
+            CsrfToken::new_random,
+            Nonce::new_random,
+        );
         for s in &self.scopes {
             if s != "openid" {
                 req = req.add_scope(Scope::new(s.clone()));
@@ -103,7 +114,12 @@ impl Oidc {
         })
     }
 
-    pub async fn finish(&self, code: String, pkce_verifier: String, nonce: String) -> AppResult<Identity> {
+    pub async fn finish(
+        &self,
+        code: String,
+        pkce_verifier: String,
+        nonce: String,
+    ) -> AppResult<Identity> {
         let meta = self.metadata(false).await?;
         let client = CoreClient::from_provider_metadata(
             meta,

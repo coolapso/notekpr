@@ -13,7 +13,7 @@ use crate::editor::{Command, Editor, Mode};
 use crate::state::{self, Modal, Route, ViewMode, ui, with};
 use crate::views::icons::Icon;
 use crate::views::panels::RightPanel;
-use crate::views::{avatar, SyncStatus};
+use crate::views::{SyncStatus, avatar};
 use crate::{knowledge, render, util};
 
 thread_local! {
@@ -125,16 +125,30 @@ fn mode_effects() {
 }
 
 /// Mount an editor for a note into `container` (unless it is already there).
-fn mount_editor(container: &web_sys::HtmlElement, host: std::rc::Rc<NoteHost>, ro: bool) -> Option<std::rc::Rc<Editor>> {
+fn mount_editor(
+    container: &web_sys::HtmlElement,
+    host: std::rc::Rc<NoteHost>,
+    ro: bool,
+) -> Option<std::rc::Rc<Editor>> {
     let ui = ui();
     let (v, n) = (host.vault.clone(), host.note.clone());
-    let mounted = with(|c| c.editor.as_ref().filter(|(ev, en, _)| *ev == v && *en == n).map(|(_, _, e)| e.clone()));
+    let mounted = with(|c| {
+        c.editor
+            .as_ref()
+            .filter(|(ev, en, _)| *ev == v && *en == n)
+            .map(|(_, _, e)| e.clone())
+    });
     if let Some(ed) = mounted
-        && container.contains(Some(ed.element())) {
-            return None;
-        }
+        && container.contains(Some(ed.element()))
+    {
+        return None;
+    }
     let text = with(|c| c.replicas.get(&v).map(|r| r.note_text(&n))).unwrap_or_default();
-    let mode = if ui.mode.get_untracked() == ViewMode::Source { Mode::Source } else { Mode::Live };
+    let mode = if ui.mode.get_untracked() == ViewMode::Source {
+        Mode::Source
+    } else {
+        Mode::Live
+    };
     let vim = ui.ui_prefs.get_untracked().vim;
     container.set_inner_html("");
     let ed = Editor::new(container.unchecked_ref(), text, host, mode, ro, vim);
@@ -158,7 +172,13 @@ fn toggle_task(vault: &str, note: &str, line: usize) {
         }
     }
     let new = lines.join("\n");
-    let up = with(|c| c.replicas.get_mut(vault)?.notes.get_mut(note)?.set_text(&new));
+    let up = with(|c| {
+        c.replicas
+            .get_mut(vault)?
+            .notes
+            .get_mut(note)?
+            .set_text(&new)
+    });
     if let Some(u) = up {
         state::local_update(vault, note, u);
         if let Some(ed) = editor() {
@@ -199,7 +219,11 @@ pub fn NoteView(vault: String, note: String) -> impl IntoView {
     Effect::new(move |_| {
         ui.tree_rev.get();
         if let Some(e) = state::entry(&v, &n4) {
-            let focused = title_ref.get().is_some_and(|t| util::document().active_element().is_some_and(|a| a.is_same_node(Some(t.unchecked_ref()))));
+            let focused = title_ref.get().is_some_and(|t| {
+                util::document()
+                    .active_element()
+                    .is_some_and(|a| a.is_same_node(Some(t.unchecked_ref())))
+            });
             if !focused {
                 title_text.set(e.title().to_string());
             }
@@ -209,12 +233,16 @@ pub fn NoteView(vault: String, note: String) -> impl IntoView {
     // Mount the editor once the vault is loaded and the container exists.
     let (v, nn) = (vault.clone(), note.clone());
     Effect::new(move |_| {
-        let Some(container) = host_ref.get() else { return };
+        let Some(container) = host_ref.get() else {
+            return;
+        };
         if !loaded.get() || !exists.get() {
             return;
         }
         let ro = !state::can_write(&v);
-        let Some(ed) = mount_editor(&container, NoteHost::new(&v, &nn), ro) else { return };
+        let Some(ed) = mount_editor(&container, NoteHost::new(&v, &nn), ro) else {
+            return;
+        };
         let focus_title = FOCUS_TITLE.with(|f| f.replace(false));
         if focus_title {
             if let Some(t) = title_ref.get() {
@@ -241,7 +269,14 @@ pub fn NoteView(vault: String, note: String) -> impl IntoView {
     let (v, n) = (vault.clone(), note.clone());
     on_cleanup(move || {
         let ed = with(|c| {
-            if c.editor.as_ref().is_some_and(|(ev, en, _)| *ev == v && *en == n) { c.editor.take() } else { None }
+            if c.editor
+                .as_ref()
+                .is_some_and(|(ev, en, _)| *ev == v && *en == n)
+            {
+                c.editor.take()
+            } else {
+                None
+            }
         });
         if let Some((_, _, ed)) = ed {
             ed.destroy();
@@ -263,17 +298,32 @@ pub fn NoteView(vault: String, note: String) -> impl IntoView {
         let note = move |t: &str| knowledge::resolve_target(&vv, t, &from);
         let va = v.clone();
         let att = move |t: &str| knowledge::resolve_attachment(&va, t);
-        render::to_html(&text, &render::Ctx { note: &note, attachment: &att })
+        render::to_html(
+            &text,
+            &render::Ctx {
+                note: &note,
+                attachment: &att,
+            },
+        )
     });
     // Load images after each render of the reading view.
     let va = vault.clone();
     Effect::new(move |_| {
         let _ = reading_html.get();
         let Some(art) = reading_ref.get() else { return };
-        let Ok(imgs) = art.query_selector_all("img[data-att]") else { return };
+        let Ok(imgs) = art.query_selector_all("img[data-att]") else {
+            return;
+        };
         for i in 0..imgs.length() {
-            let Some(img) = imgs.item(i).and_then(|n| n.dyn_into::<web_sys::HtmlImageElement>().ok()) else { continue };
-            let Some(id) = img.get_attribute("data-att") else { continue };
+            let Some(img) = imgs
+                .item(i)
+                .and_then(|n| n.dyn_into::<web_sys::HtmlImageElement>().ok())
+            else {
+                continue;
+            };
+            let Some(id) = img.get_attribute("data-att") else {
+                continue;
+            };
             let v = va.clone();
             leptos::task::spawn_local(async move {
                 if let Some(url) = actions::load_attachment(&v, &id).await {
@@ -285,7 +335,12 @@ pub fn NoteView(vault: String, note: String) -> impl IntoView {
 
     let (vr, nr) = (vault.clone(), note.clone());
     let on_reading_click = move |ev: web_sys::MouseEvent| {
-        let Some(t) = ev.target().and_then(|t| t.dyn_into::<web_sys::Element>().ok()) else { return };
+        let Some(t) = ev
+            .target()
+            .and_then(|t| t.dyn_into::<web_sys::Element>().ok())
+        else {
+            return;
+        };
         if let Some(a) = t.closest("[data-note]").ok().flatten() {
             ev.prevent_default();
             if let Some(id) = a.get_attribute("data-note") {
@@ -307,7 +362,12 @@ pub fn NoteView(vault: String, note: String) -> impl IntoView {
             if !state::can_write(&vr) {
                 return;
             }
-            let Some(line) = t.get_attribute("data-task").and_then(|s| s.parse::<usize>().ok()) else { return };
+            let Some(line) = t
+                .get_attribute("data-task")
+                .and_then(|s| s.parse::<usize>().ok())
+            else {
+                return;
+            };
             toggle_task(&vr, &nr, line);
         }
     };
@@ -339,7 +399,13 @@ pub fn NoteView(vault: String, note: String) -> impl IntoView {
         crumbs.join(" / ")
     };
     let np = note.clone();
-    let others_here = move || ui.presence.get().into_iter().filter(|p| p.note.as_deref() == Some(np.as_str())).collect::<Vec<_>>();
+    let others_here = move || {
+        ui.presence
+            .get()
+            .into_iter()
+            .filter(|p| p.note.as_deref() == Some(np.as_str()))
+            .collect::<Vec<_>>()
+    };
     let (vf, nf) = (vault.clone(), note.clone());
     let fav = move || {
         ui.prefs_rev.get();
@@ -487,19 +553,26 @@ pub fn SharedNoteView(vault: String, note: String) -> impl IntoView {
     let key = StoredValue::new((vault.clone(), note.clone()));
     let info = Memo::new(move |_| {
         let (v, n) = key.get_value();
-        ui.shared.get().into_iter().find(|s| s.vault == v && s.note == n)
+        ui.shared
+            .get()
+            .into_iter()
+            .find(|s| s.vault == v && s.note == n)
     });
     let loaded = Memo::new(move |_| info.get().is_some_and(|s| s.loaded));
     let writable = Memo::new(move |_| info.get().is_some_and(|s| s.role.can_write()));
 
     let (v, n) = (vault.clone(), note.clone());
     Effect::new(move |_| {
-        let Some(container) = host_ref.get() else { return };
+        let Some(container) = host_ref.get() else {
+            return;
+        };
         if !loaded.get() {
             return;
         }
         let ro = !writable.get_untracked();
-        let Some(ed) = mount_editor(&container, NoteHost::for_shared(&v, &n), ro) else { return };
+        let Some(ed) = mount_editor(&container, NoteHost::for_shared(&v, &n), ro) else {
+            return;
+        };
         state::send_presence();
         if !ro && ui.mode.get_untracked() != ViewMode::Reading && !util::is_touch() {
             ed.focus();
@@ -515,7 +588,14 @@ pub fn SharedNoteView(vault: String, note: String) -> impl IntoView {
     let (v, n) = (vault.clone(), note.clone());
     on_cleanup(move || {
         let ed = with(|c| {
-            if c.editor.as_ref().is_some_and(|(ev, en, _)| *ev == v && *en == n) { c.editor.take() } else { None }
+            if c.editor
+                .as_ref()
+                .is_some_and(|(ev, en, _)| *ev == v && *en == n)
+            {
+                c.editor.take()
+            } else {
+                None
+            }
         });
         if let Some((_, _, ed)) = ed {
             ed.destroy();
@@ -531,25 +611,49 @@ pub fn SharedNoteView(vault: String, note: String) -> impl IntoView {
         ui.content_rev.get();
         let text = with(|c| c.replicas.get(&v).map(|r| r.note_text(&n))).unwrap_or_default();
         let none = |_: &str| None;
-        render::to_html(&text, &render::Ctx { note: &none, attachment: &none })
+        render::to_html(
+            &text,
+            &render::Ctx {
+                note: &none,
+                attachment: &none,
+            },
+        )
     });
     let (vr, nr) = (vault.clone(), note.clone());
     let on_reading_click = move |ev: web_sys::MouseEvent| {
-        let Some(t) = ev.target().and_then(|t| t.dyn_into::<web_sys::Element>().ok()) else { return };
-        if t.closest("[data-note], [data-create], [data-tag]").ok().flatten().is_some() {
+        let Some(t) = ev
+            .target()
+            .and_then(|t| t.dyn_into::<web_sys::Element>().ok())
+        else {
+            return;
+        };
+        if t.closest("[data-note], [data-create], [data-tag]")
+            .ok()
+            .flatten()
+            .is_some()
+        {
             ev.prevent_default();
             state::info("Only this note is shared with you, not the notes it links to.");
         } else if t.class_list().contains("task") {
             ev.prevent_default();
             if writable.get_untracked()
-                && let Some(line) = t.get_attribute("data-task").and_then(|s| s.parse::<usize>().ok()) {
-                    toggle_task(&vr, &nr, line);
-                }
+                && let Some(line) = t
+                    .get_attribute("data-task")
+                    .and_then(|s| s.parse::<usize>().ok())
+            {
+                toggle_task(&vr, &nr, line);
+            }
         }
     };
 
     let np = note.clone();
-    let others_here = move || ui.presence.get().into_iter().filter(|p| p.note.as_deref() == Some(np.as_str())).collect::<Vec<_>>();
+    let others_here = move || {
+        ui.presence
+            .get()
+            .into_iter()
+            .filter(|p| p.note.as_deref() == Some(np.as_str()))
+            .collect::<Vec<_>>()
+    };
     let more = RwSignal::new(false);
     let (vh, nh) = (vault.clone(), note.clone());
     let (vd, nd) = (vault.clone(), note.clone());

@@ -33,7 +33,8 @@ pub fn clear_timeout(id: i32) {
 /// Run `f` every `ms` milliseconds for the lifetime of the page.
 pub fn set_interval(ms: i32, f: impl FnMut() + 'static) {
     let cb = Closure::wrap(Box::new(f) as Box<dyn FnMut()>);
-    let _ = window().set_interval_with_callback_and_timeout_and_arguments_0(cb.as_ref().unchecked_ref(), ms);
+    let _ = window()
+        .set_interval_with_callback_and_timeout_and_arguments_0(cb.as_ref().unchecked_ref(), ms);
     cb.forget();
 }
 
@@ -89,7 +90,11 @@ pub fn human_bytes(n: u64) -> String {
         v /= 1024.0;
         i += 1;
     }
-    if i == 0 { format!("{n} B") } else { format!("{v:.1} {}", U[i]) }
+    if i == 0 {
+        format!("{n} B")
+    } else {
+        format!("{v:.1} {}", U[i])
+    }
 }
 
 /// Offer bytes to the user as a file download.
@@ -99,8 +104,12 @@ pub fn download(name: &str, mime: &str, data: &[u8]) {
     parts.push(&arr.buffer());
     let opts = web_sys::BlobPropertyBag::new();
     opts.set_type(mime);
-    let Ok(blob) = web_sys::Blob::new_with_buffer_source_sequence_and_options(&parts, &opts) else { return };
-    let Ok(url) = web_sys::Url::create_object_url_with_blob(&blob) else { return };
+    let Ok(blob) = web_sys::Blob::new_with_buffer_source_sequence_and_options(&parts, &opts) else {
+        return;
+    };
+    let Ok(url) = web_sys::Url::create_object_url_with_blob(&blob) else {
+        return;
+    };
     let a: web_sys::HtmlAnchorElement = document().create_element("a").unwrap().unchecked_into();
     a.set_href(&url);
     a.set_download(name);
@@ -126,7 +135,9 @@ pub fn copy_to_clipboard(text: &str) {
 }
 
 pub async fn read_file(file: &web_sys::File) -> Option<Vec<u8>> {
-    let buf = wasm_bindgen_futures::JsFuture::from(file.array_buffer()).await.ok()?;
+    let buf = wasm_bindgen_futures::JsFuture::from(file.array_buffer())
+        .await
+        .ok()?;
     Some(js_sys::Uint8Array::new(&buf).to_vec())
 }
 
@@ -158,9 +169,13 @@ pub fn is_image(name: &str) -> bool {
 
 /// Stable, pleasant colour for a user id (presence cursors, avatars).
 pub fn user_color(id: &str) -> String {
-    const COLORS: [&str; 10] =
-        ["#e5484d", "#f76b15", "#ffc53d", "#46a758", "#12a594", "#0090ff", "#3e63dd", "#8e4ec6", "#d6409f", "#978365"];
-    let h = id.bytes().fold(7u32, |a, b| a.wrapping_mul(31).wrapping_add(b as u32));
+    const COLORS: [&str; 10] = [
+        "#e5484d", "#f76b15", "#ffc53d", "#46a758", "#12a594", "#0090ff", "#3e63dd", "#8e4ec6",
+        "#d6409f", "#978365",
+    ];
+    let h = id
+        .bytes()
+        .fold(7u32, |a, b| a.wrapping_mul(31).wrapping_add(b as u32));
     COLORS[(h as usize) % COLORS.len()].to_string()
 }
 
@@ -176,7 +191,11 @@ pub fn initials(name: &str) -> String {
 }
 
 pub fn is_mac() -> bool {
-    window().navigator().platform().map(|p| p.to_lowercase().contains("mac")).unwrap_or(false)
+    window()
+        .navigator()
+        .platform()
+        .map(|p| p.to_lowercase().contains("mac"))
+        .unwrap_or(false)
 }
 
 pub fn mod_key() -> &'static str {
@@ -185,7 +204,11 @@ pub fn mod_key() -> &'static str {
 
 /// Touch-first devices (don't pop up the keyboard unasked).
 pub fn is_touch() -> bool {
-    window().match_media("(pointer: coarse)").ok().flatten().is_some_and(|m| m.matches())
+    window()
+        .match_media("(pointer: coarse)")
+        .ok()
+        .flatten()
+        .is_some_and(|m| m.matches())
 }
 
 pub fn confirm(msg: &str) -> bool {

@@ -26,7 +26,12 @@ struct Row {
 
 fn build_rows(vault: &str, expanded: &BTreeSet<String>) -> Vec<Row> {
     let entries = state::live_entries(vault);
-    let shared: BTreeSet<String> = state::with(|c| c.replicas.get(vault).map(|r| r.doc_keys.keys().cloned().collect()).unwrap_or_default());
+    let shared: BTreeSet<String> = state::with(|c| {
+        c.replicas
+            .get(vault)
+            .map(|r| r.doc_keys.keys().cloned().collect())
+            .unwrap_or_default()
+    });
     let folders: BTreeMap<String, Option<String>> = {
         let mut m: BTreeMap<String, Option<String>> = BTreeMap::new();
         for e in &entries {
@@ -60,33 +65,44 @@ fn build_rows(vault: &str, expanded: &BTreeSet<String>) -> Vec<Row> {
         if e.kind == EntryKind::Folder {
             continue;
         }
-        let name = if e.kind == EntryKind::Note { e.title().to_string() } else { paths::file_name(&e.path).to_string() };
-        children.entry(paths::parent(&e.path).to_string()).or_default().push(Row {
-            key: format!("f:{}", e.id),
-            id: Some(e.id.clone()),
-            kind: e.kind,
-            path: e.path.clone(),
-            name,
-            depth: 0,
-            expanded: false,
-            has_children: false,
-            shared: shared.contains(&e.id),
-        });
+        let name = if e.kind == EntryKind::Note {
+            e.title().to_string()
+        } else {
+            paths::file_name(&e.path).to_string()
+        };
+        children
+            .entry(paths::parent(&e.path).to_string())
+            .or_default()
+            .push(Row {
+                key: format!("f:{}", e.id),
+                id: Some(e.id.clone()),
+                kind: e.kind,
+                path: e.path.clone(),
+                name,
+                depth: 0,
+                expanded: false,
+                has_children: false,
+                shared: shared.contains(&e.id),
+            });
     }
     for list in children.values_mut() {
         list.sort_by(|a, b| {
             let fa = a.kind != EntryKind::Folder;
             let fb = b.kind != EntryKind::Folder;
-            fa.cmp(&fb).then(a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+            fa.cmp(&fb)
+                .then(a.name.to_lowercase().cmp(&b.name.to_lowercase()))
         });
     }
     let mut out = Vec::new();
     fn walk(parent: &str, depth: usize, children: &BTreeMap<String, Vec<Row>>, out: &mut Vec<Row>) {
-        let Some(list) = children.get(parent) else { return };
+        let Some(list) = children.get(parent) else {
+            return;
+        };
         for r in list {
             let mut r = r.clone();
             r.depth = depth;
-            r.has_children = r.kind == EntryKind::Folder && children.get(&r.path).is_some_and(|c| !c.is_empty());
+            r.has_children =
+                r.kind == EntryKind::Folder && children.get(&r.path).is_some_and(|c| !c.is_empty());
             let recurse = r.kind == EntryKind::Folder && r.expanded;
             let p = r.path.clone();
             out.push(r);
@@ -112,15 +128,16 @@ pub fn Tree(vault: String) -> impl IntoView {
     // Reveal the open note's folder.
     Effect::new(move |_| {
         if let Route::Note(v, n) = ui.route.get()
-            && let Some(e) = state::entry(&v, &n) {
-                let mut p = paths::parent(&e.path).to_string();
-                expanded.update(|s| {
-                    while !p.is_empty() {
-                        s.insert(p.clone());
-                        p = paths::parent(&p).to_string();
-                    }
-                });
-            }
+            && let Some(e) = state::entry(&v, &n)
+        {
+            let mut p = paths::parent(&e.path).to_string();
+            expanded.update(|s| {
+                while !p.is_empty() {
+                    s.insert(p.clone());
+                    p = paths::parent(&p).to_string();
+                }
+            });
+        }
     });
 
     let v_rows = vault.clone();

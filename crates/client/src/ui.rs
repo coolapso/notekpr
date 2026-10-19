@@ -7,10 +7,16 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use anyhow::{Result, bail};
 
 static QUIET: AtomicBool = AtomicBool::new(false);
+static NO_PROMPTS: AtomicBool = AtomicBool::new(false);
 
 /// Suppress informational status lines (warnings are still shown).
 pub fn set_quiet(q: bool) {
     QUIET.store(q, Ordering::Relaxed);
+}
+
+/// Never prompt, as if stdin were not a terminal (tests).
+pub fn set_non_interactive(on: bool) {
+    NO_PROMPTS.store(on, Ordering::Relaxed);
 }
 
 pub fn status(msg: &str) {
@@ -24,7 +30,7 @@ pub fn warn(msg: &str) {
 }
 
 pub fn stdin_is_tty() -> bool {
-    std::io::stdin().is_terminal()
+    !NO_PROMPTS.load(Ordering::Relaxed) && std::io::stdin().is_terminal()
 }
 
 pub fn prompt_line(prompt: &str) -> Result<String> {

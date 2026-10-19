@@ -54,6 +54,31 @@ pub struct LoginOutcome {
     pub recovered: bool,
 }
 
+/// A first-device setup: kept (sealed) from before the upload until the
+/// recovery key was shown, so neither can be lost to a failure in between.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct PendingBootstrap {
+    device_id: String,
+    request: AccountSetupRequest,
+    recovery_key: String,
+}
+
+fn pending_bootstrap(secrets: &SecretStore, user_id: &str) -> Result<Option<PendingBootstrap>> {
+    match secrets.load_bootstrap(user_id)? {
+        Some(b) => Ok(Some(
+            serde_json::from_slice(&b).context("reading the pending account setup")?,
+        )),
+        None => Ok(None),
+    }
+}
+
+/// Call once the recovery key of a new account (`LoginOutcome::recovery_key`)
+/// was shown: until then, every `login` shows it again.
+pub fn recovery_key_shown(dirs: &Dirs, profile: &str) -> Result<()> {
+    let ps = ProfileStore::new(dirs, profile)?;
+    SecretStore::open(&ps.data_dir())?.forget_bootstrap()
+}
+
 pub fn host_name() -> String {
     #[cfg(unix)]
     {
@@ -171,15 +196,21 @@ pub async fn login(dirs: &Dirs, profile: &str, opts: LoginOptions) -> Result<Log
                 .replace(|c: char| !c.is_ascii_alphanumeric(), "-")
         );
     }
-    let mut p =
-        existing.unwrap_or_else(|| Profile::new(&server, PrincipalKind::Human, opts.insecure_http));
-    p.server = server.clone();
-    p.insecure_http |= opts.insecure_http;
-    p.session_token = Some(token.clone());
-    p.session_expires_at = Some(expires_at);
-    p.user_id = Some(user.id.clone());
-    p.display_name = Some(user.display_name.clone());
-    ps.save(&p)?;
+    // Read-modify-write (the authentication above can take minutes; a
+    // running daemon may have changed the profile meanwhile).
+    let insecure = opts.insecure_http;
+    let mut p = ps.upsert(
+        || Profile::new(&server, PrincipalKind::Human, insecure),
+        |p| {
+            p.server = server.clone();
+            p.insecure_http |= insecure;
+            p.session_token = Some(token.clone());
+            p.session_expires_at = Some(expires_at);
+            p.user_id = Some(user.id.clone());
+            p.display_name = Some(user.display_name.clone());
+            p.clone()
+        },
+    )?;
 
     let api = Api::new(&server, Credentials::Session(token))?;
     let secrets = SecretStore::open(&ps.data_dir())?;
@@ -187,9 +218,23 @@ pub async fn login(dirs: &Dirs, profile: &str, opts: LoginOptions) -> Result<Log
 
     // 2. Already enrolled on this device: renew the session only.
     if let Some(account) = secrets.load_account(&user.id)? {
-        let key = me.account_key.as_ref().ok_or_else(|| {
-            anyhow!("the server has no account key for you but this device has one; the account may have been reset")
-        })?;
+        let pending = pending_bootstrap(&secrets, &user.id)?;
+        let key = match (&me.account_key, &pending) {
+            (Some(k), _) => k.clone(),
+            // A first-device setup whose upload did not finish (network,
+            // crash): upload the same keys again.
+            (None, Some(pb)) => {
+                api.put::<_, ()>("/me/account-key", &pb.request)
+                    .await
+                    .context("uploading the new account key")?;
+                pb.request.key.clone()
+            }
+            (None, None) => bail!(
+                "the server has no account key for you but this device has one; the account may have been reset"
+            ),
+        };
+        // Not shown yet (the process ended before): show it now.
+        let recovery_key = pending.map(|p| p.recovery_key);
         if key.verify()? != account.public() {
             bail!(
                 "the account key on the server differs from the one on this device. This can mean the server was \
@@ -211,18 +256,32 @@ pub async fn login(dirs: &Dirs, profile: &str, opts: LoginOptions) -> Result<Log
                         user,
                         device_id: dev,
                         fingerprint: account.public().fingerprint(),
-                        recovery_key: None,
-                        reused_device: true,
+                        reused_device: recovery_key.is_none(),
+                        recovery_key,
                         recovered: false,
                     });
                 }
-                Err(e) if matches!(e.status(), Some(404 | 409 | 403)) => {
-                    // Respect the removal: forget the secrets and enroll again
-                    // (approval by another device, or the recovery key).
-                    ui::warn(
-                        "this device was removed from your account; it has to be approved again",
-                    );
-                    secrets.forget_account()?;
+                // The server answers 404 for a device that is unknown or was
+                // revoked. A 404 can also come from a misconfigured proxy, so
+                // the device list must confirm it before anything changes.
+                Err(e) if e.is_not_found() && device_was_removed(&api, &dev).await? => {
+                    ui::warn(&format!(
+                        "this device ({dev}) was removed from your account (with `devices revoke` or in the web \
+                         app). It must be approved again before it can decrypt anything new"
+                    ));
+                    if opts.interactive
+                        && ui::stdin_is_tty()
+                        && !ui::confirm("Register this computer as a new device now?")
+                    {
+                        bail!("cancelled; nothing was changed");
+                    }
+                    // Respect the removal, but keep the old (sealed) secrets.
+                    if let Some(aside) = secrets.set_aside_account()? {
+                        ui::status(&format!(
+                            "the old device keys were moved to {} (not deleted)",
+                            aside.display()
+                        ));
+                    }
                     ps.update(|p| {
                         p.device_id = None;
                         p.device_pending = false;
@@ -238,9 +297,16 @@ pub async fn login(dirs: &Dirs, profile: &str, opts: LoginOptions) -> Result<Log
     // 3. First device of the account.
     let Some(key) = me.account_key.clone() else {
         let b = engine::bootstrap_account(&user.id, &device_name)?;
-        api.put::<_, ()>("/me/account-key", &b.request)
-            .await
-            .context("uploading the new account key")?;
+        // Everything is kept locally *before* the upload: if the upload or
+        // this process fails, the next login uploads the same keys and shows
+        // the recovery key then. (Uploading first could leave an account
+        // whose only secret was never saved anywhere.)
+        let pending = PendingBootstrap {
+            device_id: b.device_id.clone(),
+            request: b.request.clone(),
+            recovery_key: b.recovery.to_display(),
+        };
+        secrets.save_bootstrap(&user.id, &serde_json::to_vec(&pending)?)?;
         secrets.save_device(&user.id, &b.device_id, &b.device)?;
         secrets.save_account(&user.id, &b.account)?;
         ps.update(|p| {
@@ -248,11 +314,14 @@ pub async fn login(dirs: &Dirs, profile: &str, opts: LoginOptions) -> Result<Log
             p.device_name = Some(device_name.clone());
             p.device_pending = false;
         })?;
+        api.put::<_, ()>("/me/account-key", &b.request)
+            .await
+            .context("uploading the new account key (run `coolpsonotes login` again to retry)")?;
         return Ok(LoginOutcome {
             user,
             device_id: b.device_id,
             fingerprint: b.account.public().fingerprint(),
-            recovery_key: Some(b.recovery.to_display()),
+            recovery_key: Some(pending.recovery_key),
             reused_device: false,
             recovered: false,
         });
@@ -342,6 +411,19 @@ pub async fn login(dirs: &Dirs, profile: &str, opts: LoginOptions) -> Result<Log
         reused_device: false,
         recovered,
     })
+}
+
+/// Whether the server's device list confirms that `device_id` was revoked or
+/// is unknown to the account.
+async fn device_was_removed(api: &Api, device_id: &str) -> Result<bool> {
+    let devices: Vec<DeviceInfo> = api
+        .get("/devices")
+        .await
+        .context("checking whether this device was removed")?;
+    Ok(devices
+        .iter()
+        .find(|d| d.id == device_id)
+        .is_none_or(|d| d.status == DeviceStatus::Revoked))
 }
 
 /// Unwrap the account secret with the recovery key and approve this device.
@@ -521,27 +603,32 @@ pub async fn agent_setup(
         ),
         (None, None) => {
             let (a, req) = engine::bootstrap_agent(&agent_id);
+            // Saved first: if the upload fails, running `agent setup` again
+            // uploads this key (the case above) instead of being locked out.
+            secrets.save_account(&agent_id, &a)?;
             api.put::<_, ()>("/me/account-key", &req)
                 .await
-                .context("uploading the agent key")?;
-            secrets.save_account(&agent_id, &a)?;
+                .context("uploading the agent key (run `agent setup` again to retry)")?;
             (a, true)
         }
     };
     secrets.save_account(&agent_id, &account)?;
-    let mut p =
-        existing.unwrap_or_else(|| Profile::new(&server, PrincipalKind::Agent, opts.insecure_http));
-    p.kind = PrincipalKind::Agent;
-    p.server = server;
-    p.insecure_http |= opts.insecure_http;
-    p.user_id = Some(agent_id.clone());
-    p.display_name = Some(me.user.display_name.clone());
-    p.session_token = None;
-    p.agent = Some(AgentCredentials {
-        client_id: opts.client_id,
-        client_secret_file: secret_file,
-    });
-    ps.save(&p)?;
+    let insecure = opts.insecure_http;
+    ps.upsert(
+        || Profile::new(&server, PrincipalKind::Agent, insecure),
+        |p| {
+            p.kind = PrincipalKind::Agent;
+            p.server = server.clone();
+            p.insecure_http |= insecure;
+            p.user_id = Some(agent_id.clone());
+            p.display_name = Some(me.user.display_name.clone());
+            p.session_token = None;
+            p.agent = Some(AgentCredentials {
+                client_id: opts.client_id.clone(),
+                client_secret_file: secret_file.clone(),
+            });
+        },
+    )?;
     Ok(AgentOutcome {
         agent_id,
         display_name: me.user.display_name,

@@ -6,34 +6,104 @@
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::path::Path;
+use std::time::Duration;
+
+/// Prefix and suffix of our temporary files. Short and fixed-length, so a
+/// file whose own name is close to the 255-byte limit can still be replaced
+/// (`ENAMETOOLONG`), and dot-prefixed, so the mirror watcher and editors
+/// ignore them.
+const TMP_PREFIX: &str = ".cpn-";
+const TMP_SUFFIX: &str = ".tmp";
+/// Marker of the temporary names used by older versions (`.{name}.cpn-tmp-{hex}`).
+const LEGACY_TMP_MARK: &str = ".cpn-tmp-";
+
+/// Whether a file name is one of our temporary files (current or legacy form).
+pub fn is_temp_name(name: &str) -> bool {
+    let current = name
+        .strip_prefix(TMP_PREFIX)
+        .and_then(|r| r.strip_suffix(TMP_SUFFIX))
+        .is_some_and(|hex| !hex.is_empty() && hex.bytes().all(|b| b.is_ascii_hexdigit()));
+    let legacy = name.starts_with('.')
+        && name
+            .rsplit_once(LEGACY_TMP_MARK)
+            .is_some_and(|(_, hex)| !hex.is_empty() && hex.bytes().all(|b| b.is_ascii_hexdigit()));
+    current || legacy
+}
+
+pub(crate) fn temp_path(dir: &Path) -> std::path::PathBuf {
+    let suffix = data_encoding::HEXLOWER.encode(&coolpsonotes_core::crypto::random_bytes::<6>());
+    dir.join(format!("{TMP_PREFIX}{suffix}{TMP_SUFFIX}"))
+}
 
 /// Write `data` to `path` atomically. With `private`, the file is created with
 /// mode 0600 (owner read/write only) on Unix.
 pub fn write_atomic(path: &Path, data: &[u8], private: bool) -> io::Result<()> {
+    write_atomic_if(path, data, private, || Ok(true)).map(|_| ())
+}
+
+/// Like [`write_atomic`], but `check` runs after the new content is safely on
+/// disk and immediately before the rename. If it returns `false` the
+/// temporary file is removed, `path` is left alone and `Ok(false)` returned.
+/// This keeps the window in which a concurrent writer (an editor saving the
+/// same file) can be overwritten as small as possible.
+pub fn write_atomic_if(
+    path: &Path,
+    data: &[u8],
+    private: bool,
+    check: impl FnOnce() -> io::Result<bool>,
+) -> io::Result<bool> {
     let dir = path
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
         .unwrap_or(Path::new("."));
-    let name = path
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_default();
-    let suffix = data_encoding::HEXLOWER.encode(&coolpsonotes_core::crypto::random_bytes::<6>());
-    // Dot-prefixed so the mirror watcher and editors ignore it.
-    let tmp = dir.join(format!(".{name}.cpn-tmp-{suffix}"));
+    let tmp = temp_path(dir);
     let result = (|| {
         let mut f = open_new(&tmp, private)?;
         f.write_all(data)?;
         f.sync_all()?;
         drop(f);
+        if !check()? {
+            return Ok(false);
+        }
         fs::rename(&tmp, path)?;
         sync_dir(dir);
-        Ok(())
+        Ok(true)
     })();
-    if result.is_err() {
+    if !matches!(result, Ok(true)) {
         let _ = fs::remove_file(&tmp);
     }
     result
+}
+
+/// Remove temporary files of ours left behind by a crash, below `dir` (at
+/// most `max_depth` levels deep, not following symlinks), if they are older
+/// than `min_age`. Returns how many were removed.
+pub fn remove_stale_temp_files(dir: &Path, max_depth: usize, min_age: Duration) -> usize {
+    let mut n = 0;
+    let walker = walkdir::WalkDir::new(dir)
+        .min_depth(1)
+        .max_depth(max_depth)
+        .follow_links(false)
+        .into_iter()
+        // Never descend into other dot-directories (`.git`, `.obsidian`, …).
+        .filter_entry(|e| {
+            e.file_type().is_file() || e.file_name().to_str().is_some_and(|n| !n.starts_with('.'))
+        });
+    for e in walker.filter_map(|e| e.ok()) {
+        if !e.file_type().is_file() || !e.file_name().to_str().is_some_and(is_temp_name) {
+            continue;
+        }
+        let old = e
+            .metadata()
+            .ok()
+            .and_then(|m| m.modified().ok())
+            .and_then(|t| t.elapsed().ok())
+            .is_some_and(|age| age >= min_age);
+        if old && fs::remove_file(e.path()).is_ok() {
+            n += 1;
+        }
+    }
+    n
 }
 
 fn open_new(path: &Path, private: bool) -> io::Result<File> {
@@ -121,5 +191,59 @@ mod tests {
         assert!(!is_shared_readable(&p));
         // No temporary files are left behind.
         assert_eq!(fs::read_dir(d.path()).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn temp_names_are_short_and_recognised() {
+        let d = tempfile::tempdir().unwrap();
+        // A name at the file-system limit can still be replaced atomically.
+        let long = "x".repeat(250) + ".md";
+        let p = d.path().join(&long);
+        write_atomic(&p, b"one", true).unwrap();
+        write_atomic(&p, b"two", true).unwrap();
+        assert_eq!(fs::read(&p).unwrap(), b"two");
+        let t = temp_path(d.path());
+        let name = t.file_name().unwrap().to_str().unwrap();
+        assert!(name.len() < 24 && is_temp_name(name), "{name}");
+        assert!(is_temp_name(".note.md.cpn-tmp-0a1b2c"));
+        for n in ["note.md", ".cpn-.tmp", ".cpn-xyz.tmp", "a.cpn-tmp-00"] {
+            assert!(!is_temp_name(n), "{n}");
+        }
+    }
+
+    #[test]
+    fn checked_write_leaves_the_file_alone_when_the_check_fails() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("x.md");
+        fs::write(&p, "theirs").unwrap();
+        assert!(!write_atomic_if(&p, b"ours", true, || Ok(false)).unwrap());
+        assert_eq!(fs::read(&p).unwrap(), b"theirs");
+        assert_eq!(fs::read_dir(d.path()).unwrap().count(), 1);
+        assert!(write_atomic_if(&p, b"ours", true, || Ok(true)).unwrap());
+        assert_eq!(fs::read(&p).unwrap(), b"ours");
+    }
+
+    #[test]
+    fn stale_temp_files_are_removed() {
+        let d = tempfile::tempdir().unwrap();
+        fs::create_dir_all(d.path().join("a/b")).unwrap();
+        fs::create_dir_all(d.path().join(".git")).unwrap();
+        for p in [
+            "a/.cpn-0123456789ab.tmp",
+            "a/b/.Note.md.cpn-tmp-abcdef",
+            ".git/.cpn-0123456789ab.tmp",
+            "a/keep.md",
+        ] {
+            fs::write(d.path().join(p), "x").unwrap();
+        }
+        assert_eq!(remove_stale_temp_files(d.path(), 8, Duration::ZERO), 2);
+        assert!(d.path().join("a/keep.md").exists());
+        assert!(d.path().join(".git/.cpn-0123456789ab.tmp").exists());
+        // Young files are kept (a write may be in progress).
+        fs::write(d.path().join("a/.cpn-0123456789ab.tmp"), "x").unwrap();
+        assert_eq!(
+            remove_stale_temp_files(d.path(), 8, Duration::from_secs(3600)),
+            0
+        );
     }
 }

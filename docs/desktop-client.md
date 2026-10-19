@@ -92,6 +92,11 @@ Store it in a password manager or on paper. It is the only way back in if you
 lose every device; nobody, including the server administrator, can recover
 your notes without it. Replace it any time with `coolpsonotes recovery rotate`.
 
+The keys are saved (sealed) on this device before anything is uploaded. If
+the setup is interrupted — the network fails, the process is killed — run
+`login` again: it uploads the same keys and shows the recovery key again, as
+long as it was never displayed.
+
 ### Additional devices
 
 If your account already has keys (you use the web app or another computer),
@@ -116,12 +121,23 @@ same pending device.
 Comparing the codes defeats a server that substitutes its own device key: the
 code is derived from the user id, the device id and the device's public key.
 
+If this computer was removed from the account (`devices revoke`, or in the
+web app), the next `login` notices — only after the server's device list
+confirms it, never on a bare error — asks before continuing (on a terminal),
+moves the old sealed keys aside (`account.sealed.removed-<time>` in the data
+directory, never deleted) and enrolls the computer as a new device.
+
 ### Logging out
 
 * `coolpsonotes logout` ends the session; local encrypted copies stay (read
   them offline; `login` again to sync).
 * `coolpsonotes logout --forget` also removes this device from the account and
-  deletes the profile and all of its local data.
+  deletes the profile and all of its local data. It uploads queued changes
+  first; if some cannot be uploaded (offline, too large) it says how many
+  would be lost before asking (`--yes` confirms). The decrypted Markdown
+  mirror folders of the profile are deleted only when you agree to it at the
+  prompt or pass `--remove-mirror`; otherwise they are left in place (and
+  named). `vault leave` works the same way for one vault.
 * `coolpsonotes devices list | approve <id> | revoke <id>` manages devices.
   Revoking a device ends its sessions; if it might be compromised, also rotate
   the keys of shared vaults (`vault rotate`).
@@ -152,7 +168,20 @@ vault-relative, `.md` is optional for notes.
 
 Every command first catches up with the server (REST) and uploads queued
 changes; read commands fall back to the local copy when the server is
-unreachable. `--json` gives machine-readable output for listings, `-q`
+unreachable.
+
+**One process per profile.** Only one coolpsonotes process at a time may own
+a profile's local copies (two would overwrite each other's files and lose
+queued or received changes). While `sync` or `gateway` runs, read commands
+(`ls`, `cat`, `search`, `backlinks`, `status`, `export`, `history`, `trash
+list`, `vault list`) show that process's local copies read-only — it keeps
+them current — and commands that change something (`write`, `mv`, `rm`,
+`mkdir`, `import`, `vault …`, `sync --once`, …) wait up to 3 seconds for
+another one-shot command and then stop with "profile … is in use by another
+coolpsonotes process": edit the mirrored files or use the gateway instead, or
+stop the daemon. A second `sync` or `gateway` on the same profile refuses to
+start. (Use separate profiles for a mirror and a gateway at the same time.)
+The lock is released automatically when a process ends, also after a crash. `--json` gives machine-readable output for listings, `-q`
 silences status lines. Status and warnings go to stderr, results to stdout.
 
 Revisions: a note gets a revision when an editing session ends (after a CLI
@@ -165,12 +194,20 @@ For a step-by-step guide to working in Obsidian, Neovim or any other editor
 with an always-running mirror, see [own-editor.md](own-editor.md).
 
 ```sh
-coolpsonotes sync                       # encrypted replicas only, live
-coolpsonotes sync --dir ~/Notes         # + plaintext Markdown mirror, live
+coolpsonotes sync                       # encrypted replicas, live (+ the remembered mirror, see below)
+coolpsonotes sync --dir ~/Notes         # + plaintext Markdown mirror, live; remembered for next time
 coolpsonotes sync --dir ~/Notes --once  # catch up, ingest disk changes, push, exit
 coolpsonotes sync --vault Family        # restrict to some vaults (repeatable)
 coolpsonotes sync --no-dir              # forget the remembered mirror directory
+coolpsonotes sync --once --allow-mass-delete   # confirm that many files were deleted on purpose (§7)
+coolpsonotes sync --once --restore-missing     # write vanished files (or a missing mirror) back
 ```
+
+The directory given with `--dir` is remembered in the profile: a later plain
+`coolpsonotes sync` mirrors into it again and says so when it starts
+("mirroring decrypted files into … (remembered …)"). `sync --no-dir` forgets
+it, so `sync` keeps only the encrypted replicas. `coolpsonotes status` shows
+which directory is mirrored.
 
 `sync` subscribes to every vault over the WebSocket (`since` = the local
 cursor), applies catch-up pages and live updates as they arrive, uploads local
@@ -192,6 +229,12 @@ Restart=on-failure
 WantedBy=default.target
 ```
 
+(Plain `sync` also mirrors into a directory remembered from an earlier
+`sync --dir`; run `sync --no-dir` once for encrypted replicas only.) If the
+live connection ends for good (session revoked) or the Markdown mirror stops
+working, `sync` exits with an error instead of carrying on half-dead, so
+`Restart=on-failure` brings it back.
+
 ### Modes and their security implications
 
 | Mode | What is on disk | Protects against |
@@ -202,9 +245,11 @@ WantedBy=default.target
 The plaintext mirror is the point of "real Markdown files", but anything that
 can read `DIR` can read those notes: other programs running as you, backup or
 cloud-sync tools that pick the folder up, anyone with the unlocked laptop.
-It therefore has to be **confirmed explicitly** the first time — interactively,
-or with `--plaintext-ok` — and the choice is remembered in the profile with
-the directory. The server and the encrypted copies are unaffected.
+It therefore has to be **confirmed explicitly** for each directory the first
+time it is used — interactively, or with `--plaintext-ok` — and the
+confirmation is remembered in the profile for that directory only (pointing
+the mirror somewhere else asks again). The server and the encrypted copies
+are unaffected.
 
 ### Layout
 
@@ -219,9 +264,22 @@ the directory. The server and the encrypted copies are unaffected.
 ```
 
 The directory name is chosen once per vault and kept, even if the vault is
-renamed later. Entries whose path has a hidden segment (`.git/…`, `.obsidian/…`)
-are never written to disk: a collaborator must not be able to plant files such
-as git hooks in your mirror.
+renamed later. A small `.coolpsonotes-vault` file in it records which vault it
+mirrors: a folder that already holds other files — left behind by a deleted or
+left vault with the same name, or not created by coolpsonotes at all — is never
+adopted (its files would be imported into the vault); the vault gets a
+suffixed folder (`Diary (3f2a1c)`) instead. Entries whose path has a hidden
+segment (`.git/…`, `.obsidian/…`) are never written to disk: a collaborator
+must not be able to plant files such as git hooks in your mirror. On Windows,
+paths that are not valid Win32 names (`C:` prefixes, `:` `<>"|?*`, device names
+such as `CON`, trailing dots or spaces) are not mirrored either.
+
+On case-insensitive file systems (the macOS and Windows defaults, detected at
+start), paths are compared ignoring case: vaults named `Notes` and `notes` get
+separate folders, and notes whose paths differ only in case (`Idea.md`,
+`idea.md`) get distinct file names (`Idea.md`, `idea 2.md`) instead of
+overwriting each other. Renaming a file by changing only its case on disk is
+not synced.
 
 ### Ignored files
 
@@ -234,7 +292,12 @@ synced. Markdown files must be UTF-8.
 
 A `notify` watcher triggers a pass ~300 ms after file activity settles; a full
 scan runs at startup (catching edits made while the client was not running)
-and every 30 s as a safety net. Each file's size, mtime and content hash are
+and every 30 s as a safety net. If the directory cannot be watched (the
+inotify watch limit, `fs.inotify.max_user_watches`, or a file system without
+change events) the client warns and scans every 5 s instead; it re-attaches
+the watch when that becomes possible (e.g. after a remount). One file that
+cannot be read or written (a name the file system rejects, missing
+permissions) is reported once and skipped; it never stops the other files. Each file's size, mtime and content hash are
 recorded when written or read, so the client recognises its own writes and
 never re-uploads unchanged files; files touched within the timestamp
 granularity are compared by content. Remote changes are written ~150 ms after
@@ -242,6 +305,10 @@ they arrive, atomically (temporary file + rename), and only if the file still
 matches what the client last saw.
 
 ## 5. Offline behaviour
+
+"Offline" includes a server that answers with a server error (HTTP 5xx, e.g.
+a reverse proxy's `502` while the server restarts): changes stay queued and
+reads use the local copies.
 
 Everything works offline against the encrypted replica: `ls`, `cat`, `search`,
 `backlinks`, `write`, `mv`, `rm`, imports and mirror edits. Changes are queued
@@ -273,7 +340,10 @@ the editor loaded the file. Instead:
    the state matching each version it read back from the file.
 2. When the file changes, the base the editor most likely started from is
    chosen: the one needing the fewest changed lines (then bytes) to become the
-   file; ties go to the newest.
+   file; ties go to the newest. Only the version the editor saved last and the
+   versions the client wrote after it are candidates — so going back to an
+   older text (undo after saving, `git checkout`) is synced as the change it
+   is, not mistaken for an unchanged file.
 3. That base is forked into a fresh document with a **new client id** (an id is
    never reused with a stale clock), the textual diff `base → file` is applied
    there as fine-grained insertions/deletions, and the resulting CRDT update
@@ -305,6 +375,23 @@ the remote edit.
 * **Deleting a file** moves the note to the vault's **trash** (never a
   permanent delete). `coolpsonotes trash list|restore` or the web app bring it
   back, and the mirror writes it again.
+* **Many files vanishing at once is not a deletion.** If a vault's whole
+  folder disappears, or more than 10 of its mirrored files and more than half
+  of them are missing at the same time (a moved, renamed or unmounted folder,
+  a sync tool gone wrong), nothing is moved to the trash — not even by
+  `--once` — and the folder is not re-created; the client warns and waits for
+  the files to come back. If you really deleted them, stop the daemon and run
+  `coolpsonotes sync --once --allow-mass-delete` (asked interactively with
+  `--once` on a terminal); `--restore-missing` writes them back from the local
+  copies instead.
+* **A missing mirror directory** is never re-created silently: `sync` refuses
+  to start when the remembered (or given) directory is gone although notes
+  were mirrored into it, and a running daemon pauses while it is gone (an
+  unmounted drive). Put it back, or start with `--restore-missing` for a fresh
+  copy at that place.
+* **A file replaced by a symlink, folder or special file** is not a deletion
+  either: the note is kept and that path is no longer synced (the link is
+  never written through).
 * **Renaming or moving a file** (`mv`, or delete + create of identical content
   within 1.5 s) moves the entry, keeping its identity and history. A directory
   left empty becomes an explicit folder.
@@ -375,19 +462,23 @@ Markdown mirror.
 ```sh
 coolpsonotes export Family --out ~/backup/family           # directory
 coolpsonotes export Family --out ~/backup/family.zip       # zip archive
-coolpsonotes import Family ~/old-obsidian-vault [--into Imported] [--skip-existing]
+coolpsonotes import Family ~/old-obsidian-vault [--into Imported] [--skip-existing] [--dry-run]
 coolpsonotes import Family ~/backup/family.zip
 ```
 
 Exports are a plain tree of `.md` files, attachments and (empty) folders — no
 proprietary metadata — readable by any Markdown tool. Trashed documents are not
-exported. An existing non-empty target is refused unless `--force`.
+exported. An existing non-empty target is refused unless `--force`. Exports
+are decrypted, so they are written for the owner only (files `0600`, folders
+`0700`, also inside the zip); a failed zip export leaves no `.partial` file.
 
 Import walks a directory or zip, keeping folders: `.md` files become notes
 (existing notes at the same path are diff-merged; `--skip-existing` leaves
-them alone), other files become attachments, empty directories become folders.
-Hidden files and editor leftovers are skipped, as are files over the server's
-attachment limit (reported).
+them alone — "the same path" ignoring case, exactly as `write` matches notes),
+other files become attachments, empty directories become folders. Hidden
+files and editor leftovers are skipped, as are files over the server's
+attachment limit (reported). `--dry-run` reports what an import would create,
+update or leave unchanged without changing anything.
 
 ## 10. Where data is stored and how it is protected
 
@@ -424,11 +515,22 @@ lost-or-stolen-laptop case. Session tokens in the profile grant server access
   Verify the new fingerprint with them before using `--accept-new-key`.
 * **"vault … was shared with you but its key has not arrived yet"** — the
   owner's client grants it next time it syncs.
+* **"local.key is missing, but … contains encrypted local data"** — the key
+  that seals this profile's files was deleted (or not restored with a
+  backup). The client refuses to create a new one, which would make every
+  local copy unreadable: restore `local.key`, or start over with
+  `logout --forget` and `login` (changes never uploaded are lost).
 * **"read-only on this device"** — access was revoked or the vault deleted; the
   local copy stays readable (`cat`, `export`) but is not synced.
 * **A file does not sync** — hidden names and editor temporary files are
   ignored by design; Markdown must be UTF-8; very large attachments are
   rejected by the server limit (warning printed).
+* **"changes are larger than the server accepts"** — large edits (a big paste
+  or import) are split into several updates below the server's per-update
+  limit (`/info`, remembered for offline use). A change that cannot be split
+  is kept on this device (still visible locally, counted as "TOO LARGE" in
+  `status`) and set aside, so everything else keeps uploading; it goes out by
+  itself once the administrator raises `COOLPSONOTES_MAX_UPDATE_KB`.
 * **Environment overlap** — the server also reads `COOLPSONOTES_DATA_DIR`; do
   not export it in a shell that also starts a server, or use separate shells.
 * **More detail** — `COOLPSONOTES_LOG=debug coolpsonotes sync` logs to stderr.

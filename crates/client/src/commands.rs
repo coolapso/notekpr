@@ -19,10 +19,10 @@ use crate::cli::*;
 use crate::gateway::{self, Gateway};
 use crate::hub::{Hub, HubOptions};
 use crate::manage;
-use crate::mirror::Mirror;
+use crate::mirror::{Mirror, MirrorOptions};
 use crate::note_shares;
 use crate::ops;
-use crate::profile::{Dirs, ProfileStore};
+use crate::profile::{Dirs, ProfileLock, ProfileStore};
 use crate::session::Session;
 use crate::vault::ListKind;
 use crate::{livesync, transfer, ui};
@@ -31,6 +31,9 @@ pub struct Ctx {
     pub dirs: Dirs,
     pub profile: String,
     pub json: bool,
+    /// Another process (a sync daemon, the gateway) owns this profile's
+    /// local data: read its local copies, never write them.
+    pub detached: bool,
 }
 
 impl Ctx {
@@ -42,19 +45,193 @@ impl Ctx {
         Ok(Arc::new(Session::open(&self.dirs, &self.profile)?))
     }
 
-    /// A hub for one-shot commands: catches up and pushes the given vaults.
+    /// A hub for one-shot commands: catches up and pushes the given vaults
+    /// (or, detached, only reads the local copies).
     async fn hub(&self, vaults: &[&str]) -> Result<Arc<Hub>> {
         let opts = HubOptions {
             vaults: vaults.iter().map(|s| s.to_string()).collect(),
             read_only: false,
             offline_ok: true,
-            catch_up: true,
+            catch_up: !self.detached,
+            detached: self.detached,
         };
         Hub::start(self.session()?, opts).await
     }
 
     fn print_json(&self, v: &impl Serialize) {
         println!("{}", serde_json::to_string_pretty(v).unwrap_or_default());
+    }
+}
+
+/// How a command uses the profile's local data (see [`ProfileLock`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Access {
+    /// Only the server and the profile file.
+    Free,
+    /// Reads local copies: if a daemon owns them, read them without syncing.
+    Read,
+    /// Changes local copies: needs the lock (waits briefly for it).
+    Write,
+    /// Owns the local copies while running (sync, gateway).
+    Daemon,
+}
+
+fn access(c: &Command) -> Access {
+    match c {
+        Command::Login(_)
+        | Command::Profiles
+        | Command::Devices(_)
+        | Command::Recovery(_)
+        | Command::Shared(_)
+        | Command::Agent(_) => Access::Free,
+        Command::Logout { forget, .. } => {
+            if *forget {
+                Access::Write
+            } else {
+                Access::Free
+            }
+        }
+        Command::Status
+        | Command::Ls { .. }
+        | Command::Cat { .. }
+        | Command::Search { .. }
+        | Command::Backlinks { .. }
+        | Command::Export { .. }
+        | Command::NoteShares { .. }
+        | Command::Trash(TrashCmd::List { .. })
+        | Command::Vault(VaultCmd::List) => Access::Read,
+        Command::History(h) => match h.cmd {
+            Some(HistoryCmd::Restore { .. }) => Access::Write,
+            _ => Access::Read,
+        },
+        Command::Sync(a) if a.no_dir => Access::Free,
+        Command::Sync(a) if a.once => Access::Write,
+        Command::Sync(_) => Access::Daemon,
+        Command::Gateway(a) if matches!(a.cmd, Some(GatewayCmd::Token { .. })) => Access::Free,
+        Command::Gateway(_) => Access::Daemon,
+        _ => Access::Write,
+    }
+}
+
+/// How long a one-shot command waits for another one to finish.
+const LOCK_WAIT: Duration = Duration::from_secs(3);
+
+/// Take the profile lock the command needs. Returns the guard (held until
+/// the command ends) and whether to work detached (read-only view).
+async fn lock_profile(
+    dirs: &Dirs,
+    profile: &str,
+    access: Access,
+) -> Result<(Option<ProfileLock>, bool)> {
+    let in_use = || {
+        anyhow!(
+            "profile '{profile}' is in use by another coolpsonotes process (a running `sync` daemon or \
+             `gateway`); two processes would overwrite each other's local copies. Edit the mirrored files or use \
+             the gateway instead, or stop that process and try again"
+        )
+    };
+    match access {
+        Access::Free => Ok((None, false)),
+        Access::Daemon => match ProfileLock::try_acquire(dirs, profile)? {
+            Some(l) => Ok((Some(l), false)),
+            None => Err(in_use()),
+        },
+        // Reading never waits: the owner keeps the local copies current.
+        Access::Read => match ProfileLock::try_acquire(dirs, profile)? {
+            Some(l) => Ok((Some(l), false)),
+            None => {
+                ui::status(
+                    "another coolpsonotes process (sync daemon or gateway) keeps this profile in sync; showing its \
+                     local copies (read-only)",
+                );
+                Ok((None, true))
+            }
+        },
+        // Another one-shot command usually finishes within moments.
+        Access::Write => match ProfileLock::acquire_within(dirs, profile, LOCK_WAIT).await? {
+            Some(l) => Ok((Some(l), false)),
+            None => Err(in_use()),
+        },
+    }
+}
+
+/// Upload what is queued (one vault, or all), then count what still exists
+/// only here: queued and oversized updates, attachments not uploaded.
+/// `None` if that could not be checked (signed out, no keys).
+async fn push_and_count_unsynced(ctx: &Ctx, vault: Option<&str>) -> Option<usize> {
+    let refs: Vec<&str> = vault.into_iter().collect();
+    let hub = match ctx.hub(&refs).await {
+        Ok(h) => h,
+        Err(e) => {
+            tracing::debug!("cannot check for unsynced changes: {e:#}");
+            return None;
+        }
+    };
+    let mut n = 0;
+    for v in hub.vaults() {
+        let g = v.lock().await;
+        n += g.replica.pending.len() + g.quarantined.len() + g.pending_blobs.len();
+    }
+    Some(n)
+}
+
+fn local_vault_ids(data_dir: &Path) -> std::collections::BTreeSet<String> {
+    std::fs::read_dir(data_dir.join("vaults"))
+        .map(|rd| {
+            rd.filter_map(|e| e.ok())
+                .filter_map(|e| e.file_name().to_str().map(str::to_string))
+                .filter(|n| crate::store::valid_id(n))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// This profile's mirror folders of `ids`, if they are to be deleted too
+/// (`--remove-mirror`, or confirmed on a terminal); otherwise says that they
+/// stay and returns `None`.
+fn mirror_folders_to_remove(
+    ctx: &Ctx,
+    ids: &std::collections::BTreeSet<String>,
+    yes: bool,
+    remove_mirror: bool,
+) -> Result<Option<Vec<std::path::PathBuf>>> {
+    let Some(root) = ctx.store()?.load()?.and_then(|p| p.sync.mirror_dir) else {
+        return Ok(None);
+    };
+    let folders = crate::mirror::mirrored_folders(&root, ids);
+    if folders.is_empty() {
+        return Ok(None);
+    }
+    let list = folders
+        .iter()
+        .map(|f| f.display().to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let remove = remove_mirror
+        || (!yes
+            && ui::confirm(&format!(
+                "Also delete the decrypted Markdown files in {list}?"
+            )));
+    if !remove {
+        ui::status(&format!(
+            "the decrypted Markdown files in {list} were left in place; delete them yourself if you no longer \
+             need them (or use --remove-mirror)"
+        ));
+        return Ok(None);
+    }
+    Ok(Some(folders))
+}
+
+fn remove_mirror_folders(folders: &[std::path::PathBuf]) {
+    for f in folders {
+        match std::fs::remove_dir_all(f) {
+            Ok(()) => ui::status(&format!("deleted {}", f.display())),
+            Err(e) => ui::warn(&format!("could not delete {}: {e}", f.display())),
+        }
+        // The mirror directory itself goes too once it is empty.
+        if let Some(root) = f.parent() {
+            let _ = std::fs::remove_dir(root);
+        }
     }
 }
 
@@ -73,22 +250,57 @@ fn confirm_or_flag(yes: bool, prompt: &str) -> Result<()> {
 }
 
 pub async fn run(cli: Cli) -> Result<()> {
+    run_in(cli, Dirs::from_env()?).await
+}
+
+/// [`run`] with explicit configuration and data roots (tests).
+pub async fn run_in(cli: Cli, dirs: Dirs) -> Result<()> {
     ui::set_quiet(cli.quiet);
+    // Held until the command returns; released by the OS on exit or crash.
+    let (_lock, detached) = lock_profile(&dirs, &cli.profile, access(&cli.command)).await?;
     let ctx = Ctx {
-        dirs: Dirs::from_env()?,
+        dirs,
         profile: cli.profile.clone(),
         json: cli.json,
+        detached,
     };
     match cli.command {
         Command::Login(a) => login(&ctx, a).await,
-        Command::Logout { forget, yes } => {
+        Command::Logout {
+            forget,
+            yes,
+            remove_mirror,
+        } => {
+            let mut mirror = None;
             if forget {
-                confirm_or_flag(
-                    yes,
-                    "Remove this device from your account and delete all local data of this profile?",
-                )?;
+                // Upload what can be uploaded first; say what would be lost.
+                let unsynced = push_and_count_unsynced(&ctx, None).await;
+                let mut prompt =
+                    "Remove this device from your account and delete all local data of this profile?"
+                        .to_string();
+                match unsynced {
+                    Some(0) => {}
+                    Some(n) => {
+                        ui::warn(&format!(
+                            "{n} local change(s) could not be uploaded (offline, or refused by the server) and \
+                             will be LOST"
+                        ));
+                        prompt =
+                            format!("{n} change(s) were never uploaded and will be lost. {prompt}");
+                    }
+                    None => ui::warn(
+                        "could not check for changes that were never uploaded (signed out or offline?); any \
+                         would be lost",
+                    ),
+                }
+                confirm_or_flag(yes, &prompt)?;
+                let ids = local_vault_ids(&ctx.store()?.data_dir());
+                mirror = mirror_folders_to_remove(&ctx, &ids, yes, remove_mirror)?;
             }
             account::logout(&ctx.dirs, &ctx.profile, forget).await?;
+            if let Some(folders) = mirror {
+                remove_mirror_folders(&folders);
+            }
             println!(
                 "{}",
                 if forget {
@@ -337,11 +549,20 @@ pub async fn run(cli: Cli) -> Result<()> {
             source,
             into,
             skip_existing,
+            dry_run,
         } => {
             let hub = ctx.hub(&[&vault]).await?;
             let v = hub.resolve(&vault).await?;
-            let r = transfer::import(&hub, &v, &source, into.as_deref(), skip_existing).await?;
-            print_transfer("imported", &r);
+            let r = transfer::import(&hub, &v, &source, into.as_deref(), skip_existing, dry_run)
+                .await?;
+            print_transfer(
+                if dry_run {
+                    "dry run: would import"
+                } else {
+                    "imported"
+                },
+                &r,
+            );
             Ok(())
         }
         Command::Sync(a) => sync(&ctx, a).await,
@@ -415,6 +636,9 @@ async fn login(ctx: &Ctx, a: LoginArgs) -> Result<()> {
     .await?;
     if let Some(rk) = &out.recovery_key {
         show_recovery_key(rk);
+        if let Err(e) = account::recovery_key_shown(&ctx.dirs, &ctx.profile) {
+            tracing::warn!("could not clear the pending account setup: {e:#}");
+        }
     }
     let how = if out.recovery_key.is_some() {
         "account keys created on this device"
@@ -448,6 +672,7 @@ async fn status(ctx: &Ctx) -> Result<()> {
                 s.clone(),
                 HubOptions {
                     offline_ok: true,
+                    detached: ctx.detached,
                     ..Default::default()
                 },
             )
@@ -490,6 +715,7 @@ async fn status(ctx: &Ctx) -> Result<()> {
         session.clone(),
         HubOptions {
             offline_ok: true,
+            detached: ctx.detached,
             ..Default::default()
         },
     )
@@ -523,8 +749,13 @@ async fn status(ctx: &Ctx) -> Result<()> {
             .last_sync
             .map(ui::fmt_time)
             .unwrap_or_else(|| "never".into());
+        let big = if s.too_large_changes > 0 {
+            format!(" {} TOO LARGE to upload (kept here)", s.too_large_changes)
+        } else {
+            String::new()
+        };
         println!(
-            "  {:<24} {:<7} {:>4} docs  {:>3} pending  synced {last}{}{ro}  [{}]",
+            "  {:<24} {:<7} {:>4} docs  {:>3} pending{big}  synced {last}{}{ro}  [{}]",
             s.name,
             s.role.as_str(),
             s.documents,
@@ -771,12 +1002,37 @@ async fn vault(ctx: &Ctx, c: VaultCmd) -> Result<()> {
             println!("vault key rotated (epoch {epoch})");
             Ok(())
         }
-        VaultCmd::Leave { vault, yes } => {
+        VaultCmd::Leave {
+            vault,
+            yes,
+            remove_mirror,
+        } => {
+            // Opening the hub catches up and uploads queued changes first.
             let hub = ctx.hub(&[&vault]).await?;
             let v = hub.resolve(&vault).await?;
-            let name = v.lock().await.name().to_string();
-            confirm_or_flag(yes, &format!("Leave '{name}' and delete its local copy?"))?;
+            let (name, vid, unsynced) = {
+                let g = v.lock().await;
+                (
+                    g.name().to_string(),
+                    g.id().to_string(),
+                    g.replica.pending.len() + g.quarantined.len() + g.pending_blobs.len(),
+                )
+            };
+            let mut prompt = format!("Leave '{name}' and delete its local copy?");
+            if unsynced > 0 {
+                ui::warn(&format!(
+                    "{unsynced} change(s) to '{name}' could not be uploaded and will be LOST"
+                ));
+                prompt =
+                    format!("{unsynced} change(s) were never uploaded and will be lost. {prompt}");
+            }
+            confirm_or_flag(yes, &prompt)?;
+            let ids = [vid].into_iter().collect();
+            let mirror = mirror_folders_to_remove(ctx, &ids, yes, remove_mirror)?;
             manage::leave_vault(&hub.session, &v).await?;
+            if let Some(folders) = mirror {
+                remove_mirror_folders(&folders);
+            }
             println!("left '{name}'");
             Ok(())
         }
@@ -1025,6 +1281,56 @@ async fn shutdown_signal() {
     tokio::select! { _ = ctrl_c => {}, _ = term => {} }
 }
 
+type Task = tokio::task::JoinHandle<Result<()>>;
+
+/// Wait for `stop`, or for a background task to end — which they never do on
+/// their own. The process then exits with the reason (so a service manager
+/// restarts it) instead of carrying on half-dead, e.g. syncing replicas while
+/// the Markdown mirror silently stopped. Returns the tasks still running.
+async fn supervise(
+    stop: impl std::future::Future<Output = ()>,
+    mut live: Task,
+    mut mirror: Option<Task>,
+) -> (Result<()>, Option<Task>, Option<Task>) {
+    type Joined = std::result::Result<Result<()>, tokio::task::JoinError>;
+    enum Ended {
+        Stop,
+        Live(Joined),
+        Mirror(Joined),
+    }
+    let ended = {
+        let mirror_done = async {
+            match mirror.as_mut() {
+                Some(t) => t.await,
+                None => std::future::pending().await,
+            }
+        };
+        tokio::select! {
+            _ = stop => Ended::Stop,
+            r = &mut live => Ended::Live(r),
+            r = mirror_done => Ended::Mirror(r),
+        }
+    };
+    match ended {
+        Ended::Stop => (Ok(()), Some(live), mirror),
+        Ended::Live(r) => {
+            let r = match r {
+                Ok(r) => r,
+                Err(e) => Err(anyhow!("the sync task failed: {e}")),
+            };
+            (r, None, mirror)
+        }
+        Ended::Mirror(r) => {
+            let e = match r {
+                Ok(Ok(())) => anyhow!("the Markdown mirror stopped unexpectedly"),
+                Ok(Err(e)) => e.context("the Markdown mirror failed"),
+                Err(e) => anyhow!("the Markdown mirror failed: {e}"),
+            };
+            (Err(e), Some(live), None)
+        }
+    }
+}
+
 async fn sync(ctx: &Ctx, a: SyncArgs) -> Result<()> {
     let store = ctx.store()?;
     let profile = store.require()?;
@@ -1039,11 +1345,34 @@ async fn sync(ctx: &Ctx, a: SyncArgs) -> Result<()> {
         }
         None => None,
     };
+    // A remembered mirror directory that is gone is never re-created
+    // silently: every note in it would look deleted.
+    if a.dir.is_none()
+        && !a.restore_missing
+        && let Some(d) = &dir
+        && d.symlink_metadata().is_err()
+    {
+        bail!(
+            "the remembered mirror directory {} does not exist (moved, renamed or not mounted?). Nothing was \
+             changed. Put it back and start again, use --dir to mirror somewhere else, --restore-missing to write \
+             a fresh copy there, or `coolpsonotes sync --no-dir` to stop mirroring",
+            d.display()
+        );
+    }
+    let mirror_opts = MirrorOptions {
+        allow_mass_delete: a.allow_mass_delete,
+        restore_missing: a.restore_missing,
+        ..Default::default()
+    };
     if let Some(d) = &dir {
-        if !profile.sync.plaintext_ok && !a.plaintext_ok {
+        // Confirmed once per directory, not once per profile.
+        if !profile.sync.plaintext_confirmed(d) && !a.plaintext_ok {
             eprintln!("{}\n", plaintext_note(d));
             if !ui::stdin_is_tty() {
-                bail!("writing decrypted files must be confirmed once: re-run with --plaintext-ok");
+                bail!(
+                    "writing decrypted files to {} must be confirmed once: re-run with --plaintext-ok",
+                    d.display()
+                );
             }
             let answer = ui::prompt_line("Type 'yes' to enable the plaintext mirror: ")?;
             if answer != "yes" {
@@ -1051,11 +1380,19 @@ async fn sync(ctx: &Ctx, a: SyncArgs) -> Result<()> {
                     "cancelled; run `coolpsonotes sync` without --dir to keep only encrypted local copies"
                 );
             }
-        } else if a.dir.is_some() || !profile.sync.plaintext_ok {
+        } else if a.dir.is_some() {
             ui::status(&plaintext_note(d));
         }
+        if a.dir.is_none() {
+            // Plain `sync` reuses the remembered mirror: say so.
+            ui::status(&format!(
+                "mirroring decrypted files into {} (remembered from an earlier `sync --dir`; \
+                 `coolpsonotes sync --no-dir` stops that)",
+                d.display()
+            ));
+        }
         store.update(|p| {
-            p.sync.plaintext_ok = true;
+            p.sync.confirm_plaintext(d);
             p.sync.mirror_dir = Some(d.clone());
         })?;
     }
@@ -1067,17 +1404,36 @@ async fn sync(ctx: &Ctx, a: SyncArgs) -> Result<()> {
             read_only: false,
             offline_ok: true,
             catch_up: true,
+            detached: false,
         },
     )
     .await?;
     if a.once {
         if let Some(d) = &dir {
-            let mut m = Mirror::new(hub.clone(), d).await?;
-            let r = m.reconcile_all(true).await?;
+            let mut m = Mirror::with_options(hub.clone(), d, mirror_opts).await?;
+            let mut r = m.reconcile_all(true).await?;
+            if r.held > 0
+                && ui::confirm(&format!(
+                    "{} mirrored file(s) disappeared at once (see above). Move the notes to the trash?",
+                    r.held
+                ))
+            {
+                m.set_options(MirrorOptions {
+                    allow_mass_delete: true,
+                    ..mirror_opts
+                });
+                r = m.reconcile_all(true).await?;
+            }
             ui::status(&format!(
                 "mirror: {} edit(s) and {} new file(s) uploaded, {} moved, {} trashed, {} file(s) written, {} conflict copies",
                 r.ingested, r.created, r.renamed, r.trashed, r.written, r.conflicts
             ));
+            if r.held > 0 {
+                ui::warn(&format!(
+                    "{} missing file(s) were NOT moved to the trash (held for safety)",
+                    r.held
+                ));
+            }
         }
         let mut pending = 0;
         for id in hub.vault_ids() {
@@ -1111,7 +1467,7 @@ async fn sync(ctx: &Ctx, a: SyncArgs) -> Result<()> {
     let live = tokio::spawn(livesync::run(hub.clone(), stop_rx.clone()));
     let mirror_task = match &dir {
         Some(d) => {
-            let mut m = Mirror::new(hub.clone(), d).await?;
+            let mut m = Mirror::with_options(hub.clone(), d, mirror_opts).await?;
             m.reconcile_all(false).await?;
             ui::status(&format!(
                 "mirroring {} vault(s) into {}",
@@ -1128,20 +1484,17 @@ async fn sync(ctx: &Ctx, a: SyncArgs) -> Result<()> {
         }
     };
     ui::status("press Ctrl-C to stop");
-    let mut live = live;
-    let result = tokio::select! {
-        _ = shutdown_signal() => Ok(()),
-        r = &mut live => match r {
-            Ok(Ok(())) => Ok(()),
-            Ok(Err(e)) => Err(e),
-            Err(e) => Err(anyhow!("sync task failed: {e}")),
-        },
-    };
+    let (result, live, mirror_task) = supervise(shutdown_signal(), live, mirror_task).await;
+    if let Err(e) = &result {
+        ui::warn(&format!("stopping: {e:#}"));
+    }
     let _ = stop_tx.send(true);
     if let Some(t) = mirror_task {
         let _ = tokio::time::timeout(Duration::from_secs(5), t).await;
     }
-    let _ = tokio::time::timeout(Duration::from_secs(5), live).await;
+    if let Some(t) = live {
+        let _ = tokio::time::timeout(Duration::from_secs(5), t).await;
+    }
     for id in hub.vault_ids() {
         let _ = tokio::time::timeout(Duration::from_secs(10), hub.push(&id)).await;
     }
@@ -1365,11 +1718,22 @@ async fn gateway_cmd(ctx: &Ctx, a: GatewayArgs) -> Result<()> {
             read_only: a.read_only,
             offline_ok: true,
             catch_up: true,
+            detached: false,
         },
     )
     .await?;
     let (stop_tx, stop_rx) = watch::channel(false);
-    let live = tokio::spawn(livesync::run(hub.clone(), stop_rx));
+    // If live sync ends on its own (session revoked), the gateway stops too
+    // instead of silently serving data that is no longer kept up to date.
+    let (ended_tx, mut ended_rx) = watch::channel(false);
+    let live = tokio::spawn({
+        let hub = hub.clone();
+        async move {
+            let r = livesync::run(hub, stop_rx).await;
+            let _ = ended_tx.send(true);
+            r
+        }
+    });
     let listener = tokio::net::TcpListener::bind(a.listen)
         .await
         .with_context(|| format!("binding {}", a.listen))?;
@@ -1385,9 +1749,24 @@ async fn gateway_cmd(ctx: &Ctx, a: GatewayArgs) -> Result<()> {
         token,
         audit,
     });
-    gateway::serve(listener, gw, shutdown_signal()).await?;
+    let stopped = async move {
+        tokio::select! {
+            _ = shutdown_signal() => {}
+            _ = ended_rx.changed() => {}
+        }
+    };
+    gateway::serve(listener, gw, stopped).await?;
     let _ = stop_tx.send(true);
-    let _ = tokio::time::timeout(Duration::from_secs(5), live).await;
+    let live_result = match tokio::time::timeout(Duration::from_secs(5), live).await {
+        Ok(Ok(r)) => r,
+        Ok(Err(e)) => Err(anyhow!("the sync task failed: {e}")),
+        Err(_) => Ok(()),
+    };
+    if let Err(e) = &live_result {
+        ui::warn(&format!(
+            "the gateway stopped because live sync ended: {e:#}"
+        ));
+    }
     for id in hub.vault_ids() {
         let _ = tokio::time::timeout(Duration::from_secs(10), hub.push(&id)).await;
     }
@@ -1395,5 +1774,42 @@ async fn gateway_cmd(ctx: &Ctx, a: GatewayArgs) -> Result<()> {
     hub.snapshot_idle(Duration::ZERO, livesync::SESSION_MIN_UPDATES)
         .await;
     hub.save_all().await;
-    Ok(())
+    live_result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn forever() -> Task {
+        tokio::spawn(async {
+            std::future::pending::<()>().await;
+            Ok(())
+        })
+    }
+
+    #[tokio::test]
+    async fn a_failing_mirror_task_stops_the_daemon_with_its_reason() {
+        let mirror: Task = tokio::spawn(async { Err(anyhow!("inotify watch limit reached")) });
+        let (r, live, mirror) = supervise(std::future::pending(), forever(), Some(mirror)).await;
+        let e = format!("{:#}", r.unwrap_err());
+        assert!(e.contains("mirror") && e.contains("inotify"), "{e}");
+        assert!(mirror.is_none(), "a finished task is not awaited again");
+        live.unwrap().abort();
+
+        // A mirror that just ends is an error too; a stop signal is not.
+        let mirror: Task = tokio::spawn(async { Ok(()) });
+        let (r, live, _) = supervise(std::future::pending(), forever(), Some(mirror)).await;
+        assert!(r.is_err());
+        live.unwrap().abort();
+        let (r, live, mirror) = supervise(async {}, forever(), Some(forever())).await;
+        assert!(r.is_ok());
+        live.unwrap().abort();
+        mirror.unwrap().abort();
+        // The live loop failing (session revoked) is reported as such.
+        let live: Task = tokio::spawn(async { Err(anyhow!("session revoked")) });
+        let (r, live, _) = supervise(std::future::pending(), live, None).await;
+        assert!(format!("{:#}", r.unwrap_err()).contains("revoked"));
+        assert!(live.is_none());
+    }
 }

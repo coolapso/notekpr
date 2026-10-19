@@ -42,6 +42,13 @@ impl ApiError {
         matches!(self, ApiError::Network(_))
     }
 
+    /// The server cannot be used right now: unreachable, or answering with a
+    /// server error (a reverse proxy's 502/503/504 while it restarts). Work
+    /// offline and retry later, as for a network failure.
+    pub fn is_offline(&self) -> bool {
+        self.is_network() || self.status().is_some_and(|s| (500..600).contains(&s))
+    }
+
     pub fn is_unauthorized(&self) -> bool {
         self.status() == Some(401)
     }

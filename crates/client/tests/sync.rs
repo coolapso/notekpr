@@ -286,3 +286,166 @@ async fn editing_sessions_leave_revisions() {
     // Too few edits since the last revision: no new one.
     assert_eq!(h.snapshot_idle(std::time::Duration::ZERO, 5).await, 0);
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn live_uploads_resume_after_a_reconnect_with_a_read_only_vault() {
+    let srv = start().await;
+    let alice = login(&srv, "alice").await;
+    let bob = login(&srv, "bob").await;
+    manage::create_vault(&alice, "Was shared").await.unwrap();
+    let alice_hub = hub(&alice).await;
+    let v = alice_hub.resolve("Was shared").await.unwrap();
+    manage::share(&alice, &v, "bob", Role::Editor, false)
+        .await
+        .unwrap();
+    manage::create_vault(&bob, "Own").await.unwrap();
+    drop(hub(&bob).await); // bob gets a local copy of both
+    manage::unshare(&alice, &v, "bob").await.unwrap();
+
+    // Bob's client restarts: the unshared vault is a read-only local copy.
+    let bob_hub = hub(&reopen(&srv, "bob", "bob").await).await;
+    let ro = bob_hub.resolve("Was shared").await.unwrap();
+    assert!(ro.lock().await.read_only.is_some());
+    // As after a reconnect: uploads wait until every subscribed vault is
+    // caught up. The read-only vault is never subscribed, so it must not be
+    // waited for.
+    bob_hub.set_push_now(false);
+    let bob_live = live(bob_hub).await;
+    let own = bob_live.hub.resolve("Own").await.unwrap();
+    let own_id = own.lock().await.id().to_string();
+    ops::put_document(&bob_live.hub, &own_id, "Today.md", "live edit\n", None)
+        .await
+        .unwrap();
+    eventually(10, "bob's edit is uploaded live", || async {
+        own.lock().await.replica.pending.is_empty()
+    })
+    .await;
+    bob_live.stop().await;
+    let fresh = hub(&reopen(&srv, "bob", "bob").await).await;
+    assert_eq!(
+        note(&fresh, &own_id, "Today.md").await.as_deref(),
+        Some("live edit\n")
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_server_error_from_a_proxy_counts_as_offline() {
+    use coolpsonotes_client::profile::ProfileStore;
+    let srv = start().await;
+    let alice = login(&srv, "alice").await;
+    manage::create_vault(&alice, "Notes").await.unwrap();
+    let h = hub(&alice).await;
+    ops::put_document(&h, "Notes", "A.md", "a\n", None)
+        .await
+        .unwrap();
+    drop(h);
+    // The reverse proxy answers 502 while the server restarts.
+    let down = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let d = down.clone();
+    let url = proxy(
+        &srv.url,
+        std::sync::Arc::new(move |_, _| {
+            d.load(std::sync::atomic::Ordering::SeqCst)
+                .then_some(Fault::Reply(502))
+        }),
+    )
+    .await;
+    let store = ProfileStore::new(&srv.dirs("alice"), "alice").unwrap();
+    store.update(|p| p.server = url.clone()).unwrap();
+    let offline = hub(&reopen(&srv, "alice", "alice").await).await;
+    assert!(!offline.is_online());
+    assert_eq!(
+        note(&offline, "Notes", "A.md").await.as_deref(),
+        Some("a\n")
+    );
+    let out = ops::put_document(&offline, "Notes", "A.md", "a\nb\n", None)
+        .await
+        .unwrap();
+    assert!(out.pending_changes > 0, "kept for later, not an error");
+    let vid = offline.vault_ids()[0].clone();
+    let o = offline.push(&vid).await.unwrap();
+    assert!(o.offline && o.remaining > 0);
+    drop(offline);
+    // Back up: the queued edit is uploaded.
+    down.store(false, std::sync::atomic::Ordering::SeqCst);
+    let back = hub(&reopen(&srv, "alice", "alice").await).await;
+    assert!(back.is_online());
+    assert!(
+        back.get(&vid)
+            .unwrap()
+            .lock()
+            .await
+            .replica
+            .pending
+            .is_empty()
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn oversized_changes_are_split_or_set_aside_and_never_block_the_rest() {
+    use coolpsonotes_core::doc::NoteDoc;
+    let srv = start_with(|c| c.max_update_kb = 64).await;
+    let alice = login(&srv, "alice").await;
+    let bob = login(&srv, "bob").await;
+    manage::create_vault(&alice, "Big").await.unwrap();
+    let h = hub(&alice).await;
+    let v = h.resolve("Big").await.unwrap();
+    let vid = v.lock().await.id().to_string();
+    manage::share(&alice, &v, "bob", Role::Editor, false)
+        .await
+        .unwrap();
+
+    // 1. One ~250 KB paste becomes several updates the server accepts.
+    let big: String = (0..6000)
+        .map(|i| format!("line {i}: some text to make the note large\n"))
+        .collect();
+    assert!(big.len() > 200 * 1024);
+    let out = ops::put_document(&h, &vid, "Big.md", &big, None)
+        .await
+        .unwrap();
+    assert_eq!(out.pending_changes, 0, "everything uploaded");
+    let bob_hub = hub(&bob).await;
+    assert_eq!(
+        note(&bob_hub, &vid, "Big.md").await.as_deref(),
+        Some(big.as_str())
+    );
+
+    // 2. A change that cannot be split (one huge CRDT update) is kept aside;
+    // the changes after it are uploaded anyway.
+    {
+        let mut g = v.lock().await;
+        let w = g.create_note("Raw.md", "").unwrap();
+        let u = NoteDoc::new().set_text(&"x".repeat(200_000)).unwrap();
+        g.replica
+            .notes
+            .get(&w.id)
+            .unwrap()
+            .apply_update(&u)
+            .unwrap();
+        g.record(&w.id, u).unwrap();
+        g.save().unwrap();
+    }
+    ops::put_document(&h, &vid, "Other.md", "fine\n", None)
+        .await
+        .unwrap();
+    {
+        let g = v.lock().await;
+        assert!(g.replica.pending.is_empty(), "nothing is blocked");
+        assert_eq!(g.quarantined.len(), 1);
+    }
+    bob_hub.sync_vault(&vid).await.unwrap();
+    assert_eq!(
+        note(&bob_hub, &vid, "Other.md").await.as_deref(),
+        Some("fine\n")
+    );
+    assert!(note(&bob_hub, &vid, "Raw.md").await.is_some());
+    // It is kept across restarts (and reported).
+    drop(h);
+    let again = hub(&reopen(&srv, "alice", "alice").await).await;
+    let s = again.summaries().await;
+    assert_eq!(s[0].too_large_changes, 1);
+    assert_eq!(
+        note(&again, &vid, "Raw.md").await.map(|t| t.len()),
+        Some(200_000)
+    );
+}

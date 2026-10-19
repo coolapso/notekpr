@@ -16,6 +16,7 @@ use serde::Serialize;
 use tokio::sync::{Mutex, broadcast};
 
 use crate::api::ApiError;
+use crate::profile::ServerLimits;
 use crate::session::{PushOutcome, Session, SharedVault};
 use crate::ui;
 use crate::vault::Vault;
@@ -48,6 +49,9 @@ pub struct HubOptions {
     pub offline_ok: bool,
     /// Catch up over REST and push pending changes while starting.
     pub catch_up: bool,
+    /// Another process owns this profile's local data (a running sync
+    /// daemon): only read the local copies — no network sync, no writes.
+    pub detached: bool,
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -58,6 +62,9 @@ pub struct VaultSummary {
     pub archived: bool,
     pub documents: usize,
     pub pending_changes: usize,
+    /// Local changes too large for the server: kept here, not uploaded.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub too_large_changes: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub read_only: Option<String>,
     pub seq: i64,
@@ -95,7 +102,7 @@ impl Hub {
             vaults: RwLock::new(BTreeMap::new()),
             allow: opts.vaults.clone(),
             allowed: RwLock::new(None),
-            read_only: opts.read_only,
+            read_only: opts.read_only || opts.detached,
             events,
             push_locks: Default::default(),
             online: AtomicBool::new(false),
@@ -115,22 +122,44 @@ impl Hub {
     }
 
     async fn load(&self, opts: &HubOptions) -> Result<()> {
+        if opts.detached {
+            for id in self.session.local_vault_ids() {
+                match self.session.load_local(&id) {
+                    Ok(Some(mut v)) => {
+                        v.detach();
+                        self.vaults
+                            .write()
+                            .unwrap()
+                            .insert(id, Arc::new(Mutex::new(v)));
+                    }
+                    Ok(None) => {}
+                    Err(e) => ui::warn(&format!("{e:#}")),
+                }
+            }
+            return self.apply_allow_list();
+        }
         match self.session.api.vaults().await {
             Ok(list) => {
                 self.online.store(true, Ordering::Relaxed);
+                // Learn (and remember) the size limits while online.
+                let _ = self.limits().await;
                 self.preresolve_allow_list(&list);
                 self.open_listed(&list).await?;
             }
             Err(e)
-                if (e.is_network() || e.is_unauthorized() || matches!(e, ApiError::Auth(_)))
+                if (e.is_offline() || e.is_unauthorized() || matches!(e, ApiError::Auth(_)))
                     && opts.offline_ok =>
             {
-                if !e.is_network() {
+                if e.is_network() {
+                    ui::warn("the server is unreachable; working offline with the local copies");
+                } else if e.is_offline() {
+                    ui::warn(&format!(
+                        "the server is not available right now ({e}); working offline with the local copies"
+                    ));
+                } else {
                     ui::warn(&format!(
                         "{e}; showing local copies only (run `coolpsonotes login`)"
                     ));
-                } else {
-                    ui::warn("the server is unreachable; working offline with the local copies");
                 }
                 for id in self.session.local_vault_ids() {
                     match self.session.load_local(&id) {
@@ -323,6 +352,17 @@ impl Hub {
 
     pub fn is_online(&self) -> bool {
         self.online.load(Ordering::Relaxed)
+    }
+
+    /// The server's size limits: fetched once while online, otherwise the
+    /// remembered ones (never "unlimited"). Call it before taking a vault lock.
+    pub async fn limits(&self) -> ServerLimits {
+        if self.is_online()
+            && let Err(e) = self.session.server_info().await
+        {
+            tracing::debug!("server info: {e}");
+        }
+        self.session.limits()
     }
 
     pub fn set_online(&self, online: bool) {
@@ -576,6 +616,10 @@ impl Hub {
     }
 }
 
+fn is_zero(n: &usize) -> bool {
+    *n == 0
+}
+
 async fn g_read_only(v: &SharedVault) -> bool {
     let g = v.lock().await;
     g.read_only.is_some() || !g.replica.can_write()
@@ -589,6 +633,7 @@ pub fn summary(v: &Vault) -> VaultSummary {
         archived: v.archived,
         documents: v.notes().len(),
         pending_changes: v.replica.pending.len(),
+        too_large_changes: v.quarantined.len(),
         read_only: v.read_only.clone(),
         seq: v.replica.seq,
         last_sync: v.last_sync,

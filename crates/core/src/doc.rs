@@ -674,6 +674,15 @@ mod tests {
         ];
         let _ = NoteDoc::new().apply_update(crash);
         let _ = IndexDoc::new().apply_update(crash);
+        // Spliced a second run of blocks into one client's list; panicked
+        // while encoding the commit (refused while decoding now).
+        let crash: &[u8] = &[
+            3, 3, 3, 45, 0, 1, 1, 1, 1, 1, 1, 1, 0, 3, 0, 23, 3, 1, 255, 255, 255, 255, 255, 255,
+            255, 147, 3, 3, 1, 3, 3, 1, 1, 1, 1, 1, 1, 1, 0, 3, 0, 0, 2, 0, 23, 3, 129, 3, 3, 1, 3,
+            3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 17, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        ];
+        let _ = NoteDoc::new().apply_update(crash);
+        let _ = IndexDoc::new().apply_update(crash);
         // Unwrapped a failed lookup when filling a gap (patched in vendor/yrs).
         let crash: &[u8] = &[
             3, 3, 3, 4, 0, 0, 0, 0, 0, 0, 0, 44, 187, 187, 187, 187, 187, 187, 187, 187, 187, 3, 3,

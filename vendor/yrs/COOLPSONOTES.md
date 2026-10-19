@@ -16,6 +16,10 @@ Wired in through `[patch.crates-io]` in the workspace `Cargo.toml` (and
 * `block_store.rs` `BlockStore::push`: a block filling a gap is integrated
   only when a skip covers it entirely (the original unwrapped the lookup and
   subtracted clocks without checks).
+* `update.rs` `Update::decode` and `id_set.rs` `Range::decode`: refuse what
+  breaks the store's invariants later (and panicked while committing or
+  encoding): a client listed twice, empty skip/GC blocks, clocks or delete
+  ranges past `u32::MAX`.
 
 Drop this directory once upstream releases equivalent fixes (and report them
 upstream).

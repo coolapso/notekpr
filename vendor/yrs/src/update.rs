@@ -835,6 +835,12 @@ impl Decode for Update {
 
             let client = decoder.read_client()?;
             let mut clock: u32 = decoder.read_var()?;
+            // coolpsonotes patch: a client appears once per update; listing it
+            // again would splice a second, unrelated run of blocks into its
+            // list and break the store's invariants (sorted, contiguous).
+            if blocks.clients.contains_key(&client) {
+                return Err(Error::UnexpectedValue);
+            }
             let blocks = blocks
                 .clients
                 .entry(client)
@@ -848,7 +854,14 @@ impl Decode for Update {
                 if let Some(block) = Self::decode_block(id, decoder)? {
                     // due to bug in the past it was possible for empty bugs to be generated
                     // even though they had no effect on the document store
-                    clock += block.len();
+                    // coolpsonotes patch: no empty blocks (their clock range
+                    // is inverted) and no clocks past u32::MAX (they wrapped).
+                    if block.len() == 0 {
+                        return Err(Error::UnexpectedValue);
+                    }
+                    clock = clock
+                        .checked_add(block.len())
+                        .ok_or(Error::UnexpectedValue)?;
                     blocks.push_back(block);
                 }
             }

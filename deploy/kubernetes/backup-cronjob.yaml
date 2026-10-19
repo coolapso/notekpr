@@ -1,0 +1,41 @@
+# Nightly consistent backup of the coolpsonotes database into the same volume
+# (copy /data/backups somewhere else with your usual backup tooling).
+# Everything in the backup that relates to notes is already end-to-end encrypted.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: coolpsonotes-backup
+  namespace: coolpsonotes
+spec:
+  schedule: "30 3 * * *"
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            fsGroup: 65532
+          affinity:
+            podAffinity:
+              requiredDuringSchedulingIgnoredDuringExecution:
+                - labelSelector:
+                    matchLabels:
+                      app: coolpsonotes
+                  topologyKey: kubernetes.io/hostname
+          containers:
+            - name: backup
+              image: ghcr.io/coolapso/coolpsonotes:latest
+              args: ["backup", "--out-dir", "/data/backups", "--keep", "14"]
+              env:
+                - name: COOLPSONOTES_DATA_DIR
+                  value: /data
+              volumeMounts:
+                - name: data
+                  mountPath: /data
+          volumes:
+            - name: data
+              persistentVolumeClaim:
+                claimName: coolpsonotes-data

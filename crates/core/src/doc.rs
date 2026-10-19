@@ -1,0 +1,666 @@
+//! CRDT document model (yrs, binary-compatible with Yjs update format v1).
+//!
+//! Every vault has exactly two kinds of objects:
+//!
+//! * the **index** (object id [`INDEX_OBJECT_ID`]): a map of entry id → entry
+//!   (path, kind, timestamps). Renames, moves, folder creation and trash are
+//!   CRDT map edits, so they merge offline like everything else.
+//! * one **note** object per Markdown document, holding the source text in a
+//!   single `Y.Text`. Markdown stays the canonical representation.
+//!
+//! Attachments are entries in the index whose bytes live in encrypted blobs.
+//!
+//! [`INDEX_OBJECT_ID`]: crate::protocol::INDEX_OBJECT_ID
+
+use std::collections::{BTreeMap, HashMap};
+use std::sync::{Arc, Mutex};
+
+use yrs::updates::decoder::Decode;
+use yrs::{Any, Doc, GetString, Map, MapPrelim, MapRef, Out, ReadTxn, StateVector, Text, TextRef, Transact, Update};
+
+use crate::paths;
+use crate::textdiff::{self, Edit};
+
+/// Transaction origin used for edits made by the local user.
+pub const LOCAL_ORIGIN: &str = "local";
+/// Transaction origin used when integrating updates received from elsewhere.
+/// Everything else (local edits, undo/redo) is reported as a local update.
+pub const REMOTE_ORIGIN: &str = "remote";
+const NOTE_TEXT: &str = "content";
+const INDEX_FILES: &str = "files";
+
+#[derive(Debug, thiserror::Error)]
+pub enum DocError {
+    #[error("invalid CRDT update: {0}")]
+    BadUpdate(String),
+}
+
+pub type Result<T> = std::result::Result<T, DocError>;
+
+/// Collects the binary updates produced by local transactions.
+#[derive(Clone, Default)]
+struct LocalUpdates(Arc<Mutex<Vec<Vec<u8>>>>);
+
+impl LocalUpdates {
+    fn attach(&self, doc: &Doc) {
+        let sink = self.0.clone();
+        doc.observe_update_v1("coolpsonotes-local", move |txn, e| {
+            if !is_remote(txn.origin()) {
+                sink.lock().unwrap().push(e.update.clone());
+            }
+        })
+        .expect("observer registration on a fresh doc");
+    }
+
+    fn take(&self) -> Option<Vec<u8>> {
+        let mut v = std::mem::take(&mut *self.0.lock().unwrap());
+        match v.len() {
+            0 => None,
+            1 => v.pop(),
+            _ => Some(yrs::merge_updates_v1(v.iter().map(|u| u.as_slice())).expect("merging own updates")),
+        }
+    }
+}
+
+fn is_remote(origin: Option<&yrs::Origin>) -> bool {
+    origin.is_some_and(|o| o.as_ref() == REMOTE_ORIGIN.as_bytes())
+}
+
+fn decode(update: &[u8]) -> Result<Update> {
+    Update::decode_v1(update).map_err(|e| DocError::BadUpdate(e.to_string()))
+}
+
+fn apply(doc: &Doc, update: &[u8]) -> Result<()> {
+    let u = decode(update)?;
+    doc.transact_mut_with(REMOTE_ORIGIN).apply_update(u).map_err(|e| DocError::BadUpdate(e.to_string()))
+}
+
+/// Merge several updates (e.g. before encrypting a batch).
+pub fn merge_updates(updates: &[Vec<u8>]) -> Result<Vec<u8>> {
+    yrs::merge_updates_v1(updates.iter().map(|u| u.as_slice())).map_err(|e| DocError::BadUpdate(e.to_string()))
+}
+
+/// A Markdown note.
+pub struct NoteDoc {
+    doc: Doc,
+    text: TextRef,
+    local: LocalUpdates,
+    undo: Option<yrs::UndoManager>,
+}
+
+impl Default for NoteDoc {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl NoteDoc {
+    pub fn new() -> Self {
+        let doc = Doc::new();
+        let text = doc.get_or_insert_text(NOTE_TEXT);
+        let local = LocalUpdates::default();
+        local.attach(&doc);
+        NoteDoc { doc, text, local, undo: None }
+    }
+
+    /// Build from a full state (snapshot) and/or a series of updates.
+    pub fn from_updates<'a>(updates: impl IntoIterator<Item = &'a [u8]>) -> Result<Self> {
+        let d = Self::new();
+        for u in updates {
+            d.apply_update(u)?;
+        }
+        Ok(d)
+    }
+
+    pub fn doc(&self) -> &Doc {
+        &self.doc
+    }
+
+    /// Apply a remote update. Idempotent: re-applying a known update is a no-op.
+    pub fn apply_update(&self, update: &[u8]) -> Result<()> {
+        apply(&self.doc, update)
+    }
+
+    pub fn text(&self) -> String {
+        self.text.get_string(&self.doc.transact())
+    }
+
+    /// Text length in UTF-8 bytes.
+    pub fn len(&self) -> usize {
+        self.text.len(&self.doc.transact()) as usize
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Replace the content by diffing against the current text. Returns the
+    /// resulting update, or `None` if nothing changed.
+    pub fn set_text(&self, new: &str) -> Option<Vec<u8>> {
+        let old = self.text();
+        if old == new {
+            return None;
+        }
+        self.apply_edits(&textdiff::diff(&old, new))
+    }
+
+    /// Apply a list of splices as one local transaction.
+    pub fn apply_edits(&self, edits: &[Edit]) -> Option<Vec<u8>> {
+        if edits.is_empty() {
+            return None;
+        }
+        {
+            let mut txn = self.doc.transact_mut_with(LOCAL_ORIGIN);
+            for e in edits {
+                match e {
+                    Edit::Delete { at, len } => self.text.remove_range(&mut txn, *at as u32, *len as u32),
+                    Edit::Insert { at, text } => self.text.insert(&mut txn, *at as u32, text),
+                }
+            }
+        }
+        self.take_local_update()
+    }
+
+    /// Delete `delete` bytes at `at` and insert `insert` there.
+    pub fn splice(&self, at: usize, delete: usize, insert: &str) -> Option<Vec<u8>> {
+        let mut edits = Vec::with_capacity(2);
+        if delete > 0 {
+            edits.push(Edit::Delete { at, len: delete });
+        }
+        if !insert.is_empty() {
+            edits.push(Edit::Insert { at, text: insert.to_string() });
+        }
+        self.apply_edits(&edits)
+    }
+
+    /// Updates produced locally since the last call (edits, undo, redo).
+    pub fn take_local_update(&self) -> Option<Vec<u8>> {
+        self.local.take()
+    }
+
+    /// Full state encoded as a single update (used for snapshots and caches).
+    pub fn encode_state(&self) -> Vec<u8> {
+        self.doc.transact().encode_state_as_update_v1(&StateVector::default())
+    }
+
+    pub fn state_vector(&self) -> StateVector {
+        self.doc.transact().state_vector()
+    }
+
+    /// Everything the holder of `sv` is missing.
+    pub fn encode_diff(&self, sv: &StateVector) -> Vec<u8> {
+        self.doc.transact().encode_state_as_update_v1(sv)
+    }
+
+    /// Track local edits for undo/redo.
+    #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+    pub fn enable_undo(&mut self) {
+        self.enable_undo_with_clock(|| crate::now_ms() as u64);
+    }
+
+    /// Track local edits for undo/redo; `now_ms` groups edits made in quick succession.
+    pub fn enable_undo_with_clock(&mut self, now_ms: impl Fn() -> u64 + Send + Sync + 'static) {
+        let opts = yrs::undo::Options {
+            capture_timeout_millis: 600,
+            tracked_origins: Default::default(),
+            capture_transaction: None,
+            timestamp: Arc::new(now_ms),
+            init_undo_stack: Vec::new(),
+            init_redo_stack: Vec::new(),
+        };
+        let mut mgr = yrs::UndoManager::with_options(opts);
+        mgr.expand_scope(&self.doc, &self.text);
+        mgr.include_origin(LOCAL_ORIGIN);
+        self.undo = Some(mgr);
+    }
+
+    pub fn undo_enabled(&self) -> bool {
+        self.undo.is_some()
+    }
+
+    /// End the current undo group so the next edit starts a new one.
+    pub fn undo_boundary(&mut self) {
+        if let Some(m) = &mut self.undo {
+            m.reset();
+        }
+    }
+
+    pub fn undo(&mut self) -> Option<Vec<u8>> {
+        let m = self.undo.as_mut()?;
+        if !m.undo_blocking() {
+            return None;
+        }
+        self.take_local_update()
+    }
+
+    pub fn redo(&mut self) -> Option<Vec<u8>> {
+        let m = self.undo.as_mut()?;
+        if !m.redo_blocking() {
+            return None;
+        }
+        self.take_local_update()
+    }
+
+    /// A position that survives concurrent edits (for cursors).
+    pub fn sticky(&self, index: usize, assoc_after: bool) -> Option<yrs::StickyIndex> {
+        use yrs::IndexedSequence;
+        let assoc = if assoc_after { yrs::Assoc::After } else { yrs::Assoc::Before };
+        self.text.sticky_index(&self.doc.transact(), index as u32, assoc)
+    }
+
+    pub fn resolve_sticky(&self, s: &yrs::StickyIndex) -> Option<usize> {
+        s.get_offset(&self.doc.transact()).map(|o| o.index as usize)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum EntryKind {
+    Note,
+    Attachment,
+    Folder,
+}
+
+impl EntryKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            EntryKind::Note => "note",
+            EntryKind::Attachment => "attachment",
+            EntryKind::Folder => "folder",
+        }
+    }
+
+    fn parse(s: &str) -> Option<Self> {
+        match s {
+            "note" => Some(Self::Note),
+            "attachment" => Some(Self::Attachment),
+            "folder" => Some(Self::Folder),
+            _ => None,
+        }
+    }
+}
+
+/// One file-tree entry of a vault.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct Entry {
+    pub id: String,
+    pub path: String,
+    pub kind: EntryKind,
+    pub created: i64,
+    pub modified: i64,
+    pub trashed: Option<i64>,
+    pub size: Option<u64>,
+    pub mime: Option<String>,
+}
+
+impl Entry {
+    pub fn title(&self) -> &str {
+        paths::title(&self.path)
+    }
+
+    pub fn is_live(&self) -> bool {
+        self.trashed.is_none()
+    }
+}
+
+/// The vault index document.
+pub struct IndexDoc {
+    doc: Doc,
+    files: MapRef,
+    local: LocalUpdates,
+}
+
+impl Default for IndexDoc {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+fn any_str(v: Option<Out>) -> Option<String> {
+    match v? {
+        Out::Any(Any::String(s)) => Some(s.to_string()),
+        _ => None,
+    }
+}
+
+fn any_num(v: Option<Out>) -> Option<f64> {
+    match v? {
+        Out::Any(Any::Number(yrs::any::Number::Float(n))) => Some(n),
+        Out::Any(Any::Number(yrs::any::Number::Int(n))) => Some(n as f64),
+        _ => None,
+    }
+}
+
+impl IndexDoc {
+    pub fn new() -> Self {
+        let doc = Doc::new();
+        let files = doc.get_or_insert_map(INDEX_FILES);
+        let local = LocalUpdates::default();
+        local.attach(&doc);
+        IndexDoc { doc, files, local }
+    }
+
+    pub fn from_updates<'a>(updates: impl IntoIterator<Item = &'a [u8]>) -> Result<Self> {
+        let d = Self::new();
+        for u in updates {
+            d.apply_update(u)?;
+        }
+        Ok(d)
+    }
+
+    pub fn apply_update(&self, update: &[u8]) -> Result<()> {
+        apply(&self.doc, update)
+    }
+
+    pub fn encode_state(&self) -> Vec<u8> {
+        self.doc.transact().encode_state_as_update_v1(&StateVector::default())
+    }
+
+    pub fn take_local_update(&self) -> Option<Vec<u8>> {
+        self.local.take()
+    }
+
+    fn read_entry<T: ReadTxn>(&self, txn: &T, id: &str, m: &MapRef) -> Option<Entry> {
+        let path = any_str(m.get(txn, "path"))?;
+        let kind = EntryKind::parse(&any_str(m.get(txn, "kind"))?)?;
+        let created = any_num(m.get(txn, "created")).unwrap_or(0.0) as i64;
+        Some(Entry {
+            id: id.to_string(),
+            path,
+            kind,
+            created,
+            modified: any_num(m.get(txn, "modified")).map(|n| n as i64).unwrap_or(created),
+            trashed: any_num(m.get(txn, "trashed")).map(|n| n as i64),
+            size: any_num(m.get(txn, "size")).map(|n| n as u64),
+            mime: any_str(m.get(txn, "mime")),
+        })
+    }
+
+    /// All entries, including trashed ones, sorted by path.
+    pub fn entries(&self) -> Vec<Entry> {
+        let txn = self.doc.transact();
+        let mut out: Vec<Entry> = self
+            .files
+            .iter(&txn)
+            .filter_map(|(id, v)| match v {
+                Out::YMap(m) => self.read_entry(&txn, id, &m),
+                _ => None,
+            })
+            .collect();
+        out.sort_by(|a, b| a.path.cmp(&b.path).then(a.created.cmp(&b.created)).then(a.id.cmp(&b.id)));
+        out
+    }
+
+    pub fn get(&self, id: &str) -> Option<Entry> {
+        let txn = self.doc.transact();
+        match self.files.get(&txn, id)? {
+            Out::YMap(m) => self.read_entry(&txn, id, &m),
+            _ => None,
+        }
+    }
+
+    /// Live entry at exactly `path`, preferring the oldest one if there are duplicates.
+    pub fn find_by_path(&self, path: &str) -> Option<Entry> {
+        self.entries().into_iter().find(|e| e.is_live() && e.path == path)
+    }
+
+    /// Unique display paths for live entries. Concurrent offline creation can
+    /// produce two entries with the same path; the older keeps it and later ones
+    /// get a numeric suffix. Nothing is renamed in the shared state, so this
+    /// never causes edit wars between clients.
+    pub fn resolved_paths(&self) -> BTreeMap<String, Entry> {
+        let mut taken: HashMap<String, ()> = HashMap::new();
+        let mut out = BTreeMap::new();
+        let mut live: Vec<Entry> = self.entries().into_iter().filter(|e| e.is_live()).collect();
+        live.sort_by(|a, b| a.path.cmp(&b.path).then(a.created.cmp(&b.created)).then(a.id.cmp(&b.id)));
+        for e in live {
+            let p = paths::unique(&e.path, |p| taken.contains_key(p));
+            taken.insert(p.clone(), ());
+            out.insert(p, e);
+        }
+        out
+    }
+
+    fn mutate(&self, f: impl FnOnce(&mut yrs::TransactionMut)) -> Option<Vec<u8>> {
+        {
+            let mut txn = self.doc.transact_mut_with(LOCAL_ORIGIN);
+            f(&mut txn);
+        }
+        self.take_local_update()
+    }
+
+    fn entry_map<T: ReadTxn>(&self, txn: &T, id: &str) -> Option<MapRef> {
+        match self.files.get(txn, id)? {
+            Out::YMap(m) => Some(m),
+            _ => None,
+        }
+    }
+
+    /// Insert a new entry. `now` is Unix milliseconds.
+    pub fn create(&self, id: &str, path: &str, kind: EntryKind, now: i64) -> Option<Vec<u8>> {
+        self.create_with(id, path, kind, now, None, None)
+    }
+
+    pub fn create_with(
+        &self,
+        id: &str,
+        path: &str,
+        kind: EntryKind,
+        now: i64,
+        size: Option<u64>,
+        mime: Option<&str>,
+    ) -> Option<Vec<u8>> {
+        self.mutate(|txn| {
+            let mut fields: HashMap<String, Any> = HashMap::new();
+            fields.insert("path".into(), Any::from(path));
+            fields.insert("kind".into(), Any::from(kind.as_str()));
+            fields.insert("created".into(), Any::from(now as f64));
+            fields.insert("modified".into(), Any::from(now as f64));
+            if let Some(s) = size {
+                fields.insert("size".into(), Any::from(s as f64));
+            }
+            if let Some(m) = mime {
+                fields.insert("mime".into(), Any::from(m));
+            }
+            let prelim: MapPrelim = fields.into_iter().map(|(k, v)| (k, yrs::In::from(v))).collect();
+            self.files.insert(txn, id, prelim);
+        })
+    }
+
+    pub fn rename(&self, id: &str, new_path: &str, now: i64) -> Option<Vec<u8>> {
+        self.mutate(|txn| {
+            if let Some(m) = self.entry_map(txn, id) {
+                m.try_update(txn, "path", new_path);
+                m.try_update(txn, "modified", now as f64);
+            }
+        })
+    }
+
+    /// Rename a folder: moves every entry beneath it (and the folder entry itself).
+    pub fn rename_folder(&self, old_folder: &str, new_folder: &str, now: i64) -> Option<Vec<u8>> {
+        let moves: Vec<(String, String)> = self
+            .entries()
+            .into_iter()
+            .filter(|e| e.path == old_folder || paths::is_within(&e.path, old_folder))
+            .map(|e| {
+                let rest = &e.path[old_folder.len()..];
+                (e.id, format!("{new_folder}{rest}"))
+            })
+            .collect();
+        if moves.is_empty() {
+            return None;
+        }
+        self.mutate(|txn| {
+            for (id, p) in &moves {
+                if let Some(m) = self.entry_map(txn, id) {
+                    m.try_update(txn, "path", p.as_str());
+                    m.try_update(txn, "modified", now as f64);
+                }
+            }
+        })
+    }
+
+    /// Record that an entry's content changed (drives "recent" sorting).
+    pub fn touch(&self, id: &str, now: i64, size: Option<u64>) -> Option<Vec<u8>> {
+        self.mutate(|txn| {
+            if let Some(m) = self.entry_map(txn, id) {
+                m.try_update(txn, "modified", now as f64);
+                if let Some(s) = size {
+                    m.try_update(txn, "size", s as f64);
+                }
+            }
+        })
+    }
+
+    /// Soft delete; recoverable from the trash.
+    pub fn trash(&self, id: &str, now: i64) -> Option<Vec<u8>> {
+        self.mutate(|txn| {
+            if let Some(m) = self.entry_map(txn, id) {
+                m.try_update(txn, "trashed", now as f64);
+            }
+        })
+    }
+
+    /// Trash a folder and everything in it.
+    pub fn trash_folder(&self, folder: &str, now: i64) -> Option<Vec<u8>> {
+        let ids: Vec<String> = self
+            .entries()
+            .into_iter()
+            .filter(|e| e.is_live() && (e.path == folder || paths::is_within(&e.path, folder)))
+            .map(|e| e.id)
+            .collect();
+        self.mutate(|txn| {
+            for id in &ids {
+                if let Some(m) = self.entry_map(txn, id) {
+                    m.try_update(txn, "trashed", now as f64);
+                }
+            }
+        })
+    }
+
+    pub fn restore(&self, id: &str) -> Option<Vec<u8>> {
+        self.mutate(|txn| {
+            if let Some(m) = self.entry_map(txn, id) {
+                m.remove(txn, "trashed");
+            }
+        })
+    }
+
+    /// Permanently remove an entry from the index (after its data was purged).
+    pub fn remove(&self, id: &str) -> Option<Vec<u8>> {
+        self.mutate(|txn| {
+            self.files.remove(txn, id);
+        })
+    }
+
+    /// Folders: explicit folder entries plus every parent of a live entry.
+    pub fn folders(&self) -> Vec<String> {
+        let mut set = std::collections::BTreeSet::new();
+        for e in self.entries().into_iter().filter(|e| e.is_live()) {
+            if e.kind == EntryKind::Folder {
+                set.insert(e.path.clone());
+            }
+            let mut p = paths::parent(&e.path);
+            while !p.is_empty() {
+                set.insert(p.to_string());
+                p = paths::parent(p);
+            }
+        }
+        set.into_iter().collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn note_concurrent_edits_merge() {
+        let a = NoteDoc::new();
+        let u0 = a.set_text("Hello world").unwrap();
+        let b = NoteDoc::from_updates([u0.as_slice()]).unwrap();
+        let ua = a.set_text("Hello brave world").unwrap();
+        let ub = b.set_text("Hello world!").unwrap();
+        a.apply_update(&ub).unwrap();
+        b.apply_update(&ua).unwrap();
+        assert_eq!(a.text(), "Hello brave world!");
+        assert_eq!(a.text(), b.text());
+        // Replaying is harmless.
+        a.apply_update(&ua).unwrap();
+        a.apply_update(&u0).unwrap();
+        assert_eq!(a.text(), "Hello brave world!");
+        // Snapshot reproduces state.
+        let c = NoteDoc::from_updates([a.encode_state().as_slice()]).unwrap();
+        assert_eq!(c.text(), a.text());
+    }
+
+    #[test]
+    fn remote_updates_are_not_reported_as_local() {
+        let a = NoteDoc::new();
+        let u = a.set_text("x").unwrap();
+        let b = NoteDoc::new();
+        b.apply_update(&u).unwrap();
+        assert!(b.take_local_update().is_none());
+    }
+
+    #[test]
+    fn undo_redo() {
+        let mut a = NoteDoc::new();
+        a.enable_undo();
+        a.set_text("one");
+        a.undo_boundary();
+        a.set_text("one two");
+        assert!(a.undo().is_some());
+        assert_eq!(a.text(), "one");
+        assert!(a.redo().is_some());
+        assert_eq!(a.text(), "one two");
+    }
+
+    #[test]
+    fn index_ops_merge() {
+        let a = IndexDoc::new();
+        let u = a.create("n1", "Inbox/Idea.md", EntryKind::Note, 1).unwrap();
+        let b = IndexDoc::from_updates([u.as_slice()]).unwrap();
+        // Concurrent rename on A and trash on B both apply.
+        let ra = a.rename("n1", "Projects/Idea.md", 2).unwrap();
+        let tb = b.trash("n1", 3).unwrap();
+        a.apply_update(&tb).unwrap();
+        b.apply_update(&ra).unwrap();
+        for d in [&a, &b] {
+            let e = d.get("n1").unwrap();
+            assert_eq!(e.path, "Projects/Idea.md");
+            assert_eq!(e.trashed, Some(3));
+        }
+        let r = a.restore("n1").unwrap();
+        b.apply_update(&r).unwrap();
+        assert!(b.get("n1").unwrap().is_live());
+        assert_eq!(b.folders(), vec!["Projects".to_string()]);
+    }
+
+    #[test]
+    fn duplicate_paths_resolve_deterministically() {
+        let a = IndexDoc::new();
+        let b = IndexDoc::new();
+        let ua = a.create("x", "Note.md", EntryKind::Note, 10).unwrap();
+        let ub = b.create("y", "Note.md", EntryKind::Note, 20).unwrap();
+        a.apply_update(&ub).unwrap();
+        b.apply_update(&ua).unwrap();
+        let ra = a.resolved_paths();
+        let rb = b.resolved_paths();
+        assert_eq!(ra.get("Note.md").unwrap().id, "x");
+        assert_eq!(ra.get("Note 2.md").unwrap().id, "y");
+        assert_eq!(ra.keys().collect::<Vec<_>>(), rb.keys().collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn folder_rename() {
+        let a = IndexDoc::new();
+        a.create("f", "A", EntryKind::Folder, 1);
+        a.create("n", "A/B/c.md", EntryKind::Note, 1);
+        a.create("m", "AB/d.md", EntryKind::Note, 1);
+        a.rename_folder("A", "Z", 2).unwrap();
+        assert_eq!(a.get("f").unwrap().path, "Z");
+        assert_eq!(a.get("n").unwrap().path, "Z/B/c.md");
+        assert_eq!(a.get("m").unwrap().path, "AB/d.md");
+    }
+}

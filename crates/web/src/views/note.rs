@@ -1,0 +1,631 @@
+//! The note page: title, toolbar, editor / reading view and the side panel.
+
+use std::cell::Cell;
+
+use coolpsonotes_core::doc::EntryKind;
+use coolpsonotes_core::paths;
+use leptos::html;
+use leptos::prelude::*;
+use wasm_bindgen::JsCast;
+
+use crate::actions::{self, NoteHost};
+use crate::editor::{Command, Editor, Mode};
+use crate::state::{self, Modal, Route, ViewMode, ui, with};
+use crate::views::icons::Icon;
+use crate::views::panels::RightPanel;
+use crate::views::{avatar, SyncStatus};
+use crate::{knowledge, render, util};
+
+thread_local! {
+    static FOCUS_TITLE: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Ask the next note view to focus its title (used for "New note").
+pub fn focus_title_soon() {
+    FOCUS_TITLE.with(|f| f.set(true));
+}
+
+fn editor() -> Option<std::rc::Rc<Editor>> {
+    with(|c| c.editor.as_ref().map(|(_, _, e)| e.clone()))
+}
+
+fn cmd(c: Command) {
+    if let Some(ed) = editor() {
+        ed.command(c);
+    }
+}
+
+#[component]
+fn ToolButton(icon: &'static str, title: String, c: Command) -> impl IntoView {
+    view! {
+        <button class="tb" title=title.clone() aria-label=title on:mousedown=move |ev| { ev.prevent_default(); cmd(c); }>
+            <Icon name=icon/>
+        </button>
+    }
+}
+
+/// Formatting toolbar. Without a vault (a note shared with us) there is no
+/// file attachment button.
+#[component]
+fn Toolbar(vault: Option<String>) -> impl IntoView {
+    let m = util::mod_key();
+    let heading_open = RwSignal::new(false);
+    view! {
+        <div class="toolbar" role="toolbar" aria-label="Formatting">
+            <ToolButton icon="undo" title=format!("Undo ({m}+Z)") c=Command::Undo/>
+            <ToolButton icon="redo" title=format!("Redo ({m}+Shift+Z)") c=Command::Redo/>
+            <span class="tb-sep"></span>
+            <div class="tb-drop">
+                <button class="tb" title="Heading" on:mousedown=move |ev| { ev.prevent_default(); heading_open.update(|o| *o = !*o); }><Icon name="heading"/></button>
+                <Show when=move || heading_open.get()>
+                    <div class="menu" on:mousedown=move |ev| { ev.prevent_default(); heading_open.set(false); }>
+                        <button on:mousedown=move |_| cmd(Command::Heading(1))><span class="h1s">"Heading 1"</span></button>
+                        <button on:mousedown=move |_| cmd(Command::Heading(2))><span class="h2s">"Heading 2"</span></button>
+                        <button on:mousedown=move |_| cmd(Command::Heading(3))><span class="h3s">"Heading 3"</span></button>
+                        <button on:mousedown=move |_| cmd(Command::Heading(0))>"Normal text"</button>
+                    </div>
+                </Show>
+            </div>
+            <ToolButton icon="bold" title=format!("Bold ({m}+B)") c=Command::Bold/>
+            <ToolButton icon="italic" title=format!("Italic ({m}+I)") c=Command::Italic/>
+            <ToolButton icon="strike" title=format!("Strikethrough ({m}+Shift+X)") c=Command::Strike/>
+            <span class="tb-sep"></span>
+            <ToolButton icon="list" title="Bulleted list".to_string() c=Command::Bullet/>
+            <ToolButton icon="list-ordered" title="Numbered list".to_string() c=Command::Numbered/>
+            <ToolButton icon="checkbox" title=format!("Checklist ({m}+Enter toggles)") c=Command::Task/>
+            <span class="tb-sep"></span>
+            <ToolButton icon="quote" title="Quote".to_string() c=Command::Quote/>
+            <ToolButton icon="code" title=format!("Code ({m}+`)") c=Command::Code/>
+            <ToolButton icon="link" title=format!("Link ({m}+K)") c=Command::Link/>
+            <ToolButton icon="table" title="Table".to_string() c=Command::Table/>
+            <ToolButton icon="minus" title="Divider".to_string() c=Command::Rule/>
+            {vault.map(|vault| view! {
+                <button class="tb" title="Attach a file or image" on:mousedown=move |ev| {
+                    ev.prevent_default();
+                    let v = vault.clone();
+                    actions::pick_files(false, "", move |files| {
+                        leptos::task::spawn_local(async move {
+                            let embeds = actions::upload_files(&v, files, "attachments").await;
+                            if let Some(ed) = editor() && !embeds.is_empty() { ed.insert_text(&embeds.join("\n")); }
+                        });
+                    });
+                }><Icon name="paperclip"/></button>
+            })}
+        </div>
+    }
+}
+
+/// Keep the open editor in line with the view mode and vim preference.
+fn mode_effects() {
+    let ui = ui();
+    Effect::new(move |_| {
+        let m = ui.mode.get();
+        if let Some(ed) = editor() {
+            match m {
+                ViewMode::Live => ed.set_mode(Mode::Live),
+                ViewMode::Source => ed.set_mode(Mode::Source),
+                ViewMode::Reading => {}
+            }
+        }
+        state::set_ui_prefs(|p| {
+            p.editor_mode = match m {
+                ViewMode::Live => "live",
+                ViewMode::Source => "source",
+                ViewMode::Reading => "reading",
+            }
+            .into()
+        });
+    });
+    Effect::new(move |_| {
+        let vim = ui.ui_prefs.get().vim;
+        if let Some(ed) = editor() {
+            ed.set_vim(vim);
+        }
+    });
+}
+
+/// Mount an editor for a note into `container` (unless it is already there).
+fn mount_editor(container: &web_sys::HtmlElement, host: std::rc::Rc<NoteHost>, ro: bool) -> Option<std::rc::Rc<Editor>> {
+    let ui = ui();
+    let (v, n) = (host.vault.clone(), host.note.clone());
+    let mounted = with(|c| c.editor.as_ref().filter(|(ev, en, _)| *ev == v && *en == n).map(|(_, _, e)| e.clone()));
+    if let Some(ed) = mounted
+        && container.contains(Some(ed.element())) {
+            return None;
+        }
+    let text = with(|c| c.replicas.get(&v).map(|r| r.note_text(&n))).unwrap_or_default();
+    let mode = if ui.mode.get_untracked() == ViewMode::Source { Mode::Source } else { Mode::Live };
+    let vim = ui.ui_prefs.get_untracked().vim;
+    container.set_inner_html("");
+    let ed = Editor::new(container.unchecked_ref(), text, host, mode, ro, vim);
+    let old = with(|c| c.editor.replace((v, n, ed.clone())));
+    if let Some((_, _, o)) = old {
+        o.destroy();
+    }
+    state::publish_presence();
+    Some(ed)
+}
+
+/// Toggle the checkbox of a task line (clicked in the reading view).
+fn toggle_task(vault: &str, note: &str, line: usize) {
+    let text = with(|c| c.replicas.get(vault).map(|r| r.note_text(note))).unwrap_or_default();
+    let mut lines: Vec<String> = text.split('\n').map(str::to_string).collect();
+    if let Some(l) = lines.get_mut(line) {
+        if l.contains("[ ]") {
+            *l = l.replacen("[ ]", "[x]", 1);
+        } else if l.contains("[x]") || l.contains("[X]") {
+            *l = l.replacen("[x]", "[ ]", 1).replacen("[X]", "[ ]", 1);
+        }
+    }
+    let new = lines.join("\n");
+    let up = with(|c| c.replicas.get_mut(vault)?.notes.get_mut(note)?.set_text(&new));
+    if let Some(u) = up {
+        state::local_update(vault, note, u);
+        if let Some(ed) = editor() {
+            ed.set_text(new, false);
+        }
+        ui().content_rev.update(|x| *x += 1);
+    }
+}
+
+#[component]
+pub fn NoteView(vault: String, note: String) -> impl IntoView {
+    let ui = ui();
+    let host_ref = NodeRef::<html::Div>::new();
+    let reading_ref = NodeRef::<html::Article>::new();
+    let title_ref = NodeRef::<html::Input>::new();
+    let title_text = RwSignal::new(String::new());
+
+    let v = vault.clone();
+    let loaded = Memo::new(move |_| ui.vaults.get().iter().any(|x| x.id == v && x.loaded));
+    let (v, n2) = (vault.clone(), note.clone());
+    let exists = Memo::new(move |_| {
+        ui.tree_rev.get();
+        state::entry(&v, &n2).is_some_and(|e| e.is_live() && e.kind == EntryKind::Note)
+    });
+    let (v, n3) = (vault.clone(), note.clone());
+    let trashed = Memo::new(move |_| {
+        ui.tree_rev.get();
+        state::entry(&v, &n3).is_some_and(|e| !e.is_live())
+    });
+    let v = vault.clone();
+    let writable = Memo::new(move |_| {
+        ui.vaults.get();
+        state::can_write(&v)
+    });
+
+    // Keep the title field in sync with the index (renames from elsewhere).
+    let (v, n4) = (vault.clone(), note.clone());
+    Effect::new(move |_| {
+        ui.tree_rev.get();
+        if let Some(e) = state::entry(&v, &n4) {
+            let focused = title_ref.get().is_some_and(|t| util::document().active_element().is_some_and(|a| a.is_same_node(Some(t.unchecked_ref()))));
+            if !focused {
+                title_text.set(e.title().to_string());
+            }
+        }
+    });
+
+    // Mount the editor once the vault is loaded and the container exists.
+    let (v, nn) = (vault.clone(), note.clone());
+    Effect::new(move |_| {
+        let Some(container) = host_ref.get() else { return };
+        if !loaded.get() || !exists.get() {
+            return;
+        }
+        let ro = !state::can_write(&v);
+        let Some(ed) = mount_editor(&container, NoteHost::new(&v, &nn), ro) else { return };
+        let focus_title = FOCUS_TITLE.with(|f| f.replace(false));
+        if focus_title {
+            if let Some(t) = title_ref.get() {
+                // After the title value has been rendered, select it so typing replaces "Untitled".
+                util::set_timeout(30, move || {
+                    let _ = t.focus();
+                    t.select();
+                });
+            }
+        } else if !ro && ui.mode.get_untracked() != ViewMode::Reading && !util::is_touch() {
+            ed.focus();
+        }
+    });
+
+    mode_effects();
+    let v = vault.clone();
+    Effect::new(move |_| {
+        ui.vaults.get();
+        if let Some(ed) = editor() {
+            ed.set_readonly(!state::can_write(&v));
+        }
+    });
+
+    let (v, n) = (vault.clone(), note.clone());
+    on_cleanup(move || {
+        let ed = with(|c| {
+            if c.editor.as_ref().is_some_and(|(ev, en, _)| *ev == v && *en == n) { c.editor.take() } else { None }
+        });
+        if let Some((_, _, ed)) = ed {
+            ed.destroy();
+        }
+        state::note_closed(&v, &n);
+    });
+
+    // Reading view HTML.
+    let (v, n5) = (vault.clone(), note.clone());
+    let reading_html = Memo::new(move |_| {
+        if ui.mode.get() != ViewMode::Reading {
+            return String::new();
+        }
+        ui.content_rev.get();
+        ui.tree_rev.get();
+        let text = with(|c| c.replicas.get(&v).map(|r| r.note_text(&n5))).unwrap_or_default();
+        let from = state::entry(&v, &n5).map(|e| e.path).unwrap_or_default();
+        let vv = v.clone();
+        let note = move |t: &str| knowledge::resolve_target(&vv, t, &from);
+        let va = v.clone();
+        let att = move |t: &str| knowledge::resolve_attachment(&va, t);
+        render::to_html(&text, &render::Ctx { note: &note, attachment: &att })
+    });
+    // Load images after each render of the reading view.
+    let va = vault.clone();
+    Effect::new(move |_| {
+        let _ = reading_html.get();
+        let Some(art) = reading_ref.get() else { return };
+        let Ok(imgs) = art.query_selector_all("img[data-att]") else { return };
+        for i in 0..imgs.length() {
+            let Some(img) = imgs.item(i).and_then(|n| n.dyn_into::<web_sys::HtmlImageElement>().ok()) else { continue };
+            let Some(id) = img.get_attribute("data-att") else { continue };
+            let v = va.clone();
+            leptos::task::spawn_local(async move {
+                if let Some(url) = actions::load_attachment(&v, &id).await {
+                    img.set_src(&url);
+                }
+            });
+        }
+    });
+
+    let (vr, nr) = (vault.clone(), note.clone());
+    let on_reading_click = move |ev: web_sys::MouseEvent| {
+        let Some(t) = ev.target().and_then(|t| t.dyn_into::<web_sys::Element>().ok()) else { return };
+        if let Some(a) = t.closest("[data-note]").ok().flatten() {
+            ev.prevent_default();
+            if let Some(id) = a.get_attribute("data-note") {
+                state::navigate(Route::Note(vr.clone(), id));
+            }
+        } else if let Some(a) = t.closest("[data-create]").ok().flatten() {
+            ev.prevent_default();
+            if let Some(name) = a.get_attribute("data-create") {
+                let from = state::entry(&vr, &nr).map(|e| e.path).unwrap_or_default();
+                actions::open_wiki(&vr, &name, &from);
+            }
+        } else if let Some(a) = t.closest("[data-tag]").ok().flatten() {
+            ev.prevent_default();
+            if let Some(tag) = a.get_attribute("data-tag") {
+                ui.modal.set(Some(Modal::Search(format!("tag:{tag}"))));
+            }
+        } else if t.class_list().contains("task") {
+            ev.prevent_default();
+            if !state::can_write(&vr) {
+                return;
+            }
+            let Some(line) = t.get_attribute("data-task").and_then(|s| s.parse::<usize>().ok()) else { return };
+            toggle_task(&vr, &nr, line);
+        }
+    };
+
+    let (vt, nt) = (vault.clone(), note.clone());
+    let commit_title = move || {
+        let new = title_text.get_untracked();
+        if let Some(e) = state::entry(&vt, &nt) {
+            if new.trim() == e.title() {
+                return;
+            }
+            if let Err(err) = actions::rename_entry(&vt, &nt, &new) {
+                state::error(err);
+                title_text.set(e.title().to_string());
+            }
+        }
+    };
+    let commit_title2 = commit_title.clone();
+
+    let (vb, nb) = (vault.clone(), note.clone());
+    let breadcrumb = move || {
+        ui.tree_rev.get();
+        let path = state::entry(&vb, &nb).map(|e| e.path).unwrap_or_default();
+        let folder = paths::parent(&path).to_string();
+        let mut crumbs = vec![state::vault_name(&vb)];
+        if !folder.is_empty() {
+            crumbs.extend(folder.split('/').map(str::to_string));
+        }
+        crumbs.join(" / ")
+    };
+    let np = note.clone();
+    let others_here = move || ui.presence.get().into_iter().filter(|p| p.note.as_deref() == Some(np.as_str())).collect::<Vec<_>>();
+    let (vf, nf) = (vault.clone(), note.clone());
+    let fav = move || {
+        ui.prefs_rev.get();
+        actions::is_favorite(&vf, &nf)
+    };
+    let more = RwSignal::new(false);
+    let (vm, nm) = (vault.clone(), note.clone());
+    let (vs, vh, nh) = (vault.clone(), vault.clone(), note.clone());
+    let (vfa, nfa) = (vault.clone(), note.clone());
+    let vtool = vault.clone();
+    let vback = vault.clone();
+    let (vrp, nrp) = (vault.clone(), note.clone());
+    let (vrestore, nrestore) = (vault.clone(), note.clone());
+
+    view! {
+        <div class="note-page">
+            <header class="note-head">
+                <button class="icon-btn mobile-only" title="Menu" on:click=move |_| ui.sidebar.set(true)><Icon name="menu"/></button>
+                <div class="crumbs ellipsis">{breadcrumb}</div>
+                <div class="presence">
+                    {move || others_here().into_iter().map(|p| avatar(&p.name, &p.user_id)).collect_view()}
+                </div>
+                <span class="mobile-only"><SyncStatus/></span>
+                <div class="seg" role="group" aria-label="View mode">
+                    <button class:on=move || ui.mode.get() == ViewMode::Live title="Live preview" on:click=move |_| ui.mode.set(ViewMode::Live)><Icon name="edit"/></button>
+                    <button class:on=move || ui.mode.get() == ViewMode::Source title="Markdown source" on:click=move |_| ui.mode.set(ViewMode::Source)><Icon name="code"/></button>
+                    <button class:on=move || ui.mode.get() == ViewMode::Reading title=format!("Reading view ({}+E)", util::mod_key()) on:click=move |_| ui.mode.set(ViewMode::Reading)><Icon name="book"/></button>
+                </div>
+                <button class="icon-btn" class:on=fav title="Favorite" on:click=move |_| actions::toggle_favorite(&vfa, &nfa)><Icon name="star"/></button>
+                <Show when=move || state::is_owner(&vs)>
+                    {
+                        let (v, n) = (vault.clone(), note.clone());
+                        let (v2, n2) = (vault.clone(), note.clone());
+                        let shared = move || { ui.tree_rev.get(); state::is_shared_note(&v2, &n2) };
+                        let shared2 = shared.clone();
+                        view! { <button class="icon-btn" class:on=shared
+                            title=move || if shared2() { "Shared individually — manage who can open this note" } else { "Share this note" }
+                            on:click=move |_| ui.modal.set(Some(Modal::ShareNote(v.clone(), n.clone())))><Icon name="share"/></button> }
+                    }
+                </Show>
+                <button class="icon-btn" title="Version history" on:click=move |_| ui.modal.set(Some(Modal::History(vh.clone(), nh.clone())))><Icon name="history"/></button>
+                <button class="icon-btn" class:on=move || ui.ui_prefs.get().right_panel || ui.panel_overlay.get() title=format!("Side panel ({}+\\)", util::mod_key())
+                    on:click=move |_| {
+                        let narrow = util::window().inner_width().ok().and_then(|w| w.as_f64()).unwrap_or(1200.0) <= 1100.0;
+                        if narrow { ui.panel_overlay.update(|o| *o = !*o) } else { state::set_ui_prefs(|p| p.right_panel = !p.right_panel) }
+                    }><Icon name="panel"/></button>
+                <div class="tb-drop">
+                    <button class="icon-btn" title="More" on:click=move |_| more.update(|o| *o = !*o)><Icon name="more"/></button>
+                    <Show when=move || more.get()>
+                        {
+                            let (v, n) = (vm.clone(), nm.clone());
+                            let (v2, n2) = (vm.clone(), nm.clone());
+                            let (v3, n3) = (vm.clone(), nm.clone());
+                            let (v4, n4) = (vm.clone(), nm.clone());
+                            view! {
+                                <div class="menu right" on:click=move |_| more.set(false)>
+                                    <button on:click=move |_| {
+                                        let text = with(|c| c.replicas.get(&v).map(|r| r.note_text(&n))).unwrap_or_default();
+                                        let name = state::entry(&v, &n).map(|e| paths::file_name(&e.path).to_string()).unwrap_or_else(|| "note.md".into());
+                                        util::download(&name, "text/markdown", text.as_bytes());
+                                    }><Icon name="download"/>" Download as Markdown"</button>
+                                    <button on:click=move |_| {
+                                        let t = state::entry(&v2, &n2).map(|e| e.title().to_string()).unwrap_or_default();
+                                        util::copy_to_clipboard(&format!("[[{t}]]"));
+                                        state::success("Link copied — paste it into another note.");
+                                    }><Icon name="link"/>" Copy link to note"</button>
+                                    <Show when=move || writable.get()>
+                                        {
+                                            let (v3, n3) = (v3.clone(), n3.clone());
+                                            let (v4, n4) = (v4.clone(), n4.clone());
+                                            view! {
+                                                <button on:click=move |_| ui.modal.set(Some(Modal::Move { vault: v3.clone(), id: n3.clone() }))><Icon name="move"/>" Move to…"</button>
+                                                <button class="danger" on:click=move |_| { actions::trash(&v4, &n4); state::navigate(Route::Vault(v4.clone())); }><Icon name="trash"/>" Move to trash"</button>
+                                            }
+                                        }
+                                    </Show>
+                                </div>
+                            }
+                        }
+                    </Show>
+                </div>
+            </header>
+            <div class="note-body" class:with-panel=move || ui.ui_prefs.get().right_panel class:overlay=move || ui.panel_overlay.get()>
+                <div class="note-main" class:wide=move || ui.ui_prefs.get().wide>
+                    {move || {
+                        if !loaded.get() {
+                            return view! { <div class="center-fill"><div class="spinner"></div></div> }.into_any();
+                        }
+                        if !exists.get() {
+                            let vback = vback.clone();
+                            let (vr, nr) = (vrestore.clone(), nrestore.clone());
+                            return view! {
+                                <div class="empty">
+                                    {if trashed.get_untracked() {
+                                        view! { <p>"This note is in the trash."</p>
+                                            <button class="btn" on:click=move |_| actions::restore(&vr, &nr)>"Restore it"</button> }.into_any()
+                                    } else {
+                                        view! { <p>"This note doesn't exist (anymore)."</p> }.into_any()
+                                    }}
+                                    <button class="btn ghost" on:click=move |_| state::navigate(Route::Vault(vback.clone()))>"Back to vault"</button>
+                                </div>
+                            }.into_any();
+                        }
+                        let c1 = commit_title.clone();
+                        let c2 = commit_title2.clone();
+                        let on_reading_click = on_reading_click.clone();
+                        let vtool = vtool.clone();
+                        view! {
+                            <input class="note-title" node_ref=title_ref aria-label="Note title" placeholder="Untitled"
+                                readonly=move || !writable.get()
+                                prop:value=move || title_text.get()
+                                on:input=move |ev| title_text.set(event_target_value(&ev))
+                                on:blur=move |_| c1()
+                                on:keydown=move |ev: web_sys::KeyboardEvent| {
+                                    if ev.key() == "Enter" || ev.key() == "ArrowDown" {
+                                        ev.prevent_default();
+                                        c2();
+                                        if let Some(ed) = editor() { ed.focus(); }
+                                    }
+                                }/>
+                            {move || (!writable.get()).then(|| view! {
+                                <div class="readonly-note"><Icon name="eye"/>" You can view this note. Ask the vault owner for edit access."</div>
+                            })}
+                            {move || (writable.get() && ui.mode.get() != ViewMode::Reading).then(|| view! { <Toolbar vault=Some(vtool.clone())/> })}
+                            <div class="editor-host" node_ref=host_ref class:hidden=move || ui.mode.get() == ViewMode::Reading></div>
+                            <article class="reading" node_ref=reading_ref class:hidden=move || ui.mode.get() != ViewMode::Reading
+                                inner_html=move || reading_html.get() on:click=on_reading_click></article>
+                        }.into_any()
+                    }}
+                </div>
+                <Show when=move || ui.ui_prefs.get().right_panel || ui.panel_overlay.get()>
+                    <RightPanel vault=vrp.clone() note=nrp.clone()/>
+                </Show>
+            </div>
+        </div>
+    }
+}
+
+/// A note someone shared with us individually. Only the note itself is
+/// available: no vault tree, linked notes or attachments.
+#[component]
+pub fn SharedNoteView(vault: String, note: String) -> impl IntoView {
+    let ui = ui();
+    let host_ref = NodeRef::<html::Div>::new();
+    let key = StoredValue::new((vault.clone(), note.clone()));
+    let info = Memo::new(move |_| {
+        let (v, n) = key.get_value();
+        ui.shared.get().into_iter().find(|s| s.vault == v && s.note == n)
+    });
+    let loaded = Memo::new(move |_| info.get().is_some_and(|s| s.loaded));
+    let writable = Memo::new(move |_| info.get().is_some_and(|s| s.role.can_write()));
+
+    let (v, n) = (vault.clone(), note.clone());
+    Effect::new(move |_| {
+        let Some(container) = host_ref.get() else { return };
+        if !loaded.get() {
+            return;
+        }
+        let ro = !writable.get_untracked();
+        let Some(ed) = mount_editor(&container, NoteHost::for_shared(&v, &n), ro) else { return };
+        state::send_presence();
+        if !ro && ui.mode.get_untracked() != ViewMode::Reading && !util::is_touch() {
+            ed.focus();
+        }
+    });
+    mode_effects();
+    Effect::new(move |_| {
+        let w = writable.get();
+        if let Some(ed) = editor() {
+            ed.set_readonly(!w);
+        }
+    });
+    let (v, n) = (vault.clone(), note.clone());
+    on_cleanup(move || {
+        let ed = with(|c| {
+            if c.editor.as_ref().is_some_and(|(ev, en, _)| *ev == v && *en == n) { c.editor.take() } else { None }
+        });
+        if let Some((_, _, ed)) = ed {
+            ed.destroy();
+        }
+        state::note_closed(&v, &n);
+    });
+
+    let (v, n) = (vault.clone(), note.clone());
+    let reading_html = Memo::new(move |_| {
+        if ui.mode.get() != ViewMode::Reading {
+            return String::new();
+        }
+        ui.content_rev.get();
+        let text = with(|c| c.replicas.get(&v).map(|r| r.note_text(&n))).unwrap_or_default();
+        let none = |_: &str| None;
+        render::to_html(&text, &render::Ctx { note: &none, attachment: &none })
+    });
+    let (vr, nr) = (vault.clone(), note.clone());
+    let on_reading_click = move |ev: web_sys::MouseEvent| {
+        let Some(t) = ev.target().and_then(|t| t.dyn_into::<web_sys::Element>().ok()) else { return };
+        if t.closest("[data-note], [data-create], [data-tag]").ok().flatten().is_some() {
+            ev.prevent_default();
+            state::info("Only this note is shared with you, not the notes it links to.");
+        } else if t.class_list().contains("task") {
+            ev.prevent_default();
+            if writable.get_untracked()
+                && let Some(line) = t.get_attribute("data-task").and_then(|s| s.parse::<usize>().ok()) {
+                    toggle_task(&vr, &nr, line);
+                }
+        }
+    };
+
+    let np = note.clone();
+    let others_here = move || ui.presence.get().into_iter().filter(|p| p.note.as_deref() == Some(np.as_str())).collect::<Vec<_>>();
+    let more = RwSignal::new(false);
+    let (vh, nh) = (vault.clone(), note.clone());
+    let (vd, nd) = (vault.clone(), note.clone());
+    let (vl, nl) = (vault.clone(), note.clone());
+    let title = move || info.get().map(|s| s.title).unwrap_or_default();
+
+    view! {
+        <div class="note-page shared-note">
+            <header class="note-head">
+                <button class="icon-btn mobile-only" title="Menu" on:click=move |_| ui.sidebar.set(true)><Icon name="menu"/></button>
+                <div class="crumbs ellipsis">{move || info.get().map(|s| format!("Shared with you by {}", s.owner)).unwrap_or_default()}</div>
+                <div class="presence">
+                    {move || others_here().into_iter().map(|p| avatar(&p.name, &p.user_id)).collect_view()}
+                </div>
+                <span class="mobile-only"><SyncStatus/></span>
+                <div class="seg" role="group" aria-label="View mode">
+                    <button class:on=move || ui.mode.get() == ViewMode::Live title="Live preview" on:click=move |_| ui.mode.set(ViewMode::Live)><Icon name="edit"/></button>
+                    <button class:on=move || ui.mode.get() == ViewMode::Source title="Markdown source" on:click=move |_| ui.mode.set(ViewMode::Source)><Icon name="code"/></button>
+                    <button class:on=move || ui.mode.get() == ViewMode::Reading title=format!("Reading view ({}+E)", util::mod_key()) on:click=move |_| ui.mode.set(ViewMode::Reading)><Icon name="book"/></button>
+                </div>
+                <button class="icon-btn" title="Version history" on:click=move |_| ui.modal.set(Some(Modal::History(vh.clone(), nh.clone())))><Icon name="history"/></button>
+                <div class="tb-drop">
+                    <button class="icon-btn" title="More" on:click=move |_| more.update(|o| *o = !*o)><Icon name="more"/></button>
+                    <Show when=move || more.get()>
+                        {
+                            let (v, n) = (vd.clone(), nd.clone());
+                            let (v2, n2) = (vl.clone(), nl.clone());
+                            view! {
+                                <div class="menu right" on:click=move |_| more.set(false)>
+                                    <button on:click=move |_| {
+                                        let text = with(|c| c.replicas.get(&v).map(|r| r.note_text(&n))).unwrap_or_default();
+                                        let name = format!("{}.md", info.get_untracked().map(|s| s.title).unwrap_or_else(|| "note".into()));
+                                        util::download(&name, "text/markdown", text.as_bytes());
+                                    }><Icon name="download"/>" Download as Markdown"</button>
+                                    <button class="danger" on:click=move |_| {
+                                        if !util::confirm("Remove this note from your list? You'll lose access until it is shared with you again.") { return; }
+                                        let (v, n) = (v2.clone(), n2.clone());
+                                        leptos::task::spawn_local(async move { actions::leave_shared_note(&v, &n).await });
+                                    }><Icon name="logout"/>" Remove from my list"</button>
+                                </div>
+                            }
+                        }
+                    </Show>
+                </div>
+            </header>
+            <div class="note-body">
+                <div class="note-main" class:wide=move || ui.ui_prefs.get().wide>
+                    {move || {
+                        let Some(s) = info.get() else {
+                            return view! {
+                                <div class="empty">
+                                    <p>"This note isn't shared with you (anymore)."</p>
+                                    <button class="btn ghost" on:click=move |_| state::navigate(Route::Home)>"Back home"</button>
+                                </div>
+                            }.into_any();
+                        };
+                        if let Some(e) = s.error {
+                            return view! { <div class="empty"><p>"This note can't be opened right now."</p><p class="muted small">{e}</p></div> }.into_any();
+                        }
+                        if !loaded.get() {
+                            return view! { <div class="center-fill"><div class="spinner"></div></div> }.into_any();
+                        }
+                        let on_reading_click = on_reading_click.clone();
+                        view! {
+                            <h1 class="note-title static" aria-label="Note title">{title}</h1>
+                            {move || (!writable.get()).then(|| view! {
+                                <div class="readonly-note"><Icon name="eye"/>" You can view this note. Ask the person who shared it for edit access."</div>
+                            })}
+                            {move || (writable.get() && ui.mode.get() != ViewMode::Reading).then(|| view! { <Toolbar vault=None/> })}
+                            <div class="editor-host" node_ref=host_ref class:hidden=move || ui.mode.get() == ViewMode::Reading></div>
+                            <article class="reading" class:hidden=move || ui.mode.get() != ViewMode::Reading
+                                inner_html=move || reading_html.get() on:click=on_reading_click></article>
+                        }.into_any()
+                    }}
+                </div>
+            </div>
+        </div>
+    }
+}

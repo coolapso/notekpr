@@ -1,0 +1,888 @@
+//! Modal dialogs.
+
+use coolpsonotes_core::doc::EntryKind;
+use coolpsonotes_core::engine::PinStatus;
+use coolpsonotes_core::protocol::*;
+use leptos::html;
+use leptos::prelude::*;
+use leptos::prelude::Update;
+
+use crate::actions;
+use crate::state::{self, Modal, Route, ui, with};
+use crate::util;
+use crate::views::avatar;
+use crate::views::icons::Icon;
+use crate::{api, knowledge, render};
+
+#[component]
+fn Dialog(#[prop(into)] title: String, #[prop(optional)] wide: bool, children: Children) -> impl IntoView {
+    let ui = ui();
+    let label = title.clone();
+    view! {
+        <div class="modal-back" on:mousedown=move |_| ui.modal.set(None)>
+            <div class="modal" class:wide=wide role="dialog" aria-label=label on:mousedown=|ev| ev.stop_propagation()>
+                <header>
+                    <h2>{title}</h2>
+                    <button class="icon-btn" title="Close" on:click=move |_| ui.modal.set(None)><Icon name="x"/></button>
+                </header>
+                <div class="modal-body">{children()}</div>
+            </div>
+        </div>
+    }
+}
+
+#[component]
+pub fn ModalHost() -> impl IntoView {
+    let ui = ui();
+    view! {
+        {move || ui.modal.get().map(|m| match m {
+            Modal::QuickSwitch => view! { <QuickSwitch/> }.into_any(),
+            Modal::Search(q) => view! { <SearchDialog initial=q/> }.into_any(),
+            Modal::NewVault => view! { <NewVault/> }.into_any(),
+            Modal::Share(v) => view! { <Share vault=v/> }.into_any(),
+            Modal::ShareNote(v, n) => view! { <ShareNote vault=v note=n/> }.into_any(),
+            Modal::VaultSettings(v) => view! { <VaultSettings vault=v/> }.into_any(),
+            Modal::History(v, n) => view! { <History vault=v note=n/> }.into_any(),
+            Modal::ApproveDevice(d) => view! { <ApproveDevice device=d/> }.into_any(),
+            Modal::Help => view! { <Help/> }.into_any(),
+            Modal::Rename { vault, id } => view! { <RenameDialog vault=vault id=id/> }.into_any(),
+            Modal::NewFolder { vault, parent } => view! { <NewFolder vault=vault parent=parent/> }.into_any(),
+            Modal::Move { vault, id } => view! { <MoveDialog vault=vault id=id/> }.into_any(),
+            Modal::Import(v) => view! { <ImportDialog vault=v/> }.into_any(),
+        })}
+    }
+}
+
+// ------------------------------------------------------------------ quick switcher
+
+#[component]
+fn QuickSwitch() -> impl IntoView {
+    let ui = ui();
+    let q = RwSignal::new(String::new());
+    let sel = RwSignal::new(0usize);
+    let input = NodeRef::<html::Input>::new();
+    Effect::new(move |_| {
+        if let Some(i) = input.get() {
+            let _ = i.focus();
+        }
+    });
+    let results = Memo::new(move |_| knowledge::quick(&q.get()));
+    let current_vault = ui.route.get_untracked().vault().map(str::to_string);
+    let open = move |i: usize| {
+        let r = results.get_untracked();
+        if let Some((v, id, _, _)) = r.get(i) {
+            ui.modal.set(None);
+            state::navigate(if state::is_member(v) { Route::Note(v.clone(), id.clone()) } else { Route::Shared(v.clone(), id.clone()) });
+        } else if let Some(v) = current_vault.clone() {
+            // No match: create a note with that title.
+            let title = q.get_untracked();
+            if !title.trim().is_empty() && state::can_write(&v) {
+                ui.modal.set(None);
+                leptos::task::spawn_local(async move {
+                    if let Some(id) = actions::create_note_with(&v, "", &title, "").await {
+                        state::navigate(Route::Note(v, id));
+                    }
+                });
+            }
+        }
+    };
+    let open2 = open.clone();
+    view! {
+        <div class="modal-back" on:mousedown=move |_| ui.modal.set(None)>
+            <div class="modal palette" role="dialog" aria-label="Go to note" on:mousedown=|ev| ev.stop_propagation()>
+                <div class="palette-input">
+                    <Icon name="search"/>
+                    <input node_ref=input placeholder="Jump to a note, or type a new title…" prop:value=move || q.get()
+                        on:input=move |ev| { q.set(event_target_value(&ev)); sel.set(0); }
+                        on:keydown=move |ev: web_sys::KeyboardEvent| match ev.key().as_str() {
+                            "ArrowDown" => { ev.prevent_default(); sel.update(|s| *s = (*s + 1).min(results.get_untracked().len().saturating_sub(1))); }
+                            "ArrowUp" => { ev.prevent_default(); sel.update(|s| *s = s.saturating_sub(1)); }
+                            "Enter" => { ev.prevent_default(); open(sel.get_untracked()); }
+                            _ => {}
+                        }/>
+                    <button class="btn ghost small" on:click=move |_| ui.modal.set(Some(Modal::Search(q.get_untracked())))>"Full search"</button>
+                </div>
+                <div class="palette-list">
+                    {move || {
+                        let r = results.get();
+                        if r.is_empty() {
+                            let t = q.get();
+                            return view! { <div class="palette-empty muted">{if t.trim().is_empty() { "No notes yet.".to_string() } else { format!("Press Enter to create “{t}”") }}</div> }.into_any();
+                        }
+                        r.into_iter().enumerate().map(|(i, (_, _, path, vname))| {
+                            let open = open2.clone();
+                            view! {
+                                <button class="palette-item" class:sel=move || sel.get() == i on:mouseenter=move |_| sel.set(i) on:click=move |_| open(i)>
+                                    <Icon name="file"/>
+                                    <span class="grow ellipsis">{coolpsonotes_core::paths::title(&path).to_string()}</span>
+                                    <span class="muted small ellipsis">{match coolpsonotes_core::paths::parent(&path) {
+                                        "" => vname,
+                                        folder => format!("{vname} · {folder}"),
+                                    }}</span>
+                                </button>
+                            }
+                        }).collect_view().into_any()
+                    }}
+                </div>
+            </div>
+        </div>
+    }
+}
+
+// ------------------------------------------------------------------ search
+
+fn highlighted(snippet: &str, hl: &[(usize, usize)]) -> String {
+    let chars: Vec<char> = snippet.chars().collect();
+    let mut out = String::new();
+    let mut i = 0;
+    for (a, b) in hl {
+        if *a < i || *b > chars.len() {
+            continue;
+        }
+        let pre: String = chars[i..*a].iter().collect();
+        crate::editor::syntax::escape(&pre, &mut out);
+        out.push_str("<mark>");
+        let m: String = chars[*a..*b].iter().collect();
+        crate::editor::syntax::escape(&m, &mut out);
+        out.push_str("</mark>");
+        i = *b;
+    }
+    let rest: String = chars[i.min(chars.len())..].iter().collect();
+    crate::editor::syntax::escape(&rest, &mut out);
+    out
+}
+
+#[component]
+fn SearchDialog(initial: String) -> impl IntoView {
+    let ui = ui();
+    let q = RwSignal::new(initial);
+    let scope = RwSignal::new(ui.route.get_untracked().vault().map(str::to_string));
+    let input = NodeRef::<html::Input>::new();
+    Effect::new(move |_| {
+        if let Some(i) = input.get() {
+            let _ = i.focus();
+        }
+    });
+    let results = Memo::new(move |_| {
+        ui.content_rev.get();
+        knowledge::search_all(&q.get(), scope.get().as_deref()).into_iter().map(|h| (h.vault, h.vault_name, h.id, h.path, h.snippet, h.highlights)).collect::<Vec<_>>()
+    });
+    view! {
+        <Dialog title="Search" wide=true>
+            <div class="search-bar">
+                <input class="input" node_ref=input placeholder="Search notes…  (tag:x  folder:y  \"exact phrase\")"
+                    prop:value=move || q.get() on:input=move |ev| q.set(event_target_value(&ev))/>
+                <select class="input" on:change=move |ev| { let v = event_target_value(&ev); scope.set(if v.is_empty() { None } else { Some(v) }); }>
+                    <option value="" selected=move || scope.get().is_none()>"All vaults"</option>
+                    {move || ui.vaults.get().into_iter().map(|v| {
+                        let id = v.id.clone();
+                        let id2 = v.id.clone();
+                        view! { <option value=id selected=move || scope.get().as_deref() == Some(id2.as_str())>{v.name.clone()}</option> }
+                    }).collect_view()}
+                </select>
+            </div>
+            <p class="muted small">"Search runs on this device over your decrypted notes; the server never sees your queries."</p>
+            <div class="results">
+                {move || {
+                    let r = results.get();
+                    if q.get().trim().is_empty() {
+                        return view! { <p class="muted">"Type to search."</p> }.into_any();
+                    }
+                    if r.is_empty() {
+                        return view! { <p class="muted">"No matches."</p> }.into_any();
+                    }
+                    r.into_iter().map(|(v, vname, id, path, snippet, hl)| {
+                        let html = highlighted(&snippet, &hl);
+                        view! {
+                            <button class="result" on:click=move |_| { ui.modal.set(None); state::navigate(Route::Note(v.clone(), id.clone())); }>
+                                <div class="r-title">{coolpsonotes_core::paths::title(&path).to_string()}<span class="muted small">{format!("  {vname} / {path}")}</span></div>
+                                <div class="r-snip" inner_html=html></div>
+                            </button>
+                        }
+                    }).collect_view().into_any()
+                }}
+            </div>
+        </Dialog>
+    }
+}
+
+// ------------------------------------------------------------------ vaults
+
+#[component]
+fn NewVault() -> impl IntoView {
+    let ui = ui();
+    let name = RwSignal::new(String::new());
+    let busy = RwSignal::new(false);
+    view! {
+        <Dialog title="New vault">
+            <p class="muted">"A vault is a separate collection of notes with its own encryption key and its own people. Use one for private notes, one for the family, one per project…"</p>
+            <form class="stack" on:submit=move |ev| {
+                ev.prevent_default();
+                busy.set(true);
+                let n = name.get_untracked();
+                leptos::task::spawn_local(async move {
+                    if let Some(id) = actions::create_vault(n).await {
+                        ui.modal.set(None);
+                        state::navigate(Route::Vault(id));
+                    }
+                    busy.set(false);
+                });
+            }>
+                <input class="input" placeholder="Vault name (e.g. Family)" autofocus prop:value=move || name.get() on:input=move |ev| name.set(event_target_value(&ev))/>
+                <button class="btn primary" type="submit" disabled=move || busy.get() || name.get().trim().is_empty()>"Create vault"</button>
+            </form>
+        </Dialog>
+    }
+}
+
+#[component]
+fn Share(vault: String) -> impl IntoView {
+    let ui = ui();
+    let members = RwSignal::new(Vec::<MemberInfo>::new());
+    let q = RwSignal::new(String::new());
+    let found = RwSignal::new(Vec::<PublicUser>::new());
+    let role = RwSignal::new(Role::Editor);
+    let err = RwSignal::new(None::<String>);
+    let busy = RwSignal::new(false);
+    let v = vault.clone();
+    let reload = move || {
+        let v = v.clone();
+        leptos::task::spawn_local(async move {
+            match api::get::<Vec<MemberInfo>>(&format!("/vaults/{v}/members")).await {
+                Ok(m) => {
+                    with(|c| {
+                        for x in &m {
+                            c.users.insert(x.user.id.clone(), x.user.clone());
+                        }
+                    });
+                    members.set(m);
+                }
+                Err(e) => err.set(Some(e.message)),
+            }
+        });
+    };
+    reload();
+    let timer = StoredValue::new(None::<i32>);
+    let do_search = move |text: String| search_people(text, q, found, timer);
+    let vname = state::vault_name(&vault);
+    let (vs, vr, vm) = (vault.clone(), vault.clone(), vault.clone());
+    let reload2 = reload.clone();
+    let reload3 = reload.clone();
+    let me = with(|c| c.user_id.clone());
+    view! {
+        <Dialog title=format!("Share “{vname}”") wide=true>
+            {move || err.get().map(|e| view! { <div class="alert error">{e}</div> })}
+            <div class="share-add">
+                <input class="input grow" placeholder="Add people by name or e-mail…" prop:value=move || q.get() on:input=move |ev| do_search(event_target_value(&ev))/>
+                <select class="input" on:change=move |ev| role.set(if event_target_value(&ev) == "viewer" { Role::Viewer } else { Role::Editor })>
+                    <option value="editor">"Can edit"</option>
+                    <option value="viewer">"Can view"</option>
+                </select>
+            </div>
+            <div class="found">
+                {move || found.get().into_iter().filter(|u| !members.get().iter().any(|m| m.user.id == u.id)).map(|u| {
+                    let v = vs.clone();
+                    let u2 = u.clone();
+                    let fp = actions::fingerprint(&u);
+                    let reload = reload2.clone();
+                    let pin = actions::pin_status(&u);
+                    view! {
+                        <div class="person">
+                            {avatar(&u.display_name, &u.id)}
+                            <div class="grow">
+                                <div>{u.display_name.clone()}{(u.kind == PrincipalKind::Agent).then(|| view! { <span class="tag-agent">"agent"</span> })}</div>
+                                <div class="muted small">{u.email.clone().unwrap_or_default()}</div>
+                                {fp.map(|f| view! { <div class="fp" title="Key fingerprint — compare it with the person to be sure the key is really theirs">{f}</div> })}
+                                {(pin == Some(PinStatus::Changed)).then(|| view! { <div class="alert error small">"This person's key changed since you last shared with them. Verify the fingerprint before sharing."</div> })}
+                                {u.account_key.is_none().then(|| view! { <div class="muted small">"Hasn't set up encryption yet — they'll get access after their first sign-in."</div> })}
+                            </div>
+                            {(pin == Some(PinStatus::Changed)).then(|| { let u3 = u.clone(); view! {
+                                <button class="btn small" on:click=move |_| { actions::trust_key(&u3); state::success("New key trusted."); }>"I verified it"</button>
+                            }})}
+                            <button class="btn small primary" disabled=move || busy.get() on:click=move |_| {
+                                busy.set(true);
+                                let (v, u, r) = (v.clone(), u2.clone(), role.get_untracked());
+                                let reload = reload.clone();
+                                leptos::task::spawn_local(async move {
+                                    match actions::share(&v, &u, r).await {
+                                        Ok(()) => { q.set(String::new()); found.set(vec![]); reload(); }
+                                        Err(e) => err.set(Some(e)),
+                                    }
+                                    busy.set(false);
+                                });
+                            }>"Share"</button>
+                        </div>
+                    }
+                }).collect_view()}
+            </div>
+            <h3>"People with access"</h3>
+            <div class="people">
+                {move || members.get().into_iter().map(|m| {
+                    let is_me = m.user.id == me;
+                    let (v, uid) = (vr.clone(), m.user.id.clone());
+                    let (v2, uid2) = (vm.clone(), m.user.id.clone());
+                    let reload = reload3.clone();
+                    let reload_b = reload3.clone();
+                    let fp = actions::fingerprint(&m.user);
+                    view! {
+                        <div class="person">
+                            {avatar(&m.user.display_name, &m.user.id)}
+                            <div class="grow">
+                                <div>{m.user.display_name.clone()}{is_me.then_some(" (you)")}{(m.user.kind == PrincipalKind::Agent).then(|| view! { <span class="tag-agent">"agent"</span> })}</div>
+                                <div class="muted small">{m.user.email.clone().unwrap_or_default()}{(!m.has_current_key).then_some(" · waiting for keys")}</div>
+                                {fp.map(|f| view! { <div class="fp">{f}</div> })}
+                            </div>
+                            {if m.role == Role::Owner {
+                                view! { <span class="muted small">"Owner"</span> }.into_any()
+                            } else {
+                                view! {
+                                    <select class="input small" on:change=move |ev| {
+                                        let r = if event_target_value(&ev) == "viewer" { Role::Viewer } else { Role::Editor };
+                                        let (v, u) = (v.clone(), uid.clone());
+                                        let reload = reload.clone();
+                                        leptos::task::spawn_local(async move { actions::set_role(&v, &u, r).await; reload(); });
+                                    }>
+                                        <option value="editor" selected=m.role == Role::Editor>"Can edit"</option>
+                                        <option value="viewer" selected=m.role == Role::Viewer>"Can view"</option>
+                                    </select>
+                                    <button class="icon-btn" title="Remove access (rotates the vault key)" on:click=move |_| {
+                                        if !util::confirm("Remove this person? They keep anything they already downloaded, but can't read anything new.") { return; }
+                                        let (v, u) = (v2.clone(), uid2.clone());
+                                        let reload = reload_b.clone();
+                                        leptos::task::spawn_local(async move { actions::remove_member(&v, &u).await; reload(); });
+                                    }><Icon name="x"/></button>
+                                }.into_any()
+                            }}
+                        </div>
+                    }
+                }).collect_view()}
+            </div>
+            <p class="muted small"><Icon name="shield"/>" Sharing sends the vault key encrypted to each person's own key. The server can't read it. Removing someone rotates the key."</p>
+            {let _ = ui;}
+        </Dialog>
+    }
+}
+
+/// Debounced people search shared by the sharing dialogs.
+fn search_people(text: String, q: RwSignal<String>, found: RwSignal<Vec<PublicUser>>, timer: StoredValue<Option<i32>>) {
+    q.set(text.clone());
+    if let Some(t) = timer.get_value() {
+        util::clear_timeout(t);
+    }
+    timer.set_value(Some(util::set_timeout(250, move || {
+        leptos::task::spawn_local(async move {
+            if text.trim().len() < 2 {
+                found.set(vec![]);
+                return;
+            }
+            if let Ok(u) = api::get::<Vec<PublicUser>>(&format!("/users/search?q={}", api::q(text.trim()))).await {
+                found.set(u);
+            }
+        });
+    })));
+}
+
+/// Share a single note with people outside its vault.
+#[component]
+fn ShareNote(vault: String, note: String) -> impl IntoView {
+    let ui = ui();
+    let shares = RwSignal::new(Vec::<ObjectShareInfo>::new());
+    let members = RwSignal::new(Vec::<MemberInfo>::new());
+    let q = RwSignal::new(String::new());
+    let found = RwSignal::new(Vec::<PublicUser>::new());
+    let role = RwSignal::new(Role::Editor);
+    let err = RwSignal::new(None::<String>);
+    let busy = RwSignal::new(false);
+    let timer = StoredValue::new(None::<i32>);
+    let (v, n) = (vault.clone(), note.clone());
+    Effect::new(move |_| {
+        ui.shares_rev.get();
+        let (v, n) = (v.clone(), n.clone());
+        leptos::task::spawn_local(async move {
+            match api::get::<Vec<ObjectShareInfo>>(&format!("/vaults/{v}/objects/{n}/shares")).await {
+                Ok(l) => {
+                    with(|c| {
+                        for x in &l {
+                            c.users.insert(x.user.id.clone(), x.user.clone());
+                        }
+                    });
+                    shares.set(l);
+                }
+                Err(e) => err.set(Some(e.message)),
+            }
+            if let Ok(m) = api::get::<Vec<MemberInfo>>(&format!("/vaults/{v}/members")).await {
+                members.set(m);
+            }
+        });
+    });
+    let title = state::note_title(&vault, &note).unwrap_or_else(|| "this note".into());
+    let vname = state::vault_name(&vault);
+    let (vs, ns) = (vault.clone(), note.clone());
+    let (vr, nr) = (vault.clone(), note.clone());
+    let vw = vault.clone();
+    let others = move || members.get().len().saturating_sub(1);
+    view! {
+        <Dialog title=format!("Share “{title}”") wide=true>
+            {move || err.get().map(|e| view! { <div class="alert error">{e}</div> })}
+            <p class="muted small">{format!("Only this note is shared — not the rest of “{vname}”, its other notes or attached files.")}</p>
+            <div class="share-add">
+                <input class="input grow" placeholder="Add people by name or e-mail…" prop:value=move || q.get()
+                    on:input=move |ev| search_people(event_target_value(&ev), q, found, timer)/>
+                <select class="input" on:change=move |ev| role.set(if event_target_value(&ev) == "viewer" { Role::Viewer } else { Role::Editor })>
+                    <option value="editor">"Can edit"</option>
+                    <option value="viewer">"Can view"</option>
+                </select>
+            </div>
+            <div class="found">
+                {move || {
+                    let taken = |u: &PublicUser| shares.get().iter().any(|s| s.user.id == u.id) || members.get().iter().any(|m| m.user.id == u.id);
+                    found.get().into_iter().filter(|u| !taken(u)).map(|u| {
+                        let (v, n) = (vs.clone(), ns.clone());
+                        let u2 = u.clone();
+                        let fp = actions::fingerprint(&u);
+                        let pin = actions::pin_status(&u);
+                        let no_key = u.account_key.is_none();
+                        view! {
+                            <div class="person">
+                                {avatar(&u.display_name, &u.id)}
+                                <div class="grow">
+                                    <div>{u.display_name.clone()}{(u.kind == PrincipalKind::Agent).then(|| view! { <span class="tag-agent">"agent"</span> })}</div>
+                                    <div class="muted small">{u.email.clone().unwrap_or_default()}</div>
+                                    {fp.map(|f| view! { <div class="fp" title="Key fingerprint — compare it with the person to be sure the key is really theirs">{f}</div> })}
+                                    {(pin == Some(PinStatus::Changed)).then(|| view! { <div class="alert error small">"This person's key changed since you last shared with them. Verify the fingerprint before sharing."</div> })}
+                                    {no_key.then(|| view! { <div class="muted small">"Hasn't set up encryption yet — ask them to sign in once first."</div> })}
+                                </div>
+                                {(pin == Some(PinStatus::Changed)).then(|| { let u3 = u.clone(); view! {
+                                    <button class="btn small" on:click=move |_| { actions::trust_key(&u3); state::success("New key trusted."); }>"I verified it"</button>
+                                }})}
+                                <button class="btn small primary" disabled=move || busy.get() || no_key on:click=move |_| {
+                                    busy.set(true);
+                                    err.set(None);
+                                    let (v, n, u, r) = (v.clone(), n.clone(), u2.clone(), role.get_untracked());
+                                    leptos::task::spawn_local(async move {
+                                        match actions::share_note(&v, &n, &u, r).await {
+                                            Ok(()) => { q.set(String::new()); found.set(vec![]); }
+                                            Err(e) => err.set(Some(e)),
+                                        }
+                                        busy.set(false);
+                                    });
+                                }>"Share"</button>
+                            </div>
+                        }
+                    }).collect_view()
+                }}
+            </div>
+            <h3>"People with access to this note"</h3>
+            <div class="people">
+                {move || shares.get().is_empty().then(|| view! { <p class="muted small">"Not shared with anyone outside the vault yet."</p> })}
+                {move || shares.get().into_iter().map(|sh| {
+                    let (v, n, uid) = (vr.clone(), nr.clone(), sh.user.id.clone());
+                    let (v2, n2, uid2) = (vr.clone(), nr.clone(), sh.user.id.clone());
+                    let fp = actions::fingerprint(&sh.user);
+                    view! {
+                        <div class="person">
+                            {avatar(&sh.user.display_name, &sh.user.id)}
+                            <div class="grow">
+                                <div>{sh.user.display_name.clone()}{(sh.user.kind == PrincipalKind::Agent).then(|| view! { <span class="tag-agent">"agent"</span> })}</div>
+                                <div class="muted small">{sh.user.email.clone().unwrap_or_default()}{(!sh.has_current_key).then_some(" · waiting for the new key")}</div>
+                                {fp.map(|f| view! { <div class="fp">{f}</div> })}
+                            </div>
+                            <select class="input small" on:change=move |ev| {
+                                let r = if event_target_value(&ev) == "viewer" { Role::Viewer } else { Role::Editor };
+                                let (v, n, u) = (v.clone(), n.clone(), uid.clone());
+                                leptos::task::spawn_local(async move {
+                                    match actions::set_note_share_role(&v, &n, &u, r).await {
+                                        Ok(()) => ui.shares_rev.update(|x| *x += 1),
+                                        Err(e) => err.set(Some(e)),
+                                    }
+                                });
+                            }>
+                                <option value="editor" selected=sh.role == Role::Editor>"Can edit"</option>
+                                <option value="viewer" selected=sh.role == Role::Viewer>"Can view"</option>
+                            </select>
+                            <button class="icon-btn" title="Stop sharing with this person (renews the note's key)" on:click=move |_| {
+                                if !util::confirm("Stop sharing this note with this person? They keep anything they already downloaded, but can't read anything new.") { return; }
+                                let (v, n, u) = (v2.clone(), n2.clone(), uid2.clone());
+                                leptos::task::spawn_local(async move {
+                                    match actions::unshare_note(&v, &n, &u).await {
+                                        Ok(()) => state::success("Stopped sharing and renewed the note's key."),
+                                        Err(e) => err.set(Some(e)),
+                                    }
+                                });
+                            }><Icon name="x"/></button>
+                        </div>
+                    }
+                }).collect_view()}
+            </div>
+            <div class="share-vault-hint">
+                <span class="muted small">{move || match others() {
+                    0 => "Nobody else is in this vault.".to_string(),
+                    1 => "1 other person in this vault can open it too.".to_string(),
+                    k => format!("{k} other people in this vault can open it too."),
+                }}</span>
+                <button class="btn ghost small" on:click=move |_| ui.modal.set(Some(Modal::Share(vw.clone())))><Icon name="users"/>" Share the whole vault…"</button>
+            </div>
+            <p class="muted small"><Icon name="shield"/>" The note gets its own key, sent encrypted to each person's own key — the server can't read it. Removing someone renews the note's key."</p>
+        </Dialog>
+    }
+}
+
+#[component]
+fn VaultSettings(vault: String) -> impl IntoView {
+    let ui = ui();
+    let name = RwSignal::new(state::vault_name(&vault));
+    let owner = state::is_owner(&vault);
+    let archived = with(|c| c.vault_infos.get(&vault).map(|i| i.archived)).unwrap_or(false);
+    let audit = RwSignal::new(Vec::<AuditEntry>::new());
+    let show_audit = RwSignal::new(false);
+    let (v1, v2, v3, v4, v5, v6, v7, v8) =
+        (vault.clone(), vault.clone(), vault.clone(), vault.clone(), vault.clone(), vault.clone(), vault.clone(), vault.clone());
+    let epoch = with(|c| c.replicas.get(&vault).and_then(|r| r.keyring.current_epoch())).unwrap_or(0);
+    view! {
+        <Dialog title="Vault settings" wide=true>
+            <Show when=move || owner fallback=|| view! { <p class="muted">"Only the owner can change this vault's settings."</p> }>
+                {
+                    let v1 = v1.clone();
+                    view! {
+                        <form class="row" on:submit=move |ev| {
+                            ev.prevent_default();
+                            let (v, n) = (v1.clone(), name.get_untracked());
+                            leptos::task::spawn_local(async move { actions::rename_vault(&v, &n).await; state::success("Renamed."); });
+                        }>
+                            <input class="input grow" prop:value=move || name.get() on:input=move |ev| name.set(event_target_value(&ev))/>
+                            <button class="btn" type="submit">"Rename"</button>
+                        </form>
+                    }
+                }
+            </Show>
+            <div class="settings-grid">
+                <button class="btn" on:click=move |_| { let v = v2.clone(); leptos::task::spawn_local(async move { actions::export_vault(&v).await }); }>
+                    <Icon name="download"/>" Export as Markdown (.zip)"</button>
+                <Show when=move || state::can_write(&v3)>
+                    {
+                        let v = v4.clone();
+                        view! { <button class="btn" on:click=move |_| ui.modal.set(Some(Modal::Import(v.clone())))><Icon name="upload"/>" Import notes"</button> }
+                    }
+                </Show>
+                <Show when=move || owner>
+                    {
+                        let (v5, v6, v7) = (v5.clone(), v6.clone(), v7.clone());
+                        view! {
+                            <button class="btn" on:click=move |_| ui.modal.set(Some(Modal::Share(v5.clone())))><Icon name="share"/>" People & sharing"</button>
+                            <button class="btn" on:click=move |_| {
+                                let v = v6.clone();
+                                leptos::task::spawn_local(async move { if actions::rotate_keys(&v).await { state::success("Vault key rotated."); } });
+                            }><Icon name="key"/>" Rotate encryption key"</button>
+                            <button class="btn" on:click={ let v7 = v7.clone(); move |_| { let v = v7.clone(); leptos::task::spawn_local(async move { actions::set_archived(&v, !archived).await; }); ui.modal.set(None); } }>
+                                <Icon name="archive"/>{if archived { " Unarchive" } else { " Archive" }}</button>
+                            <button class="btn" on:click={
+                                let v = v7.clone();
+                                move |_| {
+                                    show_audit.set(true);
+                                    let v = v.clone();
+                                    leptos::task::spawn_local(async move { if let Ok(a) = api::get(&format!("/vaults/{v}/audit")).await { audit.set(a); } });
+                                }
+                            }><Icon name="history"/>" Activity log"</button>
+                        }
+                    }
+                </Show>
+            </div>
+            <p class="muted small">{format!("Key epoch {epoch}. Content is encrypted with XChaCha20-Poly1305; the key is shared with members via HPKE (X25519).")}</p>
+            <Show when=move || show_audit.get()>
+                <div class="audit">
+                    {move || audit.get().into_iter().map(|a| view! {
+                        <div class="audit-row"><span class="muted small">{util::relative_time(a.at)}</span>
+                            <span>{a.actor_name.clone().unwrap_or_default()}</span><code>{a.action.clone()}</code></div>
+                    }).collect_view()}
+                </div>
+            </Show>
+            <div class="danger-zone">
+                {if owner {
+                    let v = v8.clone();
+                    let vname = state::vault_name(&v8);
+                    view! {
+                        <button class="btn danger" on:click=move |_| {
+                            let typed = util::window().prompt_with_message(&format!("This permanently deletes “{vname}” for everyone. Type the vault name to confirm:")).ok().flatten();
+                            if typed.as_deref() == Some(vname.as_str()) {
+                                ui.modal.set(None);
+                                let v = v.clone();
+                                leptos::task::spawn_local(async move { actions::delete_vault(&v).await });
+                            }
+                        }><Icon name="trash"/>" Delete vault"</button>
+                    }.into_any()
+                } else {
+                    let v = v8.clone();
+                    view! {
+                        <button class="btn danger" on:click=move |_| {
+                            if util::confirm("Leave this vault? You'll lose access until someone shares it again.") {
+                                ui.modal.set(None);
+                                let v = v.clone();
+                                leptos::task::spawn_local(async move { actions::leave_vault(&v).await });
+                            }
+                        }><Icon name="logout"/>" Leave vault"</button>
+                    }.into_any()
+                }}
+            </div>
+        </Dialog>
+    }
+}
+
+// ------------------------------------------------------------------ history
+
+#[component]
+fn History(vault: String, note: String) -> impl IntoView {
+    let ui = ui();
+    let list = RwSignal::new(Vec::<SnapshotInfo>::new());
+    let loading = RwSignal::new(true);
+    let preview = RwSignal::new(None::<(String, String)>);
+    let (v, n) = (vault.clone(), note.clone());
+    leptos::task::spawn_local(async move {
+        state::flush_now();
+        if let Ok(l) = api::get::<Vec<SnapshotInfo>>(&format!("/vaults/{v}/objects/{n}/snapshots")).await {
+            list.set(l);
+        }
+        loading.set(false);
+    });
+    let (vp, np) = (vault.clone(), note.clone());
+    let pick = move |id: String| {
+        let (v, n) = (vp.clone(), np.clone());
+        leptos::task::spawn_local(async move {
+            match api::get::<Snapshot>(&format!("/vaults/{v}/objects/{n}/snapshots/{id}")).await {
+                Ok(s) => {
+                    let text = with(|c| c.replicas.get(&v).map(|r| r.decrypt_revision(&s)));
+                    match text {
+                        Some(Ok(t)) => preview.set(Some((s.id, t))),
+                        _ => state::error("This version could not be decrypted."),
+                    }
+                }
+                Err(e) => state::error(e.message),
+            }
+        });
+    };
+    let (vr, nr) = (vault.clone(), note.clone());
+    let writable = state::can_write_note(&vault, &note);
+    let vv = vault.clone();
+    let names = move |uid: &str| with(|c| c.users.get(uid).map(|u| u.display_name.clone())).unwrap_or_else(|| if uid == with(|c| c.user_id.clone()) { "you".into() } else { "someone".into() });
+    view! {
+        <Dialog title="Version history" wide=true>
+            <div class="history">
+                <div class="h-list">
+                    <Show when=move || loading.get()><div class="spinner"></div></Show>
+                    <Show when=move || !loading.get() && list.get().is_empty()>
+                        <p class="muted small">"No saved versions yet. Versions are stored automatically after editing sessions."</p>
+                    </Show>
+                    {move || list.get().into_iter().map(|s| {
+                        let id = s.id.clone();
+                        let id2 = s.id.clone();
+                        let pick = pick.clone();
+                        let who = names(&s.author_id);
+                        view! {
+                            <button class="h-item" class:sel=move || preview.get().is_some_and(|p| p.0 == id2) on:click=move |_| pick(id.clone())>
+                                <div>{util::relative_time(s.created_at)}</div>
+                                <div class="muted small">{format!("{} · {}", who, util::absolute_time(s.created_at))}</div>
+                            </button>
+                        }
+                    }).collect_view()}
+                </div>
+                <div class="h-preview">
+                    {move || match preview.get() {
+                        None => view! { <p class="muted">"Select a version to preview it."</p> }.into_any(),
+                        Some((_, text)) => {
+                            let vv = vv.clone();
+                            let note = move |t: &str| knowledge::resolve_target(&vv, t, "");
+                            let none = |_: &str| None;
+                            let html = render::to_html(&text, &render::Ctx { note: &note, attachment: &none });
+                            let (v, n, t) = (vr.clone(), nr.clone(), text.clone());
+                            view! {
+                                <div class="h-actions">
+                                    {writable.then(|| view! {
+                                        <button class="btn primary small" on:click=move |_| { actions::restore_revision(&v, &n, &t); ui.modal.set(None); }>"Restore this version"</button>
+                                    })}
+                                    <button class="btn small" on:click={ let t = text.clone(); move |_| { util::copy_to_clipboard(&t); state::success("Copied."); } }>"Copy text"</button>
+                                </div>
+                                <article class="reading" inner_html=html></article>
+                            }.into_any()
+                        }
+                    }}
+                </div>
+            </div>
+        </Dialog>
+    }
+}
+
+// ------------------------------------------------------------------ devices
+
+#[component]
+fn ApproveDevice(device: DeviceInfo) -> impl IntoView {
+    let ui = ui();
+    let uid = with(|c| c.user_id.clone());
+    let code = coolpsonotes_core::engine::verification_code(&uid, &device.id, &device.enc_public).unwrap_or_default();
+    let busy = RwSignal::new(false);
+    let d1 = device.clone();
+    let d2 = device.clone();
+    view! {
+        <Dialog title="Approve a new device">
+            <p>{format!("“{}” wants to access your encrypted notes.", device.name)}</p>
+            <p>"Only approve it if this is your device and it shows exactly this code:"</p>
+            <div class="verify-code">{code}</div>
+            <p class="muted small">{format!("Requested {}", util::relative_time(device.created_at))}</p>
+            <div class="row">
+                <button class="btn primary" disabled=move || busy.get() on:click=move |_| {
+                    busy.set(true);
+                    let d = d1.clone();
+                    leptos::task::spawn_local(async move {
+                        let uid = with(|c| c.user_id.clone());
+                        let req = with(|c| c.account.as_ref().map(|a| coolpsonotes_core::engine::approve_device(a, &uid, &d.id, &d.enc_public)));
+                        match req {
+                            Some(Ok(r)) => match api::post::<_, ()>(&format!("/devices/{}/activate", d.id), &r).await {
+                                Ok(()) => { state::success("Device approved."); ui.modal.set(None); }
+                                Err(e) => state::error(e.message),
+                            },
+                            _ => state::error("Could not prepare the approval."),
+                        }
+                        state::refresh_pending_devices().await;
+                        busy.set(false);
+                    });
+                }>"Codes match — approve"</button>
+                <button class="btn danger" on:click=move |_| {
+                    let d = d2.clone();
+                    leptos::task::spawn_local(async move {
+                        let _ = api::delete(&format!("/devices/{}", d.id)).await;
+                        state::refresh_pending_devices().await;
+                        ui.modal.set(None);
+                    });
+                }>"Deny"</button>
+            </div>
+        </Dialog>
+    }
+}
+
+// ------------------------------------------------------------------ misc
+
+#[component]
+fn Help() -> impl IntoView {
+    let m = util::mod_key();
+    let rows: Vec<(String, &str)> = vec![
+        (format!("{m}+K or {m}+O"), "Jump to a note / create one ({m}+O while editing)"),
+        (format!("{m}+Shift+F"), "Search all notes"),
+        (format!("{m}+Alt+N"), "New note"),
+        (format!("{m}+E"), "Toggle reading view"),
+        (format!("{m}+\\"), "Toggle side panel"),
+        (format!("{m}+B / {m}+I"), "Bold / italic"),
+        (format!("{m}+K (in editor)"), "Insert link"),
+        (format!("{m}+`"), "Inline code"),
+        (format!("{m}+Shift+X / H"), "Strikethrough / highlight"),
+        (format!("{m}+Shift+8 / 7 / 9"), "Bullet / numbered / task list"),
+        (format!("{m}+Alt+1…6, 0"), "Heading level / normal text"),
+        (format!("{m}+Enter"), "Toggle checkbox"),
+        ("Tab / Shift+Tab".into(), "Indent / outdent list item; next / previous table cell"),
+        ("Enter (in a table)".into(), "New row; on an empty row, end the table"),
+        (format!("{m}+Z / {m}+Shift+Z"), "Undo / redo"),
+        ("[[".into(), "Link to another note"),
+        ("#word".into(), "Add a tag"),
+        ("?".into(), "This help"),
+    ];
+    view! {
+        <Dialog title="Keyboard shortcuts">
+            <table class="keys">
+                {rows.into_iter().map(|(k, d)| view! { <tr><td><kbd>{k}</kbd></td><td>{d}</td></tr> }).collect_view()}
+            </table>
+            <p class="muted small">"Vim keybindings can be enabled in Settings → Editor."</p>
+        </Dialog>
+    }
+}
+
+#[component]
+fn RenameDialog(vault: String, id: String) -> impl IntoView {
+    let ui = ui();
+    let name = RwSignal::new(state::entry(&vault, &id).map(|e| e.title().to_string()).unwrap_or_default());
+    view! {
+        <Dialog title="Rename">
+            <form class="stack" on:submit=move |ev| {
+                ev.prevent_default();
+                match actions::rename_entry(&vault, &id, &name.get_untracked()) { Ok(()) => ui.modal.set(None), Err(e) => state::error(e) }
+            }>
+                <input class="input" autofocus prop:value=move || name.get() on:input=move |ev| name.set(event_target_value(&ev))/>
+                <button class="btn primary" type="submit">"Rename"</button>
+            </form>
+        </Dialog>
+    }
+}
+
+#[component]
+fn NewFolder(vault: String, parent: String) -> impl IntoView {
+    let ui = ui();
+    let name = RwSignal::new(String::new());
+    let label = if parent.is_empty() { "New folder".to_string() } else { format!("New folder in {parent}") };
+    view! {
+        <Dialog title=label>
+            <form class="stack" on:submit=move |ev| {
+                ev.prevent_default();
+                let n = name.get_untracked();
+                if n.trim().is_empty() { return; }
+                actions::create_folder(&vault, &coolpsonotes_core::paths::join(&parent, n.trim()));
+                ui.modal.set(None);
+            }>
+                <input class="input" autofocus placeholder="Folder name" prop:value=move || name.get() on:input=move |ev| name.set(event_target_value(&ev))/>
+                <button class="btn primary" type="submit">"Create folder"</button>
+            </form>
+        </Dialog>
+    }
+}
+
+#[component]
+fn MoveDialog(vault: String, id: String) -> impl IntoView {
+    let ui = ui();
+    let folders = with(|c| c.replicas.get(&vault).map(|r| r.index.folders())).unwrap_or_default();
+    let current = state::entry(&vault, &id).map(|e| coolpsonotes_core::paths::parent(&e.path).to_string()).unwrap_or_default();
+    let mut all = vec![String::new()];
+    all.extend(folders);
+    view! {
+        <Dialog title="Move to folder">
+            <div class="list">
+                {all.into_iter().map(|f| {
+                    let (v, i, f2) = (vault.clone(), id.clone(), f.clone());
+                    let is_current = f == current;
+                    view! {
+                        <button class="list-row" disabled=is_current on:click=move |_| {
+                            match actions::move_entry(&v, &i, &f2) { Ok(()) => { ui.modal.set(None); state::success("Moved."); } Err(e) => state::error(e) }
+                        }>
+                            <Icon name="folder"/><span class="grow">{if f.is_empty() { "(vault root)".to_string() } else { f.clone() }}</span>
+                            {is_current.then(|| view! { <span class="muted small">"current"</span> })}
+                        </button>
+                    }
+                }).collect_view()}
+            </div>
+        </Dialog>
+    }
+}
+
+#[component]
+fn ImportDialog(vault: String) -> impl IntoView {
+    let ui = ui();
+    let busy = RwSignal::new(false);
+    let run = move |dir: bool, v: String| {
+        actions::pick_files(dir, if dir { "" } else { ".md,.markdown,.txt,.zip" }, move |files| {
+            busy.set(true);
+            leptos::task::spawn_local(async move {
+                let items = actions::files_to_import(files).await;
+                actions::import(&v, items).await;
+                busy.set(false);
+                ui.modal.set(None);
+            });
+        });
+    };
+    let run2 = run;
+    let (v1, v2) = (vault.clone(), vault.clone());
+    let _ = EntryKind::Note;
+    view! {
+        <Dialog title="Import notes">
+            <p>"Bring in Markdown notes from Obsidian, other apps or a previous export. Folder structure and attachments are kept. Files are encrypted on this device before upload."</p>
+            <div class="stack">
+                <button class="btn" disabled=move || busy.get() on:click=move |_| run(true, v1.clone())><Icon name="folder"/>" Import a folder…"</button>
+                <button class="btn" disabled=move || busy.get() on:click=move |_| run2(false, v2.clone())><Icon name="file"/>" Import files or a .zip…"</button>
+            </div>
+            <Show when=move || busy.get()><p class="muted"><span class="spinner inline"></span>" Importing…"</p></Show>
+        </Dialog>
+    }
+}

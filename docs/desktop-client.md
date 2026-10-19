@@ -1,0 +1,431 @@
+# Desktop and command-line client
+
+`coolpsonotes` is the native client (Linux first; it also builds for macOS and
+Windows). It keeps an **encrypted local replica** of your vaults for offline
+use, syncs live over the WebSocket, can **mirror vaults as ordinary Markdown
+files** you edit with Neovim, VS Code or Obsidian, and imports/exports plain
+Markdown. The same binary hosts the [agent gateway and MCP server](agents.md).
+
+All cryptography happens in the client, with the same core crate the server
+and the browser app use (`crates/core`). The server only ever receives
+ciphertext.
+
+## Contents
+
+1. [Install / build](#1-install--build)
+2. [Signing in](#2-signing-in)
+3. [Everyday commands](#3-everyday-commands)
+4. [Sync and the Markdown mirror](#4-sync-and-the-markdown-mirror)
+5. [Offline behaviour](#5-offline-behaviour)
+6. [How external edits are merged](#6-how-external-edits-are-merged)
+7. [Conflicts, duplicates, deletes and renames](#7-conflicts-duplicates-deletes-and-renames)
+8. [Sharing, members and keys](#8-sharing-members-and-keys)
+9. [Export and import](#9-export-and-import)
+10. [Where data is stored and how it is protected](#10-where-data-is-stored-and-how-it-is-protected)
+11. [Troubleshooting](#11-troubleshooting)
+
+## 1. Install / build
+
+Requires a Rust toolchain (1.94+). No Node.js or other tooling.
+
+```sh
+cargo build --release -p coolpsonotes-client
+install -m 0755 target/release/coolpsonotes ~/.local/bin/
+coolpsonotes --help
+```
+
+## 2. Signing in
+
+### With your identity provider (normal use)
+
+```sh
+coolpsonotes login --server https://notes.example.com
+```
+
+The client starts an OAuth 2.0 device authorization (RFC 8628) and prints a
+link and a short code. Open the link in a browser where you are signed in to
+the coolpsonotes web app (via your OIDC provider), check that the code matches
+and approve. The client polls the server (honouring `interval`/`slow_down`)
+and receives a session token. Nothing is typed into the terminal, so this also
+works over SSH.
+
+### Development mode (no OIDC) and several users side by side
+
+A server started with `--dev-mode` lets anyone sign in as any user name —
+useful for testing sharing between several people on one machine. Each
+**profile** is an independent identity with its own keys and data:
+
+```sh
+cargo run -p coolpsonotes-server -- --dev-mode          # http://127.0.0.1:8080
+
+coolpsonotes --profile alice login --server http://127.0.0.1:8080 --dev-user alice
+coolpsonotes --profile bob   login --server http://127.0.0.1:8080 --dev-user bob
+
+coolpsonotes -p alice vault create "Family"
+coolpsonotes -p alice vault share Family bob --role editor
+echo "# Groceries" | coolpsonotes -p alice write Family Groceries.md
+coolpsonotes -p bob cat Family Groceries
+```
+
+`--profile` can also be set with `COOLPSONOTES_PROFILE`; the default profile is
+`default`. `coolpsonotes profiles` lists them. `--dev-user` is refused unless
+the server reports development mode in `/api/v1/info`.
+
+Plain `http://` is only accepted for `localhost`, `127.0.0.1` and `::1`; any
+other host needs `https://` (or the explicit, insecure `--insecure-http`).
+
+### First device: account keys and the recovery key
+
+The first time an account signs in anywhere, the client generates the account
+key pair, a device key and a **recovery key**, uploads only public keys and
+ciphertexts, and prints the recovery key once:
+
+```
+========================================================================
+  YOUR RECOVERY KEY (shown only this once):
+
+      FRGN4-EFBCD-G4SA6-WVJB7-EVQOU-KKODS-4LRDN-I6HVW-MGYVI-IFNDP-TIQIQ
+  ...
+```
+
+Store it in a password manager or on paper. It is the only way back in if you
+lose every device; nobody, including the server administrator, can recover
+your notes without it. Replace it any time with `coolpsonotes recovery rotate`.
+
+### Additional devices
+
+If your account already has keys (you use the web app or another computer),
+`login` registers this computer as a **pending device** and shows a
+verification code:
+
+```
+This device must be approved by one of your other devices.
+On a signed-in device run `coolpsonotes devices approve 6225…` (or open Devices in the web app)
+and approve only if it shows this verification code:
+
+    HORY-OK2F-B62Y
+```
+
+Approve it from another device — `coolpsonotes devices approve <id>` shows the
+same code and asks for confirmation (`--yes` skips the prompt) — or type your
+recovery key at the prompt (or pass `--recovery-key`, or set
+`COOLPSONOTES_RECOVERY_KEY`) to unlock the account and approve the device
+yourself. If you interrupt the wait, run `login` again: it resumes with the
+same pending device.
+
+Comparing the codes defeats a server that substitutes its own device key: the
+code is derived from the user id, the device id and the device's public key.
+
+### Logging out
+
+* `coolpsonotes logout` ends the session; local encrypted copies stay (read
+  them offline; `login` again to sync).
+* `coolpsonotes logout --forget` also removes this device from the account and
+  deletes the profile and all of its local data.
+* `coolpsonotes devices list | approve <id> | revoke <id>` manages devices.
+  Revoking a device ends its sessions; if it might be compromised, also rotate
+  the keys of shared vaults (`vault rotate`).
+* `coolpsonotes status` shows profile, server, account fingerprint, devices,
+  vaults, pending changes and sync state (`--json` for scripts).
+
+## 3. Everyday commands
+
+Vaults are referred to by id or by (unique, case-insensitive) name; paths are
+vault-relative, `.md` is optional for notes.
+
+| Command | |
+|---|---|
+| `vault list` / `vault create <name>` | list (with role and document count) / create |
+| `vault rename <v> <name>` / `vault archive <v> [--undo]` / `vault delete <v>` | owner only; delete asks you to type the name |
+| `vault members <v>` | members, roles, key fingerprints and pin status |
+| `vault share <v> <user> --role editor\|viewer` | see [§8](#8-sharing-members-and-keys) |
+| `vault unshare <v> <user>` / `vault rotate <v>` / `vault leave <v>` | removal always rotates the key |
+| `ls <v> [folder] [-r]` | folders, notes and attachments |
+| `cat <v> <path>` | note text (or attachment bytes) |
+| `write <v> <path>` | create or update a note from stdin — diff-merged, never a blind overwrite; `--append`, `--attachment`, `--if-match <hash>` |
+| `mkdir <v> <path>`, `mv <v> <from> <to> [--update-links]`, `rm <v> <path>` | `rm` moves to the trash; `mv` into `dir/` keeps the name; `--update-links` rewrites `[[links]]` |
+| `trash list\|restore\|empty <v>` | restore by path or id; `empty` deletes permanently |
+| `search <query> [--vault v]` | terms, `"phrases"`, `tag:x`, `folder:x`, `title:x`, `vault:x` |
+| `backlinks <v> <path>` | notes linking to a note |
+| `history <v> <path>`, `history show\|restore <v> <path> <rev>` | encrypted revisions stored on the server |
+| `export <v> --out <dir\|file.zip>`, `import <v> <dir\|file.zip>` | see [§9](#9-export-and-import) |
+
+Every command first catches up with the server (REST) and uploads queued
+changes; read commands fall back to the local copy when the server is
+unreachable. `--json` gives machine-readable output for listings, `-q`
+silences status lines. Status and warnings go to stderr, results to stdout.
+
+Revisions: a note gets a revision when an editing session ends (after a CLI
+write, when `sync`/the gateway stop, or after two idle minutes, once at least
+five edits accumulated) and when it is compacted (every ~200 updates).
+
+## 4. Sync and the Markdown mirror
+
+```sh
+coolpsonotes sync                       # encrypted replicas only, live
+coolpsonotes sync --dir ~/Notes         # + plaintext Markdown mirror, live
+coolpsonotes sync --dir ~/Notes --once  # catch up, ingest disk changes, push, exit
+coolpsonotes sync --vault Family        # restrict to some vaults (repeatable)
+coolpsonotes sync --no-dir              # forget the remembered mirror directory
+```
+
+`sync` subscribes to every vault over the WebSocket (`since` = the local
+cursor), applies catch-up pages and live updates as they arrive, uploads local
+changes, reconnects with exponential backoff and jitter, and reacts to server
+events: rotated keys are fetched, vaults shared with you appear, revoked or
+deleted vaults become read-only local copies, and as an owner your client hands
+the vault key to members who joined before they had keys. Stop it with Ctrl-C
+or SIGTERM; it flushes and saves before exiting. To run it permanently, use a
+systemd user unit:
+
+```ini
+# ~/.config/systemd/user/coolpsonotes-sync.service
+[Unit]
+Description=coolpsonotes sync
+[Service]
+ExecStart=%h/.local/bin/coolpsonotes sync
+Restart=on-failure
+[Install]
+WantedBy=default.target
+```
+
+### Modes and their security implications
+
+| Mode | What is on disk | Protects against |
+|---|---|---|
+| `sync` (default) | encrypted replica: CRDT state encrypted with the vault keys and sealed with a per-profile local key | someone copying the data directory (backups, sync folders, other users on the machine) |
+| `sync --dir DIR` (**plaintext mirror**) | additionally ordinary decrypted `.md` files and attachments in `DIR` | only file permissions (files `0600`, directories `0700`) and your disk encryption |
+
+The plaintext mirror is the point of "real Markdown files", but anything that
+can read `DIR` can read those notes: other programs running as you, backup or
+cloud-sync tools that pick the folder up, anyone with the unlocked laptop.
+It therefore has to be **confirmed explicitly** the first time — interactively,
+or with `--plaintext-ok` — and the choice is remembered in the profile with
+the directory. The server and the encrypted copies are unaffected.
+
+### Layout
+
+```
+~/Notes/
+  Family/                 <- vault name (sanitised: / \ : * ? " < > | -> _)
+    Groceries.md
+    Recipes/Pancakes.md
+    assets/photo.jpg      <- attachments are plain files
+    Empty folder/         <- explicit (empty) folders are directories
+  Work (3f2a1c)/          <- a second vault with the same name gets its id suffix
+```
+
+The directory name is chosen once per vault and kept, even if the vault is
+renamed later. Entries whose path has a hidden segment (`.git/…`, `.obsidian/…`)
+are never written to disk: a collaborator must not be able to plant files such
+as git hooks in your mirror.
+
+### Ignored files
+
+Dotfiles and dot-directories (`.git`, `.obsidian`, `.trash`, `.DS_Store`, our
+own temporary files), editor swap/backup/lock files (`*.swp`, `*.swo`, `*~`,
+`.#*`, `#*#`, `4913`, `~$*`, `*.tmp`, `*.part`, `*.bak`) and symlinks are never
+synced. Markdown files must be UTF-8.
+
+### How changes are detected
+
+A `notify` watcher triggers a pass ~300 ms after file activity settles; a full
+scan runs at startup (catching edits made while the client was not running)
+and every 30 s as a safety net. Each file's size, mtime and content hash are
+recorded when written or read, so the client recognises its own writes and
+never re-uploads unchanged files; files touched within the timestamp
+granularity are compared by content. Remote changes are written ~150 ms after
+they arrive, atomically (temporary file + rename), and only if the file still
+matches what the client last saw.
+
+## 5. Offline behaviour
+
+Everything works offline against the encrypted replica: `ls`, `cat`, `search`,
+`backlinks`, `write`, `mv`, `rm`, imports and mirror edits. Changes are queued
+as CRDT updates with a random `client_update_id` and persisted before the
+command returns. When the server is reachable again (`sync`, or any command),
+the queue is uploaded; a retry after a crash reuses the same ids, so the server
+recognises duplicates and nothing is applied twice. Concurrent edits made
+elsewhere meanwhile merge automatically (CRDT); see the next section for files
+edited outside the client.
+
+The replica is crash-safe: pending updates are journaled before document
+states, and the sync cursor is written last, so an interrupted save at worst
+re-downloads updates (applying them again is harmless).
+
+If the server's history ever goes **backwards** (restored from an older backup,
+or a malicious rollback), the client warns, resets its cursor to the server's
+head and re-uploads the full state of every document it holds; CRDT merging
+restores whatever the server lost.
+
+## 6. How external edits are merged
+
+A synced note is a CRDT document; the `.md` file is a projection of it. When an
+external program changes the file, the client never copies the file over the
+document — that would silently discard edits that arrived from others since
+the editor loaded the file. Instead:
+
+1. For every note the client keeps its last few **base versions** (encrypted,
+   in the replica): the CRDT state behind each text it wrote to the file, and
+   the state matching each version it read back from the file.
+2. When the file changes, the base the editor most likely started from is
+   chosen: the one needing the fewest changed lines (then bytes) to become the
+   file; ties go to the newest.
+3. That base is forked into a fresh document with a **new client id** (an id is
+   never reused with a stale clock), the textual diff `base → file` is applied
+   there as fine-grained insertions/deletions, and the resulting CRDT update
+   is merged into the live document and queued for upload.
+4. The merged text is written back to the file if it differs.
+
+Example: the file contained `alpha / beta`, your editor has it open, a
+collaborator changes `alpha` to `ALPHA` (the client writes that to disk), and
+your editor — which did not reload — saves `alpha / beta / delta`. The base
+closest to that save is the old version, so the change applied is "add
+`delta`", and the result is `ALPHA / beta / delta`: both edits survive. The
+same happens for edits made while the client was not running ("edit offline
+with Neovim, sync later"), and when a remote edit arrives before a local save
+has been picked up.
+
+Editors that keep a buffer open will notice the file changing underneath them
+(Neovim: `:e` / `autoread`); either way, saving the old buffer does not lose
+the remote edit.
+
+## 7. Conflicts, duplicates, deletes and renames
+
+* **Concurrent edits** of the same note merge character by character. Two
+  people inserting at the same position both keep their text (deterministic
+  order); deleting a passage someone else is editing removes the text that
+  existed when the delete was made.
+* **Duplicate paths**: if two devices create `Notes/Idea.md` offline, both
+  survive; the older keeps the name and the other is shown as `Idea 2.md`
+  (everywhere, deterministically — nothing is renamed in the shared state).
+* **Deleting a file** moves the note to the vault's **trash** (never a
+  permanent delete). `coolpsonotes trash list|restore` or the web app bring it
+  back, and the mirror writes it again.
+* **Renaming or moving a file** (`mv`, or delete + create of identical content
+  within 1.5 s) moves the entry, keeping its identity and history. A directory
+  left empty becomes an explicit folder.
+* **Remote moves and trashes** move or remove the local file — unless you
+  changed it locally in the meantime: then your edit is merged into the note
+  and your file is kept.
+* **An unexpected local file** where a not-yet-mirrored note will be written
+  (for example after re-pointing the mirror at an old directory) is never
+  overwritten: it is renamed to `Name (conflict 2026-10-19 101500).md` and
+  synced as its own note.
+* **Attachments** are immutable blobs; changing one on disk uploads a new
+  version and moves the previous one to the trash.
+* **Viewer access**: local edits are not uploaded (you are warned) and the file
+  is left as is.
+
+## 8. Sharing, members and keys
+
+```sh
+coolpsonotes vault share Family "Bob" --role editor
+```
+
+The client fetches Bob's public account key, verifies its self-signature,
+prints its **fingerprint** and pins it (trust on first use, stored in the
+profile). Compare the fingerprint with Bob over a trusted channel (in person,
+a call): Bob sees his own with `coolpsonotes status`. If the server ever
+presents a different key for a pinned user, sharing and key rotation refuse to
+continue with a loud warning until you verify the new key and pass
+`--accept-new-key`.
+
+* People who have not set up encryption yet are added without a key; your
+  client wraps the vault key for them automatically once they have (during
+  `sync`, `vault members`, or any sync of that vault).
+* `vault unshare` removes the member **and rotates the vault key**: they keep
+  what they already downloaded, but cannot decrypt anything written later.
+* `vault rotate` rotates manually (e.g. after revoking a lost device).
+* Members holding the new key can still read old content through the key chain.
+
+### Sharing a single note
+
+Share one note with someone without giving them the vault:
+
+```sh
+coolpsonotes share-note Family "Plans/Trip.md" "Bob" --role viewer
+coolpsonotes note-shares Family "Plans/Trip.md"      # who has it
+coolpsonotes unshare-note Family "Plans/Trip.md" "Bob"   # also renews the note's key
+```
+
+The first share gives the note its own key; Bob receives only that key and
+can't see the vault's other notes, file names, attachments or members. Key
+fingerprints are checked and pinned exactly as for vault sharing. Vault members
+keep working on the note as usual (their clients pick up the note's key
+automatically). Rotating the vault key also renews the keys of shared notes.
+
+Notes shared *with you*:
+
+```sh
+coolpsonotes shared list
+coolpsonotes shared cat "Trip"
+echo "- sunscreen" | coolpsonotes shared write "Trip" --append
+```
+
+`shared write` merges your text as a diff into the current version, so
+concurrent edits by others are kept. Shared notes are not part of `sync`'s
+Markdown mirror.
+
+## 9. Export and import
+
+```sh
+coolpsonotes export Family --out ~/backup/family           # directory
+coolpsonotes export Family --out ~/backup/family.zip       # zip archive
+coolpsonotes import Family ~/old-obsidian-vault [--into Imported] [--skip-existing]
+coolpsonotes import Family ~/backup/family.zip
+```
+
+Exports are a plain tree of `.md` files, attachments and (empty) folders — no
+proprietary metadata — readable by any Markdown tool. Trashed documents are not
+exported. An existing non-empty target is refused unless `--force`.
+
+Import walks a directory or zip, keeping folders: `.md` files become notes
+(existing notes at the same path are diff-merged; `--skip-existing` leaves
+them alone), other files become attachments, empty directories become folders.
+Hidden files and editor leftovers are skipped, as are files over the server's
+attachment limit (reported).
+
+## 10. Where data is stored and how it is protected
+
+| Path | Content |
+|---|---|
+| `$XDG_CONFIG_HOME/coolpsonotes/profiles/<profile>.json` (mode `0600`) | server URL, session token, identity, device id, TOFU pins, sync settings, gateway token |
+| `$XDG_DATA_HOME/coolpsonotes/<profile>/local.key` (`0600`) | random 256-bit local key |
+| `…/<profile>/account.sealed`, `device.sealed` | account and device secrets, sealed with the local key |
+| `…/<profile>/vaults/<id>/` | sealed replica: state, pending journal, document states, mirror bookkeeping; attachment blobs (vault-key ciphertext) |
+| `…/<profile>/audit.jsonl` | gateway/MCP write log (no content) |
+
+`COOLPSONOTES_CONFIG_DIR` and `COOLPSONOTES_DATA_DIR` override the two roots.
+
+Honest limits: the local key protects the replica and secrets against casual
+copying of the data directory. It does **not** protect against malware or
+anyone able to run programs as your OS user — they can read `local.key` too.
+Use full-disk encryption (LUKS, FileVault, BitLocker) and a screen lock for the
+lost-or-stolen-laptop case. Session tokens in the profile grant server access
+(not decryption) until they expire or the device is revoked.
+
+## 11. Troubleshooting
+
+* **"refusing to use plain http://"** — use `https://`, or `--insecure-http`
+  for a trusted test network.
+* **"this device is still waiting for approval"** — run `login` again to keep
+  waiting, approve it from another device (`devices approve`), or use the
+  recovery key.
+* **"the session expired or was revoked"** — run `coolpsonotes login` again;
+  local data and queued changes are kept and uploaded afterwards.
+* **"the account key … CHANGED"** — someone's key differs from the pinned one.
+  Verify the new fingerprint with them before using `--accept-new-key`.
+* **"vault … was shared with you but its key has not arrived yet"** — the
+  owner's client grants it next time it syncs.
+* **"read-only on this device"** — access was revoked or the vault deleted; the
+  local copy stays readable (`cat`, `export`) but is not synced.
+* **A file does not sync** — hidden names and editor temporary files are
+  ignored by design; Markdown must be UTF-8; very large attachments are
+  rejected by the server limit (warning printed).
+* **Environment overlap** — the server also reads `COOLPSONOTES_DATA_DIR`; do
+  not export it in a shell that also starts a server, or use separate shells.
+* **More detail** — `COOLPSONOTES_LOG=debug coolpsonotes sync` logs to stderr.
+  Logs never contain tokens, keys or note content; document paths appear only
+  at debug level (and in the direct output of commands you ran, such as
+  `export`). Default status lines show counts, not names.

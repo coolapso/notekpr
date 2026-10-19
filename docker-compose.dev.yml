@@ -1,0 +1,50 @@
+# Local development: no OIDC needed. Sign in as any user name (alice, bob, …).
+# Open several browser tabs (each tab keeps its own session) to test sharing
+# and live collaboration between users.
+#   docker compose -f docker-compose.dev.yml up --build
+#   open http://localhost:8080
+#
+# Optional: also start a local OIDC provider (Dex) to try the real login flow:
+#   docker compose -f docker-compose.dev.yml --profile oidc up --build
+#   then open http://localhost:8081 and sign in as olivia@example.com / password
+services:
+  coolpsonotes:
+    build: .
+    image: coolpsonotes:latest
+    environment:
+      COOLPSONOTES_DEV_MODE: "true"
+      COOLPSONOTES_PUBLIC_URL: http://localhost:8080
+      COOLPSONOTES_LOG_FORMAT: pretty
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - dev-data:/data
+
+  dex:
+    profiles: ["oidc"]
+    image: ghcr.io/dexidp/dex:v2.43.1
+    command: ["dex", "serve", "/etc/dex/config.yaml"]
+    network_mode: host
+    volumes:
+      - ./deploy/dex/config.yaml:/etc/dex/config.yaml:ro
+
+  coolpsonotes-oidc:
+    profiles: ["oidc"]
+    image: coolpsonotes:latest
+    network_mode: host
+    environment:
+      COOLPSONOTES_LISTEN: 127.0.0.1:8081
+      COOLPSONOTES_PUBLIC_URL: http://localhost:8081
+      COOLPSONOTES_OIDC_ISSUER: http://127.0.0.1:5556/dex
+      COOLPSONOTES_OIDC_CLIENT_ID: coolpsonotes
+      COOLPSONOTES_OIDC_CLIENT_SECRET: devsecret
+      COOLPSONOTES_OIDC_DISPLAY_NAME: Dex (local)
+      COOLPSONOTES_LOG_FORMAT: pretty
+    volumes:
+      - dev-oidc-data:/data
+    depends_on:
+      - dex
+
+volumes:
+  dev-data:
+  dev-oidc-data:

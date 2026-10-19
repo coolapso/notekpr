@@ -1,0 +1,48 @@
+name: ci
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - name: Lint
+        run: cargo clippy --locked -p coolpsonotes-core -p coolpsonotes-server -p coolpsonotes-client --all-targets -- -D warnings
+      - name: Unit and integration tests
+        run: cargo test --locked -p coolpsonotes-core -p coolpsonotes-server -p coolpsonotes-client -p coolpsonotes-web
+      - name: Core builds for the browser
+        run: cargo build --locked -p coolpsonotes-core --target wasm32-unknown-unknown
+      - name: Install wasm-bindgen
+        run: cargo install wasm-bindgen-cli --version 0.2.128 --locked
+      - name: Build browser client
+        run: ./scripts/build-web.sh
+      - name: Browser end-to-end tests
+        run: |
+          sudo apt-get update && sudo apt-get install -y chromium-driver || true
+          CPN_CHROME=$(command -v chromium || command -v chromium-browser || command -v google-chrome) \
+            tests/e2e/run.sh
+
+  supply-chain:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+
+  image:
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          tags: coolpsonotes:ci

@@ -1,0 +1,950 @@
+//! Platform-independent client logic shared by the browser app, the desktop
+//! client and the agent gateway. No I/O happens here: callers move the
+//! request/response types over HTTP or WebSocket and feed results back in.
+
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+
+use serde::{Deserialize, Serialize};
+
+use crate::crypto::{CryptoError, Purpose};
+use crate::doc::{DocError, IndexDoc, NoteDoc};
+use crate::keys::{
+    self, AccountSecret, DeviceKey, RecoveryKey, VaultKey, VaultKeyring, wrap_account_for_device, wrap_vault_key,
+};
+use crate::protocol::*;
+use crate::random_id;
+
+#[derive(Debug, thiserror::Error)]
+pub enum EngineError {
+    #[error(transparent)]
+    Crypto(#[from] CryptoError),
+    #[error(transparent)]
+    Doc(#[from] DocError),
+    #[error("{0}")]
+    Invalid(String),
+}
+
+pub type Result<T> = std::result::Result<T, EngineError>;
+
+/// Plaintext vault metadata (stored encrypted in `encrypted_meta`).
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+pub struct VaultMeta {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
+}
+
+impl VaultMeta {
+    pub fn named(name: &str) -> Self {
+        VaultMeta { name: name.to_string(), ..Default::default() }
+    }
+
+    pub fn encrypt(&self, ring: &VaultKeyring) -> Result<Vec<u8>> {
+        Ok(ring.encrypt_meta(&serde_json::to_vec(self).expect("serializable"))?)
+    }
+
+    pub fn decrypt(ring: &VaultKeyring, ct: &[u8]) -> Result<Self> {
+        let pt = ring.decrypt_meta(ct)?;
+        serde_json::from_slice(&pt).map_err(|e| EngineError::Invalid(format!("vault metadata: {e}")))
+    }
+}
+
+// ---------------------------------------------------------------- accounts
+
+/// Everything produced when a person sets up encryption on their first device.
+pub struct AccountBootstrap {
+    pub account: AccountSecret,
+    pub device: DeviceKey,
+    pub device_id: String,
+    pub recovery: RecoveryKey,
+    pub request: AccountSetupRequest,
+}
+
+pub fn bootstrap_account(user_id: &str, device_name: &str) -> Result<AccountBootstrap> {
+    let account = AccountSecret::generate();
+    let device = DeviceKey::generate();
+    let device_id = random_id();
+    let recovery = RecoveryKey::generate();
+    let request = AccountSetupRequest {
+        key: PublicAccountKey::new(user_id, 1, &account.public(), &account.sign_account_key(user_id, 1)),
+        recovery_envelope: Some(recovery.wrap_account(&account, user_id)),
+        device: Some(FirstDevice {
+            registration: DeviceRegistration {
+                device_id: device_id.clone(),
+                name: device_name.to_string(),
+                enc_public: device.public.to_vec(),
+            },
+            account_envelope: wrap_account_for_device(&account, &device.public, user_id, &device_id)?,
+            approval_signature: account.sign_device_approval(user_id, &device_id, &device.public).to_vec(),
+        }),
+    };
+    Ok(AccountBootstrap { account, device, device_id, recovery, request })
+}
+
+/// Account setup for an agent identity: keys only, no device or recovery.
+pub fn bootstrap_agent(agent_id: &str) -> (AccountSecret, AccountSetupRequest) {
+    let account = AccountSecret::generate();
+    let request = AccountSetupRequest {
+        key: PublicAccountKey::new(agent_id, 1, &account.public(), &account.sign_account_key(agent_id, 1)),
+        recovery_envelope: None,
+        device: None,
+    };
+    (account, request)
+}
+
+/// A new (pending) device: key pair and registration request.
+pub fn new_device(device_name: &str) -> (DeviceKey, DeviceRegistration) {
+    let device = DeviceKey::generate();
+    let reg = DeviceRegistration { device_id: random_id(), name: device_name.to_string(), enc_public: device.public.to_vec() };
+    (device, reg)
+}
+
+/// Approve a pending device (run on a device that holds the account secret,
+/// or on the new device itself after unlocking with the recovery key).
+pub fn approve_device(account: &AccountSecret, user_id: &str, device_id: &str, device_public: &[u8]) -> Result<ActivateDeviceRequest> {
+    let pk: [u8; 32] = device_public.try_into().map_err(|_| EngineError::Invalid("device key must be 32 bytes".into()))?;
+    Ok(ActivateDeviceRequest {
+        account_envelope: wrap_account_for_device(account, &pk, user_id, device_id)?,
+        signature: account.sign_device_approval(user_id, device_id, &pk).to_vec(),
+    })
+}
+
+pub fn verification_code(user_id: &str, device_id: &str, device_public: &[u8]) -> Option<String> {
+    let pk: [u8; 32] = device_public.try_into().ok()?;
+    Some(keys::device_verification_code(user_id, device_id, &pk))
+}
+
+/// New recovery key replacing the old one.
+pub fn rotate_recovery(account: &AccountSecret, user_id: &str) -> (RecoveryKey, RecoveryUpdate) {
+    let rk = RecoveryKey::generate();
+    let env = rk.wrap_account(account, user_id);
+    let signature = account.sign_recovery_update(user_id, &env).to_vec();
+    (rk, RecoveryUpdate { recovery_envelope: env, signature })
+}
+
+// ---------------------------------------------------------------- trust on first use
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PinStatus {
+    /// First time we see this user's key; it is now pinned.
+    New,
+    Match,
+    /// The server presented a different key than the one pinned before.
+    Changed,
+}
+
+/// Remember account-key fingerprints per user id; report changes.
+pub fn check_pin(pins: &mut BTreeMap<String, String>, user_id: &str, fingerprint: &str) -> PinStatus {
+    match pins.get(user_id) {
+        None => {
+            pins.insert(user_id.to_string(), fingerprint.to_string());
+            PinStatus::New
+        }
+        Some(p) if p == fingerprint => PinStatus::Match,
+        Some(_) => PinStatus::Changed,
+    }
+}
+
+// ---------------------------------------------------------------- vault keys
+
+pub fn new_vault(account: &AccountSecret, user_id: &str, meta: &VaultMeta) -> Result<(CreateVaultRequest, VaultKeyring)> {
+    let id = random_id();
+    let key = VaultKey::generate();
+    let mut ring = VaultKeyring::new(&id);
+    ring.insert(1, key.clone());
+    let envelope = wrap_vault_key(&key, &id, 1, user_id, &account.public().enc_public)?;
+    let req = CreateVaultRequest {
+        id: id.clone(),
+        encrypted_meta: meta.encrypt(&ring)?,
+        key_envelope: KeyEnvelope { user_id: user_id.to_string(), epoch: 1, envelope },
+    };
+    Ok((req, ring))
+}
+
+pub fn keyring_from_response(account: &AccountSecret, user_id: &str, vault_id: &str, r: &VaultKeysResponse) -> Result<VaultKeyring> {
+    let mut ring = VaultKeyring::new(vault_id);
+    for e in &r.envelopes {
+        if e.user_id != user_id {
+            continue;
+        }
+        ring.insert(e.epoch, keys::unwrap_vault_key(account, &e.envelope, vault_id, e.epoch, user_id)?);
+    }
+    if ring.current_epoch().is_none() {
+        return Err(EngineError::Invalid("no key has been shared with you for this vault yet".into()));
+    }
+    let chain: BTreeMap<u32, Vec<u8>> = r.chain.iter().map(|c| (c.epoch, c.link.clone())).collect();
+    ring.fill_from_chain(&chain)?;
+    Ok(ring)
+}
+
+/// Wrap the current vault key for `user` after verifying their key signature.
+pub fn share_envelope(ring: &VaultKeyring, user: &PublicUser) -> Result<KeyEnvelope> {
+    let key = user.account_key.as_ref().ok_or_else(|| EngineError::Invalid("user has not set up encryption yet".into()))?;
+    if key.user_id != user.id {
+        return Err(EngineError::Invalid("key does not belong to this user".into()));
+    }
+    let public = key.verify()?;
+    let (epoch, vk) = ring.current().ok_or(CryptoError::MissingEpoch(0))?;
+    Ok(KeyEnvelope {
+        user_id: user.id.clone(),
+        epoch,
+        envelope: wrap_vault_key(vk, ring.vault_id(), epoch, &user.id, &public.enc_public)?,
+    })
+}
+
+/// Envelopes for members who are missing the current key (and have keys now).
+pub fn missing_grants(ring: &VaultKeyring, members: &[MemberInfo]) -> Vec<KeyEnvelope> {
+    members
+        .iter()
+        .filter(|m| !m.has_current_key && m.user.account_key.is_some())
+        .filter_map(|m| share_envelope(ring, &m.user).ok())
+        .collect()
+}
+
+/// Move the vault to a new epoch for the given (remaining) members. The new key
+/// is inserted into `ring` so subsequent writes use it.
+pub fn rotate(ring: &mut VaultKeyring, members: &[MemberInfo], meta: &VaultMeta) -> Result<RotateKeysRequest> {
+    let (epoch, old) = {
+        let (e, k) = ring.current().ok_or(CryptoError::MissingEpoch(0))?;
+        (e, k.clone())
+    };
+    let new_epoch = epoch + 1;
+    let new = VaultKey::generate();
+    let mut envelopes = Vec::new();
+    for m in members {
+        let Some(k) = &m.user.account_key else { continue };
+        let public = k.verify()?;
+        envelopes.push(KeyEnvelope {
+            user_id: m.user.id.clone(),
+            epoch: new_epoch,
+            envelope: wrap_vault_key(&new, ring.vault_id(), new_epoch, &m.user.id, &public.enc_public)?,
+        });
+    }
+    let chain_link = keys::encrypt_chain_link(&new, new_epoch, &old, ring.vault_id());
+    let mut next = ring.clone();
+    next.insert(new_epoch, new);
+    let encrypted_meta = meta.encrypt(&next)?;
+    *ring = next;
+    Ok(RotateKeysRequest { new_epoch, chain_link, encrypted_meta, envelopes })
+}
+
+// ---------------------------------------------------------------- shared notes
+
+/// Plaintext metadata of an individually shared note (what recipients see,
+/// since they cannot read the vault index).
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+pub struct ObjectMeta {
+    pub title: String,
+}
+
+impl ObjectMeta {
+    pub fn encrypt(&self, doc_ring: &VaultKeyring, object_id: &str) -> Result<Vec<u8>> {
+        Ok(doc_ring.encrypt(Purpose::ObjectMeta, object_id, &serde_json::to_vec(self).expect("serializable"))?)
+    }
+
+    pub fn decrypt(doc_ring: &VaultKeyring, object_id: &str, ct: &[u8]) -> Result<Self> {
+        let pt = doc_ring.decrypt(Purpose::ObjectMeta, object_id, ct)?;
+        serde_json::from_slice(&pt).map_err(|e| EngineError::Invalid(format!("note metadata: {e}")))
+    }
+}
+
+/// Document keyrings of a vault's shared notes, for vault members (from the
+/// vault keys response). Notes whose keys cannot be unwrapped are skipped.
+pub fn object_keyrings(vault_ring: &VaultKeyring, r: &VaultKeysResponse) -> HashMap<String, VaultKeyring> {
+    let mut rings: HashMap<String, VaultKeyring> = HashMap::new();
+    for e in &r.objects {
+        if let Ok(k) = keys::unwrap_doc_key_for_vault(vault_ring, &e.object_id, e.epoch, &e.envelope) {
+            rings.entry(e.object_id.clone()).or_insert_with(|| VaultKeyring::new(vault_ring.vault_id())).insert(e.epoch, k);
+        }
+    }
+    for (oid, ring) in rings.iter_mut() {
+        let chain: BTreeMap<u32, Vec<u8>> =
+            r.object_chain.iter().filter(|c| &c.object_id == oid).map(|c| (c.epoch, c.link.clone())).collect();
+        let _ = ring.fill_from_chain_with(&chain, &keys::object_scope(vault_ring.vault_id(), oid));
+    }
+    rings
+}
+
+/// Document keyring of a note shared with us individually.
+pub fn object_keyring_for_recipient(
+    account: &AccountSecret,
+    user_id: &str,
+    vault_id: &str,
+    r: &ObjectKeysResponse,
+) -> Result<VaultKeyring> {
+    let scope = keys::object_scope(vault_id, &r.object_id);
+    let mut ring = VaultKeyring::new(vault_id);
+    for e in r.envelopes.iter().filter(|e| e.user_id == user_id) {
+        ring.insert(e.epoch, keys::unwrap_vault_key(account, &e.envelope, &scope, e.epoch, user_id)?);
+    }
+    if ring.current_epoch().is_none() {
+        return Err(EngineError::Invalid("no key has been shared with you for this note".into()));
+    }
+    let chain: BTreeMap<u32, Vec<u8>> = r.chain.iter().map(|c| (c.epoch, c.link.clone())).collect();
+    ring.fill_from_chain_with(&chain, &scope)?;
+    Ok(ring)
+}
+
+/// Give a note its own document key so it can be shared without the vault
+/// key. `state` is the note's full CRDT state; it is re-encrypted as a
+/// snapshot under the new key so recipients can read the current content.
+/// `covers_seq` must cover every update of this note the caller has applied.
+pub fn start_sharing(
+    vault_ring: &VaultKeyring,
+    object_id: &str,
+    title: &str,
+    state: &[u8],
+    covers_seq: i64,
+) -> Result<(VaultKeyring, ObjectKeyUpdate)> {
+    let dk = VaultKey::generate();
+    let epoch = keys::FIRST_DOC_EPOCH;
+    let mut ring = VaultKeyring::new(vault_ring.vault_id());
+    ring.insert(epoch, dk.clone());
+    let req = ObjectKeyUpdate {
+        epoch,
+        vault_envelope: keys::wrap_doc_key_for_vault(vault_ring, object_id, epoch, &dk)?,
+        chain_link: None,
+        envelopes: vec![],
+        encrypted_meta: ObjectMeta { title: title.to_string() }.encrypt(&ring, object_id)?,
+        snapshot: Some(CreateSnapshotRequest {
+            snapshot_id: random_id(),
+            covers_seq,
+            payload: ring.encrypt(Purpose::Snapshot, object_id, state)?,
+        }),
+    };
+    Ok((ring, req))
+}
+
+/// New document key epoch for the given (remaining) recipients, e.g. after
+/// removing someone or after the vault key itself was rotated.
+pub fn rotate_object_key(
+    vault_ring: &VaultKeyring,
+    doc_ring: &VaultKeyring,
+    object_id: &str,
+    title: &str,
+    recipients: &[PublicUser],
+) -> Result<(VaultKeyring, ObjectKeyUpdate)> {
+    let (epoch, old) = doc_ring.current().ok_or(CryptoError::MissingEpoch(0))?;
+    let new_epoch = epoch + 1;
+    let nk = VaultKey::generate();
+    let scope = keys::object_scope(vault_ring.vault_id(), object_id);
+    let mut envelopes = Vec::new();
+    for u in recipients {
+        let Some(k) = &u.account_key else { continue };
+        if k.user_id != u.id {
+            return Err(EngineError::Invalid("key does not belong to this user".into()));
+        }
+        let public = k.verify()?;
+        envelopes.push(KeyEnvelope {
+            user_id: u.id.clone(),
+            epoch: new_epoch,
+            envelope: wrap_vault_key(&nk, &scope, new_epoch, &u.id, &public.enc_public)?,
+        });
+    }
+    let mut next = doc_ring.clone();
+    next.insert(new_epoch, nk.clone());
+    let req = ObjectKeyUpdate {
+        epoch: new_epoch,
+        vault_envelope: keys::wrap_doc_key_for_vault(vault_ring, object_id, new_epoch, &nk)?,
+        chain_link: Some(keys::encrypt_chain_link(&nk, new_epoch, old, &scope)),
+        envelopes,
+        encrypted_meta: ObjectMeta { title: title.to_string() }.encrypt(&next, object_id)?,
+        snapshot: None,
+    };
+    Ok((next, req))
+}
+
+/// Wrap a shared note's current document key for one more person.
+pub fn object_share_envelope(doc_ring: &VaultKeyring, object_id: &str, user: &PublicUser) -> Result<KeyEnvelope> {
+    let key = user.account_key.as_ref().ok_or_else(|| EngineError::Invalid("this person has not set up encryption yet".into()))?;
+    if key.user_id != user.id {
+        return Err(EngineError::Invalid("key does not belong to this user".into()));
+    }
+    let public = key.verify()?;
+    let (epoch, dk) = doc_ring.current().ok_or(CryptoError::MissingEpoch(0))?;
+    let scope = keys::object_scope(doc_ring.vault_id(), object_id);
+    Ok(KeyEnvelope { user_id: user.id.clone(), epoch, envelope: wrap_vault_key(dk, &scope, epoch, &user.id, &public.enc_public)? })
+}
+
+// ---------------------------------------------------------------- vault replica
+
+/// A local update not yet acknowledged by the server.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Pending {
+    pub client_update_id: String,
+    pub object_id: String,
+    /// Plaintext CRDT update (re-encrypted with the current epoch on retry).
+    pub update: Vec<u8>,
+}
+
+#[derive(Default, Debug, Clone)]
+pub struct Applied {
+    /// Objects whose content changed.
+    pub objects: BTreeSet<String>,
+    pub index_changed: bool,
+    pub purged: BTreeSet<String>,
+}
+
+impl Applied {
+    pub fn is_empty(&self) -> bool {
+        self.objects.is_empty() && !self.index_changed && self.purged.is_empty()
+    }
+
+    fn merge(&mut self, o: Applied) {
+        self.objects.extend(o.objects);
+        self.index_changed |= o.index_changed;
+        self.purged.extend(o.purged);
+    }
+}
+
+/// Updates since the last snapshot after which a client should compact.
+pub const COMPACT_AFTER: u32 = 200;
+
+/// Content received before we had the key to read it (e.g. a note just got
+/// its own key, or the vault key was rotated, and the update arrived before
+/// the new key). Kept and replayed by [`VaultReplica::retry_deferred`] once the
+/// keys are refreshed, so nothing is skipped.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Deferred {
+    Update(Update),
+    Snapshot(Snapshot),
+}
+
+const MAX_DEFERRED: usize = 20_000;
+
+/// True if the error means "we don't hold this key yet" (refresh keys and retry).
+pub fn missing_key(e: &EngineError) -> bool {
+    matches!(e, EngineError::Crypto(CryptoError::MissingEpoch(_)))
+}
+
+/// Local replica of one vault: keys, index, notes and sync bookkeeping.
+pub struct VaultReplica {
+    pub id: String,
+    pub role: Role,
+    pub keyring: VaultKeyring,
+    pub meta: VaultMeta,
+    pub index: IndexDoc,
+    pub notes: HashMap<String, NoteDoc>,
+    /// Highest sequence number applied (see protocol §6).
+    pub seq: i64,
+    /// Highest `head_seq` ever reported by the server (rollback detection).
+    pub max_head_seen: i64,
+    pub since_snapshot: HashMap<String, u32>,
+    pub pending: Vec<Pending>,
+    /// Objects permanently deleted on the server.
+    pub purged: BTreeSet<String>,
+    /// Document keyrings of individually shared notes (object id → keys).
+    /// Content of these notes is encrypted with their own key instead of the vault key.
+    pub doc_keys: HashMap<String, VaultKeyring>,
+    /// False when we only have access to individually shared notes of this
+    /// vault, not to the vault itself.
+    pub member: bool,
+    /// Received items waiting for a key we don't have yet.
+    pub deferred: Vec<Deferred>,
+}
+
+impl VaultReplica {
+    pub fn new(id: &str, role: Role, keyring: VaultKeyring, meta: VaultMeta) -> Self {
+        VaultReplica {
+            id: id.to_string(),
+            role,
+            keyring,
+            meta,
+            index: IndexDoc::new(),
+            notes: HashMap::new(),
+            seq: 0,
+            max_head_seen: 0,
+            since_snapshot: HashMap::new(),
+            pending: Vec::new(),
+            purged: BTreeSet::new(),
+            doc_keys: HashMap::new(),
+            member: true,
+            deferred: Vec::new(),
+        }
+    }
+
+    /// Replica for someone who can only access individually shared notes.
+    pub fn for_shared_notes(vault_id: &str) -> Self {
+        let mut r = VaultReplica::new(vault_id, Role::Viewer, VaultKeyring::new(vault_id), VaultMeta::default());
+        r.member = false;
+        r
+    }
+
+    pub fn can_write(&self) -> bool {
+        self.role.can_write()
+    }
+
+    /// Whether a note is shared individually (encrypted with its own key).
+    pub fn is_shared_object(&self, object_id: &str) -> bool {
+        self.doc_keys.contains_key(object_id)
+    }
+
+    /// Keyring used to encrypt new content of an object.
+    pub fn ring_for(&self, object_id: &str) -> &VaultKeyring {
+        self.doc_keys.get(object_id).unwrap_or(&self.keyring)
+    }
+
+    /// Encrypt content of an object with the right key (document key if shared).
+    pub fn encrypt_object(&self, purpose: Purpose, object_id: &str, plaintext: &[u8]) -> Result<Vec<u8>> {
+        Ok(self.ring_for(object_id).encrypt(purpose, object_id, plaintext)?)
+    }
+
+    /// Decrypt content of an object; the header epoch selects vault or document key.
+    pub fn decrypt_object(&self, purpose: Purpose, object_id: &str, ciphertext: &[u8]) -> Result<Vec<u8>> {
+        let epoch = crate::crypto::sym_epoch(ciphertext)?;
+        let ring = if keys::is_doc_epoch(epoch) {
+            self.doc_keys.get(object_id).ok_or(CryptoError::MissingEpoch(epoch))?
+        } else {
+            &self.keyring
+        };
+        Ok(ring.decrypt(purpose, object_id, ciphertext)?)
+    }
+
+    fn apply_plain(&mut self, object_id: &str, plain: &[u8]) -> Result<Applied> {
+        let mut a = Applied::default();
+        if object_id == INDEX_OBJECT_ID {
+            self.index.apply_update(plain)?;
+            a.index_changed = true;
+        } else {
+            if self.purged.contains(object_id) {
+                return Ok(a);
+            }
+            self.notes.entry(object_id.to_string()).or_default().apply_update(plain)?;
+            a.objects.insert(object_id.to_string());
+        }
+        Ok(a)
+    }
+
+    fn defer(&mut self, d: Deferred) {
+        if self.deferred.len() < MAX_DEFERRED {
+            self.deferred.push(d);
+        }
+    }
+
+    pub fn apply_snapshot(&mut self, s: &Snapshot) -> Result<Applied> {
+        let plain = match self.decrypt_object(Purpose::Snapshot, &s.object_id, &s.payload) {
+            Ok(p) => p,
+            Err(e) => {
+                if missing_key(&e) {
+                    self.defer(Deferred::Snapshot(s.clone()));
+                }
+                return Err(e);
+            }
+        };
+        let a = self.apply_plain(&s.object_id, &plain)?;
+        self.since_snapshot.insert(s.object_id.clone(), 0);
+        Ok(a)
+    }
+
+    /// Apply a server update. Always applied (CRDT merges are idempotent), so
+    /// out-of-order delivery can never drop content. Updates we cannot read
+    /// yet are deferred (see [`Deferred`]).
+    pub fn apply_update(&mut self, u: &Update) -> Result<Applied> {
+        self.seq = self.seq.max(u.seq);
+        let plain = match self.decrypt_object(Purpose::Update, &u.object_id, &u.payload) {
+            Ok(p) => p,
+            Err(e) => {
+                if missing_key(&e) {
+                    self.defer(Deferred::Update(u.clone()));
+                }
+                return Err(e);
+            }
+        };
+        let a = self.apply_plain(&u.object_id, &plain)?;
+        *self.since_snapshot.entry(u.object_id.clone()).or_default() += 1;
+        Ok(a)
+    }
+
+    /// Whether some received content is waiting for keys (refresh them, then
+    /// call [`retry_deferred`](Self::retry_deferred)).
+    pub fn needs_keys(&self) -> bool {
+        !self.deferred.is_empty()
+    }
+
+    /// Replay deferred content after keys were refreshed.
+    pub fn retry_deferred(&mut self) -> (Applied, Vec<EngineError>) {
+        let mut all = Applied::default();
+        let mut errors = Vec::new();
+        for d in std::mem::take(&mut self.deferred) {
+            let r = match &d {
+                Deferred::Snapshot(s) => self.apply_snapshot(s),
+                Deferred::Update(u) => self.apply_update(u),
+            };
+            match r {
+                Ok(a) => all.merge(a),
+                Err(e) => errors.push(e),
+            }
+        }
+        (all, errors)
+    }
+
+    pub fn apply_purge(&mut self, object_id: &str, seq: i64) -> Applied {
+        self.notes.remove(object_id);
+        self.since_snapshot.remove(object_id);
+        self.pending.retain(|p| p.object_id != object_id);
+        self.purged.insert(object_id.to_string());
+        self.seq = self.seq.max(seq);
+        let mut a = Applied::default();
+        a.purged.insert(object_id.to_string());
+        a
+    }
+
+    /// Apply one catch-up page. Decryption failures of individual items are
+    /// collected rather than aborting, so one bad ciphertext cannot hide the rest.
+    pub fn apply_changes(&mut self, ch: &ChangesResponse) -> (Applied, Vec<EngineError>) {
+        let mut all = Applied::default();
+        let mut errors = Vec::new();
+        for s in &ch.snapshots {
+            match self.apply_snapshot(s) {
+                Ok(a) => all.merge(a),
+                Err(e) => errors.push(e),
+            }
+        }
+        for u in &ch.updates {
+            match self.apply_update(u) {
+                Ok(a) => all.merge(a),
+                Err(e) => errors.push(e),
+            }
+        }
+        for p in &ch.purged {
+            all.merge(self.apply_purge(&p.object_id, p.seq));
+        }
+        self.seq = self.seq.max(ch.next_since.min(ch.head_seq));
+        self.observe_head(ch.head_seq);
+        (all, errors)
+    }
+
+    /// Record the server's head; returns true if it went backwards (possible
+    /// rollback or restore from backup).
+    pub fn observe_head(&mut self, head: i64) -> bool {
+        let rolled_back = head < self.max_head_seen;
+        self.max_head_seen = self.max_head_seen.max(head);
+        rolled_back
+    }
+
+    /// The server delivered everything up to `head` (WebSocket `synced`).
+    pub fn synced(&mut self, head: i64) -> bool {
+        let rb = self.observe_head(head);
+        self.seq = self.seq.max(head);
+        rb
+    }
+
+    /// Record and encrypt a local change for sending.
+    pub fn local_change(&mut self, object_id: &str, update: Vec<u8>) -> Result<PushUpdate> {
+        let client_update_id = random_id();
+        let payload = self.encrypt_object(Purpose::Update, object_id, &update)?;
+        self.pending.push(Pending { client_update_id: client_update_id.clone(), object_id: object_id.to_string(), update });
+        Ok(PushUpdate { object_id: object_id.to_string(), client_update_id, payload })
+    }
+
+    /// All unacknowledged updates, encrypted with the current epoch.
+    pub fn pending_pushes(&self) -> Result<Vec<PushUpdate>> {
+        self.pending
+            .iter()
+            .map(|p| {
+                Ok(PushUpdate {
+                    object_id: p.object_id.clone(),
+                    client_update_id: p.client_update_id.clone(),
+                    payload: self.encrypt_object(Purpose::Update, &p.object_id, &p.update)?,
+                })
+            })
+            .collect()
+    }
+
+    /// Mark pushed updates as stored. `in_order` is true for WebSocket acks,
+    /// which arrive in log order and so also advance `seq`; REST responses can
+    /// overtake other clients' updates still in flight and must not.
+    pub fn ack(&mut self, results: &[PushResult], in_order: bool) {
+        for r in results {
+            if let Some(i) = self.pending.iter().position(|p| p.client_update_id == r.client_update_id) {
+                let p = self.pending.remove(i);
+                *self.since_snapshot.entry(p.object_id).or_default() += 1;
+            }
+            if in_order {
+                self.seq = self.seq.max(r.seq);
+            }
+        }
+    }
+
+    /// Objects that have accumulated enough updates to be worth compacting.
+    /// Only vault members compact: their stream covers every object, so `seq`
+    /// is a valid `covers_seq` for any of them.
+    pub fn compaction_candidates(&self) -> Vec<String> {
+        if !self.can_write() || !self.member {
+            return vec![];
+        }
+        self.since_snapshot
+            .iter()
+            .filter(|(o, n)| **n >= COMPACT_AFTER && !self.pending.iter().any(|p| &p.object_id == *o))
+            .map(|(o, _)| o.clone())
+            .collect()
+    }
+
+    /// Encrypted snapshot of an object's full state covering `self.seq`.
+    pub fn snapshot_request(&self, object_id: &str) -> Result<CreateSnapshotRequest> {
+        let state = if object_id == INDEX_OBJECT_ID {
+            self.index.encode_state()
+        } else {
+            self.notes.get(object_id).ok_or_else(|| EngineError::Invalid("unknown object".into()))?.encode_state()
+        };
+        Ok(CreateSnapshotRequest {
+            snapshot_id: random_id(),
+            covers_seq: self.seq,
+            payload: self.encrypt_object(Purpose::Snapshot, object_id, &state)?,
+        })
+    }
+
+    pub fn snapshot_created(&mut self, object_id: &str) {
+        self.since_snapshot.insert(object_id.to_string(), 0);
+    }
+
+    pub fn note(&self, id: &str) -> Option<&NoteDoc> {
+        self.notes.get(id)
+    }
+
+    pub fn note_text(&self, id: &str) -> String {
+        self.notes.get(id).map(|n| n.text()).unwrap_or_default()
+    }
+
+    /// Decrypt a historical snapshot into note text.
+    pub fn decrypt_revision(&self, s: &Snapshot) -> Result<String> {
+        let plain = self.decrypt_object(Purpose::Snapshot, &s.object_id, &s.payload)?;
+        Ok(NoteDoc::from_updates([plain.as_slice()])?.text())
+    }
+
+    pub fn encrypt_attachment(&self, attachment_id: &str, data: &[u8]) -> Result<Vec<u8>> {
+        Ok(self.keyring.encrypt(Purpose::Attachment, attachment_id, data)?)
+    }
+
+    pub fn decrypt_attachment(&self, attachment_id: &str, data: &[u8]) -> Result<Vec<u8>> {
+        Ok(self.keyring.decrypt(Purpose::Attachment, attachment_id, data)?)
+    }
+
+    pub fn encrypt_awareness(&self, object_id: &str, data: &[u8]) -> Result<Vec<u8>> {
+        self.encrypt_object(Purpose::Awareness, object_id, data)
+    }
+
+    pub fn decrypt_awareness(&self, object_id: &str, data: &[u8]) -> Result<Vec<u8>> {
+        self.decrypt_object(Purpose::Awareness, object_id, data)
+    }
+}
+
+/// Plaintext presence record, encrypted with purpose `Awareness`.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct Presence {
+    pub name: String,
+    pub color: String,
+    /// Note being viewed, if any.
+    pub object_id: Option<String>,
+    /// Cursor as (anchor, head) UTF-8 byte offsets.
+    pub cursor: Option<(usize, usize)>,
+    pub at: i64,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::doc::EntryKind;
+
+    fn member(user_id: &str, account: &AccountSecret, role: Role, has_key: bool) -> MemberInfo {
+        MemberInfo {
+            user: PublicUser {
+                id: user_id.into(),
+                display_name: user_id.into(),
+                email: None,
+                kind: PrincipalKind::Human,
+                account_key: Some(PublicAccountKey::new(user_id, 1, &account.public(), &account.sign_account_key(user_id, 1))),
+            },
+            role,
+            has_current_key: has_key,
+            added_at: 0,
+            added_by: None,
+        }
+    }
+
+    #[test]
+    fn replica_roundtrip_with_rotation() {
+        let alice = AccountSecret::generate();
+        let bob = AccountSecret::generate();
+        let (req, mut ring) = new_vault(&alice, "alice", &VaultMeta::named("Home")).unwrap();
+        let mut a = VaultReplica::new(&req.id, Role::Owner, ring.clone(), VaultMeta::named("Home"));
+        let up = a.index.create("n1", "A.md", EntryKind::Note, 1).unwrap();
+        let p1 = a.local_change(INDEX_OBJECT_ID, up).unwrap();
+        let note = a.notes.entry("n1".into()).or_default();
+        let up = note.set_text("hello").unwrap();
+        let p2 = a.local_change("n1", up).unwrap();
+        assert_eq!(a.pending.len(), 2);
+        a.ack(&[PushResult { client_update_id: p1.client_update_id.clone(), seq: 1 }], true);
+        a.ack(&[PushResult { client_update_id: p2.client_update_id.clone(), seq: 2 }], true);
+        assert!(a.pending.is_empty());
+
+        // Bob gets the key via a share envelope and replays the log.
+        let bob_user = member("bob", &bob, Role::Editor, false);
+        let env = share_envelope(&ring, &bob_user.user).unwrap();
+        let resp = VaultKeysResponse { current_epoch: 1, envelopes: vec![env], chain: vec![], objects: vec![], object_chain: vec![] };
+        let bring = keyring_from_response(&bob, "bob", &req.id, &resp).unwrap();
+        let mut b = VaultReplica::new(&req.id, Role::Editor, bring, VaultMeta::default());
+        let ch = ChangesResponse {
+            updates: vec![
+                Update { object_id: p1.object_id.clone(), seq: 1, author_id: "alice".into(), payload: p1.payload.clone(), created_at: 0 },
+                Update { object_id: p2.object_id.clone(), seq: 2, author_id: "alice".into(), payload: p2.payload.clone(), created_at: 0 },
+            ],
+            snapshots: vec![],
+            purged: vec![],
+            head_seq: 2,
+            has_more: false,
+            next_since: 2,
+        };
+        let (applied, errs) = b.apply_changes(&ch);
+        assert!(errs.is_empty());
+        assert!(applied.index_changed && applied.objects.contains("n1"));
+        assert_eq!(b.note_text("n1"), "hello");
+        assert_eq!(b.seq, 2);
+
+        // Rotation for remaining members; new writes use epoch 2.
+        let members = vec![member("alice", &alice, Role::Owner, true), member("bob", &bob, Role::Editor, true)];
+        let rot = rotate(&mut ring, &members, &VaultMeta::named("Home")).unwrap();
+        assert_eq!(rot.new_epoch, 2);
+        assert_eq!(rot.envelopes.len(), 2);
+        let resp = VaultKeysResponse {
+            current_epoch: 2,
+            envelopes: vec![rot.envelopes.iter().find(|e| e.user_id == "bob").unwrap().clone()],
+            chain: vec![ChainLink { epoch: 2, link: rot.chain_link.clone() }],
+            objects: vec![],
+            object_chain: vec![],
+        };
+        let bring2 = keyring_from_response(&bob, "bob", &req.id, &resp).unwrap();
+        assert_eq!(bring2.epochs().collect::<Vec<_>>(), vec![1, 2]);
+        assert_eq!(VaultMeta::decrypt(&bring2, &rot.encrypted_meta).unwrap().name, "Home");
+
+        // Rollback detection.
+        assert!(!b.observe_head(5));
+        assert!(b.observe_head(3));
+    }
+
+    #[test]
+    fn note_sharing_keys() {
+        let alice = AccountSecret::generate();
+        let bob = AccountSecret::generate();
+        let carol = AccountSecret::generate();
+        let user = |id: &str, a: &AccountSecret| member(id, a, Role::Viewer, true).user;
+        let (vreq, vring) = new_vault(&alice, "alice", &VaultMeta::named("Private")).unwrap();
+        let mut a = VaultReplica::new(&vreq.id, Role::Owner, vring.clone(), VaultMeta::named("Private"));
+        a.seq = 3;
+        let note = a.notes.entry("n".into()).or_default();
+        note.set_text("hello bob").unwrap();
+        let state = note.encode_state();
+        let (ring, req) = start_sharing(&vring, "n", "Hello", &state, a.seq).unwrap();
+        a.doc_keys.insert("n".into(), ring.clone());
+        let env = object_share_envelope(&ring, "n", &user("bob", &bob)).unwrap();
+
+        // Bob builds his ring from the object keys response and reads the snapshot.
+        let resp = ObjectKeysResponse {
+            object_id: "n".into(),
+            role: Role::Editor,
+            current_epoch: req.epoch,
+            envelopes: vec![env],
+            chain: vec![],
+            encrypted_meta: Some(req.encrypted_meta.clone()),
+        };
+        let bring = object_keyring_for_recipient(&bob, "bob", &vreq.id, &resp).unwrap();
+        assert_eq!(ObjectMeta::decrypt(&bring, "n", &req.encrypted_meta).unwrap().title, "Hello");
+        let mut b = VaultReplica::for_shared_notes(&vreq.id);
+        b.role = Role::Editor;
+        b.doc_keys.insert("n".into(), bring);
+        let snap = req.snapshot.clone().unwrap();
+        b.apply_snapshot(&Snapshot { id: snap.snapshot_id, object_id: "n".into(), covers_seq: 3, author_id: "alice".into(), payload: snap.payload, created_at: 0 }).unwrap();
+        assert_eq!(b.note_text("n"), "hello bob");
+        // Bob's edit is encrypted with the document key and Alice can read it.
+        let up = b.notes.get("n").unwrap().set_text("hello bob!").unwrap();
+        let p = b.local_change("n", up).unwrap();
+        assert!(keys::is_doc_epoch(crate::crypto::sym_epoch(&p.payload).unwrap()));
+        a.apply_update(&Update { object_id: "n".into(), seq: 4, author_id: "bob".into(), payload: p.payload.clone(), created_at: 0 }).unwrap();
+        assert_eq!(a.note_text("n"), "hello bob!");
+        // Bob cannot read the vault index or other notes.
+        let ix = a.index.create("m", "Secret.md", crate::doc::EntryKind::Note, 1).unwrap();
+        let other = a.local_change(INDEX_OBJECT_ID, ix).unwrap();
+        assert!(b.decrypt_object(Purpose::Update, INDEX_OBJECT_ID, &other.payload).is_err());
+        assert!(!b.can_write() || b.compaction_candidates().is_empty());
+
+        // Members get the document key through the vault keys response.
+        let vresp = VaultKeysResponse {
+            current_epoch: 1,
+            envelopes: vec![],
+            chain: vec![],
+            objects: vec![ObjectKeyEnvelope { object_id: "n".into(), epoch: req.epoch, envelope: req.vault_envelope.clone() }],
+            object_chain: vec![],
+        };
+        let rings = object_keyrings(&vring, &vresp);
+        assert!(!rings["n"].decrypt(Purpose::Update, "n", &p.payload).unwrap().is_empty());
+
+        // Rotation for Carol only: Bob's old ring can't read new content.
+        let (next, rot) = rotate_object_key(&vring, &ring, "n", "Hello", &[user("carol", &carol)]).unwrap();
+        assert_eq!(rot.envelopes.len(), 1);
+        a.doc_keys.insert("n".into(), next);
+        let up = a.notes.get("n").unwrap().set_text("only carol now").unwrap();
+        let p2 = a.local_change("n", up).unwrap();
+        assert!(b.decrypt_object(Purpose::Update, "n", &p2.payload).is_err());
+        let resp = ObjectKeysResponse {
+            object_id: "n".into(),
+            role: Role::Viewer,
+            current_epoch: rot.epoch,
+            envelopes: rot.envelopes.clone(),
+            chain: vec![ChainLink { epoch: rot.epoch, link: rot.chain_link.clone().unwrap() }],
+            encrypted_meta: None,
+        };
+        let cring = object_keyring_for_recipient(&carol, "carol", &vreq.id, &resp).unwrap();
+        assert_eq!(cring.epochs().count(), 2);
+        assert!(cring.decrypt(Purpose::Update, "n", &p.payload).is_ok());
+        assert!(cring.decrypt(Purpose::Update, "n", &p2.payload).is_ok());
+    }
+
+    #[test]
+    fn content_waiting_for_keys_is_replayed() {
+        let alice = AccountSecret::generate();
+        let (_, ring) = new_vault(&alice, "alice", &VaultMeta::named("V")).unwrap();
+        let mut a = VaultReplica::new(ring.vault_id(), Role::Owner, ring.clone(), VaultMeta::default());
+        let mut b = VaultReplica::new(ring.vault_id(), Role::Editor, ring.clone(), VaultMeta::default());
+        let n = a.notes.entry("n".into()).or_default();
+        let base = n.set_text("one").unwrap();
+        let p0 = a.local_change("n", base).unwrap();
+        b.apply_update(&Update { object_id: "n".into(), seq: 1, author_id: "a".into(), payload: p0.payload, created_at: 0 }).unwrap();
+        // Alice gives the note its own key; Bob receives an update before the key.
+        let (doc, _) = start_sharing(&ring, "n", "N", &a.notes["n"].encode_state(), 1).unwrap();
+        a.doc_keys.insert("n".into(), doc.clone());
+        let up = a.notes.get("n").unwrap().set_text("one two").unwrap();
+        let p1 = a.local_change("n", up).unwrap();
+        let e = b.apply_update(&Update { object_id: "n".into(), seq: 2, author_id: "a".into(), payload: p1.payload, created_at: 0 }).unwrap_err();
+        assert!(missing_key(&e));
+        assert!(b.needs_keys());
+        assert_eq!(b.seq, 2);
+        b.doc_keys.insert("n".into(), doc);
+        let (applied, errs) = b.retry_deferred();
+        assert!(errs.is_empty());
+        assert!(applied.objects.contains("n"));
+        assert_eq!(b.note_text("n"), "one two");
+        assert!(!b.needs_keys());
+    }
+
+    #[test]
+    fn pins() {
+        let mut p = BTreeMap::new();
+        assert_eq!(check_pin(&mut p, "u", "A"), PinStatus::New);
+        assert_eq!(check_pin(&mut p, "u", "A"), PinStatus::Match);
+        assert_eq!(check_pin(&mut p, "u", "B"), PinStatus::Changed);
+    }
+
+    #[test]
+    fn bootstrap_is_consistent() {
+        let b = bootstrap_account("u1", "Firefox").unwrap();
+        let dev = b.request.device.as_ref().unwrap();
+        let back = b.device.unwrap_account(&dev.account_envelope, "u1", &b.device_id).unwrap();
+        assert_eq!(back.public(), b.account.public());
+        b.request.key.verify().unwrap();
+        let rk = RecoveryKey::parse(&b.recovery.to_display()).unwrap();
+        assert!(rk.unwrap_account(b.request.recovery_envelope.as_ref().unwrap(), "u1").is_ok());
+    }
+}

@@ -1,0 +1,45 @@
+[package]
+name = "coolpsonotes-server"
+description = "Headless, zero-knowledge synchronization server for coolpsonotes"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "coolpsonotes-server"
+path = "src/main.rs"
+
+[dependencies]
+coolpsonotes-core = { path = "../core" }
+axum = { version = "0.8", features = ["ws", "macros"] }
+tokio = { version = "1", features = ["full"] }
+tower = "0.5"
+tower-http = { version = "0.7", features = ["fs", "trace", "compression-gzip", "compression-br", "limit", "set-header", "request-id", "util"] }
+sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "sqlite", "migrate", "macros"] }
+openidconnect = "4"
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "json"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_urlencoded = "0.7"
+clap = { version = "4", features = ["derive", "env"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+metrics = "0.24"
+metrics-exporter-prometheus = { version = "0.18", default-features = false }
+governor = "0.10"
+uuid = { version = "1", features = ["v4"] }
+sha2 = "0.11"
+data-encoding = "2.11"
+getrandom = "0.4"
+thiserror = "2"
+anyhow = "1"
+futures = "0.3"
+dashmap = "6"
+url = "2"
+time = "0.3"
+subtle = "2.6"
+
+[dev-dependencies]
+reqwest = { version = "0.13", default-features = false, features = ["json", "form"] }
+tokio-tungstenite = "0.30"
+tempfile = "3"

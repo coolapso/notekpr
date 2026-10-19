@@ -1,0 +1,38 @@
+[package]
+name = "coolpsonotes-web"
+description = "coolpsonotes browser client (Rust, compiled to WebAssembly)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+coolpsonotes-core = { path = "../core" }
+leptos = { version = "0.8", features = ["csr"] }
+wasm-bindgen = "=0.2.128"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
+console_error_panic_hook = "0.1"
+data-encoding = "2.11"
+miniz_oxide = { version = "0.9", default-features = false, features = ["with-alloc"] }
+crc32fast = { version = "1.5", default-features = false }
+
+[dependencies.web-sys]
+version = "0.3"
+features = [
+  "Window", "Document", "Element", "HtmlElement", "Node", "NodeList", "Text", "Range", "Selection",
+  "Location", "History", "Storage", "Headers", "Request", "RequestInit", "RequestMode", "Response",
+  "WebSocket", "MessageEvent", "CloseEvent", "ErrorEvent", "Event", "EventTarget", "KeyboardEvent",
+  "MouseEvent", "InputEvent", "FocusEvent", "ClipboardEvent", "DataTransfer", "DragEvent",
+  "HtmlInputElement", "HtmlTextAreaElement", "HtmlAnchorElement", "HtmlImageElement", "HtmlDivElement",
+  "Blob", "BlobPropertyBag", "Url", "File", "FileList", "FileReader", "DomRect", "DomRectList",
+  "CssStyleDeclaration", "ScrollIntoViewOptions", "ScrollBehavior", "ScrollLogicalPosition",
+  "MediaQueryList", "Navigator", "Clipboard", "DomTokenList", "StaticRange", "TreeWalker", "NodeFilter",
+  "CompositionEvent", "ResizeObserver", "VisibilityState", "PopStateEvent", "AbortController", "AbortSignal",
+]

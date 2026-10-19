@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# Build the browser client with the Rust toolchain only (no npm):
+#   cargo (wasm32-unknown-unknown) + wasm-bindgen CLI (version must match the crate).
+# Output: dist/web (serve with `coolpsonotes-server --web-dir dist/web`).
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+PROFILE="${PROFILE:-wasm-release}"
+OUT="${OUT:-dist/web}"
+TARGET_DIR="${CARGO_TARGET_DIR:-target}"
+
+want=$(grep -E '^wasm-bindgen = "=' crates/web/Cargo.toml | sed -E 's/.*"=([0-9.]+)".*/\1/')
+have=$(wasm-bindgen --version 2>/dev/null | awk '{print $2}' || true)
+if [ "$want" != "$have" ]; then
+  echo "wasm-bindgen CLI $have does not match crate version $want." >&2
+  echo "Install it with: cargo install wasm-bindgen-cli --version $want" >&2
+  exit 1
+fi
+
+cargo build -p coolpsonotes-web --target wasm32-unknown-unknown --profile "$PROFILE"
+dir="$PROFILE"; [ "$PROFILE" = "dev" ] && dir=debug
+rm -rf "$OUT"
+mkdir -p "$OUT/pkg"
+wasm-bindgen --target web --no-typescript --out-dir "$OUT/pkg" \
+  "$TARGET_DIR/wasm32-unknown-unknown/$dir/coolpsonotes_web.wasm"
+if command -v wasm-opt >/dev/null 2>&1 && [ "$PROFILE" != "dev" ]; then
+  wasm-opt -Oz --enable-bulk-memory --enable-nontrapping-float-to-int -o "$OUT/pkg/coolpsonotes_web_bg.wasm" "$OUT/pkg/coolpsonotes_web_bg.wasm"
+fi
+cp crates/web/static/* "$OUT/"
+ls -la "$OUT/pkg"
+echo "web client built into $OUT"

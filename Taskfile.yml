@@ -1,0 +1,257 @@
+# Common development tasks. Requires go-task v3 (https://taskfile.dev).
+#   task            list tasks
+#   task dev        run a development server (no OIDC, sign in as any user name)
+#   task test       run all Rust tests
+version: "3"
+
+vars:
+  LISTEN: 127.0.0.1:8080
+  PUBLIC_URL: http://localhost:8080
+  DATA_DIR: data
+  BACKUP_DIR: backups
+  # The web client is built in its own target directory so native and wasm
+  # builds don't keep invalidating each other's dependencies.
+  WEB_TARGET_DIR: target-web
+  WASM_BINDGEN_VERSION:
+    sh: sed -nE 's/^wasm-bindgen = "=([0-9.]+)".*/\1/p' crates/web/Cargo.toml
+  RUST_VERSION:
+    sh: sed -nE 's/^rust-version = "([0-9.]+)".*/\1/p' Cargo.toml
+
+tasks:
+  default:
+    cmds:
+      - task --list
+    silent: true
+
+  # ------------------------------------------------------------------ setup
+
+  setup:
+    desc: Check the toolchain (Rust, wasm32 target, wasm-bindgen CLI, test tools) and say how to get what's missing
+    silent: true
+    cmds:
+      - cmd: |
+          ok=1
+          if ! v=$(rustc --version 2>/dev/null | awk '{print $2}') || [ -z "$v" ]; then
+            echo "✗ no working Rust compiler (Arch: sudo pacman -S rust)"; ok=0
+          else
+            if [ "$(printf '%s\n' "{{.RUST_VERSION}}" "$v" | sort -V | head -1)" = "{{.RUST_VERSION}}" ]; then
+              echo "✓ rustc $v"
+            else
+              echo "✗ rustc $v is older than {{.RUST_VERSION}}"; ok=0
+            fi
+            if [ -d "$(rustc --print sysroot)/lib/rustlib/wasm32-unknown-unknown" ]; then
+              echo "✓ wasm32-unknown-unknown target"
+            else
+              echo "✗ wasm32-unknown-unknown target missing (Arch: sudo pacman -S rust-wasm; rustup: rustup target add wasm32-unknown-unknown)"; ok=0
+            fi
+          fi
+          have=$(wasm-bindgen --version 2>/dev/null | awk '{print $2}')
+          if [ "$have" = "{{.WASM_BINDGEN_VERSION}}" ]; then
+            echo "✓ wasm-bindgen $have"
+          else
+            echo "✗ wasm-bindgen CLI {{.WASM_BINDGEN_VERSION}} needed, found ${have:-none}"
+            echo "    Arch: sudo pacman -S wasm-bindgen (if it is {{.WASM_BINDGEN_VERSION}}), otherwise:"
+            echo "    cargo install wasm-bindgen-cli --version {{.WASM_BINDGEN_VERSION}} --locked   (~/.cargo/bin must come first in PATH)"
+            ok=0
+          fi
+          command -v wasm-opt >/dev/null && echo "✓ wasm-opt (smaller release builds)" || echo "· optional: wasm-opt for smaller release builds (Arch: binaryen)"
+          if command -v chromedriver >/dev/null && command -v python3 >/dev/null; then
+            echo "✓ chromedriver + python3 (browser tests)"
+          else
+            echo "· optional: chromium (with chromedriver) and python3 for task test:e2e (Arch: chromium python)"
+          fi
+          command -v cargo-deny >/dev/null && echo "✓ cargo-deny (task audit)" || echo "· optional: cargo-deny for task audit (Arch: cargo-deny)"
+          command -v docker >/dev/null && echo "✓ docker (container image, Docker dev stack)" || echo "· optional: docker + compose for the docker:* tasks (Arch: docker docker-compose docker-buildx)"
+          [ "$ok" = 1 ]
+
+  rust:
+    internal: true
+    run: once
+    preconditions:
+      - sh: cargo --version > /dev/null 2>&1
+        msg: "cargo doesn't work. Run `task setup` to see what's missing (with rustup but no toolchain: reinstall your distribution's Rust, on Arch `sudo pacman -S rust`, or run `rustup default stable`)."
+
+  # ------------------------------------------------------------------ build
+
+  build:
+    desc: Build the server, the CLI and the web client (debug)
+    deps: [build:server, build:cli, build:web:dev]
+
+  build:server:
+    desc: Build the server (debug)
+    deps: [rust]
+    cmds:
+      - cargo build -p coolpsonotes-server
+
+  build:cli:
+    desc: Build the desktop/CLI client `coolpsonotes` (debug)
+    deps: [rust]
+    cmds:
+      - cargo build -p coolpsonotes-client
+
+  build:web:
+    desc: Build the optimized web client into dist/web
+    deps: [rust]
+    env:
+      CARGO_TARGET_DIR: "{{.WEB_TARGET_DIR}}"
+    cmds:
+      - ./scripts/build-web.sh
+
+  build:web:dev:
+    desc: Build the web client quickly (unoptimized) into dist/web
+    deps: [rust]
+    env:
+      CARGO_TARGET_DIR: "{{.WEB_TARGET_DIR}}"
+      PROFILE: dev
+    cmds:
+      - ./scripts/build-web.sh > /dev/null
+      - echo "web client (dev) built into dist/web"
+    silent: true
+
+  release:
+    desc: Release build of the server and CLI (target/release) plus the optimized web client
+    deps: [rust]
+    cmds:
+      - cargo build --release --locked -p coolpsonotes-server -p coolpsonotes-client
+      - task: build:web
+
+  # ------------------------------------------------------------------ run
+
+  dev:
+    desc: "Run the server in development mode on {{.PUBLIC_URL}}: no OIDC, sign in as any user (one per browser tab)"
+    deps: [build:server, build:web:dev]
+    cmds:
+      - ./target/debug/coolpsonotes-server --dev-mode --web-dir dist/web --data-dir {{.DATA_DIR}} --listen {{.LISTEN}} --public-url {{.PUBLIC_URL}} --log-format pretty {{.CLI_ARGS}}
+
+  web:watch:
+    desc: Rebuild the web client whenever its code changes (run next to `task dev`, then reload the browser)
+    watch: true
+    method: none
+    sources:
+      - crates/web/**/*
+      - crates/core/**/*.rs
+    cmds:
+      - task: build:web:dev
+
+  dev:reset:
+    desc: Delete the development database (all local test users, vaults and notes)
+    prompt: "This deletes everything in {{.DATA_DIR}}/. Continue?"
+    cmds:
+      - rm -rf {{.DATA_DIR}}
+
+  cli:
+    desc: "Run the CLI, e.g. `task cli -- --profile alice status`"
+    deps: [rust]
+    cmds:
+      - cargo run -q -p coolpsonotes-client -- {{.CLI_ARGS}}
+
+  cli:login:
+    desc: "Sign the CLI in to the dev server as a test user, e.g. `task cli:login DEV_USER=alice` (profile = user name)"
+    deps: [rust]
+    requires:
+      vars: [DEV_USER]
+    cmds:
+      - cargo run -q -p coolpsonotes-client -- --profile {{.DEV_USER}} login --server {{.PUBLIC_URL}} --dev-user {{.DEV_USER}}
+
+  backup:
+    desc: "Write a timestamped backup of {{.DATA_DIR}} into {{.BACKUP_DIR}}/ (safe while the server runs; keeps the newest 10)"
+    deps: [build:server]
+    cmds:
+      - ./target/debug/coolpsonotes-server backup --data-dir {{.DATA_DIR}} --out-dir {{.BACKUP_DIR}} --keep 10
+
+  # ------------------------------------------------------------------ test & lint
+
+  test:
+    desc: Run all Rust tests (core, server, CLI client, web)
+    deps: [rust]
+    cmds:
+      - cargo test --workspace
+
+  test:core:
+    desc: Crypto, key hierarchy, CRDT model, protocol
+    deps: [rust]
+    cmds:
+      - cargo test -p coolpsonotes-core
+
+  test:server:
+    desc: Server API tests with real client-side crypto
+    deps: [rust]
+    cmds:
+      - cargo test -p coolpsonotes-server
+
+  test:cli:
+    desc: Sync engine, Markdown mirror, gateway and MCP against an in-process server
+    deps: [rust]
+    cmds:
+      - cargo test -p coolpsonotes-client
+
+  test:web:
+    desc: Editor syntax engine, safe rendering, zip
+    deps: [rust]
+    cmds:
+      - cargo test -p coolpsonotes-web
+
+  test:e2e:
+    desc: "Headless browser tests and browser ↔ CLI test (needs chromium + chromedriver); filter with `task test:e2e -- -k collab`"
+    deps: [rust]
+    cmds:
+      - tests/e2e/run.sh {{.CLI_ARGS}}
+
+  lint:
+    desc: Clippy on every crate (warnings are errors), including the web client for wasm32
+    deps: [rust]
+    cmds:
+      - cargo clippy --locked -p coolpsonotes-core -p coolpsonotes-server -p coolpsonotes-client --all-targets -- -D warnings
+      - CARGO_TARGET_DIR={{.WEB_TARGET_DIR}} cargo clippy --locked -p coolpsonotes-web --target wasm32-unknown-unknown -- -D warnings -A clippy::type_complexity
+
+  check:wasm:
+    desc: Make sure the core crate still builds for the browser
+    deps: [rust]
+    cmds:
+      - CARGO_TARGET_DIR={{.WEB_TARGET_DIR}} cargo build --locked -p coolpsonotes-core --target wasm32-unknown-unknown
+
+  audit:
+    desc: Supply-chain checks (licenses, advisories, sources) with cargo-deny
+    preconditions:
+      - sh: command -v cargo-deny
+        msg: "cargo-deny is not installed: cargo install cargo-deny --locked"
+    cmds:
+      - cargo deny check
+
+  ci:
+    desc: Everything CI runs (lint, tests, wasm build, browser tests)
+    cmds:
+      - task: lint
+      - task: test
+      - task: check:wasm
+      - task: test:e2e
+
+  # ------------------------------------------------------------------ docker
+
+  docker:build:
+    desc: Build the container image coolpsonotes:latest
+    cmds:
+      - docker build -t coolpsonotes:latest .
+
+  docker:dev:
+    desc: Run the development server in Docker on http://localhost:8080 (no OIDC)
+    cmds:
+      - docker compose -f docker-compose.dev.yml up --build
+
+  docker:dev:oidc:
+    desc: Like docker:dev, plus a local Dex identity provider and an OIDC-enabled server on http://localhost:8081
+    cmds:
+      - docker compose -f docker-compose.dev.yml --profile oidc up --build
+
+  docker:dev:down:
+    desc: Stop the Docker development stack (data volumes are kept)
+    cmds:
+      - docker compose -f docker-compose.dev.yml --profile oidc down
+
+  # ------------------------------------------------------------------ housekeeping
+
+  clean:
+    desc: Remove build outputs (keeps the dev database)
+    cmds:
+      - cargo clean
+      - rm -rf {{.WEB_TARGET_DIR}} dist

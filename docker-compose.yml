@@ -1,0 +1,40 @@
+# Production-style deployment: coolpsonotes behind Caddy (automatic HTTPS).
+#   cp .env.example .env   # set PUBLIC_HOST and the OIDC client
+#   docker compose up -d
+services:
+  coolpsonotes:
+    build: .
+    image: coolpsonotes:latest
+    restart: unless-stopped
+    environment:
+      COOLPSONOTES_PUBLIC_URL: https://${PUBLIC_HOST:?set PUBLIC_HOST in .env}
+      COOLPSONOTES_OIDC_ISSUER: ${OIDC_ISSUER:?set OIDC_ISSUER in .env}
+      COOLPSONOTES_OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-coolpsonotes}
+      COOLPSONOTES_OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:-}
+      COOLPSONOTES_ADMINS: ${ADMINS:-}
+      COOLPSONOTES_TRUST_PROXY: "true"
+    volumes:
+      - coolpsonotes-data:/data
+    expose:
+      - "8080"
+
+  caddy:
+    image: caddy:2.10-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      PUBLIC_HOST: ${PUBLIC_HOST}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - coolpsonotes
+
+volumes:
+  coolpsonotes-data:
+  caddy-data:
+  caddy-config:

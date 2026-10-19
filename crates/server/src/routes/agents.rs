@@ -9,15 +9,14 @@ use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use coolpsonotes_core::protocol::{
-    AgentInfo, CreateAgentRequest, CreateAgentResponse, CreatedCredential, CredentialInfo,
-    UserEventKind,
+    AgentInfo, CreateAgentRequest, CreateAgentResponse, CreatedCredential, UserEventKind,
 };
-use sqlx::Row;
 
 use crate::auth::Principal;
 use crate::db;
 use crate::error::{AppError, AppResult, bad};
 use crate::hub::Control;
+use crate::repo;
 use crate::routes::me::notify_user;
 use crate::routes::users::account_key;
 use crate::state::AppState;
@@ -25,45 +24,22 @@ use crate::state::AppState;
 const MAX_AGENTS: i64 = 50;
 
 async fn load(state: &AppState, owner: &str, agent_id: &str) -> AppResult<AgentInfo> {
-    let row = sqlx::query("SELECT id, display_name, created_at FROM users WHERE id = ? AND kind = 'agent' AND owner_id = ?")
-        .bind(agent_id)
-        .bind(owner)
-        .fetch_optional(&state.db)
+    let (id, display_name, created_at) = repo::agents::get(&state.db, owner, agent_id)
         .await?
         .ok_or(AppError::NotFound)?;
-    let credentials = sqlx::query(
-        "SELECT client_id, created_at, revoked_at, last_used_at FROM agent_credentials WHERE agent_id = ? ORDER BY created_at",
-    )
-    .bind(agent_id)
-    .fetch_all(&state.db)
-    .await?
-    .iter()
-    .map(|r| CredentialInfo {
-        client_id: r.get("client_id"),
-        created_at: r.get("created_at"),
-        revoked_at: r.get("revoked_at"),
-        last_used_at: r.get("last_used_at"),
-    })
-    .collect();
     Ok(AgentInfo {
-        id: row.get("id"),
-        display_name: row.get("display_name"),
-        created_at: row.get("created_at"),
+        id,
+        display_name,
+        created_at,
         account_key: account_key(&state.db, agent_id).await?,
-        credentials,
+        credentials: repo::agents::credentials(&state.db, agent_id).await?,
     })
 }
 
 async fn new_credential(state: &AppState, agent_id: &str) -> AppResult<CreatedCredential> {
     let client_id = format!("agent_{}", &coolpsonotes_core::random_id()[..16]);
     let (secret, hash) = db::new_secret("cpn_cs_");
-    sqlx::query("INSERT INTO agent_credentials (client_id, agent_id, secret_hash, created_at) VALUES (?, ?, ?, ?)")
-        .bind(&client_id)
-        .bind(agent_id)
-        .bind(&hash)
-        .bind(db::now())
-        .execute(&state.db)
-        .await?;
+    repo::agents::insert_credential(&state.db, &client_id, agent_id, &hash, db::now()).await?;
     Ok(CreatedCredential {
         agent_id: agent_id.to_string(),
         client_id,
@@ -76,12 +52,7 @@ pub async fn list(
     who: Principal,
 ) -> AppResult<Json<Vec<AgentInfo>>> {
     who.require_human()?;
-    let ids: Vec<String> = sqlx::query_scalar(
-        "SELECT id FROM users WHERE kind = 'agent' AND owner_id = ? ORDER BY created_at",
-    )
-    .bind(&who.user_id)
-    .fetch_all(&state.db)
-    .await?;
+    let ids = repo::agents::ids(&state.db, &who.user_id).await?;
     let mut out = Vec::new();
     for id in ids {
         out.push(load(&state, &who.user_id, &id).await?);
@@ -105,22 +76,11 @@ pub async fn create(
     if name.is_empty() {
         return Err(bad("agent name must not be empty"));
     }
-    let count: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM users WHERE kind = 'agent' AND owner_id = ?")
-            .bind(&who.user_id)
-            .fetch_one(&state.db)
-            .await?;
-    if count >= MAX_AGENTS {
+    if repo::agents::count(&state.db, &who.user_id).await? >= MAX_AGENTS {
         return Err(bad("too many agents"));
     }
     let id = db::new_id();
-    sqlx::query("INSERT INTO users (id, kind, display_name, owner_id, created_at) VALUES (?, 'agent', ?, ?, ?)")
-        .bind(&id)
-        .bind(&name)
-        .bind(&who.user_id)
-        .bind(db::now())
-        .execute(&state.db)
-        .await?;
+    repo::agents::insert(&state.db, &id, &name, &who.user_id, db::now()).await?;
     let credential = new_credential(&state, &id).await?;
     db::audit(
         &state.db,
@@ -148,28 +108,12 @@ pub async fn delete(
 ) -> AppResult<StatusCode> {
     who.require_human()?;
     load(&state, &who.user_id, &id).await?;
-    let vaults: Vec<String> =
-        sqlx::query_scalar("SELECT vault_id FROM vault_members WHERE user_id = ?")
-            .bind(&id)
-            .fetch_all(&state.db)
-            .await?;
-    let notes: Vec<(String, String)> =
-        sqlx::query_as("SELECT vault_id, object_id FROM object_shares WHERE user_id = ?")
-            .bind(&id)
-            .fetch_all(&state.db)
-            .await?;
-    let sessions: Vec<String> =
-        sqlx::query_scalar("SELECT id FROM sessions WHERE user_id = ? AND revoked_at IS NULL")
-            .bind(&id)
-            .fetch_all(&state.db)
-            .await?;
+    let vaults = repo::vaults::ids_of_member(&state.db, &id).await?;
+    let notes = repo::shares::of_user(&state.db, &id).await?;
+    let sessions = repo::sessions::unrevoked_ids(&state.db, &id).await?;
     {
         let _w = state.write_lock.lock().await;
-        sqlx::query("DELETE FROM users WHERE id = ? AND kind = 'agent' AND owner_id = ?")
-            .bind(&id)
-            .bind(&who.user_id)
-            .execute(&state.db)
-            .await?;
+        repo::agents::delete(&state.db, &id, &who.user_id).await?;
     }
     // End its live connections now, not at the next session check.
     for v in vaults {
@@ -225,24 +169,10 @@ pub async fn revoke_credential(
     who.require_human()?;
     load(&state, &who.user_id, &id).await?;
     let now = db::now();
-    let n = sqlx::query("UPDATE agent_credentials SET revoked_at = ? WHERE client_id = ? AND agent_id = ? AND revoked_at IS NULL")
-        .bind(now)
-        .bind(&client_id)
-        .bind(&id)
-        .execute(&state.db)
-        .await?
-        .rows_affected();
-    if n == 0 {
+    if repo::agents::revoke_credential(&state.db, &client_id, &id, now).await? == 0 {
         return Err(AppError::NotFound);
     }
-    let sessions: Vec<String> = sqlx::query_scalar(
-        "UPDATE sessions SET revoked_at = ? WHERE user_id = ? AND kind = 'agent' AND client_name = ? AND revoked_at IS NULL RETURNING id",
-    )
-    .bind(now)
-    .bind(&id)
-    .bind(&client_id)
-    .fetch_all(&state.db)
-    .await?;
+    let sessions = repo::sessions::revoke_for_credential(&state.db, &id, &client_id, now).await?;
     for s in sessions {
         state.hub.control(&id, Control::SessionRevoked(s));
     }

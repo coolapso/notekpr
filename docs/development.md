@@ -122,3 +122,5 @@ cargo deny check licenses advisories
   belongs in a client.
 * Never log tokens, query strings, note content, names or paths.
 * Keep the protocol additive; bump `/api/v1` only for breaking changes.
+* Formatting-only commits go into `.git-blame-ignore-revs`; enable it once
+  with `git config blame.ignoreRevsFile .git-blame-ignore-revs`.

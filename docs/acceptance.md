@@ -32,6 +32,8 @@ Legend: **S** = `cargo test -p coolpsonotes-server` (`crates/server/tests/api.rs
 * OIDC login against a real provider (Dex in Docker): discovery, PKCE,
   code exchange, ID token verification, automatic provisioning, redirect back
   into the app. No personal data in the server logs.
-* Release WebAssembly bundle: 2.9 MB, ≈830 KB over the wire with brotli.
+* Release WebAssembly bundle: ≈3.3 MB as built by `cargo` (≈740 KB with
+  brotli), ≈2.7 MB after `wasm-opt -Oz`, which `scripts/build-web.sh` runs when
+  binaryen is installed — always in the Docker image.
 * Phone-width layout (390 px): drawer sidebar, compact header, side panel only
   on demand.

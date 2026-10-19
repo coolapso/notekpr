@@ -501,7 +501,7 @@ with SQLite; no SQL-dialect abstraction.
 
 ## Docs and housekeeping
 
-- [ ] `protocol.md`: document `GET /me/audit`, `/admin/*` and the WebSocket
+- [x] `protocol.md`: document `GET /me/audit`, `/admin/*` and the WebSocket
       `snapshot` message [D-L2].
 - [x] `development.md`: Dex is on port 5556 (8081 is the OIDC-enabled server);
       `network_mode: host` is Linux-only [D-L7].
@@ -509,9 +509,9 @@ with SQLite; no SQL-dialect abstraction.
       a vault argument [D-L6]; Dockerfile and compose files are at the repo
       root, not in `deploy/` [D-L12]; `task ci` vs the GitHub workflow
       (wasm clippy, cargo-deny) [D-L8].
-- [ ] `acceptance.md`: wasm size refers to the optimized build; the Docker
+- [x] `acceptance.md`: wasm size refers to the optimized build; the Docker
       image's bundle is larger until `binaryen` is added [D-L5].
-- [ ] `.git-blame-ignore-revs` with the rustfmt commit `eb5c184`.
+- [x] `.git-blame-ignore-revs` with the rustfmt commit `eb5c184`.
 
 ## UX polish
 

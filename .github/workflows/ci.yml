@@ -17,12 +17,16 @@ jobs:
         run: cargo fmt --all -- --check
       - name: Lint
         run: cargo clippy --locked -p coolpsonotes-core -p coolpsonotes-server -p coolpsonotes-client --all-targets -- -D warnings
+      - name: Lint the browser client
+        run: cargo clippy --locked -p coolpsonotes-web --target wasm32-unknown-unknown -- -D warnings -A clippy::type_complexity
       - name: Unit and integration tests
         run: cargo test --locked -p coolpsonotes-core -p coolpsonotes-server -p coolpsonotes-client -p coolpsonotes-web
       - name: Core builds for the browser
         run: cargo build --locked -p coolpsonotes-core --target wasm32-unknown-unknown
       - name: Install wasm-bindgen
-        run: cargo install wasm-bindgen-cli --version 0.2.128 --locked
+        run: |
+          v=$(sed -nE 's/^wasm-bindgen = "=([0-9.]+)".*/\1/p' crates/web/Cargo.toml)
+          cargo install wasm-bindgen-cli --version "$v" --locked
       - name: Build browser client
         run: ./scripts/build-web.sh
       - name: Browser end-to-end tests

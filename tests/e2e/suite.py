@@ -369,6 +369,17 @@ def test_attachments(env):
         b.wait("return !!document.querySelector('.reading img.att[src^=\"blob:\"]')", 15, "reading view image")
         check(True, "reading view shows the decrypted image")
         check(not severe_logs(b), "no browser errors")
+        # Signing out revokes the decrypted attachments' blob URLs.
+        blob = b.js("return document.querySelector('.reading img.att').src")
+        def blob_loads():
+            b.js("window.__img = null; const i = new Image(); i.onload = () => window.__img = 'ok'; i.onerror = () => window.__img = 'gone'; i.src = arguments[0];", blob)
+            b.wait("return window.__img !== null", 10, "image load attempt")
+            return b.js("return window.__img") == "ok"
+        check(blob_loads(), "the decrypted image is a readable blob while signed in")
+        b.js("history.pushState(null, '', '/settings/account'); dispatchEvent(new PopStateEvent('popstate'));")
+        b.click_el(b.find_text(".settings-body button", "Sign out", 10))
+        b.find(".dev-box input", 15)
+        check(not blob_loads(), "signing out revokes decrypted attachment URLs")
     finally:
         b.close()
 

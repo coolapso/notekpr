@@ -796,14 +796,18 @@ pub fn sign_out_local(error: Option<String>) {
     let ui = ui();
     storage::clear_token();
     api::set_token(None);
-    let sock = with(|c| {
+    let (sock, urls) = with(|c| {
         let s = c.socket.take();
+        let urls = take_attachment_urls(c, None);
         *c = Core::default();
-        s
+        (s, urls)
     });
     if let Some(s) = sock {
         s.stop();
     }
+    // Decrypted data must not outlive the session.
+    revoke_urls(urls);
+    crate::knowledge::clear_caches();
     ui.vaults.set(vec![]);
     ui.shared.set(vec![]);
     ui.user.set(None);
@@ -1071,13 +1075,36 @@ async fn load_vault_with(info: VaultInfo, force: bool) {
     with(|c| c.vault_infos.insert(id, info));
 }
 
+/// Remove the cached blob URLs of decrypted attachments (of one vault, or
+/// all); the caller revokes them with [`revoke_urls`] outside the borrow.
+fn take_attachment_urls(c: &mut Core, vault: Option<&str>) -> Vec<String> {
+    let prefix = vault.map(|v| format!("{v}:"));
+    let keys: Vec<String> = c
+        .attachment_urls
+        .keys()
+        .filter(|k| prefix.as_ref().is_none_or(|p| k.starts_with(p.as_str())))
+        .cloned()
+        .collect();
+    keys.iter()
+        .filter_map(|k| c.attachment_urls.remove(k))
+        .collect()
+}
+
+fn revoke_urls(urls: Vec<String>) {
+    for u in urls {
+        let _ = web_sys::Url::revoke_object_url(&u);
+    }
+}
+
 fn drop_vault(v: &str) {
-    with(|c| {
+    let urls = with(|c| {
         c.replicas.remove(v);
         c.vault_infos.remove(v);
         c.loaded.remove(v);
         c.outbox.remove(v);
+        take_attachment_urls(c, Some(v))
     });
+    revoke_urls(urls);
     let ui = ui();
     if ui.route.get_untracked().vault() == Some(v) {
         navigate(Route::Home);

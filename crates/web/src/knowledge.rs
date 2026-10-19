@@ -157,6 +157,12 @@ pub fn link_exists(vault: &str, target: &str) -> bool {
     })
 }
 
+/// Forget everything derived from decrypted notes (on sign-out).
+pub fn clear_caches() {
+    ANALYSIS.with(|a| a.borrow_mut().clear());
+    LINKS.with(|l| *l.borrow_mut() = None);
+}
+
 pub struct Backlink {
     pub id: String,
     pub path: String,

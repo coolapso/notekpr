@@ -704,7 +704,17 @@ async fn login(ctx: &Ctx, a: LoginArgs) -> Result<()> {
             insecure_http: a.insecure_http,
             dev_user: a.dev_user,
             device_name: a.device_name,
-            recovery_key: a.recovery_key,
+            recovery_key: match &a.recovery_key_file {
+                Some(f) => Some(
+                    std::fs::read_to_string(f)
+                        .with_context(|| format!("reading {}", f.display()))?
+                        .trim()
+                        .to_string(),
+                ),
+                None => std::env::var("COOLPSONOTES_RECOVERY_KEY")
+                    .ok()
+                    .filter(|k| !k.trim().is_empty()),
+            },
             interactive: true,
             approval_timeout: None,
         },
@@ -1711,6 +1721,7 @@ async fn agent(ctx: &Ctx, c: AgentCmd) -> Result<()> {
             agent,
             secret_out,
             keep_old,
+            yes,
         } => {
             let s = ctx.session()?;
             let a = resolve_agent(&s, &agent).await?;
@@ -1720,8 +1731,20 @@ async fn agent(ctx: &Ctx, c: AgentCmd) -> Result<()> {
                     secret_out.display()
                 );
             }
-            let c = manage::rotate_agent_secret(&s, &a.id, !keep_old).await?;
-            write_secret_file(&secret_out, &c.client_secret)?;
+            if !keep_old {
+                confirm_or_flag(
+                    yes,
+                    &format!(
+                        "Revoke the current credentials of '{}'? It stops working until `agent setup` runs again \
+                         with the new secret (use --keep-old to revoke later).",
+                        a.display_name
+                    ),
+                )?;
+            }
+            let c = manage::rotate_agent_secret(&s, &a.id, !keep_old, |c| {
+                write_secret_file(&secret_out, &c.client_secret)
+            })
+            .await?;
             println!(
                 "new client id: {}\nclient secret written to {}",
                 c.client_id,

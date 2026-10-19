@@ -194,9 +194,10 @@ tells you if some are still queued) and retried automatically.
 ## 5. Credential and key rotation
 
 * **Client secret**: `coolpsonotes agent rotate-secret <agent> --secret-out
-  new.secret` issues a new credential and revokes the old ones (their sessions
-  end immediately; `--keep-old` for a zero-downtime switch, then delete the old
-  one later). Re-run `agent setup` with the new client id and file — the
+  new.secret` issues a new credential, writes it to the file and then — after
+  asking, or with `--yes` — revokes the old ones (their sessions end
+  immediately; `--keep-old` for a zero-downtime switch, then delete the old
+  one later). If the file can't be written, nothing is revoked. Re-run `agent setup` with the new client id and file — the
   agent's key pair stays the same.
 * **Gateway token**: `coolpsonotes gateway token --rotate`, then restart the
   gateway.

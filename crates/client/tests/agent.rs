@@ -428,3 +428,41 @@ async fn gateway_streams_change_events() {
     assert!(!seen.contains("\"hi\""), "events must not carry content");
     watcher.stop().await;
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_rotated_secret_that_cannot_be_saved_revokes_nothing() {
+    let srv = start().await;
+    let alice = login(&srv, "alice").await;
+    let created = manage::create_agent(&alice, "helper").await.unwrap();
+    let id = created.agent.id.clone();
+    let live = |agents: Vec<coolpsonotes_core::protocol::AgentInfo>| {
+        agents
+            .into_iter()
+            .find(|a| a.id == id)
+            .unwrap()
+            .credentials
+            .into_iter()
+            .filter(|c| c.revoked_at.is_none())
+            .map(|c| c.client_id)
+            .collect::<Vec<_>>()
+    };
+    let before = live(manage::agents(&alice).await.unwrap());
+    assert_eq!(before.len(), 1);
+
+    let err = manage::rotate_agent_secret(&alice, &id, true, |_| anyhow::bail!("disk full"))
+        .await
+        .unwrap_err();
+    assert!(
+        format!("{err:#}").contains("old credentials still work"),
+        "{err:#}"
+    );
+    assert_eq!(live(manage::agents(&alice).await.unwrap()), before);
+
+    let new = manage::rotate_agent_secret(&alice, &id, true, |_| Ok(()))
+        .await
+        .unwrap();
+    assert_eq!(
+        live(manage::agents(&alice).await.unwrap()),
+        vec![new.client_id]
+    );
+}

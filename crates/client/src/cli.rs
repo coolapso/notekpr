@@ -204,9 +204,11 @@ pub struct LoginArgs {
     /// Name shown in your device list.
     #[arg(long)]
     pub device_name: Option<String>,
-    /// Unlock this device with your recovery key instead of approving it from another device.
-    #[arg(long, env = "COOLPSONOTES_RECOVERY_KEY", hide_env_values = true)]
-    pub recovery_key: Option<String>,
+    /// Unlock this device with your recovery key (read from this file) instead of
+    /// approving it from another device. Also COOLPSONOTES_RECOVERY_KEY, or type
+    /// it while waiting for approval. Never on the command line: shells keep history.
+    #[arg(long)]
+    pub recovery_key_file: Option<PathBuf>,
     /// Allow plain http:// to a non-local server (insecure).
     #[arg(long)]
     pub insecure_http: bool,
@@ -404,8 +406,12 @@ pub enum AgentCmd {
         agent: String,
         #[arg(long)]
         secret_out: PathBuf,
+        /// Keep the current credentials working (revoke them later).
         #[arg(long)]
         keep_old: bool,
+        /// Revoke the current credentials without asking.
+        #[arg(long)]
+        yes: bool,
     },
     /// Delete an agent, its memberships and sessions.
     Delete {

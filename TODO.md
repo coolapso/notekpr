@@ -320,11 +320,14 @@ Nobody's notes may be locked in because a server or an app is unavailable.
 - [ ] Revocation can be left half-done [C-M12] — retry/recovery hint, a CLI
       command to rotate a note key, exclude (don't abort on) members with a
       changed pin, handle purged shared notes.
-- [ ] `vault share`/`share-note` accept a single prefix match ("bob" →
-      "bobby") [C-M9].
-- [ ] `--recovery-key` on the command line ends up in shell history [C-L6].
-- [ ] `agent rotate-secret` revokes old credentials without confirmation
-      [C-L8].
+- [x] `vault share`/`share-note` accept a single prefix match ("bob" →
+      "bobby") [C-M9] — exact id, e-mail or name only; near matches are
+      suggested, never taken.
+- [x] `--recovery-key` on the command line ends up in shell history [C-L6]
+      (now `--recovery-key-file`, the environment variable or the prompt).
+- [x] `agent rotate-secret` revokes old credentials without confirmation
+      [C-L8] — asks (or `--yes`), and revokes only after the new secret is
+      saved.
 - [ ] CLI secrets in the OS keyring [C-H9]: `local.key` (Secret Service,
       Keychain, DPAPI; separate fallback location), session and gateway tokens.
 

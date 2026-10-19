@@ -100,3 +100,23 @@ async fn single_note_sharing_end_to_end() {
         Some("coast trip, just me\n")
     );
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn sharing_needs_an_exact_name_not_a_prefix() {
+    let srv = start().await;
+    let alice = login(&srv, "alice").await;
+    let _bobby = login(&srv, "bobby").await;
+    manage::create_vault(&alice, "Plans").await.unwrap();
+    let v = hub(&alice).await.resolve("Plans").await.unwrap();
+    // Only "bobby" exists: "bob" must not quietly pick them.
+    let err = manage::share(&alice, &v, "bob", Role::Editor, false)
+        .await
+        .err()
+        .expect("a prefix match is refused");
+    assert!(format!("{err:#}").contains("did you mean"), "{err:#}");
+    let _bob = login(&srv, "bob").await;
+    let shared = manage::share(&alice, &v, "bob", Role::Editor, false)
+        .await
+        .unwrap();
+    assert!(shared.user.display_name.eq_ignore_ascii_case("bob"));
+}

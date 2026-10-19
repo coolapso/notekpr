@@ -145,7 +145,8 @@ fn looks_like_id(s: &str) -> bool {
     s.len() >= 16 && s.bytes().all(|b| b.is_ascii_hexdigit() || b == b'-')
 }
 
-/// Find a user by id, exact e-mail or display name (prefix search).
+/// Find a user by id, exact e-mail or exact display name. A partial match is
+/// never taken: sharing with "bobby" when "bob" was meant hands over keys.
 pub async fn find_user(session: &Session, reference: &str) -> Result<PublicUser> {
     if looks_like_id(reference) {
         match session.api.user(reference).await {
@@ -165,20 +166,25 @@ pub async fn find_user(session: &Session, reference: &str) -> Result<PublicUser>
                 || u.id == reference
         })
         .collect();
-    match (exact.as_slice(), found.as_slice()) {
-        ([one], _) => Ok((*one).clone()),
-        (_, [one]) => Ok(one.clone()),
-        (_, []) => bail!("no user matches '{reference}'"),
-        _ => {
-            let list: Vec<String> = found
-                .iter()
-                .map(|u| format!("  {}  {} ({})", u.id, u.display_name, u.kind.as_str()))
-                .collect();
-            bail!(
-                "'{reference}' matches several users; use an id:\n{}",
-                list.join("\n")
-            )
-        }
+    let list = |users: &[&PublicUser]| {
+        users
+            .iter()
+            .map(|u| format!("  {}  {} ({})", u.id, u.display_name, u.kind.as_str()))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    match exact.as_slice() {
+        [one] => Ok((*one).clone()),
+        [] if found.is_empty() => bail!("no user matches '{reference}'"),
+        [] => bail!(
+            "no user is called exactly '{reference}'; did you mean one of these? Use the exact name, e-mail \
+             or id:\n{}",
+            list(&found.iter().collect::<Vec<_>>())
+        ),
+        several => bail!(
+            "'{reference}' matches several users; use an id:\n{}",
+            list(several)
+        ),
     }
 }
 
@@ -394,10 +400,15 @@ pub async fn delete_agent(session: &Session, agent_id: &str) -> Result<()> {
 }
 
 /// New client secret for an agent; optionally revoke the old credentials.
+/// Create a new credential for an agent, hand it to `save` (which must keep
+/// the secret, e.g. write it to a file), then revoke the old ones if asked.
+/// If `save` fails the new credential is revoked again and the old ones stay,
+/// so the agent is never left without a working secret.
 pub async fn rotate_agent_secret(
     session: &Session,
     agent_id: &str,
     revoke_old: bool,
+    save: impl FnOnce(&CreatedCredential) -> Result<()>,
 ) -> Result<CreatedCredential> {
     let before = agents(session).await?;
     let old: Vec<String> = before
@@ -416,6 +427,16 @@ pub async fn rotate_agent_secret(
             &serde_json::json!({}),
         )
         .await?;
+    if let Err(e) = save(&created) {
+        let _ = session
+            .api
+            .delete(&format!(
+                "/agents/{agent_id}/credentials/{}",
+                created.client_id
+            ))
+            .await;
+        return Err(e.context("the new secret could not be saved; the old credentials still work"));
+    }
     if revoke_old {
         for c in old {
             session

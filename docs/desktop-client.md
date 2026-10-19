@@ -113,9 +113,10 @@ and approve only if it shows this verification code:
 
 Approve it from another device — `coolpsonotes devices approve <id>` shows the
 same code and asks for confirmation (`--yes` skips the prompt) — or type your
-recovery key at the prompt (or pass `--recovery-key`, or set
+recovery key at the prompt (or pass `--recovery-key-file FILE`, or set
 `COOLPSONOTES_RECOVERY_KEY`) to unlock the account and approve the device
-yourself. If you interrupt the wait, run `login` again: it resumes with the
+yourself. The key is never accepted as a command-line argument, which shells
+keep in their history. If you interrupt the wait, run `login` again: it resumes with the
 same pending device.
 
 Comparing the codes defeats a server that substitutes its own device key: the

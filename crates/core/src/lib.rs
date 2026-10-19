@@ -9,6 +9,7 @@ pub mod doc;
 pub mod engine;
 pub mod keys;
 pub mod markdown;
+pub mod memberlog;
 pub mod paths;
 pub mod protocol;
 pub mod recover;

@@ -163,7 +163,20 @@ vault-relative, `.md` is optional for notes.
 
 Every command first catches up with the server (REST) and uploads queued
 changes; read commands fall back to the local copy when the server is
-unreachable. `--json` gives machine-readable output for listings, `-q`
+unreachable.
+
+**One process per profile.** Only one coolpsonotes process at a time may own
+a profile's local copies (two would overwrite each other's files and lose
+queued or received changes). While `sync` or `gateway` runs, read commands
+(`ls`, `cat`, `search`, `backlinks`, `status`, `export`, `history`, `trash
+list`, `vault list`) show that process's local copies read-only — it keeps
+them current — and commands that change something (`write`, `mv`, `rm`,
+`mkdir`, `import`, `vault …`, `sync --once`, …) wait up to 3 seconds for
+another one-shot command and then stop with "profile … is in use by another
+coolpsonotes process": edit the mirrored files or use the gateway instead, or
+stop the daemon. A second `sync` or `gateway` on the same profile refuses to
+start. (Use separate profiles for a mirror and a gateway at the same time.)
+The lock is released automatically when a process ends, also after a crash. `--json` gives machine-readable output for listings, `-q`
 silences status lines. Status and warnings go to stderr, results to stdout.
 
 Revisions: a note gets a revision when an editing session ends (after a CLI

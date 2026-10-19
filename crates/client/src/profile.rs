@@ -282,10 +282,39 @@ impl ProfileStore {
             .with_context(|| format!("saving profile '{}'", self.name))
     }
 
-    /// Read-modify-write, re-reading the file first so concurrent processes
-    /// (a running sync daemon and a one-off command) do not drop each other's changes.
+    /// Held (briefly) around every read-modify-write of the profile file, so
+    /// concurrent processes (a running sync daemon pinning a key, a login
+    /// renewing the session) never drop each other's changes.
+    fn edit_lock(&self) -> Result<std::fs::File> {
+        fsutil::create_private_dir(&self.dirs.profiles_dir())?;
+        let f = lock_file(
+            &self
+                .dirs
+                .profiles_dir()
+                .join(format!(".{}.json.lock", self.name)),
+        )?;
+        f.lock().context("locking the profile file")?;
+        Ok(f)
+    }
+
+    /// Read-modify-write under the profile's edit lock, re-reading the file
+    /// first.
     pub fn update<R>(&self, f: impl FnOnce(&mut Profile) -> R) -> Result<R> {
+        let _lock = self.edit_lock()?;
         let mut p = self.require()?;
+        let r = f(&mut p);
+        self.save(&p)?;
+        Ok(r)
+    }
+
+    /// [`ProfileStore::update`], creating the profile with `new` if needed.
+    pub fn upsert<R>(
+        &self,
+        new: impl FnOnce() -> Profile,
+        f: impl FnOnce(&mut Profile) -> R,
+    ) -> Result<R> {
+        let _lock = self.edit_lock()?;
+        let mut p = self.load()?.unwrap_or_else(new);
         let r = f(&mut p);
         self.save(&p)?;
         Ok(r)
@@ -296,6 +325,67 @@ impl ProfileStore {
             Ok(()) => Ok(()),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
             Err(e) => Err(e.into()),
+        }
+    }
+}
+
+fn lock_file(path: &Path) -> Result<std::fs::File> {
+    let mut o = std::fs::OpenOptions::new();
+    o.create(true).truncate(false).write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        o.mode(0o600);
+    }
+    o.open(path)
+        .with_context(|| format!("opening {}", path.display()))
+}
+
+/// Exclusive use of a profile's local data (replicas, mirror bookkeeping)
+/// by one process. Two processes each holding a replica in memory would
+/// overwrite each other's files — a queued edit or a received update could
+/// be lost. The lock is released when the value is dropped or the process
+/// ends (also on a crash).
+pub struct ProfileLock {
+    _file: std::fs::File,
+}
+
+impl ProfileLock {
+    fn path(dirs: &Dirs, profile: &str) -> PathBuf {
+        dirs.profiles_dir().join(format!(".{profile}.lock"))
+    }
+
+    /// Take the lock if no other process holds it.
+    pub fn try_acquire(dirs: &Dirs, profile: &str) -> Result<Option<ProfileLock>> {
+        if !valid_profile_name(profile) {
+            bail!("invalid profile name '{profile}'");
+        }
+        fsutil::create_private_dir(&dirs.profiles_dir())?;
+        let f = lock_file(&Self::path(dirs, profile))?;
+        match f.try_lock() {
+            Ok(()) => Ok(Some(ProfileLock { _file: f })),
+            Err(std::fs::TryLockError::WouldBlock) => Ok(None),
+            Err(std::fs::TryLockError::Error(e)) => {
+                Err(e).context("locking the profile's local data")
+            }
+        }
+    }
+
+    /// Take the lock, waiting up to `wait` for another process to release it.
+    pub async fn acquire_within(
+        dirs: &Dirs,
+        profile: &str,
+        wait: std::time::Duration,
+    ) -> Result<Option<ProfileLock>> {
+        let deadline = std::time::Instant::now() + wait;
+        loop {
+            if let Some(l) = Self::try_acquire(dirs, profile)? {
+                return Ok(Some(l));
+            }
+            if std::time::Instant::now() >= deadline {
+                return Ok(None);
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         }
     }
 }
@@ -401,6 +491,43 @@ mod tests {
         assert_eq!(dirs.profiles(), vec!["alice".to_string()]);
         assert!(!crate::fsutil::is_shared_readable(&ps.path()));
         assert!(ProfileStore::new(&dirs, "../x").is_err());
+    }
+
+    #[test]
+    fn one_process_at_a_time_owns_a_profile() {
+        let d = tempfile::tempdir().unwrap();
+        let dirs = Dirs::under(d.path());
+        let first = ProfileLock::try_acquire(&dirs, "alice").unwrap();
+        assert!(first.is_some());
+        // (flock conflicts between separate opens, also within one process.)
+        assert!(ProfileLock::try_acquire(&dirs, "alice").unwrap().is_none());
+        assert!(ProfileLock::try_acquire(&dirs, "bob").unwrap().is_some());
+        drop(first);
+        assert!(ProfileLock::try_acquire(&dirs, "alice").unwrap().is_some());
+    }
+
+    #[test]
+    fn concurrent_profile_edits_are_not_lost() {
+        let d = tempfile::tempdir().unwrap();
+        let dirs = Dirs::under(d.path());
+        let ps = ProfileStore::new(&dirs, "alice").unwrap();
+        ps.save(&Profile::new("https://x", PrincipalKind::Human, false))
+            .unwrap();
+        let threads: Vec<_> = (0..8)
+            .map(|t| {
+                let ps = ps.clone();
+                std::thread::spawn(move || {
+                    for i in 0..20 {
+                        ps.update(|p| p.pins.insert(format!("{t}-{i}"), "F".into()))
+                            .unwrap();
+                    }
+                })
+            })
+            .collect();
+        for t in threads {
+            t.join().unwrap();
+        }
+        assert_eq!(ps.require().unwrap().pins.len(), 160);
     }
 
     #[test]

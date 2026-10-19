@@ -106,12 +106,9 @@ reload on change pick up remote edits cleanly.
   folder by itself. See
   [desktop-client.md §7](desktop-client.md#7-conflicts-duplicates-deletes-and-renames)
   for confirming a deliberate mass deletion.
+* **CLI commands while the daemon runs:** reading ones (`cat`, `ls`,
+  `search`, …) work and show the daemon's copies; changing ones (`write`,
+  `mv`, …) are refused while it owns the profile — edit the files instead.
+  Details:
+  [desktop-client.md §3](desktop-client.md#3-everyday-commands).
 * **Phones and tablets:** there is no mobile client yet; use the web app.
-
-## Known limitations (being fixed)
-
-Until these are fixed (tracked in [TODO.md](../TODO.md), "Markdown mirror
-safety"), be careful with:
-
-* **Running one-off commands (`coolpsonotes write …`) while the daemon runs** —
-  use the files or the web app instead.

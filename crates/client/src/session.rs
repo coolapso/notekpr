@@ -559,7 +559,9 @@ impl Session {
             .await?;
         let v = vault.lock().await;
         let pt = v.replica.decrypt_attachment(attachment_id, &ct)?;
-        v.store().save_blob(attachment_id, &ct)?;
+        if !v.is_detached() {
+            v.store().save_blob(attachment_id, &ct)?;
+        }
         Ok(pt)
     }
 

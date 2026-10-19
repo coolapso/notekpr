@@ -101,3 +101,62 @@ async fn a_missing_remembered_mirror_directory_is_not_recreated() {
         "plan\n"
     );
 }
+
+/// Every file below `dir` with its content.
+fn files(dir: &std::path::Path) -> std::collections::BTreeMap<std::path::PathBuf, Vec<u8>> {
+    walkdir::WalkDir::new(dir)
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().is_file())
+        .map(|e| (e.path().to_path_buf(), std::fs::read(e.path()).unwrap()))
+        .collect()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn commands_do_not_overwrite_a_running_daemons_local_copies() {
+    use coolpsonotes_client::profile::ProfileLock;
+    let srv = start().await;
+    login(&srv, "alice").await;
+    run(&srv, "alice", &["vault", "create", "Home"])
+        .await
+        .unwrap();
+    run(&srv, "alice", &["mkdir", "Home", "Projects"])
+        .await
+        .unwrap();
+
+    // A sync daemon (or the gateway) owns the profile.
+    let daemon = ProfileLock::try_acquire(&srv.dirs("alice"), "alice")
+        .unwrap()
+        .expect("free");
+    // Changing commands are refused, with a clear message.
+    let err = run(&srv, "alice", &["mkdir", "Home", "Ideas"])
+        .await
+        .unwrap_err();
+    assert!(
+        format!("{err:#}").contains("in use by another coolpsonotes process"),
+        "{err:#}"
+    );
+    // A second daemon is refused right away.
+    let err = run(&srv, "alice", &["sync"]).await.unwrap_err();
+    assert!(format!("{err:#}").contains("in use"), "{err:#}");
+    // Reading works on the daemon's local copies, which are left untouched.
+    let data = srv.dirs("alice").profile_data("alice");
+    let before = files(&data);
+    run(&srv, "alice", &["ls", "Home"]).await.unwrap();
+    run(&srv, "alice", &["status"]).await.unwrap();
+    assert_eq!(files(&data), before, "a read-only view writes nothing");
+
+    drop(daemon);
+    run(&srv, "alice", &["mkdir", "Home", "Ideas"])
+        .await
+        .unwrap();
+    let h = hub(&reopen(&srv, "alice", "alice").await).await;
+    assert!(
+        h.resolve("Home")
+            .await
+            .unwrap()
+            .lock()
+            .await
+            .is_folder("Ideas")
+    );
+}

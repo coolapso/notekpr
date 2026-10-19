@@ -49,6 +49,9 @@ pub struct HubOptions {
     pub offline_ok: bool,
     /// Catch up over REST and push pending changes while starting.
     pub catch_up: bool,
+    /// Another process owns this profile's local data (a running sync
+    /// daemon): only read the local copies — no network sync, no writes.
+    pub detached: bool,
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -99,7 +102,7 @@ impl Hub {
             vaults: RwLock::new(BTreeMap::new()),
             allow: opts.vaults.clone(),
             allowed: RwLock::new(None),
-            read_only: opts.read_only,
+            read_only: opts.read_only || opts.detached,
             events,
             push_locks: Default::default(),
             online: AtomicBool::new(false),
@@ -119,6 +122,22 @@ impl Hub {
     }
 
     async fn load(&self, opts: &HubOptions) -> Result<()> {
+        if opts.detached {
+            for id in self.session.local_vault_ids() {
+                match self.session.load_local(&id) {
+                    Ok(Some(mut v)) => {
+                        v.detach();
+                        self.vaults
+                            .write()
+                            .unwrap()
+                            .insert(id, Arc::new(Mutex::new(v)));
+                    }
+                    Ok(None) => {}
+                    Err(e) => ui::warn(&format!("{e:#}")),
+                }
+            }
+            return self.apply_allow_list();
+        }
         match self.session.api.vaults().await {
             Ok(list) => {
                 self.online.store(true, Ordering::Relaxed);

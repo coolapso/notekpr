@@ -22,7 +22,7 @@ use crate::manage;
 use crate::mirror::{Mirror, MirrorOptions};
 use crate::note_shares;
 use crate::ops;
-use crate::profile::{Dirs, ProfileStore};
+use crate::profile::{Dirs, ProfileLock, ProfileStore};
 use crate::session::Session;
 use crate::vault::ListKind;
 use crate::{livesync, transfer, ui};
@@ -31,6 +31,9 @@ pub struct Ctx {
     pub dirs: Dirs,
     pub profile: String,
     pub json: bool,
+    /// Another process (a sync daemon, the gateway) owns this profile's
+    /// local data: read its local copies, never write them.
+    pub detached: bool,
 }
 
 impl Ctx {
@@ -42,19 +45,113 @@ impl Ctx {
         Ok(Arc::new(Session::open(&self.dirs, &self.profile)?))
     }
 
-    /// A hub for one-shot commands: catches up and pushes the given vaults.
+    /// A hub for one-shot commands: catches up and pushes the given vaults
+    /// (or, detached, only reads the local copies).
     async fn hub(&self, vaults: &[&str]) -> Result<Arc<Hub>> {
         let opts = HubOptions {
             vaults: vaults.iter().map(|s| s.to_string()).collect(),
             read_only: false,
             offline_ok: true,
-            catch_up: true,
+            catch_up: !self.detached,
+            detached: self.detached,
         };
         Hub::start(self.session()?, opts).await
     }
 
     fn print_json(&self, v: &impl Serialize) {
         println!("{}", serde_json::to_string_pretty(v).unwrap_or_default());
+    }
+}
+
+/// How a command uses the profile's local data (see [`ProfileLock`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Access {
+    /// Only the server and the profile file.
+    Free,
+    /// Reads local copies: if a daemon owns them, read them without syncing.
+    Read,
+    /// Changes local copies: needs the lock (waits briefly for it).
+    Write,
+    /// Owns the local copies while running (sync, gateway).
+    Daemon,
+}
+
+fn access(c: &Command) -> Access {
+    match c {
+        Command::Login(_)
+        | Command::Profiles
+        | Command::Devices(_)
+        | Command::Recovery(_)
+        | Command::Shared(_)
+        | Command::Agent(_) => Access::Free,
+        Command::Logout { forget, .. } => {
+            if *forget {
+                Access::Write
+            } else {
+                Access::Free
+            }
+        }
+        Command::Status
+        | Command::Ls { .. }
+        | Command::Cat { .. }
+        | Command::Search { .. }
+        | Command::Backlinks { .. }
+        | Command::Export { .. }
+        | Command::NoteShares { .. }
+        | Command::Trash(TrashCmd::List { .. })
+        | Command::Vault(VaultCmd::List) => Access::Read,
+        Command::History(h) => match h.cmd {
+            Some(HistoryCmd::Restore { .. }) => Access::Write,
+            _ => Access::Read,
+        },
+        Command::Sync(a) if a.no_dir => Access::Free,
+        Command::Sync(a) if a.once => Access::Write,
+        Command::Sync(_) => Access::Daemon,
+        Command::Gateway(a) if matches!(a.cmd, Some(GatewayCmd::Token { .. })) => Access::Free,
+        Command::Gateway(_) => Access::Daemon,
+        _ => Access::Write,
+    }
+}
+
+/// How long a one-shot command waits for another one to finish.
+const LOCK_WAIT: Duration = Duration::from_secs(3);
+
+/// Take the profile lock the command needs. Returns the guard (held until
+/// the command ends) and whether to work detached (read-only view).
+async fn lock_profile(
+    dirs: &Dirs,
+    profile: &str,
+    access: Access,
+) -> Result<(Option<ProfileLock>, bool)> {
+    let in_use = || {
+        anyhow!(
+            "profile '{profile}' is in use by another coolpsonotes process (a running `sync` daemon or \
+             `gateway`); two processes would overwrite each other's local copies. Edit the mirrored files or use \
+             the gateway instead, or stop that process and try again"
+        )
+    };
+    match access {
+        Access::Free => Ok((None, false)),
+        Access::Daemon => match ProfileLock::try_acquire(dirs, profile)? {
+            Some(l) => Ok((Some(l), false)),
+            None => Err(in_use()),
+        },
+        // Reading never waits: the owner keeps the local copies current.
+        Access::Read => match ProfileLock::try_acquire(dirs, profile)? {
+            Some(l) => Ok((Some(l), false)),
+            None => {
+                ui::status(
+                    "another coolpsonotes process (sync daemon or gateway) keeps this profile in sync; showing its \
+                     local copies (read-only)",
+                );
+                Ok((None, true))
+            }
+        },
+        // Another one-shot command usually finishes within moments.
+        Access::Write => match ProfileLock::acquire_within(dirs, profile, LOCK_WAIT).await? {
+            Some(l) => Ok((Some(l), false)),
+            None => Err(in_use()),
+        },
     }
 }
 
@@ -79,10 +176,13 @@ pub async fn run(cli: Cli) -> Result<()> {
 /// [`run`] with explicit configuration and data roots (tests).
 pub async fn run_in(cli: Cli, dirs: Dirs) -> Result<()> {
     ui::set_quiet(cli.quiet);
+    // Held until the command returns; released by the OS on exit or crash.
+    let (_lock, detached) = lock_profile(&dirs, &cli.profile, access(&cli.command)).await?;
     let ctx = Ctx {
         dirs,
         profile: cli.profile.clone(),
         json: cli.json,
+        detached,
     };
     match cli.command {
         Command::Login(a) => login(&ctx, a).await,
@@ -456,6 +556,7 @@ async fn status(ctx: &Ctx) -> Result<()> {
                 s.clone(),
                 HubOptions {
                     offline_ok: true,
+                    detached: ctx.detached,
                     ..Default::default()
                 },
             )
@@ -498,6 +599,7 @@ async fn status(ctx: &Ctx) -> Result<()> {
         session.clone(),
         HubOptions {
             offline_ok: true,
+            detached: ctx.detached,
             ..Default::default()
         },
     )
@@ -1161,6 +1263,7 @@ async fn sync(ctx: &Ctx, a: SyncArgs) -> Result<()> {
             read_only: false,
             offline_ok: true,
             catch_up: true,
+            detached: false,
         },
     )
     .await?;
@@ -1474,6 +1577,7 @@ async fn gateway_cmd(ctx: &Ctx, a: GatewayArgs) -> Result<()> {
             read_only: a.read_only,
             offline_ok: true,
             catch_up: true,
+            detached: false,
         },
     )
     .await?;

@@ -196,15 +196,21 @@ pub async fn login(dirs: &Dirs, profile: &str, opts: LoginOptions) -> Result<Log
                 .replace(|c: char| !c.is_ascii_alphanumeric(), "-")
         );
     }
-    let mut p =
-        existing.unwrap_or_else(|| Profile::new(&server, PrincipalKind::Human, opts.insecure_http));
-    p.server = server.clone();
-    p.insecure_http |= opts.insecure_http;
-    p.session_token = Some(token.clone());
-    p.session_expires_at = Some(expires_at);
-    p.user_id = Some(user.id.clone());
-    p.display_name = Some(user.display_name.clone());
-    ps.save(&p)?;
+    // Read-modify-write (the authentication above can take minutes; a
+    // running daemon may have changed the profile meanwhile).
+    let insecure = opts.insecure_http;
+    let mut p = ps.upsert(
+        || Profile::new(&server, PrincipalKind::Human, insecure),
+        |p| {
+            p.server = server.clone();
+            p.insecure_http |= insecure;
+            p.session_token = Some(token.clone());
+            p.session_expires_at = Some(expires_at);
+            p.user_id = Some(user.id.clone());
+            p.display_name = Some(user.display_name.clone());
+            p.clone()
+        },
+    )?;
 
     let api = Api::new(&server, Credentials::Session(token))?;
     let secrets = SecretStore::open(&ps.data_dir())?;
@@ -607,19 +613,22 @@ pub async fn agent_setup(
         }
     };
     secrets.save_account(&agent_id, &account)?;
-    let mut p =
-        existing.unwrap_or_else(|| Profile::new(&server, PrincipalKind::Agent, opts.insecure_http));
-    p.kind = PrincipalKind::Agent;
-    p.server = server;
-    p.insecure_http |= opts.insecure_http;
-    p.user_id = Some(agent_id.clone());
-    p.display_name = Some(me.user.display_name.clone());
-    p.session_token = None;
-    p.agent = Some(AgentCredentials {
-        client_id: opts.client_id,
-        client_secret_file: secret_file,
-    });
-    ps.save(&p)?;
+    let insecure = opts.insecure_http;
+    ps.upsert(
+        || Profile::new(&server, PrincipalKind::Agent, insecure),
+        |p| {
+            p.kind = PrincipalKind::Agent;
+            p.server = server.clone();
+            p.insecure_http |= insecure;
+            p.user_id = Some(agent_id.clone());
+            p.display_name = Some(me.user.display_name.clone());
+            p.session_token = None;
+            p.agent = Some(AgentCredentials {
+                client_id: opts.client_id.clone(),
+                client_secret_file: secret_file.clone(),
+            });
+        },
+    )?;
     Ok(AgentOutcome {
         agent_id,
         display_name: me.user.display_name,

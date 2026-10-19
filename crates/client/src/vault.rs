@@ -83,6 +83,7 @@ pub struct Vault {
     dirty_state: bool,
     dirty_pending: bool,
     dirty_quarantine: bool,
+    detached: bool,
 }
 
 /// Update budget for the server's default limit.
@@ -161,6 +162,7 @@ impl Vault {
             dirty_state: true,
             dirty_pending: true,
             dirty_quarantine: false,
+            detached: false,
         }
     }
 
@@ -279,6 +281,7 @@ impl Vault {
             dirty_state: false,
             dirty_pending: false,
             dirty_quarantine: false,
+            detached: false,
         }))
     }
 
@@ -309,9 +312,19 @@ impl Vault {
         self.dirty_state = true;
     }
 
+    /// Never write this copy back: another process owns the profile's files
+    /// (see `profile::ProfileLock`); this one only reads them.
+    pub fn detach(&mut self) {
+        self.detached = true;
+    }
+
+    pub fn is_detached(&self) -> bool {
+        self.detached
+    }
+
     /// Persist everything that changed (pending first, then objects, then state).
     pub fn save(&mut self) -> Result<()> {
-        if !self.is_dirty() {
+        if !self.is_dirty() || self.detached {
             return Ok(());
         }
         // Quarantine first: an update moved there is never in neither file.

@@ -109,9 +109,13 @@ async fn export_user(
             db::migrate(&pool, &path).await?;
         }
         let id = find_user(&pool, user).await?;
-        let export = coolpsonotes_server::export::user_export(&pool, &id)
-            .await
-            .map_err(|e| anyhow::anyhow!("{e:?}"))?;
+        let export = coolpsonotes_server::export::user_export(
+            &pool,
+            &coolpsonotes_server::blobs::Blobs::Sqlite(pool.clone()),
+            &id,
+        )
+        .await
+        .map_err(|e| anyhow::anyhow!("{e:?}"))?;
         let json = serde_json::to_vec(&export)?;
         write_private(out, &json)?;
         println!(

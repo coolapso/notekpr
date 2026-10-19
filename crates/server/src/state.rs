@@ -21,6 +21,7 @@ pub struct Inner {
     /// guarantees subscribers see each vault's log in sequence order.
     pub write_lock: tokio::sync::Mutex<()>,
     pub oidc: Option<Oidc>,
+    pub blobs: crate::blobs::Blobs,
     pub limiters: Limiters,
     pub metrics: Option<PrometheusHandle>,
 }
@@ -29,10 +30,12 @@ impl AppState {
     pub fn new(db: Db, config: Config, metrics: Option<PrometheusHandle>) -> anyhow::Result<Self> {
         let oidc = Oidc::from_config(&config)?;
         let limiters = Limiters::new(&config);
+        let blobs = crate::blobs::Blobs::Sqlite(db.clone());
         Ok(AppState(Arc::new(Inner {
             db,
             config,
             hub: Hub::new(),
+            blobs,
             write_lock: tokio::sync::Mutex::new(()),
             oidc,
             limiters,

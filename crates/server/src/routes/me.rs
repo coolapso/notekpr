@@ -26,7 +26,7 @@ pub async fn export(
     who: Principal,
 ) -> AppResult<Json<coolpsonotes_core::protocol::EncryptedExport>> {
     Ok(Json(
-        crate::export::user_export(&state.db, &who.user_id).await?,
+        crate::export::user_export(&state.db, &state.blobs, &who.user_id).await?,
     ))
 }
 

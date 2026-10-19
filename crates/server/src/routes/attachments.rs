@@ -8,8 +8,9 @@ use axum::response::{IntoResponse, Response};
 
 use crate::access;
 use crate::auth::Principal;
+use crate::blobs::Stored;
 use crate::db;
-use crate::error::{AppError, AppResult, bad, conflict};
+use crate::error::{AppError, AppResult, bad};
 use crate::state::AppState;
 
 pub async fn put(
@@ -29,32 +30,9 @@ pub async fn put(
     }
     access::require_writer(&state.db, &v, &who.user_id).await?;
     let _w = state.write_lock.lock().await;
-    let r = sqlx::query("INSERT INTO attachments (vault_id, id, size, author_id, data, created_at) VALUES (?, ?, ?, ?, ?, ?)")
-        .bind(&v)
-        .bind(&id)
-        .bind(body.len() as i64)
-        .bind(&who.user_id)
-        .bind(body.as_ref())
-        .bind(db::now())
-        .execute(&state.db)
-        .await;
-    match r {
-        // Attachments are immutable; re-uploading the same id is a no-op retry.
-        Err(sqlx::Error::Database(e)) if e.is_unique_violation() => {
-            let size: i64 =
-                sqlx::query_scalar("SELECT size FROM attachments WHERE vault_id = ? AND id = ?")
-                    .bind(&v)
-                    .bind(&id)
-                    .fetch_one(&state.db)
-                    .await?;
-            if size == body.len() as i64 {
-                Ok(StatusCode::OK)
-            } else {
-                Err(conflict("attachment id already used"))
-            }
-        }
-        r => {
-            r?;
+    match state.blobs.put(&v, &id, &who.user_id, &body).await? {
+        Stored::AlreadyThere => Ok(StatusCode::OK),
+        Stored::Created => {
             metrics::counter!("coolpsonotes_attachment_bytes_total").increment(body.len() as u64);
             Ok(StatusCode::CREATED)
         }
@@ -67,13 +45,7 @@ pub async fn get(
     Path((v, id)): Path<(String, String)>,
 ) -> AppResult<Response> {
     access::member_role(&state.db, &v, &who.user_id).await?;
-    let data: Vec<u8> =
-        sqlx::query_scalar("SELECT data FROM attachments WHERE vault_id = ? AND id = ?")
-            .bind(&v)
-            .bind(&id)
-            .fetch_optional(&state.db)
-            .await?
-            .ok_or(AppError::NotFound)?;
+    let data = state.blobs.get(&v, &id).await?;
     let mut resp = data.into_response();
     let h = resp.headers_mut();
     h.insert(
@@ -97,14 +69,6 @@ pub async fn delete(
     Path((v, id)): Path<(String, String)>,
 ) -> AppResult<StatusCode> {
     access::require_writer(&state.db, &v, &who.user_id).await?;
-    let n = sqlx::query("DELETE FROM attachments WHERE vault_id = ? AND id = ?")
-        .bind(&v)
-        .bind(&id)
-        .execute(&state.db)
-        .await?
-        .rows_affected();
-    if n == 0 {
-        return Err(AppError::NotFound);
-    }
+    state.blobs.delete(&v, &id).await?;
     Ok(StatusCode::NO_CONTENT)
 }

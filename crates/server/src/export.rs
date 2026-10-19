@@ -46,7 +46,11 @@ async fn full_log(
 
 /// Export for one user: their vaults (as a member) and the notes shared with
 /// them individually.
-pub async fn user_export(db: &Db, user_id: &str) -> AppResult<EncryptedExport> {
+pub async fn user_export(
+    db: &Db,
+    blobs: &crate::blobs::Blobs,
+    user_id: &str,
+) -> AppResult<EncryptedExport> {
     let recovery_envelope: Option<Vec<u8>> =
         sqlx::query_scalar("SELECT recovery_envelope FROM account_keys WHERE user_id = ?")
             .bind(user_id)
@@ -63,17 +67,12 @@ pub async fn user_export(db: &Db, user_id: &str) -> AppResult<EncryptedExport> {
     let mut vaults_out = Vec::with_capacity(memberships.len());
     for m in memberships {
         let vault_id: String = m.get("vault_id");
-        let attachments =
-            sqlx::query("SELECT id, data FROM attachments WHERE vault_id = ? ORDER BY id")
-                .bind(&vault_id)
-                .fetch_all(db)
-                .await?
-                .iter()
-                .map(|r| ExportedAttachment {
-                    id: r.get("id"),
-                    data: r.get("data"),
-                })
-                .collect();
+        let attachments = blobs
+            .all(&vault_id)
+            .await?
+            .into_iter()
+            .map(|(id, data)| ExportedAttachment { id, data })
+            .collect();
         vaults_out.push(ExportedVault {
             role: Role::parse(m.get("role")).unwrap_or(Role::Viewer),
             encrypted_meta: m.get("encrypted_meta"),

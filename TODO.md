@@ -367,12 +367,14 @@ every client verifies; updates are signed by the author's key.
 Lay the foundation now while it is cheap — only the parts that pay off even
 with SQLite; no SQL-dialect abstraction.
 
-- [ ] Per-vault write locks (or `BEGIN IMMEDIATE` per vault transaction)
-      instead of the server-wide `write_lock` — one busy vault no longer
-      stalls everyone.
-- [ ] Attachments behind a blob-store interface, filesystem by default —
-      smaller database, faster backups; S3-compatible later for hosted
-      instances.
+- [ ] ~~Per-vault write locks instead of the server-wide `write_lock`~~ —
+      looked into and deferred: SQLite has a single writer, so vault
+      transactions queue at the database anyway and per-vault locks would only
+      parallelize the checks before them. Revisit if profiling shows
+      contention (or with a different store).
+- [x] Attachments behind a blob-store interface (`crates/server/src/blobs.rs`).
+      SQLite stays the store for now (one-file backups); a directory or
+      S3-compatible store can be added as a variant for hosted instances.
 - [ ] Event fan-out (`hub.rs`) behind an interface — enables more than one
       process per instance later.
 - [ ] Queries behind a small repository layer — testability, one place for

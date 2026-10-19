@@ -58,9 +58,12 @@ docker compose -f docker-compose.dev.yml up --build
 ## Run it for real
 
 ```sh
-cp .env.example .env     # your domain and OIDC client (Authelia, Keycloak, Authentik, …)
-docker compose up -d     # coolpsonotes + Caddy with automatic HTTPS
+cp .env.example .env         # your domain and OIDC client (Authelia, Keycloak, Authentik, …)
+docker compose up -d --build # coolpsonotes + Caddy with automatic HTTPS
 ```
+
+On a home network without public DNS, or behind a proxy you already run, see
+the setups in [docs/operations.md](docs/operations.md#1-choose-a-setup).
 
 See [docs/operations.md](docs/operations.md) for configuration, identity
 provider setup, reverse proxies, Kubernetes, backups, upgrades and monitoring.

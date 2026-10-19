@@ -1,0 +1,9 @@
+# Run coolpsonotes without the bundled Caddy, behind a reverse proxy you
+# already have: publishes the server on 127.0.0.1:8080 only.
+#   docker compose -f docker-compose.yml -f deploy/compose.local-port.yml up -d coolpsonotes
+# Your proxy terminates TLS for PUBLIC_HOST and forwards to 127.0.0.1:8080
+# (WebSockets included); see docs/operations.md, "Reverse proxy".
+services:
+  coolpsonotes:
+    ports:
+      - "127.0.0.1:8080:8080"

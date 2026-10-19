@@ -32,7 +32,7 @@ services:
     environment:
       PUBLIC_HOST: ${PUBLIC_HOST}
     volumes:
-      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./${CADDYFILE:-deploy/Caddyfile}:/etc/caddy/Caddyfile:ro
       - caddy-data:/data
       - caddy-config:/config
     depends_on:

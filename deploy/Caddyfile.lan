@@ -1,0 +1,11 @@
+# LAN / homelab: HTTPS with Caddy's own certificate authority, so no public
+# DNS name or open ports are needed. Devices must trust Caddy's root
+# certificate once (see docs/operations.md, "On your home network").
+# Use it with CADDYFILE=deploy/Caddyfile.lan in .env.
+{$PUBLIC_HOST} {
+	tls internal
+	encode zstd gzip
+	@metrics path /metrics /metrics/*
+	respond @metrics 404
+	reverse_proxy coolpsonotes:8080
+}

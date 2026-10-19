@@ -12,6 +12,10 @@ read anything.
   merging (CRDTs), also after working offline.
 * **Plain Markdown** — wiki links, backlinks, tags, embeds, export to a
   folder of `.md` files at any time.
+* **Quick notes** — capture a thought in a second (`Ctrl+Alt+Q`, a capture
+  box that works on phones, or `coolpsonotes quick …`), sort it out later:
+  promote it to a regular note or archive it. They are plain notes in a
+  `Quick notes/` folder.
 * **Use your own editor** — the desktop client keeps your vaults as a plain
   folder of Markdown files, synced live and both ways: edit with Obsidian,
   Neovim, VS Code or anything else while the server only stores ciphertext

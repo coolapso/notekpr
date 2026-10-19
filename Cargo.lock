@@ -800,7 +800,10 @@ name = "coolpsonotes-editor"
 version = "0.1.0"
 dependencies = [
  "coolpsonotes-core",
+ "js-sys",
  "proptest",
+ "wasm-bindgen",
+ "web-sys",
 ]
 
 [[package]]

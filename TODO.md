@@ -66,12 +66,12 @@ in it.
       `core/src/markdown.rs:274` slices a `&str` mid-character; a link like
       `[x](50%増.md)` crashes the editor and reading view for everyone. Decode
       on bytes.
-- [ ] **Formatting shortcuts panic next to multibyte text** [W-H3 ✔] —
+- [x] **Formatting shortcuts panic next to multibyte text** [W-H3 ✔] —
       `web/src/editor/mod.rs:825`; use `text.get(..)`.
-- [ ] **IME commit double-borrows the editor state** [W-H1 ✔] —
+- [x] **IME commit double-borrows the editor state** [W-H1 ✔] —
       `web/src/editor/mod.rs:1256`; take `pending_remote` before `set_text`.
       Otherwise the editor dies and typing is silently lost.
-- [ ] Vim visual-mode anchor not clamped after remote edits shrink the text
+- [x] Vim visual-mode anchor not clamped after remote edits shrink the text
       [W-L1] — `web/src/editor/vim.rs:247`.
 - [x] **Per-note WebSocket subscriptions survive removal from the vault**
       [S-H2] — `server/src/ws.rs` `RevokeVault` only drops `(v, None)`. Drop
@@ -82,12 +82,12 @@ in it.
       `set_key`. (R2 removes the first-share snapshot; this is cheap now.)
 - [x] **OIDC login CSRF** [S-M6] — bind `state` to the browser with an
       HttpOnly SameSite=Lax nonce cookie (`server/src/routes/auth.rs`).
-- [ ] Links in the live editor open any URL scheme [W-L4] — reuse
+- [x] Links in the live editor open any URL scheme [W-L4] — reuse
       `render::safe_external` in `NoteHost::open_link`.
-- [ ] Attachments open as top-level `blob:` documents in the app's origin
+- [x] Attachments open as top-level `blob:` documents in the app's origin
       (SVG/HTML could run as the app) [W-M2] — download non-raster types or
       serve them as `application/octet-stream`; add `noopener`.
-- [ ] Clear decrypted caches (`ANALYSIS`, `LINKS`) and revoke attachment blob
+- [x] Clear decrypted caches (`ANALYSIS`, `LINKS`) and revoke attachment blob
       URLs on sign-out [W-L5, part].
 
 ### Deployment configuration
@@ -199,34 +199,35 @@ Before trusting the Markdown mirror and the CLI with real notes.
 
 ### Sync robustness in both clients (interim — R1 then owns them)
 
-- [ ] **Oversized changes block syncing forever** [W-H5, C-H5] — chunk pushes
+- [x] **Oversized changes block syncing forever** [W-H5, C-H5] — chunk pushes
       by bytes (`max_update_bytes` from `/info`, cached offline), refuse or
       split oversized edits and imports, quarantine a rejected item and keep
       going, show the error.
+      (web done: size-bounded pushes, refused oversized edits, held-back updates, errors shown; CLI part pending)
 - [x] A snapshot can claim to cover updates still waiting for a key
       [S-M2, W-L9] — fix once in core (`snapshot_request`,
       `compaction_candidates`): no snapshot while deferred items touch the
       object.
 - [x] Past `MAX_DEFERRED`, updates are dropped while `seq` advances [C-L11]
       (core).
-- [ ] **IME composition is applied against a stale text base** [W-H2] —
+- [x] **IME composition is applied against a stale text base** [W-H2] —
       interim: in `NoteHost::edit`, resync instead of applying when the CRDT
       text differs from the editor's base (prevents misplaced text and
       panics). Real fix in R6.
-- [ ] A rejected batch leaves the rest of its updates unsent [W-M3] —
+- [x] A rejected batch leaves the rest of its updates unsent [W-M3] —
       `resend_pending` after `drop_rejected` and `apply_purge`.
-- [ ] `persist_pending` writes an empty list if one entry fails to encrypt
+- [x] `persist_pending` writes an empty list if one entry fails to encrypt
       [W-L9]; a key reload already in progress swallows the next request
       [W-L9].
 - [ ] `missing_epoch` misreads document-key epochs, so every page refetches
       keys [C-L10].
-- [ ] An uploaded file's link can land in a different note [W-M11].
-- [ ] Every DOM resync turns non-breaking spaces into spaces [W-M5].
-- [ ] Remote edits scroll the view back to the caret [W-M7].
-- [ ] Ticking a task in reading view edits the first `[ ]` of the line [W-L6].
-- [ ] Sign-out doesn't flush; add "forget this browser" (device secret stays
+- [x] An uploaded file's link can land in a different note [W-M11].
+- [x] Every DOM resync turns non-breaking spaces into spaces [W-M5].
+- [x] Remote edits scroll the view back to the caret [W-M7].
+- [x] Ticking a task in reading view edits the first `[ ]` of the line [W-L6].
+- [x] Sign-out doesn't flush; add "forget this browser" (device secret stays
       in localStorage) [W-L10].
-- [ ] Zip import has no size limit (zip bomb); export lacks zip64 [W-L8].
+- [x] Zip import has no size limit (zip bomb); export lacks zip64 [W-L8].
 
 ---
 
@@ -289,6 +290,13 @@ Nobody's notes may be locked in because a server or an app is unavailable.
       recipients even in exact-e-mail directory mode.
       (e-mail no longer shared; vault head_seq and member ids remain until R2)
 - [x] Store `email_verified`; only verified e-mails are searchable [S-L9].
+- [ ] `push` rejects a whole batch on the first bad update (too large, purged
+      note): accept the rest or name the failing update, so clients can set
+      exactly that one aside.
+- [ ] If the account-key upload succeeded but its response was lost and the
+      page reloaded, the recovery key is never shown (a new one can be made in
+      Settings → Security). Store the bootstrap until confirmed, or let the
+      server report it.
 - [ ] Gateway audit log misses moves and deletes (only `put_document` and
       `put_attachment` are recorded).
 - [ ] Note-key rotation skips the trust-on-first-use pin check [C-M7]

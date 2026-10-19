@@ -68,7 +68,8 @@ crates/server   axum + SQLite. routes/ (REST) · ws.rs (WebSocket, subscriptions
                 sync.rs (encrypted log, snapshots, key checks) · access.rs (who may
                 do what) · hub.rs (pub/sub) · auth.rs, oidc.rs · migrations/
 crates/web      Leptos CSR → wasm32. state/ (Core + Ui in mod.rs; session, vaults,
-                shares, sync, presence, prefs, nav) · cache.rs (IndexedDB copy) ·
+                shares, sync, presence, prefs, nav, offline) · cache.rs (IndexedDB
+                copy) · static/sw.js (service worker, only with offline use on) ·
                 actions.rs (user operations) · editor/ (contenteditable live-preview
                 editor, syntax.rs, vim.rs) · views/ · render.rs (reading view)
 crates/client   `coolpsonotes` CLI: session.rs + livesync.rs (sync), mirror.rs

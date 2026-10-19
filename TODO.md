@@ -20,7 +20,8 @@ phase has an *interim* fix and the track owns the real one.
 Phases 1–3 are done, and Phase 4 except the OS keyring for CLI secrets
 [C-H9] (deferred) and partial acceptance of rejected push
 batches (left to R1). Redesign tracks: R5 mostly (encrypted IndexedDB copy,
-per-tab unsent changes; offline start open), R6 started (`state/` split),
+per-tab unsent changes, opt-in offline start; shared notes not cached yet),
+R6 started (`state/` split),
 R7 done apart from a nightly fuzz job. R1, R2 and R3 are next, each in its
 own session.
 
@@ -442,8 +443,10 @@ with SQLite; no SQL-dialect abstraction.
       stored per page load now; a later load takes over what closed tabs
       left (the server ignores updates it already has) and removes their
       keys once everything is stored under its own (e2e `test_offline_tabs`).
-- [ ] Start without the network (needs the session and device key check to
-      work offline), offline reading.
+- [x] Start without the network, opt-in per browser ("Keep this browser
+      usable offline", Settings → Devices; decided 2026-10-19): stored keys +
+      service worker for the app files; normal checks when back online
+      (`state/offline.rs`, e2e `test_offline_start`).
 - Resolves: slow start and full re-download on every page load [W-L12];
   pending edits of two tabs overwriting each other [W-M4]; quadratic offline
   pending queue and silent localStorage quota failures [W-M9]; offline reading.

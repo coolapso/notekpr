@@ -53,7 +53,8 @@ CA). The CLI uses the operating system's trust store, so it works once the
 root is installed there.
 
 Plain `http://` on a LAN is possible but not recommended: browsers restrict
-some features to secure origins (copying the recovery key to the clipboard),
+some features to secure origins (copying the recovery key to the clipboard,
+"Keep this browser usable offline", which needs a service worker),
 the CLI refuses plain HTTP to non-local servers unless `--insecure-http`, and
 sessions travel unencrypted.
 

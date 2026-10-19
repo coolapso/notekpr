@@ -38,6 +38,7 @@ features = [
   "CompositionEvent", "ResizeObserver", "VisibilityState", "PopStateEvent", "AbortController", "AbortSignal",
   "IdbFactory", "IdbDatabase", "IdbObjectStore", "IdbRequest", "IdbOpenDbRequest", "IdbTransaction",
   "IdbTransactionMode", "IdbKeyRange", "DomStringList", "DomException",
+  "ServiceWorkerContainer", "ServiceWorkerRegistration", "CacheStorage",
 ]
 
 [dev-dependencies]

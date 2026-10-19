@@ -16,6 +16,10 @@ pub async fn refresh_vaults() {
     };
     let ids: BTreeSet<String> = infos.iter().map(|v| v.id.clone()).collect();
     crate::cache::prune(&ids);
+    offline::note(|b| {
+        b.vaults = infos.clone();
+        b.keys.retain(|k, _| ids.contains(k));
+    });
     let removed: Vec<String> = with(|c| {
         c.replicas
             .iter()
@@ -33,7 +37,7 @@ pub async fn refresh_vaults() {
 
 /// Load (or refresh) one vault's keys and metadata.
 pub async fn load_vault(info: VaultInfo) {
-    load_vault_with(info, false).await
+    load_vault_with(info, false, None).await
 }
 
 /// Reload a vault's keys, e.g. after a note in it got its own key.
@@ -43,7 +47,7 @@ pub async fn reload_vault_keys(vault_id: String) {
     }
     loop {
         if let Ok(info) = api::get::<VaultInfo>(&format!("/vaults/{vault_id}")).await {
-            load_vault_with(info, true).await;
+            load_vault_with(info, true, None).await;
             publish_vaults();
         }
         if !with(|c| c.reload_again.remove(&vault_id)) {
@@ -68,7 +72,8 @@ pub(super) async fn begin_reload(tag: &str) -> bool {
     false
 }
 
-pub(super) async fn load_vault_with(info: VaultInfo, force: bool) {
+/// Load a vault's keys (fetched, or `keys` from the offline data) and metadata.
+pub(super) async fn load_vault_with(info: VaultInfo, force: bool, keys: Option<VaultKeysResponse>) {
     let (needs_keys, uid) = with(|c| {
         let needs = match c.replicas.get(&info.id) {
             None => true,
@@ -83,12 +88,20 @@ pub(super) async fn load_vault_with(info: VaultInfo, force: bool) {
         } else {
             None
         };
-        let keys: VaultKeysResponse = match api::get(&format!("/vaults/{id}/keys")).await {
-            Ok(k) => k,
-            Err(e) => {
-                with(|c| c.vault_errors.insert(id.clone(), e.message.clone()));
-                return;
-            }
+        let keys: VaultKeysResponse = match keys {
+            Some(k) => k,
+            None => match api::get::<VaultKeysResponse>(&format!("/vaults/{id}/keys")).await {
+                Ok(k) => {
+                    offline::note(|b| {
+                        b.keys.insert(id.clone(), k.clone());
+                    });
+                    k
+                }
+                Err(e) => {
+                    with(|c| c.vault_errors.insert(id.clone(), e.message.clone()));
+                    return;
+                }
+            },
         };
         let ring = with(|c| {
             c.account

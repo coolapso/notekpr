@@ -105,7 +105,7 @@
           <li><strong>The first key you see is trusted.</strong> A malicious server could hand out a wrong key the first time you share with someone. Comparing fingerprints catches this. A signed membership log that removes this trust is planned.</li>
           <li><strong>Metadata is visible.</strong> The server knows who shares with whom, sizes and timing, as listed above.</li>
           <li><strong>Plain text on disk is your choice.</strong> The Markdown folder is ordinary files; protect your computer with full-disk encryption.</li>
-          <li><strong>Browsers are browsers.</strong> In the web app your device key and an encrypted copy of your vaults live in the browser profile, as safe as that profile. "Forget this browser" removes both.</li>
+          <li><strong>Browsers are browsers.</strong> In the web app your device key and an encrypted copy of your vaults live in the browser profile, as safe as that profile. "Forget this browser" removes both. If you turn on offline use for a browser, it also keeps the keys to open that copy, so a copy of the profile can be read without the server; it is off unless you choose it.</li>
         </ul>
         <p>The full threat model, with what each attacker can and can't do, is in <a href="https://github.com/coolapso/coolpsonotes/blob/dev/docs/security.md">docs/security.md</a>.</p>
       </div>

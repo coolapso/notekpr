@@ -8,6 +8,11 @@ pub(super) async fn load_prefs() {
     let Ok(blob) = api::get::<PrefsBlob>("/me/prefs").await else {
         return;
     };
+    offline::note(|b| b.prefs = Some(blob.clone()));
+    apply_prefs(&blob);
+}
+
+pub(super) fn apply_prefs(blob: &PrefsBlob) {
     with(|c| {
         c.prefs_version = blob.version;
         if let (Some(ct), Some(acct)) = (&blob.ciphertext, &c.account)

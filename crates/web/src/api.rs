@@ -35,6 +35,12 @@ impl Error {
     pub fn is_offline(&self) -> bool {
         self.status == 0
     }
+
+    /// The server can't be used right now: no network, or a proxy answering
+    /// for a server that is down.
+    pub fn is_unreachable(&self) -> bool {
+        self.status == 0 || matches!(self.status, 502..=504)
+    }
 }
 
 impl std::fmt::Display for Error {

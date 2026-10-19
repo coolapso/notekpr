@@ -399,6 +399,9 @@ pub struct Core {
     pub storage_warned_at: i64,
     /// Keys of a first-device setup whose upload failed, reused on retry.
     pub setup: Option<engine::AccountBootstrap>,
+    /// Started from this browser's offline data; the normal checks run when
+    /// the server is reachable again (`offline::finish_online`).
+    pub offline_start: bool,
 }
 
 impl Core {
@@ -422,6 +425,7 @@ impl Core {
 }
 
 mod nav;
+mod offline;
 mod prefs;
 mod presence;
 mod session;
@@ -430,6 +434,10 @@ mod sync;
 mod vaults;
 
 pub use nav::*;
+pub use offline::{
+    disable as disable_offline, enable as enable_offline, enabled as offline_enabled,
+    supported as offline_supported,
+};
 pub use prefs::*;
 pub use presence::*;
 pub use session::*;

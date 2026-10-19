@@ -71,6 +71,9 @@ pub(super) fn on_server_message(m: ServerMessage) {
                 subscribe_share(&v, &n);
             }
             send_presence();
+            if with(|c| std::mem::take(&mut c.offline_start)) {
+                leptos::task::spawn_local(offline::finish_online());
+            }
         }
         ServerMessage::Changes { vault_id, changes } => {
             let res = with(|c| {

@@ -154,6 +154,15 @@ deleted when access ends, when a vault
 disappears from the account's list, and by "Forget this browser"
 (`crates/web/src/cache.rs`).
 
+**Offline start (browser, opt-in).** Normally the browser asks the server for
+its wrapped account key and the vault keys at every start. With "Keep this
+browser usable offline" (Settings → Devices) it also stores those and a
+service worker keeps the app's files, so when the server can't be reached the
+app opens from the local copy and edits are queued. Once the socket connects
+again, the normal checks run first (session, device still on the account),
+then everything is refreshed. The trade-off is in [security.md](security.md)
+(`crates/web/src/state/offline.rs`, `crates/web/static/sw.js`).
+
 **Compaction and history.** A writer that has seen many updates for an object
 uploads an encrypted full-state snapshot covering a sequence number. The server
 prunes only updates covered by the *previous* snapshot, so one generation of

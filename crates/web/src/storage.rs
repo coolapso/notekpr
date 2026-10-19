@@ -7,6 +7,8 @@
 //!   Anyone with access to this browser profile can use it, as with any web
 //!   app holding keys; rely on OS account security and disk encryption.
 //! * Unsent updates: `localStorage`, already encrypted with the vault key.
+//! * Only with "Keep this browser usable offline": what starting without the
+//!   server needs (see `state::offline`), `localStorage`.
 
 use coolpsonotes_core::protocol::PushUpdate;
 use serde::{Deserialize, Serialize};
@@ -205,7 +207,12 @@ pub fn forget_user(user_id: &str) {
     clear_token();
     clear_pending_recovery(user_id);
     let Some(s) = local() else { return };
-    let exact = [device_key(user_id), format!("cpn.last.{user_id}")];
+    let exact = [
+        device_key(user_id),
+        format!("cpn.last.{user_id}"),
+        offline_flag(user_id),
+        offline_data_key(user_id),
+    ];
     let prefixes = [
         format!("cpn.pending.{user_id}."),
         format!("cpn.head.{user_id}."),
@@ -218,6 +225,50 @@ pub fn forget_user(user_id: &str) {
     for k in keys {
         let _ = s.remove_item(&k);
     }
+}
+
+fn offline_flag(user_id: &str) -> String {
+    format!("cpn.offline.on.{user_id}")
+}
+
+fn offline_data_key(user_id: &str) -> String {
+    format!("cpn.offline.data.{user_id}")
+}
+
+/// Whether the person turned on "Keep this browser usable offline" here.
+pub fn offline_enabled(user_id: &str) -> bool {
+    get(local(), &offline_flag(user_id)).is_some()
+}
+
+pub fn set_offline_enabled(user_id: &str, on: bool) {
+    if on {
+        set(local(), &offline_flag(user_id), "1");
+    } else {
+        remove(local(), &offline_flag(user_id));
+    }
+}
+
+pub fn offline_data(user_id: &str) -> Option<String> {
+    get(local(), &offline_data_key(user_id))
+}
+
+pub fn set_offline_data(user_id: &str, json: &str) -> Result<(), String> {
+    try_set(local(), &offline_data_key(user_id), json)
+}
+
+pub fn remove_offline_data(user_id: &str) {
+    remove(local(), &offline_data_key(user_id));
+}
+
+/// The stored offline data of every account that has some in this browser.
+pub fn all_offline_data() -> Vec<String> {
+    let Some(s) = local() else { return vec![] };
+    let n = s.length().unwrap_or(0);
+    let keys: Vec<String> = (0..n)
+        .filter_map(|i| s.key(i).ok().flatten())
+        .filter(|k| k.starts_with("cpn.offline.data."))
+        .collect();
+    keys.iter().filter_map(|k| get(local(), k)).collect()
 }
 
 fn head_key(user_id: &str, vault_id: &str) -> String {

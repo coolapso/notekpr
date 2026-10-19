@@ -150,9 +150,57 @@ fn Devices() -> impl IntoView {
                 }
             }).collect_view()}
         </div>
+        <OfflineSetting/>
         <h3>"Add the desktop app"</h3>
         <p class="muted small">"Install the coolpsonotes command-line client and run " <code>{format!("coolpsonotes login --server {}", util::window().location().origin().unwrap_or_default())}</code>
             ". It will show a code to confirm here, then ask this device to approve it."</p>
+    }
+}
+
+/// "Keep this browser usable offline" (see `state::offline`).
+#[component]
+fn OfflineSetting() -> impl IntoView {
+    let on = RwSignal::new(state::offline_enabled());
+    let busy = RwSignal::new(false);
+    let supported = state::offline_supported();
+    let toggle = move |want: bool| {
+        if want
+            && !util::confirm(
+                "Keep what's needed to decrypt your notes in this browser? Anyone with a copy of this browser's data could then read your notes without the server, even after you remove this device. Only do this on your own computer with disk encryption.",
+            )
+        {
+            on.set(false);
+            return;
+        }
+        busy.set(true);
+        leptos::task::spawn_local(async move {
+            if want {
+                match state::enable_offline().await {
+                    Ok(()) => state::success("This browser now works without the server."),
+                    Err(e) => {
+                        on.set(false);
+                        state::error(format!("Could not turn on offline use: {e}"));
+                    }
+                }
+            } else {
+                state::disable_offline().await;
+                state::info("The offline data was removed from this browser.");
+            }
+            busy.set(false);
+        });
+    };
+    view! {
+        <h3>"Use without the server"</h3>
+        <label class="check">
+            <input type="checkbox" class="offline-toggle" prop:checked=move || on.get() disabled=move || busy.get() || !supported
+                on:change=move |ev| { let want = event_target_checked(&ev); on.set(want); toggle(want); }/>
+            " Keep this browser usable offline"
+        </label>
+        <p class="muted small">
+            "Opens and edits your notes from this browser's copy when the server can't be reached; changes sync when it is back. "
+            "This keeps the keys to your notes in this browser: anyone with a copy of its data could read them, even after you remove this device. Use it only on your own computer, with disk encryption."
+        </p>
+        {(!supported).then(|| view! { <p class="muted small">"Needs the app to be served over HTTPS."</p> })}
     }
 }
 

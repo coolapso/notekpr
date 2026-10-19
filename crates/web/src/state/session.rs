@@ -39,12 +39,22 @@ pub async fn boot() {
     api::on_unauthorized(|| {
         let ui = self::ui();
         if ui.phase.get_untracked() != (Phase::SignedOut { error: None }) {
+            // The stored offline data holds this dead session's token.
+            offline::signed_out(&with(|c| c.user_id.clone()));
             sign_out_local(Some("Your session ended. Please sign in again.".into()));
         }
     });
     match api::get::<ServerInfo>("/info").await {
         Ok(i) => ui.server.set(Some(i)),
         Err(e) => {
+            if e.is_unreachable()
+                && let Some(t) = storage::token()
+                && let Some(b) = offline::for_token(&t)
+            {
+                api::set_token(Some(t));
+                offline::start(b).await;
+                return;
+            }
             ui.phase
                 .set(Phase::Fatal(format!("Cannot reach the server: {e}")));
             return;
@@ -148,6 +158,12 @@ pub async fn after_login() {
             return;
         }
         Err(e) => {
+            if e.is_unreachable()
+                && let Some(b) = storage::token().and_then(|t| offline::for_token(&t))
+            {
+                offline::start(b).await;
+                return;
+            }
             ui.phase
                 .set(Phase::Fatal(format!("Cannot load your account: {e}")));
             return;
@@ -158,7 +174,13 @@ pub async fn after_login() {
     let has_key = me.account_key.is_some();
     with(|c| {
         c.user_id = uid.clone();
-        c.me = Some(me);
+        c.me = Some(me.clone());
+    });
+    let server = ui.server.get_untracked();
+    offline::note(|b| {
+        b.me = Some(me);
+        b.token = storage::token().unwrap_or_default();
+        b.server = server;
     });
     if !has_key {
         ui.phase.set(Phase::Setup);
@@ -188,7 +210,10 @@ pub async fn after_login() {
             }
             // Only the server's explicit answer: a 404 from a misrouted proxy
             // must never delete the device key.
-            Err(e) if e.status == 404 && e.code == "device_revoked" => storage::clear_device(&uid),
+            Err(e) if e.status == 404 && e.code == "device_revoked" => {
+                offline::forget(&uid).await;
+                storage::clear_device(&uid);
+            }
             Err(e) => {
                 ui.phase
                     .set(Phase::Fatal(format!("Cannot check this device: {e}")));
@@ -260,6 +285,10 @@ pub(super) fn unlock_with_device(uid: &str, rec: &DeviceRecord, envelope: &[u8])
         r.pin(&expected);
         storage::set_device(uid, &r);
     }
+    offline::note(|b| {
+        b.device_id = rec.device_id.clone();
+        b.envelope = envelope.to_vec();
+    });
     with(|c| {
         c.account = Some(acct);
         c.device_id = Some(rec.device_id.clone());
@@ -541,6 +570,8 @@ pub fn sign_out_local(error: Option<String>) {
 pub async fn sign_out() {
     flush_now();
     let _ = api::post_empty::<()>("/auth/logout").await;
+    let uid = with(|c| c.user_id.clone());
+    offline::signed_out(&uid);
     sign_out_local(None);
 }
 
@@ -591,6 +622,7 @@ pub async fn forget_browser() {
     }
     sign_out_local(None);
     // After signing out, which stores unsent changes.
+    offline::forget(&uid).await;
     storage::forget_user(&uid);
     crate::cache::forget_user(&uid).await;
     if removed {
@@ -613,22 +645,30 @@ pub(super) async fn enter_ready() {
     refresh_shares().await;
     connect_socket();
     ui.phase.set(Phase::Ready);
-    if matches!(ui.route.get_untracked(), Route::Home) {
-        let uid = with(|c| c.user_id.clone());
-        if let Some(last) = storage::last_location(&uid) {
-            let r = Route::parse(&last, "");
-            let known = match &r {
-                Route::Shared(v, n) => with(|c| c.shares.contains_key(&(v.clone(), n.clone()))),
-                _ => r
-                    .vault()
-                    .is_some_and(|v| with(|c| c.replicas.get(v).is_some_and(|x| x.member))),
-            };
-            if known {
-                navigate_replace(r);
-            }
+    go_to_last_location();
+    refresh_pending_devices().await;
+    offline::ensure_worker().await;
+}
+
+/// On the home page after a start: go back to where this person last was.
+pub(super) fn go_to_last_location() {
+    let ui = ui();
+    if !matches!(ui.route.get_untracked(), Route::Home) {
+        return;
+    }
+    let uid = with(|c| c.user_id.clone());
+    if let Some(last) = storage::last_location(&uid) {
+        let r = Route::parse(&last, "");
+        let known = match &r {
+            Route::Shared(v, n) => with(|c| c.shares.contains_key(&(v.clone(), n.clone()))),
+            _ => r
+                .vault()
+                .is_some_and(|v| with(|c| c.replicas.get(v).is_some_and(|x| x.member))),
+        };
+        if known {
+            navigate_replace(r);
         }
     }
-    refresh_pending_devices().await;
 }
 
 // ------------------------------------------------------------------ devices

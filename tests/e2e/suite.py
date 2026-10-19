@@ -828,7 +828,49 @@ def test_offline_tabs(env):
         b.close()
 
 
-TESTS = [test_onboarding, test_collab, test_devices_and_recovery, test_features, test_attachments, test_note_sharing, test_tables, test_editor_safety, test_local_copy, test_ui_basics, test_offline_tabs, test_mobile]
+def test_offline_start(env):
+    b = Browser()
+    try:
+        signup(b, uniq("otto"))
+        new_note(b, "Trip", "pack the tent")
+        note_url = b.js("return location.href")
+        time.sleep(3)  # the local copy is written
+        b.go(env.url + "settings/devices")
+        b.find(".offline-toggle", 15)
+        b.js("window.confirm = () => true")
+        b.click(".offline-toggle")
+        b.wait("return !!navigator.serviceWorker.controller && Object.keys(localStorage).some(k => k.startsWith('cpn.offline.data.'))", 20,
+               "the offline setting to take effect")
+        check(True, "offline use can be turned on")
+        env.stop_server()
+        b.go(note_url)
+        b.wait("return document.querySelector('.ed') && document.querySelector('.ed').textContent.includes('pack the tent')", 30,
+               "the note without the server")
+        check(True, "the app starts and shows notes without the server")
+        end = "const ed=document.querySelector('.ed'); ed.focus(); const s=getSelection(); s.selectAllChildren(ed); s.collapseToEnd();"
+        b.js(end)
+        b.keys(" and a stove")
+        time.sleep(1)
+        check(b.js("return Object.keys(localStorage).some(k => k.startsWith('cpn.pending.'))"), "offline edits are kept")
+        env.start_server()
+        b.wait("return Object.keys(localStorage).filter(k => k.startsWith('cpn.pending.')).length === 0", 60, "the edit to sync")
+        check(True, "edits made after an offline start sync when the server is back")
+        b.go(note_url)
+        b.wait("return document.querySelector('.ed') && document.querySelector('.ed').textContent.includes('and a stove')", 20, "the synced note")
+        b.go(env.url + "settings/devices")
+        b.find(".offline-toggle", 15)
+        check(b.js("return document.querySelector('.offline-toggle').checked"), "the setting shows as on")
+        b.click(".offline-toggle")
+        b.js("window.__regs = null; navigator.serviceWorker.getRegistrations().then(r => window.__regs = r.length)")
+        b.wait("return !Object.keys(localStorage).some(k => k.startsWith('cpn.offline.')) && window.__regs !== null", 20, "the offline data to go")
+        b.wait("navigator.serviceWorker.getRegistrations().then(r => window.__regs = r.length); return window.__regs === 0", 20, "the app copy to go")
+        check(True, "turning it off removes the stored keys and the app copy")
+        check(not severe_logs(b), "no browser errors")
+    finally:
+        b.close()
+
+
+TESTS = [test_onboarding, test_collab, test_devices_and_recovery, test_features, test_attachments, test_note_sharing, test_tables, test_editor_safety, test_local_copy, test_ui_basics, test_offline_tabs, test_offline_start, test_mobile]
 
 
 def main():

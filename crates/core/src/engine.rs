@@ -577,6 +577,10 @@ pub struct VaultReplica {
     pub member: bool,
     /// Received items waiting for a key we don't have yet.
     pub deferred: Vec<Deferred>,
+    /// Updates that could not even be deferred (queue full), by sequence
+    /// number. `seq` never moves past the first of them, so the next catch-up
+    /// fetches them again instead of skipping them for good.
+    pub dropped: BTreeMap<i64, String>,
 }
 
 impl VaultReplica {
@@ -596,6 +600,7 @@ impl VaultReplica {
             doc_keys: HashMap::new(),
             member: true,
             deferred: Vec::new(),
+            dropped: BTreeMap::new(),
         }
     }
 
@@ -673,10 +678,33 @@ impl VaultReplica {
         Ok(a)
     }
 
-    fn defer(&mut self, d: Deferred) {
+    /// Keep content we can't decrypt yet; false if there is no room.
+    fn defer(&mut self, d: Deferred) -> bool {
         if self.deferred.len() < MAX_DEFERRED {
             self.deferred.push(d);
+            true
+        } else {
+            false
         }
+    }
+
+    /// Move the sequence cursor forward, but never past an update that was
+    /// dropped because it couldn't be kept (see [`VaultReplica::dropped`]).
+    fn advance(&mut self, seq: i64) {
+        self.seq = self.seq.max(seq);
+        if let Some((&first, _)) = self.dropped.first_key_value() {
+            self.seq = self.seq.min(first - 1);
+        }
+    }
+
+    /// Whether some content of this object is still waiting for a key; its
+    /// local state then lacks changes that `seq` already counts.
+    fn object_incomplete(&self, object_id: &str) -> bool {
+        self.dropped.values().any(|o| o == object_id)
+            || self.deferred.iter().any(|d| match d {
+                Deferred::Update(u) => u.object_id == object_id,
+                Deferred::Snapshot(s) => s.object_id == object_id,
+            })
     }
 
     pub fn apply_snapshot(&mut self, s: &Snapshot) -> Result<Applied> {
@@ -698,16 +726,18 @@ impl VaultReplica {
     /// out-of-order delivery can never drop content. Updates we cannot read
     /// yet are deferred (see [`Deferred`]).
     pub fn apply_update(&mut self, u: &Update) -> Result<Applied> {
-        self.seq = self.seq.max(u.seq);
         let plain = match self.decrypt_object(Purpose::Update, &u.object_id, &u.payload) {
             Ok(p) => p,
             Err(e) => {
-                if missing_key(&e) {
-                    self.defer(Deferred::Update(u.clone()));
+                if missing_key(&e) && !self.defer(Deferred::Update(u.clone())) {
+                    self.dropped.insert(u.seq, u.object_id.clone());
                 }
+                self.advance(u.seq);
                 return Err(e);
             }
         };
+        self.dropped.remove(&u.seq);
+        self.advance(u.seq);
         let a = self.apply_plain(&u.object_id, &plain)?;
         *self.since_snapshot.entry(u.object_id.clone()).or_default() += 1;
         Ok(a)
@@ -741,7 +771,8 @@ impl VaultReplica {
         self.since_snapshot.remove(object_id);
         self.pending.retain(|p| p.object_id != object_id);
         self.purged.insert(object_id.to_string());
-        self.seq = self.seq.max(seq);
+        self.dropped.retain(|_, o| o != object_id);
+        self.advance(seq);
         let mut a = Applied::default();
         a.purged.insert(object_id.to_string());
         a
@@ -767,7 +798,7 @@ impl VaultReplica {
         for p in &ch.purged {
             all.merge(self.apply_purge(&p.object_id, p.seq));
         }
-        self.seq = self.seq.max(ch.next_since.min(ch.head_seq));
+        self.advance(ch.next_since.min(ch.head_seq));
         self.observe_head(ch.head_seq);
         (all, errors)
     }
@@ -783,7 +814,7 @@ impl VaultReplica {
     /// The server delivered everything up to `head` (WebSocket `synced`).
     pub fn synced(&mut self, head: i64) -> bool {
         let rb = self.observe_head(head);
-        self.seq = self.seq.max(head);
+        self.advance(head);
         rb
     }
 
@@ -831,7 +862,7 @@ impl VaultReplica {
                 *self.since_snapshot.entry(p.object_id).or_default() += 1;
             }
             if in_order {
-                self.seq = self.seq.max(r.seq);
+                self.advance(r.seq);
             }
         }
     }
@@ -846,14 +877,24 @@ impl VaultReplica {
         self.since_snapshot
             .iter()
             .filter(|(o, n)| {
-                **n >= COMPACT_AFTER && !self.pending.iter().any(|p| &p.object_id == *o)
+                **n >= COMPACT_AFTER
+                    && !self.pending.iter().any(|p| &p.object_id == *o)
+                    && !self.object_incomplete(o)
             })
             .map(|(o, _)| o.clone())
             .collect()
     }
 
     /// Encrypted snapshot of an object's full state covering `self.seq`.
+    /// Refused while some of the object's content waits for a key: the
+    /// snapshot would claim to cover changes it doesn't contain, and the
+    /// server would then drop them.
     pub fn snapshot_request(&self, object_id: &str) -> Result<CreateSnapshotRequest> {
+        if self.object_incomplete(object_id) {
+            return Err(EngineError::Invalid(
+                "some changes of this note are still waiting for a key".into(),
+            ));
+        }
         let state = if object_id == INDEX_OBJECT_ID {
             self.index.encode_state()
         } else {
@@ -1179,6 +1220,92 @@ mod tests {
         assert_eq!(cring.epochs().count(), 2);
         assert!(cring.decrypt(Purpose::Update, "n", &p.payload).is_ok());
         assert!(cring.decrypt(Purpose::Update, "n", &p2.payload).is_ok());
+    }
+
+    #[test]
+    fn no_snapshot_covers_content_waiting_for_a_key() {
+        let alice = AccountSecret::generate();
+        let (_, ring) = new_vault(&alice, "alice", &VaultMeta::named("V")).unwrap();
+        let mut a = VaultReplica::new(
+            ring.vault_id(),
+            Role::Owner,
+            ring.clone(),
+            VaultMeta::default(),
+        );
+        let mut b = VaultReplica::new(
+            ring.vault_id(),
+            Role::Editor,
+            ring.clone(),
+            VaultMeta::default(),
+        );
+        let base = a
+            .notes
+            .entry("n".into())
+            .or_default()
+            .set_text("one")
+            .unwrap();
+        let p0 = a.local_change("n", base).unwrap();
+        let up = |seq, payload| Update {
+            object_id: "n".into(),
+            seq,
+            author_id: "a".into(),
+            payload,
+            created_at: 0,
+        };
+        b.apply_update(&up(1, p0.payload)).unwrap();
+        let (doc, _) = start_sharing(&ring, "n", "N", &a.notes["n"].encode_state(), 1).unwrap();
+        a.doc_keys.insert("n".into(), doc.clone());
+        let u2 = a.notes.get("n").unwrap().set_text("one two").unwrap();
+        let p1 = a.local_change("n", u2).unwrap();
+        assert!(b.apply_update(&up(2, p1.payload)).is_err());
+        b.since_snapshot.insert("n".into(), COMPACT_AFTER);
+        // Bob's state lacks update 2 although his seq counts it.
+        assert!(b.snapshot_request("n").is_err());
+        assert!(!b.compaction_candidates().contains(&"n".to_string()));
+        b.doc_keys.insert("n".into(), doc);
+        b.retry_deferred();
+        assert!(b.snapshot_request("n").is_ok());
+    }
+
+    #[test]
+    fn updates_that_cannot_be_kept_are_fetched_again() {
+        let alice = AccountSecret::generate();
+        let (_, ring) = new_vault(&alice, "alice", &VaultMeta::named("V")).unwrap();
+        let mut a = VaultReplica::new(
+            ring.vault_id(),
+            Role::Owner,
+            ring.clone(),
+            VaultMeta::default(),
+        );
+        let mut b = VaultReplica::new(
+            ring.vault_id(),
+            Role::Editor,
+            ring.clone(),
+            VaultMeta::default(),
+        );
+        let (doc, _) = start_sharing(&ring, "n", "N", &[], 0).unwrap();
+        a.doc_keys.insert("n".into(), doc);
+        let note = a.notes.entry("n".into()).or_default();
+        let u = note.set_text("x").unwrap();
+        let p = a.local_change("n", u).unwrap();
+        let up = |seq: i64| Update {
+            object_id: "n".into(),
+            seq,
+            author_id: "a".into(),
+            payload: p.payload.clone(),
+            created_at: 0,
+        };
+        // Fill the deferral queue, then one more update can't be kept.
+        for seq in 1..=MAX_DEFERRED as i64 {
+            assert!(b.apply_update(&up(seq)).is_err());
+        }
+        assert_eq!(b.seq, MAX_DEFERRED as i64);
+        let first_dropped = MAX_DEFERRED as i64 + 1;
+        assert!(b.apply_update(&up(first_dropped)).is_err());
+        assert!(b.apply_update(&up(first_dropped + 1)).is_err());
+        // seq stays before the dropped update, also when the server says it's synced.
+        b.synced(first_dropped + 10);
+        assert_eq!(b.seq, first_dropped - 1);
     }
 
     #[test]

@@ -80,6 +80,9 @@ fn Account() -> impl IntoView {
         <h3>"Data"</h3>
         <p class="muted small">"Export any vault as plain Markdown from its settings. Your data is never locked into a proprietary format."</p>
         <button class="btn" on:click=move |_| leptos::task::spawn_local(state::sign_out())><Icon name="logout"/>" Sign out"</button>
+        <h3>"This browser"</h3>
+        <p class="muted small">"On a shared or borrowed computer, make this browser forget your account: it signs out, removes this device and deletes its key and unsent changes. Signing in here again then needs approval from another device or your recovery key."</p>
+        <button class="btn danger" on:click=move |_| leptos::task::spawn_local(state::forget_browser())>"Forget this browser"</button>
     }
 }
 
@@ -128,7 +131,10 @@ fn Devices() -> impl IntoView {
                                 });
                             }
                         }>"Rename"</button>
-                        <button class="btn small danger" on:click=move |_| {
+                        {d.current.then(|| view! {
+                            <button class="btn small danger" on:click=move |_| leptos::task::spawn_local(state::forget_browser())>"Forget this browser"</button>
+                        })}
+                        <button class="btn small danger" class:hidden=d.current on:click=move |_| {
                             if util::confirm("Remove this device? It will be signed out and can't decrypt new data. If it was lost or stolen, also rotate the keys of your shared vaults.") {
                                 let id = id2.clone();
                                 leptos::task::spawn_local(async move {

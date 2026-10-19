@@ -130,6 +130,26 @@ pub fn pending_vaults(user_id: &str) -> Vec<String> {
         .collect()
 }
 
+/// Delete everything stored for a user in this browser: device key, unsent
+/// changes, sync positions, last location (and the session token).
+pub fn forget_user(user_id: &str) {
+    clear_token();
+    let Some(s) = local() else { return };
+    let exact = [device_key(user_id), format!("cpn.last.{user_id}")];
+    let prefixes = [
+        format!("cpn.pending.{user_id}."),
+        format!("cpn.head.{user_id}."),
+    ];
+    let n = s.length().unwrap_or(0);
+    let keys: Vec<String> = (0..n)
+        .filter_map(|i| s.key(i).ok().flatten())
+        .filter(|k| exact.contains(k) || prefixes.iter().any(|p| k.starts_with(p.as_str())))
+        .collect();
+    for k in keys {
+        let _ = s.remove_item(&k);
+    }
+}
+
 fn head_key(user_id: &str, vault_id: &str) -> String {
     format!("cpn.head.{user_id}.{vault_id}")
 }

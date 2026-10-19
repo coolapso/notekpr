@@ -260,6 +260,22 @@ def test_devices_and_recovery(env):
         a.find(".settings-body .list-row", 10)
         time.sleep(0.8)
         check(a.js("return document.querySelectorAll('.settings-body .list .list-row').length") == 3, "three devices are listed")
+        # "Forget this browser" signs out, removes the device and deletes its key locally.
+        b3.go(env.url + "settings/devices")
+        forget = b3.find_text(".settings-body .list-row button", "Forget this browser", 15)
+        b3.js("window.confirm = () => true")
+        b3.click_el(forget)
+        b3.find(".dev-box input", 15)
+        check(b3.js("return Object.keys(localStorage).filter(k => k.startsWith('cpn.device.') || k.startsWith('cpn.pending.') || k.startsWith('cpn.head.')).length") == 0,
+              "forgetting the browser deletes its device key and sync data")
+        b3.type(".dev-box input", name)
+        b3.click(".dev-box button[type=submit]")
+        b3.find_text(".auth-card button", "Approve from another device", 15)
+        check(True, "signing in again needs approval or the recovery key")
+        a.go(env.url + "settings/devices")
+        a.find(".settings-body .list-row", 10)
+        time.sleep(0.8)
+        check(a.js("return document.querySelectorAll('.settings-body .list .list-row').length") == 2, "the forgotten browser is removed from the devices")
         check(not severe_logs(a, b2, b3), "no browser errors")
     finally:
         for x in (a, b2, b3):

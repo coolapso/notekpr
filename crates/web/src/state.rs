@@ -386,6 +386,8 @@ pub struct Core {
     pub oversized_reported: HashSet<String>,
     /// When we last told the user that local storage is full.
     pub storage_warned_at: i64,
+    /// Keys of a first-device setup whose upload failed, reused on retry.
+    pub setup: Option<engine::AccountBootstrap>,
 }
 
 impl Core {
@@ -677,17 +679,30 @@ fn poll_approval(uid: String, rec: DeviceRecord) {
 pub async fn setup_keys() {
     let ui = ui();
     let uid = with(|c| c.user_id.clone());
-    let boot = match engine::bootstrap_account(&uid, &device_name()) {
-        Ok(b) => b,
-        Err(e) => {
-            error(format!("Key generation failed: {e}"));
-            return;
+    let boot = match with(|c| c.setup.take()) {
+        // A previous attempt whose upload failed: send the same keys again.
+        Some(b) => b,
+        None => {
+            // An earlier attempt may have succeeded although its answer got lost.
+            if storage::device(&uid).is_some()
+                && let Ok(me) = api::get::<MeResponse>("/me").await
+                && me.account_key.is_some()
+            {
+                after_login().await;
+                return;
+            }
+            match engine::bootstrap_account(&uid, &device_name()) {
+                Ok(b) => b,
+                Err(e) => {
+                    error(format!("Key generation failed: {e}"));
+                    return;
+                }
+            }
         }
     };
-    if let Err(e) = api::put::<_, ()>("/me/account-key", &boot.request).await {
-        error(format!("Could not save your keys: {e}"));
-        return;
-    }
+    // Keep this browser's device key before the server holds an account key
+    // that only this device can unwrap: a lost answer must not lose it.
+    let previous = storage::device(&uid);
     storage::set_device(
         &uid,
         &DeviceRecord {
@@ -695,6 +710,28 @@ pub async fn setup_keys() {
             secret: coolpsonotes_core::b64::encode(&boot.device.secret),
         },
     );
+    if let Err(e) = api::put::<_, ()>("/me/account-key", &boot.request).await {
+        let stored = match api::get::<MeResponse>("/me").await {
+            // Our keys did arrive; only the answer was lost.
+            Ok(me) if me.account_key.as_ref() == Some(&boot.request.key) => true,
+            // Set up meanwhile from elsewhere (e.g. another tab): ours are useless.
+            Ok(me) if me.account_key.is_some() => {
+                match &previous {
+                    Some(p) => storage::set_device(&uid, p),
+                    None => storage::clear_device(&uid),
+                }
+                after_login().await;
+                return;
+            }
+            _ => false,
+        };
+        if !stored {
+            // Not stored, or we can't tell: retrying sends the same keys.
+            with(|c| c.setup = Some(boot));
+            error(format!("Could not save your keys: {e}"));
+            return;
+        }
+    }
     let key = boot.recovery.to_display();
     with(|c| {
         c.account = Some(boot.account);
@@ -800,6 +837,8 @@ pub async fn recover(input: String) {
 
 pub fn sign_out_local(error: Option<String>) {
     let ui = ui();
+    // Unsent changes go to local storage, to be sent after the next sign-in.
+    flush_now();
     storage::clear_token();
     api::set_token(None);
     let (sock, urls) = with(|c| {
@@ -825,6 +864,49 @@ pub async fn sign_out() {
     flush_now();
     let _ = api::post_empty::<()>("/auth/logout").await;
     sign_out_local(None);
+}
+
+/// Sign out and make this browser forget the account: remove this device
+/// from the account and delete its key and unsent changes from local storage.
+/// Signing in here again needs approval from another device or the recovery key.
+pub async fn forget_browser() {
+    flush_now();
+    let unsent = with(|c| c.pending_count());
+    let warn = if unsent > 0 {
+        format!(
+            " {unsent} note{} with changes that are not synced yet will lose them.",
+            if unsent == 1 { "" } else { "s" }
+        )
+    } else {
+        String::new()
+    };
+    if !util::confirm(&format!(
+        "Forget this browser? You will be signed out and this browser's key will be deleted, so opening your notes here again needs approval from another device or your recovery key.{warn}"
+    )) {
+        return;
+    }
+    let (uid, device) = with(|c| (c.user_id.clone(), c.device_id.clone()));
+    // Removing the device also ends its sessions, this one included.
+    let removed = match &device {
+        Some(d) => match api::delete(&format!("/devices/{d}")).await {
+            Ok(()) | Err(api::Error { status: 404, .. }) => true,
+            Err(_) => false,
+        },
+        None => true,
+    };
+    if !removed || device.is_none() {
+        let _ = api::post_empty::<()>("/auth/logout").await;
+    }
+    sign_out_local(None);
+    // After signing out, which stores unsent changes.
+    storage::forget_user(&uid);
+    if removed {
+        success("This browser forgot your account.");
+    } else {
+        error(
+            "This browser forgot your keys, but could not remove itself from your devices. Remove it in Settings → Devices on another device.",
+        );
+    }
 }
 
 async fn enter_ready() {

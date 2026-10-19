@@ -138,7 +138,7 @@ sessions and envelope), rotate keys of shared vaults, rotate the recovery key.
 | Client | At rest |
 |---|---|
 | Browser | Device secret in `localStorage`, unsent updates (already encrypted with vault keys) in `localStorage`. No plaintext notes are persisted; content is decrypted into memory. Protection of the browser profile relies on the OS account and full-disk encryption. |
-| Desktop, default | Encrypted local replica (vault-key encrypted CRDT state, sealed with a local key file `0600`). Protects against casual copying, not against malware running as the same user; use full-disk encryption. |
+| Desktop, default | Encrypted local replica (vault-key encrypted CRDT state, sealed with a local key file `0600`). The key file sits in the same profile directory, so this protects against other OS users and stray copies of single files, but not against a copy of the whole directory (a backup, a synced folder) or malware running as the same user; use full-disk encryption. Moving the key to the OS keyring is planned. |
 | Desktop, plaintext mirror (explicit opt-in) | Ordinary Markdown files readable by any program running as the user — the point of the mode. It must be enabled explicitly and the CLI explains the implications. |
 | Agent gateway host | Holds the agent's keys and plaintext of the vaults shared with the agent. Treat it like any server with secrets; the gateway listens on localhost by default and requires a bearer token. |
 
@@ -154,6 +154,10 @@ reported, never applied partially. Duplicate deliveries are no-ops.
 * All devices lost: recovery key.
 * All devices *and* the recovery key lost: the notes cannot be recovered — by
   design there is no server-side master key. Export your vaults regularly.
+* **No lock-in**: with the recovery key (or a device) and an encrypted export
+  (`GET /me/export`, or `coolpsonotes-server export-user` from any server
+  backup), everything a person could read decrypts offline into Markdown files,
+  without the server or the apps.
 
 ### Web application threats
 
@@ -163,7 +167,10 @@ reported, never applied partially. Duplicate deliveries are no-ops.
   (`script-src 'self' 'wasm-unsafe-eval'`, no inline scripts, `frame-ancestors
   'none'`, `object-src 'none'`) is a second layer. External images are not
   loaded (also prevents tracking pixels).
-* **CSRF**: the API uses bearer tokens, not cookies.
+* **CSRF**: the API uses bearer tokens, not cookies. The OIDC login itself is
+  bound to the browser that started it (an HttpOnly, SameSite cookie checked at
+  the callback), so a login link prepared by someone else can't sign a victim
+  into the attacker's account.
 * **Open redirects**: login `return_to` must be a same-origin path.
 * **Clickjacking**: `X-Frame-Options: DENY`, `frame-ancestors 'none'`.
 * **Supply chain**: the browser client contains no third-party JavaScript; all
@@ -174,17 +181,29 @@ reported, never applied partially. Duplicate deliveries are no-ops.
 
 * OIDC: authorization code with PKCE, `state` and `nonce`, ID token signature
   verified against the provider's JWKS (refreshed on key rotation), issuer and
-  audience checked by `openidconnect`; HTTP redirects disabled for IdP calls.
+  audience checked by `openidconnect`; HTTP redirects disabled and response
+  sizes capped for provider calls; the provider's certificate is checked
+  against the system trust store (plus an optional CA file). Only e-mail
+  addresses the provider marks verified are used to find people.
 * Identities are keyed by `iss`+`sub`, never e-mail. Authentication grants no
   vault access.
-* Authorization is checked on every request and every WebSocket push; non-members
-  get `404` so vault ids cannot be probed.
-* Rate limits per client IP on the API and (stricter) on login/token endpoints;
-  per-connection limits on presence messages; request size limits per route.
+* Authorization is checked on every request and every WebSocket push (under the
+  write lock, so a push can't race a removal); non-members get `404` so vault
+  ids cannot be probed.
+* Content must be encrypted with the current key: after a key rotation the
+  server refuses updates and snapshots under older epochs (`stale_key`), so
+  outdated clients can't keep writing content a removed member could read.
+* Rate limits per client IP on the API and (stricter) on login, token and
+  device-code endpoints; per-connection limits on presence messages and on
+  WebSocket pushes and subscriptions; request size limits per route; catch-up
+  pages capped in rows and bytes; a per-person cooldown on snapshots.
 * Logs contain method, a redacted path and status — never tokens, query strings,
   bodies or names. No telemetry.
 * Development mode (`--dev-mode`) allows password-less login and is announced in
-  logs and on every page; never enable it on a reachable server.
+  logs and on every page. The server refuses to start in dev mode on a
+  non-loopback address, with an https public URL or with OIDC configured unless
+  explicitly overridden; without dev mode, sessions of dev-mode accounts are
+  ended and those accounts never become the first administrator.
 
 ## Residual risks and planned hardening
 

@@ -23,7 +23,9 @@ fn esc(s: &str) -> String {
     o
 }
 
-fn safe_external(url: &str) -> bool {
+/// Whether a link may be opened outside the app: only web and e-mail links,
+/// never `javascript:`, `data:`, `file:` or custom protocol handlers.
+pub fn safe_external(url: &str) -> bool {
     let l = url.trim().to_ascii_lowercase();
     l.starts_with("http://") || l.starts_with("https://") || l.starts_with("mailto:")
 }
@@ -286,6 +288,26 @@ mod tests {
         assert!(!h.contains("<img src=x"));
         assert!(!h.contains("javascript:"));
         assert!(h.contains("&lt;script&gt;"));
+    }
+
+    #[test]
+    fn only_web_and_mail_links_are_external() {
+        for ok in ["https://x.org", " HTTP://x.org/a?b", "mailto:a@b.c"] {
+            assert!(safe_external(ok), "{ok}");
+        }
+        for bad in [
+            "javascript:alert(1)",
+            " JavaScript:alert(1)",
+            "data:text/html,<script>",
+            "file:///etc/passwd",
+            "vbscript:x",
+            "ms-settings:",
+            "steam://run/1",
+            "//evil.example",
+            "",
+        ] {
+            assert!(!safe_external(bad), "{bad}");
+        }
     }
 
     #[test]

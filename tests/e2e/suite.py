@@ -474,7 +474,26 @@ def test_tables(env):
         b.close()
 
 
-TESTS = [test_onboarding, test_collab, test_devices_and_recovery, test_features, test_attachments, test_note_sharing, test_tables, test_mobile]
+def test_editor_safety(env):
+    b = Browser()
+    try:
+        signup(b, uniq("sam"))
+        new_note(b, "Links", "[evil](javascript:window.__pwned=1) [ok](https://example.org/)")
+        # Links in the live editor: only web and e-mail links may be opened.
+        b.js("window.__opened = []; window.open = (u) => { window.__opened.push(String(u)); return null; };")
+        click = "document.querySelector(`.ed [data-link=\"${arguments[0]}\"]`).dispatchEvent(new MouseEvent('mousedown', {bubbles: true, cancelable: true, ctrlKey: true}));"
+        b.js(click, 0)
+        b.find_text(".toast", "Only web and e-mail links", 5)
+        b.js(click, 1)
+        time.sleep(0.3)
+        check(b.js("return window.__opened") == ["https://example.org/"] and not b.js("return !!window.__pwned"),
+              "the editor opens web links but not javascript: links")
+        check(not severe_logs(b), "no browser errors")
+    finally:
+        b.close()
+
+
+TESTS = [test_onboarding, test_collab, test_devices_and_recovery, test_features, test_attachments, test_note_sharing, test_tables, test_editor_safety, test_mobile]
 
 
 def main():

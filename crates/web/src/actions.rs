@@ -16,7 +16,7 @@ use wasm_bindgen::JsCast;
 use crate::editor::Host;
 use crate::editor::syntax::Target;
 use crate::state::{self, Route, error, info, local_update, navigate, success, with};
-use crate::{api, knowledge, util, zipfile};
+use crate::{api, knowledge, render, util, zipfile};
 
 fn now() -> i64 {
     util::now_ms()
@@ -1269,13 +1269,14 @@ impl Host for NoteHost {
 
     fn open_link(&self, target: &Target, _new_tab: bool) {
         match target {
-            Target::Url(u) => {
+            Target::Url(u) if render::safe_external(u) => {
                 let _ = util::window().open_with_url_and_target_and_features(
-                    u,
+                    u.trim(),
                     "_blank",
                     "noopener,noreferrer",
                 );
             }
+            Target::Url(_) => info("Only web and e-mail links can be opened from a note."),
             Target::Wiki(_) if self.shared => {
                 info("Only this note is shared with you, not the notes it links to.")
             }

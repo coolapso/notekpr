@@ -595,7 +595,29 @@ pub struct PushResult {
 pub struct PushResponse {
     pub results: Vec<PushResult>,
     pub head_seq: i64,
+    /// Updates of the batch the server refused one by one; the rest was
+    /// stored. Older servers refuse the whole batch instead.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rejected: Vec<RejectedUpdate>,
 }
+
+/// One update of a push the server refused, and why.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct RejectedUpdate {
+    pub client_update_id: String,
+    pub object_id: String,
+    /// [`REJECT_TOO_LARGE`], [`REJECT_PURGED`], [`REJECT_STALE_KEY`] or
+    /// `bad_request`.
+    pub code: String,
+    pub message: String,
+}
+
+/// Larger than the server's `max_update_bytes`.
+pub const REJECT_TOO_LARGE: &str = "too_large";
+/// The object was permanently deleted.
+pub const REJECT_PURGED: &str = "purged";
+/// Encrypted with an outdated key: reload keys and send it again.
+pub const REJECT_STALE_KEY: &str = "stale_key";
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct CreateSnapshotRequest {
@@ -860,6 +882,9 @@ pub enum ServerMessage {
     Ack {
         vault_id: String,
         results: Vec<PushResult>,
+        /// Updates of the push refused one by one (see [`PushResponse::rejected`]).
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        rejected: Vec<RejectedUpdate>,
     },
     Awareness {
         vault_id: String,

@@ -1,8 +1,8 @@
 [workspace]
 resolver = "3"
-members = ["crates/core", "crates/server", "crates/client", "crates/web"]
+members = ["crates/core", "crates/sync", "crates/server", "crates/client", "crates/web"]
 # The web crate only makes sense for wasm32; build it with scripts/build-web.sh.
-default-members = ["crates/core", "crates/server", "crates/client"]
+default-members = ["crates/core", "crates/sync", "crates/server", "crates/client"]
 
 [workspace.package]
 version = "0.1.0"

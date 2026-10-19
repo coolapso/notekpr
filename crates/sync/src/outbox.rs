@@ -1,0 +1,511 @@
+//! What to upload, and what to do with the server's answers.
+//!
+//! A replica's `pending` queue holds every local update the server hasn't
+//! confirmed. The [`Outbox`] decides what goes out next: it merges queued
+//! updates of the same object that were never sent (an offline session
+//! stays one update per note instead of thousands), encrypts them with the
+//! current keys, holds back those the server can never store, and splits
+//! the rest into pushes the server accepts. It then turns acknowledgements
+//! and refusals into the right follow-up: drop, hold, reload keys, re-send.
+
+use std::collections::BTreeSet;
+
+use coolpsonotes_core::crypto::Purpose;
+use coolpsonotes_core::doc;
+use coolpsonotes_core::engine::{Pending, VaultReplica};
+use coolpsonotes_core::protocol::{
+    PushResult, PushUpdate, REJECT_PURGED, REJECT_STALE_KEY, REJECT_TOO_LARGE, RejectedUpdate,
+};
+use coolpsonotes_core::random_id;
+use serde::{Deserialize, Serialize};
+
+/// The server's limits, as far as the client knows them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Limits {
+    /// Largest encrypted update the server stores (`/info` `max_update_bytes`).
+    pub max_update_bytes: usize,
+    /// Most updates in one push.
+    pub max_push_count: usize,
+}
+
+impl Limits {
+    /// Used until the server told us its own.
+    pub const DEFAULT_MAX_UPDATE: usize = 2 << 20;
+    pub const MAX_PUSH_COUNT: usize = 200;
+
+    pub fn new(max_update_bytes: usize) -> Limits {
+        Limits {
+            max_update_bytes: max_update_bytes.max(1024),
+            max_push_count: Self::MAX_PUSH_COUNT,
+        }
+    }
+
+    /// Bytes one local change may cost (see `edits`) so that its encrypted
+    /// update stays well within the limit (CRDT encoding and the envelope add
+    /// to the text).
+    pub fn edit_budget(&self) -> usize {
+        (self.max_update_bytes / 2).max(1024)
+    }
+
+    /// Payload bytes per push: base64 in JSON keeps a full push well below
+    /// the server's request and frame limits.
+    pub fn push_bytes(&self) -> usize {
+        self.max_update_bytes
+    }
+}
+
+impl Default for Limits {
+    fn default() -> Limits {
+        Limits::new(Self::DEFAULT_MAX_UPDATE)
+    }
+}
+
+/// An update kept back from uploading.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Held {
+    pub client_update_id: String,
+    pub object_id: String,
+    /// Encrypted size, if known.
+    pub bytes: usize,
+    pub reason: HoldReason,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum HoldReason {
+    /// Larger than the server accepts; goes out again once it fits.
+    TooLarge,
+    /// The server refused it for another reason (bad request).
+    Refused(String),
+}
+
+/// Upload bookkeeping kept next to a replica. `held` must be persisted with
+/// the pending queue (it is local work the server doesn't have); the rest is
+/// per connection.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct Outbox {
+    /// Updates kept back: the server can't store them (yet). They stay
+    /// applied locally and are released when they fit.
+    #[serde(default)]
+    pub held: Vec<Pending>,
+    /// Handed to the transport at least once: never merged again, so a retry
+    /// carries the same id and the server stores it only once.
+    #[serde(skip)]
+    sent: BTreeSet<String>,
+    /// Sent on the current connection and not acknowledged yet.
+    #[serde(skip)]
+    in_flight: BTreeSet<String>,
+    /// Pushed one at a time to find which one an older server refuses.
+    #[serde(skip)]
+    alone: BTreeSet<String>,
+    /// Held updates the user was already told about.
+    #[serde(skip)]
+    reported: BTreeSet<String>,
+    /// The size limit each held update was held under: it is released only
+    /// once the known limit grows past that (a server refusing an update we
+    /// thought fits must not make us resend it forever).
+    #[serde(skip)]
+    held_under: std::collections::HashMap<String, usize>,
+}
+
+/// The pushes to send now, and what changed in the queue.
+#[derive(Debug, Default)]
+pub struct Plan {
+    pub pushes: Vec<Vec<PushUpdate>>,
+    /// Newly held back (tell the user once).
+    pub held: Vec<Held>,
+    /// Queued updates that can't be encrypted right now (their key is being
+    /// reloaded); they stay queued.
+    pub waiting_for_keys: usize,
+    /// Held updates that fit again and were queued.
+    pub released: usize,
+}
+
+impl Plan {
+    pub fn is_empty(&self) -> bool {
+        self.pushes.is_empty()
+    }
+
+    pub fn ids(&self) -> Vec<String> {
+        self.pushes
+            .iter()
+            .flatten()
+            .map(|u| u.client_update_id.clone())
+            .collect()
+    }
+}
+
+/// What a client has to do after the server's answer.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct Reaction {
+    /// Some updates need a newer key: reload keys, then plan again.
+    pub reload_keys: bool,
+    /// Objects permanently deleted on the server whose local changes were
+    /// dropped (the text is still in the replica if the client wants to keep
+    /// a copy).
+    pub purged: Vec<String>,
+    /// Newly held back.
+    pub held: Vec<Held>,
+    /// Something can be sent again right away.
+    pub resend: bool,
+}
+
+impl Outbox {
+    /// Number of updates kept back.
+    pub fn held_count(&self) -> usize {
+        self.held.len()
+    }
+
+    /// Everything this replica still has to upload (queued and held).
+    pub fn unsent(&self, r: &VaultReplica) -> usize {
+        r.pending.len() + self.held.len()
+    }
+
+    /// The connection was lost or replaced: everything not acknowledged is
+    /// sent again on the next plan (with the same ids).
+    pub fn connection_reset(&mut self) {
+        self.in_flight.clear();
+    }
+
+    /// These updates could not be handed to the transport (e.g. the socket
+    /// is closed): plan them again later. Still mergeable when never sent.
+    pub fn not_sent(&mut self, ids: &[String]) {
+        for id in ids {
+            self.in_flight.remove(id);
+            self.sent.remove(id);
+        }
+    }
+
+    /// Merge queued updates of the same object that were never sent into one
+    /// [W-M9]. Applying the merged update equals applying the originals.
+    pub fn merge_unsent(&mut self, r: &mut VaultReplica) {
+        let mut out: Vec<Pending> = Vec::with_capacity(r.pending.len());
+        let mut groups: Vec<(String, Vec<usize>)> = Vec::new();
+        for (i, p) in r.pending.iter().enumerate() {
+            if self.sent.contains(&p.client_update_id) {
+                continue;
+            }
+            match groups.iter_mut().find(|(o, _)| *o == p.object_id) {
+                Some((_, v)) => v.push(i),
+                None => groups.push((p.object_id.clone(), vec![i])),
+            }
+        }
+        let mut replace: std::collections::HashMap<usize, Option<Pending>> =
+            std::collections::HashMap::new();
+        for (object_id, idx) in groups.into_iter().filter(|(_, v)| v.len() > 1) {
+            let updates: Vec<Vec<u8>> = idx.iter().map(|&i| r.pending[i].update.clone()).collect();
+            let Ok(merged) = doc::merge_updates(&updates) else {
+                continue;
+            };
+            replace.insert(
+                idx[0],
+                Some(Pending {
+                    client_update_id: random_id(),
+                    object_id,
+                    update: merged,
+                }),
+            );
+            for &i in &idx[1..] {
+                replace.insert(i, None);
+            }
+        }
+        if replace.is_empty() {
+            return;
+        }
+        for (i, p) in std::mem::take(&mut r.pending).into_iter().enumerate() {
+            match replace.remove(&i) {
+                Some(Some(m)) => out.push(m),
+                Some(None) => {}
+                None => out.push(p),
+            }
+        }
+        r.pending = out;
+    }
+
+    /// The pushes to send now. Updates in flight on this connection are not
+    /// sent twice; call [`Outbox::connection_reset`] to send everything again.
+    /// Read-only replicas send nothing.
+    pub fn plan(&mut self, r: &mut VaultReplica, limits: &Limits) -> Plan {
+        let mut plan = Plan::default();
+        if !r.can_write() {
+            return plan;
+        }
+        plan.released = self.release_fitting(r, limits);
+        self.merge_unsent(r);
+        let max = limits.max_update_bytes;
+        let mut ready: Vec<PushUpdate> = Vec::new();
+        let mut hold_ids = Vec::new();
+        for p in &r.pending {
+            if self.in_flight.contains(&p.client_update_id) {
+                continue;
+            }
+            match r.encrypt_object(Purpose::Update, &p.object_id, &p.update) {
+                Ok(payload) if payload.len() > max => {
+                    hold_ids.push(p.client_update_id.clone());
+                    plan.held.push(Held {
+                        client_update_id: p.client_update_id.clone(),
+                        object_id: p.object_id.clone(),
+                        bytes: payload.len(),
+                        reason: HoldReason::TooLarge,
+                    });
+                }
+                Ok(payload) => ready.push(PushUpdate {
+                    object_id: p.object_id.clone(),
+                    client_update_id: p.client_update_id.clone(),
+                    payload,
+                }),
+                Err(_) => plan.waiting_for_keys += 1,
+            }
+        }
+        self.hold(r, &hold_ids, max);
+        plan.held
+            .retain(|h| self.reported.insert(h.client_update_id.clone()));
+        // Single pushes first for updates an older server refused as part of
+        // a batch, then size- and count-bounded batches.
+        let (alone, rest): (Vec<PushUpdate>, Vec<PushUpdate>) = ready
+            .into_iter()
+            .partition(|u| self.alone.contains(&u.client_update_id));
+        plan.pushes.extend(alone.into_iter().map(|u| vec![u]));
+        let mut cur: Vec<PushUpdate> = Vec::new();
+        let mut bytes = 0;
+        for u in rest {
+            let n = u.payload.len();
+            if !cur.is_empty()
+                && (bytes + n > limits.push_bytes() || cur.len() >= limits.max_push_count)
+            {
+                plan.pushes.push(std::mem::take(&mut cur));
+                bytes = 0;
+            }
+            bytes += n;
+            cur.push(u);
+        }
+        if !cur.is_empty() {
+            plan.pushes.push(cur);
+        }
+        for id in plan.ids() {
+            self.sent.insert(id.clone());
+            self.in_flight.insert(id);
+        }
+        plan
+    }
+
+    /// The server stored these updates. `in_order` is true for WebSocket
+    /// acknowledgements, which arrive in log order and also move the replica's
+    /// cursor; REST answers can overtake other clients' updates and must not.
+    pub fn on_ack(&mut self, r: &mut VaultReplica, results: &[PushResult], in_order: bool) {
+        for res in results {
+            self.in_flight.remove(&res.client_update_id);
+            self.sent.remove(&res.client_update_id);
+            self.alone.remove(&res.client_update_id);
+        }
+        r.ack(results, in_order);
+    }
+
+    /// The server refused single updates of a push (the rest was stored).
+    /// `limits` are the limits the client knew when it sent them.
+    pub fn on_rejected(
+        &mut self,
+        r: &mut VaultReplica,
+        rejected: &[RejectedUpdate],
+        limits: &Limits,
+    ) -> Reaction {
+        let mut out = Reaction::default();
+        let mut hold_ids = Vec::new();
+        for x in rejected {
+            self.in_flight.remove(&x.client_update_id);
+            self.alone.remove(&x.client_update_id);
+            match x.code.as_str() {
+                REJECT_PURGED => {
+                    self.drop_object(r, &x.object_id);
+                    if !out.purged.contains(&x.object_id) {
+                        out.purged.push(x.object_id.clone());
+                    }
+                }
+                REJECT_STALE_KEY => {
+                    out.reload_keys = true;
+                }
+                code => {
+                    let reason = if code == REJECT_TOO_LARGE {
+                        HoldReason::TooLarge
+                    } else {
+                        HoldReason::Refused(x.message.clone())
+                    };
+                    hold_ids.push(x.client_update_id.clone());
+                    if self.reported.insert(x.client_update_id.clone()) {
+                        out.held.push(Held {
+                            client_update_id: x.client_update_id.clone(),
+                            object_id: x.object_id.clone(),
+                            bytes: 0,
+                            reason,
+                        });
+                    }
+                }
+            }
+        }
+        self.hold(r, &hold_ids, limits.max_update_bytes);
+        out.resend = !r.pending.is_empty() && !out.reload_keys;
+        out
+    }
+
+    /// An older server refused a whole batch (one update too large, or for a
+    /// purged object, without saying which): send its updates one at a time
+    /// next, so the refusal names the culprit. A single refused update is held
+    /// (`too_large`) or dropped with its object (`purged`, the object id given).
+    pub fn on_batch_refused(
+        &mut self,
+        r: &mut VaultReplica,
+        ids: &[String],
+        too_large: bool,
+        limits: &Limits,
+    ) -> Reaction {
+        for id in ids {
+            self.in_flight.remove(id);
+        }
+        if ids.len() > 1 {
+            self.alone.extend(ids.iter().cloned());
+            return Reaction {
+                resend: true,
+                ..Default::default()
+            };
+        }
+        let Some(id) = ids.first() else {
+            return Reaction::default();
+        };
+        let object_id = r
+            .pending
+            .iter()
+            .find(|p| &p.client_update_id == id)
+            .map(|p| p.object_id.clone())
+            .unwrap_or_default();
+        let code = if too_large {
+            REJECT_TOO_LARGE
+        } else {
+            REJECT_PURGED
+        };
+        self.on_rejected(
+            r,
+            &[RejectedUpdate {
+                client_update_id: id.clone(),
+                object_id,
+                code: code.into(),
+                message: String::new(),
+            }],
+            limits,
+        )
+    }
+
+    /// Drop every local change of an object deleted for good on the server.
+    pub fn drop_object(&mut self, r: &mut VaultReplica, object_id: &str) {
+        r.pending.retain(|p| p.object_id != object_id);
+        self.held.retain(|p| p.object_id != object_id);
+    }
+
+    fn hold(&mut self, r: &mut VaultReplica, ids: &[String], limit: usize) {
+        if ids.is_empty() {
+            return;
+        }
+        for id in ids {
+            self.held_under.insert(id.clone(), limit);
+        }
+        let (bad, keep): (Vec<Pending>, Vec<Pending>) = std::mem::take(&mut r.pending)
+            .into_iter()
+            .partition(|p| ids.contains(&p.client_update_id));
+        r.pending = keep;
+        for p in bad {
+            self.in_flight.remove(&p.client_update_id);
+            if !self
+                .held
+                .iter()
+                .any(|h| h.client_update_id == p.client_update_id)
+            {
+                self.held.push(p);
+            }
+        }
+    }
+
+    /// Queue held updates that fit within `limits` again (the administrator
+    /// raised the limit). Returns how many.
+    pub fn release_fitting(&mut self, r: &mut VaultReplica, limits: &Limits) -> usize {
+        if self.held.is_empty() {
+            return 0;
+        }
+        let max = limits.max_update_bytes;
+        let held_under = &self.held_under;
+        let (ok, keep): (Vec<Pending>, Vec<Pending>) =
+            std::mem::take(&mut self.held).into_iter().partition(|p| {
+                held_under
+                    .get(&p.client_update_id)
+                    .is_none_or(|&under| max > under)
+                    && r.encrypt_object(Purpose::Update, &p.object_id, &p.update)
+                        .is_ok_and(|c| c.len() <= max)
+            });
+        self.held = keep;
+        let n = ok.len();
+        for p in ok {
+            self.reported.remove(&p.client_update_id);
+            self.held_under.remove(&p.client_update_id);
+            r.pending.push(p);
+        }
+        n
+    }
+}
+
+/// The server's history went backwards (restored from an older backup, or a
+/// rollback): move the cursor back to its head and queue the complete local
+/// state of every object, so CRDT merging restores whatever it lost.
+/// Returns how many objects were queued (0 for read-only replicas).
+pub fn recover_from_rollback(r: &mut VaultReplica, head: i64) -> usize {
+    r.seq = r.seq.min(head);
+    r.max_head_seen = head;
+    if !r.can_write() || !r.member {
+        return 0;
+    }
+    let mut items = vec![(
+        coolpsonotes_core::protocol::INDEX_OBJECT_ID.to_string(),
+        r.index.encode_state(),
+    )];
+    for (id, n) in &r.notes {
+        items.push((id.clone(), n.encode_state()));
+    }
+    let mut n = 0;
+    for (id, state) in items {
+        if r.local_change(&id, state).is_ok() {
+            n += 1;
+        }
+    }
+    n
+}
+
+/// Encrypted copies of the queued updates for storage, e.g. in browser
+/// storage. An update that can't be encrypted right now (its key is being
+/// reloaded) keeps its previously stored copy instead of being lost.
+/// `None` if nothing at all could be produced although updates are queued
+/// (then keep what is stored).
+pub fn stored_copies(
+    r: &VaultReplica,
+    outbox: &Outbox,
+    previous: &[PushUpdate],
+) -> Option<Vec<PushUpdate>> {
+    let all: Vec<&Pending> = r.pending.iter().chain(outbox.held.iter()).collect();
+    let out: Vec<PushUpdate> = all
+        .iter()
+        .filter_map(|p| {
+            r.encrypt_object(Purpose::Update, &p.object_id, &p.update)
+                .ok()
+                .map(|payload| PushUpdate {
+                    object_id: p.object_id.clone(),
+                    client_update_id: p.client_update_id.clone(),
+                    payload,
+                })
+                .or_else(|| {
+                    previous
+                        .iter()
+                        .find(|s| s.client_update_id == p.client_update_id)
+                        .cloned()
+                })
+        })
+        .collect();
+    if out.is_empty() && !all.is_empty() {
+        return None;
+    }
+    Some(out)
+}

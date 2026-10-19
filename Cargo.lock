@@ -832,6 +832,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "coolpsonotes-sync"
+version = "0.1.0"
+dependencies = [
+ "coolpsonotes-core",
+ "proptest",
+ "serde",
+]
+
+[[package]]
 name = "coolpsonotes-web"
 version = "0.1.0"
 dependencies = [

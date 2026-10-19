@@ -197,6 +197,18 @@ tasks:
     cmds:
       - tests/e2e/run.sh {{.CLI_ARGS}}
 
+  fmt:
+    desc: Format all Rust code (rustfmt defaults)
+    deps: [rust]
+    cmds:
+      - cargo fmt --all
+
+  fmt:check:
+    desc: Fail if any Rust code is not formatted
+    deps: [rust]
+    cmds:
+      - cargo fmt --all -- --check
+
   lint:
     desc: Clippy on every crate (warnings are errors), including the web client for wasm32
     deps: [rust]
@@ -219,8 +231,9 @@ tasks:
       - cargo deny check
 
   ci:
-    desc: Everything CI runs (lint, tests, wasm build, browser tests)
+    desc: Everything CI runs (format check, lint, tests, wasm build, browser tests)
     cmds:
+      - task: fmt:check
       - task: lint
       - task: test
       - task: check:wasm

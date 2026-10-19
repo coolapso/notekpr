@@ -13,6 +13,8 @@ jobs:
           targets: wasm32-unknown-unknown
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
+      - name: Formatting
+        run: cargo fmt --all -- --check
       - name: Lint
         run: cargo clippy --locked -p coolpsonotes-core -p coolpsonotes-server -p coolpsonotes-client --all-targets -- -D warnings
       - name: Unit and integration tests

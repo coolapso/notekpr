@@ -50,6 +50,7 @@ task web:watch                # in a 2nd terminal: rebuild the web client on cha
 task cli:login DEV_USER=bob   # sign the CLI in as a test user (profile "bob")
 task cli -- --profile bob ls  # run any CLI command
 task test                     # all Rust tests;  task test:e2e -- -k collab  for browser tests
+task fmt                      # rustfmt (default style); CI checks it with task fmt:check
 task lint                     # clippy, warnings are errors
 task ci                       # what CI runs
 task dev:reset                # wipe the dev database

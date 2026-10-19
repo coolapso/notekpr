@@ -5,6 +5,8 @@
 FROM rust:1.99-slim-trixie AS build
 ARG WASM_BINDGEN_VERSION=0.2.128
 RUN rustup target add wasm32-unknown-unknown
+# wasm-opt makes the browser bundle much smaller.
+RUN apt-get update && apt-get install -y --no-install-recommends binaryen && rm -rf /var/lib/apt/lists/*
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     cargo install wasm-bindgen-cli --version ${WASM_BINDGEN_VERSION} --locked
 WORKDIR /src

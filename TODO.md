@@ -442,7 +442,7 @@ with SQLite; no SQL-dialect abstraction.
       client error reports opt-in, scrubbed of content and titles,
       first-party only; written policy.
 - [ ] **Release engineering**: publish versioned images to GHCR [D-H4];
-      prebuilt binaries [gap 3]; `binaryen` in the image build [D-L5]; ~~CI runs
+      prebuilt binaries [gap 3]; ~~`binaryen` in the image build [D-L5]~~ (done); ~~CI runs
       the wasm clippy step and reads the `wasm-bindgen` version from
       `crates/web/Cargo.toml` [D-L8]~~ (done); Kubernetes manifest fixes — `/tmp`
       volume, `ingressClassName`, TLS secret, body limit vs attachment size

@@ -69,6 +69,20 @@ primitives. Formats:
   pinned key changes; fingerprints can be compared out of band. Residual risk:
   a server that substitutes keys *before* the first share between two people is
   only detected by comparing fingerprints.
+* **Adds a member on its own, or changes someone's role?** Every membership
+  and key change is an entry in the vault's owner-signed, hash-chained
+  membership log (protocol.md §5.2). The owner's client gives vault keys only
+  to members the verified log lists with that role and key, members see
+  anyone the log doesn't list flagged in the member list, and rotation stops
+  with a security warning if the server lists an unknown member with keys.
+* **Hands a member a vault key it made itself** (so it could read what they
+  write next)? The owner commits to every epoch's key in the log; clients
+  check each key they receive against the commitment and refuse a vault
+  whose key doesn't match or was never announced.
+* **Rolls back or rewrites the membership log?** Clients remember the last
+  entry they verified; a log that no longer contains it is a security error.
+  Vaults from before the log are trusted as their owner's client saw them
+  when it signed the first checkpoint.
 * **Enrolls a rogue device?** Requires an account signature over the device key,
   which only a holder of the account secret can produce, and the user compares
   a verification code shown on both devices.
@@ -220,8 +234,11 @@ reported, never applied partially. Duplicate deliveries are no-ops.
 
 1. First-contact key substitution by a malicious server (mitigated only by
    fingerprint comparison).
-2. Update authenticity among members with a colluding server (planned: signed
-   updates and a signed membership log).
+2. Update authenticity among members with a colluding server: a viewer holds
+   the vault key and could forge content the server then accepts (planned:
+   signed updates). Membership itself is signed (§5.2 of the protocol).
+   Recipients of single notes don't see the vault's log; their note keys are
+   not committed to yet (planned: an owner signature on each share).
 3. Metadata visible to the server (sizes, timing, social graph).
 4. Browser key storage relies on the browser profile's security.
 5. Post-quantum: key wrapping uses X25519 today; the format is versioned for a

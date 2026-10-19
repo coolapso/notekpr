@@ -129,6 +129,12 @@ Account public key ──── HPKE ─────▶ Vault key, epoch N  ─�
   vault key for members. A client creating a note registers its key before
   sending any of its content; older notes move to their own key at their next
   snapshot. The vault index and attachments stay under the vault key.
+* **Membership log**: the owner signs every membership and key change into
+  a hash-chained log per vault (members sign their own leaving). Clients
+  verify it against the owner's pinned key, check each vault key against the
+  owner's commitment, and the owner gives keys only to members the log
+  vouches for — so a server can't add people or plant keys. Vaults from
+  before the log start it with an owner-signed checkpoint.
 * **Rotation / revocation**: removing a member triggers a new epoch: a fresh
   vault key, wrapped for remaining members, plus a chain link so members can
   still read history, and in the same request a new epoch of every note's key.

@@ -127,15 +127,17 @@ device's public key, but the code would differ.
 | Endpoint | Role |
 |---|---|
 | `GET /vaults` | caller's vaults with role, `encrypted_meta`, `key_epoch`, `head_seq` |
-| `POST /vaults {id, encrypted_meta, key_envelope}` | human; the client picks the id and wraps epoch 1 to itself |
+| `POST /vaults {id, encrypted_meta, key_envelope, log_entry?}` | human; the client picks the id and wraps epoch 1 to itself; `log_entry` starts the membership log (§5.2) |
 | `GET/PATCH/DELETE /vaults/{v}` | read: member; update (`encrypted_meta`, `archived`): owner; delete: owner |
 | `GET /vaults/{v}/keys` | member: own envelopes for every epoch granted + full key chain; the notes' document keys (`objects`, `object_chain`) and which notes are shared individually (`shared`; absent on servers from before notes had their own keys) |
 | `GET /vaults/{v}/members` | member: `MemberInfo {user (with account key), role, has_current_key}` |
-| `POST /vaults/{v}/members {user_id, role, key_envelope?}` | owner. Without an envelope the member is "pending keys" until the owner's client grants them |
-| `PATCH /vaults/{v}/members/{u} {role}` | owner |
-| `DELETE /vaults/{v}/members/{u}` | owner removes; any non-owner can remove themselves |
+| `POST /vaults/{v}/members {user_id, role, key_envelope?, log_entry?}` | owner. Without an envelope the member is "pending keys" until the owner's client grants them |
+| `PATCH /vaults/{v}/members/{u} {role, log_entry?}` | owner |
+| `DELETE /vaults/{v}/members/{u}` (optional body `{log_entry}`) | owner removes; any non-owner can remove themselves |
+| `GET /vaults/{v}/log?since=` | member: the membership log, `MemberLogResponse {entries}` (§5.2) |
+| `POST /vaults/{v}/log {entry}` | owner: a `checkpoint` (vaults without a log), a `rekey`, or a `remove` of someone who already left (§5.2) |
 | `POST /vaults/{v}/keys/grant {envelopes}` | owner fills missing envelopes for the current epoch |
-| `POST /vaults/{v}/keys/rotate {new_epoch, chain_link, encrypted_meta, envelopes, objects}` | owner; `new_epoch = current + 1`; envelopes must cover exactly the members that have account keys; `objects` (`ObjectKeyChange {object_id, update}`) moves **every** note with a document key to its next epoch in the same transaction (each a rotation as in §5.1, wrapped under the new vault key), else `409` |
+| `POST /vaults/{v}/keys/rotate {new_epoch, chain_link, encrypted_meta, envelopes, objects, log_entry?}` | owner; `new_epoch = current + 1`; envelopes must cover exactly the members that have account keys; `objects` (`ObjectKeyChange {object_id, update}`) moves **every** note with a document key to its next epoch in the same transaction (each a rotation as in §5.1, wrapped under the new vault key), else `409` |
 | `GET /vaults/{v}/audit` | owner: membership, key and deletion events (no content) |
 | `GET /users/search?q=` | humans matching a display-name prefix or exact e-mail, plus the caller's own agents |
 | `GET /users/{id}` | public profile + account key of a user the caller may interact with |
@@ -189,6 +191,51 @@ only under the **current** document epoch; anything else is refused with
 `412 stale_key` (an older client still using the vault key, or a key that was
 just rotated). Clients reload keys and re-send. Rotating the vault key renews
 every note's key in the same request (removed members knew them).
+
+### 5.2 The membership log
+
+Every vault has a **membership log** (`crates/core/src/memberlog.rs`): a
+hash chain of entries signed by the vault's owner (a `leave` is signed by the
+member who leaves). Clients verify it against the owner's key — their own, or
+the one they pinned for the owner — so the server can neither add members nor
+hand out vault keys the owner didn't make.
+
+`LogEntry {seq, prev, signer, signed_at, body, signature}`; `seq` counts from
+0, `prev` is the previous entry's hash (32 zero bytes for the first). Bodies
+(`kind`):
+
+| `kind` | Fields | Means |
+|---|---|---|
+| `create` | `owner` (member), `key_commit` | first entry of a new vault; commits to epoch 1's key |
+| `checkpoint` | `members`, `epoch`, `key_commit` | first entry of a vault from before the log: its members as the owner's client saw them, trusted from here on |
+| `add` | `member` | someone joins (keys pinned; empty keys: "pending keys") |
+| `role` | `user_id`, `role` | a role changes (never to or from owner) |
+| `rekey` | `member` | the owner pins a member's (new) account keys |
+| `remove` / `leave` | `user_id` | someone is removed by the owner / leaves |
+| `rotate` | `epoch`, `key_commit` | the vault key moves to `epoch` (current + 1) |
+
+A member is `{user_id, role, enc_public, sign_public}`. The signature is
+Ed25519 over `statement("coolpsonotes/v1/sig/member-log", [vault_id,
+seq:u64be, prev, signer, signed_at:i64be, body])`, where `body` is a
+length-prefixed encoding of the fields (never JSON). An entry's hash is
+BLAKE3 (derive-key mode, context `coolpsonotes v1 member-log entry`) over its
+fields and signature. A key commitment is BLAKE3 (context `coolpsonotes v1
+vault key commitment`) over `statement("key", [vault_id, epoch:u32be, key])`.
+
+The server appends the entry that comes with a membership or key change in
+the same transaction, after checking that it continues the log, is signed by
+the caller with their stored account key, and says exactly what the request
+does (`400` otherwise, `409` if the log moved on meanwhile). Once a vault has
+a log, changes without an entry are refused with `409` (leaving excepted).
+Clients:
+
+* verify the whole log, and that it still contains the head they verified
+  before (no rollback, no rewritten history);
+* check every vault key they hold against its epoch's commitment (epochs from
+  before a checkpoint have none) and don't use a key that fails;
+* as the owner, wrap vault keys only for members the log lists with that role
+  and key, and pin a pending member's keys (`rekey`) before granting them;
+* as the owner of a vault without a log, sign a `checkpoint` when they open it.
 
 ## 6. The encrypted log
 

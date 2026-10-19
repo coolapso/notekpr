@@ -24,7 +24,7 @@ R6 started (`state/` split; the editor is its own crate with a document
 model, transactions and line-level rendering),
 R7 done (weekly fuzzing in CI). R1 done (sync engine crate, partial push
 acceptance), R2 done (every note has its own key; sharing starts a fresh,
-unlinked one). R3 is next.
+unlinked one). R3: the signed membership log is done; signed updates next.
 
 ## Decisions (2026-10-19)
 
@@ -434,14 +434,27 @@ key). Single-note and folder sharing become the same mechanism.
 Owners sign membership and key changes into a hash-chained log per vault that
 every client verifies; updates are signed by the author's key.
 
-- [ ] Signed, hash-chained membership/key log; clients refuse unsigned
-      changes.
+- [x] Signed, hash-chained membership/key log; clients refuse unsigned
+      changes. Owner-signed entries (create, checkpoint, add, role, rekey,
+      remove, rotate; leave by the member), vault keys committed to per
+      epoch, verified against the owner's pinned key and the last head seen;
+      the server checks and appends them atomically with each change and
+      refuses unsigned changes once a vault has a log; older vaults get a
+      checkpoint from their owner's client (core `memberlog`, sync
+      `members`, web and CLI).
+- [ ] Commit the document keys of individually shared notes too (an owner
+      signature on each share), so a server can't hand a recipient a note
+      key of its own.
 - [ ] Signed updates (authorship verifiable even against a colluding server).
 - [x] Bind the account key into device approval (interim fix): the
       verification code covers the account key; new devices pin it and refuse
       a secret of any other account, also on later unlocks [S-M5, W-M1].
+- [ ] Trust pins rolled back by replaying old prefs [W-M10]: a version
+      counter inside the encrypted prefs, the highest seen kept locally.
+- [ ] Recovery-key rotation replay [S-L8]: a counter in the signed recovery
+      update, kept by the server and checked by clients.
 - Resolves: the owner's client giving the vault key to any member the server
-  lists [C-H8]; new-device secret substitution [S-M5, W-M1]; trust pins
+  lists [C-H8] (done); new-device secret substitution [S-M5, W-M1]; trust pins
   rolled back by replaying old prefs [W-M10]; recovery-key rotation replay
   [S-L8]; pin checks in rotations [C-M7]; residual risk #2 in
   [security.md](docs/security.md) (viewers forging content with a colluding

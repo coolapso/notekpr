@@ -7,8 +7,9 @@
 use std::collections::HashMap;
 
 use coolpsonotes_core::protocol::{
-    ChangesResponse, INDEX_OBJECT_ID, ObjectState, PurgedObject, PushResult, PushUpdate, Snapshot,
-    SnapshotInfo, Update,
+    ChangesResponse, INDEX_OBJECT_ID, ObjectState, PurgedObject, PushResult, PushUpdate,
+    REJECT_PURGED, REJECT_STALE_KEY, REJECT_TOO_LARGE, RejectedUpdate, Snapshot, SnapshotInfo,
+    Update,
 };
 use sqlx::Row;
 
@@ -286,11 +287,26 @@ pub struct PushOutcome {
     pub results: Vec<PushResult>,
     /// Retries of updates that were already stored (not broadcast again).
     pub duplicates: Vec<PushResult>,
+    /// Updates refused one by one; the rest of the batch was stored.
+    pub rejected: Vec<RejectedUpdate>,
     pub head_seq: i64,
+}
+
+fn rejected(u: &PushUpdate, code: &str, message: &str) -> RejectedUpdate {
+    RejectedUpdate {
+        client_update_id: u.client_update_id.clone(),
+        object_id: u.object_id.clone(),
+        code: code.to_string(),
+        message: message.to_string(),
+    }
 }
 
 /// Append encrypted updates. Duplicate `client_update_id`s return the original
 /// sequence number without appending again, so clients can retry safely.
+/// An update that can't be stored on its own merits (too large, for a purged
+/// object, under an outdated key) is refused alone and listed in
+/// `rejected`; the others are stored. Malformed requests and missing access
+/// still fail the whole push.
 pub async fn push(
     state: &AppState,
     who: &Principal,
@@ -302,6 +318,7 @@ pub async fn push(
         return Ok(PushOutcome {
             results: vec![],
             duplicates: vec![],
+            rejected: vec![],
             head_seq: head_seq(&state.db, vault_id).await?,
         });
     }
@@ -317,10 +334,22 @@ pub async fn push(
         if u.payload.is_empty() {
             return Err(bad("empty payload"));
         }
-        if u.payload.len() > max {
-            return Err(AppError::TooLarge);
-        }
     }
+    let mut refused = Vec::new();
+    let updates: Vec<PushUpdate> = updates
+        .into_iter()
+        .filter(|u| {
+            let ok = u.payload.len() <= max;
+            if !ok {
+                refused.push(rejected(
+                    u,
+                    REJECT_TOO_LARGE,
+                    "larger than the server's update limit",
+                ));
+            }
+            ok
+        })
+        .collect();
     // Access is checked under the write lock, so a push can't land after
     // the writer was removed (membership changes take the same lock).
     let _w = state.write_lock.lock().await;
@@ -363,13 +392,22 @@ pub async fn push(
         .bind(&u.object_id)
         .fetch_optional(&mut *tx)
         .await?;
-        check_payload_key(vault_epoch, obj.and_then(|o| o.1), &u.payload)?;
+        match check_payload_key(vault_epoch, obj.and_then(|o| o.1), &u.payload) {
+            Ok(()) => {}
+            Err(AppError::StaleKey(m)) => {
+                refused.push(rejected(&u, REJECT_STALE_KEY, &m));
+                continue;
+            }
+            Err(e) => return Err(e),
+        }
         match obj.map(|o| o.0) {
             Some(Some(_)) => {
-                return Err(conflict(format!(
-                    "object {} was permanently deleted",
-                    u.object_id
-                )));
+                refused.push(rejected(
+                    &u,
+                    REJECT_PURGED,
+                    "the note was permanently deleted",
+                ));
+                continue;
             }
             Some(None) => {
                 sqlx::query("UPDATE objects SET updated_at = ? WHERE vault_id = ? AND id = ?")
@@ -446,6 +484,7 @@ pub async fn push(
     Ok(PushOutcome {
         results,
         duplicates,
+        rejected: refused,
         head_seq: head,
     })
 }

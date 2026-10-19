@@ -183,7 +183,7 @@ vault's events in strictly increasing order without gaps.**
 
 | Endpoint | Notes |
 |---|---|
-| `POST /vaults/{v}/updates {updates: [{object_id, client_update_id, payload}]}` | editor/owner. Idempotent per `client_update_id`: a retry returns the original `seq`. Objects are created on first write. Writing to a purged object → `409`. |
+| `POST /vaults/{v}/updates {updates: [{object_id, client_update_id, payload}]}` → `{results, head_seq, rejected?}` | editor/owner. Idempotent per `client_update_id`: a retry returns the original `seq`. Objects are created on first write. An update that can't be stored on its own merits is refused alone and listed in `rejected: [{client_update_id, object_id, code, message}]` with `code` `too_large` (over `max_update_bytes`), `purged` (the object was permanently deleted) or `stale_key` (encrypted with an outdated key: reload keys, re-encrypt, send again); the rest of the batch is stored. Malformed requests, a batch over 500 updates and missing write access still fail the whole push. (Servers before this answered `413` / `409` / `412` for the whole batch; clients handle both.) |
 | `GET /vaults/{v}/changes?since=S&limit=N&snapshots=true` | `ChangesResponse {updates, snapshots, purged, head_seq, has_more, next_since}`. For any object whose latest snapshot covers part of `(S, head]`, the snapshot is returned **instead of** the updates it covers. Request further pages with `since=next_since&snapshots=false`. |
 | `GET /vaults/{v}/objects/{o}` | `ObjectState`: latest snapshot + updates after it |
 | `POST /vaults/{v}/objects/{o}/snapshots {snapshot_id, covers_seq, payload}` | editor/owner. Store a compaction (`payload` = encrypted full state). Updates covered by the *previous* snapshot are pruned — one generation is always kept so a bad snapshot is recoverable. One snapshot per person and note per `--snapshot-cooldown-secs` (default 30 s; `429` otherwise). |
@@ -213,7 +213,7 @@ Client → server: `auth {token}` (must be first, within 10 s),
 Server → client: `ready {user_id, session_id, conn_id}`,
 `changes {vault_id, changes}` (catch-up pages after `subscribe` with `since`),
 `synced {vault_id, head_seq, object_id?}`, `update {vault_id, update}`,
-`ack {vault_id, results}` (your own pushes, delivered in log order),
+`ack {vault_id, results, rejected?}` (your own pushes, delivered in log order; `rejected` as for the REST push),
 `snapshot {vault_id, snapshot}` (a snapshot someone else stored), `snapshot_created {…}` (yours),
 `purged {vault_id, object_id, seq}`,
 `awareness {vault_id, object_id, from_user, from_conn, payload}` (empty payload = that connection left),

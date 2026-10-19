@@ -379,14 +379,12 @@ async fn pushes_are_idempotent_and_snapshots_compact() {
         204
     );
     let u = note.set_text("zombie").unwrap();
-    assert_eq!(
-        alice
-            .push(&v, vec![alice.encrypt_update(&v, "n", &u)])
-            .await
-            .unwrap_err()
-            .0,
-        409
-    );
+    let resp = alice
+        .push(&v, vec![alice.encrypt_update(&v, "n", &u)])
+        .await
+        .unwrap();
+    assert!(resp.results.is_empty());
+    assert_eq!(resp.rejected[0].code, REJECT_PURGED);
     let ch: ChangesResponse = alice.api.get(&format!("/vaults/{v}/changes?since=5")).await;
     assert_eq!(
         ch.purged,
@@ -1050,11 +1048,9 @@ async fn attachments_prefs_admin_and_limits() {
             payload: vec![0; 3 * 1024 * 1024],
         }],
     };
-    let st = alice
-        .api
-        .status(Method::POST, &format!("/vaults/{v}/updates"), Some(&big))
-        .await;
-    assert_eq!(st, 413);
+    let resp = alice.push(&v, big.updates).await.unwrap();
+    assert!(resp.results.is_empty());
+    assert_eq!(resp.rejected[0].code, REJECT_TOO_LARGE);
     // Unknown API routes are JSON 404s; unauthenticated calls are 401.
     assert_eq!(
         alice.api.status::<()>(Method::GET, "/nope", None).await,
@@ -1449,7 +1445,9 @@ async fn individual_note_sharing() {
 
     // A client that still encrypts the shared note with the vault key is told to reload keys.
     let stale = alice.encrypt_update(&v, "n1", &n1.set_text("stale").unwrap());
-    assert_eq!(alice.push(&v, vec![stale]).await.unwrap_err().0, 412);
+    let resp = alice.push(&v, vec![stale]).await.unwrap();
+    assert_eq!(resp.rejected[0].code, REJECT_STALE_KEY);
+    assert!(resp.results.is_empty());
 
     // Bob edits (editor share); Alice reads it with the document key.
     let pb = br
@@ -1587,21 +1585,18 @@ async fn individual_note_sharing() {
     let old = br
         .local_change("n1", br.notes.get("n1").unwrap().set_text("x").unwrap())
         .unwrap();
-    assert_eq!(
-        alice
-            .push(
-                &v,
-                vec![PushUpdate {
-                    object_id: "n1".into(),
-                    client_update_id: random_id(),
-                    payload: old.payload
-                }]
-            )
-            .await
-            .unwrap_err()
-            .0,
-        412
-    );
+    let resp = alice
+        .push(
+            &v,
+            vec![PushUpdate {
+                object_id: "n1".into(),
+                client_update_id: random_id(),
+                payload: old.payload,
+            }],
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.rejected[0].code, REJECT_STALE_KEY);
     // Carol still reads everything through the key chain.
     let ckeys: ObjectKeysResponse = carol.api.get(&format!("/vaults/{v}/objects/n1/keys")).await;
     let cring =
@@ -1744,7 +1739,8 @@ async fn writes_with_a_replaced_vault_key_are_refused() {
     alice.rotate(&v).await;
     let u = note.set_text("after").unwrap();
     let stale = bob.encrypt_update(&v, "n1", &u);
-    assert_eq!(bob.push(&v, vec![stale]).await.unwrap_err().0, 412);
+    let resp = bob.push(&v, vec![stale]).await.unwrap();
+    assert_eq!(resp.rejected[0].code, REJECT_STALE_KEY);
     // Snapshots too.
     let snap = CreateSnapshotRequest {
         snapshot_id: random_id(),
@@ -1886,4 +1882,75 @@ async fn snapshots_of_one_note_by_one_person_have_a_cooldown() {
         alice.api.status(Method::POST, &path, Some(&snap())).await,
         429
     );
+}
+
+#[tokio::test]
+async fn one_bad_update_does_not_block_its_batch() {
+    let srv = start().await;
+    let mut alice = new_user(&srv.base, "alice").await;
+    let v = alice.create_vault("Home").await;
+    let note = NoteDoc::new();
+    let good1 = alice.encrypt_update(&v, "n", &note.set_text("one").unwrap());
+    let good2 = alice.encrypt_update(&v, "n", &note.set_text("one two").unwrap());
+    let big = PushUpdate {
+        object_id: "m".into(),
+        client_update_id: random_id(),
+        payload: vec![1; 3 * 1024 * 1024],
+    };
+    let big_id = big.client_update_id.clone();
+    let resp = alice
+        .push(&v, vec![good1.clone(), big, good2.clone()])
+        .await
+        .unwrap();
+    let stored: Vec<&str> = resp
+        .results
+        .iter()
+        .map(|r| r.client_update_id.as_str())
+        .collect();
+    assert_eq!(
+        stored,
+        vec![good1.client_update_id.as_str(), good2.client_update_id.as_str()]
+    );
+    assert_eq!(resp.rejected.len(), 1);
+    assert_eq!(resp.rejected[0].client_update_id, big_id);
+    assert_eq!(resp.rejected[0].object_id, "m");
+    assert_eq!(resp.rejected[0].code, REJECT_TOO_LARGE);
+
+    // Over the WebSocket the refusal comes in an acknowledgement.
+    let mut ws = Ws::connect(&srv.ws, alice.api.token.as_ref().unwrap()).await;
+    ws.send(&ClientMessage::Subscribe {
+        vault_id: v.clone(),
+        since: Some(resp.head_seq),
+        object_id: None,
+    })
+    .await;
+    ws.until(|m| matches!(m, ServerMessage::Synced { .. }).then_some(()))
+        .await;
+    let good3 = alice.encrypt_update(&v, "n", &note.set_text("one two three").unwrap());
+    let big = PushUpdate {
+        object_id: "m".into(),
+        client_update_id: random_id(),
+        payload: vec![1; 3 * 1024 * 1024],
+    };
+    ws.send(&ClientMessage::Push {
+        vault_id: v.clone(),
+        updates: vec![big, good3.clone()],
+    })
+    .await;
+    let mut acked = Vec::new();
+    let mut refused = Vec::new();
+    while acked.is_empty() || refused.is_empty() {
+        let (a, r) = ws
+            .until(|m| match m {
+                ServerMessage::Ack {
+                    results, rejected, ..
+                } => Some((results.clone(), rejected.clone())),
+                _ => None,
+            })
+            .await;
+        acked.extend(a);
+        refused.extend(r);
+    }
+    assert_eq!(acked[0].client_update_id, good3.client_update_id);
+    assert_eq!(refused[0].code, REJECT_TOO_LARGE);
 }

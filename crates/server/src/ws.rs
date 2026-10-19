@@ -340,11 +340,13 @@ impl Conn {
                 }
                 match sync::push(&self.state, &self.who, &vault_id, updates, self.conn_id).await {
                     // Fresh updates are acknowledged in log order by the
-                    // subscription; retries of known updates are acked here.
-                    Ok(out) if !out.duplicates.is_empty() => {
+                    // subscription; retries of known updates and refusals
+                    // of single updates are answered here.
+                    Ok(out) if !out.duplicates.is_empty() || !out.rejected.is_empty() => {
                         self.send(ServerMessage::Ack {
                             vault_id,
                             results: out.duplicates,
+                            rejected: out.rejected,
                         })
                         .await;
                     }
@@ -529,6 +531,7 @@ async fn forward(
                             client_update_id: client_update_id.clone(),
                             seq: update.seq,
                         }],
+                        rejected: vec![],
                     }
                 } else {
                     ServerMessage::Update {

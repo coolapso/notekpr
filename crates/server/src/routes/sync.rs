@@ -93,6 +93,7 @@ pub async fn push(
     Ok(Json(PushResponse {
         results: out.results,
         head_seq: out.head_seq,
+        rejected: out.rejected,
     }))
 }
 

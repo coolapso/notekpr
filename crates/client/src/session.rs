@@ -10,6 +10,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use coolpsonotes_core::engine::{self, Applied, PinStatus, VaultMeta, VaultReplica};
 use coolpsonotes_core::keys::{AccountSecret, VaultKeyring};
 use coolpsonotes_core::protocol::*;
+use coolpsonotes_sync::SnapshotAction;
 use tokio::sync::{Mutex, OnceCell};
 
 use crate::api::{Api, ApiError, Credentials};
@@ -17,7 +18,7 @@ use crate::profile::{Dirs, Profile, ProfileStore, ServerLimits};
 use crate::secrets::{LocalKey, SecretStore};
 use crate::store::{VaultStore, valid_id};
 use crate::ui;
-use crate::vault::{Vault, merge_applied};
+use crate::vault::{Keys, Vault, merge_applied};
 
 pub type SharedVault = Arc<Mutex<Vault>>;
 
@@ -192,21 +193,20 @@ impl Session {
 
     /// Fetch and unwrap this principal's keys for a vault.
     pub async fn keyring(&self, vault_id: &str) -> Result<VaultKeyring> {
-        Ok(self.keys(vault_id).await?.0)
+        Ok(self.keys(vault_id).await?.ring)
     }
 
-    /// Vault keyring plus the document keyrings of its individually shared notes.
-    pub async fn keys(
-        &self,
-        vault_id: &str,
-    ) -> Result<(
-        VaultKeyring,
-        std::collections::HashMap<String, VaultKeyring>,
-    )> {
+    /// Vault keyring plus the document keyrings of its notes.
+    pub async fn keys(&self, vault_id: &str) -> Result<Keys> {
         let r = self.api.vault_keys(vault_id).await?;
         let ring = engine::keyring_from_response(&self.account, &self.user_id, vault_id, &r)?;
         let docs = engine::object_keyrings(&ring, &r);
-        Ok((ring, docs))
+        Ok(Keys {
+            ring,
+            docs,
+            shared: engine::shared_objects(&r),
+            note_keys: r.shared.is_some(),
+        })
     }
 
     /// Open a vault the server listed: the local replica if there is one
@@ -216,14 +216,15 @@ impl Session {
         let mut v = match Vault::load(store.clone())? {
             Some(v) => v,
             None => {
-                let (ring, docs) = self.keys(&info.id).await?;
-                let meta = VaultMeta::decrypt(&ring, &info.encrypted_meta).unwrap_or_else(|e| {
-                    tracing::warn!("cannot decrypt vault metadata: {e}");
-                    VaultMeta::named(&info.id)
-                });
-                let mut replica = VaultReplica::new(&info.id, info.role, ring, meta);
-                replica.doc_keys = docs;
+                let keys = self.keys(&info.id).await?;
+                let meta =
+                    VaultMeta::decrypt(&keys.ring, &info.encrypted_meta).unwrap_or_else(|e| {
+                        tracing::warn!("cannot decrypt vault metadata: {e}");
+                        VaultMeta::named(&info.id)
+                    });
+                let replica = VaultReplica::new(&info.id, info.role, keys.ring.clone(), meta);
                 let mut v = Vault::new(store, replica, &info.owner_id, info.archived);
+                v.set_keys(keys);
                 v.save()?;
                 v
             }
@@ -235,9 +236,11 @@ impl Session {
     /// Bring role, archive flag, keys and name in line with the server.
     pub async fn apply_info(&self, v: &mut Vault, info: &VaultInfo) -> Result<()> {
         v.set_update_limit(self.limits().max_update_bytes);
-        if v.replica.keyring.current_epoch().unwrap_or(0) < info.key_epoch {
-            let (ring, docs) = self.keys(&info.id).await?;
-            v.set_keys(ring, docs);
+        // (Copies from before notes had their own keys learn whether the
+        // server keeps them.)
+        if v.replica.keyring.current_epoch().unwrap_or(0) < info.key_epoch || !v.outbox.note_keys {
+            let keys = self.keys(&info.id).await?;
+            v.set_keys(keys);
         }
         v.replica.role = info.role;
         v.owner_id = info.owner_id.clone();
@@ -253,9 +256,9 @@ impl Session {
 
     pub async fn refresh_keys(&self, vault: &SharedVault) -> Result<()> {
         let id = vault.lock().await.id().to_string();
-        let (ring, docs) = self.keys(&id).await?;
+        let keys = self.keys(&id).await?;
         let mut v = vault.lock().await;
-        v.set_keys(ring, docs);
+        v.set_keys(keys);
         v.save()
     }
 
@@ -349,6 +352,7 @@ impl Session {
             }
         }
         let mut rekeyed = false;
+        let mut stale_note_key = false;
         // Known even offline (remembered), never "unlimited".
         let max = self.limits().max_update_bytes;
         {
@@ -369,6 +373,49 @@ impl Session {
             };
             if plan.is_empty() {
                 break;
+            }
+            // New notes' own keys first; their content follows next round.
+            for k in &plan.register {
+                let path = format!("/vaults/{id}/objects/{}/key", k.object_id);
+                match self.api.put::<_, ()>(&path, &k.update).await {
+                    Ok(()) => {
+                        let mut v = vault.lock().await;
+                        v.key_registered(&k.object_id);
+                        v.save()?;
+                    }
+                    Err(e) if e.is_offline() => {
+                        out.offline = true;
+                        break 'rounds;
+                    }
+                    // Wrapped under a vault key that was replaced meanwhile:
+                    // a new key under the current one (once; then the note
+                    // stays under the vault key).
+                    Err(e) if e.status() == Some(412) => {
+                        self.refresh_keys(vault).await?;
+                        let mut v = vault.lock().await;
+                        v.key_refused(&k.object_id, !stale_note_key);
+                        stale_note_key = true;
+                        v.save()?;
+                    }
+                    // Refused (403: e.g. no write access any more, which the
+                    // pushes below find out). Perhaps it is registered and
+                    // the answer got lost: fresh keys show
+                    // (`Outbox::keys_reloaded`).
+                    Err(e) if matches!(e.status(), Some(400 | 403 | 409)) => {
+                        self.refresh_keys(vault).await?;
+                        let mut v = vault.lock().await;
+                        if v.outbox.waits_for_key(&k.object_id) {
+                            tracing::warn!(vault = %id, "the server refused a new note's own key ({e}); it is encrypted with the vault key instead");
+                            v.key_refused(&k.object_id, false);
+                        }
+                        v.save()?;
+                    }
+                    Err(e) if e.status() == Some(404) => {
+                        return Err(anyhow!(e)
+                            .context("the vault no longer exists or you lost access to it"));
+                    }
+                    Err(e) => return Err(anyhow!(e).context("registering a new note's key")),
+                }
             }
             let mut pushes = plan.pushes.into_iter();
             while let Some(batch) = pushes.next() {
@@ -497,22 +544,44 @@ impl Session {
             Err(e) if e.is_offline() => return Ok(false),
             Err(e) => return Err(anyhow!(e).context("catching up before a snapshot")),
         }
-        let req = {
+        let action = {
             let v = vault.lock().await;
-            match coolpsonotes_sync::snapshot_now(&v.replica, &v.outbox, oid, None) {
-                Some(req) => req,
+            match coolpsonotes_sync::snapshot_action(&v.replica, &v.outbox, oid, None) {
+                Some(a) => a,
                 None => return Ok(false),
             }
         };
-        match self.api.create_snapshot(id, oid, &req).await {
-            Ok(_) => {
+        let res = match &action {
+            SnapshotAction::Snapshot(req) => {
+                self.api.create_snapshot(id, oid, req).await.map(|_| ())
+            }
+            // An older note moves to its own key, with this snapshot under it.
+            SnapshotAction::AdoptKey { update, .. } => {
+                self.api
+                    .put::<_, ()>(&format!("/vaults/{id}/objects/{oid}/key"), update)
+                    .await
+            }
+        };
+        match res {
+            Ok(()) => {
                 let mut v = vault.lock().await;
+                if let SnapshotAction::AdoptKey { ring, .. } = action {
+                    v.set_note_keyring(oid, ring);
+                }
                 v.replica.snapshot_created(oid);
                 v.mark_state_dirty();
                 v.save()?;
                 Ok(true)
             }
             Err(e) if e.is_offline() => Ok(false),
+            // Someone else gave it a key, or changes arrived meanwhile: next time.
+            Err(e)
+                if matches!(action, SnapshotAction::AdoptKey { .. })
+                    && matches!(e.status(), Some(409 | 412)) =>
+            {
+                self.refresh_keys(vault).await?;
+                Ok(false)
+            }
             Err(e) => Err(anyhow!(e).context("uploading a snapshot")),
         }
     }
@@ -666,19 +735,68 @@ impl Session {
         Ok(())
     }
 
-    /// Move the vault to a new key epoch for the current members. Refuses if a
-    /// member's key no longer matches its pin.
+    /// Move the vault to a new key epoch for the current members, and every
+    /// note's key with it (removed members knew those too). Refuses if a
+    /// member's or a recipient's key no longer matches its pin.
     pub async fn rotate_keys(&self, vault: &SharedVault) -> Result<u32> {
         let id = vault.lock().await.id().to_string();
         for attempt in 0..2 {
+            // The rotation must cover exactly the notes the server has keys for.
+            self.refresh_keys(vault).await?;
             let members = self.api.members(&id).await?;
             let users: Vec<PublicUser> = members.iter().map(|m| m.user.clone()).collect();
             self.refuse_changed_keys(&users, "vault")?;
-            let (req, ring) = {
+            let (keyed, shared) = {
                 let v = vault.lock().await;
+                let keyed: Vec<String> = v
+                    .replica
+                    .doc_keys
+                    .keys()
+                    .filter(|o| !v.outbox.waits_for_key(o))
+                    .cloned()
+                    .collect();
+                (keyed, v.replica.shared.clone())
+            };
+            let mut recipients = std::collections::HashMap::new();
+            for oid in keyed.iter().filter(|o| shared.contains(*o)) {
+                let shares: Vec<coolpsonotes_core::protocol::ObjectShareInfo> = match self
+                    .api
+                    .get(&format!("/vaults/{id}/objects/{oid}/shares"))
+                    .await
+                {
+                    Ok(s) => s,
+                    Err(e) if e.is_not_found() => vec![],
+                    Err(e) => {
+                        return Err(anyhow!(e).context("listing a shared note's recipients"));
+                    }
+                };
+                let users: Vec<PublicUser> = shares.into_iter().map(|s| s.user).collect();
+                self.refuse_changed_keys(&users, "note")?;
+                recipients.insert(oid.clone(), users);
+            }
+            let (req, ring, rings) = {
+                let v = vault.lock().await;
+                let notes: Vec<_> = keyed
+                    .iter()
+                    .map(|oid| {
+                        let title = v
+                            .replica
+                            .index
+                            .get(oid)
+                            .map(|e| e.title().to_string())
+                            .unwrap_or_default();
+                        (
+                            oid.clone(),
+                            &v.replica.doc_keys[oid],
+                            title,
+                            recipients.remove(oid).unwrap_or_default(),
+                        )
+                    })
+                    .collect();
                 let mut ring = v.replica.keyring.clone();
-                let req = engine::rotate(&mut ring, &members, &v.replica.meta)?;
-                (req, ring)
+                let (req, rings) =
+                    engine::rotate_with_notes(&mut ring, &members, &v.replica.meta, &notes)?;
+                (req, ring, rings)
             };
             match self
                 .api
@@ -686,78 +804,32 @@ impl Session {
                 .await
             {
                 Ok(()) => {
-                    {
-                        let mut v = vault.lock().await;
-                        v.set_keyring(ring);
-                        v.save()?;
+                    let mut v = vault.lock().await;
+                    v.set_keyring(ring);
+                    for (oid, next) in rings {
+                        v.set_note_keyring(&oid, next);
                     }
-                    // Removed members knew the document keys of shared notes too.
-                    self.rotate_document_keys(vault).await?;
+                    // New notes' keys not registered yet were wrapped under
+                    // the old vault key.
+                    let waiting: Vec<String> = v
+                        .outbox
+                        .new_keys
+                        .iter()
+                        .map(|k| k.object_id.clone())
+                        .collect();
+                    for oid in waiting {
+                        v.key_refused(&oid, true);
+                    }
+                    v.save()?;
                     return Ok(req.new_epoch);
                 }
-                // Membership changed meanwhile, or someone else rotated: retry once.
-                Err(e) if e.status() == Some(409) && attempt == 0 => {
-                    self.refresh_keys(vault).await?;
-                }
+                // Membership or notes changed meanwhile, or someone else
+                // rotated: retry once with fresh keys.
+                Err(e) if e.status() == Some(409) && attempt == 0 => {}
                 Err(e) => return Err(anyhow!(e).context("rotating the vault key")),
             }
         }
         bail!("could not rotate the vault key (membership keeps changing); try again")
-    }
-}
-
-impl Session {
-    /// Give every individually shared note of a vault a fresh document key,
-    /// wrapped under the vault's current key and for its current recipients.
-    pub async fn rotate_document_keys(&self, vault: &SharedVault) -> Result<()> {
-        let (id, notes) = {
-            let v = vault.lock().await;
-            (
-                v.id().to_string(),
-                v.replica.doc_keys.keys().cloned().collect::<Vec<_>>(),
-            )
-        };
-        for oid in notes {
-            // Deleted for good meanwhile: nothing left to protect.
-            if vault.lock().await.replica.purged.contains(&oid) {
-                continue;
-            }
-            let shares: Vec<coolpsonotes_core::protocol::ObjectShareInfo> = match self
-                .api
-                .get(&format!("/vaults/{id}/objects/{oid}/shares"))
-                .await
-            {
-                Ok(s) => s,
-                Err(e) if e.is_not_found() => continue,
-                Err(e) => return Err(anyhow!(e).context("listing a shared note's recipients")),
-            };
-            let users: Vec<_> = shares.into_iter().map(|s| s.user).collect();
-            self.refuse_changed_keys(&users, "note")?;
-            let (next, req) = {
-                let v = vault.lock().await;
-                let title = v
-                    .replica
-                    .index
-                    .get(&oid)
-                    .map(|e| e.title().to_string())
-                    .unwrap_or_default();
-                engine::rotate_object_key(
-                    &v.replica.keyring,
-                    &v.replica.doc_keys[&oid],
-                    &oid,
-                    &title,
-                    &users,
-                )?
-            };
-            self.api
-                .put::<_, ()>(&format!("/vaults/{id}/objects/{oid}/key"), &req)
-                .await?;
-            let mut v = vault.lock().await;
-            v.replica.doc_keys.insert(oid, next);
-            v.mark_state_dirty();
-            v.save()?;
-        }
-        Ok(())
     }
 }
 

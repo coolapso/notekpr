@@ -87,6 +87,17 @@ pub struct Vault {
     detached: bool,
 }
 
+/// A vault's keys as the server gives them to this principal.
+pub struct Keys {
+    pub ring: VaultKeyring,
+    /// Document keyrings of its notes (any note may have one).
+    pub docs: std::collections::HashMap<String, VaultKeyring>,
+    /// Notes shared with someone individually.
+    pub shared: BTreeSet<String>,
+    /// The server keeps a key per note (R2).
+    pub note_keys: bool,
+}
+
 /// Apply text edits to a note as one or more updates within `budget`
 /// bytes each (see `coolpsonotes_sync::edits`).
 pub fn apply_edits_chunked(doc: &NoteDoc, edits: &[Edit], budget: usize) -> Vec<Vec<u8>> {
@@ -209,6 +220,10 @@ impl Vault {
             }
             r.doc_keys.insert(oid.clone(), dr);
         }
+        r.shared = s
+            .shared
+            .clone()
+            .unwrap_or_else(|| r.doc_keys.keys().cloned().collect());
         r.seq = s.seq;
         r.max_head_seen = s.max_head_seen;
         r.since_snapshot = s.since_snapshot.into_iter().collect();
@@ -242,6 +257,10 @@ impl Vault {
                 tracing::warn!("a queued local change could not be re-applied: {e}");
             }
         }
+        let mut outbox = Outbox::with_held(quarantined);
+        outbox.new_keys = s.new_keys;
+        outbox.note_keys = s.note_keys;
+        outbox.restore_new_keys(&mut r);
         Ok(Some(Vault {
             replica: r,
             owner_id: s.owner_id,
@@ -249,7 +268,7 @@ impl Vault {
             read_only: s.read_only,
             pending_blobs: s.pending_blobs,
             last_sync: s.last_sync,
-            outbox: Outbox::with_held(quarantined),
+            outbox,
             limits: Limits::default(),
             store,
             dirty_objects: BTreeSet::new(),
@@ -351,6 +370,9 @@ impl Vault {
             meta: self.replica.meta.clone(),
             keys,
             doc_keys,
+            shared: Some(self.replica.shared.clone()),
+            new_keys: self.outbox.new_keys.clone(),
+            note_keys: self.outbox.note_keys,
             deferred: self.replica.deferred.clone(),
             seq: self.replica.seq,
             max_head_seen: self.replica.max_head_seen,
@@ -451,16 +473,39 @@ impl Vault {
         self.dirty_state = true;
     }
 
-    /// Replace the vault keyring and the document keyrings of shared notes.
-    pub fn set_keys(
-        &mut self,
-        ring: VaultKeyring,
-        doc_keys: std::collections::HashMap<String, VaultKeyring>,
-    ) {
-        self.replica.keyring = ring;
-        self.replica.doc_keys = doc_keys;
+    /// Replace the vault keyring and the notes' document keyrings with what
+    /// the server has.
+    pub fn set_keys(&mut self, keys: Keys) {
+        self.replica.keyring = keys.ring;
+        self.replica.doc_keys = keys.docs;
+        self.replica.shared = keys.shared;
+        self.outbox.keys_reloaded(&mut self.replica, keys.note_keys);
         self.dirty_state = true;
         self.retry_deferred();
+    }
+
+    /// The server stored a new note's key.
+    pub fn key_registered(&mut self, object_id: &str) {
+        self.outbox.key_registered(object_id);
+        self.dirty_state = true;
+    }
+
+    /// The server refused a new note's key: `stale` if it was wrapped under
+    /// an outdated vault key (a new one replaces it), otherwise the note
+    /// stays under the vault key.
+    pub fn key_refused(&mut self, object_id: &str, stale: bool) {
+        if stale {
+            self.outbox.key_stale(&mut self.replica, object_id);
+        } else {
+            self.outbox.key_refused(&mut self.replica, object_id);
+        }
+        self.dirty_state = true;
+    }
+
+    /// The server accepted `ring` as a note's (new) keyring.
+    pub fn set_note_keyring(&mut self, object_id: &str, ring: VaultKeyring) {
+        self.replica.doc_keys.insert(object_id.to_string(), ring);
+        self.dirty_state = true;
     }
 
     pub fn set_meta(&mut self, meta: VaultMeta) {
@@ -791,6 +836,13 @@ impl Vault {
             None,
         );
         self.record_index(u)?;
+        // Its own key, registered before any of its content is uploaded.
+        if self
+            .outbox
+            .new_document_key(&mut self.replica, &id, paths::title(&p))
+        {
+            self.dirty_state = true;
+        }
         Ok(WriteResult {
             id,
             path: p,

@@ -1,8 +1,9 @@
 //! Sharing single notes: the owner's side (share/unshare a note of a vault)
 //! and the recipient's side (read and edit notes shared with you).
 //!
-//! A shared note gets its own document key; see `engine::start_sharing`.
-//! Recipients never receive the vault key or the vault index.
+//! Sharing starts with a fresh document key that has no link to the note's
+//! earlier keys (`engine::start_sharing_keyed`), so recipients get the note
+//! from then on only. They never receive the vault key or the vault index.
 
 use anyhow::{Context, Result, anyhow, bail};
 use coolpsonotes_core::engine::{self, ObjectMeta, PinStatus, VaultReplica};
@@ -80,6 +81,12 @@ pub async fn share_note(
         }
         Err(e) => return Err(anyhow!(e).context("sharing the note")),
     }
+    {
+        let mut v = vault.lock().await;
+        v.replica.shared.insert(note_id.clone());
+        v.mark_state_dirty();
+        v.save()?;
+    }
     Ok(ShareOutcome {
         user,
         fingerprint: Some(verified.fingerprint),
@@ -89,8 +96,9 @@ pub async fn share_note(
     })
 }
 
-/// Make sure a note has a document key, creating it (with a covering
-/// snapshot under the new key) if needed.
+/// Make sure a note can be shared: if nobody has it yet, move it to a fresh
+/// document key (with a covering snapshot under it) that its earlier keys
+/// can't be derived from.
 async fn ensure_document_key(
     session: &Session,
     vault: &SharedVault,
@@ -119,7 +127,20 @@ async fn ensure_document_key(
                 .note(note_id)
                 .map(|n| n.encode_state())
                 .unwrap_or_default();
-            engine::start_sharing(&v.replica.keyring, note_id, &title, &state, v.replica.seq)?
+            let keyring = &v.replica.keyring;
+            match v.replica.doc_keys.get(note_id) {
+                Some(doc) if !v.outbox.waits_for_key(note_id) => engine::start_sharing_keyed(
+                    keyring,
+                    doc,
+                    note_id,
+                    &title,
+                    &state,
+                    v.replica.seq,
+                )?,
+                // No key yet, or a new note's key the server doesn't know
+                // (sharing starts with a key of its own instead).
+                _ => engine::start_sharing(keyring, note_id, &title, &state, v.replica.seq)?,
+            }
         };
         match session
             .api
@@ -128,8 +149,8 @@ async fn ensure_document_key(
         {
             Ok(()) => {
                 let mut v = vault.lock().await;
-                v.replica.doc_keys.insert(note_id.to_string(), ring);
-                v.mark_state_dirty();
+                v.outbox.key_registered(note_id);
+                v.set_note_keyring(note_id, ring);
                 v.save()?;
                 return Ok(());
             }
@@ -223,8 +244,10 @@ pub async fn rotate_note_key(
         .await
         .context("rotating the note key")?;
     let mut v = vault.lock().await;
-    v.replica.doc_keys.insert(note_id.to_string(), next);
-    v.mark_state_dirty();
+    v.set_note_keyring(note_id, next);
+    if users.is_empty() {
+        v.replica.shared.remove(note_id);
+    }
     v.save()
 }
 

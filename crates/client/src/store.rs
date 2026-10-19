@@ -51,9 +51,20 @@ pub struct StoredState {
     pub meta: VaultMeta,
     /// Vault key per epoch (base64). Needed to read the replica offline.
     pub keys: BTreeMap<u32, String>,
-    /// Document keys of individually shared notes: object id → epoch → key (base64).
+    /// Document keys of notes: object id → epoch → key (base64).
     #[serde(default)]
     pub doc_keys: BTreeMap<String, BTreeMap<u32, String>>,
+    /// Notes shared with someone individually. Absent in copies written
+    /// before notes had their own keys: then every note with a key is shared.
+    #[serde(default)]
+    pub shared: Option<BTreeSet<String>>,
+    /// Keys of new notes not registered with the server yet (wrapped under
+    /// the vault key; see `coolpsonotes_sync::Outbox::new_keys`).
+    #[serde(default)]
+    pub new_keys: Vec<coolpsonotes_sync::NewKey>,
+    /// The server keeps a key per note.
+    #[serde(default)]
+    pub note_keys: bool,
     /// Received content waiting for a key (already encrypted).
     #[serde(default)]
     pub deferred: Vec<coolpsonotes_core::engine::Deferred>,

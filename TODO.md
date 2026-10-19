@@ -15,6 +15,15 @@ tracks](#redesign-tracks). Those findings are listed under their track and
 not repeated in the phases, unless they are too dangerous to wait — then the
 phase has an *interim* fix and the track owns the real one.
 
+## Status (end of 2026-10-19)
+
+Phases 1–3 are done, and Phase 4 except the OS keyring for CLI secrets
+[C-H9] (needs a backend decision) and partial acceptance of rejected push
+batches (left to R1). Redesign tracks: R5 mostly (encrypted IndexedDB copy,
+per-tab unsent changes; offline start open), R6 started (`state/` split),
+R7 done apart from a nightly fuzz job. R1, R2 and R3 are next, each in its
+own session.
+
 ## Decisions (2026-10-19)
 
 - **SQLite only**, also for a hosted offering: one database per instance, grow
@@ -39,7 +48,7 @@ phase has an *interim* fix and the track owns the real one.
 - [x] Removed the stdio MCP server (`coolpsonotes mcp`) and its tests; docs
       explain why and describe the remote connector idea.
 - [x] Guide for using your own editor with an always-running mirror:
-      [docs/own-editor.md](docs/own-editor.md) (incl. known mirror limitations).
+      [docs/own-editor.md](docs/own-editor.md).
 - [x] Recorded the SQLite-only and agent-access decisions in
       [docs/architecture.md](docs/architecture.md) (also fixes its inaccurate
       "Postgres can be added behind the same queries" [D-L9]).

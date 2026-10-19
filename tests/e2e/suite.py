@@ -113,6 +113,25 @@ def share(owner, vault_btn_css, user, role="editor"):
 def test_onboarding(env):
     b = Browser()
     try:
+        # A reload on the recovery-key screen shows the same key again.
+        b.go(env.url)
+        b.find(".dev-box input", 20)
+        b.type(".dev-box input", uniq("eve"))
+        b.click(".dev-box button[type=submit]")
+        b.click_el(b.find_text(".auth-card button", "Create my keys", 15))
+        key = b.find_text(".recovery-key", "-", 15) and b.js("return document.querySelector('.recovery-key').textContent")
+        b.go(env.url)
+        b.wait("return document.querySelector('.recovery-key') && document.querySelector('.recovery-key').textContent === %r" % key, 20,
+               "the recovery key after a reload")
+        check(True, "a reload before the recovery key is confirmed shows it again")
+        b.click(".check input")
+        b.click_el(b.find_text(".auth-card button", "Continue"))
+        b.find(".ed .ln", 20)
+        b.go(env.url)
+        b.find(".ed .ln", 20)
+        check(not b.js("return !!document.querySelector('.recovery-key')"), "once confirmed it isn't shown again")
+        b.close()
+        b = Browser()
         signup(b, uniq("ada"))
         check(b.js("return document.querySelector('.note-title').value") == "Welcome", "welcome note is created and opened")
         check(b.js("return document.querySelectorAll('.ed .ln').length") > 5, "live editor renders the note")

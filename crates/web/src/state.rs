@@ -579,6 +579,11 @@ pub async fn after_login() {
         match api::get::<DeviceEnvelope>(&format!("/devices/{}/envelope", rec.device_id)).await {
             Ok(env) => match unlock_with_device(&uid, &rec, &env.account_envelope) {
                 Unlock::Unlocked => {
+                    // A setup interrupted before its recovery key was confirmed.
+                    if let Some(key) = unconfirmed_recovery_key(&uid).await {
+                        ui.phase.set(Phase::ShowRecovery { key });
+                        return;
+                    }
                     enter_ready().await;
                     return;
                 }
@@ -604,6 +609,22 @@ pub async fn after_login() {
         pending: None,
         error: None,
     });
+}
+
+/// The recovery key of an interrupted setup, if it really opens this account
+/// (checked against the server's recovery envelope; a stale one is dropped).
+async fn unconfirmed_recovery_key(uid: &str) -> Option<String> {
+    let key = storage::pending_recovery(uid)?;
+    let rk = RecoveryKey::parse(&key).ok();
+    let env = api::get::<RecoveryEnvelope>("/me/recovery").await.ok()?;
+    let mine = with(|c| c.account.as_ref().map(|a| a.public()))?;
+    let opens = rk
+        .and_then(|rk| rk.unwrap_account(&env.recovery_envelope, uid).ok())
+        .is_some_and(|a| a.public() == mine);
+    if !opens {
+        storage::clear_pending_recovery(uid);
+    }
+    opens.then_some(key)
 }
 
 enum Unlock {
@@ -758,8 +779,10 @@ pub async fn setup_keys() {
         }
     };
     // Keep this browser's device key before the server holds an account key
-    // that only this device can unwrap: a lost answer must not lose it.
+    // that only this device can unwrap: a lost answer must not lose it. The
+    // recovery key too, until its screen is confirmed.
     let previous = storage::device(&uid);
+    storage::set_pending_recovery(&uid, &boot.recovery.to_display());
     storage::set_device(&uid, &{
         let mut r = DeviceRecord {
             device_id: boot.device_id.clone(),
@@ -779,6 +802,7 @@ pub async fn setup_keys() {
                     Some(p) => storage::set_device(&uid, p),
                     None => storage::clear_device(&uid),
                 }
+                storage::clear_pending_recovery(&uid);
                 after_login().await;
                 return;
             }
@@ -801,6 +825,7 @@ pub async fn setup_keys() {
 
 /// After the recovery key was saved: create a first vault with a welcome note.
 pub async fn finish_setup() {
+    storage::clear_pending_recovery(&with(|c| c.user_id.clone()));
     enter_ready().await;
     if with(|c| c.replicas.is_empty())
         && let Some(v) = crate::actions::create_vault("My notes".into()).await

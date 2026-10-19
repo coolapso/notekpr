@@ -309,12 +309,13 @@ Nobody's notes may be locked in because a server or an app is unavailable.
 - [ ] `push` rejects a whole batch on the first bad update (too large, purged
       note): accept the rest or name the failing update, so clients can set
       exactly that one aside.
-- [ ] If the account-key upload succeeded but its response was lost and the
-      page reloaded, the recovery key is never shown (a new one can be made in
-      Settings → Security). Store the bootstrap until confirmed, or let the
-      server report it.
-- [ ] Gateway audit log misses moves and deletes (only `put_document` and
-      `put_attachment` are recorded).
+- [x] If the account-key upload succeeded but its response was lost and the
+      page reloaded, the recovery key is never shown — kept in the tab's
+      `sessionStorage` until confirmed and shown again after a reload, once
+      checked against the server's recovery envelope.
+- [x] Gateway audit log misses moves and deletes (recorded:
+      `trash_document`, `move_document`; link rewrites in other notes during
+      a move are not listed separately).
 - [ ] Note-key rotation skips the trust-on-first-use pin check [C-M7]
       (interim until R3).
 - [ ] Revocation can be left half-done [C-M12] — retry/recovery hint, a CLI
@@ -508,8 +509,8 @@ with SQLite; no SQL-dialect abstraction.
 
 - [ ] The welcome note says Ctrl+K jumps to a note and `?` shows shortcuts,
       but the editor is focused (Ctrl+K inserts a link, `?` types) [W-L11].
-- [ ] Reloading during the recovery-key screen loses the key without warning
-      [W-L11].
+- [x] Reloading during the recovery-key screen loses the key without warning
+      [W-L11] (shown again after a reload).
 - [ ] Menus don't close on an outside click; `autofocus` on dynamically
       inserted inputs does nothing [W-L11].
 - [ ] Accessibility: icon buttons rely on `title` only; dialogs lack

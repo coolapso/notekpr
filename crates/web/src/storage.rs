@@ -45,6 +45,25 @@ fn remove(s: Option<Storage>, k: &str) {
     }
 }
 
+fn recovery_slot(user_id: &str) -> String {
+    format!("cpn.recovery.{user_id}")
+}
+
+/// The recovery key of a setup whose recovery screen wasn't confirmed yet, so
+/// a reload or a lost server answer still shows it. This tab only
+/// (`sessionStorage`), removed once confirmed.
+pub fn pending_recovery(user_id: &str) -> Option<String> {
+    get(session(), &recovery_slot(user_id))
+}
+
+pub fn set_pending_recovery(user_id: &str, key: &str) {
+    set(session(), &recovery_slot(user_id), key);
+}
+
+pub fn clear_pending_recovery(user_id: &str) {
+    remove(session(), &recovery_slot(user_id));
+}
+
 const TOKEN: &str = "cpn.token";
 const LAST_TOKEN: &str = "cpn.token.last";
 
@@ -158,6 +177,7 @@ pub fn pending_vaults(user_id: &str) -> Vec<String> {
 /// changes, sync positions, last location (and the session token).
 pub fn forget_user(user_id: &str) {
     clear_token();
+    clear_pending_recovery(user_id);
     let Some(s) = local() else { return };
     let exact = [device_key(user_id), format!("cpn.last.{user_id}")];
     let prefixes = [

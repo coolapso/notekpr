@@ -133,12 +133,7 @@ async fn export_user(
 
 /// A user by id, exact e-mail or exact display name (case-insensitive).
 async fn find_user(pool: &db::Db, user: &str) -> anyhow::Result<String> {
-    let ids: Vec<String> = sqlx::query_scalar(
-        "SELECT id FROM users WHERE id = ?1 OR lower(email) = lower(?1) OR lower(display_name) = lower(?1)",
-    )
-    .bind(user)
-    .fetch_all(pool)
-    .await?;
+    let ids = coolpsonotes_server::repo::users::find(pool, user).await?;
     match ids.as_slice() {
         [one] => Ok(one.clone()),
         [] => bail!("no user {user:?} in this database"),

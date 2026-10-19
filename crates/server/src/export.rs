@@ -5,13 +5,12 @@
 
 use coolpsonotes_core::protocol::{
     ChangesResponse, EXPORT_FORMAT, EncryptedExport, ExportedAttachment, ExportedSharedNote,
-    ExportedVault, Role,
+    ExportedVault,
 };
-use sqlx::Row;
 
 use crate::db::{self, Db};
 use crate::error::AppResult;
-use crate::routes::{shares, vaults};
+use crate::repo;
 use crate::sync;
 
 /// The whole log of a vault (or of one object): the latest snapshot of each
@@ -51,22 +50,10 @@ pub async fn user_export(
     blobs: &crate::blobs::Blobs,
     user_id: &str,
 ) -> AppResult<EncryptedExport> {
-    let recovery_envelope: Option<Vec<u8>> =
-        sqlx::query_scalar("SELECT recovery_envelope FROM account_keys WHERE user_id = ?")
-            .bind(user_id)
-            .fetch_optional(db)
-            .await?
-            .flatten();
-    let memberships = sqlx::query(
-        "SELECT m.vault_id, m.role, v.encrypted_meta FROM vault_members m JOIN vaults v ON v.id = m.vault_id
-         WHERE m.user_id = ? ORDER BY m.vault_id",
-    )
-    .bind(user_id)
-    .fetch_all(db)
-    .await?;
+    let recovery_envelope = repo::users::recovery_envelope(db, user_id).await?;
+    let memberships = repo::vaults::memberships(db, user_id).await?;
     let mut vaults_out = Vec::with_capacity(memberships.len());
-    for m in memberships {
-        let vault_id: String = m.get("vault_id");
+    for (vault_id, role, encrypted_meta) in memberships {
         let attachments = blobs
             .all(&vault_id)
             .await?
@@ -74,30 +61,19 @@ pub async fn user_export(
             .map(|(id, data)| ExportedAttachment { id, data })
             .collect();
         vaults_out.push(ExportedVault {
-            role: Role::parse(m.get("role")).unwrap_or(Role::Viewer),
-            encrypted_meta: m.get("encrypted_meta"),
-            keys: vaults::vault_keys_for(db, &vault_id, user_id).await?,
+            role,
+            encrypted_meta,
+            keys: repo::keys::vault_keys(db, &vault_id, user_id).await?,
             changes: full_log(db, &vault_id, None, false).await?,
             attachments,
             vault_id,
         });
     }
-    let shares = sqlx::query(
-        "SELECT s.vault_id, s.object_id, s.role FROM object_shares s
-         JOIN objects o ON o.vault_id = s.vault_id AND o.id = s.object_id AND o.purged_at IS NULL
-         WHERE s.user_id = ?
-           AND NOT EXISTS (SELECT 1 FROM vault_members m WHERE m.vault_id = s.vault_id AND m.user_id = s.user_id)
-         ORDER BY s.vault_id, s.object_id",
-    )
-    .bind(user_id)
-    .fetch_all(db)
-    .await?;
+    let shares = repo::shares::exportable(db, user_id).await?;
     let mut shared_notes = Vec::with_capacity(shares.len());
-    for s in shares {
-        let (vault_id, object_id): (String, String) = (s.get("vault_id"), s.get("object_id"));
-        let role = Role::parse(s.get("role")).unwrap_or(Role::Viewer);
+    for (vault_id, object_id, role) in shares {
         shared_notes.push(ExportedSharedNote {
-            keys: shares::object_keys_for(db, &vault_id, &object_id, user_id, role).await?,
+            keys: repo::keys::document_keys(db, &vault_id, &object_id, user_id, role).await?,
             changes: full_log(db, &vault_id, Some(&object_id), true).await?,
             vault_id,
         });

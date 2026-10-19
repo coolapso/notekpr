@@ -68,7 +68,8 @@ crates/sync     the client sync engine both clients use (sans-IO): outbox (merge
                 batch pushes, acks and refusals), rollback recovery, edit splitting
 crates/server   axum + SQLite. routes/ (REST) · ws.rs (WebSocket, subscriptions) ·
                 sync.rs (encrypted log, snapshots, key checks) · access.rs (who may
-                do what) · hub.rs (pub/sub) · auth.rs, oidc.rs · migrations/
+                do what) · repo/ (all other SQL) · hub.rs (EventBus: live events) ·
+                blobs.rs (attachment store) · auth.rs, oidc.rs · migrations/
 crates/web      Leptos CSR → wasm32. state/ (Core + Ui in mod.rs; session, vaults,
                 shares, sync, presence, prefs, nav, offline) · cache.rs (IndexedDB
                 copy) · static/sw.js (service worker, only with offline use on) ·
@@ -140,7 +141,15 @@ Without go-task, see the plain commands in the [Taskfile](Taskfile.yml) or
 - sqlx 0.9 only accepts static SQL strings: no `format!` into queries — bind
   parameters, or write variants out literally.
 - Authorization goes through `access.rs` (`member_role`, `object_access`, …);
-  don't re-implement checks in handlers.
+  don't re-implement checks in handlers. SQL lives in `repo/` (the log's in
+  `sync.rs`): handlers don't write queries.
+- A write that depends on a role re-checks it inside its `BEGIN IMMEDIATE`
+  transaction (`access::require_owner(&mut *tx, …)`), and membership, role
+  and share changes run under `write_lock` in such a transaction — see the
+  rule at the top of `access.rs`.
+- Live events go through `hub.rs`'s `EventBus` only; publish log events after
+  the commit, while still holding `write_lock` (its docs list what
+  subscribers rely on).
 
 **Web client**
 - `state::with(|core| …)` borrows a thread-local `RefCell`. Never call into

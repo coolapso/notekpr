@@ -261,12 +261,10 @@ async fn healthz() -> &'static str {
 }
 
 async fn readyz(State(state): State<AppState>) -> Response {
-    match sqlx::query_scalar::<_, i64>("SELECT 1")
-        .fetch_one(&state.db)
-        .await
-    {
-        Ok(_) => (StatusCode::OK, "ready").into_response(),
-        Err(_) => (StatusCode::SERVICE_UNAVAILABLE, "database unavailable").into_response(),
+    if crate::db::ping(&state.db).await {
+        (StatusCode::OK, "ready").into_response()
+    } else {
+        (StatusCode::SERVICE_UNAVAILABLE, "database unavailable").into_response()
     }
 }
 

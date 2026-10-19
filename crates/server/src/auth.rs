@@ -7,10 +7,10 @@
 use axum::extract::FromRequestParts;
 use axum::http::request::Parts;
 use coolpsonotes_core::protocol::{PrincipalKind, UserInfo};
-use sqlx::Row;
 
 use crate::db::{self, Db};
 use crate::error::{AppError, AppResult, forbidden};
+use crate::repo;
 use crate::state::AppState;
 
 pub const SESSION_PREFIX: &str = "cpn_s_";
@@ -77,49 +77,28 @@ pub async fn authenticate(state: &AppState, token: &str) -> AppResult<Principal>
         return Err(AppError::Unauthorized);
     }
     let hash = db::sha256(token.as_bytes());
-    let row = sqlx::query(
-        "SELECT s.id, s.user_id, s.device_id, s.kind AS skind, s.expires_at, s.revoked_at, s.last_used_at,
-                u.kind AS ukind, u.display_name, u.is_admin, u.disabled, u.owner_id,
-                COALESCE(o.disabled, 0) AS owner_disabled
-         FROM sessions s JOIN users u ON u.id = s.user_id
-         LEFT JOIN users o ON o.id = u.owner_id
-         WHERE s.token_hash = ?",
-    )
-    .bind(&hash)
-    .fetch_optional(&state.db)
-    .await?
-    .ok_or(AppError::Unauthorized)?;
+    let row = repo::sessions::by_token_hash(&state.db, &hash)
+        .await?
+        .ok_or(AppError::Unauthorized)?;
     let now = db::now();
-    let revoked: Option<i64> = row.get("revoked_at");
-    let expires: i64 = row.get("expires_at");
     // An agent stops working when its owner's account is disabled.
-    let disabled: bool = row.get::<bool, _>("disabled") || row.get::<bool, _>("owner_disabled");
-    if revoked.is_some() || expires <= now || disabled {
+    if row.revoked_at.is_some() || row.expires_at <= now || row.disabled || row.owner_disabled {
         return Err(AppError::Unauthorized);
     }
     let p = Principal {
-        session_id: row.get("id"),
-        user_id: row.get("user_id"),
-        device_id: row.get("device_id"),
-        session_kind: row.get("skind"),
-        kind: PrincipalKind::parse(row.get("ukind")).unwrap_or(PrincipalKind::Human),
-        display_name: row.get("display_name"),
-        is_admin: row.get("is_admin"),
-        owner_id: row.get("owner_id"),
+        session_id: row.id,
+        user_id: row.user_id,
+        device_id: row.device_id,
+        session_kind: row.kind,
+        kind: PrincipalKind::parse(&row.user_kind).unwrap_or(PrincipalKind::Human),
+        display_name: row.display_name,
+        is_admin: row.is_admin,
+        owner_id: row.owner_id,
     };
-    let last_used: Option<i64> = row.get("last_used_at");
-    if last_used.is_none_or(|t| now - t > 60_000) {
-        let _ = sqlx::query("UPDATE sessions SET last_used_at = ? WHERE id = ?")
-            .bind(now)
-            .bind(&p.session_id)
-            .execute(&state.db)
-            .await;
+    if row.last_used_at.is_none_or(|t| now - t > 60_000) {
+        let _ = repo::sessions::touch(&state.db, &p.session_id, now).await;
         if let Some(d) = &p.device_id {
-            let _ = sqlx::query("UPDATE devices SET last_seen_at = ? WHERE id = ?")
-                .bind(now)
-                .bind(d)
-                .execute(&state.db)
-                .await;
+            let _ = repo::devices::touch(&state.db, d, now).await;
         }
     }
     Ok(p)
@@ -142,19 +121,7 @@ pub async fn create_session(
     let id = db::new_id();
     let now = db::now();
     let expires_at = now + ttl_ms;
-    sqlx::query(
-        "INSERT INTO sessions (id, token_hash, user_id, kind, client_name, created_at, expires_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?)",
-    )
-    .bind(&id)
-    .bind(&hash)
-    .bind(user_id)
-    .bind(kind)
-    .bind(client_name)
-    .bind(now)
-    .bind(expires_at)
-    .execute(db)
-    .await?;
+    repo::sessions::insert(db, &id, &hash, user_id, kind, client_name, now, expires_at).await?;
     Ok(NewSession {
         token,
         id,
@@ -174,69 +141,27 @@ pub async fn provision_user(
     let _w = state.write_lock.lock().await;
     let now = db::now();
     let configured_admin = state.config.is_admin_identity(issuer, subject);
-    let existing: Option<String> =
-        sqlx::query_scalar("SELECT user_id FROM identities WHERE issuer = ? AND subject = ?")
-            .bind(issuer)
-            .bind(subject)
-            .fetch_optional(&state.db)
-            .await?;
+    let existing = repo::users::identity_user(&state.db, issuer, subject).await?;
     let user_id = if let Some(id) = existing {
-        let disabled: bool = sqlx::query_scalar("SELECT disabled FROM users WHERE id = ?")
-            .bind(&id)
-            .fetch_one(&state.db)
-            .await?;
-        if disabled {
+        if repo::users::is_disabled(&state.db, &id).await? {
             return Err(forbidden("this account has been disabled"));
         }
-        sqlx::query(
-            "UPDATE users SET display_name = ?, email = COALESCE(?, email), last_login_at = ?,
-             is_admin = CASE WHEN ? THEN 1 ELSE is_admin END WHERE id = ?",
-        )
-        .bind(display_name)
-        .bind(email)
-        .bind(now)
-        .bind(configured_admin)
-        .bind(&id)
-        .execute(&state.db)
-        .await?;
+        repo::users::record_login(&state.db, &id, display_name, email, configured_admin, now)
+            .await?;
         id
     } else {
         // "First user" counts real accounts and development-mode accounts
         // separately, so test users from dev mode never take the admin role
         // from the first real person signing in on the same database.
         let dev = issuer == coolpsonotes_core::protocol::DEV_ISSUER;
-        let humans: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM users u WHERE u.kind = 'human' AND EXISTS
-               (SELECT 1 FROM identities i WHERE i.user_id = u.id AND (i.issuer = ?) = ?)",
-        )
-        .bind(coolpsonotes_core::protocol::DEV_ISSUER)
-        .bind(dev)
-        .fetch_one(&state.db)
-        .await?;
+        let humans =
+            repo::users::count_humans(&state.db, coolpsonotes_core::protocol::DEV_ISSUER, dev)
+                .await?;
         let is_admin = configured_admin || (state.config.first_user_admin && humans == 0);
         let id = db::new_id();
         let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
-        sqlx::query(
-            "INSERT INTO users (id, kind, display_name, email, is_admin, created_at, last_login_at)
-             VALUES (?, 'human', ?, ?, ?, ?, ?)",
-        )
-        .bind(&id)
-        .bind(display_name)
-        .bind(email)
-        .bind(is_admin)
-        .bind(now)
-        .bind(now)
-        .execute(&mut *tx)
-        .await?;
-        sqlx::query(
-            "INSERT INTO identities (issuer, subject, user_id, created_at) VALUES (?, ?, ?, ?)",
-        )
-        .bind(issuer)
-        .bind(subject)
-        .bind(&id)
-        .bind(now)
-        .execute(&mut *tx)
-        .await?;
+        repo::users::insert_human(&mut *tx, &id, display_name, email, is_admin, now).await?;
+        repo::users::insert_identity(&mut *tx, issuer, subject, &id, now).await?;
         tx.commit().await?;
         tracing::info!(user_id = %id, is_admin, "provisioned new user");
         id
@@ -255,19 +180,7 @@ pub async fn provision_user(
 }
 
 pub async fn user_info(db: &Db, user_id: &str) -> AppResult<UserInfo> {
-    let row = sqlx::query(
-        "SELECT id, display_name, email, kind, is_admin, created_at FROM users WHERE id = ?",
-    )
-    .bind(user_id)
-    .fetch_optional(db)
-    .await?
-    .ok_or(AppError::NotFound)?;
-    Ok(UserInfo {
-        id: row.get("id"),
-        display_name: row.get("display_name"),
-        email: row.get("email"),
-        kind: PrincipalKind::parse(row.get("kind")).unwrap_or(PrincipalKind::Human),
-        is_admin: row.get("is_admin"),
-        created_at: row.get("created_at"),
-    })
+    repo::users::info(db, user_id)
+        .await?
+        .ok_or(AppError::NotFound)
 }

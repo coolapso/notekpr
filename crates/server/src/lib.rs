@@ -16,6 +16,7 @@ pub mod export;
 pub mod hub;
 pub mod oidc;
 pub mod ratelimit;
+pub mod repo;
 pub mod routes;
 pub mod state;
 pub mod sync;
@@ -47,15 +48,12 @@ pub async fn build(
 /// Sessions of accounts created in development mode stop working once the
 /// server runs without it (e.g. a dev database reused for real use).
 async fn end_dev_sessions(state: &AppState) -> anyhow::Result<()> {
-    let n = sqlx::query(
-        "UPDATE sessions SET revoked_at = ? WHERE revoked_at IS NULL AND user_id IN
-           (SELECT user_id FROM identities WHERE issuer = ?)",
+    let n = repo::sessions::revoke_for_issuer(
+        &state.db,
+        coolpsonotes_core::protocol::DEV_ISSUER,
+        db::now(),
     )
-    .bind(db::now())
-    .bind(coolpsonotes_core::protocol::DEV_ISSUER)
-    .execute(&state.db)
-    .await?
-    .rows_affected();
+    .await?;
     if n > 0 {
         tracing::warn!(
             sessions = n,
@@ -74,21 +72,11 @@ fn spawn_maintenance(state: AppState) {
             state.limiters.cleanup();
             let now = db::now();
             let month = 30 * 24 * 3600 * 1000;
-            for q in [
-                "DELETE FROM login_codes WHERE expires_at < ?",
-                "DELETE FROM oidc_states WHERE expires_at < ?",
-            ] {
-                let _ = sqlx::query(q).bind(now).execute(&state.db).await;
-            }
-            let _ = sqlx::query("DELETE FROM device_grants WHERE expires_at < ?")
-                .bind(now - 86_400_000)
-                .execute(&state.db)
-                .await;
-            let _ = sqlx::query("DELETE FROM sessions WHERE expires_at < ? OR revoked_at < ?")
-                .bind(now - month)
-                .bind(now - month)
-                .execute(&state.db)
-                .await;
+            let db = &state.db;
+            let _ = repo::sessions::delete_expired_login_codes(db, now).await;
+            let _ = repo::sessions::delete_expired_oidc_states(db, now).await;
+            let _ = repo::sessions::delete_device_grants_expired_before(db, now - 86_400_000).await;
+            let _ = repo::sessions::delete_ended_before(db, now - month).await;
         }
     });
 }

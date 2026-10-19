@@ -13,12 +13,12 @@ use coolpsonotes_core::protocol::{
     DeviceAuthorizationResponse, DeviceCodeDecision, DeviceCodeLookup, OAuthError, TokenResponse,
 };
 use serde::Deserialize;
-use sqlx::Row;
 use subtle::ConstantTimeEq;
 
 use crate::auth::{self, Principal};
 use crate::db;
 use crate::error::{AppError, AppResult, bad};
+use crate::repo;
 use crate::state::AppState;
 
 const DEVICE_CODE_TTL_MS: i64 = 600_000;
@@ -59,30 +59,22 @@ pub async fn device_authorization(
         .collect();
     let (device_code, hash) = db::new_secret("cpn_d_");
     let now = db::now();
-    sqlx::query("DELETE FROM device_grants WHERE expires_at < ?")
-        .bind(now - DAY_MS)
-        .execute(&state.db)
-        .await?;
+    repo::sessions::delete_device_grants_expired_before(&state.db, now - DAY_MS).await?;
     let mut user_code = db::new_user_code();
     for _ in 0..5 {
-        let r = sqlx::query(
-            "INSERT INTO device_grants (device_code_hash, user_code, client_name, status, created_at, expires_at)
-             VALUES (?, ?, ?, 'pending', ?, ?)",
+        if repo::sessions::insert_device_grant(
+            &state.db,
+            &hash,
+            &user_code,
+            &client_name,
+            now,
+            now + DEVICE_CODE_TTL_MS,
         )
-        .bind(&hash)
-        .bind(&user_code)
-        .bind(&client_name)
-        .bind(now)
-        .bind(now + DEVICE_CODE_TTL_MS)
-        .execute(&state.db)
-        .await;
-        match r {
-            Ok(_) => break,
-            Err(sqlx::Error::Database(e)) if e.is_unique_violation() => {
-                user_code = db::new_user_code()
-            }
-            Err(e) => return Err(e.into()),
+        .await?
+        {
+            break;
         }
+        user_code = db::new_user_code();
     }
     let base = state.config.public_url();
     Ok(Json(DeviceAuthorizationResponse {
@@ -165,29 +157,17 @@ async fn device_token(state: &AppState, f: TokenForm) -> AppResult<Response> {
     };
     let hash = db::sha256(code.as_bytes());
     let _w = state.write_lock.lock().await;
-    let Some(row) = sqlx::query(
-        "SELECT status, user_id, client_name, expires_at, last_poll_at FROM device_grants WHERE device_code_hash = ?",
-    )
-    .bind(&hash)
-    .fetch_optional(&state.db)
-    .await?
-    else {
+    let Some(grant) = repo::sessions::device_grant(&state.db, &hash).await? else {
         return Ok(oauth_error(StatusCode::BAD_REQUEST, "invalid_grant", None));
     };
     let now = db::now();
-    let expires: i64 = row.get("expires_at");
-    if expires < now {
+    if grant.expires_at < now {
         return Ok(oauth_error(StatusCode::BAD_REQUEST, "expired_token", None));
     }
-    let status: String = row.get("status");
-    match status.as_str() {
-        "pending" => {
-            let last: Option<i64> = row.get("last_poll_at");
-            sqlx::query("UPDATE device_grants SET last_poll_at = ? WHERE device_code_hash = ?")
-                .bind(now)
-                .bind(&hash)
-                .execute(&state.db)
-                .await?;
+    match (grant.status.as_str(), grant.user_id) {
+        ("pending", _) => {
+            let last = grant.last_poll_at;
+            repo::sessions::set_device_grant_polled(&state.db, &hash, now).await?;
             if last.is_some_and(|l| now - l < (POLL_INTERVAL_S * 1000) - 500) {
                 return Ok(oauth_error(StatusCode::BAD_REQUEST, "slow_down", None));
             }
@@ -197,14 +177,10 @@ async fn device_token(state: &AppState, f: TokenForm) -> AppResult<Response> {
                 None,
             ))
         }
-        "denied" => Ok(oauth_error(StatusCode::BAD_REQUEST, "access_denied", None)),
-        "approved" => {
-            let user_id: String = row.get("user_id");
-            let client_name: String = row.get("client_name");
-            sqlx::query("UPDATE device_grants SET status = 'consumed' WHERE device_code_hash = ?")
-                .bind(&hash)
-                .execute(&state.db)
-                .await?;
+        ("denied", _) => Ok(oauth_error(StatusCode::BAD_REQUEST, "access_denied", None)),
+        ("approved", Some(user_id)) => {
+            let client_name = grant.client_name;
+            repo::sessions::consume_device_grant(&state.db, &hash).await?;
             let ttl = state.config.device_session_ttl_days * DAY_MS;
             let s =
                 auth::create_session(&state.db, &user_id, "cli", Some(&client_name), ttl).await?;
@@ -235,14 +211,7 @@ async fn client_credentials(
     client_id: &str,
     secret: &str,
 ) -> AppResult<Response> {
-    let row = sqlx::query(
-        "SELECT c.agent_id, c.secret_hash, c.revoked_at, a.disabled AS agent_disabled, o.disabled AS owner_disabled
-         FROM agent_credentials c JOIN users a ON a.id = c.agent_id LEFT JOIN users o ON o.id = a.owner_id
-         WHERE c.client_id = ?",
-    )
-    .bind(client_id)
-    .fetch_optional(&state.db)
-    .await?;
+    let row = repo::agents::credential_login(&state.db, client_id).await?;
     let hash = db::sha256(secret.as_bytes());
     let Some(row) = row else {
         return Ok(oauth_error(
@@ -251,14 +220,10 @@ async fn client_credentials(
             None,
         ));
     };
-    let stored: Vec<u8> = row.get("secret_hash");
-    let revoked: Option<i64> = row.get("revoked_at");
-    let agent_disabled: bool = row.get("agent_disabled");
-    let owner_disabled: Option<bool> = row.get("owner_disabled");
-    if !bool::from(stored.ct_eq(&hash))
-        || revoked.is_some()
-        || agent_disabled
-        || owner_disabled.unwrap_or(false)
+    if !bool::from(row.secret_hash.ct_eq(&hash))
+        || row.revoked_at.is_some()
+        || row.agent_disabled
+        || row.owner_disabled.unwrap_or(false)
     {
         return Ok(oauth_error(
             StatusCode::UNAUTHORIZED,
@@ -266,12 +231,8 @@ async fn client_credentials(
             None,
         ));
     }
-    let agent_id: String = row.get("agent_id");
-    sqlx::query("UPDATE agent_credentials SET last_used_at = ? WHERE client_id = ?")
-        .bind(db::now())
-        .bind(client_id)
-        .execute(&state.db)
-        .await?;
+    let agent_id = row.agent_id;
+    repo::agents::touch_credential(&state.db, client_id, db::now()).await?;
     let ttl_ms = state.config.agent_token_ttl_secs * 1000;
     let s = auth::create_session(&state.db, &agent_id, "agent", Some(client_id), ttl_ms).await?;
     Ok(Json(TokenResponse {
@@ -308,20 +269,15 @@ pub async fn device_lookup(
 ) -> AppResult<Json<DeviceCodeLookup>> {
     who.require_human()?;
     let code = normalize_user_code(&q.user_code);
-    let row = sqlx::query(
-        "SELECT client_name, created_at, expires_at FROM device_grants
-         WHERE user_code = ? AND status = 'pending' AND expires_at > ?",
-    )
-    .bind(&code)
-    .bind(db::now())
-    .fetch_optional(&state.db)
-    .await?
-    .ok_or(AppError::NotFound)?;
+    let (client_name, created_at, expires_at) =
+        repo::sessions::pending_device_grant(&state.db, &code, db::now())
+            .await?
+            .ok_or(AppError::NotFound)?;
     Ok(Json(DeviceCodeLookup {
         user_code: code,
-        client_name: row.get("client_name"),
-        created_at: row.get("created_at"),
-        expires_at: row.get("expires_at"),
+        client_name,
+        created_at,
+        expires_at,
     }))
 }
 
@@ -335,17 +291,9 @@ pub async fn device_decision(
     if code.len() != 9 {
         return Err(bad("invalid code"));
     }
-    let status = if d.approve { "approved" } else { "denied" };
-    let n = sqlx::query(
-        "UPDATE device_grants SET status = ?, user_id = ? WHERE user_code = ? AND status = 'pending' AND expires_at > ?",
-    )
-    .bind(status)
-    .bind(&who.user_id)
-    .bind(&code)
-    .bind(db::now())
-    .execute(&state.db)
-    .await?
-    .rows_affected();
+    let n =
+        repo::sessions::decide_device_grant(&state.db, &code, d.approve, &who.user_id, db::now())
+            .await?;
     if n == 0 {
         return Err(AppError::NotFound);
     }

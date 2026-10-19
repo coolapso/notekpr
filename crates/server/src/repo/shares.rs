@@ -1,0 +1,356 @@
+//! Individually shared notes: the note's document-key state and encrypted
+//! title (columns of `objects`), and who it is shared with (`object_shares`).
+
+use coolpsonotes_core::protocol::Role;
+use sqlx::{Row, SqliteExecutor};
+
+use crate::error::AppResult;
+
+/// `(purged_at, key_epoch)` of an object, `None` if it was never written.
+pub async fn object_state(
+    db: impl SqliteExecutor<'_>,
+    vault_id: &str,
+    object_id: &str,
+) -> AppResult<Option<(Option<i64>, Option<i64>)>> {
+    Ok(
+        sqlx::query_as("SELECT purged_at, key_epoch FROM objects WHERE vault_id = ? AND id = ?")
+            .bind(vault_id)
+            .bind(object_id)
+            .fetch_optional(db)
+            .await?,
+    )
+}
+
+/// Create the object row if it doesn't exist yet (sharing a note nobody
+/// wrote to).
+pub async fn ensure_object(
+    db: impl SqliteExecutor<'_>,
+    vault_id: &str,
+    object_id: &str,
+    created_by: &str,
+    now: i64,
+) -> AppResult<()> {
+    sqlx::query(
+        "INSERT INTO objects (vault_id, id, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(vault_id, id) DO NOTHING",
+    )
+    .bind(vault_id)
+    .bind(object_id)
+    .bind(created_by)
+    .bind(now)
+    .bind(now)
+    .execute(db)
+    .await?;
+    Ok(())
+}
+
+/// Move a note to a document key epoch, with its title under that key.
+pub async fn set_document_epoch(
+    db: impl SqliteExecutor<'_>,
+    vault_id: &str,
+    object_id: &str,
+    epoch: i64,
+    encrypted_meta: &[u8],
+    now: i64,
+) -> AppResult<()> {
+    sqlx::query("UPDATE objects SET key_epoch = ?, encrypted_meta = ?, updated_at = ? WHERE vault_id = ? AND id = ?")
+        .bind(epoch)
+        .bind(encrypted_meta)
+        .bind(now)
+        .bind(vault_id)
+        .bind(object_id)
+        .execute(db)
+        .await?;
+    Ok(())
+}
+
+pub async fn set_title(
+    db: impl SqliteExecutor<'_>,
+    vault_id: &str,
+    object_id: &str,
+    encrypted_meta: &[u8],
+) -> AppResult<()> {
+    sqlx::query("UPDATE objects SET encrypted_meta = ? WHERE vault_id = ? AND id = ?")
+        .bind(encrypted_meta)
+        .bind(vault_id)
+        .bind(object_id)
+        .execute(db)
+        .await?;
+    Ok(())
+}
+
+/// Highest sequence number of the object's updates still stored.
+pub async fn last_update_seq(
+    db: impl SqliteExecutor<'_>,
+    vault_id: &str,
+    object_id: &str,
+) -> AppResult<Option<i64>> {
+    Ok(
+        sqlx::query_scalar("SELECT MAX(seq) FROM updates WHERE vault_id = ? AND object_id = ?")
+            .bind(vault_id)
+            .bind(object_id)
+            .fetch_one(db)
+            .await?,
+    )
+}
+
+/// Highest `covers_seq` of the object's snapshots.
+pub async fn newest_snapshot_covers(
+    db: impl SqliteExecutor<'_>,
+    vault_id: &str,
+    object_id: &str,
+) -> AppResult<Option<i64>> {
+    Ok(sqlx::query_scalar(
+        "SELECT MAX(covers_seq) FROM snapshots WHERE vault_id = ? AND object_id = ?",
+    )
+    .bind(vault_id)
+    .bind(object_id)
+    .fetch_one(db)
+    .await?)
+}
+
+// --- Shares ---
+
+/// Role granted by an individual share of a note that isn't purged (not by
+/// vault membership).
+pub async fn role(
+    db: impl SqliteExecutor<'_>,
+    vault_id: &str,
+    object_id: &str,
+    user_id: &str,
+) -> AppResult<Option<Role>> {
+    let role: Option<String> = sqlx::query_scalar(
+        "SELECT s.role FROM object_shares s JOIN objects o ON o.vault_id = s.vault_id AND o.id = s.object_id
+         WHERE s.vault_id = ? AND s.object_id = ? AND s.user_id = ? AND o.purged_at IS NULL",
+    )
+    .bind(vault_id)
+    .bind(object_id)
+    .bind(user_id)
+    .fetch_optional(db)
+    .await?;
+    Ok(role.and_then(|r| Role::parse(&r)))
+}
+
+/// A note shared with someone, as listed for them.
+pub struct SharedWith {
+    pub vault_id: String,
+    pub object_id: String,
+    pub role: Role,
+    pub added_by: Option<String>,
+    pub added_at: i64,
+    pub key_epoch: Option<i64>,
+    pub encrypted_meta: Option<Vec<u8>>,
+    pub vault_owner_id: String,
+}
+
+/// Notes shared with a user individually (not purged), newest first.
+pub async fn shared_with(db: impl SqliteExecutor<'_>, user_id: &str) -> AppResult<Vec<SharedWith>> {
+    let rows = sqlx::query(
+        "SELECT s.vault_id, s.object_id, s.role, s.added_by, s.added_at, o.key_epoch, o.encrypted_meta, v.owner_id
+         FROM object_shares s
+         JOIN objects o ON o.vault_id = s.vault_id AND o.id = s.object_id AND o.purged_at IS NULL
+         JOIN vaults v ON v.id = s.vault_id
+         WHERE s.user_id = ? ORDER BY s.added_at DESC",
+    )
+    .bind(user_id)
+    .fetch_all(db)
+    .await?;
+    Ok(rows
+        .iter()
+        .map(|r| SharedWith {
+            vault_id: r.get("vault_id"),
+            object_id: r.get("object_id"),
+            role: Role::parse(r.get("role")).unwrap_or(Role::Viewer),
+            added_by: r.get("added_by"),
+            added_at: r.get("added_at"),
+            key_epoch: r.get("key_epoch"),
+            encrypted_meta: r.get("encrypted_meta"),
+            vault_owner_id: r.get("owner_id"),
+        })
+        .collect())
+}
+
+/// `(vault id, object id, role)` of notes shared with a user that the user
+/// can't already read as a vault member (for exports).
+pub async fn exportable(
+    db: impl SqliteExecutor<'_>,
+    user_id: &str,
+) -> AppResult<Vec<(String, String, Role)>> {
+    let rows = sqlx::query(
+        "SELECT s.vault_id, s.object_id, s.role FROM object_shares s
+         JOIN objects o ON o.vault_id = s.vault_id AND o.id = s.object_id AND o.purged_at IS NULL
+         WHERE s.user_id = ?
+           AND NOT EXISTS (SELECT 1 FROM vault_members m WHERE m.vault_id = s.vault_id AND m.user_id = s.user_id)
+         ORDER BY s.vault_id, s.object_id",
+    )
+    .bind(user_id)
+    .fetch_all(db)
+    .await?;
+    Ok(rows
+        .iter()
+        .map(|s| {
+            (
+                s.get("vault_id"),
+                s.get("object_id"),
+                Role::parse(s.get("role")).unwrap_or(Role::Viewer),
+            )
+        })
+        .collect())
+}
+
+/// A person a note is shared with, as listed for vault members.
+pub struct Recipient {
+    pub user_id: String,
+    pub role: Role,
+    pub added_at: i64,
+    pub added_by: Option<String>,
+    /// Holds an envelope for the given document key epoch.
+    pub has_current_key: bool,
+}
+
+/// The people a note is shared with, in the order they were added.
+pub async fn recipients(
+    db: impl SqliteExecutor<'_>,
+    vault_id: &str,
+    object_id: &str,
+    current_epoch: i64,
+) -> AppResult<Vec<Recipient>> {
+    let rows = sqlx::query(
+        "SELECT s.user_id, s.role, s.added_at, s.added_by,
+                EXISTS(SELECT 1 FROM object_keys k WHERE k.vault_id = s.vault_id AND k.object_id = s.object_id
+                       AND k.user_id = s.user_id AND k.epoch = ?) AS has_key
+         FROM object_shares s WHERE s.vault_id = ? AND s.object_id = ? ORDER BY s.added_at",
+    )
+    .bind(current_epoch)
+    .bind(vault_id)
+    .bind(object_id)
+    .fetch_all(db)
+    .await?;
+    Ok(rows
+        .iter()
+        .map(|r| Recipient {
+            user_id: r.get("user_id"),
+            role: Role::parse(r.get("role")).unwrap_or(Role::Viewer),
+            added_at: r.get("added_at"),
+            added_by: r.get("added_by"),
+            has_current_key: r.get("has_key"),
+        })
+        .collect())
+}
+
+/// Recipients of a note who have set up account keys (they must receive
+/// its document keys).
+pub async fn recipient_ids_with_account_keys(
+    db: impl SqliteExecutor<'_>,
+    vault_id: &str,
+    object_id: &str,
+) -> AppResult<Vec<String>> {
+    Ok(sqlx::query_scalar(
+        "SELECT s.user_id FROM object_shares s JOIN account_keys k ON k.user_id = s.user_id WHERE s.vault_id = ? AND s.object_id = ?",
+    )
+    .bind(vault_id)
+    .bind(object_id)
+    .fetch_all(db)
+    .await?)
+}
+
+/// `(recipient, object id)` of every share in a vault.
+pub async fn in_vault(
+    db: impl SqliteExecutor<'_>,
+    vault_id: &str,
+) -> AppResult<Vec<(String, String)>> {
+    Ok(
+        sqlx::query_as("SELECT user_id, object_id FROM object_shares WHERE vault_id = ?")
+            .bind(vault_id)
+            .fetch_all(db)
+            .await?,
+    )
+}
+
+/// `(vault id, object id)` of every note shared with a user.
+pub async fn of_user(
+    db: impl SqliteExecutor<'_>,
+    user_id: &str,
+) -> AppResult<Vec<(String, String)>> {
+    Ok(
+        sqlx::query_as("SELECT vault_id, object_id FROM object_shares WHERE user_id = ?")
+            .bind(user_id)
+            .fetch_all(db)
+            .await?,
+    )
+}
+
+/// `Ok(false)` if the note is already shared with the user.
+pub async fn insert(
+    db: impl SqliteExecutor<'_>,
+    vault_id: &str,
+    object_id: &str,
+    user_id: &str,
+    role: Role,
+    added_by: &str,
+    now: i64,
+) -> AppResult<bool> {
+    super::inserted(
+        sqlx::query("INSERT INTO object_shares (vault_id, object_id, user_id, role, added_by, added_at) VALUES (?, ?, ?, ?, ?, ?)")
+            .bind(vault_id)
+            .bind(object_id)
+            .bind(user_id)
+            .bind(role.as_str())
+            .bind(added_by)
+            .bind(now)
+            .execute(db)
+            .await,
+    )
+}
+
+/// Change a recipient's role; rows affected.
+pub async fn set_role(
+    db: impl SqliteExecutor<'_>,
+    vault_id: &str,
+    object_id: &str,
+    user_id: &str,
+    role: Role,
+) -> AppResult<u64> {
+    Ok(sqlx::query(
+        "UPDATE object_shares SET role = ? WHERE vault_id = ? AND object_id = ? AND user_id = ?",
+    )
+    .bind(role.as_str())
+    .bind(vault_id)
+    .bind(object_id)
+    .bind(user_id)
+    .execute(db)
+    .await?
+    .rows_affected())
+}
+
+/// Stop sharing a note with someone; rows affected.
+pub async fn delete(
+    db: impl SqliteExecutor<'_>,
+    vault_id: &str,
+    object_id: &str,
+    user_id: &str,
+) -> AppResult<u64> {
+    Ok(sqlx::query(
+        "DELETE FROM object_shares WHERE vault_id = ? AND object_id = ? AND user_id = ?",
+    )
+    .bind(vault_id)
+    .bind(object_id)
+    .bind(user_id)
+    .execute(db)
+    .await?
+    .rows_affected())
+}
+
+/// Drop every share of a vault's notes with one person (who became a member).
+pub async fn delete_in_vault_for(
+    db: impl SqliteExecutor<'_>,
+    vault_id: &str,
+    user_id: &str,
+) -> AppResult<()> {
+    sqlx::query("DELETE FROM object_shares WHERE vault_id = ? AND user_id = ?")
+        .bind(vault_id)
+        .bind(user_id)
+        .execute(db)
+        .await?;
+    Ok(())
+}

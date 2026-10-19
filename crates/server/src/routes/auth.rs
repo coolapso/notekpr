@@ -9,12 +9,12 @@ use coolpsonotes_core::protocol::{
     DEV_ISSUER, DevLoginRequest, ExchangeRequest, ServerInfo, SessionEntry, SessionResponse,
 };
 use serde::Deserialize;
-use sqlx::Row;
 
 use crate::auth::{self, Principal};
 use crate::db;
 use crate::error::{AppError, AppResult, bad};
 use crate::hub::Control;
+use crate::repo;
 use crate::state::AppState;
 
 const DAY_MS: i64 = 24 * 3600 * 1000;
@@ -85,20 +85,20 @@ pub async fn oidc_start(
     let oidc = state.oidc.as_ref().ok_or(AppError::NotFound)?;
     let start = oidc.start().await?;
     let now = db::now();
-    sqlx::query("DELETE FROM oidc_states WHERE expires_at < ?")
-        .bind(now)
-        .execute(&state.db)
-        .await?;
+    repo::sessions::delete_expired_oidc_states(&state.db, now).await?;
     let (browser_secret, browser_hash) = db::new_secret("");
-    sqlx::query("INSERT INTO oidc_states (state, pkce_verifier, nonce, return_to, expires_at, browser_hash) VALUES (?, ?, ?, ?, ?, ?)")
-        .bind(&start.state)
-        .bind(&start.pkce_verifier)
-        .bind(&start.nonce)
-        .bind(safe_return_to(q.return_to))
-        .bind(now + OIDC_STATE_TTL_MS)
-        .bind(&browser_hash)
-        .execute(&state.db)
-        .await?;
+    repo::sessions::insert_oidc_state(
+        &state.db,
+        &start.state,
+        &repo::sessions::OidcState {
+            pkce_verifier: start.pkce_verifier,
+            nonce: start.nonce,
+            return_to: safe_return_to(q.return_to),
+            expires_at: now + OIDC_STATE_TTL_MS,
+            browser_hash: Some(browser_hash),
+        },
+    )
+    .await?;
     let mut resp = Redirect::to(&start.url).into_response();
     resp.headers_mut().append(
         header::SET_COOKIE,
@@ -149,18 +149,14 @@ async fn oidc_callback_inner(
         return Err(bad("missing code or state"));
     };
     // States are single-use.
-    let row = sqlx::query("DELETE FROM oidc_states WHERE state = ? RETURNING pkce_verifier, nonce, return_to, expires_at, browser_hash")
-        .bind(&st)
-        .fetch_optional(&state.db)
+    let row = repo::sessions::take_oidc_state(&state.db, &st)
         .await?
         .ok_or_else(|| bad("unknown or already used login state"))?;
-    let expires: i64 = row.get("expires_at");
-    if expires < db::now() {
+    if row.expires_at < db::now() {
         return Ok(complete_redirect("error=login_expired"));
     }
     // Only the browser that started this login may finish it.
-    let expected: Option<Vec<u8>> = row.get("browser_hash");
-    let same_browser = match (&expected, &browser) {
+    let same_browser = match (&row.browser_hash, &browser) {
         (Some(e), Some(b)) => {
             use subtle::ConstantTimeEq;
             bool::from(e.ct_eq(b))
@@ -171,10 +167,7 @@ async fn oidc_callback_inner(
         tracing::warn!("OIDC callback from a browser that didn't start the login");
         return Ok(complete_redirect("error=login_failed"));
     }
-    let identity = match oidc
-        .finish(code, row.get("pkce_verifier"), row.get("nonce"))
-        .await
-    {
+    let identity = match oidc.finish(code, row.pkce_verifier, row.nonce).await {
         Ok(i) => i,
         Err(AppError::Unauthorized) => return Ok(complete_redirect("error=login_failed")),
         Err(e) => return Err(e),
@@ -193,14 +186,9 @@ async fn oidc_callback_inner(
         Err(e) => return Err(e),
     };
     let (code, hash) = db::new_secret("cpn_l_");
-    sqlx::query("INSERT INTO login_codes (code_hash, user_id, expires_at) VALUES (?, ?, ?)")
-        .bind(&hash)
-        .bind(&user_id)
-        .bind(db::now() + LOGIN_CODE_TTL_MS)
-        .execute(&state.db)
+    repo::sessions::insert_login_code(&state.db, &hash, &user_id, db::now() + LOGIN_CODE_TTL_MS)
         .await?;
-    let return_to: String = row.get("return_to");
-    let encoded: String = url::form_urlencoded::byte_serialize(return_to.as_bytes()).collect();
+    let encoded: String = url::form_urlencoded::byte_serialize(row.return_to.as_bytes()).collect();
     Ok(complete_redirect(&format!(
         "code={code}&return_to={encoded}"
     )))
@@ -233,17 +221,12 @@ pub async fn exchange(
     Json(req): Json<ExchangeRequest>,
 ) -> AppResult<Json<SessionResponse>> {
     let hash = db::sha256(req.code.as_bytes());
-    let row =
-        sqlx::query("DELETE FROM login_codes WHERE code_hash = ? RETURNING user_id, expires_at")
-            .bind(&hash)
-            .fetch_optional(&state.db)
-            .await?
-            .ok_or(AppError::Unauthorized)?;
-    let expires: i64 = row.get("expires_at");
+    let (user_id, expires) = repo::sessions::take_login_code(&state.db, &hash)
+        .await?
+        .ok_or(AppError::Unauthorized)?;
     if expires < db::now() {
         return Err(AppError::Unauthorized);
     }
-    let user_id: String = row.get("user_id");
     Ok(Json(
         session_response(&state, &user_id, "web", Some("browser")).await?,
     ))
@@ -292,16 +275,7 @@ pub async fn logout(State(state): State<AppState>, who: Principal) -> AppResult<
 }
 
 pub async fn revoke_session(state: &AppState, user_id: &str, session_id: &str) -> AppResult<()> {
-    let n = sqlx::query(
-        "UPDATE sessions SET revoked_at = ? WHERE id = ? AND user_id = ? AND revoked_at IS NULL",
-    )
-    .bind(db::now())
-    .bind(session_id)
-    .bind(user_id)
-    .execute(&state.db)
-    .await?
-    .rows_affected();
-    if n == 0 {
+    if repo::sessions::revoke(&state.db, session_id, user_id, db::now()).await? == 0 {
         return Err(AppError::NotFound);
     }
     state
@@ -314,30 +288,8 @@ pub async fn list_sessions(
     State(state): State<AppState>,
     who: Principal,
 ) -> AppResult<Json<Vec<SessionEntry>>> {
-    let rows = sqlx::query(
-        "SELECT id, kind, client_name, device_id, created_at, last_used_at, expires_at FROM sessions
-         WHERE user_id = ? AND revoked_at IS NULL AND expires_at > ? ORDER BY created_at DESC",
-    )
-    .bind(&who.user_id)
-    .bind(db::now())
-    .fetch_all(&state.db)
-    .await?;
     Ok(Json(
-        rows.iter()
-            .map(|r| {
-                let id: String = r.get("id");
-                SessionEntry {
-                    current: id == who.session_id,
-                    id,
-                    kind: r.get("kind"),
-                    client_name: r.get("client_name"),
-                    device_id: r.get("device_id"),
-                    created_at: r.get("created_at"),
-                    last_used_at: r.get("last_used_at"),
-                    expires_at: r.get("expires_at"),
-                }
-            })
-            .collect(),
+        repo::sessions::list_active(&state.db, &who.user_id, &who.session_id, db::now()).await?,
     ))
 }
 

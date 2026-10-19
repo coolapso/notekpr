@@ -11,15 +11,15 @@ use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use coolpsonotes_core::protocol::{
-    ActivateDeviceRequest, DeviceEnvelope, DeviceInfo, DeviceRegistration, DeviceStatus,
-    RenameRequest, UserEventKind,
+    ActivateDeviceRequest, DeviceEnvelope, DeviceInfo, DeviceRegistration, RenameRequest,
+    UserEventKind,
 };
-use sqlx::Row;
 
 use crate::auth::Principal;
 use crate::db;
 use crate::error::{AppError, AppResult, bad, conflict, forbidden};
 use crate::hub::Control;
+use crate::repo;
 use crate::routes::me::{insert_device, notify_user};
 use crate::routes::users::account_key;
 use crate::state::AppState;
@@ -29,29 +29,8 @@ pub async fn list(
     who: Principal,
 ) -> AppResult<Json<Vec<DeviceInfo>>> {
     who.require_human()?;
-    let rows = sqlx::query(
-        "SELECT id, name, status, enc_public, created_at, approved_at, last_seen_at FROM devices
-         WHERE user_id = ? AND status != 'revoked' ORDER BY created_at",
-    )
-    .bind(&who.user_id)
-    .fetch_all(&state.db)
-    .await?;
     Ok(Json(
-        rows.iter()
-            .map(|r| {
-                let id: String = r.get("id");
-                DeviceInfo {
-                    current: who.device_id.as_deref() == Some(id.as_str()),
-                    id,
-                    name: r.get("name"),
-                    status: DeviceStatus::parse(r.get("status")).unwrap_or(DeviceStatus::Pending),
-                    enc_public: r.get("enc_public"),
-                    created_at: r.get("created_at"),
-                    approved_at: r.get("approved_at"),
-                    last_seen_at: r.get("last_seen_at"),
-                }
-            })
-            .collect(),
+        repo::devices::list(&state.db, &who.user_id, who.device_id.as_deref()).await?,
     ))
 }
 
@@ -67,11 +46,7 @@ pub async fn register(
     if account_key(&state.db, &who.user_id).await?.is_none() {
         return Err(conflict("set up account keys first"));
     }
-    let pending: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM devices WHERE user_id = ? AND status = 'pending'")
-            .bind(&who.user_id)
-            .fetch_one(&state.db)
-            .await?;
+    let pending = repo::devices::count_pending(&state.db, &who.user_id).await?;
     if pending >= 10 {
         return Err(conflict(
             "too many pending devices; approve or remove some first",
@@ -81,11 +56,7 @@ pub async fn register(
         let _w = state.write_lock.lock().await;
         let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
         insert_device(&mut tx, &who.user_id, &reg, None, db::now()).await?;
-        sqlx::query("UPDATE sessions SET device_id = ? WHERE id = ?")
-            .bind(&reg.device_id)
-            .bind(&who.session_id)
-            .execute(&mut *tx)
-            .await?;
+        repo::sessions::bind_device(&mut *tx, &who.session_id, &reg.device_id).await?;
         tx.commit().await?;
     }
     db::audit(
@@ -108,17 +79,14 @@ pub async fn envelope(
     Path(id): Path<String>,
 ) -> AppResult<Json<DeviceEnvelope>> {
     who.require_human()?;
-    let row =
-        sqlx::query("SELECT status, account_envelope FROM devices WHERE id = ? AND user_id = ?")
-            .bind(&id)
-            .bind(&who.user_id)
-            .fetch_optional(&state.db)
-            .await?
-            .ok_or(AppError::DeviceRevoked)?;
-    let status: String = row.get("status");
+    let (status, envelope) = repo::devices::envelope(&state.db, &id, &who.user_id)
+        .await?
+        .ok_or(AppError::DeviceRevoked)?;
     match status.as_str() {
         "active" => Ok(Json(DeviceEnvelope {
-            account_envelope: row.get("account_envelope"),
+            account_envelope: envelope.ok_or_else(|| {
+                AppError::Internal(anyhow::anyhow!("active device without an envelope"))
+            })?,
         })),
         "pending" => Err(conflict("device is waiting for approval")),
         _ => Err(AppError::DeviceRevoked),
@@ -142,17 +110,15 @@ pub async fn activate(
         .verify()
         .map_err(|e| AppError::Internal(anyhow::anyhow!("stored key invalid: {e}")))?;
     let _w = state.write_lock.lock().await;
-    let row = sqlx::query("SELECT status, enc_public FROM devices WHERE id = ? AND user_id = ?")
-        .bind(&id)
-        .bind(&who.user_id)
-        .fetch_optional(&state.db)
+    // Checked and activated in one transaction, so a removal in between
+    // can't be undone by the activation.
+    let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
+    let (status, dev_pub) = repo::devices::public_key(&mut *tx, &id, &who.user_id)
         .await?
         .ok_or(AppError::NotFound)?;
-    let status: String = row.get("status");
     if status != "pending" {
         return Err(conflict("device is not pending"));
     }
-    let dev_pub: Vec<u8> = row.get("enc_public");
     let dev_pub: [u8; 32] = dev_pub
         .as_slice()
         .try_into()
@@ -160,14 +126,8 @@ pub async fn activate(
     public
         .verify_device_approval(&who.user_id, &id, &dev_pub, &req.signature)
         .map_err(|_| forbidden("invalid device approval signature"))?;
-    sqlx::query(
-        "UPDATE devices SET status = 'active', account_envelope = ?, approved_at = ? WHERE id = ?",
-    )
-    .bind(&req.account_envelope)
-    .bind(db::now())
-    .bind(&id)
-    .execute(&state.db)
-    .await?;
+    repo::devices::activate(&mut *tx, &id, &req.account_envelope, db::now()).await?;
+    tx.commit().await?;
     drop(_w);
     db::audit(
         &state.db,
@@ -200,16 +160,7 @@ pub async fn rename(
     if name.is_empty() {
         return Err(bad("name must not be empty"));
     }
-    let n = sqlx::query(
-        "UPDATE devices SET name = ? WHERE id = ? AND user_id = ? AND status != 'revoked'",
-    )
-    .bind(&name)
-    .bind(&id)
-    .bind(&who.user_id)
-    .execute(&state.db)
-    .await?
-    .rows_affected();
-    if n == 0 {
+    if repo::devices::rename(&state.db, &id, &who.user_id, &name).await? == 0 {
         return Err(AppError::NotFound);
     }
     notify_user(&state, &who.user_id, UserEventKind::DevicesChanged);
@@ -226,25 +177,10 @@ pub async fn revoke(
 ) -> AppResult<StatusCode> {
     who.require_human()?;
     let now = db::now();
-    let n = sqlx::query(
-        "UPDATE devices SET status = 'revoked', account_envelope = NULL, revoked_at = ?
-         WHERE id = ? AND user_id = ? AND status != 'revoked'",
-    )
-    .bind(now)
-    .bind(&id)
-    .bind(&who.user_id)
-    .execute(&state.db)
-    .await?
-    .rows_affected();
-    if n == 0 {
+    if repo::devices::revoke(&state.db, &id, &who.user_id, now).await? == 0 {
         return Err(AppError::NotFound);
     }
-    let sessions: Vec<String> =
-        sqlx::query_scalar("UPDATE sessions SET revoked_at = ? WHERE device_id = ? AND revoked_at IS NULL RETURNING id")
-            .bind(now)
-            .bind(&id)
-            .fetch_all(&state.db)
-            .await?;
+    let sessions = repo::sessions::revoke_for_device(&state.db, &id, now).await?;
     for s in sessions {
         state.hub.control(&who.user_id, Control::SessionRevoked(s));
     }

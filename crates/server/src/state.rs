@@ -5,7 +5,7 @@ use metrics_exporter_prometheus::PrometheusHandle;
 
 use crate::config::Config;
 use crate::db::Db;
-use crate::hub::Hub;
+use crate::hub::EventBus;
 use crate::oidc::Oidc;
 use crate::ratelimit::Limiters;
 
@@ -15,7 +15,8 @@ pub struct AppState(Arc<Inner>);
 pub struct Inner {
     pub db: Db,
     pub config: Config,
-    pub hub: Hub,
+    /// Event fan-out to live connections (see `hub.rs` for its guarantees).
+    pub hub: EventBus,
     /// SQLite has a single writer. Serialising writes in-process avoids busy
     /// errors and, because events are published while the lock is held,
     /// guarantees subscribers see each vault's log in sequence order.
@@ -34,7 +35,7 @@ impl AppState {
         Ok(AppState(Arc::new(Inner {
             db,
             config,
-            hub: Hub::new(),
+            hub: EventBus::new(),
             blobs,
             write_lock: tokio::sync::Mutex::new(()),
             oidc,

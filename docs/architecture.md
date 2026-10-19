@@ -38,13 +38,28 @@ alternatives were considered. The wire protocol is in
 The server never links any code path that could decrypt content: it only
 handles opaque byte strings and public keys.
 
+### 1.1 Inside the server
+
+| Part | Does |
+|---|---|
+| `routes/`, `ws.rs` | HTTP and WebSocket handlers: validate requests, ask `access.rs`, write through `repo/` or `sync.rs`, publish events. No SQL. |
+| `access.rs` | Authorization decisions (`404` without access so ids can't be probed, `403` for too low a role). A write that depends on a role checks it again inside its own transaction; membership, role and share changes run under the write lock in a transaction too, so a write can't land after a removal or demotion. |
+| `repo/` | All SQL except the log's, as small functions per table group (users, sessions, devices, vaults and members, keys, shares, agents, audit, attachments). One place to review and test authorization-sensitive queries; unit tests run against a migrated database. |
+| `sync.rs` | The encrypted log: push, catch-up pages, snapshots, purges, the key-epoch checks. |
+| `hub.rs` | `EventBus`: vault events and per-user control messages to live connections. Today in-process channels. Its interface states what another backend (polling the log, a message broker) must guarantee — per-vault order, nothing lost after `subscribe` returns, gaps reported as lag, connection ids unique across processes — so an instance could later run as several processes on one database without touching callers. |
+| `blobs.rs` | Attachment bytes. Stored in SQLite today; a directory or S3-compatible store can be added as another variant. |
+
+One server-wide write lock serializes writes (SQLite has a single writer
+anyway); log events are published after their commit while it is still held,
+which is what makes each vault's live stream gapless and ordered.
+
 ## 2. Technology decisions
 
 | Area | Choice | Alternatives considered | Why |
 |---|---|---|---|
 | Language | Rust everywhere, including the browser (WebAssembly) | TypeScript web client (Svelte/React + CodeMirror + Yjs) | Mandated for the core; using it in the browser too means a single implementation of crypto and CRDT logic for every client, no npm supply chain, and no JS/Rust format drift. Cost: we wrote our own editor instead of reusing CodeMirror. |
 | Server framework | axum 0.8 + tokio + tower-http | actix-web, warp | Mature, minimal, first-class WebSockets, tower middleware ecosystem. |
-| Database | SQLite (WAL) via sqlx, single file — **SQLite only, by decision**, also for a hosted offering (one database per instance; grow by adding instances) | PostgreSQL | Zero extra services for self-hosting; a single file is a complete, consistent backup (`VACUUM INTO`); a notes workload with no server-side content processing fits one SQLite instance for a very large number of users. The SQL is SQLite-specific (e.g. `VACUUM INTO`, `BEGIN IMMEDIATE`). Storage access is to move behind small interfaces (see [TODO.md](../TODO.md)) so the decision stays cheap to revisit, but there are no plans for another database. |
+| Database | SQLite (WAL) via sqlx, single file — **SQLite only, by decision**, also for a hosted offering (one database per instance; grow by adding instances) | PostgreSQL | Zero extra services for self-hosting; a single file is a complete, consistent backup (`VACUUM INTO`); a notes workload with no server-side content processing fits one SQLite instance for a very large number of users. The SQL is SQLite-specific (e.g. `VACUUM INTO`, `BEGIN IMMEDIATE`). Storage access sits behind small interfaces (queries in `repo/`, attachment bytes in `blobs.rs`, live events in `hub.rs`, see §1.1) so the decision stays cheap to revisit, but there are no plans for another database. |
 | Attachments | Encrypted blobs inside SQLite | Filesystem/S3 | Atomic with metadata, one-file backups. Tradeoff: very large media libraries make the DB big (limit configurable, default 25 MB per file). |
 | CRDT | yrs 0.28 (Rust port of Yjs, update format v1) | Automerge, diamond-types, custom OT | Mature, fast, compact updates, text + map types, undo manager, sticky indices for cursors; binary compatible with the Yjs ecosystem. |
 | Document model | One `Y.Text` with the Markdown source per note; one `Y.Map` index per vault | Rich-text CRDT (ProseMirror/XmlFragment) with Markdown export | Markdown stays the canonical format, so external editors (Neovim, Obsidian) map to text diffs and nothing proprietary is needed for portability. |

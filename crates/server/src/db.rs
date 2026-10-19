@@ -165,30 +165,15 @@ pub fn valid_id(s: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
 }
 
-pub async fn audit(
-    db: &Db,
-    actor_id: Option<&str>,
-    user_id: Option<&str>,
-    vault_id: Option<&str>,
-    action: &str,
-    target: Option<&str>,
-    details: serde_json::Value,
-) {
-    let r = sqlx::query(
-        "INSERT INTO audit_log (at, actor_id, user_id, vault_id, action, target, details) VALUES (?, ?, ?, ?, ?, ?, ?)",
-    )
-    .bind(now())
-    .bind(actor_id)
-    .bind(user_id)
-    .bind(vault_id)
-    .bind(action)
-    .bind(target)
-    .bind(details.to_string())
-    .execute(db)
-    .await;
-    if let Err(e) = r {
-        tracing::warn!(error = %e, action, "failed to write audit log");
-    }
+/// Best-effort audit entry (see [`crate::repo::audit::record`]).
+pub use crate::repo::audit::record as audit;
+
+/// Readiness probe: can the database answer a query?
+pub async fn ping(db: &Db) -> bool {
+    sqlx::query_scalar::<_, i64>("SELECT 1")
+        .fetch_one(db)
+        .await
+        .is_ok()
 }
 
 #[cfg(test)]

@@ -106,6 +106,16 @@ pub fn QuickPage() -> impl IntoView {
             busy.set(false);
         });
     };
+    // Ready to type (on phones only when tapped: no keyboard popping up).
+    Effect::new(move |_| {
+        if let Some(a) = area.get()
+            && !util::is_touch()
+        {
+            util::set_timeout(0, move || {
+                let _ = a.focus();
+            });
+        }
+    });
     let hint = format!("{}+Enter to save", util::mod_key());
     view! {
         <div class="page quick-page">
@@ -125,7 +135,7 @@ pub fn QuickPage() -> impl IntoView {
                         prop:value=move || text.get()
                         on:input=move |ev| text.set(event_target_value(&ev))
                         on:keydown=move |ev: web_sys::KeyboardEvent| {
-                            if ev.key() == "Enter" && (ev.ctrl_key() || ev.meta_key()) {
+                            if ev.key() == "Enter" && (ev.ctrl_key() || ev.meta_key()) && !ev.is_composing() {
                                 ev.prevent_default();
                                 save();
                             }

@@ -18,16 +18,16 @@ use coolpsonotes_core::doc::{EntryKind, NoteDoc};
 use coolpsonotes_core::engine::{self, ObjectMeta, Presence, VaultMeta, VaultReplica};
 use coolpsonotes_core::keys::{AccountPublic, AccountSecret, DeviceKey, RecoveryKey};
 use coolpsonotes_core::protocol::*;
-use coolpsonotes_core::{paths, random_id, textdiff};
+use coolpsonotes_core::{paths, random_id};
 use leptos::prelude::Update;
 use leptos::prelude::*;
 use serde::{Deserialize, Serialize};
 
+use crate::api;
 use crate::editor::{Editor, RemoteCursor};
 use crate::storage::{self, DeviceRecord, UiPrefs};
 use crate::util::{self, now_ms};
 use crate::ws::{ConnState, Socket};
-use crate::{api, sizes};
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Phase {
@@ -366,7 +366,8 @@ pub struct Core {
     pub cache: crate::cache::Tracker,
     pub socket: Option<Rc<Socket>>,
     pub conn_id: u64,
-    pub outbox: BTreeMap<String, Vec<PushUpdate>>,
+    /// Upload bookkeeping per replica (`coolpsonotes_sync::Outbox`).
+    pub outboxes: BTreeMap<String, coolpsonotes_sync::Outbox>,
     pub prefs: Prefs,
     pub prefs_version: i64,
     pub editor: Option<(String, String, Rc<Editor>)>,
@@ -393,8 +394,6 @@ pub struct Core {
     pub presence_debounce: util::Debounce,
     pub content_debounce: util::Debounce,
     pub cursor: Option<(usize, usize)>,
-    /// Unsent updates too large for the server that the user was told about.
-    pub oversized_reported: HashSet<String>,
     /// When we last told the user that local storage is full.
     pub storage_warned_at: i64,
     /// Keys of a first-device setup whose upload failed, reused on retry.
@@ -409,13 +408,20 @@ impl Core {
         self.replicas.get(v)
     }
 
-    /// Number of documents with changes not yet confirmed by the server.
+    /// Number of documents with changes not yet confirmed by the server
+    /// (queued, or held back as too large).
     pub fn pending_count(&self) -> usize {
         self.replicas
             .iter()
             .map(|(v, r)| {
+                let held = self
+                    .outboxes
+                    .get(v)
+                    .map(|o| o.held.as_slice())
+                    .unwrap_or(&[]);
                 r.pending
                     .iter()
+                    .chain(held)
                     .map(|p| (v, &p.object_id))
                     .collect::<BTreeSet<_>>()
                     .len()

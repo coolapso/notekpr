@@ -169,6 +169,26 @@ impl Outbox {
         r.pending.len() + self.held.len()
     }
 
+    /// Plaintext bytes of queued updates not yet handed to the transport on
+    /// this connection (e.g. to pace a bulk import).
+    pub fn unsent_bytes(&self, r: &VaultReplica) -> usize {
+        r.pending
+            .iter()
+            .filter(|p| !self.in_flight.contains(&p.client_update_id))
+            .map(|p| p.update.len())
+            .sum()
+    }
+
+    /// Whether an object has local changes the server doesn't have yet
+    /// (queued or held back). A local copy of its state must not be treated
+    /// as confirmed.
+    pub fn unconfirmed(&self, r: &VaultReplica, object_id: &str) -> bool {
+        r.pending
+            .iter()
+            .chain(self.held.iter())
+            .any(|p| p.object_id == object_id)
+    }
+
     /// The connection was lost or replaced: everything not acknowledged is
     /// sent again on the next plan (with the same ids).
     pub fn connection_reset(&mut self) {

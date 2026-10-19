@@ -228,7 +228,7 @@ pub(super) fn drop_share(vault: &str, note: &str) {
                 c.shares_restored.remove(vault);
             }
         }
-        c.outbox.remove(vault);
+        c.outboxes.remove(vault);
     });
     persist_pending(vault);
     update_pending_count();

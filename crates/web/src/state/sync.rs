@@ -123,16 +123,25 @@ pub(super) fn on_server_message(m: ServerMessage) {
                 None => {}
             }
         }
-        ServerMessage::Ack { vault_id, results } => {
-            with(|c| {
-                if let Some(r) = c.replicas.get_mut(&vault_id) {
-                    r.ack(&results, true);
-                }
+        ServerMessage::Ack {
+            vault_id,
+            results,
+            rejected,
+        } => {
+            let limits = limits();
+            let reaction = with(|c| {
+                let r = c.replicas.get_mut(&vault_id)?;
+                let o = c.outboxes.entry(vault_id.clone()).or_default();
+                o.on_ack(r, &results, true);
+                Some(o.on_rejected(r, &rejected, &limits))
             });
             persist_pending(&vault_id);
             update_pending_count();
             maybe_compact(&vault_id);
             crate::cache::schedule();
+            if let Some(re) = reaction {
+                react(&vault_id, re);
+            }
         }
         ServerMessage::SnapshotCreated {
             vault_id,
@@ -176,9 +185,12 @@ pub(super) fn on_server_message(m: ServerMessage) {
                 });
             }
             let a = with(|c| {
-                c.replicas
-                    .get_mut(&vault_id)
-                    .map(|r| r.apply_purge(&object_id, seq))
+                let r = c.replicas.get_mut(&vault_id)?;
+                c.outboxes
+                    .entry(vault_id.clone())
+                    .or_default()
+                    .drop_object(r, &object_id);
+                Some(r.apply_purge(&object_id, seq))
             });
             if let Some(a) = a {
                 after_apply(&vault_id, a);
@@ -231,33 +243,12 @@ pub(super) fn on_server_message(m: ServerMessage) {
             message,
             vault_id,
         } => {
+            // (Older servers refuse whole pushes; newer ones list single
+            // refused updates in the acknowledgement, see `react`.)
             if code == "stale_key"
                 && let Some(v) = vault_id
             {
-                // A note got its own key (or a new one): reload keys and re-send.
-                let v2 = v.clone();
-                leptos::task::spawn_local(async move {
-                    let before = key_epochs(&v2);
-                    if is_member(&v2) {
-                        reload_vault_keys(v2.clone()).await;
-                    } else {
-                        let notes: Vec<String> = with(|c| {
-                            c.shares
-                                .keys()
-                                .filter(|(x, _)| *x == v2)
-                                .map(|(_, n)| n.clone())
-                                .collect()
-                        });
-                        for n in notes {
-                            reload_share_keys(&v2, &n).await;
-                        }
-                    }
-                    if key_epochs(&v2) != before {
-                        resend_pending(&v2);
-                    } else {
-                        util::warn("server refused our key, and no newer key is available");
-                    }
-                });
+                leptos::task::spawn_local(reload_keys_and_resend(v));
             } else if code == "not_found" && vault_id.is_some() {
                 leptos::task::spawn_local(async {
                     refresh_vaults().await;
@@ -283,6 +274,74 @@ pub(super) fn on_server_message(m: ServerMessage) {
             }
         }
         ServerMessage::Pong { .. } => {}
+    }
+}
+
+/// What to do after the server's answer to a push (see `coolpsonotes_sync::Reaction`).
+pub(super) fn react(vault_id: &str, re: coolpsonotes_sync::Reaction) {
+    if !re.held.is_empty() {
+        report_held(vault_id, &re.held);
+    }
+    for object in &re.purged {
+        rescue_dropped(vault_id, object);
+    }
+    if re.reload_keys {
+        leptos::task::spawn_local(reload_keys_and_resend(vault_id.to_string()));
+    } else if re.resend {
+        send_planned(vault_id);
+    }
+}
+
+/// The server refused updates encrypted with an outdated key (a note got
+/// its own key, or a key was rotated): reload keys, then send again.
+pub(super) async fn reload_keys_and_resend(v: String) {
+    let before = key_epochs(&v);
+    if is_member(&v) {
+        reload_vault_keys(v.clone()).await;
+    } else {
+        let notes: Vec<String> = with(|c| {
+            c.shares
+                .keys()
+                .filter(|(x, _)| *x == v)
+                .map(|(_, n)| n.clone())
+                .collect()
+        });
+        for n in notes {
+            reload_share_keys(&v, &n).await;
+        }
+    }
+    if key_epochs(&v) != before {
+        resend_pending(&v);
+    } else {
+        util::warn("server refused our key, and no newer key is available");
+    }
+}
+
+/// Our unsent changes to a note were dropped because someone deleted it for
+/// good: keep our version as a new note rather than losing it.
+fn rescue_dropped(vault_id: &str, object_id: &str) {
+    let rescue = with(|c| {
+        let r = c.replicas.get(vault_id)?;
+        if r.purged.contains(object_id) || !r.member {
+            return None;
+        }
+        let text = r.note_text(object_id);
+        let title = r
+            .index
+            .get(object_id)
+            .map(|e| e.title().to_string())
+            .unwrap_or_else(|| "Untitled".into());
+        (!text.is_empty()).then_some((title, text))
+    });
+    if let Some((title, text)) = rescue {
+        let v = vault_id.to_string();
+        leptos::task::spawn_local(async move {
+            let name = format!("{title} (recovered)");
+            crate::actions::create_note_with(&v, "", &name, &text).await;
+            info(format!(
+                "“{title}” was deleted by someone else; your unsent changes were saved as “{name}”."
+            ));
+        });
     }
 }
 
@@ -312,7 +371,10 @@ pub(super) fn drop_rejected(vault_id: &str) -> bool {
         };
         let before = r.pending.len();
         let purged = r.purged.clone();
-        r.pending.retain(|p| !purged.contains(&p.object_id));
+        let o = c.outboxes.entry(vault_id.to_string()).or_default();
+        for object in &purged {
+            o.drop_object(r, object);
+        }
         r.pending.len() != before
     });
     persist_pending(vault_id);
@@ -328,7 +390,15 @@ pub(super) fn on_synced(vault_id: &str, head: i64) {
         let rb = c
             .replicas
             .get_mut(vault_id)
-            .map(|r| r.synced(head))
+            .map(|r| {
+                // The server's history went backwards: queue our full state.
+                let rb = head < r.max_head_seen;
+                if rb {
+                    coolpsonotes_sync::recover_from_rollback(r, head);
+                }
+                r.synced(head);
+                rb
+            })
             .unwrap_or(false);
         (rb, uid, first)
     });
@@ -350,7 +420,6 @@ pub(super) fn on_synced(vault_id: &str, head: i64) {
         ui().warning.set(Some(
             "The server's copy of a vault is older than what this browser saw before (restored backup or a server problem). Your local changes are being re-sent.".into(),
         ));
-        repush_everything(vault_id);
     }
     resend_pending(vault_id);
     maybe_compact(vault_id);
@@ -438,59 +507,46 @@ pub(super) fn restore_stored_pending(vault_id: &str) {
     }
 }
 
-pub(super) fn repush_everything(vault_id: &str) {
-    with(|c| {
-        let Some(r) = c.replicas.get_mut(vault_id) else {
-            return;
-        };
-        if !r.can_write() || !r.member {
-            return;
-        }
-        let mut items = vec![(INDEX_OBJECT_ID.to_string(), r.index.encode_state())];
-        for (id, n) in &r.notes {
-            items.push((id.clone(), n.encode_state()));
-        }
-        for (id, state) in items {
-            let _ = r.local_change(&id, state);
-        }
-    });
-    resend_pending(vault_id);
-}
-
+/// Send everything not acknowledged again (after a reconnect, new keys or a
+/// refused push).
 pub(super) fn resend_pending(vault_id: &str) {
-    let ups = with(|c| {
-        c.replicas
-            .get(vault_id)
-            .map(|r| {
-                encrypt_pending(r)
-                    .into_iter()
-                    .filter_map(|(_, u)| u)
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default()
+    with(|c| {
+        if let Some(o) = c.outboxes.get_mut(vault_id) {
+            o.connection_reset();
+        }
     });
-    push_all(vault_id, ups);
-    update_pending_count();
+    send_planned(vault_id);
 }
 
-/// Every unacknowledged update with its id, encrypted with the current keys.
-/// One that can't be encrypted right now (`None`, e.g. its note's key is
-/// being reloaded) doesn't keep the others from being sent or stored.
-pub(super) fn encrypt_pending(r: &VaultReplica) -> Vec<(String, Option<PushUpdate>)> {
-    r.pending
-        .iter()
-        .map(|p| {
-            let u = r
-                .encrypt_object(Purpose::Update, &p.object_id, &p.update)
-                .ok()
-                .map(|payload| PushUpdate {
-                    object_id: p.object_id.clone(),
-                    client_update_id: p.client_update_id.clone(),
-                    payload,
-                });
-            (p.client_update_id.clone(), u)
-        })
-        .collect()
+/// Send what the sync engine plans for a vault. What can't be handed to the
+/// socket (it is closed) is planned again later — and merged with later
+/// edits meanwhile.
+pub(super) fn send_planned(vault_id: &str) {
+    let limits = limits();
+    let plan = with(|c| {
+        let r = c.replicas.get_mut(vault_id)?;
+        let o = c.outboxes.entry(vault_id.to_string()).or_default();
+        Some(o.plan(r, &limits))
+    });
+    let Some(plan) = plan else { return };
+    if !plan.held.is_empty() {
+        report_held(vault_id, &plan.held);
+    }
+    for updates in plan.pushes {
+        let ids: Vec<String> = updates.iter().map(|u| u.client_update_id.clone()).collect();
+        let sent = send(&ClientMessage::Push {
+            vault_id: vault_id.to_string(),
+            updates,
+        });
+        if !sent {
+            with(|c| {
+                if let Some(o) = c.outboxes.get_mut(vault_id) {
+                    o.not_sent(&ids);
+                }
+            });
+        }
+    }
+    update_pending_count();
 }
 
 /// The server's limit for one update (from `/info`).
@@ -498,34 +554,17 @@ pub fn max_update_bytes() -> usize {
     ui().server
         .get_untracked()
         .map(|s| s.max_update_bytes as usize)
-        .unwrap_or(sizes::DEFAULT_MAX_UPDATE)
+        .unwrap_or(coolpsonotes_sync::Limits::DEFAULT_MAX_UPDATE)
 }
 
-/// Send updates in pushes the server accepts. Updates too large to ever be
-/// stored are held back (they stay pending on this device) and reported,
-/// instead of making every push of the vault fail.
-pub(super) fn push_all(vault_id: &str, ups: Vec<PushUpdate>) {
-    let (pushes, oversized) = sizes::batches(ups, max_update_bytes());
-    for updates in pushes {
-        // If the socket is down, updates stay in the replica's pending
-        // queue and are re-sent after reconnecting.
-        send(&ClientMessage::Push {
-            vault_id: vault_id.to_string(),
-            updates,
-        });
-    }
-    if !oversized.is_empty() {
-        report_oversized(vault_id, &oversized);
-    }
+/// The server's limits as far as known.
+pub fn limits() -> coolpsonotes_sync::Limits {
+    coolpsonotes_sync::Limits::new(max_update_bytes())
 }
 
-pub(super) fn report_oversized(vault_id: &str, ups: &[PushUpdate]) {
-    let new: Vec<&PushUpdate> = with(|c| {
-        ups.iter()
-            .filter(|u| c.oversized_reported.insert(u.client_update_id.clone()))
-            .collect()
-    });
-    let Some(biggest) = new.iter().max_by_key(|u| u.payload.len()) else {
+/// Tell the user (once per update) about changes held back as too large.
+pub(super) fn report_held(vault_id: &str, held: &[coolpsonotes_sync::Held]) {
+    let Some(biggest) = held.iter().max_by_key(|h| h.bytes) else {
         return;
     };
     let title = with(|c| {
@@ -544,12 +583,16 @@ pub(super) fn report_oversized(vault_id: &str, ups: &[PushUpdate]) {
         None => "A change".to_string(),
     };
     util::warn(&format!(
-        "holding back {} update(s) larger than the server limit",
-        new.len()
+        "holding back {} update(s) the server can't store",
+        held.len()
     ));
+    let size = if biggest.bytes > 0 {
+        format!("{}; ", util::human_bytes(biggest.bytes as u64))
+    } else {
+        String::new()
+    };
     error(format!(
-        "{what} is too large to sync ({}; the server accepts {} at a time). It is kept on this device only.",
-        util::human_bytes(biggest.payload.len() as u64),
+        "{what} is too large to sync ({size}the server accepts {} at a time). It is kept on this device only.",
         util::human_bytes(max_update_bytes() as u64)
     ));
 }
@@ -568,14 +611,16 @@ pub(super) async fn on_too_large(vault_id: String) {
     }
 }
 
-/// Total payload bytes waiting in the outbox of a vault.
+/// Bytes of local changes of a vault not handed to the server yet.
 pub fn outbox_bytes(vault_id: &str) -> usize {
     with(|c| {
-        c.outbox
-            .get(vault_id)
-            .map(|v| v.iter().map(|u| u.payload.len()).sum())
-            .unwrap_or(0)
+        let r = c.replicas.get(vault_id)?;
+        Some(c.outboxes.get(vault_id).map_or_else(
+            || r.pending.iter().map(|p| p.update.len()).sum(),
+            |o| o.unsent_bytes(r),
+        ))
     })
+    .unwrap_or(0)
 }
 
 pub(super) fn on_vault_event(vault_id: String, event: VaultEventKind) {
@@ -667,10 +712,7 @@ pub fn local_update(vault_id: &str, object_id: &str, update: Vec<u8>) {
             return false;
         };
         match r.local_change(object_id, update) {
-            Ok(p) => {
-                c.outbox.entry(vault_id.to_string()).or_default().push(p);
-                true
-            }
+            Ok(_) => true,
             Err(e) => {
                 util::warn(&format!("encrypting update failed: {e}"));
                 false
@@ -690,10 +732,15 @@ pub fn schedule_flush() {
 }
 
 pub fn flush_now() {
-    let batches: Vec<(String, Vec<PushUpdate>)> =
-        with(|c| std::mem::take(&mut c.outbox).into_iter().collect());
-    for (v, ups) in batches {
-        push_all(&v, ups);
+    let vaults: Vec<String> = with(|c| {
+        c.replicas
+            .iter()
+            .filter(|(_, r)| !r.pending.is_empty())
+            .map(|(v, _)| v.clone())
+            .collect()
+    });
+    for v in vaults {
+        send_planned(&v);
         persist_pending(&v);
     }
     update_pending_count();
@@ -701,37 +748,23 @@ pub fn flush_now() {
 
 /// Store this page's unsent updates of a vault; false if that failed.
 pub(super) fn persist_pending(vault_id: &str) -> bool {
-    let (uid, items) = with(|c| {
-        (
-            c.user_id.clone(),
-            c.replicas.get(vault_id).map(encrypt_pending),
-        )
+    let uid = with(|c| c.user_id.clone());
+    let previous = storage::pending(&uid, vault_id);
+    let copies = with(|c| {
+        let r = c.replicas.get(vault_id)?;
+        let empty = coolpsonotes_sync::Outbox::default();
+        let o = c.outboxes.get(vault_id).unwrap_or(&empty);
+        Some(coolpsonotes_sync::stored_copies(r, o, &previous))
     });
-    let Some(items) = items else {
+    let ups = match copies {
         // The replica is gone (e.g. the last note shared with us from this vault).
-        return storage::set_pending(&uid, vault_id, &[]).is_ok();
-    };
-    let failed = items.iter().filter(|(_, u)| u.is_none()).count();
-    let ups: Vec<PushUpdate> = if failed == 0 {
-        items.into_iter().filter_map(|(_, u)| u).collect()
-    } else {
-        // Keep what was stored before for updates we can't encrypt now.
-        util::warn(&format!("{failed} unsent update(s) could not be encrypted"));
-        let mut stored = storage::pending(&uid, vault_id);
-        let ups: Vec<PushUpdate> = items
-            .into_iter()
-            .filter_map(|(id, u)| {
-                u.or_else(|| {
-                    let i = stored.iter().position(|s| s.client_update_id == id)?;
-                    Some(stored.swap_remove(i))
-                })
-            })
-            .collect();
-        if ups.is_empty() {
-            // Never replace stored changes with nothing because of an error.
+        None => return storage::set_pending(&uid, vault_id, &[]).is_ok(),
+        // Never replace stored changes with nothing because of an error.
+        Some(None) => {
+            util::warn("unsent updates could not be encrypted; keeping the stored copies");
             return false;
         }
-        ups
+        Some(Some(ups)) => ups,
     };
     if let Err(e) = storage::set_pending(&uid, vault_id, &ups) {
         util::warn(&format!("could not store unsent changes: {e}"));
@@ -756,16 +789,10 @@ pub(super) fn storage_full() {
 /// text) and queue the change, split into updates small enough for the
 /// server. Returns how many updates were made (0: unchanged or no such note).
 pub fn set_note_text(vault: &str, note: &str, text: &str) -> usize {
-    let budget = sizes::insert_budget(max_update_bytes());
+    let budget = limits().edit_budget();
     let ups = with(|c| {
         let n = c.replicas.get_mut(vault)?.notes.get_mut(note)?;
-        let edits = textdiff::diff(&n.text(), text);
-        Some(
-            sizes::split_edits(edits, budget)
-                .iter()
-                .filter_map(|g| n.apply_edits(g))
-                .collect::<Vec<_>>(),
-        )
+        Some(coolpsonotes_sync::edits::set_text(n, text, budget))
     })
     .unwrap_or_default();
     let n = ups.len();
@@ -828,18 +855,19 @@ pub fn snapshot(vault_id: String, object_id: String) {
             return None;
         }
         let r = c.replicas.get(&vault_id)?;
-        if !r.can_write() || r.seq == 0 || r.pending.iter().any(|p| p.object_id == object_id) {
-            return None;
-        }
-        let mut req = r.snapshot_request(&object_id).ok()?;
-        if !r.member {
-            // Our sequence number only means something for the note itself.
+        // Our sequence number only means something for a shared note itself.
+        let covers = if r.member {
+            None
+        } else {
             let s = c.shares.get(&key)?;
             if !s.loaded || !s.info.role.can_write() {
                 return None;
             }
-            req.covers_seq = s.seq;
-        }
+            Some(s.seq)
+        };
+        let empty = coolpsonotes_sync::Outbox::default();
+        let o = c.outboxes.get(&vault_id).unwrap_or(&empty);
+        let req = coolpsonotes_sync::snapshot_now(r, o, &object_id, covers)?;
         c.snapshotting.insert(key.clone());
         Some(req)
     });

@@ -847,6 +847,7 @@ version = "0.1.0"
 dependencies = [
  "console_error_panic_hook",
  "coolpsonotes-core",
+ "coolpsonotes-sync",
  "crc32fast",
  "data-encoding",
  "futures",

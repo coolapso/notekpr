@@ -21,11 +21,7 @@ pub fn snapshot_now(
     object_id: &str,
     covers_seq: Option<i64>,
 ) -> Option<CreateSnapshotRequest> {
-    let unconfirmed = r
-        .pending
-        .iter()
-        .chain(outbox.held.iter())
-        .any(|p| p.object_id == object_id);
+    let unconfirmed = outbox.unconfirmed(r, object_id);
     let exists = object_id == INDEX_OBJECT_ID || r.notes.contains_key(object_id);
     let seq = covers_seq.unwrap_or(r.seq);
     if !r.can_write() || unconfirmed || r.purged.contains(object_id) || !exists || seq < 1 {

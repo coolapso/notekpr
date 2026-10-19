@@ -224,7 +224,7 @@ pub(super) fn drop_vault(v: &str) {
         c.vault_infos.remove(v);
         c.loaded.remove(v);
         c.synced.remove(v);
-        c.outbox.remove(v);
+        c.outboxes.remove(v);
         take_attachment_urls(c, Some(v))
     });
     revoke_urls(urls);

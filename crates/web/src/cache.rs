@@ -122,6 +122,7 @@ fn prepare(
     removed: BTreeSet<String>,
     cursor: Option<i64>,
     stored: &mut BTreeSet<String>,
+    held: &[coolpsonotes_core::engine::Pending],
 ) -> Option<Job> {
     let mut puts = Vec::new();
     let mut kept = BTreeSet::new();
@@ -139,7 +140,9 @@ fn prepare(
         };
         let sealed = r.encrypt_object(Purpose::LocalCache, &o, &state);
         match sealed {
-            Ok(data) if !r.pending.iter().any(|p| p.object_id == o) => puts.push((o, data)),
+            Ok(data) if !r.pending.iter().chain(held).any(|p| p.object_id == o) => {
+                puts.push((o, data))
+            }
             _ => {
                 kept.insert(o);
             }
@@ -328,7 +331,9 @@ async fn save_now() {
             let dirty = t.dirty.entry(id.clone()).or_default();
             let removed = t.removed.remove(id).unwrap_or_default();
             let stored = t.stored.entry(id.clone()).or_default();
-            if let Some(job) = prepare(r, dirty, removed, t.cursor.get(id).copied(), stored) {
+            // Held back as too large: as unconfirmed as queued changes.
+            let held = c.outboxes.get(id).map(|o| o.held.as_slice()).unwrap_or(&[]);
+            if let Some(job) = prepare(r, dirty, removed, t.cursor.get(id).copied(), stored, held) {
                 jobs.push(job);
             }
         }
@@ -734,7 +739,15 @@ mod tests {
         r.apply_update(&remote(&mut other, "n1", "hello", 5))
             .unwrap();
         let mut dirty = set(&["n1"]);
-        let job = prepare(&r, &mut dirty, BTreeSet::new(), None, &mut BTreeSet::new()).unwrap();
+        let job = prepare(
+            &r,
+            &mut dirty,
+            BTreeSet::new(),
+            None,
+            &mut BTreeSet::new(),
+            &[],
+        )
+        .unwrap();
         assert!(dirty.is_empty());
         assert_eq!(job.cursor, 5);
 
@@ -750,7 +763,15 @@ mod tests {
         let (mut r, mut other) = (replica(&k), replica(&k));
         r.apply_update(&remote(&mut other, "n1", "a", 3)).unwrap();
         let mut stored = BTreeSet::new();
-        let first = prepare(&r, &mut set(&["n1"]), BTreeSet::new(), None, &mut stored).unwrap();
+        let first = prepare(
+            &r,
+            &mut set(&["n1"]),
+            BTreeSet::new(),
+            None,
+            &mut stored,
+            &[],
+        )
+        .unwrap();
         assert_eq!(first.cursor, 3);
 
         // A local edit the server hasn't confirmed, then someone else's change.
@@ -763,7 +784,7 @@ mod tests {
         r.local_change("n2", u).unwrap();
         r.apply_update(&remote(&mut other, "n1", "ab", 4)).unwrap();
         let mut dirty = set(&["n1", "n2"]);
-        let job = prepare(&r, &mut dirty, BTreeSet::new(), Some(3), &mut stored).unwrap();
+        let job = prepare(&r, &mut dirty, BTreeSet::new(), Some(3), &mut stored, &[]).unwrap();
         assert_eq!(dirty, set(&["n2"]));
         assert!(job.puts.iter().all(|(o, _)| o != "n2"));
         assert_eq!(
@@ -774,7 +795,7 @@ mod tests {
         // Confirmed: everything is written and the cursor moves.
         r.pending.clear();
         r.seq = 5;
-        let job = prepare(&r, &mut dirty, BTreeSet::new(), Some(3), &mut stored).unwrap();
+        let job = prepare(&r, &mut dirty, BTreeSet::new(), Some(3), &mut stored, &[]).unwrap();
         assert!(dirty.is_empty());
         assert_eq!(job.cursor, 5);
     }
@@ -796,6 +817,7 @@ mod tests {
             BTreeSet::new(),
             None,
             &mut BTreeSet::new(),
+            &[],
         )
         .unwrap();
         assert_eq!(job.cursor, 6);
@@ -810,7 +832,8 @@ mod tests {
                 &mut BTreeSet::new(),
                 BTreeSet::new(),
                 Some(0),
-                &mut BTreeSet::new()
+                &mut BTreeSet::new(),
+                &[]
             )
             .is_none()
         );
@@ -820,7 +843,8 @@ mod tests {
                 &mut BTreeSet::new(),
                 BTreeSet::new(),
                 None,
-                &mut BTreeSet::new()
+                &mut BTreeSet::new(),
+                &[]
             )
             .is_some()
         );
@@ -838,6 +862,7 @@ mod tests {
             set(&["n1"]),
             Some(2),
             &mut set(&["n1"]),
+            &[],
         )
         .unwrap();
         assert!(job.puts.is_empty());
@@ -857,6 +882,7 @@ mod tests {
             BTreeSet::new(),
             None,
             &mut BTreeSet::new(),
+            &[],
         )
         .unwrap();
         let mut partial = stored(&job);
@@ -874,6 +900,7 @@ mod tests {
             BTreeSet::new(),
             None,
             &mut BTreeSet::new(),
+            &[],
         )
         .unwrap();
         let mut stranger = replica(&ring(1));

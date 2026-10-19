@@ -76,6 +76,7 @@ provider setup, reverse proxies, Kubernetes, backups, upgrades and monitoring.
 * [Sync protocol and HTTP API](docs/protocol.md)
 * [Operations](docs/operations.md) · [Development](docs/development.md)
 * [Acceptance criteria and how they are tested](docs/acceptance.md)
+* [Working on the code (rules for humans and AI agents)](AGENTS.md)
 
 ## Status
 

@@ -474,7 +474,8 @@ impl Editor {
         if let Some((a, h)) = sel
             && self.has_focus()
         {
-            self.set_selection(a, h);
+            // Not the user's doing (an image loaded, links changed): don't scroll.
+            self.place_selection(a, h, false);
         }
     }
 
@@ -708,7 +709,12 @@ impl Editor {
         Some((a, h))
     }
 
+    /// Select `[anchor, head)` and scroll the caret into view.
     pub fn set_selection(&self, anchor: usize, head: usize) {
+        self.place_selection(anchor, head, true);
+    }
+
+    fn place_selection(&self, anchor: usize, head: usize, scroll: bool) {
         let (anchor, head) = {
             let st = self.st.borrow();
             (floor_char(&st.text, anchor), floor_char(&st.text, head))
@@ -723,7 +729,9 @@ impl Editor {
             let _ = sel.set_base_and_extent(&an, ao, &hn, ho);
         }
         self.update_active();
-        self.scroll_caret_into_view();
+        if scroll {
+            self.scroll_caret_into_view();
+        }
     }
 
     fn scroll_caret_into_view(&self) {
@@ -891,7 +899,9 @@ impl Editor {
         }
         self.render(false);
         if focused {
-            self.set_selection(a, h);
+            // Only undo/redo brings the change into view; remote edits must not
+            // move the page under the reader.
+            self.place_selection(a, h, caret_to_change);
         } else {
             let mut st = self.st.borrow_mut();
             st.sel = (floor_char(&st.text, a), floor_char(&st.text, h));

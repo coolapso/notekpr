@@ -195,6 +195,21 @@ def test_collab(env):
         a.js("document.querySelector('.ed').dispatchEvent(new CompositionEvent('compositionend', {bubbles: true, data: ''}));")
         a.wait("return document.querySelector('.ed').textContent.includes('remote again')", 10, "remote text after a cancelled composition")
         check(True, "remote text that waited for a cancelled composition is shown")
+        # Remote edits don't scroll the page back to the caret.
+        a.js("const ed=document.querySelector('.ed'); ed.focus(); const s=getSelection(); s.selectAllChildren(ed); s.collapseToEnd();"
+             "const dt = new DataTransfer(); dt.setData('text/plain', '\\nfiller'.repeat(150)); ed.dispatchEvent(new ClipboardEvent('paste', {clipboardData: dt, bubbles: true, cancelable: true}));")
+        b.wait("return document.querySelector('.ed').textContent.endsWith('fillerfiller')", 10, "ben gets the long text")
+        a.js("const ed=document.querySelector('.ed'); ed.focus(); const r=document.createRange(); r.setStart(ed.firstChild.firstChild || ed.firstChild, 0); r.collapse(true); const s=getSelection(); s.removeAllRanges(); s.addRange(r);")
+        time.sleep(0.3)
+        a.js("document.querySelector('.main').scrollTop = 1e6;")
+        time.sleep(0.3)
+        top = a.js("return document.querySelector('.main').scrollTop")
+        b.js("const ed=document.querySelector('.ed'); ed.focus(); const s=getSelection(); s.selectAllChildren(ed); s.collapseToEnd();")
+        b.keys(" last")
+        a.wait("return document.querySelector('.ed').textContent.endsWith('filler last')", 10, "alice gets ben's edit")
+        time.sleep(0.5)
+        check(top > 500 and abs(a.js("return document.querySelector('.main').scrollTop") - top) < 5,
+              "a remote edit doesn't scroll the page back to the caret")
         check(a.js("return document.querySelectorAll('.presence .avatar').length") >= 1, "collaborator presence is shown")
         check(a.js("return document.querySelectorAll('.rc').length") >= 1, "remote cursor is shown")
         a.shot("collab-alice")

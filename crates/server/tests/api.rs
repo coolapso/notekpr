@@ -1710,3 +1710,49 @@ async fn removed_members_lose_per_note_subscriptions() {
     .await;
     assert!(update.is_err(), "a removed member still received an update");
 }
+
+#[tokio::test]
+async fn writes_with_a_replaced_vault_key_are_refused() {
+    let srv = start().await;
+    let mut alice = new_user(&srv.base, "alice").await;
+    let mut bob = new_user(&srv.base, "bob").await;
+    let v = alice.create_vault("Family").await;
+    alice.share(&v, &bob.id, Role::Editor).await.unwrap();
+    bob.load_keys(&v).await.unwrap();
+    let note = NoteDoc::new();
+    let u = note.set_text("before").unwrap();
+    bob.push(&v, vec![bob.encrypt_update(&v, "n1", &u)])
+        .await
+        .unwrap();
+
+    // The owner rotates the key (e.g. after removing someone); Bob's client
+    // hasn't noticed yet and still encrypts with the old key.
+    alice.rotate(&v).await;
+    let u = note.set_text("after").unwrap();
+    let stale = bob.encrypt_update(&v, "n1", &u);
+    assert_eq!(bob.push(&v, vec![stale]).await.unwrap_err().0, 412);
+    // Snapshots too.
+    let snap = CreateSnapshotRequest {
+        snapshot_id: random_id(),
+        covers_seq: 1,
+        payload: bob
+            .ring(&v)
+            .encrypt(Purpose::Snapshot, "n1", &note.encode_state())
+            .unwrap(),
+    };
+    assert_eq!(
+        bob.api
+            .status(
+                Method::POST,
+                &format!("/vaults/{v}/objects/n1/snapshots"),
+                Some(&snap)
+            )
+            .await,
+        412
+    );
+    // After reloading keys the same change goes through.
+    bob.load_keys(&v).await.unwrap();
+    bob.push(&v, vec![bob.encrypt_update(&v, "n1", &u)])
+        .await
+        .unwrap();
+}

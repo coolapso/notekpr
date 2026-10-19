@@ -216,7 +216,16 @@ pub fn validate_object_id(id: &str) -> AppResult<()> {
 /// Shared notes accept only content encrypted with their current document
 /// key; other notes only vault-key content. The key epoch is in the
 /// (authenticated, but not secret) ciphertext header.
-pub fn check_payload_key(object_key_epoch: Option<i64>, payload: &[u8]) -> AppResult<()> {
+/// Content must be encrypted with the current key: the note's own key for
+/// individually shared notes, otherwise the vault's current key. Anything
+/// older is refused with `stale_key` (the client reloads keys and
+/// re-encrypts), so after a key rotation nobody keeps writing content that
+/// removed members could still read.
+pub fn check_payload_key(
+    vault_epoch: i64,
+    object_key_epoch: Option<i64>,
+    payload: &[u8],
+) -> AppResult<()> {
     use coolpsonotes_core::keys::is_doc_epoch;
     let epoch =
         coolpsonotes_core::crypto::sym_epoch(payload).map_err(|_| bad("malformed ciphertext"))?;
@@ -225,9 +234,22 @@ pub fn check_payload_key(object_key_epoch: Option<i64>, payload: &[u8]) -> AppRe
             "this note now has its own key; reload keys and encrypt with it".into(),
         )),
         Some(cur) if (epoch as i64) > cur => Err(bad("unknown document key epoch")),
+        Some(_) => Ok(()),
         None if is_doc_epoch(epoch) => Err(bad("document key used for a note that is not shared")),
-        _ => Ok(()),
+        None if (epoch as i64) < vault_epoch => Err(AppError::StaleKey(
+            "the vault has a new key; reload keys and encrypt with it".into(),
+        )),
+        None if (epoch as i64) > vault_epoch => Err(bad("unknown vault key epoch")),
+        None => Ok(()),
     }
+}
+
+async fn vault_key_epoch(db: impl sqlx::SqliteExecutor<'_>, vault_id: &str) -> AppResult<i64> {
+    sqlx::query_scalar("SELECT key_epoch FROM vaults WHERE id = ?")
+        .bind(vault_id)
+        .fetch_optional(db)
+        .await?
+        .ok_or(AppError::NotFound)
 }
 
 /// May `who` write to `object_id`? Vault editors/owners, or people the note
@@ -289,6 +311,9 @@ pub async fn push(
             return Err(AppError::TooLarge);
         }
     }
+    // Access is checked under the write lock, so a push can't land after
+    // the writer was removed (membership changes take the same lock).
+    let _w = state.write_lock.lock().await;
     let member = access::member_role_opt(&state.db, vault_id, &who.user_id).await?;
     if member.is_none() && head_seq(&state.db, vault_id).await.is_err() {
         return Err(AppError::NotFound);
@@ -298,10 +323,9 @@ pub async fn push(
     for o in objects {
         write_access(&state.db, member, vault_id, o, &who.user_id).await?;
     }
-
-    let _w = state.write_lock.lock().await;
     let now = db::now();
     let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
+    let vault_epoch = vault_key_epoch(&mut *tx, vault_id).await?;
     let mut results = Vec::with_capacity(updates.len());
     let mut duplicates = Vec::new();
     let mut fresh: Vec<(Update, String)> = Vec::new();
@@ -329,7 +353,7 @@ pub async fn push(
         .bind(&u.object_id)
         .fetch_optional(&mut *tx)
         .await?;
-        check_payload_key(obj.and_then(|o| o.1), &u.payload)?;
+        check_payload_key(vault_epoch, obj.and_then(|o| o.1), &u.payload)?;
         match obj.map(|o| o.0) {
             Some(Some(_)) => {
                 return Err(conflict(format!(
@@ -438,9 +462,9 @@ pub async fn create_snapshot(
     if payload.len() as u64 > state.config.max_snapshot_bytes() {
         return Err(AppError::TooLarge);
     }
+    let _w = state.write_lock.lock().await;
     let member = access::member_role_opt(&state.db, vault_id, &who.user_id).await?;
     write_access(&state.db, member, vault_id, object_id, &who.user_id).await?;
-    let _w = state.write_lock.lock().await;
     let head = head_seq(&state.db, vault_id).await?;
     if covers_seq < 1 || covers_seq > head {
         return Err(bad("covers_seq out of range"));
@@ -454,7 +478,11 @@ pub async fn create_snapshot(
     let Some((None, key_epoch)) = obj else {
         return Err(AppError::NotFound);
     };
-    check_payload_key(key_epoch, &payload)?;
+    check_payload_key(
+        vault_key_epoch(&state.db, vault_id).await?,
+        key_epoch,
+        &payload,
+    )?;
     let now = db::now();
     let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
     insert_snapshot(

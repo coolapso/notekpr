@@ -451,9 +451,14 @@ with SQLite; no SQL-dialect abstraction.
 - [ ] `cargo-fuzz` targets: link/percent decoding and Markdown analysis,
       editor syntax classification and styling (multibyte!), envelope and
       protocol parsing, zip import, text diff.
-- [ ] Property tests: CRDT convergence under random concurrent edits, mirror
-      path mapping (case-insensitive and Windows rules), table/key helpers.
-- [ ] In CI from now on.
+- [x] Property tests: CRDT convergence under random concurrent edits, mirror
+      path mapping (case-insensitive and Windows rules), table/key helpers
+      (`crates/core/tests/properties.rs`, `crates/web/tests/properties.rs`,
+      `path_properties` in `crates/client/src/mirror.rs`; `PROPTEST_CASES`
+      raises the case count).
+- [x] In CI from now on (part of `cargo test`).
+- [ ] `cargo-fuzz` needs nightly; decide whether CI gets a nightly fuzz job
+      or the property tests stay the only randomized tests.
 - Would have caught W-H3 and W-H4; guards the mirror path fixes (C-H6, C-H7).
 
 ---

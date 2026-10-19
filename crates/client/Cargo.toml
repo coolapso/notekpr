@@ -50,3 +50,4 @@ similar = { version = "3", default-features = false }
 [dev-dependencies]
 coolpsonotes-server = { path = "../server" }
 tempfile = "3"
+proptest = { version = "1", default-features = false, features = ["std"] }

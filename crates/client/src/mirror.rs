@@ -2573,3 +2573,125 @@ mod tests {
         assert!(n.ends_with(").md"));
     }
 }
+
+/// Property tests for the path rules that keep mirrored files inside their
+/// folder and apart from each other [C-H6, C-H7].
+#[cfg(test)]
+mod path_properties {
+    use super::*;
+    use coolpsonotes_core::doc::Entry;
+    use proptest::prelude::*;
+
+    const ALPHABET: &[char] = &[
+        'a', 'B', 'n', 'N', '1', ' ', '.', '.', '/', '/', '\\', ':', '*', '?', '"', '<', '>', '|',
+        '-', '_', '~', '\0', '\t', 'é', 'É', 'ß', 'İ', '€', '😀', '\u{202e}',
+    ];
+    const WORDS: &[&str] = &[
+        "con", "CON", "nul.md", "Com1", "lpt9.txt", "..", ".", "a", "A", "Notes", "notes",
+    ];
+
+    fn text(max: usize) -> impl Strategy<Value = String> {
+        prop::collection::vec(
+            prop_oneof![
+                4 => prop::sample::select(ALPHABET).prop_map(|c| c.to_string()),
+                1 => prop::sample::select(WORDS).prop_map(str::to_string),
+            ],
+            0..max,
+        )
+        .prop_map(|v| v.concat())
+    }
+
+    fn cases() -> u32 {
+        std::env::var("PROPTEST_CASES")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(512)
+    }
+
+    fn entry(id: &str, path: &str) -> (String, (String, Entry)) {
+        let e = Entry {
+            id: id.into(),
+            path: path.into(),
+            kind: EntryKind::Note,
+            created: 0,
+            modified: 0,
+            trashed: None,
+            size: None,
+            mime: None,
+        };
+        (id.to_string(), (path.to_string(), e))
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(cases()))]
+
+        /// A path accepted for mirroring maps below the mirror folder, one
+        /// plain component per segment, also under Windows' rules.
+        #[test]
+        fn safe_paths_stay_inside(p in text(40)) {
+            let base = Path::new("/mirror/Vault");
+            for windows in [false, true] {
+                if !is_safe_vault_path_for(&p, windows) {
+                    continue;
+                }
+                let d = disk_path(base, &p).unwrap();
+                prop_assert!(d.starts_with(base) && d != base);
+                prop_assert_eq!(
+                    d.strip_prefix(base).unwrap().components().count(),
+                    p.split('/').count()
+                );
+                prop_assert!(p.split('/').all(|s| s != ".." && s != "." && !s.is_empty()));
+                if windows {
+                    prop_assert!(p.split('/').all(is_windows_safe_name));
+                }
+            }
+        }
+
+        /// Whatever disk_path accepts stays below its directory.
+        #[test]
+        fn disk_paths_never_escape(p in text(40)) {
+            let base = Path::new("/mirror/Vault");
+            if let Ok(d) = disk_path(base, &p) {
+                prop_assert!(d.starts_with(base) && d != base);
+                prop_assert!(!d.components().any(|c| matches!(c, std::path::Component::ParentDir)));
+            }
+        }
+
+        /// Vault folder names are always usable on every common file system.
+        #[test]
+        fn vault_folder_names_are_safe(name in text(60)) {
+            let n = sanitize_dir_name(&name, "Vault");
+            prop_assert!(is_windows_safe_name(&n), "{n:?}");
+            prop_assert!(!n.starts_with('.') && n.len() <= 200 && !n.contains('/'));
+        }
+
+        /// On a case-insensitive file system every note still gets its own
+        /// file; paths that don't clash keep their name. On a case-sensitive
+        /// one nothing is renamed.
+        #[test]
+        fn case_clashes_get_distinct_files(paths in prop::collection::btree_set(
+            prop::collection::vec(prop::sample::select(&["a", "A", "b", "Ä", "ä", "ß", "SS"][..]), 1..4)
+                .prop_map(|v| v.concat() + ".md"),
+            1..8,
+        )) {
+            let live: BTreeMap<_, _> = paths
+                .iter()
+                .enumerate()
+                .map(|(i, p)| entry(&format!("n{i}"), p))
+                .collect();
+            let plain = assign_disk_paths(&live, &BTreeMap::new(), false);
+            prop_assert!(live.iter().all(|(id, (p, _))| plain[id] == *p));
+
+            let folded = assign_disk_paths(&live, &BTreeMap::new(), true);
+            prop_assert_eq!(folded.len(), live.len());
+            let keys: BTreeSet<String> = folded.values().map(|d| fold_key(true, d)).collect();
+            prop_assert_eq!(keys.len(), folded.len(), "two notes share a file: {:?}", folded);
+            for (id, (p, _)) in &live {
+                let clashes = live.values().filter(|(q, _)| fold_key(true, q) == fold_key(true, p)).count();
+                if clashes == 1 {
+                    prop_assert_eq!(&folded[id], p);
+                }
+            }
+        }
+    }
+}

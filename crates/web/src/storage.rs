@@ -139,14 +139,51 @@ pub fn clear_device(user_id: &str) {
     remove(local(), &device_key(user_id));
 }
 
-fn pending_key(user_id: &str, vault_id: &str) -> String {
-    format!("cpn.pending.{user_id}.{vault_id}")
+thread_local! {
+    /// This page load: unsent changes are stored per page, so two tabs never
+    /// overwrite each other's (each later load takes over what is left).
+    static PAGE: String = coolpsonotes_core::random_id();
 }
 
+fn pending_key(user_id: &str, vault_id: &str) -> String {
+    PAGE.with(|p| format!("cpn.pending.{user_id}.{vault_id}.{p}"))
+}
+
+/// This page's unsent updates of a vault.
 pub fn pending(user_id: &str, vault_id: &str) -> Vec<PushUpdate> {
     get(local(), &pending_key(user_id, vault_id))
         .and_then(|s| serde_json::from_str(&s).ok())
         .unwrap_or_default()
+}
+
+/// Unsent updates of a vault stored by any page (earlier loads, other tabs,
+/// and the single key of older versions), by storage key.
+pub fn all_pending(user_id: &str, vault_id: &str) -> Vec<(String, Vec<PushUpdate>)> {
+    let Some(s) = local() else { return vec![] };
+    let legacy = format!("cpn.pending.{user_id}.{vault_id}");
+    let prefix = format!("{legacy}.");
+    let n = s.length().unwrap_or(0);
+    let keys: Vec<String> = (0..n)
+        .filter_map(|i| s.key(i).ok().flatten())
+        .filter(|k| *k == legacy || k.starts_with(&prefix))
+        .collect();
+    keys.into_iter()
+        .filter_map(|k| {
+            let v = serde_json::from_str(&get(local(), &k)?).ok()?;
+            Some((k, v))
+        })
+        .collect()
+}
+
+/// Whether `key` is this page's own storage key for the vault.
+pub fn is_own_pending_key(user_id: &str, vault_id: &str, key: &str) -> bool {
+    key == pending_key(user_id, vault_id)
+}
+
+pub fn remove_pending_key(key: &str) {
+    if key.starts_with("cpn.pending.") {
+        remove(local(), key);
+    }
 }
 
 pub fn set_pending(user_id: &str, vault_id: &str, p: &[PushUpdate]) -> Result<(), String> {
@@ -160,17 +197,6 @@ pub fn set_pending(user_id: &str, vault_id: &str, p: &[PushUpdate]) -> Result<()
             &serde_json::to_string(p).unwrap(),
         )
     }
-}
-
-/// Every vault that has unsent updates stored for this user.
-pub fn pending_vaults(user_id: &str) -> Vec<String> {
-    let Some(s) = local() else { return vec![] };
-    let prefix = format!("cpn.pending.{user_id}.");
-    let n = s.length().unwrap_or(0);
-    (0..n)
-        .filter_map(|i| s.key(i).ok().flatten())
-        .filter_map(|k| k.strip_prefix(&prefix).map(str::to_string))
-        .collect()
 }
 
 /// Delete everything stored for a user in this browser: device key, unsent

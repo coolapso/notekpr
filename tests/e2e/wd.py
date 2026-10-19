@@ -110,6 +110,22 @@ class Browser:
         open(path, "wb").write(base64.b64decode(png))
         return path
 
+    def new_tab(self):
+        """Open a tab in the same browser profile (shared storage) and switch to it."""
+        h = req("POST", self.p("/window/new"), {"type": "tab"})["handle"]
+        self.switch(h)
+        return h
+
+    def switch(self, handle):
+        req("POST", self.p("/window"), {"handle": handle})
+
+    def tab(self):
+        return req("GET", self.p("/window"))
+
+    def close_tab(self):
+        """Close the current tab; switch to another one afterwards."""
+        return req("DELETE", self.p("/window"))
+
     def logs(self):
         try:
             return req("POST", self.p("/se/log"), {"type": "browser"})

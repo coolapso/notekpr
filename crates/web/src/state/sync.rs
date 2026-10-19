@@ -364,48 +364,75 @@ pub(super) fn show_loaded(vault_id: &str) {
     }
 }
 
-/// Updates left unsent by a previous session (tab closed while offline):
-/// apply them locally (they are ours) and send them again.
+/// Updates left unsent by earlier page loads or other tabs (closed while
+/// offline): apply them locally (they are ours) and send them again. Another
+/// tab still sending the same updates is harmless: the server keeps one copy
+/// per update id. Their storage keys are removed once everything in them is
+/// stored under this page's key.
 pub(super) fn restore_stored_pending(vault_id: &str) {
     let uid = with(|c| c.user_id.clone());
-    let stored = storage::pending(&uid, vault_id);
+    let stored = storage::all_pending(&uid, vault_id);
     if stored.is_empty() {
         return;
     }
     let mut applied = engine::Applied::default();
+    let mut adopted = 0;
+    let mut done_keys = Vec::new();
     with(|c| {
         let Some(r) = c.replicas.get_mut(vault_id) else {
             return;
         };
-        for p in stored {
-            if r.pending
-                .iter()
-                .any(|x| x.client_update_id == p.client_update_id)
-            {
-                continue;
-            }
-            if let Ok(plain) = r.decrypt_object(Purpose::Update, &p.object_id, &p.payload) {
-                if p.object_id == INDEX_OBJECT_ID {
-                    let _ = r.index.apply_update(&plain);
-                    applied.index_changed = true;
-                } else {
-                    let _ = r
-                        .notes
-                        .entry(p.object_id.clone())
-                        .or_default()
-                        .apply_update(&plain);
-                    applied.objects.insert(p.object_id.clone());
+        for (key, items) in stored {
+            let mut complete = true;
+            for p in items {
+                if r.pending
+                    .iter()
+                    .any(|x| x.client_update_id == p.client_update_id)
+                {
+                    continue;
                 }
-                r.pending.push(engine::Pending {
-                    client_update_id: p.client_update_id,
-                    object_id: p.object_id,
-                    update: plain,
-                });
+                match r.decrypt_object(Purpose::Update, &p.object_id, &p.payload) {
+                    Ok(plain) => {
+                        adopted += 1;
+                        if p.object_id == INDEX_OBJECT_ID {
+                            let _ = r.index.apply_update(&plain);
+                            applied.index_changed = true;
+                        } else {
+                            let _ = r
+                                .notes
+                                .entry(p.object_id.clone())
+                                .or_default()
+                                .apply_update(&plain);
+                            applied.objects.insert(p.object_id.clone());
+                        }
+                        r.pending.push(engine::Pending {
+                            client_update_id: p.client_update_id,
+                            object_id: p.object_id,
+                            update: plain,
+                        });
+                    }
+                    // Kept where it is (e.g. its key isn't loaded yet).
+                    Err(_) => complete = false,
+                }
+            }
+            if complete && !storage::is_own_pending_key(&uid, vault_id, &key) {
+                done_keys.push(key);
             }
         }
     });
+    if adopted == 0 && done_keys.is_empty() {
+        return;
+    }
     after_apply(vault_id, applied);
-    info("Sending changes saved while you were offline.");
+    // Only after they are stored under this page's key.
+    if persist_pending(vault_id) {
+        for k in &done_keys {
+            storage::remove_pending_key(k);
+        }
+    }
+    if adopted > 0 {
+        info("Sending changes saved while you were offline.");
+    }
 }
 
 pub(super) fn repush_everything(vault_id: &str) {
@@ -669,7 +696,8 @@ pub fn flush_now() {
     update_pending_count();
 }
 
-pub(super) fn persist_pending(vault_id: &str) {
+/// Store this page's unsent updates of a vault; false if that failed.
+pub(super) fn persist_pending(vault_id: &str) -> bool {
     let (uid, items) = with(|c| {
         (
             c.user_id.clone(),
@@ -678,8 +706,7 @@ pub(super) fn persist_pending(vault_id: &str) {
     });
     let Some(items) = items else {
         // The replica is gone (e.g. the last note shared with us from this vault).
-        let _ = storage::set_pending(&uid, vault_id, &[]);
-        return;
+        return storage::set_pending(&uid, vault_id, &[]).is_ok();
     };
     let failed = items.iter().filter(|(_, u)| u.is_none()).count();
     let ups: Vec<PushUpdate> = if failed == 0 {
@@ -699,14 +726,16 @@ pub(super) fn persist_pending(vault_id: &str) {
             .collect();
         if ups.is_empty() {
             // Never replace stored changes with nothing because of an error.
-            return;
+            return false;
         }
         ups
     };
     if let Err(e) = storage::set_pending(&uid, vault_id, &ups) {
         util::warn(&format!("could not store unsent changes: {e}"));
         storage_full();
+        return false;
     }
+    true
 }
 
 /// Tell the user (at most once a minute) that unsent changes can't be kept.

@@ -427,6 +427,10 @@ with SQLite; no SQL-dialect abstraction.
 - [ ] Local copies for notes shared individually (recipient replicas).
 - [x] Load vault keys in parallel at startup. Shares still load one by one
       (notes of one vault share a replica).
+- [x] Unsent edits of two tabs overwrote each other in localStorage [W-M4]:
+      stored per page load now; a later load takes over what closed tabs
+      left (the server ignores updates it already has) and removes their
+      keys once everything is stored under its own (e2e `test_offline_tabs`).
 - [ ] Start without the network (needs the session and device key check to
       work offline), offline reading.
 - Resolves: slow start and full re-download on every page load [W-L12];

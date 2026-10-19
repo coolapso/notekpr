@@ -789,7 +789,46 @@ def test_ui_basics(env):
         b.close()
 
 
-TESTS = [test_onboarding, test_collab, test_devices_and_recovery, test_features, test_attachments, test_note_sharing, test_tables, test_editor_safety, test_local_copy, test_ui_basics, test_mobile]
+def test_offline_tabs(env):
+    b = Browser()
+    try:
+        signup(b, uniq("ola"))
+        new_note(b, "Draft", "start")
+        url = b.js("return location.href")
+        tab_a = b.tab()
+        tab_b = b.new_tab()
+        b.go(url)
+        b.wait("return document.querySelector('.ed') && document.querySelector('.ed').textContent.includes('start')", 20, "tab B opens the note")
+        end = "const ed=document.querySelector('.ed'); ed.focus(); const s=getSelection(); s.selectAllChildren(ed); s.collapseToEnd();"
+        env.stop_server()
+        time.sleep(1)
+        # Both tabs edit while offline; then the first one is closed.
+        b.switch(tab_a)
+        b.js(end)
+        b.keys(" fromA")
+        time.sleep(1)
+        b.switch(tab_b)
+        b.js(end)
+        b.keys(" fromB")
+        time.sleep(1)
+        b.switch(tab_a)
+        b.close_tab()
+        b.switch(tab_b)
+        env.start_server()
+        b.go(url)
+        b.wait("const t = document.querySelector('.ed') && document.querySelector('.ed').textContent; return t && t.includes('fromA') && t.includes('fromB')", 30,
+               "both offline edits after reconnecting")
+        check(True, "unsent changes of a closed tab survive another tab's")
+        # Acknowledged by the server: nothing unsent is left, the closed tab's
+        # stored changes included.
+        b.wait("return Object.keys(localStorage).filter(k => k.startsWith('cpn.pending.')).length === 0", 30, "everything sent")
+        check(True, "the taken-over changes are sent and their storage is cleared")
+        check(not severe_logs(b), "no browser errors")
+    finally:
+        b.close()
+
+
+TESTS = [test_onboarding, test_collab, test_devices_and_recovery, test_features, test_attachments, test_note_sharing, test_tables, test_editor_safety, test_local_copy, test_ui_basics, test_offline_tabs, test_mobile]
 
 
 def main():

@@ -13,8 +13,8 @@ use leptos::prelude::Update;
 use leptos::prelude::*;
 use wasm_bindgen::JsCast;
 
-use crate::editor::Host;
 use crate::editor::syntax::Target;
+use crate::editor::{self, Host};
 use crate::state::{self, Route, error, info, local_update, navigate, success, with};
 use crate::{api, knowledge, render, util, zipfile};
 
@@ -1231,7 +1231,7 @@ impl NoteHost {
 }
 
 impl Host for NoteHost {
-    fn edit(&self, edits: &[Edit]) -> bool {
+    fn edit(&self, base: &str, edits: &[Edit]) -> bool {
         // One edit is one update; refuse what the server could never store
         // rather than block the vault's sync with it.
         let inserted = crate::sizes::inserted_bytes(edits);
@@ -1244,19 +1244,50 @@ impl Host for NoteHost {
             ));
             return false;
         }
+        // The editor's text and the CRDT can differ when remote text arrived
+        // during an IME composition: the editor's offsets are then relative to
+        // an outdated text. Move simple edits onto the current text, or drop
+        // them; either way the editor reloads the note's text afterwards.
         let res = with(|c| {
             let n = c.replicas.get_mut(&self.vault)?.notes.get_mut(&self.note)?;
-            let u = n.apply_edits(edits)?;
-            Some((u, n.len()))
+            let current = n.text();
+            let in_sync = current == base;
+            let rebased;
+            let edits = if in_sync {
+                edits
+            } else {
+                match editor::rebase(base, &current, edits) {
+                    Some(e) => {
+                        rebased = e;
+                        &rebased[..]
+                    }
+                    None => return Some((None, 0, false)),
+                }
+            };
+            // Out-of-range offsets would make yrs panic.
+            if !editor::edits_fit(&current, edits) {
+                return Some((None, 0, false));
+            }
+            Some((n.apply_edits(edits), n.len(), in_sync))
         });
-        if let Some((u, len)) = res {
+        let Some((update, len, in_sync)) = res else {
+            return true;
+        };
+        if !in_sync {
+            util::warn(if update.is_some() {
+                "the note changed during text input; the input was moved onto the current text"
+            } else {
+                "the note changed during text input; the input could not be applied"
+            });
+        }
+        if let Some(u) = update {
             local_update(&self.vault, &self.note, u);
             state::touch(&self.vault, &self.note, len);
             let ui = state::ui();
             let d = with(|c| c.content_debounce.clone());
             d.run(400, move || ui.content_rev.update(|v| *v += 1));
         }
-        true
+        in_sync
     }
 
     fn text(&self) -> Option<String> {

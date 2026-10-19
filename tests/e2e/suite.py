@@ -168,6 +168,33 @@ def test_collab(env):
         b.wait("return document.querySelector('.ed').textContent.includes('Shopping: ')", 10, "ben sees alice's edit")
         time.sleep(1)
         check(editor_text(a) == editor_text(b), "both editors converge to identical text")
+        # An IME composition that ends while a remote change is waiting must neither
+        # kill the editor nor be applied at outdated offsets.
+        a.js("document.querySelector('.ed').dispatchEvent(new CompositionEvent('compositionstart', {bubbles: true, data: ''}));")
+        b.js("const ed=document.querySelector('.ed'); ed.focus(); const s=getSelection(); s.selectAllChildren(ed); s.collapseToEnd();")
+        b.keys(" remote")
+        time.sleep(2)
+        check("remote" not in editor_text(a), "remote text waits while a composition is in progress")
+        a.js("""
+            const ed = document.querySelector('.ed');
+            const n = document.createTreeWalker(ed.firstElementChild, NodeFilter.SHOW_TEXT).nextNode();
+            n.data = 'かな' + n.data;
+            ed.dispatchEvent(new InputEvent('input', {bubbles: true, isComposing: true, inputType: 'insertCompositionText', data: 'かな'}));
+            ed.dispatchEvent(new CompositionEvent('compositionend', {bubbles: true, data: 'かな'}));
+        """)
+        a.wait("return document.querySelector('.ed').textContent.includes('remote')", 10, "remote text after the composition")
+        b.wait("return document.querySelector('.ed').textContent.includes('かな')", 10, "the composition reaches ben")
+        time.sleep(1)
+        check(editor_text(a) == editor_text(b) and editor_text(a).startswith("かなShopping") and editor_text(a).endswith(" remote"),
+              "a composition committed while remote text waited lands where it was typed")
+        # A cancelled composition (no text) applies the waiting remote text.
+        a.js("document.querySelector('.ed').dispatchEvent(new CompositionEvent('compositionstart', {bubbles: true, data: ''}));")
+        b.js("const ed=document.querySelector('.ed'); ed.focus(); const s=getSelection(); s.selectAllChildren(ed); s.collapseToEnd();")
+        b.keys(" again")
+        time.sleep(2)
+        a.js("document.querySelector('.ed').dispatchEvent(new CompositionEvent('compositionend', {bubbles: true, data: ''}));")
+        a.wait("return document.querySelector('.ed').textContent.includes('remote again')", 10, "remote text after a cancelled composition")
+        check(True, "remote text that waited for a cancelled composition is shown")
         check(a.js("return document.querySelectorAll('.presence .avatar').length") >= 1, "collaborator presence is shown")
         check(a.js("return document.querySelectorAll('.rc').length") >= 1, "remote cursor is shown")
         a.shot("collab-alice")

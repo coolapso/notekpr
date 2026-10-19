@@ -23,10 +23,11 @@ use crate::util::document;
 use syntax::{Block, Target};
 
 pub trait Host {
-    /// Local edits, already applied to the editor's text. Returns `false` if
-    /// the host did not take them (e.g. too large to sync); the editor then
-    /// reloads the document's text.
-    fn edit(&self, edits: &[Edit]) -> bool;
+    /// Local edits made on `base` (the editor's text before them), already
+    /// applied to the editor's text. Returns `false` if the editor must reload
+    /// the document's text: the edits were refused (e.g. too large to sync),
+    /// or the document no longer matched `base`.
+    fn edit(&self, base: &str, edits: &[Edit]) -> bool;
     /// The document's current text.
     fn text(&self) -> Option<String>;
     fn undo(&self) -> Option<String>;
@@ -182,6 +183,70 @@ fn map_pos(mut p: usize, edits: &[Edit], stay: bool) -> usize {
         }
     }
     p
+}
+
+/// Whether sequential edits stay inside `text` and on character boundaries
+/// (anything else would panic or corrupt the CRDT).
+pub fn edits_fit(text: &str, edits: &[Edit]) -> bool {
+    let mut t = text.to_string();
+    for e in edits {
+        match e {
+            Edit::Delete { at, len } => {
+                let end = at.saturating_add(*len);
+                if end > t.len() || !t.is_char_boundary(*at) || !t.is_char_boundary(end) {
+                    return false;
+                }
+                t.replace_range(*at..end, "");
+            }
+            Edit::Insert { at, text } => {
+                if *at > t.len() || !t.is_char_boundary(*at) {
+                    return false;
+                }
+                t.insert_str(*at, text);
+            }
+        }
+    }
+    true
+}
+
+/// Move local edits made on `base` onto `current` (`base` plus changes made
+/// elsewhere). Only the simple shapes an IME commit produces are handled —
+/// an insertion, or a replacement of text nobody else touched; `None` means
+/// the edits can't be placed safely. (Interim: a general rebase comes with
+/// the editor redesign.)
+pub fn rebase(base: &str, current: &str, edits: &[Edit]) -> Option<Vec<Edit>> {
+    let remote = textdiff::diff(base, current);
+    let out = match edits {
+        [Edit::Insert { at, text }] => vec![Edit::Insert {
+            at: map_pos(*at, &remote, false),
+            text: text.clone(),
+        }],
+        [Edit::Delete { at, len }] | [Edit::Delete { at, len }, Edit::Insert { .. }] => {
+            let gone = base.get(*at..at + len)?;
+            let from = map_pos(*at, &remote, false);
+            let to = map_pos(at + len, &remote, true);
+            if to < from || current.get(from..to) != Some(gone) {
+                return None;
+            }
+            let mut v = vec![Edit::Delete {
+                at: from,
+                len: *len,
+            }];
+            if let [_, Edit::Insert { at: ia, text }] = edits
+                && ia == at
+            {
+                v.push(Edit::Insert {
+                    at: from,
+                    text: text.clone(),
+                });
+            } else if edits.len() == 2 {
+                return None;
+            }
+            v
+        }
+        _ => return None,
+    };
+    edits_fit(current, &out).then_some(out)
 }
 
 /// Edits that toggle `open`/`close` around the selection `[a, b)` (or the
@@ -668,6 +733,7 @@ impl Editor {
             return;
         }
         let mut edits = Vec::with_capacity(2);
+        let base = self.st.borrow().text.clone();
         let from = {
             let mut st = self.st.borrow_mut();
             let to = floor_char(&st.text, to);
@@ -696,7 +762,7 @@ impl Editor {
             let p = from + insert.len();
             (p, p)
         });
-        if !self.commit(&edits, (a, h)) {
+        if !self.commit(&base, &edits, (a, h)) {
             return;
         }
         self.render(false);
@@ -708,11 +774,12 @@ impl Editor {
         if edits.is_empty() || self.st.borrow().readonly {
             return;
         }
-        {
-            let mut st = self.st.borrow_mut();
-            st.text = textdiff::apply(&st.text, &edits);
+        let base = self.st.borrow().text.clone();
+        if !edits_fit(&base, &edits) {
+            return;
         }
-        if !self.commit(&edits, caret) {
+        self.st.borrow_mut().text = textdiff::apply(&base, &edits);
+        if !self.commit(&base, &edits, caret) {
             return;
         }
         self.render(false);
@@ -722,8 +789,8 @@ impl Editor {
 
     /// Hand local edits (already applied to our text) to the host. If it
     /// refuses them, go back to the document's text and return `false`.
-    fn commit(&self, edits: &[Edit], caret: (usize, usize)) -> bool {
-        if self.host.edit(edits) {
+    fn commit(&self, base: &str, edits: &[Edit], caret: (usize, usize)) -> bool {
+        if self.host.edit(base, edits) {
             return true;
         }
         self.resync(caret);
@@ -1231,7 +1298,7 @@ impl Editor {
             };
             (p, p)
         });
-        if !self.commit(&edits, caret) {
+        if !self.commit(&old, &edits, caret) {
             return;
         }
         self.render(true);
@@ -1779,6 +1846,79 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn edits_are_checked_against_the_text() {
+        let ins = |at, t: &str| Edit::Insert { at, text: t.into() };
+        let del = |at, len| Edit::Delete { at, len };
+        assert!(edits_fit("日本", &[ins(3, "x"), del(0, 3)]));
+        assert!(edits_fit("", &[ins(0, "a")]));
+        assert!(!edits_fit("日本", &[ins(1, "x")]));
+        assert!(!edits_fit("日本", &[ins(7, "x")]));
+        assert!(!edits_fit("日本", &[del(3, 4)]));
+        assert!(!edits_fit("日本", &[del(0, 2)]));
+        assert!(!edits_fit("ab", &[del(0, usize::MAX)]));
+        // Later edits are checked against the text as it is by then.
+        assert!(edits_fit("ab", &[ins(2, "cd"), del(3, 1)]));
+        assert!(!edits_fit("ab", &[del(0, 2), ins(1, "x")]));
+    }
+
+    #[test]
+    fn composition_is_rebased_onto_remote_changes() {
+        let base = "Shopping: milk\neggs";
+        // Someone else appended a line while we were composing at the start.
+        let current = "Shopping: milk\neggs\nbread";
+        let local = textdiff::diff(base, "かなShopping: milk\neggs");
+        let e = rebase(base, current, &local).unwrap();
+        assert_eq!(
+            textdiff::apply(current, &e),
+            "かなShopping: milk\neggs\nbread"
+        );
+        // …or inserted text before our composition.
+        let current = "Remote. Shopping: milk\neggs";
+        let local = vec![Edit::Insert {
+            at: 15,
+            text: "日本".into(),
+        }];
+        let e = rebase(base, current, &local).unwrap();
+        assert_eq!(
+            textdiff::apply(current, &e),
+            "Remote. Shopping: milk\n日本eggs"
+        );
+        // A replacement of text nobody else touched moves along too.
+        let local = vec![
+            Edit::Delete { at: 10, len: 4 },
+            Edit::Insert {
+                at: 10,
+                text: "ミルク".into(),
+            },
+        ];
+        let e = rebase(base, current, &local).unwrap();
+        assert_eq!(
+            textdiff::apply(current, &e),
+            "Remote. Shopping: ミルク\neggs"
+        );
+        let current = "Shopping: oat milk\neggs";
+        let e = rebase(base, current, &local).unwrap();
+        assert_eq!(textdiff::apply(current, &e), "Shopping: oat ミルク\neggs");
+        // If the replaced text changed elsewhere, give up.
+        let current = "Shopping: mi1k\neggs";
+        assert_eq!(rebase(base, current, &local), None);
+        let current = "Shopping: mil-k\neggs";
+        assert_eq!(rebase(base, current, &local), None);
+        // Several separate edits are not rebased.
+        let local = vec![
+            Edit::Insert {
+                at: 0,
+                text: "a".into(),
+            },
+            Edit::Insert {
+                at: 5,
+                text: "b".into(),
+            },
+        ];
+        assert_eq!(rebase(base, current, &local), None);
     }
 
     #[test]

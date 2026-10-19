@@ -267,6 +267,16 @@ pub struct Config {
     )]
     pub snapshot_retention: i64,
 
+    /// Minimum seconds between two snapshots of the same note by the same
+    /// person (keeps history from being flooded).
+    #[arg(
+        long,
+        env = "COOLPSONOTES_SNAPSHOT_COOLDOWN_SECS",
+        default_value_t = 30,
+        global = true
+    )]
+    pub snapshot_cooldown_secs: i64,
+
     /// Trust X-Forwarded-For / X-Real-IP (only behind a reverse proxy you control).
     #[arg(
         long,
@@ -390,6 +400,7 @@ impl Config {
         let mut c = cli.config;
         c.normalize();
         c.rate_limit_rps = 10_000;
+        c.snapshot_cooldown_secs = 0;
         c.auth_rate_limit_per_min = 10_000;
         c
     }

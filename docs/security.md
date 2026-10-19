@@ -106,8 +106,12 @@ primitives. Formats:
   author's key is planned to close this.)
 * **Editors** can change or trash content but not manage members or keys.
   Their writes are attributed (author and device are recorded per update) and
-  history allows restoring earlier versions. Purges are limited to items in the
-  trash and are recorded in the vault audit log.
+  history allows restoring earlier versions. Permanent deletes are recorded in
+  the vault audit log. Because the server can't check what a snapshot
+  contains, a malicious editor can still damage the *server's* copy of history
+  (e.g. snapshots that drop content; a per-person cooldown keeps this slow).
+  Members' local replicas, Markdown exports and server backups are the
+  recovery path; owner-recoverable deletes are planned.
 * **Removed members** lose server access immediately and the vault key is
   rotated, so content written afterwards is unreadable to them even if they
   obtain ciphertext. Data they downloaded before removal cannot be revoked —

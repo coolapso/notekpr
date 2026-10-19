@@ -493,7 +493,21 @@ pub async fn create_snapshot(
         key_epoch,
         &payload,
     )?;
+    // Clients snapshot a note after many updates or when an editing session
+    // ends; a cooldown per author and note keeps anyone from flooding the
+    // history and pushing real revisions out of retention.
+    let last: Option<i64> = sqlx::query_scalar(
+        "SELECT MAX(created_at) FROM snapshots WHERE vault_id = ? AND object_id = ? AND author_id = ?",
+    )
+    .bind(vault_id)
+    .bind(object_id)
+    .bind(&who.user_id)
+    .fetch_one(&state.db)
+    .await?;
     let now = db::now();
+    if last.is_some_and(|t| now - t < state.config.snapshot_cooldown_secs * 1000) {
+        return Err(AppError::RateLimited);
+    }
     let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
     insert_snapshot(
         &mut tx,

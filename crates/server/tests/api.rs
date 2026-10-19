@@ -1843,3 +1843,33 @@ async fn large_catch_ups_are_split_into_pages() {
     assert_eq!(seen, 9);
     assert!(pages >= 2);
 }
+
+#[tokio::test]
+async fn snapshots_of_one_note_by_one_person_have_a_cooldown() {
+    let srv = start_with(|c| c.snapshot_cooldown_secs = 30).await;
+    let mut alice = new_user(&srv.base, "alice").await;
+    let v = alice.create_vault("V").await;
+    let note = NoteDoc::new();
+    let u = note.set_text("hello").unwrap();
+    alice
+        .push(&v, vec![alice.encrypt_update(&v, "n1", &u)])
+        .await
+        .unwrap();
+    let snap = || CreateSnapshotRequest {
+        snapshot_id: random_id(),
+        covers_seq: 1,
+        payload: alice
+            .ring(&v)
+            .encrypt(Purpose::Snapshot, "n1", &note.encode_state())
+            .unwrap(),
+    };
+    let path = format!("/vaults/{v}/objects/n1/snapshots");
+    assert_eq!(
+        alice.api.status(Method::POST, &path, Some(&snap())).await,
+        201
+    );
+    assert_eq!(
+        alice.api.status(Method::POST, &path, Some(&snap())).await,
+        429
+    );
+}

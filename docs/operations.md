@@ -147,6 +147,7 @@ compose or env file) counts as not set.
 | `--max-attachment-mb` / `COOLPSONOTES_MAX_ATTACHMENT_MB` | `25` | maximum attachment size |
 | `--max-update-kb` / `COOLPSONOTES_MAX_UPDATE_KB` | `2048` | maximum size of one encrypted update |
 | `--snapshot-retention` / `COOLPSONOTES_SNAPSHOT_RETENTION` | `100` | revisions kept per document |
+| `--snapshot-cooldown-secs` / `COOLPSONOTES_SNAPSHOT_COOLDOWN_SECS` | `30` | minimum time between two snapshots of one note by one person |
 | `--trust-proxy` / `COOLPSONOTES_TRUST_PROXY` | `false` | use `X-Forwarded-For` for rate limiting (only behind your proxy, §4) |
 | `--rate-limit-rps` / `COOLPSONOTES_RATE_LIMIT_RPS` | `50` | API requests per second per IP (burst ×4) |
 | `--auth-rate-limit-per-min` / `COOLPSONOTES_AUTH_RATE_LIMIT_PER_MIN` | `30` | login/token requests per minute per IP |

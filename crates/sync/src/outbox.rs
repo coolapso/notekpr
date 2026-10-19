@@ -207,31 +207,27 @@ impl Outbox {
         self.new_keys.retain(|k| k.object_id != object_id);
     }
 
-    /// The server refused a new note's key (e.g. the note had content
-    /// already): the note stays under the vault key.
+    /// The server refused a new note's key. If it was wrapped under a vault
+    /// key that is no longer the current one (the vault's key rotated
+    /// meanwhile; reload keys first), a new key under the current vault key
+    /// replaces it: nothing of the note left this device under the old one.
+    /// Otherwise (e.g. the note had content already) the note stays under
+    /// the vault key.
     pub fn key_refused(&mut self, r: &mut VaultReplica, object_id: &str) {
-        if self.new_keys.iter().any(|k| k.object_id == object_id) {
-            self.new_keys.retain(|k| k.object_id != object_id);
-            r.doc_keys.remove(object_id);
-        }
-    }
-
-    /// A new note's key was wrapped under a vault key that is no longer the
-    /// current one (the vault's key rotated meanwhile): replace it with a new
-    /// key under the current vault key. Nothing of the note left this device
-    /// under the old one.
-    pub fn key_stale(&mut self, r: &mut VaultReplica, object_id: &str) {
         let Some(pos) = self.new_keys.iter().position(|k| k.object_id == object_id) else {
             return;
         };
-        self.new_keys.remove(pos);
+        let k = self.new_keys.remove(pos);
         r.doc_keys.remove(object_id);
-        let title = r
-            .index
-            .get(object_id)
-            .map(|e| e.title().to_string())
-            .unwrap_or_default();
-        self.new_document_key(r, object_id, &title);
+        let wrapped_under = coolpsonotes_core::crypto::sym_epoch(&k.update.vault_envelope).ok();
+        if wrapped_under < r.keyring.current_epoch() {
+            let title = r
+                .index
+                .get(object_id)
+                .map(|e| e.title().to_string())
+                .unwrap_or_default();
+            self.new_document_key(r, object_id, &title);
+        }
     }
 
     /// The client replaced `r.doc_keys` with the keys the server has: new

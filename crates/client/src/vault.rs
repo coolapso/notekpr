@@ -490,15 +490,9 @@ impl Vault {
         self.dirty_state = true;
     }
 
-    /// The server refused a new note's key: `stale` if it was wrapped under
-    /// an outdated vault key (a new one replaces it), otherwise the note
-    /// stays under the vault key.
-    pub fn key_refused(&mut self, object_id: &str, stale: bool) {
-        if stale {
-            self.outbox.key_stale(&mut self.replica, object_id);
-        } else {
-            self.outbox.key_refused(&mut self.replica, object_id);
-        }
+    /// The server refused a new note's key (see `Outbox::key_refused`).
+    pub fn key_refused(&mut self, object_id: &str) {
+        self.outbox.key_refused(&mut self.replica, object_id);
         self.dirty_state = true;
     }
 

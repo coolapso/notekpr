@@ -352,7 +352,6 @@ impl Session {
             }
         }
         let mut rekeyed = false;
-        let mut stale_note_key = false;
         // Known even offline (remembered), never "unlimited".
         let max = self.limits().max_update_bytes;
         {
@@ -388,13 +387,11 @@ impl Session {
                         break 'rounds;
                     }
                     // Wrapped under a vault key that was replaced meanwhile:
-                    // a new key under the current one (once; then the note
-                    // stays under the vault key).
+                    // with fresh keys, a new key under the current one.
                     Err(e) if e.status() == Some(412) => {
                         self.refresh_keys(vault).await?;
                         let mut v = vault.lock().await;
-                        v.key_refused(&k.object_id, !stale_note_key);
-                        stale_note_key = true;
+                        v.key_refused(&k.object_id);
                         v.save()?;
                     }
                     // Refused (403: e.g. no write access any more, which the
@@ -406,7 +403,7 @@ impl Session {
                         let mut v = vault.lock().await;
                         if v.outbox.waits_for_key(&k.object_id) {
                             tracing::warn!(vault = %id, "the server refused a new note's own key ({e}); it is encrypted with the vault key instead");
-                            v.key_refused(&k.object_id, false);
+                            v.key_refused(&k.object_id);
                         }
                         v.save()?;
                     }
@@ -818,7 +815,7 @@ impl Session {
                         .map(|k| k.object_id.clone())
                         .collect();
                     for oid in waiting {
-                        v.key_refused(&oid, true);
+                        v.key_refused(&oid);
                     }
                     v.save()?;
                     return Ok(req.new_epoch);

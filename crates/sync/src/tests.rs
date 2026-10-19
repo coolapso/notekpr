@@ -355,11 +355,14 @@ fn a_key_wrapped_under_an_old_vault_key_is_replaced() {
     let old = r.doc_keys["n1"].current().unwrap().1.0;
     let next = VaultKey::generate();
     r.keyring.insert(2, next);
-    o.key_stale(&mut r, "n1");
+    o.key_refused(&mut r, "n1");
     assert_eq!(o.new_keys.len(), 1);
     let env = &o.new_keys[0].update.vault_envelope;
     assert_eq!(coolpsonotes_core::crypto::sym_epoch(env).unwrap(), 2);
     assert_ne!(r.doc_keys["n1"].current().unwrap().1.0, old);
+    // Refused again under the current key: it stays under the vault key.
+    o.key_refused(&mut r, "n1");
+    assert!(o.new_keys.is_empty() && !r.doc_keys.contains_key("n1"));
 }
 
 #[test]

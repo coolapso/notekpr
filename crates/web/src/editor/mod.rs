@@ -132,7 +132,18 @@ fn line_starts(text: &str) -> Vec<usize> {
     v
 }
 
+/// `i` clamped to `s` and moved back onto a character boundary, so it can be
+/// used to slice `s` (offsets can come from stale state or remote edits).
+pub(crate) fn floor_char(s: &str, i: usize) -> usize {
+    let mut i = i.min(s.len());
+    while !s.is_char_boundary(i) {
+        i -= 1;
+    }
+    i
+}
+
 fn prev_char(s: &str, i: usize) -> usize {
+    let i = floor_char(s, i);
     s[..i]
         .char_indices()
         .next_back()
@@ -141,11 +152,84 @@ fn prev_char(s: &str, i: usize) -> usize {
 }
 
 fn next_char(s: &str, i: usize) -> usize {
+    let i = floor_char(s, i);
     s[i..]
         .chars()
         .next()
         .map(|c| i + c.len_utf8())
         .unwrap_or(s.len())
+}
+
+/// Edits that toggle `open`/`close` around the selection `[a, b)` (or the
+/// word at the caret), and the selection afterwards. Never slices `text`
+/// inside a character, whatever the offsets.
+fn wrap_toggle(
+    text: &str,
+    a: usize,
+    b: usize,
+    open: &str,
+    close: &str,
+) -> (Vec<Edit>, (usize, usize)) {
+    let (a, b) = (floor_char(text, a), floor_char(text, b));
+    let (a, b) = (a.min(b), a.max(b));
+    let (ol, cl) = (open.len(), close.len());
+    let wrapped =
+        a >= ol && text.get(a - ol..a) == Some(open) && text.get(b..b + cl) == Some(close);
+    if wrapped {
+        let edits = vec![
+            Edit::Delete { at: b, len: cl },
+            Edit::Delete {
+                at: a - ol,
+                len: ol,
+            },
+        ];
+        return (edits, (a - ol, b - ol));
+    }
+    if a == b {
+        // Wrap the word under the caret, or insert an empty pair.
+        let is_word = |c: char| c.is_alphanumeric() || c == '_' || c == '-';
+        let ws = text[..a]
+            .char_indices()
+            .rev()
+            .take_while(|(_, c)| is_word(*c))
+            .last()
+            .map(|(i, _)| i)
+            .unwrap_or(a);
+        let we = a + text[a..]
+            .chars()
+            .take_while(|c| is_word(*c))
+            .map(char::len_utf8)
+            .sum::<usize>();
+        let edits = if ws < we {
+            vec![
+                Edit::Insert {
+                    at: we,
+                    text: close.into(),
+                },
+                Edit::Insert {
+                    at: ws,
+                    text: open.into(),
+                },
+            ]
+        } else {
+            vec![Edit::Insert {
+                at: a,
+                text: format!("{open}{close}"),
+            }]
+        };
+        return (edits, (a + ol, a + ol));
+    }
+    let edits = vec![
+        Edit::Insert {
+            at: b,
+            text: close.into(),
+        },
+        Edit::Insert {
+            at: a,
+            text: open.into(),
+        },
+    ];
+    (edits, (a + ol, b + ol))
 }
 
 impl Editor {
@@ -449,7 +533,7 @@ impl Editor {
             .get(idx + 1)
             .map(|e| e - 1)
             .unwrap_or(st.text.len());
-        let line = &st.text[start..end];
+        let line = st.text.get(start..end).unwrap_or("");
         let range = document().create_range().ok()?;
         range.set_start(&el, 0).ok()?;
         if range.set_end(node, offset).is_err() {
@@ -468,7 +552,7 @@ impl Editor {
             .get(idx + 1)
             .map(|e| e - 1)
             .unwrap_or(st.text.len());
-        let line = &st.text[start..end];
+        let line = st.text.get(start..end).unwrap_or("");
         let target = byte_to_utf16(line, offset.saturating_sub(start).min(line.len()));
         let el = self.root.children().item(idx as u32)?;
         let walker = document()
@@ -508,8 +592,10 @@ impl Editor {
     }
 
     pub fn set_selection(&self, anchor: usize, head: usize) {
-        let len = self.st.borrow().text.len();
-        let (anchor, head) = (anchor.min(len), head.min(len));
+        let (anchor, head) = {
+            let st = self.st.borrow();
+            (floor_char(&st.text, anchor), floor_char(&st.text, head))
+        };
         self.st.borrow_mut().sel = (anchor, head);
         let (Some((an, ao)), Some((hn, ho))) =
             (self.offset_to_dom(anchor), self.offset_to_dom(head))
@@ -542,7 +628,11 @@ impl Editor {
     }
 
     fn sel_sorted(&self) -> (usize, usize) {
-        let (a, h) = self.st.borrow().sel;
+        let st = self.st.borrow();
+        let (a, h) = (
+            floor_char(&st.text, st.sel.0),
+            floor_char(&st.text, st.sel.1),
+        );
         (a.min(h), a.max(h))
     }
 
@@ -677,20 +767,24 @@ impl Editor {
         if focused {
             self.set_selection(a, h);
         } else {
-            self.st.borrow_mut().sel = (a, h);
+            let mut st = self.st.borrow_mut();
+            st.sel = (floor_char(&st.text, a), floor_char(&st.text, h));
         }
     }
 
+    /// `(index, start, end)` of the line containing `offset`; start and end
+    /// are always valid slice bounds of the text.
     fn current_line(&self, offset: usize) -> (usize, usize, usize) {
         let idx = self.line_of(offset);
         let st = self.st.borrow();
-        let start = st.starts[idx];
+        let start = st.starts.get(idx).copied().unwrap_or(0);
         let end = st
             .starts
             .get(idx + 1)
             .map(|e| e - 1)
             .unwrap_or(st.text.len());
-        (idx, start, end)
+        let end = floor_char(&st.text, end);
+        (idx, floor_char(&st.text, start).min(end), end)
     }
 
     fn smart_newline(&self) {
@@ -796,7 +890,9 @@ impl Editor {
         }
         let (_, ls, _le) = self.current_line(a);
         let text = self.st.borrow().text.clone();
-        let line_to_caret = &text[ls..a];
+        let Some(line_to_caret) = text.get(ls..a) else {
+            return false;
+        };
         if let Some((indent, mlen, _)) = syntax::list_marker(&text[ls..]) {
             let content_start = indent + mlen;
             let task = syntax::task_box(&text[ls + content_start..])
@@ -821,62 +917,8 @@ impl Editor {
     fn toggle_wrap(&self, open: &str, close: &str) {
         let (a, b) = self.sel_sorted();
         let text = self.st.borrow().text.clone();
-        let (ol, cl) = (open.len(), close.len());
-        if a >= ol && b + cl <= text.len() && &text[a - ol..a] == open && &text[b..b + cl] == close
-        {
-            let edits = vec![
-                Edit::Delete { at: b, len: cl },
-                Edit::Delete {
-                    at: a - ol,
-                    len: ol,
-                },
-            ];
-            self.apply_edits_local(edits, (a - ol, b - ol));
-            return;
-        }
-        if a == b {
-            // Wrap the word under the caret, or insert an empty pair.
-            let is_word = |c: char| c.is_alphanumeric() || c == '_' || c == '-';
-            let ws = text[..a]
-                .char_indices()
-                .rev()
-                .take_while(|(_, c)| is_word(*c))
-                .last()
-                .map(|(i, _)| i)
-                .unwrap_or(a);
-            let we = a + text[a..]
-                .chars()
-                .take_while(|c| is_word(*c))
-                .map(char::len_utf8)
-                .sum::<usize>();
-            if ws < we {
-                let edits = vec![
-                    Edit::Insert {
-                        at: we,
-                        text: close.into(),
-                    },
-                    Edit::Insert {
-                        at: ws,
-                        text: open.into(),
-                    },
-                ];
-                self.apply_edits_local(edits, (a + ol, a + ol));
-            } else {
-                self.replace(a, a, &format!("{open}{close}"), Some((a + ol, a + ol)));
-            }
-            return;
-        }
-        let edits = vec![
-            Edit::Insert {
-                at: b,
-                text: close.into(),
-            },
-            Edit::Insert {
-                at: a,
-                text: open.into(),
-            },
-        ];
-        self.apply_edits_local(edits, (a + ol, b + ol));
+        let (edits, caret) = wrap_toggle(&text, a, b, open, close);
+        self.apply_edits_local(edits, caret);
     }
 
     /// Apply a transformation to every line touched by the selection.
@@ -885,7 +927,9 @@ impl Editor {
         let (l0, s0, _) = self.current_line(a);
         let (l1, _, e1) = self.current_line(b);
         let text = self.st.borrow().text.clone();
-        let old = &text[s0..e1];
+        let Some(old) = text.get(s0..e1) else {
+            return;
+        };
         let new: Vec<String> = old
             .split('\n')
             .enumerate()
@@ -936,7 +980,7 @@ impl Editor {
             Command::Code => self.toggle_wrap("`", "`"),
             Command::Link => {
                 let (a, b) = self.sel_sorted();
-                let sel = self.st.borrow().text[a..b].to_string();
+                let sel = self.st.borrow().text.get(a..b).unwrap_or("").to_string();
                 if sel.starts_with("http://") || sel.starts_with("https://") {
                     self.replace(a, b, &format!("[]({sel})"), Some((a + 1, a + 1)));
                 } else if sel.is_empty() {
@@ -952,7 +996,7 @@ impl Editor {
             }
             Command::CodeBlock => {
                 let (a, b) = self.sel_sorted();
-                let sel = self.st.borrow().text[a..b].to_string();
+                let sel = self.st.borrow().text.get(a..b).unwrap_or("").to_string();
                 let (_, ls, _) = self.current_line(a);
                 let lead = if a > ls { "\n" } else { "" };
                 let ins = format!("{lead}```\n{sel}\n```\n");
@@ -1051,7 +1095,10 @@ impl Editor {
                 .get(idx + 1)
                 .map(|e| e - 1)
                 .unwrap_or(st.text.len());
-            (s, st.text[s..e].to_string())
+            let Some(line) = st.text.get(s..e) else {
+                return;
+            };
+            (s, line.to_string())
         };
         if let Some((indent, mlen, _)) = syntax::list_marker(&line) {
             let at = start + indent + mlen + 1;
@@ -1455,7 +1502,7 @@ impl Editor {
                     return;
                 }
                 let (_, ls, le) = self.current_line(a);
-                let line = self.st.borrow().text[ls..le].to_string();
+                let line = self.st.borrow().text.get(ls..le).unwrap_or("").to_string();
                 if syntax::list_marker(&line).is_some() || shift {
                     Some(if shift {
                         Command::Outdent
@@ -1495,7 +1542,9 @@ impl Editor {
             return;
         }
         ev.prevent_default();
-        let text = self.st.borrow().text[a..b].to_string();
+        let Some(text) = self.st.borrow().text.get(a..b).map(str::to_string) else {
+            return;
+        };
         if let Some(dt) = ev.clipboard_data() {
             let _ = dt.set_data("text/plain", &text);
         }
@@ -1647,3 +1696,69 @@ impl Drop for Editor {
 
 #[wasm_bindgen]
 extern "C" {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn floor_char_stays_on_boundaries() {
+        let s = "a日b";
+        assert_eq!(floor_char(s, 0), 0);
+        assert_eq!(floor_char(s, 2), 1);
+        assert_eq!(floor_char(s, 3), 1);
+        assert_eq!(floor_char(s, 4), 4);
+        assert_eq!(floor_char(s, 99), s.len());
+        assert_eq!(prev_char(s, 3), 0);
+        assert_eq!(next_char(s, 2), 4);
+    }
+
+    #[test]
+    fn formatting_next_to_multibyte_text_never_panics() {
+        let samples = [
+            "日本語",
+            "**日**",
+            "a日*",
+            "日~~x~~本",
+            "é`ü`ö",
+            "👍==👍==",
+            "",
+        ];
+        let pairs = [
+            ("**", "**"),
+            ("*", "*"),
+            ("~~", "~~"),
+            ("==", "=="),
+            ("`", "`"),
+        ];
+        for t in samples {
+            for a in 0..=t.len() + 2 {
+                for b in 0..=t.len() + 2 {
+                    for (open, close) in pairs {
+                        let (edits, (x, y)) = wrap_toggle(t, a, b, open, close);
+                        let out = textdiff::apply(t, &edits);
+                        assert!(out.is_char_boundary(x.min(out.len())), "{t:?} {a} {b}");
+                        assert!(out.is_char_boundary(y.min(out.len())), "{t:?} {a} {b}");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn wrap_toggle_wraps_and_unwraps() {
+        let (e, sel) = wrap_toggle("x 日本 y", 2, 8, "**", "**");
+        assert_eq!(textdiff::apply("x 日本 y", &e), "x **日本** y");
+        assert_eq!(sel, (4, 10));
+        let (e, sel) = wrap_toggle("x **日本** y", 4, 10, "**", "**");
+        assert_eq!(textdiff::apply("x **日本** y", &e), "x 日本 y");
+        assert_eq!(sel, (2, 8));
+        // Caret inside a word wraps the word.
+        let (e, _) = wrap_toggle("über", 2, 2, "*", "*");
+        assert_eq!(textdiff::apply("über", &e), "*über*");
+        // Caret between spaces inserts an empty pair.
+        let (e, sel) = wrap_toggle("日  本", 4, 4, "`", "`");
+        assert_eq!(textdiff::apply("日  本", &e), "日 `` 本");
+        assert_eq!(sel, (5, 5));
+    }
+}

@@ -168,6 +168,48 @@ def test_collab(env):
         b.wait("return document.querySelector('.ed').textContent.includes('Shopping: ')", 10, "ben sees alice's edit")
         time.sleep(1)
         check(editor_text(a) == editor_text(b), "both editors converge to identical text")
+        # An IME composition that ends while a remote change is waiting must neither
+        # kill the editor nor be applied at outdated offsets.
+        a.js("document.querySelector('.ed').dispatchEvent(new CompositionEvent('compositionstart', {bubbles: true, data: ''}));")
+        b.js("const ed=document.querySelector('.ed'); ed.focus(); const s=getSelection(); s.selectAllChildren(ed); s.collapseToEnd();")
+        b.keys(" remote")
+        time.sleep(2)
+        check("remote" not in editor_text(a), "remote text waits while a composition is in progress")
+        a.js("""
+            const ed = document.querySelector('.ed');
+            const n = document.createTreeWalker(ed.firstElementChild, NodeFilter.SHOW_TEXT).nextNode();
+            n.data = 'かな' + n.data;
+            ed.dispatchEvent(new InputEvent('input', {bubbles: true, isComposing: true, inputType: 'insertCompositionText', data: 'かな'}));
+            ed.dispatchEvent(new CompositionEvent('compositionend', {bubbles: true, data: 'かな'}));
+        """)
+        a.wait("return document.querySelector('.ed').textContent.includes('remote')", 10, "remote text after the composition")
+        b.wait("return document.querySelector('.ed').textContent.includes('かな')", 10, "the composition reaches ben")
+        time.sleep(1)
+        check(editor_text(a) == editor_text(b) and editor_text(a).startswith("かなShopping") and editor_text(a).endswith(" remote"),
+              "a composition committed while remote text waited lands where it was typed")
+        # A cancelled composition (no text) applies the waiting remote text.
+        a.js("document.querySelector('.ed').dispatchEvent(new CompositionEvent('compositionstart', {bubbles: true, data: ''}));")
+        b.js("const ed=document.querySelector('.ed'); ed.focus(); const s=getSelection(); s.selectAllChildren(ed); s.collapseToEnd();")
+        b.keys(" again")
+        time.sleep(2)
+        a.js("document.querySelector('.ed').dispatchEvent(new CompositionEvent('compositionend', {bubbles: true, data: ''}));")
+        a.wait("return document.querySelector('.ed').textContent.includes('remote again')", 10, "remote text after a cancelled composition")
+        check(True, "remote text that waited for a cancelled composition is shown")
+        # Remote edits don't scroll the page back to the caret.
+        a.js("const ed=document.querySelector('.ed'); ed.focus(); const s=getSelection(); s.selectAllChildren(ed); s.collapseToEnd();"
+             "const dt = new DataTransfer(); dt.setData('text/plain', '\\nfiller'.repeat(150)); ed.dispatchEvent(new ClipboardEvent('paste', {clipboardData: dt, bubbles: true, cancelable: true}));")
+        b.wait("return document.querySelector('.ed').textContent.endsWith('fillerfiller')", 10, "ben gets the long text")
+        a.js("const ed=document.querySelector('.ed'); ed.focus(); const r=document.createRange(); r.setStart(ed.firstChild.firstChild || ed.firstChild, 0); r.collapse(true); const s=getSelection(); s.removeAllRanges(); s.addRange(r);")
+        time.sleep(0.3)
+        a.js("document.querySelector('.main').scrollTop = 1e6;")
+        time.sleep(0.3)
+        top = a.js("return document.querySelector('.main').scrollTop")
+        b.js("const ed=document.querySelector('.ed'); ed.focus(); const s=getSelection(); s.selectAllChildren(ed); s.collapseToEnd();")
+        b.keys(" last")
+        a.wait("return document.querySelector('.ed').textContent.endsWith('filler last')", 10, "alice gets ben's edit")
+        time.sleep(0.5)
+        check(top > 500 and abs(a.js("return document.querySelector('.main').scrollTop") - top) < 5,
+              "a remote edit doesn't scroll the page back to the caret")
         check(a.js("return document.querySelectorAll('.presence .avatar').length") >= 1, "collaborator presence is shown")
         check(a.js("return document.querySelectorAll('.rc').length") >= 1, "remote cursor is shown")
         a.shot("collab-alice")
@@ -218,6 +260,22 @@ def test_devices_and_recovery(env):
         a.find(".settings-body .list-row", 10)
         time.sleep(0.8)
         check(a.js("return document.querySelectorAll('.settings-body .list .list-row').length") == 3, "three devices are listed")
+        # "Forget this browser" signs out, removes the device and deletes its key locally.
+        b3.go(env.url + "settings/devices")
+        forget = b3.find_text(".settings-body .list-row button", "Forget this browser", 15)
+        b3.js("window.confirm = () => true")
+        b3.click_el(forget)
+        b3.find(".dev-box input", 15)
+        check(b3.js("return Object.keys(localStorage).filter(k => k.startsWith('cpn.device.') || k.startsWith('cpn.pending.') || k.startsWith('cpn.head.')).length") == 0,
+              "forgetting the browser deletes its device key and sync data")
+        b3.type(".dev-box input", name)
+        b3.click(".dev-box button[type=submit]")
+        b3.find_text(".auth-card button", "Approve from another device", 15)
+        check(True, "signing in again needs approval or the recovery key")
+        a.go(env.url + "settings/devices")
+        a.find(".settings-body .list-row", 10)
+        time.sleep(0.8)
+        check(a.js("return document.querySelectorAll('.settings-body .list .list-row').length") == 2, "the forgotten browser is removed from the devices")
         check(not severe_logs(a, b2, b3), "no browser errors")
     finally:
         for x in (a, b2, b3):
@@ -342,10 +400,44 @@ def test_attachments(env):
         b.wait("return !!document.querySelector('.ed .w img[src^=\"blob:\"]')", 15, "image preview")
         check(True, "embedded image is decrypted and previewed inline")
         check("attachments" in b.js("return Array.from(document.querySelectorAll('.tree-item .name')).map(e=>e.textContent).join(' ')"), "attachment is filed under attachments/ in the tree")
+        # Opening attachments: raster images open in a new tab (noopener); anything that
+        # could run as a page of this origin (SVG, HTML) is downloaded instead.
+        b.js("""
+            window.__opened = []; window.__downloads = [];
+            window.open = (u, t, f) => { window.__opened.push([String(u), String(f)]); return null; };
+            const click = HTMLAnchorElement.prototype.click;
+            HTMLAnchorElement.prototype.click = function () { if (this.download) { window.__downloads.push(this.download); } else { click.call(this); } };
+            const ed = document.querySelector('.ed'); ed.focus(); const s = getSelection(); s.selectAllChildren(ed); s.collapseToEnd();
+            const dt = new DataTransfer();
+            dt.items.add(new File(['<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>'], 'pic.svg', {type: 'image/svg+xml'}));
+            ed.dispatchEvent(new ClipboardEvent('paste', {clipboardData: dt, bubbles: true, cancelable: true}));
+        """)
+        b.wait("return document.querySelector('.ed').textContent.includes('[[pic.svg]]')", 15, "svg embed inserted")
+        time.sleep(0.5)
+        if "dot.png" not in b.js("return Array.from(document.querySelectorAll('.tree-item .name')).map(e=>e.textContent).join(' ')"):
+            b.click_el(b.find_text(".tree-item", "attachments", 10))
+        b.click_el(b.find_text(".tree-item", "dot.png", 10))
+        b.wait("return window.__opened.length == 1", 15, "png opened")
+        opened = b.js("return window.__opened")[0]
+        check(opened[0].startswith("blob:") and "noopener" in opened[1], "a raster image opens in a new tab without an opener")
+        b.click_el(b.find_text(".tree-item", "pic.svg", 10))
+        b.wait("return window.__downloads.includes('pic.svg')", 15, "svg downloaded")
+        check(b.js("return window.__opened.length") == 1, "an SVG attachment is downloaded, not opened as a page")
         b.click(".seg button[title^='Reading']")
         b.wait("return !!document.querySelector('.reading img.att[src^=\"blob:\"]')", 15, "reading view image")
         check(True, "reading view shows the decrypted image")
         check(not severe_logs(b), "no browser errors")
+        # Signing out revokes the decrypted attachments' blob URLs.
+        blob = b.js("return document.querySelector('.reading img.att').src")
+        def blob_loads():
+            b.js("window.__img = null; const i = new Image(); i.onload = () => window.__img = 'ok'; i.onerror = () => window.__img = 'gone'; i.src = arguments[0];", blob)
+            b.wait("return window.__img !== null", 10, "image load attempt")
+            return b.js("return window.__img") == "ok"
+        check(blob_loads(), "the decrypted image is a readable blob while signed in")
+        b.js("history.pushState(null, '', '/settings/account'); dispatchEvent(new PopStateEvent('popstate'));")
+        b.click_el(b.find_text(".settings-body button", "Sign out", 10))
+        b.find(".dev-box input", 15)
+        check(not blob_loads(), "signing out revokes decrypted attachment URLs")
     finally:
         b.close()
 
@@ -474,7 +566,79 @@ def test_tables(env):
         b.close()
 
 
-TESTS = [test_onboarding, test_collab, test_devices_and_recovery, test_features, test_attachments, test_note_sharing, test_tables, test_mobile]
+def test_editor_safety(env):
+    b = Browser()
+    try:
+        signup(b, uniq("sam"))
+        new_note(b, "Links", "[evil](javascript:window.__pwned=1) [ok](https://example.org/)")
+        # Links in the live editor: only web and e-mail links may be opened.
+        b.js("window.__opened = []; window.open = (u) => { window.__opened.push(String(u)); return null; };")
+        click = "document.querySelector(`.ed [data-link=\"${arguments[0]}\"]`).dispatchEvent(new MouseEvent('mousedown', {bubbles: true, cancelable: true, ctrlKey: true}));"
+        b.js(click, 0)
+        b.find_text(".toast", "Only web and e-mail links", 5)
+        b.js(click, 1)
+        time.sleep(0.3)
+        check(b.js("return window.__opened") == ["https://example.org/"] and not b.js("return !!window.__pwned"),
+              "the editor opens web links but not javascript: links")
+        # A paste larger than the server accepts in one change is refused; syncing goes on.
+        end = "const ed=document.querySelector('.ed'); ed.focus(); const s=getSelection(); s.selectAllChildren(ed); s.collapseToEnd();"
+        b.js(end)
+        b.js("const dt = new DataTransfer(); dt.setData('text/plain', 'x'.repeat(2200000)); document.querySelector('.ed').dispatchEvent(new ClipboardEvent('paste', {clipboardData: dt, bubbles: true, cancelable: true}));")
+        b.find_text(".toast", "too large to add at once", 15)
+        check(len(editor_text(b)) < 1000, "a paste over the server's update limit is refused")
+        b.js(end)
+        b.keys(" after")
+        b.wait("return (document.querySelector('.sync .lbl')||{}).textContent == 'Synced'", 20, "synced")
+        path = b.js("return location.pathname")
+        b.go(env.url.rstrip("/") + path)
+        b.wait("return document.querySelector('.ed') && document.querySelector('.ed').textContent.includes('after')", 20, "edit after the refused paste")
+        check(True, "later edits still sync")
+        # A file still uploading when you switch notes is not linked into the other note.
+        new_note(b, "Other", "other body")
+        b.click_el(b.find_text(".tree-item", "Links", 10))
+        b.wait("return document.querySelector('.ed') && document.querySelector('.ed').textContent.includes('after')", 10, "back in Links")
+        b.js("""
+            const f = window.fetch;
+            window.fetch = (r, o) => String(r.url || r).includes('/attachments/')
+                ? new Promise(res => setTimeout(res, 2000)).then(() => f(r, o)) : f(r, o);
+            const dt = new DataTransfer();
+            dt.items.add(new File(['slow'], 'late.txt', {type: 'text/plain'}));
+            document.querySelector('.ed').dispatchEvent(new ClipboardEvent('paste', {clipboardData: dt, bubbles: true, cancelable: true}));
+        """)
+        b.click_el(b.find_text(".tree-item", "Other", 10))
+        b.find_text(".toast", "The note was closed meanwhile", 15)
+        check("late.txt" not in editor_text(b) and "other body" in editor_text(b), "a finished upload is not linked into the note opened meanwhile")
+        # A native browser edit (reconciled from the DOM) keeps the note's no-break spaces.
+        b.js(end)
+        b.js("const dt = new DataTransfer(); dt.setData('text/plain', ' 10\\u00a0km'); document.querySelector('.ed').dispatchEvent(new ClipboardEvent('paste', {clipboardData: dt, bubbles: true, cancelable: true}));")
+        b.wait("return document.querySelector('.ed').textContent.includes('10\\u00a0km')", 5, "no-break space pasted")
+        b.js("""
+            const ed = document.querySelector('.ed');
+            const n = document.createTreeWalker(ed.firstElementChild, NodeFilter.SHOW_TEXT).nextNode();
+            n.data = 'X\\u00a0' + n.data;
+            ed.dispatchEvent(new InputEvent('input', {bubbles: true, inputType: 'insertText', data: 'X'}));
+        """)
+        time.sleep(0.5)
+        t = editor_text(b)
+        check(t.startswith("X other") and "10 km" in t, "native edits keep existing no-break spaces and plain-space new ones")
+        # Ticking a task in reading view changes its own box, not a later "[ ]".
+        new_note(b, "Tasks", "")
+        b.js("const dt = new DataTransfer(); dt.setData('text/plain', '- [x] buy [ ] boxes\\n> - [ ] quoted [x]'); document.querySelector('.ed').dispatchEvent(new ClipboardEvent('paste', {clipboardData: dt, bubbles: true, cancelable: true}));")
+        b.click(".seg button[title^='Reading']")
+        b.find(".reading input.task", 10)
+        b.js("document.querySelectorAll('.reading input.task')[0].click()")
+        time.sleep(0.4)
+        b.js("document.querySelectorAll('.reading input.task')[1].click()")
+        time.sleep(0.4)
+        b.click(".seg button[title='Live preview']")
+        time.sleep(0.4)
+        check(editor_text(b) == "- [ ] buy [ ] boxes\n> - [x] quoted [x]", "reading view toggles the task's own box")
+        check(not severe_logs(b), "no browser errors")
+    finally:
+        b.close()
+
+
+TESTS = [test_onboarding, test_collab, test_devices_and_recovery, test_features, test_attachments, test_note_sharing, test_tables, test_editor_safety, test_mobile]
 
 
 def main():

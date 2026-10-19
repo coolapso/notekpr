@@ -25,9 +25,18 @@ fn get(s: Option<Storage>, k: &str) -> Option<String> {
 }
 
 fn set(s: Option<Storage>, k: &str, v: &str) {
-    if let Some(s) = s {
-        let _ = s.set_item(k, v);
-    }
+    let _ = try_set(s, k, v);
+}
+
+/// Like [`set`], but reports failures (storage full or unavailable).
+fn try_set(s: Option<Storage>, k: &str, v: &str) -> Result<(), String> {
+    let s = s.ok_or("local storage is not available")?;
+    s.set_item(k, v).map_err(|e| {
+        js_sys::Reflect::get(&e, &"name".into())
+            .ok()
+            .and_then(|n| n.as_string())
+            .unwrap_or_else(|| "storage error".into())
+    })
 }
 
 fn remove(s: Option<Storage>, k: &str) {
@@ -97,15 +106,16 @@ pub fn pending(user_id: &str, vault_id: &str) -> Vec<PushUpdate> {
         .unwrap_or_default()
 }
 
-pub fn set_pending(user_id: &str, vault_id: &str, p: &[PushUpdate]) {
+pub fn set_pending(user_id: &str, vault_id: &str, p: &[PushUpdate]) -> Result<(), String> {
     if p.is_empty() {
         remove(local(), &pending_key(user_id, vault_id));
+        Ok(())
     } else {
-        set(
+        try_set(
             local(),
             &pending_key(user_id, vault_id),
             &serde_json::to_string(p).unwrap(),
-        );
+        )
     }
 }
 
@@ -118,6 +128,26 @@ pub fn pending_vaults(user_id: &str) -> Vec<String> {
         .filter_map(|i| s.key(i).ok().flatten())
         .filter_map(|k| k.strip_prefix(&prefix).map(str::to_string))
         .collect()
+}
+
+/// Delete everything stored for a user in this browser: device key, unsent
+/// changes, sync positions, last location (and the session token).
+pub fn forget_user(user_id: &str) {
+    clear_token();
+    let Some(s) = local() else { return };
+    let exact = [device_key(user_id), format!("cpn.last.{user_id}")];
+    let prefixes = [
+        format!("cpn.pending.{user_id}."),
+        format!("cpn.head.{user_id}."),
+    ];
+    let n = s.length().unwrap_or(0);
+    let keys: Vec<String> = (0..n)
+        .filter_map(|i| s.key(i).ok().flatten())
+        .filter(|k| exact.contains(k) || prefixes.iter().any(|p| k.starts_with(p.as_str())))
+        .collect();
+    for k in keys {
+        let _ = s.remove_item(&k);
+    }
 }
 
 fn head_key(user_id: &str, vault_id: &str) -> String {

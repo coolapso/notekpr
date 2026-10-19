@@ -13,10 +13,10 @@ use leptos::prelude::Update;
 use leptos::prelude::*;
 use wasm_bindgen::JsCast;
 
-use crate::editor::Host;
 use crate::editor::syntax::Target;
+use crate::editor::{self, Host};
 use crate::state::{self, Route, error, info, local_update, navigate, success, with};
-use crate::{api, knowledge, util, zipfile};
+use crate::{api, knowledge, render, util, zipfile};
 
 fn now() -> i64 {
     util::now_ms()
@@ -608,16 +608,10 @@ pub async fn create_note_with(
     if let Some(u) = up {
         local_update(vault, INDEX_OBJECT_ID, u);
     }
+    state::ensure_note_loaded(vault, &id);
     if !text.is_empty() {
-        let up = with(|c| {
-            let r = c.replicas.get_mut(vault)?;
-            r.notes.entry(id.clone()).or_default().set_text(text)
-        });
-        if let Some(u) = up {
-            local_update(vault, &id, u);
-        }
-    } else {
-        state::ensure_note_loaded(vault, &id);
+        // Large texts become several updates, each within the server's limit.
+        state::set_note_text(vault, &id, text);
     }
     state::ui().tree_rev.update(|v| *v += 1);
     Some(id)
@@ -728,18 +722,10 @@ fn update_links_after_rename(vault: &str, id: &str, old_path: &str, new_title: &
         let rewritten = markdown::rewrite_links(&text, new_title, |l| {
             markdown::resolve(l, &path, &cands) == Some(id)
         });
-        if let Some(new_text) = rewritten {
-            let up = with(|c| {
-                c.replicas
-                    .get_mut(vault)?
-                    .notes
-                    .get_mut(&nid)?
-                    .set_text(&new_text)
-            });
-            if let Some(u) = up {
-                local_update(vault, &nid, u);
-                changed += 1;
-            }
+        if let Some(new_text) = rewritten
+            && state::set_note_text(vault, &nid, &new_text) > 0
+        {
+            changed += 1;
         }
     }
     if changed > 0 {
@@ -971,9 +957,20 @@ pub async fn load_attachment(vault: &str, id: &str) -> Option<String> {
     url
 }
 
+/// Show an attachment in a new tab if the browser can display it safely
+/// (raster images, PDFs); download anything else.
 pub async fn open_attachment(vault: &str, id: &str) {
+    let name = state::entry(vault, id).map(|e| e.path).unwrap_or_default();
+    if !util::opens_inline(&name) {
+        download_attachment(vault, id).await;
+        return;
+    }
     if let Some(url) = load_attachment(vault, id).await {
-        let _ = util::window().open_with_url_and_target(&url, "_blank");
+        let _ = util::window().open_with_url_and_target_and_features(
+            &url,
+            "_blank",
+            "noopener,noreferrer",
+        );
     }
 }
 
@@ -981,8 +978,14 @@ pub async fn download_attachment(vault: &str, id: &str) {
     let name = state::entry(vault, id)
         .map(|e| paths::file_name(&e.path).to_string())
         .unwrap_or_else(|| "file".into());
+    // Never hand the browser a type it might render as a document of this origin.
+    let mime = if util::opens_inline(&name) {
+        util::mime_for(&name)
+    } else {
+        "application/octet-stream"
+    };
     if let Some(b) = attachment_bytes(vault, id).await {
-        util::download(&name, util::mime_for(&name), &b);
+        util::download(&name, mime, &b);
     } else {
         error("Could not download the file.");
     }
@@ -1078,7 +1081,13 @@ pub async fn export_vault(vault: &str) {
             }),
         }
     }
-    let zip = zipfile::write(&entries);
+    let zip = match zipfile::write(&entries) {
+        Ok(z) => z,
+        Err(e) => {
+            error(format!("Export failed: {e}"));
+            return;
+        }
+    };
     let safe: String = name
         .chars()
         .map(|c| {
@@ -1111,7 +1120,15 @@ pub async fn import(vault: &str, mut files: Vec<(String, Vec<u8>)>) {
     let total = files.len();
     let mut notes = 0;
     let mut atts = 0;
-    for (path, data) in files {
+    let max = state::max_update_bytes();
+    for (i, (path, data)) in files.into_iter().enumerate() {
+        // Send in pushes of bounded size as we go, and let the page breathe.
+        if state::outbox_bytes(vault) >= max {
+            state::flush_now();
+        }
+        if i % 20 == 19 {
+            util::sleep(0).await;
+        }
         if paths::is_note(&path) {
             let text = String::from_utf8_lossy(&data).replace("\r\n", "\n");
             let folder = paths::parent(&path).to_string();
@@ -1158,15 +1175,7 @@ pub async fn files_to_import(files: Vec<web_sys::File>) -> Vec<(String, Vec<u8>)
 // ------------------------------------------------------------------ history
 
 pub fn restore_revision(vault: &str, note: &str, text: &str) {
-    let up = with(|c| {
-        c.replicas
-            .get_mut(vault)?
-            .notes
-            .get_mut(note)?
-            .set_text(text)
-    });
-    if let Some(u) = up {
-        local_update(vault, note, u);
+    if state::set_note_text(vault, note, text) > 0 {
         refresh_open_editor(vault);
         success("Restored this version. The previous text remains in history.");
     }
@@ -1228,19 +1237,73 @@ impl NoteHost {
 }
 
 impl Host for NoteHost {
-    fn edit(&self, edits: &[Edit]) {
+    fn edit(&self, base: &str, edits: &[Edit]) -> bool {
+        // One edit is one update; refuse what the server could never store
+        // rather than block the vault's sync with it.
+        let inserted = crate::sizes::inserted_bytes(edits);
+        let max = state::max_update_bytes();
+        if inserted > crate::sizes::insert_budget(max) {
+            error(format!(
+                "This is too large to add at once ({}; the server accepts {} per change). Add it in smaller parts, or attach it as a file.",
+                util::human_bytes(inserted as u64),
+                util::human_bytes(max as u64)
+            ));
+            return false;
+        }
+        // The editor's text and the CRDT can differ when remote text arrived
+        // during an IME composition: the editor's offsets are then relative to
+        // an outdated text. Move simple edits onto the current text, or drop
+        // them; either way the editor reloads the note's text afterwards.
         let res = with(|c| {
             let n = c.replicas.get_mut(&self.vault)?.notes.get_mut(&self.note)?;
-            let u = n.apply_edits(edits)?;
-            Some((u, n.len()))
+            let current = n.text();
+            let in_sync = current == base;
+            let rebased;
+            let edits = if in_sync {
+                edits
+            } else {
+                match editor::rebase(base, &current, edits) {
+                    Some(e) => {
+                        rebased = e;
+                        &rebased[..]
+                    }
+                    None => return Some((None, 0, false)),
+                }
+            };
+            // Out-of-range offsets would make yrs panic.
+            if !editor::edits_fit(&current, edits) {
+                return Some((None, 0, false));
+            }
+            Some((n.apply_edits(edits), n.len(), in_sync))
         });
-        if let Some((u, len)) = res {
+        let Some((update, len, in_sync)) = res else {
+            return true;
+        };
+        if !in_sync {
+            util::warn(if update.is_some() {
+                "the note changed during text input; the input was moved onto the current text"
+            } else {
+                "the note changed during text input; the input could not be applied"
+            });
+        }
+        if let Some(u) = update {
             local_update(&self.vault, &self.note, u);
             state::touch(&self.vault, &self.note, len);
             let ui = state::ui();
             let d = with(|c| c.content_debounce.clone());
             d.run(400, move || ui.content_rev.update(|v| *v += 1));
         }
+        in_sync
+    }
+
+    fn text(&self) -> Option<String> {
+        with(|c| {
+            c.replicas
+                .get(&self.vault)?
+                .notes
+                .get(&self.note)
+                .map(|n| n.text())
+        })
     }
 
     fn undo(&self) -> Option<String> {
@@ -1269,13 +1332,14 @@ impl Host for NoteHost {
 
     fn open_link(&self, target: &Target, _new_tab: bool) {
         match target {
-            Target::Url(u) => {
+            Target::Url(u) if render::safe_external(u) => {
                 let _ = util::window().open_with_url_and_target_and_features(
-                    u,
+                    u.trim(),
                     "_blank",
                     "noopener,noreferrer",
                 );
             }
+            Target::Url(_) => info("Only web and e-mail links can be opened from a note."),
             Target::Wiki(_) if self.shared => {
                 info("Only this note is shared with you, not the notes it links to.")
             }
@@ -1318,17 +1382,37 @@ impl Host for NoteHost {
             error("Files can't be added to a note shared with you.");
             return;
         }
-        let v = self.vault.clone();
+        let (v, n) = (self.vault.clone(), self.note.clone());
         leptos::task::spawn_local(async move {
             let embeds = upload_files(&v, files, "attachments").await;
-            if embeds.is_empty() {
-                return;
-            }
-            let ed = with(|c| c.editor.as_ref().map(|(_, _, e)| e.clone()));
-            if let Some(ed) = ed {
-                ed.insert_text(&embeds.join("\n"));
-            }
+            insert_embeds(&v, &n, &embeds);
         });
+    }
+}
+
+/// Insert links to uploaded files into the note they were added to — only
+/// if that note is still the one open (uploads take a while).
+pub fn insert_embeds(vault: &str, note: &str, embeds: &[String]) {
+    if embeds.is_empty() {
+        return;
+    }
+    let ed = with(|c| {
+        c.editor
+            .as_ref()
+            .filter(|(v, n, _)| v == vault && n == note)
+            .map(|(_, _, e)| e.clone())
+    });
+    match ed {
+        Some(ed) => ed.insert_text(&embeds.join("\n")),
+        None => info(format!(
+            "Uploaded {} to “attachments”. The note was closed meanwhile; add {} to link it.",
+            if embeds.len() == 1 {
+                "the file".to_string()
+            } else {
+                format!("{} files", embeds.len())
+            },
+            embeds.join(" ")
+        )),
     }
 }
 

@@ -157,6 +157,31 @@ pub fn task_box(after_marker: &str) -> Option<bool> {
     }
 }
 
+/// The line with its task box ticked or unticked: the box right after the
+/// list marker (also inside block quotes), never a `[ ]` later in the text.
+/// `None` if the line is not a task item.
+pub fn toggle_task(line: &str) -> Option<String> {
+    let mut p = 0;
+    // Block quote markers: up to three spaces, `>`, an optional space.
+    loop {
+        let rest = &line[p..];
+        let sp = rest.len() - rest.trim_start_matches(' ').len();
+        if sp > 3 || !rest[sp..].starts_with('>') {
+            break;
+        }
+        p += sp + 1;
+        if line[p..].starts_with(' ') {
+            p += 1;
+        }
+    }
+    let (indent, mlen, _) = list_marker(&line[p..])?;
+    let at = p + indent + mlen;
+    let checked = task_box(&line[at..])?;
+    let mut out = line.to_string();
+    out.replace_range(at + 1..at + 2, if checked { " " } else { "x" });
+    Some(out)
+}
+
 /// Byte offsets of the `|` that separate table cells (escaped `\|` don't).
 pub fn table_pipes(line: &str) -> Vec<usize> {
     let b = line.as_bytes();
@@ -1204,6 +1229,28 @@ pub fn line_html(line: &str, st: &Styled) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn toggles_the_task_box_after_the_marker() {
+        let cases = [
+            ("- [x] buy [ ] boxes", Some("- [ ] buy [ ] boxes")),
+            ("- [ ] buy [x] boxes", Some("- [x] buy [x] boxes")),
+            ("1. [X] done", Some("1. [ ] done")),
+            ("  * [ ] nested", Some("  * [x] nested")),
+            ("> - [ ] quoted", Some("> - [x] quoted")),
+            ("> > 2) [x] deep", Some("> > 2) [ ] deep")),
+            ("- [ ] 日本 [x]", Some("- [x] 日本 [x]")),
+            ("- [ ]", Some("- [x]")),
+            ("text with [ ] box", None),
+            ("- not a [ ] task", None),
+            ("-[ ] no space", None),
+            ("", None),
+            (">", None),
+        ];
+        for (line, want) in cases {
+            assert_eq!(toggle_task(line).as_deref(), want, "{line:?}");
+        }
+    }
 
     fn flags_of(line: &str) -> Styled {
         let b = classify(&[line]);

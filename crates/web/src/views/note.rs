@@ -83,10 +83,12 @@ fn Toolbar(vault: Option<String>) -> impl IntoView {
                 <button class="tb" title="Attach a file or image" on:mousedown=move |ev| {
                     ev.prevent_default();
                     let v = vault.clone();
+                    // The note the file is for: the one open now, not when the upload ends.
+                    let Some(n) = with(|c| c.editor.as_ref().filter(|(ev, _, _)| *ev == v).map(|(_, n, _)| n.clone())) else { return };
                     actions::pick_files(false, "", move |files| {
                         leptos::task::spawn_local(async move {
                             let embeds = actions::upload_files(&v, files, "attachments").await;
-                            if let Some(ed) = editor() && !embeds.is_empty() { ed.insert_text(&embeds.join("\n")); }
+                            actions::insert_embeds(&v, &n, &embeds);
                         });
                     });
                 }><Icon name="paperclip"/></button>
@@ -164,23 +166,13 @@ fn mount_editor(
 fn toggle_task(vault: &str, note: &str, line: usize) {
     let text = with(|c| c.replicas.get(vault).map(|r| r.note_text(note))).unwrap_or_default();
     let mut lines: Vec<String> = text.split('\n').map(str::to_string).collect();
-    if let Some(l) = lines.get_mut(line) {
-        if l.contains("[ ]") {
-            *l = l.replacen("[ ]", "[x]", 1);
-        } else if l.contains("[x]") || l.contains("[X]") {
-            *l = l.replacen("[x]", "[ ]", 1).replacen("[X]", "[ ]", 1);
-        }
-    }
+    let Some(l) = lines.get_mut(line) else { return };
+    let Some(toggled) = crate::editor::syntax::toggle_task(l) else {
+        return;
+    };
+    *l = toggled;
     let new = lines.join("\n");
-    let up = with(|c| {
-        c.replicas
-            .get_mut(vault)?
-            .notes
-            .get_mut(note)?
-            .set_text(&new)
-    });
-    if let Some(u) = up {
-        state::local_update(vault, note, u);
+    if state::set_note_text(vault, note, &new) > 0 {
         if let Some(ed) = editor() {
             ed.set_text(new, false);
         }

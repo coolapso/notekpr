@@ -14,16 +14,16 @@ use coolpsonotes_core::doc::{EntryKind, NoteDoc};
 use coolpsonotes_core::engine::{self, ObjectMeta, Presence, VaultMeta, VaultReplica};
 use coolpsonotes_core::keys::{AccountSecret, DeviceKey, RecoveryKey};
 use coolpsonotes_core::protocol::*;
-use coolpsonotes_core::{paths, random_id};
+use coolpsonotes_core::{paths, random_id, textdiff};
 use leptos::prelude::Update;
 use leptos::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::api;
 use crate::editor::{Editor, RemoteCursor};
 use crate::storage::{self, DeviceRecord, UiPrefs};
 use crate::util::{self, now_ms};
 use crate::ws::{ConnState, Socket};
+use crate::{api, sizes};
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Phase {
@@ -373,6 +373,8 @@ pub struct Core {
     pub shares_restored: BTreeSet<String>,
     /// Vaults / shared notes whose keys are being reloaded.
     pub reloading: HashSet<String>,
+    /// Reloads asked for while one was running: run once more afterwards.
+    pub reload_again: HashSet<String>,
     /// The shared note we last announced our presence on.
     pub presence_note: Option<(String, String)>,
     pub flush: util::Debounce,
@@ -380,6 +382,12 @@ pub struct Core {
     pub presence_debounce: util::Debounce,
     pub content_debounce: util::Debounce,
     pub cursor: Option<(usize, usize)>,
+    /// Unsent updates too large for the server that the user was told about.
+    pub oversized_reported: HashSet<String>,
+    /// When we last told the user that local storage is full.
+    pub storage_warned_at: i64,
+    /// Keys of a first-device setup whose upload failed, reused on retry.
+    pub setup: Option<engine::AccountBootstrap>,
 }
 
 impl Core {
@@ -671,17 +679,30 @@ fn poll_approval(uid: String, rec: DeviceRecord) {
 pub async fn setup_keys() {
     let ui = ui();
     let uid = with(|c| c.user_id.clone());
-    let boot = match engine::bootstrap_account(&uid, &device_name()) {
-        Ok(b) => b,
-        Err(e) => {
-            error(format!("Key generation failed: {e}"));
-            return;
+    let boot = match with(|c| c.setup.take()) {
+        // A previous attempt whose upload failed: send the same keys again.
+        Some(b) => b,
+        None => {
+            // An earlier attempt may have succeeded although its answer got lost.
+            if storage::device(&uid).is_some()
+                && let Ok(me) = api::get::<MeResponse>("/me").await
+                && me.account_key.is_some()
+            {
+                after_login().await;
+                return;
+            }
+            match engine::bootstrap_account(&uid, &device_name()) {
+                Ok(b) => b,
+                Err(e) => {
+                    error(format!("Key generation failed: {e}"));
+                    return;
+                }
+            }
         }
     };
-    if let Err(e) = api::put::<_, ()>("/me/account-key", &boot.request).await {
-        error(format!("Could not save your keys: {e}"));
-        return;
-    }
+    // Keep this browser's device key before the server holds an account key
+    // that only this device can unwrap: a lost answer must not lose it.
+    let previous = storage::device(&uid);
     storage::set_device(
         &uid,
         &DeviceRecord {
@@ -689,6 +710,28 @@ pub async fn setup_keys() {
             secret: coolpsonotes_core::b64::encode(&boot.device.secret),
         },
     );
+    if let Err(e) = api::put::<_, ()>("/me/account-key", &boot.request).await {
+        let stored = match api::get::<MeResponse>("/me").await {
+            // Our keys did arrive; only the answer was lost.
+            Ok(me) if me.account_key.as_ref() == Some(&boot.request.key) => true,
+            // Set up meanwhile from elsewhere (e.g. another tab): ours are useless.
+            Ok(me) if me.account_key.is_some() => {
+                match &previous {
+                    Some(p) => storage::set_device(&uid, p),
+                    None => storage::clear_device(&uid),
+                }
+                after_login().await;
+                return;
+            }
+            _ => false,
+        };
+        if !stored {
+            // Not stored, or we can't tell: retrying sends the same keys.
+            with(|c| c.setup = Some(boot));
+            error(format!("Could not save your keys: {e}"));
+            return;
+        }
+    }
     let key = boot.recovery.to_display();
     with(|c| {
         c.account = Some(boot.account);
@@ -794,16 +837,22 @@ pub async fn recover(input: String) {
 
 pub fn sign_out_local(error: Option<String>) {
     let ui = ui();
+    // Unsent changes go to local storage, to be sent after the next sign-in.
+    flush_now();
     storage::clear_token();
     api::set_token(None);
-    let sock = with(|c| {
+    let (sock, urls) = with(|c| {
         let s = c.socket.take();
+        let urls = take_attachment_urls(c, None);
         *c = Core::default();
-        s
+        (s, urls)
     });
     if let Some(s) = sock {
         s.stop();
     }
+    // Decrypted data must not outlive the session.
+    revoke_urls(urls);
+    crate::knowledge::clear_caches();
     ui.vaults.set(vec![]);
     ui.shared.set(vec![]);
     ui.user.set(None);
@@ -815,6 +864,49 @@ pub async fn sign_out() {
     flush_now();
     let _ = api::post_empty::<()>("/auth/logout").await;
     sign_out_local(None);
+}
+
+/// Sign out and make this browser forget the account: remove this device
+/// from the account and delete its key and unsent changes from local storage.
+/// Signing in here again needs approval from another device or the recovery key.
+pub async fn forget_browser() {
+    flush_now();
+    let unsent = with(|c| c.pending_count());
+    let warn = if unsent > 0 {
+        format!(
+            " {unsent} note{} with changes that are not synced yet will lose them.",
+            if unsent == 1 { "" } else { "s" }
+        )
+    } else {
+        String::new()
+    };
+    if !util::confirm(&format!(
+        "Forget this browser? You will be signed out and this browser's key will be deleted, so opening your notes here again needs approval from another device or your recovery key.{warn}"
+    )) {
+        return;
+    }
+    let (uid, device) = with(|c| (c.user_id.clone(), c.device_id.clone()));
+    // Removing the device also ends its sessions, this one included.
+    let removed = match &device {
+        Some(d) => match api::delete(&format!("/devices/{d}")).await {
+            Ok(()) | Err(api::Error { status: 404, .. }) => true,
+            Err(_) => false,
+        },
+        None => true,
+    };
+    if !removed || device.is_none() {
+        let _ = api::post_empty::<()>("/auth/logout").await;
+    }
+    sign_out_local(None);
+    // After signing out, which stores unsent changes.
+    storage::forget_user(&uid);
+    if removed {
+        success("This browser forgot your account.");
+    } else {
+        error(
+            "This browser forgot your keys, but could not remove itself from your devices. Remove it in Settings → Devices on another device.",
+        );
+    }
 }
 
 async fn enter_ready() {
@@ -958,14 +1050,34 @@ pub async fn load_vault(info: VaultInfo) {
 
 /// Reload a vault's keys, e.g. after a note in it got its own key.
 pub async fn reload_vault_keys(vault_id: String) {
-    if !with(|c| c.reloading.insert(vault_id.clone())) {
+    if !begin_reload(&vault_id).await {
         return;
     }
-    if let Ok(info) = api::get::<VaultInfo>(&format!("/vaults/{vault_id}")).await {
-        load_vault_with(info, true).await;
-        publish_vaults();
+    loop {
+        if let Ok(info) = api::get::<VaultInfo>(&format!("/vaults/{vault_id}")).await {
+            load_vault_with(info, true).await;
+            publish_vaults();
+        }
+        if !with(|c| c.reload_again.remove(&vault_id)) {
+            break;
+        }
     }
     with(|c| c.reloading.remove(&vault_id));
+}
+
+/// Start reloading the keys behind `tag`. If a reload is already running,
+/// it may have fetched the keys before they changed: ask it to run once
+/// more, wait until it is done and return `false`.
+async fn begin_reload(tag: &str) -> bool {
+    if with(|c| c.reloading.insert(tag.to_string())) {
+        with(|c| c.reload_again.remove(tag));
+        return true;
+    }
+    with(|c| c.reload_again.insert(tag.to_string()));
+    while with(|c| c.reloading.contains(tag)) {
+        util::sleep(50).await;
+    }
+    false
 }
 
 async fn load_vault_with(info: VaultInfo, force: bool) {
@@ -1071,13 +1183,36 @@ async fn load_vault_with(info: VaultInfo, force: bool) {
     with(|c| c.vault_infos.insert(id, info));
 }
 
+/// Remove the cached blob URLs of decrypted attachments (of one vault, or
+/// all); the caller revokes them with [`revoke_urls`] outside the borrow.
+fn take_attachment_urls(c: &mut Core, vault: Option<&str>) -> Vec<String> {
+    let prefix = vault.map(|v| format!("{v}:"));
+    let keys: Vec<String> = c
+        .attachment_urls
+        .keys()
+        .filter(|k| prefix.as_ref().is_none_or(|p| k.starts_with(p.as_str())))
+        .cloned()
+        .collect();
+    keys.iter()
+        .filter_map(|k| c.attachment_urls.remove(k))
+        .collect()
+}
+
+fn revoke_urls(urls: Vec<String>) {
+    for u in urls {
+        let _ = web_sys::Url::revoke_object_url(&u);
+    }
+}
+
 fn drop_vault(v: &str) {
-    with(|c| {
+    let urls = with(|c| {
         c.replicas.remove(v);
         c.vault_infos.remove(v);
         c.loaded.remove(v);
         c.outbox.remove(v);
+        take_attachment_urls(c, Some(v))
     });
+    revoke_urls(urls);
     let ui = ui();
     if ui.route.get_untracked().vault() == Some(v) {
         navigate(Route::Home);
@@ -1232,13 +1367,22 @@ async fn load_share(info: SharedNote) {
 
 /// (Re)load the document key of a note shared with us.
 pub async fn reload_share_keys(vault: &str, note: &str) {
-    let key = (vault.to_string(), note.to_string());
     let tag = format!("{vault}/{note}");
-    if !with(|c| c.reloading.insert(tag.clone())) {
+    if !begin_reload(&tag).await {
         return;
     }
-    let res = api::get::<ObjectKeysResponse>(&format!("/vaults/{vault}/objects/{note}/keys")).await;
+    loop {
+        reload_share_keys_once(vault, note).await;
+        if !with(|c| c.reload_again.remove(&tag)) {
+            break;
+        }
+    }
     with(|c| c.reloading.remove(&tag));
+}
+
+async fn reload_share_keys_once(vault: &str, note: &str) {
+    let key = (vault.to_string(), note.to_string());
+    let res = api::get::<ObjectKeysResponse>(&format!("/vaults/{vault}/objects/{note}/keys")).await;
     let keys = match res {
         Ok(k) => k,
         Err(e) if e.status == 404 => {
@@ -1658,6 +1802,7 @@ fn on_server_message(m: ServerMessage) {
                     .unwrap_or_else(|| "Untitled".into());
                 Some((title, r.note_text(&object_id)))
             });
+            let had_pending = rescue.is_some();
             if let Some((title, text)) = rescue {
                 let v = vault_id.clone();
                 leptos::task::spawn_local(async move {
@@ -1675,6 +1820,12 @@ fn on_server_message(m: ServerMessage) {
             });
             if let Some(a) = a {
                 after_apply(&vault_id, a);
+            }
+            if had_pending {
+                // A push with updates of the purged note is refused as a whole:
+                // send the other updates again, without the dropped ones.
+                persist_pending(&vault_id);
+                resend_pending(&vault_id);
             }
         }
         ServerMessage::Snapshot { vault_id, snapshot } => {
@@ -1750,13 +1901,20 @@ fn on_server_message(m: ServerMessage) {
                     refresh_vaults().await;
                     refresh_shares().await;
                 });
+            } else if code == "too_large" {
+                if let Some(v) = vault_id {
+                    leptos::task::spawn_local(on_too_large(v));
+                }
             } else if code == "forbidden" {
                 error(format!("Not allowed: {message}"));
             } else if code == "conflict" {
                 // e.g. a note was permanently deleted elsewhere while we edited it.
                 error(message);
-                if let Some(v) = vault_id {
-                    drop_rejected(&v);
+                // The whole push was refused: send the rest of it again.
+                if let Some(v) = vault_id
+                    && drop_rejected(&v)
+                {
+                    resend_pending(&v);
                 }
             } else {
                 util::warn(&format!("server error {code}: {message}"));
@@ -1783,17 +1941,21 @@ fn key_epochs(vault: &str) -> Vec<(String, Option<u32>)> {
     })
 }
 
-/// Pending updates for purged objects can never succeed; keep the text safe
-/// in a new note instead of silently dropping it.
-fn drop_rejected(vault_id: &str) {
-    with(|c| {
-        if let Some(r) = c.replicas.get_mut(vault_id) {
-            let purged = r.purged.clone();
-            r.pending.retain(|p| !purged.contains(&p.object_id));
-        }
+/// Pending updates for purged objects can never succeed (the text is kept
+/// in a new note by the `Purged` handler). Returns whether any were dropped.
+fn drop_rejected(vault_id: &str) -> bool {
+    let dropped = with(|c| {
+        let Some(r) = c.replicas.get_mut(vault_id) else {
+            return false;
+        };
+        let before = r.pending.len();
+        let purged = r.purged.clone();
+        r.pending.retain(|p| !purged.contains(&p.object_id));
+        r.pending.len() != before
     });
     persist_pending(vault_id);
     update_pending_count();
+    dropped
 }
 
 fn on_synced(vault_id: &str, head: i64) {
@@ -1903,16 +2065,121 @@ fn resend_pending(vault_id: &str) {
     let ups = with(|c| {
         c.replicas
             .get(vault_id)
-            .and_then(|r| r.pending_pushes().ok())
+            .map(|r| {
+                encrypt_pending(r)
+                    .into_iter()
+                    .filter_map(|(_, u)| u)
+                    .collect::<Vec<_>>()
+            })
             .unwrap_or_default()
     });
-    for chunk in ups.chunks(200) {
+    push_all(vault_id, ups);
+    update_pending_count();
+}
+
+/// Every unacknowledged update with its id, encrypted with the current keys.
+/// One that can't be encrypted right now (`None`, e.g. its note's key is
+/// being reloaded) doesn't keep the others from being sent or stored.
+fn encrypt_pending(r: &VaultReplica) -> Vec<(String, Option<PushUpdate>)> {
+    r.pending
+        .iter()
+        .map(|p| {
+            let u = r
+                .encrypt_object(Purpose::Update, &p.object_id, &p.update)
+                .ok()
+                .map(|payload| PushUpdate {
+                    object_id: p.object_id.clone(),
+                    client_update_id: p.client_update_id.clone(),
+                    payload,
+                });
+            (p.client_update_id.clone(), u)
+        })
+        .collect()
+}
+
+/// The server's limit for one update (from `/info`).
+pub fn max_update_bytes() -> usize {
+    ui().server
+        .get_untracked()
+        .map(|s| s.max_update_bytes as usize)
+        .unwrap_or(sizes::DEFAULT_MAX_UPDATE)
+}
+
+/// Send updates in pushes the server accepts. Updates too large to ever be
+/// stored are held back (they stay pending on this device) and reported,
+/// instead of making every push of the vault fail.
+fn push_all(vault_id: &str, ups: Vec<PushUpdate>) {
+    let (pushes, oversized) = sizes::batches(ups, max_update_bytes());
+    for updates in pushes {
+        // If the socket is down, updates stay in the replica's pending
+        // queue and are re-sent after reconnecting.
         send(&ClientMessage::Push {
             vault_id: vault_id.to_string(),
-            updates: chunk.to_vec(),
+            updates,
         });
     }
-    update_pending_count();
+    if !oversized.is_empty() {
+        report_oversized(vault_id, &oversized);
+    }
+}
+
+fn report_oversized(vault_id: &str, ups: &[PushUpdate]) {
+    let new: Vec<&PushUpdate> = with(|c| {
+        ups.iter()
+            .filter(|u| c.oversized_reported.insert(u.client_update_id.clone()))
+            .collect()
+    });
+    let Some(biggest) = new.iter().max_by_key(|u| u.payload.len()) else {
+        return;
+    };
+    let title = with(|c| {
+        c.replicas
+            .get(vault_id)
+            .and_then(|r| r.index.get(&biggest.object_id))
+            .map(|e| e.title().to_string())
+            .or_else(|| {
+                c.shares
+                    .get(&(vault_id.to_string(), biggest.object_id.clone()))
+                    .map(|s| s.title.clone())
+            })
+    });
+    let what = match title {
+        Some(t) => format!("A change to “{t}”"),
+        None => "A change".to_string(),
+    };
+    util::warn(&format!(
+        "holding back {} update(s) larger than the server limit",
+        new.len()
+    ));
+    error(format!(
+        "{what} is too large to sync ({}; the server accepts {} at a time). It is kept on this device only.",
+        util::human_bytes(biggest.payload.len() as u64),
+        util::human_bytes(max_update_bytes() as u64)
+    ));
+}
+
+/// The server refused a push as too large: its limit may have gone down
+/// since we asked. Refresh it and re-send what still fits.
+async fn on_too_large(vault_id: String) {
+    let before = max_update_bytes();
+    if let Ok(info) = api::get::<ServerInfo>("/info").await {
+        ui().server.set(Some(info));
+    }
+    if max_update_bytes() < before {
+        resend_pending(&vault_id);
+    } else {
+        error("The server refused some changes as too large; they are kept on this device.");
+    }
+}
+
+/// Total payload bytes waiting in the outbox of a vault.
+pub fn outbox_bytes(vault_id: &str) -> usize {
+    with(|c| {
+        c.outbox
+            .get(vault_id)
+            .map(|v| v.iter().map(|u| u.payload.len()).sum())
+            .unwrap_or(0)
+    })
 }
 
 fn on_vault_event(vault_id: String, event: VaultEventKind) {
@@ -2023,30 +2290,84 @@ pub fn flush_now() {
     let batches: Vec<(String, Vec<PushUpdate>)> =
         with(|c| std::mem::take(&mut c.outbox).into_iter().collect());
     for (v, ups) in batches {
-        for chunk in ups.chunks(200) {
-            // If the socket is down, updates stay in the replica's pending
-            // queue and are re-sent after reconnecting.
-            send(&ClientMessage::Push {
-                vault_id: v.clone(),
-                updates: chunk.to_vec(),
-            });
-        }
+        push_all(&v, ups);
         persist_pending(&v);
     }
     update_pending_count();
 }
 
 fn persist_pending(vault_id: &str) {
-    let (uid, ups) = with(|c| {
+    let (uid, items) = with(|c| {
         (
             c.user_id.clone(),
-            c.replicas
-                .get(vault_id)
-                .and_then(|r| r.pending_pushes().ok())
-                .unwrap_or_default(),
+            c.replicas.get(vault_id).map(encrypt_pending),
         )
     });
-    storage::set_pending(&uid, vault_id, &ups);
+    let Some(items) = items else {
+        // The replica is gone (e.g. the last note shared with us from this vault).
+        let _ = storage::set_pending(&uid, vault_id, &[]);
+        return;
+    };
+    let failed = items.iter().filter(|(_, u)| u.is_none()).count();
+    let ups: Vec<PushUpdate> = if failed == 0 {
+        items.into_iter().filter_map(|(_, u)| u).collect()
+    } else {
+        // Keep what was stored before for updates we can't encrypt now.
+        util::warn(&format!("{failed} unsent update(s) could not be encrypted"));
+        let mut stored = storage::pending(&uid, vault_id);
+        let ups: Vec<PushUpdate> = items
+            .into_iter()
+            .filter_map(|(id, u)| {
+                u.or_else(|| {
+                    let i = stored.iter().position(|s| s.client_update_id == id)?;
+                    Some(stored.swap_remove(i))
+                })
+            })
+            .collect();
+        if ups.is_empty() {
+            // Never replace stored changes with nothing because of an error.
+            return;
+        }
+        ups
+    };
+    if let Err(e) = storage::set_pending(&uid, vault_id, &ups) {
+        util::warn(&format!("could not store unsent changes: {e}"));
+        storage_full();
+    }
+}
+
+/// Tell the user (at most once a minute) that unsent changes can't be kept.
+fn storage_full() {
+    let now = now_ms();
+    if with(|c| std::mem::replace(&mut c.storage_warned_at, now)) > now - 60_000 {
+        return;
+    }
+    error(
+        "This browser's storage is full, so changes that are not synced yet would be lost if you close or reload this tab. Stay online until they are synced.",
+    );
+}
+
+/// Replace a note's text through its CRDT (diffing against the current
+/// text) and queue the change, split into updates small enough for the
+/// server. Returns how many updates were made (0: unchanged or no such note).
+pub fn set_note_text(vault: &str, note: &str, text: &str) -> usize {
+    let budget = sizes::insert_budget(max_update_bytes());
+    let ups = with(|c| {
+        let n = c.replicas.get_mut(vault)?.notes.get_mut(note)?;
+        let edits = textdiff::diff(&n.text(), text);
+        Some(
+            sizes::split_edits(edits, budget)
+                .iter()
+                .filter_map(|g| n.apply_edits(g))
+                .collect::<Vec<_>>(),
+        )
+    })
+    .unwrap_or_default();
+    let n = ups.len();
+    for u in ups {
+        local_update(vault, note, u);
+    }
+    n
 }
 
 fn update_pending_count() {

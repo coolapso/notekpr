@@ -23,8 +23,13 @@ use crate::util::document;
 use syntax::{Block, Target};
 
 pub trait Host {
-    /// Local edits, already applied to the editor's text.
-    fn edit(&self, edits: &[Edit]);
+    /// Local edits made on `base` (the editor's text before them), already
+    /// applied to the editor's text. Returns `false` if the editor must reload
+    /// the document's text: the edits were refused (e.g. too large to sync),
+    /// or the document no longer matched `base`.
+    fn edit(&self, base: &str, edits: &[Edit]) -> bool;
+    /// The document's current text.
+    fn text(&self) -> Option<String>;
     fn undo(&self) -> Option<String>;
     fn redo(&self) -> Option<String>;
     /// Start a new undo group.
@@ -132,7 +137,18 @@ fn line_starts(text: &str) -> Vec<usize> {
     v
 }
 
+/// `i` clamped to `s` and moved back onto a character boundary, so it can be
+/// used to slice `s` (offsets can come from stale state or remote edits).
+pub(crate) fn floor_char(s: &str, i: usize) -> usize {
+    let mut i = i.min(s.len());
+    while !s.is_char_boundary(i) {
+        i -= 1;
+    }
+    i
+}
+
 fn prev_char(s: &str, i: usize) -> usize {
+    let i = floor_char(s, i);
     s[..i]
         .char_indices()
         .next_back()
@@ -141,11 +157,196 @@ fn prev_char(s: &str, i: usize) -> usize {
 }
 
 fn next_char(s: &str, i: usize) -> usize {
+    let i = floor_char(s, i);
     s[i..]
         .chars()
         .next()
         .map(|c| i + c.len_utf8())
         .unwrap_or(s.len())
+}
+
+/// Map an offset through sequential edits. An insertion exactly at the
+/// offset moves it past the inserted text unless `stay` is set.
+fn map_pos(mut p: usize, edits: &[Edit], stay: bool) -> usize {
+    for e in edits {
+        match e {
+            Edit::Insert { at, text } => {
+                if *at < p || (*at == p && !stay) {
+                    p += text.len();
+                }
+            }
+            Edit::Delete { at, len } => {
+                if p > *at {
+                    p -= (*len).min(p - at);
+                }
+            }
+        }
+    }
+    p
+}
+
+/// Replace no-break spaces (U+00A0) in inserted text by plain spaces,
+/// shifting the later edits accordingly (each takes one byte less).
+fn plain_spaces_in_inserts(edits: Vec<Edit>) -> Vec<Edit> {
+    let mut shift = 0;
+    edits
+        .into_iter()
+        .map(|e| match e {
+            Edit::Insert { at, text } => {
+                let n = text.matches('\u{a0}').count();
+                let e = Edit::Insert {
+                    at: at.saturating_sub(shift),
+                    text: if n > 0 {
+                        text.replace('\u{a0}', " ")
+                    } else {
+                        text
+                    },
+                };
+                shift += n;
+                e
+            }
+            Edit::Delete { at, len } => Edit::Delete {
+                at: at.saturating_sub(shift),
+                len,
+            },
+        })
+        .collect()
+}
+
+/// Whether sequential edits stay inside `text` and on character boundaries
+/// (anything else would panic or corrupt the CRDT).
+pub fn edits_fit(text: &str, edits: &[Edit]) -> bool {
+    let mut t = text.to_string();
+    for e in edits {
+        match e {
+            Edit::Delete { at, len } => {
+                let end = at.saturating_add(*len);
+                if end > t.len() || !t.is_char_boundary(*at) || !t.is_char_boundary(end) {
+                    return false;
+                }
+                t.replace_range(*at..end, "");
+            }
+            Edit::Insert { at, text } => {
+                if *at > t.len() || !t.is_char_boundary(*at) {
+                    return false;
+                }
+                t.insert_str(*at, text);
+            }
+        }
+    }
+    true
+}
+
+/// Move local edits made on `base` onto `current` (`base` plus changes made
+/// elsewhere). Only the simple shapes an IME commit produces are handled —
+/// an insertion, or a replacement of text nobody else touched; `None` means
+/// the edits can't be placed safely. (Interim: a general rebase comes with
+/// the editor redesign.)
+pub fn rebase(base: &str, current: &str, edits: &[Edit]) -> Option<Vec<Edit>> {
+    let remote = textdiff::diff(base, current);
+    let out = match edits {
+        [Edit::Insert { at, text }] => vec![Edit::Insert {
+            at: map_pos(*at, &remote, false),
+            text: text.clone(),
+        }],
+        [Edit::Delete { at, len }] | [Edit::Delete { at, len }, Edit::Insert { .. }] => {
+            let gone = base.get(*at..at + len)?;
+            let from = map_pos(*at, &remote, false);
+            let to = map_pos(at + len, &remote, true);
+            if to < from || current.get(from..to) != Some(gone) {
+                return None;
+            }
+            let mut v = vec![Edit::Delete {
+                at: from,
+                len: *len,
+            }];
+            if let [_, Edit::Insert { at: ia, text }] = edits
+                && ia == at
+            {
+                v.push(Edit::Insert {
+                    at: from,
+                    text: text.clone(),
+                });
+            } else if edits.len() == 2 {
+                return None;
+            }
+            v
+        }
+        _ => return None,
+    };
+    edits_fit(current, &out).then_some(out)
+}
+
+/// Edits that toggle `open`/`close` around the selection `[a, b)` (or the
+/// word at the caret), and the selection afterwards. Never slices `text`
+/// inside a character, whatever the offsets.
+fn wrap_toggle(
+    text: &str,
+    a: usize,
+    b: usize,
+    open: &str,
+    close: &str,
+) -> (Vec<Edit>, (usize, usize)) {
+    let (a, b) = (floor_char(text, a), floor_char(text, b));
+    let (a, b) = (a.min(b), a.max(b));
+    let (ol, cl) = (open.len(), close.len());
+    let wrapped =
+        a >= ol && text.get(a - ol..a) == Some(open) && text.get(b..b + cl) == Some(close);
+    if wrapped {
+        let edits = vec![
+            Edit::Delete { at: b, len: cl },
+            Edit::Delete {
+                at: a - ol,
+                len: ol,
+            },
+        ];
+        return (edits, (a - ol, b - ol));
+    }
+    if a == b {
+        // Wrap the word under the caret, or insert an empty pair.
+        let is_word = |c: char| c.is_alphanumeric() || c == '_' || c == '-';
+        let ws = text[..a]
+            .char_indices()
+            .rev()
+            .take_while(|(_, c)| is_word(*c))
+            .last()
+            .map(|(i, _)| i)
+            .unwrap_or(a);
+        let we = a + text[a..]
+            .chars()
+            .take_while(|c| is_word(*c))
+            .map(char::len_utf8)
+            .sum::<usize>();
+        let edits = if ws < we {
+            vec![
+                Edit::Insert {
+                    at: we,
+                    text: close.into(),
+                },
+                Edit::Insert {
+                    at: ws,
+                    text: open.into(),
+                },
+            ]
+        } else {
+            vec![Edit::Insert {
+                at: a,
+                text: format!("{open}{close}"),
+            }]
+        };
+        return (edits, (a + ol, a + ol));
+    }
+    let edits = vec![
+        Edit::Insert {
+            at: b,
+            text: close.into(),
+        },
+        Edit::Insert {
+            at: a,
+            text: open.into(),
+        },
+    ];
+    (edits, (a + ol, b + ol))
 }
 
 impl Editor {
@@ -273,7 +474,8 @@ impl Editor {
         if let Some((a, h)) = sel
             && self.has_focus()
         {
-            self.set_selection(a, h);
+            // Not the user's doing (an image loaded, links changed): don't scroll.
+            self.place_selection(a, h, false);
         }
     }
 
@@ -449,7 +651,7 @@ impl Editor {
             .get(idx + 1)
             .map(|e| e - 1)
             .unwrap_or(st.text.len());
-        let line = &st.text[start..end];
+        let line = st.text.get(start..end).unwrap_or("");
         let range = document().create_range().ok()?;
         range.set_start(&el, 0).ok()?;
         if range.set_end(node, offset).is_err() {
@@ -468,7 +670,7 @@ impl Editor {
             .get(idx + 1)
             .map(|e| e - 1)
             .unwrap_or(st.text.len());
-        let line = &st.text[start..end];
+        let line = st.text.get(start..end).unwrap_or("");
         let target = byte_to_utf16(line, offset.saturating_sub(start).min(line.len()));
         let el = self.root.children().item(idx as u32)?;
         let walker = document()
@@ -507,9 +709,16 @@ impl Editor {
         Some((a, h))
     }
 
+    /// Select `[anchor, head)` and scroll the caret into view.
     pub fn set_selection(&self, anchor: usize, head: usize) {
-        let len = self.st.borrow().text.len();
-        let (anchor, head) = (anchor.min(len), head.min(len));
+        self.place_selection(anchor, head, true);
+    }
+
+    fn place_selection(&self, anchor: usize, head: usize, scroll: bool) {
+        let (anchor, head) = {
+            let st = self.st.borrow();
+            (floor_char(&st.text, anchor), floor_char(&st.text, head))
+        };
         self.st.borrow_mut().sel = (anchor, head);
         let (Some((an, ao)), Some((hn, ho))) =
             (self.offset_to_dom(anchor), self.offset_to_dom(head))
@@ -520,7 +729,9 @@ impl Editor {
             let _ = sel.set_base_and_extent(&an, ao, &hn, ho);
         }
         self.update_active();
-        self.scroll_caret_into_view();
+        if scroll {
+            self.scroll_caret_into_view();
+        }
     }
 
     fn scroll_caret_into_view(&self) {
@@ -542,7 +753,11 @@ impl Editor {
     }
 
     fn sel_sorted(&self) -> (usize, usize) {
-        let (a, h) = self.st.borrow().sel;
+        let st = self.st.borrow();
+        let (a, h) = (
+            floor_char(&st.text, st.sel.0),
+            floor_char(&st.text, st.sel.1),
+        );
         (a.min(h), a.max(h))
     }
 
@@ -554,10 +769,11 @@ impl Editor {
             return;
         }
         let mut edits = Vec::with_capacity(2);
-        {
+        let base = self.st.borrow().text.clone();
+        let from = {
             let mut st = self.st.borrow_mut();
-            let to = to.min(st.text.len());
-            let from = from.min(to);
+            let to = floor_char(&st.text, to);
+            let from = floor_char(&st.text, from).min(to);
             if to > from {
                 edits.push(Edit::Delete {
                     at: from,
@@ -576,13 +792,16 @@ impl Editor {
             let mut t = std::mem::take(&mut st.text);
             t.replace_range(from..to, insert);
             st.text = t;
-        }
-        self.host.edit(&edits);
-        self.render(false);
+            from
+        };
         let (a, h) = caret.unwrap_or_else(|| {
             let p = from + insert.len();
             (p, p)
         });
+        if !self.commit(&base, &edits, (a, h)) {
+            return;
+        }
+        self.render(false);
         self.set_selection(a, h);
         self.host.selection_changed(a, h);
     }
@@ -591,14 +810,51 @@ impl Editor {
         if edits.is_empty() || self.st.borrow().readonly {
             return;
         }
-        {
-            let mut st = self.st.borrow_mut();
-            st.text = textdiff::apply(&st.text, &edits);
+        let base = self.st.borrow().text.clone();
+        if !edits_fit(&base, &edits) {
+            return;
         }
-        self.host.edit(&edits);
+        self.st.borrow_mut().text = textdiff::apply(&base, &edits);
+        if !self.commit(&base, &edits, caret) {
+            return;
+        }
         self.render(false);
         self.set_selection(caret.0, caret.1);
         self.host.selection_changed(caret.0, caret.1);
+    }
+
+    /// Hand local edits (already applied to our text) to the host. If it
+    /// refuses them, go back to the document's text and return `false`.
+    fn commit(&self, base: &str, edits: &[Edit], caret: (usize, usize)) -> bool {
+        if self.host.edit(base, edits) {
+            return true;
+        }
+        self.resync(caret);
+        false
+    }
+
+    /// Replace our text with the document's, after local edits were refused.
+    /// `caret` is a position in our current text; it is mapped through the change.
+    fn resync(&self, caret: (usize, usize)) {
+        let Some(t) = self.host.text() else { return };
+        let edits = textdiff::diff(&self.st.borrow().text, &t);
+        let (a, h) = (
+            map_pos(caret.0, &edits, false),
+            map_pos(caret.1, &edits, false),
+        );
+        {
+            let mut st = self.st.borrow_mut();
+            st.text = t;
+            st.pending_remote = None;
+        }
+        self.render(true);
+        if self.has_focus() {
+            self.set_selection(a, h);
+        } else {
+            let mut st = self.st.borrow_mut();
+            st.sel = (floor_char(&st.text, a), floor_char(&st.text, h));
+        }
+        self.host.selection_changed(a, h);
     }
 
     pub fn insert_text(&self, s: &str) {
@@ -618,31 +874,17 @@ impl Editor {
             return;
         }
         let focused = self.has_focus();
-        let (mut a, mut h) = self.read_selection().unwrap_or(self.st.borrow().sel);
-        let mut changed_at = None;
-        for e in &edits {
-            match e {
-                Edit::Insert { at, text } => {
-                    changed_at = Some(at + text.len());
-                    if *at < a || (*at == a && !caret_to_change) {
-                        a += text.len();
-                    }
-                    if *at < h || (*at == h && !caret_to_change) {
-                        h += text.len();
-                    }
-                }
-                Edit::Delete { at, len } => {
-                    changed_at = Some(*at);
-                    if a > *at {
-                        a -= (*len).min(a - at);
-                    }
-                    if h > *at {
-                        h -= (*len).min(h - at);
-                    }
-                }
-            }
-        }
-        if caret_to_change && let Some(c) = changed_at {
+        let (a, h) = self.read_selection().unwrap_or(self.st.borrow().sel);
+        let (mut a, mut h) = (
+            map_pos(a, &edits, caret_to_change),
+            map_pos(h, &edits, caret_to_change),
+        );
+        if caret_to_change
+            && let Some(c) = edits.last().map(|e| match e {
+                Edit::Insert { at, text } => at + text.len(),
+                Edit::Delete { at, .. } => *at,
+            })
+        {
             a = c;
             h = c;
         }
@@ -650,47 +892,35 @@ impl Editor {
         {
             let mut st = self.st.borrow_mut();
             for c in &mut st.cursors {
-                for e in &edits {
-                    match e {
-                        Edit::Insert { at, text } => {
-                            if *at < c.head {
-                                c.head += text.len();
-                            }
-                            if *at < c.anchor {
-                                c.anchor += text.len();
-                            }
-                        }
-                        Edit::Delete { at, len } => {
-                            if c.head > *at {
-                                c.head -= (*len).min(c.head - at);
-                            }
-                            if c.anchor > *at {
-                                c.anchor -= (*len).min(c.anchor - at);
-                            }
-                        }
-                    }
-                }
+                c.head = map_pos(c.head, &edits, true);
+                c.anchor = map_pos(c.anchor, &edits, true);
             }
             st.text = new_text;
         }
         self.render(false);
         if focused {
-            self.set_selection(a, h);
+            // Only undo/redo brings the change into view; remote edits must not
+            // move the page under the reader.
+            self.place_selection(a, h, caret_to_change);
         } else {
-            self.st.borrow_mut().sel = (a, h);
+            let mut st = self.st.borrow_mut();
+            st.sel = (floor_char(&st.text, a), floor_char(&st.text, h));
         }
     }
 
+    /// `(index, start, end)` of the line containing `offset`; start and end
+    /// are always valid slice bounds of the text.
     fn current_line(&self, offset: usize) -> (usize, usize, usize) {
         let idx = self.line_of(offset);
         let st = self.st.borrow();
-        let start = st.starts[idx];
+        let start = st.starts.get(idx).copied().unwrap_or(0);
         let end = st
             .starts
             .get(idx + 1)
             .map(|e| e - 1)
             .unwrap_or(st.text.len());
-        (idx, start, end)
+        let end = floor_char(&st.text, end);
+        (idx, floor_char(&st.text, start).min(end), end)
     }
 
     fn smart_newline(&self) {
@@ -796,7 +1026,9 @@ impl Editor {
         }
         let (_, ls, _le) = self.current_line(a);
         let text = self.st.borrow().text.clone();
-        let line_to_caret = &text[ls..a];
+        let Some(line_to_caret) = text.get(ls..a) else {
+            return false;
+        };
         if let Some((indent, mlen, _)) = syntax::list_marker(&text[ls..]) {
             let content_start = indent + mlen;
             let task = syntax::task_box(&text[ls + content_start..])
@@ -821,62 +1053,8 @@ impl Editor {
     fn toggle_wrap(&self, open: &str, close: &str) {
         let (a, b) = self.sel_sorted();
         let text = self.st.borrow().text.clone();
-        let (ol, cl) = (open.len(), close.len());
-        if a >= ol && b + cl <= text.len() && &text[a - ol..a] == open && &text[b..b + cl] == close
-        {
-            let edits = vec![
-                Edit::Delete { at: b, len: cl },
-                Edit::Delete {
-                    at: a - ol,
-                    len: ol,
-                },
-            ];
-            self.apply_edits_local(edits, (a - ol, b - ol));
-            return;
-        }
-        if a == b {
-            // Wrap the word under the caret, or insert an empty pair.
-            let is_word = |c: char| c.is_alphanumeric() || c == '_' || c == '-';
-            let ws = text[..a]
-                .char_indices()
-                .rev()
-                .take_while(|(_, c)| is_word(*c))
-                .last()
-                .map(|(i, _)| i)
-                .unwrap_or(a);
-            let we = a + text[a..]
-                .chars()
-                .take_while(|c| is_word(*c))
-                .map(char::len_utf8)
-                .sum::<usize>();
-            if ws < we {
-                let edits = vec![
-                    Edit::Insert {
-                        at: we,
-                        text: close.into(),
-                    },
-                    Edit::Insert {
-                        at: ws,
-                        text: open.into(),
-                    },
-                ];
-                self.apply_edits_local(edits, (a + ol, a + ol));
-            } else {
-                self.replace(a, a, &format!("{open}{close}"), Some((a + ol, a + ol)));
-            }
-            return;
-        }
-        let edits = vec![
-            Edit::Insert {
-                at: b,
-                text: close.into(),
-            },
-            Edit::Insert {
-                at: a,
-                text: open.into(),
-            },
-        ];
-        self.apply_edits_local(edits, (a + ol, b + ol));
+        let (edits, caret) = wrap_toggle(&text, a, b, open, close);
+        self.apply_edits_local(edits, caret);
     }
 
     /// Apply a transformation to every line touched by the selection.
@@ -885,7 +1063,9 @@ impl Editor {
         let (l0, s0, _) = self.current_line(a);
         let (l1, _, e1) = self.current_line(b);
         let text = self.st.borrow().text.clone();
-        let old = &text[s0..e1];
+        let Some(old) = text.get(s0..e1) else {
+            return;
+        };
         let new: Vec<String> = old
             .split('\n')
             .enumerate()
@@ -936,7 +1116,7 @@ impl Editor {
             Command::Code => self.toggle_wrap("`", "`"),
             Command::Link => {
                 let (a, b) = self.sel_sorted();
-                let sel = self.st.borrow().text[a..b].to_string();
+                let sel = self.st.borrow().text.get(a..b).unwrap_or("").to_string();
                 if sel.starts_with("http://") || sel.starts_with("https://") {
                     self.replace(a, b, &format!("[]({sel})"), Some((a + 1, a + 1)));
                 } else if sel.is_empty() {
@@ -952,7 +1132,7 @@ impl Editor {
             }
             Command::CodeBlock => {
                 let (a, b) = self.sel_sorted();
-                let sel = self.st.borrow().text[a..b].to_string();
+                let sel = self.st.borrow().text.get(a..b).unwrap_or("").to_string();
                 let (_, ls, _) = self.current_line(a);
                 let lead = if a > ls { "\n" } else { "" };
                 let ins = format!("{lead}```\n{sel}\n```\n");
@@ -1051,7 +1231,10 @@ impl Editor {
                 .get(idx + 1)
                 .map(|e| e - 1)
                 .unwrap_or(st.text.len());
-            (s, st.text[s..e].to_string())
+            let Some(line) = st.text.get(s..e) else {
+                return;
+            };
+            (s, line.to_string())
         };
         if let Some((indent, mlen, _)) = syntax::list_marker(&line) {
             let at = start + indent + mlen + 1;
@@ -1137,15 +1320,28 @@ impl Editor {
             };
             lines.push(t);
         }
-        let dom_text = lines.join("\n").replace('\u{a0}', " ");
+        let dom_text = lines.join("\n");
         let sel = self.read_selection();
         let old = self.st.borrow().text.clone();
         if dom_text == old {
             return;
         }
-        let edits = textdiff::diff(&old, &dom_text);
-        self.st.borrow_mut().text = dom_text;
-        self.host.edit(&edits);
+        // Browsers put no-break spaces into text they edit natively; turn
+        // those into spaces, but leave the rest of the note alone.
+        let new_text = textdiff::apply(
+            &old,
+            &plain_spaces_in_inserts(textdiff::diff(&old, &dom_text)),
+        );
+        if new_text == old {
+            // Only spaces were swapped: just redraw.
+            self.render(true);
+            if let Some((a, h)) = sel {
+                self.set_selection(a, h);
+            }
+            return;
+        }
+        let edits = textdiff::diff(&old, &new_text);
+        self.st.borrow_mut().text = new_text;
         let caret = sel.unwrap_or_else(|| {
             let p = match edits.last() {
                 Some(Edit::Insert { at, text }) => at + text.len(),
@@ -1154,6 +1350,9 @@ impl Editor {
             };
             (p, p)
         });
+        if !self.commit(&old, &edits, caret) {
+            return;
+        }
         self.render(true);
         self.set_selection(caret.0, caret.1);
     }
@@ -1253,7 +1452,10 @@ impl Editor {
         Editor::listen(this, &root, "compositionend", |ed, _| {
             ed.st.borrow_mut().composing = false;
             ed.sync_from_dom();
-            if let Some(t) = ed.st.borrow_mut().pending_remote.take() {
+            // Take it first: a borrow held in the `if let` would still be
+            // alive inside `set_text`, which borrows the state again.
+            let pending = ed.st.borrow_mut().pending_remote.take();
+            if let Some(t) = pending {
                 ed.set_text(t, false);
             }
         });
@@ -1455,7 +1657,7 @@ impl Editor {
                     return;
                 }
                 let (_, ls, le) = self.current_line(a);
-                let line = self.st.borrow().text[ls..le].to_string();
+                let line = self.st.borrow().text.get(ls..le).unwrap_or("").to_string();
                 if syntax::list_marker(&line).is_some() || shift {
                     Some(if shift {
                         Command::Outdent
@@ -1495,7 +1697,9 @@ impl Editor {
             return;
         }
         ev.prevent_default();
-        let text = self.st.borrow().text[a..b].to_string();
+        let Some(text) = self.st.borrow().text.get(a..b).map(str::to_string) else {
+            return;
+        };
         if let Some(dt) = ev.clipboard_data() {
             let _ = dt.set_data("text/plain", &text);
         }
@@ -1647,3 +1851,180 @@ impl Drop for Editor {
 
 #[wasm_bindgen]
 extern "C" {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn floor_char_stays_on_boundaries() {
+        let s = "a日b";
+        assert_eq!(floor_char(s, 0), 0);
+        assert_eq!(floor_char(s, 2), 1);
+        assert_eq!(floor_char(s, 3), 1);
+        assert_eq!(floor_char(s, 4), 4);
+        assert_eq!(floor_char(s, 99), s.len());
+        assert_eq!(prev_char(s, 3), 0);
+        assert_eq!(next_char(s, 2), 4);
+    }
+
+    #[test]
+    fn formatting_next_to_multibyte_text_never_panics() {
+        let samples = [
+            "日本語",
+            "**日**",
+            "a日*",
+            "日~~x~~本",
+            "é`ü`ö",
+            "👍==👍==",
+            "",
+        ];
+        let pairs = [
+            ("**", "**"),
+            ("*", "*"),
+            ("~~", "~~"),
+            ("==", "=="),
+            ("`", "`"),
+        ];
+        for t in samples {
+            for a in 0..=t.len() + 2 {
+                for b in 0..=t.len() + 2 {
+                    for (open, close) in pairs {
+                        let (edits, (x, y)) = wrap_toggle(t, a, b, open, close);
+                        let out = textdiff::apply(t, &edits);
+                        assert!(out.is_char_boundary(x.min(out.len())), "{t:?} {a} {b}");
+                        assert!(out.is_char_boundary(y.min(out.len())), "{t:?} {a} {b}");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn edits_are_checked_against_the_text() {
+        let ins = |at, t: &str| Edit::Insert { at, text: t.into() };
+        let del = |at, len| Edit::Delete { at, len };
+        assert!(edits_fit("日本", &[ins(3, "x"), del(0, 3)]));
+        assert!(edits_fit("", &[ins(0, "a")]));
+        assert!(!edits_fit("日本", &[ins(1, "x")]));
+        assert!(!edits_fit("日本", &[ins(7, "x")]));
+        assert!(!edits_fit("日本", &[del(3, 4)]));
+        assert!(!edits_fit("日本", &[del(0, 2)]));
+        assert!(!edits_fit("ab", &[del(0, usize::MAX)]));
+        // Later edits are checked against the text as it is by then.
+        assert!(edits_fit("ab", &[ins(2, "cd"), del(3, 1)]));
+        assert!(!edits_fit("ab", &[del(0, 2), ins(1, "x")]));
+    }
+
+    #[test]
+    fn composition_is_rebased_onto_remote_changes() {
+        let base = "Shopping: milk\neggs";
+        // Someone else appended a line while we were composing at the start.
+        let current = "Shopping: milk\neggs\nbread";
+        let local = textdiff::diff(base, "かなShopping: milk\neggs");
+        let e = rebase(base, current, &local).unwrap();
+        assert_eq!(
+            textdiff::apply(current, &e),
+            "かなShopping: milk\neggs\nbread"
+        );
+        // …or inserted text before our composition.
+        let current = "Remote. Shopping: milk\neggs";
+        let local = vec![Edit::Insert {
+            at: 15,
+            text: "日本".into(),
+        }];
+        let e = rebase(base, current, &local).unwrap();
+        assert_eq!(
+            textdiff::apply(current, &e),
+            "Remote. Shopping: milk\n日本eggs"
+        );
+        // A replacement of text nobody else touched moves along too.
+        let local = vec![
+            Edit::Delete { at: 10, len: 4 },
+            Edit::Insert {
+                at: 10,
+                text: "ミルク".into(),
+            },
+        ];
+        let e = rebase(base, current, &local).unwrap();
+        assert_eq!(
+            textdiff::apply(current, &e),
+            "Remote. Shopping: ミルク\neggs"
+        );
+        let current = "Shopping: oat milk\neggs";
+        let e = rebase(base, current, &local).unwrap();
+        assert_eq!(textdiff::apply(current, &e), "Shopping: oat ミルク\neggs");
+        // If the replaced text changed elsewhere, give up.
+        let current = "Shopping: mi1k\neggs";
+        assert_eq!(rebase(base, current, &local), None);
+        let current = "Shopping: mil-k\neggs";
+        assert_eq!(rebase(base, current, &local), None);
+        // Several separate edits are not rebased.
+        let local = vec![
+            Edit::Insert {
+                at: 0,
+                text: "a".into(),
+            },
+            Edit::Insert {
+                at: 5,
+                text: "b".into(),
+            },
+        ];
+        assert_eq!(rebase(base, current, &local), None);
+    }
+
+    #[test]
+    fn only_inserted_no_break_spaces_become_spaces() {
+        let nb = '\u{a0}';
+        let old = format!("price:{nb}5 € and more");
+        // A native edit typed "a b " (with no-break spaces) in two places.
+        let dom = format!("a{nb}b{nb}price:{nb}5 € and{nb}x more");
+        let out = textdiff::apply(&old, &plain_spaces_in_inserts(textdiff::diff(&old, &dom)));
+        assert_eq!(out, format!("a b price:{nb}5 € and x more"));
+        // Nothing inserted: existing no-break spaces stay.
+        let dom = format!("price:{nb}5 € more");
+        let out = textdiff::apply(&old, &plain_spaces_in_inserts(textdiff::diff(&old, &dom)));
+        assert_eq!(out, dom);
+    }
+
+    #[test]
+    fn positions_follow_edits() {
+        // "hello world" → "hello brave new world!"
+        let edits = vec![
+            Edit::Insert {
+                at: 6,
+                text: "brave new ".into(),
+            },
+            Edit::Insert {
+                at: 21,
+                text: "!".into(),
+            },
+        ];
+        assert_eq!(map_pos(0, &edits, false), 0);
+        assert_eq!(map_pos(6, &edits, false), 16);
+        assert_eq!(map_pos(6, &edits, true), 6);
+        assert_eq!(map_pos(11, &edits, false), 22);
+        // "one two three" → "one three"
+        let edits = vec![Edit::Delete { at: 4, len: 4 }];
+        assert_eq!(map_pos(5, &edits, false), 4);
+        assert_eq!(map_pos(13, &edits, false), 9);
+        assert_eq!(map_pos(2, &edits, false), 2);
+    }
+
+    #[test]
+    fn wrap_toggle_wraps_and_unwraps() {
+        let (e, sel) = wrap_toggle("x 日本 y", 2, 8, "**", "**");
+        assert_eq!(textdiff::apply("x 日本 y", &e), "x **日本** y");
+        assert_eq!(sel, (4, 10));
+        let (e, sel) = wrap_toggle("x **日本** y", 4, 10, "**", "**");
+        assert_eq!(textdiff::apply("x **日本** y", &e), "x 日本 y");
+        assert_eq!(sel, (2, 8));
+        // Caret inside a word wraps the word.
+        let (e, _) = wrap_toggle("über", 2, 2, "*", "*");
+        assert_eq!(textdiff::apply("über", &e), "*über*");
+        // Caret between spaces inserts an empty pair.
+        let (e, sel) = wrap_toggle("日  本", 4, 4, "`", "`");
+        assert_eq!(textdiff::apply("日  本", &e), "日 `` 本");
+        assert_eq!(sel, (5, 5));
+    }
+}

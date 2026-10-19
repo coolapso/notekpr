@@ -167,6 +167,14 @@ pub fn is_image(name: &str) -> bool {
     mime_for(name).starts_with("image/") && !name.to_ascii_lowercase().ends_with(".svg")
 }
 
+/// Whether an attachment may be opened in a browser tab: raster images and
+/// PDFs only. A `blob:` URL belongs to this app's origin, so anything that
+/// can carry scripts (SVG, HTML, …) would run as the app; those are
+/// downloaded instead.
+pub fn opens_inline(name: &str) -> bool {
+    is_image(name) || mime_for(name) == "application/pdf"
+}
+
 /// Stable, pleasant colour for a user id (presence cursors, avatars).
 pub fn user_color(id: &str) -> String {
     const COLORS: [&str; 10] = [
@@ -221,4 +229,30 @@ pub fn log(msg: &str) {
 
 pub fn warn(msg: &str) {
     web_sys::console::warn_1(&JsValue::from_str(msg));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_raster_images_and_pdfs_open_inline() {
+        for ok in [
+            "a.png",
+            "b.JPG",
+            "c.jpeg",
+            "d.gif",
+            "e.webp",
+            "f.avif",
+            "g.pdf",
+            "dir/h.PDF",
+        ] {
+            assert!(opens_inline(ok), "{ok}");
+        }
+        for bad in [
+            "a.svg", "b.SVG", "c.html", "d.htm", "e.xhtml", "f.xml", "g.md", "h", "i.js", "j.mp4",
+        ] {
+            assert!(!opens_inline(bad), "{bad}");
+        }
+    }
 }

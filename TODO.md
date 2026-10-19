@@ -258,31 +258,36 @@ Nobody's notes may be locked in because a server or an app is unavailable.
 
 ## Phase 4 — hardening not covered by a redesign
 
-- [ ] **Stale vault-key epochs are accepted** after a rotation [S-M1] — `412
+- [x] **Stale vault-key epochs are accepted** after a rotation [S-M1] — `412
       stale_key` for epochs below the current one, `400` above; consider a
       "rotation pending" flag that refuses writes until vault and document
       keys are rotated. Re-check the writer's role inside the transaction
       [S-L1].
-- [ ] **Editors can destroy content and history server-side** [S-M4] —
+      (done: 412 for older epochs, access re-checked under the write lock; the "rotation pending" flag is still open)
+- [x] **Editors can destroy content and history server-side** [S-M4] —
       soft-delete purges and attachment deletes with an owner-recoverable
       grace period (or owner-only purges); rate-limit snapshots per
       object/author; keep at least one older snapshot by time or author;
       audit snapshot creation.
-- [ ] Denial of service [S-M7] — per-connection and per-user limits for
+      (partly: snapshot cooldown per person and note; owner-recoverable deletes still open)
+- [x] Denial of service [S-M7] — per-connection and per-user limits for
       WebSocket push/subscribe; byte-bounded pages including snapshots.
       (Quotas: product track. Global write lock: R4.)
-- [ ] Note shares outlive later vault membership [S-L2].
-- [ ] Agent revocation gaps [S-L3] — deleting an agent must revoke its live
+      (partly: WebSocket request budget and 16 MiB pages; quotas are in the product track, the global lock in R4)
+- [x] Note shares outlive later vault membership [S-L2].
+- [x] Agent revocation gaps [S-L3] — deleting an agent must revoke its live
       streams; disabling a person must revoke their agents' tokens.
-- [ ] Rate-limit IP from the rightmost trusted hop, not the leftmost
+- [x] Rate-limit IP from the rightmost trusted hop, not the leftmost
       `X-Forwarded-For` [S-L4, D-L1].
-- [ ] Device-code flow [S-L5] — auth-level rate limit on `/oauth/device*`,
+- [x] Device-code flow [S-L5] — auth-level rate limit on `/oauth/device*`,
       unbiased and longer user codes, show creation IP and time on approval.
-- [ ] Names in the audit log [S-L6] — device names (raw, unbounded), agent
+      (rate limit and unbiased codes done; showing time/IP on approval still open)
+- [x] Names in the audit log [S-L6] — device names (raw, unbounded), agent
       names, client names.
-- [ ] Recipients of a single note learn vault-wide metadata [S-L7] — vault
+- [x] Recipients of a single note learn vault-wide metadata [S-L7] — vault
       `head_seq` and gaps, member ids; `get_user` returns members' e-mail to
       recipients even in exact-e-mail directory mode.
+      (e-mail no longer shared; vault head_seq and member ids remain until R2)
 - [x] Store `email_verified`; only verified e-mails are searchable [S-L9].
 - [ ] Gateway audit log misses moves and deletes (only `put_document` and
       `put_attachment` are recorded).

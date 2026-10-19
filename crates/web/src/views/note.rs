@@ -166,13 +166,11 @@ fn mount_editor(
 fn toggle_task(vault: &str, note: &str, line: usize) {
     let text = with(|c| c.replicas.get(vault).map(|r| r.note_text(note))).unwrap_or_default();
     let mut lines: Vec<String> = text.split('\n').map(str::to_string).collect();
-    if let Some(l) = lines.get_mut(line) {
-        if l.contains("[ ]") {
-            *l = l.replacen("[ ]", "[x]", 1);
-        } else if l.contains("[x]") || l.contains("[X]") {
-            *l = l.replacen("[x]", "[ ]", 1).replacen("[X]", "[ ]", 1);
-        }
-    }
+    let Some(l) = lines.get_mut(line) else { return };
+    let Some(toggled) = crate::editor::syntax::toggle_task(l) else {
+        return;
+    };
+    *l = toggled;
     let new = lines.join("\n");
     if state::set_note_text(vault, note, &new) > 0 {
         if let Some(ed) = editor() {

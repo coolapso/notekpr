@@ -605,6 +605,18 @@ def test_editor_safety(env):
         time.sleep(0.5)
         t = editor_text(b)
         check(t.startswith("X other") and "10 km" in t, "native edits keep existing no-break spaces and plain-space new ones")
+        # Ticking a task in reading view changes its own box, not a later "[ ]".
+        new_note(b, "Tasks", "")
+        b.js("const dt = new DataTransfer(); dt.setData('text/plain', '- [x] buy [ ] boxes\\n> - [ ] quoted [x]'); document.querySelector('.ed').dispatchEvent(new ClipboardEvent('paste', {clipboardData: dt, bubbles: true, cancelable: true}));")
+        b.click(".seg button[title^='Reading']")
+        b.find(".reading input.task", 10)
+        b.js("document.querySelectorAll('.reading input.task')[0].click()")
+        time.sleep(0.4)
+        b.js("document.querySelectorAll('.reading input.task')[1].click()")
+        time.sleep(0.4)
+        b.click(".seg button[title='Live preview']")
+        time.sleep(0.4)
+        check(editor_text(b) == "- [ ] buy [ ] boxes\n> - [x] quoted [x]", "reading view toggles the task's own box")
         check(not severe_logs(b), "no browser errors")
     finally:
         b.close()

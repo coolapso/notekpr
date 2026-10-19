@@ -1300,7 +1300,10 @@ impl Editor {
         Editor::listen(this, &root, "compositionend", |ed, _| {
             ed.st.borrow_mut().composing = false;
             ed.sync_from_dom();
-            if let Some(t) = ed.st.borrow_mut().pending_remote.take() {
+            // Take it first: a borrow held in the `if let` would still be
+            // alive inside `set_text`, which borrows the state again.
+            let pending = ed.st.borrow_mut().pending_remote.take();
+            if let Some(t) = pending {
                 ed.set_text(t, false);
             }
         });

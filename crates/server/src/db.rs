@@ -207,6 +207,9 @@ mod user_code_tests {
         }
         // 16000 draws over 20 letters: about 800 each.
         assert_eq!(counts.len(), 20);
-        assert!(counts.values().all(|n| (600..1000).contains(n)), "{counts:?}");
+        assert!(
+            counts.values().all(|n| (600..1000).contains(n)),
+            "{counts:?}"
+        );
     }
 }

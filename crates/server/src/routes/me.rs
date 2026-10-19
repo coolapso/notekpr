@@ -161,7 +161,11 @@ pub async fn setup_account_key(
 /// A device name as stored and shown: trimmed, no control characters, at
 /// most 100 characters.
 pub fn device_name(raw: &str) -> String {
-    raw.trim().chars().filter(|c| !c.is_control()).take(100).collect()
+    raw.trim()
+        .chars()
+        .filter(|c| !c.is_control())
+        .take(100)
+        .collect()
 }
 
 pub async fn insert_device(

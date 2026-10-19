@@ -28,6 +28,10 @@ use crate::sync;
 
 const AUTH_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_SUBSCRIPTIONS: usize = 200;
+/// Sustained pushes + subscriptions per connection and second, and burst
+/// (a reconnect subscribes to every vault at once).
+const REQUESTS_PER_SEC: f64 = 20.0;
+const REQUEST_BURST: f64 = 400.0;
 const MAX_AWARENESS_BYTES: usize = 16 * 1024;
 const OUTBOUND_QUEUE: usize = 1024;
 
@@ -116,6 +120,7 @@ async fn connection(socket: WebSocket, state: AppState) {
         via_membership: Default::default(),
         announced: Default::default(),
         awareness: Bucket::new(30.0, 60.0),
+        requests: Bucket::new(REQUESTS_PER_SEC, REQUEST_BURST),
     };
     let mut keepalive = tokio::time::interval(Duration::from_secs(30));
     let mut revalidate = tokio::time::interval(Duration::from_secs(60));
@@ -219,6 +224,9 @@ struct Conn {
     /// Notes this connection announced presence on (to say goodbye there too).
     announced: std::collections::HashSet<(String, String)>,
     awareness: Bucket,
+    /// Pushes and (un)subscriptions: generous for real clients (which
+    /// batch edits and subscribe once per vault), but bounded.
+    requests: Bucket,
 }
 
 impl Conn {
@@ -239,6 +247,17 @@ impl Conn {
                 return true;
             }
         };
+        if matches!(
+            msg,
+            ClientMessage::Push { .. }
+                | ClientMessage::Subscribe { .. }
+                | ClientMessage::Unsubscribe { .. }
+        ) && !self.requests.take()
+        {
+            metrics::counter!("coolpsonotes_rate_limited_total", "scope" => "ws").increment(1);
+            self.send(error_msg(&AppError::RateLimited, None)).await;
+            return true;
+        }
         match msg {
             ClientMessage::Auth { .. } => {}
             ClientMessage::Ping { nonce } => self.send(ServerMessage::Pong { nonce }).await,

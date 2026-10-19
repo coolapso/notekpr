@@ -23,6 +23,8 @@ use crate::state::AppState;
 pub const MAX_BATCH: usize = 500;
 pub const DEFAULT_PAGE: i64 = 1000;
 pub const MAX_PAGE: i64 = 5000;
+/// Upper bound for the update payloads in one page of changes.
+pub const PAGE_BYTES: usize = 16 << 20;
 
 fn row_update(r: &sqlx::sqlite::SqliteRow) -> Update {
     Update {
@@ -111,15 +113,23 @@ pub async fn changes_since(
     .bind(limit + 1)
     .fetch_all(db)
     .await?;
-    let has_more = rows.len() as i64 > limit;
+    let mut has_more = rows.len() as i64 > limit;
     let mut last = since;
     let mut updates = Vec::with_capacity(rows.len());
+    let mut bytes = 0usize;
     for r in rows.iter().take(limit as usize) {
         let u = row_update(r);
+        // Pages are bounded in bytes too, so one page never holds thousands
+        // of large updates; the rest follows on the next page.
+        if !updates.is_empty() && bytes + u.payload.len() > PAGE_BYTES {
+            has_more = true;
+            break;
+        }
         last = u.seq;
         if covered.get(&u.object_id).is_some_and(|c| u.seq <= *c) {
             continue;
         }
+        bytes += u.payload.len();
         updates.push(u);
     }
     let next_since = if has_more { last } else { head };

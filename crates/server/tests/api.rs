@@ -1808,3 +1808,38 @@ async fn agents_stop_when_their_owner_is_disabled() {
         401
     );
 }
+
+#[tokio::test]
+async fn large_catch_ups_are_split_into_pages() {
+    let srv = start().await;
+    let mut alice = new_user(&srv.base, "alice").await;
+    let v = alice.create_vault("Big").await;
+    // Nine updates of ~1.9 MB: more than one 16 MiB page.
+    for i in 0..9 {
+        let payload = vec![b'x'; 1_900_000];
+        let p = alice.encrypt_update(&v, &format!("n{i}"), &payload);
+        alice.push(&v, vec![p]).await.unwrap();
+    }
+    let mut since = 0;
+    let mut pages = 0;
+    let mut seen = 0;
+    loop {
+        let ch: ChangesResponse = alice
+            .api
+            .get(&format!(
+                "/vaults/{v}/changes?since={since}&snapshots={}",
+                pages == 0
+            ))
+            .await;
+        let bytes: usize = ch.updates.iter().map(|u| u.payload.len()).sum();
+        assert!(bytes <= 16 << 20 || ch.updates.len() == 1);
+        seen += ch.updates.len();
+        pages += 1;
+        since = ch.next_since;
+        if !ch.has_more {
+            break;
+        }
+    }
+    assert_eq!(seen, 9);
+    assert!(pages >= 2);
+}

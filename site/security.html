@@ -78,7 +78,7 @@
       </div>
       <div class="stack">
         <h2>Adding a device</h2>
-        <p>A new browser or computer shows a short code. A device you already use shows the same code; approve only if they match. Lost every device? Your recovery key unlocks the account and enrolls a new one.</p>
+        <p>A new browser or computer shows a short code. A device you already use shows the same code; approve only if they match. The code covers both the new device's key and your account key, so a tampering server can neither slip in its own device nor hand the new one fake keys. Lost every device? Your recovery key unlocks the account and enrolls a new one.</p>
       </div>
     </div>
   </section>
@@ -105,7 +105,7 @@
           <li><strong>The first key you see is trusted.</strong> A malicious server could hand out a wrong key the first time you share with someone. Comparing fingerprints catches this. A signed membership log that removes this trust is planned.</li>
           <li><strong>Metadata is visible.</strong> The server knows who shares with whom, sizes and timing, as listed above.</li>
           <li><strong>Plain text on disk is your choice.</strong> The Markdown folder is ordinary files; protect your computer with full-disk encryption.</li>
-          <li><strong>Browsers are browsers.</strong> In the web app your device key lives in the browser profile, as safe as that profile.</li>
+          <li><strong>Browsers are browsers.</strong> In the web app your device key and an encrypted copy of your vaults live in the browser profile, as safe as that profile. "Forget this browser" removes both.</li>
         </ul>
         <p>The full threat model, with what each attacker can and can't do, is in <a href="https://github.com/coolapso/coolpsonotes/blob/dev/docs/security.md">docs/security.md</a>.</p>
       </div>

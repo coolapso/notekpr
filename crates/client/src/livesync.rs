@@ -154,7 +154,7 @@ async fn connect(hub: &Hub) -> Result<Ws> {
     let url = api.ws_url();
     let token = match api.token().await {
         Ok(t) => t,
-        Err(e) if e.is_network() => return Err(anyhow!(e)),
+        Err(e) if e.is_offline() => return Err(anyhow!(e)),
         Err(e) => return Err(Fatal(format!("{e}")).into()),
     };
     let connector = if url.starts_with("wss://") {

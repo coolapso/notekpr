@@ -332,7 +332,7 @@ impl Session {
                     v.save()?;
                     out.blobs += 1;
                 }
-                Err(e) if e.is_network() => {
+                Err(e) if e.is_offline() => {
                     out.offline = true;
                     out.remaining = vault.lock().await.replica.pending.len();
                     return Ok(out);
@@ -372,7 +372,7 @@ impl Session {
                     v.ack(&resp.results, false);
                     v.save()?;
                 }
-                Err(e) if e.is_network() => {
+                Err(e) if e.is_offline() => {
                     out.offline = true;
                     break;
                 }
@@ -455,7 +455,7 @@ impl Session {
         // the object up to it has been applied (protocol §6).
         match self.catch_up(vault).await {
             Ok(_) => {}
-            Err(e) if e.is_network() => return Ok(false),
+            Err(e) if e.is_offline() => return Ok(false),
             Err(e) => return Err(anyhow!(e).context("catching up before a snapshot")),
         }
         let req = {
@@ -481,7 +481,7 @@ impl Session {
                 v.save()?;
                 Ok(true)
             }
-            Err(e) if e.is_network() => Ok(false),
+            Err(e) if e.is_offline() => Ok(false),
             Err(e) => Err(anyhow!(e).context("uploading a snapshot")),
         }
     }

@@ -327,3 +327,56 @@ async fn live_uploads_resume_after_a_reconnect_with_a_read_only_vault() {
         Some("live edit\n")
     );
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_server_error_from_a_proxy_counts_as_offline() {
+    use coolpsonotes_client::profile::ProfileStore;
+    let srv = start().await;
+    let alice = login(&srv, "alice").await;
+    manage::create_vault(&alice, "Notes").await.unwrap();
+    let h = hub(&alice).await;
+    ops::put_document(&h, "Notes", "A.md", "a\n", None)
+        .await
+        .unwrap();
+    drop(h);
+    // The reverse proxy answers 502 while the server restarts.
+    let down = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let d = down.clone();
+    let url = proxy(
+        &srv.url,
+        std::sync::Arc::new(move |_, _| {
+            d.load(std::sync::atomic::Ordering::SeqCst)
+                .then_some(Fault::Reply(502))
+        }),
+    )
+    .await;
+    let store = ProfileStore::new(&srv.dirs("alice"), "alice").unwrap();
+    store.update(|p| p.server = url.clone()).unwrap();
+    let offline = hub(&reopen(&srv, "alice", "alice").await).await;
+    assert!(!offline.is_online());
+    assert_eq!(
+        note(&offline, "Notes", "A.md").await.as_deref(),
+        Some("a\n")
+    );
+    let out = ops::put_document(&offline, "Notes", "A.md", "a\nb\n", None)
+        .await
+        .unwrap();
+    assert!(out.pending_changes > 0, "kept for later, not an error");
+    let vid = offline.vault_ids()[0].clone();
+    let o = offline.push(&vid).await.unwrap();
+    assert!(o.offline && o.remaining > 0);
+    drop(offline);
+    // Back up: the queued edit is uploaded.
+    down.store(false, std::sync::atomic::Ordering::SeqCst);
+    let back = hub(&reopen(&srv, "alice", "alice").await).await;
+    assert!(back.is_online());
+    assert!(
+        back.get(&vid)
+            .unwrap()
+            .lock()
+            .await
+            .replica
+            .pending
+            .is_empty()
+    );
+}

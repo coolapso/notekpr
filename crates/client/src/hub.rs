@@ -125,15 +125,19 @@ impl Hub {
                 self.open_listed(&list).await?;
             }
             Err(e)
-                if (e.is_network() || e.is_unauthorized() || matches!(e, ApiError::Auth(_)))
+                if (e.is_offline() || e.is_unauthorized() || matches!(e, ApiError::Auth(_)))
                     && opts.offline_ok =>
             {
-                if !e.is_network() {
+                if e.is_network() {
+                    ui::warn("the server is unreachable; working offline with the local copies");
+                } else if e.is_offline() {
+                    ui::warn(&format!(
+                        "the server is not available right now ({e}); working offline with the local copies"
+                    ));
+                } else {
                     ui::warn(&format!(
                         "{e}; showing local copies only (run `coolpsonotes login`)"
                     ));
-                } else {
-                    ui::warn("the server is unreachable; working offline with the local copies");
                 }
                 for id in self.session.local_vault_ids() {
                     match self.session.load_local(&id) {

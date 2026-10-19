@@ -283,6 +283,10 @@ matches what the client last saw.
 
 ## 5. Offline behaviour
 
+"Offline" includes a server that answers with a server error (HTTP 5xx, e.g.
+a reverse proxy's `502` while the server restarts): changes stay queued and
+reads use the local copies.
+
 Everything works offline against the encrypted replica: `ls`, `cat`, `search`,
 `backlinks`, `write`, `mv`, `rm`, imports and mirror edits. Changes are queued
 as CRDT updates with a random `client_update_id` and persisted before the

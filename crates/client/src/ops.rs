@@ -427,7 +427,7 @@ pub async fn history(hub: &Hub, vref: &str, path: &str) -> OpResult<Vec<Revision
         .get(&format!("/vaults/{vid}/objects/{oid}/snapshots"))
         .await
         .map_err(|e| {
-            if e.is_network() {
+            if e.is_offline() {
                 OpError::Unavailable(e.to_string())
             } else {
                 OpError::Internal(e.into())
@@ -467,7 +467,7 @@ pub async fn revision(hub: &Hub, vref: &str, path: &str, snapshot_id: &str) -> O
         .await
         .map_err(|e| match e.status() {
             Some(404) => OpError::NotFound("no such revision".into()),
-            _ if e.is_network() => OpError::Unavailable(e.to_string()),
+            _ if e.is_offline() => OpError::Unavailable(e.to_string()),
             _ => OpError::Internal(e.into()),
         })?;
     if snap.object_id != oid {
@@ -551,7 +551,7 @@ pub async fn empty_trash(hub: &Hub, vref: &str) -> OpResult<usize> {
         match res {
             Ok(()) => {}
             Err(err) if err.is_not_found() => {}
-            Err(err) if err.is_network() => return Err(OpError::Unavailable(err.to_string())),
+            Err(err) if err.is_offline() => return Err(OpError::Unavailable(err.to_string())),
             Err(err) => {
                 return Err(OpError::Internal(
                     anyhow::anyhow!(err).context("deleting from the server"),

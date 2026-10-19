@@ -827,7 +827,7 @@ impl Decode for Update {
         // read blocks
         let clients_len: u32 = decoder.read_var()?;
         let mut clients = HashMap::with_hasher(BuildHasherDefault::default());
-        clients.try_reserve(clients_len as usize)?;
+        clients.try_reserve(crate::encoding::read::prealloc(clients_len as usize))?;
 
         let mut blocks = BlockSet { clients };
         for _ in 0..clients_len {
@@ -847,7 +847,7 @@ impl Decode for Update {
                 .or_insert_with(|| VecDeque::new());
             // Attempt to pre-allocate memory for the blocks. If the capacity overflows and
             // allocation fails, return an error.
-            blocks.try_reserve(blocks_len)?;
+            blocks.try_reserve(crate::encoding::read::prealloc(blocks_len))?;
 
             for _ in 0..blocks_len {
                 let id = ID::new(client, clock);

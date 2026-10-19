@@ -683,6 +683,14 @@ mod tests {
         ];
         let _ = NoteDoc::new().apply_update(crash);
         let _ = IndexDoc::new().apply_update(crash);
+        // A map value declaring a huge entry count made yrs reserve ~2 GB.
+        let bomb: &[u8] = &[
+            1, 247, 95, 44, 90, 72, 25, 9, 165, 255, 44, 118, 255, 255, 255, 255, 5, 255, 255, 255,
+            147, 25, 9, 165, 254, 255,
+        ];
+        let t = std::time::Instant::now();
+        let _ = NoteDoc::new().apply_update(bomb);
+        assert!(t.elapsed() < std::time::Duration::from_millis(50));
         // Unwrapped a failed lookup when filling a gap (patched in vendor/yrs).
         let crash: &[u8] = &[
             3, 3, 3, 4, 0, 0, 0, 0, 0, 0, 0, 44, 187, 187, 187, 187, 187, 187, 187, 187, 187, 3, 3,

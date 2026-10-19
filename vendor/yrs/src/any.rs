@@ -65,7 +65,7 @@ impl Any {
                 // `len` is attacker-controlled; a fallible reservation avoids an allocation bomb
                 // (see `Update::decode`'s `try_reserve`).
                 let mut map = HashMap::new();
-                map.try_reserve(len)?;
+                map.try_reserve(crate::encoding::read::prealloc(len))?;
                 for _ in 0..len {
                     let key = decoder.read_string()?;
                     map.insert(key.to_owned(), Any::decode(decoder)?);
@@ -78,7 +78,7 @@ impl Any {
                 // `len` is attacker-controlled; a fallible reservation avoids an allocation bomb
                 // (see `Update::decode`'s `try_reserve`).
                 let mut arr = Vec::new();
-                arr.try_reserve(len)?;
+                arr.try_reserve(crate::encoding::read::prealloc(len))?;
                 for _ in 0..len {
                     arr.push(Any::decode(decoder)?);
                 }

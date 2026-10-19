@@ -171,3 +171,17 @@ pub trait Read: Sized {
         Ok(u64::from_be_bytes(buf))
     }
 }
+
+/// coolpsonotes patch: the most elements reserved up front for a count read
+/// from an update. Counts are attacker-controlled, and a fallible
+/// reservation still allocates (and, for hash maps, initialises) whatever can
+/// be had — a few bytes declaring a billion entries cost gigabytes. Larger
+/// collections grow as their elements are actually read (each takes input
+/// bytes), so this changes nothing for real data.
+pub(crate) const PREALLOC_LIMIT: usize = 1024;
+
+/// `n` capped at [`PREALLOC_LIMIT`] (see there).
+#[inline]
+pub(crate) fn prealloc(n: usize) -> usize {
+    n.min(PREALLOC_LIMIT)
+}

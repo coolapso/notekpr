@@ -122,7 +122,7 @@ impl Decode for StateVector {
         // allocation bomb into a recoverable decode error instead of an abort. Mirrors the
         // `try_reserve` pattern already used for blocks in `Update::decode`.
         let mut sv = HashMap::with_hasher(BuildHasherDefault::default());
-        sv.try_reserve(len)?;
+        sv.try_reserve(crate::encoding::read::prealloc(len))?;
         let mut i = 0;
         while i < len {
             let client: u64 = decoder.read_var()?;

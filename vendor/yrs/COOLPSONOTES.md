@@ -20,6 +20,11 @@ Wired in through `[patch.crates-io]` in the workspace `Cargo.toml` (and
   breaks the store's invariants later (and panicked while committing or
   encoding): a client listed twice, empty skip/GC blocks, clocks or delete
   ranges past `u32::MAX`.
+* Decoders (`update.rs`, `any.rs`, `block.rs`, `state_vector.rs`): reserve at
+  most `encoding::read::PREALLOC_LIMIT` elements up front for counts read
+  from input (a fallible reservation still allocated and initialised
+  gigabytes for a few bytes declaring a huge count); collections grow as
+  elements are read.
 
 Drop this directory once upstream releases equivalent fixes (and report them
 upstream).

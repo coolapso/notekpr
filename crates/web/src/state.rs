@@ -1689,6 +1689,7 @@ fn on_server_message(m: ServerMessage) {
                     .unwrap_or_else(|| "Untitled".into());
                 Some((title, r.note_text(&object_id)))
             });
+            let had_pending = rescue.is_some();
             if let Some((title, text)) = rescue {
                 let v = vault_id.clone();
                 leptos::task::spawn_local(async move {
@@ -1706,6 +1707,12 @@ fn on_server_message(m: ServerMessage) {
             });
             if let Some(a) = a {
                 after_apply(&vault_id, a);
+            }
+            if had_pending {
+                // A push with updates of the purged note is refused as a whole:
+                // send the other updates again, without the dropped ones.
+                persist_pending(&vault_id);
+                resend_pending(&vault_id);
             }
         }
         ServerMessage::Snapshot { vault_id, snapshot } => {
@@ -1790,8 +1797,11 @@ fn on_server_message(m: ServerMessage) {
             } else if code == "conflict" {
                 // e.g. a note was permanently deleted elsewhere while we edited it.
                 error(message);
-                if let Some(v) = vault_id {
-                    drop_rejected(&v);
+                // The whole push was refused: send the rest of it again.
+                if let Some(v) = vault_id
+                    && drop_rejected(&v)
+                {
+                    resend_pending(&v);
                 }
             } else {
                 util::warn(&format!("server error {code}: {message}"));
@@ -1818,17 +1828,21 @@ fn key_epochs(vault: &str) -> Vec<(String, Option<u32>)> {
     })
 }
 
-/// Pending updates for purged objects can never succeed; keep the text safe
-/// in a new note instead of silently dropping it.
-fn drop_rejected(vault_id: &str) {
-    with(|c| {
-        if let Some(r) = c.replicas.get_mut(vault_id) {
-            let purged = r.purged.clone();
-            r.pending.retain(|p| !purged.contains(&p.object_id));
-        }
+/// Pending updates for purged objects can never succeed (the text is kept
+/// in a new note by the `Purged` handler). Returns whether any were dropped.
+fn drop_rejected(vault_id: &str) -> bool {
+    let dropped = with(|c| {
+        let Some(r) = c.replicas.get_mut(vault_id) else {
+            return false;
+        };
+        let before = r.pending.len();
+        let purged = r.purged.clone();
+        r.pending.retain(|p| !purged.contains(&p.object_id));
+        r.pending.len() != before
     });
     persist_pending(vault_id);
     update_pending_count();
+    dropped
 }
 
 fn on_synced(vault_id: &str, head: i64) {

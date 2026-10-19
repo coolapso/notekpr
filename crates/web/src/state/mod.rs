@@ -378,6 +378,10 @@ pub struct Core {
     pub outboxes: BTreeMap<String, coolpsonotes_sync::Outbox>,
     /// New notes' keys being registered, by (vault, note).
     pub registering: HashSet<(String, String)>,
+    /// Verified membership logs, by vault (`state::members`).
+    pub member_logs: BTreeMap<String, coolpsonotes_sync::members::MemberLog>,
+    /// Vault owners' account keys, checked against our pins this session.
+    pub owner_keys: HashMap<String, coolpsonotes_core::keys::AccountPublic>,
     pub prefs: Prefs,
     pub prefs_version: i64,
     pub editor: Option<(String, String, Rc<Editor>)>,
@@ -440,6 +444,7 @@ impl Core {
     }
 }
 
+mod members;
 mod nav;
 mod offline;
 mod prefs;
@@ -449,6 +454,7 @@ mod shares;
 mod sync;
 mod vaults;
 
+pub use members::{log_entry, member_log, pin_member_key, reload_log, vouched};
 pub use nav::*;
 pub use offline::{
     disable as disable_offline, enable as enable_offline, enabled as offline_enabled,

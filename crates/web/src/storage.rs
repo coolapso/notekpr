@@ -261,6 +261,7 @@ pub fn forget_user(user_id: &str) {
     let prefixes = [
         format!("cpn.pending.{user_id}."),
         format!("cpn.newkeys.{user_id}."),
+        format!("cpn.logseen.{user_id}."),
         format!("cpn.head.{user_id}."),
     ];
     let n = s.length().unwrap_or(0);
@@ -329,6 +330,27 @@ pub fn head_seen(user_id: &str, vault_id: &str) -> i64 {
 
 pub fn set_head_seen(user_id: &str, vault_id: &str, head: i64) {
     set(local(), &head_key(user_id, vault_id), &head.to_string());
+}
+
+fn log_seen_key(user_id: &str, vault_id: &str) -> String {
+    format!("cpn.logseen.{user_id}.{vault_id}")
+}
+
+/// The last membership log entry verified in this browser: `(seq, hash)`.
+pub fn log_seen(user_id: &str, vault_id: &str) -> Option<(u64, Vec<u8>)> {
+    let s = get(local(), &log_seen_key(user_id, vault_id))?;
+    let (seq, hash) = s.split_once(':')?;
+    Some((
+        seq.parse().ok()?,
+        coolpsonotes_core::b64::decode(hash).ok()?,
+    ))
+}
+
+pub fn set_log_seen(user_id: &str, vault_id: &str, seen: Option<(u64, Vec<u8>)>) {
+    if let Some((seq, hash)) = seen {
+        let v = format!("{seq}:{}", coolpsonotes_core::b64::encode(&hash));
+        set(local(), &log_seen_key(user_id, vault_id), &v);
+    }
 }
 
 /// Per-browser UI preferences (not secret, not synced).

@@ -177,6 +177,11 @@ pub async fn delete(path: &str) -> Result<()> {
     call::<(), ()>("DELETE", path, None).await
 }
 
+/// `DELETE` with a JSON body (e.g. a membership log entry).
+pub async fn delete_with<B: Serialize>(path: &str, body: &B) -> Result<()> {
+    call::<B, ()>("DELETE", path, Some(body)).await
+}
+
 pub async fn post_empty<T: DeserializeOwned>(path: &str) -> Result<T> {
     call::<(), T>("POST", path, None).await
 }

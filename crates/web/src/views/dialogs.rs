@@ -413,6 +413,7 @@ fn Share(vault: String) -> impl IntoView {
                     let reload = reload3.clone();
                     let reload_b = reload3.clone();
                     let fp = actions::fingerprint(&m.user);
+                    let vouched = state::vouched(&vr, &m);
                     view! {
                         <div class="person">
                             {avatar(&m.user.display_name, &m.user.id)}
@@ -420,6 +421,7 @@ fn Share(vault: String) -> impl IntoView {
                                 <div>{m.user.display_name.clone()}{is_me.then_some(" (you)")}{(m.user.kind == PrincipalKind::Agent).then(|| view! { <span class="tag-agent">"agent"</span> })}</div>
                                 <div class="muted small">{m.user.email.clone().unwrap_or_default()}{(!m.has_current_key).then_some(" · waiting for keys")}</div>
                                 {fp.map(|f| view! { <div class="fp">{f}</div> })}
+                                {(!vouched).then(|| view! { <div class="alert error small unvouched">"Not added by the vault's owner: the server lists this person, but the owner's signed member list doesn't. They don't get the vault key; tell your administrator."</div> })}
                             </div>
                             {if m.role == Role::Owner {
                                 view! { <span class="muted small">"Owner"</span> }.into_any()
@@ -446,7 +448,7 @@ fn Share(vault: String) -> impl IntoView {
                     }
                 }).collect_view()}
             </div>
-            <p class="muted small"><Icon name="shield"/>" Sharing sends the vault key encrypted to each person's own key. The server can't read it. Removing someone rotates the key."</p>
+            <p class="muted small"><Icon name="shield"/>" Sharing sends the vault key encrypted to each person's own key. The server can't read it, and every change to who has access is signed by the vault's owner. Removing someone rotates the key."</p>
             {let _ = ui;}
         </Dialog>
     }

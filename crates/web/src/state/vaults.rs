@@ -110,6 +110,18 @@ pub(super) async fn load_vault_with(info: VaultInfo, force: bool, keys: Option<V
         });
         match ring {
             Some(Ok(ring)) => {
+                // The owner's signed membership log, and our keys against it.
+                match super::members::load_log(&id, &info.owner_id, &ring).await {
+                    Ok(Some(log)) => {
+                        with(|c| c.member_logs.insert(id.clone(), log));
+                    }
+                    Ok(None) => {}
+                    Err(msg) => {
+                        with(|c| c.vault_errors.insert(id.clone(), msg.clone()));
+                        error(msg);
+                        return;
+                    }
+                }
                 let meta = VaultMeta::decrypt(&ring, &info.encrypted_meta)
                     .unwrap_or_else(|_| VaultMeta::named("(unreadable)"));
                 let docs = engine::object_keyrings(&ring, &keys);
@@ -189,6 +201,11 @@ pub(super) async fn load_vault_with(info: VaultInfo, force: bool, keys: Option<V
                 });
                 if let Some(adopted) = adopted {
                     persist_new_keys(&id, &adopted);
+                }
+                // Owners start the log of a vault from before it.
+                let unsigned = with(|c| c.member_logs.get(&id).is_none_or(|l| !l.has_log()));
+                if unsigned && info.role == Role::Owner && !with(|c| c.offline_start) {
+                    leptos::task::spawn_local(super::members::start_log(id.clone()));
                 }
                 if is_new {
                     subscribe(&id);

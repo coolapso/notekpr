@@ -7,6 +7,7 @@ use std::rc::Rc;
 
 use coolpsonotes_core::doc::{EntryKind, NoteDoc};
 use coolpsonotes_core::engine::{self, ObjectMeta, PinStatus, VaultMeta, VaultReplica};
+use coolpsonotes_core::memberlog::LogBody;
 use coolpsonotes_core::protocol::*;
 use coolpsonotes_core::textdiff::Edit;
 use coolpsonotes_core::{markdown, paths};
@@ -33,7 +34,7 @@ pub async fn create_vault(name: String) -> Option<String> {
     let made = with(|c| {
         c.account
             .as_ref()
-            .map(|a| engine::new_vault(a, &c.user_id, &VaultMeta::named(&name)))
+            .map(|a| engine::new_vault(a, &c.user_id, &VaultMeta::named(&name), now()))
     });
     let (req, ring) = match made {
         Some(Ok(x)) => x,
@@ -51,6 +52,21 @@ pub async fn create_vault(name: String) -> Option<String> {
         }
     };
     let id = info.id.clone();
+    let log = with(|c| {
+        let a = c.account.as_ref()?.public();
+        coolpsonotes_sync::members::MemberLog::verify(
+            &id,
+            &a,
+            req.log_entry.clone().into_iter().collect(),
+            None,
+        )
+        .ok()
+    });
+    if let Some(log) = log {
+        let uid = with(|c| c.user_id.clone());
+        crate::storage::set_log_seen(&uid, &id, log.head());
+        with(|c| c.member_logs.insert(id.clone(), log));
+    }
     let note_keys = state::ui()
         .server
         .get_untracked()
@@ -133,7 +149,18 @@ pub async fn delete_vault(vault: &str) {
 
 pub async fn leave_vault(vault: &str) {
     let uid = with(|c| c.user_id.clone());
-    match api::delete(&format!("/vaults/{vault}/members/{uid}")).await {
+    let log_entry = state::log_entry(
+        vault,
+        LogBody::Leave {
+            user_id: uid.clone(),
+        },
+    );
+    match api::delete_with(
+        &format!("/vaults/{vault}/members/{uid}"),
+        &RemoveMemberRequest { log_entry },
+    )
+    .await
+    {
         Ok(()) => {
             with(|c| {
                 c.replicas.remove(vault);
@@ -208,16 +235,24 @@ pub async fn share(vault: &str, user: &PublicUser, role: Role) -> Result<(), Str
         None
     };
     let pending = envelope.is_none();
+    // The owner vouches for them, with their key pinned, in the vault's log.
+    let key = match &user.account_key {
+        Some(k) => Some(k.verify().map_err(|e| e.to_string())?),
+        None => None,
+    };
+    let member = coolpsonotes_sync::members::log_member(&user.id, role, key.as_ref());
     api::post::<_, MemberInfo>(
         &format!("/vaults/{vault}/members"),
         &AddMemberRequest {
             user_id: user.id.clone(),
             role,
             key_envelope: envelope,
+            log_entry: state::log_entry(vault, LogBody::Add { member }),
         },
     )
     .await
     .map_err(|e| e.message)?;
+    state::reload_log(vault).await;
     with(|c| c.users.insert(user.id.clone(), user.clone()));
     if pending {
         info(format!(
@@ -231,20 +266,39 @@ pub async fn share(vault: &str, user: &PublicUser, role: Role) -> Result<(), Str
 }
 
 pub async fn set_role(vault: &str, user_id: &str, role: Role) {
+    let log_entry = state::log_entry(
+        vault,
+        LogBody::Role {
+            user_id: user_id.to_string(),
+            role,
+        },
+    );
     if let Err(e) = api::patch::<_, ()>(
         &format!("/vaults/{vault}/members/{user_id}"),
-        &UpdateMemberRequest { role },
+        &UpdateMemberRequest { role, log_entry },
     )
     .await
     {
         error(e.message);
     }
+    state::reload_log(vault).await;
 }
 
 /// Remove a member and rotate the vault key so they cannot read anything
 /// written afterwards.
 pub async fn remove_member(vault: &str, user_id: &str) {
-    if let Err(e) = api::delete(&format!("/vaults/{vault}/members/{user_id}")).await {
+    let log_entry = state::log_entry(
+        vault,
+        LogBody::Remove {
+            user_id: user_id.to_string(),
+        },
+    );
+    if let Err(e) = api::delete_with(
+        &format!("/vaults/{vault}/members/{user_id}"),
+        &RemoveMemberRequest { log_entry },
+    )
+    .await
+    {
         error(e.message);
         return;
     }
@@ -257,6 +311,7 @@ pub async fn rotate_keys(vault: &str) -> bool {
     for attempt in 0..2 {
         // The rotation must cover exactly the notes the server has keys for.
         state::reload_vault_keys(vault.to_string()).await;
+        state::reload_log(vault).await;
         let members: Vec<MemberInfo> = match api::get(&format!("/vaults/{vault}/members")).await {
             Ok(m) => m,
             Err(e) => {
@@ -264,6 +319,17 @@ pub async fn rotate_keys(vault: &str) -> bool {
                 return false;
             }
         };
+        // The new key goes only to members the owner vouched for.
+        if let Some(m) = members
+            .iter()
+            .find(|m| m.user.account_key.is_some() && !state::vouched(vault, m))
+        {
+            error(format!(
+                "Security warning: the server lists {} as a member with a key you never added. The vault key was not renewed; tell your administrator.",
+                m.user.display_name
+            ));
+            return false;
+        }
         for m in &members {
             if m.user.account_key.is_some()
                 && let Err(e) = check_trust(&m.user)
@@ -334,6 +400,13 @@ pub async fn rotate_keys(vault: &str) -> bool {
                     .map(|(req, rings)| (ring, req, rings)),
             )
         });
+        let prepared = prepared.map(|p| {
+            p.map(|(ring, mut req, rings)| {
+                req.log_entry = coolpsonotes_sync::members::rotation(vault, &ring)
+                    .and_then(|body| state::log_entry(vault, body));
+                (ring, req, rings)
+            })
+        });
         let (ring, req, rings) = match prepared {
             Some(Ok(x)) => x,
             Some(Err(e)) => {
@@ -361,6 +434,7 @@ pub async fn rotate_keys(vault: &str) -> bool {
                     }
                 });
                 state::persist_new_keys(vault, &[]);
+                state::reload_log(vault).await;
                 return true;
             }
             // Membership or notes changed meanwhile: retry once with fresh keys.
@@ -383,6 +457,26 @@ pub async fn grant_missing_keys(vault: &str) {
     let trusted: Vec<MemberInfo> = members
         .into_iter()
         .filter(|m| m.user.account_key.is_none() || check_trust(&m.user).is_ok())
+        .collect();
+    // Added before they had keys: pin their keys in the log first.
+    let to_pin: Vec<MemberInfo> = state::member_log(vault)
+        .to_pin(&trusted)
+        .into_iter()
+        .filter(|m| !m.has_current_key)
+        .cloned()
+        .collect();
+    for m in &to_pin {
+        let Some(Ok(key)) = m.user.account_key.as_ref().map(|k| k.verify()) else {
+            continue;
+        };
+        if let Err(e) = state::pin_member_key(vault, &m.user.id, m.role, &key).await {
+            util::warn(&format!("could not pin a member's key: {e}"));
+        }
+    }
+    // Only members the owner's log vouches for get the vault key.
+    let trusted: Vec<MemberInfo> = trusted
+        .into_iter()
+        .filter(|m| state::vouched(vault, m))
         .collect();
     let env = with(|c| {
         c.replicas
@@ -446,7 +540,10 @@ pub async fn share_note(
         Err(e) if e.status == 409 && e.message.contains("already shared") => {
             api::patch::<_, ()>(
                 &format!("/vaults/{vault}/objects/{note}/shares/{}", user.id),
-                &UpdateMemberRequest { role },
+                &UpdateMemberRequest {
+                    role,
+                    log_entry: None,
+                },
             )
             .await
             .map_err(|e| e.message)?;
@@ -568,7 +665,10 @@ pub async fn set_note_share_role(
 ) -> Result<(), String> {
     api::patch::<_, ()>(
         &format!("/vaults/{vault}/objects/{note}/shares/{user_id}"),
-        &UpdateMemberRequest { role },
+        &UpdateMemberRequest {
+            role,
+            log_entry: None,
+        },
     )
     .await
     .map_err(|e| e.message)

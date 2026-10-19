@@ -292,7 +292,12 @@ synced. Markdown files must be UTF-8.
 
 A `notify` watcher triggers a pass ~300 ms after file activity settles; a full
 scan runs at startup (catching edits made while the client was not running)
-and every 30 s as a safety net. Each file's size, mtime and content hash are
+and every 30 s as a safety net. If the directory cannot be watched (the
+inotify watch limit, `fs.inotify.max_user_watches`, or a file system without
+change events) the client warns and scans every 5 s instead; it re-attaches
+the watch when that becomes possible (e.g. after a remount). One file that
+cannot be read or written (a name the file system rejects, missing
+permissions) is reported once and skipped; it never stops the other files. Each file's size, mtime and content hash are
 recorded when written or read, so the client recognises its own writes and
 never re-uploads unchanged files; files touched within the timestamp
 granularity are compared by content. Remote changes are written ~150 ms after

@@ -4,7 +4,9 @@
 use anyhow::{Context, Result, anyhow, bail};
 use coolpsonotes_core::engine::{self, PinStatus, VaultMeta, VaultReplica};
 use coolpsonotes_core::keys::RecoveryKey;
+use coolpsonotes_core::memberlog::LogBody;
 use coolpsonotes_core::protocol::*;
+use coolpsonotes_sync::members;
 
 use crate::hub::Hub;
 use crate::session::{Session, SharedVault, VerifiedUser};
@@ -21,7 +23,12 @@ pub async fn create_vault(session: &Session, name: &str) -> Result<Vault> {
         bail!("agents cannot create vaults; the owner shares vaults with them");
     }
     let meta = VaultMeta::named(name);
-    let (req, ring) = engine::new_vault(session.account(), &session.user_id, &meta)?;
+    let (req, ring) = engine::new_vault(
+        session.account(),
+        &session.user_id,
+        &meta,
+        coolpsonotes_core::now_ms(),
+    )?;
     let info: VaultInfo = session.api.post("/vaults", &req).await?;
     let replica = VaultReplica::new(&info.id, info.role, ring, meta);
     let mut v = Vault::new(
@@ -103,9 +110,20 @@ pub async fn leave_vault(session: &Session, vault: &SharedVault) -> Result<()> {
     if role == Role::Owner {
         bail!("the owner cannot leave a vault; delete it instead");
     }
+    let log_entry = session
+        .log_entry(
+            vault,
+            LogBody::Leave {
+                user_id: session.user_id.clone(),
+            },
+        )
+        .await;
     match session
         .api
-        .delete(&format!("/vaults/{id}/members/{}", session.user_id))
+        .delete_with(
+            &format!("/vaults/{id}/members/{}", session.user_id),
+            &RemoveMemberRequest { log_entry },
+        )
         .await
     {
         Ok(()) => {}
@@ -119,24 +137,34 @@ pub struct MemberView {
     pub member: MemberInfo,
     pub key: Option<VerifiedUser>,
     pub key_error: Option<String>,
+    /// Listed in the owner-signed membership log with this role and key
+    /// (always true for vaults without a log).
+    pub vouched: bool,
+    /// The vault has a membership log.
+    pub signed: bool,
 }
 
 pub async fn members(session: &Session, vault: &SharedVault) -> Result<Vec<MemberView>> {
-    let id = vault.lock().await.id().to_string();
+    let (id, log) = {
+        let v = vault.lock().await;
+        (v.id().to_string(), v.log.clone())
+    };
     let members = session.api.members(&id).await?;
     Ok(members
         .into_iter()
-        .map(|m| match session.verify_user(&m.user) {
-            Ok(key) => MemberView {
+        .map(|m| {
+            let vouched = log.vouches_for(&m);
+            let (key, key_error) = match session.verify_user(&m.user) {
+                Ok(key) => (key, None),
+                Err(e) => (None, Some(format!("{e:#}"))),
+            };
+            MemberView {
                 member: m,
                 key,
-                key_error: None,
-            },
-            Err(e) => MemberView {
-                member: m,
-                key: None,
-                key_error: Some(format!("{e:#}")),
-            },
+                key_error,
+                vouched,
+                signed: log.has_log(),
+            }
         })
         .collect())
 }
@@ -240,10 +268,17 @@ pub async fn share(
         None => None,
     };
     let key_shared = envelope.is_some();
+    let public = match &user.account_key {
+        Some(k) if verified.is_some() => Some(k.verify()?),
+        _ => None,
+    };
+    // The owner vouches for them, with their key pinned, in the vault's log.
+    let member = members::log_member(&user.id, role, public.as_ref());
     let req = AddMemberRequest {
         user_id: user.id.clone(),
         role,
         key_envelope: envelope.clone(),
+        log_entry: session.log_entry(vault, LogBody::Add { member }).await,
     };
     let mut updated_role = false;
     match session
@@ -252,15 +287,39 @@ pub async fn share(
         .await
     {
         Ok(_) => {}
-        Err(e) if e.status() == Some(409) => {
+        Err(e) if e.status() == Some(409) && e.to_string().contains("already a member") => {
             // Already a member: update the role and make sure they have the key.
+            let log_entry = session
+                .log_entry(
+                    vault,
+                    LogBody::Role {
+                        user_id: user.id.clone(),
+                        role,
+                    },
+                )
+                .await;
             session
                 .api
                 .patch::<_, ()>(
                     &format!("/vaults/{id}/members/{}", user.id),
-                    &UpdateMemberRequest { role },
+                    &UpdateMemberRequest { role, log_entry },
                 )
                 .await?;
+            session.reload_member_log(vault).await?;
+            // A new key they have now (accepted above) is pinned in the log.
+            if let Some(k) = &public {
+                let pinned = {
+                    let v = vault.lock().await;
+                    v.log.state.as_ref().is_none_or(|s| {
+                        s.member(&user.id)
+                            .and_then(|m| m.public().ok().flatten())
+                            .is_some_and(|p| p == *k)
+                    })
+                };
+                if !pinned {
+                    session.pin_member_key(vault, &user.id, role, k).await?;
+                }
+            }
             updated_role = true;
             if let Some(env) = envelope {
                 let _ = session
@@ -276,6 +335,7 @@ pub async fn share(
         }
         Err(e) => return Err(e.into()),
     }
+    session.reload_member_log(vault).await?;
     Ok(ShareOutcome {
         user,
         fingerprint: verified.as_ref().map(|v| v.fingerprint.clone()),
@@ -312,9 +372,20 @@ pub async fn unshare(
     if user.id == session.user_id {
         bail!("the owner cannot be removed");
     }
+    let log_entry = session
+        .log_entry(
+            vault,
+            LogBody::Remove {
+                user_id: user.id.clone(),
+            },
+        )
+        .await;
     session
         .api
-        .delete(&format!("/vaults/{id}/members/{}", user.id))
+        .delete_with(
+            &format!("/vaults/{id}/members/{}", user.id),
+            &RemoveMemberRequest { log_entry },
+        )
         .await?;
     let name = vault.lock().await.name().to_string();
     let epoch = session.rotate_keys(vault).await.with_context(|| {

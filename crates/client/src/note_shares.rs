@@ -74,7 +74,10 @@ pub async fn share_note(
                 .api
                 .patch::<_, ()>(
                     &format!("/vaults/{id}/objects/{note_id}/shares/{}", user.id),
-                    &UpdateMemberRequest { role },
+                    &UpdateMemberRequest {
+                        role,
+                        log_entry: None,
+                    },
                 )
                 .await?;
             updated_role = true;

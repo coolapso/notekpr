@@ -65,6 +65,10 @@ pub struct StoredState {
     /// The server keeps a key per note.
     #[serde(default)]
     pub note_keys: bool,
+    /// The last membership log entry verified here: `(seq, hash)` (base64).
+    /// The log the server hands out must still contain it.
+    #[serde(default)]
+    pub log_seen: Option<(u64, String)>,
     /// Received content waiting for a key (already encrypted).
     #[serde(default)]
     pub deferred: Vec<coolpsonotes_core::engine::Deferred>,

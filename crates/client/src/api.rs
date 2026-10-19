@@ -278,6 +278,11 @@ impl Api {
         self.request(Method::DELETE, path, None::<&()>).await
     }
 
+    /// `DELETE` with a JSON body (e.g. a membership log entry).
+    pub async fn delete_with<B: Serialize>(&self, path: &str, body: &B) -> ApiResult<()> {
+        self.request(Method::DELETE, path, Some(body)).await
+    }
+
     pub async fn get_bytes(&self, path: &str) -> ApiResult<Vec<u8>> {
         let resp = self.send(Method::GET, path, Body::None).await?;
         Ok(resp.bytes().await.map_err(net)?.to_vec())

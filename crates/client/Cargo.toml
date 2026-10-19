@@ -50,5 +50,7 @@ similar = { version = "3", default-features = false }
 
 [dev-dependencies]
 coolpsonotes-server = { path = "../server" }
+# Tests play a compromised server by changing its database directly.
+sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "sqlite"] }
 tempfile = "3"
 proptest = { version = "1", default-features = false, features = ["std"] }

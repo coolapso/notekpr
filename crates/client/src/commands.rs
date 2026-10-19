@@ -1026,6 +1026,7 @@ async fn vault(ctx: &Ctx, c: VaultCmd) -> Result<()> {
                             "role": m.member.role, "has_key": m.member.has_current_key,
                             "fingerprint": m.key.as_ref().map(|k| k.fingerprint.clone()),
                             "pin": m.key.as_ref().map(|k| manage::pin_label(k.pin)),
+                            "vouched_by_owner": m.signed.then_some(m.vouched),
                         })
                     })
                     .collect();
@@ -1038,7 +1039,9 @@ async fn vault(ctx: &Ctx, c: VaultCmd) -> Result<()> {
                     (None, Some(e)) => format!("KEY INVALID: {e}"),
                     (None, None) => "no keys yet".into(),
                 };
-                let key = if m.member.has_current_key {
+                let key = if !m.vouched {
+                    "  [NOT ADDED BY THE OWNER — the server lists them, the signed membership log doesn't]"
+                } else if m.member.has_current_key {
                     ""
                 } else {
                     "  [waiting for vault key]"

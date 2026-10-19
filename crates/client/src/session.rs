@@ -8,9 +8,11 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
 use coolpsonotes_core::engine::{self, Applied, PinStatus, VaultMeta, VaultReplica};
-use coolpsonotes_core::keys::{AccountSecret, VaultKeyring};
+use coolpsonotes_core::keys::{AccountPublic, AccountSecret, VaultKeyring};
+use coolpsonotes_core::memberlog::{KeyCheckError, LogBody, LogEntry};
 use coolpsonotes_core::protocol::*;
 use coolpsonotes_sync::SnapshotAction;
+use coolpsonotes_sync::members::{self, MemberLog};
 use tokio::sync::{Mutex, OnceCell};
 
 use crate::api::{Api, ApiError, Credentials};
@@ -246,12 +248,177 @@ impl Session {
         v.owner_id = info.owner_id.clone();
         v.archived = info.archived;
         v.read_only = None;
+        self.load_member_log(v).await?;
         match VaultMeta::decrypt(&v.replica.keyring, &info.encrypted_meta) {
             Ok(m) => v.set_meta(m),
             Err(e) => tracing::warn!(vault = %info.id, "cannot decrypt vault metadata: {e}"),
         }
         v.mark_state_dirty();
         v.save()
+    }
+
+    // ------------------------------------------------------------ membership log
+
+    /// The key a vault's membership log must be signed with: ours, or the
+    /// owner's as pinned on this device (trust on first use).
+    async fn owner_key(&self, owner_id: &str) -> Result<AccountPublic> {
+        if owner_id == self.user_id {
+            return Ok(self.account.public());
+        }
+        let owner = self.api.user(owner_id).await?;
+        let vu = self
+            .verify_user(&owner)?
+            .ok_or_else(|| anyhow!("the vault's owner has no account key"))?;
+        if vu.pin == PinStatus::Changed {
+            bail!(
+                "SECURITY: the account key of {}, who owns this vault, changed since it was pinned (now {}). \
+                 Their membership changes can't be trusted until you verify the new key with them",
+                owner.display_name,
+                vu.fingerprint
+            );
+        }
+        Ok(owner
+            .account_key
+            .as_ref()
+            .expect("verified above")
+            .verify()?)
+    }
+
+    /// Fetch and verify a vault's membership log, and check the vault keys
+    /// we hold against the owner's commitments. Owners start the log of a
+    /// vault that has none (a checkpoint of the current members).
+    pub async fn load_member_log(&self, v: &mut Vault) -> Result<()> {
+        let id = v.id().to_string();
+        let anchor = self.owner_key(&v.owner_id).await?;
+        for attempt in 0..2 {
+            let entries = self
+                .api
+                .get::<MemberLogResponse>(&format!("/vaults/{id}/log"))
+                .await?
+                .entries;
+            let seen = v.log_seen.clone();
+            let log = MemberLog::verify(
+                &id,
+                &anchor,
+                entries,
+                seen.as_ref().map(|(s, h)| (*s, h.as_slice())),
+            )
+            .map_err(|e| {
+                anyhow!(
+                    "SECURITY: the membership history of vault '{}' does not check out ({e}). The server may \
+                     have been tampered with; nothing was changed. Tell the vault's owner and your administrator",
+                    v.name()
+                )
+            })?;
+            match log.check_keyring(&v.replica.keyring) {
+                Ok(()) => {
+                    v.log_seen = log.head();
+                    v.log = log;
+                    v.mark_state_dirty();
+                    break;
+                }
+                // A rotation between our reads of the keys and the log.
+                Err(KeyCheckError::Unannounced(_)) if attempt == 0 => continue,
+                Err(e) => bail!(
+                    "SECURITY: {e} (vault '{}'). The server may be trying to read new notes; this vault is \
+                     not used until that is resolved. Tell the vault's owner and your administrator",
+                    v.name()
+                ),
+            }
+        }
+        if !v.log.has_log()
+            && v.role() == Role::Owner
+            && v.read_only.is_none()
+            && let Err(e) = self.start_member_log(v).await
+        {
+            tracing::warn!(vault = %id, "could not start the membership log: {e:#}");
+        }
+        Ok(())
+    }
+
+    /// Owner: sign a checkpoint of the members as they are now (their keys
+    /// checked against our pins) to start the vault's membership log.
+    async fn start_member_log(&self, v: &mut Vault) -> Result<()> {
+        let id = v.id().to_string();
+        let members = self.api.members(&id).await?;
+        let users: Vec<PublicUser> = members.iter().map(|m| m.user.clone()).collect();
+        self.refuse_changed_keys(&users, "vault")?;
+        let list: Vec<(String, Role, Option<AccountPublic>)> = members
+            .iter()
+            .map(|m| {
+                (
+                    m.user.id.clone(),
+                    m.role,
+                    m.user.account_key.as_ref().and_then(|k| k.verify().ok()),
+                )
+            })
+            .collect();
+        let body = members::checkpoint(&id, &v.replica.keyring, &list)
+            .ok_or_else(|| anyhow!("no vault key"))?;
+        let entry = v
+            .log
+            .next(
+                &self.account,
+                &self.user_id,
+                &id,
+                body,
+                coolpsonotes_core::now_ms(),
+            )
+            .ok_or_else(|| anyhow!("the vault has a membership log already"))?;
+        self.api
+            .post::<_, ()>(
+                &format!("/vaults/{id}/log"),
+                &AppendLogRequest {
+                    entry: entry.clone(),
+                },
+            )
+            .await?;
+        v.log = MemberLog::verify(&id, &self.account.public(), vec![entry], None)?;
+        v.log_seen = v.log.head();
+        v.mark_state_dirty();
+        Ok(())
+    }
+
+    /// [`Session::load_member_log`] for an open vault (after a change).
+    pub async fn reload_member_log(&self, vault: &SharedVault) -> Result<()> {
+        let mut v = vault.lock().await;
+        self.load_member_log(&mut v).await?;
+        v.save()
+    }
+
+    /// Owner: pin a member's (new) account key in the vault's log, after the
+    /// caller checked it against our pin.
+    pub async fn pin_member_key(
+        &self,
+        vault: &SharedVault,
+        user_id: &str,
+        role: Role,
+        key: &AccountPublic,
+    ) -> Result<()> {
+        let body = LogBody::Rekey {
+            member: members::log_member(user_id, role, Some(key)),
+        };
+        let Some(entry) = self.log_entry(vault, body).await else {
+            return Ok(());
+        };
+        let id = vault.lock().await.id().to_string();
+        self.api
+            .post::<_, ()>(&format!("/vaults/{id}/log"), &AppendLogRequest { entry })
+            .await?;
+        self.reload_member_log(vault).await
+    }
+
+    /// Sign `body` as the vault's next membership log entry (`None`: the
+    /// vault has no log yet, older servers).
+    pub async fn log_entry(&self, vault: &SharedVault, body: LogBody) -> Option<LogEntry> {
+        let v = vault.lock().await;
+        v.log.next(
+            &self.account,
+            &self.user_id,
+            v.id(),
+            body,
+            coolpsonotes_core::now_ms(),
+        )
     }
 
     pub async fn refresh_keys(&self, vault: &SharedVault) -> Result<()> {
@@ -686,7 +853,26 @@ impl Session {
                             m.user.display_name, vu.fingerprint
                         ));
                     }
-                    ok.push(m.clone());
+                    // Added before they had keys: pin them in the log first.
+                    let pending = !vault
+                        .lock()
+                        .await
+                        .log
+                        .to_pin(std::slice::from_ref(m))
+                        .is_empty();
+                    if pending {
+                        let key = m.user.account_key.as_ref().expect("filtered").verify()?;
+                        self.pin_member_key(vault, &m.user.id, m.role, &key).await?;
+                    }
+                    if vault.lock().await.log.vouches_for(m) {
+                        ok.push(m.clone());
+                    } else {
+                        ui::warn(&format!(
+                            "NOT sharing keys with {}: the vault's membership log doesn't list them with this \
+                             key and role. The server may be adding people you didn't; tell your administrator",
+                            m.user.display_name
+                        ));
+                    }
                 }
                 Ok(None) => {}
                 Err(e) => ui::warn(&format!("skipping {}: {e:#}", m.user.display_name)),
@@ -740,9 +926,27 @@ impl Session {
         for attempt in 0..2 {
             // The rotation must cover exactly the notes the server has keys for.
             self.refresh_keys(vault).await?;
+            self.reload_member_log(vault).await?;
             let members = self.api.members(&id).await?;
             let users: Vec<PublicUser> = members.iter().map(|m| m.user.clone()).collect();
             self.refuse_changed_keys(&users, "vault")?;
+            // The new key goes only to members the owner vouched for.
+            {
+                let v = vault.lock().await;
+                if let Some(m) = v
+                    .log
+                    .unvouched(&members)
+                    .into_iter()
+                    .find(|m| m.user.account_key.is_some())
+                {
+                    bail!(
+                        "SECURITY: the server lists {} as a member of '{}' with a key you never added. Not \
+                         renewing the vault key for them; tell your administrator",
+                        m.user.display_name,
+                        v.name()
+                    );
+                }
+            }
             let (keyed, shared) = {
                 let v = vault.lock().await;
                 let keyed: Vec<String> = v
@@ -791,8 +995,17 @@ impl Session {
                     })
                     .collect();
                 let mut ring = v.replica.keyring.clone();
-                let (req, rings) =
+                let (mut req, rings) =
                     engine::rotate_with_notes(&mut ring, &members, &v.replica.meta, &notes)?;
+                req.log_entry = members::rotation(&id, &ring).and_then(|body| {
+                    v.log.next(
+                        &self.account,
+                        &self.user_id,
+                        &id,
+                        body,
+                        coolpsonotes_core::now_ms(),
+                    )
+                });
                 (req, ring, rings)
             };
             match self
@@ -805,6 +1018,9 @@ impl Session {
                     v.set_keyring(ring);
                     for (oid, next) in rings {
                         v.set_note_keyring(&oid, next);
+                    }
+                    if let Err(e) = self.load_member_log(&mut v).await {
+                        ui::warn(&format!("{e:#}"));
                     }
                     // New notes' keys not registered yet were wrapped under
                     // the old vault key.

@@ -17,6 +17,7 @@ use coolpsonotes_core::protocol::{
 };
 use coolpsonotes_core::textdiff::{self, Edit};
 use coolpsonotes_core::{markdown, now_ms, paths, random_id, search};
+use coolpsonotes_sync::members::MemberLog;
 use coolpsonotes_sync::{Limits, Outbox, Plan, Reaction};
 
 use crate::store::{StoredState, VaultStore};
@@ -77,6 +78,11 @@ pub struct Vault {
     /// large for the server — are kept (and applied locally), not uploaded,
     /// so they never block the rest of the queue; stored as `quarantine`.
     pub outbox: Outbox,
+    /// The vault's verified membership log (loaded from the server per
+    /// session; `coolpsonotes_sync::members`).
+    pub log: MemberLog,
+    /// The last log entry verified here, `(seq, hash)`: kept across sessions.
+    pub log_seen: Option<(u64, Vec<u8>)>,
     /// The server's limits as far as known (sizes edits and pushes).
     limits: Limits,
     store: VaultStore,
@@ -114,6 +120,8 @@ impl Vault {
             pending_blobs: BTreeSet::new(),
             last_sync: None,
             outbox: Outbox::default(),
+            log: MemberLog::default(),
+            log_seen: None,
             limits: Limits::default(),
             store,
             dirty_objects: BTreeSet::new(),
@@ -269,6 +277,10 @@ impl Vault {
             pending_blobs: s.pending_blobs,
             last_sync: s.last_sync,
             outbox,
+            log: MemberLog::default(),
+            log_seen: s
+                .log_seen
+                .and_then(|(seq, h)| Some((seq, b64::decode(&h).ok()?))),
             limits: Limits::default(),
             store,
             dirty_objects: BTreeSet::new(),
@@ -373,6 +385,10 @@ impl Vault {
             shared: Some(self.replica.shared.clone()),
             new_keys: self.outbox.new_keys.clone(),
             note_keys: self.outbox.note_keys,
+            log_seen: self
+                .log_seen
+                .as_ref()
+                .map(|(seq, h)| (*seq, b64::encode(h))),
             deferred: self.replica.deferred.clone(),
             seq: self.replica.seq,
             max_head_seen: self.replica.max_head_seen,
@@ -1195,7 +1211,8 @@ mod tests {
     fn vault(dir: &std::path::Path) -> Vault {
         let account = AccountSecret::generate();
         let (req, ring) =
-            coolpsonotes_core::engine::new_vault(&account, "u1", &VaultMeta::named("T")).unwrap();
+            coolpsonotes_core::engine::new_vault(&account, "u1", &VaultMeta::named("T"), 1)
+                .unwrap();
         let key = std::sync::Arc::new(crate::secrets::LocalKey::load_or_create(dir).unwrap());
         let store = VaultStore::new(dir.join("vaults"), key, &req.id).unwrap();
         Vault::new(

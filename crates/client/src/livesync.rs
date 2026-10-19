@@ -707,7 +707,7 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let account = AccountSecret::generate();
         let meta = VaultMeta::named("T");
-        let (req, ring) = coolpsonotes_core::engine::new_vault(&account, "u1", &meta).unwrap();
+        let (req, ring) = coolpsonotes_core::engine::new_vault(&account, "u1", &meta, 1).unwrap();
         let key = Arc::new(crate::secrets::LocalKey::load_or_create(d.path()).unwrap());
         let store = crate::store::VaultStore::new(d.path().join("vaults"), key, &req.id).unwrap();
         let mut replica = VaultReplica::new(&req.id, Role::Owner, ring, meta);

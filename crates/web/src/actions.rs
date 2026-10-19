@@ -1376,17 +1376,37 @@ impl Host for NoteHost {
             error("Files can't be added to a note shared with you.");
             return;
         }
-        let v = self.vault.clone();
+        let (v, n) = (self.vault.clone(), self.note.clone());
         leptos::task::spawn_local(async move {
             let embeds = upload_files(&v, files, "attachments").await;
-            if embeds.is_empty() {
-                return;
-            }
-            let ed = with(|c| c.editor.as_ref().map(|(_, _, e)| e.clone()));
-            if let Some(ed) = ed {
-                ed.insert_text(&embeds.join("\n"));
-            }
+            insert_embeds(&v, &n, &embeds);
         });
+    }
+}
+
+/// Insert links to uploaded files into the note they were added to — only
+/// if that note is still the one open (uploads take a while).
+pub fn insert_embeds(vault: &str, note: &str, embeds: &[String]) {
+    if embeds.is_empty() {
+        return;
+    }
+    let ed = with(|c| {
+        c.editor
+            .as_ref()
+            .filter(|(v, n, _)| v == vault && n == note)
+            .map(|(_, _, e)| e.clone())
+    });
+    match ed {
+        Some(ed) => ed.insert_text(&embeds.join("\n")),
+        None => info(format!(
+            "Uploaded {} to “attachments”. The note was closed meanwhile; add {} to link it.",
+            if embeds.len() == 1 {
+                "the file".to_string()
+            } else {
+                format!("{} files", embeds.len())
+            },
+            embeds.join(" ")
+        )),
     }
 }
 

@@ -562,6 +562,21 @@ def test_editor_safety(env):
         b.go(env.url.rstrip("/") + path)
         b.wait("return document.querySelector('.ed') && document.querySelector('.ed').textContent.includes('after')", 20, "edit after the refused paste")
         check(True, "later edits still sync")
+        # A file still uploading when you switch notes is not linked into the other note.
+        new_note(b, "Other", "other body")
+        b.click_el(b.find_text(".tree-item", "Links", 10))
+        b.wait("return document.querySelector('.ed') && document.querySelector('.ed').textContent.includes('after')", 10, "back in Links")
+        b.js("""
+            const f = window.fetch;
+            window.fetch = (r, o) => String(r.url || r).includes('/attachments/')
+                ? new Promise(res => setTimeout(res, 2000)).then(() => f(r, o)) : f(r, o);
+            const dt = new DataTransfer();
+            dt.items.add(new File(['slow'], 'late.txt', {type: 'text/plain'}));
+            document.querySelector('.ed').dispatchEvent(new ClipboardEvent('paste', {clipboardData: dt, bubbles: true, cancelable: true}));
+        """)
+        b.click_el(b.find_text(".tree-item", "Other", 10))
+        b.find_text(".toast", "The note was closed meanwhile", 15)
+        check("late.txt" not in editor_text(b) and "other body" in editor_text(b), "a finished upload is not linked into the note opened meanwhile")
         check(not severe_logs(b), "no browser errors")
     finally:
         b.close()

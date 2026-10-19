@@ -83,10 +83,12 @@ fn Toolbar(vault: Option<String>) -> impl IntoView {
                 <button class="tb" title="Attach a file or image" on:mousedown=move |ev| {
                     ev.prevent_default();
                     let v = vault.clone();
+                    // The note the file is for: the one open now, not when the upload ends.
+                    let Some(n) = with(|c| c.editor.as_ref().filter(|(ev, _, _)| *ev == v).map(|(_, n, _)| n.clone())) else { return };
                     actions::pick_files(false, "", move |files| {
                         leptos::task::spawn_local(async move {
                             let embeds = actions::upload_files(&v, files, "attachments").await;
-                            if let Some(ed) = editor() && !embeds.is_empty() { ed.insert_text(&embeds.join("\n")); }
+                            actions::insert_embeds(&v, &n, &embeds);
                         });
                     });
                 }><Icon name="paperclip"/></button>

@@ -57,6 +57,8 @@ pub enum Route {
     Device(Option<String>),
     /// A note shared with us individually (we are not a member of its vault).
     Shared(String, String),
+    /// All quick notes (see `crate::quick`).
+    Quick,
 }
 
 impl Route {
@@ -70,6 +72,7 @@ impl Route {
             Route::Device(Some(c)) => format!("/device?code={}", api::q(c)),
             Route::Device(None) => "/device".into(),
             Route::Shared(v, n) => format!("/s/{v}/{n}"),
+            Route::Quick => "/quick".into(),
         }
     }
 
@@ -84,6 +87,7 @@ impl Route {
             ["v", v, "trash"] => Route::Trash(v.to_string()),
             ["v", v, n] => Route::Note(v.to_string(), n.to_string()),
             ["s", v, n] => Route::Shared(v.to_string(), n.to_string()),
+            ["quick"] => Route::Quick,
             ["settings"] => Route::Settings("account".into()),
             ["settings", t] => Route::Settings(t.to_string()),
             ["device"] => {
@@ -210,6 +214,7 @@ pub enum Modal {
     NewFolder { vault: String, parent: String },
     Move { vault: String, id: String },
     Import(String),
+    Promote { vault: String, id: String },
 }
 
 #[derive(Clone, Copy)]
@@ -339,6 +344,9 @@ pub struct Prefs {
     /// Trust-on-first-use pins: user id → account key fingerprint.
     #[serde(default)]
     pub pins: BTreeMap<String, String>,
+    /// The vault quick notes go to (`None`: the default, see `crate::quick`).
+    #[serde(default)]
+    pub quick_vault: Option<String>,
 }
 
 pub struct PresenceEntry {

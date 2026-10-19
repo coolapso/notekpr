@@ -298,10 +298,17 @@ pub struct UiPrefs {
     pub right_panel: bool,
     #[serde(default)]
     pub wide: bool,
+    /// The "Quick notes" section of the sidebar.
+    #[serde(default = "yes")]
+    pub quick_notes: bool,
 }
 
 fn default_mode() -> String {
     "live".into()
+}
+
+fn yes() -> bool {
+    true
 }
 
 impl Default for UiPrefs {
@@ -312,6 +319,7 @@ impl Default for UiPrefs {
             vim: false,
             right_panel: true,
             wide: false,
+            quick_notes: true,
         }
     }
 }

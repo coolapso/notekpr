@@ -4,6 +4,19 @@ use super::*;
 
 // ------------------------------------------------------------------ prefs
 
+thread_local! {
+    /// The quick-notes vault was changed here and not saved yet: on a merge
+    /// with another device's preferences, this choice wins.
+    static QUICK_VAULT_CHANGED: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Choose the vault quick notes go to (`None`: the default).
+pub fn set_quick_vault(vault: Option<String>) {
+    with(|c| c.prefs.quick_vault = vault);
+    QUICK_VAULT_CHANGED.with(|f| f.set(true));
+    save_prefs();
+}
+
 pub(super) async fn load_prefs() {
     let Ok(blob) = api::get::<PrefsBlob>("/me/prefs").await else {
         return;
@@ -43,6 +56,7 @@ pub fn save_prefs() {
                 match api::put::<_, PrefsBlob>("/me/prefs", &req).await {
                     Ok(b) => {
                         with(|c| c.prefs_version = b.version);
+                        QUICK_VAULT_CHANGED.with(|f| f.set(false));
                         return;
                     }
                     Err(e) if e.status == 409 => {
@@ -66,6 +80,9 @@ pub fn save_prefs() {
                             }
                             recent.truncate(30);
                             c.prefs.recent = recent;
+                            if QUICK_VAULT_CHANGED.with(|f| f.get()) {
+                                c.prefs.quick_vault = mine.quick_vault;
+                            }
                         });
                     }
                     Err(_) => return,

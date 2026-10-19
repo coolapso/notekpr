@@ -63,7 +63,7 @@ impl Api {
         }
     }
 
-    fn req(&self, m: reqwest::Method, path: &str) -> reqwest::RequestBuilder {
+    pub fn req(&self, m: reqwest::Method, path: &str) -> reqwest::RequestBuilder {
         let r = self.http.request(m, format!("{}{}", self.base, path));
         match &self.token {
             Some(t) => r.bearer_auth(t),

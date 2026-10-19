@@ -11,7 +11,10 @@ Authenticated calls send `Authorization: Bearer <token>`. Errors return
 `unauthorized`, `forbidden`, `not_found`, `conflict`, `stale_key` (412: content
 was encrypted with an outdated key — the vault's or an individually shared
 note's; reload keys and re-encrypt), `too_large`, `rate_limited` (429),
-`unavailable`, `internal`. Vaults the caller is not a member of
+`device_revoked` (404 from `GET /devices/{id}/envelope` and
+`PUT /me/session/device`: the device was removed from the account or never
+belonged to it — the only 404 after which a client may forget a device's
+keys), `unavailable`, `internal`. Vaults the caller is not a member of
 always return `404` so their existence cannot be probed.
 
 ## 1. Data model the server sees

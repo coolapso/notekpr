@@ -261,10 +261,14 @@ pub async fn login(dirs: &Dirs, profile: &str, opts: LoginOptions) -> Result<Log
                         recovered: false,
                     });
                 }
-                // The server answers 404 for a device that is unknown or was
-                // revoked. A 404 can also come from a misconfigured proxy, so
-                // the device list must confirm it before anything changes.
-                Err(e) if e.is_not_found() && device_was_removed(&api, &dev).await? => {
+                // The server says `device_revoked` for a device that is unknown
+                // or was revoked (older servers: a plain 404). A 404 can also
+                // come from a misconfigured proxy, so a plain one must be
+                // confirmed by the device list before anything changes.
+                Err(e)
+                    if e.is_device_revoked()
+                        || (e.is_not_found() && device_was_removed(&api, &dev).await?) =>
+                {
                     ui::warn(&format!(
                         "this device ({dev}) was removed from your account (with `devices revoke` or in the web \
                          app). It must be approved again before it can decrypt anything new"

@@ -697,6 +697,16 @@ async fn device_enrollment_and_recovery() {
     );
     assert_eq!(api2.status::<()>(Method::GET, "/me", None).await, 401);
     assert_eq!(api3.status::<()>(Method::GET, "/me", None).await, 200);
+    // ...and says so explicitly, so clients can tell it from any other 404
+    // before they forget the device's keys.
+    let r = api3
+        .req(Method::GET, &format!("/devices/{dev2_id}/envelope"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status().as_u16(), 404);
+    let body: ApiError = r.json().await.unwrap();
+    assert_eq!(body.error, "device_revoked");
 
     // Rotating the recovery key requires an account signature.
     let new_rk = coolpsonotes_core::keys::RecoveryKey::generate();

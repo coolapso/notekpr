@@ -186,7 +186,9 @@ pub async fn after_login() {
                 show_pending(&uid, rec);
                 return;
             }
-            Err(e) if e.status == 404 => storage::clear_device(&uid),
+            // Only the server's explicit answer: a 404 from a misrouted proxy
+            // must never delete the device key.
+            Err(e) if e.status == 404 && e.code == "device_revoked" => storage::clear_device(&uid),
             Err(e) => {
                 ui.phase
                     .set(Phase::Fatal(format!("Cannot check this device: {e}")));
@@ -328,7 +330,7 @@ pub(super) fn poll_approval(uid: String, rec: DeviceRecord) {
                     }
                     return;
                 }
-                Err(e) if e.status == 404 => {
+                Err(e) if e.status == 404 && e.code == "device_revoked" => {
                     storage::clear_device(&uid);
                     ui.phase.set(Phase::Enroll {
                         pending: None,

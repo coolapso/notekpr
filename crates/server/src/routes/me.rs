@@ -330,7 +330,7 @@ pub async fn bind_session_device(
             .fetch_optional(&state.db)
             .await?;
     if owner.as_deref() != Some(who.user_id.as_str()) {
-        return Err(AppError::NotFound);
+        return Err(AppError::DeviceRevoked);
     }
     sqlx::query("UPDATE sessions SET device_id = ? WHERE id = ?")
         .bind(&req.device_id)

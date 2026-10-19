@@ -56,6 +56,12 @@ impl ApiError {
     pub fn is_not_found(&self) -> bool {
         self.status() == Some(404)
     }
+
+    /// The server says this device was removed from the account (not just
+    /// any 404, which a misrouted proxy can produce too).
+    pub fn is_device_revoked(&self) -> bool {
+        matches!(self, ApiError::Status { status: 404, code, .. } if code == "device_revoked")
+    }
 }
 
 pub type ApiResult<T> = Result<T, ApiError>;

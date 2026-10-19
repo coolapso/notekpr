@@ -184,8 +184,10 @@ Before trusting the Markdown mirror and the CLI with real notes.
       updates that depend on it stay invisible to others until it is
       released — needs state-vector splitting or a snapshot upload (core, R1).
 - [ ] macOS NFD/NFC file-name normalization in the mirror (core helper).
-- [ ] Server: explicit "device revoked" error on `PUT /me/session/device`
-      (the CLI now confirms a 404 through the device list).
+- [x] Server: explicit "device revoked" error on `PUT /me/session/device`
+      (`device_revoked`, also on the envelope endpoint). The web client now
+      forgets its device key only on that code, not on any 404; the CLI still
+      confirms a plain 404 (older servers) through the device list.
 - [x] **Login deletes the only account secret on HTTP 403/404/409** [C-M8]
       (`client/src/account.rs:219-232`) — act only on an explicit "device
       revoked" code; move aside, never delete; ask.

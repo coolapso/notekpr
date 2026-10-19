@@ -114,14 +114,14 @@ pub async fn envelope(
             .bind(&who.user_id)
             .fetch_optional(&state.db)
             .await?
-            .ok_or(AppError::NotFound)?;
+            .ok_or(AppError::DeviceRevoked)?;
     let status: String = row.get("status");
     match status.as_str() {
         "active" => Ok(Json(DeviceEnvelope {
             account_envelope: row.get("account_envelope"),
         })),
         "pending" => Err(conflict("device is waiting for approval")),
-        _ => Err(AppError::NotFound),
+        _ => Err(AppError::DeviceRevoked),
     }
 }
 

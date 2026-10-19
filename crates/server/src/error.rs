@@ -22,6 +22,10 @@ pub enum AppError {
     StaleKey(String),
     #[error("request too large")]
     TooLarge,
+    /// The device was removed from the account (or never belonged to it).
+    /// Clients may then forget its keys; any other 404 must not make them.
+    #[error("this device was removed from the account")]
+    DeviceRevoked,
     #[error("too many requests")]
     RateLimited,
     #[error("{0}")]
@@ -48,6 +52,7 @@ impl AppError {
             AppError::Conflict(_) => "conflict",
             AppError::StaleKey(_) => "stale_key",
             AppError::TooLarge => "too_large",
+            AppError::DeviceRevoked => "device_revoked",
             AppError::RateLimited => "rate_limited",
             AppError::Unavailable(_) => "unavailable",
             AppError::Internal(_) => "internal",
@@ -63,6 +68,7 @@ impl AppError {
             AppError::Conflict(_) => StatusCode::CONFLICT,
             AppError::StaleKey(_) => StatusCode::PRECONDITION_FAILED,
             AppError::TooLarge => StatusCode::PAYLOAD_TOO_LARGE,
+            AppError::DeviceRevoked => StatusCode::NOT_FOUND,
             AppError::RateLimited => StatusCode::TOO_MANY_REQUESTS,
             AppError::Unavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
             AppError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,

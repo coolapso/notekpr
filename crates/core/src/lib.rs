@@ -11,6 +11,7 @@ pub mod keys;
 pub mod markdown;
 pub mod paths;
 pub mod protocol;
+pub mod recover;
 pub mod search;
 pub mod textdiff;
 

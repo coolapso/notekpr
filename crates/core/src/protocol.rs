@@ -891,6 +891,56 @@ pub enum ServerMessage {
     },
 }
 
+// ---------------------------------------------------------------- encrypted export
+
+/// Format version of [`EncryptedExport`].
+pub const EXPORT_FORMAT: u32 = 1;
+
+/// Everything one person needs to read their notes without the server or
+/// the apps: the ciphertexts and key envelopes of what they can access.
+/// Nothing in it is readable without their account key (the recovery key or
+/// one of their devices). Produced by `GET /me/export` and by
+/// `coolpsonotes-server export-user`; decrypted by `coolpsonotes recover`.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct EncryptedExport {
+    pub format: u32,
+    pub user_id: String,
+    pub created_at: i64,
+    /// The account secret encrypted under the recovery key.
+    #[serde(default, with = "b64::opt")]
+    pub recovery_envelope: Option<Vec<u8>>,
+    pub vaults: Vec<ExportedVault>,
+    /// Notes shared with this person individually.
+    #[serde(default)]
+    pub shared_notes: Vec<ExportedSharedNote>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct ExportedVault {
+    pub vault_id: String,
+    pub role: Role,
+    #[serde(with = "b64")]
+    pub encrypted_meta: Vec<u8>,
+    pub keys: VaultKeysResponse,
+    /// The whole log: latest snapshot of every object plus later updates.
+    pub changes: ChangesResponse,
+    pub attachments: Vec<ExportedAttachment>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct ExportedSharedNote {
+    pub vault_id: String,
+    pub keys: ObjectKeysResponse,
+    pub changes: ChangesResponse,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct ExportedAttachment {
+    pub id: String,
+    #[serde(with = "b64")]
+    pub data: Vec<u8>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

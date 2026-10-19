@@ -109,6 +109,14 @@ the files (see [desktop-client.md §4](desktop-client.md#4-sync-and-the-markdown
 **The gateway (local HTTP API)** — for programs and services that prefer HTTP
 and JSON, or need change events. Described next.
 
+**One process per profile.** `sync` and `gateway` own their profile's local
+data while they run, so they can't share one profile. While one of them runs,
+read commands (`ls`, `cat`, `search`) still work on the profile; changing
+commands (`write`, `mv`, `rm`, …) wait a few seconds and then refuse. An agent
+that edits through the mirror or the gateway should therefore not also call
+changing CLI commands on the same profile — use the files or the gateway's API
+for writes, or give the CLI its own agent profile.
+
 ## 4. The gateway (local HTTP API)
 
 ```sh

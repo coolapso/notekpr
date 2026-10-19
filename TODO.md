@@ -146,54 +146,63 @@ Before trusting the Markdown mirror and the CLI with real notes.
 
 ### Markdown mirror safety (`crates/client/src/mirror.rs`)
 
-- [ ] **A missing, moved or unmounted mirror root trashes every note**
-      [C-H3 ✔] — don't recreate a missing remembered root (refuse to start);
+- [x] **A missing, moved or unmounted mirror root trashes every note**
+      [C-H3] — don't recreate a missing remembered root (refuse to start);
       pause and ask when a vault directory or more than N files/N% disappear
       in one pass; never apply mass deletes in a final pass.
-- [ ] **Reverting a file is overwritten** with the newer text [C-H1] —
+- [x] **Reverting a file is overwritten** with the newer text [C-H1] —
       `choose_base` picks an older base at cost 0; track which bases were read
       from disk vs written by us.
-- [ ] A save during a remote write can be overwritten unseen [C-M3] — use the
+- [x] A save during a remote write can be overwritten unseen [C-M3] — use the
       pre-read stat, re-check right before the rename, keep and ingest the
       replaced file if it differs.
-- [ ] Edited locally while trashed remotely: the file is deleted [C-M4].
-- [ ] Leftover mirror files are imported into a different vault with the
+- [x] Edited locally while trashed remotely: the file is deleted [C-M4].
+- [x] Leftover mirror files are imported into a different vault with the
       same name [C-M5] — use a suffixed directory or ask.
-- [ ] One bad file aborts whole passes and the daemon start [C-M2] — handle
+- [x] One bad file aborts whole passes and the daemon start [C-M2] — handle
       errors per entry; shorter temp names.
-- [ ] Mirror task failure is silent [C-M13] — `sync` must notice and report.
-- [ ] Case-insensitive filesystems (macOS, Windows): duplicates, ping-pong
+- [x] Mirror task failure is silent [C-M13] — `sync` must notice and report.
+- [x] Case-insensitive filesystems (macOS, Windows): duplicates, ping-pong
       corruption, two vaults in one directory [C-H6].
-- [ ] Windows: vault paths can escape the mirror/export directory (`C:` in a
+- [x] Windows: vault paths can escape the mirror/export directory (`C:` in a
       segment) [C-H7] — reject drive prefixes, reserved names and characters;
       check every joined component.
-- [ ] Replacing a synced file with a symlink trashes the note [C-L7].
-- [ ] `plaintext_ok` is remembered per profile, not per directory; plain
+- [x] Replacing a synced file with a symlink trashes the note [C-L7].
+- [x] `plaintext_ok` is remembered per profile, not per directory; plain
       `sync` silently reuses the remembered mirror [C-L3].
-- [ ] Ingest calls `server_info()` over the network while holding the vault
+- [x] Ingest calls `server_info()` over the network while holding the vault
       lock [C-L12].
 
 ### CLI client data loss
 
-- [ ] **A one-shot command and the running daemon overwrite each other's
-      replica files** [C-H2, C-L9] — per-profile `flock`; one-shot commands
-      wait, refuse, or hand work to the daemon.
-- [ ] **Login deletes the only account secret on HTTP 403/404/409** [C-M8]
+- [x] **A one-shot command and the running daemon overwrite each other's
+      replica files** [C-H2, C-L9] — per-profile lock: `sync` and `gateway`
+      own the profile while running; changing commands wait 3 s then refuse;
+      read commands use a read-only view.
+- [ ] Hand changing commands to the running daemon instead of refusing.
+- [ ] A single CRDT update too large to split is only quarantined; later
+      updates that depend on it stay invisible to others until it is
+      released — needs state-vector splitting or a snapshot upload (core, R1).
+- [ ] macOS NFD/NFC file-name normalization in the mirror (core helper).
+- [ ] Server: explicit "device revoked" error on `PUT /me/session/device`
+      (the CLI now confirms a 404 through the device list).
+- [x] **Login deletes the only account secret on HTTP 403/404/409** [C-M8]
       (`client/src/account.rs:219-232`) — act only on an explicit "device
       revoked" code; move aside, never delete; ask.
-- [ ] `Vault::save` partial failure loses remote updates [C-M6] — remove from
+- [x] `Vault::save` partial failure loses remote updates [C-M6] — remove from
       the dirty set only after a successful save.
-- [ ] A missing `local.key` is silently regenerated, making every replica
+- [x] A missing `local.key` is silently regenerated, making every replica
       unreadable [C-L5].
-- [ ] First device uploads its account key before saving secrets locally
-      [C-L4]; same in the web client's `setup_keys` [W-L10].
-- [ ] `logout --forget` and `vault leave` drop unpushed changes and leave the
+- [x] First device uploads its account key before saving secrets locally
+      [C-L4].
+- [x] Same in the web client's `setup_keys` [W-L10] (device key stored before the upload).
+- [x] `logout --forget` and `vault leave` drop unpushed changes and leave the
       plaintext mirror [C-M11] — push first or warn; offer to remove the files.
-- [ ] Transient errors end live sync; the gateway then serves stale data
+- [x] Transient errors end live sync; the gateway then serves stale data
       [C-M1] — reconnect instead of exiting; surface a dead live task.
-- [ ] Live uploads stop after a reconnect if any vault is read-only [C-H4].
-- [ ] Offline fallback doesn't treat HTTP 5xx as offline [C-M10].
-- [ ] `import --skip-existing` compares paths case-sensitively; add
+- [x] Live uploads stop after a reconnect if any vault is read-only [C-H4].
+- [x] Offline fallback doesn't treat HTTP 5xx as offline [C-M10].
+- [x] `import --skip-existing` compares paths case-sensitively; add
       `--dry-run` [C-L1]. Export writes `0644`, leaves `.partial` and temp
       files [C-L2].
 
@@ -203,7 +212,9 @@ Before trusting the Markdown mirror and the CLI with real notes.
       by bytes (`max_update_bytes` from `/info`, cached offline), refuse or
       split oversized edits and imports, quarantine a rejected item and keep
       going, show the error.
-      (web done: size-bounded pushes, refused oversized edits, held-back updates, errors shown; CLI part pending)
+      (web: size-bounded pushes, refused oversized edits, held-back updates,
+      errors shown; CLI: edits split under the limit, rejected updates
+      quarantined in `quarantine.sealed` and shown in `status`.)
 - [x] A snapshot can claim to cover updates still waiting for a key
       [S-M2, W-L9] — fix once in core (`snapshot_request`,
       `compaction_candidates`): no snapshot while deferred items touch the
@@ -219,7 +230,7 @@ Before trusting the Markdown mirror and the CLI with real notes.
 - [x] `persist_pending` writes an empty list if one entry fails to encrypt
       [W-L9]; a key reload already in progress swallows the next request
       [W-L9].
-- [ ] `missing_epoch` misreads document-key epochs, so every page refetches
+- [x] `missing_epoch` misreads document-key epochs, so every page refetches
       keys [C-L10].
 - [x] An uploaded file's link can land in a different note [W-M11].
 - [x] Every DOM resync turns non-breaking spaces into spaces [W-M5].

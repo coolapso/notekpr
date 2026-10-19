@@ -9,3 +9,4 @@
 __pycache__/
 .task/
 .claude/*.lock
+.claude/worktrees/

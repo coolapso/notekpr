@@ -3,7 +3,7 @@
 
 use axum::Json;
 use axum::extract::{Path, Query, State};
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Redirect, Response};
 use coolpsonotes_core::protocol::{
     DEV_ISSUER, DevLoginRequest, ExchangeRequest, ServerInfo, SessionEntry, SessionResponse,
@@ -53,6 +53,31 @@ fn safe_return_to(r: Option<String>) -> String {
     }
 }
 
+/// Cookie that ties an OIDC login to the browser that started it, so a
+/// login link prepared by someone else can't sign this browser in as them.
+const LOGIN_COOKIE: &str = "cpn_login";
+
+fn login_cookie(state: &AppState, value: &str, max_age_secs: i64) -> HeaderValue {
+    let secure = if state.config.public_url().starts_with("https://") {
+        "; Secure"
+    } else {
+        ""
+    };
+    HeaderValue::from_str(&format!(
+        "{LOGIN_COOKIE}={value}; Path=/api/v1/auth/oidc; HttpOnly; SameSite=Lax; Max-Age={max_age_secs}{secure}"
+    ))
+    .expect("cookie is ASCII")
+}
+
+fn cookie_value<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
+    headers
+        .get_all(header::COOKIE)
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .flat_map(|v| v.split(';'))
+        .find_map(|kv| kv.trim().strip_prefix(name)?.strip_prefix('='))
+}
+
 pub async fn oidc_start(
     State(state): State<AppState>,
     Query(q): Query<StartQuery>,
@@ -64,15 +89,22 @@ pub async fn oidc_start(
         .bind(now)
         .execute(&state.db)
         .await?;
-    sqlx::query("INSERT INTO oidc_states (state, pkce_verifier, nonce, return_to, expires_at) VALUES (?, ?, ?, ?, ?)")
+    let (browser_secret, browser_hash) = db::new_secret("");
+    sqlx::query("INSERT INTO oidc_states (state, pkce_verifier, nonce, return_to, expires_at, browser_hash) VALUES (?, ?, ?, ?, ?, ?)")
         .bind(&start.state)
         .bind(&start.pkce_verifier)
         .bind(&start.nonce)
         .bind(safe_return_to(q.return_to))
         .bind(now + OIDC_STATE_TTL_MS)
+        .bind(&browser_hash)
         .execute(&state.db)
         .await?;
-    Ok(Redirect::to(&start.url).into_response())
+    let mut resp = Redirect::to(&start.url).into_response();
+    resp.headers_mut().append(
+        header::SET_COOKIE,
+        login_cookie(&state, &browser_secret, OIDC_STATE_TTL_MS / 1000),
+    );
+    Ok(resp)
 }
 
 #[derive(Deserialize)]
@@ -88,7 +120,21 @@ fn complete_redirect(fragment: &str) -> Response {
 
 pub async fn oidc_callback(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Query(q): Query<CallbackQuery>,
+) -> AppResult<Response> {
+    let browser = cookie_value(&headers, LOGIN_COOKIE).map(|v| db::sha256(v.as_bytes()));
+    let mut resp = oidc_callback_inner(&state, browser, q).await?;
+    // The cookie is single-use: always clear it.
+    resp.headers_mut()
+        .append(header::SET_COOKIE, login_cookie(&state, "", 0));
+    Ok(resp)
+}
+
+async fn oidc_callback_inner(
+    state: &AppState,
+    browser: Option<Vec<u8>>,
+    q: CallbackQuery,
 ) -> AppResult<Response> {
     let oidc = state.oidc.as_ref().ok_or(AppError::NotFound)?;
     if let Some(err) = q.error {
@@ -103,7 +149,7 @@ pub async fn oidc_callback(
         return Err(bad("missing code or state"));
     };
     // States are single-use.
-    let row = sqlx::query("DELETE FROM oidc_states WHERE state = ? RETURNING pkce_verifier, nonce, return_to, expires_at")
+    let row = sqlx::query("DELETE FROM oidc_states WHERE state = ? RETURNING pkce_verifier, nonce, return_to, expires_at, browser_hash")
         .bind(&st)
         .fetch_optional(&state.db)
         .await?
@@ -111,6 +157,19 @@ pub async fn oidc_callback(
     let expires: i64 = row.get("expires_at");
     if expires < db::now() {
         return Ok(complete_redirect("error=login_expired"));
+    }
+    // Only the browser that started this login may finish it.
+    let expected: Option<Vec<u8>> = row.get("browser_hash");
+    let same_browser = match (&expected, &browser) {
+        (Some(e), Some(b)) => {
+            use subtle::ConstantTimeEq;
+            bool::from(e.ct_eq(b))
+        }
+        _ => false,
+    };
+    if !same_browser {
+        tracing::warn!("OIDC callback from a browser that didn't start the login");
+        return Ok(complete_redirect("error=login_failed"));
     }
     let identity = match oidc
         .finish(code, row.get("pkce_verifier"), row.get("nonce"))
@@ -121,7 +180,7 @@ pub async fn oidc_callback(
         Err(e) => return Err(e),
     };
     let user_id = match auth::provision_user(
-        &state,
+        state,
         &identity.issuer,
         &identity.subject,
         &identity.display_name,

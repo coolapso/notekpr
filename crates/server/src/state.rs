@@ -26,10 +26,10 @@ pub struct Inner {
 }
 
 impl AppState {
-    pub fn new(db: Db, config: Config, metrics: Option<PrometheusHandle>) -> Self {
-        let oidc = Oidc::from_config(&config);
+    pub fn new(db: Db, config: Config, metrics: Option<PrometheusHandle>) -> anyhow::Result<Self> {
+        let oidc = Oidc::from_config(&config)?;
         let limiters = Limiters::new(&config);
-        AppState(Arc::new(Inner {
+        Ok(AppState(Arc::new(Inner {
             db,
             config,
             hub: Hub::new(),
@@ -37,7 +37,7 @@ impl AppState {
             oidc,
             limiters,
             metrics,
-        }))
+        })))
     }
 }
 

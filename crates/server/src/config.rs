@@ -52,6 +52,15 @@ pub enum LogFormat {
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
+pub enum TokenAuth {
+    Auto,
+    #[value(name = "client_secret_basic")]
+    ClientSecretBasic,
+    #[value(name = "client_secret_post")]
+    ClientSecretPost,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
 pub enum UserDirectory {
     /// Other users can be found by display-name prefix or exact e-mail.
     Search,
@@ -116,6 +125,32 @@ pub struct Config {
         global = true
     )]
     pub oidc_scopes: String,
+
+    /// How the client secret is sent to the token endpoint: `auto` uses what
+    /// the provider advertises (`client_secret_basic` when both are offered).
+    #[arg(
+        long,
+        env = "COOLPSONOTES_OIDC_TOKEN_AUTH",
+        value_enum,
+        default_value = "auto",
+        global = true
+    )]
+    pub oidc_token_auth: TokenAuth,
+
+    /// Extra CA certificates (PEM bundle) to trust for the identity provider,
+    /// e.g. a private homelab CA. The system's trust store is always used.
+    #[arg(long, env = "COOLPSONOTES_OIDC_CA_FILE", global = true)]
+    pub oidc_ca_file: Option<PathBuf>,
+
+    /// Accept e-mail addresses the provider doesn't mark as verified
+    /// (`email_verified`). They are used for finding people to share with.
+    #[arg(
+        long,
+        env = "COOLPSONOTES_OIDC_ALLOW_UNVERIFIED_EMAIL",
+        default_value_t = false,
+        global = true
+    )]
+    pub oidc_allow_unverified_email: bool,
 
     /// Name shown on the login button.
     #[arg(
@@ -298,6 +333,27 @@ impl Config {
     }
 
     /// Configuration for tests.
+    /// Treat empty values (e.g. `FOO=` in a compose or Kubernetes file) as
+    /// not set, rather than as an empty secret or token.
+    pub fn normalize(&mut self) {
+        for v in [
+            &mut self.oidc_issuer,
+            &mut self.oidc_client_id,
+            &mut self.oidc_client_secret,
+            &mut self.metrics_token,
+        ] {
+            if v.as_deref().is_some_and(|s| s.trim().is_empty()) {
+                *v = None;
+            }
+        }
+        for p in [&mut self.web_dir, &mut self.oidc_ca_file] {
+            if p.as_ref().is_some_and(|p| p.as_os_str().is_empty()) {
+                *p = None;
+            }
+        }
+        self.admins.retain(|a| !a.trim().is_empty());
+    }
+
     pub fn for_tests(data_dir: PathBuf) -> Self {
         let cli = Cli::parse_from([
             "coolpsonotes-server",
@@ -306,6 +362,7 @@ impl Config {
             data_dir.to_str().unwrap(),
         ]);
         let mut c = cli.config;
+        c.normalize();
         c.rate_limit_rps = 10_000;
         c.auth_rate_limit_per_min = 10_000;
         c

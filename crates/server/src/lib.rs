@@ -34,7 +34,7 @@ pub async fn build(
     let path = config.db_path();
     let db = db::connect(&path).await?;
     db::migrate(&db, &path).await?;
-    let state = AppState::new(db, config, metrics);
+    let state = AppState::new(db, config, metrics)?;
     spawn_maintenance(state.clone());
     Ok((routes::router(state.clone()), state))
 }

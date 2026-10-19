@@ -21,7 +21,8 @@ fn init_logging(format: LogFormat) {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let cli = Cli::parse();
+    let mut cli = Cli::parse();
+    cli.config.normalize();
     init_logging(cli.config.log_format);
     match cli.command.unwrap_or(Command::Serve) {
         Command::Serve => serve(cli.config).await,

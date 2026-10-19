@@ -204,6 +204,13 @@ has unsent edits to it, that person's client saves their version as a new
 * **Sharing folders**: builds on the same mechanism — a shared folder would get
   its own key and a small index object listing only its entries, with its notes
   under that key.
+* **Sharing between instances** (much later): independent instances sharing
+  vaults, folders or notes with each other's users. To keep it possible, ids
+  stay random and globally unique, people are identified by their account
+  keys (instance-qualified user ids later), one instance owns each vault's
+  ordered log, and membership is to become verifiable without trusting a
+  server (signed membership log). Details and guardrails in
+  [TODO.md](../TODO.md#other).
 * **Signed updates**: updates could carry an Ed25519 signature by the author's
   account key, letting clients verify authorship even against a colluding
   server (see security.md, residual risks).

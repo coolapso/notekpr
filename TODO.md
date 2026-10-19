@@ -525,3 +525,20 @@ with a history.
 
 - [ ] Folder sharing (builds on R2).
 - [ ] Mobile apps; native desktop GUI.
+- [ ] **Sharing between instances** (very later): independent self-hosted
+      instances share vaults, folders or notes with each other's users.
+      Not planned yet, but decisions made now must not rule it out:
+      - ids stay random and globally unique (vaults, objects, devices) —
+        never sequential or instance-scoped;
+      - people are identified by their **account keys**, not only by a
+        local user id; plan for instance-qualified ids (`user@instance`);
+      - one instance owns a vault's ordered log; remote members sync
+        against it (no global sequence numbers);
+      - membership must be verifiable without trusting the other server —
+        another reason for the signed membership log (R3);
+      - per-document and folder keys (R2) make "share a note or folder with
+        someone elsewhere" the same mechanism as sharing locally;
+      - still needed then: instance identity and server-to-server auth,
+        discovery (`/.well-known`), abuse limits, and documenting what a
+        remote instance learns (members, timing).
+      See also [architecture.md §8](docs/architecture.md#8-accommodating-future-work).

@@ -67,3 +67,69 @@ async fn an_interrupted_first_device_setup_is_finished_by_the_next_login() {
         .unwrap();
     assert!(later.recovery_key.is_none() && later.reused_device);
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn login_keeps_the_account_secret_unless_the_device_was_really_removed() {
+    use coolpsonotes_client::profile::ProfileStore;
+    let srv = start().await;
+    let a_dirs = srv.dirs("alice-a");
+    let first = account::login(&a_dirs, "alice", dev_login(&srv.url, "alice"))
+        .await
+        .unwrap();
+    let rk = first.recovery_key.clone().unwrap();
+    let a = Session::open(&a_dirs, "alice").unwrap();
+    let b_dirs = srv.dirs("alice-b");
+    let with_rk = |url: &str| LoginOptions {
+        recovery_key: Some(rk.clone()),
+        approval_timeout: Some(std::time::Duration::from_secs(1)),
+        ..dev_login(url, "alice")
+    };
+    let b = account::login(&b_dirs, "alice", with_rk(&srv.url))
+        .await
+        .unwrap();
+    assert!(b.recovered);
+    let b_data = b_dirs.profile_data("alice");
+    let b_store = ProfileStore::new(&b_dirs, "alice").unwrap();
+
+    // A 404 that is not a removal (here: a misconfigured proxy) changes
+    // nothing: the device keys stay.
+    let url = proxy(
+        &srv.url,
+        Arc::new(|m, path| {
+            (m == axum::http::Method::PUT && path.ends_with("/me/session/device"))
+                .then_some(Fault::Reply(404))
+        }),
+    )
+    .await;
+    b_store.update(|p| p.server = url.clone()).unwrap();
+    let no_rk = LoginOptions {
+        approval_timeout: Some(std::time::Duration::from_secs(1)),
+        ..dev_login(&url, "alice")
+    };
+    assert!(account::login(&b_dirs, "alice", no_rk).await.is_err());
+    assert!(b_data.join("account.sealed").exists());
+    assert_eq!(
+        b_store.require().unwrap().device_id.as_deref(),
+        Some(b.device_id.as_str())
+    );
+    b_store.update(|p| p.server = srv.url.clone()).unwrap();
+
+    // Really removed from another device: B enrolls again, and its old
+    // secrets are moved aside, not deleted.
+    coolpsonotes_client::manage::revoke_device(&a, &b.device_id)
+        .await
+        .unwrap();
+    let again = account::login(&b_dirs, "alice", with_rk(&srv.url))
+        .await
+        .unwrap();
+    assert!(again.recovered);
+    assert_ne!(again.device_id, b.device_id);
+    let aside: Vec<String> = std::fs::read_dir(&b_data)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|n| n.starts_with("account.sealed.removed-"))
+        .collect();
+    assert_eq!(aside.len(), 1, "{aside:?}");
+    assert!(Session::open(&b_dirs, "alice").is_ok());
+}

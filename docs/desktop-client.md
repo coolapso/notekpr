@@ -121,6 +121,12 @@ same pending device.
 Comparing the codes defeats a server that substitutes its own device key: the
 code is derived from the user id, the device id and the device's public key.
 
+If this computer was removed from the account (`devices revoke`, or in the
+web app), the next `login` notices — only after the server's device list
+confirms it, never on a bare error — asks before continuing (on a terminal),
+moves the old sealed keys aside (`account.sealed.removed-<time>` in the data
+directory, never deleted) and enrolls the computer as a new device.
+
 ### Logging out
 
 * `coolpsonotes logout` ends the session; local encrypted copies stay (read

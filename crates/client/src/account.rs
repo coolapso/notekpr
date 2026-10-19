@@ -255,13 +255,27 @@ pub async fn login(dirs: &Dirs, profile: &str, opts: LoginOptions) -> Result<Log
                         recovered: false,
                     });
                 }
-                Err(e) if matches!(e.status(), Some(404 | 409 | 403)) => {
-                    // Respect the removal: forget the secrets and enroll again
-                    // (approval by another device, or the recovery key).
-                    ui::warn(
-                        "this device was removed from your account; it has to be approved again",
-                    );
-                    secrets.forget_account()?;
+                // The server answers 404 for a device that is unknown or was
+                // revoked. A 404 can also come from a misconfigured proxy, so
+                // the device list must confirm it before anything changes.
+                Err(e) if e.is_not_found() && device_was_removed(&api, &dev).await? => {
+                    ui::warn(&format!(
+                        "this device ({dev}) was removed from your account (with `devices revoke` or in the web \
+                         app). It must be approved again before it can decrypt anything new"
+                    ));
+                    if opts.interactive
+                        && ui::stdin_is_tty()
+                        && !ui::confirm("Register this computer as a new device now?")
+                    {
+                        bail!("cancelled; nothing was changed");
+                    }
+                    // Respect the removal, but keep the old (sealed) secrets.
+                    if let Some(aside) = secrets.set_aside_account()? {
+                        ui::status(&format!(
+                            "the old device keys were moved to {} (not deleted)",
+                            aside.display()
+                        ));
+                    }
                     ps.update(|p| {
                         p.device_id = None;
                         p.device_pending = false;
@@ -391,6 +405,19 @@ pub async fn login(dirs: &Dirs, profile: &str, opts: LoginOptions) -> Result<Log
         reused_device: false,
         recovered,
     })
+}
+
+/// Whether the server's device list confirms that `device_id` was revoked or
+/// is unknown to the account.
+async fn device_was_removed(api: &Api, device_id: &str) -> Result<bool> {
+    let devices: Vec<DeviceInfo> = api
+        .get("/devices")
+        .await
+        .context("checking whether this device was removed")?;
+    Ok(devices
+        .iter()
+        .find(|d| d.id == device_id)
+        .is_none_or(|d| d.status == DeviceStatus::Revoked))
 }
 
 /// Unwrap the account secret with the recovery key and approve this device.

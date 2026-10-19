@@ -204,15 +204,22 @@ impl SecretStore {
         }
     }
 
-    /// Delete the sealed account and device secrets (device was revoked).
-    pub fn forget_account(&self) -> Result<()> {
+    /// Move the sealed account and device secrets aside (this device was
+    /// removed from the account) — never delete them: they may be the only
+    /// copy of the account secret. Returns the new name of the account file.
+    pub fn set_aside_account(&self) -> Result<Option<PathBuf>> {
+        let stamp = coolpsonotes_core::now_ms();
+        let mut moved = None;
         for f in [ACCOUNT_FILE, DEVICE_FILE] {
-            match std::fs::remove_file(self.dir.join(f)) {
-                Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e.into()),
-                _ => {}
+            let to = self.dir.join(format!("{f}.removed-{stamp}"));
+            match std::fs::rename(self.dir.join(f), &to) {
+                Ok(()) if f == ACCOUNT_FILE => moved = Some(to),
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => return Err(e).context("moving the old device keys aside"),
             }
         }
-        Ok(())
+        Ok(moved)
     }
 
     pub fn has_account(&self) -> bool {

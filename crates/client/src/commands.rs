@@ -1056,6 +1056,7 @@ async fn sync(ctx: &Ctx, a: SyncArgs) -> Result<()> {
     let mirror_opts = MirrorOptions {
         allow_mass_delete: a.allow_mass_delete,
         restore_missing: a.restore_missing,
+        ..Default::default()
     };
     if let Some(d) = &dir {
         if !profile.sync.plaintext_ok && !a.plaintext_ok {

@@ -71,6 +71,11 @@ struct Base {
 struct FileRecord {
     /// Vault path the file was written to / read from.
     path: String,
+    /// Where the file is, relative to the vault folder, if not at `path`: on
+    /// a case-insensitive file system, entries whose paths differ only in
+    /// case get distinct names.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    disk: Option<String>,
     kind: EntryKind,
     /// Hash of the content last written or ingested.
     hash: String,
@@ -100,6 +105,8 @@ struct MirrorVault {
     missing_since: BTreeMap<String, Instant>,
     /// Deletions are held: too many files (or the whole folder) vanished.
     held: bool,
+    /// The file system ignores case: compare paths case-folded.
+    fold: bool,
     warned: BTreeSet<String>,
 }
 
@@ -157,6 +164,9 @@ pub struct MirrorOptions {
     /// Write them again from the replica (and re-create a missing mirror
     /// directory), instead of holding.
     pub restore_missing: bool,
+    /// Treat the mirror directory as case-insensitive (`None` = detect).
+    #[doc(hidden)]
+    pub case_insensitive: Option<bool>,
 }
 
 pub struct Mirror {
@@ -165,6 +175,107 @@ pub struct Mirror {
     vaults: BTreeMap<String, MirrorVault>,
     warned: BTreeSet<String>,
     opts: MirrorOptions,
+    /// The mirror directory ignores case (macOS and Windows defaults).
+    fold: bool,
+}
+
+/// Comparison key of a path: case-folded on a case-insensitive file system.
+fn fold_key(fold: bool, p: &str) -> String {
+    if fold {
+        p.to_lowercase()
+    } else {
+        p.to_string()
+    }
+}
+
+/// Whether `dir` is on a case-insensitive file system: create a lower-case
+/// probe file and look for it under its upper-case name.
+pub fn is_case_insensitive(dir: &Path) -> std::io::Result<bool> {
+    let probe = fsutil::temp_path(dir);
+    fsutil::create_private_file(&probe, b"")?;
+    let upper = probe
+        .file_name()
+        .and_then(|n| n.to_str())
+        .map(|n| dir.join(n.to_uppercase()));
+    let found = upper.is_some_and(|u| u.symlink_metadata().is_ok());
+    let _ = std::fs::remove_file(&probe);
+    Ok(found)
+}
+
+/// Where each live note and attachment goes on disk, relative to the vault
+/// folder. Normally its path; on a case-insensitive file system, entries
+/// whose paths differ only in case would share one file (and overwrite each
+/// other), so all but one get a distinct name (`idea 2.md`). Entries already
+/// on disk stay where they are.
+fn assign_disk_paths(
+    live: &BTreeMap<String, (String, coolpsonotes_core::doc::Entry)>,
+    files: &BTreeMap<String, FileRecord>,
+    fold: bool,
+) -> BTreeMap<String, String> {
+    let mut out = BTreeMap::new();
+    let mut used = BTreeSet::new();
+    let mut entries: Vec<(&String, &String)> = live
+        .iter()
+        .filter(|(_, (_, e))| e.kind != EntryKind::Folder)
+        .map(|(id, (p, _))| (id, p))
+        .collect();
+    entries.sort_by(|a, b| a.1.cmp(b.1).then(a.0.cmp(b.0)));
+    for (id, p) in &entries {
+        if let Some(r) = files.get(*id)
+            && r.path == **p
+            && used.insert(fold_key(fold, r.disk()))
+        {
+            out.insert((*id).clone(), r.disk().to_string());
+        }
+    }
+    let all: BTreeSet<String> = entries.iter().map(|(_, p)| fold_key(fold, p)).collect();
+    let mut clashing = Vec::new();
+    for (id, p) in &entries {
+        if out.contains_key(*id) {
+            continue;
+        }
+        if used.insert(fold_key(fold, p)) {
+            out.insert((*id).clone(), (*p).clone());
+        } else {
+            clashing.push((*id, *p));
+        }
+    }
+    for (id, p) in clashing {
+        let d = paths::unique(p, |q| {
+            let k = fold_key(fold, q);
+            used.contains(&k) || all.contains(&k)
+        });
+        used.insert(fold_key(fold, &d));
+        out.insert(id.clone(), d);
+    }
+    out
+}
+
+/// Live entries that may be mirrored (safe paths), by id.
+fn mirrored_entries(v: &Vault) -> BTreeMap<String, (String, coolpsonotes_core::doc::Entry)> {
+    v.paths()
+        .into_iter()
+        .filter(|(p, _)| is_safe_vault_path(p))
+        .map(|(p, e)| (e.id.clone(), (p, e)))
+        .collect()
+}
+
+/// Marker in each vault folder naming the vault it mirrors, so a folder left
+/// behind by a deleted or left vault is never imported into another one.
+const VAULT_MARKER: &str = ".coolpsonotes-vault";
+
+fn vault_marker(dir: &Path) -> Option<String> {
+    std::fs::read_to_string(dir.join(VAULT_MARKER))
+        .ok()
+        .map(|s| s.trim().to_string())
+}
+
+/// Whether a directory contains anything the mirror would sync.
+fn has_mirrorable_content(dir: &Path) -> bool {
+    std::fs::read_dir(dir).is_ok_and(|rd| {
+        rd.filter_map(|e| e.ok())
+            .any(|e| e.file_name().to_str().is_none_or(|n| !is_ignored_name(n)))
+    })
 }
 
 /// `p` made absolute, with its longest existing ancestor canonicalised (works
@@ -726,6 +837,11 @@ fn remove_if_unchanged(path: &Path, hash: &str) -> Result<bool> {
 }
 
 impl FileRecord {
+    /// Location of the file relative to the vault folder.
+    fn disk(&self) -> &str {
+        self.disk.as_deref().unwrap_or(&self.path)
+    }
+
     fn set_stat(&mut self, st: Stat) {
         self.size = st.size;
         self.mtime_ns = st.mtime_ns;
@@ -760,9 +876,16 @@ impl MirrorVault {
         );
     }
 
-    /// Whether `q` is taken on disk (anything at all is there) or by a live entry.
-    fn taken(&self, q: &str, live_paths: &BTreeSet<String>) -> bool {
-        live_paths.contains(q)
+    fn key(&self, p: &str) -> String {
+        fold_key(self.fold, p)
+    }
+
+    /// Whether `q` is taken: by a live entry (`live_keys`, folded), by a
+    /// recorded file, or on disk (anything at all is there).
+    fn taken(&self, q: &str, live_keys: &BTreeSet<String>) -> bool {
+        let k = self.key(q);
+        live_keys.contains(&k)
+            || self.state.files.values().any(|r| self.key(r.disk()) == k)
             || disk_path(&self.dir, q).map_or(true, |p| p.symlink_metadata().is_ok())
     }
 }
@@ -779,7 +902,7 @@ fn ingest_record(
     let Some(mut rec) = mv.state.files.get(id).cloned() else {
         return Ok(());
     };
-    let path = disk_path(&mv.dir, &rec.path)?;
+    let path = disk_path(&mv.dir, rec.disk())?;
     match disk_state(&path, &mut rec)? {
         DiskState::Unchanged(_) => {
             mv.missing_since.remove(id);
@@ -899,10 +1022,11 @@ fn ingest_new_file(
         && v.entry(&id).is_some_and(|e| e.is_live())
     {
         match v.move_path(&id, path, false) {
-            Ok(_) => {
+            Ok(new_path) => {
                 mv.missing_since.remove(&id);
                 if let Some(r) = mv.state.files.get_mut(&id) {
-                    r.path = path.to_string();
+                    r.disk = (new_path != path).then(|| path.to_string());
+                    r.path = new_path;
                     r.set_stat(st);
                 }
                 mv.dirty = true;
@@ -942,6 +1066,7 @@ fn ingest_new_file(
         (v.add_attachment(path, &data, None)?, None)
     };
     let mut rec = FileRecord {
+        disk: (r.path != path).then(|| path.to_string()),
         path: r.path.clone(),
         kind,
         hash: hash.clone(),
@@ -973,7 +1098,7 @@ fn remove_gone(
     let Some(mut rec) = mv.state.files.get(id).cloned() else {
         return Ok(());
     };
-    let path = disk_path(&mv.dir, &rec.path)?;
+    let path = disk_path(&mv.dir, rec.disk())?;
     let state = disk_state(&path, &mut rec)?;
     mv.state.files.remove(id);
     mv.dirty = true;
@@ -1018,7 +1143,8 @@ fn apply_move(
     v: &mut Vault,
     id: &str,
     target: &str,
-    live_paths: &BTreeSet<String>,
+    target_disk: &str,
+    live_keys: &BTreeSet<String>,
     writable: bool,
     touched: &mut BTreeSet<String>,
     report: &mut Report,
@@ -1026,28 +1152,46 @@ fn apply_move(
     let Some(rec) = mv.state.files.get(id) else {
         return Ok(());
     };
-    if rec.path == target {
+    if rec.path == target && rec.disk() == target_disk {
         return Ok(());
     }
     let mut rec = rec.clone();
-    let old = disk_path(&mv.dir, &rec.path)?;
-    let new = disk_path(&mv.dir, target)?;
-    match stat(&new)? {
-        Node::Missing => {}
-        Node::File(_) if !mv.state.files.values().any(|r| r.path == target) => {
-            // An unknown local file is in the way: keep it as a conflict copy.
-            let copy = conflict_name(target, |q| mv.taken(q, live_paths));
-            std::fs::rename(&new, disk_path(&mv.dir, &copy)?)
-                .context("keeping a conflicting local file")?;
-            ui::warn(&format!(
-                "vault '{}': a local file was in the way of a note moved elsewhere; it was kept as a conflict \
-                 copy next to it",
-                v.name()
-            ));
-            report.conflicts += 1;
+    if rec.path == target {
+        // Not moved, but its file is shared with another entry whose path
+        // differs only in case (recorded before case-insensitivity was
+        // handled): leave that file to the other entry and write this one
+        // afresh under its own name.
+        mv.state.files.remove(id);
+        mv.dirty = true;
+        return Ok(());
+    }
+    let old = disk_path(&mv.dir, rec.disk())?;
+    let new = disk_path(&mv.dir, target_disk)?;
+    // A rename that only changes case is the same file on a case-insensitive
+    // file system: nothing is "in the way".
+    if mv.key(rec.disk()) != mv.key(target_disk) {
+        let recorded = mv
+            .state
+            .files
+            .iter()
+            .any(|(other, r)| other != id && mv.key(r.disk()) == mv.key(target_disk));
+        match stat(&new)? {
+            Node::Missing => {}
+            Node::File(_) if !recorded => {
+                // An unknown local file is in the way: keep it as a conflict copy.
+                let copy = conflict_name(target_disk, |q| mv.taken(q, live_keys));
+                std::fs::rename(&new, disk_path(&mv.dir, &copy)?)
+                    .context("keeping a conflicting local file")?;
+                ui::warn(&format!(
+                    "vault '{}': a local file was in the way of a note moved elsewhere; it was kept as a \
+                     conflict copy next to it",
+                    v.name()
+                ));
+                report.conflicts += 1;
+            }
+            // Another synced file or a folder is in the way: try again later.
+            _ => return Ok(()),
         }
-        // Another synced file or a folder is in the way: try again later.
-        _ => return Ok(()),
     }
     match disk_state(&old, &mut rec)? {
         DiskState::Missing | DiskState::NotAFile => {
@@ -1072,6 +1216,7 @@ fn apply_move(
             std::fs::rename(&old, &new).context("moving a mirrored file")?;
             prune_empty_parents(&old, &mv.dir);
             rec.path = target.to_string();
+            rec.disk = (target_disk != target).then(|| target_disk.to_string());
             mv.state.files.insert(id.to_string(), rec);
             mv.record_stat(id, &new);
             report.renamed += 1;
@@ -1102,12 +1247,13 @@ fn write_note(
     v: &mut Vault,
     id: &str,
     p: &str,
-    live_paths: &BTreeSet<String>,
+    disk: &str,
+    live_keys: &BTreeSet<String>,
     writable: bool,
     touched: &mut BTreeSet<String>,
     report: &mut Report,
 ) -> Result<()> {
-    let path = disk_path(&mv.dir, p)?;
+    let path = disk_path(&mv.dir, disk)?;
     let text = v.note_text(id);
     let hash = content_hash(text.as_bytes());
     let Some(mut rec) = mv.state.files.get(id).cloned() else {
@@ -1129,7 +1275,7 @@ fn write_note(
             Node::File(_) => {
                 let data = std::fs::read(&path)?;
                 if content_hash(&data) != hash {
-                    let copy = conflict_name(p, |q| mv.taken(q, live_paths));
+                    let copy = conflict_name(disk, |q| mv.taken(q, live_keys));
                     std::fs::rename(&path, disk_path(&mv.dir, &copy)?)
                         .context("keeping a conflicting local file")?;
                     ui::warn(&format!(
@@ -1161,6 +1307,7 @@ fn write_note(
             .unwrap_or_default();
         let mut rec = FileRecord {
             path: p.to_string(),
+            disk: (disk != p).then(|| disk.to_string()),
             kind: EntryKind::Note,
             hash: hash.clone(),
             size: 0,
@@ -1173,8 +1320,8 @@ fn write_note(
         mv.record_stat(id, &path);
         return Ok(());
     };
-    // A move that step b could not apply yet: the file at `p` is not ours.
-    if rec.path != p || rec.hash == hash {
+    // A move that step b could not apply yet: the file at `disk` is not ours.
+    if rec.path != p || rec.disk() != disk || rec.hash == hash {
         return Ok(());
     }
     let expected = match disk_state(&path, &mut rec)? {
@@ -1241,17 +1388,18 @@ fn write_download(
     mv: &mut MirrorVault,
     id: &str,
     p: &str,
+    disk: &str,
     data: &[u8],
     report: &mut Report,
 ) -> Result<()> {
-    let path = disk_path(&mv.dir, p)?;
+    let path = disk_path(&mv.dir, disk)?;
     let hash = content_hash(data);
     match stat(&path)? {
         Node::Other => return Ok(()),
         Node::File(_) => {
             let current = std::fs::read(&path)?;
             if content_hash(&current) != hash {
-                let copy = conflict_name(p, |q| mv.taken(q, &BTreeSet::new()));
+                let copy = conflict_name(disk, |q| mv.taken(q, &BTreeSet::new()));
                 std::fs::rename(&path, disk_path(&mv.dir, &copy)?)
                     .context("keeping a conflicting local file")?;
                 report.conflicts += 1;
@@ -1272,6 +1420,7 @@ fn write_download(
         id.to_string(),
         FileRecord {
             path: p.to_string(),
+            disk: (disk != p).then(|| disk.to_string()),
             kind: EntryKind::Attachment,
             hash,
             size: 0,
@@ -1315,12 +1464,21 @@ impl Mirror {
         let root = root
             .canonicalize()
             .with_context(|| format!("resolving {}", root.display()))?;
+        let fold = match opts.case_insensitive {
+            Some(f) => f,
+            None => is_case_insensitive(&root)
+                .with_context(|| format!("checking {}", root.display()))?,
+        };
+        if fold {
+            tracing::debug!("mirror: the directory is case-insensitive");
+        }
         let mut m = Mirror {
             hub,
             root,
             vaults: BTreeMap::new(),
             warned: BTreeSet::new(),
             opts,
+            fold,
         };
         for id in m.hub.vault_ids() {
             m.attach_or_warn(&id).await;
@@ -1363,18 +1521,21 @@ impl Mirror {
         }
         let stored = stored_state(&v).await?;
         let name = v.lock().await.name().to_string();
+        // Vault folders must differ even ignoring case where the file system
+        // does ("Notes" and "notes" would share one folder).
         let taken: BTreeSet<String> = self
             .vaults
             .values()
-            .map(|m| m.state.dir_name.clone())
+            .map(|m| fold_key(self.fold, &m.state.dir_name))
             .collect();
         let state = match stored {
-            Some(s) if s.root == self.root && !taken.contains(&s.dir_name) => s,
+            Some(s)
+                if s.root == self.root && !taken.contains(&fold_key(self.fold, &s.dir_name)) =>
+            {
+                s
+            }
             _ => {
-                let mut dir_name = sanitize_dir_name(&name, vault_id);
-                if taken.contains(&dir_name) {
-                    dir_name = format!("{dir_name} ({})", &vault_id[..vault_id.len().min(6)]);
-                }
+                let dir_name = self.fresh_dir_name(&name, vault_id, &taken)?;
                 MirrorState {
                     root: self.root.clone(),
                     dir_name,
@@ -1389,6 +1550,15 @@ impl Mirror {
         if state.files.is_empty() || dir.is_dir() || self.opts.restore_missing {
             fsutil::create_private_dir(&dir)?;
             fsutil::remove_stale_temp_files(&dir, 64, STALE_TEMP_AGE);
+            if vault_marker(&dir).as_deref() != Some(vault_id)
+                && let Err(e) = fsutil::write_atomic(
+                    &dir.join(VAULT_MARKER),
+                    format!("{vault_id}\n").as_bytes(),
+                    true,
+                )
+            {
+                tracing::debug!("mirror: cannot write the vault marker: {e}");
+            }
         }
         self.vaults.insert(
             vault_id.to_string(),
@@ -1398,10 +1568,50 @@ impl Mirror {
                 dirty: true,
                 missing_since: BTreeMap::new(),
                 held: false,
+                fold: self.fold,
                 warned: BTreeSet::new(),
             },
         );
         Ok(())
+    }
+
+    /// Folder name for a vault without mirror state (first sync, or the state
+    /// was lost). A folder that already holds files not mirrored for *this*
+    /// vault — left behind by a deleted or left vault with the same name, or
+    /// someone else's files — is never adopted: its files would be imported
+    /// into this vault. A suffixed name is used instead.
+    fn fresh_dir_name(
+        &self,
+        name: &str,
+        vault_id: &str,
+        taken: &BTreeSet<String>,
+    ) -> Result<String> {
+        let base = sanitize_dir_name(name, vault_id);
+        let short = &vault_id[..vault_id.len().min(6)];
+        for n in 1..100 {
+            let cand = match n {
+                1 => base.clone(),
+                2 => format!("{base} ({short})"),
+                k => format!("{base} ({short}) {}", k - 1),
+            };
+            if taken.contains(&fold_key(self.fold, &cand)) {
+                continue;
+            }
+            let d = disk_path(&self.root, &cand)?;
+            let foreign =
+                has_mirrorable_content(&d) && vault_marker(&d).as_deref() != Some(vault_id);
+            if foreign {
+                continue;
+            }
+            if n > 1 {
+                ui::status(&format!(
+                    "mirror: vault '{name}' goes into the folder '{cand}' ('{base}' already holds other files, \
+                     which are left alone)"
+                ));
+            }
+            return Ok(cand);
+        }
+        bail!("no free folder name for vault '{name}' in the mirror directory")
     }
 
     /// The mirror directory itself vanished while running (unmounted, moved):
@@ -1488,8 +1698,16 @@ impl Mirror {
         let writable = !self.hub.read_only && v.require_writable().is_ok();
         let mut touched: BTreeSet<String> = BTreeSet::new();
         let live = v.paths();
-        let known_paths: BTreeSet<String> =
-            mv.state.files.values().map(|r| r.path.clone()).collect();
+        // Disk paths that belong to a recorded file, or to a live entry not
+        // written yet (write_remote adopts or resolves what is there).
+        let assigned = assign_disk_paths(&mirrored_entries(&v), &mv.state.files, mv.fold);
+        let claimed: BTreeSet<String> = mv
+            .state
+            .files
+            .values()
+            .map(|r| mv.key(r.disk()))
+            .chain(assigned.values().map(|d| mv.key(d)))
+            .collect();
 
         // 1. Recorded files: modified or missing?
         let ids: Vec<String> = mv.state.files.keys().cloned().collect();
@@ -1502,9 +1720,7 @@ impl Mirror {
         // 2. New files: renames (same content as a missing file) or creations.
         let new_files: Vec<(String, Stat)> = disk
             .iter()
-            .filter(|(p, _)| !known_paths.contains(*p))
-            // A live entry we have not written yet: write_remote adopts or resolves it.
-            .filter(|(p, _)| !live.contains_key(*p))
+            .filter(|(p, _)| !claimed.contains(&mv.key(p)))
             .map(|(p, s)| (p.clone(), *s))
             .collect();
         if writable && !new_files.is_empty() {
@@ -1598,8 +1814,12 @@ impl Mirror {
         // 4. Explicit folders: new empty directories, removed folder entries.
         if writable && !mv.held {
             for d in &empty_dirs {
-                let known = mv.state.folders.values().any(|p| p == d)
-                    || live.keys().any(|p| p == d || paths::is_within(p, d));
+                let dk = mv.key(d);
+                let known = mv.state.folders.values().any(|p| mv.key(p) == dk)
+                    || live.keys().any(|p| {
+                        let pk = mv.key(p);
+                        pk == dk || paths::is_within(&pk, &dk)
+                    });
                 if !known && let Ok(id) = v.create_folder(d) {
                     mv.state.folders.insert(id.clone(), d.clone());
                     mv.dirty = true;
@@ -1669,7 +1889,7 @@ impl Mirror {
             }
             fsutil::create_private_dir(&mv.dir)?;
         }
-        let mut downloads: Vec<(String, String)> = Vec::new();
+        let mut downloads: Vec<(String, String, String)> = Vec::new();
         let mut touched: BTreeSet<String> = BTreeSet::new();
         let name;
         {
@@ -1693,7 +1913,7 @@ impl Mirror {
                 }
                 live.insert(e.id.clone(), (p, e));
             }
-            let live_paths: BTreeSet<String> = live.values().map(|(p, _)| p.clone()).collect();
+            let live_keys: BTreeSet<String> = live.values().map(|(p, _)| mv.key(p)).collect();
 
             // a. Entries that are gone (trashed, removed) or became folders.
             let gone: Vec<String> = mv
@@ -1712,6 +1932,10 @@ impl Mirror {
                 }
             }
 
+            // Where each entry lives on disk (distinct even ignoring case).
+            let assigned = assign_disk_paths(&live, &mv.state.files, mv.fold);
+            let disk_of = |id: &str, p: &String| assigned.get(id).unwrap_or(p).clone();
+
             // b. Moves/renames done elsewhere.
             for (id, (p, _)) in &live {
                 if let Err(e) = apply_move(
@@ -1719,7 +1943,8 @@ impl Mirror {
                     &mut v,
                     id,
                     p,
-                    &live_paths,
+                    &disk_of(id, p),
+                    &live_keys,
                     writable,
                     &mut touched,
                     &mut report,
@@ -1741,7 +1966,7 @@ impl Mirror {
                     EntryKind::Folder => write_folder(mv, id, p),
                     EntryKind::Attachment => {
                         if !mv.state.files.contains_key(id) {
-                            downloads.push((id.clone(), p.clone()));
+                            downloads.push((id.clone(), p.clone(), disk_of(id, p)));
                         }
                         Ok(())
                     }
@@ -1750,7 +1975,8 @@ impl Mirror {
                         &mut v,
                         id,
                         p,
-                        &live_paths,
+                        &disk_of(id, p),
+                        &live_keys,
                         writable,
                         &mut touched,
                         &mut report,
@@ -1790,7 +2016,7 @@ impl Mirror {
         }
 
         // Attachments are downloaded without holding the vault lock.
-        for (id, p) in downloads {
+        for (id, p, disk) in downloads {
             let data = match self.hub.session.attachment(&shared, &id).await {
                 Ok(d) => d,
                 Err(e) => {
@@ -1798,7 +2024,7 @@ impl Mirror {
                     continue;
                 }
             };
-            if let Err(e) = write_download(mv, &id, &p, &data, &mut report) {
+            if let Err(e) = write_download(mv, &id, &p, &disk, &data, &mut report) {
                 mv.entry_failed(&name, &id, &e);
             }
         }
@@ -2228,6 +2454,7 @@ mod tests {
         // The same text read and written keeps the "read" mark.
         let mut rec = FileRecord {
             path: "a.md".into(),
+            disk: None,
             kind: EntryKind::Note,
             hash: String::new(),
             size: 0,
@@ -2239,6 +2466,72 @@ mod tests {
         push_base(&mut rec, vec![], "h", false);
         assert_eq!(rec.bases.len(), 1);
         assert!(rec.bases[0].read);
+    }
+
+    fn entry(id: &str, path: &str) -> (String, (String, coolpsonotes_core::doc::Entry)) {
+        let e = coolpsonotes_core::doc::Entry {
+            id: id.into(),
+            path: path.into(),
+            kind: EntryKind::Note,
+            created: 0,
+            modified: 0,
+            size: None,
+            mime: None,
+            trashed: None,
+        };
+        (id.to_string(), (path.to_string(), e))
+    }
+
+    #[test]
+    fn case_variants_get_distinct_files_where_case_is_ignored() {
+        let live: BTreeMap<_, _> = [
+            entry("b", "idea.md"),
+            entry("a", "Idea.md"),
+            entry("c", "idea 2.md"),
+            entry("d", "Other.md"),
+        ]
+        .into_iter()
+        .collect();
+        let none = BTreeMap::new();
+        // Case-sensitive: everything at its own path.
+        let plain = assign_disk_paths(&live, &none, false);
+        assert!(plain.iter().all(|(id, d)| *d == live[id].0), "{plain:?}");
+        // Case-insensitive: "Idea.md" keeps the name, "idea.md" moves aside
+        // without taking the real "idea 2.md".
+        let folded = assign_disk_paths(&live, &none, true);
+        assert_eq!(folded["a"], "Idea.md");
+        assert_eq!(folded["c"], "idea 2.md");
+        assert_eq!(folded["b"], "idea 3.md");
+        assert_eq!(folded["d"], "Other.md");
+        let keys: BTreeSet<String> = folded.values().map(|d| d.to_lowercase()).collect();
+        assert_eq!(keys.len(), 4);
+        // A file already on disk stays where it is.
+        let mut files = BTreeMap::new();
+        files.insert(
+            "b".to_string(),
+            FileRecord {
+                path: "idea.md".into(),
+                disk: None,
+                kind: EntryKind::Note,
+                hash: String::new(),
+                size: 0,
+                mtime_ns: 0,
+                checked_ns: 0,
+                bases: vec![],
+            },
+        );
+        let kept = assign_disk_paths(&live, &files, true);
+        assert_eq!(kept["b"], "idea.md");
+        assert_eq!(kept["a"], "Idea 3.md");
+    }
+
+    #[test]
+    fn case_probe_matches_the_file_system() {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::write(d.path().join("probe"), "").unwrap();
+        let expected = d.path().join("PROBE").exists();
+        assert_eq!(is_case_insensitive(d.path()).unwrap(), expected);
+        assert_eq!(std::fs::read_dir(d.path()).unwrap().count(), 1);
     }
 
     #[test]

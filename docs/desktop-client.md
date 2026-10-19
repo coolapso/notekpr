@@ -221,9 +221,22 @@ the directory. The server and the encrypted copies are unaffected.
 ```
 
 The directory name is chosen once per vault and kept, even if the vault is
-renamed later. Entries whose path has a hidden segment (`.git/…`, `.obsidian/…`)
-are never written to disk: a collaborator must not be able to plant files such
-as git hooks in your mirror.
+renamed later. A small `.coolpsonotes-vault` file in it records which vault it
+mirrors: a folder that already holds other files — left behind by a deleted or
+left vault with the same name, or not created by coolpsonotes at all — is never
+adopted (its files would be imported into the vault); the vault gets a
+suffixed folder (`Diary (3f2a1c)`) instead. Entries whose path has a hidden
+segment (`.git/…`, `.obsidian/…`) are never written to disk: a collaborator
+must not be able to plant files such as git hooks in your mirror. On Windows,
+paths that are not valid Win32 names (`C:` prefixes, `:` `<>"|?*`, device names
+such as `CON`, trailing dots or spaces) are not mirrored either.
+
+On case-insensitive file systems (the macOS and Windows defaults, detected at
+start), paths are compared ignoring case: vaults named `Notes` and `notes` get
+separate folders, and notes whose paths differ only in case (`Idea.md`,
+`idea.md`) get distinct file names (`Idea.md`, `idea 2.md`) instead of
+overwriting each other. Renaming a file by changing only its case on disk is
+not synced.
 
 ### Ignored files
 

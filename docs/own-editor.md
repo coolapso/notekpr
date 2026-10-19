@@ -115,5 +115,3 @@ safety"), be careful with:
 
 * **Running one-off commands (`coolpsonotes write …`) while the daemon runs** —
   use the files or the web app instead.
-* **macOS and Windows:** avoid notes or folders whose names differ only in
-  upper/lower case.

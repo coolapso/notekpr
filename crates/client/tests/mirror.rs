@@ -579,3 +579,138 @@ async fn reverting_a_file_to_an_older_version_is_synced() {
         "{merged:?}"
     );
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn leftover_files_are_not_imported_into_a_new_vault_with_the_same_name() {
+    let srv = start().await;
+    let alice = login(&srv, "alice").await;
+    manage::create_vault(&alice, "Diary").await.unwrap();
+    let h = hub(&alice).await;
+    let old = h.resolve("Diary").await.unwrap();
+    let old_id = old.lock().await.id().to_string();
+    ops::put_document(&h, &old_id, "Secret.md", "old vault\n", None)
+        .await
+        .unwrap();
+    let root = srv.path("mirror");
+    let mut m = Mirror::new(h.clone(), &root).await.unwrap();
+    m.reconcile_all(true).await.unwrap();
+    let old_dir = m.vault_dir(&old_id).unwrap().to_path_buf();
+    assert_eq!(old_dir.file_name().unwrap(), "Diary");
+    drop(m);
+
+    // The same vault without its mirror bookkeeping (e.g. a re-login) adopts
+    // its own folder again: nothing is duplicated.
+    {
+        let g = old.lock().await;
+        std::fs::remove_file(g.store().dir().join("mirror.sealed")).unwrap();
+    }
+    let mut m = Mirror::new(h.clone(), &root).await.unwrap();
+    let r = m.reconcile_all(true).await.unwrap();
+    assert_eq!(m.vault_dir(&old_id).unwrap(), old_dir);
+    assert_eq!((r.created, r.conflicts), (0, 0), "{r:?}");
+    drop(m);
+
+    // The vault is deleted; its files stay on disk. A new vault with the same
+    // name must not import them.
+    manage::delete_vault(&alice, &old).await.unwrap();
+    manage::create_vault(&alice, "Diary").await.unwrap();
+    let h = hub(&reopen(&srv, "alice", "alice").await).await;
+    let new_id = h
+        .resolve("Diary")
+        .await
+        .unwrap()
+        .lock()
+        .await
+        .id()
+        .to_string();
+    assert_ne!(new_id, old_id);
+    let mut m = Mirror::new(h.clone(), &root).await.unwrap();
+    let r = m.reconcile_all(true).await.unwrap();
+    assert_eq!(r.created, 0, "{r:?}");
+    let new_dir = m.vault_dir(&new_id).unwrap().to_path_buf();
+    assert_ne!(new_dir, old_dir);
+    assert!(
+        new_dir
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .starts_with("Diary (")
+    );
+    assert_eq!(read(&old_dir.join("Secret.md")), "old vault\n");
+    assert!(h.get(&new_id).unwrap().lock().await.notes().is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn case_insensitive_file_systems_keep_case_variants_apart() {
+    use coolpsonotes_client::mirror::MirrorOptions;
+    let srv = start().await;
+    let alice = login(&srv, "alice").await;
+    manage::create_vault(&alice, "Notes").await.unwrap();
+    manage::create_vault(&alice, "notes").await.unwrap();
+    let h = hub(&alice).await;
+    let mut ids = Vec::new();
+    for v in h.vaults() {
+        let g = v.lock().await;
+        ids.push((g.name().to_string(), g.id().to_string()));
+    }
+    ids.sort();
+    let (upper, lower) = (ids[0].1.clone(), ids[1].1.clone());
+    ops::put_document(&h, &upper, "Idea.md", "upper case\n", None)
+        .await
+        .unwrap();
+    {
+        // (`put_document` would match "Idea.md" case-insensitively.)
+        let v = h.get(&upper).unwrap();
+        let mut g = v.lock().await;
+        g.create_note("idea.md", "lower case\n").unwrap();
+        g.save().unwrap();
+    }
+    ops::put_document(&h, &lower, "x.md", "other vault\n", None)
+        .await
+        .unwrap();
+
+    // macOS and Windows defaults: forced here, detected in real use.
+    let opts = MirrorOptions {
+        case_insensitive: Some(true),
+        ..Default::default()
+    };
+    let mut m = Mirror::with_options(h.clone(), &srv.path("mirror"), opts)
+        .await
+        .unwrap();
+    m.reconcile_all(true).await.unwrap();
+    // "Notes" and "notes" do not share a folder.
+    let d_upper = m.vault_dir(&upper).unwrap().to_path_buf();
+    let d_lower = m.vault_dir(&lower).unwrap().to_path_buf();
+    assert_ne!(
+        d_upper.to_string_lossy().to_lowercase(),
+        d_lower.to_string_lossy().to_lowercase()
+    );
+    // "Idea.md" and "idea.md" get files whose names differ ignoring case.
+    let mut names: Vec<String> = std::fs::read_dir(&d_upper)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|n| !n.starts_with('.'))
+        .collect();
+    names.sort();
+    assert_eq!(names, ["Idea.md", "idea 2.md"]);
+    assert_eq!(read(&d_upper.join("Idea.md")), "upper case\n");
+    assert_eq!(read(&d_upper.join("idea 2.md")), "lower case\n");
+    // Stable: no ping-pong, no duplicates.
+    let r = m.reconcile_all(true).await.unwrap();
+    assert!(r.is_empty(), "{r:?}");
+    // Editing each file edits its own note.
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    write(&d_upper.join("idea 2.md"), "lower case, edited\n");
+    let r = m.reconcile_all(true).await.unwrap();
+    assert_eq!((r.ingested, r.created), (1, 0), "{r:?}");
+    assert_eq!(
+        note(&h, &upper, "idea.md").await.as_deref(),
+        Some("lower case, edited\n")
+    );
+    assert_eq!(
+        note(&h, &upper, "Idea.md").await.as_deref(),
+        Some("upper case\n")
+    );
+    assert_eq!(h.get(&upper).unwrap().lock().await.notes().len(), 2);
+}

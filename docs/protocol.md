@@ -9,8 +9,9 @@ server and every Rust client (CLI, agent gateway, browser).
 Authenticated calls send `Authorization: Bearer <token>`. Errors return
 `{"error": "<code>", "message": "..."}` with codes `bad_request`,
 `unauthorized`, `forbidden`, `not_found`, `conflict`, `stale_key` (412: content
-of an individually shared note was encrypted with an outdated key — reload keys
-and re-encrypt), `too_large`, `rate_limited`, `unavailable`, `internal`. Vaults the caller is not a member of
+was encrypted with an outdated key — the vault's or an individually shared
+note's; reload keys and re-encrypt), `too_large`, `rate_limited` (429),
+`unavailable`, `internal`. Vaults the caller is not a member of
 always return `404` so their existence cannot be probed.
 
 ## 1. Data model the server sees
@@ -65,8 +66,8 @@ Defined in `crates/core/src/crypto.rs` and `keys.rs`.
 | Endpoint | Purpose |
 |---|---|
 | `GET /info` | server name, version, `dev_mode`, `oidc_enabled`, size limits (no auth) |
-| `GET /auth/oidc/start?return_to=/path` | 302 to the identity provider (authorization code + PKCE + nonce) |
-| `GET /auth/oidc/callback` | provider redirect target; redirects the browser to `/auth/complete#code=…&return_to=…` |
+| `GET /auth/oidc/start?return_to=/path` | 302 to the identity provider (authorization code + PKCE + nonce); sets an HttpOnly, SameSite=Lax `cpn_login` cookie that binds the login to this browser |
+| `GET /auth/oidc/callback` | provider redirect target; requires the `cpn_login` cookie of the browser that started the login (otherwise `#error=login_failed`, which closes login CSRF); redirects to `/auth/complete#code=…&return_to=…` |
 | `POST /auth/exchange {code}` | one-time code (120 s) → `SessionResponse {token, expires_at, user}` |
 | `POST /auth/dev-login {username, display_name?}` | **development mode only** (`--dev-mode`), otherwise 404 |
 | `POST /auth/logout` | revoke the current session |
@@ -99,6 +100,8 @@ form fields. Tokens are short-lived (default 1 h).
 | `GET /me/recovery` | the recovery envelope (encrypted under the recovery key) |
 | `PUT /me/recovery {recovery_envelope, signature}` | rotate the recovery key; signature by the account key |
 | `GET/PUT /me/prefs` | encrypted per-user data with `expected_version` optimistic concurrency |
+| `GET /me/export` | `EncryptedExport`: everything the caller can read, as stored — vaults (keys, the whole log, attachments) and individually shared notes, plus the recovery envelope. For offline decryption with `coolpsonotes recover`; nothing in it is readable without the caller's keys. `coolpsonotes-server export-user` writes the same from a database or backup file. |
+| `GET /me/audit` | the newest 200 audit entries about the caller (devices, keys, agents, sessions) |
 | `PUT /me/session/device {device_id}` | label the current session with its device |
 | `GET /devices` | own non-revoked devices |
 | `POST /devices {device_id, name, enc_public}` | register a **pending** device; other connections get `user_event: device_pending` |
@@ -175,14 +178,15 @@ vault's events in strictly increasing order without gaps.**
 | `POST /vaults/{v}/updates {updates: [{object_id, client_update_id, payload}]}` | editor/owner. Idempotent per `client_update_id`: a retry returns the original `seq`. Objects are created on first write. Writing to a purged object → `409`. |
 | `GET /vaults/{v}/changes?since=S&limit=N&snapshots=true` | `ChangesResponse {updates, snapshots, purged, head_seq, has_more, next_since}`. For any object whose latest snapshot covers part of `(S, head]`, the snapshot is returned **instead of** the updates it covers. Request further pages with `since=next_since&snapshots=false`. |
 | `GET /vaults/{v}/objects/{o}` | `ObjectState`: latest snapshot + updates after it |
-| `POST /vaults/{v}/objects/{o}/snapshots {snapshot_id, covers_seq, payload}` | editor/owner. Store a compaction (`payload` = encrypted full state). Updates covered by the *previous* snapshot are pruned — one generation is always kept so a bad snapshot is recoverable. |
+| `POST /vaults/{v}/objects/{o}/snapshots {snapshot_id, covers_seq, payload}` | editor/owner. Store a compaction (`payload` = encrypted full state). Updates covered by the *previous* snapshot are pruned — one generation is always kept so a bad snapshot is recoverable. One snapshot per person and note per `--snapshot-cooldown-secs` (default 30 s; `429` otherwise). |
 | `GET /vaults/{v}/objects/{o}/snapshots[/{id}]` | revision history (newest first); default retention 100 per object |
 | `DELETE /vaults/{v}/objects/{o}` | editor/owner: permanently delete (emptying the trash). Not allowed for `index`. |
 | `PUT/GET/DELETE /vaults/{v}/attachments/{id}` | raw encrypted bytes (`application/octet-stream`). Upload: editor/owner; immutable (same id+size re-upload is an idempotent retry). |
 
 **Client rules**
 
-* Encrypt every update with purpose `Update` (snapshots: `Snapshot`) and context `(vault_id, object_id)`, always using the **current** epoch.
+* Encrypt every update with purpose `Update` (snapshots: `Snapshot`) and context `(vault_id, object_id)`, always using the **current** epoch. The server refuses older epochs with `412 stale_key` and unknown newer ones with `400`: reload keys, re-encrypt pending changes and send them again.
+* Pages of `/changes` are bounded by row count (`limit`, at most 5000) and by size (16 MiB of update payloads); keep requesting while `has_more`.
 * Apply updates idempotently (CRDT). Track `vault_seq` = highest sequence received (updates, acks, purges, `synced.head_seq`).
 * A snapshot's `covers_seq` must be ≥ 1 and ≤ the client's `vault_seq` at the time it encoded the state, and the client must have applied every update of that object up to there. REST push responses do not advance `vault_seq` (they can overtake other clients' updates); a REST-only client therefore catches up via `/changes` before creating a snapshot.
 * Compact when an object has accumulated many updates (clients use ~200) or after an editing session ends; add random jitter.
@@ -202,7 +206,8 @@ Server → client: `ready {user_id, session_id, conn_id}`,
 `changes {vault_id, changes}` (catch-up pages after `subscribe` with `since`),
 `synced {vault_id, head_seq, object_id?}`, `update {vault_id, update}`,
 `ack {vault_id, results}` (your own pushes, delivered in log order),
-`snapshot_created {…}`, `purged {vault_id, object_id, seq}`,
+`snapshot {vault_id, snapshot}` (a snapshot someone else stored), `snapshot_created {…}` (yours),
+`purged {vault_id, object_id, seq}`,
 `awareness {vault_id, object_id, from_user, from_conn, payload}` (empty payload = that connection left),
 `vault_event {vault_id, event}` (`members_changed`, `key_rotated`, `meta_changed`, `deleted`, `access_revoked`, `role_changed`),
 `object_event {vault_id, object_id, event}` (`shared`, `key_rotated`, `meta_changed`, `shares_changed`, `access_revoked`, `deleted`),
@@ -210,6 +215,9 @@ Server → client: `ready {user_id, session_id, conn_id}`,
 `error {code, message, vault_id?}`, `pong {nonce}`.
 
 A client must subscribe to a vault before pushing to it over the socket.
+Pushes and (un)subscriptions share a per-connection budget (20 per second,
+bursts of 400); beyond it the server answers `error {code: "rate_limited"}`
+and drops the message, so clients keep the changes pending and retry.
 Awareness payloads are encrypted by clients (purpose `Awareness`); the server
 only relays them (rate-limited, ≤ 16 KiB).
 
@@ -235,7 +243,15 @@ An agent creates its own account key (`PUT /me/account-key` with only `key`).
 Its owner shares vaults with it like with any person, choosing viewer or editor.
 Agents cannot create vaults, manage members, devices or agents.
 
-## 9. Operations endpoints
+## 9. Administration
+
+| Endpoint | Notes |
+|---|---|
+| `GET /admin/users` | administrators: accounts with kind, e-mail, owner (agents), admin and disabled flags, last sign-in, vault and device counts — no content |
+| `PATCH /admin/users/{id} {disabled?, is_admin?}` | disable (ends the person's sessions and their agents') or (un)make administrator |
+| `GET /admin/stats` | counts of users, agents, vaults, objects, updates, snapshots and attachments, and total storage |
+
+## 10. Operations endpoints
 
 `/healthz` (liveness), `/readyz` (database reachable), `/metrics` (Prometheus;
 optional bearer token). All responses carry a strict CSP and security headers.

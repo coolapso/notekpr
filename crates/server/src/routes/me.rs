@@ -158,6 +158,12 @@ pub async fn setup_account_key(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// A device name as stored and shown: trimmed, no control characters, at
+/// most 100 characters.
+pub fn device_name(raw: &str) -> String {
+    raw.trim().chars().filter(|c| !c.is_control()).take(100).collect()
+}
+
 pub async fn insert_device(
     tx: &mut sqlx::Transaction<'static, sqlx::Sqlite>,
     user_id: &str,
@@ -168,13 +174,7 @@ pub async fn insert_device(
     if reg.enc_public.len() != 32 {
         return Err(bad("device key must be 32 bytes"));
     }
-    let name: String = reg
-        .name
-        .trim()
-        .chars()
-        .filter(|c| !c.is_control())
-        .take(100)
-        .collect();
+    let name = device_name(&reg.name);
     let status = if envelope.is_some() {
         "active"
     } else {

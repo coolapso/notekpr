@@ -95,7 +95,7 @@ pub async fn register(
         None,
         "device.register",
         Some(&reg.device_id),
-        serde_json::json!({ "name": reg.name }),
+        serde_json::json!({ "name": super::me::device_name(&reg.name) }),
     )
     .await;
     notify_user(&state, &who.user_id, UserEventKind::DevicePending);

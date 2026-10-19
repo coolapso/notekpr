@@ -184,7 +184,9 @@ impl Vault {
         if self.dirty_pending {
             self.store.save_pending(&self.replica.pending)?;
         }
-        for oid in std::mem::take(&mut self.dirty_objects) {
+        // An object leaves the dirty set only once it is on disk: after a
+        // failed save (disk full, …) the rest is still saved next time.
+        for oid in self.dirty_objects.clone() {
             if oid == INDEX_OBJECT_ID {
                 self.store
                     .save_object(&oid, &self.replica.index.encode_state())?;
@@ -193,6 +195,7 @@ impl Vault {
             } else {
                 self.store.delete_object(&oid)?;
             }
+            self.dirty_objects.remove(&oid);
         }
         let keys = self
             .replica
@@ -1040,6 +1043,49 @@ mod tests {
             NoteDoc::from_updates([p.update.as_slice()]).unwrap().text(),
             "hello"
         );
+    }
+
+    #[test]
+    fn a_failed_save_keeps_everything_dirty_for_the_next_one() {
+        let d = tempfile::tempdir().unwrap();
+        let mut v = vault(d.path());
+        v.save().unwrap();
+        // Remote updates for several objects arrive; the objects directory
+        // cannot be written (here: a file is in its way).
+        let mut other = vault(d.path());
+        for (i, name) in ["A.md", "B.md", "C.md"].iter().enumerate() {
+            other.write_note(name, &format!("text {i}")).unwrap();
+        }
+        for p in other.replica.pending.clone() {
+            let doc_update = p.update.clone();
+            if p.object_id == INDEX_OBJECT_ID {
+                v.replica.index.apply_update(&doc_update).unwrap();
+            } else {
+                v.replica
+                    .notes
+                    .entry(p.object_id.clone())
+                    .or_default()
+                    .apply_update(&doc_update)
+                    .unwrap();
+            }
+            v.dirty_objects.insert(p.object_id.clone());
+        }
+        v.dirty_state = true;
+        let objects = v.store.dir().join("objects");
+        std::fs::remove_dir_all(&objects).ok();
+        std::fs::write(&objects, "in the way").unwrap();
+        assert!(v.save().is_err());
+        assert_eq!(v.dirty_objects.len(), 4, "nothing may be forgotten");
+        // The disk recovers: the next save writes all of them.
+        std::fs::remove_file(&objects).unwrap();
+        v.save().unwrap();
+        assert!(!v.is_dirty());
+        let store = v.store.clone();
+        drop(v);
+        let back = Vault::load(store).unwrap().unwrap();
+        assert_eq!(back.notes().len(), 3);
+        let (_, e) = back.find("B.md").unwrap();
+        assert_eq!(back.note_text(&e.id), "text 1");
     }
 
     #[test]

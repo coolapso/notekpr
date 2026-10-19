@@ -16,13 +16,13 @@ use coolpsonotes_core::protocol::{
     ClientMessage, ObjectEventKind, PushResult, ServerMessage, UserEventKind, VaultEventKind,
 };
 use futures::{SinkExt, StreamExt};
-use tokio::sync::{broadcast, mpsc};
+use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
 use crate::access;
 use crate::auth::{self, Principal};
 use crate::error::AppError;
-use crate::hub::{Control, VaultEvent};
+use crate::hub::{Control, RecvError, VaultEvent, VaultSubscription};
 use crate::state::AppState;
 use crate::sync;
 
@@ -78,8 +78,7 @@ async fn connection(socket: WebSocket, state: AppState) {
         }
     };
 
-    let conn_id = state.hub.next_conn_id();
-    let mut control = state.hub.register_user(&who.user_id, conn_id);
+    let (conn_id, mut control) = state.hub.connect(&who.user_id);
     let (out_tx, mut out_rx) = mpsc::channel::<Out>(OUTBOUND_QUEUE);
     metrics::gauge!("coolpsonotes_ws_connections").increment(1.0);
 
@@ -203,7 +202,7 @@ async fn connection(socket: WebSocket, state: AppState) {
             },
         );
     }
-    state.hub.unregister_user(&conn.who.user_id, conn_id);
+    state.hub.disconnect(&conn.who.user_id, conn_id);
     metrics::gauge!("coolpsonotes_ws_connections").decrement(1.0);
     let _ = out_tx.send(Out::Close).await;
     drop(out_tx);
@@ -305,6 +304,8 @@ impl Conn {
                 if let (Some(o), true) = (&object_id, member) {
                     self.via_membership.insert((vault_id.clone(), o.clone()));
                 }
+                // Subscribe before `forward` reads the log, so nothing
+                // committed after its catch-up read can be missed (hub.rs).
                 let rx = self.state.hub.subscribe(&vault_id);
                 let task = tokio::spawn(forward(
                     self.state.clone(),
@@ -432,7 +433,7 @@ async fn forward(
     doc_only: bool,
     since: Option<i64>,
     conn_id: u64,
-    mut rx: broadcast::Receiver<std::sync::Arc<VaultEvent>>,
+    mut rx: VaultSubscription,
     out: mpsc::Sender<Out>,
 ) {
     let send = |m: ServerMessage| {
@@ -472,7 +473,7 @@ async fn forward(
     loop {
         let ev = match rx.recv().await {
             Ok(ev) => ev,
-            Err(broadcast::error::RecvError::Lagged(_)) => {
+            Err(RecvError::Lagged) => {
                 // Too slow to keep up live: replay from the log instead.
                 match catch_up(&state, &vault_id, object.as_deref(), doc_only, last, &out).await {
                     Ok(h) => {
@@ -491,7 +492,7 @@ async fn forward(
                     Err(_) => return,
                 }
             }
-            Err(broadcast::error::RecvError::Closed) => return,
+            Err(RecvError::Closed) => return,
         };
         // Per-note subscriptions only see that note (no vault-wide activity).
         if let Some(o) = &object {

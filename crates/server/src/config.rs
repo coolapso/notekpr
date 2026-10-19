@@ -170,6 +170,17 @@ pub struct Config {
     )]
     pub dev_mode: bool,
 
+    /// Allow development mode where it could be reachable by others: a
+    /// non-loopback listen address (e.g. inside a container whose port is
+    /// only published on localhost), an https public URL, or with OIDC.
+    #[arg(
+        long,
+        env = "COOLPSONOTES_DEV_MODE_ANYWHERE",
+        default_value_t = false,
+        global = true
+    )]
+    pub dev_mode_anywhere: bool,
+
     /// Identities ("issuer|subject", or "dev:<name>" in dev mode) that are administrators.
     #[arg(
         long = "admin",

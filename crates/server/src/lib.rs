@@ -35,8 +35,32 @@ pub async fn build(
     let db = db::connect(&path).await?;
     db::migrate(&db, &path).await?;
     let state = AppState::new(db, config, metrics)?;
+    if !state.config.dev_mode {
+        end_dev_sessions(&state).await?;
+    }
     spawn_maintenance(state.clone());
     Ok((routes::router(state.clone()), state))
+}
+
+/// Sessions of accounts created in development mode stop working once the
+/// server runs without it (e.g. a dev database reused for real use).
+async fn end_dev_sessions(state: &AppState) -> anyhow::Result<()> {
+    let n = sqlx::query(
+        "UPDATE sessions SET revoked_at = ? WHERE revoked_at IS NULL AND user_id IN
+           (SELECT user_id FROM identities WHERE issuer = ?)",
+    )
+    .bind(db::now())
+    .bind(coolpsonotes_core::protocol::DEV_ISSUER)
+    .execute(&state.db)
+    .await?
+    .rows_affected();
+    if n > 0 {
+        tracing::warn!(
+            sessions = n,
+            "ended sessions of development-mode accounts (development mode is off)"
+        );
+    }
+    Ok(())
 }
 
 /// Periodic cleanup of expired short-lived records and rate-limiter state.

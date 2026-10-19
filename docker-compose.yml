@@ -1,6 +1,9 @@
 # Production-style deployment: coolpsonotes behind Caddy (automatic HTTPS).
 #   cp .env.example .env   # set PUBLIC_HOST and the OIDC client
 #   docker compose up -d
+# The project name keeps this stack apart from docker-compose.dev.yml, so the
+# two can never replace each other's containers.
+name: coolpsonotes
 services:
   coolpsonotes:
     build: .

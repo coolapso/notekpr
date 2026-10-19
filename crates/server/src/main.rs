@@ -87,11 +87,35 @@ async fn serve(config: Config) -> anyhow::Result<()> {
         );
     }
     if config.dev_mode {
+        // Anyone who can reach a dev-mode server can sign in as anyone:
+        // refuse setups that look like they are meant to be reachable.
+        let risky = [
+            (
+                !config.listen.ip().is_loopback(),
+                "it listens on a non-loopback address",
+            ),
+            (
+                config.public_url.starts_with("https://"),
+                "its public URL is https",
+            ),
+            (config.oidc_enabled(), "OIDC sign-in is configured too"),
+        ];
+        let reasons: Vec<&str> = risky
+            .iter()
+            .filter(|(on, _)| *on)
+            .map(|(_, r)| *r)
+            .collect();
+        if !reasons.is_empty() && !config.dev_mode_anywhere {
+            bail!(
+                "refusing to start in development mode because {}. Development mode lets anyone sign in as anyone. If this server really is reachable only by you (e.g. a container published on 127.0.0.1), add --dev-mode-anywhere (COOLPSONOTES_DEV_MODE_ANYWHERE=true).",
+                reasons.join(" and ")
+            );
+        }
         tracing::warn!(
             "DEVELOPMENT MODE: anyone who can reach this server can sign in as any user name without a password"
         );
-        if !config.listen.ip().is_loopback() {
-            tracing::warn!(listen = %config.listen, "development mode is listening on a non-loopback address");
+        for r in reasons {
+            tracing::warn!("development mode allowed although {r}");
         }
     }
     if !config.public_url.starts_with("https://") && !is_local_url(&config.public_url) {

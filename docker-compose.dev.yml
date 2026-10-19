@@ -7,12 +7,20 @@
 # Optional: also start a local OIDC provider (Dex) to try the real login flow:
 #   docker compose -f docker-compose.dev.yml --profile oidc up --build
 #   then open http://localhost:8081 and sign in as olivia@example.com / password
+#
+# Never run this on a production host: it is a separate compose project
+# ("coolpsonotes-dev"), so it can't replace the production containers, but
+# anyone who can reach a dev-mode server can sign in as anyone.
+name: coolpsonotes-dev
 services:
   coolpsonotes:
     build: .
     image: coolpsonotes:latest
     environment:
       COOLPSONOTES_DEV_MODE: "true"
+      # Inside the container the server listens on 0.0.0.0; the port is only
+      # published on 127.0.0.1 below, so dev mode is reachable just from here.
+      COOLPSONOTES_DEV_MODE_ANYWHERE: "true"
       COOLPSONOTES_PUBLIC_URL: http://localhost:8080
       COOLPSONOTES_LOG_FORMAT: pretty
     ports:

@@ -197,9 +197,18 @@ pub async fn provision_user(
         .await?;
         id
     } else {
-        let humans: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users WHERE kind = 'human'")
-            .fetch_one(&state.db)
-            .await?;
+        // "First user" counts real accounts and development-mode accounts
+        // separately, so test users from dev mode never take the admin role
+        // from the first real person signing in on the same database.
+        let dev = issuer == coolpsonotes_core::protocol::DEV_ISSUER;
+        let humans: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM users u WHERE u.kind = 'human' AND EXISTS
+               (SELECT 1 FROM identities i WHERE i.user_id = u.id AND (i.issuer = ?) = ?)",
+        )
+        .bind(coolpsonotes_core::protocol::DEV_ISSUER)
+        .bind(dev)
+        .fetch_one(&state.db)
+        .await?;
         let is_admin = configured_admin || (state.config.first_user_admin && humans == 0);
         let id = db::new_id();
         let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;

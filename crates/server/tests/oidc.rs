@@ -312,3 +312,67 @@ async fn unverified_email_is_not_used() {
     assert_eq!(session.user.display_name, "Olivia");
     assert_eq!(session.user.email, None);
 }
+
+#[tokio::test]
+async fn dev_accounts_never_take_the_first_admin_role() {
+    let s = setup(vec!["client_secret_basic"], true, true).await;
+    // The same database was used in development mode before.
+    let dir = s._dir.path().to_path_buf();
+    let mut cfg = coolpsonotes_server::config::Config::for_tests(dir.clone());
+    cfg.public_url = s.base.clone();
+    let (dev_app, _) = coolpsonotes_server::build(cfg, None).await.unwrap();
+    let dev_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let dev_base = format!("http://{}", dev_listener.local_addr().unwrap());
+    tokio::spawn(async move {
+        axum::serve(
+            dev_listener,
+            dev_app.into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .await
+        .unwrap()
+    });
+    let r = s
+        .http
+        .post(format!("{dev_base}/api/v1/auth/dev-login"))
+        .json(&json!({"username": "tester"}))
+        .send()
+        .await
+        .unwrap();
+    let dev: SessionResponse = r.json().await.unwrap();
+    assert!(dev.user.is_admin, "first dev user is admin in dev mode");
+
+    // The first real person to sign in still becomes the administrator.
+    let session = s.exchange(&s.login(true).await).await;
+    assert!(session.user.is_admin);
+
+    // Restarting without development mode ends the dev account's sessions.
+    let mut cfg = coolpsonotes_server::config::Config::for_tests(dir);
+    cfg.dev_mode = false;
+    cfg.oidc_issuer = Some(s.idp.0.issuer.clone());
+    cfg.oidc_client_id = Some(CLIENT_ID.into());
+    let (app, _) = coolpsonotes_server::build(cfg, None).await.unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move {
+        axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .await
+        .unwrap()
+    });
+    let me = |token: String| {
+        let http = s.http.clone();
+        let base = base.clone();
+        async move {
+            http.get(format!("{base}/api/v1/me"))
+                .bearer_auth(token)
+                .send()
+                .await
+                .unwrap()
+                .status()
+        }
+    };
+    assert_eq!(me(dev.token).await, 401);
+    assert_eq!(me(session.token).await, 200);
+}

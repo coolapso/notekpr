@@ -1689,6 +1689,8 @@ impl Mirror {
             return Ok(report);
         };
         let opts = self.opts;
+        // Never ask the network while holding the vault lock.
+        let max_attachment = self.hub.limits().await.max_attachment_bytes;
         let Some(mv) = self.vaults.get_mut(vault_id) else {
             return Ok(report);
         };
@@ -1723,17 +1725,7 @@ impl Mirror {
             .filter(|(p, _)| !claimed.contains(&mv.key(p)))
             .map(|(p, s)| (p.clone(), *s))
             .collect();
-        if writable && !new_files.is_empty() {
-            let max_attachment = if new_files.iter().any(|(p, _)| !paths::is_note(p)) {
-                self.hub
-                    .session
-                    .server_info()
-                    .await
-                    .map(|i| i.max_attachment_bytes)
-                    .unwrap_or(u64::MAX)
-            } else {
-                u64::MAX
-            };
+        if writable {
             for (path, st) in new_files {
                 if let Err(e) = ingest_new_file(
                     mv,

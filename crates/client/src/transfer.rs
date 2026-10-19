@@ -244,12 +244,7 @@ pub async fn import(
         Some(f) if !f.trim_matches('/').is_empty() => paths::normalize(f)?,
         _ => String::new(),
     };
-    let max = hub
-        .session
-        .server_info()
-        .await
-        .map(|i| i.max_attachment_bytes)
-        .unwrap_or(u64::MAX);
+    let max = hub.limits().await.max_attachment_bytes;
     let vault_id;
     {
         let mut v = vault.lock().await;

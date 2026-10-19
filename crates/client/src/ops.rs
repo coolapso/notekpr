@@ -508,12 +508,7 @@ pub async fn put_attachment(
     mime: Option<&str>,
 ) -> OpResult<PutOutcome> {
     let v = vault(hub, vref).await?;
-    let max = hub
-        .session
-        .server_info()
-        .await
-        .map(|i| i.max_attachment_bytes)
-        .unwrap_or(25 * 1024 * 1024);
+    let max = hub.limits().await.max_attachment_bytes;
     if data.len() as u64 > max {
         return Err(OpError::BadRequest(format!(
             "attachment is larger than the server limit of {max} bytes"

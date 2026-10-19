@@ -13,7 +13,7 @@ use coolpsonotes_core::protocol::*;
 use tokio::sync::{Mutex, OnceCell};
 
 use crate::api::{Api, ApiError, Credentials};
-use crate::profile::{Dirs, Profile, ProfileStore};
+use crate::profile::{Dirs, Profile, ProfileStore, ServerLimits};
 use crate::secrets::{LocalKey, SecretStore};
 use crate::store::{VaultStore, valid_id};
 use crate::ui;
@@ -37,6 +37,7 @@ pub struct Session {
     pub(crate) account: AccountSecret,
     pub local_key: Arc<LocalKey>,
     info: OnceCell<ServerInfo>,
+    limits: std::sync::Mutex<(ServerLimits, bool)>,
 }
 
 /// What happened during a push.
@@ -93,6 +94,11 @@ impl Session {
             },
         };
         let api = Api::new(&p.server, creds)?;
+        // (limits, whether they are the remembered ones rather than defaults)
+        let limits = (
+            p.server_limits.unwrap_or_default(),
+            p.server_limits.is_some(),
+        );
         Ok(Session {
             profiles,
             kind: p.kind,
@@ -102,6 +108,7 @@ impl Session {
             account,
             local_key: Arc::new(secrets.into_local_key()),
             info: OnceCell::new(),
+            limits: std::sync::Mutex::new(limits),
         })
     }
 
@@ -121,8 +128,29 @@ impl Session {
         self.profiles.data_dir()
     }
 
+    /// `/info` (fetched once per process). Also refreshes [`Session::limits`].
     pub async fn server_info(&self) -> Result<&ServerInfo, ApiError> {
-        self.info.get_or_try_init(|| self.api.info()).await
+        let info = self.info.get_or_try_init(|| self.api.info()).await?;
+        let fresh = ServerLimits {
+            max_attachment_bytes: info.max_attachment_bytes,
+            max_update_bytes: info.max_update_bytes,
+        };
+        let changed = {
+            let mut l = self.limits.lock().unwrap();
+            let known = std::mem::replace(&mut *l, (fresh, true));
+            known != (fresh, true)
+        };
+        if changed && let Err(e) = self.profiles.update(|p| p.server_limits = Some(fresh)) {
+            tracing::debug!("could not remember the server limits: {e:#}");
+        }
+        Ok(info)
+    }
+
+    /// The server's size limits without touching the network: as last seen
+    /// (remembered in the profile), or the server defaults. Safe to call
+    /// while holding a vault lock and offline.
+    pub fn limits(&self) -> ServerLimits {
+        self.limits.lock().unwrap().0
     }
 
     fn vaults_dir(&self) -> PathBuf {

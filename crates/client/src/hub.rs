@@ -16,6 +16,7 @@ use serde::Serialize;
 use tokio::sync::{Mutex, broadcast};
 
 use crate::api::ApiError;
+use crate::profile::ServerLimits;
 use crate::session::{PushOutcome, Session, SharedVault};
 use crate::ui;
 use crate::vault::Vault;
@@ -118,6 +119,8 @@ impl Hub {
         match self.session.api.vaults().await {
             Ok(list) => {
                 self.online.store(true, Ordering::Relaxed);
+                // Learn (and remember) the size limits while online.
+                let _ = self.limits().await;
                 self.preresolve_allow_list(&list);
                 self.open_listed(&list).await?;
             }
@@ -323,6 +326,17 @@ impl Hub {
 
     pub fn is_online(&self) -> bool {
         self.online.load(Ordering::Relaxed)
+    }
+
+    /// The server's size limits: fetched once while online, otherwise the
+    /// remembered ones (never "unlimited"). Call it before taking a vault lock.
+    pub async fn limits(&self) -> ServerLimits {
+        if self.is_online()
+            && let Err(e) = self.session.server_info().await
+        {
+            tracing::debug!("server info: {e}");
+        }
+        self.session.limits()
     }
 
     pub fn set_online(&self, online: bool) {

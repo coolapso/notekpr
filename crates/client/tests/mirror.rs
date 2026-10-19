@@ -714,3 +714,56 @@ async fn case_insensitive_file_systems_keep_case_variants_apart() {
     );
     assert_eq!(h.get(&upper).unwrap().lock().await.notes().len(), 2);
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn server_limits_are_remembered_and_enforced_offline() {
+    use coolpsonotes_client::profile::{ProfileStore, ServerLimits};
+    let srv = start().await;
+    let alice = login(&srv, "alice").await;
+    manage::create_vault(&alice, "Files").await.unwrap();
+    let h = hub(&alice).await;
+    let vid = h
+        .resolve("Files")
+        .await
+        .unwrap()
+        .lock()
+        .await
+        .id()
+        .to_string();
+    drop(h);
+    // Learned while online.
+    let store = ProfileStore::new(&srv.dirs("alice"), "alice").unwrap();
+    assert_eq!(
+        store.require().unwrap().server_limits,
+        Some(ServerLimits::default())
+    );
+
+    // Offline, with a (remembered) small attachment limit.
+    let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let dead = format!("http://{}", l.local_addr().unwrap());
+    drop(l);
+    store
+        .update(|p| {
+            p.server = dead.clone();
+            p.server_limits = Some(ServerLimits {
+                max_attachment_bytes: 10,
+                max_update_bytes: 2048 * 1024,
+            });
+        })
+        .unwrap();
+    let offline = hub(&reopen(&srv, "alice", "alice").await).await;
+    assert!(!offline.is_online());
+    let mut m = Mirror::new(offline.clone(), &srv.path("mirror"))
+        .await
+        .unwrap();
+    m.reconcile_all(true).await.unwrap();
+    let dir = m.vault_dir(&vid).unwrap().to_path_buf();
+    std::fs::write(dir.join("big.bin"), [7u8; 100]).unwrap();
+    std::fs::write(dir.join("small.bin"), [7u8; 5]).unwrap();
+    let r = m.reconcile_all(true).await.unwrap();
+    assert_eq!(r.created, 1, "only the small file is synced: {r:?}");
+    assert!(matches!(
+        ops::put_attachment(&offline, &vid, "x.bin", &[0u8; 100], None).await,
+        Err(ops::OpError::BadRequest(_))
+    ));
+}

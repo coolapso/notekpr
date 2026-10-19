@@ -122,6 +122,23 @@ pub struct SyncSettings {
     pub mirror_dir: Option<PathBuf>,
 }
 
+/// Size limits the server enforces, remembered so they are known offline.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ServerLimits {
+    pub max_attachment_bytes: u64,
+    pub max_update_bytes: u64,
+}
+
+impl Default for ServerLimits {
+    /// The server's defaults (`--max-attachment-mb 25`, `--max-update-kb 2048`).
+    fn default() -> Self {
+        ServerLimits {
+            max_attachment_bytes: 25 * 1024 * 1024,
+            max_update_bytes: 2048 * 1024,
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct GatewaySettings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -156,6 +173,9 @@ pub struct Profile {
     pub sync: SyncSettings,
     #[serde(default)]
     pub gateway: GatewaySettings,
+    /// Last limits the server announced (`/info`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub server_limits: Option<ServerLimits>,
     /// Trust-on-first-use account key fingerprints: user id -> fingerprint.
     #[serde(default)]
     pub pins: BTreeMap<String, String>,
@@ -177,6 +197,7 @@ impl Profile {
             agent: None,
             sync: SyncSettings::default(),
             gateway: GatewaySettings::default(),
+            server_limits: None,
             pins: BTreeMap::new(),
         }
     }

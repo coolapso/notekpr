@@ -110,8 +110,13 @@ form fields. Tokens are short-lived (default 1 h).
 | `PATCH /devices/{id} {name}`, `DELETE /devices/{id}` | rename / remove (revokes the device's sessions) |
 
 Device approval UX: both devices display
-`device_verification_code(user_id, device_id, device_public)` (12 base32
-characters); the user approves only if they match.
+`device_verification_code(user_id, device_id, device_public, account_public)`
+(12 base32 characters, statement `device-code-v2`); the user approves only if
+they match. The approving device uses its own account key; the new device uses
+the published account key (`GET /me`, self-signature checked) and pins it. An
+envelope that unwraps to a secret of any other account key is refused, so a
+server can't hand a new device a secret of its own: anyone can encrypt to a
+device's public key, but the code would differ.
 
 ## 5. Vaults, members, keys
 

@@ -758,8 +758,11 @@ fn History(vault: String, note: String) -> impl IntoView {
 #[component]
 fn ApproveDevice(device: DeviceInfo) -> impl IntoView {
     let ui = ui();
-    let uid = with(|c| c.user_id.clone());
-    let code = coolpsonotes_core::engine::verification_code(&uid, &device.id, &device.enc_public)
+    let (uid, account) = with(|c| (c.user_id.clone(), c.account.as_ref().map(|a| a.public())));
+    let code = account
+        .and_then(|a| {
+            coolpsonotes_core::engine::verification_code(&uid, &device.id, &device.enc_public, &a)
+        })
         .unwrap_or_default();
     let busy = RwSignal::new(false);
     let d1 = device.clone();

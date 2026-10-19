@@ -250,13 +250,27 @@ pub fn wrap_account_for_device(
 }
 
 /// Code shown on both the new device and the approving device. The user checks
-/// they match before approving, which defeats a server that substitutes its own
-/// device key. 60 bits makes grinding a colliding key during the approval
-/// window impractical.
-pub fn device_verification_code(user_id: &str, device_id: &str, device_public: &Key32) -> String {
+/// they match before approving, which defeats a server that substitutes its
+/// own device key — or, towards the new device, its own account key (whose
+/// secret it could then send instead of the real one): the new device computes
+/// the code from the account key it expects, the approving device from its own.
+/// 60 bits makes grinding a colliding key during the approval window
+/// impractical.
+pub fn device_verification_code(
+    user_id: &str,
+    device_id: &str,
+    device_public: &Key32,
+    account: &AccountPublic,
+) -> String {
     let m = crypto::statement(
-        "device-code",
-        &[user_id.as_bytes(), device_id.as_bytes(), device_public],
+        "device-code-v2",
+        &[
+            user_id.as_bytes(),
+            device_id.as_bytes(),
+            device_public,
+            &account.sign_public,
+            &account.enc_public,
+        ],
     );
     let h = crypto::kdf_hash("coolpsonotes v1 device verification code", &m);
     // 60 bits -> 12 base32 characters.
@@ -640,8 +654,18 @@ mod tests {
         let back = d.unwrap_account(&sealed, "u1", "d1").unwrap();
         assert_eq!(back.public(), a.public());
         assert!(d.unwrap_account(&sealed, "u1", "d2").is_err());
-        let code = device_verification_code("u1", "d1", &d.public);
+        let code = device_verification_code("u1", "d1", &d.public, &a.public());
         assert_eq!(code.len(), 14);
+        // A substituted account key (or device key) changes the code.
+        let other = AccountSecret::generate();
+        assert_ne!(
+            code,
+            device_verification_code("u1", "d1", &d.public, &other.public())
+        );
+        assert_ne!(
+            code,
+            device_verification_code("u1", "d1", &DeviceKey::generate().public, &a.public())
+        );
         let sig = a.sign_device_approval("u1", "d1", &d.public);
         a.public()
             .verify_device_approval("u1", "d1", &d.public, &sig)

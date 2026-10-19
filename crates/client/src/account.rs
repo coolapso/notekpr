@@ -374,7 +374,8 @@ pub async fn login(dirs: &Dirs, profile: &str, opts: LoginOptions) -> Result<Log
             (dev, reg.device_id)
         }
     };
-    let code = engine::verification_code(&user.id, &device_id, &device.public).unwrap_or_default();
+    let code = engine::verification_code(&user.id, &device_id, &device.public, &public)
+        .unwrap_or_default();
 
     let (account, recovered) = match &opts.recovery_key {
         Some(k) => (

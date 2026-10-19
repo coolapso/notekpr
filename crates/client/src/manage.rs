@@ -334,8 +334,13 @@ pub async fn pending_device(session: &Session, device_id: &str) -> Result<(Devic
             d.status.as_str()
         );
     }
-    let code = engine::verification_code(&session.user_id, &d.id, &d.enc_public)
-        .ok_or_else(|| anyhow!("the device key is malformed"))?;
+    let code = engine::verification_code(
+        &session.user_id,
+        &d.id,
+        &d.enc_public,
+        &session.account().public(),
+    )
+    .ok_or_else(|| anyhow!("the device key is malformed"))?;
     Ok((d, code))
 }
 

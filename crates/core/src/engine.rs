@@ -9,8 +9,8 @@ use serde::{Deserialize, Serialize};
 use crate::crypto::{CryptoError, Purpose};
 use crate::doc::{DocError, IndexDoc, NoteDoc};
 use crate::keys::{
-    self, AccountSecret, DeviceKey, RecoveryKey, VaultKey, VaultKeyring, wrap_account_for_device,
-    wrap_vault_key,
+    self, AccountPublic, AccountSecret, DeviceKey, RecoveryKey, VaultKey, VaultKeyring,
+    wrap_account_for_device, wrap_vault_key,
 };
 use crate::protocol::*;
 use crate::random_id;
@@ -152,9 +152,43 @@ pub fn approve_device(
     })
 }
 
-pub fn verification_code(user_id: &str, device_id: &str, device_public: &[u8]) -> Option<String> {
+/// The approval code for a device (see [`keys::device_verification_code`]).
+/// `account` is the account key: on the approving device its own, on the new
+/// device the published key it pinned, which an approved secret must then
+/// match ([`check_approved_account`]).
+pub fn verification_code(
+    user_id: &str,
+    device_id: &str,
+    device_public: &[u8],
+    account: &AccountPublic,
+) -> Option<String> {
     let pk: [u8; 32] = device_public.try_into().ok()?;
-    Some(keys::device_verification_code(user_id, device_id, &pk))
+    Some(keys::device_verification_code(
+        user_id, device_id, &pk, account,
+    ))
+}
+
+/// The account key a new device expects: the published one, checked.
+pub fn published_account(user_id: &str, key: &PublicAccountKey) -> Result<AccountPublic> {
+    if key.user_id != user_id {
+        return Err(EngineError::Invalid(
+            "the server returned an account key for a different user".into(),
+        ));
+    }
+    Ok(key.verify()?)
+}
+
+/// Refuse an account secret that doesn't belong to the account key a device
+/// was approved for: anyone (the server too) can encrypt a secret to a
+/// device's public key.
+pub fn check_approved_account(secret: &AccountSecret, expected: &AccountPublic) -> Result<()> {
+    if secret.public() != *expected {
+        return Err(EngineError::Invalid(
+            "the keys sent to this device belong to a different account key than the one it was approved for"
+                .into(),
+        ));
+    }
+    Ok(())
 }
 
 /// New recovery key replacing the old one.
@@ -1358,6 +1392,18 @@ mod tests {
         assert!(applied.objects.contains("n"));
         assert_eq!(b.note_text("n"), "one two");
         assert!(!b.needs_keys());
+    }
+
+    #[test]
+    fn a_device_accepts_only_the_account_it_was_approved_for() {
+        let real = AccountSecret::generate();
+        let fake = AccountSecret::generate();
+        let key = PublicAccountKey::new("u1", 1, &real.public(), &real.sign_account_key("u1", 1));
+        let expected = published_account("u1", &key).unwrap();
+        assert!(published_account("u2", &key).is_err());
+        assert!(check_approved_account(&real, &expected).is_ok());
+        // The server could encrypt its own secret to the device's public key.
+        assert!(check_approved_account(&fake, &expected).is_err());
     }
 
     #[test]

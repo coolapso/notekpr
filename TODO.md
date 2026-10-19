@@ -376,9 +376,9 @@ every client verifies; updates are signed by the author's key.
 - [ ] Signed, hash-chained membership/key log; clients refuse unsigned
       changes.
 - [ ] Signed updates (authorship verifiable even against a colluding server).
-- [ ] Bind the account key into device approval (interim fix worth doing
-      first: include the account-key fingerprint in the verification code and
-      verify the unwrapped secret against the published key) [S-M5, W-M1].
+- [x] Bind the account key into device approval (interim fix): the
+      verification code covers the account key; new devices pin it and refuse
+      a secret of any other account, also on later unlocks [S-M5, W-M1].
 - Resolves: the owner's client giving the vault key to any member the server
   lists [C-H8]; new-device secret substitution [S-M5, W-M1]; trust pins
   rolled back by replaying old prefs [W-M10]; recovery-key rotation replay

@@ -12,7 +12,7 @@ use std::rc::Rc;
 use coolpsonotes_core::crypto::Purpose;
 use coolpsonotes_core::doc::{EntryKind, NoteDoc};
 use coolpsonotes_core::engine::{self, ObjectMeta, Presence, VaultMeta, VaultReplica};
-use coolpsonotes_core::keys::{AccountSecret, DeviceKey, RecoveryKey};
+use coolpsonotes_core::keys::{AccountPublic, AccountSecret, DeviceKey, RecoveryKey};
 use coolpsonotes_core::protocol::*;
 use coolpsonotes_core::{paths, random_id, textdiff};
 use leptos::prelude::Update;
@@ -577,15 +577,19 @@ pub async fn after_login() {
     }
     if let Some(rec) = storage::device(&uid) {
         match api::get::<DeviceEnvelope>(&format!("/devices/{}/envelope", rec.device_id)).await {
-            Ok(env) => {
-                if unlock_with_device(&uid, &rec, &env.account_envelope) {
+            Ok(env) => match unlock_with_device(&uid, &rec, &env.account_envelope) {
+                Unlock::Unlocked => {
                     enter_ready().await;
                     return;
                 }
-                storage::clear_device(&uid);
-            }
+                Unlock::WrongAccount => {
+                    ui.phase.set(Phase::Fatal(WRONG_ACCOUNT.into()));
+                    return;
+                }
+                Unlock::Unreadable => storage::clear_device(&uid),
+            },
             Err(e) if e.status == 409 => {
-                show_pending(&uid, &rec);
+                show_pending(&uid, rec);
                 return;
             }
             Err(e) if e.status == 404 => storage::clear_device(&uid),
@@ -602,26 +606,56 @@ pub async fn after_login() {
     });
 }
 
-fn unlock_with_device(uid: &str, rec: &DeviceRecord, envelope: &[u8]) -> bool {
-    let Some(secret) = coolpsonotes_core::b64::decode32(&rec.secret) else {
-        return false;
-    };
-    let Ok(dev) = DeviceKey::from_secret(secret) else {
-        return false;
-    };
-    match dev.unwrap_account(envelope, uid, &rec.device_id) {
-        Ok(acct) => {
-            with(|c| {
-                c.account = Some(acct);
-                c.device_id = Some(rec.device_id.clone());
-            });
-            true
-        }
-        Err(_) => false,
-    }
+enum Unlock {
+    Unlocked,
+    /// Not for this device (or the record is damaged).
+    Unreadable,
+    /// A valid secret, but of another account key than this device was
+    /// approved for: someone (possibly the server) substituted keys.
+    WrongAccount,
 }
 
-fn show_pending(uid: &str, rec: &DeviceRecord) {
+const WRONG_ACCOUNT: &str = "The server sent this browser keys of a different account than the one it was approved for. This can mean the server was tampered with. Nothing was decrypted with them; check your devices from another device before signing in here again.";
+
+/// The account key the server publishes for us, checked.
+fn published_account(uid: &str) -> Option<AccountPublic> {
+    with(|c| {
+        let key = c.me.as_ref()?.account_key.as_ref()?;
+        engine::published_account(uid, key).ok()
+    })
+}
+
+fn unlock_with_device(uid: &str, rec: &DeviceRecord, envelope: &[u8]) -> Unlock {
+    let Some(secret) = coolpsonotes_core::b64::decode32(&rec.secret) else {
+        return Unlock::Unreadable;
+    };
+    let Ok(dev) = DeviceKey::from_secret(secret) else {
+        return Unlock::Unreadable;
+    };
+    let Ok(acct) = dev.unwrap_account(envelope, uid, &rec.device_id) else {
+        return Unlock::Unreadable;
+    };
+    // Pinned when the approval code was shown; records from before pinning
+    // pin the published key now.
+    let Some(expected) = rec.account().or_else(|| published_account(uid)) else {
+        return Unlock::WrongAccount;
+    };
+    if engine::check_approved_account(&acct, &expected).is_err() {
+        return Unlock::WrongAccount;
+    }
+    if rec.account.is_none() {
+        let mut r = rec.clone();
+        r.pin(&expected);
+        storage::set_device(uid, &r);
+    }
+    with(|c| {
+        c.account = Some(acct);
+        c.device_id = Some(rec.device_id.clone());
+    });
+    Unlock::Unlocked
+}
+
+fn show_pending(uid: &str, mut rec: DeviceRecord) {
     let ui = ui();
     let Some(secret) = coolpsonotes_core::b64::decode32(&rec.secret) else {
         return;
@@ -629,12 +663,29 @@ fn show_pending(uid: &str, rec: &DeviceRecord) {
     let Ok(dev) = DeviceKey::from_secret(secret) else {
         return;
     };
-    let code = engine::verification_code(uid, &rec.device_id, &dev.public).unwrap_or_default();
+    // The code covers the account key this browser expects; the approving
+    // device shows one computed from the real key.
+    let account = match rec.account() {
+        Some(a) => a,
+        None => {
+            let Some(a) = published_account(uid) else {
+                ui.phase.set(Phase::Fatal(
+                    "Your account key on the server failed verification.".into(),
+                ));
+                return;
+            };
+            rec.pin(&a);
+            storage::set_device(uid, &rec);
+            a
+        }
+    };
+    let code =
+        engine::verification_code(uid, &rec.device_id, &dev.public, &account).unwrap_or_default();
     ui.phase.set(Phase::Enroll {
         pending: Some((rec.device_id.clone(), code)),
         error: None,
     });
-    poll_approval(uid.to_string(), rec.clone());
+    poll_approval(uid.to_string(), rec);
 }
 
 fn poll_approval(uid: String, rec: DeviceRecord) {
@@ -654,14 +705,16 @@ fn poll_approval(uid: String, rec: DeviceRecord) {
             match api::get::<DeviceEnvelope>(&format!("/devices/{}/envelope", rec.device_id)).await
             {
                 Ok(env) => {
-                    if unlock_with_device(&uid, &rec, &env.account_envelope) {
-                        success("This browser was approved.");
-                        enter_ready().await;
-                    } else {
-                        ui.phase.set(Phase::Enroll {
+                    match unlock_with_device(&uid, &rec, &env.account_envelope) {
+                        Unlock::Unlocked => {
+                            success("This browser was approved.");
+                            enter_ready().await;
+                        }
+                        Unlock::WrongAccount => ui.phase.set(Phase::Fatal(WRONG_ACCOUNT.into())),
+                        Unlock::Unreadable => ui.phase.set(Phase::Enroll {
                             pending: None,
                             error: Some("Approval data was invalid.".into()),
-                        });
+                        }),
                     }
                     return;
                 }
@@ -707,13 +760,15 @@ pub async fn setup_keys() {
     // Keep this browser's device key before the server holds an account key
     // that only this device can unwrap: a lost answer must not lose it.
     let previous = storage::device(&uid);
-    storage::set_device(
-        &uid,
-        &DeviceRecord {
+    storage::set_device(&uid, &{
+        let mut r = DeviceRecord {
             device_id: boot.device_id.clone(),
             secret: coolpsonotes_core::b64::encode(&boot.device.secret),
-        },
-    );
+            account: None,
+        };
+        r.pin(&boot.account.public());
+        r
+    });
     if let Err(e) = api::put::<_, ()>("/me/account-key", &boot.request).await {
         let stored = match api::get::<MeResponse>("/me").await {
             // Our keys did arrive; only the answer was lost.
@@ -774,9 +829,10 @@ pub async fn request_approval() {
     let rec = DeviceRecord {
         device_id: reg.device_id.clone(),
         secret: coolpsonotes_core::b64::encode(&dev.secret),
+        account: None,
     };
     storage::set_device(&uid, &rec);
-    show_pending(&uid, &rec);
+    show_pending(&uid, rec);
 }
 
 /// Unlock with the recovery key and enroll this browser without another device.
@@ -802,21 +858,23 @@ pub async fn recover(input: String) {
         Err(_) => return fail("This recovery key does not belong to this account.".into()),
     };
     // Reuse a pending device of this browser or register a new one.
-    let rec = match storage::device(&uid) {
+    let mut rec = match storage::device(&uid) {
         Some(r) => r,
         None => {
             let (dev, reg) = engine::new_device(&device_name());
             if let Err(e) = api::post::<_, ()>("/devices", &reg).await {
                 return fail(e.message);
             }
-            let r = DeviceRecord {
+            DeviceRecord {
                 device_id: reg.device_id.clone(),
                 secret: coolpsonotes_core::b64::encode(&dev.secret),
-            };
-            storage::set_device(&uid, &r);
-            r
+                account: None,
+            }
         }
     };
+    // The recovery key opened the real account secret: this is the key to expect.
+    rec.pin(&account.public());
+    storage::set_device(&uid, &rec);
     let Some(secret) = coolpsonotes_core::b64::decode32(&rec.secret) else {
         return fail("Corrupt device record".into());
     };

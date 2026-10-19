@@ -598,10 +598,14 @@ async fn device_enrollment_and_recovery() {
         &alice.id,
         &pending.id,
         pending.enc_public.as_slice().try_into().unwrap(),
+        &alice.account.public(),
     );
+    // The new device computes it from the published account key.
+    let me: MeResponse = api2.get("/me").await;
+    let published = me.account_key.unwrap().verify().unwrap();
     assert_eq!(
         shown_on_old,
-        keys::device_verification_code(&alice.id, &dev2_id, &dev2.public)
+        keys::device_verification_code(&alice.id, &dev2_id, &dev2.public, &published)
     );
 
     // A session without the account secret cannot activate a device.

@@ -96,7 +96,9 @@ Account public key ──── HPKE ─────▶ Vault key, epoch N  ─�
   the device, and the account secret encrypted under the recovery key.
 * **New device**: registers its public key as *pending*. Any device holding the
   account secret approves it after the user compares a 60-bit verification code
-  displayed on both screens (defeats a server substituting keys). The approval
+  displayed on both screens (defeats a server substituting keys). The code
+  also covers the account key the new device expects, which then only accepts
+  a secret of that account. The approval
   is an account signature over `(user, device id, device key)` that the server
   verifies, so a stolen OIDC session alone cannot enroll a device.
 * **Recovery**: on a new device, the recovery key decrypts the recovery

@@ -72,6 +72,13 @@ primitives. Formats:
 * **Enrolls a rogue device?** Requires an account signature over the device key,
   which only a holder of the account secret can produce, and the user compares
   a verification code shown on both devices.
+* **Gives a new device its own account secret?** Anyone can encrypt to a
+  device's public key, so the server could send a pending device a secret it
+  made up, and then read what that device writes. The verification code also
+  covers the account key: the new device computes it from the account key it
+  expects (and pins it), the approving device from the real one, and the new
+  device refuses a secret whose public key differs from the pinned one —
+  also on every later unlock.
 * **Tampers with, reorders or replays updates?** AEAD rejects tampering;
   object/vault/epoch binding rejects moved ciphertexts; CRDT updates are
   idempotent so replays are harmless.

@@ -74,6 +74,30 @@ pub fn clear_token() {
 pub struct DeviceRecord {
     pub device_id: String,
     pub secret: String,
+    /// The account key this device was approved for (signing ‖ encryption
+    /// public key, base64), pinned when its verification code was shown. An
+    /// envelope must unwrap to a secret of exactly this account.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account: Option<String>,
+}
+
+impl DeviceRecord {
+    pub fn account(&self) -> Option<coolpsonotes_core::keys::AccountPublic> {
+        let b = coolpsonotes_core::b64::decode(self.account.as_deref()?).ok()?;
+        if b.len() != 64 {
+            return None;
+        }
+        Some(coolpsonotes_core::keys::AccountPublic {
+            sign_public: b[..32].try_into().ok()?,
+            enc_public: b[32..].try_into().ok()?,
+        })
+    }
+
+    pub fn pin(&mut self, a: &coolpsonotes_core::keys::AccountPublic) {
+        self.account = Some(coolpsonotes_core::b64::encode(
+            &[a.sign_public, a.enc_public].concat(),
+        ));
+    }
 }
 
 fn device_key(user_id: &str) -> String {

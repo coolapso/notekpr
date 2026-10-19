@@ -265,15 +265,22 @@ pub fn is_internal_target(t: &str) -> bool {
 }
 
 pub fn percent_decode(s: &str) -> String {
+    fn hex(c: u8) -> Option<u8> {
+        (c as char).to_digit(16).map(|d| d as u8)
+    }
+    // Works on bytes: `%` may be followed by anything, including the middle
+    // of a multibyte character.
     let b = s.as_bytes();
     let mut out = Vec::with_capacity(b.len());
     let mut i = 0;
     while i < b.len() {
         if b[i] == b'%'
-            && i + 2 < b.len()
-            && let Ok(v) = u8::from_str_radix(&s[i + 1..i + 3], 16)
+            && let (Some(hi), Some(lo)) = (
+                b.get(i + 1).and_then(|c| hex(*c)),
+                b.get(i + 2).and_then(|c| hex(*c)),
+            )
         {
-            out.push(v);
+            out.push(hi << 4 | lo);
             i += 3;
             continue;
         }
@@ -478,6 +485,22 @@ pub fn rewrite_links(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn percent_decode_handles_any_input() {
+        assert_eq!(
+            percent_decode("Daily%20notes/2026%2D10.md"),
+            "Daily notes/2026-10.md"
+        );
+        // `%` before multibyte characters or at the end must not panic.
+        for s in ["notes/50%増.md", "a%a€b", "%", "%2", "100%", "%€€", "%%41"] {
+            let _ = percent_decode(s);
+        }
+        assert_eq!(percent_decode("50%増"), "50%増");
+        assert_eq!(percent_decode("%%41"), "%A");
+        // Invalid UTF-8 after decoding falls back to the input.
+        assert_eq!(percent_decode("%FF"), "%FF");
+    }
 
     #[test]
     fn extracts_links_tags_headings() {

@@ -796,6 +796,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "coolpsonotes-editor"
+version = "0.1.0"
+dependencies = [
+ "coolpsonotes-core",
+ "proptest",
+]
+
+[[package]]
 name = "coolpsonotes-server"
 version = "0.1.0"
 dependencies = [
@@ -837,6 +845,7 @@ version = "0.1.0"
 dependencies = [
  "console_error_panic_hook",
  "coolpsonotes-core",
+ "coolpsonotes-editor",
  "crc32fast",
  "data-encoding",
  "futures",

@@ -8,6 +8,12 @@
 //! Tables work the same way: each row is a line whose cells are wrapped in
 //! spans that CSS lays out as table rows and cells, so columns line up while
 //! the text stays the Markdown source.
+//!
+//! Block classification is a state machine over lines ([`step`]): a line's
+//! block depends only on the state the lines above left ([`LineState`]), the
+//! line itself and the next line (a table header needs its delimiter row).
+//! That is what lets [`crate::decorations`] re-classify only the lines around
+//! an edit.
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Block {
@@ -101,7 +107,7 @@ impl Block {
     }
 }
 
-fn fence_of(line: &str) -> Option<(&str, &str)> {
+fn fence_of(line: &str) -> Option<(&'static str, &str)> {
     let t = line.trim_start();
     if line.len() - t.len() > 3 {
         return None;
@@ -272,15 +278,124 @@ fn continues_table(line: &str) -> bool {
             && list_marker(line).is_none())
 }
 
-/// Column alignments if `lines[i]` starts a table: a header row followed by a
+/// Column alignments if `line` starts a table: a header row followed by a
 /// delimiter row with as many cells. Without outer pipes both rows need a
 /// `|` (otherwise `text` + `---` is a setext heading).
-fn table_start(lines: &[&str], i: usize) -> Option<Vec<Align>> {
-    let (line, next) = (lines[i], *lines.get(i + 1)?);
+fn table_start(line: &str, next: Option<&str>) -> Option<Vec<Align>> {
+    let next = next?;
     if !is_table_line(line) && (table_pipes(line).is_empty() || table_pipes(next).is_empty()) {
         return None;
     }
     delimiter_row(next).filter(|a| a.len() == table_cell_texts(line).len())
+}
+
+/// What the lines above a line leave open, as far as classifying it goes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum LineState {
+    /// The first line of the note: front matter may start here.
+    Start,
+    Normal,
+    Frontmatter,
+    Fence {
+        fence: &'static str,
+        lang: String,
+    },
+    /// The line after a table header: its delimiter row.
+    TableDelimiter {
+        align: Vec<Align>,
+    },
+    TableBody {
+        align: Vec<Align>,
+    },
+    PipeText,
+}
+
+/// Classify `line` given the state the lines above left and the line after
+/// it: its block, and the state for the next line.
+pub fn step(state: &LineState, line: &str, next: Option<&str>) -> (Block, LineState) {
+    match state {
+        LineState::Start if line.trim_end() == "---" => {
+            (Block::FrontmatterFence, LineState::Frontmatter)
+        }
+        LineState::Frontmatter => {
+            if line.trim_end() == "---" || line.trim_end() == "..." {
+                (Block::FrontmatterFence, LineState::Normal)
+            } else {
+                (Block::Frontmatter, LineState::Frontmatter)
+            }
+        }
+        LineState::Fence { fence, lang } => {
+            if let Some((g, rest)) = fence_of(line)
+                && g == *fence
+                && rest.is_empty()
+            {
+                (Block::Fence { lang: lang.clone() }, LineState::Normal)
+            } else {
+                (Block::Code { lang: lang.clone() }, state.clone())
+            }
+        }
+        LineState::TableDelimiter { align } => (
+            Block::Table {
+                row: Row::Delimiter,
+                align: align.clone(),
+            },
+            LineState::TableBody {
+                align: align.clone(),
+            },
+        ),
+        LineState::TableBody { align } if continues_table(line) => (
+            Block::Table {
+                row: Row::Body,
+                align: align.clone(),
+            },
+            state.clone(),
+        ),
+        LineState::PipeText if is_table_line(line) => (Block::PipeText, LineState::PipeText),
+        _ => normal_line(line, next),
+    }
+}
+
+fn normal_line(line: &str, next: Option<&str>) -> (Block, LineState) {
+    let normal = |b| (b, LineState::Normal);
+    if let Some((fence, lang)) = fence_of(line) {
+        return (
+            Block::Fence {
+                lang: lang.to_string(),
+            },
+            LineState::Fence {
+                fence,
+                lang: lang.to_string(),
+            },
+        );
+    }
+    if line.trim().is_empty() {
+        normal(Block::Blank)
+    } else if let Some((lvl, _)) = coolpsonotes_core::markdown::heading(line) {
+        normal(Block::Heading(lvl))
+    } else if is_hr(line) && !line.trim_start().starts_with("- ") {
+        normal(Block::Hr)
+    } else if line.trim_start().starts_with('>') {
+        normal(Block::Quote)
+    } else if let Some((indent, len, ordered)) = list_marker(line) {
+        normal(Block::List {
+            ordered,
+            task: task_box(&line[indent + len..]),
+        })
+    } else if let Some(align) = table_start(line, next) {
+        // A table: this header, its delimiter row, and the rows that follow.
+        (
+            Block::Table {
+                row: Row::Header,
+                align: align.clone(),
+            },
+            LineState::TableDelimiter { align },
+        )
+    } else if is_table_line(line) {
+        // `|` lines that are not a table.
+        (Block::PipeText, LineState::PipeText)
+    } else {
+        normal(Block::Paragraph)
+    }
 }
 
 /// What Enter or Tab does inside a table.
@@ -295,30 +410,76 @@ pub enum TableKey {
     },
 }
 
-struct TableCtx<'a> {
-    lines: Vec<&'a str>,
+/// A classified document: the text, where its lines start and their blocks
+/// (the editor keeps these up to date; [`Doc::classify`] computes them).
+#[derive(Clone, Copy)]
+pub struct Doc<'a> {
+    pub text: &'a str,
+    pub starts: &'a [usize],
+    pub blocks: &'a [Block],
+}
+
+/// Owned line starts and blocks for a [`Doc`] built from plain text.
+pub struct Classified {
     starts: Vec<usize>,
     blocks: Vec<Block>,
+}
+
+impl Classified {
+    pub fn doc<'a>(&'a self, text: &'a str) -> Doc<'a> {
+        Doc {
+            text,
+            starts: &self.starts,
+            blocks: &self.blocks,
+        }
+    }
+}
+
+impl<'a> Doc<'a> {
+    /// Classify `text` from scratch.
+    pub fn classify(text: &str) -> Classified {
+        let lines: Vec<&str> = text.split('\n').collect();
+        Classified {
+            starts: std::iter::once(0)
+                .chain(text.match_indices('\n').map(|(i, _)| i + 1))
+                .collect(),
+            blocks: classify(&lines),
+        }
+    }
+
+    pub fn line_of(&self, offset: usize) -> usize {
+        match self.starts.binary_search(&offset) {
+            Ok(i) => i,
+            Err(i) => i.saturating_sub(1),
+        }
+    }
+
+    pub fn line(&self, i: usize) -> &'a str {
+        let s = self.starts[i];
+        let e = self
+            .starts
+            .get(i + 1)
+            .map(|e| e - 1)
+            .unwrap_or(self.text.len());
+        &self.text[s..e]
+    }
+}
+
+struct TableCtx<'a> {
+    doc: Doc<'a>,
     idx: usize,
 }
 
+impl<'a> TableCtx<'a> {
+    fn line(&self, i: usize) -> &'a str {
+        self.doc.line(i)
+    }
+}
+
 /// The table row containing `offset`, if any.
-fn table_ctx(text: &str, offset: usize) -> Option<TableCtx<'_>> {
-    let lines: Vec<&str> = text.split('\n').collect();
-    let starts: Vec<usize> = std::iter::once(0)
-        .chain(text.match_indices('\n').map(|(i, _)| i + 1))
-        .collect();
-    let idx = match starts.binary_search(&offset) {
-        Ok(i) => i,
-        Err(i) => i.saturating_sub(1),
-    };
-    let blocks = classify(&lines);
-    matches!(blocks.get(idx), Some(Block::Table { .. })).then_some(TableCtx {
-        lines,
-        starts,
-        blocks,
-        idx,
-    })
+fn table_ctx<'a>(doc: Doc<'a>, offset: usize) -> Option<TableCtx<'a>> {
+    let idx = doc.line_of(offset);
+    matches!(doc.blocks.get(idx), Some(Block::Table { .. })).then_some(TableCtx { doc, idx })
 }
 
 /// Caret position inside a cell: after its pipe and one space.
@@ -336,11 +497,16 @@ fn new_row(cols: usize) -> String {
 /// the row becomes a blank line (Markdown would otherwise continue the table
 /// with the next line) and the caret moves below it.
 pub fn table_enter(text: &str, offset: usize) -> Option<TableKey> {
-    let c = table_ctx(text, offset)?;
-    let Block::Table { row, align } = &c.blocks[c.idx] else {
+    table_enter_in(Doc::classify(text).doc(text), offset)
+}
+
+/// [`table_enter`] on an already classified document.
+pub fn table_enter_in(doc: Doc, offset: usize) -> Option<TableKey> {
+    let c = table_ctx(doc, offset)?;
+    let Block::Table { row, align } = &c.doc.blocks[c.idx] else {
         return None;
     };
-    let (ls, line) = (c.starts[c.idx], c.lines[c.idx]);
+    let (ls, line) = (c.doc.starts[c.idx], c.line(c.idx));
     if *row == Row::Body && table_cell_texts(line).iter().all(|t| t.is_empty()) {
         return Some(TableKey::Edit {
             from: ls,
@@ -349,12 +515,12 @@ pub fn table_enter(text: &str, offset: usize) -> Option<TableKey> {
             caret: ls + 1,
         });
     }
-    let after = if *row == Row::Header {
+    let after = if *row == Row::Header && c.idx + 1 < c.doc.starts.len() {
         c.idx + 1
     } else {
         c.idx
     };
-    let at = c.starts[after] + c.lines[after].len();
+    let at = c.doc.starts[after] + c.line(after).len();
     Some(TableKey::Edit {
         from: at,
         to: at,
@@ -366,26 +532,31 @@ pub fn table_enter(text: &str, offset: usize) -> Option<TableKey> {
 /// Tab / Shift+Tab in a table: next / previous cell, continuing on the next or
 /// previous row. Tab in the last cell of the last row adds a row.
 pub fn table_tab(text: &str, offset: usize, back: bool) -> Option<TableKey> {
-    let c = table_ctx(text, offset)?;
-    let Block::Table { align, .. } = &c.blocks[c.idx] else {
+    table_tab_in(Doc::classify(text).doc(text), offset, back)
+}
+
+/// [`table_tab`] on an already classified document.
+pub fn table_tab_in(doc: Doc, offset: usize, back: bool) -> Option<TableKey> {
+    let c = table_ctx(doc, offset)?;
+    let Block::Table { align, .. } = &c.doc.blocks[c.idx] else {
         return None;
     };
-    let (ls, line) = (c.starts[c.idx], c.lines[c.idx]);
+    let (ls, line) = (c.doc.starts[c.idx], c.line(c.idx));
     let cells = table_cells(line);
     let rel = offset - ls;
     let k = cells
         .iter()
         .position(|&(a, b)| rel >= a && rel < b)
         .unwrap_or(cells.len().saturating_sub(1));
-    let row_at = |i: usize| match c.blocks.get(i) {
+    let row_at = |i: usize| match c.doc.blocks.get(i) {
         Some(Block::Table { row, .. }) => Some(*row),
         _ => None,
     };
     let caret_in = |i: usize, last: bool| {
-        let l = c.lines[i];
+        let l = c.line(i);
         let cs = table_cells(l);
         let cell = if last { cs.last() } else { cs.first() };
-        TableKey::Move(c.starts[i] + cell.map(|&x| cell_caret(l, x)).unwrap_or(0))
+        TableKey::Move(c.doc.starts[i] + cell.map(|&x| cell_caret(l, x)).unwrap_or(0))
     };
     if !back {
         if k + 1 < cells.len() {
@@ -419,91 +590,14 @@ pub fn table_tab(text: &str, offset: usize, back: bool) -> Option<TableKey> {
     }
 }
 
+/// The block of every line.
 pub fn classify(lines: &[&str]) -> Vec<Block> {
     let mut out = Vec::with_capacity(lines.len());
-    let mut fence: Option<(String, String)> = None;
-    let mut in_fm = lines.first().is_some_and(|l| l.trim_end() == "---");
-    // Remaining rows of a table already classified.
-    let mut queued: std::collections::VecDeque<Block> = Default::default();
+    let mut state = LineState::Start;
     for (i, line) in lines.iter().enumerate() {
-        if let Some(b) = queued.pop_front() {
-            out.push(b);
-            continue;
-        }
-        if in_fm {
-            if i == 0 {
-                out.push(Block::FrontmatterFence);
-                continue;
-            }
-            if line.trim_end() == "---" || line.trim_end() == "..." {
-                in_fm = false;
-                out.push(Block::FrontmatterFence);
-            } else {
-                out.push(Block::Frontmatter);
-            }
-            continue;
-        }
-        if let Some((f, lang)) = &fence {
-            if let Some((g, rest)) = fence_of(line)
-                && g == f
-                && rest.is_empty()
-            {
-                out.push(Block::Fence { lang: lang.clone() });
-                fence = None;
-                continue;
-            }
-            out.push(Block::Code { lang: lang.clone() });
-            continue;
-        }
-        if let Some((f, lang)) = fence_of(line) {
-            fence = Some((f.to_string(), lang.to_string()));
-            out.push(Block::Fence {
-                lang: lang.to_string(),
-            });
-            continue;
-        }
-        if line.trim().is_empty() {
-            out.push(Block::Blank);
-        } else if let Some((lvl, _)) = coolpsonotes_core::markdown::heading(line) {
-            out.push(Block::Heading(lvl));
-        } else if is_hr(line) && !line.trim_start().starts_with("- ") {
-            out.push(Block::Hr);
-        } else if line.trim_start().starts_with('>') {
-            out.push(Block::Quote);
-        } else if let Some((indent, len, ordered)) = list_marker(line) {
-            out.push(Block::List {
-                ordered,
-                task: task_box(&line[indent + len..]),
-            });
-        } else if let Some(align) = table_start(lines, i) {
-            // A table: a header, its delimiter row, and the rows that follow.
-            let end = (i + 2..lines.len())
-                .find(|&j| !continues_table(lines[j]))
-                .unwrap_or(lines.len());
-            out.push(Block::Table {
-                row: Row::Header,
-                align: align.clone(),
-            });
-            queued.push_back(Block::Table {
-                row: Row::Delimiter,
-                align: align.clone(),
-            });
-            for _ in i + 2..end {
-                queued.push_back(Block::Table {
-                    row: Row::Body,
-                    align: align.clone(),
-                });
-            }
-        } else if is_table_line(line) {
-            // `|` lines that are not a table.
-            let end = (i..lines.len())
-                .find(|&j| !is_table_line(lines[j]))
-                .unwrap_or(lines.len());
-            out.push(Block::PipeText);
-            queued.extend((i + 1..end).map(|_| Block::PipeText));
-        } else {
-            out.push(Block::Paragraph);
-        }
+        let (b, next) = step(&state, line, lines.get(i + 1).copied());
+        out.push(b);
+        state = next;
     }
     out
 }

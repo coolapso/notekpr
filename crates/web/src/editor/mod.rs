@@ -8,8 +8,8 @@
 //! text against the model afterwards, so the DOM can never silently diverge
 //! from what gets synced.
 
-pub mod syntax;
-pub mod vim;
+// The syntax engine and vim keys live in the editor crate now.
+pub use coolpsonotes_editor::{syntax, vim};
 
 use std::cell::RefCell;
 use std::rc::{Rc, Weak};
@@ -21,6 +21,7 @@ use web_sys::{Element, HtmlElement, InputEvent, KeyboardEvent, MouseEvent, Node}
 
 use crate::util::document;
 use syntax::{Block, Target};
+use vim::Mods;
 
 pub trait Host {
     /// Local edits made on `base` (the editor's text before them), already
@@ -1816,7 +1817,12 @@ impl Editor {
             let Some(v) = st.vim.as_mut() else {
                 return false;
             };
-            v.key(ev, &text, sel)
+            let mods = Mods {
+                ctrl: ev.ctrl_key(),
+                meta: ev.meta_key(),
+                alt: ev.alt_key(),
+            };
+            v.key(&ev.key(), mods, &text, sel)
         };
         let Some(action) = action else { return false };
         self.apply_mode_classes();

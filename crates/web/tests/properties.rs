@@ -1,10 +1,10 @@
 //! Property tests for the browser client's pure parts (run natively with
-//! `cargo test -p coolpsonotes-web`): the live editor's syntax engine, table
-//! keys, task toggling, the reading-view renderer and zip import. Random text
-//! is biased towards Markdown syntax and multibyte characters; these are the
-//! inputs behind the crashes found in review.
+//! `cargo test -p coolpsonotes-web`): the reading-view renderer and zip
+//! import. Random text is biased towards Markdown syntax and multibyte
+//! characters; these are the inputs behind the crashes found in review. The
+//! live editor's syntax engine, table keys and task toggling are tested in
+//! `crates/editor/tests/properties.rs`.
 
-use coolpsonotes_web::editor::syntax::{self, TableKey};
 use coolpsonotes_web::{render, zipfile};
 use proptest::prelude::*;
 
@@ -26,71 +26,8 @@ fn cases() -> u32 {
         .unwrap_or(512)
 }
 
-/// Text content of rendered line HTML: tags removed, entities decoded.
-fn text_of(html: &str) -> String {
-    let mut out = String::new();
-    let mut in_tag = false;
-    for c in html.chars() {
-        match c {
-            '<' => in_tag = true,
-            '>' if in_tag => in_tag = false,
-            c if !in_tag => out.push(c),
-            _ => {}
-        }
-    }
-    out.replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&quot;", "\"")
-        .replace("&#39;", "'")
-        .replace("&amp;", "&")
-}
-
-fn boundaries(t: &str) -> Vec<usize> {
-    t.char_indices().map(|(i, _)| i).chain([t.len()]).collect()
-}
-
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(cases()))]
-
-    /// The editor's DOM text must always equal the Markdown source.
-    #[test]
-    fn rendered_lines_keep_the_source_text(t in text(160)) {
-        let lines: Vec<&str> = t.split('\n').collect();
-        let blocks = syntax::classify(&lines);
-        prop_assert_eq!(blocks.len(), lines.len());
-        for (line, block) in lines.iter().zip(&blocks) {
-            let styled = syntax::style_line(line, block, &|t: &str| t.len() % 2 == 0);
-            prop_assert_eq!(styled.flags.len(), line.len());
-            let html = syntax::line_html(line, &styled);
-            prop_assert_eq!(text_of(&html), *line);
-        }
-    }
-
-    #[test]
-    fn table_keys_land_on_char_boundaries(t in text(120), pick in any::<prop::sample::Index>(), back in any::<bool>()) {
-        let b = boundaries(&t);
-        let offset = b[pick.index(b.len())];
-        for k in [syntax::table_tab(&t, offset, back), syntax::table_enter(&t, offset)].into_iter().flatten() {
-            match k {
-                TableKey::Move(o) => prop_assert!(t.is_char_boundary(o)),
-                TableKey::Edit { from, to, insert, caret } => {
-                    prop_assert!(from <= to && t.is_char_boundary(from) && t.is_char_boundary(to));
-                    let mut after = t.clone();
-                    after.replace_range(from..to, &insert);
-                    prop_assert!(after.is_char_boundary(caret));
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn toggling_a_task_only_flips_its_box(line in text(60)) {
-        if let Some(toggled) = syntax::toggle_task(&line) {
-            prop_assert_eq!(toggled.chars().count(), line.chars().count());
-            let changed = line.chars().zip(toggled.chars()).filter(|(a, b)| a != b).count();
-            prop_assert_eq!(changed, 1);
-        }
-    }
 
     #[test]
     fn rendering_never_panics(t in text(300)) {

@@ -1,0 +1,13 @@
+[package]
+name = "coolpsonotes-editor"
+description = "Live-preview Markdown editor of the coolpsonotes web client: a document model (pure Rust) and a contenteditable DOM view"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+coolpsonotes-core = { path = "../core" }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+proptest = { version = "1", default-features = false, features = ["std"] }

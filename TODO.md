@@ -393,9 +393,17 @@ with SQLite; no SQL-dialect abstraction.
 
 ### R5. Local-first web client
 
-- [ ] Persist encrypted replicas in IndexedDB (sealed with a non-extractable
-      WebCrypto key); start from local state, then catch up incrementally.
-- [ ] Load vault keys and shares in parallel at startup.
+- [x] Persist encrypted replicas in IndexedDB; start from local state, then
+      catch up incrementally (`crates/web/src/cache.rs`). Sealed with the
+      vault / note keys (purpose `LocalCache`) rather than a separate
+      non-extractable WebCrypto key: the device secret sits in the same
+      profile, so a second key would not protect a copied profile, and the
+      copy stays exactly as readable as the server's. Member vaults only.
+- [ ] Local copies for notes shared individually (recipient replicas).
+- [x] Load vault keys in parallel at startup. Shares still load one by one
+      (notes of one vault share a replica).
+- [ ] Start without the network (needs the session and device key check to
+      work offline), offline reading.
 - Resolves: slow start and full re-download on every page load [W-L12];
   pending edits of two tabs overwriting each other [W-M4]; quadratic offline
   pending queue and silent localStorage quota failures [W-M9]; offline reading.

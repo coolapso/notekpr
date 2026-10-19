@@ -352,7 +352,11 @@ pub struct Core {
     pub vault_infos: BTreeMap<String, VaultInfo>,
     pub replicas: BTreeMap<String, VaultReplica>,
     pub vault_errors: BTreeMap<String, String>,
+    /// Vaults whose content can be shown (restored from this browser's copy or synced).
     pub loaded: BTreeSet<String>,
+    /// Vaults that finished their first catch-up this session.
+    pub synced: BTreeSet<String>,
+    pub cache: crate::cache::Tracker,
     pub socket: Option<Rc<Socket>>,
     pub conn_id: u64,
     pub outbox: BTreeMap<String, Vec<PushUpdate>>,
@@ -914,6 +918,7 @@ pub async fn forget_browser() {
     sign_out_local(None);
     // After signing out, which stores unsent changes.
     storage::forget_user(&uid);
+    crate::cache::forget_user(&uid).await;
     if removed {
         success("This browser forgot your account.");
     } else {
@@ -1041,6 +1046,7 @@ pub async fn refresh_vaults() {
         }
     };
     let ids: BTreeSet<String> = infos.iter().map(|v| v.id.clone()).collect();
+    crate::cache::prune(&ids);
     let removed: Vec<String> = with(|c| {
         c.replicas
             .iter()
@@ -1051,9 +1057,8 @@ pub async fn refresh_vaults() {
     for v in &removed {
         drop_vault(v);
     }
-    for info in infos {
-        load_vault(info).await;
-    }
+    // In parallel: each needs its own key request (and local copy read).
+    futures::future::join_all(infos.into_iter().map(load_vault)).await;
     publish_vaults();
 }
 
@@ -1104,6 +1109,11 @@ async fn load_vault_with(info: VaultInfo, force: bool) {
     });
     let id = info.id.clone();
     if needs_keys {
+        let stored = if with(|c| c.replicas.get(&id).is_none_or(|r| !r.member)) {
+            crate::cache::fetch(&uid, &id).await
+        } else {
+            None
+        };
         let keys: VaultKeysResponse = match api::get(&format!("/vaults/{id}/keys")).await {
             Ok(k) => k,
             Err(e) => {
@@ -1140,7 +1150,7 @@ async fn load_vault_with(info: VaultInfo, force: bool) {
                     with(|c| c.replicas.remove(&id));
                     publish_shares();
                 }
-                let (is_new, applied, docs_changed) = with(|c| {
+                let (is_new, applied, docs_changed, restored) = with(|c| {
                     c.vault_errors.remove(&id);
                     match c.replicas.get_mut(&id) {
                         Some(r) => {
@@ -1154,19 +1164,27 @@ async fn load_vault_with(info: VaultInfo, force: bool) {
                             r.role = info.role;
                             r.doc_keys = docs;
                             let (applied, _) = r.retry_deferred();
-                            (false, applied, docs_changed)
+                            (false, applied, docs_changed, false)
                         }
                         None => {
                             let mut r = VaultReplica::new(&id, info.role, ring, meta);
                             r.doc_keys = docs;
                             r.max_head_seen = storage::head_seen(&uid, &id);
+                            let restored =
+                                crate::cache::restore_into(&mut c.cache, &uid, &mut r, stored);
+                            if restored {
+                                c.loaded.insert(id.clone());
+                            }
                             c.replicas.insert(id.clone(), r);
-                            (true, engine::Applied::default(), false)
+                            (true, engine::Applied::default(), false, restored)
                         }
                     }
                 });
                 if is_new {
                     subscribe(&id);
+                    if restored {
+                        show_loaded(&id);
+                    }
                 } else {
                     after_apply(&id, applied);
                     if docs_changed {
@@ -1223,10 +1241,12 @@ fn drop_vault(v: &str) {
         c.replicas.remove(v);
         c.vault_infos.remove(v);
         c.loaded.remove(v);
+        c.synced.remove(v);
         c.outbox.remove(v);
         take_attachment_urls(c, Some(v))
     });
     revoke_urls(urls);
+    crate::cache::forget_vault(v);
     let ui = ui();
     if ui.route.get_untracked().vault() == Some(v) {
         navigate(Route::Home);
@@ -1785,6 +1805,7 @@ fn on_server_message(m: ServerMessage) {
             persist_pending(&vault_id);
             update_pending_count();
             maybe_compact(&vault_id);
+            crate::cache::schedule();
         }
         ServerMessage::SnapshotCreated {
             vault_id,
@@ -1975,7 +1996,8 @@ fn drop_rejected(vault_id: &str) -> bool {
 fn on_synced(vault_id: &str, head: i64) {
     let (rolled_back, uid, first) = with(|c| {
         let uid = c.user_id.clone();
-        let first = c.loaded.insert(vault_id.to_string());
+        c.loaded.insert(vault_id.to_string());
+        let first = c.synced.insert(vault_id.to_string());
         let rb = c
             .replicas
             .get_mut(vault_id)
@@ -1995,12 +2017,7 @@ fn on_synced(vault_id: &str, head: i64) {
     );
     if first {
         restore_stored_pending(vault_id);
-        publish_vaults();
-        let ui = ui();
-        if ui.route.get_untracked().vault() == Some(vault_id) {
-            ui.tree_rev.update(|v| *v += 1);
-            ui.content_rev.update(|v| *v += 1);
-        }
+        show_loaded(vault_id);
     }
     if rolled_back {
         ui().warning.set(Some(
@@ -2010,6 +2027,17 @@ fn on_synced(vault_id: &str, head: i64) {
     }
     resend_pending(vault_id);
     maybe_compact(vault_id);
+    crate::cache::schedule();
+}
+
+/// A vault's content became available: show it.
+fn show_loaded(vault_id: &str) {
+    publish_vaults();
+    let ui = ui();
+    if ui.route.get_untracked().vault() == Some(vault_id) {
+        ui.tree_rev.update(|v| *v += 1);
+        ui.content_rev.update(|v| *v += 1);
+    }
 }
 
 /// Updates left unsent by a previous session (tab closed while offline):
@@ -2203,7 +2231,12 @@ fn on_vault_event(vault_id: String, event: VaultEventKind) {
         | VaultEventKind::RoleChanged
         | VaultEventKind::MembersChanged => {
             leptos::task::spawn_local(async move {
-                if let Ok(info) = api::get::<VaultInfo>(&format!("/vaults/{vault_id}")).await {
+                // From the list rather than `/vaults/{id}`: someone just removed
+                // may get this before their `AccessRevoked`, and is handled by that.
+                let Ok(infos) = api::get::<Vec<VaultInfo>>("/vaults").await else {
+                    return;
+                };
+                if let Some(info) = infos.into_iter().find(|i| i.id == vault_id) {
                     let owner = info.role == Role::Owner;
                     load_vault(info).await;
                     publish_vaults();
@@ -2233,6 +2266,7 @@ pub fn after_apply(vault_id: &str, applied: engine::Applied) {
     if applied.is_empty() {
         return;
     }
+    crate::cache::note_applied(vault_id, &applied);
     let ui = ui();
     let current = ui.route.get_untracked();
     if current.vault() == Some(vault_id) || current.shared().is_some_and(|(v, _)| v == vault_id) {
@@ -2290,6 +2324,7 @@ pub fn local_update(vault_id: &str, object_id: &str, update: Vec<u8>) {
         }
     });
     if ok {
+        crate::cache::note_local(vault_id, object_id);
         schedule_flush();
     }
 }

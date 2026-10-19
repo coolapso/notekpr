@@ -640,7 +640,89 @@ def test_editor_safety(env):
         b.close()
 
 
-TESTS = [test_onboarding, test_collab, test_devices_and_recovery, test_features, test_attachments, test_note_sharing, test_tables, test_editor_safety, test_mobile]
+IDB_READ = """
+window.__idb = null;
+const r = indexedDB.open('coolpsonotes');
+r.onsuccess = () => {
+  const db = r.result;
+  const st = db.transaction('cache').objectStore('cache');
+  const k = st.getAllKeys(), v = st.getAll();
+  v.onsuccess = () => {
+    window.__idb = {keys: k.result, text: v.result.map(x => new TextDecoder('latin1').decode(x)).join('')};
+    db.close();
+  };
+};
+"""
+
+
+def local_copy(b):
+    """Keys and (latin1) contents of the browser's IndexedDB vault copies."""
+    b.js(IDB_READ)
+    b.wait("return window.__idb !== null", 10, "reading IndexedDB")
+    return b.js("return window.__idb")
+
+
+def test_local_copy(env):
+    a, b = Browser(), Browser()
+    try:
+        an, bn = uniq("cora"), uniq("dan")
+        signup(a, an)
+        signup(b, bn)
+        a.click(".vault-btn")
+        a.click_el(a.find_text(".vault-menu button", "New vault"))
+        a.type(".modal input", "Trip")
+        a.click(".modal button[type=submit]")
+        a.find_text(".page-head h1", "Trip", 15)
+        a.click_el(a.find_text(".qa", "New note"))
+        a.find(".note-title", 10)
+        time.sleep(0.5)
+        a.keys("Packing" + KEYS["enter"])
+        time.sleep(0.5)
+        a.keys("tent and stove")
+        time.sleep(0.8)
+        url = a.js("return location.pathname")
+        vault = url.split("/")[2]
+        share(a, ".sb-bottom button:nth-child(2)", bn)
+        b.go(env.url.rstrip("/") + url)
+        b.wait("return document.querySelector('.ed') && document.querySelector('.ed').textContent.includes('tent and stove')", 20, "dan sees the note")
+        time.sleep(3)
+        copy = local_copy(b)
+        check(any(vault in k for k in copy["keys"]), "the browser keeps a local copy of the vault")
+        check("tent and stove" not in copy["text"] and "Packing" not in copy["text"], "the local copy is encrypted")
+        b.js("window.__locks = null; navigator.locks.query().then(q => window.__locks = q.held.map(l => l.name))")
+        b.wait("return window.__locks !== null", 10, "querying locks")
+        check(sum(n.startswith("coolpsonotes-cache-") for n in b.js("return window.__locks")) == 1, "one tab holds the right to write the copy")
+        # Away while the note changes, then back: the copy is shown and catches up.
+        b.go("about:blank")
+        start = "const ed=document.querySelector('.ed'); ed.focus(); const s=getSelection(); s.selectAllChildren(ed); s.collapseToEnd();"
+        a.js(start)
+        a.keys(" and a map")
+        time.sleep(1)
+        b.logs()
+        b.go(env.url.rstrip("/") + url)
+        b.wait("return document.querySelector('.ed') && document.querySelector('.ed').textContent.includes('and a map')", 20, "dan gets the edit made while away")
+        restored = [l.get("message", "") for l in b.logs() or [] if "from this browser's copy" in l.get("message", "")]
+        check(any(vault in m and "catching up from 0" not in m for m in restored), "the vault opens from the local copy and catches up from where it was")
+        check(True, "changes made while away arrive")
+        b.js(start)
+        b.keys(" and boots")
+        a.wait("return document.querySelector('.ed').textContent.includes('and boots')", 10, "cora gets dan's edit")
+        check(True, "editing after opening from the local copy syncs")
+        # Losing access deletes the copy.
+        a.click(".sb-bottom button:nth-child(2)")
+        a.find_text(".people .person", bn.capitalize(), 10)
+        a.js("window.confirm = () => true")
+        a.click(".people .person .icon-btn[title^='Remove access']")
+        b.wait("return !location.pathname.includes('%s')" % vault, 15, "dan is sent away from the vault")
+        time.sleep(1)
+        check(not any(vault in k for k in local_copy(b)["keys"]), "losing access deletes the local copy")
+        check(not severe_logs(a, b), "no browser errors")
+    finally:
+        a.close()
+        b.close()
+
+
+TESTS = [test_onboarding, test_collab, test_devices_and_recovery, test_features, test_attachments, test_note_sharing, test_tables, test_editor_safety, test_local_copy, test_mobile]
 
 
 def main():

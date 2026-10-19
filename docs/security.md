@@ -137,7 +137,7 @@ sessions and envelope), rotate keys of shared vaults, rotate the recovery key.
 
 | Client | At rest |
 |---|---|
-| Browser | Device secret in `localStorage`, unsent updates (already encrypted with vault keys) in `localStorage`. No plaintext notes are persisted; content is decrypted into memory. Protection of the browser profile relies on the OS account and full-disk encryption. |
+| Browser | Device secret in `localStorage`, unsent updates (already encrypted with vault keys) in `localStorage`, and a local copy of each vault in IndexedDB, encrypted with the vault's (or shared note's) keys like the server's copy. No plaintext notes are persisted; content is decrypted into memory. The local copy is deleted when access to a vault ends and by "Forget this browser". Protection of the browser profile relies on the OS account and full-disk encryption. |
 | Desktop, default | Encrypted local replica (vault-key encrypted CRDT state, sealed with a local key file `0600`). The key file sits in the same profile directory, so this protects against other OS users and stray copies of single files, but not against a copy of the whole directory (a backup, a synced folder) or malware running as the same user; use full-disk encryption. Moving the key to the OS keyring is planned. |
 | Desktop, plaintext mirror (explicit opt-in) | Ordinary Markdown files readable by any program running as the user — the point of the mode. It must be enabled explicitly and the CLI explains the implications. |
 | Agent gateway host | Holds the agent's keys and plaintext of the vaults shared with the agent. Treat it like any server with secrets; the gateway listens on localhost by default and requires a bearer token. |

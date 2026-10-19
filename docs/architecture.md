@@ -136,6 +136,22 @@ reconnecting. CRDT merging makes the order irrelevant and guarantees
 convergence; concurrent edits to the same note interleave instead of
 overwriting.
 
+**Local copy (browser).** The browser keeps each vault's documents in
+IndexedDB: every note's full CRDT state, encrypted with the key its server
+copy uses (the vault key, or a shared note's own key; purpose `LocalCache`,
+bound to vault and object), plus a cursor: the sequence
+number the stored copy is complete up to. A page load shows the stored notes
+right away and subscribes from the cursor, so only what changed since is
+downloaded. The cursor moves only when everything changed in memory has been
+written and never past content still waiting for a key; notes with unconfirmed
+local edits aren't written until the server acknowledges them (until then the
+edits live in the pending queue, and a stored state must never contain changes
+the server could miss). One tab per account writes (a Web Lock held while it
+is open), so a tab that is behind can't overwrite newer states. Copies are
+deleted when access ends, when a vault
+disappears from the account's list, and by "Forget this browser"
+(`crates/web/src/cache.rs`).
+
 **Compaction and history.** A writer that has seen many updates for an object
 uploads an encrypted full-state snapshot covering a sequence number. The server
 prunes only updates covered by the *previous* snapshot, so one generation of
@@ -228,6 +244,6 @@ has unsent edits to it, that person's client saves their version as a new
 | M5 Agents | agent identities, CLI and Markdown-folder access, gateway | done (`crates/client`); local MCP server removed, remote MCP connector considered for later |
 | M6 Packaging | Docker image, compose, Kubernetes, backup/restore docs | done |
 | M7 Note sharing | share single notes outside a vault: document keys, per-note subscriptions, web + CLI | done (S `individual_note_sharing`, D `single_note_sharing_end_to_end`, E `test_note_sharing`) |
-| Next | native desktop GUI shell (Tauri around the web UI), mobile apps, folder sharing, signed updates, IndexedDB cache for faster browser start | planned |
+| Next | native desktop GUI shell (Tauri around the web UI), mobile apps, folder sharing, signed updates, offline start of the web app | planned |
 
 Acceptance criteria and how each is verified: [acceptance.md](acceptance.md).

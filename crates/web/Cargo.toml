@@ -22,6 +22,7 @@ console_error_panic_hook = "0.1"
 data-encoding = "2.11"
 miniz_oxide = { version = "0.9", default-features = false, features = ["with-alloc"] }
 crc32fast = { version = "1.5", default-features = false }
+futures = { version = "0.3", default-features = false, features = ["alloc"] }
 
 [dependencies.web-sys]
 version = "0.3"
@@ -35,6 +36,8 @@ features = [
   "CssStyleDeclaration", "ScrollIntoViewOptions", "ScrollBehavior", "ScrollLogicalPosition",
   "MediaQueryList", "Navigator", "Clipboard", "DomTokenList", "StaticRange", "TreeWalker", "NodeFilter",
   "CompositionEvent", "ResizeObserver", "VisibilityState", "PopStateEvent", "AbortController", "AbortSignal",
+  "IdbFactory", "IdbDatabase", "IdbObjectStore", "IdbRequest", "IdbOpenDbRequest", "IdbTransaction",
+  "IdbTransactionMode", "IdbKeyRange", "DomStringList", "DomException",
 ]
 
 [dev-dependencies]

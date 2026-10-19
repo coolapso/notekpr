@@ -838,6 +838,7 @@ dependencies = [
  "coolpsonotes-core",
  "crc32fast",
  "data-encoding",
+ "futures",
  "js-sys",
  "leptos",
  "miniz_oxide",

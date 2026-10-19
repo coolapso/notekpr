@@ -6,6 +6,7 @@
 
 pub mod actions;
 pub mod api;
+pub mod cache;
 pub mod editor;
 pub mod knowledge;
 pub mod render;

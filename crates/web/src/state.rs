@@ -880,8 +880,22 @@ pub async fn forget_browser() {
     } else {
         String::new()
     };
+    // Without another device, the recovery key is the only way back in.
+    let others = api::get::<Vec<DeviceInfo>>("/devices")
+        .await
+        .map(|d| {
+            d.iter()
+                .filter(|d| !d.current && d.status == DeviceStatus::Active)
+                .count()
+        })
+        .unwrap_or(1);
+    let last = if others == 0 {
+        " This is your only device: afterwards only your recovery key can open your notes. Without it they are lost for good."
+    } else {
+        ""
+    };
     if !util::confirm(&format!(
-        "Forget this browser? You will be signed out and this browser's key will be deleted, so opening your notes here again needs approval from another device or your recovery key.{warn}"
+        "Forget this browser? You will be signed out and this browser's key will be deleted, so opening your notes here again needs approval from another device or your recovery key.{last}{warn}"
     )) {
         return;
     }

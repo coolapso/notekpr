@@ -62,6 +62,9 @@ struct Base {
     #[serde(with = "b64")]
     state: Vec<u8>,
     hash: String,
+    /// Read from disk (saved by an editor) rather than written by us.
+    #[serde(default)]
+    read: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -630,18 +633,34 @@ fn prune_empty_parents(path: &Path, stop: &Path) {
     }
 }
 
-fn push_base(rec: &mut FileRecord, state: Vec<u8>, hash: &str) {
+/// Remember a version of the file. `read` = it was read from disk (the
+/// editor saved it), otherwise we wrote it.
+fn push_base(rec: &mut FileRecord, state: Vec<u8>, hash: &str, read: bool) {
+    let mut read = read;
     if let Some(last) = rec.bases.last()
         && last.hash == hash
     {
+        // Same text: the editor has it if either version says so.
+        read |= last.read;
         rec.bases.pop();
     }
     rec.bases.push(Base {
         state,
         hash: hash.to_string(),
+        read,
     });
     let excess = rec.bases.len().saturating_sub(MAX_BASES);
     rec.bases.drain(..excess);
+}
+
+/// The bases an editor can have started from: the newest version it saved
+/// (read from disk), and what we wrote after that (it may have reloaded
+/// those). Anything older is history it has moved past — a file equal to
+/// such a version is a deliberate revert (undo, `git checkout`), and must be
+/// diffed against what the editor saved last, not treated as "no change".
+fn candidate_bases(bases: &[Base]) -> &[Base] {
+    let from = bases.iter().rposition(|b| b.read).unwrap_or(0);
+    &bases[from..]
 }
 
 /// Apply an external edit of a note relative to the best base. Returns the
@@ -656,8 +675,7 @@ fn ingest_note(v: &mut Vault, id: &str, rec: &FileRecord, disk: &str) -> Result<
     if v.note_text(id) == disk {
         return Ok(live_state);
     }
-    let mut candidates: Vec<NoteDoc> = rec
-        .bases
+    let mut candidates: Vec<NoteDoc> = candidate_bases(&rec.bases)
         .iter()
         .filter_map(|b| fork_note(&b.state).ok())
         .collect();
@@ -814,7 +832,7 @@ fn ingest_record(
                         return Ok(());
                     };
                     let base_state = ingest_note(v, id, &rec, &text)?;
-                    push_base(&mut rec, base_state, &hash);
+                    push_base(&mut rec, base_state, &hash, true);
                 }
                 EntryKind::Attachment => {
                     // Blobs are immutable: a new version is a new entry
@@ -933,7 +951,7 @@ fn ingest_new_file(
         bases: vec![],
     };
     if let Some(s) = state {
-        push_base(&mut rec, s, &hash);
+        push_base(&mut rec, s, &hash, true);
     }
     mv.state.files.insert(r.id.clone(), rec);
     mv.dirty = true;
@@ -1044,7 +1062,7 @@ fn apply_move(
             {
                 let hash = content_hash(text.as_bytes());
                 let base = ingest_note(v, id, &rec, &text)?;
-                push_base(&mut rec, base, &hash);
+                push_base(&mut rec, base, &hash, true);
                 rec.hash = hash;
                 touched.insert(id.to_string());
             }
@@ -1095,6 +1113,7 @@ fn write_note(
     let Some(mut rec) = mv.state.files.get(id).cloned() else {
         // Not written yet. A file already there is adopted if identical,
         // otherwise kept as a conflict copy.
+        let written_before = report.written;
         match stat(&path)? {
             Node::Other => {
                 mv.warn_once(
@@ -1132,6 +1151,8 @@ fn write_note(
                 report.written += 1;
             }
         }
+        // An identical file that was already there is adopted: read, not written.
+        let adopted = report.written == written_before;
         let state = v
             .replica
             .notes
@@ -1147,7 +1168,7 @@ fn write_note(
             checked_ns: 0,
             bases: vec![],
         };
-        push_base(&mut rec, state, &hash);
+        push_base(&mut rec, state, &hash, adopted);
         mv.state.files.insert(id.to_string(), rec);
         mv.record_stat(id, &path);
         return Ok(());
@@ -1168,7 +1189,7 @@ fn write_note(
             };
             let disk_hash = content_hash(disk_text.as_bytes());
             let base = ingest_note(v, id, &rec, &disk_text)?;
-            push_base(&mut rec, base, &disk_hash);
+            push_base(&mut rec, base, &disk_hash, true);
             rec.hash = disk_hash;
             rec.set_stat(st);
             touched.insert(id.to_string());
@@ -1200,7 +1221,7 @@ fn write_note(
                 if writable && let Ok(saved) = String::from_utf8(data) {
                     let saved_hash = content_hash(saved.as_bytes());
                     let base = ingest_note(v, id, &rec, &saved)?;
-                    push_base(&mut rec, base, &saved_hash);
+                    push_base(&mut rec, base, &saved_hash, true);
                     touched.insert(id.to_string());
                     report.ingested += 1;
                 }
@@ -1209,7 +1230,7 @@ fn write_note(
         rec.hash = hash.clone();
         report.written += 1;
     }
-    push_base(&mut rec, state, &hash);
+    push_base(&mut rec, state, &hash, false);
     mv.state.files.insert(id.to_string(), rec);
     mv.record_stat(id, &path);
     Ok(())
@@ -2185,6 +2206,39 @@ mod tests {
         // Ties go to the newest.
         assert_eq!(choose_base(&[v1.clone(), v1.clone()], "x"), Some(1));
         assert_eq!(choose_base(&[], "x"), None);
+    }
+
+    #[test]
+    fn versions_before_the_last_save_are_not_starting_points() {
+        let b = |h: &str, read| Base {
+            state: vec![],
+            hash: h.into(),
+            read,
+        };
+        let hashes = |bs: &[Base]| bs.iter().map(|b| b.hash.clone()).collect::<Vec<_>>();
+        // Only our writes: the editor may hold any of them.
+        assert_eq!(
+            hashes(candidate_bases(&[b("w1", false), b("w2", false)])),
+            ["w1", "w2"]
+        );
+        // It saved r2: w1 is history (a file equal to it is a revert), w3 may
+        // have been reloaded.
+        let bases = [b("w1", false), b("r2", true), b("w3", false)];
+        assert_eq!(hashes(candidate_bases(&bases)), ["r2", "w3"]);
+        // The same text read and written keeps the "read" mark.
+        let mut rec = FileRecord {
+            path: "a.md".into(),
+            kind: EntryKind::Note,
+            hash: String::new(),
+            size: 0,
+            mtime_ns: 0,
+            checked_ns: 0,
+            bases: vec![],
+        };
+        push_base(&mut rec, vec![], "h", true);
+        push_base(&mut rec, vec![], "h", false);
+        assert_eq!(rec.bases.len(), 1);
+        assert!(rec.bases[0].read);
     }
 
     #[test]

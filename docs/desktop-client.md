@@ -275,7 +275,10 @@ the editor loaded the file. Instead:
    the state matching each version it read back from the file.
 2. When the file changes, the base the editor most likely started from is
    chosen: the one needing the fewest changed lines (then bytes) to become the
-   file; ties go to the newest.
+   file; ties go to the newest. Only the version the editor saved last and the
+   versions the client wrote after it are candidates — so going back to an
+   older text (undo after saving, `git checkout`) is synced as the change it
+   is, not mistaken for an unchanged file.
 3. That base is forked into a fresh document with a **new client id** (an id is
    never reused with a stale clock), the textual diff `base → file` is applied
    there as fine-grained insertions/deletions, and the resulting CRDT update

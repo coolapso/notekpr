@@ -113,8 +113,6 @@ reload on change pick up remote edits cleanly.
 Until these are fixed (tracked in [TODO.md](../TODO.md), "Markdown mirror
 safety"), be careful with:
 
-* **Reverting a file to an older version** (editor undo after saving,
-  `git checkout`): the daemon may write the newer text back.
 * **Running one-off commands (`coolpsonotes write …`) while the daemon runs** —
   use the files or the web app instead.
 * **macOS and Windows:** avoid notes or folders whose names differ only in

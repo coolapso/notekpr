@@ -525,3 +525,57 @@ async fn a_vanished_folder_or_mass_deletion_is_held_not_trashed() {
     assert_eq!((r.trashed, r.held), (11, 0), "{r:?}");
     assert_eq!(note_count(&h, &vid).await, 1);
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn reverting_a_file_to_an_older_version_is_synced() {
+    let srv = start().await;
+    let (alice_hub, vid, bob_hub, mut m, dir) = shared_mirror(&srv, "Undo").await;
+    ops::put_document(&alice_hub, &vid, "Plan.md", "v1\n", None)
+        .await
+        .unwrap();
+    bob_hub.sync_vault(&vid).await.unwrap();
+    m.reconcile_all(true).await.unwrap();
+    let plan = dir.join("Plan.md");
+    assert_eq!(read(&plan), "v1\n");
+
+    // Bob's editor saves an edit ...
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    write(&plan, "v1\nv2 (bob)\n");
+    m.reconcile_all(true).await.unwrap();
+    assert_eq!(
+        note(&bob_hub, &vid, "Plan.md").await.as_deref(),
+        Some("v1\nv2 (bob)\n")
+    );
+    // ... then undoes it and saves again (or `git checkout`s the old file).
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    write(&plan, "v1\n");
+    let r = m.reconcile_all(true).await.unwrap();
+    assert_eq!(r.ingested, 1, "{r:?}");
+    assert_eq!(read(&plan), "v1\n", "the revert must not be overwritten");
+    assert_eq!(
+        note(&bob_hub, &vid, "Plan.md").await.as_deref(),
+        Some("v1\n")
+    );
+    alice_hub.sync_vault(&vid).await.unwrap();
+    assert_eq!(
+        note(&alice_hub, &vid, "Plan.md").await.as_deref(),
+        Some("v1\n")
+    );
+
+    // A stale editor buffer saved after a remote edit still keeps the remote
+    // edit (it started from what we wrote, not from its own last save).
+    ops::put_document(&alice_hub, &vid, "Plan.md", "v1\nremote\n", None)
+        .await
+        .unwrap();
+    bob_hub.sync_vault(&vid).await.unwrap();
+    m.reconcile_all(true).await.unwrap();
+    assert_eq!(read(&plan), "v1\nremote\n");
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    write(&plan, "v1\nlocal\n");
+    m.reconcile_all(true).await.unwrap();
+    let merged = note(&bob_hub, &vid, "Plan.md").await.unwrap();
+    assert!(
+        merged.contains("remote") && merged.contains("local"),
+        "{merged:?}"
+    );
+}

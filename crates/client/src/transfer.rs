@@ -95,6 +95,8 @@ pub async fn export(
             }
         }
     }
+    // Exports are decrypted: owner-only permissions (0600 files, 0700
+    // folders), like the mirror.
     if zip {
         if out.exists() && !force {
             bail!(
@@ -103,21 +105,29 @@ pub async fn export(
             );
         }
         let tmp = out.with_extension("zip.partial");
-        let f =
-            std::fs::File::create(&tmp).with_context(|| format!("creating {}", tmp.display()))?;
-        let mut w = zip::ZipWriter::new(f);
-        let opts = zip::write::SimpleFileOptions::default()
-            .compression_method(zip::CompressionMethod::Deflated)
-            .unix_permissions(0o644);
-        for d in &folders {
-            w.add_directory(format!("{d}/"), opts)?;
+        let written = (|| -> Result<()> {
+            let f = create_private(&tmp).with_context(|| format!("creating {}", tmp.display()))?;
+            let mut w = zip::ZipWriter::new(f);
+            let file_opts = zip::write::SimpleFileOptions::default()
+                .compression_method(zip::CompressionMethod::Deflated)
+                .unix_permissions(0o600);
+            let dir_opts = file_opts.unix_permissions(0o700);
+            for d in &folders {
+                w.add_directory(format!("{d}/"), dir_opts)?;
+            }
+            for (p, data) in &files {
+                w.start_file(p.as_str(), file_opts)?;
+                w.write_all(data)?;
+            }
+            w.finish()?.sync_all()?;
+            std::fs::rename(&tmp, out).with_context(|| format!("replacing {}", out.display()))?;
+            Ok(())
+        })();
+        if written.is_err() {
+            // Never leave a half-written plaintext archive behind.
+            let _ = std::fs::remove_file(&tmp);
         }
-        for (p, data) in &files {
-            w.start_file(p.as_str(), opts)?;
-            w.write_all(data)?;
-        }
-        w.finish()?.sync_all()?;
-        std::fs::rename(&tmp, out)?;
+        written?;
     } else {
         if out.exists() {
             let nonempty = std::fs::read_dir(out)
@@ -129,22 +139,36 @@ pub async fn export(
                     out.display()
                 );
             }
+            // Leftovers of an export that crashed.
+            fsutil::remove_stale_temp_files(out, 64, std::time::Duration::from_secs(60));
         }
-        std::fs::create_dir_all(out)?;
+        fsutil::create_private_dir(out)?;
         for d in &folders {
-            std::fs::create_dir_all(disk_path(out, d)?)?;
+            fsutil::create_private_dir(&disk_path(out, d)?)?;
         }
         for (p, data) in &files {
             // Every segment is checked again: nothing may land outside `out`.
             let target = disk_path(out, p)?;
             if let Some(parent) = target.parent() {
-                std::fs::create_dir_all(parent)?;
+                fsutil::create_private_dir(parent)?;
             }
-            fsutil::write_atomic(&target, data, false)
+            fsutil::write_atomic(&target, data, true)
                 .with_context(|| format!("writing {}", target.display()))?;
         }
     }
     Ok(report)
+}
+
+/// Create (or truncate) a file readable by its owner only.
+fn create_private(path: &Path) -> std::io::Result<std::fs::File> {
+    let mut o = std::fs::OpenOptions::new();
+    o.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        o.mode(0o600);
+    }
+    o.open(path)
 }
 
 /// Files to import as (vault-relative path, bytes), plus empty folders.
@@ -224,13 +248,16 @@ fn collect_zip(src: &Path, report: &mut TransferReport) -> Result<Collected> {
 
 /// Import Markdown files and attachments (a directory or a `.zip`),
 /// preserving folders. Existing notes are diff-updated (merged), unless
-/// `skip_existing`.
+/// `skip_existing` — "existing" uses the same (case-insensitive) matching as
+/// writing, so a case variant is never merged into. With `dry_run`, nothing
+/// changes: the report says what an import would do.
 pub async fn import(
     hub: &Hub,
     vault: &SharedVault,
     src: &Path,
     into: Option<&str>,
     skip_existing: bool,
+    dry_run: bool,
 ) -> Result<TransferReport> {
     let mut report = TransferReport::default();
     let (files, dirs) = if is_zip(src) {
@@ -255,6 +282,15 @@ pub async fn import(
         vault_id = v.id().to_string();
         for d in dirs {
             let p = paths::join(&prefix, &d);
+            if dry_run {
+                match v.paths().get(&p) {
+                    Some(e) if e.kind != EntryKind::Folder => report
+                        .skipped
+                        .push((p, "exists and is not a folder".into())),
+                    _ => report.folders += 1,
+                }
+                continue;
+            }
             match v.create_folder(&p) {
                 Ok(_) => report.folders += 1,
                 Err(e) => report.skipped.push((p, format!("{e:#}"))),
@@ -269,14 +305,24 @@ pub async fn import(
                     continue;
                 }
             };
+            let existing = v.find(&norm);
             if paths::is_note(&norm) {
                 let Ok(text) = String::from_utf8(data) else {
                     report.skipped.push((norm, "not valid UTF-8".into()));
                     continue;
                 };
-                let exists = v.find(&norm).is_some_and(|(dp, _)| dp == norm);
-                if exists && skip_existing {
+                if existing.is_some() && skip_existing {
                     report.unchanged += 1;
+                    continue;
+                }
+                if dry_run {
+                    match existing {
+                        Some((_, e)) if e.kind != EntryKind::Note => report
+                            .skipped
+                            .push((norm, "exists and is not a note".into())),
+                        Some((_, e)) if v.note_text(&e.id) == text => report.unchanged += 1,
+                        _ => report.notes += 1,
+                    }
                     continue;
                 }
                 match v.write_note(&norm, &text) {
@@ -295,9 +341,20 @@ pub async fn import(
                     report.skipped.push((norm, "empty file".into()));
                     continue;
                 }
-                let exists = v.find(&norm).is_some_and(|(dp, _)| dp == norm);
-                if exists && skip_existing {
+                if existing.is_some() && skip_existing {
                     report.unchanged += 1;
+                    continue;
+                }
+                if dry_run {
+                    let same = existing
+                        .filter(|(dp, _)| *dp == norm)
+                        .and_then(|(_, e)| v.cached_attachment(&e.id).ok().flatten())
+                        .is_some_and(|d| d == data);
+                    if same {
+                        report.unchanged += 1;
+                    } else {
+                        report.attachments += 1;
+                    }
                     continue;
                 }
                 match v.add_attachment(&norm, &data, None) {
@@ -307,8 +364,12 @@ pub async fn import(
                 }
             }
         }
-        v.save()?;
+        if !dry_run {
+            v.save()?;
+        }
     }
-    hub.local_changed(&vault_id, vec![], true).await;
+    if !dry_run {
+        hub.local_changed(&vault_id, vec![], true).await;
+    }
     Ok(report)
 }

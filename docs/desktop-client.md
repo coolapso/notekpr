@@ -457,19 +457,23 @@ Markdown mirror.
 ```sh
 coolpsonotes export Family --out ~/backup/family           # directory
 coolpsonotes export Family --out ~/backup/family.zip       # zip archive
-coolpsonotes import Family ~/old-obsidian-vault [--into Imported] [--skip-existing]
+coolpsonotes import Family ~/old-obsidian-vault [--into Imported] [--skip-existing] [--dry-run]
 coolpsonotes import Family ~/backup/family.zip
 ```
 
 Exports are a plain tree of `.md` files, attachments and (empty) folders — no
 proprietary metadata — readable by any Markdown tool. Trashed documents are not
-exported. An existing non-empty target is refused unless `--force`.
+exported. An existing non-empty target is refused unless `--force`. Exports
+are decrypted, so they are written for the owner only (files `0600`, folders
+`0700`, also inside the zip); a failed zip export leaves no `.partial` file.
 
 Import walks a directory or zip, keeping folders: `.md` files become notes
 (existing notes at the same path are diff-merged; `--skip-existing` leaves
-them alone), other files become attachments, empty directories become folders.
-Hidden files and editor leftovers are skipped, as are files over the server's
-attachment limit (reported).
+them alone — "the same path" ignoring case, exactly as `write` matches notes),
+other files become attachments, empty directories become folders. Hidden
+files and editor leftovers are skipped, as are files over the server's
+attachment limit (reported). `--dry-run` reports what an import would create,
+update or leave unchanged without changing anything.
 
 ## 10. Where data is stored and how it is protected
 

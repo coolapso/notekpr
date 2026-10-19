@@ -549,11 +549,20 @@ pub async fn run_in(cli: Cli, dirs: Dirs) -> Result<()> {
             source,
             into,
             skip_existing,
+            dry_run,
         } => {
             let hub = ctx.hub(&[&vault]).await?;
             let v = hub.resolve(&vault).await?;
-            let r = transfer::import(&hub, &v, &source, into.as_deref(), skip_existing).await?;
-            print_transfer("imported", &r);
+            let r = transfer::import(&hub, &v, &source, into.as_deref(), skip_existing, dry_run)
+                .await?;
+            print_transfer(
+                if dry_run {
+                    "dry run: would import"
+                } else {
+                    "imported"
+                },
+                &r,
+            );
             Ok(())
         }
         Command::Sync(a) => sync(&ctx, a).await,

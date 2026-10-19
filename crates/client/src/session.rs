@@ -78,6 +78,11 @@ impl Session {
             );
         }
         let secrets = SecretStore::open(&profiles.data_dir())?;
+        // Temporary files left by a crash (never one of a write in progress:
+        // those are younger than a minute).
+        let stale = Duration::from_secs(60);
+        crate::fsutil::remove_stale_temp_files(&profiles.data_dir(), 4, stale);
+        crate::fsutil::remove_stale_temp_files(&dirs.profiles_dir(), 1, stale);
         let account = secrets.load_account(&user_id)?.ok_or_else(|| {
             anyhow!(
                 "no account keys on this device for profile '{profile}'; run `coolpsonotes --profile {profile} login`"

@@ -130,6 +130,9 @@ pub enum Command {
         /// Leave notes that already exist untouched (default: merge the file's content).
         #[arg(long)]
         skip_existing: bool,
+        /// Only report what would be imported; change nothing.
+        #[arg(long)]
+        dry_run: bool,
     },
     /// Share a single note (not its vault) with someone.
     ShareNote {

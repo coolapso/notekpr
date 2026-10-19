@@ -96,7 +96,7 @@ async fn export_import_round_trip_preserves_paths_and_content() {
     transfer::export(&h, &src, &zip, false).await.unwrap();
 
     let to_dir = h.resolve("From dir").await.unwrap();
-    let r = transfer::import(&h, &to_dir, &dir, None, false)
+    let r = transfer::import(&h, &to_dir, &dir, None, false, false)
         .await
         .unwrap();
     assert_eq!(
@@ -107,13 +107,13 @@ async fn export_import_round_trip_preserves_paths_and_content() {
     );
     assert_eq!(snapshot(&h, "From dir").await, original);
     let to_zip = h.resolve("From zip").await.unwrap();
-    transfer::import(&h, &to_zip, &zip, None, false)
+    transfer::import(&h, &to_zip, &zip, None, false, false)
         .await
         .unwrap();
     assert_eq!(snapshot(&h, "From zip").await, original);
 
     // Re-importing is a no-op; changed files are merged into existing notes.
-    let r = transfer::import(&h, &to_dir, &dir, None, false)
+    let r = transfer::import(&h, &to_dir, &dir, None, false, false)
         .await
         .unwrap();
     assert_eq!((r.notes, r.attachments), (0, 0));
@@ -122,7 +122,7 @@ async fn export_import_round_trip_preserves_paths_and_content() {
         "# Home\nSee [[Projects/Plan]]\nedited\n",
     )
     .unwrap();
-    let r = transfer::import(&h, &to_dir, &dir, None, false)
+    let r = transfer::import(&h, &to_dir, &dir, None, false, false)
         .await
         .unwrap();
     assert_eq!(r.notes, 1);
@@ -132,7 +132,7 @@ async fn export_import_round_trip_preserves_paths_and_content() {
     );
 
     // Import below a folder.
-    let r = transfer::import(&h, &to_dir, &zip, Some("Imported"), false)
+    let r = transfer::import(&h, &to_dir, &zip, Some("Imported"), false, false)
         .await
         .unwrap();
     assert_eq!(r.notes, 3);
@@ -145,4 +145,87 @@ async fn export_import_round_trip_preserves_paths_and_content() {
     // Everything was pushed: a fresh client sees the imported vault.
     let other = hub(&reopen(&srv, "alice", "alice").await).await;
     assert_eq!(snapshot(&other, "From zip").await, original);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn import_skip_existing_and_dry_run_change_nothing_they_should_not() {
+    let srv = start().await;
+    let alice = login(&srv, "alice").await;
+    manage::create_vault(&alice, "Notes").await.unwrap();
+    let h = hub(&alice).await;
+    ops::put_document(&h, "Notes", "README.md", "mine\n", None)
+        .await
+        .unwrap();
+    let src = srv.path("old-vault");
+    std::fs::create_dir_all(src.join("Ideas")).unwrap();
+    std::fs::write(src.join("readme.md"), "theirs\n").unwrap();
+    std::fs::write(src.join("Ideas/New.md"), "new\n").unwrap();
+    let v = h.resolve("Notes").await.unwrap();
+
+    // A dry run reports and changes nothing.
+    let r = transfer::import(&h, &v, &src, None, false, true)
+        .await
+        .unwrap();
+    assert_eq!((r.notes, r.unchanged), (2, 0), "{:?}", r.skipped);
+    assert_eq!(v.lock().await.notes().len(), 1);
+    assert!(v.lock().await.replica.pending.is_empty());
+    assert_eq!(
+        note(&h, "Notes", "README.md").await.as_deref(),
+        Some("mine\n")
+    );
+
+    // --skip-existing treats "readme.md" as the existing "README.md" (as a
+    // write would): left alone, not merged.
+    let r = transfer::import(&h, &v, &src, None, true, true)
+        .await
+        .unwrap();
+    assert_eq!((r.notes, r.unchanged), (1, 1));
+    let r = transfer::import(&h, &v, &src, None, true, false)
+        .await
+        .unwrap();
+    assert_eq!((r.notes, r.unchanged), (1, 1));
+    assert_eq!(
+        note(&h, "Notes", "README.md").await.as_deref(),
+        Some("mine\n")
+    );
+    assert_eq!(
+        note(&h, "Notes", "Ideas/New.md").await.as_deref(),
+        Some("new\n")
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn exports_are_private_and_never_left_half_written() {
+    use std::os::unix::fs::PermissionsExt;
+    let srv = start().await;
+    let alice = login(&srv, "alice").await;
+    manage::create_vault(&alice, "Private").await.unwrap();
+    let h = hub(&alice).await;
+    ops::put_document(&h, "Private", "Diary/Today.md", "secret\n", None)
+        .await
+        .unwrap();
+    let v = h.resolve("Private").await.unwrap();
+    let mode = |p: &std::path::Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+
+    let dir = srv.path("export");
+    transfer::export(&h, &v, &dir, false).await.unwrap();
+    assert_eq!(mode(&dir), 0o700);
+    assert_eq!(mode(&dir.join("Diary")), 0o700);
+    assert_eq!(mode(&dir.join("Diary/Today.md")), 0o600);
+
+    let zip = srv.path("export.zip");
+    transfer::export(&h, &v, &zip, false).await.unwrap();
+    assert_eq!(mode(&zip), 0o600);
+    let mut a = zip::ZipArchive::new(std::fs::File::open(&zip).unwrap()).unwrap();
+    let entry = a.by_name("Diary/Today.md").unwrap();
+    assert_eq!(entry.unix_mode().map(|m| m & 0o777), Some(0o600));
+    drop(entry);
+
+    // A failing zip export (here: a directory is in the way of the final
+    // name) leaves no partial plaintext archive behind.
+    let blocked = srv.path("blocked.zip");
+    std::fs::create_dir_all(blocked.join("inside")).unwrap();
+    assert!(transfer::export(&h, &v, &blocked, true).await.is_err());
+    assert!(!srv.path("blocked.zip.partial").exists());
 }

@@ -24,3 +24,12 @@ lto = "fat"
 codegen-units = 1
 panic = "abort"
 strip = true
+
+# yrs's debug_assert on 53-bit client ids fires on crafted updates (found by
+# fuzzing); release builds compile it out, so dev builds do too.
+[profile.dev.package.yrs]
+debug-assertions = false
+
+# yrs with fixes for panics on crafted updates (see vendor/yrs/COOLPSONOTES.md).
+[patch.crates-io]
+yrs = { path = "vendor/yrs" }

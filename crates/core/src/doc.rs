@@ -666,6 +666,24 @@ mod tests {
     use super::*;
 
     #[test]
+    fn crafted_updates_found_by_fuzzing_do_not_panic() {
+        // Divided by zero in yrs's block lookup while committing (patched in
+        // vendor/yrs).
+        let crash: &[u8] = &[
+            1, 6, 0, 0, 50, 1, 0, 0, 0, 0, 0, 0, 4, 0, 24, 0, 0, 0, 0, 0, 0, 0, 0, 0, 253,
+        ];
+        let _ = NoteDoc::new().apply_update(crash);
+        let _ = IndexDoc::new().apply_update(crash);
+        // Unwrapped a failed lookup when filling a gap (patched in vendor/yrs).
+        let crash: &[u8] = &[
+            3, 3, 3, 4, 0, 0, 0, 0, 0, 0, 0, 44, 187, 187, 187, 187, 187, 187, 187, 187, 187, 3, 3,
+            3, 1, 0, 24, 0, 0, 0, 0, 0, 0,
+        ];
+        let _ = NoteDoc::new().apply_update(crash);
+        let _ = IndexDoc::new().apply_update(crash);
+    }
+
+    #[test]
     fn an_update_claiming_a_billion_clients_is_refused_at_once() {
         // Found by fuzzing: this made yrs reserve ~2 GB before failing.
         let bomb: &[u8] = &[0x83, 0x83, 0x83, 0xff, 0x83, 0x2d, 0xff];

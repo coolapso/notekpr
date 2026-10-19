@@ -238,7 +238,7 @@ mod tests {
     #[test]
     fn recovers_notes_attachments_trash_and_shared_notes() {
         let alice = AccountSecret::generate();
-        let (create, ring) = new_vault(&alice, "alice", &VaultMeta::named("Family")).unwrap();
+        let (create, ring) = new_vault(&alice, "alice", &VaultMeta::named("Family"), 1).unwrap();
         let vid = ring.vault_id().to_string();
         let mut r = VaultReplica::new(&vid, Role::Owner, ring.clone(), VaultMeta::named("Family"));
         let index = IndexDoc::new();

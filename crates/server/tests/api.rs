@@ -249,6 +249,7 @@ async fn viewers_are_read_only_and_revocation_rotates_keys() {
                 encrypted_meta: vec![1; 60],
                 envelopes: vec![],
                 objects: vec![],
+                log_entry: None,
             }),
         )
         .await;
@@ -905,7 +906,10 @@ async fn agents_are_scoped_to_shared_vaults() {
         .call(
             Method::PATCH,
             &format!("/vaults/{shared}/members/{aid}"),
-            Some(&UpdateMemberRequest { role: Role::Editor }),
+            Some(&UpdateMemberRequest {
+                role: Role::Editor,
+                log_entry: None,
+            }),
         )
         .await
         .unwrap();
@@ -2025,7 +2029,10 @@ async fn role_dependent_writes_follow_role_changes() {
     };
     let meta_path = format!("/vaults/{v}/objects/n1/meta");
     let share_path = format!("/vaults/{v}/objects/n1/shares/{}", carol.id);
-    let to_editor = UpdateMemberRequest { role: Role::Editor };
+    let to_editor = UpdateMemberRequest {
+        role: Role::Editor,
+        log_entry: None,
+    };
 
     // As an editor, bob writes; only the owner manages shares and the vault.
     assert_eq!(put_attachment(&bob, &v, "a1").await, 201);
@@ -2077,7 +2084,10 @@ async fn role_dependent_writes_follow_role_changes() {
     assert!(info.archived);
 
     // Demoted to viewer, bob can't change anything any more.
-    let to_viewer = UpdateMemberRequest { role: Role::Viewer };
+    let to_viewer = UpdateMemberRequest {
+        role: Role::Viewer,
+        log_entry: None,
+    };
     assert_eq!(
         alice
             .api
@@ -2324,4 +2334,324 @@ async fn notes_have_own_keys_and_recipients_never_get_the_history_before_sharing
         .map(|e| e.epoch)
         .collect();
     assert!(n_epochs.contains(&(FIRST_DOC_EPOCH + 2)));
+}
+
+#[tokio::test]
+async fn membership_changes_carry_owner_signed_log_entries() {
+    use coolpsonotes_core::memberlog::{LogBody, LogEntry, LogMember, LogState, key_commitment};
+    let srv = start().await;
+    let mut alice = new_user(&srv.base, "alice").await;
+    let bob = new_user(&srv.base, "bob").await;
+    let carol = new_user(&srv.base, "carol").await;
+    let v = alice.create_signed_vault("Signed").await;
+    let log = alice.member_log(&v).await;
+    assert_eq!(log.len(), 1);
+    let s = LogState::verify(&v, &alice.account.public(), &log).unwrap();
+    assert_eq!(s.check_key(1, alice.ring(&v).get(1).unwrap()), Ok(true));
+    // Members only.
+    let st = bob
+        .api
+        .status::<()>(Method::GET, &format!("/vaults/{v}/log"), None)
+        .await;
+    assert_eq!(st, 404);
+
+    let add = |entry: Option<LogEntry>, role: Role| AddMemberRequest {
+        user_id: bob.id.clone(),
+        role,
+        key_envelope: None,
+        log_entry: entry,
+    };
+    let members = format!("/vaults/{v}/members");
+    let bob_member = LogMember::new(&bob.id, Role::Editor, &bob.account.public());
+    // Unsigned, mismatching, someone else's or forged entries are refused.
+    assert_eq!(
+        alice
+            .api
+            .status(Method::POST, &members, Some(&add(None, Role::Editor)))
+            .await,
+        409
+    );
+    let e = alice
+        .sign_next(
+            &v,
+            LogBody::Add {
+                member: bob_member.clone(),
+            },
+        )
+        .await;
+    assert_eq!(
+        alice
+            .api
+            .status(
+                Method::POST,
+                &members,
+                Some(&add(Some(e.clone()), Role::Viewer))
+            )
+            .await,
+        400,
+        "the entry says editor"
+    );
+    let by_carol = LogEntry::sign(
+        &carol.account,
+        &alice.id,
+        &v,
+        log.last(),
+        LogBody::Add {
+            member: bob_member.clone(),
+        },
+        1,
+    );
+    assert_eq!(
+        alice
+            .api
+            .status(
+                Method::POST,
+                &members,
+                Some(&add(Some(by_carol), Role::Editor))
+            )
+            .await,
+        400,
+        "not signed by the owner's key"
+    );
+    let swapped = LogMember::new(&bob.id, Role::Editor, &carol.account.public());
+    let e2 = alice.sign_next(&v, LogBody::Add { member: swapped }).await;
+    assert_eq!(
+        alice
+            .api
+            .status(Method::POST, &members, Some(&add(Some(e2), Role::Editor)))
+            .await,
+        400,
+        "not bob's key"
+    );
+    assert_eq!(
+        alice
+            .api
+            .status(
+                Method::POST,
+                &members,
+                Some(&add(Some(e.clone()), Role::Editor))
+            )
+            .await,
+        201
+    );
+    // An entry that doesn't continue the log (signed against an old head).
+    let stale = LogEntry::sign(
+        &alice.account,
+        &alice.id,
+        &v,
+        log.last(),
+        LogBody::Role {
+            user_id: bob.id.clone(),
+            role: Role::Viewer,
+        },
+        1,
+    );
+    let role_path = format!("/vaults/{v}/members/{}", bob.id);
+    assert_eq!(
+        alice
+            .api
+            .status(
+                Method::PATCH,
+                &role_path,
+                Some(&UpdateMemberRequest {
+                    role: Role::Viewer,
+                    log_entry: Some(stale)
+                }),
+            )
+            .await,
+        409
+    );
+    let e = alice
+        .sign_next(
+            &v,
+            LogBody::Role {
+                user_id: bob.id.clone(),
+                role: Role::Viewer,
+            },
+        )
+        .await;
+    assert_eq!(
+        alice
+            .api
+            .status(
+                Method::PATCH,
+                &role_path,
+                Some(&UpdateMemberRequest {
+                    role: Role::Viewer,
+                    log_entry: Some(e)
+                }),
+            )
+            .await,
+        204
+    );
+
+    // Rotation needs its entry with the new key's commitment.
+    let mut ring = alice.ring(&v).clone();
+    let ms: Vec<MemberInfo> = alice.api.get(&members).await;
+    let mut req =
+        coolpsonotes_core::engine::rotate(&mut ring, &ms, &VaultMeta::named("S")).unwrap();
+    let st = alice
+        .api
+        .status(
+            Method::POST,
+            &format!("/vaults/{v}/keys/rotate"),
+            Some(&req),
+        )
+        .await;
+    assert_eq!(st, 409, "unsigned rotation");
+    req.log_entry = Some(
+        alice
+            .sign_next(
+                &v,
+                LogBody::Rotate {
+                    epoch: 2,
+                    key_commit: key_commitment(&v, 2, ring.get(2).unwrap()),
+                },
+            )
+            .await,
+    );
+    let st = alice
+        .api
+        .status(
+            Method::POST,
+            &format!("/vaults/{v}/keys/rotate"),
+            Some(&req),
+        )
+        .await;
+    assert_eq!(st, 204);
+
+    // Bob may leave with or without an entry; the owner removes only with one.
+    let leave = bob
+        .sign_next(
+            &v,
+            LogBody::Leave {
+                user_id: bob.id.clone(),
+            },
+        )
+        .await;
+    let st = bob
+        .api
+        .status(
+            Method::DELETE,
+            &role_path,
+            Some(&RemoveMemberRequest {
+                log_entry: Some(leave),
+            }),
+        )
+        .await;
+    assert_eq!(st, 204);
+    let log = alice.member_log(&v).await;
+    let s = LogState::verify(&v, &alice.account.public(), &log).unwrap();
+    assert!(s.member(&bob.id).is_none());
+    assert_eq!(s.epoch, 2);
+    assert_eq!(s.check_key(2, ring.get(2).unwrap()), Ok(true));
+
+    // Someone added before they have keys is pinned later (`Rekey`).
+    let (dana_api, dana) = dev_login(&srv.base, "dana").await;
+    let e = alice
+        .sign_next(
+            &v,
+            LogBody::Add {
+                member: LogMember::pending(&dana.user.id, Role::Editor),
+            },
+        )
+        .await;
+    let req = AddMemberRequest {
+        user_id: dana.user.id.clone(),
+        role: Role::Editor,
+        key_envelope: None,
+        log_entry: Some(e),
+    };
+    assert_eq!(
+        alice.api.status(Method::POST, &members, Some(&req)).await,
+        201
+    );
+    drop(dana_api);
+}
+
+#[tokio::test]
+async fn an_existing_vault_starts_its_log_with_a_checkpoint() {
+    use coolpsonotes_core::memberlog::{LogBody, LogEntry, LogMember, LogState, key_commitment};
+    let srv = start().await;
+    let mut alice = new_user(&srv.base, "alice").await;
+    let bob = new_user(&srv.base, "bob").await;
+    let v = alice.create_vault("Old").await;
+    alice.share(&v, &bob.id, Role::Viewer).await.unwrap();
+    let log_path = format!("/vaults/{v}/log");
+    let checkpoint = |members: Vec<LogMember>| {
+        LogEntry::sign(
+            &alice.account,
+            &alice.id,
+            &v,
+            None,
+            LogBody::Checkpoint {
+                members,
+                epoch: 1,
+                key_commit: key_commitment(&v, 1, alice.ring(&v).get(1).unwrap()),
+            },
+            1,
+        )
+    };
+    let me = LogMember::new(&alice.id, Role::Owner, &alice.account.public());
+    let bob_m = LogMember::new(&bob.id, Role::Viewer, &bob.account.public());
+    // It must list exactly the members, with their roles and keys.
+    for wrong in [
+        vec![me.clone()],
+        vec![
+            me.clone(),
+            LogMember::new(&bob.id, Role::Editor, &bob.account.public()),
+        ],
+    ] {
+        let st = alice
+            .api
+            .status(
+                Method::POST,
+                &log_path,
+                Some(&AppendLogRequest {
+                    entry: checkpoint(wrong),
+                }),
+            )
+            .await;
+        assert_eq!(st, 400);
+    }
+    let entry = checkpoint(vec![me.clone(), bob_m.clone()]);
+    let st = bob
+        .api
+        .status(
+            Method::POST,
+            &log_path,
+            Some(&AppendLogRequest {
+                entry: entry.clone(),
+            }),
+        )
+        .await;
+    assert_eq!(st, 403, "owner only");
+    let st = alice
+        .api
+        .status(
+            Method::POST,
+            &log_path,
+            Some(&AppendLogRequest {
+                entry: entry.clone(),
+            }),
+        )
+        .await;
+    assert_eq!(st, 204);
+    let st = alice
+        .api
+        .status(Method::POST, &log_path, Some(&AppendLogRequest { entry }))
+        .await;
+    assert_eq!(st, 409, "only once");
+    let s = LogState::verify(&v, &alice.account.public(), &alice.member_log(&v).await).unwrap();
+    assert!(s.vouches_for(&bob.id, Role::Viewer, &bob.account.public()));
+    // From now on unsigned changes are refused.
+    let st = alice
+        .api
+        .status::<()>(
+            Method::DELETE,
+            &format!("/vaults/{v}/members/{}", bob.id),
+            None,
+        )
+        .await;
+    assert_eq!(st, 409);
 }

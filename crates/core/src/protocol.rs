@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use crate::b64;
 use crate::crypto::{CryptoError, Key32};
 use crate::keys::AccountPublic;
+pub use crate::memberlog::LogEntry;
 
 pub const API_PREFIX: &str = "/api/v1";
 /// Object id of each vault's index document (file tree, paths, trash).
@@ -357,6 +358,9 @@ pub struct CreateVaultRequest {
     #[serde(with = "b64")]
     pub encrypted_meta: Vec<u8>,
     pub key_envelope: KeyEnvelope,
+    /// The membership log's first entry (`Create`), signed by the owner.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub log_entry: Option<LogEntry>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
@@ -514,11 +518,40 @@ pub struct AddMemberRequest {
     pub role: Role,
     #[serde(default)]
     pub key_envelope: Option<KeyEnvelope>,
+    /// `Add`, signed by the owner (required once the vault has a log).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub log_entry: Option<LogEntry>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct UpdateMemberRequest {
     pub role: Role,
+    /// `Role`, signed by the owner (required once the vault has a log).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub log_entry: Option<LogEntry>,
+}
+
+/// Optional body of `DELETE /vaults/{v}/members/{u}`.
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct RemoveMemberRequest {
+    /// `Remove` (signed by the owner, required once the vault has a log) or
+    /// `Leave` (signed by the member; leaving works without it).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub log_entry: Option<LogEntry>,
+}
+
+/// `POST /vaults/{v}/log`: entries that change nothing else on the server
+/// (`Checkpoint` to start the log of an existing vault, `Rekey`, `Remove` of
+/// someone who already left).
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct AppendLogRequest {
+    pub entry: LogEntry,
+}
+
+/// `GET /vaults/{v}/log?since=` (entries with `seq >= since`).
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct MemberLogResponse {
+    pub entries: Vec<LogEntry>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -538,6 +571,9 @@ pub struct RotateKeysRequest {
     /// new vault key, so removed members can't read new content of any note.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub objects: Vec<ObjectKeyChange>,
+    /// `Rotate`, signed by the owner (required once the vault has a log).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub log_entry: Option<LogEntry>,
 }
 
 /// One encrypted CRDT update as stored by the server.

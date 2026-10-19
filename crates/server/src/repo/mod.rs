@@ -28,6 +28,7 @@ pub mod attachments;
 pub mod audit;
 pub mod devices;
 pub mod keys;
+pub mod member_log;
 pub mod sessions;
 pub mod shares;
 pub mod stats;

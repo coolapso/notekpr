@@ -12,6 +12,7 @@ use crate::keys::{
     self, AccountPublic, AccountSecret, DeviceKey, RecoveryKey, VaultKey, VaultKeyring,
     wrap_account_for_device, wrap_vault_key,
 };
+use crate::memberlog;
 use crate::protocol::*;
 use crate::random_id;
 
@@ -234,16 +235,30 @@ pub fn check_pin(
 
 // ---------------------------------------------------------------- vault keys
 
+/// A new vault: its first key wrapped to ourselves, and the first entry of
+/// its membership log (signed at `now`, ms).
 pub fn new_vault(
     account: &AccountSecret,
     user_id: &str,
     meta: &VaultMeta,
+    now: i64,
 ) -> Result<(CreateVaultRequest, VaultKeyring)> {
     let id = random_id();
     let key = VaultKey::generate();
     let mut ring = VaultKeyring::new(&id);
     ring.insert(1, key.clone());
     let envelope = wrap_vault_key(&key, &id, 1, user_id, &account.public().enc_public)?;
+    let log_entry = memberlog::LogEntry::sign(
+        account,
+        user_id,
+        &id,
+        None,
+        memberlog::LogBody::Create {
+            owner: memberlog::LogMember::new(user_id, Role::Owner, &account.public()),
+            key_commit: memberlog::key_commitment(&id, 1, &key),
+        },
+        now,
+    );
     let req = CreateVaultRequest {
         id: id.clone(),
         encrypted_meta: meta.encrypt(&ring)?,
@@ -252,6 +267,7 @@ pub fn new_vault(
             epoch: 1,
             envelope,
         },
+        log_entry: Some(log_entry),
     };
     Ok((req, ring))
 }
@@ -353,6 +369,7 @@ pub fn rotate(
         encrypted_meta,
         envelopes,
         objects: vec![],
+        log_entry: None,
     })
 }
 
@@ -1167,7 +1184,7 @@ mod tests {
     fn replica_roundtrip_with_rotation() {
         let alice = AccountSecret::generate();
         let bob = AccountSecret::generate();
-        let (req, mut ring) = new_vault(&alice, "alice", &VaultMeta::named("Home")).unwrap();
+        let (req, mut ring) = new_vault(&alice, "alice", &VaultMeta::named("Home"), 1).unwrap();
         let mut a = VaultReplica::new(&req.id, Role::Owner, ring.clone(), VaultMeta::named("Home"));
         let up = a.index.create("n1", "A.md", EntryKind::Note, 1).unwrap();
         let p1 = a.local_change(INDEX_OBJECT_ID, up).unwrap();
@@ -1278,7 +1295,7 @@ mod tests {
         let bob = AccountSecret::generate();
         let carol = AccountSecret::generate();
         let user = |id: &str, a: &AccountSecret| member(id, a, Role::Viewer, true).user;
-        let (vreq, vring) = new_vault(&alice, "alice", &VaultMeta::named("Private")).unwrap();
+        let (vreq, vring) = new_vault(&alice, "alice", &VaultMeta::named("Private"), 1).unwrap();
         let mut a = VaultReplica::new(
             &vreq.id,
             Role::Owner,
@@ -1404,7 +1421,7 @@ mod tests {
     #[test]
     fn no_snapshot_covers_content_waiting_for_a_key() {
         let alice = AccountSecret::generate();
-        let (_, ring) = new_vault(&alice, "alice", &VaultMeta::named("V")).unwrap();
+        let (_, ring) = new_vault(&alice, "alice", &VaultMeta::named("V"), 1).unwrap();
         let mut a = VaultReplica::new(
             ring.vault_id(),
             Role::Owner,
@@ -1449,7 +1466,7 @@ mod tests {
     #[test]
     fn updates_that_cannot_be_kept_are_fetched_again() {
         let alice = AccountSecret::generate();
-        let (_, ring) = new_vault(&alice, "alice", &VaultMeta::named("V")).unwrap();
+        let (_, ring) = new_vault(&alice, "alice", &VaultMeta::named("V"), 1).unwrap();
         let mut a = VaultReplica::new(
             ring.vault_id(),
             Role::Owner,
@@ -1490,7 +1507,7 @@ mod tests {
     #[test]
     fn content_waiting_for_keys_is_replayed() {
         let alice = AccountSecret::generate();
-        let (_, ring) = new_vault(&alice, "alice", &VaultMeta::named("V")).unwrap();
+        let (_, ring) = new_vault(&alice, "alice", &VaultMeta::named("V"), 1).unwrap();
         let mut a = VaultReplica::new(
             ring.vault_id(),
             Role::Owner,

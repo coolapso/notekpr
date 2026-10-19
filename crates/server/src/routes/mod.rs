@@ -4,6 +4,7 @@ pub mod attachments;
 pub mod auth;
 pub mod devices;
 pub mod me;
+pub mod member_log;
 pub mod oauth;
 pub mod shares;
 pub mod sync;
@@ -87,6 +88,10 @@ pub fn router(state: AppState) -> Router {
                 .delete(vaults::delete),
         )
         .route("/vaults/{v}/keys", get(vaults::keys))
+        .route(
+            "/vaults/{v}/log",
+            get(member_log::log).post(member_log::append),
+        )
         .route("/vaults/{v}/keys/grant", post(vaults::grant_keys))
         .route("/vaults/{v}/keys/rotate", post(vaults::rotate_keys))
         .route(

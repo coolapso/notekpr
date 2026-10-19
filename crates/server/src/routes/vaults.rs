@@ -10,8 +10,8 @@ use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use coolpsonotes_core::protocol::{
     AddMemberRequest, AuditEntry, CreateVaultRequest, GrantKeysRequest, MemberInfo,
-    ObjectEventKind, Role, RotateKeysRequest, UpdateMemberRequest, UpdateVaultRequest,
-    UserEventKind, VaultEventKind, VaultInfo, VaultKeysResponse,
+    ObjectEventKind, RemoveMemberRequest, Role, RotateKeysRequest, UpdateMemberRequest,
+    UpdateVaultRequest, UserEventKind, VaultEventKind, VaultInfo, VaultKeysResponse,
 };
 use sqlx::SqliteExecutor;
 
@@ -22,6 +22,7 @@ use crate::error::{AppError, AppResult, bad, conflict, forbidden};
 use crate::hub::{Control, VaultEvent};
 use crate::repo;
 use crate::routes::me::notify_user;
+use crate::routes::member_log::{self, Expect};
 use crate::routes::users::{account_key, public_user};
 use crate::state::AppState;
 
@@ -99,6 +100,15 @@ pub async fn create(
             &who.user_id,
             &env.envelope,
             &who.user_id,
+            now,
+        )
+        .await?;
+        member_log::check_and_append(
+            &mut tx,
+            &req.id,
+            &who,
+            req.log_entry.as_ref(),
+            Expect::Create,
             now,
         )
         .await?;
@@ -306,6 +316,18 @@ pub async fn add_member(
         // they don't silently keep access after a later removal.
         repo::shares::delete_in_vault_for(&mut *tx, &v, &req.user_id).await?;
         repo::keys::delete_vault_document_keys_of(&mut *tx, &v, &req.user_id).await?;
+        member_log::check_and_append(
+            &mut tx,
+            &v,
+            &who,
+            req.log_entry.as_ref(),
+            Expect::Add {
+                user_id: &req.user_id,
+                role: req.role,
+            },
+            now,
+        )
+        .await?;
         tx.commit().await?;
     }
     db::audit(
@@ -352,6 +374,18 @@ pub async fn update_member(
         if repo::vaults::set_member_role(&mut *tx, &v, &u, req.role).await? == 0 {
             return Err(AppError::NotFound);
         }
+        member_log::check_and_append(
+            &mut tx,
+            &v,
+            &who,
+            req.log_entry.as_ref(),
+            Expect::Role {
+                user_id: &u,
+                role: req.role,
+            },
+            db::now(),
+        )
+        .await?;
         tx.commit().await?;
     }
     db::audit(
@@ -377,7 +411,9 @@ pub async fn remove_member(
     State(state): State<AppState>,
     who: Principal,
     Path((v, u)): Path<(String, String)>,
+    req: Option<Json<RemoveMemberRequest>>,
 ) -> AppResult<StatusCode> {
+    let req = req.map(|Json(r)| r).unwrap_or_default();
     // Owners remove others; anyone but the owner may leave.
     let may_remove = |role: Role| {
         if u == who.user_id {
@@ -398,6 +434,15 @@ pub async fn remove_member(
             return Err(AppError::NotFound);
         }
         repo::keys::delete_vault_keys_of(&mut *tx, &v, &u).await?;
+        member_log::check_and_append(
+            &mut tx,
+            &v,
+            &who,
+            req.log_entry.as_ref(),
+            Expect::Remove { user_id: &u },
+            db::now(),
+        )
+        .await?;
         tx.commit().await?;
     }
     db::audit(
@@ -570,6 +615,17 @@ pub async fn rotate_keys(
         )
         .await?;
     }
+    member_log::check_and_append(
+        &mut tx,
+        &v,
+        &who,
+        req.log_entry.as_ref(),
+        Expect::Rotate {
+            epoch: req.new_epoch,
+        },
+        now,
+    )
+    .await?;
     repo::vaults::set_key_epoch(&mut *tx, &v, req.new_epoch as i64, &req.encrypted_meta, now)
         .await?;
     tx.commit().await?;

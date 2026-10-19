@@ -227,11 +227,38 @@ impl User {
                         epoch: 1,
                         envelope: env,
                     },
+                    log_entry: None,
                 },
             )
             .await;
         self.keyrings.insert(id.clone(), ring);
         id
+    }
+
+    /// A vault whose membership log starts with its creation (R3).
+    pub async fn create_signed_vault(&mut self, name: &str) -> String {
+        let meta = coolpsonotes_core::engine::VaultMeta::named(name);
+        let (req, ring) =
+            coolpsonotes_core::engine::new_vault(&self.account, &self.id, &meta, 1).unwrap();
+        let _: VaultInfo = self.api.post("/vaults", &req).await;
+        self.keyrings.insert(req.id.clone(), ring);
+        req.id
+    }
+
+    /// The vault's membership log as the server has it.
+    pub async fn member_log(&self, vault_id: &str) -> Vec<LogEntry> {
+        let r: MemberLogResponse = self.api.get(&format!("/vaults/{vault_id}/log")).await;
+        r.entries
+    }
+
+    /// Sign `body` as the next entry of the vault's log.
+    pub async fn sign_next(
+        &self,
+        vault_id: &str,
+        body: coolpsonotes_core::memberlog::LogBody,
+    ) -> LogEntry {
+        let log = self.member_log(vault_id).await;
+        LogEntry::sign(&self.account, &self.id, vault_id, log.last(), body, 1)
     }
 
     /// Fetch and unwrap this user's vault keys (as any client does on startup).
@@ -311,6 +338,7 @@ impl User {
                         epoch,
                         envelope: env,
                     }),
+                    log_entry: None,
                 }),
             )
             .await
@@ -382,6 +410,7 @@ impl User {
                     encrypted_meta: meta,
                     envelopes,
                     objects,
+                    log_entry: None,
                 },
             )
             .await;

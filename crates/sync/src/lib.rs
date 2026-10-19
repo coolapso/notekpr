@@ -19,6 +19,7 @@
 //! content, acknowledgements) stays in `coolpsonotes_core::engine::VaultReplica`.
 
 pub mod edits;
+pub mod members;
 pub mod outbox;
 pub mod snapshot;
 

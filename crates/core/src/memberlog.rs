@@ -30,7 +30,9 @@ const HASH_CONTEXT: &str = "coolpsonotes v1 member-log entry";
 const COMMIT_CONTEXT: &str = "coolpsonotes v1 vault key commitment";
 
 /// A member as the owner vouches for them: their account keys are pinned
-/// here, so a server can't swap them.
+/// here, so a server can't swap them. Both keys are empty for someone added
+/// before they set up encryption ("pending keys"); a `Rekey` entry pins
+/// their keys once they have them.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct LogMember {
     pub user_id: String,
@@ -51,11 +53,30 @@ impl LogMember {
         }
     }
 
-    pub fn public(&self) -> Result<AccountPublic, LogError> {
-        Ok(AccountPublic {
+    /// Someone without account keys yet.
+    pub fn pending(user_id: &str, role: Role) -> LogMember {
+        LogMember {
+            user_id: user_id.to_string(),
+            role,
+            enc_public: vec![],
+            sign_public: vec![],
+        }
+    }
+
+    /// The pinned account keys (`None`: none yet).
+    pub fn public(&self) -> Result<Option<AccountPublic>, LogError> {
+        if self.enc_public.is_empty() && self.sign_public.is_empty() {
+            return Ok(None);
+        }
+        Ok(Some(AccountPublic {
             enc_public: key32(&self.enc_public)?,
             sign_public: key32(&self.sign_public)?,
-        })
+        }))
+    }
+
+    fn keys(&self, seq: u64) -> Result<AccountPublic, LogError> {
+        self.public()?
+            .ok_or(LogError::Invalid(seq, "no account keys"))
     }
 
     fn encode(&self, out: &mut Vec<Vec<u8>>) {
@@ -323,7 +344,7 @@ impl LogState {
                 owner: o,
                 key_commit,
             } => {
-                if o.user_id != owner || o.role != Role::Owner || o.public()? != *owner_key {
+                if o.user_id != owner || o.role != Role::Owner || o.keys(0)? != *owner_key {
                     return Err(LogError::Invalid(0, "the creator must be the owner"));
                 }
                 check_commit(0, key_commit)?;
@@ -353,7 +374,7 @@ impl LogState {
                 let me = map
                     .get(&owner)
                     .ok_or(LogError::Invalid(0, "the owner must be a member"))?;
-                if me.role != Role::Owner || me.public()? != *owner_key {
+                if me.role != Role::Owner || me.keys(0)? != *owner_key {
                     return Err(LogError::Invalid(0, "the signer must be the owner"));
                 }
                 if map.values().filter(|m| m.role == Role::Owner).count() != 1 {
@@ -408,13 +429,13 @@ impl LogState {
                 self.members
                     .get(user_id)
                     .ok_or(LogError::Invalid(e.seq, "not a member"))?
-                    .public()?
+                    .keys(e.seq)?
             }
             _ => {
                 if e.signer != self.owner {
                     return Err(LogError::Signer(e.seq));
                 }
-                self.members[&self.owner].public()?
+                self.members[&self.owner].keys(e.seq)?
             }
         };
         e.verify_signature(&self.vault_id, &signer_key)?;
@@ -443,7 +464,7 @@ impl LogState {
                     .role = *role;
             }
             LogBody::Rekey { member } => {
-                member.public()?;
+                member.keys(n)?;
                 let m = self
                     .members
                     .get_mut(&member.user_id)
@@ -483,7 +504,7 @@ impl LogState {
     pub fn vouches_for(&self, user_id: &str, role: Role, key: &AccountPublic) -> bool {
         self.members
             .get(user_id)
-            .is_some_and(|m| m.role == role && m.public().is_ok_and(|k| k == *key))
+            .is_some_and(|m| m.role == role && m.public().ok().flatten().is_some_and(|k| k == *key))
     }
 
     /// Check a vault key against the log: `Ok(true)` if its epoch's
@@ -832,6 +853,47 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn people_without_keys_yet_get_them_pinned_later() {
+        let (alice, bob) = (person("alice"), person("bob"));
+        let (mut log, _) = created(&alice);
+        append(
+            &mut log,
+            &alice,
+            LogBody::Add {
+                member: LogMember::pending("bob", Role::Editor),
+            },
+        );
+        let s = LogState::verify(V, &alice.secret.public(), &log).unwrap();
+        assert!(!s.vouches_for("bob", Role::Editor, &bob.secret.public()));
+        append(
+            &mut log,
+            &alice,
+            LogBody::Rekey {
+                member: member(&bob, Role::Editor),
+            },
+        );
+        let s = LogState::verify(V, &alice.secret.public(), &log).unwrap();
+        assert!(s.vouches_for("bob", Role::Editor, &bob.secret.public()));
+        // Leaving needs keys to sign with: a pending member can't sign.
+        let (mut log2, _) = created(&alice);
+        append(
+            &mut log2,
+            &alice,
+            LogBody::Add {
+                member: LogMember::pending("bob", Role::Editor),
+            },
+        );
+        append(
+            &mut log2,
+            &bob,
+            LogBody::Leave {
+                user_id: "bob".into(),
+            },
+        );
+        assert!(LogState::verify(V, &alice.secret.public(), &log2).is_err());
     }
 
     #[test]

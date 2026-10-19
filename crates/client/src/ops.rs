@@ -6,12 +6,13 @@
 use std::collections::BTreeSet;
 
 use coolpsonotes_core::doc::{Entry, EntryKind};
-use coolpsonotes_core::protocol::{INDEX_OBJECT_ID, Snapshot, SnapshotInfo};
+use coolpsonotes_core::protocol::{INDEX_OBJECT_ID, PrefsBlob, Role, Snapshot, SnapshotInfo};
 use coolpsonotes_core::{paths, search};
 use serde::Serialize;
 
+use crate::api::ApiError;
 use crate::hub::{Hub, VaultSummary};
-use crate::session::SharedVault;
+use crate::session::{Session, SharedVault};
 use crate::vault::{Vault, WriteResult, content_hash};
 
 #[derive(Debug, thiserror::Error)]
@@ -578,4 +579,369 @@ pub async fn empty_trash(hub: &Hub, vref: &str) -> OpResult<usize> {
     }
     hub.local_changed(&vid, vec![], true).await;
     Ok(purged.len())
+}
+
+// ---------------------------------------------------------------- quick notes
+//
+// Quick notes are ordinary notes in `Quick notes/` of one vault, as in the
+// web client (crates/web/src/quick.rs): same folder, naming, preview and
+// default-vault rule.
+
+/// Folder of the quick notes in their vault.
+pub const QUICK_FOLDER: &str = "Quick notes";
+/// Archived quick notes.
+pub const QUICK_ARCHIVE: &str = "Quick notes/Archive";
+
+/// Name of a quick note made at `ms`, in local time: `2026-10-19 14.32`
+/// (no `:`, which Windows file names don't allow).
+pub fn quick_note_name(ms: i64) -> String {
+    let (y, mo, d, h, mi) = local_time(ms);
+    format!("{y:04}-{mo:02}-{d:02} {h:02}.{mi:02}")
+}
+
+/// Year, month, day, hour and minute of `ms` in the local time zone (UTC
+/// where that is not available).
+fn local_time(ms: i64) -> (i32, u32, u32, u32, u32) {
+    #[cfg(unix)]
+    {
+        let secs = ms.div_euclid(1000) as libc::time_t;
+        // SAFETY: localtime_r only writes the struct it is given; this
+        // process never changes TZ while running.
+        let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+        if !unsafe { libc::localtime_r(&secs, &mut tm) }.is_null() {
+            return (
+                tm.tm_year + 1900,
+                (tm.tm_mon + 1) as u32,
+                tm.tm_mday as u32,
+                tm.tm_hour as u32,
+                tm.tm_min as u32,
+            );
+        }
+    }
+    let t = time::OffsetDateTime::from_unix_timestamp(ms.div_euclid(1000))
+        .unwrap_or(time::OffsetDateTime::UNIX_EPOCH);
+    (
+        t.year(),
+        u8::from(t.month()) as u32,
+        t.day() as u32,
+        t.hour() as u32,
+        t.minute() as u32,
+    )
+}
+
+pub fn is_quick_note(path: &str) -> bool {
+    paths::is_within(path, QUICK_FOLDER) && paths::is_note(path)
+}
+
+pub fn is_archived_quick_note(path: &str) -> bool {
+    paths::is_within(path, QUICK_ARCHIVE)
+}
+
+/// A line without Markdown block markers (headings, quotes, bullets, tasks).
+fn plain_line(line: &str) -> &str {
+    let mut s = line.trim();
+    loop {
+        let before = s;
+        let hashes = s.len() - s.trim_start_matches('#').len();
+        if (1..=6).contains(&hashes) && s[hashes..].starts_with(' ') {
+            s = s[hashes..].trim_start();
+        }
+        if let Some(r) = s.strip_prefix('>') {
+            s = r.trim_start();
+        }
+        for m in ["- ", "* ", "+ "] {
+            if let Some(r) = s.strip_prefix(m) {
+                s = r.trim_start();
+            }
+        }
+        let digits = s.len() - s.trim_start_matches(|c: char| c.is_ascii_digit()).len();
+        if digits > 0 && (s[digits..].starts_with(". ") || s[digits..].starts_with(") ")) {
+            s = s[digits + 2..].trim_start();
+        }
+        for m in ["[ ] ", "[x] ", "[X] "] {
+            if let Some(r) = s.strip_prefix(m) {
+                s = r.trim_start();
+            }
+        }
+        if s == before {
+            return s;
+        }
+    }
+}
+
+/// What lists show for a quick note: its first non-empty line (without
+/// front matter and Markdown markers), or `title` if it has no text yet.
+pub fn quick_preview(text: &str, title: &str) -> String {
+    let mut lines = text.lines().peekable();
+    // Only a closed block at the start is front matter.
+    if lines.peek().is_some_and(|l| l.trim_end() == "---")
+        && text.lines().skip(1).any(|l| l.trim_end() == "---")
+    {
+        lines.next();
+        for l in lines.by_ref() {
+            if l.trim_end() == "---" {
+                break;
+            }
+        }
+    }
+    let first = lines
+        .filter(|l| !l.trim_start().starts_with("```"))
+        .map(plain_line)
+        .find(|l| !l.is_empty() && *l != "---");
+    match first {
+        Some(l) if l.chars().count() > 160 => {
+            let mut s: String = l.chars().take(160).collect();
+            s = s.trim_end().to_string();
+            s.push('…');
+            s
+        }
+        Some(l) => l.to_string(),
+        None => title.to_string(),
+    }
+}
+
+/// A vault that could hold the quick notes.
+#[derive(Clone, Debug)]
+pub struct QuickVaultCandidate {
+    pub id: String,
+    pub name: String,
+    pub owned: bool,
+    pub writable: bool,
+    pub archived: bool,
+    /// When the vault was created (`i64::MAX` if unknown).
+    pub created_at: i64,
+}
+
+/// The quick-notes vault: the chosen one if it can still be edited,
+/// otherwise the first vault the person owns (their personal vault, the
+/// oldest), otherwise the first they can edit. Archived vaults only when
+/// chosen.
+pub fn choose_quick_vault(pref: Option<&str>, vaults: &[QuickVaultCandidate]) -> Option<String> {
+    if let Some(p) = pref
+        && vaults.iter().any(|v| v.id == p && v.writable)
+    {
+        return Some(p.to_string());
+    }
+    let mut c: Vec<&QuickVaultCandidate> = vaults
+        .iter()
+        .filter(|v| v.writable && !v.archived)
+        .collect();
+    c.sort_by(|a, b| {
+        a.created_at
+            .cmp(&b.created_at)
+            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+            .then_with(|| a.id.cmp(&b.id))
+    });
+    c.iter()
+        .find(|v| v.owned)
+        .or_else(|| c.first())
+        .map(|v| v.id.clone())
+}
+
+/// The quick-notes vault chosen in the synced preferences (`quick_vault`
+/// of the web client's encrypted prefs). `Ok(None)`: not chosen.
+pub async fn quick_vault_pref(session: &Session) -> anyhow::Result<Option<String>> {
+    /// The one field needed from the web client's `Prefs`.
+    #[derive(serde::Deserialize)]
+    struct QuickPrefs {
+        #[serde(default)]
+        quick_vault: Option<String>,
+    }
+    let blob: PrefsBlob = session.api.get("/me/prefs").await?;
+    let Some(ct) = blob.ciphertext else {
+        return Ok(None);
+    };
+    let pt = session.account().open_private(&session.user_id, &ct)?;
+    Ok(serde_json::from_slice::<QuickPrefs>(&pt)?.quick_vault)
+}
+
+/// Where quick notes go, decided with the server: the preference, else the
+/// default rule over the vault list. `Ok(None)`: no vault can be edited.
+/// `Err`: the server can't be asked (use [`local_quick_vault`]).
+pub async fn quick_vault_online(session: &Session) -> Result<Option<String>, ApiError> {
+    let infos = session.api.vaults().await?;
+    let pref = match quick_vault_pref(session).await {
+        Ok(p) => p,
+        Err(e) => {
+            crate::ui::warn(&format!(
+                "could not read your quick-notes vault setting ({e:#}); using the default"
+            ));
+            None
+        }
+    };
+    let cands: Vec<QuickVaultCandidate> = infos
+        .iter()
+        .map(|i| QuickVaultCandidate {
+            id: i.id.clone(),
+            name: String::new(),
+            owned: i.role == Role::Owner,
+            writable: i.role.can_write(),
+            archived: i.archived,
+            created_at: i.created_at,
+        })
+        .collect();
+    Ok(choose_quick_vault(pref.as_deref(), &cands))
+}
+
+/// The default quick-notes vault among the hub's local copies, for when the
+/// server (and so the preference) can't be reached.
+pub async fn local_quick_vault(hub: &Hub) -> Option<String> {
+    let mut cands = Vec::new();
+    for v in hub.vaults() {
+        let g = v.lock().await;
+        cands.push(QuickVaultCandidate {
+            id: g.id().to_string(),
+            name: g.name().to_string(),
+            owned: g.role() == Role::Owner,
+            writable: g.require_writable().is_ok(),
+            archived: g.archived,
+            created_at: i64::MAX,
+        });
+    }
+    choose_quick_vault(None, &cands)
+}
+
+/// Create a quick note with `text` in `Quick notes/` of a vault.
+pub async fn create_quick_note(hub: &Hub, vref: &str, text: &str) -> OpResult<PutOutcome> {
+    let text = text.trim_end().trim_start_matches(['\n', '\r']);
+    let name = quick_note_name(coolpsonotes_core::now_ms());
+    let v = vault(hub, vref).await?;
+    let (vault_id, res) = {
+        let mut g = v.lock().await;
+        check_write(hub, &g)?;
+        let taken: BTreeSet<String> = g.paths().keys().map(|p| p.to_lowercase()).collect();
+        let path = paths::unique(&paths::join(QUICK_FOLDER, &format!("{name}.md")), |p| {
+            taken.contains(&p.to_lowercase())
+        });
+        let res = g.create_note(&path, text).map_err(bad)?;
+        g.save()?;
+        (g.id().to_string(), res)
+    };
+    Ok(finish(hub, &vault_id, res, text.as_bytes()).await)
+}
+
+#[derive(Serialize, Clone, Debug)]
+pub struct QuickNote {
+    pub vault: String,
+    pub path: String,
+    pub id: String,
+    pub title: String,
+    pub preview: String,
+    pub created: i64,
+    pub modified: i64,
+    pub archived: bool,
+}
+
+/// Quick notes of a vault, newest first (archived ones only with `archived`).
+pub async fn list_quick_notes(
+    hub: &Hub,
+    vref: &str,
+    archived: bool,
+    limit: usize,
+) -> OpResult<Vec<QuickNote>> {
+    let v = vault(hub, vref).await?;
+    let g = v.lock().await;
+    let mut notes: Vec<(String, Entry)> = g
+        .notes()
+        .into_iter()
+        .filter(|(p, _)| is_quick_note(p) && (archived || !is_archived_quick_note(p)))
+        .collect();
+    notes.sort_by(|(_, a), (_, b)| {
+        b.created
+            .cmp(&a.created)
+            .then(b.modified.cmp(&a.modified))
+            .then(a.id.cmp(&b.id))
+    });
+    notes.truncate(limit);
+    Ok(notes
+        .into_iter()
+        .map(|(p, e)| {
+            let title = paths::title(&p).to_string();
+            QuickNote {
+                vault: g.id().to_string(),
+                preview: quick_preview(&g.note_text(&e.id), &title),
+                archived: is_archived_quick_note(&p),
+                title,
+                path: p,
+                id: e.id,
+                created: e.created,
+                modified: e.modified,
+            }
+        })
+        .collect())
+}
+
+#[cfg(test)]
+mod quick_tests {
+    use super::*;
+
+    #[test]
+    fn quick_note_names_are_local_minutes() {
+        let n = quick_note_name(coolpsonotes_core::now_ms());
+        let b = n.as_bytes();
+        assert_eq!(n.len(), 16, "{n}");
+        assert!(
+            b[4] == b'-' && b[7] == b'-' && b[10] == b' ' && b[13] == b'.',
+            "{n}"
+        );
+        assert_eq!(n.chars().filter(|c| c.is_ascii_digit()).count(), 12, "{n}");
+        assert!(!n.contains(':'));
+    }
+
+    #[test]
+    fn previews_and_paths() {
+        assert_eq!(
+            quick_preview("\n  # Call the dentist\nmore", "t"),
+            "Call the dentist"
+        );
+        assert_eq!(quick_preview("", "2026-10-19 14.32"), "2026-10-19 14.32");
+        assert_eq!(quick_preview("- [ ] milk", "t"), "milk");
+        assert_eq!(quick_preview("---\na: b\n---\nText", "t"), "Text");
+        assert_eq!(quick_preview("---\nText", "t"), "Text");
+        assert!(is_quick_note("Quick notes/a.md") && !is_quick_note("Quick notes/a.png"));
+        assert!(is_archived_quick_note("Quick notes/Archive/a.md"));
+        assert!(!is_quick_note("Other/Quick notes/a.md"));
+    }
+
+    #[test]
+    fn default_quick_vault() {
+        let c =
+            |id: &str, owned: bool, writable: bool, archived: bool, at: i64| QuickVaultCandidate {
+                id: id.into(),
+                name: id.into(),
+                owned,
+                writable,
+                archived,
+                created_at: at,
+            };
+        let vaults = [
+            c("shared", false, true, false, 1),
+            c("work", true, true, false, 30),
+            c("mine", true, true, false, 10),
+            c("ro", false, false, false, 0),
+            c("old", true, true, true, 5),
+        ];
+        assert_eq!(choose_quick_vault(None, &vaults).as_deref(), Some("mine"));
+        assert_eq!(
+            choose_quick_vault(Some("work"), &vaults).as_deref(),
+            Some("work")
+        );
+        assert_eq!(
+            choose_quick_vault(Some("old"), &vaults).as_deref(),
+            Some("old")
+        );
+        assert_eq!(
+            choose_quick_vault(Some("ro"), &vaults).as_deref(),
+            Some("mine")
+        );
+        assert_eq!(
+            choose_quick_vault(Some("gone"), &vaults).as_deref(),
+            Some("mine")
+        );
+        assert_eq!(
+            choose_quick_vault(None, &vaults[..1]).as_deref(),
+            Some("shared")
+        );
+        assert_eq!(choose_quick_vault(None, &vaults[3..4]), None);
+    }
 }

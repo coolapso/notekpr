@@ -1,4 +1,5 @@
-//! Left sidebar: vault switcher, quick actions, favorites, recent, file tree.
+//! Left sidebar: vault switcher, quick actions, favorites, quick notes,
+//! recent, file tree.
 
 use coolpsonotes_core::protocol::Role;
 use leptos::prelude::*;
@@ -7,6 +8,7 @@ use crate::actions;
 use crate::state::{self, Modal, Route, ui};
 use crate::util;
 use crate::views::icons::Icon;
+use crate::views::quick::QuickSection;
 use crate::views::tree::Tree;
 use crate::views::{SyncStatus, avatar};
 
@@ -123,6 +125,7 @@ pub fn Sidebar() -> impl IntoView {
             </div>
             <nav class="sb-scroll">
                 <Favorites/>
+                <QuickSection/>
                 <Recent/>
                 <SharedWithMe/>
                 {move || match vault() {

@@ -54,6 +54,18 @@ own session.
       "Postgres can be added behind the same queries" [D-L9]).
 - [x] Corrected the false claim that a copy of the CLI's data directory
       reveals nothing (`local.key` lives in it) [C-H9 ✔, docs part].
+- [x] **Quick notes** (brain dump): ordinary notes in `Quick notes/` of one
+      vault — the synced `quick_vault` preference (Settings → Editor), else
+      the person's oldest own vault, else the first writable one. Named by
+      the local time (`2026-10-19 14.32`, no `:` for Windows mirrors; ` 2`
+      if taken); lists show the first line. Web: sidebar section above
+      Recent (can be turned off), `/quick` page with a capture box that
+      stays put (Ctrl/Cmd+Enter), cards with promote (move + rename) and
+      archive (`Quick notes/Archive/`), Ctrl/Cmd+Alt+Q. CLI:
+      `coolpsonotes quick [TEXT]`, `quick --list`. No server or protocol
+      changes. The small naming/preview/default-vault helpers exist in
+      both clients (`crates/web/src/quick.rs`, `crates/client/src/ops.rs`);
+      they could move to `crates/core`.
 
 ---
 
@@ -596,20 +608,6 @@ agent identity, sees only vaults shared with that agent, and is never part of
 the sync server. Trade-off: whoever operates it can read those vaults, so a
 hosted version must be an explicit per-vault opt-in. Full reasoning and open
 questions: [docs/agents.md §8](docs/agents.md#8-why-there-is-no-mcp-server).
-
-### Quick notes (brain dump)
-
-A capture-first space for thoughts that don't have a home yet.
-
-- A sidebar section that can be turned on or off in settings, above
-  "Recent": a one-click / one-shortcut "new quick note", plus the latest
-  few quick notes.
-- An overview page showing all quick notes at a glance (cards, newest
-  first), with "promote to a regular note" (move into a folder) and archive.
-- Stored as ordinary notes in a `Quick notes/` folder of a chosen vault, so
-  they sync, mirror to Markdown files and work in your own editor too.
-- Open questions: one quick-notes vault or per vault; naming (timestamp vs
-  first line); shortcut; mobile-friendly capture.
 
 ### Tasks (undecided — capturing ideas)
 

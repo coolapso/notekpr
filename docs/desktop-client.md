@@ -160,6 +160,7 @@ vault-relative, `.md` is optional for notes.
 | `ls <v> [folder] [-r]` | folders, notes and attachments |
 | `cat <v> <path>` | note text (or attachment bytes) |
 | `write <v> <path>` | create or update a note from stdin — diff-merged, never a blind overwrite; `--append`, `--attachment`, `--if-match <hash>` |
+| `quick [text…]` / `quick --list` | capture a quick note (text or stdin) / list the newest; see [Quick notes](#quick-notes) |
 | `mkdir <v> <path>`, `mv <v> <from> <to> [--update-links]`, `rm <v> <path>` | `rm` moves to the trash; `mv` into `dir/` keeps the name; `--update-links` rewrites `[[links]]` |
 | `trash list\|restore\|empty <v>` | restore by path or id; `empty` deletes permanently |
 | `search <query> [--vault v]` | terms, `"phrases"`, `tag:x`, `folder:x`, `title:x`, `vault:x` |
@@ -175,7 +176,7 @@ unreachable.
 a profile's local copies (two would overwrite each other's files and lose
 queued or received changes). While `sync` or `gateway` runs, read commands
 (`ls`, `cat`, `search`, `backlinks`, `status`, `export`, `history`, `trash
-list`, `vault list`) show that process's local copies read-only — it keeps
+list`, `vault list`, `quick --list`) show that process's local copies read-only — it keeps
 them current — and commands that change something (`write`, `mv`, `rm`,
 `mkdir`, `import`, `vault …`, `sync --once`, …) wait up to 3 seconds for
 another one-shot command and then stop with "profile … is in use by another
@@ -188,6 +189,34 @@ silences status lines. Status and warnings go to stderr, results to stdout.
 Revisions: a note gets a revision when an editing session ends (after a CLI
 write, when `sync`/the gateway stop, or after two idle minutes, once at least
 five edits accumulated) and when it is compacted (every ~200 updates).
+
+### Quick notes
+
+Quick notes are for thoughts that don't have a home yet. They are ordinary
+notes in the `Quick notes/` folder of one vault, so they sync, mirror to
+Markdown files and open in any editor like every other note. The web app
+shows them in the sidebar and on its *Quick notes* page (`Ctrl+Alt+Q` makes
+one), where they can be promoted to a regular note or archived (moved to
+`Quick notes/Archive/`).
+
+```sh
+coolpsonotes quick Call the dentist about Tuesday   # words are joined with spaces
+echo "Gift ideas: a kite" | coolpsonotes quick      # or the text from stdin
+coolpsonotes quick --vault Work "Ask about the release date"
+coolpsonotes quick --list                           # newest first: name and first line
+coolpsonotes quick --list --archived --limit 50 --json
+```
+
+A new quick note is named by the local time, e.g.
+`Quick notes/2026-10-19 14.32.md` (a second one in the same minute gets
+` 2`, ` 3`, …; there is no `:` because Windows doesn't allow it in file
+names). The vault is the one given with `--vault`, otherwise the one chosen
+in the web app (Settings → Editor → *Vault for quick notes*, stored in your
+encrypted, synced preferences), otherwise your own first vault (the oldest
+one you own), otherwise the first vault you can edit. Without a connection
+to the server the setting can't be read: the default among the local copies
+is used, with a warning. `quick` changes data, so it waits for the profile
+lock like `write`; `quick --list` only reads.
 
 ## 4. Sync and the Markdown mirror
 

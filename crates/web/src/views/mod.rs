@@ -4,6 +4,7 @@ pub mod home;
 pub mod icons;
 pub mod note;
 pub mod panels;
+pub mod quick;
 pub mod settings;
 pub mod sidebar;
 pub mod tree;
@@ -47,6 +48,7 @@ pub fn Shell() -> impl IntoView {
                     Route::Settings(tab) => view! { <settings::Settings tab=tab/> }.into_any(),
                     Route::Device(code) => view! { <settings::DeviceCodePage code=code/> }.into_any(),
                     Route::Shared(v, n) => view! { <note::SharedNoteView vault=v note=n/> }.into_any(),
+                    Route::Quick => view! { <quick::QuickPage/> }.into_any(),
                 }}
             </main>
             <dialogs::ModalHost/>
@@ -172,6 +174,20 @@ pub fn close_on_outside(open: RwSignal<bool>) {
     });
 }
 
+/// Ctrl+Alt+Q (⌘+Alt+Q on macs): a new quick note. On macs Alt changes the
+/// key ("œ"), so the physical key counts there; elsewhere the key must be a
+/// "q", so AltGr+Q (which types "@" on some layouts) never triggers it.
+fn is_quick_note_key(e: &web_sys::KeyboardEvent) -> bool {
+    if !e.alt_key() || e.shift_key() {
+        return false;
+    }
+    let q = e.key().eq_ignore_ascii_case("q");
+    if e.meta_key() && !e.ctrl_key() {
+        return q || e.code() == "KeyQ";
+    }
+    e.ctrl_key() && !e.meta_key() && q && !e.get_modifier_state("AltGraph")
+}
+
 fn install_shortcuts() {
     let cb = wasm_bindgen::closure::Closure::wrap(Box::new(move |e: web_sys::KeyboardEvent| {
         let ui = ui();
@@ -182,6 +198,11 @@ fn install_shortcuts() {
         let m = e.ctrl_key() || e.meta_key();
         let key = e.key();
         let route = ui.route.get_untracked();
+        if is_quick_note_key(&e) {
+            e.prevent_default();
+            crate::quick::new_and_open();
+            return;
+        }
         match (m, e.shift_key(), e.alt_key(), key.as_str()) {
             (true, false, false, "k") | (true, false, false, "p") | (true, false, false, "o") => {
                 e.prevent_default();

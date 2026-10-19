@@ -508,3 +508,4 @@ table.keys td:first-child { white-space: nowrap; width: 1%; padding-right: 16px;
   .tree-more { opacity: 1; }
   .ed { font-size: 17px; }
 }
+.note-title:focus-visible { box-shadow: 0 2px 0 0 var(--accent); }

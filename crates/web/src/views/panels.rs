@@ -94,7 +94,7 @@ pub fn RightPanel(vault: String, note: String) -> impl IntoView {
                         move || broken.get().into_iter().map(|t| {
                             let (v, p) = (vbr.clone(), pbr.clone());
                             let t2 = t.clone();
-                            view! { <button class="panel-item" title="Create this note" on:click=move |_| crate::actions::open_wiki(&v, &t2, &p())>
+                            view! { <button class="panel-item" title="Create this note" aria-label="Create this note" on:click=move |_| crate::actions::open_wiki(&v, &t2, &p())>
                                 <span class="pi-title broken">{t}</span><span class="pi-snip">"click to create"</span></button> }
                         }).collect_view()
                     }

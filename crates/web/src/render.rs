@@ -166,16 +166,27 @@ pub fn to_html(src: &str, ctx: &Ctx) -> String {
                 dest_url,
                 ..
             }) => {
-                let dest = dest_url.to_string();
+                let mut dest = dest_url.to_string();
+                // `<a@b.c>` comes without its scheme; it is never a note.
+                if link_type == LinkType::Email && !dest.starts_with("mailto:") {
+                    dest = format!("mailto:{dest}");
+                }
                 let html = if matches!(link_type, LinkType::WikiLink { .. })
                     || coolpsonotes_core::markdown::is_internal_target(&dest)
                 {
                     let target = coolpsonotes_core::markdown::percent_decode(&dest);
                     let name = target.split('#').next().unwrap_or(&target).to_string();
+                    let heading = target
+                        .split_once('#')
+                        .map(|(_, h)| h.trim())
+                        .filter(|h| !h.is_empty())
+                        .map(|h| format!(" data-heading=\"{}\"", esc(h)))
+                        .unwrap_or_default();
                     match (ctx.note)(&name) {
-                        Some(id) => {
-                            format!("<a class=\"wl\" href=\"#\" data-note=\"{}\">", esc(&id))
-                        }
+                        Some(id) => format!(
+                            "<a class=\"wl\" href=\"#\" data-note=\"{}\"{heading}>",
+                            esc(&id)
+                        ),
                         None => format!(
                             "<a class=\"wl wlb\" href=\"#\" data-create=\"{}\" title=\"Create this note\">",
                             esc(&name)
@@ -288,6 +299,30 @@ mod tests {
         assert!(!h.contains("<img src=x"));
         assert!(!h.contains("javascript:"));
         assert!(h.contains("&lt;script&gt;"));
+    }
+
+    #[test]
+    fn links_to_a_heading_keep_it() {
+        let note = |s: &str| (s == "Plan").then(|| "n1".to_string());
+        let attachment = |_: &str| None;
+        let h = to_html(
+            "see [[Plan#Next steps]]",
+            &Ctx {
+                note: &note,
+                attachment: &attachment,
+            },
+        );
+        assert!(
+            h.contains("data-note=\"n1\" data-heading=\"Next steps\""),
+            "{h}"
+        );
+    }
+
+    #[test]
+    fn email_autolinks_are_mail_links_not_notes() {
+        let h = render("write to <ana@example.org>");
+        assert!(h.contains("href=\"mailto:ana@example.org\""), "{h}");
+        assert!(!h.contains("data-create"), "{h}");
     }
 
     #[test]

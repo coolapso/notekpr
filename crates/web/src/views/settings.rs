@@ -31,7 +31,7 @@ pub fn Settings(tab: String) -> impl IntoView {
     view! {
         <div class="page">
             <header class="page-head">
-                <button class="icon-btn mobile-only" title="Menu" on:click=move |_| ui.sidebar.set(true)><Icon name="menu"/></button>
+                <button class="icon-btn mobile-only" title="Menu" aria-label="Menu" on:click=move |_| ui.sidebar.set(true)><Icon name="menu"/></button>
                 <h1 class="grow">"Settings"</h1>
             </header>
             <div class="settings">

@@ -50,13 +50,14 @@ fn ToolButton(icon: &'static str, title: String, c: Command) -> impl IntoView {
 fn Toolbar(vault: Option<String>) -> impl IntoView {
     let m = util::mod_key();
     let heading_open = RwSignal::new(false);
+    super::close_on_outside(heading_open);
     view! {
         <div class="toolbar" role="toolbar" aria-label="Formatting">
             <ToolButton icon="undo" title=format!("Undo ({m}+Z)") c=Command::Undo/>
             <ToolButton icon="redo" title=format!("Redo ({m}+Shift+Z)") c=Command::Redo/>
             <span class="tb-sep"></span>
             <div class="tb-drop">
-                <button class="tb" title="Heading" on:mousedown=move |ev| { ev.prevent_default(); heading_open.update(|o| *o = !*o); }><Icon name="heading"/></button>
+                <button class="tb" title="Heading" aria-label="Heading" on:mousedown=move |ev| { ev.prevent_default(); heading_open.update(|o| *o = !*o); }><Icon name="heading"/></button>
                 <Show when=move || heading_open.get()>
                     <div class="menu" on:mousedown=move |ev| { ev.prevent_default(); heading_open.set(false); }>
                         <button on:mousedown=move |_| cmd(Command::Heading(1))><span class="h1s">"Heading 1"</span></button>
@@ -80,7 +81,7 @@ fn Toolbar(vault: Option<String>) -> impl IntoView {
             <ToolButton icon="table" title="Table".to_string() c=Command::Table/>
             <ToolButton icon="minus" title="Divider".to_string() c=Command::Rule/>
             {vault.map(|vault| view! {
-                <button class="tb" title="Attach a file or image" on:mousedown=move |ev| {
+                <button class="tb" title="Attach a file or image" aria-label="Attach a file or image" on:mousedown=move |ev| {
                     ev.prevent_default();
                     let v = vault.clone();
                     // The note the file is for: the one open now, not when the upload ends.
@@ -336,7 +337,12 @@ pub fn NoteView(vault: String, note: String) -> impl IntoView {
         if let Some(a) = t.closest("[data-note]").ok().flatten() {
             ev.prevent_default();
             if let Some(id) = a.get_attribute("data-note") {
-                state::navigate(Route::Note(vr.clone(), id));
+                if state::current_route().note() != Some((vr.as_str(), id.as_str())) {
+                    state::navigate(Route::Note(vr.clone(), id.clone()));
+                }
+                if let Some(h) = a.get_attribute("data-heading") {
+                    actions::jump_to_heading(vr.clone(), id, h);
+                }
             }
         } else if let Some(a) = t.closest("[data-create]").ok().flatten() {
             ev.prevent_default();
@@ -404,6 +410,7 @@ pub fn NoteView(vault: String, note: String) -> impl IntoView {
         actions::is_favorite(&vf, &nf)
     };
     let more = RwSignal::new(false);
+    super::close_on_outside(more);
     let (vm, nm) = (vault.clone(), note.clone());
     let (vs, vh, nh) = (vault.clone(), vault.clone(), note.clone());
     let (vfa, nfa) = (vault.clone(), note.clone());
@@ -415,18 +422,18 @@ pub fn NoteView(vault: String, note: String) -> impl IntoView {
     view! {
         <div class="note-page">
             <header class="note-head">
-                <button class="icon-btn mobile-only" title="Menu" on:click=move |_| ui.sidebar.set(true)><Icon name="menu"/></button>
+                <button class="icon-btn mobile-only" title="Menu" aria-label="Menu" on:click=move |_| ui.sidebar.set(true)><Icon name="menu"/></button>
                 <div class="crumbs ellipsis">{breadcrumb}</div>
                 <div class="presence">
                     {move || others_here().into_iter().map(|p| avatar(&p.name, &p.user_id)).collect_view()}
                 </div>
                 <span class="mobile-only"><SyncStatus/></span>
                 <div class="seg" role="group" aria-label="View mode">
-                    <button class:on=move || ui.mode.get() == ViewMode::Live title="Live preview" on:click=move |_| ui.mode.set(ViewMode::Live)><Icon name="edit"/></button>
-                    <button class:on=move || ui.mode.get() == ViewMode::Source title="Markdown source" on:click=move |_| ui.mode.set(ViewMode::Source)><Icon name="code"/></button>
-                    <button class:on=move || ui.mode.get() == ViewMode::Reading title=format!("Reading view ({}+E)", util::mod_key()) on:click=move |_| ui.mode.set(ViewMode::Reading)><Icon name="book"/></button>
+                    <button class:on=move || ui.mode.get() == ViewMode::Live title="Live preview" aria-label="Live preview" aria-pressed=move || (ui.mode.get() == ViewMode::Live).to_string() on:click=move |_| ui.mode.set(ViewMode::Live)><Icon name="edit"/></button>
+                    <button class:on=move || ui.mode.get() == ViewMode::Source title="Markdown source" aria-label="Markdown source" aria-pressed=move || (ui.mode.get() == ViewMode::Source).to_string() on:click=move |_| ui.mode.set(ViewMode::Source)><Icon name="code"/></button>
+                    <button class:on=move || ui.mode.get() == ViewMode::Reading title=format!("Reading view ({}+E)", util::mod_key()) aria-label="Reading view" aria-pressed=move || (ui.mode.get() == ViewMode::Reading).to_string() on:click=move |_| ui.mode.set(ViewMode::Reading)><Icon name="book"/></button>
                 </div>
-                <button class="icon-btn" class:on=fav title="Favorite" on:click=move |_| actions::toggle_favorite(&vfa, &nfa)><Icon name="star"/></button>
+                <button class="icon-btn" class:on=fav.clone() title="Favorite" aria-label="Favorite" aria-pressed=move || fav().to_string() on:click=move |_| actions::toggle_favorite(&vfa, &nfa)><Icon name="star"/></button>
                 <Show when=move || state::is_owner(&vs)>
                     {
                         let (v, n) = (vault.clone(), note.clone());
@@ -435,17 +442,18 @@ pub fn NoteView(vault: String, note: String) -> impl IntoView {
                         let shared2 = shared.clone();
                         view! { <button class="icon-btn" class:on=shared
                             title=move || if shared2() { "Shared individually — manage who can open this note" } else { "Share this note" }
+                            aria-label="Share this note"
                             on:click=move |_| ui.modal.set(Some(Modal::ShareNote(v.clone(), n.clone())))><Icon name="share"/></button> }
                     }
                 </Show>
-                <button class="icon-btn" title="Version history" on:click=move |_| ui.modal.set(Some(Modal::History(vh.clone(), nh.clone())))><Icon name="history"/></button>
-                <button class="icon-btn" class:on=move || ui.ui_prefs.get().right_panel || ui.panel_overlay.get() title=format!("Side panel ({}+\\)", util::mod_key())
+                <button class="icon-btn" title="Version history" aria-label="Version history" on:click=move |_| ui.modal.set(Some(Modal::History(vh.clone(), nh.clone())))><Icon name="history"/></button>
+                <button class="icon-btn" class:on=move || ui.ui_prefs.get().right_panel || ui.panel_overlay.get() title=format!("Side panel ({}+\\)", util::mod_key()) aria-label="Side panel"
                     on:click=move |_| {
                         let narrow = util::window().inner_width().ok().and_then(|w| w.as_f64()).unwrap_or(1200.0) <= 1100.0;
                         if narrow { ui.panel_overlay.update(|o| *o = !*o) } else { state::set_ui_prefs(|p| p.right_panel = !p.right_panel) }
                     }><Icon name="panel"/></button>
                 <div class="tb-drop">
-                    <button class="icon-btn" title="More" on:click=move |_| more.update(|o| *o = !*o)><Icon name="more"/></button>
+                    <button class="icon-btn" title="More" aria-label="More" on:click=move |_| more.update(|o| *o = !*o)><Icon name="more"/></button>
                     <Show when=move || more.get()>
                         {
                             let (v, n) = (vm.clone(), nm.clone());
@@ -647,6 +655,7 @@ pub fn SharedNoteView(vault: String, note: String) -> impl IntoView {
             .collect::<Vec<_>>()
     };
     let more = RwSignal::new(false);
+    super::close_on_outside(more);
     let (vh, nh) = (vault.clone(), note.clone());
     let (vd, nd) = (vault.clone(), note.clone());
     let (vl, nl) = (vault.clone(), note.clone());
@@ -655,20 +664,20 @@ pub fn SharedNoteView(vault: String, note: String) -> impl IntoView {
     view! {
         <div class="note-page shared-note">
             <header class="note-head">
-                <button class="icon-btn mobile-only" title="Menu" on:click=move |_| ui.sidebar.set(true)><Icon name="menu"/></button>
+                <button class="icon-btn mobile-only" title="Menu" aria-label="Menu" on:click=move |_| ui.sidebar.set(true)><Icon name="menu"/></button>
                 <div class="crumbs ellipsis">{move || info.get().map(|s| format!("Shared with you by {}", s.owner)).unwrap_or_default()}</div>
                 <div class="presence">
                     {move || others_here().into_iter().map(|p| avatar(&p.name, &p.user_id)).collect_view()}
                 </div>
                 <span class="mobile-only"><SyncStatus/></span>
                 <div class="seg" role="group" aria-label="View mode">
-                    <button class:on=move || ui.mode.get() == ViewMode::Live title="Live preview" on:click=move |_| ui.mode.set(ViewMode::Live)><Icon name="edit"/></button>
-                    <button class:on=move || ui.mode.get() == ViewMode::Source title="Markdown source" on:click=move |_| ui.mode.set(ViewMode::Source)><Icon name="code"/></button>
-                    <button class:on=move || ui.mode.get() == ViewMode::Reading title=format!("Reading view ({}+E)", util::mod_key()) on:click=move |_| ui.mode.set(ViewMode::Reading)><Icon name="book"/></button>
+                    <button class:on=move || ui.mode.get() == ViewMode::Live title="Live preview" aria-label="Live preview" aria-pressed=move || (ui.mode.get() == ViewMode::Live).to_string() on:click=move |_| ui.mode.set(ViewMode::Live)><Icon name="edit"/></button>
+                    <button class:on=move || ui.mode.get() == ViewMode::Source title="Markdown source" aria-label="Markdown source" aria-pressed=move || (ui.mode.get() == ViewMode::Source).to_string() on:click=move |_| ui.mode.set(ViewMode::Source)><Icon name="code"/></button>
+                    <button class:on=move || ui.mode.get() == ViewMode::Reading title=format!("Reading view ({}+E)", util::mod_key()) aria-label="Reading view" aria-pressed=move || (ui.mode.get() == ViewMode::Reading).to_string() on:click=move |_| ui.mode.set(ViewMode::Reading)><Icon name="book"/></button>
                 </div>
-                <button class="icon-btn" title="Version history" on:click=move |_| ui.modal.set(Some(Modal::History(vh.clone(), nh.clone())))><Icon name="history"/></button>
+                <button class="icon-btn" title="Version history" aria-label="Version history" on:click=move |_| ui.modal.set(Some(Modal::History(vh.clone(), nh.clone())))><Icon name="history"/></button>
                 <div class="tb-drop">
-                    <button class="icon-btn" title="More" on:click=move |_| more.update(|o| *o = !*o)><Icon name="more"/></button>
+                    <button class="icon-btn" title="More" aria-label="More" on:click=move |_| more.update(|o| *o = !*o)><Icon name="more"/></button>
                     <Show when=move || more.get()>
                         {
                             let (v, n) = (vd.clone(), nd.clone());

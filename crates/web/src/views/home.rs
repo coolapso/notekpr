@@ -15,7 +15,7 @@ fn PageHead(title: String) -> impl IntoView {
     let ui = ui();
     view! {
         <header class="page-head">
-            <button class="icon-btn mobile-only" title="Menu" on:click=move |_| ui.sidebar.set(true)><Icon name="menu"/></button>
+            <button class="icon-btn mobile-only" title="Menu" aria-label="Menu" on:click=move |_| ui.sidebar.set(true)><Icon name="menu"/></button>
             <h1 class="grow ellipsis">{title}</h1>
             <span class="mobile-only"><SyncStatus/></span>
         </header>
@@ -121,7 +121,7 @@ pub fn VaultHome(vault: String) -> impl IntoView {
     view! {
         <div class="page">
             <header class="page-head">
-                <button class="icon-btn mobile-only" title="Menu" on:click=move |_| ui.sidebar.set(true)><Icon name="menu"/></button>
+                <button class="icon-btn mobile-only" title="Menu" aria-label="Menu" on:click=move |_| ui.sidebar.set(true)><Icon name="menu"/></button>
                 <h1 class="grow ellipsis">{move || title.get()}</h1>
                 <button class="btn ghost small" on:click=move |_| ui.modal.set(Some(Modal::VaultSettings(vid.get_value())))><Icon name="settings"/>" Vault settings"</button>
             </header>
@@ -209,7 +209,7 @@ pub fn Trash(vault: String) -> impl IntoView {
     view! {
         <div class="page">
             <header class="page-head">
-                <button class="icon-btn mobile-only" title="Menu" on:click=move |_| ui.sidebar.set(true)><Icon name="menu"/></button>
+                <button class="icon-btn mobile-only" title="Menu" aria-label="Menu" on:click=move |_| ui.sidebar.set(true)><Icon name="menu"/></button>
                 <h1 class="grow">"Trash"</h1>
                 <Show when=move || writable() && !items2().is_empty()>
                     {

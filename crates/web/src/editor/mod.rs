@@ -409,28 +409,32 @@ impl Editor {
     }
 
     fn apply_mode_classes(&self) {
-        let st = self.st.borrow();
-        let mut c = String::from("ed");
-        c.push_str(if st.mode == Mode::Source {
-            " source"
-        } else {
-            " live"
-        });
-        if st.readonly {
-            c.push_str(" readonly");
-        }
-        if let Some(v) = &st.vim {
-            c.push_str(if v.insert {
-                " vim vim-insert"
+        let (c, editable) = {
+            let st = self.st.borrow();
+            let mut c = String::from("ed");
+            c.push_str(if st.mode == Mode::Source {
+                " source"
             } else {
-                " vim vim-normal"
+                " live"
             });
-        }
+            if st.readonly {
+                c.push_str(" readonly");
+            }
+            if let Some(v) = &st.vim {
+                c.push_str(if v.insert {
+                    " vim vim-insert"
+                } else {
+                    " vim vim-normal"
+                });
+            }
+            (c, if st.readonly { "false" } else { "true" })
+        };
+        // No borrow held from here: changing a focused element can fire
+        // focus/blur synchronously, and those handlers use the state.
         self.root.set_class_name(&c);
-        let _ = self.root.set_attribute(
-            "contenteditable",
-            if st.readonly { "false" } else { "true" },
-        );
+        if self.root.get_attribute("contenteditable").as_deref() != Some(editable) {
+            let _ = self.root.set_attribute("contenteditable", editable);
+        }
     }
 
     pub fn set_mode(&self, mode: Mode) {
@@ -445,6 +449,10 @@ impl Editor {
     }
 
     pub fn set_vim(&self, on: bool) {
+        // Called on every preference change: keep the current vim state.
+        if self.st.borrow().vim.is_some() == on {
+            return;
+        }
         self.st.borrow_mut().vim = if on { Some(vim::Vim::default()) } else { None };
         self.apply_mode_classes();
     }

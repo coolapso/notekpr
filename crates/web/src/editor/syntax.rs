@@ -191,26 +191,29 @@ pub fn table_pipes(line: &str) -> Vec<usize> {
 }
 
 /// Byte ranges of a table row's cells, each starting at its leading `|`; the
-/// first also covers leading whitespace and the last any trailing `|`.
+/// first also covers leading whitespace (and starts without a pipe in a row
+/// written without outer pipes, `a | b`) and the last any trailing `|`.
 pub fn table_cells(line: &str) -> Vec<(usize, usize)> {
     let pipes = table_pipes(line);
-    let Some(&last) = pipes.last() else {
+    if pipes.is_empty() {
         return vec![];
-    };
-    let trailing_text = !line[last + 1..].trim().is_empty();
-    let n = if trailing_text {
-        pipes.len()
-    } else {
-        pipes.len() - 1
     }
-    .max(1);
-    (0..n)
-        .map(|k| {
-            let a = if k == 0 { 0 } else { pipes[k] };
-            let b = if k + 1 < n { pipes[k + 1] } else { line.len() };
-            (a, b)
-        })
-        .collect()
+    let lead = pipes[0] == line.len() - line.trim_start().len();
+    let mut seps = pipes[usize::from(lead)..].to_vec();
+    if seps
+        .last()
+        .is_some_and(|&l| line[l + 1..].trim().is_empty())
+    {
+        seps.pop();
+    }
+    let mut cells = Vec::with_capacity(seps.len() + 1);
+    let mut start = 0;
+    for s in seps {
+        cells.push((start, s));
+        start = s;
+    }
+    cells.push((start, line.len()));
+    cells
 }
 
 /// Text of each cell of a table row (trimmed, without the pipes).
@@ -256,6 +259,28 @@ fn delimiter_row(line: &str) -> Option<Vec<Align>> {
 
 fn is_table_line(line: &str) -> bool {
     line.trim_start().starts_with('|')
+}
+
+/// A line that continues a table: starts with `|`, or — as GFM allows rows
+/// without outer pipes — has a cell separator and doesn't start another block.
+fn continues_table(line: &str) -> bool {
+    is_table_line(line)
+        || (!table_pipes(line).is_empty()
+            && !line.trim().is_empty()
+            && coolpsonotes_core::markdown::heading(line).is_none()
+            && !line.trim_start().starts_with('>')
+            && list_marker(line).is_none())
+}
+
+/// Column alignments if `lines[i]` starts a table: a header row followed by a
+/// delimiter row with as many cells. Without outer pipes both rows need a
+/// `|` (otherwise `text` + `---` is a setext heading).
+fn table_start(lines: &[&str], i: usize) -> Option<Vec<Align>> {
+    let (line, next) = (lines[i], *lines.get(i + 1)?);
+    if !is_table_line(line) && (table_pipes(line).is_empty() || table_pipes(next).is_empty()) {
+        return None;
+    }
+    delimiter_row(next).filter(|a| a.len() == table_cell_texts(line).len())
 }
 
 /// What Enter or Tab does inside a table.
@@ -450,38 +475,32 @@ pub fn classify(lines: &[&str]) -> Vec<Block> {
                 ordered,
                 task: task_box(&line[indent + len..]),
             });
+        } else if let Some(align) = table_start(lines, i) {
+            // A table: a header, its delimiter row, and the rows that follow.
+            let end = (i + 2..lines.len())
+                .find(|&j| !continues_table(lines[j]))
+                .unwrap_or(lines.len());
+            out.push(Block::Table {
+                row: Row::Header,
+                align: align.clone(),
+            });
+            queued.push_back(Block::Table {
+                row: Row::Delimiter,
+                align: align.clone(),
+            });
+            for _ in i + 2..end {
+                queued.push_back(Block::Table {
+                    row: Row::Body,
+                    align: align.clone(),
+                });
+            }
         } else if is_table_line(line) {
-            // A table: consecutive `|` lines whose second is a delimiter row
-            // with as many cells as the header.
+            // `|` lines that are not a table.
             let end = (i..lines.len())
                 .find(|&j| !is_table_line(lines[j]))
                 .unwrap_or(lines.len());
-            let align = (i + 1 < end)
-                .then(|| delimiter_row(lines[i + 1]))
-                .flatten()
-                .filter(|a| a.len() == table_cell_texts(line).len());
-            match align {
-                Some(align) => {
-                    out.push(Block::Table {
-                        row: Row::Header,
-                        align: align.clone(),
-                    });
-                    queued.push_back(Block::Table {
-                        row: Row::Delimiter,
-                        align: align.clone(),
-                    });
-                    for _ in i + 2..end {
-                        queued.push_back(Block::Table {
-                            row: Row::Body,
-                            align: align.clone(),
-                        });
-                    }
-                }
-                None => {
-                    out.push(Block::PipeText);
-                    queued.extend((i + 1..end).map(|_| Block::PipeText));
-                }
-            }
+            out.push(Block::PipeText);
+            queued.extend((i + 1..end).map(|_| Block::PipeText));
         } else {
             out.push(Block::Paragraph);
         }
@@ -1374,6 +1393,43 @@ mod tests {
         assert_eq!(text, lines[0]);
         // A header with a different number of cells than the delimiter row is not a table.
         assert_eq!(classify(&["| a | b |", "| --- |"])[0], Block::PipeText);
+    }
+
+    #[test]
+    fn tables_without_outer_pipes() {
+        let lines = [
+            "Name | Qty",
+            "--- | --:",
+            "a | 1",
+            "b | 2",
+            "",
+            "after | text",
+        ];
+        let k = classify(&lines);
+        let align = vec![Align::None, Align::Right];
+        assert_eq!(
+            k[0],
+            Block::Table {
+                row: Row::Header,
+                align: align.clone()
+            }
+        );
+        assert_eq!(
+            k[3],
+            Block::Table {
+                row: Row::Body,
+                align
+            }
+        );
+        assert_eq!(k[4], Block::Blank);
+        assert_eq!(k[5], Block::Paragraph, "a line with a pipe is just text");
+        assert_eq!(table_cell_texts("a | 1"), vec!["a", "1"]);
+        assert_eq!(table_cells("a | 1"), vec![(0, 2), (2, 5)]);
+        // Text over a `---` line stays a setext heading, and a list ends a table.
+        assert_ne!(classify(&["Title", "---"])[0], classify(&lines)[0]);
+        let k = classify(&["a | b", "- | -", "- item | x"]);
+        assert!(matches!(k[1], Block::Table { .. }));
+        assert!(matches!(k[2], Block::List { .. }));
     }
 
     #[test]

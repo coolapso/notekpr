@@ -20,6 +20,7 @@ use icons::Icon;
 pub fn App() -> impl IntoView {
     let ui = ui();
     install_shortcuts();
+    install_menu_closer();
     Effect::new(move |_| {
         let theme = ui.ui_prefs.get().theme;
         if let Some(root) = util::document().document_element() {
@@ -133,6 +134,44 @@ fn in_text_input(e: &web_sys::KeyboardEvent) -> bool {
         })
 }
 
+/// Elements a press may land on without closing the open menus: the menus
+/// themselves and the buttons that open them.
+const MENU_PARTS: &str = ".menu, .tb-drop, .vault-switch, .user-btn, .tree-more";
+
+fn install_menu_closer() {
+    let cb = wasm_bindgen::closure::Closure::wrap(Box::new(move |e: web_sys::Event| {
+        let inside = e
+            .target()
+            .and_then(|t| t.dyn_into::<web_sys::Element>().ok())
+            .is_some_and(|el| el.closest(MENU_PARTS).ok().flatten().is_some());
+        if !inside {
+            ui().close_menus.update(|n| *n += 1);
+        }
+    }) as Box<dyn FnMut(_)>);
+    let _ = util::document()
+        .add_event_listener_with_callback("pointerdown", cb.as_ref().unchecked_ref());
+    cb.forget();
+}
+
+/// `use:focus_on_mount` — focus an input inserted after the page loaded (the
+/// `autofocus` attribute only works for the initial page).
+pub fn focus_on_mount(el: web_sys::Element) {
+    util::set_timeout(0, move || {
+        if let Some(h) = el.dyn_ref::<web_sys::HtmlElement>() {
+            let _ = h.focus();
+        }
+    });
+}
+
+/// Close the menu `open` controls when [`install_menu_closer`] says so.
+pub fn close_on_outside(open: RwSignal<bool>) {
+    let ui = ui();
+    Effect::new(move |_| {
+        ui.close_menus.track();
+        open.set(false);
+    });
+}
+
 fn install_shortcuts() {
     let cb = wasm_bindgen::closure::Closure::wrap(Box::new(move |e: web_sys::KeyboardEvent| {
         let ui = ui();
@@ -185,11 +224,16 @@ fn install_shortcuts() {
                 state::flush_now();
                 state::info("Changes are saved automatically.");
             }
+            (true, false, false, "/") => {
+                e.prevent_default();
+                ui.modal.set(Some(Modal::Help));
+            }
             (false, _, false, "?") if !in_text_input(&e) => {
                 e.prevent_default();
                 ui.modal.set(Some(Modal::Help));
             }
             (false, false, false, "Escape") => {
+                ui.close_menus.update(|n| *n += 1);
                 if ui.modal.get_untracked().is_some() {
                     ui.modal.set(None);
                 } else if ui.sidebar.get_untracked() {

@@ -889,9 +889,67 @@ pub fn is_favorite(vault: &str, note: &str) -> bool {
 }
 
 /// Follow a wiki link; create the note if it doesn't exist yet.
+/// Go to a heading of a note being opened (`[[Note#Heading]]`): the caret
+/// in the editor, or the heading in reading view. Retries briefly while the
+/// note's view is still being set up.
+pub fn jump_to_heading(vault: String, note: String, heading: String) {
+    fn attempt(vault: String, note: String, heading: String, left: u32) {
+        if try_jump(&vault, &note, &heading) || left == 0 {
+            return;
+        }
+        util::set_timeout(100, move || attempt(vault, note, heading, left - 1));
+    }
+    util::set_timeout(50, move || attempt(vault, note, heading, 20));
+}
+
+fn try_jump(vault: &str, note: &str, heading: &str) -> bool {
+    if state::current_route().note() != Some((vault, note)) {
+        return false;
+    }
+    let text = with(|c| c.replicas.get(vault).map(|r| r.note_text(note))).unwrap_or_default();
+    let want = heading.to_lowercase();
+    let outline = knowledge::outline(vault, note, &text);
+    let Some(i) = outline
+        .iter()
+        .position(|(_, t, _)| t.trim().to_lowercase() == want)
+    else {
+        return true; // no such heading: stay at the top
+    };
+    if state::ui().mode.get_untracked() == state::ViewMode::Reading {
+        return match util::document().query_selector(&format!("article.reading [data-h=\"{i}\"]")) {
+            Ok(Some(el)) => {
+                el.scroll_into_view();
+                true
+            }
+            _ => false,
+        };
+    }
+    let ed = with(|c| {
+        c.editor
+            .as_ref()
+            .filter(|(v, n, _)| v == vault && n == note)
+            .map(|(_, _, e)| e.clone())
+    });
+    match ed {
+        Some(ed) => {
+            let off = outline[i].2;
+            ed.focus();
+            ed.set_selection(off, off);
+            true
+        }
+        None => false,
+    }
+}
+
 pub fn open_wiki(vault: &str, target: &str, from_path: &str) {
-    let name = target.split('#').next().unwrap_or(target).trim();
+    let (name, heading) = match target.split_once('#') {
+        Some((n, h)) => (n.trim(), Some(h.trim()).filter(|h| !h.is_empty())),
+        None => (target.trim(), None),
+    };
     if name.is_empty() {
+        if let (Some(h), Some((v, n))) = (heading, state::current_route().note()) {
+            jump_to_heading(v.to_string(), n.to_string(), h.to_string());
+        }
         return;
     }
     if let Some(id) = knowledge::resolve_target(vault, name, from_path) {
@@ -900,7 +958,14 @@ pub fn open_wiki(vault: &str, target: &str, from_path: &str) {
                 let (v, i) = (vault.to_string(), id.clone());
                 leptos::task::spawn_local(async move { open_attachment(&v, &i).await });
             }
-            _ => navigate(Route::Note(vault.to_string(), id)),
+            _ => {
+                if state::current_route().note() != Some((vault, id.as_str())) {
+                    navigate(Route::Note(vault.to_string(), id.clone()));
+                }
+                if let Some(h) = heading {
+                    jump_to_heading(vault.to_string(), id, h.to_string());
+                }
+            }
         }
         return;
     }

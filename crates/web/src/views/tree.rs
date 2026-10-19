@@ -1,5 +1,6 @@
 //! The file tree of a vault (folders, notes, attachments).
 
+use super::focus_on_mount;
 use std::collections::{BTreeMap, BTreeSet};
 
 use coolpsonotes_core::doc::EntryKind;
@@ -120,6 +121,10 @@ pub fn Tree(vault: String) -> impl IntoView {
     let ui = ui();
     let expanded = RwSignal::new(BTreeSet::<String>::new());
     let menu = RwSignal::new(None::<String>);
+    Effect::new(move |_| {
+        ui.close_menus.track();
+        menu.set(None);
+    });
     let renaming = RwSignal::new(None::<String>);
     let rename_text = RwSignal::new(String::new());
     let drop_target = RwSignal::new(None::<String>);
@@ -244,7 +249,7 @@ pub fn Tree(vault: String) -> impl IntoView {
                                         };
                                         match res { Ok(()) => renaming.set(None), Err(e) => state::error(e) }
                                     }>
-                                        <input class="input small" autofocus prop:value=move || rename_text.get()
+                                        <input class="input small" use:focus_on_mount prop:value=move || rename_text.get()
                                             on:input=move |ev| rename_text.set(event_target_value(&ev))
                                             on:keydown=move |ev: web_sys::KeyboardEvent| if ev.key() == "Escape" { renaming.set(None); }
                                             on:blur=move |_| renaming.set(None)/>
@@ -254,7 +259,9 @@ pub fn Tree(vault: String) -> impl IntoView {
                                 let name = row2.name.clone();
                                 let caret = if is_folder { if row2.expanded { "chevron-down" } else { "chevron-right" } } else { "" };
                                 view! {
-                                    <button class="tree-item" on:click=on_click.clone() title=row2.path.clone()>
+                                    <button class="tree-item" on:click=on_click.clone() title=row2.path.clone()
+                                        attr:aria-level=(row2.depth + 1).to_string()
+                                        attr:aria-expanded=is_folder.then(|| row2.expanded.to_string())>
                                         {(!caret.is_empty()).then(|| view! { <Icon name=caret class="caret"/> })}
                                         <Icon name=icon/>
                                         <span class="name">{name}</span>
@@ -262,7 +269,7 @@ pub fn Tree(vault: String) -> impl IntoView {
                                     </button>
                                 }.into_any()
                             }}
-                            <button class="tree-more" title="More" on:click={
+                            <button class="tree-more" title="More" aria-label="More" on:click={
                                 let key = key.clone();
                                 move |ev: web_sys::MouseEvent| { ev.stop_propagation(); menu.update(|m| *m = if m.as_deref() == Some(key.as_str()) { None } else { Some(key.clone()) }); }
                             }><Icon name="more"/></button>

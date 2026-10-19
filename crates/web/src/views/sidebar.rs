@@ -23,6 +23,7 @@ fn role_badge(role: Role, shared: bool) -> AnyView {
 fn VaultSwitcher() -> impl IntoView {
     let ui = ui();
     let open = RwSignal::new(false);
+    super::close_on_outside(open);
     let current = move || {
         let v = ui.route.get().vault().map(str::to_string);
         ui.vaults
@@ -81,6 +82,7 @@ fn VaultSwitcher() -> impl IntoView {
 pub fn Sidebar() -> impl IntoView {
     let ui = ui();
     let user_menu = RwSignal::new(false);
+    super::close_on_outside(user_menu);
     let vault = move || ui.route.get().vault().map(str::to_string);
     let writable = move || {
         ui.vaults.get();
@@ -105,10 +107,10 @@ pub fn Sidebar() -> impl IntoView {
                     <div class="sb-actions">
                         <button class="btn primary small grow" on:click=move |_| if let Some(v) = vault() { actions::new_note(&v, &current_folder()); }>
                             <Icon name="plus"/>" New note"</button>
-                        <button class="icon-btn" title="New folder" on:click=move |_| if let Some(v) = vault() {
+                        <button class="icon-btn" title="New folder" aria-label="New folder" on:click=move |_| if let Some(v) = vault() {
                             ui.modal.set(Some(Modal::NewFolder { vault: v, parent: String::new() }));
                         }><Icon name="folder-plus"/></button>
-                        <button class="icon-btn" title="Upload files" on:click=move |_| if let Some(v) = vault() {
+                        <button class="icon-btn" title="Upload files" aria-label="Upload files" on:click=move |_| if let Some(v) = vault() {
                             actions::pick_files(false, "", move |files| {
                                 leptos::task::spawn_local(async move {
                                     let n = actions::upload_files(&v, files, "attachments").await.len();
@@ -130,7 +132,7 @@ pub fn Sidebar() -> impl IntoView {
                             <div class="sb-section">
                                 <div class="sb-label">
                                     <span>"Notes"</span>
-                                    <button class="icon-btn tiny" title="Vault settings" on:click=move |_| ui.modal.set(Some(Modal::VaultSettings(v2.clone())))><Icon name="settings"/></button>
+                                    <button class="icon-btn tiny" title="Vault settings" aria-label="Vault settings" on:click=move |_| ui.modal.set(Some(Modal::VaultSettings(v2.clone())))><Icon name="settings"/></button>
                                 </div>
                                 <Tree vault=v/>
                             </div>

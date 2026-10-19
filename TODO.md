@@ -515,21 +515,28 @@ with SQLite; no SQL-dialect abstraction.
 
 ## UX polish
 
-- [ ] The welcome note says Ctrl+K jumps to a note and `?` shows shortcuts,
-      but the editor is focused (Ctrl+K inserts a link, `?` types) [W-L11].
+- [x] The welcome note says Ctrl+K jumps to a note and `?` shows shortcuts,
+      but the editor is focused (Ctrl+K inserts a link, `?` types) [W-L11] —
+      now Ctrl+P and Ctrl+/ (which work everywhere).
 - [x] Reloading during the recovery-key screen loses the key without warning
       [W-L11] (shown again after a reload).
-- [ ] Menus don't close on an outside click; `autofocus` on dynamically
-      inserted inputs does nothing [W-L11].
-- [ ] Accessibility: icon buttons rely on `title` only; dialogs lack
+- [x] Menus don't close on an outside click; `autofocus` on dynamically
+      inserted inputs does nothing [W-L11] (`use:focus_on_mount`).
+- [x] Accessibility: icon buttons rely on `title` only; dialogs lack
       `aria-modal` and a focus trap; the tree lacks `aria-expanded`/
-      `aria-level`; the note title has no visible focus outline [W-L11].
-- [ ] Back/forward navigation doesn't refresh presence; e-mail autolinks
+      `aria-level`; the note title has no visible focus outline [W-L11]
+      (dialogs also return the focus when closed; e2e `test_ui_basics`).
+- [x] Back/forward navigation doesn't refresh presence; e-mail autolinks
       become "create note" links [W-L11].
-- [ ] Pipe-less GFM tables (`a | b`) render in reading view but not in live
+- [x] Pipe-less GFM tables (`a | b`) render in reading view but not in live
       preview.
-- [ ] Wiki links to headings (`[[Note#Heading]]`) open the note but don't
+- [x] Wiki links to headings (`[[Note#Heading]]`) open the note but don't
       jump to the heading.
+- [x] Switching to reading view could panic the editor ("RefCell already
+      borrowed"): a preference change re-applied the editor's mode classes
+      with its state borrowed, and Chrome fired `blur` synchronously. The
+      borrow is released first, and vim state is no longer reset by
+      unrelated preference changes.
 
 ---
 

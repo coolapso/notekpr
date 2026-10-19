@@ -741,7 +741,55 @@ def test_local_copy(env):
         b.close()
 
 
-TESTS = [test_onboarding, test_collab, test_devices_and_recovery, test_features, test_attachments, test_note_sharing, test_tables, test_editor_safety, test_local_copy, test_mobile]
+def test_ui_basics(env):
+    b = Browser()
+    try:
+        signup(b, uniq("uma"))
+        b.click(".vault-btn")
+        b.find(".vault-menu", 5)
+        b.click(".note-title")
+        time.sleep(0.3)
+        check(not b.js("return !!document.querySelector('.vault-menu')"), "a menu closes on a click outside it")
+        b.click(".user-btn")
+        b.find(".menu.up", 5)
+        b.chord(KEYS["escape"])
+        time.sleep(0.3)
+        check(not b.js("return !!document.querySelector('.menu.up')"), "Escape closes an open menu")
+        # Help from inside the editor, a modal dialog that keeps the focus.
+        b.js("const ed=document.querySelector('.ed'); ed.focus(); const s=getSelection(); s.selectAllChildren(ed); s.collapseToEnd();")
+        b.chord(KEYS["ctrl"], "/")
+        b.find(".modal[aria-modal=true]", 5)
+        check(True, "Ctrl+/ opens the shortcut help from the editor")
+        for _ in range(12):
+            b.keys(KEYS["tab"])
+        check(b.js("return document.querySelector('.modal').contains(document.activeElement)"), "Tab stays inside the dialog")
+        b.chord(KEYS["escape"])
+        time.sleep(0.3)
+        check(b.js("return !!document.activeElement.closest('.ed')"), "closing the dialog gives the focus back")
+        # [[Note#Heading]] opens the note at that heading.
+        paste = "const ed=document.querySelector('.ed'); ed.focus(); const s=getSelection(); s.selectAllChildren(ed); s.collapseToEnd();" \
+                "const dt = new DataTransfer(); dt.setData('text/plain', arguments[0]); ed.dispatchEvent(new ClipboardEvent('paste', {clipboardData: dt, bubbles: true, cancelable: true}));"
+        new_note(b, "Plan", "")
+        b.js(paste, "intro\n" + "filler\n" * 120 + "## Next steps\nship it")
+        time.sleep(0.8)
+        new_note(b, "Links", "")
+        b.js(paste, "see [[Plan#Next steps]]")
+        time.sleep(0.8)
+        b.chord(KEYS["ctrl"], "e")
+        b.click("article.reading a.wl[data-heading]")
+        b.wait("return document.querySelector('.note-title') && document.querySelector('.note-title').value === 'Plan'", 10, "Plan opens")
+        b.wait("const h = Array.from(document.querySelectorAll('article.reading h2')).find(h => h.textContent.includes('Next steps'));"
+               "return h && h.getBoundingClientRect().top >= 0 && h.getBoundingClientRect().top < innerHeight", 10, "the heading in view")
+        check(True, "a link to a heading opens the note at that heading")
+        b.chord(KEYS["ctrl"], "e")
+        unlabelled = b.js("return Array.from(document.querySelectorAll('button')).filter(x => !x.textContent.trim() && !x.getAttribute('aria-label')).length")
+        check(unlabelled == 0, f"icon buttons have accessible names ({unlabelled} without)")
+        check(not severe_logs(b), "no browser errors")
+    finally:
+        b.close()
+
+
+TESTS = [test_onboarding, test_collab, test_devices_and_recovery, test_features, test_attachments, test_note_sharing, test_tables, test_editor_safety, test_local_copy, test_ui_basics, test_mobile]
 
 
 def main():

@@ -1,5 +1,6 @@
 //! Signed-out and onboarding screens.
 
+use super::focus_on_mount;
 use leptos::prelude::*;
 
 use crate::state::{self, Phase, ui};
@@ -82,7 +83,7 @@ pub fn Login(error: Option<String>) -> impl IntoView {
                     <div class="dev-title"><Icon name="alert"/>" Development mode"</div>
                     <p class="small muted">"Sign in as any user without a password. Each browser tab keeps its own session, so open another tab to sign in as a second person."</p>
                     <form on:submit=move |ev| { ev.prevent_default(); dev_login(username.get_untracked()); }>
-                        <input class="input" placeholder="user name (e.g. alice)" autofocus
+                        <input class="input" placeholder="user name (e.g. alice)" use:focus_on_mount
                             prop:value=move || username.get() on:input=move |ev| username.set(event_target_value(&ev))/>
                         <button class="btn" type="submit" disabled=move || busy.get()>"Sign in"</button>
                     </form>
@@ -187,7 +188,7 @@ pub fn Enroll(pending: Option<(String, String)>, error: Option<String>) -> impl 
                     let k = key.get_untracked();
                     leptos::task::spawn_local(async move { state::recover(k).await; busy.set(false); });
                 }>
-                    <textarea class="input mono" rows="3" placeholder="XXXXX-XXXXX-…" autofocus
+                    <textarea class="input mono" rows="3" placeholder="XXXXX-XXXXX-…" use:focus_on_mount
                         prop:value=move || key.get() on:input=move |ev| key.set(event_target_value(&ev))></textarea>
                     <button class="btn primary" type="submit" disabled=move || busy.get()>"Unlock with recovery key"</button>
                 </form>

@@ -1,5 +1,6 @@
 //! Modal dialogs.
 
+use super::focus_on_mount;
 use coolpsonotes_core::doc::EntryKind;
 use coolpsonotes_core::engine::PinStatus;
 use coolpsonotes_core::protocol::*;
@@ -22,12 +23,32 @@ fn Dialog(
 ) -> impl IntoView {
     let ui = ui();
     let label = title.clone();
+    let root = NodeRef::<html::Div>::new();
+    // Focus moves into the dialog (unless an input inside takes it).
+    Effect::new(move |_| {
+        if let Some(el) = root.get() {
+            util::set_timeout(10, move || {
+                let inside = util::document()
+                    .active_element()
+                    .is_some_and(|a| el.contains(Some(&a)));
+                if !inside {
+                    let _ = el.focus();
+                }
+            });
+        }
+    });
     view! {
         <div class="modal-back" on:mousedown=move |_| ui.modal.set(None)>
-            <div class="modal" class:wide=wide role="dialog" aria-label=label on:mousedown=|ev| ev.stop_propagation()>
+            <div class="modal" class:wide=wide role="dialog" aria-modal="true" aria-label=label tabindex="-1" node_ref=root
+                on:mousedown=|ev| ev.stop_propagation()
+                on:keydown=move |ev: web_sys::KeyboardEvent| {
+                    if ev.key() == "Tab" && let Some(el) = root.get() {
+                        trap_focus(&el, &ev);
+                    }
+                }>
                 <header>
                     <h2>{title}</h2>
-                    <button class="icon-btn" title="Close" on:click=move |_| ui.modal.set(None)><Icon name="x"/></button>
+                    <button class="icon-btn" title="Close" aria-label="Close" on:click=move |_| ui.modal.set(None)><Icon name="x"/></button>
                 </header>
                 <div class="modal-body">{children()}</div>
             </div>
@@ -35,9 +56,65 @@ fn Dialog(
     }
 }
 
+/// Keep Tab and Shift+Tab inside the dialog.
+fn trap_focus(root: &web_sys::HtmlElement, ev: &web_sys::KeyboardEvent) {
+    use wasm_bindgen::JsCast;
+    let Ok(list) = root.query_selector_all(
+        "button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex='-1'])",
+    ) else {
+        return;
+    };
+    let items: Vec<web_sys::HtmlElement> = (0..list.length())
+        .filter_map(|i| list.item(i)?.dyn_into().ok())
+        .collect();
+    let (Some(first), Some(last)) = (items.first(), items.last()) else {
+        return;
+    };
+    let active = util::document().active_element();
+    let at = |e: &web_sys::HtmlElement| {
+        active
+            .as_ref()
+            .is_some_and(|a| a == e.unchecked_ref::<web_sys::Element>())
+    };
+    let outside = !active.as_ref().is_some_and(|a| root.contains(Some(a)))
+        || active
+            .as_ref()
+            .is_some_and(|a| a == root.unchecked_ref::<web_sys::Element>());
+    if ev.shift_key() && (at(first) || outside) {
+        ev.prevent_default();
+        let _ = last.focus();
+    } else if !ev.shift_key() && (at(last) || outside) {
+        ev.prevent_default();
+        let _ = first.focus();
+    }
+}
+
+thread_local! {
+    /// What had the focus before a dialog opened; it gets it back afterwards.
+    static RETURN_FOCUS: std::cell::RefCell<Option<web_sys::HtmlElement>> = const { std::cell::RefCell::new(None) };
+}
+
 #[component]
 pub fn ModalHost() -> impl IntoView {
     let ui = ui();
+    Effect::new(move |was_open: Option<bool>| {
+        use wasm_bindgen::JsCast;
+        let open = ui.modal.with(|m| m.is_some());
+        match (was_open.unwrap_or(false), open) {
+            (false, true) => RETURN_FOCUS.with(|r| {
+                *r.borrow_mut() = util::document()
+                    .active_element()
+                    .and_then(|a| a.dyn_into().ok());
+            }),
+            (true, false) => {
+                if let Some(el) = RETURN_FOCUS.with(|r| r.borrow_mut().take()) {
+                    let _ = el.focus();
+                }
+            }
+            _ => {}
+        }
+        open
+    });
     view! {
         {move || ui.modal.get().map(|m| match m {
             Modal::QuickSwitch => view! { <QuickSwitch/> }.into_any(),
@@ -239,7 +316,7 @@ fn NewVault() -> impl IntoView {
                     busy.set(false);
                 });
             }>
-                <input class="input" placeholder="Vault name (e.g. Family)" autofocus prop:value=move || name.get() on:input=move |ev| name.set(event_target_value(&ev))/>
+                <input class="input" placeholder="Vault name (e.g. Family)" use:focus_on_mount prop:value=move || name.get() on:input=move |ev| name.set(event_target_value(&ev))/>
                 <button class="btn primary" type="submit" disabled=move || busy.get() || name.get().trim().is_empty()>"Create vault"</button>
             </form>
         </Dialog>
@@ -356,7 +433,7 @@ fn Share(vault: String) -> impl IntoView {
                                         <option value="editor" selected=m.role == Role::Editor>"Can edit"</option>
                                         <option value="viewer" selected=m.role == Role::Viewer>"Can view"</option>
                                     </select>
-                                    <button class="icon-btn" title="Remove access (rotates the vault key)" on:click=move |_| {
+                                    <button class="icon-btn" title="Remove access (rotates the vault key)" aria-label="Remove access (rotates the vault key)" on:click=move |_| {
                                         if !util::confirm("Remove this person? They keep anything they already downloaded, but can't read anything new.") { return; }
                                         let (v, u) = (v2.clone(), uid2.clone());
                                         let reload = reload_b.clone();
@@ -520,7 +597,7 @@ fn ShareNote(vault: String, note: String) -> impl IntoView {
                                 <option value="editor" selected=sh.role == Role::Editor>"Can edit"</option>
                                 <option value="viewer" selected=sh.role == Role::Viewer>"Can view"</option>
                             </select>
-                            <button class="icon-btn" title="Stop sharing with this person (renews the note's key)" on:click=move |_| {
+                            <button class="icon-btn" title="Stop sharing with this person (renews the note's key)" aria-label="Stop sharing with this person (renews the note's key)" on:click=move |_| {
                                 if !util::confirm("Stop sharing this note with this person? They keep anything they already downloaded, but can't read anything new.") { return; }
                                 let (v, n, u) = (v2.clone(), n2.clone(), uid2.clone());
                                 leptos::task::spawn_local(async move {
@@ -811,8 +888,8 @@ fn Help() -> impl IntoView {
     let m = util::mod_key();
     let rows: Vec<(String, &str)> = vec![
         (
-            format!("{m}+K or {m}+O"),
-            "Jump to a note / create one ({m}+O while editing)",
+            format!("{m}+P (or {m}+K outside the editor)"),
+            "Jump to a note / create one",
         ),
         (format!("{m}+Shift+F"), "Search all notes"),
         (format!("{m}+Alt+N"), "New note"),
@@ -839,7 +916,7 @@ fn Help() -> impl IntoView {
         (format!("{m}+Z / {m}+Shift+Z"), "Undo / redo"),
         ("[[".into(), "Link to another note"),
         ("#word".into(), "Add a tag"),
-        ("?".into(), "This help"),
+        (format!("{m}+/ (or ? outside the editor)"), "This help"),
     ];
     view! {
         <Dialog title="Keyboard shortcuts">
@@ -865,7 +942,7 @@ fn RenameDialog(vault: String, id: String) -> impl IntoView {
                 ev.prevent_default();
                 match actions::rename_entry(&vault, &id, &name.get_untracked()) { Ok(()) => ui.modal.set(None), Err(e) => state::error(e) }
             }>
-                <input class="input" autofocus prop:value=move || name.get() on:input=move |ev| name.set(event_target_value(&ev))/>
+                <input class="input" use:focus_on_mount prop:value=move || name.get() on:input=move |ev| name.set(event_target_value(&ev))/>
                 <button class="btn primary" type="submit">"Rename"</button>
             </form>
         </Dialog>
@@ -890,7 +967,7 @@ fn NewFolder(vault: String, parent: String) -> impl IntoView {
                 actions::create_folder(&vault, &coolpsonotes_core::paths::join(&parent, n.trim()));
                 ui.modal.set(None);
             }>
-                <input class="input" autofocus placeholder="Folder name" prop:value=move || name.get() on:input=move |ev| name.set(event_target_value(&ev))/>
+                <input class="input" use:focus_on_mount placeholder="Folder name" prop:value=move || name.get() on:input=move |ev| name.set(event_target_value(&ev))/>
                 <button class="btn primary" type="submit">"Create folder"</button>
             </form>
         </Dialog>

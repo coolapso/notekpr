@@ -234,6 +234,8 @@ pub struct Ui {
     /// Side panel shown as an overlay on narrow screens (not persisted).
     pub panel_overlay: RwSignal<bool>,
     pub warning: RwSignal<Option<String>>,
+    /// Bumped by a click outside any menu (or Escape): open menus close.
+    pub close_menus: RwSignal<u64>,
 }
 
 thread_local! {
@@ -271,6 +273,7 @@ pub fn init_ui() -> Ui {
         ui_prefs: RwSignal::new(p),
         panel_overlay: RwSignal::new(false),
         warning: RwSignal::new(None),
+        close_menus: RwSignal::new(0),
     };
     UI.with(|u| u.set(Some(ui)));
     ui
@@ -837,7 +840,7 @@ pub async fn finish_setup() {
     }
 }
 
-const WELCOME: &str = "# Welcome to coolpsonotes 👋\n\nThis is your private vault. Everything you write is **encrypted on this device** before it is synced — the server never sees your notes.\n\n## Getting started\n\n- [ ] Write something here — just start typing\n- [ ] Create a new note with the **+** button (or Ctrl+Alt+N)\n- [ ] Link notes by typing `[[` and a note name, like [[Ideas]]\n- [ ] Add #tags anywhere\n- [ ] Share a vault with family from the vault menu\n\nUse the toolbar for formatting, or Markdown if you know it: `**bold**`, `*italic*`, `# Heading`, `- list`.\n\nPress **Ctrl+K** to jump to any note, and **?** for all keyboard shortcuts.\n";
+const WELCOME: &str = "# Welcome to coolpsonotes 👋\n\nThis is your private vault. Everything you write is **encrypted on this device** before it is synced — the server never sees your notes.\n\n## Getting started\n\n- [ ] Write something here — just start typing\n- [ ] Create a new note with the **+** button (or Ctrl+Alt+N)\n- [ ] Link notes by typing `[[` and a note name, like [[Ideas]]\n- [ ] Add #tags anywhere\n- [ ] Share a vault with family from the vault menu\n\nUse the toolbar for formatting, or Markdown if you know it: `**bold**`, `*italic*`, `# Heading`, `- list`.\n\nPress **Ctrl+P** (⌘P on a Mac) to jump to any note, and **Ctrl+/** for all keyboard shortcuts.\n";
 
 /// Register this browser as a new (pending) device and wait for approval.
 pub async fn request_approval() {
@@ -2856,9 +2859,14 @@ fn push_route(route: Route, replace: bool) {
 
 pub fn listen_popstate() {
     use wasm_bindgen::JsCast;
-    let cb = wasm_bindgen::closure::Closure::wrap(
-        Box::new(|| ui().route.set(current_route())) as Box<dyn FnMut()>
-    );
+    let cb = wasm_bindgen::closure::Closure::wrap(Box::new(|| {
+        let ui = ui();
+        ui.sidebar.set(false);
+        ui.route.set(current_route());
+        // Collaborators see which note we are on.
+        send_presence();
+        publish_presence();
+    }) as Box<dyn FnMut()>);
     let _ =
         util::window().add_event_listener_with_callback("popstate", cb.as_ref().unchecked_ref());
     cb.forget();

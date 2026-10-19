@@ -9,9 +9,9 @@ use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use coolpsonotes_core::protocol::{
-    AddMemberRequest, AuditEntry, CreateVaultRequest, GrantKeysRequest, MemberInfo, Role,
-    RotateKeysRequest, UpdateMemberRequest, UpdateVaultRequest, UserEventKind, VaultEventKind,
-    VaultInfo, VaultKeysResponse,
+    AddMemberRequest, AuditEntry, CreateVaultRequest, GrantKeysRequest, MemberInfo,
+    ObjectEventKind, Role, RotateKeysRequest, UpdateMemberRequest, UpdateVaultRequest,
+    UserEventKind, VaultEventKind, VaultInfo, VaultKeysResponse,
 };
 use sqlx::SqliteExecutor;
 
@@ -523,6 +523,39 @@ pub async fn rotate_keys(
         return Err(bad("invalid envelope"));
     }
     let now = db::now();
+    // Every note's key moves on with the vault key: removed members knew
+    // them all (R2).
+    let keyed: HashSet<String> = repo::shares::keyed_in_vault(&mut *tx, &v)
+        .await?
+        .into_iter()
+        .collect();
+    let rotated: HashSet<String> = req.objects.iter().map(|c| c.object_id.clone()).collect();
+    if rotated != keyed || rotated.len() != req.objects.len() {
+        return Err(conflict(
+            "rotate the key of every note that has one together with the vault key",
+        ));
+    }
+    let mut shared_notes = Vec::new();
+    for c in &req.objects {
+        let kind = crate::routes::shares::apply_key_change(
+            &state,
+            &mut tx,
+            &who,
+            true,
+            &v,
+            &c.object_id,
+            &c.update,
+            req.new_epoch as i64,
+            now,
+        )
+        .await?;
+        if kind != crate::routes::shares::KeyChange::Rotation {
+            return Err(bad("note keys rotate with a chain link"));
+        }
+        if !c.update.envelopes.is_empty() {
+            shared_notes.push(c.object_id.clone());
+        }
+    }
     repo::keys::insert_vault_chain_link(&mut *tx, &v, req.new_epoch as i64, &req.chain_link)
         .await?;
     for e in &req.envelopes {
@@ -543,6 +576,10 @@ pub async fn rotate_keys(
     state
         .hub
         .publish(&v, VaultEvent::Event(VaultEventKind::KeyRotated));
+    // People single notes are shared with reload those notes' keys.
+    for o in &shared_notes {
+        crate::routes::shares::publish(&state, &v, o, ObjectEventKind::KeyRotated);
+    }
     drop(_w);
     db::audit(
         &state.db,

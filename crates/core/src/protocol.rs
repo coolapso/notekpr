@@ -369,11 +369,15 @@ pub struct VaultKeysResponse {
     /// The requesting principal's own envelopes, one per epoch it was granted.
     pub envelopes: Vec<KeyEnvelope>,
     pub chain: Vec<ChainLink>,
-    /// Document keys of individually shared notes, each wrapped under a vault key.
+    /// Document keys of notes, each wrapped under a vault key.
     #[serde(default)]
     pub objects: Vec<ObjectKeyEnvelope>,
     #[serde(default)]
     pub object_chain: Vec<ObjectChainLink>,
+    /// Notes currently shared with someone individually. `None` from servers
+    /// before per-note keys, where having a document key meant being shared.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shared: Option<Vec<String>>,
 }
 
 /// A note's document key (one epoch) encrypted under a vault key.
@@ -406,8 +410,16 @@ pub struct ObjectKeysResponse {
     pub encrypted_meta: Option<Vec<u8>>,
 }
 
-/// Start sharing a note (first epoch, with a snapshot of its full state
-/// under the new document key) or rotate its document key.
+/// A note's document key: its first key, a fresh key to start sharing it,
+/// or a rotation (see protocol.md §5).
+///
+/// * `private: true` — a key only vault members get (every new note gets
+///   one; older notes get one lazily). No recipients; any writer may set it.
+///   A snapshot is needed only if the note already has content.
+/// * `private: false` without `chain_link` — sharing starts: recipients get
+///   content from this epoch on, never what was written before (a snapshot
+///   of the note's full state under the new key is required).
+/// * with `chain_link` — a rotation (owner), e.g. after removing someone.
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct ObjectKeyUpdate {
     pub epoch: u32,
@@ -422,6 +434,15 @@ pub struct ObjectKeyUpdate {
     pub encrypted_meta: Vec<u8>,
     #[serde(default)]
     pub snapshot: Option<CreateSnapshotRequest>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub private: bool,
+}
+
+/// A note's key rotated together with its vault's key.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct ObjectKeyChange {
+    pub object_id: String,
+    pub update: ObjectKeyUpdate,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -509,6 +530,10 @@ pub struct RotateKeysRequest {
     #[serde(with = "b64")]
     pub encrypted_meta: Vec<u8>,
     pub envelopes: Vec<KeyEnvelope>,
+    /// Every note with a document key moves to a new epoch wrapped under the
+    /// new vault key, so removed members can't read new content of any note.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub objects: Vec<ObjectKeyChange>,
 }
 
 /// One encrypted CRDT update as stored by the server.

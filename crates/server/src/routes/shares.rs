@@ -53,7 +53,7 @@ async fn object_key_epoch(db: impl SqliteExecutor<'_>, v: &str, o: &str) -> AppR
     }
 }
 
-fn publish(state: &AppState, v: &str, o: &str, event: ObjectEventKind) {
+pub(crate) fn publish(state: &AppState, v: &str, o: &str, event: ObjectEventKind) {
     state.hub.publish(
         v,
         VaultEvent::Object {
@@ -97,16 +97,35 @@ pub async fn object_keys(
     ))
 }
 
-/// Start sharing a note (first document key + covering snapshot) or rotate its key.
-pub async fn set_key(
-    State(state): State<AppState>,
-    who: Principal,
-    Path((v, o)): Path<(String, String)>,
-    Json(req): Json<ObjectKeyUpdate>,
-) -> AppResult<StatusCode> {
-    who.require_human()?;
-    check_object(&o)?;
-    access::require_owner(&state.db, &v, &who.user_id).await?;
+/// What a key change does (see `ObjectKeyUpdate`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum KeyChange {
+    /// The note's first key, private: only vault members get it.
+    Private,
+    /// Sharing starts (first key, or a fresh one without a chain link):
+    /// recipients get content from this epoch on.
+    ShareStart,
+    /// A new epoch linked to the previous one.
+    Rotation,
+}
+
+/// Check one change of a note's document key and store it, inside the
+/// caller's write transaction. `vault_epoch` is the vault key epoch the new
+/// key must be wrapped under; `owner` whether the caller owns the vault
+/// (otherwise they are a writer). Returns what kind of change it was.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn apply_key_change(
+    state: &AppState,
+    tx: &mut sqlx::Transaction<'static, sqlx::Sqlite>,
+    who: &Principal,
+    owner: bool,
+    v: &str,
+    o: &str,
+    req: &ObjectKeyUpdate,
+    vault_epoch: i64,
+    now: i64,
+) -> AppResult<KeyChange> {
+    check_object(o)?;
     if !is_doc_epoch(req.epoch) {
         return Err(bad("document key epochs have the top bit set"));
     }
@@ -119,69 +138,91 @@ pub async fn set_key(
     {
         return Err(bad("metadata must be encrypted with the new document key"));
     }
-    let _w = state.write_lock.lock().await;
-    let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
-    access::require_owner(&mut *tx, &v, &who.user_id).await?;
-    let vault_epoch = repo::vaults::key_epoch(&mut *tx, &v)
-        .await?
-        .ok_or_else(|| AppError::Internal(anyhow::anyhow!("vault without a key epoch")))?;
     if epoch_of(&req.vault_envelope)? as i64 != vault_epoch {
         return Err(AppError::StaleKey(
             "wrap the document key with the vault's current key".into(),
         ));
     }
-    let current = object_key_epoch(&mut *tx, &v, &o).await?;
-    match current {
-        None => {
-            if req.epoch != FIRST_DOC_EPOCH || req.chain_link.is_some() {
-                return Err(bad(
-                    "the first document key has epoch FIRST_DOC_EPOCH and no chain link",
-                ));
-            }
-            let Some(snap) = &req.snapshot else {
-                return Err(bad("sharing a note needs a snapshot under its new key"));
-            };
-            if epoch_of(&snap.payload)? != req.epoch {
-                return Err(bad(
-                    "the snapshot must be encrypted with the new document key",
-                ));
-            }
-            // Every existing update of the note must be covered, otherwise
-            // recipients would receive content they cannot decrypt.
-            let last = repo::shares::last_update_seq(&mut *tx, &v, &o).await?;
-            // ...and it must be the newest snapshot of the note, or readers
-            // would be handed an older one they can't use instead.
-            let newest = repo::shares::newest_snapshot_covers(&mut *tx, &v, &o).await?;
-            // Read on another connection, but nothing can commit while this
-            // transaction holds the write reservation.
-            let head = sync::head_seq(&state.db, &v).await?;
-            if snap.covers_seq < last.unwrap_or(0).max(newest.unwrap_or(0))
-                || snap.covers_seq > head
-            {
-                return Err(AppError::StaleKey(
-                    "the snapshot does not cover the latest changes; catch up and retry".into(),
-                ));
-            }
+    let current = object_key_epoch(&mut **tx, v, o).await?;
+    let recipients: HashSet<String> =
+        repo::shares::recipient_ids_with_account_keys(&mut **tx, v, o)
+            .await?
+            .into_iter()
+            .collect();
+    let has_recipients = !repo::shares::recipients(&mut **tx, v, o, 0)
+        .await?
+        .is_empty();
+    let kind = match (current, &req.chain_link) {
+        (None, Some(_)) => return Err(bad("the first document key has no chain link")),
+        (None, None) if req.epoch != FIRST_DOC_EPOCH => {
+            return Err(bad("the first document key has epoch FIRST_DOC_EPOCH"));
         }
-        Some(cur) => {
-            if req.epoch as i64 != cur + 1 {
-                return Err(conflict(format!("expected document key epoch {}", cur + 1)));
-            }
-            let Some(link) = &req.chain_link else {
-                return Err(bad("a chain link is required when rotating"));
-            };
+        (None, None) if req.private => KeyChange::Private,
+        (None, None) => KeyChange::ShareStart,
+        (Some(cur), _) if req.epoch as i64 != cur + 1 => {
+            return Err(conflict(format!("expected document key epoch {}", cur + 1)));
+        }
+        (Some(_), Some(link)) => {
             if epoch_of(link)? != req.epoch {
                 return Err(bad("invalid chain link"));
             }
+            KeyChange::Rotation
+        }
+        (Some(_), None) if req.private => {
+            return Err(bad("a new epoch of a note's key needs a chain link"));
+        }
+        // A fresh key without a link to the earlier ones: sharing (re)starts.
+        (Some(_), None) => {
+            if has_recipients {
+                return Err(conflict(
+                    "the note is already shared; add people with its current key",
+                ));
+            }
+            KeyChange::ShareStart
+        }
+    };
+    if kind != KeyChange::Private {
+        who.require_human()?;
+        if !owner {
+            return Err(forbidden(
+                "only the vault's owner can share notes or rotate their keys",
+            ));
+        }
+    }
+    if kind != KeyChange::Rotation && !req.envelopes.is_empty() {
+        return Err(bad("add people after sharing started"));
+    }
+    // A snapshot under the new key must cover everything stored so far
+    // (recipients, or members after a private key, could not decrypt the
+    // older content otherwise). A brand-new note needs none.
+    let needs_snapshot = match kind {
+        KeyChange::ShareStart => true,
+        KeyChange::Private => repo::shares::has_content(&mut **tx, v, o).await?,
+        KeyChange::Rotation => false,
+    };
+    if needs_snapshot {
+        let Some(snap) = &req.snapshot else {
+            return Err(bad("this needs a snapshot of the note under its new key"));
+        };
+        if epoch_of(&snap.payload)? != req.epoch {
+            return Err(bad(
+                "the snapshot must be encrypted with the new document key",
+            ));
+        }
+        let last = repo::shares::last_update_seq(&mut **tx, v, o).await?;
+        let newest = repo::shares::newest_snapshot_covers(&mut **tx, v, o).await?;
+        // Read on another connection, but nothing can commit while this
+        // transaction holds the write reservation.
+        let head = sync::head_seq(&state.db, v).await?;
+        if snap.covers_seq < last.unwrap_or(0).max(newest.unwrap_or(0)) || snap.covers_seq > head {
+            return Err(AppError::StaleKey(
+                "the snapshot does not cover the latest changes; catch up and retry".into(),
+            ));
         }
     }
     // Envelopes must cover exactly the current recipients that have keys.
-    let need: HashSet<String> = repo::shares::recipient_ids_with_account_keys(&mut *tx, &v, &o)
-        .await?
-        .into_iter()
-        .collect();
     let got: HashSet<String> = req.envelopes.iter().map(|e| e.user_id.clone()).collect();
-    if got != need || got.len() != req.envelopes.len() {
+    if kind == KeyChange::Rotation && (got != recipients || got.len() != req.envelopes.len()) {
         return Err(conflict(
             "envelopes must cover exactly the people the note is shared with",
         ));
@@ -191,13 +232,12 @@ pub async fn set_key(
     }) {
         return Err(bad("invalid envelope"));
     }
-    let now = db::now();
     let epoch = req.epoch as i64;
-    repo::shares::ensure_object(&mut *tx, &v, &o, &who.user_id, now).await?;
+    repo::shares::ensure_object(&mut **tx, v, o, &who.user_id, now).await?;
     repo::keys::insert_document_key(
-        &mut *tx,
-        &v,
-        &o,
+        &mut **tx,
+        v,
+        o,
         epoch,
         "",
         &req.vault_envelope,
@@ -207,9 +247,9 @@ pub async fn set_key(
     .await?;
     for e in &req.envelopes {
         repo::keys::insert_document_key(
-            &mut *tx,
-            &v,
-            &o,
+            &mut **tx,
+            v,
+            o,
             epoch,
             &e.user_id,
             &e.envelope,
@@ -219,21 +259,25 @@ pub async fn set_key(
         .await?;
     }
     if let Some(link) = &req.chain_link {
-        repo::keys::insert_document_chain_link(&mut *tx, &v, &o, epoch, link).await?;
+        repo::keys::insert_document_chain_link(&mut **tx, v, o, epoch, link).await?;
     }
-    repo::shares::set_document_epoch(&mut *tx, &v, &o, epoch, &req.encrypted_meta, now).await?;
+    repo::shares::set_document_epoch(&mut **tx, v, o, epoch, &req.encrypted_meta, now).await?;
+    if kind == KeyChange::ShareStart {
+        repo::shares::set_share_from(&mut **tx, v, o, req.epoch).await?;
+    }
     if let Some(snap) = &req.snapshot {
         if !db::valid_id(&snap.snapshot_id)
             || snap.payload.len() as u64 > state.config.max_snapshot_bytes()
+            || epoch_of(&snap.payload)? != req.epoch
         {
             return Err(bad("invalid snapshot"));
         }
         sync::insert_snapshot(
-            &mut tx,
+            tx,
             &state.config,
             &who.user_id,
-            &v,
-            &o,
+            v,
+            o,
             &snap.snapshot_id,
             snap.covers_seq.max(0),
             &snap.payload,
@@ -241,28 +285,47 @@ pub async fn set_key(
         )
         .await?;
     }
+    Ok(kind)
+}
+
+/// Give a note its first (private) key, start sharing it, or rotate its key.
+/// Agents may only do the first (they write notes, they don't share them).
+pub async fn set_key(
+    State(state): State<AppState>,
+    who: Principal,
+    Path((v, o)): Path<(String, String)>,
+    Json(req): Json<ObjectKeyUpdate>,
+) -> AppResult<StatusCode> {
+    check_object(&o)?;
+    access::require_writer(&state.db, &v, &who.user_id).await?;
+    let _w = state.write_lock.lock().await;
+    let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
+    let owner = access::require_writer(&mut *tx, &v, &who.user_id)
+        .await?
+        .can_manage();
+    let vault_epoch = repo::vaults::key_epoch(&mut *tx, &v)
+        .await?
+        .ok_or_else(|| AppError::Internal(anyhow::anyhow!("vault without a key epoch")))?;
+    let now = db::now();
+    let kind =
+        apply_key_change(&state, &mut tx, &who, owner, &v, &o, &req, vault_epoch, now).await?;
     tx.commit().await?;
     drop(_w);
-    let first = current.is_none();
-    publish(
-        &state,
-        &v,
-        &o,
-        if first {
-            ObjectEventKind::Shared
-        } else {
-            ObjectEventKind::KeyRotated
-        },
-    );
+    match kind {
+        // Members' clients reload keys when the note's key changes.
+        KeyChange::Private => publish(&state, &v, &o, ObjectEventKind::KeyRotated),
+        KeyChange::ShareStart => publish(&state, &v, &o, ObjectEventKind::Shared),
+        KeyChange::Rotation => publish(&state, &v, &o, ObjectEventKind::KeyRotated),
+    }
     db::audit(
         &state.db,
         Some(&who.user_id),
         None,
         Some(&v),
-        if first {
-            "object.share_start"
-        } else {
-            "object.key_rotate"
+        match kind {
+            KeyChange::Private => "object.key_create",
+            KeyChange::ShareStart => "object.share_start",
+            KeyChange::Rotation => "object.key_rotate",
         },
         Some(&o),
         serde_json::json!({ "epoch": req.epoch }),
@@ -377,6 +440,13 @@ pub async fn add(
             "start sharing the note (set its document key) first",
         ));
     };
+    // A private key protects the note's history: sharing starts with a
+    // fresh key first (see `apply_key_change`).
+    if repo::shares::share_from(&mut *tx, &v, &o).await?.is_none() {
+        return Err(conflict(
+            "start sharing the note (give it a fresh key) first",
+        ));
+    }
     let env = &req.envelope;
     if env.user_id != req.user_id
         || env.epoch as i64 != cur

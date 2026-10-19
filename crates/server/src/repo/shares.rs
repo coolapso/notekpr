@@ -354,3 +354,79 @@ pub async fn delete_in_vault_for(
         .await?;
     Ok(())
 }
+
+/// The key epoch from which a note's recipients get its content (set when
+/// sharing started), `None` if it was never shared.
+pub async fn share_from(
+    db: impl SqliteExecutor<'_>,
+    vault_id: &str,
+    object_id: &str,
+) -> AppResult<Option<u32>> {
+    let b: Option<Option<Vec<u8>>> =
+        sqlx::query_scalar("SELECT share_from FROM objects WHERE vault_id = ? AND id = ?")
+            .bind(vault_id)
+            .bind(object_id)
+            .fetch_optional(db)
+            .await?;
+    Ok(b.flatten()
+        .and_then(|b| <[u8; 4]>::try_from(b.as_slice()).ok())
+        .map(u32::from_be_bytes))
+}
+
+/// Sharing starts at `epoch`: recipients get content encrypted with it or a
+/// later key (stored as the ciphertext header's 4 big-endian epoch bytes, so
+/// queries compare `substr(payload, 2, 4)` with it).
+pub async fn set_share_from(
+    db: impl SqliteExecutor<'_>,
+    vault_id: &str,
+    object_id: &str,
+    epoch: u32,
+) -> AppResult<()> {
+    sqlx::query("UPDATE objects SET share_from = ? WHERE vault_id = ? AND id = ?")
+        .bind(epoch.to_be_bytes().to_vec())
+        .bind(vault_id)
+        .bind(object_id)
+        .execute(db)
+        .await?;
+    Ok(())
+}
+
+/// Notes of a vault shared with someone right now.
+pub async fn shared_in_vault(
+    db: impl SqliteExecutor<'_>,
+    vault_id: &str,
+) -> AppResult<Vec<String>> {
+    Ok(sqlx::query_scalar(
+        "SELECT DISTINCT object_id FROM object_shares WHERE vault_id = ? ORDER BY object_id",
+    )
+    .bind(vault_id)
+    .fetch_all(db)
+    .await?)
+}
+
+/// Notes of a vault with a document key (not purged).
+pub async fn keyed_in_vault(db: impl SqliteExecutor<'_>, vault_id: &str) -> AppResult<Vec<String>> {
+    Ok(sqlx::query_scalar(
+        "SELECT id FROM objects WHERE vault_id = ? AND key_epoch IS NOT NULL AND purged_at IS NULL ORDER BY id",
+    )
+    .bind(vault_id)
+    .fetch_all(db)
+    .await?)
+}
+
+/// Whether anything of a note was stored yet (updates or snapshots).
+pub async fn has_content(
+    db: impl SqliteExecutor<'_>,
+    vault_id: &str,
+    object_id: &str,
+) -> AppResult<bool> {
+    let n: i64 = sqlx::query_scalar(
+        "SELECT (SELECT COUNT(*) FROM updates WHERE vault_id = ?1 AND object_id = ?2)
+              + (SELECT COUNT(*) FROM snapshots WHERE vault_id = ?1 AND object_id = ?2)",
+    )
+    .bind(vault_id)
+    .bind(object_id)
+    .fetch_one(db)
+    .await?;
+    Ok(n > 0)
+}

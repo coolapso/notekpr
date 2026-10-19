@@ -235,7 +235,7 @@ tasks:
     desc: Clippy on every crate (warnings are errors), including the web client for wasm32
     deps: [rust]
     cmds:
-      - cargo clippy --locked -p coolpsonotes-core -p coolpsonotes-server -p coolpsonotes-client -p coolpsonotes-editor --all-targets -- -D warnings
+      - cargo clippy --locked -p coolpsonotes-core -p coolpsonotes-server -p coolpsonotes-sync -p coolpsonotes-client -p coolpsonotes-editor --all-targets -- -D warnings
       - CARGO_TARGET_DIR={{.WEB_TARGET_DIR}} cargo clippy --locked -p coolpsonotes-web --target wasm32-unknown-unknown -- -D warnings -A clippy::type_complexity
       - CARGO_TARGET_DIR={{.WEB_TARGET_DIR}} cargo clippy --locked -p coolpsonotes-editor --target wasm32-unknown-unknown --all-targets -- -D warnings
 

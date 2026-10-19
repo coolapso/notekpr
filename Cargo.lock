@@ -858,6 +858,7 @@ dependencies = [
  "coolpsonotes-core",
  "proptest",
  "serde",
+ "serde_json",
 ]
 
 [[package]]

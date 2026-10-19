@@ -328,6 +328,7 @@ mod tests {
                         envelope: req.vault_envelope.clone(),
                     }],
                     object_chain: vec![],
+                    shared: None,
                 },
                 changes: ChangesResponse {
                     updates,

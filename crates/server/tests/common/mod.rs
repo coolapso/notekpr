@@ -346,9 +346,32 @@ impl User {
                 .unwrap(),
             })
             .collect();
+        // Every note with its own key moves on too (R2).
+        let vk: VaultKeysResponse = self.api.get(&format!("/vaults/{vault_id}/keys")).await;
+        let doc_rings = coolpsonotes_core::engine::object_keyrings(self.ring(vault_id), &vk);
         let ring = self.keyrings.get_mut(vault_id).unwrap();
         ring.insert(new_epoch, new.clone());
         let meta = ring.encrypt_meta(br#"{"name":"rotated"}"#).unwrap();
+        let mut objects = Vec::new();
+        for (oid, doc_ring) in &doc_rings {
+            let shares: Vec<ObjectShareInfo> = self
+                .api
+                .get(&format!("/vaults/{vault_id}/objects/{oid}/shares"))
+                .await;
+            let users: Vec<PublicUser> = shares.into_iter().map(|s| s.user).collect();
+            let (_, update) = coolpsonotes_core::engine::rotate_object_key(
+                self.keyrings.get(vault_id).unwrap(),
+                doc_ring,
+                oid,
+                "rotated",
+                &users,
+            )
+            .unwrap();
+            objects.push(ObjectKeyChange {
+                object_id: oid.clone(),
+                update,
+            });
+        }
         let _: () = self
             .api
             .post(
@@ -358,6 +381,7 @@ impl User {
                     chain_link: keys::encrypt_chain_link(&new, new_epoch, &old, vault_id),
                     encrypted_meta: meta,
                     envelopes,
+                    objects,
                 },
             )
             .await;

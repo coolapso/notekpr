@@ -23,9 +23,9 @@ pub mod outbox;
 pub mod snapshot;
 
 pub use outbox::{
-    Held, HoldReason, Limits, Outbox, Plan, Reaction, recover_from_rollback, stored_copies,
+    Held, HoldReason, Limits, NewKey, Outbox, Plan, Reaction, recover_from_rollback, stored_copies,
 };
-pub use snapshot::snapshot_now;
+pub use snapshot::{SnapshotAction, snapshot_action, snapshot_now};
 
 #[cfg(test)]
 mod tests;

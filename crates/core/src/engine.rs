@@ -352,7 +352,40 @@ pub fn rotate(
         chain_link,
         encrypted_meta,
         envelopes,
+        objects: vec![],
     })
+}
+
+/// [`rotate`], and move every note's document key to a new epoch wrapped
+/// under the new vault key (removed members knew the old ones). `notes` are
+/// the notes' keyrings with their titles and current recipients. Returns the
+/// notes' new keyrings, to use once the server accepted the rotation.
+pub fn rotate_with_notes(
+    ring: &mut VaultKeyring,
+    members: &[MemberInfo],
+    meta: &VaultMeta,
+    notes: &[(String, &VaultKeyring, String, Vec<PublicUser>)],
+) -> Result<(RotateKeysRequest, HashMap<String, VaultKeyring>)> {
+    let mut req = rotate(ring, members, meta)?;
+    let mut rings = HashMap::new();
+    for (object_id, doc_ring, title, recipients) in notes {
+        let (next, update) = rotate_object_key(ring, doc_ring, object_id, title, recipients)?;
+        req.objects.push(ObjectKeyChange {
+            object_id: object_id.clone(),
+            update,
+        });
+        rings.insert(object_id.clone(), next);
+    }
+    Ok((req, rings))
+}
+
+/// The notes of a vault that are shared with someone individually, from its
+/// keys response (servers before per-note keys: those with a document key).
+pub fn shared_objects(r: &VaultKeysResponse) -> BTreeSet<String> {
+    match &r.shared {
+        Some(list) => list.iter().cloned().collect(),
+        None => r.objects.iter().map(|e| e.object_id.clone()).collect(),
+    }
 }
 
 // ---------------------------------------------------------------- shared notes
@@ -433,6 +466,109 @@ pub fn object_keyring_for_recipient(
     Ok(ring)
 }
 
+/// A new note's own document key (R2): private (only vault members get it,
+/// wrapped under the vault key), registered before the note's first content
+/// is uploaded, so nothing of it is ever encrypted with the vault key itself.
+pub fn new_document_key(
+    vault_ring: &VaultKeyring,
+    object_id: &str,
+    title: &str,
+) -> Result<(VaultKeyring, ObjectKeyUpdate)> {
+    first_document_key(vault_ring, object_id, title, None, true)
+}
+
+/// A private document key for a note whose content so far is under the vault
+/// key (moving older notes to their own key, e.g. when compacting them):
+/// `state` and `covers_seq` as for [`start_sharing`].
+pub fn adopt_document_key(
+    vault_ring: &VaultKeyring,
+    object_id: &str,
+    title: &str,
+    state: &[u8],
+    covers_seq: i64,
+) -> Result<(VaultKeyring, ObjectKeyUpdate)> {
+    first_document_key(
+        vault_ring,
+        object_id,
+        title,
+        Some((state, covers_seq)),
+        true,
+    )
+}
+
+fn first_document_key(
+    vault_ring: &VaultKeyring,
+    object_id: &str,
+    title: &str,
+    state: Option<(&[u8], i64)>,
+    private: bool,
+) -> Result<(VaultKeyring, ObjectKeyUpdate)> {
+    let dk = VaultKey::generate();
+    let epoch = keys::FIRST_DOC_EPOCH;
+    let mut ring = VaultKeyring::new(vault_ring.vault_id());
+    ring.insert(epoch, dk.clone());
+    let snapshot = match state {
+        Some((state, covers_seq)) => Some(CreateSnapshotRequest {
+            snapshot_id: random_id(),
+            covers_seq,
+            payload: ring.encrypt(Purpose::Snapshot, object_id, state)?,
+        }),
+        None => None,
+    };
+    let req = ObjectKeyUpdate {
+        epoch,
+        vault_envelope: keys::wrap_doc_key_for_vault(vault_ring, object_id, epoch, &dk)?,
+        chain_link: None,
+        envelopes: vec![],
+        encrypted_meta: ObjectMeta {
+            title: title.to_string(),
+        }
+        .encrypt(&ring, object_id)?,
+        snapshot,
+        private,
+    };
+    Ok((ring, req))
+}
+
+/// Start sharing a note that already has its own (private) document key: a
+/// fresh epoch *without* a chain link to the earlier ones, so recipients can
+/// never decrypt what was written before, and a snapshot of the note's full
+/// state under it so they can read the current content. Vault members keep
+/// every epoch (each is wrapped under the vault key).
+pub fn start_sharing_keyed(
+    vault_ring: &VaultKeyring,
+    doc_ring: &VaultKeyring,
+    object_id: &str,
+    title: &str,
+    state: &[u8],
+    covers_seq: i64,
+) -> Result<(VaultKeyring, ObjectKeyUpdate)> {
+    let epoch = doc_ring
+        .current_epoch()
+        .ok_or(CryptoError::MissingEpoch(0))?
+        + 1;
+    let dk = VaultKey::generate();
+    let mut next = doc_ring.clone();
+    next.insert(epoch, dk.clone());
+    let req = ObjectKeyUpdate {
+        epoch,
+        vault_envelope: keys::wrap_doc_key_for_vault(vault_ring, object_id, epoch, &dk)?,
+        chain_link: None,
+        envelopes: vec![],
+        encrypted_meta: ObjectMeta {
+            title: title.to_string(),
+        }
+        .encrypt(&next, object_id)?,
+        snapshot: Some(CreateSnapshotRequest {
+            snapshot_id: random_id(),
+            covers_seq,
+            payload: next.encrypt(Purpose::Snapshot, object_id, state)?,
+        }),
+        private: false,
+    };
+    Ok((next, req))
+}
+
 /// Give a note its own document key so it can be shared without the vault
 /// key. `state` is the note's full CRDT state; it is re-encrypted as a
 /// snapshot under the new key so recipients can read the current content.
@@ -462,6 +598,7 @@ pub fn start_sharing(
             covers_seq,
             payload: ring.encrypt(Purpose::Snapshot, object_id, state)?,
         }),
+        private: false,
     };
     Ok((ring, req))
 }
@@ -506,6 +643,7 @@ pub fn rotate_object_key(
         }
         .encrypt(&next, object_id)?,
         snapshot: None,
+        private: false,
     };
     Ok((next, req))
 }
@@ -609,6 +747,9 @@ pub struct VaultReplica {
     /// False when we only have access to individually shared notes of this
     /// vault, not to the vault itself.
     pub member: bool,
+    /// Notes shared with someone individually (see [`shared_objects`]).
+    /// Every note may have a document key; only these are shared.
+    pub shared: BTreeSet<String>,
     /// Received items waiting for a key we don't have yet.
     pub deferred: Vec<Deferred>,
     /// Updates that could not even be deferred (queue full), by sequence
@@ -632,6 +773,7 @@ impl VaultReplica {
             pending: Vec::new(),
             purged: BTreeSet::new(),
             doc_keys: HashMap::new(),
+            shared: BTreeSet::new(),
             member: true,
             deferred: Vec::new(),
             dropped: BTreeMap::new(),
@@ -654,9 +796,9 @@ impl VaultReplica {
         self.role.can_write()
     }
 
-    /// Whether a note is shared individually (encrypted with its own key).
+    /// Whether a note is shared with someone individually.
     pub fn is_shared_object(&self, object_id: &str) -> bool {
-        self.doc_keys.contains_key(object_id)
+        self.shared.contains(object_id)
     }
 
     /// Keyring used to encrypt new content of an object.
@@ -1058,6 +1200,7 @@ mod tests {
             chain: vec![],
             objects: vec![],
             object_chain: vec![],
+            shared: None,
         };
         let bring = keyring_from_response(&bob, "bob", &req.id, &resp).unwrap();
         let mut b = VaultReplica::new(&req.id, Role::Editor, bring, VaultMeta::default());
@@ -1113,6 +1256,7 @@ mod tests {
             }],
             objects: vec![],
             object_chain: vec![],
+            shared: None,
         };
         let bring2 = keyring_from_response(&bob, "bob", &req.id, &resp).unwrap();
         assert_eq!(bring2.epochs().collect::<Vec<_>>(), vec![1, 2]);
@@ -1217,6 +1361,7 @@ mod tests {
                 envelope: req.vault_envelope.clone(),
             }],
             object_chain: vec![],
+            shared: None,
         };
         let rings = object_keyrings(&vring, &vresp);
         assert!(

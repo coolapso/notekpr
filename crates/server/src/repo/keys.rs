@@ -47,7 +47,7 @@ pub async fn vault_keys(db: &Db, vault_id: &str, user_id: &str) -> AppResult<Vau
                 link: r.get("link"),
             })
             .collect();
-    // Document keys of individually shared notes, wrapped under vault keys.
+    // Document keys of notes, wrapped under vault keys.
     let objects = sqlx::query("SELECT object_id, epoch, envelope FROM object_keys WHERE vault_id = ? AND user_id = '' ORDER BY object_id, epoch")
         .bind(vault_id)
         .fetch_all(db)
@@ -62,12 +62,14 @@ pub async fn vault_keys(db: &Db, vault_id: &str, user_id: &str) -> AppResult<Vau
         .iter()
         .map(|r| ObjectChainLink { object_id: r.get("object_id"), epoch: r.get::<i64, _>("epoch") as u32, link: r.get("link") })
         .collect();
+    let shared = super::shares::shared_in_vault(db, vault_id).await?;
     Ok(VaultKeysResponse {
         current_epoch: current as u32,
         envelopes,
         chain,
         objects,
         object_chain,
+        shared: Some(shared),
     })
 }
 
@@ -174,9 +176,15 @@ pub async fn document_keys(
         .iter()
         .map(|r| KeyEnvelope { user_id: user_id.to_string(), epoch: r.get::<i64, _>("epoch") as u32, envelope: r.get("envelope") })
         .collect();
-    let chain = sqlx::query("SELECT epoch, link FROM object_key_chain WHERE vault_id = ? AND object_id = ? ORDER BY epoch")
+    // Links within the shared epochs only (sharing started with a key that
+    // has no link to the note's earlier, private keys).
+    let from = super::shares::share_from(db, vault_id, object_id)
+        .await?
+        .unwrap_or(coolpsonotes_core::keys::FIRST_DOC_EPOCH);
+    let chain = sqlx::query("SELECT epoch, link FROM object_key_chain WHERE vault_id = ? AND object_id = ? AND epoch > ? ORDER BY epoch")
         .bind(vault_id)
         .bind(object_id)
+        .bind(from as i64)
         .fetch_all(db)
         .await?
         .iter()

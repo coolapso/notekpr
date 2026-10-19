@@ -248,6 +248,7 @@ async fn viewers_are_read_only_and_revocation_rotates_keys() {
                 chain_link: vec![1; 60],
                 encrypted_meta: vec![1; 60],
                 envelopes: vec![],
+                objects: vec![],
             }),
         )
         .await;
@@ -1424,7 +1425,9 @@ async fn individual_note_sharing() {
     );
     let vkeys: VaultKeysResponse = alice.api.get(&format!("/vaults/{v}/keys")).await;
     ar.doc_keys = engine::object_keyrings(alice.ring(&v), &vkeys);
+    ar.shared = engine::shared_objects(&vkeys);
     assert!(ar.is_shared_object("n1"));
+    assert!(!ar.is_shared_object("n2"));
     let p_private = ar
         .local_change("n2", n2.set_text("private diary, more").unwrap())
         .unwrap();
@@ -2152,4 +2155,176 @@ async fn role_dependent_writes_follow_role_changes() {
     );
     // The owner still can.
     assert_eq!(alice.api.status::<()>(Method::DELETE, &a2, None).await, 204);
+}
+
+async fn put_key(u: &User, v: &str, o: &str, req: &ObjectKeyUpdate) -> Result<(), u16> {
+    u.api
+        .call::<_, ()>(
+            Method::PUT,
+            &format!("/vaults/{v}/objects/{o}/key"),
+            Some(req),
+        )
+        .await
+        .map_err(|e| e.0)
+}
+
+/// R2: every note can have its own key from the start; sharing it later
+/// starts with a fresh key, so recipients never get what was written before.
+#[tokio::test]
+async fn notes_have_own_keys_and_recipients_never_get_the_history_before_sharing() {
+    use coolpsonotes_core::engine;
+    use coolpsonotes_core::keys::FIRST_DOC_EPOCH;
+    let srv = start().await;
+    let mut alice = new_user(&srv.base, "alice").await;
+    let mut bob = new_user(&srv.base, "bob").await;
+    let carol = new_user(&srv.base, "carol").await;
+    let v = alice.create_vault("Home").await;
+    alice.share(&v, &bob.id, Role::Editor).await.unwrap();
+    bob.load_keys(&v).await.unwrap();
+
+    // An editor gives a new note its own (private) key: no snapshot needed.
+    let (doc, req) = engine::new_document_key(bob.ring(&v), "n", "Plans").unwrap();
+    assert!(req.private);
+    put_key(&bob, &v, "n", &req).await.unwrap();
+    let note = NoteDoc::new();
+    let first = note.set_text("private plans").unwrap();
+    let under_doc = PushUpdate {
+        object_id: "n".into(),
+        client_update_id: random_id(),
+        payload: doc.encrypt(Purpose::Update, "n", &first).unwrap(),
+    };
+    let resp = bob.push(&v, vec![under_doc]).await.unwrap();
+    assert_eq!(resp.results.len(), 1);
+    // Content under the vault key is refused now.
+    let stale = bob.encrypt_update(&v, "n", &NoteDoc::new().set_text("x").unwrap());
+    assert_eq!(
+        bob.push(&v, vec![stale]).await.unwrap().rejected[0].code,
+        REJECT_STALE_KEY
+    );
+    let vk: VaultKeysResponse = alice.api.get(&format!("/vaults/{v}/keys")).await;
+    assert!(vk.objects.iter().any(|e| e.object_id == "n"));
+    assert_eq!(vk.shared, Some(vec![]), "a private key is not a share");
+
+    // Nobody can be added before sharing starts with a fresh key.
+    let carol_pub: PublicUser = alice.api.get(&format!("/users/{}", carol.id)).await;
+    let early = engine::object_share_envelope(&doc, "n", &carol_pub).unwrap();
+    let add = |env: KeyEnvelope| AddObjectShareRequest {
+        user_id: carol.id.clone(),
+        role: Role::Viewer,
+        envelope: env,
+    };
+    let st = alice
+        .api
+        .status(
+            Method::POST,
+            &format!("/vaults/{v}/objects/n/shares"),
+            Some(&add(early)),
+        )
+        .await;
+    assert_eq!(st, 409);
+
+    // Only the owner starts sharing: a fresh epoch, no chain link, a snapshot.
+    let ch: ChangesResponse = alice.api.get(&format!("/vaults/{v}/changes?since=0")).await;
+    let covers = ch.head_seq;
+    let (shared, start) = engine::start_sharing_keyed(
+        alice.ring(&v),
+        &doc,
+        "n",
+        "Plans",
+        &note.encode_state(),
+        covers,
+    )
+    .unwrap();
+    assert_eq!(start.epoch, FIRST_DOC_EPOCH + 1);
+    assert!(start.chain_link.is_none());
+    assert_eq!(put_key(&bob, &v, "n", &start).await.unwrap_err(), 403);
+    put_key(&alice, &v, "n", &start).await.unwrap();
+    let env = engine::object_share_envelope(&shared, "n", &carol_pub).unwrap();
+    let _: ObjectShareInfo = alice
+        .api
+        .post(&format!("/vaults/{v}/objects/n/shares"), &add(env))
+        .await;
+    let vk: VaultKeysResponse = alice.api.get(&format!("/vaults/{v}/keys")).await;
+    assert_eq!(vk.shared, Some(vec!["n".to_string()]));
+
+    // Carol gets the key and content from the share on — never the earlier
+    // key, nor anything encrypted with it.
+    let keys: ObjectKeysResponse = carol.api.get(&format!("/vaults/{v}/objects/n/keys")).await;
+    assert!(
+        keys.envelopes
+            .iter()
+            .all(|e| e.epoch == FIRST_DOC_EPOCH + 1)
+    );
+    assert!(keys.chain.iter().all(|c| c.epoch > FIRST_DOC_EPOCH + 1));
+    let ring = engine::object_keyring_for_recipient(&carol.account, &carol.id, &v, &keys).unwrap();
+    assert!(ring.get(FIRST_DOC_EPOCH).is_none());
+    let ch: ChangesResponse = carol
+        .api
+        .get(&format!("/vaults/{v}/objects/n/changes?since=0"))
+        .await;
+    let epochs: Vec<u32> = ch
+        .updates
+        .iter()
+        .map(|u| coolpsonotes_core::crypto::sym_epoch(&u.payload).unwrap())
+        .chain(
+            ch.snapshots
+                .iter()
+                .map(|s| coolpsonotes_core::crypto::sym_epoch(&s.payload).unwrap()),
+        )
+        .collect();
+    assert!(!epochs.is_empty());
+    assert!(
+        epochs.iter().all(|&e| e > FIRST_DOC_EPOCH),
+        "{epochs:x?}"
+    );
+    let n = NoteDoc::new();
+    for s in &ch.snapshots {
+        n.apply_update(&ring.decrypt(Purpose::Snapshot, "n", &s.payload).unwrap())
+            .unwrap();
+    }
+    assert_eq!(n.text(), "private plans");
+
+    // An older note under the vault key gets a private key with a snapshot.
+    let old = NoteDoc::new();
+    let u = old.set_text("old note").unwrap();
+    bob.push(&v, vec![bob.encrypt_update(&v, "m", &u)])
+        .await
+        .unwrap();
+    let (_, no_snapshot) = engine::new_document_key(bob.ring(&v), "m", "Old").unwrap();
+    assert_eq!(put_key(&bob, &v, "m", &no_snapshot).await.unwrap_err(), 400);
+    let ch: ChangesResponse = bob.api.get(&format!("/vaults/{v}/changes?since=0")).await;
+    let (_, adopt) =
+        engine::adopt_document_key(bob.ring(&v), "m", "Old", &old.encode_state(), ch.head_seq)
+            .unwrap();
+    put_key(&bob, &v, "m", &adopt).await.unwrap();
+
+    // Rotating the vault key must rotate every note's key with it.
+    let st = alice
+        .api
+        .status(
+            Method::POST,
+            &format!("/vaults/{v}/keys/rotate"),
+            Some(
+                &engine::rotate(
+                    &mut alice.ring(&v).clone(),
+                    &alice
+                        .api
+                        .get::<Vec<MemberInfo>>(&format!("/vaults/{v}/members"))
+                        .await,
+                    &VaultMeta::named("Home"),
+                )
+                .unwrap(),
+            ),
+        )
+        .await;
+    assert_eq!(st, 409);
+    alice.rotate(&v).await;
+    let vk: VaultKeysResponse = alice.api.get(&format!("/vaults/{v}/keys")).await;
+    let n_epochs: Vec<u32> = vk
+        .objects
+        .iter()
+        .filter(|e| e.object_id == "n")
+        .map(|e| e.epoch)
+        .collect();
+    assert!(n_epochs.contains(&(FIRST_DOC_EPOCH + 2)));
 }

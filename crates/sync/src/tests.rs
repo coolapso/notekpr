@@ -1,4 +1,4 @@
-use coolpsonotes_core::doc::NoteDoc;
+use coolpsonotes_core::doc::{EntryKind, NoteDoc};
 use coolpsonotes_core::engine::{VaultMeta, VaultReplica};
 use coolpsonotes_core::keys::{VaultKey, VaultKeyring};
 use coolpsonotes_core::protocol::*;
@@ -270,4 +270,136 @@ fn snapshots_wait_for_confirmation_and_catch_up() {
     assert!(snapshot_now(&r, &o, "missing", None).is_none());
     r.seq = 0;
     assert!(snapshot_now(&r, &o, "n1", None).is_none(), "not caught up");
+}
+
+#[test]
+fn a_new_note_waits_for_its_key_then_goes_out_under_it() {
+    let (mut r, mut o) = (replica(), keyed());
+    assert!(o.new_document_key(&mut r, "n1", "Trip"));
+    assert!(!o.new_document_key(&mut r, "n1", "Trip"), "only once");
+    edit(&mut r, "n1", "pack");
+    edit(&mut r, "n2", "other");
+    let plan = o.plan(&mut r, &Limits::default());
+    assert_eq!(plan.register.len(), 1);
+    assert_eq!(plan.register[0].object_id, "n1");
+    assert!(plan.register[0].update.private);
+    let objects: Vec<String> = plan
+        .pushes
+        .iter()
+        .flatten()
+        .map(|u| u.object_id.clone())
+        .collect();
+    assert_eq!(objects, vec!["n2".to_string()], "n1 waits for its key");
+    assert!(snapshot_now(&r, &o, "n1", Some(5)).is_none());
+    o.key_registered("n1");
+    let plan = o.plan(&mut r, &Limits::default());
+    assert!(plan.register.is_empty());
+    let u = &plan.pushes[0][0];
+    assert_eq!(u.object_id, "n1");
+    let epoch = coolpsonotes_core::crypto::sym_epoch(&u.payload).unwrap();
+    assert!(
+        coolpsonotes_core::keys::is_doc_epoch(epoch),
+        "never under the vault key"
+    );
+}
+
+#[test]
+fn a_refused_key_falls_back_to_the_vault_key() {
+    let (mut r, mut o) = (replica(), keyed());
+    o.new_document_key(&mut r, "n1", "Trip");
+    edit(&mut r, "n1", "pack");
+    o.key_refused(&mut r, "n1");
+    let plan = o.plan(&mut r, &Limits::default());
+    let u = &plan.pushes[0][0];
+    let epoch = coolpsonotes_core::crypto::sym_epoch(&u.payload).unwrap();
+    assert!(!coolpsonotes_core::keys::is_doc_epoch(epoch));
+}
+
+#[test]
+fn unregistered_keys_survive_a_reload() {
+    let (mut r, mut o) = (replica(), keyed());
+    o.new_document_key(&mut r, "n1", "Trip");
+    let stored = serde_json_roundtrip(&o);
+    let mut fresh = replica();
+    fresh.keyring = r.keyring.clone();
+    let mut o2 = stored;
+    o2.restore_new_keys(&mut fresh);
+    assert_eq!(
+        fresh.doc_keys["n1"].current().unwrap().1.0,
+        r.doc_keys["n1"].current().unwrap().1.0
+    );
+    assert_eq!(o2.new_keys.len(), 1);
+}
+
+#[test]
+fn a_reload_recognises_keys_the_server_already_has() {
+    let (mut r, mut o) = (replica(), keyed());
+    o.new_document_key(&mut r, "n1", "Trip");
+    o.new_document_key(&mut r, "n2", "Other");
+    let ring = r.doc_keys["n1"].clone();
+    // The server answered n1's registration but the answer was lost; the
+    // client reloads its keys from the server.
+    r.doc_keys.clear();
+    r.doc_keys.insert("n1".into(), ring);
+    o.keys_reloaded(&mut r, true);
+    let waiting: Vec<&str> = o.new_keys.iter().map(|k| k.object_id.as_str()).collect();
+    assert_eq!(waiting, vec!["n2"]);
+    assert!(r.doc_keys.contains_key("n2"), "n2's key put back");
+}
+
+#[test]
+fn a_key_wrapped_under_an_old_vault_key_is_replaced() {
+    let (mut r, mut o) = (replica(), keyed());
+    r.index.create("n1", "Trip.md", EntryKind::Note, 1);
+    o.new_document_key(&mut r, "n1", "Trip");
+    let old = r.doc_keys["n1"].current().unwrap().1.0;
+    let next = VaultKey::generate();
+    r.keyring.insert(2, next);
+    o.key_stale(&mut r, "n1");
+    assert_eq!(o.new_keys.len(), 1);
+    let env = &o.new_keys[0].update.vault_envelope;
+    assert_eq!(coolpsonotes_core::crypto::sym_epoch(env).unwrap(), 2);
+    assert_ne!(r.doc_keys["n1"].current().unwrap().1.0, old);
+}
+
+#[test]
+fn servers_without_note_keys_get_none() {
+    let (mut r, mut o) = (replica(), Outbox::default());
+    assert!(!o.new_document_key(&mut r, "n1", "Trip"));
+    edit(&mut r, "old", "text");
+    let plan = o.plan(&mut r, &Limits::default());
+    ack_all(&mut o, &mut r, &plan, 1);
+    assert!(matches!(
+        snapshot_action(&r, &o, "old", None),
+        Some(SnapshotAction::Snapshot(_))
+    ));
+}
+
+fn keyed() -> Outbox {
+    let mut o = Outbox::default();
+    o.note_keys = true;
+    o
+}
+
+fn serde_json_roundtrip(o: &Outbox) -> Outbox {
+    let v = serde_json::to_vec(o).unwrap();
+    serde_json::from_slice(&v).unwrap()
+}
+
+#[test]
+fn an_older_note_gets_its_own_key_at_its_next_snapshot() {
+    let (mut r, mut o) = (replica(), keyed());
+    edit(&mut r, "old", "under the vault key");
+    let plan = o.plan(&mut r, &Limits::default());
+    ack_all(&mut o, &mut r, &plan, 1);
+    match snapshot_action(&r, &o, "old", None).unwrap() {
+        SnapshotAction::AdoptKey { update, .. } => {
+            assert!(update.private && update.snapshot.is_some());
+        }
+        SnapshotAction::Snapshot(_) => panic!("should move to its own key"),
+    }
+    match snapshot_action(&r, &o, INDEX_OBJECT_ID, None) {
+        Some(SnapshotAction::Snapshot(_)) => {}
+        _ => panic!("the index stays under the vault key"),
+    }
 }

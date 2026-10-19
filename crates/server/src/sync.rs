@@ -56,10 +56,11 @@ pub async fn head_seq(db: &Db, vault_id: &str) -> AppResult<i64> {
         .ok_or(AppError::NotFound)
 }
 
-// `doc_only` queries keep only payloads encrypted with a note's own document
-// key (envelope epoch with the top bit set: `hex(substr(payload, 2, 1)) >= '80'`).
-// People a single note is shared with get only those, never the note's
-// history from before it was shared, which is encrypted with the vault key.
+// `doc_only` queries keep only payloads encrypted with the key sharing
+// started with or a later one: the envelope epoch (header bytes 2..5,
+// big-endian) is at least the note's `share_from`. People a single note is
+// shared with get only those, never the note's history from before it was
+// shared (under the vault key, or the note's earlier private keys).
 
 /// Everything after `since`, optionally restricted to one object (for people
 /// a single note is shared with). Snapshots (only when `include_snapshots`,
@@ -83,9 +84,9 @@ pub async fn changes_since(
              FROM snapshots s
              JOIN objects o ON o.vault_id = s.vault_id AND o.id = s.object_id AND o.purged_at IS NULL
              WHERE s.vault_id = ? AND s.covers_seq > ? AND (? IS NULL OR s.object_id = ?)
-               AND (? = 0 OR hex(substr(s.payload, 2, 1)) >= '80')
+               AND (? = 0 OR substr(s.payload, 2, 4) >= (SELECT ob.share_from FROM objects ob WHERE ob.vault_id = s.vault_id AND ob.id = s.object_id))
                AND s.id = (SELECT s2.id FROM snapshots s2 WHERE s2.vault_id = s.vault_id AND s2.object_id = s.object_id
-                             AND (? = 0 OR hex(substr(s2.payload, 2, 1)) >= '80')
+                             AND (? = 0 OR substr(s2.payload, 2, 4) >= (SELECT ob.share_from FROM objects ob WHERE ob.vault_id = s2.vault_id AND ob.id = s2.object_id))
                            ORDER BY s2.covers_seq DESC, s2.created_at DESC LIMIT 1)",
         )
         .bind(vault_id)
@@ -104,7 +105,7 @@ pub async fn changes_since(
     }
     let rows = sqlx::query(
         "SELECT object_id, seq, author_id, payload, created_at FROM updates
-         WHERE vault_id = ? AND seq > ? AND (? IS NULL OR object_id = ?) AND (? = 0 OR hex(substr(payload, 2, 1)) >= '80') ORDER BY seq LIMIT ?",
+         WHERE vault_id = ? AND seq > ? AND (? IS NULL OR object_id = ?) AND (? = 0 OR substr(payload, 2, 4) >= (SELECT ob.share_from FROM objects ob WHERE ob.vault_id = updates.vault_id AND ob.id = updates.object_id)) ORDER BY seq LIMIT ?",
     )
     .bind(vault_id)
     .bind(since)
@@ -186,7 +187,7 @@ pub async fn object_state(
     }
     let snapshot = sqlx::query(
         "SELECT id, object_id, covers_seq, author_id, payload, created_at FROM snapshots
-         WHERE vault_id = ? AND object_id = ? AND (? = 0 OR hex(substr(payload, 2, 1)) >= '80') ORDER BY covers_seq DESC, created_at DESC LIMIT 1",
+         WHERE vault_id = ? AND object_id = ? AND (? = 0 OR substr(payload, 2, 4) >= (SELECT ob.share_from FROM objects ob WHERE ob.vault_id = snapshots.vault_id AND ob.id = snapshots.object_id)) ORDER BY covers_seq DESC, created_at DESC LIMIT 1",
     )
     .bind(vault_id)
     .bind(object_id)
@@ -197,7 +198,7 @@ pub async fn object_state(
     let after = snapshot.as_ref().map(|s| s.covers_seq).unwrap_or(0);
     let updates = sqlx::query(
         "SELECT object_id, seq, author_id, payload, created_at FROM updates
-         WHERE vault_id = ? AND object_id = ? AND seq > ? AND (? = 0 OR hex(substr(payload, 2, 1)) >= '80') ORDER BY seq",
+         WHERE vault_id = ? AND object_id = ? AND seq > ? AND (? = 0 OR substr(payload, 2, 4) >= (SELECT ob.share_from FROM objects ob WHERE ob.vault_id = updates.vault_id AND ob.id = updates.object_id)) ORDER BY seq",
     )
     .bind(vault_id)
     .bind(object_id)
@@ -655,7 +656,7 @@ pub async fn list_snapshots(
 ) -> AppResult<Vec<SnapshotInfo>> {
     Ok(sqlx::query(
         "SELECT id, object_id, covers_seq, author_id, created_at, size FROM snapshots
-         WHERE vault_id = ? AND object_id = ? AND (? = 0 OR hex(substr(payload, 2, 1)) >= '80') ORDER BY covers_seq DESC, created_at DESC",
+         WHERE vault_id = ? AND object_id = ? AND (? = 0 OR substr(payload, 2, 4) >= (SELECT ob.share_from FROM objects ob WHERE ob.vault_id = snapshots.vault_id AND ob.id = snapshots.object_id)) ORDER BY covers_seq DESC, created_at DESC",
     )
     .bind(vault_id)
     .bind(object_id)
@@ -683,7 +684,7 @@ pub async fn get_snapshot(
 ) -> AppResult<Snapshot> {
     sqlx::query(
         "SELECT id, object_id, covers_seq, author_id, payload, created_at FROM snapshots
-         WHERE vault_id = ? AND object_id = ? AND id = ? AND (? = 0 OR hex(substr(payload, 2, 1)) >= '80')",
+         WHERE vault_id = ? AND object_id = ? AND id = ? AND (? = 0 OR substr(payload, 2, 4) >= (SELECT ob.share_from FROM objects ob WHERE ob.vault_id = snapshots.vault_id AND ob.id = snapshots.object_id))",
     )
     .bind(vault_id)
     .bind(object_id)

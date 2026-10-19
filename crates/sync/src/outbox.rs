@@ -14,7 +14,8 @@ use coolpsonotes_core::crypto::Purpose;
 use coolpsonotes_core::doc;
 use coolpsonotes_core::engine::{Pending, VaultReplica};
 use coolpsonotes_core::protocol::{
-    PushResult, PushUpdate, REJECT_PURGED, REJECT_STALE_KEY, REJECT_TOO_LARGE, RejectedUpdate,
+    ObjectKeyUpdate, PushResult, PushUpdate, REJECT_PURGED, REJECT_STALE_KEY, REJECT_TOO_LARGE,
+    RejectedUpdate,
 };
 use coolpsonotes_core::random_id;
 use serde::{Deserialize, Serialize};
@@ -87,6 +88,17 @@ pub struct Outbox {
     /// applied locally and are released when they fit.
     #[serde(default)]
     pub held: Vec<Pending>,
+    /// Document keys of new notes the server doesn't know yet (R2). A note's
+    /// updates wait until its key is registered, so nothing of it is ever
+    /// encrypted with the vault key. Persisted with the queue: the key itself
+    /// is in there only wrapped under the vault key.
+    #[serde(default)]
+    pub new_keys: Vec<NewKey>,
+    /// The server keeps a key per note (it said which notes are shared,
+    /// `VaultKeysResponse::shared`); older servers would treat every keyed
+    /// note as shared, so new notes get no key there.
+    #[serde(default)]
+    pub note_keys: bool,
     /// Handed to the transport at least once: never merged again, so a retry
     /// carries the same id and the server stores it only once.
     #[serde(skip)]
@@ -107,9 +119,20 @@ pub struct Outbox {
     held_under: std::collections::HashMap<String, usize>,
 }
 
+/// A new note's document key waiting to be registered
+/// (`PUT /vaults/{v}/objects/{o}/key`).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct NewKey {
+    pub object_id: String,
+    pub update: ObjectKeyUpdate,
+}
+
 /// The pushes to send now, and what changed in the queue.
 #[derive(Debug, Default)]
 pub struct Plan {
+    /// Register these document keys first; the notes' updates follow in a
+    /// later plan, after [`Outbox::key_registered`].
+    pub register: Vec<NewKey>,
     pub pushes: Vec<Vec<PushUpdate>>,
     /// Newly held back (tell the user once).
     pub held: Vec<Held>,
@@ -122,7 +145,7 @@ pub struct Plan {
 
 impl Plan {
     pub fn is_empty(&self) -> bool {
-        self.pushes.is_empty()
+        self.pushes.is_empty() && self.register.is_empty()
     }
 
     pub fn ids(&self) -> Vec<String> {
@@ -159,6 +182,100 @@ impl Outbox {
         }
     }
 
+    /// Give a note created here its own document key (R2), to be registered
+    /// before its content goes out. Nothing happens if it has a key already,
+    /// or for replicas that can't write or aren't the vault's members.
+    pub fn new_document_key(&mut self, r: &mut VaultReplica, object_id: &str, title: &str) -> bool {
+        if !self.note_keys || !r.member || !r.can_write() || r.doc_keys.contains_key(object_id) {
+            return false;
+        }
+        let Ok((ring, update)) =
+            coolpsonotes_core::engine::new_document_key(&r.keyring, object_id, title)
+        else {
+            return false;
+        };
+        r.doc_keys.insert(object_id.to_string(), ring);
+        self.new_keys.push(NewKey {
+            object_id: object_id.to_string(),
+            update,
+        });
+        true
+    }
+
+    /// The server stored a new note's key: its updates may go out now.
+    pub fn key_registered(&mut self, object_id: &str) {
+        self.new_keys.retain(|k| k.object_id != object_id);
+    }
+
+    /// The server refused a new note's key (e.g. the note had content
+    /// already): the note stays under the vault key.
+    pub fn key_refused(&mut self, r: &mut VaultReplica, object_id: &str) {
+        if self.new_keys.iter().any(|k| k.object_id == object_id) {
+            self.new_keys.retain(|k| k.object_id != object_id);
+            r.doc_keys.remove(object_id);
+        }
+    }
+
+    /// A new note's key was wrapped under a vault key that is no longer the
+    /// current one (the vault's key rotated meanwhile): replace it with a new
+    /// key under the current vault key. Nothing of the note left this device
+    /// under the old one.
+    pub fn key_stale(&mut self, r: &mut VaultReplica, object_id: &str) {
+        let Some(pos) = self.new_keys.iter().position(|k| k.object_id == object_id) else {
+            return;
+        };
+        self.new_keys.remove(pos);
+        r.doc_keys.remove(object_id);
+        let title = r
+            .index
+            .get(object_id)
+            .map(|e| e.title().to_string())
+            .unwrap_or_default();
+        self.new_document_key(r, object_id, &title);
+    }
+
+    /// The client replaced `r.doc_keys` with the keys the server has: new
+    /// notes whose key is among them are registered (an answer that got lost),
+    /// the others get their key back.
+    pub fn keys_reloaded(&mut self, r: &mut VaultReplica, note_keys: bool) {
+        self.note_keys = note_keys;
+        self.new_keys
+            .retain(|k| !r.doc_keys.contains_key(&k.object_id));
+        self.restore_new_keys(r);
+    }
+
+    /// After loading the queue from storage: put the keys of new notes not
+    /// registered yet back into the replica (unwrapped with the vault key),
+    /// so their queued updates can be decrypted and sent.
+    pub fn restore_new_keys(&mut self, r: &mut VaultReplica) {
+        let vault_id = r.keyring.vault_id().to_string();
+        self.new_keys.retain(|k| {
+            if r.doc_keys.contains_key(&k.object_id) {
+                return true;
+            }
+            match coolpsonotes_core::keys::unwrap_doc_key_for_vault(
+                &r.keyring,
+                &k.object_id,
+                k.update.epoch,
+                &k.update.vault_envelope,
+            ) {
+                Ok(dk) => {
+                    let mut ring = coolpsonotes_core::keys::VaultKeyring::new(&vault_id);
+                    ring.insert(k.update.epoch, dk);
+                    r.doc_keys.insert(k.object_id.clone(), ring);
+                    true
+                }
+                // The vault key it was wrapped under is gone: nothing to do.
+                Err(_) => false,
+            }
+        });
+    }
+
+    /// Whether a new note's key is still to be registered.
+    pub fn waits_for_key(&self, object_id: &str) -> bool {
+        self.new_keys.iter().any(|k| k.object_id == object_id)
+    }
+
     /// Number of updates kept back.
     pub fn held_count(&self) -> usize {
         self.held.len()
@@ -183,10 +300,11 @@ impl Outbox {
     /// (queued or held back). A local copy of its state must not be treated
     /// as confirmed.
     pub fn unconfirmed(&self, r: &VaultReplica, object_id: &str) -> bool {
-        r.pending
-            .iter()
-            .chain(self.held.iter())
-            .any(|p| p.object_id == object_id)
+        self.waits_for_key(object_id)
+            || r.pending
+                .iter()
+                .chain(self.held.iter())
+                .any(|p| p.object_id == object_id)
     }
 
     /// The connection was lost or replaced: everything not acknowledged is
@@ -274,11 +392,12 @@ impl Outbox {
         }
         plan.released = self.release_fitting(r, limits);
         self.merge_unsent(r, limits);
+        plan.register = self.new_keys.clone();
         let max = limits.max_update_bytes;
         let mut ready: Vec<PushUpdate> = Vec::new();
         let mut hold_ids = Vec::new();
         for p in &r.pending {
-            if self.in_flight.contains(&p.client_update_id) {
+            if self.in_flight.contains(&p.client_update_id) || self.waits_for_key(&p.object_id) {
                 continue;
             }
             match r.encrypt_object(Purpose::Update, &p.object_id, &p.update) {

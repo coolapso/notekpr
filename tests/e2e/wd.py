@@ -5,7 +5,7 @@ import base64, json, time, urllib.request
 import os
 def _wd():
     return os.environ.get("CPN_WEBDRIVER", "http://127.0.0.1:19515")
-KEYS = {"enter": "", "backspace": "", "tab": "", "escape": "", "ctrl": "",
+KEYS = {"enter": "", "backspace": "", "tab": "", "escape": "", "ctrl": "", "alt": "",
         "shift": "", "left": "", "right": "", "up": "", "down": "", "home": "", "end": ""}
 
 

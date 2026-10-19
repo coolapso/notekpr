@@ -870,7 +870,113 @@ def test_offline_start(env):
         b.close()
 
 
-TESTS = [test_onboarding, test_collab, test_devices_and_recovery, test_features, test_attachments, test_note_sharing, test_tables, test_editor_safety, test_local_copy, test_ui_basics, test_offline_tabs, test_offline_start, test_mobile]
+def test_quick_notes(env):
+    b, m = Browser(), None
+    cards = "return Array.from(document.querySelectorAll('.qn-card .qn-text')).map(e => e.textContent)"
+    sidebar = "return Array.from(document.querySelectorAll('.sb-quick .sb-link')).map(e => e.textContent.trim())"
+    try:
+        signup(b, uniq("quinn"))
+        # The shortcut, even from inside the editor: a new quick note, ready to type.
+        b.js("const ed=document.querySelector('.ed'); ed.focus(); const s=getSelection(); s.selectAllChildren(ed); s.collapseToEnd();")
+        b.chord(KEYS["ctrl"], KEYS["alt"], "q")
+        b.wait("return /^\\d{4}-\\d\\d-\\d\\d \\d\\d\\.\\d\\d$/.test((document.querySelector('.note-title') || {}).value || '')", 10, "a quick note opens")
+        b.wait("return !!document.activeElement.closest('.ed')", 5, "the caret in its editor")
+        check(True, "Ctrl+Alt+Q creates a quick note named by the time and puts the caret in its editor")
+        check(b.js("return document.querySelector('.crumbs').textContent").endswith("Quick notes"), "it is an ordinary note in the Quick notes folder")
+        b.keys("Call the dentist")
+        time.sleep(0.8)
+        check(editor_text(b) == "Call the dentist", "typing goes into the quick note")
+        b.wait(sidebar + ".includes('Call the dentist')", 10, "the sidebar entry")
+        check(True, "the sidebar shows the quick note by its first line")
+        # The overview page: capture several thoughts without leaving it.
+        b.click(".sb-quick .sb-label-link")
+        b.find(".quick-capture textarea", 10)
+        check(b.js("return location.pathname") == "/quick", "the section header opens /quick")
+        b.click(".quick-capture textarea")
+        b.keys("Garden plan" + KEYS["enter"] + "tomatoes and beans")
+        b.chord(KEYS["ctrl"], KEYS["enter"])
+        b.wait("return document.querySelector('.quick-capture textarea').value === ''", 5, "the box is cleared")
+        b.wait(cards + ".join('|') === 'Garden plan|Call the dentist'", 10, "two cards, newest first")
+        check(b.js("return location.pathname") == "/quick", "Ctrl+Enter saves a quick note without leaving the page and clears the box")
+        check("tomatoes and beans" in b.js("return document.querySelector('.qn-card .qn-rest').textContent"), "cards show more of the text")
+        b.keys("Old thought")
+        b.click(".quick-capture button[type=submit]")
+        b.wait(cards + ".join('|') === 'Old thought|Garden plan|Call the dentist'", 10, "three cards")
+        b.wait("return document.activeElement === document.querySelector('.quick-capture textarea')", 5, "focus back in the box")
+        check(True, "the Save button saves too and leaves the focus in the box")
+        b.wait(sidebar + ".join('|') === 'Old thought|Garden plan|Call the dentist'", 10, "sidebar order")
+        check(True, "the sidebar lists the latest quick notes, newest first")
+        # Promote: a name (default: the first line) and a folder.
+        b.click_el(b.find_text(".qn-open", "Garden plan"))
+        b.wait("return !!document.querySelector('.note-title') && document.querySelector('.note-title').value !== ''", 10, "the card opens its note")
+        check(editor_text(b) == "Garden plan\ntomatoes and beans", "a card opens its note")
+        b.js("history.back()")
+        b.find(".quick-capture", 10)
+        b.js("Array.from(document.querySelectorAll('.qn-card')).find(c => c.textContent.includes('Garden plan')).querySelector('.qn-promote').click()")
+        b.find(".modal .promote-name", 5)
+        time.sleep(0.3)
+        check(b.js("return document.querySelector('.promote-name').value") == "Garden plan", "promoting suggests the first line as the name")
+        b.js("const i=document.querySelector('.promote-name'); i.focus(); i.select();")
+        b.keys("Vegetable garden")
+        b.click(".promote-folder")
+        b.keys("Projects")
+        b.click(".modal button[type=submit]")
+        b.wait(cards + ".join('|') === 'Old thought|Call the dentist'", 10, "the promoted note leaves the quick notes")
+        check(not b.js("return !!document.querySelector('.modal')"), "promoting closes the dialog")
+        b.click_el(b.find_text(".sb-link", "My notes", 10))
+        b.click_el(b.find_text(".tree-item", "Projects", 10))
+        b.click_el(b.find_text(".tree-item", "Vegetable garden", 10))
+        b.wait("return document.querySelector('.note-title') && document.querySelector('.note-title').value === 'Vegetable garden'", 10, "the promoted note")
+        check(b.js("return document.querySelector('.crumbs').textContent").endswith("Projects") and editor_text(b) == "Garden plan\ntomatoes and beans",
+              "promoting moves and renames it out of Quick notes, keeping its text")
+        # Archive: hidden from the sidebar and the list, unless asked for.
+        b.click(".sb-quick .sb-label-link")
+        b.find(".qn-card", 10)
+        b.js("Array.from(document.querySelectorAll('.qn-card')).find(c => c.textContent.includes('Call the dentist')).querySelector('.qn-archive').click()")
+        b.wait(cards + ".join('|') === 'Old thought'", 10, "archived note hidden")
+        b.wait(sidebar + ".join('|') === 'Old thought'", 10, "archived note gone from the sidebar")
+        check(True, "archiving hides a quick note from the list and the sidebar")
+        b.click(".qn-archived-toggle")
+        b.wait(cards + ".join('|') === 'Old thought|Call the dentist'", 10, "archived shown")
+        check(b.js("return Array.from(document.querySelectorAll('.qn-card.archived')).map(c => c.querySelector('.qn-text').textContent)") == ["Call the dentist"],
+              "“Show archived” lists archived ones, marked as such")
+        # Shortcut help and the settings toggle.
+        b.chord(KEYS["ctrl"], "/")
+        b.find(".modal table.keys", 5)
+        check("Ctrl+Alt+Q" in b.js("return document.querySelector('.modal table.keys').textContent"), "the shortcut help lists Ctrl+Alt+Q")
+        b.chord(KEYS["escape"])
+        b.click(".user-btn")
+        b.click_el(b.find_text(".menu.up button", "Settings"))
+        b.click_el(b.find_text(".settings-nav button", "Editor"))
+        b.click(".quick-sidebar-toggle")
+        b.wait("return !document.querySelector('.sb-quick')", 5, "the section is gone")
+        check(True, "the sidebar section can be turned off in Settings")
+        b.click(".quick-sidebar-toggle")
+        b.find(".sb-quick", 5)
+        check(not severe_logs(b), "no browser errors")
+        # Phone width: the overview page and the capture box fit and work.
+        m = Browser(390, 844)
+        signup(m, uniq("quip"))
+        m.go(env.url + "quick")
+        m.wait("const t = document.querySelector('.quick-capture textarea'); return t && !t.disabled", 20, "the capture box")
+        m.click(".quick-capture textarea")
+        m.keys("Idea on the go")
+        m.click(".quick-capture button[type=submit]")
+        m.wait(cards + ".join('|') === 'Idea on the go'", 10, "the card on a phone")
+        fits = m.js("""const w = innerWidth, r = e => e.getBoundingClientRect();
+            const els = [document.querySelector('.quick-capture'), document.querySelector('.quick-capture .btn'),
+                         document.querySelector('.qn-card'), document.querySelector('.qn-card .qn-archive')];
+            return document.querySelector('.main').scrollWidth <= w && els.every(e => e && r(e).left >= 0 && r(e).right <= w);""")
+        check(fits, "at 390px the capture box, its Save button and the cards fit the screen")
+        m.shot("quick-mobile")
+        check(not severe_logs(m), "no browser errors on the phone")
+    finally:
+        b.close()
+        if m:
+            m.close()
+
+
+TESTS = [test_onboarding, test_collab, test_devices_and_recovery, test_features, test_attachments, test_note_sharing, test_tables, test_editor_safety, test_local_copy, test_ui_basics, test_offline_tabs, test_offline_start, test_mobile, test_quick_notes]
 
 
 def main():

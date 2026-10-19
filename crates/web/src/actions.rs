@@ -1446,33 +1446,48 @@ impl Host for NoteHost {
         state::send_presence();
     }
 
-    fn insert_files(&self, files: Vec<web_sys::File>, _at: usize) {
+    fn insert_files(&self, files: Vec<web_sys::File>, at: usize) {
         if self.shared {
             error("Files can't be added to a note shared with you.");
             return;
         }
         let (v, n) = (self.vault.clone(), self.note.clone());
+        // The links go where the files were pasted or dropped, wherever that
+        // is once the upload is done.
+        let anchor = open_editor(&v, &n).map(|ed| ed.anchor(at));
         leptos::task::spawn_local(async move {
             let embeds = upload_files(&v, files, "attachments").await;
-            insert_embeds(&v, &n, &embeds);
+            insert_embeds_at(&v, &n, &embeds, anchor.as_ref());
         });
     }
+}
+
+fn open_editor(vault: &str, note: &str) -> Option<Rc<editor::Editor>> {
+    with(|c| {
+        c.editor
+            .as_ref()
+            .filter(|(v, n, _)| v == vault && n == note)
+            .map(|(_, _, e)| e.clone())
+    })
 }
 
 /// Insert links to uploaded files into the note they were added to — only
 /// if that note is still the one open (uploads take a while).
 pub fn insert_embeds(vault: &str, note: &str, embeds: &[String]) {
+    insert_embeds_at(vault, note, embeds, None);
+}
+
+/// [`insert_embeds`] at `at` (taken when the files were added) instead of
+/// the selection.
+fn insert_embeds_at(vault: &str, note: &str, embeds: &[String], at: Option<&editor::Anchor>) {
     if embeds.is_empty() {
         return;
     }
-    let ed = with(|c| {
-        c.editor
-            .as_ref()
-            .filter(|(v, n, _)| v == vault && n == note)
-            .map(|(_, _, e)| e.clone())
-    });
-    match ed {
-        Some(ed) => ed.insert_text(&embeds.join("\n")),
+    match open_editor(vault, note) {
+        Some(ed) => match at {
+            Some(a) => ed.insert_at(a, &embeds.join("\n")),
+            None => ed.insert_text(&embeds.join("\n")),
+        },
         None => info(format!(
             "Uploaded {} to “attachments”. The note was closed meanwhile; add {} to link it.",
             if embeds.len() == 1 {

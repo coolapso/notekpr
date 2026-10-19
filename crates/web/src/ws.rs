@@ -44,6 +44,16 @@ fn ws_url() -> String {
     format!("{proto}://{}/api/v1/ws", loc.host().unwrap_or_default())
 }
 
+/// Close a connection we are done with. Its handlers are removed first:
+/// their closures are about to be dropped, and the `close` event that
+/// follows would otherwise call into a dropped closure.
+fn close_detached(ws: &WebSocket) {
+    ws.set_onopen(None);
+    ws.set_onmessage(None);
+    ws.set_onclose(None);
+    let _ = ws.close();
+}
+
 impl Socket {
     pub fn new(token: String, on_message: OnMessage, on_state: OnState) -> Rc<Socket> {
         let s = Rc::new(Socket {
@@ -91,8 +101,9 @@ impl Socket {
 
     pub fn stop(&self) {
         self.stopped.set(true);
-        if let Some(ws) = self.ws.borrow_mut().take() {
-            let _ = ws.close();
+        let ws = self.ws.borrow_mut().take();
+        if let Some(ws) = ws {
+            close_detached(&ws);
         }
         self.callbacks.borrow_mut().clear();
     }
@@ -101,8 +112,9 @@ impl Socket {
     pub fn kick(self: &Rc<Self>) {
         if self.state.get() != ConnState::Open {
             self.attempts.set(0);
-            if let Some(ws) = self.ws.borrow_mut().take() {
-                let _ = ws.close();
+            let ws = self.ws.borrow_mut().take();
+            if let Some(ws) = ws {
+                close_detached(&ws);
             }
             Socket::connect(self);
         }

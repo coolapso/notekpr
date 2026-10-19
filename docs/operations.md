@@ -224,10 +224,11 @@ credentials from coolpsonotes itself (see [agents.md](agents.md)).
 
 TLS is required in production. WebSockets live at `/api/v1/ws`; allow long
 idle timeouts (the client pings every 20 s). Allow request bodies a little
-larger than `--max-attachment-mb`. Set `--trust-proxy`, and make sure the
-proxy **replaces** `X-Forwarded-For` with the client's address rather than
-appending to a value the client sent: the server uses the first address in
-that header for rate limiting.
+larger than `--max-attachment-mb`. Set `--trust-proxy`: the server then takes
+the client's address from the **last** entry of `X-Forwarded-For` (the one
+your proxy added) for rate limiting. If several proxies are chained, the
+outermost must be the only one that adds an entry, or set the header to the
+client address at the edge.
 
 Don't expose `/metrics` publicly (the bundled Caddyfiles answer it with 404;
 scrape the server directly or set `--metrics-token`).
@@ -241,7 +242,7 @@ location / {
     proxy_set_header Upgrade $http_upgrade;
     proxy_set_header Connection "upgrade";
     proxy_set_header Host $host;
-    proxy_set_header X-Forwarded-For $remote_addr;   # replace, don't append
+    proxy_set_header X-Forwarded-For $remote_addr;
     proxy_read_timeout 3600s;
     client_max_body_size 64m;
 }

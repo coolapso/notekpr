@@ -33,12 +33,17 @@ impl Limiters {
     }
 }
 
+/// The client's address. Behind a trusted proxy, the last entry of
+/// `X-Forwarded-For` is the one that proxy added; earlier entries come from
+/// the client and can be anything.
 pub fn client_ip(headers: &HeaderMap, peer: Option<SocketAddr>, trust_proxy: bool) -> IpAddr {
     if trust_proxy {
         let forwarded = headers
-            .get("x-forwarded-for")
-            .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.split(',').next())
+            .get_all("x-forwarded-for")
+            .iter()
+            .filter_map(|v| v.to_str().ok())
+            .flat_map(|v| v.split(','))
+            .last()
             .and_then(|v| v.trim().parse().ok())
             .or_else(|| {
                 headers
@@ -76,4 +81,21 @@ pub async fn auth_limit(State(state): State<AppState>, req: Request, next: Next)
         return AppError::RateLimited.into_response();
     }
     next.run(req).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn uses_the_address_the_proxy_added() {
+        let mut h = HeaderMap::new();
+        h.insert("x-forwarded-for", "6.6.6.6, 203.0.113.7".parse().unwrap());
+        let peer = Some("10.0.0.2:4000".parse().unwrap());
+        assert_eq!(client_ip(&h, peer, true), "203.0.113.7".parse::<IpAddr>().unwrap());
+        assert_eq!(client_ip(&h, peer, false), "10.0.0.2".parse::<IpAddr>().unwrap());
+        let mut h = HeaderMap::new();
+        h.insert("x-forwarded-for", "203.0.113.9".parse().unwrap());
+        assert_eq!(client_ip(&h, peer, true), "203.0.113.9".parse::<IpAddr>().unwrap());
+    }
 }

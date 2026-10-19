@@ -3,6 +3,8 @@
 
 use web_sys::KeyboardEvent;
 
+use super::floor_char;
+
 pub enum Action {
     Consumed,
     Move(usize, usize),
@@ -17,6 +19,13 @@ pub enum Action {
     Yank(String),
 }
 
+#[derive(Clone, Copy, Default)]
+struct Mods {
+    ctrl: bool,
+    meta: bool,
+    alt: bool,
+}
+
 #[derive(Default)]
 pub struct Vim {
     pub insert: bool,
@@ -27,6 +36,7 @@ pub struct Vim {
 }
 
 fn line_bounds(t: &str, i: usize) -> (usize, usize) {
+    let i = floor_char(t, i);
     let s = t[..i].rfind('\n').map(|p| p + 1).unwrap_or(0);
     let e = t[i..].find('\n').map(|p| i + p).unwrap_or(t.len());
     (s, e)
@@ -178,9 +188,24 @@ impl Vim {
     }
 
     pub fn key(&mut self, ev: &KeyboardEvent, t: &str, sel: (usize, usize)) -> Option<Action> {
-        let key = ev.key();
+        let mods = Mods {
+            ctrl: ev.ctrl_key(),
+            meta: ev.meta_key(),
+            alt: ev.alt_key(),
+        };
+        self.handle(ev.key(), mods, t, sel)
+    }
+
+    /// Handle one key. Offsets kept between keys (the visual-mode anchor)
+    /// and the selection may be stale after remote edits, so they are
+    /// clamped to the current text first.
+    fn handle(&mut self, key: String, mods: Mods, t: &str, sel: (usize, usize)) -> Option<Action> {
+        let sel = (floor_char(t, sel.0), floor_char(t, sel.1));
+        if let Some(a) = self.visual {
+            self.visual = Some(floor_char(t, a));
+        }
         if self.insert {
-            if key == "Escape" || (ev.ctrl_key() && key == "[") {
+            if key == "Escape" || (mods.ctrl && key == "[") {
                 self.insert = false;
                 let (s, _) = line_bounds(t, sel.1);
                 let p = if sel.1 > s { prev(t, sel.1) } else { sel.1 };
@@ -188,10 +213,10 @@ impl Vim {
             }
             return None;
         }
-        if ev.ctrl_key() && key == "r" {
+        if mods.ctrl && key == "r" {
             return Some(Action::Redo);
         }
-        if ev.ctrl_key() || ev.meta_key() || ev.alt_key() {
+        if mods.ctrl || mods.meta || mods.alt {
             return None;
         }
         if key.len() > 1
@@ -492,5 +517,55 @@ impl Vim {
             }
             _ => Action::Consumed,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn press(v: &mut Vim, key: &str, t: &str, sel: (usize, usize)) -> Option<Action> {
+        v.handle(key.to_string(), Mods::default(), t, sel)
+    }
+
+    #[test]
+    fn visual_anchor_survives_remote_shrinking() {
+        let mut v = Vim::default();
+        press(&mut v, "v", "hello wonderful world", (15, 15));
+        assert_eq!(v.visual, Some(15));
+        // A remote edit shrank the text below the anchor.
+        match press(&mut v, "d", "hello", (2, 2)) {
+            Some(Action::Edit { from, to, .. }) => assert_eq!((from, to), (2, 5)),
+            _ => panic!("expected a deletion"),
+        }
+        assert_eq!(v.visual, None);
+        // Anchor and selection inside a multibyte character.
+        press(&mut v, "v", "日本語です", (12, 12));
+        match press(&mut v, "y", "日本語", (4, 5)) {
+            Some(Action::Yank(s)) => assert_eq!(s, "本語"),
+            _ => panic!("expected a yank"),
+        }
+        press(&mut v, "v", "日本語です", (12, 12));
+        assert!(matches!(
+            press(&mut v, "l", "日本", (1, 1)),
+            Some(Action::Move(6, 3))
+        ));
+    }
+
+    #[test]
+    fn stale_offsets_never_panic() {
+        let texts = ["", "a", "日本語", "x\n日\n", "👍 a 👍"];
+        let keys = [
+            "v", "h", "l", "j", "k", "w", "e", "b", "0", "^", "$", "x", "X", "d", "d", "c", "w",
+            "y", "y", "p", "P", "o", "Escape", "D", "v", "G", "y", "a", "Escape", "I", "Escape",
+        ];
+        for t in texts {
+            for off in 0..t.len() + 3 {
+                let mut v = Vim::default();
+                for k in keys {
+                    let _ = press(&mut v, k, t, (off, off + 1));
+                }
+            }
+        }
     }
 }

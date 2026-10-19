@@ -89,6 +89,7 @@ networking, so it works on Linux only).
 cargo test -p coolpsonotes-core      # crypto, key hierarchy, CRDT model, diffs, markdown, search
 cargo test -p coolpsonotes-server    # end-to-end API tests with real client-side crypto
 cargo test -p coolpsonotes-web       # editor syntax engine, safe rendering, zip
+cargo test -p coolpsonotes-sync      # the shared sync engine: outbox, refusals, no-loss property test
 cargo test -p coolpsonotes-client    # sync engine, mirror, gateway against an in-process server
 tests/e2e/run.sh                     # headless browsers: onboarding, collaboration, devices,
                                      # recovery, viewers, history, trash, search, offline,
@@ -97,6 +98,22 @@ tests/e2e/run.sh                     # headless browsers: onboarding, collaborat
 
 The browser suite starts its own dev-mode server on a free port with a
 temporary database; screenshots land in `target/e2e/`.
+
+Property tests (`proptest`) run with `cargo test`; `PROPTEST_CASES=20000`
+searches harder. Fuzz targets for everything that parses untrusted input
+(Markdown, diffs, envelopes, protocol JSON, zip import, CRDT updates) live in
+`fuzz/` and run on the stable toolchain — libFuzzer with coverage
+instrumentation through `RUSTFLAGS`, no nightly needed:
+
+```sh
+task fuzz                 # every target, 60 s each
+fuzz/run.sh crdt 600      # one target, longer
+```
+
+A crash or out-of-memory input is written to `fuzz/artifacts/`; add it as a
+unit test next to the fix (the CRDT allocation guard in `crates/core/src/doc.rs`
+came from this). With nightly and `cargo-fuzz`, `cargo fuzz run <target>`
+works too and adds AddressSanitizer.
 
 Also build the core for the browser to catch wasm-only issues:
 

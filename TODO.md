@@ -482,17 +482,21 @@ with SQLite; no SQL-dialect abstraction.
 
 ### R7. Fuzzing and property tests
 
-- [ ] `cargo-fuzz` targets: link/percent decoding and Markdown analysis,
-      editor syntax classification and styling (multibyte!), envelope and
-      protocol parsing, zip import, text diff.
+- [x] Fuzz targets: link/percent decoding and Markdown analysis, envelope
+      and protocol parsing, zip import, text diff, CRDT updates (`fuzz/`,
+      `task fuzz`, stable toolchain). First find: a 7-byte CRDT update made
+      yrs reserve ~2 GB (any member could crash the others' tabs) — refused
+      up front now (`doc::check_plausible`).
+- [ ] Editor syntax target once the editor crate lands (property tests cover
+      it meanwhile).
 - [x] Property tests: CRDT convergence under random concurrent edits, mirror
       path mapping (case-insensitive and Windows rules), table/key helpers
       (`crates/core/tests/properties.rs`, `crates/web/tests/properties.rs`,
       `path_properties` in `crates/client/src/mirror.rs`; `PROPTEST_CASES`
       raises the case count).
 - [x] In CI from now on (part of `cargo test`).
-- [ ] `cargo-fuzz` needs nightly; decide whether CI gets a nightly fuzz job
-      or the property tests stay the only randomized tests.
+- [x] No nightly needed (stable libFuzzer build); a weekly CI fuzz job runs
+      every target (`.github/workflows/fuzz.yml`).
 - Would have caught W-H3 and W-H4; guards the mirror path fixes (C-H6, C-H7).
 
 ---

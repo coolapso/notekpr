@@ -191,6 +191,12 @@ tasks:
     cmds:
       - cargo test -p coolpsonotes-web
 
+  fuzz:
+    desc: "Fuzz the parsers (stable toolchain, libFuzzer): `task fuzz` (60 s per target) or `task fuzz -- zip 300`"
+    deps: [rust]
+    cmds:
+      - fuzz/run.sh {{.CLI_ARGS}}
+
   test:e2e:
     desc: "Headless browser tests and browser ↔ CLI test (needs chromium + chromedriver); filter with `task test:e2e -- -k collab`"
     deps: [rust]

@@ -72,7 +72,34 @@ fn is_remote(origin: Option<&yrs::Origin>) -> bool {
 }
 
 fn decode(update: &[u8]) -> Result<Update> {
+    check_plausible(update)?;
     Update::decode_v1(update).map_err(|e| DocError::BadUpdate(e.to_string()))
+}
+
+/// Refuse an update whose header claims more clients than its bytes could
+/// hold. yrs reserves a hash table for the claimed count before reading
+/// them, so a 7-byte update declaring a billion clients made it allocate and
+/// initialise ~2 GB (found by fuzzing; any member could have crashed the
+/// others' tabs). Each client entry takes at least three bytes (block
+/// count, client id, clock).
+fn check_plausible(update: &[u8]) -> Result<()> {
+    let mut clients: u64 = 0;
+    let mut used = 0;
+    for (i, b) in update.iter().take(5).enumerate() {
+        clients |= u64::from(b & 0x7f) << (7 * i);
+        used = i + 1;
+        if b & 0x80 == 0 {
+            break;
+        }
+    }
+    let rest = (update.len() - used) as u64;
+    if clients > rest / 3 {
+        return Err(DocError::BadUpdate(format!(
+            "update declares {clients} clients in {} bytes",
+            update.len()
+        )));
+    }
+    Ok(())
 }
 
 fn apply(doc: &Doc, update: &[u8]) -> Result<()> {
@@ -637,6 +664,24 @@ impl IndexDoc {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_update_claiming_a_billion_clients_is_refused_at_once() {
+        // Found by fuzzing: this made yrs reserve ~2 GB before failing.
+        let bomb: &[u8] = &[0x83, 0x83, 0x83, 0xff, 0x83, 0x2d, 0xff];
+        let t = std::time::Instant::now();
+        assert!(NoteDoc::new().apply_update(bomb).is_err());
+        assert!(IndexDoc::new().apply_update(bomb).is_err());
+        assert!(t.elapsed() < std::time::Duration::from_millis(50));
+        // Real updates still apply.
+        let n = NoteDoc::new();
+        let u = n.set_text("hello").unwrap();
+        let m = NoteDoc::new();
+        m.apply_update(&u).unwrap();
+        assert_eq!(m.text(), "hello");
+        let empty = NoteDoc::new().encode_state();
+        NoteDoc::new().apply_update(&empty).unwrap();
+    }
 
     #[test]
     fn note_concurrent_edits_merge() {

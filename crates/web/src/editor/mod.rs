@@ -185,6 +185,34 @@ fn map_pos(mut p: usize, edits: &[Edit], stay: bool) -> usize {
     p
 }
 
+/// Replace no-break spaces (U+00A0) in inserted text by plain spaces,
+/// shifting the later edits accordingly (each takes one byte less).
+fn plain_spaces_in_inserts(edits: Vec<Edit>) -> Vec<Edit> {
+    let mut shift = 0;
+    edits
+        .into_iter()
+        .map(|e| match e {
+            Edit::Insert { at, text } => {
+                let n = text.matches('\u{a0}').count();
+                let e = Edit::Insert {
+                    at: at.saturating_sub(shift),
+                    text: if n > 0 {
+                        text.replace('\u{a0}', " ")
+                    } else {
+                        text
+                    },
+                };
+                shift += n;
+                e
+            }
+            Edit::Delete { at, len } => Edit::Delete {
+                at: at.saturating_sub(shift),
+                len,
+            },
+        })
+        .collect()
+}
+
 /// Whether sequential edits stay inside `text` and on character boundaries
 /// (anything else would panic or corrupt the CRDT).
 pub fn edits_fit(text: &str, edits: &[Edit]) -> bool {
@@ -1282,14 +1310,28 @@ impl Editor {
             };
             lines.push(t);
         }
-        let dom_text = lines.join("\n").replace('\u{a0}', " ");
+        let dom_text = lines.join("\n");
         let sel = self.read_selection();
         let old = self.st.borrow().text.clone();
         if dom_text == old {
             return;
         }
-        let edits = textdiff::diff(&old, &dom_text);
-        self.st.borrow_mut().text = dom_text;
+        // Browsers put no-break spaces into text they edit natively; turn
+        // those into spaces, but leave the rest of the note alone.
+        let new_text = textdiff::apply(
+            &old,
+            &plain_spaces_in_inserts(textdiff::diff(&old, &dom_text)),
+        );
+        if new_text == old {
+            // Only spaces were swapped: just redraw.
+            self.render(true);
+            if let Some((a, h)) = sel {
+                self.set_selection(a, h);
+            }
+            return;
+        }
+        let edits = textdiff::diff(&old, &new_text);
+        self.st.borrow_mut().text = new_text;
         let caret = sel.unwrap_or_else(|| {
             let p = match edits.last() {
                 Some(Edit::Insert { at, text }) => at + text.len(),
@@ -1919,6 +1961,20 @@ mod tests {
             },
         ];
         assert_eq!(rebase(base, current, &local), None);
+    }
+
+    #[test]
+    fn only_inserted_no_break_spaces_become_spaces() {
+        let nb = '\u{a0}';
+        let old = format!("price:{nb}5 € and more");
+        // A native edit typed "a b " (with no-break spaces) in two places.
+        let dom = format!("a{nb}b{nb}price:{nb}5 € and{nb}x more");
+        let out = textdiff::apply(&old, &plain_spaces_in_inserts(textdiff::diff(&old, &dom)));
+        assert_eq!(out, format!("a b price:{nb}5 € and x more"));
+        // Nothing inserted: existing no-break spaces stay.
+        let dom = format!("price:{nb}5 € more");
+        let out = textdiff::apply(&old, &plain_spaces_in_inserts(textdiff::diff(&old, &dom)));
+        assert_eq!(out, dom);
     }
 
     #[test]

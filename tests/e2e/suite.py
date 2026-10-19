@@ -577,6 +577,19 @@ def test_editor_safety(env):
         b.click_el(b.find_text(".tree-item", "Other", 10))
         b.find_text(".toast", "The note was closed meanwhile", 15)
         check("late.txt" not in editor_text(b) and "other body" in editor_text(b), "a finished upload is not linked into the note opened meanwhile")
+        # A native browser edit (reconciled from the DOM) keeps the note's no-break spaces.
+        b.js(end)
+        b.js("const dt = new DataTransfer(); dt.setData('text/plain', ' 10\\u00a0km'); document.querySelector('.ed').dispatchEvent(new ClipboardEvent('paste', {clipboardData: dt, bubbles: true, cancelable: true}));")
+        b.wait("return document.querySelector('.ed').textContent.includes('10\\u00a0km')", 5, "no-break space pasted")
+        b.js("""
+            const ed = document.querySelector('.ed');
+            const n = document.createTreeWalker(ed.firstElementChild, NodeFilter.SHOW_TEXT).nextNode();
+            n.data = 'X\\u00a0' + n.data;
+            ed.dispatchEvent(new InputEvent('input', {bubbles: true, inputType: 'insertText', data: 'X'}));
+        """)
+        time.sleep(0.5)
+        t = editor_text(b)
+        check(t.startswith("X other") and "10 km" in t, "native edits keep existing no-break spaces and plain-space new ones")
         check(not severe_logs(b), "no browser errors")
     finally:
         b.close()

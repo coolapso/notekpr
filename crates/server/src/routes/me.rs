@@ -267,11 +267,16 @@ pub async fn bind_session_device(
     Json(req): Json<BindDeviceRequest>,
 ) -> AppResult<StatusCode> {
     who.require_human()?;
-    let owner = repo::devices::owner_unless_revoked(&state.db, &req.device_id).await?;
+    // One transaction: a device removed meanwhile has already had its
+    // sessions revoked, so binding to it now would escape that.
+    let _w = state.write_lock.lock().await;
+    let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
+    let owner = repo::devices::owner_unless_revoked(&mut *tx, &req.device_id).await?;
     if owner.as_deref() != Some(who.user_id.as_str()) {
         return Err(AppError::DeviceRevoked);
     }
-    repo::sessions::bind_device(&state.db, &who.session_id, &req.device_id).await?;
+    repo::sessions::bind_device(&mut *tx, &who.session_id, &req.device_id).await?;
+    tx.commit().await?;
     Ok(StatusCode::NO_CONTENT)
 }
 

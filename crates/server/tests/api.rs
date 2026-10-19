@@ -1887,3 +1887,199 @@ async fn snapshots_of_one_note_by_one_person_have_a_cooldown() {
         429
     );
 }
+
+async fn put_attachment(u: &User, v: &str, id: &str) -> u16 {
+    let blob = u
+        .ring(v)
+        .encrypt(Purpose::Attachment, id, b"bytes")
+        .unwrap();
+    u.api
+        .raw()
+        .put(format!("{}/vaults/{v}/attachments/{id}", u.api.base))
+        .bearer_auth(u.api.token.clone().unwrap())
+        .body(blob)
+        .send()
+        .await
+        .unwrap()
+        .status()
+        .as_u16()
+}
+
+/// Every write that depends on a role follows role changes and removals.
+/// These handlers repeat their checks inside the write transaction (S-L1);
+/// the race that closes can't be provoked from here, but this covers the
+/// handlers themselves.
+#[tokio::test]
+async fn role_dependent_writes_follow_role_changes() {
+    use coolpsonotes_core::engine;
+    let srv = start().await;
+    let mut alice = new_user(&srv.base, "alice").await;
+    let mut bob = new_user(&srv.base, "bob").await;
+    let carol = new_user(&srv.base, "carol").await;
+    let v = alice.create_vault("Team").await;
+    alice.share(&v, &bob.id, Role::Editor).await.unwrap();
+    bob.load_keys(&v).await.unwrap();
+
+    // A note shared with carol, so bob can retitle it as an editor.
+    let n1 = NoteDoc::new();
+    let u1 = n1.set_text("plans").unwrap();
+    alice
+        .push(&v, vec![alice.encrypt_update(&v, "n1", &u1)])
+        .await
+        .unwrap();
+    let (doc_ring, req) =
+        engine::start_sharing(alice.ring(&v), "n1", "Plans", &n1.encode_state(), 1).unwrap();
+    let _: () = alice
+        .api
+        .put(&format!("/vaults/{v}/objects/n1/key"), &req)
+        .await;
+    let carol_pub: PublicUser = alice.api.get(&format!("/users/{}", carol.id)).await;
+    let _: ObjectShareInfo = alice
+        .api
+        .post(
+            &format!("/vaults/{v}/objects/n1/shares"),
+            &AddObjectShareRequest {
+                user_id: carol.id.clone(),
+                role: Role::Viewer,
+                envelope: engine::object_share_envelope(&doc_ring, "n1", &carol_pub).unwrap(),
+            },
+        )
+        .await;
+    let title = |t: &str| ObjectMetaUpdate {
+        encrypted_meta: engine::ObjectMeta { title: t.into() }
+            .encrypt(&doc_ring, "n1")
+            .unwrap(),
+    };
+    let meta_path = format!("/vaults/{v}/objects/n1/meta");
+    let share_path = format!("/vaults/{v}/objects/n1/shares/{}", carol.id);
+    let to_editor = UpdateMemberRequest { role: Role::Editor };
+
+    // As an editor, bob writes; only the owner manages shares and the vault.
+    assert_eq!(put_attachment(&bob, &v, "a1").await, 201);
+    assert_eq!(put_attachment(&bob, &v, "a2").await, 201);
+    let a1 = format!("/vaults/{v}/attachments/a1");
+    let a2 = format!("/vaults/{v}/attachments/a2");
+    assert_eq!(bob.api.status::<()>(Method::DELETE, &a1, None).await, 204);
+    assert_eq!(
+        bob.api
+            .status(Method::PUT, &meta_path, Some(&title("Plan B")))
+            .await,
+        204
+    );
+    assert_eq!(
+        bob.api
+            .status(Method::PATCH, &share_path, Some(&to_editor))
+            .await,
+        403
+    );
+    assert_eq!(
+        carol
+            .api
+            .status(Method::PATCH, &share_path, Some(&to_editor))
+            .await,
+        404
+    );
+    assert_eq!(
+        alice
+            .api
+            .status(Method::PATCH, &share_path, Some(&to_editor))
+            .await,
+        204
+    );
+    let archive = UpdateVaultRequest {
+        encrypted_meta: None,
+        archived: Some(true),
+    };
+    assert_eq!(
+        bob.api
+            .status(Method::PATCH, &format!("/vaults/{v}"), Some(&archive))
+            .await,
+        403
+    );
+    let info: VaultInfo = alice
+        .api
+        .call(Method::PATCH, &format!("/vaults/{v}"), Some(&archive))
+        .await
+        .unwrap();
+    assert!(info.archived);
+
+    // Demoted to viewer, bob can't change anything any more.
+    let to_viewer = UpdateMemberRequest { role: Role::Viewer };
+    assert_eq!(
+        alice
+            .api
+            .status(
+                Method::PATCH,
+                &format!("/vaults/{v}/members/{}", bob.id),
+                Some(&to_viewer)
+            )
+            .await,
+        204
+    );
+    assert_eq!(put_attachment(&bob, &v, "a3").await, 403);
+    assert_eq!(bob.api.status::<()>(Method::DELETE, &a2, None).await, 403);
+    assert_eq!(
+        bob.api
+            .status(Method::PUT, &meta_path, Some(&title("Plan C")))
+            .await,
+        403
+    );
+    assert_eq!(
+        bob.api
+            .status::<()>(Method::DELETE, &format!("/vaults/{v}/objects/n1"), None)
+            .await,
+        403
+    );
+    let w = bob.encrypt_update(&v, "n2", &NoteDoc::new().set_text("x").unwrap());
+    assert_eq!(bob.push(&v, vec![w]).await.unwrap_err().0, 403);
+
+    // Once removed, bob gets no envelope back, and everything is 404 to him.
+    assert_eq!(
+        alice
+            .api
+            .status::<()>(
+                Method::DELETE,
+                &format!("/vaults/{v}/members/{}", bob.id),
+                None
+            )
+            .await,
+        204
+    );
+    let bob_pub: PublicUser = alice.api.get(&format!("/users/{}", bob.id)).await;
+    let (epoch, key) = alice.ring(&v).current().unwrap();
+    let grant = GrantKeysRequest {
+        envelopes: vec![KeyEnvelope {
+            user_id: bob.id.clone(),
+            epoch,
+            envelope: keys::wrap_vault_key(
+                key,
+                &v,
+                epoch,
+                &bob.id,
+                &bob_pub.account_key.unwrap().verify().unwrap().enc_public,
+            )
+            .unwrap(),
+        }],
+    };
+    assert_eq!(
+        alice
+            .api
+            .status(
+                Method::POST,
+                &format!("/vaults/{v}/keys/grant"),
+                Some(&grant)
+            )
+            .await,
+        400
+    );
+    assert_eq!(bob.load_keys(&v).await, Err(404));
+    assert_eq!(bob.api.status::<()>(Method::DELETE, &a2, None).await, 404);
+    assert_eq!(
+        bob.api
+            .status(Method::PUT, &meta_path, Some(&title("Plan D")))
+            .await,
+        404
+    );
+    // The owner still can.
+    assert_eq!(alice.api.status::<()>(Method::DELETE, &a2, None).await, 204);
+}

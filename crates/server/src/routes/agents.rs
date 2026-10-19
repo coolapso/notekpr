@@ -108,13 +108,24 @@ pub async fn delete(
 ) -> AppResult<StatusCode> {
     who.require_human()?;
     load(&state, &who.user_id, &id).await?;
-    let vaults = repo::vaults::ids_of_member(&state.db, &id).await?;
-    let notes = repo::shares::of_user(&state.db, &id).await?;
-    let sessions = repo::sessions::unrevoked_ids(&state.db, &id).await?;
-    {
+    // What to revoke is read in the same transaction as the delete, so
+    // access granted meanwhile doesn't keep a live connection open.
+    let (vaults, notes, sessions) = {
         let _w = state.write_lock.lock().await;
-        repo::agents::delete(&state.db, &id, &who.user_id).await?;
-    }
+        let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
+        if repo::agents::get(&mut *tx, &who.user_id, &id)
+            .await?
+            .is_none()
+        {
+            return Err(AppError::NotFound);
+        }
+        let vaults = repo::vaults::ids_of_member(&mut *tx, &id).await?;
+        let notes = repo::shares::of_user(&mut *tx, &id).await?;
+        let sessions = repo::sessions::unrevoked_ids(&mut *tx, &id).await?;
+        repo::agents::delete(&mut *tx, &id, &who.user_id).await?;
+        tx.commit().await?;
+        (vaults, notes, sessions)
+    };
     // End its live connections now, not at the next session check.
     for v in vaults {
         state.hub.control(&id, Control::RevokeVault(v));

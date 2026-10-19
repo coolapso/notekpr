@@ -17,6 +17,7 @@ use coolpsonotes_core::protocol::{
     AddObjectShareRequest, INDEX_OBJECT_ID, ObjectEventKind, ObjectKeyUpdate, ObjectKeysResponse,
     ObjectMetaUpdate, ObjectShareInfo, Role, SharedNote, UpdateMemberRequest, UserEventKind,
 };
+use sqlx::SqliteExecutor;
 
 use crate::access;
 use crate::auth::Principal;
@@ -44,8 +45,8 @@ fn check_object(o: &str) -> AppResult<()> {
     Ok(())
 }
 
-async fn object_key_epoch(state: &AppState, v: &str, o: &str) -> AppResult<Option<i64>> {
-    match repo::shares::object_state(&state.db, v, o).await? {
+async fn object_key_epoch(db: impl SqliteExecutor<'_>, v: &str, o: &str) -> AppResult<Option<i64>> {
+    match repo::shares::object_state(db, v, o).await? {
         Some((Some(_), _)) => Err(AppError::NotFound),
         Some((None, e)) => Ok(e),
         None => Ok(None),
@@ -119,7 +120,9 @@ pub async fn set_key(
         return Err(bad("metadata must be encrypted with the new document key"));
     }
     let _w = state.write_lock.lock().await;
-    let vault_epoch = repo::vaults::key_epoch(&state.db, &v)
+    let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
+    access::require_owner(&mut *tx, &v, &who.user_id).await?;
+    let vault_epoch = repo::vaults::key_epoch(&mut *tx, &v)
         .await?
         .ok_or_else(|| AppError::Internal(anyhow::anyhow!("vault without a key epoch")))?;
     if epoch_of(&req.vault_envelope)? as i64 != vault_epoch {
@@ -127,7 +130,7 @@ pub async fn set_key(
             "wrap the document key with the vault's current key".into(),
         ));
     }
-    let current = object_key_epoch(&state, &v, &o).await?;
+    let current = object_key_epoch(&mut *tx, &v, &o).await?;
     match current {
         None => {
             if req.epoch != FIRST_DOC_EPOCH || req.chain_link.is_some() {
@@ -145,10 +148,12 @@ pub async fn set_key(
             }
             // Every existing update of the note must be covered, otherwise
             // recipients would receive content they cannot decrypt.
-            let last = repo::shares::last_update_seq(&state.db, &v, &o).await?;
+            let last = repo::shares::last_update_seq(&mut *tx, &v, &o).await?;
             // ...and it must be the newest snapshot of the note, or readers
             // would be handed an older one they can't use instead.
-            let newest = repo::shares::newest_snapshot_covers(&state.db, &v, &o).await?;
+            let newest = repo::shares::newest_snapshot_covers(&mut *tx, &v, &o).await?;
+            // Read on another connection, but nothing can commit while this
+            // transaction holds the write reservation.
             let head = sync::head_seq(&state.db, &v).await?;
             if snap.covers_seq < last.unwrap_or(0).max(newest.unwrap_or(0))
                 || snap.covers_seq > head
@@ -171,7 +176,7 @@ pub async fn set_key(
         }
     }
     // Envelopes must cover exactly the current recipients that have keys.
-    let need: HashSet<String> = repo::shares::recipient_ids_with_account_keys(&state.db, &v, &o)
+    let need: HashSet<String> = repo::shares::recipient_ids_with_account_keys(&mut *tx, &v, &o)
         .await?
         .into_iter()
         .collect();
@@ -188,7 +193,6 @@ pub async fn set_key(
     }
     let now = db::now();
     let epoch = req.epoch as i64;
-    let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
     repo::shares::ensure_object(&mut *tx, &v, &o, &who.user_id, now).await?;
     repo::keys::insert_document_key(
         &mut *tx,
@@ -275,19 +279,36 @@ pub async fn set_meta(
     Json(req): Json<ObjectMetaUpdate>,
 ) -> AppResult<StatusCode> {
     access::require_writer(&state.db, &v, &who.user_id).await?;
-    let Some(cur) = object_key_epoch(&state, &v, &o).await? else {
+    let Some(cur) = object_key_epoch(&state.db, &v, &o).await? else {
         return Err(AppError::NotFound);
     };
     if req.encrypted_meta.is_empty() || req.encrypted_meta.len() > MAX_META_BYTES {
         return Err(bad("invalid metadata"));
     }
     let e = epoch_of(&req.encrypted_meta)?;
-    if !is_doc_epoch(e) || e as i64 != cur {
-        return Err(AppError::StaleKey(
-            "encrypt the title with the note's current key".into(),
-        ));
+    let check_epoch = |cur: i64| {
+        if !is_doc_epoch(e) || e as i64 != cur {
+            Err(AppError::StaleKey(
+                "encrypt the title with the note's current key".into(),
+            ))
+        } else {
+            Ok(())
+        }
+    };
+    check_epoch(cur)?;
+    {
+        // Re-checked in the transaction: the writer may have been demoted,
+        // or the note's key rotated, since the checks above.
+        let _w = state.write_lock.lock().await;
+        let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
+        access::require_writer(&mut *tx, &v, &who.user_id).await?;
+        let Some(cur) = object_key_epoch(&mut *tx, &v, &o).await? else {
+            return Err(AppError::NotFound);
+        };
+        check_epoch(cur)?;
+        repo::shares::set_title(&mut *tx, &v, &o, &req.encrypted_meta).await?;
+        tx.commit().await?;
     }
-    repo::shares::set_title(&state.db, &v, &o, &req.encrypted_meta).await?;
     publish(&state, &v, &o, ObjectEventKind::MetaChanged);
     Ok(StatusCode::NO_CONTENT)
 }
@@ -299,7 +320,7 @@ pub async fn list(
     Path((v, o)): Path<(String, String)>,
 ) -> AppResult<Json<Vec<ObjectShareInfo>>> {
     access::member_role(&state.db, &v, &who.user_id).await?;
-    let cur = object_key_epoch(&state, &v, &o).await?.unwrap_or(0);
+    let cur = object_key_epoch(&state.db, &v, &o).await?.unwrap_or(0);
     let rows = repo::shares::recipients(&state.db, &v, &o, cur).await?;
     let mut out = Vec::with_capacity(rows.len());
     for r in rows {
@@ -341,7 +362,17 @@ pub async fn add(
         return Err(conflict("this person already has access through the vault"));
     }
     let _w = state.write_lock.lock().await;
-    let Some(cur) = object_key_epoch(&state, &v, &o).await? else {
+    let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
+    // Re-checked in the transaction: the person may have become a member
+    // since the check above (membership supersedes shares).
+    access::require_owner(&mut *tx, &v, &who.user_id).await?;
+    if access::member_role_opt(&mut *tx, &v, &req.user_id)
+        .await?
+        .is_some()
+    {
+        return Err(conflict("this person already has access through the vault"));
+    }
+    let Some(cur) = object_key_epoch(&mut *tx, &v, &o).await? else {
         return Err(conflict(
             "start sharing the note (set its document key) first",
         ));
@@ -357,7 +388,6 @@ pub async fn add(
         ));
     }
     let now = db::now();
-    let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
     if !repo::shares::insert(&mut *tx, &v, &o, &req.user_id, req.role, &who.user_id, now).await? {
         return Err(conflict("the note is already shared with this person"));
     }
@@ -407,8 +437,14 @@ pub async fn update(
     if req.role == Role::Owner {
         return Err(bad("notes can be shared as editor or viewer"));
     }
-    if repo::shares::set_role(&state.db, &v, &o, &u, req.role).await? == 0 {
-        return Err(AppError::NotFound);
+    {
+        let _w = state.write_lock.lock().await;
+        let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
+        access::require_owner(&mut *tx, &v, &who.user_id).await?;
+        if repo::shares::set_role(&mut *tx, &v, &o, &u, req.role).await? == 0 {
+            return Err(AppError::NotFound);
+        }
+        tx.commit().await?;
     }
     db::audit(
         &state.db,
@@ -425,6 +461,24 @@ pub async fn update(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// The vault owner may stop sharing with anyone; a recipient may remove the
+/// note from their own list.
+async fn may_remove(
+    db: impl SqliteExecutor<'_>,
+    v: &str,
+    o: &str,
+    u: &str,
+    caller: &str,
+) -> AppResult<()> {
+    if u != caller {
+        access::require_owner(db, v, caller).await
+    } else if access::share_role(db, v, o, caller).await?.is_none() {
+        Err(AppError::NotFound)
+    } else {
+        Ok(())
+    }
+}
+
 /// Stop sharing a note with someone (owner), or remove a note shared with
 /// you from your list. Owners should rotate the note's key afterwards.
 pub async fn remove(
@@ -432,17 +486,11 @@ pub async fn remove(
     who: Principal,
     Path((v, o, u)): Path<(String, String, String)>,
 ) -> AppResult<StatusCode> {
-    if u != who.user_id {
-        access::require_owner(&state.db, &v, &who.user_id).await?;
-    } else if access::share_role(&state.db, &v, &o, &who.user_id)
-        .await?
-        .is_none()
-    {
-        return Err(AppError::NotFound);
-    }
+    may_remove(&state.db, &v, &o, &u, &who.user_id).await?;
     {
         let _w = state.write_lock.lock().await;
         let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
+        may_remove(&mut *tx, &v, &o, &u, &who.user_id).await?;
         if repo::shares::delete(&mut *tx, &v, &o, &u).await? == 0 {
             return Err(if u == who.user_id {
                 AppError::NotFound

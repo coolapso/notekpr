@@ -3,6 +3,22 @@
 //! The rows come from [`crate::repo`]; the decisions are made here. Checks
 //! that read one row accept any executor, so a write can run them inside its
 //! own transaction.
+//!
+//! # Writes and changing permissions
+//!
+//! * Every change to memberships, roles or note shares runs under the
+//!   server's write lock, in a `BEGIN IMMEDIATE` transaction.
+//! * A write whose permission depends on them checks it again *inside* its
+//!   write transaction, reading through the transaction (`&mut *tx`); a
+//!   check before taking the lock only fails fast. So a write can't land
+//!   after the caller was removed or demoted, even with another process
+//!   writing the same database.
+//! * Where the written data isn't in that transaction (attachment bytes in
+//!   [`crate::blobs`]), the check is repeated under the write lock instead.
+//! * `sync::push` and `sync::create_snapshot` check under the write lock just
+//!   before their transaction. Within one process that is equivalent (every
+//!   change above holds the same lock); with several processes writing one
+//!   database those checks must move into the transaction too.
 
 use coolpsonotes_core::protocol::Role;
 use sqlx::SqliteExecutor;

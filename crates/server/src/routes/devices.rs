@@ -110,7 +110,10 @@ pub async fn activate(
         .verify()
         .map_err(|e| AppError::Internal(anyhow::anyhow!("stored key invalid: {e}")))?;
     let _w = state.write_lock.lock().await;
-    let (status, dev_pub) = repo::devices::public_key(&state.db, &id, &who.user_id)
+    // Checked and activated in one transaction, so a removal in between
+    // can't be undone by the activation.
+    let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
+    let (status, dev_pub) = repo::devices::public_key(&mut *tx, &id, &who.user_id)
         .await?
         .ok_or(AppError::NotFound)?;
     if status != "pending" {
@@ -123,7 +126,8 @@ pub async fn activate(
     public
         .verify_device_approval(&who.user_id, &id, &dev_pub, &req.signature)
         .map_err(|_| forbidden("invalid device approval signature"))?;
-    repo::devices::activate(&state.db, &id, &req.account_envelope, db::now()).await?;
+    repo::devices::activate(&mut *tx, &id, &req.account_envelope, db::now()).await?;
+    tx.commit().await?;
     drop(_w);
     db::audit(
         &state.db,

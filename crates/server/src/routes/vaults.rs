@@ -13,6 +13,7 @@ use coolpsonotes_core::protocol::{
     RotateKeysRequest, UpdateMemberRequest, UpdateVaultRequest, UserEventKind, VaultEventKind,
     VaultInfo, VaultKeysResponse,
 };
+use sqlx::SqliteExecutor;
 
 use crate::access;
 use crate::auth::Principal;
@@ -127,14 +128,24 @@ pub async fn update(
     Json(req): Json<UpdateVaultRequest>,
 ) -> AppResult<Json<VaultInfo>> {
     access::require_owner(&state.db, &v, &who.user_id).await?;
-    if let Some(meta) = &req.encrypted_meta {
-        if meta.is_empty() || meta.len() > MAX_META_BYTES {
-            return Err(bad("invalid vault metadata"));
-        }
-        repo::vaults::set_meta(&state.db, &v, meta, db::now()).await?;
+    if req
+        .encrypted_meta
+        .as_ref()
+        .is_some_and(|meta| meta.is_empty() || meta.len() > MAX_META_BYTES)
+    {
+        return Err(bad("invalid vault metadata"));
     }
-    if let Some(archived) = req.archived {
-        repo::vaults::set_archived(&state.db, &v, archived, db::now()).await?;
+    {
+        let _w = state.write_lock.lock().await;
+        let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
+        access::require_owner(&mut *tx, &v, &who.user_id).await?;
+        if let Some(meta) = &req.encrypted_meta {
+            repo::vaults::set_meta(&mut *tx, &v, meta, db::now()).await?;
+        }
+        if let Some(archived) = req.archived {
+            repo::vaults::set_archived(&mut *tx, &v, archived, db::now()).await?;
+        }
+        tx.commit().await?;
     }
     db::audit(
         &state.db,
@@ -158,12 +169,18 @@ pub async fn delete(
     Path(v): Path<String>,
 ) -> AppResult<StatusCode> {
     access::require_owner(&state.db, &v, &who.user_id).await?;
-    let members = repo::vaults::member_ids(&state.db, &v).await?;
-    let recipients = repo::shares::in_vault(&state.db, &v).await?;
-    {
+    // Who to notify is read in the same transaction as the delete, so
+    // nobody added meanwhile keeps a live subscription.
+    let (members, recipients) = {
         let _w = state.write_lock.lock().await;
-        repo::vaults::delete(&state.db, &v).await?;
-    }
+        let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
+        access::require_owner(&mut *tx, &v, &who.user_id).await?;
+        let members = repo::vaults::member_ids(&mut *tx, &v).await?;
+        let recipients = repo::shares::in_vault(&mut *tx, &v).await?;
+        repo::vaults::delete(&mut *tx, &v).await?;
+        tx.commit().await?;
+        (members, recipients)
+    };
     for (u, o) in recipients {
         state.hub.control(&u, Control::RevokeObject(v.clone(), o));
         notify_user(&state, &u, UserEventKind::SharesChanged);
@@ -219,8 +236,8 @@ pub async fn members(
     Ok(Json(out))
 }
 
-async fn current_epoch(state: &AppState, v: &str) -> AppResult<u32> {
-    let e = repo::vaults::key_epoch(&state.db, v)
+async fn current_epoch(db: impl SqliteExecutor<'_>, v: &str) -> AppResult<u32> {
+    let e = repo::vaults::key_epoch(db, v)
         .await?
         .ok_or(AppError::NotFound)?;
     Ok(e as u32)
@@ -247,21 +264,27 @@ pub async fn add_member(
     if target.is_agent() && target.owner_id.as_deref() != Some(who.user_id.as_str()) {
         return Err(AppError::NotFound);
     }
-    let epoch = current_epoch(&state, &v).await?;
-    if let Some(env) = &req.key_envelope
-        && (env.user_id != req.user_id
-            || env.epoch != epoch
-            || env.envelope.is_empty()
-            || env.envelope.len() > MAX_ENVELOPE_BYTES)
-    {
-        return Err(bad(
-            "key envelope must be for the new member at the current epoch",
-        ));
-    }
+    let check_envelope = |epoch: u32| match &req.key_envelope {
+        Some(env)
+            if env.user_id != req.user_id
+                || env.epoch != epoch
+                || env.envelope.is_empty()
+                || env.envelope.len() > MAX_ENVELOPE_BYTES =>
+        {
+            Err(bad(
+                "key envelope must be for the new member at the current epoch",
+            ))
+        }
+        _ => Ok(()),
+    };
+    check_envelope(current_epoch(&state.db, &v).await?)?;
     {
         let _w = state.write_lock.lock().await;
         let now = db::now();
         let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
+        // Re-checked in the transaction: the checks above ran before the lock.
+        access::require_owner(&mut *tx, &v, &who.user_id).await?;
+        check_envelope(current_epoch(&mut *tx, &v).await?)?;
         if !repo::vaults::insert_member(&mut *tx, &v, &req.user_id, req.role, &who.user_id, now)
             .await?
         {
@@ -320,8 +343,16 @@ pub async fn update_member(
     if u == who.user_id || req.role == Role::Owner {
         return Err(bad("the owner's role cannot be changed"));
     }
-    if repo::vaults::set_member_role(&state.db, &v, &u, req.role).await? == 0 {
-        return Err(AppError::NotFound);
+    {
+        // Under the write lock like every membership change, so a push or
+        // snapshot checked under it can't land after a demotion.
+        let _w = state.write_lock.lock().await;
+        let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
+        access::require_owner(&mut *tx, &v, &who.user_id).await?;
+        if repo::vaults::set_member_role(&mut *tx, &v, &u, req.role).await? == 0 {
+            return Err(AppError::NotFound);
+        }
+        tx.commit().await?;
     }
     db::audit(
         &state.db,
@@ -347,17 +378,22 @@ pub async fn remove_member(
     who: Principal,
     Path((v, u)): Path<(String, String)>,
 ) -> AppResult<StatusCode> {
-    let role = access::member_role(&state.db, &v, &who.user_id).await?;
-    if u == who.user_id {
-        if role == Role::Owner {
-            return Err(bad("the owner cannot leave; delete the vault instead"));
+    // Owners remove others; anyone but the owner may leave.
+    let may_remove = |role: Role| {
+        if u == who.user_id {
+            if role == Role::Owner {
+                return Err(bad("the owner cannot leave; delete the vault instead"));
+            }
+        } else if !role.can_manage() {
+            return Err(forbidden("only the vault owner can remove members"));
         }
-    } else if !role.can_manage() {
-        return Err(forbidden("only the vault owner can remove members"));
-    }
+        Ok(())
+    };
+    may_remove(access::member_role(&state.db, &v, &who.user_id).await?)?;
     {
         let _w = state.write_lock.lock().await;
         let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
+        may_remove(access::member_role(&mut *tx, &v, &who.user_id).await?)?;
         if repo::vaults::delete_member(&mut *tx, &v, &u).await? == 0 {
             return Err(AppError::NotFound);
         }
@@ -391,26 +427,29 @@ pub async fn grant_keys(
 ) -> AppResult<StatusCode> {
     who.require_human()?;
     access::require_owner(&state.db, &v, &who.user_id).await?;
-    let epoch = current_epoch(&state, &v).await?;
-    let members: HashSet<String> = repo::vaults::member_ids(&state.db, &v)
-        .await?
-        .into_iter()
-        .collect();
-    for e in &req.envelopes {
-        if e.epoch != epoch
-            || !members.contains(&e.user_id)
-            || e.envelope.is_empty()
-            || e.envelope.len() > MAX_ENVELOPE_BYTES
-        {
-            return Err(bad(
-                "envelopes must be for current members at the current epoch",
-            ));
-        }
-    }
     {
+        // Members and epoch are read in the write transaction, so a member
+        // removed (or a rotation) meanwhile can't get an envelope back.
         let _w = state.write_lock.lock().await;
         let now = db::now();
         let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
+        access::require_owner(&mut *tx, &v, &who.user_id).await?;
+        let epoch = current_epoch(&mut *tx, &v).await?;
+        let members: HashSet<String> = repo::vaults::member_ids(&mut *tx, &v)
+            .await?
+            .into_iter()
+            .collect();
+        for e in &req.envelopes {
+            if e.epoch != epoch
+                || !members.contains(&e.user_id)
+                || e.envelope.is_empty()
+                || e.envelope.len() > MAX_ENVELOPE_BYTES
+            {
+                return Err(bad(
+                    "envelopes must be for current members at the current epoch",
+                ));
+            }
+        }
         for e in &req.envelopes {
             repo::keys::put_vault_key(
                 &mut *tx,
@@ -462,11 +501,13 @@ pub async fn rotate_keys(
         return Err(bad("invalid rotation payload"));
     }
     let _w = state.write_lock.lock().await;
-    let epoch = current_epoch(&state, &v).await?;
+    let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
+    access::require_owner(&mut *tx, &v, &who.user_id).await?;
+    let epoch = current_epoch(&mut *tx, &v).await?;
     if req.new_epoch != epoch + 1 {
         return Err(conflict(format!("expected new epoch {}", epoch + 1)));
     }
-    let need: HashSet<String> = repo::vaults::member_ids_with_account_keys(&state.db, &v)
+    let need: HashSet<String> = repo::vaults::member_ids_with_account_keys(&mut *tx, &v)
         .await?
         .into_iter()
         .collect();
@@ -482,7 +523,6 @@ pub async fn rotate_keys(
         return Err(bad("invalid envelope"));
     }
     let now = db::now();
-    let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
     repo::keys::insert_vault_chain_link(&mut *tx, &v, req.new_epoch as i64, &req.chain_link)
         .await?;
     for e in &req.envelopes {

@@ -30,6 +30,10 @@ pub async fn put(
     }
     access::require_writer(&state.db, &v, &who.user_id).await?;
     let _w = state.write_lock.lock().await;
+    // The blob store may live outside the database, so the role is re-checked
+    // under the write lock (which every membership change takes) rather than
+    // in a transaction.
+    access::require_writer(&state.db, &v, &who.user_id).await?;
     match state.blobs.put(&v, &id, &who.user_id, &body).await? {
         Stored::AlreadyThere => Ok(StatusCode::OK),
         Stored::Created => {
@@ -68,6 +72,8 @@ pub async fn delete(
     who: Principal,
     Path((v, id)): Path<(String, String)>,
 ) -> AppResult<StatusCode> {
+    access::require_writer(&state.db, &v, &who.user_id).await?;
+    let _w = state.write_lock.lock().await;
     access::require_writer(&state.db, &v, &who.user_id).await?;
     state.blobs.delete(&v, &id).await?;
     Ok(StatusCode::NO_CONTENT)

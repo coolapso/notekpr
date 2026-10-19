@@ -82,6 +82,8 @@ def severe_logs(*browsers):
             m = l.get("message", "")
             if l.get("level") == "SEVERE" and "WebSocket connection" not in m and "ERR_CONNECTION_REFUSED" not in m:
                 out.append(m[:300])
+    for m in out:
+        print(f"    ! browser: {m}")
     return out
 
 

@@ -32,7 +32,8 @@ alternatives were considered. The wire protocol is in
 | `crates/core` | Everything security-sensitive or shared: cryptographic formats, key hierarchy, the CRDT document model (vault index + notes), protocol types, client engine logic (`engine.rs`), Markdown link/tag analysis, search, path rules. Compiled natively and to wasm32. |
 | `crates/sync` | The client sync engine both clients use (`coolpsonotes-sync`): what to upload next (unsent updates merged per object, held back when too large, size-bounded pushes), what acknowledgements and refusals mean, rollback recovery, snapshot readiness, splitting large edits. *Sans-IO*: clients do the networking, storage and timers and feed it what happened, so it is identical on wasm and tokio and tested without a network. |
 | `crates/server` | Headless sync server: OIDC relying party, sessions, OAuth device and client-credentials grants, users/devices/agents, vaults/members/key envelopes, the ordered encrypted log, snapshots, attachments, WebSocket fan-out, rate limiting, metrics, backup/restore. Works without the web client. |
-| `crates/web` | Browser client compiled to WebAssembly; served as static files by the server. Custom Markdown editor, all decryption in the browser. |
+| `crates/editor` | The live-preview Markdown editor: a pure-Rust document model (text with a line index, change sets, transactions, incrementally updated decorations, commands) tested natively, and a `contenteditable` DOM view tested in a headless browser. |
+| `crates/web` | Browser client compiled to WebAssembly; served as static files by the server. Hosts the editor, all decryption in the browser. |
 | `crates/client` | Desktop/CLI client: login (device flow), enrollment, encrypted local replica, live sync daemon with plaintext Markdown mirror, export/import, agent gateway (local HTTP API). |
 
 The server never links any code path that could decrypt content: it only
@@ -70,7 +71,7 @@ which is what makes each vault's live stream gapless and ordered.
 | Auth (CLI) | RFC 8628 device authorization grant served by our server | Loopback redirect (RFC 8252) | Works over SSH and headless machines; approval happens in the already signed-in web app. |
 | Auth (agents) | OAuth 2.0 client credentials (RFC 6749 §4.4), per-agent revocable secrets | Long-lived API keys | Standard, short-lived tokens (1 h), rotation without downtime. |
 | Web UI framework | Leptos 0.8 (CSR) | Yew, Dioxus | Fine-grained reactivity, small output, active project. |
-| Editor | Custom `contenteditable` editor (`crates/web/src/editor`) | CodeMirror 6, ProseMirror, Lexical | No JS dependencies allowed. Live-preview styling with the full source always in the DOM keeps caret mapping exact and CRDT edits precise. |
+| Editor | Custom `contenteditable` editor (`crates/editor`) with a CodeMirror-like model: transactions over a line-indexed buffer, line-granular re-rendering | CodeMirror 6, ProseMirror, Lexical | No JS dependencies allowed. Live-preview styling with the full source always in the DOM keeps caret mapping exact and CRDT edits precise. |
 | Markdown rendering | pulldown-cmark (CommonMark + GFM tables, task lists, strikethrough, footnotes, wiki links) | comrak | Fast, pure Rust, wasm-friendly. Raw HTML is rendered as text (no sanitizer needed). |
 | Search | Client-side scan with simple scoring over decrypted notes | Tantivy in WASM, server-side index | E2EE forbids server indexing; ordinary vaults (thousands of notes) search instantly with a scan. Tantivy is an option for large desktop vaults. |
 | Reverse proxy / TLS | Caddy example (automatic HTTPS); any proxy works | Built-in TLS | Keeps the server simple; TLS is mandatory in production (spec) and handled at the edge. |
@@ -229,11 +230,23 @@ has unsent edits to it, that person's client saves their version as a new
 
 * State lives in a non-reactive core (keys, replicas, socket) plus Leptos
   signals for rendering.
-* The editor renders every source character; syntax markers get a class that
-  CSS hides on lines without the caret (live preview). Typing is handled via
-  `beforeinput`; anything the browser does on its own (IME composition, mobile
-  keyboards) is reconciled by diffing DOM text against the model, so the DOM can
-  never silently diverge from what is synced.
+* The editor (`crates/editor`) renders every source character, one `div.ln`
+  per line; syntax markers get a class that CSS hides on lines without the
+  caret (live preview). Every edit is a transaction on the document model —
+  a change set (compose / transform / map positions), the selection after it,
+  its origin and undo grouping — and the view re-renders only the lines it
+  replaced plus those whose Markdown block changed (blocks are re-classified
+  incrementally from the edit until the parser state matches again). Typing
+  is handled via `beforeinput`; anything the browser does on its own (IME
+  composition, mobile keyboards, spellcheck) is seen by a `MutationObserver`,
+  read back line by line and rendered again, so the DOM can never silently
+  diverge from what is synced. During an IME composition the DOM is left to
+  the browser: remote text waits and is merged (operational transform) with
+  the composed text when it ends.
+* The editor's text buffer is a `String` with a line index rather than a rope:
+  the host (`edit(base, edits)`), the CRDT and remote updates all work on
+  whole texts, so a rope would be flattened on every keystroke anyway; an
+  edit costs one tail `memmove` and shifting later line starts.
 * Each browser tab keeps its own session (sessionStorage), seeded from the last
   login in local storage. In development mode this lets several people be
   signed in side by side in one browser.

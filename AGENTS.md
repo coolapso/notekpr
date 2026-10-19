@@ -70,11 +70,16 @@ crates/server   axum + SQLite. routes/ (REST) · ws.rs (WebSocket, subscriptions
                 sync.rs (encrypted log, snapshots, key checks) · access.rs (who may
                 do what) · repo/ (all other SQL) · hub.rs (EventBus: live events) ·
                 blobs.rs (attachment store) · auth.rs, oidc.rs · migrations/
+crates/editor   the live-preview Markdown editor. Pure model (native tests): text.rs
+                (source + line index) · change.rs (ChangeSet: compose, transform,
+                map) · state.rs (EditorState, Transaction) · decorations.rs
+                (incremental block classification) · syntax.rs · commands.rs · vim.rs.
+                DOM view: view/ (contenteditable, line patches, IME, native edits)
 crates/web      Leptos CSR → wasm32. state/ (Core + Ui in mod.rs; session, vaults,
                 shares, sync, presence, prefs, nav, offline) · cache.rs (IndexedDB
                 copy) · static/sw.js (service worker, only with offline use on) ·
-                actions.rs (user operations) · editor/ (contenteditable live-preview
-                editor, syntax.rs, vim.rs) · views/ · render.rs (reading view)
+                actions.rs (user operations; NoteHost = the editor's Host) ·
+                editor.rs (re-exports crates/editor) · views/ · render.rs (reading view)
 crates/client   `coolpsonotes` CLI: session.rs + livesync.rs (sync), mirror.rs
                 (Markdown files), gateway.rs, ops.rs, note_shares.rs
 tests/e2e       browser tests: suite.py, cross_client.py, wd.py (stdlib WebDriver)
@@ -98,6 +103,7 @@ task cli -- --profile alice ls Family   # run the CLI;  task cli:login DEV_USER=
 task fmt / task lint             # rustfmt; clippy with warnings as errors
 task test                        # all Rust tests
 task test:e2e -- -k sharing      # browser tests (chromium + chromedriver + python3)
+task test:editor                 # the editor's DOM view in headless Chromium (wasm-bindgen-test)
 task ci                          # what CI runs (CI also runs cargo-deny: task audit)
 ```
 
@@ -114,7 +120,10 @@ Without go-task, see the plain commands in the [Taskfile](Taskfile.yml) or
   - API, authorization, sync rules → `crates/server/tests/api.rs` (real
     client-side crypto against an in-process server)
   - CLI, mirror, gateway → `crates/client/tests/`
-  - editor syntax and rendering → unit tests in `crates/web` (run natively)
+  - editor model, syntax, commands → unit and property tests in
+    `crates/editor` (native); the editor's DOM behaviour (typing, IME,
+    selection, native edits) → `crates/editor/tests/browser.rs`
+    (`task test:editor`)
   - UI flows → `tests/e2e/suite.py` (several users = several browsers)
 - Docs follow the code: API or wire change → `docs/protocol.md`; anything
   about keys, trust or metadata → `docs/security.md`; new CLI commands →
@@ -156,9 +165,19 @@ Without go-task, see the plain commands in the [Taskfile](Taskfile.yml) or
   the editor, or anything that might call `with` again, while inside it —
   copy what you need out first.
 - The editor's DOM text must always equal the Markdown source (caret mapping
-  depends on it). Style with classes; hide syntax with CSS (`.mk`); anything
+  depends on it): the editor element holds one `div.ln` per line and
+  nothing else. Style with classes; hide syntax with CSS (`.mk`); anything
   that isn't source text must be `contenteditable="false"` with `data-w`.
   Tables are laid out with CSS `display: table-row/table-cell`, not widgets.
+- Editor changes go through transactions (`crates/editor/src/state.rs`):
+  build one in a command, dispatch it; the view re-renders only the lines it
+  replaced or whose block changed. Never re-render everything per keystroke.
+- Editor borrow rules (`crates/editor/src/view/mod.rs`): the state is only
+  borrowed inside `Editor::model(|st| …)`, whose closure is `'static` — it
+  computes, DOM and host calls happen after it returns. Every entry point is
+  an operation; calls made during one (from host callbacks) are queued and
+  events fired by our own DOM calls are deferred. No DOM changes while an
+  IME composition is open: remote text and refreshes wait for its end.
 - Leptos 0.8: share values between several closures with `StoredValue` or
   `Memo` instead of cloning chains; `impl IntoView` returns sometimes need
   `+ use<>`.

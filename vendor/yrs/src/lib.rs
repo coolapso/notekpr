@@ -1,3 +1,6 @@
+// coolpsonotes patch: built like a registry dependency (whose warnings cargo
+// caps), so its own warnings don't drown ours.
+#![allow(warnings)]
 #![doc(
     html_logo_url = "https://raw.githubusercontent.com/y-crdt/y-crdt/main/logo-yrs.svg",
     html_favicon_url = "https://raw.githubusercontent.com/y-crdt/y-crdt/main/logo-yrs.svg"

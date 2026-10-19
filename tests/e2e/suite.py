@@ -642,6 +642,17 @@ def test_editor_safety(env):
         time.sleep(0.5)
         t = editor_text(b)
         check(t.startswith("X other") and "10 km" in t, "native edits keep existing no-break spaces and plain-space new ones")
+        # Nodes the browser adds to the editor itself become lines of ours.
+        b.js("""
+            const ed = document.querySelector('.ed');
+            const d = document.createElement('div'); d.innerHTML = '<span style="color:red">stray</span>'; ed.appendChild(d);
+            ed.appendChild(document.createTextNode('loose'));
+            ed.dispatchEvent(new InputEvent('input', {bubbles: true, inputType: 'insertText'}));
+        """)
+        time.sleep(0.5)
+        check(editor_text(b).endswith("\nstray\nloose")
+              and b.js("return Array.from(document.querySelector('.ed').childNodes).every(n => n.nodeType === 1 && n.classList.contains('ln') && !n.querySelector('[style]'))"),
+              "after native edits the editor holds only its own lines")
         # Ticking a task in reading view changes its own box, not a later "[ ]".
         new_note(b, "Tasks", "")
         b.js("const dt = new DataTransfer(); dt.setData('text/plain', '- [x] buy [ ] boxes\\n> - [ ] quoted [x]'); document.querySelector('.ed').dispatchEvent(new ClipboardEvent('paste', {clipboardData: dt, bubbles: true, cancelable: true}));")

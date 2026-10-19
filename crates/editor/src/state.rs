@@ -1,0 +1,462 @@
+//! The editor state and transactions (pure Rust: no DOM, no host).
+//!
+//! Every change to the editor goes through [`EditorState::apply`] with a
+//! [`Transaction`]: changes to the text, the selection afterwards, where it
+//! came from and what the host must hear about it. `apply` returns an
+//! [`Applied`] that says exactly which lines were replaced and which must be
+//! drawn again; the view turns that into DOM work after the state is no
+//! longer borrowed.
+
+use std::cell::Cell;
+use std::ops::Range;
+use std::rc::{Rc, Weak};
+
+use crate::change::{Assoc, ChangeSet};
+use crate::decorations::Decorations;
+use crate::syntax::{self, Block};
+use crate::text::{LineSplice, Text};
+use crate::vim::Vim;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Mode {
+    Live,
+    Source,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct RemoteCursor {
+    pub name: String,
+    pub color: String,
+    pub anchor: usize,
+    pub head: usize,
+}
+
+/// Byte offsets; `anchor` stays put while `head` moves.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Selection {
+    pub anchor: usize,
+    pub head: usize,
+}
+
+impl Selection {
+    pub fn new(anchor: usize, head: usize) -> Selection {
+        Selection { anchor, head }
+    }
+
+    pub fn cursor(at: usize) -> Selection {
+        Selection::new(at, at)
+    }
+
+    pub fn from(&self) -> usize {
+        self.anchor.min(self.head)
+    }
+
+    pub fn to(&self) -> usize {
+        self.anchor.max(self.head)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.anchor == self.head
+    }
+
+    pub fn map(&self, c: &ChangeSet, assoc: Assoc) -> Selection {
+        Selection::new(c.map_pos(self.anchor, assoc), c.map_pos(self.head, assoc))
+    }
+
+    pub fn pair(&self) -> (usize, usize) {
+        (self.anchor, self.head)
+    }
+}
+
+/// Where a transaction comes from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Origin {
+    /// Typing, deleting, pasting.
+    Input,
+    /// Toolbar, shortcuts, vim, task boxes.
+    Command,
+    /// An edit the browser made in the DOM itself (IME, spellcheck, …).
+    Native,
+    /// The document changed elsewhere (another device, a rename, …).
+    Remote,
+    /// Undo / redo, already applied by the host.
+    History,
+}
+
+/// Undo grouping hooks: start a new undo group before and/or after the change.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Boundary {
+    pub before: bool,
+    pub after: bool,
+}
+
+/// What the host is told about a transaction's changes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Report {
+    /// The changes, made on the editor's text (local edits).
+    Changes,
+    /// Nothing: the host already has them (remote edits, undo).
+    Nothing,
+    /// Other changes on another base: a native edit moved over remote text
+    /// that arrived while it was being made (see [`merge_native`]).
+    Rebased { base: String, changes: ChangeSet },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Transaction {
+    pub changes: ChangeSet,
+    /// The selection afterwards; `None` maps the current one through the changes.
+    pub selection: Option<Selection>,
+    pub origin: Origin,
+    pub report: Report,
+    pub boundary: Boundary,
+    /// Bring the caret into view afterwards.
+    pub scroll: bool,
+}
+
+impl Transaction {
+    pub fn new(changes: ChangeSet, origin: Origin) -> Transaction {
+        let report = match origin {
+            Origin::Input | Origin::Command | Origin::Native => Report::Changes,
+            Origin::Remote | Origin::History => Report::Nothing,
+        };
+        Transaction {
+            changes,
+            selection: None,
+            origin,
+            report,
+            boundary: Boundary::default(),
+            scroll: false,
+        }
+    }
+
+    /// Only move the selection.
+    pub fn select(doc_len: usize, sel: Selection) -> Transaction {
+        Transaction::new(ChangeSet::empty(doc_len), Origin::Command).with_selection(sel)
+    }
+
+    pub fn with_selection(mut self, sel: Selection) -> Transaction {
+        self.selection = Some(sel);
+        self
+    }
+
+    pub fn with_boundary(mut self, before: bool, after: bool) -> Transaction {
+        self.boundary = Boundary { before, after };
+        self
+    }
+
+    pub fn scrolling(mut self) -> Transaction {
+        self.scroll = true;
+        self
+    }
+
+    /// This transaction followed by `next` (whose changes apply to this
+    /// one's result), as one.
+    pub fn then(self, next: Transaction) -> Transaction {
+        let selection = next
+            .selection
+            .or_else(|| self.selection.map(|s| s.map(&next.changes, Assoc::After)));
+        Transaction {
+            changes: self.changes.compose(&next.changes),
+            selection,
+            origin: self.origin,
+            report: self.report,
+            boundary: Boundary {
+                before: self.boundary.before,
+                after: next.boundary.after,
+            },
+            scroll: self.scroll || next.scroll,
+        }
+    }
+
+    pub fn is_local(&self) -> bool {
+        self.report != Report::Nothing
+    }
+}
+
+/// What a transaction did.
+#[derive(Clone, Debug)]
+pub struct Applied {
+    pub changes: ChangeSet,
+    /// Replaced lines, in document order.
+    pub splices: Vec<LineSplice>,
+    /// Lines of the new document to draw again (spliced lines included).
+    pub redraw: Vec<Range<usize>>,
+    pub selection: Selection,
+    pub origin: Origin,
+    pub report: Report,
+    pub boundary: Boundary,
+    pub scroll: bool,
+}
+
+/// A position that follows the changes made after it was taken (where an
+/// uploaded file's link goes once the upload finished).
+#[derive(Clone, Debug)]
+pub struct Anchor {
+    pos: Rc<Cell<usize>>,
+    owner: usize,
+}
+
+impl Anchor {
+    pub fn pos(&self) -> usize {
+        self.pos.get()
+    }
+
+    pub(crate) fn owner(&self) -> usize {
+        self.owner
+    }
+}
+
+pub struct EditorState {
+    doc: Text,
+    deco: Decorations,
+    sel: Selection,
+    pub readonly: bool,
+    pub mode: Mode,
+    pub vim: Option<Vim>,
+    cursors: Vec<RemoteCursor>,
+    anchors: Vec<Weak<Cell<usize>>>,
+    id: usize,
+}
+
+impl EditorState {
+    pub fn new(text: String) -> EditorState {
+        static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(1);
+        let doc = Text::new(text);
+        EditorState {
+            deco: Decorations::new(&doc),
+            doc,
+            sel: Selection::default(),
+            readonly: false,
+            mode: Mode::Live,
+            vim: None,
+            cursors: vec![],
+            anchors: vec![],
+            id: NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+        }
+    }
+
+    pub fn doc(&self) -> &Text {
+        &self.doc
+    }
+
+    pub fn text(&self) -> &str {
+        self.doc.as_str()
+    }
+
+    pub fn blocks(&self) -> &[Block] {
+        self.deco.blocks()
+    }
+
+    pub fn block(&self, line: usize) -> &Block {
+        self.deco.block(line)
+    }
+
+    /// The document as the Markdown helpers take it.
+    pub fn syntax_doc(&self) -> syntax::Doc<'_> {
+        syntax::Doc {
+            text: self.doc.as_str(),
+            starts: self.doc.starts(),
+            blocks: self.deco.blocks(),
+        }
+    }
+
+    pub fn selection(&self) -> Selection {
+        self.sel
+    }
+
+    /// Set the selection (clamped onto character boundaries).
+    pub fn set_selection(&mut self, sel: Selection) {
+        self.sel = Selection::new(self.doc.floor(sel.anchor), self.doc.floor(sel.head));
+    }
+
+    pub fn cursors(&self) -> &[RemoteCursor] {
+        &self.cursors
+    }
+
+    pub fn set_cursors(&mut self, cursors: Vec<RemoteCursor>) {
+        self.cursors = cursors;
+    }
+
+    /// A key for vim mode (`None`: vim is off, or the key is not vim's).
+    pub fn vim_key(
+        &mut self,
+        key: &str,
+        mods: crate::vim::Mods,
+        sel: (usize, usize),
+    ) -> Option<crate::vim::Action> {
+        let EditorState { doc, vim, .. } = self;
+        vim.as_mut()?.key(key, mods, doc.as_str(), sel)
+    }
+
+    /// Track `at` across later changes.
+    pub fn anchor(&mut self, at: usize) -> Anchor {
+        let pos = Rc::new(Cell::new(self.doc.floor(at)));
+        self.anchors.retain(|w| w.strong_count() > 0);
+        self.anchors.push(Rc::downgrade(&pos));
+        Anchor {
+            pos,
+            owner: self.id,
+        }
+    }
+
+    /// Where `a` is now, if it was taken in this state.
+    pub fn anchor_pos(&self, a: &Anchor) -> Option<usize> {
+        (a.owner() == self.id).then(|| self.doc.floor(a.pos()))
+    }
+
+    pub fn apply(&mut self, tr: Transaction) -> Applied {
+        let Transaction {
+            mut changes,
+            selection,
+            origin,
+            report,
+            boundary,
+            scroll,
+        } = tr;
+        if changes.base_len() != self.doc.len() {
+            // A change for another text (a bug): drop it rather than corrupt ours.
+            debug_assert!(false, "change for a text of another length");
+            changes = ChangeSet::empty(self.doc.len());
+        }
+        let sel = selection.unwrap_or_else(|| self.sel.map(&changes, Assoc::After));
+        let splices = self.doc.apply(&changes);
+        let redraw = self.deco.update(&self.doc, &splices);
+        if !changes.is_empty() {
+            for c in &mut self.cursors {
+                c.anchor = changes.map_pos(c.anchor, Assoc::Before);
+                c.head = changes.map_pos(c.head, Assoc::Before);
+            }
+            self.anchors.retain(|w| match w.upgrade() {
+                Some(p) => {
+                    p.set(changes.map_pos(p.get(), Assoc::Before));
+                    true
+                }
+                None => false,
+            });
+        }
+        self.set_selection(sel);
+        Applied {
+            changes,
+            splices,
+            redraw,
+            selection: self.sel,
+            origin,
+            report,
+            boundary,
+            scroll,
+        }
+    }
+}
+
+/// A change the browser made natively on `base` (the editor's text), merged
+/// with `remote`, a newer text of the document that arrived meanwhile (an
+/// IME composition must not be disturbed, so remote text waits for its end).
+///
+/// Returns the transaction that takes the editor from `base` to the merged
+/// text and tells the host the native change as made on `remote`, and the
+/// change from what the DOM shows (`base` + native) to the merged text (to
+/// map the DOM's caret).
+pub fn merge_native(
+    base: &str,
+    native: ChangeSet,
+    remote: Option<String>,
+) -> (Transaction, ChangeSet) {
+    match remote {
+        Some(r) if r != base => {
+            let theirs = ChangeSet::diff(base, &r);
+            // Where both inserted at the same place, their text goes first.
+            let (theirs_after, mine) = theirs.transform(&native);
+            let mut tr = Transaction::new(native.compose(&theirs_after), Origin::Native);
+            tr.report = Report::Rebased {
+                base: r,
+                changes: mine,
+            };
+            (tr, theirs_after)
+        }
+        _ => {
+            let after = ChangeSet::empty(native.target_len());
+            (Transaction::new(native, Origin::Native), after)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn transactions_update_selection_cursors_and_anchors() {
+        let mut st = EditorState::new("hello world".into());
+        st.set_selection(Selection::cursor(6));
+        st.set_cursors(vec![RemoteCursor {
+            name: "b".into(),
+            color: "red".into(),
+            anchor: 6,
+            head: 6,
+        }]);
+        let a = st.anchor(6);
+        let applied = st.apply(Transaction::new(
+            ChangeSet::replace(11, 6, 6, "big "),
+            Origin::Remote,
+        ));
+        // The local caret moves past text inserted at it; others stay before it.
+        assert_eq!(applied.selection, Selection::cursor(10));
+        assert_eq!(st.cursors()[0].head, 6);
+        assert_eq!(st.anchor_pos(&a), Some(6));
+        assert_eq!(st.text(), "hello big world");
+        assert_eq!(applied.report, Report::Nothing);
+        // An anchor of another editor is not valid here.
+        let other = EditorState::new(String::new()).anchor(0);
+        assert_eq!(st.anchor_pos(&other), None);
+    }
+
+    #[test]
+    fn composed_transactions() {
+        let t = Transaction::new(ChangeSet::replace(3, 3, 3, "d"), Origin::Input)
+            .with_boundary(true, false)
+            .then(
+                Transaction::new(ChangeSet::replace(4, 0, 0, ">"), Origin::Input)
+                    .with_boundary(false, true),
+            );
+        let mut st = EditorState::new("abc".into());
+        st.set_selection(Selection::cursor(3));
+        let applied = st.apply(t);
+        assert_eq!(st.text(), ">abcd");
+        assert_eq!(
+            applied.boundary,
+            Boundary {
+                before: true,
+                after: true
+            }
+        );
+        assert_eq!(applied.selection, Selection::cursor(5));
+    }
+
+    #[test]
+    fn native_edits_merge_with_waiting_remote_text() {
+        let base = "Shopping: milk\neggs";
+        let native = ChangeSet::diff(base, "かなShopping: milk\neggs");
+        let remote = "Shopping: milk\neggs remote".to_string();
+        let (tr, after) = merge_native(base, native.clone(), Some(remote.clone()));
+        let merged = tr.changes.apply(base).unwrap();
+        assert_eq!(merged, "かなShopping: milk\neggs remote");
+        let Report::Rebased { base: b, changes } = &tr.report else {
+            panic!("not rebased")
+        };
+        assert_eq!(b, &remote);
+        assert_eq!(changes.apply(&remote).unwrap(), merged);
+        // From what the DOM shows to the merged text.
+        let dom = native.apply(base).unwrap();
+        assert_eq!(after.apply(&dom).unwrap(), merged);
+        // Without remote text (or an unchanged one) it is the native change.
+        assert_eq!(
+            merge_native(base, native.clone(), None).0.report,
+            Report::Changes
+        );
+        assert_eq!(
+            merge_native(base, native, Some(base.into())).0.report,
+            Report::Changes
+        );
+    }
+}

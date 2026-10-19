@@ -16,11 +16,13 @@ jobs:
       - name: Formatting
         run: cargo fmt --all -- --check
       - name: Lint
-        run: cargo clippy --locked -p coolpsonotes-core -p coolpsonotes-server -p coolpsonotes-client --all-targets -- -D warnings
+        run: cargo clippy --locked -p coolpsonotes-core -p coolpsonotes-server -p coolpsonotes-client -p coolpsonotes-editor --all-targets -- -D warnings
       - name: Lint the browser client
-        run: cargo clippy --locked -p coolpsonotes-web --target wasm32-unknown-unknown -- -D warnings -A clippy::type_complexity
+        run: |
+          cargo clippy --locked -p coolpsonotes-web --target wasm32-unknown-unknown -- -D warnings -A clippy::type_complexity
+          cargo clippy --locked -p coolpsonotes-editor --target wasm32-unknown-unknown --all-targets -- -D warnings
       - name: Unit and integration tests
-        run: cargo test --locked -p coolpsonotes-core -p coolpsonotes-server -p coolpsonotes-client -p coolpsonotes-web
+        run: cargo test --locked -p coolpsonotes-core -p coolpsonotes-server -p coolpsonotes-client -p coolpsonotes-editor -p coolpsonotes-web
       - name: Core builds for the browser
         run: cargo build --locked -p coolpsonotes-core --target wasm32-unknown-unknown
       - name: Install wasm-bindgen
@@ -34,6 +36,10 @@ jobs:
           sudo apt-get update && sudo apt-get install -y chromium-driver || true
           CPN_CHROME=$(command -v chromium || command -v chromium-browser || command -v google-chrome) \
             tests/e2e/run.sh
+      - name: Editor browser tests (wasm-bindgen-test)
+        run: |
+          CHROMEDRIVER=$(command -v chromedriver) CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=wasm-bindgen-test-runner \
+            cargo test --locked -p coolpsonotes-editor --target wasm32-unknown-unknown --test browser
 
   supply-chain:
     runs-on: ubuntu-latest

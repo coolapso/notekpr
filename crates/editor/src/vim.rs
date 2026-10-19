@@ -1,10 +1,12 @@
 //! Optional Vim keybindings (normal, insert and visual modes with the most
 //! common motions and operators). Off by default; enabled in settings.
+//!
+//! Pure: keys come in as `KeyboardEvent.key` strings plus modifiers, actions
+//! go out; the view turns them into transactions.
 
-use web_sys::KeyboardEvent;
+use crate::text::floor_char;
 
-use super::floor_char;
-
+#[derive(Debug, PartialEq, Eq)]
 pub enum Action {
     Consumed,
     Move(usize, usize),
@@ -19,11 +21,11 @@ pub enum Action {
     Yank(String),
 }
 
-#[derive(Clone, Copy, Default)]
-struct Mods {
-    ctrl: bool,
-    meta: bool,
-    alt: bool,
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Mods {
+    pub ctrl: bool,
+    pub meta: bool,
+    pub alt: bool,
 }
 
 #[derive(Default)]
@@ -187,13 +189,8 @@ impl Vim {
         })
     }
 
-    pub fn key(&mut self, ev: &KeyboardEvent, t: &str, sel: (usize, usize)) -> Option<Action> {
-        let mods = Mods {
-            ctrl: ev.ctrl_key(),
-            meta: ev.meta_key(),
-            alt: ev.alt_key(),
-        };
-        self.handle(ev.key(), mods, t, sel)
+    pub fn key(&mut self, key: &str, mods: Mods, t: &str, sel: (usize, usize)) -> Option<Action> {
+        self.handle(key.to_string(), mods, t, sel)
     }
 
     /// Handle one key. Offsets kept between keys (the visual-mode anchor)

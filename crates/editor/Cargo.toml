@@ -1,0 +1,34 @@
+[package]
+name = "coolpsonotes-editor"
+description = "Live-preview Markdown editor of the coolpsonotes web client: a document model (pure Rust) and a contenteditable DOM view"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+coolpsonotes-core = { path = "../core" }
+wasm-bindgen = "=0.2.128"
+js-sys = "0.3"
+
+[dependencies.web-sys]
+version = "0.3"
+features = [
+  "Window", "Document", "Element", "HtmlElement", "HtmlCollection", "Node", "NodeList", "Text", "Range",
+  "Selection", "Event", "EventTarget", "KeyboardEvent", "MouseEvent", "InputEvent", "ClipboardEvent",
+  "DataTransfer", "DragEvent", "File", "FileList", "DomRect", "CssStyleDeclaration", "ScrollIntoViewOptions",
+  "ScrollLogicalPosition", "DomTokenList", "StaticRange", "TreeWalker", "NodeFilter", "CompositionEvent",
+  "MutationObserver", "MutationObserverInit", "MutationRecord", "CaretPosition", "Navigator", "Clipboard",
+  "HtmlTemplateElement", "DocumentFragment",
+]
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+proptest = { version = "1", default-features = false, features = ["std"] }
+
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+wasm-bindgen-test = "0.3"
+wasm-bindgen-futures = "0.4"
+web-sys = { version = "0.3", features = [
+  "InputEventInit", "KeyboardEventInit", "CompositionEventInit", "DragEventInit", "MouseEventInit",
+  "ClipboardEventInit", "EventInit", "DataTransferItemList", "DataTransferItem", "Performance",
+] }

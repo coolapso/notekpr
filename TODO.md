@@ -20,7 +20,8 @@ phase has an *interim* fix and the track owns the real one.
 Phases 1–3 are done, and Phase 4 except the OS keyring for CLI secrets
 [C-H9] (deferred). Redesign tracks: R5 mostly (encrypted IndexedDB copy,
 per-tab unsent changes, opt-in offline start; shared notes not cached yet),
-R6 started (`state/` split),
+R6 started (`state/` split; the editor is its own crate with a document
+model, transactions and line-level rendering),
 R7 done apart from a nightly fuzz job. R1, R2 and R3 are next, each in its
 own session.
 
@@ -247,7 +248,9 @@ Before trusting the Markdown mirror and the CLI with real notes.
 - [x] **IME composition is applied against a stale text base** [W-H2] —
       interim: in `NoteHost::edit`, resync instead of applying when the CRDT
       text differs from the editor's base (prevents misplaced text and
-      panics). Real fix in R6.
+      panics). Real fix in R6 (done: the editor merges the composition with
+      the text that waited for it by operational transform, `merge_native`;
+      the host guard stays, now with the general `rebase`).
 - [x] A rejected batch leaves the rest of its updates unsent [W-M3] —
       `resend_pending` after `drop_rejected` and `apply_purge`.
 - [x] `persist_pending` writes an empty list if one entry fails to encrypt
@@ -487,12 +490,45 @@ with SQLite; no SQL-dialect abstraction.
       types in `state/mod.rs`) — mechanical, no behaviour change.
 - [ ] Then turn them into services with Leptos contexts/stores instead of one
       global `RefCell` — no more re-entrancy footgun.
-- [ ] The editor holds its own `RefCell` state across DOM calls that can fire
+- [x] The editor holds its own `RefCell` state across DOM calls that can fire
       events synchronously (one such panic fixed: `apply_mode_classes`);
       the editor crate's document model should make that impossible.
-- [ ] Move the editor into its own crate with a document model (rope +
+      (done: the state is only borrowed in `Editor::model`, whose closure is
+      `'static` and so can't reach DOM or host; entry points are operations,
+      re-entrant calls are queued, events fired by our DOM calls deferred)
+- [x] Move the editor into its own crate with a document model (rope +
       transactions + decorations) instead of per-line re-render and DOM
       diffing; browser-level tests (`wasm-bindgen-test`).
+      (done: `crates/editor` — a `String` with a line index rather than a
+      rope, see its `text.rs`; OT change sets; incremental block
+      classification; the view patches only replaced or re-classified lines;
+      20 browser tests, `task test:editor`. Typing on a 5,000-line note,
+      `tests/e2e/perf.py`, median per key: release 20 → 1.5 ms, Enter
+      25 → 1.9 ms; dev build 50 → 2.4 ms)
+- [x] IME rebasing [W-H2, real fix] — see Phase 2.
+- [x] Full rebuild during composition [W-M6] — no DOM changes while a
+      composition is open (remote text and refreshes wait); at its end only
+      the touched lines are read back and rendered.
+- [x] Re-render per keystroke on large notes [W-M8, editor part] — only the
+      changed lines are styled and rendered. (Still open: index rebuilt per
+      lookup, backlinks recomputed, no attachment failure cache.)
+- [x] Stray DOM nodes after native edits [W-L2] — a `MutationObserver` finds
+      the lines the browser touched; they are rendered again even when their
+      text is unchanged; nodes it added to the editor itself are replaced by
+      line elements of ours (their text kept). E2e check in
+      `test_editor_safety`.
+- [x] Safari composition input types [W-L3] — `insertFromComposition` /
+      `deleteCompositionText` (and unknown input right after
+      `compositionend`) are left to the browser, keyCode 229 keys ignored;
+      the composition is read back once it is over.
+- [x] Leaked closures, listeners and intervals [W-L5, editor part] —
+      `destroy` (and `Drop`) remove listeners, disconnect the observer and
+      cancel the frame and composition timers; nothing keeps the editor
+      alive (browser test). (Still open outside the editor: `pick_files`
+      forgets its closure; the WebSocket watchdog `set_interval` per socket.)
+- [x] Drag-and-drop at the drop point [W-L7] — text lands at the drop point
+      (moved, when dragged within the note); files' links go there too, kept
+      in place across edits made during the upload (`Editor::anchor`).
 - Resolves: IME composition rebasing [W-H2, real fix]; full rebuild during
   composition [W-M6]; performance on large notes and vaults (re-render per
   keystroke, index rebuilt per lookup, backlinks recomputed, no attachment

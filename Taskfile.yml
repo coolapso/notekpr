@@ -129,6 +129,7 @@ tasks:
     method: none
     sources:
       - crates/web/**/*
+      - crates/editor/**/*.rs
       - crates/core/**/*.rs
     cmds:
       - task: build:web:dev
@@ -186,7 +187,7 @@ tasks:
       - cargo test -p coolpsonotes-client
 
   test:web:
-    desc: Editor syntax engine, safe rendering, zip
+    desc: Safe rendering, zip (natively)
     deps: [rust]
     cmds:
       - cargo test -p coolpsonotes-web
@@ -196,6 +197,21 @@ tasks:
     deps: [rust]
     cmds:
       - fuzz/run.sh {{.CLI_ARGS}}
+
+  test:editor:
+    desc: "The editor: its model natively, then its DOM view in headless Chromium (wasm-bindgen-test; needs chromedriver); `task test:editor -- --nocapture` shows timings"
+    deps: [rust]
+    env:
+      CARGO_TARGET_DIR: "{{.WEB_TARGET_DIR}}"
+      CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER: wasm-bindgen-test-runner
+    preconditions:
+      - sh: '[ "$(wasm-bindgen-test-runner --version 2>/dev/null | awk ''{print $2}'')" = "{{.WASM_BINDGEN_VERSION}}" ]'
+        msg: "wasm-bindgen-test-runner {{.WASM_BINDGEN_VERSION}} is needed (it comes with the wasm-bindgen CLI: cargo install wasm-bindgen-cli --version {{.WASM_BINDGEN_VERSION}} --locked)"
+      - sh: command -v chromedriver
+        msg: "chromedriver is needed (Arch: chromium)"
+    cmds:
+      - cargo test -p coolpsonotes-editor
+      - CHROMEDRIVER="${CHROMEDRIVER:-$(command -v chromedriver)}" cargo test -p coolpsonotes-editor --target wasm32-unknown-unknown --test browser {{.CLI_ARGS}}
 
   test:e2e:
     desc: "Headless browser tests and browser ↔ CLI test (needs chromium + chromedriver); filter with `task test:e2e -- -k collab`"
@@ -219,8 +235,9 @@ tasks:
     desc: Clippy on every crate (warnings are errors), including the web client for wasm32
     deps: [rust]
     cmds:
-      - cargo clippy --locked -p coolpsonotes-core -p coolpsonotes-server -p coolpsonotes-client --all-targets -- -D warnings
+      - cargo clippy --locked -p coolpsonotes-core -p coolpsonotes-server -p coolpsonotes-client -p coolpsonotes-editor --all-targets -- -D warnings
       - CARGO_TARGET_DIR={{.WEB_TARGET_DIR}} cargo clippy --locked -p coolpsonotes-web --target wasm32-unknown-unknown -- -D warnings -A clippy::type_complexity
+      - CARGO_TARGET_DIR={{.WEB_TARGET_DIR}} cargo clippy --locked -p coolpsonotes-editor --target wasm32-unknown-unknown --all-targets -- -D warnings
 
   check:wasm:
     desc: Make sure the core crate still builds for the browser
@@ -243,6 +260,7 @@ tasks:
       - task: lint
       - task: test
       - task: check:wasm
+      - task: test:editor
       - task: test:e2e
 
   # ------------------------------------------------------------------ website

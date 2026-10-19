@@ -11,6 +11,7 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 coolpsonotes-core = { path = "../core" }
+coolpsonotes-editor = { path = "../editor" }
 coolpsonotes-sync = { path = "../sync" }
 leptos = { version = "0.8", features = ["csr"] }
 wasm-bindgen = "=0.2.128"

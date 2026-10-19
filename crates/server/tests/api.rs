@@ -1642,3 +1642,65 @@ async fn individual_note_sharing() {
     let mine: Vec<SharedNote> = carol.api.get("/shares").await;
     assert!(mine.is_empty());
 }
+
+#[tokio::test]
+async fn removed_members_lose_per_note_subscriptions() {
+    let srv = start().await;
+    let mut alice = new_user(&srv.base, "alice").await;
+    let mut bob = new_user(&srv.base, "bob").await;
+    let v = alice.create_vault("Family").await;
+    alice.share(&v, &bob.id, Role::Editor).await.unwrap();
+    bob.load_keys(&v).await.unwrap();
+    let note = NoteDoc::new();
+    let u = note.set_text("hello").unwrap();
+    alice
+        .push(&v, vec![alice.encrypt_update(&v, "n1", &u)])
+        .await
+        .unwrap();
+
+    // As a member, Bob subscribes to a single note of the vault.
+    let mut wb = Ws::connect(&srv.ws, bob.api.token.as_ref().unwrap()).await;
+    wb.send(&ClientMessage::Subscribe {
+        vault_id: v.clone(),
+        since: None,
+        object_id: Some("n1".into()),
+    })
+    .await;
+    wb.until(|m| matches!(m, ServerMessage::Synced { .. }).then_some(()))
+        .await;
+
+    // Removing him from the vault ends that subscription as well.
+    assert_eq!(
+        alice
+            .api
+            .status::<()>(
+                Method::DELETE,
+                &format!("/vaults/{v}/members/{}", bob.id),
+                None
+            )
+            .await,
+        204
+    );
+    wb.until(|m| {
+        matches!(
+            m,
+            ServerMessage::ObjectEvent {
+                event: ObjectEventKind::AccessRevoked,
+                ..
+            }
+        )
+        .then_some(())
+    })
+    .await;
+    let later = note.set_text("hello, written after Bob left").unwrap();
+    alice
+        .push(&v, vec![alice.encrypt_update(&v, "n1", &later)])
+        .await
+        .unwrap();
+    let update = tokio::time::timeout(
+        std::time::Duration::from_millis(500),
+        wb.until(|m| matches!(m, ServerMessage::Update { .. }).then_some(())),
+    )
+    .await;
+    assert!(update.is_err(), "a removed member still received an update");
+}

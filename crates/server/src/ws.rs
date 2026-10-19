@@ -113,6 +113,7 @@ async fn connection(socket: WebSocket, state: AppState) {
         conn_id,
         out: out_tx.clone(),
         subs: HashMap::new(),
+        via_membership: Default::default(),
         announced: Default::default(),
         awareness: Bucket::new(30.0, 60.0),
     };
@@ -137,7 +138,16 @@ async fn connection(socket: WebSocket, state: AppState) {
             },
             Some(c) = control.recv() => match c {
                 Control::RevokeVault(v) => {
-                    // Individually shared notes of the vault stay subscribed.
+                    // Per-note subscriptions opened as a member end too;
+                    // those of notes shared individually stay.
+                    let member_notes: Vec<String> = conn.via_membership.iter().filter(|(x, _)| *x == v).map(|(_, o)| o.clone()).collect();
+                    for o in member_notes {
+                        conn.via_membership.remove(&(v.clone(), o.clone()));
+                        if let Some(h) = conn.subs.remove(&(v.clone(), Some(o.clone()))) {
+                            h.abort();
+                            conn.send(ServerMessage::ObjectEvent { vault_id: v.clone(), object_id: o, event: ObjectEventKind::AccessRevoked }).await;
+                        }
+                    }
                     if let Some(h) = conn.subs.remove(&(v.clone(), None)) {
                         h.abort();
                         conn.send(ServerMessage::VaultEvent { vault_id: v, event: VaultEventKind::AccessRevoked }).await;
@@ -203,6 +213,9 @@ struct Conn {
     out: mpsc::Sender<Out>,
     /// Subscriptions keyed by (vault, note): `None` = the whole vault.
     subs: HashMap<(String, Option<String>), JoinHandle<()>>,
+    /// Per-note subscriptions granted through vault membership (not an
+    /// individual share); they end when the membership does.
+    via_membership: std::collections::HashSet<(String, String)>,
     /// Notes this connection announced presence on (to say goodbye there too).
     announced: std::collections::HashSet<(String, String)>,
     awareness: Bucket,
@@ -259,6 +272,9 @@ impl Conn {
                 if let Some(h) = self.subs.remove(&key) {
                     h.abort();
                 }
+                if let Some(o) = &object_id {
+                    self.via_membership.remove(&(vault_id.clone(), o.clone()));
+                }
                 if self.subs.len() >= MAX_SUBSCRIPTIONS {
                     self.send(error_msg(
                         &AppError::BadRequest("too many subscriptions".into()),
@@ -266,6 +282,9 @@ impl Conn {
                     ))
                     .await;
                     return true;
+                }
+                if let (Some(o), true) = (&object_id, member) {
+                    self.via_membership.insert((vault_id.clone(), o.clone()));
                 }
                 let rx = self.state.hub.subscribe(&vault_id);
                 let task = tokio::spawn(forward(
@@ -284,6 +303,9 @@ impl Conn {
                 vault_id,
                 object_id,
             } => {
+                if let Some(o) = &object_id {
+                    self.via_membership.remove(&(vault_id.clone(), o.clone()));
+                }
                 if let Some(h) = self.subs.remove(&(vault_id, object_id)) {
                     h.abort();
                 }

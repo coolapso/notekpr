@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>coolpsonotes</title>
+<meta name="description" content="Self-hosted Markdown notes with live collaboration and end-to-end encryption. Use the web app or your own editor; the server only stores ciphertext.">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="site-head">
+  <div class="wrap">
+    <a class="brand" href="./" aria-label="coolpsonotes home">
+      <svg viewBox="0 0 64 64" aria-hidden="true"><rect width="64" height="64" rx="14" style="fill: var(--accent)"/><path d="M32 12 50 32 32 52 14 32Z" style="fill: var(--bg)"/><path d="M32 22 42 32 32 42 22 32Z" style="fill: var(--accent)"/></svg>
+      coolpsonotes
+    </a>
+    <nav class="site-nav" aria-label="Main">
+      <a href="./" aria-current="page">Home</a>
+      <a href="features.html">Features</a>
+      <a href="security.html">Security</a>
+      <a href="self-host.html">Self-host</a>
+      <a href="https://github.com/coolapso/coolpsonotes">Source</a>
+    </nav>
+  </div>
+</header>
+
+<main class="md">
+  <section class="hero">
+    <div class="wrap hero-grid">
+      <div class="hero-copy">
+        <p class="eyebrow">Self-hosted · end-to-end encrypted · plain Markdown</p>
+        <h1>Write in Markdown. Your server only sees noise.</h1>
+        <p class="lede">coolpsonotes is a notes app you run yourself. Notes are encrypted on your devices before they sync, so the server stores ciphertext and nothing else. Write in the browser with live collaboration, or keep your vaults as a folder of Markdown files and use your own editor.</p>
+        <div class="btns">
+          <a class="btn primary" href="self-host.html">Run it yourself</a>
+          <a class="btn" href="security.html">How the encryption works</a>
+        </div>
+      </div>
+
+      <figure class="views" aria-label="The same note on your device and on the server">
+        <div class="view">
+          <div class="view-label"><b>On your device</b><span>Family / Weekend trip.md</span></div>
+          <div class="note">
+            <div class="t"><span class="mk"># </span>Weekend trip</div>
+            <div><span class="box on"></span><span class="done">Book the cabin</span></div>
+            <div><span class="box"></span>Pack <strong>sunscreen</strong> and the <span class="hl">good</span> kettle</div>
+            <div><span class="box"></span>Ask <span class="wl">Alice</span> if we can borrow the car</div>
+            <div>Leaving Friday at 17:00 #travel</div>
+          </div>
+        </div>
+        <div class="view">
+          <div class="view-label"><b>On the server</b><span>one encrypted update, as stored</span></div>
+          <p class="cipher" id="cipher"><span class="v">01</span> <span class="e">00000002</span> <span class="n">a4c123b1612dd272d1371c17149d439536b3216fdaeeb975</span> <span class="seg scramble" id="ct">729fae923d5a4fd12aabfe228f219e9cb0eb53f16947ccf25ec84d8dbc74254770f58904dba41ecccc3fc1626e53a13043b026c48bbf33feff9243a8f506b40928b5b7a767c76fb008f86bebb2737f6a6f0fb23c6f5da2cec255404e</span> <span class="tg">4fb440034d6608697a8d41bed440e504</span></p>
+          <div class="legend" aria-label="Envelope format">
+            <span style="--c: var(--accent-ink)">version</span>
+            <span style="--c: var(--ok)">key epoch</span>
+            <span style="--c: var(--muted)">nonce (24 bytes)</span>
+            <span style="--c: var(--cipher)">ciphertext</span>
+            <span style="--c: var(--fg-2)">tag</span>
+          </div>
+        </div>
+      </figure>
+    </div>
+  </section>
+
+  <section class="section">
+    <div class="wrap stack-lg">
+      <h2>What it is for</h2>
+      <div class="pillars">
+        <div class="pillar">
+          <span class="k">Private by design</span>
+          <p>Note text, titles, folder names, attachments and history are encrypted with keys that only your devices hold. Whoever runs the server, or breaks into it, gets ciphertext.</p>
+        </div>
+        <div class="pillar">
+          <span class="k">Made for working together</span>
+          <p>Share a vault with family or a team as editor or viewer, or share a single note. Everyone edits the same note at once, with live cursors and no lost changes, also after working offline.</p>
+        </div>
+        <div class="pillar">
+          <span class="k">Plain Markdown, your files</span>
+          <p>Notes are Markdown with wiki links, tags and embeds. Export a vault as <code>.md</code> files at any time, or keep it synced as a folder on your disk.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="section">
+    <div class="wrap split">
+      <div class="stack">
+        <h2>Use your own editor</h2>
+        <p>The desktop client keeps your vaults as an ordinary folder of Markdown files, always up to date. Edit them in Obsidian, Neovim, VS Code or anything else. Changes sync both ways and merge with what others write in the web app at the same time.</p>
+        <p>The files are plain text on your machine. The server still only ever sees them encrypted, so coolpsonotes works as an end-to-end encrypted sync server for an Obsidian vault, with a web app and collaboration on top.</p>
+        <div class="editors" aria-label="Works with"><span>Obsidian</span><span>Neovim</span><span>VS Code</span><span>Emacs</span><span>grep &amp; sed</span></div>
+        <p><a href="https://github.com/coolapso/coolpsonotes/blob/dev/docs/own-editor.md">Set it up in a few minutes</a></p>
+      </div>
+      <div class="stack">
+<pre><span class="p">$ </span>coolpsonotes login --server https://notes.example.com
+<span class="p">$ </span>coolpsonotes sync --dir ~/Notes
+<span class="c">syncing 2 vaults, watching ~/Notes</span></pre>
+<div class="tree" aria-label="Example folder"><span class="d">~/Notes/</span>
+  <span class="d">Family/</span>
+    Weekend trip.md
+    Groceries.md
+    Recipes/Pancakes.md
+    assets/cabin.jpg
+  <span class="d">Work/</span>
+    Roadmap.md      <span class="c">← open in your editor</span></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="section">
+    <div class="wrap stack-lg">
+      <h2>How it works</h2>
+      <ol class="flow">
+        <li><h3>Encrypt on your device</h3><p>Every change is encrypted in the browser or desktop client with the vault's key, before it leaves your device.</p></li>
+        <li><h3>Sync ciphertext</h3><p>The server orders and stores encrypted changes and passes them on live. It knows who is a member of a vault, not what anyone wrote.</p></li>
+        <li><h3>Decrypt for members</h3><p>Members' devices hold the vault key, wrapped to each person's own key. They decrypt and merge the changes locally.</p></li>
+      </ol>
+    </div>
+  </section>
+
+  <section class="section">
+    <div class="wrap stack-lg">
+      <h2>In the box</h2>
+      <ul class="grid-list">
+        <li><b>Live-preview editor</b><span>Markdown that formats as you type, with a toolbar, tables, task lists and optional Vim keys.</span></li>
+        <li><b>Links and backlinks</b><span><code>[[Wiki links]]</code>, embeds, tags and an outline, all resolved on your device.</span></li>
+        <li><b>Search everywhere</b><span>Full-text search with <code>tag:</code>, <code>folder:</code> and <code>title:</code> filters, and a quick switcher.</span></li>
+        <li><b>History and trash</b><span>Earlier versions of every note to preview and restore, and a trash for deleted notes.</span></li>
+        <li><b>Works offline</b><span>Keep writing without a connection. Changes upload and merge when you are back online.</span></li>
+        <li><b>Sign in with what you have</b><span>Any OpenID Connect provider: Authelia, Keycloak, Authentik, Google and others.</span></li>
+        <li><b>AI agents, scoped</b><span>Give an assistant its own identity and only the vaults it needs. It uses the CLI or a folder of files.</span></li>
+        <li><b>One small server</b><span>A single Rust binary and a SQLite file. Docker, Compose and Kubernetes examples included.</span></li>
+      </ul>
+      <p><a href="features.html">All features</a></p>
+    </div>
+  </section>
+
+  <section class="section">
+    <div class="wrap split">
+      <div class="stack">
+        <h2>Run it yourself</h2>
+        <p>coolpsonotes is open source under the AGPL. You need a machine with Docker, a domain name and an OpenID Connect provider for sign-in. Caddy takes care of HTTPS.</p>
+        <p>Want to look around first? Development mode runs without a sign-in provider: open two browser tabs, sign in as two people and share a vault between them.</p>
+        <div class="btns"><a class="btn primary" href="self-host.html">Self-hosting guide</a></div>
+      </div>
+<pre><span class="p">$ </span>git clone https://github.com/coolapso/coolpsonotes
+<span class="p">$ </span>cd coolpsonotes
+<span class="p">$ </span>cp .env.example .env  <span class="c"># domain, sign-in</span>
+<span class="p">$ </span>docker compose up -d --build</pre>
+    </div>
+  </section>
+
+  <section class="section">
+    <div class="wrap">
+      <div class="callout">
+        <span class="eyebrow">Early release · 0.1</span>
+        <p>coolpsonotes is young. It works, it is tested, and known issues are tracked in the open. Keep backups, and read the <a href="security.html">security notes</a> before you rely on it for important data.</p>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer class="site-foot">
+  <div class="wrap">
+    <span>coolpsonotes · AGPL-3.0-or-later</span>
+    <nav aria-label="Footer">
+      <a href="features.html">Features</a>
+      <a href="security.html">Security</a>
+      <a href="self-host.html">Self-host</a>
+      <a href="https://github.com/coolapso/coolpsonotes">Source code</a>
+      <a href="https://github.com/coolapso/coolpsonotes/tree/dev/docs">Documentation</a>
+    </nav>
+  </div>
+</footer>
+
+<script>
+  // Settle the ciphertext from random hex once on load: a hint that every
+  // change is fresh ciphertext. Static text without motion preferences or JS.
+  (function () {
+    var el = document.getElementById("ct");
+    if (!el || !window.matchMedia || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    var target = el.textContent, hex = "0123456789abcdef", frame = 0, frames = 26;
+    function tick() {
+      frame++;
+      var keep = Math.floor(target.length * frame / frames), out = target.slice(0, keep);
+      for (var i = keep; i < target.length; i++) out += hex[(Math.random() * 16) | 0];
+      el.textContent = out;
+      if (frame < frames) requestAnimationFrame(tick);
+    }
+    requestAnimationFrame(tick);
+  })();
+</script>
+</body>
+</html>

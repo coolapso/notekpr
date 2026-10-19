@@ -239,6 +239,15 @@ tasks:
       - task: check:wasm
       - task: test:e2e
 
+  # ------------------------------------------------------------------ website
+
+  site:
+    desc: "Preview the website (site/) on http://localhost:{{.SITE_PORT}}"
+    vars:
+      SITE_PORT: '{{.SITE_PORT | default "8090"}}'
+    cmds:
+      - python3 -m http.server --bind 127.0.0.1 --directory site {{.SITE_PORT}}
+
   # ------------------------------------------------------------------ docker
 
   docker:build:

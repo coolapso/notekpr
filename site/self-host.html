@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Self-host · coolpsonotes</title>
+<meta name="description" content="Run coolpsonotes on your own server: try it in development mode, deploy with Docker Compose and Caddy, sign in with your OpenID Connect provider, back it up.">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="site-head">
+  <div class="wrap">
+    <a class="brand" href="./" aria-label="coolpsonotes home">
+      <svg viewBox="0 0 64 64" aria-hidden="true"><rect width="64" height="64" rx="14" style="fill: var(--accent)"/><path d="M32 12 50 32 32 52 14 32Z" style="fill: var(--bg)"/><path d="M32 22 42 32 32 42 22 32Z" style="fill: var(--accent)"/></svg>
+      coolpsonotes
+    </a>
+    <nav class="site-nav" aria-label="Main">
+      <a href="./">Home</a>
+      <a href="features.html">Features</a>
+      <a href="security.html">Security</a>
+      <a href="self-host.html" aria-current="page">Self-host</a>
+      <a href="https://github.com/coolapso/coolpsonotes">Source</a>
+    </nav>
+  </div>
+</header>
+
+<main class="md">
+  <header class="wrap page-head">
+    <p class="eyebrow">Self-host</p>
+    <h1>Run it yourself</h1>
+    <p class="lede">coolpsonotes is one small server: a Rust binary, a SQLite file and the web app. Here is how to try it, run it for real, and keep it safe.</p>
+  </header>
+
+  <section class="section">
+    <div class="wrap split">
+      <div class="stack">
+        <h2>Try it first</h2>
+        <p>Development mode needs no sign-in provider. Sign in as any name, then open a second browser tab and sign in as someone else to try sharing and live editing between two people.</p>
+        <p>Never expose development mode to a network: anyone can sign in as anyone.</p>
+      </div>
+<pre><span class="c"># with Docker</span>
+<span class="p">$ </span>docker compose -f docker-compose.dev.yml up --build
+
+<span class="c"># or from source (Rust, wasm32 target, wasm-bindgen)</span>
+<span class="p">$ </span>task setup
+<span class="p">$ </span>task dev
+
+<span class="c"># then open http://localhost:8080</span></pre>
+    </div>
+  </section>
+
+  <section class="section">
+    <div class="wrap split">
+      <div class="stack">
+        <h2>Run it for real</h2>
+        <p>You need a machine with Docker, a domain name pointing at it, and an OpenID Connect provider such as Authelia, Keycloak, Authentik or Google. The included Compose file runs coolpsonotes behind Caddy, which gets HTTPS certificates automatically.</p>
+        <p>Register coolpsonotes with your provider, with the redirect address <code>https://your.domain/api/v1/auth/oidc/callback</code>, and put the details in <code>.env</code>.</p>
+        <p>The first person to sign in becomes the administrator.</p>
+      </div>
+<pre><span class="p">$ </span>git clone https://github.com/coolapso/coolpsonotes
+<span class="p">$ </span>cd coolpsonotes
+<span class="p">$ </span>cp .env.example .env
+<span class="c"># PUBLIC_HOST=notes.example.com
+# OIDC_ISSUER=https://auth.example.com
+# OIDC_CLIENT_ID=coolpsonotes
+# OIDC_CLIENT_SECRET=…</span>
+<span class="p">$ </span>docker compose up -d --build</pre>
+    </div>
+  </section>
+
+  <section class="section">
+    <div class="wrap split">
+      <div class="stack">
+        <h2>Back it up</h2>
+        <p>Everything lives in one SQLite database: encrypted notes, attachments and keys wrapped for members. A backup is a consistent copy of that file, made while the server runs. Backups are encrypted data too; they need people's own keys to read.</p>
+      </div>
+<pre><span class="p">$ </span>docker compose exec coolpsonotes \
+    coolpsonotes-server backup --out-dir /data/backups --keep 14</pre>
+    </div>
+  </section>
+
+  <section class="section">
+    <div class="wrap split">
+      <div class="stack">
+        <h2>The desktop client</h2>
+        <p>Build the <code>coolpsonotes</code> command-line client, sign in once per computer, and keep your vaults as a folder of Markdown files that you edit with any editor.</p>
+        <p><a href="https://github.com/coolapso/coolpsonotes/blob/dev/docs/own-editor.md">Use your own editor</a> · <a href="https://github.com/coolapso/coolpsonotes/blob/dev/docs/desktop-client.md">All CLI commands</a></p>
+      </div>
+<pre><span class="p">$ </span>cargo install --path crates/client --locked
+<span class="p">$ </span>coolpsonotes login --server https://notes.example.com
+<span class="p">$ </span>coolpsonotes sync --dir ~/Notes</pre>
+    </div>
+  </section>
+
+  <section class="section">
+    <div class="wrap stack-lg">
+      <h2>Going further</h2>
+      <ul class="grid-list">
+        <li><b>Kubernetes</b><span>Manifests for a single replica with a persistent volume and a backup CronJob.</span></li>
+        <li><b>Other reverse proxies</b><span>nginx and Traefik work too; the server needs WebSockets and the forwarded client address.</span></li>
+        <li><b>Monitoring</b><span>Prometheus metrics, health and readiness endpoints.</span></li>
+        <li><b>Upgrades</b><span>Database migrations run on start, after an automatic backup.</span></li>
+      </ul>
+      <p>Configuration, identity providers, proxies, backups and upgrades are covered in <a href="https://github.com/coolapso/coolpsonotes/blob/dev/docs/operations.md">docs/operations.md</a>.</p>
+    </div>
+  </section>
+</main>
+
+<footer class="site-foot">
+  <div class="wrap">
+    <span>coolpsonotes · AGPL-3.0-or-later</span>
+    <nav aria-label="Footer">
+      <a href="features.html">Features</a>
+      <a href="security.html">Security</a>
+      <a href="self-host.html">Self-host</a>
+      <a href="https://github.com/coolapso/coolpsonotes">Source code</a>
+      <a href="https://github.com/coolapso/coolpsonotes/tree/dev/docs">Documentation</a>
+    </nav>
+  </div>
+</footer>
+
+</body>
+</html>

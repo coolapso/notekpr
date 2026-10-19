@@ -73,6 +73,8 @@ crates/web      Leptos CSR → wasm32. state.rs (Core + Ui, sync, presence) ·
 crates/client   `coolpsonotes` CLI: session.rs + livesync.rs (sync), mirror.rs
                 (Markdown files), gateway.rs, ops.rs, note_shares.rs
 tests/e2e       browser tests: suite.py, cross_client.py, wd.py (stdlib WebDriver)
+site/           project website: static HTML + CSS, no build step, no third-party
+                requests (fonts, scripts, analytics) — keep it that way
 deploy/         Caddy, Dex (dev OIDC), Kubernetes · Dockerfile, compose files
 ```
 

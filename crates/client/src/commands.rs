@@ -25,7 +25,7 @@ use crate::ops;
 use crate::profile::{Dirs, ProfileLock, ProfileStore};
 use crate::session::Session;
 use crate::vault::ListKind;
-use crate::{livesync, transfer, ui};
+use crate::{fsutil, livesync, recover, transfer, ui};
 
 pub struct Ctx {
     pub dirs: Dirs,
@@ -79,6 +79,8 @@ enum Access {
 fn access(c: &Command) -> Access {
     match c {
         Command::Login(_)
+        | Command::ExportEncrypted { .. }
+        | Command::Recover(_)
         | Command::Profiles
         | Command::Devices(_)
         | Command::Recovery(_)
@@ -544,6 +546,27 @@ pub async fn run_in(cli: Cli, dirs: Dirs) -> Result<()> {
             print_transfer("exported", &r);
             Ok(())
         }
+        Command::ExportEncrypted { out, force } => {
+            if out.exists() && !force {
+                bail!("{} exists (use --force to replace it)", out.display());
+            }
+            let s = ctx.session()?;
+            let export = recover::download_export(&s).await?;
+            let json = serde_json::to_vec(&export)?;
+            fsutil::write_atomic(&out, &json, true)
+                .with_context(|| format!("writing {}", out.display()))?;
+            println!(
+                "Saved an encrypted export of {} vault(s) and {} shared note(s) to {} ({}). Keep it with your \
+                 backups; `coolpsonotes recover --from {}` turns it into Markdown files with your recovery key.",
+                export.vaults.len(),
+                export.shared_notes.len(),
+                out.display(),
+                ui::fmt_size(json.len() as u64),
+                out.display()
+            );
+            Ok(())
+        }
+        Command::Recover(a) => recover_cmd(&ctx, a).await,
         Command::Import {
             vault,
             source,
@@ -569,6 +592,59 @@ pub async fn run_in(cli: Cli, dirs: Dirs) -> Result<()> {
         Command::Agent(c) => agent(&ctx, c).await,
         Command::Gateway(a) => gateway_cmd(&ctx, a).await,
     }
+}
+
+async fn recover_cmd(ctx: &Ctx, a: RecoverArgs) -> Result<()> {
+    let report = match &a.from {
+        Some(file) => {
+            let export = recover::read_export(file)?;
+            let key = match &a.recovery_key_file {
+                Some(f) => std::fs::read_to_string(f)
+                    .with_context(|| format!("reading {}", f.display()))?,
+                None => match std::env::var("COOLPSONOTES_RECOVERY_KEY") {
+                    Ok(k) if !k.trim().is_empty() => k,
+                    _ => {
+                        if !ui::stdin_is_tty() {
+                            bail!(
+                                "no recovery key: pass --recovery-key-file or set COOLPSONOTES_RECOVERY_KEY"
+                            );
+                        }
+                        ui::prompt_secret("Recovery key: ")?
+                    }
+                },
+            };
+            let account = coolpsonotes_core::recover::unlock_with_recovery_key(&export, key.trim())
+                .map_err(|e| anyhow!("the recovery key does not open this export: {e}"))?;
+            recover::recover_to(&export, &account, &a.out)?
+        }
+        None => {
+            let s = ctx.session()?;
+            let export = recover::download_export(&s).await?;
+            recover::recover_with_device(&s, &export, &a.out)?
+        }
+    };
+    if ctx.json {
+        ctx.print_json(&json!({
+            "vaults": report.vaults,
+            "files": report.files,
+            "problems": report.problems,
+        }));
+    } else {
+        println!(
+            "Recovered {} file(s) from {} vault(s) into {}.",
+            report.files,
+            report.vaults,
+            a.out.display()
+        );
+        if !report.problems.is_empty() {
+            println!("Not recovered:");
+            for p in &report.problems {
+                println!("  - {p}");
+            }
+        }
+        ui::status("these files are decrypted plain text: keep the folder private");
+    }
+    Ok(())
 }
 
 fn show_recovery_key(rk: &str) {

@@ -79,6 +79,7 @@ provider setup, reverse proxies, Kubernetes, backups, upgrades and monitoring.
 ## Documentation
 
 * [Use your own editor (Obsidian, Neovim, …)](docs/own-editor.md)
+* [Getting your notes out, whatever happens (encrypted export, offline recovery)](docs/recovery.md)
 * [Architecture and technology decisions](docs/architecture.md)
 * [Security model and threat analysis](docs/security.md)
 * [Sync protocol and HTTP API](docs/protocol.md)

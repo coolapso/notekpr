@@ -246,25 +246,30 @@ Before trusting the Markdown mirror and the CLI with real notes.
 
 Nobody's notes may be locked in because a server or an app is unavailable.
 
-- [ ] **`coolpsonotes recover`** — fully offline, no login, no server:
+- [x] **`coolpsonotes recover`** — fully offline, no login, no server:
       ```
-      coolpsonotes recover --backup coolpsonotes.db --recovery-key - --out ./notes
+      coolpsonotes recover --from export.json --out ./notes [--recovery-key-file F]
       ```
       recovery key → account secret → vault keys (all epochs, via the key
       chain) → document keys → snapshots + updates → Markdown files and
-      attachments, with the vault's folder structure. Built into the CLI (one
-      static binary), reusing `crates/core`; reads the recovery key from stdin
-      or a file, never argv.
-- [ ] Also accept a device's local profile instead of the recovery key, and a
-      hosted-user **encrypted export bundle** (`GET /me/export`: the user's
-      vault ciphertexts, envelopes and chains) — hosted users can't get a
-      server backup file.
+      attachments, with the vault's folder structure, trash in `_trash/`,
+      shared notes in `Shared with me/` (`crates/core/src/recover.rs`). The
+      key comes from a file, `COOLPSONOTES_RECOVERY_KEY` or a hidden prompt,
+      never argv. From a server backup: `coolpsonotes-server export-user`
+      first (the server tool never decrypts).
+- [x] **Encrypted export bundle** (`GET /me/export`, `coolpsonotes
+      export-encrypted`): the user's vault ciphertexts, envelopes and chains,
+      so hosted users without a server backup can leave too. `recover`
+      without `--from` uses a signed-in device instead of the recovery key.
+- [ ] `recover` with a device's local profile fully offline (today the device
+      path downloads the export).
 - [ ] `coolpsonotes export` works fully offline from the local replica
       (attachments cached or marked missing).
-- [ ] Test: backup → recover → byte-identical notes and attachments; include
-      rotated keys, shared notes and trashed entries.
-- [ ] Docs: "Leaving coolpsonotes / disaster recovery", and a format
-      description precise enough for an independent implementation.
+- [x] Test: backup → recover → byte-identical notes and attachments; include
+      rotated keys, shared notes and trashed entries (server `tests/export.rs`,
+      core `recover` tests, client `tests/recover.rs`).
+- [x] Docs: [docs/recovery.md](docs/recovery.md), including how an
+      independent tool would decrypt an export.
 
 ---
 

@@ -480,6 +480,20 @@ files and editor leftovers are skipped, as are files over the server's
 attachment limit (reported). `--dry-run` reports what an import would create,
 update or leave unchanged without changing anything.
 
+### Encrypted export and offline recovery
+
+```sh
+coolpsonotes export-encrypted --out ~/backup/coolpsonotes-$(date +%F).json
+coolpsonotes recover --from ~/backup/coolpsonotes-2026-10-19.json --out ~/Recovered
+coolpsonotes recover --out ~/Recovered          # with this signed-in device
+```
+
+`export-encrypted` saves everything the account can read, still encrypted, as
+one file that is safe to keep in backups. `recover` turns such a file into
+plain Markdown files without a server, unlocking it with the recovery key
+(asked for; or `--recovery-key-file`, or `COOLPSONOTES_RECOVERY_KEY`). See
+[recovery.md](recovery.md).
+
 ## 10. Where data is stored and how it is protected
 
 | Path | Content |

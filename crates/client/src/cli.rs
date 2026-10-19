@@ -120,6 +120,18 @@ pub enum Command {
         #[arg(long)]
         force: bool,
     },
+    /// Save an encrypted export of everything this account can read (a backup
+    /// that `recover` can turn into Markdown files without any server).
+    ExportEncrypted {
+        #[arg(long)]
+        out: PathBuf,
+        /// Replace an existing file.
+        #[arg(long)]
+        force: bool,
+    },
+    /// Decrypt an encrypted export into plain Markdown files, offline: with
+    /// --from and your recovery key, or (without --from) with this signed-in device.
+    Recover(RecoverArgs),
     /// Import Markdown files and attachments (directory or .zip), keeping folders.
     Import {
         vault: String,
@@ -164,6 +176,21 @@ pub enum Command {
     Agent(AgentCmd),
     /// Local plaintext HTTP API for agents and scripts.
     Gateway(GatewayArgs),
+}
+
+#[derive(Args, Debug)]
+pub struct RecoverArgs {
+    /// Encrypted export to decrypt (from `export-encrypted`, `GET /api/v1/me/export`
+    /// or `coolpsonotes-server export-user`). Without it, this device downloads one.
+    #[arg(long)]
+    pub from: Option<PathBuf>,
+    /// New (or empty) folder for the recovered files.
+    #[arg(long)]
+    pub out: PathBuf,
+    /// Read the recovery key from this file (otherwise from
+    /// COOLPSONOTES_RECOVERY_KEY, or asked for).
+    #[arg(long)]
+    pub recovery_key_file: Option<PathBuf>,
 }
 
 #[derive(Args, Debug)]

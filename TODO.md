@@ -291,7 +291,7 @@ Nobody's notes may be locked in because a server or an app is unavailable.
       stale_key` for epochs below the current one, `400` above; consider a
       "rotation pending" flag that refuses writes until vault and document
       keys are rotated. Re-check the writer's role inside the transaction
-      [S-L1].
+      [S-L1 ✔, done in R4].
       (done: 412 for older epochs, access re-checked under the write lock; the "rotation pending" flag is still open)
 - [x] **Editors can destroy content and history server-side** [S-M4] —
       soft-delete purges and attachment deletes with an owner-recoverable
@@ -420,10 +420,18 @@ with SQLite; no SQL-dialect abstraction.
 - [x] Attachments behind a blob-store interface (`crates/server/src/blobs.rs`).
       SQLite stays the store for now (one-file backups); a directory or
       S3-compatible store can be added as a variant for hosted instances.
-- [ ] Event fan-out (`hub.rs`) behind an interface — enables more than one
-      process per instance later.
-- [ ] Queries behind a small repository layer — testability, one place for
-      authorization-sensitive SQL.
+- [x] Event fan-out (`hub.rs`) behind an interface — enables more than one
+      process per instance later. `EventBus` (one in-process variant); its
+      docs state what another backend must guarantee (per-vault order,
+      nothing lost after `subscribe`, gaps reported as lag).
+- [x] Queries behind a small repository layer — testability, one place for
+      authorization-sensitive SQL. `crates/server/src/repo/`, unit-tested
+      against a migrated database; the log's queries stay in `sync.rs`.
+- [x] Re-check roles inside the write transaction [S-L1] — every write that
+      depends on a membership, role or share re-checks it in its `BEGIN
+      IMMEDIATE` transaction; role changes take the write lock too (rule in
+      `access.rs`). Push and snapshot still check under the lock just before
+      their transaction: move that in before running several processes.
 - Resolves: global lock part of S-M7, re-checking roles inside the write
   transaction [S-L1]; prepares the hosted tier's backups and scaling by
   instances.

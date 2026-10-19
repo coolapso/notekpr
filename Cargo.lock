@@ -841,6 +841,7 @@ dependencies = [
  "js-sys",
  "leptos",
  "miniz_oxide",
+ "proptest",
  "pulldown-cmark",
  "serde",
  "serde_json",

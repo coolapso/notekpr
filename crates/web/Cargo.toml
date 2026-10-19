@@ -36,3 +36,6 @@ features = [
   "MediaQueryList", "Navigator", "Clipboard", "DomTokenList", "StaticRange", "TreeWalker", "NodeFilter",
   "CompositionEvent", "ResizeObserver", "VisibilityState", "PopStateEvent", "AbortController", "AbortSignal",
 ]
+
+[dev-dependencies]
+proptest = { version = "1", default-features = false, features = ["std"] }

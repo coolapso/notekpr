@@ -342,6 +342,29 @@ def test_attachments(env):
         b.wait("return !!document.querySelector('.ed .w img[src^=\"blob:\"]')", 15, "image preview")
         check(True, "embedded image is decrypted and previewed inline")
         check("attachments" in b.js("return Array.from(document.querySelectorAll('.tree-item .name')).map(e=>e.textContent).join(' ')"), "attachment is filed under attachments/ in the tree")
+        # Opening attachments: raster images open in a new tab (noopener); anything that
+        # could run as a page of this origin (SVG, HTML) is downloaded instead.
+        b.js("""
+            window.__opened = []; window.__downloads = [];
+            window.open = (u, t, f) => { window.__opened.push([String(u), String(f)]); return null; };
+            const click = HTMLAnchorElement.prototype.click;
+            HTMLAnchorElement.prototype.click = function () { if (this.download) { window.__downloads.push(this.download); } else { click.call(this); } };
+            const ed = document.querySelector('.ed'); ed.focus(); const s = getSelection(); s.selectAllChildren(ed); s.collapseToEnd();
+            const dt = new DataTransfer();
+            dt.items.add(new File(['<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>'], 'pic.svg', {type: 'image/svg+xml'}));
+            ed.dispatchEvent(new ClipboardEvent('paste', {clipboardData: dt, bubbles: true, cancelable: true}));
+        """)
+        b.wait("return document.querySelector('.ed').textContent.includes('[[pic.svg]]')", 15, "svg embed inserted")
+        time.sleep(0.5)
+        if "dot.png" not in b.js("return Array.from(document.querySelectorAll('.tree-item .name')).map(e=>e.textContent).join(' ')"):
+            b.click_el(b.find_text(".tree-item", "attachments", 10))
+        b.click_el(b.find_text(".tree-item", "dot.png", 10))
+        b.wait("return window.__opened.length == 1", 15, "png opened")
+        opened = b.js("return window.__opened")[0]
+        check(opened[0].startswith("blob:") and "noopener" in opened[1], "a raster image opens in a new tab without an opener")
+        b.click_el(b.find_text(".tree-item", "pic.svg", 10))
+        b.wait("return window.__downloads.includes('pic.svg')", 15, "svg downloaded")
+        check(b.js("return window.__opened.length") == 1, "an SVG attachment is downloaded, not opened as a page")
         b.click(".seg button[title^='Reading']")
         b.wait("return !!document.querySelector('.reading img.att[src^=\"blob:\"]')", 15, "reading view image")
         check(True, "reading view shows the decrypted image")

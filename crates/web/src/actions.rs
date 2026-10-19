@@ -971,9 +971,20 @@ pub async fn load_attachment(vault: &str, id: &str) -> Option<String> {
     url
 }
 
+/// Show an attachment in a new tab if the browser can display it safely
+/// (raster images, PDFs); download anything else.
 pub async fn open_attachment(vault: &str, id: &str) {
+    let name = state::entry(vault, id).map(|e| e.path).unwrap_or_default();
+    if !util::opens_inline(&name) {
+        download_attachment(vault, id).await;
+        return;
+    }
     if let Some(url) = load_attachment(vault, id).await {
-        let _ = util::window().open_with_url_and_target(&url, "_blank");
+        let _ = util::window().open_with_url_and_target_and_features(
+            &url,
+            "_blank",
+            "noopener,noreferrer",
+        );
     }
 }
 
@@ -981,8 +992,14 @@ pub async fn download_attachment(vault: &str, id: &str) {
     let name = state::entry(vault, id)
         .map(|e| paths::file_name(&e.path).to_string())
         .unwrap_or_else(|| "file".into());
+    // Never hand the browser a type it might render as a document of this origin.
+    let mime = if util::opens_inline(&name) {
+        util::mime_for(&name)
+    } else {
+        "application/octet-stream"
+    };
     if let Some(b) = attachment_bytes(vault, id).await {
-        util::download(&name, util::mime_for(&name), &b);
+        util::download(&name, mime, &b);
     } else {
         error("Could not download the file.");
     }

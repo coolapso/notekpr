@@ -27,8 +27,9 @@ metadata:
 type: Opaque
 stringData:
   COOLPSONOTES_OIDC_CLIENT_SECRET: "change-me"
-  # Optional bearer token protecting /metrics.
-  COOLPSONOTES_METRICS_TOKEN: ""
+  # Optional bearer token protecting /metrics (recommended: the Ingress below
+  # routes every path, /metrics included).
+  # COOLPSONOTES_METRICS_TOKEN: change-me
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim

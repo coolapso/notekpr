@@ -15,6 +15,7 @@ services:
       COOLPSONOTES_OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-coolpsonotes}
       COOLPSONOTES_OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:-}
       COOLPSONOTES_ADMINS: ${ADMINS:-}
+      COOLPSONOTES_METRICS_TOKEN: ${METRICS_TOKEN:-}
       COOLPSONOTES_TRUST_PROXY: "true"
     volumes:
       - coolpsonotes-data:/data

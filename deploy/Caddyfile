@@ -1,5 +1,9 @@
 # Caddy obtains and renews TLS certificates automatically.
 {$PUBLIC_HOST} {
 	encode zstd gzip
+	# Prometheus metrics are for monitoring inside your network, not for the
+	# internet: scrape coolpsonotes:8080/metrics directly.
+	@metrics path /metrics /metrics/*
+	respond @metrics 404
 	reverse_proxy coolpsonotes:8080
 }

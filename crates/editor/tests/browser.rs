@@ -573,6 +573,51 @@ fn refused_edits_restore_the_host_text() {
 }
 
 #[wasm_bindgen_test]
+fn commands_and_shortcuts() {
+    let f = setup("word and more\nsecond");
+    f.ed.set_selection(0, 4);
+    key(&f, "b", true, false);
+    assert_text(&f, "**word** and more\nsecond");
+    f.ed.command(coolpsonotes_editor::Command::Heading(2));
+    assert_text(&f, "## **word** and more\nsecond");
+    f.ed.set_selection(21, 27);
+    f.ed.command(coolpsonotes_editor::Command::Task);
+    assert_text(&f, "## **word** and more\n- [ ] second");
+    key(&f, "Enter", true, false);
+    assert_text(&f, "## **word** and more\n- [x] second");
+    // Source mode only changes classes.
+    let before = lines(&f);
+    f.ed.set_mode(Mode::Source);
+    assert!(root(&f).class_list().contains("source"));
+    assert!(lines(&f)[0].is_same_node(Some(&before[0])));
+}
+
+#[wasm_bindgen_test]
+fn vim_keys() {
+    let f = setup("one two\nthree");
+    f.ed.set_vim(true);
+    caret_at(&f, 0);
+    // Normal mode: typing is not text.
+    assert!(input(&f, "insertText", Some("z")).default_prevented());
+    assert_text(&f, "one two\nthree");
+    for k in ["w", "x"] {
+        key(&f, k, false, false);
+    }
+    assert_text(&f, "one wo\nthree");
+    key(&f, "d", false, false);
+    key(&f, "d", false, false);
+    assert_text(&f, "three");
+    key(&f, "u", false, false);
+    assert_text(&f, "one wo\nthree");
+    key(&f, "i", false, false);
+    assert!(root(&f).class_list().contains("vim-insert"));
+    type_str(&f, "!");
+    key(&f, "Escape", false, false);
+    assert!(root(&f).class_list().contains("vim-normal"));
+    assert_eq!(f.ed.text().matches('!').count(), 1);
+}
+
+#[wasm_bindgen_test]
 fn readonly_ignores_input() {
     let f = setup_with("read me", true);
     let ev = input(&f, "insertText", Some("x"));

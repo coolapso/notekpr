@@ -16,7 +16,7 @@ use crate::views::icons::Icon;
 use crate::{api, knowledge, render};
 
 #[component]
-fn Dialog(
+pub(crate) fn Dialog(
     #[prop(into)] title: String,
     #[prop(optional)] wide: bool,
     children: Children,
@@ -130,6 +130,7 @@ pub fn ModalHost() -> impl IntoView {
             Modal::NewFolder { vault, parent } => view! { <NewFolder vault=vault parent=parent/> }.into_any(),
             Modal::Move { vault, id } => view! { <MoveDialog vault=vault id=id/> }.into_any(),
             Modal::Import(v) => view! { <ImportDialog vault=v/> }.into_any(),
+            Modal::Promote { vault, id } => view! { <super::quick::PromoteDialog vault=vault id=id/> }.into_any(),
         })}
     }
 }
@@ -893,6 +894,7 @@ fn Help() -> impl IntoView {
         ),
         (format!("{m}+Shift+F"), "Search all notes"),
         (format!("{m}+Alt+N"), "New note"),
+        (format!("{m}+Alt+Q"), "New quick note"),
         (format!("{m}+E"), "Toggle reading view"),
         (format!("{m}+\\"), "Toggle side panel"),
         (format!("{m}+B / {m}+I"), "Bold / italic"),

@@ -396,6 +396,59 @@ fn EditorPrefs() -> impl IntoView {
                 <button class:on=move || ui.ui_prefs.get().theme == t on:click=move |_| state::set_ui_prefs(|p| p.theme = t.into())>{t}</button>
             }).collect_view()}
         </div>
+        <QuickNotesPrefs/>
+    }
+}
+
+/// Where quick notes go (synced) and whether the sidebar shows them (this browser).
+#[component]
+fn QuickNotesPrefs() -> impl IntoView {
+    let ui = ui();
+    let choice = Memo::new(move |_| {
+        ui.prefs_rev.get();
+        ui.vaults.get();
+        let chosen = with(|c| c.prefs.quick_vault.clone());
+        let mut writable: Vec<(String, String)> = crate::quick::candidates()
+            .into_iter()
+            .filter(|v| v.writable)
+            .map(|v| (v.id, v.name))
+            .collect();
+        writable.sort_by_key(|(_, n)| n.to_lowercase());
+        let default = crate::quick::choose_vault(None, &crate::quick::candidates())
+            .map(|v| state::vault_name(&v));
+        (chosen, writable, default)
+    });
+    view! {
+        <h3>"Quick notes"</h3>
+        <label class="check">
+            <input type="checkbox" class="quick-sidebar-toggle" prop:checked=move || ui.ui_prefs.get().quick_notes
+                on:change=move |ev| { let on = event_target_checked(&ev); state::set_ui_prefs(|p| p.quick_notes = on); }/>
+            " Show quick notes in the sidebar"
+        </label>
+        <label class="field">
+            <span class="small muted">"Vault for quick notes (synced to your other devices)"</span>
+            <select class="input quick-vault" on:change=move |ev| {
+                let v = event_target_value(&ev);
+                state::set_quick_vault(if v.is_empty() { None } else { Some(v) });
+            }>
+                {move || {
+                    let (chosen, list, default) = choice.get();
+                    let auto = match default {
+                        Some(n) => format!("Automatic ({n})"),
+                        None => "Automatic".to_string(),
+                    };
+                    let c2 = chosen.clone();
+                    view! {
+                        <option value="" selected=chosen.is_none()>{auto}</option>
+                        {list.into_iter().map(|(id, name)| {
+                            let sel = c2.as_deref() == Some(id.as_str());
+                            view! { <option value=id selected=sel>{name}</option> }
+                        }).collect_view()}
+                    }
+                }}
+            </select>
+        </label>
+        <p class="muted small">{format!("Quick notes are regular notes in the “{}” folder of that vault. New one: {}+Alt+Q.", crate::quick::FOLDER, util::mod_key())}</p>
     }
 }
 

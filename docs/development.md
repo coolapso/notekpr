@@ -5,6 +5,7 @@
 ```
 crates/core     shared crypto, keys, CRDT model, protocol, engine, markdown, search
 crates/server   sync server (axum + SQLite)            → coolpsonotes-server
+crates/editor   live-preview Markdown editor (model + DOM view), used by crates/web
 crates/web      browser client (Leptos → wasm32)       → dist/web
 crates/client   desktop/CLI client, mirror, gateway    → coolpsonotes
 site/           project website: static HTML + CSS, no build step (task site)
@@ -51,6 +52,7 @@ task web:watch                # in a 2nd terminal: rebuild the web client on cha
 task cli:login DEV_USER=bob   # sign the CLI in as a test user (profile "bob")
 task cli -- --profile bob ls Family   # run any CLI command
 task test                     # all Rust tests;  task test:e2e -- -k collab  for browser tests
+task test:editor              # the editor's DOM view in headless Chromium (wasm-bindgen-test)
 task fmt                      # rustfmt (default style); CI checks it with task fmt:check
 task lint                     # clippy, warnings are errors
 task ci                       # what CI runs
@@ -88,7 +90,8 @@ networking, so it works on Linux only).
 ```sh
 cargo test -p coolpsonotes-core      # crypto, key hierarchy, CRDT model, diffs, markdown, search
 cargo test -p coolpsonotes-server    # end-to-end API tests with real client-side crypto
-cargo test -p coolpsonotes-web       # editor syntax engine, safe rendering, zip
+cargo test -p coolpsonotes-editor    # editor model: change sets, incremental blocks, commands, syntax
+cargo test -p coolpsonotes-web       # safe rendering, zip
 cargo test -p coolpsonotes-client    # sync engine, mirror, gateway against an in-process server
 tests/e2e/run.sh                     # headless browsers: onboarding, collaboration, devices,
                                      # recovery, viewers, history, trash, search, offline,
@@ -103,6 +106,28 @@ Also build the core for the browser to catch wasm-only issues:
 ```sh
 cargo build -p coolpsonotes-core --target wasm32-unknown-unknown
 ```
+
+### Editor browser tests
+
+The editor's DOM view (typing, Enter and list continuation, tables, IME
+composition sequences including Safari's event order, selection mapping,
+undo/redo, remote edits, native DOM edits, drag and drop, teardown) is tested
+in headless Chromium with `wasm-bindgen-test`. Its runner,
+`wasm-bindgen-test-runner`, comes with the `wasm-bindgen` CLI (same pinned
+version); it drives Chromium through `chromedriver`:
+
+```sh
+task test:editor
+# or:
+CARGO_TARGET_DIR=target-web CHROMEDRIVER=$(command -v chromedriver) \
+  CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=wasm-bindgen-test-runner \
+  cargo test -p coolpsonotes-editor --target wasm32-unknown-unknown --test browser
+```
+
+Add `-- --nocapture` to see the typing-latency line of `typing_on_a_large_note`.
+For the latency in the real app (CRDT, sync, Leptos around the editor), run
+`python3 tests/e2e/perf.py --server target/debug/coolpsonotes-server --web dist/web`:
+it types into a 5,000-line note and prints median/p95 per keystroke.
 
 ## Supply-chain checks
 

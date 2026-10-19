@@ -669,24 +669,33 @@ impl Session {
         Ok(names)
     }
 
+    /// Refuse to wrap a new key for anyone whose account key no longer matches
+    /// its pin (the server may be substituting it); `what` names the key.
+    pub fn refuse_changed_keys(&self, users: &[PublicUser], what: &str) -> Result<()> {
+        for u in users {
+            if let Some(vu) = self.verify_user(u)?
+                && vu.pin == PinStatus::Changed
+            {
+                bail!(
+                    "the account key of {} changed since it was pinned (now {}); refusing to give them the new \
+                     {what} key. Verify it with them, then re-share with --accept-new-key (or stop sharing with \
+                     them) and run this again",
+                    u.display_name,
+                    vu.fingerprint
+                );
+            }
+        }
+        Ok(())
+    }
+
     /// Move the vault to a new key epoch for the current members. Refuses if a
     /// member's key no longer matches its pin.
     pub async fn rotate_keys(&self, vault: &SharedVault) -> Result<u32> {
         let id = vault.lock().await.id().to_string();
         for attempt in 0..2 {
             let members = self.api.members(&id).await?;
-            for m in &members {
-                if let Some(vu) = self.verify_user(&m.user)?
-                    && vu.pin == PinStatus::Changed
-                {
-                    bail!(
-                        "the account key of {} changed since it was pinned (now {}); refusing to give them the \
-                             new vault key. Verify it, then re-share with --accept-new-key",
-                        m.user.display_name,
-                        vu.fingerprint
-                    );
-                }
-            }
+            let users: Vec<PublicUser> = members.iter().map(|m| m.user.clone()).collect();
+            self.refuse_changed_keys(&users, "vault")?;
             let (req, ring) = {
                 let v = vault.lock().await;
                 let mut ring = v.replica.keyring.clone();
@@ -731,11 +740,21 @@ impl Session {
             )
         };
         for oid in notes {
-            let shares: Vec<coolpsonotes_core::protocol::ObjectShareInfo> = self
+            // Deleted for good meanwhile: nothing left to protect.
+            if vault.lock().await.replica.purged.contains(&oid) {
+                continue;
+            }
+            let shares: Vec<coolpsonotes_core::protocol::ObjectShareInfo> = match self
                 .api
                 .get(&format!("/vaults/{id}/objects/{oid}/shares"))
-                .await?;
+                .await
+            {
+                Ok(s) => s,
+                Err(e) if e.is_not_found() => continue,
+                Err(e) => return Err(anyhow!(e).context("listing a shared note's recipients")),
+            };
             let users: Vec<_> = shares.into_iter().map(|s| s.user).collect();
+            self.refuse_changed_keys(&users, "note")?;
             let (next, req) = {
                 let v = vault.lock().await;
                 let title = v

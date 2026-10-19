@@ -1,7 +1,7 @@
 //! Account and vault administration: vaults, members and sharing (with TOFU
 //! key pinning), key rotation, devices, recovery keys and agent identities.
 
-use anyhow::{Result, anyhow, bail};
+use anyhow::{Context, Result, anyhow, bail};
 use coolpsonotes_core::engine::{self, PinStatus, VaultMeta, VaultReplica};
 use coolpsonotes_core::keys::RecoveryKey;
 use coolpsonotes_core::protocol::*;
@@ -316,7 +316,14 @@ pub async fn unshare(
         .api
         .delete(&format!("/vaults/{id}/members/{}", user.id))
         .await?;
-    let epoch = session.rotate_keys(vault).await?;
+    let name = vault.lock().await.name().to_string();
+    let epoch = session.rotate_keys(vault).await.with_context(|| {
+        format!(
+            "{} was removed, but the vault key could not be renewed, so they could still read new notes if \
+             the server passed them on. Finish with `coolpsonotes vault rotate \"{name}\"`",
+            user.display_name
+        )
+    })?;
     Ok((user, epoch))
 }
 

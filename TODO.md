@@ -316,11 +316,14 @@ Nobody's notes may be locked in because a server or an app is unavailable.
 - [x] Gateway audit log misses moves and deletes (recorded:
       `trash_document`, `move_document`; link rewrites in other notes during
       a move are not listed separately).
-- [ ] Note-key rotation skips the trust-on-first-use pin check [C-M7]
-      (interim until R3).
-- [ ] Revocation can be left half-done [C-M12] — retry/recovery hint, a CLI
-      command to rotate a note key, exclude (don't abort on) members with a
-      changed pin, handle purged shared notes.
+- [x] Note-key rotation skips the trust-on-first-use pin check [C-M7]
+      (interim until R3) — both clients refuse, like vault rotation.
+- [x] Revocation can be left half-done [C-M12] — the error says how to
+      finish (`vault rotate`, new `rotate-note-key`); purged shared notes no
+      longer abort a vault rotation.
+- [ ] Rotate without (rather than abort on) members whose pin changed: the
+      server requires envelopes for exactly the current members, so this
+      needs a protocol change (R3).
 - [x] `vault share`/`share-note` accept a single prefix match ("bob" →
       "bobby") [C-M9] — exact id, e-mail or name only; near matches are
       suggested, never taken.

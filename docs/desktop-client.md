@@ -446,6 +446,12 @@ fingerprints are checked and pinned exactly as for vault sharing. Vault members
 keep working on the note as usual (their clients pick up the note's key
 automatically). Rotating the vault key also renews the keys of shared notes.
 
+A new key is never wrapped for someone whose account key changed since it was
+pinned: the rotation stops and says who. Verify the fingerprint with them and
+re-share with `--accept-new-key` (or stop sharing with them), then finish an
+interrupted removal with `coolpsonotes rotate-note-key Family "Plans/Trip.md"`
+(or `coolpsonotes vault rotate Family` for a vault).
+
 Notes shared *with you*:
 
 ```sh

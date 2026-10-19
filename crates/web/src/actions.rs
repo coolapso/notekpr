@@ -487,6 +487,10 @@ pub async fn rotate_note_key(vault: &str, note: &str) -> Result<(), String> {
                 .await
                 .map_err(|e| e.message)?;
         let users: Vec<PublicUser> = shares.into_iter().map(|s| s.user).collect();
+        // Never wrap the new key to a key that changed since it was pinned.
+        for u in users.iter().filter(|u| u.account_key.is_some()) {
+            check_trust(u)?;
+        }
         let made = with(|c| {
             let r = c.replicas.get(vault)?;
             let ring = r.doc_keys.get(note)?;

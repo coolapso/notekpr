@@ -166,6 +166,9 @@ pub enum Command {
     },
     /// Who a note is shared with individually.
     NoteShares { vault: String, path: String },
+    /// Give an individually shared note a new key for its current recipients
+    /// (finishes an interrupted `unshare-note`).
+    RotateNoteKey { vault: String, path: String },
     /// Notes other people shared with you individually.
     #[command(subcommand)]
     Shared(SharedCmd),

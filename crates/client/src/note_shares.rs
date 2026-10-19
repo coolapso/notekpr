@@ -150,11 +150,11 @@ pub async fn unshare_note(
     path: &str,
     user_ref: &str,
 ) -> Result<PublicUser> {
-    let (id, note_id) = {
+    let (id, note_id, vault_name) = {
         let v = vault.lock().await;
         manage::require_owner(&v)?;
         let (_, e) = v.find_note(path)?;
-        (v.id().to_string(), e.id)
+        (v.id().to_string(), e.id, v.name().to_string())
     };
     let shares = note_shares(session, &id, &note_id).await?;
     let user = shares
@@ -176,7 +176,16 @@ pub async fn unshare_note(
             user.id
         ))
         .await?;
-    rotate_note_key(session, vault, &id, &note_id).await?;
+    rotate_note_key(session, vault, &id, &note_id)
+        .await
+        .with_context(|| {
+            format!(
+                "{} no longer has access, but the note's key could not be renewed, so they could still read \
+                 new changes if the server passed them on. Finish with `coolpsonotes rotate-note-key \
+                 \"{vault_name}\" \"{path}\"`",
+                user.display_name
+            )
+        })?;
     Ok(user)
 }
 
@@ -192,6 +201,7 @@ pub async fn rotate_note_key(
         .into_iter()
         .map(|s| s.user)
         .collect();
+    session.refuse_changed_keys(&users, "note")?;
     let (next, req) = {
         let v = vault.lock().await;
         let ring = v

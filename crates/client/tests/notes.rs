@@ -120,3 +120,37 @@ async fn sharing_needs_an_exact_name_not_a_prefix() {
         .unwrap();
     assert!(shared.user.display_name.eq_ignore_ascii_case("bob"));
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_note_key_is_never_renewed_for_a_changed_account_key() {
+    use coolpsonotes_client::profile::ProfileStore;
+    let srv = start().await;
+    let alice = login(&srv, "alice").await;
+    let _bob = login(&srv, "bob").await;
+    let carol = login(&srv, "carol").await;
+    manage::create_vault(&alice, "Private").await.unwrap();
+    let ah = hub(&alice).await;
+    ops::put_document(&ah, "Private", "Trip.md", "coast\n", None)
+        .await
+        .unwrap();
+    let v = ah.resolve("Private").await.unwrap();
+    for who in ["bob", "carol"] {
+        note_shares::share_note(&alice, &v, "Trip", who, Role::Editor, false)
+            .await
+            .unwrap();
+    }
+    // Carol's key now differs from the pinned one (as a server substituting
+    // it would make it look): renewing the key must not wrap it for her.
+    ProfileStore::new(&srv.dirs("alice"), "alice")
+        .unwrap()
+        .update(|p| p.pins.insert(carol.user_id.clone(), "0000".into()))
+        .unwrap();
+    let err = note_shares::unshare_note(&alice, &v, "Trip", "bob")
+        .await
+        .unwrap_err();
+    let msg = format!("{err:#}");
+    assert!(
+        msg.contains("changed since it was pinned") && msg.contains("rotate-note-key"),
+        "{msg}"
+    );
+}

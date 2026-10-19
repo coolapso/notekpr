@@ -394,6 +394,22 @@ pub async fn run_in(cli: Cli, dirs: Dirs) -> Result<()> {
             );
             Ok(())
         }
+        Command::RotateNoteKey { vault, path } => {
+            let hub = ctx.hub(&[&vault]).await?;
+            let v = hub.resolve(&vault).await?;
+            let (vid, nid) = {
+                let g = v.lock().await;
+                manage::require_owner(&g)?;
+                let (_, e) = g.find_note(&path)?;
+                if !g.replica.is_shared_object(&e.id) {
+                    bail!("'{path}' is not shared individually");
+                }
+                (g.id().to_string(), e.id.clone())
+            };
+            note_shares::rotate_note_key(&hub.session, &v, &vid, &nid).await?;
+            println!("the key of '{path}' was renewed for its current recipients");
+            Ok(())
+        }
         Command::NoteShares { vault, path } => {
             let hub = ctx.hub(&[&vault]).await?;
             let v = hub.resolve(&vault).await?;

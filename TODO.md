@@ -55,14 +55,14 @@ in it.
 
 ### Crashes and leaks
 
-- [ ] **Deleted text leaks into snapshots** [S-H1 ✔] — with undo enabled (the
+- [x] **Deleted text leaks into snapshots** [S-H1 ✔] — with undo enabled (the
       web editor), `NoteDoc::encode_state` keeps deleted text, so the snapshot
       sent to people a single note is shared with contains text deleted
       before sharing. Encode snapshots from a reloaded copy
       (`NoteDoc::from_updates([state]).encode_state()`) in `start_sharing` and
       `snapshot_request` (`core/src/engine.rs`); core test: delete with undo
       on, share, assert the bytes are gone.
-- [ ] **`percent_decode` panics on `%` + multibyte** [W-H4 ✔] —
+- [x] **`percent_decode` panics on `%` + multibyte** [W-H4 ✔] —
       `core/src/markdown.rs:274` slices a `&str` mid-character; a link like
       `[x](50%増.md)` crashes the editor and reading view for everyone. Decode
       on bytes.
@@ -73,14 +73,14 @@ in it.
       Otherwise the editor dies and typing is silently lost.
 - [ ] Vim visual-mode anchor not clamped after remote edits shrink the text
       [W-L1] — `web/src/editor/vim.rs:247`.
-- [ ] **Per-note WebSocket subscriptions survive removal from the vault**
+- [x] **Per-note WebSocket subscriptions survive removal from the vault**
       [S-H2] — `server/src/ws.rs` `RevokeVault` only drops `(v, None)`. Drop
       member-granted `(v, Some(_))` subscriptions too.
-- [ ] Recipients can miss the share snapshot [S-M3] — apply the document-key
+- [x] Recipients can miss the share snapshot [S-M3] — apply the document-key
       filter inside the latest-snapshot subquery (`server/src/sync.rs`
       `changes_since`) and require `covers_seq >= max(snapshots.covers_seq)` in
       `set_key`. (R2 removes the first-share snapshot; this is cheap now.)
-- [ ] **OIDC login CSRF** [S-M6] — bind `state` to the browser with an
+- [x] **OIDC login CSRF** [S-M6] — bind `state` to the browser with an
       HttpOnly SameSite=Lax nonce cookie (`server/src/routes/auth.rs`).
 - [ ] Links in the live editor open any URL scheme [W-L4] — reuse
       `render::safe_external` in `NoteHost::open_link`.
@@ -92,48 +92,48 @@ in it.
 
 ### Deployment configuration
 
-- [ ] **Dev and prod compose files share project and service name** [D-H1 ✔]
+- [x] **Dev and prod compose files share project and service name** [D-H1 ✔]
       — `docker compose -f docker-compose.dev.yml up` on the prod host replaces
       prod with a dev-mode server behind your domain. Add `name:` to both
       files; never share a project between them.
-- [ ] **Dev-mode safety** [S-L10, D-L10] — refuse `--dev-mode` with an https
+- [x] **Dev-mode safety** [S-L10, D-L10] — refuse `--dev-mode` with an https
       public URL, OIDC or a non-loopback listen unless an explicit override
       flag; revoke dev-issued sessions at startup when dev mode is off; dev
       users never become the first admin.
-- [ ] OIDC token endpoint auth: only `client_secret_basic` works although the
+- [x] OIDC token endpoint auth: only `client_secret_basic` works although the
       docs promise `client_secret_post` [D-H2 ✔] — make it configurable
       (`server/src/oidc.rs`), fix the docs either way.
-- [ ] IdP certificates: only bundled Mozilla roots are trusted, so private-CA
+- [x] IdP certificates: only bundled Mozilla roots are trusted, so private-CA
       IdPs (typical homelab) fail [D-H3] — use the platform verifier / native
       roots or add a CA-bundle option.
-- [ ] Empty env vars count as set [D-M2] — treat `""` as unset in
+- [x] Empty env vars count as set [D-M2] — treat `""` as unset in
       `server/src/config.rs`; remove `COOLPSONOTES_METRICS_TOKEN: ""` from the
       Kubernetes manifest.
-- [ ] `/metrics` is public through Caddy by default [D-M1, S-L10] — block it
+- [x] `/metrics` is public through Caddy by default [D-M1, S-L10] — block it
       in the Caddyfile, add `METRICS_TOKEN` to `.env.example`, document it.
-- [ ] `.dockerignore` misses `.env` and `.claude/` [D-L4].
+- [x] `.dockerignore` misses `.env` and `.claude/` [D-L4].
 
 ### Docs needed for a first local deployment
 
-- [ ] A LAN/homelab path [gap 1]: Caddy `tls internal` (and trusting its root
+- [x] A LAN/homelab path [gap 1]: Caddy `tls internal` (and trusting its root
       CA) or DNS-01, and a Caddy-less compose variant behind an existing proxy.
-- [ ] Identity-provider requirements [gap 2, D-M3]: issuer reachable from the
+- [x] Identity-provider requirements [gap 2, D-M3]: issuer reachable from the
       container at the same URL as from the browser; publicly trusted
       certificate (until D-H3); name/e-mail claims in the ID token (Authelia
       `claims_policy` example) — or add a userinfo fallback.
-- [ ] Backups for compose [D-M4, gap 5]: scheduling, copying backups off the
+- [x] Backups for compose [D-M4, gap 5]: scheduling, copying backups off the
       volume, a restore procedure (and for Kubernetes), `--data-dir` in the
       host example, `--out` needs an existing directory, what a restore loses
       (sessions, devices, memberships created later).
-- [ ] Upgrades [D-M5]: exact commands (`git pull && docker compose build --pull
+- [x] Upgrades [D-M5]: exact commands (`git pull && docker compose build --pull
       && docker compose up -d`).
-- [ ] First admin [D-L10, gap 6]: sign in yourself first or set `ADMINS`; how
+- [x] First admin [D-L10, gap 6]: sign in yourself first or set `ADMINS`; how
       to find your `issuer|subject`; removing from `ADMINS` doesn't revoke;
       never reuse a dev-mode data directory.
-- [ ] From-source deployment [D-M7]: serve a web build outside the checkout
+- [x] From-source deployment [D-M7]: serve a web build outside the checkout
       (`build-web.sh` replaces `dist/web`), secret via env file not argv,
       `--trust-proxy`, `--locked`, a systemd unit with its own user.
-- [ ] Small fixes: `login --dev-user` needs `--server` on first login [D-M6];
+- [x] Small fixes: `login --dev-user` needs `--server` on first login [D-M6];
       env var names for every flag [D-L11]; `X-Forwarded-For` warning [D-L1];
       plain-HTTP-on-LAN caveats (CLI `--insecure-http`, clipboard needs a
       secure context) [gap 4]; bind-mount ownership (uid 65532) [gap 5].
@@ -203,11 +203,11 @@ Before trusting the Markdown mirror and the CLI with real notes.
       by bytes (`max_update_bytes` from `/info`, cached offline), refuse or
       split oversized edits and imports, quarantine a rejected item and keep
       going, show the error.
-- [ ] A snapshot can claim to cover updates still waiting for a key
+- [x] A snapshot can claim to cover updates still waiting for a key
       [S-M2, W-L9] — fix once in core (`snapshot_request`,
       `compaction_candidates`): no snapshot while deferred items touch the
       object.
-- [ ] Past `MAX_DEFERRED`, updates are dropped while `seq` advances [C-L11]
+- [x] Past `MAX_DEFERRED`, updates are dropped while `seq` advances [C-L11]
       (core).
 - [ ] **IME composition is applied against a stale text base** [W-H2] —
       interim: in `NoteHost::edit`, resync instead of applying when the CRDT
@@ -283,7 +283,7 @@ Nobody's notes may be locked in because a server or an app is unavailable.
 - [ ] Recipients of a single note learn vault-wide metadata [S-L7] — vault
       `head_seq` and gaps, member ids; `get_user` returns members' e-mail to
       recipients even in exact-e-mail directory mode.
-- [ ] Store `email_verified`; only verified e-mails are searchable [S-L9].
+- [x] Store `email_verified`; only verified e-mails are searchable [S-L9].
 - [ ] Gateway audit log misses moves and deletes (only `put_document` and
       `put_attachment` are recorded).
 - [ ] Note-key rotation skips the trust-on-first-use pin check [C-M7]
@@ -435,9 +435,9 @@ with SQLite; no SQL-dialect abstraction.
       client error reports opt-in, scrubbed of content and titles,
       first-party only; written policy.
 - [ ] **Release engineering**: publish versioned images to GHCR [D-H4];
-      prebuilt binaries [gap 3]; `binaryen` in the image build [D-L5]; CI runs
+      prebuilt binaries [gap 3]; `binaryen` in the image build [D-L5]; ~~CI runs
       the wasm clippy step and reads the `wasm-bindgen` version from
-      `crates/web/Cargo.toml` [D-L8]; Kubernetes manifest fixes — `/tmp`
+      `crates/web/Cargo.toml` [D-L8]~~ (done); Kubernetes manifest fixes — `/tmp`
       volume, `ingressClassName`, TLS secret, body limit vs attachment size
       [D-L3]; signed releases, SBOM.
 - [ ] **External security and cryptography audit** before selling on
@@ -452,9 +452,9 @@ with SQLite; no SQL-dialect abstraction.
 
 - [ ] `protocol.md`: document `GET /me/audit`, `/admin/*` and the WebSocket
       `snapshot` message [D-L2].
-- [ ] `development.md`: Dex is on port 5556 (8081 is the OIDC-enabled server);
+- [x] `development.md`: Dex is on port 5556 (8081 is the OIDC-enabled server);
       `network_mode: host` is Linux-only [D-L7].
-- [ ] `AGENTS.md` and `development.md`: `task cli -- --profile alice ls` needs
+- [x] `AGENTS.md` and `development.md`: `task cli -- --profile alice ls` needs
       a vault argument [D-L6]; Dockerfile and compose files are at the repo
       root, not in `deploy/` [D-L12]; `task ci` vs the GitHub workflow
       (wasm clippy, cargo-deny) [D-L8].

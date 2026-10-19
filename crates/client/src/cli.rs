@@ -84,6 +84,8 @@ pub enum Command {
         #[arg(long)]
         if_match: Option<String>,
     },
+    /// Capture a quick note (TEXT, or stdin) in your quick-notes vault; --list shows the newest.
+    Quick(QuickArgs),
     /// Create a folder.
     Mkdir { vault: String, path: String },
     /// Move or rename a document or folder.
@@ -179,6 +181,26 @@ pub enum Command {
     Agent(AgentCmd),
     /// Local plaintext HTTP API for agents and scripts.
     Gateway(GatewayArgs),
+}
+
+#[derive(Args, Debug)]
+pub struct QuickArgs {
+    /// The note's text (several words are joined with spaces). Read from
+    /// stdin when omitted.
+    pub text: Vec<String>,
+    /// This vault (id or name) instead of the quick-notes vault from your
+    /// settings (Settings → Editor in the web app; default: your own first vault).
+    #[arg(long)]
+    pub vault: Option<String>,
+    /// List the newest quick notes (name and first line) instead of adding one.
+    #[arg(long, conflicts_with = "text")]
+    pub list: bool,
+    /// With --list: include archived ones (Quick notes/Archive).
+    #[arg(long, requires = "list")]
+    pub archived: bool,
+    /// With --list: how many to show.
+    #[arg(long, default_value_t = 20, requires = "list")]
+    pub limit: usize,
 }
 
 #[derive(Args, Debug)]

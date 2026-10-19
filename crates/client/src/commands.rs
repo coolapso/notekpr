@@ -106,6 +106,7 @@ fn access(c: &Command) -> Access {
             Some(HistoryCmd::Restore { .. }) => Access::Write,
             _ => Access::Read,
         },
+        Command::Quick(q) if q.list => Access::Read,
         Command::Sync(a) if a.no_dir => Access::Free,
         Command::Sync(a) if a.once => Access::Write,
         Command::Sync(_) => Access::Daemon,
@@ -486,6 +487,7 @@ pub async fn run_in(cli: Cli, dirs: Dirs) -> Result<()> {
             append,
             if_match,
         } => write(&ctx, &vault, &path, attachment, append, if_match.as_deref()).await,
+        Command::Quick(a) => quick(&ctx, a).await,
         Command::Mkdir { vault, path } => {
             let hub = ctx.hub(&[&vault]).await?;
             let v = hub.resolve(&vault).await?;
@@ -1245,6 +1247,99 @@ async fn write(
         "unchanged"
     };
     println!("{what} {}", out.path);
+    if out.pending_changes > 0 {
+        ui::status(&format!(
+            "saved locally; {} change(s) will be uploaded when the server is reachable",
+            out.pending_changes
+        ));
+    }
+    Ok(())
+}
+
+/// `quick`: add a quick note (or list them) in the quick-notes vault: the
+/// one named with --vault, else the synced preference, else the default.
+async fn quick(ctx: &Ctx, a: QuickArgs) -> Result<()> {
+    let text = if a.list {
+        String::new()
+    } else if a.text.is_empty() {
+        if ui::stdin_is_tty() {
+            eprintln!("Type your quick note, then press Ctrl+D:");
+        }
+        let mut s = String::new();
+        std::io::stdin()
+            .read_to_string(&mut s)
+            .context("reading stdin")?;
+        s
+    } else {
+        a.text.join(" ")
+    };
+    if !a.list && text.trim().is_empty() {
+        bail!("nothing to save: pass the text as an argument or on stdin");
+    }
+    let no_vault = || {
+        anyhow!(
+            "quick notes need a vault you can edit: create one with `coolpsonotes vault create <name>`"
+        )
+    };
+    // Decided before opening the hub, so only that vault is synced.
+    let target = match &a.vault {
+        Some(v) => Some(v.clone()),
+        None => match ops::quick_vault_online(&*ctx.session()?).await {
+            Ok(Some(id)) => Some(id),
+            Ok(None) => return Err(no_vault()),
+            // Offline or signed out: the default among the local copies.
+            Err(e) => {
+                tracing::debug!("cannot ask the server for the quick-notes vault: {e}");
+                None
+            }
+        },
+    };
+    let refs: Vec<&str> = target.as_deref().into_iter().collect();
+    let hub = ctx.hub(&refs).await?;
+    let vref = match target {
+        Some(t) => t,
+        None => {
+            let id = ops::local_quick_vault(&hub).await.ok_or_else(no_vault)?;
+            let name = hub.resolve(&id).await?.lock().await.name().to_string();
+            ui::warn(&format!(
+                "could not read your quick-notes vault setting from the server; using '{name}'"
+            ));
+            id
+        }
+    };
+    if a.list {
+        let notes = op(ops::list_quick_notes(&hub, &vref, a.archived, a.limit).await)?;
+        if ctx.json {
+            ctx.print_json(&notes);
+        } else if notes.is_empty() {
+            println!("no quick notes yet — add one with `coolpsonotes quick <text>`");
+        } else {
+            for n in notes {
+                println!(
+                    "{:<18}  {}{}",
+                    n.title,
+                    n.preview,
+                    if n.archived { "  (archived)" } else { "" }
+                );
+            }
+        }
+        return Ok(());
+    }
+    let out = op(ops::create_quick_note(&hub, &vref, &text).await)?;
+    hub.snapshot_idle(Duration::ZERO, livesync::SESSION_MIN_UPDATES)
+        .await;
+    if ctx.json {
+        ctx.print_json(&out);
+    } else {
+        let name = hub
+            .resolve(&out.vault)
+            .await?
+            .lock()
+            .await
+            .name()
+            .to_string();
+        println!("created {} in '{name}'", out.path);
+    }
     if out.pending_changes > 0 {
         ui::status(&format!(
             "saved locally; {} change(s) will be uploaded when the server is reachable",

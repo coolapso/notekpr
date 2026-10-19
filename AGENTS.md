@@ -5,14 +5,14 @@ Read this first; it is short on purpose and links to the detailed docs.
 
 > Not to be confused with [docs/agents.md](docs/agents.md), which documents
 > the *product feature* that lets AI agents use coolpsonotes as a knowledge base
-> (gateway, MCP).
+> (CLI, Markdown folder, local HTTP gateway).
 
 ## What this is
 
 coolpsonotes is a self-hosted, local-first, **end-to-end encrypted**
 Markdown notes platform with real-time collaboration, written entirely in
 Rust: a zero-knowledge sync server, a browser client compiled to WebAssembly,
-and a desktop/CLI client (sync daemon, Markdown mirror, agent gateway, MCP).
+and a desktop/CLI client (sync daemon, Markdown mirror, agent gateway).
 The original requirements are in [spec.md](spec.md).
 
 | Doc | Read it when you… |
@@ -23,6 +23,9 @@ The original requirements are in [spec.md](spec.md).
 | [docs/development.md](docs/development.md) | set up a machine, run things locally, run tests |
 | [docs/acceptance.md](docs/acceptance.md) | want to know which test proves which requirement |
 | [docs/desktop-client.md](docs/desktop-client.md), [docs/operations.md](docs/operations.md) | change the CLI or deployment/ops behaviour |
+
+Known work, review findings and decisions are tracked in [TODO.md](TODO.md) —
+check it before starting something, and keep it current.
 
 ## Hard rules
 
@@ -68,7 +71,7 @@ crates/web      Leptos CSR → wasm32. state.rs (Core + Ui, sync, presence) ·
                 actions.rs (user operations) · editor/ (contenteditable live-preview
                 editor, syntax.rs, vim.rs) · views/ · render.rs (reading view)
 crates/client   `coolpsonotes` CLI: session.rs + livesync.rs (sync), mirror.rs
-                (Markdown files), gateway.rs, mcp.rs, ops.rs, note_shares.rs
+                (Markdown files), gateway.rs, ops.rs, note_shares.rs
 tests/e2e       browser tests: suite.py, cross_client.py, wd.py (stdlib WebDriver)
 deploy/         Caddy, Dex (dev OIDC), Kubernetes · Dockerfile, compose files
 ```
@@ -102,7 +105,7 @@ Without go-task, see the plain commands in the [Taskfile](Taskfile.yml) or
   - crypto, formats, CRDT, Markdown → unit tests in `crates/core`
   - API, authorization, sync rules → `crates/server/tests/api.rs` (real
     client-side crypto against an in-process server)
-  - CLI, mirror, gateway, MCP → `crates/client/tests/`
+  - CLI, mirror, gateway → `crates/client/tests/`
   - editor syntax and rendering → unit tests in `crates/web` (run natively)
   - UI flows → `tests/e2e/suite.py` (several users = several browsers)
 - Docs follow the code: API or wire change → `docs/protocol.md`; anything

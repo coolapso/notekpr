@@ -3,8 +3,10 @@
 coolpsonotes can be the long-term knowledge base and memory of AI agents and
 scripts — without giving them your account, your keys or access to every note.
 Because the server cannot decrypt anything, plaintext access always goes
-through a **trusted client that holds keys**: the `coolpsonotes gateway` (local
-HTTP API) or `coolpsonotes mcp` (Model Context Protocol over stdio).
+through a **trusted client that holds keys** — the `coolpsonotes` CLI, running
+on the agent's machine with the agent's own identity. An agent can use it in
+three ways (§3): CLI commands, a folder of plain Markdown files kept in sync,
+or a local HTTP API (the gateway).
 
 ## 1. The agent model
 
@@ -22,9 +24,9 @@ HTTP API) or `coolpsonotes mcp` (Model Context Protocol over stdio).
 * Every write is an ordinary encrypted CRDT update attributed to the agent, so
   people editing the same note concurrently never lose their changes, and the
   vault's history shows who changed what.
-* The gateway and MCP server can also run with a person's own profile (e.g. a
-  personal script). Then they have that person's access — prefer an agent for
-  anything automated.
+* The CLI, the Markdown folder and the gateway can also run with a person's
+  own profile (e.g. a personal script). Then they have that person's access —
+  prefer an agent for anything automated.
 
 ## 2. Setting up an agent
 
@@ -72,7 +74,42 @@ web app's share dialog) shows; it is then pinned and you are warned if it ever
 changes. Use `--role viewer` for read-only agents. `coolpsonotes agent list`
 shows your agents, their fingerprints and active credentials.
 
-## 3. The gateway (local HTTP API)
+## 3. How an agent works with notes
+
+Pick whatever fits the agent; all three use the same profile, keys and sync,
+and every write is an encrypted CRDT update merged with concurrent edits.
+
+**CLI commands** — best for agents with a shell (coding agents, scripts, cron
+jobs). Composable, nothing extra to run:
+
+```sh
+coolpsonotes -p assistant ls "Agent memory" People
+coolpsonotes -p assistant cat "Agent memory" People/Alice.md
+coolpsonotes -p assistant search tag:project deadline
+echo "- met Alice about the roadmap" | coolpsonotes -p assistant write "Agent memory" Journal.md --append
+coolpsonotes -p assistant cat "Agent memory" Plan.md --json     # includes the content hash
+coolpsonotes -p assistant write "Agent memory" Plan.md --if-match <hash> < Plan.md
+```
+
+`write` merges the new text as a diff, so it never overwrites what someone else
+changed meanwhile; `--if-match` refuses the write if the note changed since the
+agent read it.
+
+**A Markdown folder** — best for agents that edit files natively (Claude Code,
+Codex, editors with AI features). Keep the agent's vaults mirrored and let the
+agent read, grep and edit ordinary files:
+
+```sh
+coolpsonotes -p assistant sync --dir ~/agent-notes --plaintext-ok
+```
+
+Edits on disk are picked up, merged and synced; changes from people appear in
+the files (see [desktop-client.md §4](desktop-client.md#4-sync-and-the-markdown-mirror)).
+
+**The gateway (local HTTP API)** — for programs and services that prefer HTTP
+and JSON, or need change events. Described next.
+
+## 4. The gateway (local HTTP API)
 
 ```sh
 coolpsonotes -p assistant gateway                       # 127.0.0.1:7878
@@ -146,46 +183,6 @@ Writes are acknowledged once they are stored in the encrypted local replica;
 they are uploaded immediately when online (`pending_changes` in the response
 tells you if some are still queued) and retried automatically.
 
-## 4. MCP
-
-`coolpsonotes mcp` speaks MCP (protocol revision `2025-06-18`, JSON-RPC 2.0,
-one message per line on stdio; logs go to stderr). It runs the same live sync
-as the gateway. Tools:
-
-| Tool | Arguments |
-|---|---|
-| `list_vaults` | — |
-| `list_documents` | `vault`, `folder?` |
-| `read_document` | `vault`, `path` → content item 1: Markdown; item 2: metadata JSON incl. `hash` |
-| `search` | `query`, `vault?`, `limit?` |
-| `create_document` | `vault`, `path`, `content` (fails if it exists) |
-| `update_document` | `vault`, `path`, `content`, `expected_hash?` (full content, merged as a diff) |
-| `append_to_document` | `vault`, `path`, `content` |
-| `move_document` | `vault`, `from`, `to`, `update_links?` |
-| `delete_document` | `vault`, `path` (moves to the trash) |
-| `get_backlinks` | `vault`, `path` |
-| `document_history` | `vault`, `path`, `revision?` |
-
-With `--read-only` the five write tools are not offered at all (and refused if
-called). `--vault` restricts the vaults as for the gateway. Tool failures are
-returned as results with `isError: true`.
-
-Example client configuration (Claude Desktop / Claude Code `mcpServers`
-format; other MCP clients use the same command and arguments):
-
-```json
-{
-  "mcpServers": {
-    "coolpsonotes": {
-      "command": "/home/me/.local/bin/coolpsonotes",
-      "args": ["--profile", "assistant", "mcp", "--vault", "Agent memory"]
-    }
-  }
-}
-```
-
-Claude Code: `claude mcp add coolpsonotes -- coolpsonotes --profile assistant mcp`.
-
 ## 5. Credential and key rotation
 
 * **Client secret**: `coolpsonotes agent rotate-secret <agent> --secret-out
@@ -205,27 +202,29 @@ Claude Code: `claude mcp add coolpsonotes -- coolpsonotes --profile assistant mc
 
 ## 6. Audit log
 
-Every write through the gateway or MCP is appended to
+Every write through the gateway is appended to
 `$XDG_DATA_HOME/coolpsonotes/<profile>/audit.jsonl` (mode 0600):
 
 ```json
 {"at":1792378331454,"via":"gateway","op":"put_document","vault":"6ad6…","document":"052b…","bytes":18}
 ```
 
-Operations: `put_document`, `create_document`, `update_document`,
-`append_to_document`, `move_document`, `trash_document`/`delete_document`,
-`put_attachment`. Entries contain time, channel, vault id, document id and size
-— never content, titles or paths. On the server side, each update is
+Operations are named after the call (`put_document`, `put_attachment`).
+Entries contain time, channel, vault id, document id and size — never content,
+titles or paths. (CLI commands and the Markdown folder are not audited
+separately; their writes are attributed to the agent on the server like any
+other.) On the server side, each update is
 attributed to the agent's identity, and owners see membership and key events
 in the vault audit (`GET /api/v1/vaults/{v}/audit`).
 
 ## 7. Threat notes
 
-* **The gateway host holds plaintext** of every vault shared with the agent,
-  and the agent's private key. Treat it like a server with secrets: full-disk
-  encryption, an OS account of its own, no untrusted code running as that user.
-  The local key file protects the replica only against copying the data
-  directory, not against processes of the same user.
+* **The agent's machine holds plaintext** of every vault shared with the
+  agent, and the agent's private key. Treat it like a server with secrets:
+  full-disk encryption, an OS account of its own, no untrusted code running as
+  that user. The local replica is encrypted, but its key file currently sits in
+  the same profile directory, so a copy of that directory can be decrypted
+  (moving it to the OS keyring is planned — see [TODO.md](../TODO.md)).
 * **Anyone with the gateway token** (or able to run programs as the gateway's
   user) can read and, unless `--read-only`, change the exposed vaults. Keep the
   default loopback address; restrict with `--vault` and `--read-only`.
@@ -240,3 +239,54 @@ in the vault audit (`GET /api/v1/vaults/{v}/audit`).
 * **Revocation is forward-looking**: removing an agent prevents access to
   future content after key rotation; data it already synced or exported cannot
   be recalled.
+
+## 8. Why there is no MCP server
+
+Earlier versions shipped `coolpsonotes mcp`, a Model Context Protocol server on
+stdio. It was removed on purpose (2026-10).
+
+**What MCP is good at** is giving an AI application a standard way to reach a
+tool it could not reach otherwise — typically a *remote* service, connected to
+by URL, with nothing to install.
+
+**A local stdio MCP server added little here.** It had to run on the agent's
+machine with the agent's keys anyway — exactly where the CLI and the Markdown
+folder already work. And for agents that can run programs, those are the
+better tools:
+
+* **Plain files beat tool calls.** Agents read, search, diff and edit files
+  with their native tools, at any scale, without a tool schema in their
+  context and without one round trip per operation.
+* **The CLI composes.** `cat`, `write --append`, `search`, pipes and scripts
+  cover the same operations, with the same authentication, encryption and
+  merge-as-diff behaviour, and humans use the very same commands.
+* **Less to secure and maintain.** The MCP server was a second plaintext write
+  path (its own JSON-RPC implementation, tool definitions, audit and
+  read-only enforcement) to keep correct and safe, for no capability the CLI
+  lacked.
+
+**Where MCP would add something** is the case a stdio server cannot serve
+either: hosted assistants and cloud agents that cannot install or run
+anything and can only connect to a URL. That is the remote connector below.
+
+### Considered for later: a remote MCP connector
+
+A separate, optional service — `coolpsonotes connector`, the same binary —
+that speaks MCP over HTTP (Streamable HTTP transport) to remote AI clients:
+
+* It runs with an **agent identity**, holds only that agent's key and can only
+  read the vaults explicitly shared with that agent, as viewer or editor.
+  Revoking is the usual unshare + key rotation.
+* It is **never part of the sync server process**: the server stays
+  zero-knowledge. Self-hosters run the connector wherever they like (next to
+  the server, or at home); it is a client like any other.
+* **Trust trade-off, stated plainly:** whoever operates the connector can read
+  the vaults shared with its agent. A hosted version must therefore be an
+  explicit, per-vault opt-in ("vaults shared with the hosted connector are
+  readable by the service").
+* Open questions: authentication of remote MCP clients (OAuth 2.1 as the MCP
+  specification describes), read-only by default, rate limits, audit, and
+  which tools to offer (the gateway's operations in `crates/client/src/ops.rs`
+  are a ready starting point).
+
+Tracked in [TODO.md](../TODO.md).

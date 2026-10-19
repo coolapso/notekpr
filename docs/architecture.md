@@ -13,7 +13,7 @@ alternatives were considered. The wire protocol is in
                  │                                                                      │
  Browser ──────▶ │  Web client (Rust → WebAssembly, Leptos)                             │
                  │  Desktop client `coolpsonotes` (Rust): sync daemon, Markdown mirror  │
- AI agents ────▶ │  Agent gateway (local HTTP API) and MCP server — part of the client  │
+ AI agents ────▶ │  same client: CLI commands, a Markdown folder, local HTTP gateway    │
                  │                                                                      │
                  │      all of them link coolpsonotes-core: crypto · keys · CRDT ·       │
                  │      protocol types · Markdown analysis · search                      │
@@ -32,7 +32,7 @@ alternatives were considered. The wire protocol is in
 | `crates/core` | Everything security-sensitive or shared: cryptographic formats, key hierarchy, the CRDT document model (vault index + notes), protocol types, client engine logic (`engine.rs`), Markdown link/tag analysis, search, path rules. Compiled natively and to wasm32. |
 | `crates/server` | Headless sync server: OIDC relying party, sessions, OAuth device and client-credentials grants, users/devices/agents, vaults/members/key envelopes, the ordered encrypted log, snapshots, attachments, WebSocket fan-out, rate limiting, metrics, backup/restore. Works without the web client. |
 | `crates/web` | Browser client compiled to WebAssembly; served as static files by the server. Custom Markdown editor, all decryption in the browser. |
-| `crates/client` | Desktop/CLI client: login (device flow), enrollment, encrypted local replica, live sync daemon with plaintext Markdown mirror, export/import, agent gateway (HTTP) and MCP (stdio). |
+| `crates/client` | Desktop/CLI client: login (device flow), enrollment, encrypted local replica, live sync daemon with plaintext Markdown mirror, export/import, agent gateway (local HTTP API). |
 
 The server never links any code path that could decrypt content: it only
 handles opaque byte strings and public keys.
@@ -43,7 +43,7 @@ handles opaque byte strings and public keys.
 |---|---|---|---|
 | Language | Rust everywhere, including the browser (WebAssembly) | TypeScript web client (Svelte/React + CodeMirror + Yjs) | Mandated for the core; using it in the browser too means a single implementation of crypto and CRDT logic for every client, no npm supply chain, and no JS/Rust format drift. Cost: we wrote our own editor instead of reusing CodeMirror. |
 | Server framework | axum 0.8 + tokio + tower-http | actix-web, warp | Mature, minimal, first-class WebSockets, tower middleware ecosystem. |
-| Database | SQLite (WAL) via sqlx, single file | PostgreSQL | Zero extra services for self-hosting; a single file is a complete, consistent backup (`VACUUM INTO`); plenty for families/small teams. Writes are serialized in-process. Postgres support can be added behind the same queries if scale demands. |
+| Database | SQLite (WAL) via sqlx, single file — **SQLite only, by decision**, also for a hosted offering (one database per instance; grow by adding instances) | PostgreSQL | Zero extra services for self-hosting; a single file is a complete, consistent backup (`VACUUM INTO`); a notes workload with no server-side content processing fits one SQLite instance for a very large number of users. The SQL is SQLite-specific (e.g. `VACUUM INTO`, `BEGIN IMMEDIATE`). Storage access is to move behind small interfaces (see [TODO.md](../TODO.md)) so the decision stays cheap to revisit, but there are no plans for another database. |
 | Attachments | Encrypted blobs inside SQLite | Filesystem/S3 | Atomic with metadata, one-file backups. Tradeoff: very large media libraries make the DB big (limit configurable, default 25 MB per file). |
 | CRDT | yrs 0.28 (Rust port of Yjs, update format v1) | Automerge, diamond-types, custom OT | Mature, fast, compact updates, text + map types, undo manager, sticky indices for cursors; binary compatible with the Yjs ecosystem. |
 | Document model | One `Y.Text` with the Markdown source per note; one `Y.Map` index per vault | Rich-text CRDT (ProseMirror/XmlFragment) with Markdown export | Markdown stays the canonical format, so external editors (Neovim, Obsidian) map to text diffs and nothing proprietary is needed for portability. |
@@ -58,6 +58,7 @@ handles opaque byte strings and public keys.
 | Markdown rendering | pulldown-cmark (CommonMark + GFM tables, task lists, strikethrough, footnotes, wiki links) | comrak | Fast, pure Rust, wasm-friendly. Raw HTML is rendered as text (no sanitizer needed). |
 | Search | Client-side scan with simple scoring over decrypted notes | Tantivy in WASM, server-side index | E2EE forbids server indexing; ordinary vaults (thousands of notes) search instantly with a scan. Tantivy is an option for large desktop vaults. |
 | Reverse proxy / TLS | Caddy example (automatic HTTPS); any proxy works | Built-in TLS | Keeps the server simple; TLS is mandatory in production (spec) and handled at the edge. |
+| Agent access | Agents use the client with their own identity: CLI commands, a synced Markdown folder, or the local HTTP gateway | A local MCP server (shipped at first, then removed); MCP or plaintext APIs on the sync server | Files and the CLI are better tools than tool calls for agents that can run programs; a local MCP server only duplicated them, and anything on the sync server would break zero knowledge. A remote MCP connector for agents that cannot install anything is a candidate for later ([agents.md §8](agents.md#8-why-there-is-no-mcp-server)). |
 | License | AGPL-3.0-or-later | MIT/Apache-2.0, MPL-2.0 | Protects users of hosted instances (source must be offered), compatible with all dependencies (MIT/Apache/BSD/ISC/Zlib). Tradeoff: some companies avoid AGPL; the core crate could be relicensed under MPL-2.0 if third-party integrations need it. |
 
 ## 3. Data model
@@ -217,7 +218,7 @@ has unsent edits to it, that person's client saves their version as a new
 | M2 Server | auth (OIDC, dev, device flow, client credentials), vaults, sharing, log, snapshots, attachments, WebSocket, ops | done (`cargo test -p coolpsonotes-server`) |
 | M3 Web client | onboarding, devices, recovery, editor, collaboration, sharing, history, search, import/export, settings, admin | done (browser e2e tests in `tests/e2e`) |
 | M4 Desktop client | login, enrollment, offline replica, live sync, Markdown mirror, export/import | see `crates/client` |
-| M5 Agents | agent identities, gateway, MCP | server + web done; gateway/MCP in `crates/client` |
+| M5 Agents | agent identities, CLI and Markdown-folder access, gateway | done (`crates/client`); local MCP server removed, remote MCP connector considered for later |
 | M6 Packaging | Docker image, compose, Kubernetes, backup/restore docs | done |
 | M7 Note sharing | share single notes outside a vault: document keys, per-note subscriptions, web + CLI | done (S `individual_note_sharing`, D `single_note_sharing_end_to_end`, E `test_note_sharing`) |
 | Next | native desktop GUI shell (Tauri around the web UI), mobile apps, folder sharing, signed updates, IndexedDB cache for faster browser start | planned |

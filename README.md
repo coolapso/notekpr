@@ -11,12 +11,16 @@ read anything.
   viewer; edit the same note simultaneously with live cursors. Conflict-free
   merging (CRDTs), also after working offline.
 * **Plain Markdown** — wiki links, backlinks, tags, embeds, export to a
-  folder of `.md` files at any time. The desktop client can mirror vaults as
-  real files you edit with Neovim or Obsidian.
+  folder of `.md` files at any time.
+* **Use your own editor** — the desktop client keeps your vaults as a plain
+  folder of Markdown files, synced live and both ways: edit with Obsidian,
+  Neovim, VS Code or anything else while the server only stores ciphertext
+  ([how](docs/own-editor.md)).
 * **Easy for everyone** — sign in with your existing identity provider (OIDC),
   one click to set up encryption, a clean editor with a formatting toolbar.
 * **For AI agents too** — give an agent its own identity and keys, share only
-  the vaults it needs, and connect it through a local HTTP gateway or MCP.
+  the vaults it needs; it works with notes through the CLI, a folder of
+  Markdown files, or a local HTTP gateway.
 * **Rust everywhere** — the server, the desktop client and the browser client
   (compiled to WebAssembly) share one core crate for all cryptography and
   syncing. No npm, no third-party JavaScript.
@@ -67,16 +71,17 @@ provider setup, reverse proxies, Kubernetes, backups, upgrades and monitoring.
 |---|---|
 | Browser | served by the server; works on desktop and phones |
 | Desktop / CLI (`coolpsonotes`) | offline replica, live sync, optional Markdown mirror, export/import — [docs/desktop-client.md](docs/desktop-client.md) |
-| Agents | gateway HTTP API and MCP server — [docs/agents.md](docs/agents.md) |
+| Agents | CLI, Markdown folder or local HTTP gateway — [docs/agents.md](docs/agents.md) |
 
 ## Documentation
 
+* [Use your own editor (Obsidian, Neovim, …)](docs/own-editor.md)
 * [Architecture and technology decisions](docs/architecture.md)
 * [Security model and threat analysis](docs/security.md)
 * [Sync protocol and HTTP API](docs/protocol.md)
 * [Operations](docs/operations.md) · [Development](docs/development.md)
 * [Acceptance criteria and how they are tested](docs/acceptance.md)
-* [Working on the code (rules for humans and AI agents)](AGENTS.md)
+* [Working on the code (rules for humans and AI agents)](AGENTS.md) · [TODO and roadmap](TODO.md)
 
 ## Status
 
@@ -85,7 +90,7 @@ encryption with device enrollment, recovery and key rotation, vault sharing
 with roles, sharing single notes with people outside a vault, live
 collaboration, offline sync, revision history, trash,
 search/backlinks/tags, import/export, agent identities, desktop/CLI client with
-gateway and MCP, Docker/Kubernetes packaging. Planned: native desktop GUI shell,
+agent gateway, Docker/Kubernetes packaging. Planned: native desktop GUI shell,
 mobile apps, sharing folders, signed updates
 ([roadmap](docs/architecture.md#9-milestones)).
 

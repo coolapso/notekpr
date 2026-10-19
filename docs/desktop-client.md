@@ -4,7 +4,7 @@
 Windows). It keeps an **encrypted local replica** of your vaults for offline
 use, syncs live over the WebSocket, can **mirror vaults as ordinary Markdown
 files** you edit with Neovim, VS Code or Obsidian, and imports/exports plain
-Markdown. The same binary hosts the [agent gateway and MCP server](agents.md).
+Markdown. The same binary is how [AI agents](agents.md) work with notes (CLI, Markdown folder, local HTTP gateway).
 
 All cryptography happens in the client, with the same core crate the server
 and the browser app use (`crates/core`). The server only ever receives
@@ -161,6 +161,9 @@ five edits accumulated) and when it is compacted (every ~200 updates).
 
 ## 4. Sync and the Markdown mirror
 
+For a step-by-step guide to working in Obsidian, Neovim or any other editor
+with an always-running mirror, see [own-editor.md](own-editor.md).
+
 ```sh
 coolpsonotes sync                       # encrypted replicas only, live
 coolpsonotes sync --dir ~/Notes         # + plaintext Markdown mirror, live
@@ -193,7 +196,7 @@ WantedBy=default.target
 
 | Mode | What is on disk | Protects against |
 |---|---|---|
-| `sync` (default) | encrypted replica: CRDT state encrypted with the vault keys and sealed with a per-profile local key | someone copying the data directory (backups, sync folders, other users on the machine) |
+| `sync` (default) | encrypted replica: CRDT state encrypted with the vault keys and sealed with a per-profile local key | other users on the machine (file permissions); copies of individual replica files. **Not** a copy of the whole profile directory, which includes the local key (see §10) |
 | `sync --dir DIR` (**plaintext mirror**) | additionally ordinary decrypted `.md` files and attachments in `DIR` | only file permissions (files `0600`, directories `0700`) and your disk encryption |
 
 The plaintext mirror is the point of "real Markdown files", but anything that
@@ -394,13 +397,16 @@ attachment limit (reported).
 | `$XDG_DATA_HOME/coolpsonotes/<profile>/local.key` (`0600`) | random 256-bit local key |
 | `…/<profile>/account.sealed`, `device.sealed` | account and device secrets, sealed with the local key |
 | `…/<profile>/vaults/<id>/` | sealed replica: state, pending journal, document states, mirror bookkeeping; attachment blobs (vault-key ciphertext) |
-| `…/<profile>/audit.jsonl` | gateway/MCP write log (no content) |
+| `…/<profile>/audit.jsonl` | gateway write log (no content) |
 
 `COOLPSONOTES_CONFIG_DIR` and `COOLPSONOTES_DATA_DIR` override the two roots.
 
-Honest limits: the local key protects the replica and secrets against casual
-copying of the data directory. It does **not** protect against malware or
-anyone able to run programs as your OS user — they can read `local.key` too.
+Honest limits: `local.key` lives in the same profile directory as the sealed
+data, so **a copy of that directory (a backup, a synced folder) can be
+decrypted** — keep it out of cloud-sync and unencrypted backups. Moving the
+local key into the OS keyring is planned ([TODO.md](../TODO.md)). The key does
+not protect against malware or anyone able to run programs as your OS user
+either — they can read `local.key` too.
 Use full-disk encryption (LUKS, FileVault, BitLocker) and a screen lock for the
 lost-or-stolen-laptop case. Session tokens in the profile grant server access
 (not decryption) until they expire or the device is revoked.

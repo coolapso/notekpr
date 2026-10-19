@@ -6,7 +6,7 @@
 crates/core     shared crypto, keys, CRDT model, protocol, engine, markdown, search
 crates/server   sync server (axum + SQLite)            → coolpsonotes-server
 crates/web      browser client (Leptos → wasm32)       → dist/web
-crates/client   desktop/CLI client, gateway, MCP       → coolpsonotes
+crates/client   desktop/CLI client, mirror, gateway    → coolpsonotes
 tests/e2e       browser end-to-end tests (Python stdlib + chromedriver)
 deploy/         Caddy, Dex (dev OIDC), Kubernetes
 docs/           architecture, protocol, security, operations, agents, desktop client
@@ -86,7 +86,7 @@ With Docker: `docker compose -f docker-compose.dev.yml up --build`
 cargo test -p coolpsonotes-core      # crypto, key hierarchy, CRDT model, diffs, markdown, search
 cargo test -p coolpsonotes-server    # end-to-end API tests with real client-side crypto
 cargo test -p coolpsonotes-web       # editor syntax engine, safe rendering, zip
-cargo test -p coolpsonotes-client    # sync engine, mirror, gateway, MCP against an in-process server
+cargo test -p coolpsonotes-client    # sync engine, mirror, gateway against an in-process server
 tests/e2e/run.sh                     # headless browsers: onboarding, collaboration, devices,
                                      # recovery, viewers, history, trash, search, offline,
                                      # attachments, mobile — then browser ↔ CLI mirror sync

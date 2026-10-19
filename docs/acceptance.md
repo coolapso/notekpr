@@ -20,7 +20,7 @@ Legend: **S** = `cargo test -p coolpsonotes-server` (`crates/server/tests/api.rs
 | 11 | Device enrollment and recovery work without server-held plaintext keys | S `device_enrollment_and_recovery`; E `test_devices_and_recovery` (code comparison, approval, recovery-key unlock) |
 | 12 | The web frontend can edit encrypted vaults | E all tests |
 | 13 | An authorized desktop client can read and edit Markdown locally | D `mirror_syncs_both_ways_and_merges_external_edits`; X files edited on disk reach the browser and vice versa |
-| 14 | An authorized agent client can read and update permitted documents without exposing plaintext to the server | S `agents_are_scoped_to_shared_vaults`; D `agent_gateway_is_scoped_audited_and_syncs`, `gateway_streams_change_events`, `mcp_tools_read_search_and_update` |
+| 14 | An authorized agent client can read and update permitted documents without exposing plaintext to the server | S `agents_are_scoped_to_shared_vaults`; D `agent_gateway_is_scoped_audited_and_syncs`, `gateway_streams_change_events`; agents can also use the CLI and a Markdown folder ([agents.md §3](agents.md#3-how-an-agent-works-with-notes)) |
 | 15 | Vaults can be exported in portable Markdown | Web: vault settings → Export (zip of `.md` + attachments); D `export_import_round_trip_preserves_paths_and_content` |
 | 16 | Encrypted backups can be restored successfully | S `backup_and_restore_roundtrip` (online backup, restore into a new data dir, original keys decrypt notes and attachments) |
 | 17 | Runs without proprietary cloud services or paid licenses | Single self-hosted binary + SQLite; any OIDC provider (verified with Dex); AGPL-3.0 |

@@ -24,3 +24,11 @@ features = [
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 proptest = { version = "1", default-features = false, features = ["std"] }
+
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+wasm-bindgen-test = "0.3"
+wasm-bindgen-futures = "0.4"
+web-sys = { version = "0.3", features = [
+  "InputEventInit", "KeyboardEventInit", "CompositionEventInit", "DragEventInit", "MouseEventInit",
+  "ClipboardEventInit", "EventInit", "DataTransferItemList", "DataTransferItem", "Performance",
+] }

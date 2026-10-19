@@ -430,6 +430,18 @@ pub async fn add_member(
             .execute(&mut *tx)
             .await?;
         }
+        // Individual note shares are superseded by membership: drop them, so
+        // they don't silently keep access after a later removal.
+        sqlx::query("DELETE FROM object_shares WHERE vault_id = ? AND user_id = ?")
+            .bind(&v)
+            .bind(&req.user_id)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("DELETE FROM object_keys WHERE vault_id = ? AND user_id = ?")
+            .bind(&v)
+            .bind(&req.user_id)
+            .execute(&mut *tx)
+            .await?;
         tx.commit().await?;
     }
     db::audit(

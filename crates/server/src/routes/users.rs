@@ -137,16 +137,24 @@ pub async fn get_user(
     .bind(&who.user_id)
     .fetch_optional(&state.db)
     .await?;
+    let own_agent = owner.as_deref() == Some(who.user_id.as_str());
+    let searchable = kind == "human"
+        && !disabled
+        && who.is_human()
+        && state.config.user_directory == UserDirectory::Search;
     let allowed = id == who.user_id
         || shares_vault.is_some()
         || shares_note.is_some()
-        || owner.as_deref() == Some(who.user_id.as_str())
-        || (kind == "human"
-            && !disabled
-            && who.is_human()
-            && state.config.user_directory == UserDirectory::Search);
+        || own_agent
+        || searchable;
     if !allowed {
         return Err(AppError::NotFound);
     }
-    Ok(Json(public_user(&state.db, &id).await?))
+    let mut user = public_user(&state.db, &id).await?;
+    // People connected only through an individually shared note get the
+    // name and key needed to work together, not the e-mail address.
+    if !(id == who.user_id || shares_vault.is_some() || own_agent || searchable) {
+        user.email = None;
+    }
+    Ok(Json(user))
 }

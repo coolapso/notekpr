@@ -92,10 +92,19 @@ mod tests {
         let mut h = HeaderMap::new();
         h.insert("x-forwarded-for", "6.6.6.6, 203.0.113.7".parse().unwrap());
         let peer = Some("10.0.0.2:4000".parse().unwrap());
-        assert_eq!(client_ip(&h, peer, true), "203.0.113.7".parse::<IpAddr>().unwrap());
-        assert_eq!(client_ip(&h, peer, false), "10.0.0.2".parse::<IpAddr>().unwrap());
+        assert_eq!(
+            client_ip(&h, peer, true),
+            "203.0.113.7".parse::<IpAddr>().unwrap()
+        );
+        assert_eq!(
+            client_ip(&h, peer, false),
+            "10.0.0.2".parse::<IpAddr>().unwrap()
+        );
         let mut h = HeaderMap::new();
         h.insert("x-forwarded-for", "203.0.113.9".parse().unwrap());
-        assert_eq!(client_ip(&h, peer, true), "203.0.113.9".parse::<IpAddr>().unwrap());
+        assert_eq!(
+            client_ip(&h, peer, true),
+            "203.0.113.9".parse::<IpAddr>().unwrap()
+        );
     }
 }

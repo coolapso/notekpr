@@ -140,14 +140,20 @@ pub fn new_id() -> String {
     uuid::Uuid::new_v4().to_string()
 }
 
-/// RFC 8628 §6.1: short, unambiguous, consonants only.
+/// RFC 8628 §6.1: short, unambiguous, consonants only; every character
+/// equally likely (lookups are rate-limited and codes expire).
 pub fn new_user_code() -> String {
     const ALPHABET: &[u8] = b"BCDFGHJKLMNPQRSTVWXZ";
-    let bytes = random::<8>();
-    let chars: String = bytes
-        .iter()
-        .map(|b| ALPHABET[(*b as usize) % ALPHABET.len()] as char)
-        .collect();
+    // Accept only bytes below the largest multiple of the alphabet size.
+    let limit = 256 - 256 % ALPHABET.len();
+    let mut chars = String::with_capacity(9);
+    while chars.len() < 8 {
+        for b in random::<16>() {
+            if (b as usize) < limit && chars.len() < 8 {
+                chars.push(ALPHABET[b as usize % ALPHABET.len()] as char);
+            }
+        }
+    }
     format!("{}-{}", &chars[..4], &chars[4..])
 }
 
@@ -182,5 +188,25 @@ pub async fn audit(
     .await;
     if let Err(e) = r {
         tracing::warn!(error = %e, action, "failed to write audit log");
+    }
+}
+
+#[cfg(test)]
+mod user_code_tests {
+    #[test]
+    fn user_codes_use_the_whole_alphabet_evenly_and_keep_their_shape() {
+        let mut counts = std::collections::HashMap::new();
+        for _ in 0..2000 {
+            let c = super::new_user_code();
+            assert_eq!(c.len(), 9);
+            assert_eq!(&c[4..5], "-");
+            for ch in c.chars().filter(|c| *c != '-') {
+                assert!("BCDFGHJKLMNPQRSTVWXZ".contains(ch));
+                *counts.entry(ch).or_insert(0usize) += 1;
+            }
+        }
+        // 16000 draws over 20 letters: about 800 each.
+        assert_eq!(counts.len(), 20);
+        assert!(counts.values().all(|n| (600..1000).contains(n)), "{counts:?}");
     }
 }

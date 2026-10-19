@@ -52,13 +52,15 @@ pub fn router(state: AppState) -> Router {
             post(oauth::device_authorization),
         )
         .route("/oauth/token", post(oauth::token))
+        // Looking up and approving device codes is limited like logins, so
+        // codes can't be guessed.
+        .route("/oauth/device", get(oauth::device_lookup))
+        .route("/oauth/device/decision", post(oauth::device_decision))
         .layer(from_fn_with_state(state.clone(), ratelimit::auth_limit));
 
     let api = Router::new()
         .route("/info", get(auth::info))
         .route("/auth/logout", post(auth::logout))
-        .route("/oauth/device", get(oauth::device_lookup))
-        .route("/oauth/device/decision", post(oauth::device_decision))
         .route("/me", get(me::me))
         .route("/me/account-key", put(me::setup_account_key))
         .route("/me/recovery", get(me::get_recovery).put(me::put_recovery))

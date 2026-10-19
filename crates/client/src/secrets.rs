@@ -24,9 +24,24 @@ use crate::fsutil;
 const LOCAL_KEY_FILE: &str = "local.key";
 const ACCOUNT_FILE: &str = "account.sealed";
 const DEVICE_FILE: &str = "device.sealed";
+/// A first-device setup not finished yet: keys created but maybe not uploaded,
+/// recovery key not shown yet (see `account::login`).
+const BOOTSTRAP_FILE: &str = "bootstrap.sealed";
 
 /// The per-profile key protecting local files at rest.
 pub struct LocalKey(Zeroizing<[u8; 32]>);
+
+/// Whether `data_dir` holds data sealed with a local key (secrets or vault
+/// copies) — which a new key could never open.
+fn has_sealed_data(data_dir: &Path) -> bool {
+    [ACCOUNT_FILE, DEVICE_FILE, BOOTSTRAP_FILE]
+        .iter()
+        .any(|f| data_dir.join(f).exists())
+        || std::fs::read_dir(data_dir.join("vaults")).is_ok_and(|rd| {
+            rd.filter_map(|e| e.ok())
+                .any(|e| e.path().join("state.sealed").exists())
+        })
+}
 
 impl LocalKey {
     pub fn load_or_create(data_dir: &Path) -> Result<LocalKey> {
@@ -34,6 +49,18 @@ impl LocalKey {
         let path = data_dir.join(LOCAL_KEY_FILE);
         if let Some(k) = Self::load(&path)? {
             return Ok(k);
+        }
+        // A fresh key would silently make every sealed file unreadable (and
+        // the next save would overwrite them with data under the new key).
+        if has_sealed_data(data_dir) {
+            bail!(
+                "{} is missing, but {} contains encrypted local data (account keys, vault copies) that only \
+                 this key can open. Restore local.key from a backup and try again. To start over instead, run \
+                 `coolpsonotes logout --forget` for this profile and sign in again (changes that were never \
+                 uploaded are lost)",
+                path.display(),
+                data_dir.display()
+            );
         }
         let key: [u8; 32] = random_bytes();
         match fsutil::create_private_file(&path, &key) {
@@ -171,6 +198,7 @@ impl SecretStore {
     pub fn wipe(data_dir: &Path) -> Result<()> {
         if data_dir.exists() {
             if !data_dir.join(LOCAL_KEY_FILE).exists()
+                && !has_sealed_data(data_dir)
                 && std::fs::read_dir(data_dir)?.next().is_some()
             {
                 bail!(
@@ -210,5 +238,32 @@ mod tests {
         // Nothing on disk contains the raw secret.
         let raw = std::fs::read(d.path().join(ACCOUNT_FILE)).unwrap();
         assert!(!raw.windows(32).any(|w| w == a.enc_secret));
+    }
+
+    #[test]
+    fn a_lost_local_key_is_not_silently_replaced() {
+        let d = tempfile::tempdir().unwrap();
+        let s = SecretStore::open(d.path()).unwrap();
+        s.save_account("u1", &AccountSecret::generate()).unwrap();
+        drop(s);
+        let key = std::fs::read(d.path().join(LOCAL_KEY_FILE)).unwrap();
+        std::fs::remove_file(d.path().join(LOCAL_KEY_FILE)).unwrap();
+        let e = SecretStore::open(d.path()).err().expect("refused");
+        assert!(format!("{e:#}").contains("local.key is missing"), "{e:#}");
+        assert!(!d.path().join(LOCAL_KEY_FILE).exists());
+        // Vault copies alone count too.
+        std::fs::remove_file(d.path().join(ACCOUNT_FILE)).unwrap();
+        std::fs::create_dir_all(d.path().join("vaults/v1")).unwrap();
+        std::fs::write(d.path().join("vaults/v1/state.sealed"), b"x").unwrap();
+        assert!(LocalKey::load_or_create(d.path()).is_err());
+        // Restoring the key works again; `logout --forget` can still wipe.
+        std::fs::write(d.path().join(LOCAL_KEY_FILE), &key).unwrap();
+        assert!(LocalKey::load_or_create(d.path()).is_ok());
+        std::fs::remove_file(d.path().join(LOCAL_KEY_FILE)).unwrap();
+        SecretStore::wipe(d.path()).unwrap();
+        assert!(!d.path().exists());
+        // A brand-new profile still gets a key.
+        let fresh = tempfile::tempdir().unwrap();
+        assert!(LocalKey::load_or_create(fresh.path()).is_ok());
     }
 }

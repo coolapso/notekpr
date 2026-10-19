@@ -473,6 +473,11 @@ lost-or-stolen-laptop case. Session tokens in the profile grant server access
   Verify the new fingerprint with them before using `--accept-new-key`.
 * **"vault … was shared with you but its key has not arrived yet"** — the
   owner's client grants it next time it syncs.
+* **"local.key is missing, but … contains encrypted local data"** — the key
+  that seals this profile's files was deleted (or not restored with a
+  backup). The client refuses to create a new one, which would make every
+  local copy unreadable: restore `local.key`, or start over with
+  `logout --forget` and `login` (changes never uploaded are lost).
 * **"read-only on this device"** — access was revoked or the vault deleted; the
   local copy stays readable (`cat`, `export`) but is not synced.
 * **A file does not sync** — hidden names and editor temporary files are

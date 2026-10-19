@@ -270,6 +270,23 @@ fn vault_marker(dir: &Path) -> Option<String> {
         .map(|s| s.trim().to_string())
 }
 
+/// The vault folders below a mirror directory that mirror one of `vault_ids`
+/// (by their `.coolpsonotes-vault` marker). Folders without a marker (or of
+/// other vaults) are never included.
+pub fn mirrored_folders(root: &Path, vault_ids: &BTreeSet<String>) -> Vec<PathBuf> {
+    let Ok(rd) = std::fs::read_dir(root) else {
+        return vec![];
+    };
+    let mut out: Vec<PathBuf> = rd
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
+        .map(|e| e.path())
+        .filter(|d| vault_marker(d).is_some_and(|id| vault_ids.contains(&id)))
+        .collect();
+    out.sort();
+    out
+}
+
 /// Whether a directory contains anything the mirror would sync.
 fn has_mirrorable_content(dir: &Path) -> bool {
     std::fs::read_dir(dir).is_ok_and(|rd| {

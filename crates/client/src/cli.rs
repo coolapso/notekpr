@@ -43,6 +43,10 @@ pub enum Command {
         forget: bool,
         #[arg(long)]
         yes: bool,
+        /// With --forget: also delete this profile's decrypted Markdown mirror
+        /// folders (asked interactively otherwise).
+        #[arg(long, requires = "forget")]
+        remove_mirror: bool,
     },
     /// Show profile, account, devices, vaults and sync state.
     Status,
@@ -268,6 +272,10 @@ pub enum VaultCmd {
         vault: String,
         #[arg(long)]
         yes: bool,
+        /// Also delete the vault's decrypted Markdown mirror folder (asked
+        /// interactively otherwise).
+        #[arg(long)]
+        remove_mirror: bool,
     },
 }
 

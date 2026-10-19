@@ -160,3 +160,73 @@ async fn commands_do_not_overwrite_a_running_daemons_local_copies() {
             .is_folder("Ideas")
     );
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn leaving_uploads_first_and_can_remove_the_mirror() {
+    use coolpsonotes_client::manage;
+    use coolpsonotes_core::protocol::Role;
+    let srv = start().await;
+    let alice = login(&srv, "alice").await;
+    login(&srv, "bob").await;
+    for name in ["Family", "Work"] {
+        manage::create_vault(&alice, name).await.unwrap();
+    }
+    let alice_hub = hub(&alice).await;
+    for name in ["Family", "Work"] {
+        let v = alice_hub.resolve(name).await.unwrap();
+        manage::share(&alice, &v, "bob", Role::Editor, false)
+            .await
+            .unwrap();
+    }
+    let m = srv.path("bob-notes");
+    let m_str = m.to_str().unwrap();
+    run(
+        &srv,
+        "bob",
+        &["sync", "--once", "--dir", m_str, "--plaintext-ok"],
+    )
+    .await
+    .unwrap();
+    assert!(m.join("Family").is_dir() && m.join("Work").is_dir());
+
+    // Leaving one vault can take its decrypted folder along; the other stays.
+    run(
+        &srv,
+        "bob",
+        &["vault", "leave", "Work", "--yes", "--remove-mirror"],
+    )
+    .await
+    .unwrap();
+    assert!(!m.join("Work").exists());
+    assert!(m.join("Family").is_dir());
+
+    // An edit made offline is still queued...
+    let store = ProfileStore::new(&srv.dirs("bob"), "bob").unwrap();
+    let real = store.require().unwrap().server;
+    let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let dead = format!("http://{}", l.local_addr().unwrap());
+    drop(l);
+    store.update(|p| p.server = dead.clone()).unwrap();
+    run(&srv, "bob", &["mkdir", "Family", "Made offline"])
+        .await
+        .unwrap();
+    store.update(|p| p.server = real.clone()).unwrap();
+    // ... `logout --forget` without confirmation (no terminal) deletes nothing.
+    let data = srv.dirs("bob").profile_data("bob");
+    assert!(run(&srv, "bob", &["logout", "--forget"]).await.is_err());
+    assert!(data.exists());
+    // Confirmed: the edit is uploaded first, then everything is removed.
+    run(
+        &srv,
+        "bob",
+        &["logout", "--forget", "--yes", "--remove-mirror"],
+    )
+    .await
+    .unwrap();
+    assert!(!data.exists());
+    assert!(!m.exists(), "the emptied mirror directory is removed too");
+    let fam = alice_hub.resolve("Family").await.unwrap();
+    let fam_id = fam.lock().await.id().to_string();
+    alice_hub.sync_vault(&fam_id).await.unwrap();
+    assert!(fam.lock().await.is_folder("Made offline"));
+}

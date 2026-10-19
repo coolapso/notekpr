@@ -132,7 +132,12 @@ directory, never deleted) and enrolls the computer as a new device.
 * `coolpsonotes logout` ends the session; local encrypted copies stay (read
   them offline; `login` again to sync).
 * `coolpsonotes logout --forget` also removes this device from the account and
-  deletes the profile and all of its local data.
+  deletes the profile and all of its local data. It uploads queued changes
+  first; if some cannot be uploaded (offline, too large) it says how many
+  would be lost before asking (`--yes` confirms). The decrypted Markdown
+  mirror folders of the profile are deleted only when you agree to it at the
+  prompt or pass `--remove-mirror`; otherwise they are left in place (and
+  named). `vault leave` works the same way for one vault.
 * `coolpsonotes devices list | approve <id> | revoke <id>` manages devices.
   Revoking a device ends its sessions; if it might be compromised, also rotate
   the keys of shared vaults (`vault rotate`).

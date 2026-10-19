@@ -155,6 +155,86 @@ async fn lock_profile(
     }
 }
 
+/// Upload what is queued (one vault, or all), then count what still exists
+/// only here: queued and oversized updates, attachments not uploaded.
+/// `None` if that could not be checked (signed out, no keys).
+async fn push_and_count_unsynced(ctx: &Ctx, vault: Option<&str>) -> Option<usize> {
+    let refs: Vec<&str> = vault.into_iter().collect();
+    let hub = match ctx.hub(&refs).await {
+        Ok(h) => h,
+        Err(e) => {
+            tracing::debug!("cannot check for unsynced changes: {e:#}");
+            return None;
+        }
+    };
+    let mut n = 0;
+    for v in hub.vaults() {
+        let g = v.lock().await;
+        n += g.replica.pending.len() + g.quarantined.len() + g.pending_blobs.len();
+    }
+    Some(n)
+}
+
+fn local_vault_ids(data_dir: &Path) -> std::collections::BTreeSet<String> {
+    std::fs::read_dir(data_dir.join("vaults"))
+        .map(|rd| {
+            rd.filter_map(|e| e.ok())
+                .filter_map(|e| e.file_name().to_str().map(str::to_string))
+                .filter(|n| crate::store::valid_id(n))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// This profile's mirror folders of `ids`, if they are to be deleted too
+/// (`--remove-mirror`, or confirmed on a terminal); otherwise says that they
+/// stay and returns `None`.
+fn mirror_folders_to_remove(
+    ctx: &Ctx,
+    ids: &std::collections::BTreeSet<String>,
+    yes: bool,
+    remove_mirror: bool,
+) -> Result<Option<Vec<std::path::PathBuf>>> {
+    let Some(root) = ctx.store()?.load()?.and_then(|p| p.sync.mirror_dir) else {
+        return Ok(None);
+    };
+    let folders = crate::mirror::mirrored_folders(&root, ids);
+    if folders.is_empty() {
+        return Ok(None);
+    }
+    let list = folders
+        .iter()
+        .map(|f| f.display().to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let remove = remove_mirror
+        || (!yes
+            && ui::confirm(&format!(
+                "Also delete the decrypted Markdown files in {list}?"
+            )));
+    if !remove {
+        ui::status(&format!(
+            "the decrypted Markdown files in {list} were left in place; delete them yourself if you no longer \
+             need them (or use --remove-mirror)"
+        ));
+        return Ok(None);
+    }
+    Ok(Some(folders))
+}
+
+fn remove_mirror_folders(folders: &[std::path::PathBuf]) {
+    for f in folders {
+        match std::fs::remove_dir_all(f) {
+            Ok(()) => ui::status(&format!("deleted {}", f.display())),
+            Err(e) => ui::warn(&format!("could not delete {}: {e}", f.display())),
+        }
+        // The mirror directory itself goes too once it is empty.
+        if let Some(root) = f.parent() {
+            let _ = std::fs::remove_dir(root);
+        }
+    }
+}
+
 fn op<T>(r: ops::OpResult<T>) -> Result<T> {
     r.map_err(|e| anyhow!("{e}"))
 }
@@ -186,14 +266,41 @@ pub async fn run_in(cli: Cli, dirs: Dirs) -> Result<()> {
     };
     match cli.command {
         Command::Login(a) => login(&ctx, a).await,
-        Command::Logout { forget, yes } => {
+        Command::Logout {
+            forget,
+            yes,
+            remove_mirror,
+        } => {
+            let mut mirror = None;
             if forget {
-                confirm_or_flag(
-                    yes,
-                    "Remove this device from your account and delete all local data of this profile?",
-                )?;
+                // Upload what can be uploaded first; say what would be lost.
+                let unsynced = push_and_count_unsynced(&ctx, None).await;
+                let mut prompt =
+                    "Remove this device from your account and delete all local data of this profile?"
+                        .to_string();
+                match unsynced {
+                    Some(0) => {}
+                    Some(n) => {
+                        ui::warn(&format!(
+                            "{n} local change(s) could not be uploaded (offline, or refused by the server) and \
+                             will be LOST"
+                        ));
+                        prompt =
+                            format!("{n} change(s) were never uploaded and will be lost. {prompt}");
+                    }
+                    None => ui::warn(
+                        "could not check for changes that were never uploaded (signed out or offline?); any \
+                         would be lost",
+                    ),
+                }
+                confirm_or_flag(yes, &prompt)?;
+                let ids = local_vault_ids(&ctx.store()?.data_dir());
+                mirror = mirror_folders_to_remove(&ctx, &ids, yes, remove_mirror)?;
             }
             account::logout(&ctx.dirs, &ctx.profile, forget).await?;
+            if let Some(folders) = mirror {
+                remove_mirror_folders(&folders);
+            }
             println!(
                 "{}",
                 if forget {
@@ -886,12 +993,37 @@ async fn vault(ctx: &Ctx, c: VaultCmd) -> Result<()> {
             println!("vault key rotated (epoch {epoch})");
             Ok(())
         }
-        VaultCmd::Leave { vault, yes } => {
+        VaultCmd::Leave {
+            vault,
+            yes,
+            remove_mirror,
+        } => {
+            // Opening the hub catches up and uploads queued changes first.
             let hub = ctx.hub(&[&vault]).await?;
             let v = hub.resolve(&vault).await?;
-            let name = v.lock().await.name().to_string();
-            confirm_or_flag(yes, &format!("Leave '{name}' and delete its local copy?"))?;
+            let (name, vid, unsynced) = {
+                let g = v.lock().await;
+                (
+                    g.name().to_string(),
+                    g.id().to_string(),
+                    g.replica.pending.len() + g.quarantined.len() + g.pending_blobs.len(),
+                )
+            };
+            let mut prompt = format!("Leave '{name}' and delete its local copy?");
+            if unsynced > 0 {
+                ui::warn(&format!(
+                    "{unsynced} change(s) to '{name}' could not be uploaded and will be LOST"
+                ));
+                prompt =
+                    format!("{unsynced} change(s) were never uploaded and will be lost. {prompt}");
+            }
+            confirm_or_flag(yes, &prompt)?;
+            let ids = [vid].into_iter().collect();
+            let mirror = mirror_folders_to_remove(ctx, &ids, yes, remove_mirror)?;
             manage::leave_vault(&hub.session, &v).await?;
+            if let Some(folders) = mirror {
+                remove_mirror_folders(&folders);
+            }
             println!("left '{name}'");
             Ok(())
         }

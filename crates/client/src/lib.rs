@@ -18,6 +18,7 @@ pub mod mirror;
 pub mod note_shares;
 pub mod ops;
 pub mod profile;
+pub mod recover;
 pub mod secrets;
 pub mod session;
 pub mod store;

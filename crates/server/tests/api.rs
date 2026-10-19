@@ -1246,20 +1246,26 @@ async fn individual_note_sharing() {
         201
     );
 
-    // A snapshot that misses earlier changes of the note is refused.
-    let (_, bad_req) =
-        engine::start_sharing(alice.ring(&v), "n1", "Trip", &n1.encode_state(), 1).unwrap();
-    assert_eq!(
-        alice
-            .api
-            .status(
-                Method::PUT,
-                &format!("/vaults/{v}/objects/n1/key"),
-                Some(&bad_req)
-            )
-            .await,
-        412
-    );
+    // A snapshot that misses earlier changes of the note is refused, and so
+    // is one older than the newest existing snapshot (covers 3): readers would
+    // otherwise get that one, which they can't decrypt.
+    for covers in [1, 2] {
+        let (_, bad_req) =
+            engine::start_sharing(alice.ring(&v), "n1", "Trip", &n1.encode_state(), covers)
+                .unwrap();
+        assert_eq!(
+            alice
+                .api
+                .status(
+                    Method::PUT,
+                    &format!("/vaults/{v}/objects/n1/key"),
+                    Some(&bad_req)
+                )
+                .await,
+            412,
+            "covers_seq {covers}"
+        );
+    }
 
     // Alice shares n1 only.
     let (ring, req) =

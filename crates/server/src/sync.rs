@@ -82,12 +82,14 @@ pub async fn changes_since(
              WHERE s.vault_id = ? AND s.covers_seq > ? AND (? IS NULL OR s.object_id = ?)
                AND (? = 0 OR hex(substr(s.payload, 2, 1)) >= '80')
                AND s.id = (SELECT s2.id FROM snapshots s2 WHERE s2.vault_id = s.vault_id AND s2.object_id = s.object_id
+                             AND (? = 0 OR hex(substr(s2.payload, 2, 1)) >= '80')
                            ORDER BY s2.covers_seq DESC, s2.created_at DESC LIMIT 1)",
         )
         .bind(vault_id)
         .bind(since)
         .bind(object)
         .bind(object)
+        .bind(doc_only)
         .bind(doc_only)
         .fetch_all(db)
         .await?;

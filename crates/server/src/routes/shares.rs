@@ -201,8 +201,19 @@ pub async fn set_key(
             .bind(&o)
             .fetch_one(&state.db)
             .await?;
+            // ...and it must be the newest snapshot of the note, or readers
+            // would be handed an older one they can't use instead.
+            let newest: Option<i64> = sqlx::query_scalar(
+                "SELECT MAX(covers_seq) FROM snapshots WHERE vault_id = ? AND object_id = ?",
+            )
+            .bind(&v)
+            .bind(&o)
+            .fetch_one(&state.db)
+            .await?;
             let head = sync::head_seq(&state.db, &v).await?;
-            if snap.covers_seq < last.unwrap_or(0) || snap.covers_seq > head {
+            if snap.covers_seq < last.unwrap_or(0).max(newest.unwrap_or(0))
+                || snap.covers_seq > head
+            {
                 return Err(AppError::StaleKey(
                     "the snapshot does not cover the latest changes; catch up and retry".into(),
                 ));

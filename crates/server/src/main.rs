@@ -75,8 +75,85 @@ async fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Command::Restore { from } => restore(&cli.config, &from).await,
+        Command::ExportUser { user, backup, out } => {
+            export_user(&cli.config, &user, backup.as_deref(), &out).await
+        }
         Command::Healthcheck => healthcheck(cli.config.listen),
     }
+}
+
+/// Export one person's encrypted data from the live database or a backup.
+async fn export_user(
+    config: &Config,
+    user: &str,
+    backup: Option<&std::path::Path>,
+    out: &std::path::Path,
+) -> anyhow::Result<()> {
+    anyhow::ensure!(!out.exists(), "{} already exists", out.display());
+    // A backup may be from an older version: work on a migrated copy so the
+    // backup itself is never modified.
+    let scratch = std::env::temp_dir().join(format!("coolpsonotes-export-{}", db::new_id()));
+    let path = match backup {
+        Some(b) => {
+            std::fs::create_dir_all(&scratch)?;
+            let copy = scratch.join("coolpsonotes.db");
+            std::fs::copy(b, &copy).with_context(|| format!("reading {}", b.display()))?;
+            copy
+        }
+        None => config.db_path(),
+    };
+    anyhow::ensure!(path.exists(), "no database at {}", path.display());
+    let result = async {
+        let pool = db::connect(&path).await?;
+        if backup.is_some() {
+            db::migrate(&pool, &path).await?;
+        }
+        let id = find_user(&pool, user).await?;
+        let export = coolpsonotes_server::export::user_export(&pool, &id)
+            .await
+            .map_err(|e| anyhow::anyhow!("{e:?}"))?;
+        let json = serde_json::to_vec(&export)?;
+        write_private(out, &json)?;
+        println!(
+            "wrote {} ({} vaults, {} shared notes) for user {id}",
+            out.display(),
+            export.vaults.len(),
+            export.shared_notes.len()
+        );
+        anyhow::Ok(())
+    }
+    .await;
+    let _ = std::fs::remove_dir_all(&scratch);
+    result
+}
+
+/// A user by id, exact e-mail or exact display name (case-insensitive).
+async fn find_user(pool: &db::Db, user: &str) -> anyhow::Result<String> {
+    let ids: Vec<String> = sqlx::query_scalar(
+        "SELECT id FROM users WHERE id = ?1 OR lower(email) = lower(?1) OR lower(display_name) = lower(?1)",
+    )
+    .bind(user)
+    .fetch_all(pool)
+    .await?;
+    match ids.as_slice() {
+        [one] => Ok(one.clone()),
+        [] => bail!("no user {user:?} in this database"),
+        _ => bail!("{user:?} matches several users; pass the user id"),
+    }
+}
+
+fn write_private(path: &std::path::Path, data: &[u8]) -> anyhow::Result<()> {
+    use std::io::Write;
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create_new(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut opts, 0o600);
+    let mut f = opts
+        .open(path)
+        .with_context(|| format!("creating {}", path.display()))?;
+    f.write_all(data)?;
+    f.sync_all()?;
+    Ok(())
 }
 
 async fn serve(config: Config) -> anyhow::Result<()> {

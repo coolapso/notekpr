@@ -260,28 +260,38 @@ pub async fn keys(
     Path(v): Path<String>,
 ) -> AppResult<Json<VaultKeysResponse>> {
     access::member_role(&state.db, &v, &who.user_id).await?;
+    Ok(Json(vault_keys_for(&state.db, &v, &who.user_id).await?))
+}
+
+/// A member's key envelopes for a vault, the key chain, and the document
+/// keys of its individually shared notes (callers check membership).
+pub async fn vault_keys_for(
+    db: &crate::db::Db,
+    v: &str,
+    user_id: &str,
+) -> AppResult<VaultKeysResponse> {
     let current: i64 = sqlx::query_scalar("SELECT key_epoch FROM vaults WHERE id = ?")
-        .bind(&v)
-        .fetch_one(&state.db)
+        .bind(v)
+        .fetch_one(db)
         .await?;
     let envelopes = sqlx::query(
         "SELECT epoch, envelope FROM vault_keys WHERE vault_id = ? AND user_id = ? ORDER BY epoch",
     )
-    .bind(&v)
-    .bind(&who.user_id)
-    .fetch_all(&state.db)
+    .bind(v)
+    .bind(user_id)
+    .fetch_all(db)
     .await?
     .iter()
     .map(|r| KeyEnvelope {
-        user_id: who.user_id.clone(),
+        user_id: user_id.to_string(),
         epoch: r.get::<i64, _>("epoch") as u32,
         envelope: r.get("envelope"),
     })
     .collect();
     let chain =
         sqlx::query("SELECT epoch, link FROM vault_key_chain WHERE vault_id = ? ORDER BY epoch")
-            .bind(&v)
-            .fetch_all(&state.db)
+            .bind(v)
+            .fetch_all(db)
             .await?
             .iter()
             .map(|r| ChainLink {
@@ -291,26 +301,26 @@ pub async fn keys(
             .collect();
     // Document keys of individually shared notes, wrapped under vault keys.
     let objects = sqlx::query("SELECT object_id, epoch, envelope FROM object_keys WHERE vault_id = ? AND user_id = '' ORDER BY object_id, epoch")
-        .bind(&v)
-        .fetch_all(&state.db)
+        .bind(v)
+        .fetch_all(db)
         .await?
         .iter()
         .map(|r| ObjectKeyEnvelope { object_id: r.get("object_id"), epoch: r.get::<i64, _>("epoch") as u32, envelope: r.get("envelope") })
         .collect();
     let object_chain = sqlx::query("SELECT object_id, epoch, link FROM object_key_chain WHERE vault_id = ? ORDER BY object_id, epoch")
-        .bind(&v)
-        .fetch_all(&state.db)
+        .bind(v)
+        .fetch_all(db)
         .await?
         .iter()
         .map(|r| ObjectChainLink { object_id: r.get("object_id"), epoch: r.get::<i64, _>("epoch") as u32, link: r.get("link") })
         .collect();
-    Ok(Json(VaultKeysResponse {
+    Ok(VaultKeysResponse {
         current_epoch: current as u32,
         envelopes,
         chain,
         objects,
         object_chain,
-    }))
+    })
 }
 
 pub async fn members(

@@ -19,6 +19,17 @@ use crate::state::AppState;
 
 const MAX_PREFS_BYTES: usize = 512 * 1024;
 
+/// Everything the caller can read, encrypted as stored, for offline
+/// decryption with `coolpsonotes recover` (see docs).
+pub async fn export(
+    State(state): State<AppState>,
+    who: Principal,
+) -> AppResult<Json<coolpsonotes_core::protocol::EncryptedExport>> {
+    Ok(Json(
+        crate::export::user_export(&state.db, &who.user_id).await?,
+    ))
+}
+
 pub async fn me(State(state): State<AppState>, who: Principal) -> AppResult<Json<MeResponse>> {
     let user = auth::user_info(&state.db, &who.user_id).await?;
     let key = account_key(&state.db, &who.user_id).await?;

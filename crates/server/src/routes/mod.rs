@@ -67,6 +67,7 @@ pub fn router(state: AppState) -> Router {
         .route("/me/sessions", get(auth::list_sessions))
         .route("/me/sessions/{id}", delete(auth::delete_session))
         .route("/me/audit", get(me::my_audit))
+        .route("/me/export", get(me::export))
         .route("/devices", get(devices::list).post(devices::register))
         .route(
             "/devices/{id}",

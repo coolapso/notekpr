@@ -39,6 +39,21 @@ pub enum Command {
         #[arg(long)]
         from: PathBuf,
     },
+    /// Write one person's encrypted export: their vaults and the notes shared
+    /// with them, exactly as stored (ciphertext and key envelopes). They
+    /// decrypt it offline with `coolpsonotes recover` and their recovery key.
+    /// Works on a backup file too, without a running server.
+    ExportUser {
+        /// User id, e-mail address or display name.
+        #[arg(long)]
+        user: String,
+        /// Read this backup file instead of the server's database.
+        #[arg(long)]
+        backup: Option<PathBuf>,
+        /// Destination file (must not exist).
+        #[arg(long)]
+        out: PathBuf,
+    },
     /// Apply pending database migrations and exit.
     Migrate,
     /// Probe /readyz on the configured listen address (for container health checks).

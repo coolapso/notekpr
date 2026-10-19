@@ -108,40 +108,54 @@ pub async fn object_keys(
     Path((v, o)): Path<(String, String)>,
 ) -> AppResult<Json<ObjectKeysResponse>> {
     let role = access::object_role(&state.db, &v, &o, &who.user_id).await?;
+    Ok(Json(
+        object_keys_for(&state.db, &v, &o, &who.user_id, role).await?,
+    ))
+}
+
+/// One person's key envelopes for a shared note, its key chain and title
+/// (callers check access).
+pub async fn object_keys_for(
+    db: &crate::db::Db,
+    v: &str,
+    o: &str,
+    user_id: &str,
+    role: Role,
+) -> AppResult<ObjectKeysResponse> {
     let row: Option<(Option<i64>, Option<Vec<u8>>)> =
         sqlx::query_as("SELECT key_epoch, encrypted_meta FROM objects WHERE vault_id = ? AND id = ? AND purged_at IS NULL")
-            .bind(&v)
-            .bind(&o)
-            .fetch_optional(&state.db)
+            .bind(v)
+            .bind(o)
+            .fetch_optional(db)
             .await?;
     let Some((Some(epoch), meta)) = row else {
         return Err(AppError::NotFound);
     };
     let envelopes = sqlx::query("SELECT epoch, envelope FROM object_keys WHERE vault_id = ? AND object_id = ? AND user_id = ? ORDER BY epoch")
-        .bind(&v)
-        .bind(&o)
-        .bind(&who.user_id)
-        .fetch_all(&state.db)
+        .bind(v)
+        .bind(o)
+        .bind(user_id)
+        .fetch_all(db)
         .await?
         .iter()
-        .map(|r| KeyEnvelope { user_id: who.user_id.clone(), epoch: r.get::<i64, _>("epoch") as u32, envelope: r.get("envelope") })
+        .map(|r| KeyEnvelope { user_id: user_id.to_string(), epoch: r.get::<i64, _>("epoch") as u32, envelope: r.get("envelope") })
         .collect();
     let chain = sqlx::query("SELECT epoch, link FROM object_key_chain WHERE vault_id = ? AND object_id = ? ORDER BY epoch")
-        .bind(&v)
-        .bind(&o)
-        .fetch_all(&state.db)
+        .bind(v)
+        .bind(o)
+        .fetch_all(db)
         .await?
         .iter()
         .map(|r| ChainLink { epoch: r.get::<i64, _>("epoch") as u32, link: r.get("link") })
         .collect();
-    Ok(Json(ObjectKeysResponse {
-        object_id: o,
+    Ok(ObjectKeysResponse {
+        object_id: o.to_string(),
         role,
         current_epoch: epoch as u32,
         envelopes,
         chain,
         encrypted_meta: meta,
-    }))
+    })
 }
 
 /// Start sharing a note (first document key + covering snapshot) or rotate its key.

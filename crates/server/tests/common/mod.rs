@@ -18,7 +18,7 @@ use tokio_tungstenite::tungstenite::Message;
 pub struct TestServer {
     pub base: String,
     pub ws: String,
-    _dir: tempfile::TempDir,
+    pub dir: tempfile::TempDir,
 }
 
 pub async fn start() -> TestServer {
@@ -43,7 +43,7 @@ pub async fn start_with(f: impl FnOnce(&mut coolpsonotes_server::config::Config)
     TestServer {
         base: format!("http://{addr}/api/v1"),
         ws: format!("ws://{addr}/api/v1/ws"),
-        _dir: dir,
+        dir,
     }
 }
 

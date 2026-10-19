@@ -10,11 +10,12 @@ use std::collections::{BTreeMap, BTreeSet};
 use anyhow::{Result, anyhow, bail};
 use coolpsonotes_core::b64;
 use coolpsonotes_core::doc::{self, Entry, EntryKind, NoteDoc};
-use coolpsonotes_core::engine::{Applied, VaultMeta, VaultReplica};
+use coolpsonotes_core::engine::{Applied, Pending, VaultMeta, VaultReplica};
 use coolpsonotes_core::keys::{VaultKey, VaultKeyring};
 use coolpsonotes_core::protocol::{
     ChangesResponse, INDEX_OBJECT_ID, PushResult, Role, Snapshot, Update,
 };
+use coolpsonotes_core::textdiff::{self, Edit};
 use coolpsonotes_core::{markdown, now_ms, paths, random_id, search};
 
 use crate::store::{StoredState, VaultStore};
@@ -71,10 +72,77 @@ pub struct Vault {
     pub read_only: Option<String>,
     pub pending_blobs: BTreeSet<String>,
     pub last_sync: Option<i64>,
+    /// Local updates too large for the server: kept (and applied locally),
+    /// not uploaded, so they never block the rest of the queue.
+    pub quarantined: Vec<Pending>,
+    /// Largest plaintext a single local edit update may carry (half the
+    /// server's update limit; larger text edits are split).
+    update_budget: usize,
     store: VaultStore,
     dirty_objects: BTreeSet<String>,
     dirty_state: bool,
     dirty_pending: bool,
+    dirty_quarantine: bool,
+}
+
+/// Update budget for the server's default limit.
+const DEFAULT_UPDATE_BUDGET: usize = 1024 * 1024;
+
+/// Per-edit overhead assumed when sizing updates (ids, clocks, encoding).
+const EDIT_OVERHEAD: usize = 64;
+
+/// Apply text edits to a note as one or more updates, each carrying at most
+/// about `budget` bytes: a huge paste or import becomes several updates
+/// instead of one the server rejects forever. Offsets in `edits` refer to
+/// the text after the previous edits, so applying them in order in several
+/// transactions gives the same result as one.
+pub fn apply_edits_chunked(doc: &NoteDoc, edits: &[Edit], budget: usize) -> Vec<Vec<u8>> {
+    let budget = budget.max(1024);
+    let mut out = Vec::new();
+    let mut group: Vec<Edit> = Vec::new();
+    let mut size = 0;
+    let flush = |group: &mut Vec<Edit>, size: &mut usize, out: &mut Vec<Vec<u8>>| {
+        if !group.is_empty() {
+            out.extend(doc.apply_edits(group));
+            group.clear();
+            *size = 0;
+        }
+    };
+    for e in edits {
+        match e {
+            Edit::Insert { at, text } if text.len() > budget => {
+                flush(&mut group, &mut size, &mut out);
+                let (mut pos, mut rest) = (*at, text.as_str());
+                while !rest.is_empty() {
+                    let mut cut = budget.min(rest.len());
+                    while !rest.is_char_boundary(cut) {
+                        cut -= 1;
+                    }
+                    let (piece, tail) = rest.split_at(cut);
+                    out.extend(doc.apply_edits(&[Edit::Insert {
+                        at: pos,
+                        text: piece.to_string(),
+                    }]));
+                    pos += piece.len();
+                    rest = tail;
+                }
+            }
+            e => {
+                let cost = EDIT_OVERHEAD
+                    + match e {
+                        Edit::Insert { text, .. } => text.len(),
+                        Edit::Delete { .. } => 0,
+                    };
+                if size + cost > budget {
+                    flush(&mut group, &mut size, &mut out);
+                }
+                group.push(e.clone());
+                size += cost;
+            }
+        }
+    }
+    flush(&mut group, &mut size, &mut out);
+    out
 }
 
 impl Vault {
@@ -86,11 +154,63 @@ impl Vault {
             read_only: None,
             pending_blobs: BTreeSet::new(),
             last_sync: None,
+            quarantined: Vec::new(),
+            update_budget: DEFAULT_UPDATE_BUDGET,
             store,
             dirty_objects: BTreeSet::new(),
             dirty_state: true,
             dirty_pending: true,
+            dirty_quarantine: false,
         }
+    }
+
+    /// Size local edit updates for a server accepting `max_update_bytes`.
+    pub fn set_update_limit(&mut self, max_update_bytes: u64) {
+        self.update_budget = (max_update_bytes / 2).clamp(1024, usize::MAX as u64) as usize;
+    }
+
+    pub fn update_budget(&self) -> usize {
+        self.update_budget
+    }
+
+    /// Move queued updates the server can never accept (too large) out of
+    /// the upload queue. They stay applied locally and are kept on disk.
+    pub fn quarantine(&mut self, client_update_ids: &[String]) -> usize {
+        let (bad, keep): (Vec<Pending>, Vec<Pending>) = std::mem::take(&mut self.replica.pending)
+            .into_iter()
+            .partition(|p| client_update_ids.contains(&p.client_update_id));
+        self.replica.pending = keep;
+        let n = bad.len();
+        for p in bad {
+            if !self
+                .quarantined
+                .iter()
+                .any(|q| q.client_update_id == p.client_update_id)
+            {
+                self.quarantined.push(p);
+            }
+        }
+        if n > 0 {
+            self.dirty_pending = true;
+            self.dirty_quarantine = true;
+        }
+        n
+    }
+
+    /// Queue quarantined updates again (the server's limit grew); returns
+    /// how many.
+    pub fn release_quarantine(&mut self, fits: impl Fn(&Pending) -> bool) -> usize {
+        let (ok, keep): (Vec<Pending>, Vec<Pending>) = std::mem::take(&mut self.quarantined)
+            .into_iter()
+            .partition(fits);
+        self.quarantined = keep;
+        let n = ok.len();
+        if n > 0 {
+            self.replica.pending.extend(ok);
+            self.dirty_pending = true;
+            self.dirty_quarantine = true;
+        }
+        n
     }
 
     /// Load the local replica, re-applying unacknowledged updates.
@@ -125,7 +245,14 @@ impl Vault {
         }
         r.deferred = s.deferred.clone();
         r.pending = store.load_pending()?;
-        for p in &r.pending {
+        let quarantined = store.load_quarantine()?;
+        // (A crash while moving one into quarantine can leave it in both.)
+        r.pending.retain(|p| {
+            !quarantined
+                .iter()
+                .any(|q| q.client_update_id == p.client_update_id)
+        });
+        for p in r.pending.iter().chain(&quarantined) {
             let res = if p.object_id == INDEX_OBJECT_ID {
                 r.index.apply_update(&p.update)
             } else {
@@ -145,10 +272,13 @@ impl Vault {
             read_only: s.read_only,
             pending_blobs: s.pending_blobs,
             last_sync: s.last_sync,
+            quarantined,
+            update_budget: DEFAULT_UPDATE_BUDGET,
             store,
             dirty_objects: BTreeSet::new(),
             dirty_state: false,
             dirty_pending: false,
+            dirty_quarantine: false,
         }))
     }
 
@@ -169,7 +299,10 @@ impl Vault {
     }
 
     pub fn is_dirty(&self) -> bool {
-        self.dirty_state || self.dirty_pending || !self.dirty_objects.is_empty()
+        self.dirty_state
+            || self.dirty_pending
+            || self.dirty_quarantine
+            || !self.dirty_objects.is_empty()
     }
 
     pub fn mark_state_dirty(&mut self) {
@@ -180,6 +313,11 @@ impl Vault {
     pub fn save(&mut self) -> Result<()> {
         if !self.is_dirty() {
             return Ok(());
+        }
+        // Quarantine first: an update moved there is never in neither file.
+        if self.dirty_quarantine {
+            self.store.save_quarantine(&self.quarantined)?;
+            self.dirty_quarantine = false;
         }
         if self.dirty_pending {
             self.store.save_pending(&self.replica.pending)?;
@@ -293,6 +431,9 @@ impl Vault {
     }
 
     pub fn apply_purge(&mut self, object_id: &str, seq: i64) -> Applied {
+        let before = self.quarantined.len();
+        self.quarantined.retain(|p| p.object_id != object_id);
+        self.dirty_quarantine |= self.quarantined.len() != before;
         let a = self.replica.apply_purge(object_id, seq);
         self.mark_applied(&a);
         a
@@ -658,11 +799,14 @@ impl Vault {
             bail!("'{p}' already exists");
         }
         let id = random_id();
+        let budget = self.update_budget;
         let note = self.replica.notes.entry(id.clone()).or_default();
-        if let Some(u) = note.set_text(text) {
-            self.record(&id, u)?;
-        } else {
+        let updates = apply_edits_chunked(note, &textdiff::diff("", text), budget);
+        if updates.is_empty() {
             self.dirty_objects.insert(id.clone());
+        }
+        for u in updates {
+            self.record(&id, u)?;
         }
         let u = self.replica.index.create_with(
             &id,
@@ -684,11 +828,19 @@ impl Vault {
     /// Replace a note's text via a diff. Returns false if nothing changed.
     pub fn set_note_text(&mut self, id: &str, text: &str) -> Result<bool> {
         self.require_writable()?;
+        let budget = self.update_budget;
         let note = self.replica.notes.entry(id.to_string()).or_default();
-        let Some(u) = note.set_text(text) else {
+        let old = note.text();
+        if old == text {
             return Ok(false);
-        };
-        self.record(id, u)?;
+        }
+        let updates = apply_edits_chunked(note, &textdiff::diff(&old, text), budget);
+        if updates.is_empty() {
+            return Ok(false);
+        }
+        for u in updates {
+            self.record(id, u)?;
+        }
         self.touch(id, text.len() as u64)?;
         Ok(true)
     }
@@ -696,11 +848,24 @@ impl Vault {
     /// Merge an update produced elsewhere (e.g. a forked document in the file
     /// mirror) into a note and queue it.
     pub fn merge_note_update(&mut self, id: &str, update: Vec<u8>) -> Result<()> {
+        self.merge_note_updates(id, vec![update])
+    }
+
+    /// [`Vault::merge_note_update`] for several updates (a split edit).
+    pub fn merge_note_updates(&mut self, id: &str, updates: Vec<Vec<u8>>) -> Result<()> {
         self.require_writable()?;
-        let note = self.replica.notes.entry(id.to_string()).or_default();
-        note.apply_update(&update)?;
-        let len = note.len() as u64;
-        self.record(id, update)?;
+        if updates.is_empty() {
+            return Ok(());
+        }
+        for u in updates {
+            self.replica
+                .notes
+                .entry(id.to_string())
+                .or_default()
+                .apply_update(&u)?;
+            self.record(id, u)?;
+        }
+        let len = self.replica.notes.get(id).map_or(0, |n| n.len() as u64);
         self.touch(id, len)
     }
 
@@ -713,18 +878,26 @@ impl Vault {
         self.require_writable()?;
         match self.find(path) {
             Some((p, e)) if e.kind == EntryKind::Note => {
+                let budget = self.update_budget;
                 let note = self.replica.notes.entry(e.id.clone()).or_default();
                 let len = note.len();
-                let Some(u) = note.splice(len, 0, text) else {
+                let insert = Edit::Insert {
+                    at: len,
+                    text: text.to_string(),
+                };
+                let updates = apply_edits_chunked(note, &[insert], budget);
+                if updates.is_empty() {
                     return Ok(WriteResult {
                         id: e.id,
                         path: p,
                         created: false,
                         changed: false,
                     });
-                };
+                }
                 let new_len = note.len() as u64;
-                self.record(&e.id, u)?;
+                for u in updates {
+                    self.record(&e.id, u)?;
+                }
                 self.touch(&e.id, new_len)?;
                 Ok(WriteResult {
                     id: e.id,
@@ -1042,6 +1215,37 @@ mod tests {
         assert_eq!(
             NoteDoc::from_updates([p.update.as_slice()]).unwrap().text(),
             "hello"
+        );
+    }
+
+    #[test]
+    fn large_edits_are_split_into_updates_under_the_budget() {
+        let doc = NoteDoc::new();
+        let old = "start\n".repeat(10);
+        doc.set_text(&old);
+        // A huge paste of multibyte text plus many small edits.
+        let new = format!(
+            "{}{}{}",
+            "start (edited)\n".repeat(10),
+            "größer ✓ ".repeat(20_000),
+            "end\n"
+        );
+        let budget = 16 * 1024;
+        let initial = doc.encode_state();
+        let updates = apply_edits_chunked(&doc, &textdiff::diff(&old, &new), budget);
+        assert!(updates.len() > 10, "{}", updates.len());
+        assert!(updates.iter().all(|u| u.len() <= budget + 1024));
+        assert_eq!(doc.text(), new);
+        // Another replica applying the updates in order gets the same text.
+        let replay = NoteDoc::from_updates([initial.as_slice()]).unwrap();
+        for u in &updates {
+            replay.apply_update(u).unwrap();
+        }
+        assert_eq!(replay.text(), new);
+        // Small edits stay one update.
+        assert_eq!(
+            apply_edits_chunked(&doc, &textdiff::diff(&new, "short"), budget).len(),
+            1
         );
     }
 

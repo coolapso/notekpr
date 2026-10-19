@@ -380,3 +380,72 @@ async fn a_server_error_from_a_proxy_counts_as_offline() {
             .is_empty()
     );
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn oversized_changes_are_split_or_set_aside_and_never_block_the_rest() {
+    use coolpsonotes_core::doc::NoteDoc;
+    let srv = start_with(|c| c.max_update_kb = 64).await;
+    let alice = login(&srv, "alice").await;
+    let bob = login(&srv, "bob").await;
+    manage::create_vault(&alice, "Big").await.unwrap();
+    let h = hub(&alice).await;
+    let v = h.resolve("Big").await.unwrap();
+    let vid = v.lock().await.id().to_string();
+    manage::share(&alice, &v, "bob", Role::Editor, false)
+        .await
+        .unwrap();
+
+    // 1. One ~250 KB paste becomes several updates the server accepts.
+    let big: String = (0..6000)
+        .map(|i| format!("line {i}: some text to make the note large\n"))
+        .collect();
+    assert!(big.len() > 200 * 1024);
+    let out = ops::put_document(&h, &vid, "Big.md", &big, None)
+        .await
+        .unwrap();
+    assert_eq!(out.pending_changes, 0, "everything uploaded");
+    let bob_hub = hub(&bob).await;
+    assert_eq!(
+        note(&bob_hub, &vid, "Big.md").await.as_deref(),
+        Some(big.as_str())
+    );
+
+    // 2. A change that cannot be split (one huge CRDT update) is kept aside;
+    // the changes after it are uploaded anyway.
+    {
+        let mut g = v.lock().await;
+        let w = g.create_note("Raw.md", "").unwrap();
+        let u = NoteDoc::new().set_text(&"x".repeat(200_000)).unwrap();
+        g.replica
+            .notes
+            .get(&w.id)
+            .unwrap()
+            .apply_update(&u)
+            .unwrap();
+        g.record(&w.id, u).unwrap();
+        g.save().unwrap();
+    }
+    ops::put_document(&h, &vid, "Other.md", "fine\n", None)
+        .await
+        .unwrap();
+    {
+        let g = v.lock().await;
+        assert!(g.replica.pending.is_empty(), "nothing is blocked");
+        assert_eq!(g.quarantined.len(), 1);
+    }
+    bob_hub.sync_vault(&vid).await.unwrap();
+    assert_eq!(
+        note(&bob_hub, &vid, "Other.md").await.as_deref(),
+        Some("fine\n")
+    );
+    assert!(note(&bob_hub, &vid, "Raw.md").await.is_some());
+    // It is kept across restarts (and reported).
+    drop(h);
+    let again = hub(&reopen(&srv, "alice", "alice").await).await;
+    let s = again.summaries().await;
+    assert_eq!(s[0].too_large_changes, 1);
+    assert_eq!(
+        note(&again, &vid, "Raw.md").await.map(|t| t.len()),
+        Some(200_000)
+    );
+}

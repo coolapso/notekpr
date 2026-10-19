@@ -36,7 +36,7 @@ use tokio::sync::{broadcast, mpsc, watch};
 use crate::fsutil;
 use crate::hub::{Hub, HubEvent};
 use crate::ui;
-use crate::vault::{Vault, content_hash, fork_note};
+use crate::vault::{Vault, apply_edits_chunked, content_hash, fork_note};
 
 /// Versions kept per note for base selection.
 const MAX_BASES: usize = 4;
@@ -796,9 +796,9 @@ fn ingest_note(v: &mut Vault, id: &str, rec: &FileRecord, disk: &str) -> Result<
         None => fork_note(&live_state)?,
     };
     let base_text = fork.text();
-    if let Some(update) = fork.apply_edits(&textdiff::diff(&base_text, disk)) {
-        v.merge_note_update(id, update)?;
-    }
+    // A huge edit (a big paste) becomes several updates the server accepts.
+    let updates = apply_edits_chunked(&fork, &textdiff::diff(&base_text, disk), v.update_budget());
+    v.merge_note_updates(id, updates)?;
     Ok(fork.encode_state())
 }
 

@@ -531,8 +531,13 @@ async fn status(ctx: &Ctx) -> Result<()> {
             .last_sync
             .map(ui::fmt_time)
             .unwrap_or_else(|| "never".into());
+        let big = if s.too_large_changes > 0 {
+            format!(" {} TOO LARGE to upload (kept here)", s.too_large_changes)
+        } else {
+            String::new()
+        };
         println!(
-            "  {:<24} {:<7} {:>4} docs  {:>3} pending  synced {last}{}{ro}  [{}]",
+            "  {:<24} {:<7} {:>4} docs  {:>3} pending{big}  synced {last}{}{ro}  [{}]",
             s.name,
             s.role.as_str(),
             s.documents,

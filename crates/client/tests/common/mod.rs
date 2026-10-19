@@ -21,6 +21,13 @@ pub struct TestServer {
 }
 
 pub async fn start() -> TestServer {
+    start_with(|_| {}).await
+}
+
+/// [`start`] with a changed server configuration (e.g. smaller limits).
+pub async fn start_with(
+    configure: impl FnOnce(&mut coolpsonotes_server::config::Config),
+) -> TestServer {
     coolpsonotes_client::ui::set_quiet(std::env::var_os("TEST_LOG").is_none());
     // Never wait for a prompt, even when `cargo test` runs in a terminal.
     coolpsonotes_client::ui::set_non_interactive(true);
@@ -29,7 +36,8 @@ pub async fn start() -> TestServer {
         .with_writer(std::io::stderr)
         .try_init();
     let dir = tempfile::tempdir().unwrap();
-    let cfg = coolpsonotes_server::config::Config::for_tests(dir.path().join("server"));
+    let mut cfg = coolpsonotes_server::config::Config::for_tests(dir.path().join("server"));
+    configure(&mut cfg);
     let (app, _state) = coolpsonotes_server::build(cfg, None).await.unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();

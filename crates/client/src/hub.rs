@@ -59,6 +59,9 @@ pub struct VaultSummary {
     pub archived: bool,
     pub documents: usize,
     pub pending_changes: usize,
+    /// Local changes too large for the server: kept here, not uploaded.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub too_large_changes: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub read_only: Option<String>,
     pub seq: i64,
@@ -594,6 +597,10 @@ impl Hub {
     }
 }
 
+fn is_zero(n: &usize) -> bool {
+    *n == 0
+}
+
 async fn g_read_only(v: &SharedVault) -> bool {
     let g = v.lock().await;
     g.read_only.is_some() || !g.replica.can_write()
@@ -607,6 +614,7 @@ pub fn summary(v: &Vault) -> VaultSummary {
         archived: v.archived,
         documents: v.notes().len(),
         pending_changes: v.replica.pending.len(),
+        too_large_changes: v.quarantined.len(),
         read_only: v.read_only.clone(),
         seq: v.replica.seq,
         last_sync: v.last_sync,

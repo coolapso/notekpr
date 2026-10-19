@@ -7,6 +7,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
+use coolpsonotes_core::crypto::Purpose;
 use coolpsonotes_core::engine::{self, Applied, PinStatus, VaultMeta, VaultReplica};
 use coolpsonotes_core::keys::{AccountSecret, VaultKeyring};
 use coolpsonotes_core::protocol::*;
@@ -48,6 +49,8 @@ pub struct PushOutcome {
     /// Updates still waiting (offline, or not allowed to write).
     pub remaining: usize,
     pub offline: bool,
+    /// Updates set aside in this push because the server can't accept them.
+    pub quarantined: usize,
 }
 
 /// A fetched user whose account key passed verification.
@@ -177,8 +180,12 @@ impl Session {
     }
 
     pub fn load_local(&self, vault_id: &str) -> Result<Option<Vault>> {
-        Vault::load(self.vault_store(vault_id)?)
-            .with_context(|| format!("loading the local copy of vault {vault_id}"))
+        let mut v = Vault::load(self.vault_store(vault_id)?)
+            .with_context(|| format!("loading the local copy of vault {vault_id}"))?;
+        if let Some(v) = &mut v {
+            v.set_update_limit(self.limits().max_update_bytes);
+        }
+        Ok(v)
     }
 
     // ------------------------------------------------------------ keys
@@ -227,6 +234,7 @@ impl Session {
 
     /// Bring role, archive flag, keys and name in line with the server.
     pub async fn apply_info(&self, v: &mut Vault, info: &VaultInfo) -> Result<()> {
+        v.set_update_limit(self.limits().max_update_bytes);
         if v.replica.keyring.current_epoch().unwrap_or(0) < info.key_epoch {
             let (ring, docs) = self.keys(&info.id).await?;
             v.set_keys(ring, docs);
@@ -342,14 +350,52 @@ impl Session {
         }
         let mut individually = false;
         let mut rekeyed = false;
+        // Known even offline (remembered), never "unlimited".
+        let max = self.limits().max_update_bytes as usize;
+        {
+            // Changes kept back as too large go out again once they fit (the
+            // administrator raised the limit).
+            let mut v = vault.lock().await;
+            if !v.quarantined.is_empty() {
+                let fit: Vec<String> = v
+                    .quarantined
+                    .iter()
+                    .filter(|p| {
+                        v.replica
+                            .encrypt_object(Purpose::Update, &p.object_id, &p.update)
+                            .is_ok_and(|c| c.len() <= max)
+                    })
+                    .map(|p| p.client_update_id.clone())
+                    .collect();
+                if v.release_quarantine(|p| fit.contains(&p.client_update_id)) > 0 {
+                    v.save()?;
+                }
+            }
+        }
         loop {
             let batch = {
-                let v = vault.lock().await;
+                let mut v = vault.lock().await;
                 let all = v.replica.pending_pushes()?;
+                // One change the server can never accept must not block all
+                // the others behind it: keep it aside (locally) and go on.
+                let too_big: Vec<String> = all
+                    .iter()
+                    .filter(|p| p.payload.len() > max)
+                    .map(|p| p.client_update_id.clone())
+                    .collect();
+                if !too_big.is_empty() {
+                    let n = v.quarantine(&too_big);
+                    v.save()?;
+                    out.quarantined += n;
+                    warn_too_large(v.name(), n, max);
+                }
                 let mut batch = Vec::new();
                 let mut bytes = 0;
                 let limit = if individually { 1 } else { PUSH_BATCH };
-                for p in all {
+                for p in all
+                    .into_iter()
+                    .filter(|p| !too_big.contains(&p.client_update_id))
+                {
                     if !batch.is_empty()
                         && (batch.len() >= limit || bytes + p.payload.len() > PUSH_BYTES)
                     {
@@ -392,10 +438,12 @@ impl Session {
                         v.save()?;
                         tracing::warn!(vault = %id, "dropped a change to a document that was permanently deleted");
                     } else {
-                        bail!(
-                            "a change is larger than the server accepts ({e}); it stays queued locally — ask the \
-                             administrator to raise COOLPSONOTES_MAX_UPDATE_KB"
-                        );
+                        // Refused although it is within the limit we know of
+                        // (the limit changed): keep it aside, push the rest.
+                        let n = v.quarantine(&ids);
+                        v.save()?;
+                        out.quarantined += n;
+                        warn_too_large(v.name(), n, max);
                     }
                 }
                 // A note became individually shared (or its key rotated): fetch
@@ -707,6 +755,14 @@ impl Session {
         }
         Ok(())
     }
+}
+
+fn warn_too_large(vault_name: &str, n: usize, max: usize) {
+    ui::warn(&format!(
+        "vault '{vault_name}': {n} change(s) are larger than the server accepts ({max} bytes per change); they \
+         are kept on this device but not uploaded — ask the administrator to raise COOLPSONOTES_MAX_UPDATE_KB. \
+         Other changes keep syncing"
+    ));
 }
 
 /// Uniformly random duration in `[0, max)`.

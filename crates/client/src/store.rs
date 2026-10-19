@@ -4,6 +4,7 @@
 //! <data>/<profile>/vaults/<vault-id>/
 //!   state.sealed        keys, metadata, seq, max_head_seen, counters, flags
 //!   pending.sealed      unacknowledged local updates (retried with the same id)
+//!   quarantine.sealed   local updates too large for the server (kept, not sent)
 //!   objects/<id>.sealed full CRDT state of the index and of every note
 //!   blobs/<id>          attachment ciphertext exactly as stored on the server
 //!   mirror.sealed       file-mirror bookkeeping (see `mirror.rs`)
@@ -146,13 +147,30 @@ impl VaultStore {
     }
 
     pub fn load_pending(&self) -> Result<Vec<Pending>> {
+        self.load_updates("pending")
+    }
+
+    pub fn save_pending(&self, pending: &[Pending]) -> Result<()> {
+        self.save_updates("pending", pending)
+    }
+
+    /// Local updates the server refused as too large: kept, not uploaded.
+    pub fn load_quarantine(&self) -> Result<Vec<Pending>> {
+        self.load_updates("quarantine")
+    }
+
+    pub fn save_quarantine(&self, updates: &[Pending]) -> Result<()> {
+        self.save_updates("quarantine", updates)
+    }
+
+    fn load_updates(&self, name: &str) -> Result<Vec<Pending>> {
         let Some(pt) = self
             .key
-            .read_sealed(&self.dir.join("pending.sealed"), &self.ctx("pending"))?
+            .read_sealed(&self.dir.join(format!("{name}.sealed")), &self.ctx(name))?
         else {
             return Ok(vec![]);
         };
-        let p: StoredPending = serde_json::from_slice(&pt).context("decoding pending updates")?;
+        let p: StoredPending = serde_json::from_slice(&pt).context("decoding queued updates")?;
         Ok(p.updates
             .into_iter()
             .map(|u| Pending {
@@ -163,10 +181,10 @@ impl VaultStore {
             .collect())
     }
 
-    pub fn save_pending(&self, pending: &[Pending]) -> Result<()> {
+    fn save_updates(&self, name: &str, updates: &[Pending]) -> Result<()> {
         fsutil::create_private_dir(&self.dir)?;
         let p = StoredPending {
-            updates: pending
+            updates: updates
                 .iter()
                 .map(|p| StoredPendingUpdate {
                     client_update_id: p.client_update_id.clone(),
@@ -176,8 +194,8 @@ impl VaultStore {
                 .collect(),
         };
         self.key.write_sealed(
-            &self.dir.join("pending.sealed"),
-            &self.ctx("pending"),
+            &self.dir.join(format!("{name}.sealed")),
+            &self.ctx(name),
             &serde_json::to_vec(&p)?,
         )
     }

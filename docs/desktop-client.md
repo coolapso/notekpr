@@ -498,6 +498,12 @@ lost-or-stolen-laptop case. Session tokens in the profile grant server access
 * **A file does not sync** — hidden names and editor temporary files are
   ignored by design; Markdown must be UTF-8; very large attachments are
   rejected by the server limit (warning printed).
+* **"changes are larger than the server accepts"** — large edits (a big paste
+  or import) are split into several updates below the server's per-update
+  limit (`/info`, remembered for offline use). A change that cannot be split
+  is kept on this device (still visible locally, counted as "TOO LARGE" in
+  `status`) and set aside, so everything else keeps uploading; it goes out by
+  itself once the administrator raises `COOLPSONOTES_MAX_UPDATE_KB`.
 * **Environment overlap** — the server also reads `COOLPSONOTES_DATA_DIR`; do
   not export it in a shell that also starts a server, or use separate shells.
 * **More detail** — `COOLPSONOTES_LOG=debug coolpsonotes sync` logs to stderr.

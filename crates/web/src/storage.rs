@@ -6,11 +6,14 @@
 //! * Device key: `localStorage`, keyed by user id. It never leaves the browser.
 //!   Anyone with access to this browser profile can use it, as with any web
 //!   app holding keys; rely on OS account security and disk encryption.
-//! * Unsent updates: `localStorage`, already encrypted with the vault key.
+//! * Unsent updates: `localStorage`, already encrypted (vault or note key).
+//! * Keys of new notes not registered yet: `localStorage`, wrapped under the
+//!   vault key.
 //! * Only with "Keep this browser usable offline": what starting without the
 //!   server needs (see `state::offline`), `localStorage`.
 
 use coolpsonotes_core::protocol::PushUpdate;
+use coolpsonotes_sync::NewKey;
 use serde::{Deserialize, Serialize};
 use web_sys::Storage;
 
@@ -201,6 +204,48 @@ pub fn set_pending(user_id: &str, vault_id: &str, p: &[PushUpdate]) -> Result<()
     }
 }
 
+fn new_keys_key(user_id: &str, vault_id: &str) -> String {
+    PAGE.with(|p| format!("cpn.newkeys.{user_id}.{vault_id}.{p}"))
+}
+
+/// Keys of new notes not registered with the server yet, stored by any page
+/// (like [`all_pending`]: per page, so tabs never overwrite each other's).
+/// Each is wrapped under the vault key.
+pub fn all_new_keys(user_id: &str, vault_id: &str) -> Vec<(String, Vec<NewKey>)> {
+    let Some(s) = local() else { return vec![] };
+    let prefix = format!("cpn.newkeys.{user_id}.{vault_id}.");
+    let n = s.length().unwrap_or(0);
+    let keys: Vec<String> = (0..n)
+        .filter_map(|i| s.key(i).ok().flatten())
+        .filter(|k| k.starts_with(&prefix))
+        .collect();
+    keys.into_iter()
+        .filter_map(|k| {
+            let v = serde_json::from_str(&get(local(), &k)?).ok()?;
+            Some((k, v))
+        })
+        .collect()
+}
+
+/// Store this page's unregistered note keys of a vault; other pages' entries
+/// it has taken over (`adopted`) are removed once it is stored.
+pub fn set_new_keys(user_id: &str, vault_id: &str, keys: &[NewKey], adopted: &[String]) {
+    let own = new_keys_key(user_id, vault_id);
+    let stored = if keys.is_empty() {
+        remove(local(), &own);
+        true
+    } else {
+        try_set(local(), &own, &serde_json::to_string(keys).unwrap()).is_ok()
+    };
+    if stored {
+        for k in adopted {
+            if *k != own && k.starts_with("cpn.newkeys.") {
+                remove(local(), k);
+            }
+        }
+    }
+}
+
 /// Delete everything stored for a user in this browser: device key, unsent
 /// changes, sync positions, last location (and the session token).
 pub fn forget_user(user_id: &str) {
@@ -215,6 +260,7 @@ pub fn forget_user(user_id: &str) {
     ];
     let prefixes = [
         format!("cpn.pending.{user_id}."),
+        format!("cpn.newkeys.{user_id}."),
         format!("cpn.head.{user_id}."),
     ];
     let n = s.length().unwrap_or(0);

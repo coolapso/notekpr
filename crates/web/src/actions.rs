@@ -2,6 +2,7 @@
 //! resulting update for sync) or calls the REST API for membership and keys.
 
 use std::cell::RefCell;
+use std::collections::{BTreeSet, HashMap};
 use std::rc::Rc;
 
 use coolpsonotes_core::doc::{EntryKind, NoteDoc};
@@ -50,9 +51,14 @@ pub async fn create_vault(name: String) -> Option<String> {
         }
     };
     let id = info.id.clone();
+    let note_keys = state::ui()
+        .server
+        .get_untracked()
+        .is_some_and(|s| s.note_keys);
     with(|c| {
         let r = VaultReplica::new(&id, Role::Owner, ring, VaultMeta::named(&name));
         c.replicas.insert(id.clone(), r);
+        c.outboxes.entry(id.clone()).or_default().note_keys = note_keys;
         c.vault_infos.insert(id.clone(), info);
         // A brand-new vault has nothing to catch up on.
         c.loaded.insert(id.clone());
@@ -248,54 +254,125 @@ pub async fn remove_member(vault: &str, user_id: &str) {
 }
 
 pub async fn rotate_keys(vault: &str) -> bool {
-    let members: Vec<MemberInfo> = match api::get(&format!("/vaults/{vault}/members")).await {
-        Ok(m) => m,
-        Err(e) => {
-            error(e.message);
-            return false;
+    for attempt in 0..2 {
+        // The rotation must cover exactly the notes the server has keys for.
+        state::reload_vault_keys(vault.to_string()).await;
+        let members: Vec<MemberInfo> = match api::get(&format!("/vaults/{vault}/members")).await {
+            Ok(m) => m,
+            Err(e) => {
+                error(e.message);
+                return false;
+            }
+        };
+        for m in &members {
+            if m.user.account_key.is_some()
+                && let Err(e) = check_trust(&m.user)
+            {
+                error(e);
+                return false;
+            }
         }
-    };
-    for m in &members {
-        if m.user.account_key.is_some()
-            && let Err(e) = check_trust(&m.user)
-        {
-            error(e);
-            return false;
-        }
-    }
-    let prepared = with(|c| {
-        let r = c.replicas.get(vault)?;
-        let mut ring = r.keyring.clone();
-        Some(engine::rotate(&mut ring, &members, &r.meta).map(|req| (ring, req)))
-    });
-    let (ring, req) = match prepared {
-        Some(Ok(x)) => x,
-        Some(Err(e)) => {
-            error(e.to_string());
-            return false;
-        }
-        None => return false,
-    };
-    match api::post::<_, ()>(&format!("/vaults/{vault}/keys/rotate"), &req).await {
-        Ok(()) => {
-            let notes = with(|c| {
-                let r = c.replicas.get_mut(vault)?;
-                r.keyring = ring;
-                Some(r.doc_keys.keys().cloned().collect::<Vec<_>>())
-            });
-            // Removed members knew the keys of individually shared notes too.
-            for n in notes.unwrap_or_default() {
-                if let Err(e) = rotate_note_key(vault, &n).await {
-                    error(format!("Could not renew the key of a shared note: {e}"));
+        // Removed members knew every note's key too: they all move on, and
+        // shared notes' new keys go to their current recipients.
+        let (keyed, shared) = with(|c| {
+            let Some(r) = c.replicas.get(vault) else {
+                return (vec![], BTreeSet::new());
+            };
+            let o = c.outboxes.get(vault);
+            let keyed: Vec<String> = r
+                .doc_keys
+                .keys()
+                .filter(|n| !o.is_some_and(|o| o.waits_for_key(n)))
+                .cloned()
+                .collect();
+            (keyed, r.shared.clone())
+        });
+        let mut recipients: HashMap<String, Vec<PublicUser>> = HashMap::new();
+        for n in keyed.iter().filter(|n| shared.contains(*n)) {
+            let users: Vec<PublicUser> = match api::get::<Vec<ObjectShareInfo>>(&format!(
+                "/vaults/{vault}/objects/{n}/shares"
+            ))
+            .await
+            {
+                Ok(s) => s.into_iter().map(|s| s.user).collect(),
+                Err(e) if e.status == 404 => vec![],
+                Err(e) => {
+                    error(e.message);
+                    return false;
+                }
+            };
+            // Never wrap a new key to a key that changed since it was pinned.
+            for u in users.iter().filter(|u| u.account_key.is_some()) {
+                if let Err(e) = check_trust(u) {
+                    error(e);
+                    return false;
                 }
             }
-            true
+            recipients.insert(n.clone(), users);
         }
-        Err(e) => {
-            error(format!("Key rotation failed: {e}"));
-            false
+        let prepared = with(|c| {
+            let r = c.replicas.get(vault)?;
+            let notes: Vec<_> = keyed
+                .iter()
+                .filter_map(|n| {
+                    let title = r
+                        .index
+                        .get(n)
+                        .map(|e| e.title().to_string())
+                        .unwrap_or_default();
+                    Some((
+                        n.clone(),
+                        r.doc_keys.get(n)?,
+                        title,
+                        recipients.remove(n).unwrap_or_default(),
+                    ))
+                })
+                .collect();
+            let mut ring = r.keyring.clone();
+            Some(
+                engine::rotate_with_notes(&mut ring, &members, &r.meta, &notes)
+                    .map(|(req, rings)| (ring, req, rings)),
+            )
+        });
+        let (ring, req, rings) = match prepared {
+            Some(Ok(x)) => x,
+            Some(Err(e)) => {
+                error(e.to_string());
+                return false;
+            }
+            None => return false,
+        };
+        match api::post::<_, ()>(&format!("/vaults/{vault}/keys/rotate"), &req).await {
+            Ok(()) => {
+                with(|c| {
+                    let Some(r) = c.replicas.get_mut(vault) else {
+                        return;
+                    };
+                    r.keyring = ring;
+                    r.doc_keys.extend(rings);
+                    // New notes' keys not registered yet were wrapped under
+                    // the old vault key: new ones replace them.
+                    if let Some(o) = c.outboxes.get_mut(vault) {
+                        let waiting: Vec<String> =
+                            o.new_keys.iter().map(|k| k.object_id.clone()).collect();
+                        for n in waiting {
+                            o.key_refused(r, &n);
+                        }
+                    }
+                });
+                state::persist_new_keys(vault, &[]);
+                return true;
+            }
+            // Membership or notes changed meanwhile: retry once with fresh keys.
+            Err(e) if e.status == 409 && attempt == 0 => {}
+            Err(e) => {
+                error(format!("Key rotation failed: {e}"));
+                return false;
+            }
         }
     }
+    error("Key rotation failed: the vault keeps changing; please try again.");
+    false
 }
 
 /// Owner: give keys to members who were added before they had any.
@@ -387,7 +464,14 @@ pub async fn share_note(
         }
         Err(e) => return Err(e.message),
     }
-    with(|c| c.users.insert(user.id.clone(), user.clone()));
+    with(|c| {
+        c.users.insert(user.id.clone(), user.clone());
+        if let Some(r) = c.replicas.get_mut(vault) {
+            r.shared.insert(note.to_string());
+        }
+    });
+    state::ui().tree_rev.update(|v| *v += 1);
+    state::send_presence();
     state::ui().shares_rev.update(|v| *v += 1);
     success(format!(
         "Shared “{}” with {}.",
@@ -425,7 +509,15 @@ async fn ensure_note_key(vault: &str, note: &str) -> Result<(), String> {
                 .map(|e| e.title().to_string())
                 .unwrap_or_default();
             let st = r.note(note).map(|n| n.encode_state()).unwrap_or_default();
-            Some(engine::start_sharing(&r.keyring, note, &title, &st, r.seq))
+            let waiting = c.outboxes.get(vault).is_some_and(|o| o.waits_for_key(note));
+            Some(match r.doc_keys.get(note) {
+                // Its own key already: a fresh one without a link to it, so
+                // recipients never read what was written before.
+                Some(doc) if !waiting => {
+                    engine::start_sharing_keyed(&r.keyring, doc, note, &title, &st, r.seq)
+                }
+                _ => engine::start_sharing(&r.keyring, note, &title, &st, r.seq),
+            })
         });
         let (ring, req) = match made {
             Some(Ok(x)) => x,
@@ -438,9 +530,12 @@ async fn ensure_note_key(vault: &str, note: &str) -> Result<(), String> {
                     if let Some(r) = c.replicas.get_mut(vault) {
                         r.doc_keys.insert(note.to_string(), ring);
                     }
+                    // A new note's own key needs no registering any more.
+                    if let Some(o) = c.outboxes.get_mut(vault) {
+                        o.key_registered(note);
+                    }
                 });
-                state::ui().tree_rev.update(|v| *v += 1);
-                state::send_presence();
+                state::persist_new_keys(vault, &[]);
                 return Ok(());
             }
             // Someone else started sharing it, or new changes arrived: reload and retry.
@@ -513,8 +608,12 @@ pub async fn rotate_note_key(vault: &str, note: &str) -> Result<(), String> {
                 with(|c| {
                     if let Some(r) = c.replicas.get_mut(vault) {
                         r.doc_keys.insert(note.to_string(), next);
+                        if users.is_empty() {
+                            r.shared.remove(note);
+                        }
                     }
                 });
+                state::ui().tree_rev.update(|v| *v += 1);
                 return Ok(());
             }
             // Recipients or keys changed meanwhile: reload and retry once.
@@ -604,6 +703,8 @@ pub async fn create_note_with(
         }
     };
     let id = state::new_id();
+    // Its own key, registered before any of its content is sent.
+    state::new_note_key(vault, &id, paths::title(&path));
     let up = with(|c| {
         c.replicas
             .get(vault)

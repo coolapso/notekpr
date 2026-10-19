@@ -376,6 +376,8 @@ pub struct Core {
     pub conn_id: u64,
     /// Upload bookkeeping per replica (`coolpsonotes_sync::Outbox`).
     pub outboxes: BTreeMap<String, coolpsonotes_sync::Outbox>,
+    /// New notes' keys being registered, by (vault, note).
+    pub registering: HashSet<(String, String)>,
     pub prefs: Prefs,
     pub prefs_version: i64,
     pub editor: Option<(String, String, Rc<Editor>)>,

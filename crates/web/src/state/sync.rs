@@ -2,6 +2,7 @@
 //! edits, unsent changes kept in local storage, compaction.
 
 use super::*;
+use coolpsonotes_sync::SnapshotAction;
 
 // ------------------------------------------------------------------ socket
 
@@ -532,6 +533,18 @@ pub(super) fn send_planned(vault_id: &str) {
     if !plan.held.is_empty() {
         report_held(vault_id, &plan.held);
     }
+    let register: Vec<coolpsonotes_sync::NewKey> = with(|c| {
+        plan.register
+            .into_iter()
+            .filter(|k| {
+                c.registering
+                    .insert((vault_id.to_string(), k.object_id.clone()))
+            })
+            .collect()
+    });
+    if !register.is_empty() {
+        leptos::task::spawn_local(register_keys(vault_id.to_string(), register));
+    }
     for updates in plan.pushes {
         let ids: Vec<String> = updates.iter().map(|u| u.client_update_id.clone()).collect();
         let sent = send(&ClientMessage::Push {
@@ -547,6 +560,100 @@ pub(super) fn send_planned(vault_id: &str) {
         }
     }
     update_pending_count();
+}
+
+/// Give a note created here its own key, registered before any of its
+/// content is sent (so none of it is ever under the vault key).
+pub fn new_note_key(vault_id: &str, object_id: &str, title: &str) {
+    let made = with(|c| {
+        let r = c.replicas.get_mut(vault_id)?;
+        let o = c.outboxes.entry(vault_id.to_string()).or_default();
+        Some(o.new_document_key(r, object_id, title))
+    });
+    if made == Some(true) {
+        persist_new_keys(vault_id, &[]);
+    }
+}
+
+/// Store the vault's unregistered note keys under this page's key (and drop
+/// the other pages' entries in `adopted`, now kept here).
+pub fn persist_new_keys(vault_id: &str, adopted: &[String]) {
+    let (uid, keys) = with(|c| {
+        (
+            c.user_id.clone(),
+            c.outboxes
+                .get(vault_id)
+                .map(|o| o.new_keys.clone())
+                .unwrap_or_default(),
+        )
+    });
+    storage::set_new_keys(&uid, vault_id, &keys, adopted);
+}
+
+/// Take over the unregistered note keys stored by earlier page loads or
+/// other tabs (before restoring the copies of unsent changes that need them).
+/// Returns the storage keys taken over.
+pub(super) fn adopt_stored_new_keys(c: &mut Core, vault_id: &str) -> Vec<String> {
+    let stored = storage::all_new_keys(&c.user_id, vault_id);
+    let o = c.outboxes.entry(vault_id.to_string()).or_default();
+    let mut adopted = Vec::new();
+    for (key, keys) in stored {
+        for k in keys {
+            if !o.new_keys.iter().any(|x| x.object_id == k.object_id) {
+                o.new_keys.push(k);
+            }
+        }
+        adopted.push(key);
+    }
+    adopted
+}
+
+/// Register new notes' keys, then send their content.
+async fn register_keys(vault_id: String, keys: Vec<coolpsonotes_sync::NewKey>) {
+    let mut decided = false;
+    for k in keys {
+        let path = format!("/vaults/{vault_id}/objects/{}/key", k.object_id);
+        match api::put::<_, ()>(&path, &k.update).await {
+            Ok(()) => {
+                decided = true;
+                with(|c| {
+                    if let Some(o) = c.outboxes.get_mut(&vault_id) {
+                        o.key_registered(&k.object_id);
+                    }
+                })
+            }
+            // Offline or a server problem: tried again with a later plan
+            // (the next edit or reconnect).
+            Err(e) if e.status == 0 || e.status >= 500 => {}
+            // Wrapped under a replaced vault key (412), or refused; perhaps it
+            // is registered and the answer got lost: fresh keys show
+            // (`Outbox::keys_reloaded`).
+            Err(e) => {
+                decided = true;
+                super::reload_vault_keys(vault_id.clone()).await;
+                with(|c| {
+                    let (Some(r), Some(o)) =
+                        (c.replicas.get_mut(&vault_id), c.outboxes.get_mut(&vault_id))
+                    else {
+                        return;
+                    };
+                    if o.waits_for_key(&k.object_id) {
+                        util::warn(&format!("a new note's key was refused: {}", e.message));
+                        o.key_refused(r, &k.object_id);
+                    }
+                });
+            }
+        }
+        with(|c| {
+            c.registering
+                .remove(&(vault_id.clone(), k.object_id.clone()))
+        });
+    }
+    if decided {
+        persist_new_keys(&vault_id, &[]);
+        persist_pending(&vault_id);
+        send_planned(&vault_id);
+    }
 }
 
 /// The server's limit for one update (from `/info`).
@@ -850,7 +957,7 @@ pub fn maybe_compact(vault_id: &str) {
 
 pub fn snapshot(vault_id: String, object_id: String) {
     let key = (vault_id.clone(), object_id.clone());
-    let req = with(|c| {
+    let action = with(|c| {
         if c.snapshotting.contains(&key) {
             return None;
         }
@@ -867,28 +974,52 @@ pub fn snapshot(vault_id: String, object_id: String) {
         };
         let empty = coolpsonotes_sync::Outbox::default();
         let o = c.outboxes.get(&vault_id).unwrap_or(&empty);
-        let req = coolpsonotes_sync::snapshot_now(r, o, &object_id, covers)?;
+        let action = coolpsonotes_sync::snapshot_action(r, o, &object_id, covers)?;
         c.snapshotting.insert(key.clone());
-        Some(req)
+        Some(action)
     });
-    let Some(req) = req else { return };
+    let Some(action) = action else { return };
     leptos::task::spawn_local(async move {
         // Jitter so several clients don't compact the same object at once.
         util::sleep((js_sys::Math::random() * 1500.0) as i32).await;
-        let r = api::post::<_, SnapshotInfo>(
-            &format!("/vaults/{vault_id}/objects/{object_id}/snapshots"),
-            &req,
-        )
-        .await;
+        let (res, ring) = match action {
+            SnapshotAction::Snapshot(req) => (
+                api::post::<_, SnapshotInfo>(
+                    &format!("/vaults/{vault_id}/objects/{object_id}/snapshots"),
+                    &req,
+                )
+                .await
+                .map(|_| ()),
+                None,
+            ),
+            // An older note moves to its own key, with this snapshot under it.
+            SnapshotAction::AdoptKey { ring, update } => (
+                api::put::<_, ()>(
+                    &format!("/vaults/{vault_id}/objects/{object_id}/key"),
+                    &update,
+                )
+                .await,
+                Some(ring),
+            ),
+        };
+        let adopted = ring.is_some();
+        let refused = matches!(&res, Err(e) if e.status == 409 || e.status == 412);
         with(|c| {
             c.snapshotting.remove(&key);
-            if r.is_ok() {
+            if res.is_ok() {
                 c.dirty.remove(&key);
                 if let Some(rep) = c.replicas.get_mut(&vault_id) {
+                    if let Some(ring) = ring {
+                        rep.doc_keys.insert(object_id.clone(), ring);
+                    }
                     rep.snapshot_created(&object_id);
                 }
             }
         });
+        // Someone else gave it a key, or changes arrived meanwhile.
+        if adopted && refused {
+            super::reload_vault_keys(vault_id).await;
+        }
     });
 }
 

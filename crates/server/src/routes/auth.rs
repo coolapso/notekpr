@@ -33,6 +33,7 @@ pub async fn info(State(state): State<AppState>) -> Json<ServerInfo> {
             .map(|_| state.config.oidc_display_name.clone()),
         max_attachment_bytes: state.config.max_attachment_bytes(),
         max_update_bytes: state.config.max_update_bytes(),
+        note_keys: true,
     })
 }
 

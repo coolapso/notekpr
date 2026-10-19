@@ -30,7 +30,7 @@ fn build_rows(vault: &str, expanded: &BTreeSet<String>) -> Vec<Row> {
     let shared: BTreeSet<String> = state::with(|c| {
         c.replicas
             .get(vault)
-            .map(|r| r.doc_keys.keys().cloned().collect())
+            .map(|r| r.shared.clone())
             .unwrap_or_default()
     });
     let folders: BTreeMap<String, Option<String>> = {

@@ -287,7 +287,7 @@ def test_devices_and_recovery(env):
         b3.js("window.confirm = () => true")
         b3.click_el(forget)
         b3.find(".dev-box input", 15)
-        check(b3.js("return Object.keys(localStorage).filter(k => k.startsWith('cpn.device.') || k.startsWith('cpn.pending.') || k.startsWith('cpn.head.')).length") == 0,
+        check(b3.js("return Object.keys(localStorage).filter(k => k.startsWith('cpn.device.') || k.startsWith('cpn.pending.') || k.startsWith('cpn.newkeys.') || k.startsWith('cpn.head.')).length") == 0,
               "forgetting the browser deletes its device key and sync data")
         b3.type(".dev-box input", name)
         b3.click(".dev-box button[type=submit]")
@@ -463,6 +463,28 @@ def test_attachments(env):
         b.close()
 
 
+API_GET = """
+window.__api = undefined;
+fetch('/api/v1' + arguments[0], {headers: {Authorization: 'Bearer ' + sessionStorage.getItem('cpn.token')}})
+  .then(r => r.ok ? r.json() : null).then(j => { window.__api = j; }, () => { window.__api = null; });
+"""
+
+
+def api_get(b, path):
+    """GET an API path with the browser's session (parsed JSON, None on error)."""
+    b.js(API_GET, path)
+    b.wait("return window.__api !== undefined", 10, "API answer")
+    return b.js("return window.__api")
+
+
+DOC_EPOCH_1 = 0x8000_0001
+
+
+def payload_epoch(b, payload):
+    """Key epoch of a base64 ciphertext (bytes 1..5, big endian)."""
+    return b.js("const s=atob(arguments[0]); return ((s.charCodeAt(1)<<24)>>>0) + (s.charCodeAt(2)<<16) + (s.charCodeAt(3)<<8) + s.charCodeAt(4);", payload)
+
+
 def test_note_sharing(env):
     a, b = Browser(), Browser()
     end = "const ed=document.querySelector('.ed'); ed.focus(); const s=getSelection(); s.selectAllChildren(ed); s.collapseToEnd();"
@@ -474,6 +496,20 @@ def test_note_sharing(env):
         new_note(a, "Secret plans", "only for me")
         new_note(a, "Trip", "Pack sunscreen")
         path = a.js("return location.pathname")
+        vid, nid = path.split("/")[2], path.split("/")[3]
+        # The note has its own key from the start: none of it under the vault key.
+        a.wait("return Object.keys(localStorage).filter(k => k.startsWith('cpn.pending.') || k.startsWith('cpn.newkeys.')).length === 0", 15, "olga's edits are sent")
+        keys = None
+        for _ in range(50):
+            keys = api_get(a, f"/vaults/{vid}/keys")
+            if keys and any(o["object_id"] == nid for o in keys["objects"]):
+                break
+            time.sleep(0.2)
+        check(any(o["object_id"] == nid and o["epoch"] == DOC_EPOCH_1 for o in keys["objects"]) and keys["shared"] == [],
+              "a new note gets its own private key")
+        ch = api_get(a, f"/vaults/{vid}/objects/{nid}/changes?since=0")
+        check(ch["updates"] and all(payload_epoch(a, u["payload"]) >= DOC_EPOCH_1 for u in ch["updates"]),
+              "none of its content is under the vault key")
         # Share just this note with Pete.
         a.click(".note-head button[title='Share this note']")
         a.find_text(".modal h2", "Trip", 10)
@@ -492,6 +528,11 @@ def test_note_sharing(env):
         b.wait("return document.querySelector('.ed') && document.querySelector('.ed').textContent.includes('Pack sunscreen')", 20, "pete reads the note")
         check(b.js("return document.querySelector('.note-title').textContent") == "Trip", "the title is decrypted for the recipient")
         check(b.js("return location.pathname").startswith("/s/"), "the note opens as a shared note")
+        ch = api_get(b, f"/vaults/{vid}/objects/{nid}/changes?since=0&snapshots=true")
+        got = [x["payload"] for x in ch["updates"] + ch["snapshots"]]
+        check(got and all(payload_epoch(b, p) > DOC_EPOCH_1 for p in got),
+              "sharing started a fresh key: nothing from before reaches the recipient")
+        check(api_get(a, f"/vaults/{vid}/keys")["shared"] == [nid], "the server lists the note as shared")
         b.click(".sb-search")
         b.find(".palette input", 5)
         b.keys("secret")

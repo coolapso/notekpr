@@ -132,36 +132,64 @@ pub(super) async fn load_vault_with(info: VaultInfo, force: bool, keys: Option<V
                     with(|c| c.replicas.remove(&id));
                     publish_shares();
                 }
-                let (is_new, applied, docs_changed, restored) = with(|c| {
+                let shared = engine::shared_objects(&keys);
+                let note_keys = keys.shared.is_some();
+                let (is_new, applied, docs_changed, restored, adopted) = with(|c| {
                     c.vault_errors.remove(&id);
                     match c.replicas.get_mut(&id) {
                         Some(r) => {
-                            let docs_changed = r.doc_keys.keys().ne(docs.keys())
-                                || r.doc_keys.iter().any(|(o, k)| {
-                                    docs.get(o).map(|d| d.current_epoch())
-                                        != Some(k.current_epoch())
-                                });
+                            let epochs = |r: &VaultReplica| {
+                                r.doc_keys
+                                    .iter()
+                                    .map(|(o, k)| (o.clone(), k.current_epoch()))
+                                    .collect::<Vec<_>>()
+                            };
+                            let before = (epochs(r), r.shared.clone());
                             r.keyring = ring;
                             r.meta = meta;
                             r.role = info.role;
                             r.doc_keys = docs;
+                            r.shared = shared;
+                            // New notes' keys the server doesn't have yet stay.
+                            c.outboxes
+                                .entry(id.clone())
+                                .or_default()
+                                .keys_reloaded(r, note_keys);
+                            let docs_changed = before != (epochs(r), r.shared.clone());
                             let (applied, _) = r.retry_deferred();
-                            (false, applied, docs_changed, false)
+                            (false, applied, docs_changed, false, None)
                         }
                         None => {
                             let mut r = VaultReplica::new(&id, info.role, ring, meta);
                             r.doc_keys = docs;
+                            r.shared = shared;
                             r.max_head_seen = storage::head_seen(&uid, &id);
+                            // Keys of new notes not registered yet, before the
+                            // local copy and unsent changes that need them.
+                            let adopted = adopt_stored_new_keys(c, &id);
+                            c.outboxes
+                                .entry(id.clone())
+                                .or_default()
+                                .keys_reloaded(&mut r, note_keys);
                             let restored =
                                 crate::cache::restore_into(&mut c.cache, &uid, &mut r, stored);
                             if restored {
                                 c.loaded.insert(id.clone());
                             }
                             c.replicas.insert(id.clone(), r);
-                            (true, engine::Applied::default(), false, restored)
+                            (
+                                true,
+                                engine::Applied::default(),
+                                false,
+                                restored,
+                                Some(adopted),
+                            )
                         }
                     }
                 });
+                if let Some(adopted) = adopted {
+                    persist_new_keys(&id, &adopted);
+                }
                 if is_new {
                     subscribe(&id);
                     if restored {

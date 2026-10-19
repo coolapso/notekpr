@@ -91,6 +91,10 @@ pub struct ServerInfo {
     pub oidc_display_name: Option<String>,
     pub max_attachment_bytes: u64,
     pub max_update_bytes: u64,
+    /// Every note can have its own key (`PUT …/objects/{o}/key` with
+    /// `private`); absent on older servers.
+    #[serde(default)]
+    pub note_keys: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]

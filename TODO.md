@@ -18,7 +18,7 @@ phase has an *interim* fix and the track owns the real one.
 ## Status (end of 2026-10-19)
 
 Phases 1–3 are done, and Phase 4 except the OS keyring for CLI secrets
-[C-H9] (needs a backend decision) and partial acceptance of rejected push
+[C-H9] (deferred) and partial acceptance of rejected push
 batches (left to R1). Redesign tracks: R5 mostly (encrypted IndexedDB copy,
 per-tab unsent changes; offline start open), R6 started (`state/` split),
 R7 done apart from a nightly fuzz job. R1, R2 and R3 are next, each in its
@@ -345,6 +345,8 @@ Nobody's notes may be locked in because a server or an app is unavailable.
       saved.
 - [ ] CLI secrets in the OS keyring [C-H9]: `local.key` (Secret Service,
       Keychain, DPAPI; separate fallback location), session and gateway tokens.
+      *Deferred (2026-10-19): not worth the dependency weight for now; the
+      docs say plainly that `local.key` sits next to the data.*
 
 ---
 

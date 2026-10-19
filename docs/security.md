@@ -22,7 +22,7 @@
 | Presence (which note, cursor) | encrypted awareness messages | that a user is connected to a vault |
 | Favorites, recent notes, key pins | account-key encryption | no |
 | Vault keys | HPKE to each member's account key | no |
-| Document keys of individually shared notes | wrapped under the vault key for members, HPKE to each recipient | no |
+| Document keys (every note has its own) | wrapped under the vault key for members, HPKE to each person a note is shared with | no; it learns which notes are shared, with whom, and when sharing started |
 | Account secrets | HPKE to each device, and to the recovery key | no |
 | Identities, memberships, roles, devices, sessions | server-enforced authorization | yes (needed to operate) |
 
@@ -122,13 +122,15 @@ primitives. Formats:
 * **Removed members** lose server access immediately and the vault key is
   rotated, so content written afterwards is unreadable to them even if they
   obtain ciphertext. Data they downloaded before removal cannot be revoked —
-  the UI says so. The document keys of individually shared notes are rotated
-  too, since members could read them.
-* **Recipients of a single note** hold only that note's document key. The
-  server gives them only that note's content under that key — not the vault
-  index (paths, other titles), other notes, attachments, the member list, the
-  vault key, or the note's history from before it was shared (stored under the
-  vault key). They learn the owner's identity and see the presence of people
+  the UI says so. Every note's document key is renewed in the same request
+  (members could unwrap them all).
+* **Recipients of a single note** hold only that note's document keys from
+  the moment sharing started. Sharing gives the note a fresh key that has no
+  chain link to its earlier ones, so even with all the ciphertext a recipient
+  cannot decrypt the note's history from before it was shared; the server
+  also hands out only content from that epoch on (`share_from`). Nor do they
+  get the vault index (paths, other titles), other notes, attachments, the
+  member list or the vault key. They learn the owner's identity and see the presence of people
   working on that note. They cannot share it further or change its key. When
   one is removed, the owner's client rotates the document key; as with vault
   members, what they already downloaded stays with them. Images embedded from
@@ -144,7 +146,7 @@ sessions and envelope), rotate keys of shared vaults, rotate the recovery key.
 
 | Client | At rest |
 |---|---|
-| Browser | Device secret in `localStorage`, unsent updates (already encrypted with vault keys) in `localStorage`, and a local copy of each vault in IndexedDB, encrypted with the vault's (or shared note's) keys like the server's copy. No plaintext notes are persisted; content is decrypted into memory. The local copy is deleted when access to a vault ends and by "Forget this browser". Protection of the browser profile relies on the OS account and full-disk encryption. |
+| Browser | Device secret in `localStorage`, unsent updates (already encrypted with vault or note keys) and new notes' keys not registered yet (wrapped under the vault key) in `localStorage`, and a local copy of each vault in IndexedDB, encrypted with the vault's (or shared note's) keys like the server's copy. No plaintext notes are persisted; content is decrypted into memory. The local copy is deleted when access to a vault ends and by "Forget this browser". Protection of the browser profile relies on the OS account and full-disk encryption. |
 | Browser, "Keep this browser usable offline" (opt-in) | Additionally the session token, this device's wrapped account key, the vault list with the wrapped vault keys and the encrypted preferences (`localStorage`), and a service worker with a copy of the app's own files. With the device secret next to them, a copy of the browser profile can then be decrypted **without the server — and removing the device no longer cuts it off**. Off by default; the setting explains this. Turning it off, "Forget this browser", a dead session or a device the server reports as removed delete the stored data. |
 | Desktop, default | Encrypted local replica (vault-key encrypted CRDT state, sealed with a local key file `0600`). The key file sits in the same profile directory, so this protects against other OS users and stray copies of single files, but not against a copy of the whole directory (a backup, a synced folder) or malware running as the same user; use full-disk encryption. Moving the key to the OS keyring is planned. |
 | Desktop, plaintext mirror (explicit opt-in) | Ordinary Markdown files readable by any program running as the user — the point of the mode. It must be enabled explicitly and the CLI explains the implications. |

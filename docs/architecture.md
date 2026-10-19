@@ -125,10 +125,15 @@ Account public key ──── HPKE ─────▶ Vault key, epoch N  ─�
   fingerprint for out-of-band comparison), and uploads the vault key encrypted
   to it. Recipients who have not set up keys yet become "pending keys" members
   and receive the key automatically when the owner's client next sees them.
+* **Note keys**: every note has its own *document key*, wrapped under the
+  vault key for members. A client creating a note registers its key before
+  sending any of its content; older notes move to their own key at their next
+  snapshot. The vault index and attachments stay under the vault key.
 * **Rotation / revocation**: removing a member triggers a new epoch: a fresh
   vault key, wrapped for remaining members, plus a chain link so members can
-  still read history. New content always uses the newest epoch. Already
-  downloaded data cannot be revoked (stated in the UI).
+  still read history, and in the same request a new epoch of every note's key.
+  New content always uses the newest epoch. Already downloaded data cannot be
+  revoked (stated in the UI).
 * **Devices removed** lose their envelope and sessions immediately. Because a
   device held the account secret, a *compromised* device warrants rotating the
   shared vaults' keys (one click in vault settings).
@@ -167,7 +172,7 @@ overwriting.
 
 **Local copy (browser).** The browser keeps each vault's documents in
 IndexedDB: every note's full CRDT state, encrypted with the key its server
-copy uses (the vault key, or a shared note's own key; purpose `LocalCache`,
+copy uses (the note's own key, or the vault key for the index and older notes; purpose `LocalCache`,
 bound to vault and object), plus a cursor: the sequence
 number the stored copy is complete up to. A page load shows the stored notes
 right away and subscribes from the cursor, so only what changed since is
@@ -258,18 +263,19 @@ has unsent edits to it, that person's client saves their version as a new
   encrypted store, exactly like the desktop client minus the plaintext mirror.
   The web client is responsive and usable on phones today.
 * **Sharing single notes** (implemented): each note is its own CRDT and
-  ciphertext with per-object AAD, so a note can move to its own *document key*
-  (epochs with the top bit set, so every ciphertext says which key it needs).
-  The key is wrapped under the vault key for members and with HPKE for each
-  recipient; a snapshot under the new key gives recipients the current content
-  without the note's earlier, vault-key history. Recipients subscribe to just
+  ciphertext with per-object AAD under its own *document key* (epochs with the
+  top bit set, so every ciphertext says which key it needs). Sharing starts a
+  fresh epoch with no chain link to the earlier ones, wrapped with HPKE for
+  each recipient; a snapshot under it gives recipients the current content,
+  and they can neither receive nor decrypt the note's earlier history
+  (the server hands out content from that epoch on). Recipients subscribe to just
   that note, the server returns them only document-key payloads, and refuses
   writes under outdated keys (`stale_key`) so clients re-encrypt. Content that
   arrives before its key is kept and replayed once the key is loaded. See
   protocol.md §5.1.
 * **Sharing folders**: builds on the same mechanism — a shared folder would get
-  its own key and a small index object listing only its entries, with its notes
-  under that key.
+  its own key and a small index object listing only its entries, with its
+  notes' keys wrapped under the folder key.
 * **Sharing between instances** (much later): independent instances sharing
   vaults, folders or notes with each other's users. To keep it possible, ids
   stay random and globally unique, people are identified by their account

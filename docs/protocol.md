@@ -56,19 +56,20 @@ Defined in `crates/core/src/crypto.rs` and `keys.rs`.
   Wraps the account secret (symmetric envelope, purpose `Recovery`, context = user id).
 * **Key chain**: when a vault moves to epoch N, `link_N = Enc(key_N, key_{N-1})`.
   A member holding the newest key can recover all older ones.
-* **Document keys** (individually shared notes, §5.1): same envelope, but the
+* **Document keys** (every note's own key, §5.1): same envelope, but the
   epoch has its top bit set (`0x8000_0001`, `0x8000_0002`, …), so a ciphertext
   says whether it is under the vault key or the note's own key. A document key
   is wrapped for vault members under the current vault key (purpose `DocKey`,
   context `vault_id, object_id, epoch`) and for recipients with HPKE (scope
   `vault_id/object_id`). The note's title for recipients is encrypted under it
-  (purpose `ObjectMeta`).
+  (purpose `ObjectMeta`). The vault index and attachments stay under the vault
+  key.
 
 ## 3. Authentication
 
 | Endpoint | Purpose |
 |---|---|
-| `GET /info` | server name, version, `dev_mode`, `oidc_enabled`, size limits (no auth) |
+| `GET /info` | server name, version, `dev_mode`, `oidc_enabled`, size limits, `note_keys` (notes can have their own keys, §5.1) (no auth) |
 | `GET /auth/oidc/start?return_to=/path` | 302 to the identity provider (authorization code + PKCE + nonce); sets an HttpOnly, SameSite=Lax `cpn_login` cookie that binds the login to this browser |
 | `GET /auth/oidc/callback` | provider redirect target; requires the `cpn_login` cookie of the browser that started the login (otherwise `#error=login_failed`, which closes login CSRF); redirects to `/auth/complete#code=…&return_to=…` |
 | `POST /auth/exchange {code}` | one-time code (120 s) → `SessionResponse {token, expires_at, user}` |
@@ -128,13 +129,13 @@ device's public key, but the code would differ.
 | `GET /vaults` | caller's vaults with role, `encrypted_meta`, `key_epoch`, `head_seq` |
 | `POST /vaults {id, encrypted_meta, key_envelope}` | human; the client picks the id and wraps epoch 1 to itself |
 | `GET/PATCH/DELETE /vaults/{v}` | read: member; update (`encrypted_meta`, `archived`): owner; delete: owner |
-| `GET /vaults/{v}/keys` | member: own envelopes for every epoch granted + full key chain |
+| `GET /vaults/{v}/keys` | member: own envelopes for every epoch granted + full key chain; the notes' document keys (`objects`, `object_chain`) and which notes are shared individually (`shared`; absent on servers from before notes had their own keys) |
 | `GET /vaults/{v}/members` | member: `MemberInfo {user (with account key), role, has_current_key}` |
 | `POST /vaults/{v}/members {user_id, role, key_envelope?}` | owner. Without an envelope the member is "pending keys" until the owner's client grants them |
 | `PATCH /vaults/{v}/members/{u} {role}` | owner |
 | `DELETE /vaults/{v}/members/{u}` | owner removes; any non-owner can remove themselves |
 | `POST /vaults/{v}/keys/grant {envelopes}` | owner fills missing envelopes for the current epoch |
-| `POST /vaults/{v}/keys/rotate {new_epoch, chain_link, encrypted_meta, envelopes}` | owner; `new_epoch = current + 1`; envelopes must cover exactly the members that have account keys |
+| `POST /vaults/{v}/keys/rotate {new_epoch, chain_link, encrypted_meta, envelopes, objects}` | owner; `new_epoch = current + 1`; envelopes must cover exactly the members that have account keys; `objects` (`ObjectKeyChange {object_id, update}`) moves **every** note with a document key to its next epoch in the same transaction (each a rotation as in §5.1, wrapped under the new vault key), else `409` |
 | `GET /vaults/{v}/audit` | owner: membership, key and deletion events (no content) |
 | `GET /users/search?q=` | humans matching a display-name prefix or exact e-mail, plus the caller's own agents |
 | `GET /users/{id}` | public profile + account key of a user the caller may interact with |
@@ -143,36 +144,51 @@ Clients **must** call `PublicAccountKey::verify()` before wrapping a key to a
 fetched public key, and should pin fingerprints (trust on first use) and show
 them for out-of-band comparison.
 
-### 5.1 Sharing single notes
+### 5.1 Note keys and sharing single notes
+
+Every note has its own *document key*. A client creating a note registers a
+key for it (**private**: wrapped only under the vault key) *before* uploading
+any of the note's content, so none of it is ever under the vault key. Notes
+from before this (under the vault key) move to their own key lazily, at their
+next snapshot. The index and attachments stay under the vault key.
 
 A vault owner can share one note with people who are **not** members of the
-vault. The note gets its own *document key*; recipients receive only that key
-and can reach only that note — never the vault index, other notes, attachments,
-member list or vault key.
+vault. Sharing starts with a **fresh** document key that has no chain link to
+the note's earlier keys; the server remembers that epoch (`share_from`) and
+hands recipients only content from it on. Recipients receive only that key and
+can reach only that note — never the vault index, other notes, attachments,
+member list, vault key, or the note's history from before it was shared.
 
 | Endpoint | Role |
 |---|---|
-| `PUT /vaults/{v}/objects/{o}/key` `ObjectKeyUpdate {epoch, vault_envelope, chain_link?, envelopes, encrypted_meta, snapshot?}` | owner. **First share**: `epoch = 0x8000_0001`, plus a `snapshot` of the note's full state under the new key whose `covers_seq` covers every stored update of the note (else `412 stale_key`). **Rotation**: `epoch = current + 1`, a `chain_link`, and `envelopes` for exactly the current recipients (else `409`). `vault_envelope` must be wrapped under the vault's *current* epoch. |
-| `GET /vaults/{v}/objects/{o}/keys` | member or recipient: `ObjectKeysResponse {role, current_epoch, envelopes (own), chain, encrypted_meta}` |
+| `PUT /vaults/{v}/objects/{o}/key` `ObjectKeyUpdate {epoch, vault_envelope, chain_link?, envelopes, encrypted_meta, snapshot?, private?}` | See the three kinds below. `vault_envelope` must be wrapped under the vault's *current* epoch (else `412 stale_key`). A `snapshot` must be under the new key and its `covers_seq` must cover every stored update of the note (else `412 stale_key`). |
+| `GET /vaults/{v}/objects/{o}/keys` | member or recipient: `ObjectKeysResponse {role, current_epoch, envelopes (own), chain, encrypted_meta}`; the chain only from `share_from` on |
 | `PUT /vaults/{v}/objects/{o}/meta {encrypted_meta}` | writer: the title recipients see, under the current document key |
 | `GET /vaults/{v}/objects/{o}/shares` | member: `ObjectShareInfo {user, role, added_at, added_by, has_current_key}` |
-| `POST /vaults/{v}/objects/{o}/shares {user_id, role, envelope}` | owner; `role` is `editor` or `viewer`; the envelope wraps the current document key to the person. Vault members are refused (`409`). |
+| `POST /vaults/{v}/objects/{o}/shares {user_id, role, envelope}` | owner; `role` is `editor` or `viewer`; the envelope wraps the current document key to the person. Vault members are refused (`409`), and so is a note whose sharing has not started (`409`: give it a fresh key first). |
 | `PATCH /vaults/{v}/objects/{o}/shares/{u} {role}`, `DELETE …/shares/{u}` | owner; recipients may remove themselves. Clients rotate the document key after removing someone. |
 | `GET /shares` | notes shared with the caller: `SharedNote {vault_id, object_id, role, owner, shared_by, key_epoch, encrypted_meta, added_at}` |
 | `GET /vaults/{v}/objects/{o}/changes?since=` | that note's part of the log (same shape as `/changes`) |
 
-Recipients use `GET /vaults/{v}/objects/{o}[/snapshots[/{id}]]`, `/changes` and
+The kinds of `PUT …/key`:
+
+| Kind | Request | Who |
+|---|---|---|
+| **Private first key** | `private: true`, `epoch = 0x8000_0001`, no chain link, no envelopes; a covering `snapshot` only if the note has content already (lazy move of an older note) | any writer, agents included |
+| **Sharing starts** | `private: false` and either the first key (`0x8000_0001`) or `current + 1` **without** a chain link; a covering `snapshot` is required; no envelopes (people are added afterwards); refused (`409`) while the note has recipients | owner |
+| **Rotation** | `epoch = current + 1` with a `chain_link`, and `envelopes` for exactly the current recipients (else `409`) | owner |
+
+A repeated private first key for a note that has one is refused (`409`;
+clients reload keys and see it registered). Recipients use
+`GET /vaults/{v}/objects/{o}[/snapshots[/{id}]]`, `/changes` and
 `POST /vaults/{v}/updates` / snapshots for that note only. Reads by recipients
-return **only payloads under the document key** (epoch top bit set): the note's
-history from before it was shared, which is under the vault key, is never handed
-out. `GET /vaults/{v}/keys` gives members the document-key envelopes
-(`objects`) and chains (`object_chain`) of the vault's shared notes.
+return **only payloads under a document epoch at or after `share_from`**.
 
 Once a note has a document key, the server accepts its updates and snapshots
 only under the **current** document epoch; anything else is refused with
 `412 stale_key` (an older client still using the vault key, or a key that was
-just rotated). Clients reload keys and re-send. When a vault key is rotated,
-the owner's client also rotates every document key (removed members knew them).
+just rotated). Clients reload keys and re-send. Rotating the vault key renews
+every note's key in the same request (removed members knew them).
 
 ## 6. The encrypted log
 

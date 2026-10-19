@@ -15,15 +15,16 @@ tracks](#redesign-tracks). Those findings are listed under their track and
 not repeated in the phases, unless they are too dangerous to wait — then the
 phase has an *interim* fix and the track owns the real one.
 
-## Status (end of 2026-10-19)
+## Status (2026-10-20)
 
 Phases 1–3 are done, and Phase 4 except the OS keyring for CLI secrets
 [C-H9] (deferred). Redesign tracks: R5 mostly (encrypted IndexedDB copy,
 per-tab unsent changes, opt-in offline start; shared notes not cached yet),
 R6 started (`state/` split; the editor is its own crate with a document
 model, transactions and line-level rendering),
-R7 done apart from a nightly fuzz job. R1, R2 and R3 are next, each in its
-own session.
+R7 done (weekly fuzzing in CI). R1 done (sync engine crate, partial push
+acceptance), R2 done (every note has its own key; sharing starts a fresh,
+unlinked one). R3 is next.
 
 ## Decisions (2026-10-19)
 
@@ -406,12 +407,27 @@ the desktop client, with one test suite.
 Give every note its own key, wrapped by its vault key (later: by a folder
 key). Single-note and folder sharing become the same mechanism.
 
-- [ ] Key hierarchy vault → (folder) → document; migration that wraps
-      existing content lazily.
-- [ ] Remove the top-bit epoch scheme and the first-share re-encryption.
-- Resolves: the first-share snapshot dance and its races [S-M3, stale_key on
-  first share]; reduces recipient metadata exposure [S-L7, with per-object
-  sequence numbers]; prerequisite for folder sharing.
+- [x] Key hierarchy vault → document (folder keys come with folder
+      sharing): every new note gets its own private key, registered before
+      any of its content is uploaded; older notes move to their own key
+      lazily, at their next snapshot (web and CLI). Rotating the vault key
+      renews every note's key in the same request.
+- [x] ~~Remove the top-bit epoch scheme and the first-share re-encryption~~ —
+      decided otherwise (2026-10-20): the top-bit epochs stay (every
+      ciphertext says which key it needs; wire formats are append-only), and
+      sharing still starts with a snapshot under a **fresh, unlinked** key, so
+      the guarantee "recipients never get the history from before sharing"
+      holds against the ciphertext too, not only by server filtering
+      (`objects.share_from`).
+- [ ] Incremental key reloads: every new note publishes `KeyRotated`, and
+      members then fetch the whole `GET /vaults/{v}/keys` (all notes' keys).
+      Fine for thousands of notes; a per-note member endpoint would scale
+      further.
+- [ ] Local copies of individually shared notes (with R5).
+- Resolves: the first-share races [S-M3, stale_key on first share] (sharing
+  no longer depends on the note's history being under the vault key);
+  prerequisite for folder sharing. Recipient metadata [S-L7: vault head_seq,
+  member ids] needs per-object sequence numbers and is still open.
 
 ### R3. Signed membership log and signed updates
 

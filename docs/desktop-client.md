@@ -165,14 +165,20 @@ For a step-by-step guide to working in Obsidian, Neovim or any other editor
 with an always-running mirror, see [own-editor.md](own-editor.md).
 
 ```sh
-coolpsonotes sync                       # encrypted replicas only, live
-coolpsonotes sync --dir ~/Notes         # + plaintext Markdown mirror, live
+coolpsonotes sync                       # encrypted replicas, live (+ the remembered mirror, see below)
+coolpsonotes sync --dir ~/Notes         # + plaintext Markdown mirror, live; remembered for next time
 coolpsonotes sync --dir ~/Notes --once  # catch up, ingest disk changes, push, exit
 coolpsonotes sync --vault Family        # restrict to some vaults (repeatable)
 coolpsonotes sync --no-dir              # forget the remembered mirror directory
 coolpsonotes sync --once --allow-mass-delete   # confirm that many files were deleted on purpose (§7)
 coolpsonotes sync --once --restore-missing     # write vanished files (or a missing mirror) back
 ```
+
+The directory given with `--dir` is remembered in the profile: a later plain
+`coolpsonotes sync` mirrors into it again and says so when it starts
+("mirroring decrypted files into … (remembered …)"). `sync --no-dir` forgets
+it, so `sync` keeps only the encrypted replicas. `coolpsonotes status` shows
+which directory is mirrored.
 
 `sync` subscribes to every vault over the WebSocket (`since` = the local
 cursor), applies catch-up pages and live updates as they arrive, uploads local
@@ -194,6 +200,12 @@ Restart=on-failure
 WantedBy=default.target
 ```
 
+(Plain `sync` also mirrors into a directory remembered from an earlier
+`sync --dir`; run `sync --no-dir` once for encrypted replicas only.) If the
+live connection ends for good (session revoked) or the Markdown mirror stops
+working, `sync` exits with an error instead of carrying on half-dead, so
+`Restart=on-failure` brings it back.
+
 ### Modes and their security implications
 
 | Mode | What is on disk | Protects against |
@@ -204,9 +216,11 @@ WantedBy=default.target
 The plaintext mirror is the point of "real Markdown files", but anything that
 can read `DIR` can read those notes: other programs running as you, backup or
 cloud-sync tools that pick the folder up, anyone with the unlocked laptop.
-It therefore has to be **confirmed explicitly** the first time — interactively,
-or with `--plaintext-ok` — and the choice is remembered in the profile with
-the directory. The server and the encrypted copies are unaffected.
+It therefore has to be **confirmed explicitly** for each directory the first
+time it is used — interactively, or with `--plaintext-ok` — and the
+confirmation is remembered in the profile for that directory only (pointing
+the mirror somewhere else asks again). The server and the encrypted copies
+are unaffected.
 
 ### Layout
 

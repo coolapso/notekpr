@@ -73,9 +73,14 @@ fn confirm_or_flag(yes: bool, prompt: &str) -> Result<()> {
 }
 
 pub async fn run(cli: Cli) -> Result<()> {
+    run_in(cli, Dirs::from_env()?).await
+}
+
+/// [`run`] with explicit configuration and data roots (tests).
+pub async fn run_in(cli: Cli, dirs: Dirs) -> Result<()> {
     ui::set_quiet(cli.quiet);
     let ctx = Ctx {
-        dirs: Dirs::from_env()?,
+        dirs,
         profile: cli.profile.clone(),
         json: cli.json,
     };
@@ -1025,6 +1030,56 @@ async fn shutdown_signal() {
     tokio::select! { _ = ctrl_c => {}, _ = term => {} }
 }
 
+type Task = tokio::task::JoinHandle<Result<()>>;
+
+/// Wait for `stop`, or for a background task to end — which they never do on
+/// their own. The process then exits with the reason (so a service manager
+/// restarts it) instead of carrying on half-dead, e.g. syncing replicas while
+/// the Markdown mirror silently stopped. Returns the tasks still running.
+async fn supervise(
+    stop: impl std::future::Future<Output = ()>,
+    mut live: Task,
+    mut mirror: Option<Task>,
+) -> (Result<()>, Option<Task>, Option<Task>) {
+    type Joined = std::result::Result<Result<()>, tokio::task::JoinError>;
+    enum Ended {
+        Stop,
+        Live(Joined),
+        Mirror(Joined),
+    }
+    let ended = {
+        let mirror_done = async {
+            match mirror.as_mut() {
+                Some(t) => t.await,
+                None => std::future::pending().await,
+            }
+        };
+        tokio::select! {
+            _ = stop => Ended::Stop,
+            r = &mut live => Ended::Live(r),
+            r = mirror_done => Ended::Mirror(r),
+        }
+    };
+    match ended {
+        Ended::Stop => (Ok(()), Some(live), mirror),
+        Ended::Live(r) => {
+            let r = match r {
+                Ok(r) => r,
+                Err(e) => Err(anyhow!("the sync task failed: {e}")),
+            };
+            (r, None, mirror)
+        }
+        Ended::Mirror(r) => {
+            let e = match r {
+                Ok(Ok(())) => anyhow!("the Markdown mirror stopped unexpectedly"),
+                Ok(Err(e)) => e.context("the Markdown mirror failed"),
+                Err(e) => anyhow!("the Markdown mirror failed: {e}"),
+            };
+            (Err(e), Some(live), None)
+        }
+    }
+}
+
 async fn sync(ctx: &Ctx, a: SyncArgs) -> Result<()> {
     let store = ctx.store()?;
     let profile = store.require()?;
@@ -1059,10 +1114,14 @@ async fn sync(ctx: &Ctx, a: SyncArgs) -> Result<()> {
         ..Default::default()
     };
     if let Some(d) = &dir {
-        if !profile.sync.plaintext_ok && !a.plaintext_ok {
+        // Confirmed once per directory, not once per profile.
+        if !profile.sync.plaintext_confirmed(d) && !a.plaintext_ok {
             eprintln!("{}\n", plaintext_note(d));
             if !ui::stdin_is_tty() {
-                bail!("writing decrypted files must be confirmed once: re-run with --plaintext-ok");
+                bail!(
+                    "writing decrypted files to {} must be confirmed once: re-run with --plaintext-ok",
+                    d.display()
+                );
             }
             let answer = ui::prompt_line("Type 'yes' to enable the plaintext mirror: ")?;
             if answer != "yes" {
@@ -1070,11 +1129,19 @@ async fn sync(ctx: &Ctx, a: SyncArgs) -> Result<()> {
                     "cancelled; run `coolpsonotes sync` without --dir to keep only encrypted local copies"
                 );
             }
-        } else if a.dir.is_some() || !profile.sync.plaintext_ok {
+        } else if a.dir.is_some() {
             ui::status(&plaintext_note(d));
         }
+        if a.dir.is_none() {
+            // Plain `sync` reuses the remembered mirror: say so.
+            ui::status(&format!(
+                "mirroring decrypted files into {} (remembered from an earlier `sync --dir`; \
+                 `coolpsonotes sync --no-dir` stops that)",
+                d.display()
+            ));
+        }
         store.update(|p| {
-            p.sync.plaintext_ok = true;
+            p.sync.confirm_plaintext(d);
             p.sync.mirror_dir = Some(d.clone());
         })?;
     }
@@ -1165,20 +1232,17 @@ async fn sync(ctx: &Ctx, a: SyncArgs) -> Result<()> {
         }
     };
     ui::status("press Ctrl-C to stop");
-    let mut live = live;
-    let result = tokio::select! {
-        _ = shutdown_signal() => Ok(()),
-        r = &mut live => match r {
-            Ok(Ok(())) => Ok(()),
-            Ok(Err(e)) => Err(e),
-            Err(e) => Err(anyhow!("sync task failed: {e}")),
-        },
-    };
+    let (result, live, mirror_task) = supervise(shutdown_signal(), live, mirror_task).await;
+    if let Err(e) = &result {
+        ui::warn(&format!("stopping: {e:#}"));
+    }
     let _ = stop_tx.send(true);
     if let Some(t) = mirror_task {
         let _ = tokio::time::timeout(Duration::from_secs(5), t).await;
     }
-    let _ = tokio::time::timeout(Duration::from_secs(5), live).await;
+    if let Some(t) = live {
+        let _ = tokio::time::timeout(Duration::from_secs(5), t).await;
+    }
     for id in hub.vault_ids() {
         let _ = tokio::time::timeout(Duration::from_secs(10), hub.push(&id)).await;
     }
@@ -1433,4 +1497,41 @@ async fn gateway_cmd(ctx: &Ctx, a: GatewayArgs) -> Result<()> {
         .await;
     hub.save_all().await;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn forever() -> Task {
+        tokio::spawn(async {
+            std::future::pending::<()>().await;
+            Ok(())
+        })
+    }
+
+    #[tokio::test]
+    async fn a_failing_mirror_task_stops_the_daemon_with_its_reason() {
+        let mirror: Task = tokio::spawn(async { Err(anyhow!("inotify watch limit reached")) });
+        let (r, live, mirror) = supervise(std::future::pending(), forever(), Some(mirror)).await;
+        let e = format!("{:#}", r.unwrap_err());
+        assert!(e.contains("mirror") && e.contains("inotify"), "{e}");
+        assert!(mirror.is_none(), "a finished task is not awaited again");
+        live.unwrap().abort();
+
+        // A mirror that just ends is an error too; a stop signal is not.
+        let mirror: Task = tokio::spawn(async { Ok(()) });
+        let (r, live, _) = supervise(std::future::pending(), forever(), Some(mirror)).await;
+        assert!(r.is_err());
+        live.unwrap().abort();
+        let (r, live, mirror) = supervise(async {}, forever(), Some(forever())).await;
+        assert!(r.is_ok());
+        live.unwrap().abort();
+        mirror.unwrap().abort();
+        // The live loop failing (session revoked) is reported as such.
+        let live: Task = tokio::spawn(async { Err(anyhow!("session revoked")) });
+        let (r, live, _) = supervise(std::future::pending(), live, None).await;
+        assert!(format!("{:#}", r.unwrap_err()).contains("revoked"));
+        assert!(live.is_none());
+    }
 }

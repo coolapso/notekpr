@@ -1756,31 +1756,31 @@ impl Mirror {
             .filter(|(_, t)| final_pass || t.elapsed() >= RENAME_WINDOW)
             .map(|(id, _)| id.clone())
             .collect();
-        if mass && !opts.allow_mass_delete {
-            if opts.restore_missing {
-                // Forget them: write_remote writes them again.
-                for id in std::mem::take(&mut mv.missing_since).into_keys() {
-                    mv.state.files.remove(&id);
-                    report.restored += 1;
-                }
-                mv.dirty = true;
-            } else {
-                if !mv.held {
-                    let what = if dir_gone {
-                        format!("its folder {} is gone", mv.dir.display())
-                    } else {
-                        format!("{missing} of {total} mirrored files disappeared at once")
-                    };
-                    ui::warn(&format!(
-                        "vault '{name}': {what}. Nothing was moved to the trash. If the folder was moved, renamed \
-                         or unmounted, put it back. If you deleted the files on purpose, stop `coolpsonotes sync` \
-                         and run `coolpsonotes sync --once --allow-mass-delete` (moves them to the trash), or \
-                         `--restore-missing` to get the files back"
-                    ));
-                }
-                mv.held = true;
-                report.held = missing;
+        if opts.restore_missing && missing > 0 {
+            // Forget them all: write_remote writes them again.
+            for id in std::mem::take(&mut mv.missing_since).into_keys() {
+                mv.state.files.remove(&id);
+                report.restored += 1;
             }
+            mv.dirty = true;
+            mv.held = false;
+            expired.clear();
+        } else if mass && !opts.allow_mass_delete {
+            if !mv.held {
+                let what = if dir_gone {
+                    format!("its folder {} is gone", mv.dir.display())
+                } else {
+                    format!("{missing} of {total} mirrored files disappeared at once")
+                };
+                ui::warn(&format!(
+                    "vault '{name}': {what}. Nothing was moved to the trash. If the folder was moved, renamed or \
+                     unmounted, put it back. If you deleted the files on purpose, stop `coolpsonotes sync` and run \
+                     `coolpsonotes sync --once --allow-mass-delete` (moves them to the trash), or \
+                     `--restore-missing` to get the files back"
+                ));
+            }
+            mv.held = true;
+            report.held = missing;
             expired.clear();
         } else if mv.held {
             mv.held = false;

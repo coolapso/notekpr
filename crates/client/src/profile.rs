@@ -115,11 +115,37 @@ pub struct AgentCredentials {
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct SyncSettings {
-    /// The user explicitly accepted that `sync --dir` writes decrypted files.
+    /// Older profiles: the user accepted decrypted files for the remembered
+    /// `mirror_dir` (it used to apply to any directory). Migrated to
+    /// `plaintext_dirs` on the next confirmation.
     #[serde(default)]
     pub plaintext_ok: bool,
+    /// Directories the user explicitly accepted decrypted files in.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub plaintext_dirs: Vec<PathBuf>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mirror_dir: Option<PathBuf>,
+}
+
+impl SyncSettings {
+    /// Whether writing decrypted files into `dir` was confirmed.
+    pub fn plaintext_confirmed(&self, dir: &Path) -> bool {
+        self.plaintext_dirs.iter().any(|d| d == dir)
+            || (self.plaintext_ok && self.mirror_dir.as_deref() == Some(dir))
+    }
+
+    pub fn confirm_plaintext(&mut self, dir: &Path) {
+        let mut dirs = vec![dir.to_path_buf()];
+        if self.plaintext_ok {
+            dirs.extend(self.mirror_dir.clone());
+            self.plaintext_ok = false;
+        }
+        for d in dirs {
+            if !self.plaintext_dirs.contains(&d) {
+                self.plaintext_dirs.push(d);
+            }
+        }
+    }
 }
 
 /// Size limits the server enforces, remembered so they are known offline.
@@ -375,5 +401,25 @@ mod tests {
         assert_eq!(dirs.profiles(), vec!["alice".to_string()]);
         assert!(!crate::fsutil::is_shared_readable(&ps.path()));
         assert!(ProfileStore::new(&dirs, "../x").is_err());
+    }
+
+    #[test]
+    fn plaintext_confirmation_is_per_directory() {
+        let a = Path::new("/home/u/Notes");
+        let b = Path::new("/mnt/usb/Notes");
+        // A profile from before: the flag covers its remembered directory only.
+        let mut s = SyncSettings {
+            plaintext_ok: true,
+            plaintext_dirs: vec![],
+            mirror_dir: Some(a.into()),
+        };
+        assert!(s.plaintext_confirmed(a));
+        assert!(!s.plaintext_confirmed(b));
+        s.confirm_plaintext(b);
+        s.mirror_dir = Some(b.into());
+        assert!(!s.plaintext_ok);
+        assert!(s.plaintext_confirmed(a) && s.plaintext_confirmed(b));
+        s.confirm_plaintext(b);
+        assert_eq!(s.plaintext_dirs.len(), 2);
     }
 }

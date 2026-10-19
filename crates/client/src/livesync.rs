@@ -62,6 +62,31 @@ impl Backoff {
     }
 }
 
+/// A connection that lasted this long was healthy: the next retry starts
+/// with the shortest delay again.
+const HEALTHY_AFTER: Duration = Duration::from_secs(30);
+
+/// What to do after a connection ended.
+#[derive(Debug)]
+enum Next {
+    Stop,
+    Fail(anyhow::Error),
+    Retry(String),
+}
+
+/// Only a [`Fatal`] error (session revoked or expired) ends live sync; any
+/// other error — a socket write failing, a key fetch timing out — is
+/// transient and means reconnecting (the server resends everything after
+/// the local cursor), never leaving the daemon or gateway with stale data.
+fn after_session(r: Result<Exit>) -> Next {
+    match r {
+        Ok(Exit::Shutdown) => Next::Stop,
+        Ok(Exit::Reconnect(reason)) => Next::Retry(reason),
+        Err(e) if e.is::<Fatal>() => Next::Fail(e),
+        Err(e) => Next::Retry(format!("{e:#}")),
+    }
+}
+
 /// Run until `shutdown` becomes true or a fatal error (session revoked).
 pub async fn run(hub: Arc<Hub>, mut shutdown: watch::Receiver<bool>) -> Result<()> {
     let mut backoff = Backoff { attempt: 0 };
@@ -69,28 +94,31 @@ pub async fn run(hub: Arc<Hub>, mut shutdown: watch::Receiver<bool>) -> Result<(
         if *shutdown.borrow() {
             return Ok(());
         }
-        let reason = match connect(&hub).await {
+        let next = match connect(&hub).await {
             Ok(ws) => {
-                backoff.reset();
-                match session_loop(&hub, ws, &mut shutdown).await {
-                    Ok(Exit::Shutdown) => {
-                        hub.set_push_now(true);
-                        return Ok(());
-                    }
-                    Ok(Exit::Reconnect(r)) => r,
-                    Err(e) => {
-                        hub.set_online(false);
-                        hub.set_push_now(true);
-                        return Err(e);
-                    }
+                let started = Instant::now();
+                let r = session_loop(&hub, ws, &mut shutdown).await;
+                // A connection that fails right away again and again keeps
+                // backing off instead of hammering the server.
+                if started.elapsed() >= HEALTHY_AFTER {
+                    backoff.reset();
                 }
+                after_session(r)
             }
-            Err(e) if e.is::<Fatal>() => {
+            Err(e) if e.is::<Fatal>() => Next::Fail(e),
+            Err(e) => Next::Retry(format!("{e:#}")),
+        };
+        let reason = match next {
+            Next::Stop => {
+                hub.set_push_now(true);
+                return Ok(());
+            }
+            Next::Fail(e) => {
                 hub.set_online(false);
                 hub.set_push_now(true);
                 return Err(e);
             }
-            Err(e) => format!("{e:#}"),
+            Next::Retry(reason) => reason,
         };
         hub.set_online(false);
         hub.set_push_now(false);
@@ -177,14 +205,17 @@ async fn send(sink: &mut Sink, m: &ClientMessage) -> Result<()> {
     Ok(())
 }
 
-async fn subscribe(hub: &Hub, sink: &mut Sink, vault_id: &str) -> Result<()> {
+/// Subscribe to a vault. Returns false (and sends nothing) for a vault that
+/// is not open or read-only here: such a vault never reports `Synced`, so it
+/// must not be waited for.
+async fn subscribe(hub: &Hub, sink: &mut Sink, vault_id: &str) -> Result<bool> {
     let Some(v) = hub.get(vault_id) else {
-        return Ok(());
+        return Ok(false);
     };
     let since = {
         let g = v.lock().await;
         if g.read_only.is_some() {
-            return Ok(());
+            return Ok(false);
         }
         g.replica.seq
     };
@@ -196,7 +227,8 @@ async fn subscribe(hub: &Hub, sink: &mut Sink, vault_id: &str) -> Result<()> {
             object_id: None,
         },
     )
-    .await
+    .await?;
+    Ok(true)
 }
 
 struct Conn {
@@ -227,8 +259,11 @@ async fn session_loop(
         tracing::warn!("refreshing the vault list: {e:#}");
     }
     for id in hub.vault_ids() {
-        subscribe(hub, &mut sink, &id).await?;
-        conn.subscribed.insert(id);
+        // Only vaults actually subscribed are waited for: a read-only one
+        // would otherwise keep live uploads off after every reconnect.
+        if subscribe(hub, &mut sink, &id).await? {
+            conn.subscribed.insert(id);
+        }
     }
     if conn.subscribed.is_empty() {
         announce(hub, &mut conn).await;
@@ -280,6 +315,15 @@ async fn session_loop(
                 return Ok(Exit::Shutdown);
             }
         }
+    }
+}
+
+/// A vault became read-only (deleted, access revoked): stop waiting for it.
+async fn close(hub: &Hub, conn: &mut Conn, vault_id: &str, reason: &str) {
+    hub.close_vault(vault_id, reason).await;
+    conn.subscribed.remove(vault_id);
+    if conn.subscribed.iter().all(|id| conn.synced.contains(id)) {
+        announce(hub, conn).await;
     }
 }
 
@@ -392,7 +436,7 @@ async fn handle(
             let Some(v) = hub.get(&vault_id) else {
                 return Ok(None);
             };
-            {
+            let needs_keys = {
                 let mut g = v.lock().await;
                 g.check_rollback(head_seq);
                 g.synced(head_seq);
@@ -400,11 +444,16 @@ async fn handle(
                 if let Err(e) = g.save() {
                     ui::warn(&format!("saving the local copy: {e:#}"));
                 }
-            }
+                g.replica.needs_keys()
+            };
             conn.synced.insert(vault_id.clone());
             spawn_push(hub, &vault_id);
             let h = hub.clone();
             tokio::spawn(async move {
+                // Content kept for a key that could not be fetched before.
+                if needs_keys && let Err(e) = h.session.refresh_keys(&v).await {
+                    tracing::warn!("refreshing keys: {e:#}");
+                }
                 if let Err(e) = h.session.grant_missing_keys(&v).await {
                     tracing::warn!("granting keys: {e:#}");
                 }
@@ -421,8 +470,14 @@ async fn handle(
             if let Err(e) = &res
                 && is_missing_epoch(e)
             {
-                session.refresh_keys(&v).await?;
-                res = v.lock().await.apply_update(&update);
+                // The update is kept (deferred) and replayed once the keys
+                // could be fetched; a failed fetch does not end live sync.
+                match session.refresh_keys(&v).await {
+                    Ok(()) => res = v.lock().await.apply_update(&update),
+                    Err(e) => ui::warn(&format!(
+                        "could not fetch keys (will retry; content is kept): {e:#}"
+                    )),
+                }
             }
             match res {
                 Ok(a) => hub.emit_applied(&vault_id, &a, false),
@@ -439,8 +494,12 @@ async fn handle(
             if let Err(e) = &res
                 && is_missing_epoch(e)
             {
-                session.refresh_keys(&v).await?;
-                res = v.lock().await.apply_snapshot(&snapshot);
+                match session.refresh_keys(&v).await {
+                    Ok(()) => res = v.lock().await.apply_snapshot(&snapshot),
+                    Err(e) => ui::warn(&format!(
+                        "could not fetch keys (will retry; content is kept): {e:#}"
+                    )),
+                }
             }
             match res {
                 Ok(a) => hub.emit_applied(&vault_id, &a, false),
@@ -507,12 +566,16 @@ async fn handle(
                     });
                 }
                 VaultEventKind::Deleted => {
-                    hub.close_vault(&vault_id, "the vault was deleted by its owner")
-                        .await
+                    close(hub, conn, &vault_id, "the vault was deleted by its owner").await
                 }
                 VaultEventKind::AccessRevoked => {
-                    hub.close_vault(&vault_id, "your access to this vault was revoked")
-                        .await
+                    close(
+                        hub,
+                        conn,
+                        &vault_id,
+                        "your access to this vault was revoked",
+                    )
+                    .await
                 }
             }
         }
@@ -528,20 +591,27 @@ async fn handle(
             }
         }
         ServerMessage::UserEvent { event } => match event {
-            UserEventKind::VaultsChanged => match session.api.vaults().await {
-                Ok(list) => {
-                    for id in hub.open_listed(&list).await? {
-                        let name = match hub.get(&id) {
-                            Some(v) => v.lock().await.name().to_string(),
-                            None => id.clone(),
-                        };
-                        ui::status(&format!("vault '{name}' is now available"));
-                        subscribe(hub, sink, &id).await?;
-                        conn.subscribed.insert(id);
+            UserEventKind::VaultsChanged => {
+                let opened = match session.api.vaults().await {
+                    Ok(list) => hub.open_listed(&list).await,
+                    Err(e) => Err(anyhow!(e)),
+                };
+                match opened {
+                    Ok(ids) => {
+                        for id in ids {
+                            let name = match hub.get(&id) {
+                                Some(v) => v.lock().await.name().to_string(),
+                                None => id.clone(),
+                            };
+                            ui::status(&format!("vault '{name}' is now available"));
+                            if subscribe(hub, sink, &id).await? {
+                                conn.subscribed.insert(id);
+                            }
+                        }
                     }
+                    Err(e) => tracing::warn!("refreshing the vault list: {e:#}"),
                 }
-                Err(e) => tracing::warn!("refreshing the vault list: {e}"),
-            },
+            }
             UserEventKind::SessionRevoked => {
                 if session.kind == PrincipalKind::Agent {
                     session.api.invalidate_token().await;
@@ -579,8 +649,7 @@ async fn handle(
                     }
                 }
                 Some(v) if code == "not_found" => {
-                    hub.close_vault(&v, "the vault is no longer accessible")
-                        .await
+                    close(hub, conn, &v, "the vault is no longer accessible").await
                 }
                 Some(v) => tracing::warn!(vault = %v, code, "server error: {message}"),
                 None => tracing::warn!(code, "server error: {message}"),
@@ -599,6 +668,27 @@ mod tests {
     use coolpsonotes_core::crypto::Purpose;
     use coolpsonotes_core::engine::{VaultMeta, VaultReplica};
     use coolpsonotes_core::keys::{AccountSecret, FIRST_DOC_EPOCH, VaultKey, VaultKeyring};
+
+    #[test]
+    fn only_a_revoked_session_ends_live_sync() {
+        // Transient failures (a socket write, a key fetch) reconnect.
+        assert!(matches!(
+            after_session(Err(anyhow!("socket write failed"))),
+            Next::Retry(_)
+        ));
+        let keys = anyhow!(crate::api::ApiError::Network("timed out".into()))
+            .context("fetching vault keys");
+        assert!(matches!(after_session(Err(keys)), Next::Retry(_)));
+        assert!(matches!(
+            after_session(Ok(Exit::Reconnect("closed".into()))),
+            Next::Retry(_)
+        ));
+        assert!(matches!(after_session(Ok(Exit::Shutdown)), Next::Stop));
+        assert!(matches!(
+            after_session(Err(Fatal("session revoked".into()).into())),
+            Next::Fail(_)
+        ));
+    }
 
     #[test]
     fn document_key_epochs_are_not_mistaken_for_rotations() {

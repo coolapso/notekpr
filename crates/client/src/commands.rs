@@ -1473,7 +1473,17 @@ async fn gateway_cmd(ctx: &Ctx, a: GatewayArgs) -> Result<()> {
     )
     .await?;
     let (stop_tx, stop_rx) = watch::channel(false);
-    let live = tokio::spawn(livesync::run(hub.clone(), stop_rx));
+    // If live sync ends on its own (session revoked), the gateway stops too
+    // instead of silently serving data that is no longer kept up to date.
+    let (ended_tx, mut ended_rx) = watch::channel(false);
+    let live = tokio::spawn({
+        let hub = hub.clone();
+        async move {
+            let r = livesync::run(hub, stop_rx).await;
+            let _ = ended_tx.send(true);
+            r
+        }
+    });
     let listener = tokio::net::TcpListener::bind(a.listen)
         .await
         .with_context(|| format!("binding {}", a.listen))?;
@@ -1489,9 +1499,24 @@ async fn gateway_cmd(ctx: &Ctx, a: GatewayArgs) -> Result<()> {
         token,
         audit,
     });
-    gateway::serve(listener, gw, shutdown_signal()).await?;
+    let stopped = async move {
+        tokio::select! {
+            _ = shutdown_signal() => {}
+            _ = ended_rx.changed() => {}
+        }
+    };
+    gateway::serve(listener, gw, stopped).await?;
     let _ = stop_tx.send(true);
-    let _ = tokio::time::timeout(Duration::from_secs(5), live).await;
+    let live_result = match tokio::time::timeout(Duration::from_secs(5), live).await {
+        Ok(Ok(r)) => r,
+        Ok(Err(e)) => Err(anyhow!("the sync task failed: {e}")),
+        Err(_) => Ok(()),
+    };
+    if let Err(e) = &live_result {
+        ui::warn(&format!(
+            "the gateway stopped because live sync ended: {e:#}"
+        ));
+    }
     for id in hub.vault_ids() {
         let _ = tokio::time::timeout(Duration::from_secs(10), hub.push(&id)).await;
     }
@@ -1499,7 +1524,7 @@ async fn gateway_cmd(ctx: &Ctx, a: GatewayArgs) -> Result<()> {
     hub.snapshot_idle(Duration::ZERO, livesync::SESSION_MIN_UPDATES)
         .await;
     hub.save_all().await;
-    Ok(())
+    live_result
 }
 
 #[cfg(test)]

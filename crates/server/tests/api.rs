@@ -718,6 +718,7 @@ async fn device_enrollment_and_recovery() {
     let bad = RecoveryUpdate {
         recovery_envelope: env.clone(),
         signature: vec![0; 64],
+        version: None,
     };
     assert_eq!(
         alice
@@ -728,15 +729,27 @@ async fn device_enrollment_and_recovery() {
     );
     let good = RecoveryUpdate {
         signature: alice.account.sign_recovery_update(&alice.id, &env).to_vec(),
-        recovery_envelope: env,
+        recovery_envelope: env.clone(),
+        version: None,
     };
-    assert_eq!(
-        alice
-            .api
-            .status(Method::PUT, "/me/recovery", Some(&good))
-            .await,
-        204
-    );
+    let put = |u: &RecoveryUpdate| {
+        let (api, u) = (&alice.api, u.clone());
+        async move { api.status(Method::PUT, "/me/recovery", Some(&u)).await }
+    };
+    assert_eq!(put(&good).await, 204);
+    // Versioned updates only go forward [S-L8]: once one is stored, neither
+    // an older nor an unversioned (replayed) update replaces it.
+    let (_, v10) = coolpsonotes_core::engine::rotate_recovery(&alice.account, &alice.id, 10);
+    let mut forged = v10.clone();
+    forged.version = Some(11);
+    assert_eq!(put(&forged).await, 403, "the version is signed");
+    assert_eq!(put(&v10).await, 204);
+    assert_eq!(put(&v10).await, 409, "replayed");
+    let (_, v5) = coolpsonotes_core::engine::rotate_recovery(&alice.account, &alice.id, 5);
+    assert_eq!(put(&v5).await, 409, "older");
+    assert_eq!(put(&good).await, 409, "unversioned, after a versioned one");
+    let (_, v11) = coolpsonotes_core::engine::rotate_recovery(&alice.account, &alice.id, 11);
+    assert_eq!(put(&v11).await, 204);
 }
 
 #[tokio::test]

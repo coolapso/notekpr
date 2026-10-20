@@ -275,19 +275,41 @@ pub async fn insert_account_key(
     Ok(())
 }
 
+/// Replace the recovery envelope. With a `version`, only if it is higher
+/// than the stored one; without, only while none is stored (older clients).
+/// Returns whether it was replaced.
 pub async fn set_recovery_envelope(
     db: impl SqliteExecutor<'_>,
     user_id: &str,
     envelope: &[u8],
+    version: Option<u64>,
     now: i64,
-) -> AppResult<()> {
-    sqlx::query("UPDATE account_keys SET recovery_envelope = ?, updated_at = ? WHERE user_id = ?")
+) -> AppResult<bool> {
+    let r = match version {
+        Some(v) => sqlx::query(
+            "UPDATE account_keys SET recovery_envelope = ?, recovery_version = ?, updated_at = ?
+                 WHERE user_id = ? AND recovery_version < ?",
+        )
         .bind(envelope)
+        .bind(v as i64)
         .bind(now)
         .bind(user_id)
+        .bind(v as i64)
         .execute(db)
-        .await?;
-    Ok(())
+        .await?,
+        None => {
+            sqlx::query(
+                "UPDATE account_keys SET recovery_envelope = ?, updated_at = ?
+                 WHERE user_id = ? AND recovery_version = 0",
+            )
+            .bind(envelope)
+            .bind(now)
+            .bind(user_id)
+            .execute(db)
+            .await?
+        }
+    };
+    Ok(r.rows_affected() == 1)
 }
 
 // --- Private preferences (one blob encrypted with the account key) ---

@@ -195,16 +195,24 @@ pub fn check_approved_account(secret: &AccountSecret, expected: &AccountPublic) 
     Ok(())
 }
 
-/// New recovery key replacing the old one.
-pub fn rotate_recovery(account: &AccountSecret, user_id: &str) -> (RecoveryKey, RecoveryUpdate) {
+/// New recovery key replacing the old one; `version` (the time in ms) must
+/// be higher than that of the update it replaces.
+pub fn rotate_recovery(
+    account: &AccountSecret,
+    user_id: &str,
+    version: u64,
+) -> (RecoveryKey, RecoveryUpdate) {
     let rk = RecoveryKey::generate();
     let env = rk.wrap_account(account, user_id);
-    let signature = account.sign_recovery_update(user_id, &env).to_vec();
+    let signature = account
+        .sign_recovery_update_v2(user_id, version, &env)
+        .to_vec();
     (
         rk,
         RecoveryUpdate {
             recovery_envelope: env,
             signature,
+            version: Some(version),
         },
     )
 }

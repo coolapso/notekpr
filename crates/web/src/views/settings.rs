@@ -261,7 +261,7 @@ fn Security() -> impl IntoView {
                 <button class="btn" on:click=move |_| {
                     if !util::confirm("Create a new recovery key? Your old recovery key will stop working.") { return; }
                     leptos::task::spawn_local(async move {
-                        let req = with(|c| c.account.as_ref().map(|a| coolpsonotes_core::engine::rotate_recovery(a, &c.user_id)));
+                        let req = with(|c| c.account.as_ref().map(|a| coolpsonotes_core::engine::rotate_recovery(a, &c.user_id, util::now_ms().max(0) as u64)));
                         if let Some((rk, req)) = req {
                             match api::put::<_, ()>("/me/recovery", &req).await {
                                 Ok(()) => new_key.set(Some(rk.to_display())),

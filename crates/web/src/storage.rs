@@ -254,6 +254,7 @@ pub fn forget_user(user_id: &str) {
     let Some(s) = local() else { return };
     let exact = [
         device_key(user_id),
+        prefs_copy_key(user_id),
         format!("cpn.last.{user_id}"),
         offline_flag(user_id),
         offline_data_key(user_id),
@@ -330,6 +331,24 @@ pub fn head_seen(user_id: &str, vault_id: &str) -> i64 {
 
 pub fn set_head_seen(user_id: &str, vault_id: &str, head: i64) {
     set(local(), &head_key(user_id, vault_id), &head.to_string());
+}
+
+fn prefs_copy_key(user_id: &str) -> String {
+    format!("cpn.prefs.{user_id}")
+}
+
+/// This browser's copy of the user's encrypted preferences (as sealed with
+/// the account key), so an older copy from the server can't replace them.
+pub fn prefs_copy(user_id: &str) -> Option<Vec<u8>> {
+    coolpsonotes_core::b64::decode(&get(local(), &prefs_copy_key(user_id))?).ok()
+}
+
+pub fn set_prefs_copy(user_id: &str, ciphertext: &[u8]) {
+    set(
+        local(),
+        &prefs_copy_key(user_id),
+        &coolpsonotes_core::b64::encode(ciphertext),
+    );
 }
 
 fn log_seen_key(user_id: &str, vault_id: &str) -> String {

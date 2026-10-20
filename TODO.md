@@ -24,8 +24,8 @@ R6 started (`state/` split; the editor is its own crate with a document
 model, transactions and line-level rendering),
 R7 done (weekly fuzzing in CI). R1 done (sync engine crate, partial push
 acceptance), R2 done (every note has its own key; sharing starts a fresh,
-unlinked one). R3: the signed membership log and signed content are done; the replay fixes
-[W-M10, S-L8] and committed note keys for recipients remain.
+unlinked one). R3 done (signed membership log, signed content, no replay of recovery
+updates or preferences) apart from committing note keys for recipients.
 
 ## Decisions (2026-10-19)
 
@@ -458,10 +458,12 @@ every client verifies; updates are signed by the author's key.
 - [x] Bind the account key into device approval (interim fix): the
       verification code covers the account key; new devices pin it and refuse
       a secret of any other account, also on later unlocks [S-M5, W-M1].
-- [ ] Trust pins rolled back by replaying old prefs [W-M10]: a version
-      counter inside the encrypted prefs, the highest seen kept locally.
-- [ ] Recovery-key rotation replay [S-L8]: a counter in the signed recovery
-      update, kept by the server and checked by clients.
+- [x] Trust pins rolled back by replaying old prefs [W-M10]: a counter
+      inside the encrypted prefs; the browser keeps its own sealed copy and
+      uses whichever is newer, re-uploading its own if the server's is older.
+- [x] Recovery-key rotation replay [S-L8]: the signed recovery update covers
+      a version (the time in ms); the server keeps the last and accepts only
+      higher ones, and no unversioned update once a versioned one is stored.
 - Resolves: the owner's client giving the vault key to any member the server
   lists [C-H8] (done); new-device secret substitution [S-M5, W-M1]; trust pins
   rolled back by replaying old prefs [W-M10]; recovery-key rotation replay

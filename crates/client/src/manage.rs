@@ -449,8 +449,11 @@ pub async fn revoke_device(session: &Session, device_id: &str) -> Result<()> {
 
 /// Replace the recovery key; returns the new one (shown once).
 pub async fn rotate_recovery(session: &Session) -> Result<String> {
-    let (rk, req): (RecoveryKey, RecoveryUpdate) =
-        engine::rotate_recovery(session.account(), &session.user_id);
+    let (rk, req): (RecoveryKey, RecoveryUpdate) = engine::rotate_recovery(
+        session.account(),
+        &session.user_id,
+        coolpsonotes_core::now_ms().max(0) as u64,
+    );
     session.api.put::<_, ()>("/me/recovery", &req).await?;
     Ok(rk.to_display())
 }

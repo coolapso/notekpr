@@ -200,11 +200,31 @@ pub async fn put_recovery(
     let public: AccountPublic = key
         .verify()
         .map_err(|e| AppError::Internal(anyhow::anyhow!("stored key invalid: {e}")))?;
-    public
-        .verify_recovery_update(&who.user_id, &req.recovery_envelope, &req.signature)
-        .map_err(|_| forbidden("invalid signature"))?;
-    repo::users::set_recovery_envelope(&state.db, &who.user_id, &req.recovery_envelope, db::now())
-        .await?;
+    match req.version {
+        Some(v) => public.verify_recovery_update_v2(
+            &who.user_id,
+            v,
+            &req.recovery_envelope,
+            &req.signature,
+        ),
+        None => public.verify_recovery_update(&who.user_id, &req.recovery_envelope, &req.signature),
+    }
+    .map_err(|_| forbidden("invalid signature"))?;
+    // Versions only go up: an older signed update can't be replayed.
+    if req.version.is_some_and(|v| v > i64::MAX as u64)
+        || !repo::users::set_recovery_envelope(
+            &state.db,
+            &who.user_id,
+            &req.recovery_envelope,
+            req.version,
+            db::now(),
+        )
+        .await?
+    {
+        return Err(conflict(
+            "a newer recovery key is in place; update the app or retry",
+        ));
+    }
     db::audit(
         &state.db,
         Some(&who.user_id),

@@ -51,7 +51,8 @@ Defined in `crates/core/src/crypto.rs` and `keys.rs`.
 * **Signatures**: Ed25519 (strict) over length-prefixed statements:
   account key self-signature `(user_id, key_version, enc_public, sign_public)`,
   device approval `(user_id, device_id, device_public)`,
-  recovery update `(user_id, recovery_envelope)`.
+  recovery update `(user_id, recovery_envelope)`, and since R3
+  `recovery-update-v2` `(user_id, version:u64be, recovery_envelope)`.
 * **Recovery key**: 256 random bits + 16-bit checksum, base32 in groups of five.
   Wraps the account secret (symmetric envelope, purpose `Recovery`, context = user id).
 * **Key chain**: when a vault moves to epoch N, `link_N = Enc(key_N, key_{N-1})`.
@@ -102,8 +103,8 @@ form fields. Tokens are short-lived (default 1 h).
 | `GET /me` | `MeResponse {user, account_key?, has_recovery, session}` |
 | `PUT /me/account-key` | one-time `AccountSetupRequest`. Humans must include `recovery_envelope` and `device` (first device with its account envelope and an approval signature). Agents send only `key`. |
 | `GET /me/recovery` | the recovery envelope (encrypted under the recovery key) |
-| `PUT /me/recovery {recovery_envelope, signature}` | rotate the recovery key; signature by the account key |
-| `GET/PUT /me/prefs` | encrypted per-user data with `expected_version` optimistic concurrency |
+| `PUT /me/recovery {recovery_envelope, signature, version?}` | rotate the recovery key; signature by the account key. With a `version` (clients use the time in ms) the signature covers it and the server accepts only a higher one than the last (`409` otherwise); once one is stored, unversioned updates are refused too, so older updates can't be replayed |
+| `GET/PUT /me/prefs` | encrypted per-user data with `expected_version` optimistic concurrency. Inside the encryption the web client keeps a `counter` that goes up with every save, and its own sealed copy: an older copy from the server is not used |
 | `GET /me/export` | `EncryptedExport`: everything the caller can read, as stored — vaults (keys, the whole log, attachments) and individually shared notes, plus the recovery envelope. For offline decryption with `coolpsonotes recover`; nothing in it is readable without the caller's keys. `coolpsonotes-server export-user` writes the same from a database or backup file. |
 | `GET /me/audit` | the newest 200 audit entries about the caller (devices, keys, agents, sessions) |
 | `PUT /me/session/device {device_id}` | label the current session with its device |

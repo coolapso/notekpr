@@ -96,6 +96,15 @@ primitives. Formats:
 * **Tampers with, reorders or replays updates?** AEAD rejects tampering;
   object/vault/epoch binding rejects moved ciphertexts; CRDT updates are
   idempotent so replays are harmless.
+* **Replays an older recovery update** (for a recovery key since replaced
+  because it leaked)? The signed update covers a version that the server
+  only lets go up; once a versioned update is stored, no older or
+  unversioned one is accepted.
+* **Hands out older preferences** (say, from before someone's key was
+  pinned, so a substituted key would be trusted on "first" use)? Preferences
+  carry a counter inside their encryption, and each browser keeps its own
+  sealed copy; an older copy from the server is not used (a browser that
+  never saw the newer one can't tell).
 * **Withholds updates or rolls back state?** Clients track the highest sequence
   ever seen and warn on regression, then re-push their state (CRDT merge
   restores lost content). A server can still delay or drop *future* deliveries

@@ -107,6 +107,18 @@ impl AccountSecret {
         self.sign(&recovery_update_statement(user_id, envelope))
     }
 
+    /// [`sign_recovery_update`](Self::sign_recovery_update) covering a
+    /// version the server only lets go up, so an older update (for a
+    /// recovery key since replaced) can't be replayed [S-L8].
+    pub fn sign_recovery_update_v2(
+        &self,
+        user_id: &str,
+        version: u64,
+        envelope: &[u8],
+    ) -> [u8; 64] {
+        self.sign(&recovery_update_statement_v2(user_id, version, envelope))
+    }
+
     /// Encrypt private per-user data (preferences, favourites, TOFU pins).
     pub fn seal_private(&self, user_id: &str, plaintext: &[u8]) -> Vec<u8> {
         crypto::seal_sym(
@@ -161,6 +173,20 @@ impl AccountPublic {
         )
     }
 
+    pub fn verify_recovery_update_v2(
+        &self,
+        user_id: &str,
+        version: u64,
+        envelope: &[u8],
+        signature: &[u8],
+    ) -> Result<()> {
+        crypto::ed25519_verify(
+            &self.sign_public,
+            &recovery_update_statement_v2(user_id, version, envelope),
+            signature,
+        )
+    }
+
     pub fn verify_device_approval(
         &self,
         user_id: &str,
@@ -180,6 +206,13 @@ pub fn recovery_update_statement(user_id: &str, envelope: &[u8]) -> Vec<u8> {
     crypto::statement(
         "coolpsonotes/v1/sig/recovery-update",
         &[user_id.as_bytes(), envelope],
+    )
+}
+
+pub fn recovery_update_statement_v2(user_id: &str, version: u64, envelope: &[u8]) -> Vec<u8> {
+    crypto::statement(
+        "coolpsonotes/v1/sig/recovery-update-v2",
+        &[user_id.as_bytes(), &version.to_be_bytes(), envelope],
     )
 }
 
@@ -634,6 +667,19 @@ pub fn open_local(key: &Key32, context: &str, ciphertext: &[u8]) -> Result<Vec<u
 mod tests {
     use super::*;
 
+    #[test]
+    fn versioned_recovery_updates_sign_their_version() {
+        let a = AccountSecret::generate();
+        let p = a.public();
+        let sig = a.sign_recovery_update_v2("u1", 7, b"env");
+        assert!(p.verify_recovery_update_v2("u1", 7, b"env", &sig).is_ok());
+        assert!(p.verify_recovery_update_v2("u1", 8, b"env", &sig).is_err());
+        assert!(p.verify_recovery_update_v2("u2", 7, b"env", &sig).is_err());
+        assert!(
+            p.verify_recovery_update("u1", b"env", &sig).is_err(),
+            "not the old format"
+        );
+    }
     #[test]
     fn account_roundtrip_signature_fingerprint() {
         let a = AccountSecret::generate();

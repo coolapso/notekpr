@@ -231,6 +231,11 @@ pub struct RecoveryUpdate {
     pub recovery_envelope: Vec<u8>,
     #[serde(with = "b64")]
     pub signature: Vec<u8>,
+    /// Signed too (`sign_recovery_update_v2`); the server accepts only a
+    /// higher one than the last, so older updates can't be replayed. Clients
+    /// use the time in ms. Absent: the older signature without a version.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<u64>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]

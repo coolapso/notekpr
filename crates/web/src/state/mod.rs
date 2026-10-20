@@ -347,6 +347,11 @@ pub struct Prefs {
     /// The vault quick notes go to (`None`: the default, see `crate::quick`).
     #[serde(default)]
     pub quick_vault: Option<String>,
+    /// Goes up with every save. Inside the encryption, so the server can't
+    /// change it: an older copy it hands out (e.g. one without a pin) is
+    /// noticed and not used [W-M10].
+    #[serde(default)]
+    pub counter: u64,
 }
 
 pub struct PresenceEntry {

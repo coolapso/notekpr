@@ -514,3 +514,31 @@ async fn a_change_too_large_for_one_update_reaches_others_in_a_snapshot() {
         Some(edited.as_str())
     );
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_owner_shares_a_new_vault_with_several_people_in_a_row() {
+    let srv = start().await;
+    let alice = login(&srv, "alice").await;
+    let others = ["bob", "carol", "dave", "erin"];
+    for o in others {
+        login(&srv, o).await;
+    }
+    // Alice's live connection works on the new vault (opening it, signing
+    // her log) while she shares it: each share still gets in.
+    let live = live(hub(&alice).await).await;
+    for round in 0..3 {
+        let name = format!("Team {round}");
+        let v = manage::create_vault(&alice, &name).await.unwrap();
+        let list = alice.api.vaults().await.unwrap();
+        live.hub.open_listed(&list).await.unwrap();
+        let shared = live.hub.get(v.id()).unwrap();
+        for o in others {
+            manage::share(&alice, &shared, o, Role::Editor, false)
+                .await
+                .unwrap_or_else(|e| panic!("sharing {name} with {o}: {e:#}"));
+        }
+        let members = manage::members(&alice, &shared).await.unwrap();
+        assert_eq!(members.len(), others.len() + 1, "{name}");
+    }
+    live.stop().await;
+}

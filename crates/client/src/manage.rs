@@ -298,18 +298,38 @@ pub async fn share(
     };
     // The owner vouches for them, with their key pinned, in the vault's log.
     let member = members::log_member(&user.id, role, public.as_ref());
-    let req = AddMemberRequest {
-        user_id: user.id.clone(),
-        role,
-        key_envelope: envelope.clone(),
-        log_entry: session.log_entry(vault, LogBody::Add { member }).await,
-    };
     let mut updated_role = false;
-    match session
-        .api
-        .post::<_, MemberInfo>(&format!("/vaults/{id}/members"), &req)
-        .await
-    {
+    let mut attempt = 0;
+    let added = loop {
+        let req = AddMemberRequest {
+            user_id: user.id.clone(),
+            role,
+            key_envelope: envelope.clone(),
+            log_entry: session
+                .log_entry(
+                    vault,
+                    LogBody::Add {
+                        member: member.clone(),
+                    },
+                )
+                .await,
+        };
+        match session
+            .api
+            .post::<_, MemberInfo>(&format!("/vaults/{id}/members"), &req)
+            .await
+        {
+            // Another change to the log got in first (this client's own
+            // background work, or another device of the owner's): sign
+            // again on top of it. The server took nothing of this request.
+            Err(e) if is_log_race(&e) && attempt < 3 => {
+                attempt += 1;
+                session.reload_member_log(vault).await?;
+            }
+            r => break r,
+        }
+    };
+    match added {
         Ok(_) => {}
         Err(e) if e.status() == Some(409) && e.to_string().contains("already a member") => {
             // Already a member: update the role and make sure they have the key.
@@ -367,6 +387,12 @@ pub async fn share(
         key_shared,
         updated_role,
     })
+}
+
+/// The server refused a membership log entry because the log moved on since
+/// it was signed: reload it and sign again.
+fn is_log_race(e: &crate::api::ApiError) -> bool {
+    e.status() == Some(409) && e.to_string().contains("changed meanwhile")
 }
 
 /// Remove a member and rotate the vault key so they cannot read anything

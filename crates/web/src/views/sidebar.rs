@@ -22,12 +22,12 @@ fn role_badge(role: Role, shared: bool) -> AnyView {
 }
 
 #[component]
-fn VaultSwitcher() -> impl IntoView {
+fn VaultSwitcher(vault: Memo<Option<String>>) -> impl IntoView {
     let ui = ui();
     let open = RwSignal::new(false);
     super::close_on_outside(open);
     let current = move || {
-        let v = ui.route.get().vault().map(str::to_string);
+        let v = vault.get();
         ui.vaults
             .get()
             .into_iter()
@@ -85,7 +85,26 @@ pub fn Sidebar() -> impl IntoView {
     let ui = ui();
     let user_menu = RwSignal::new(false);
     super::close_on_outside(user_menu);
-    let vault = move || ui.route.get().vault().map(str::to_string);
+    // The vault shown: the page's; on a page of no vault (quick notes,
+    // settings, a note shared with us) the one shown before, else the quick
+    // notes vault, so the sidebar doesn't change under you. A memo, so the
+    // tree is only rebuilt (losing which folders are open) for another vault.
+    let shown = Memo::new(move |before: Option<&Option<String>>| {
+        let route = ui.route.get();
+        if let Some(v) = route.vault() {
+            return Some(v.to_string());
+        }
+        if route == Route::Home {
+            return None;
+        }
+        let vaults = ui.vaults.get();
+        before
+            .cloned()
+            .flatten()
+            .or_else(crate::quick::vault)
+            .filter(|v| vaults.iter().any(|x| &x.id == v))
+    });
+    let vault = move || shown.get();
     let writable = move || {
         ui.vaults.get();
         vault().is_some_and(|v| state::step(|c| c.can_write(&v)))
@@ -101,7 +120,7 @@ pub fn Sidebar() -> impl IntoView {
     view! {
         <aside class="sidebar" aria-label="Navigation">
             <div class="sb-top">
-                <VaultSwitcher/>
+                <VaultSwitcher vault=shown/>
                 <button class="sb-search" on:click=move |_| ui.modal.set(Some(Modal::QuickSwitch))>
                     <Icon name="search"/><span>"Search"</span><kbd>{format!("{}K", util::mod_key())}</kbd>
                 </button>
@@ -126,7 +145,7 @@ pub fn Sidebar() -> impl IntoView {
             <nav class="sb-scroll">
                 <Favorites/>
                 <QuickSection/>
-                <Recent/>
+                <Recent vault=shown/>
                 <SharedWithMe/>
                 {move || match vault() {
                     Some(v) => {
@@ -218,12 +237,12 @@ fn Favorites() -> impl IntoView {
 }
 
 #[component]
-fn Recent() -> impl IntoView {
+fn Recent(vault: Memo<Option<String>>) -> impl IntoView {
     let ui = ui();
     let items = move || {
         ui.prefs_rev.get();
         ui.tree_rev.get();
-        let cur = ui.route.get().vault().map(str::to_string);
+        let cur = vault.get();
         state::step(|c| {
             c.prefs
                 .recent

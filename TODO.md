@@ -75,7 +75,9 @@ Phases 1–3 are done, and Phase 4 except the OS keyring for CLI secrets
 - [x] Sidebar marks the open note in one place only (2026-10-20): the tree,
       which no longer opens folders by itself — a closed folder holding the
       open note is marked instead. Favorites, Recent and the Quick notes
-      entry (no longer a list) mark nothing.
+      entry (no longer a list) mark nothing. On pages of no vault (quick
+      notes, settings, a note shared with us) the sidebar keeps the vault
+      it showed, with its tree and buttons; only "All vaults" leaves it.
 
 ---
 

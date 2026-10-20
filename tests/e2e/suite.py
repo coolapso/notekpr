@@ -973,6 +973,9 @@ def test_quick_notes(env):
         b.click(".sb-quick .sb-link")
         b.find(".quick-capture textarea", 10)
         check(b.js("return location.pathname") == "/quick", "the Quick notes entry opens /quick")
+        check(b.js("return !!document.querySelector('.sb-actions .btn.primary') && !!document.querySelector('.sidebar .tree')"
+                   " && document.querySelector('.vault-btn .vname').textContent === 'My notes'"),
+              "the sidebar stays as it was: same vault, its tree and the New note buttons")
         b.click(".quick-capture textarea")
         b.keys("Garden plan" + KEYS["enter"] + "tomatoes and beans")
         b.chord(KEYS["ctrl"], KEYS["enter"])
@@ -1002,10 +1005,12 @@ def test_quick_notes(env):
         b.click(".modal button[type=submit]")
         b.wait(cards + ".join('|') === 'Old thought|Call the dentist'", 10, "the promoted note leaves the quick notes")
         check(not b.js("return !!document.querySelector('.modal')"), "promoting closes the dialog")
-        b.click_el(b.find_text(".sb-link", "My notes", 10))
         b.click_el(b.find_text(".tree-item", "Projects", 10))
         b.click_el(b.find_text(".tree-item", "Vegetable garden", 10))
         b.wait("return document.querySelector('.note-title') && document.querySelector('.note-title').value === 'Vegetable garden'", 10, "the promoted note")
+        check(b.js("return Array.from(document.querySelectorAll('.tree-row.folder')).find(r => r.textContent.trim() === 'Projects').getAttribute('aria-expanded')") == "true"
+              and b.js("return document.querySelector('.tree-row.active').textContent.trim()") == "Vegetable garden",
+              "a folder stays open when a note in it is opened")
         check(b.js("return document.querySelector('.crumbs').textContent").endswith("Projects") and editor_text(b) == "Garden plan\ntomatoes and beans",
               "promoting moves and renames it out of Quick notes, keeping its text")
         # Archive: hidden from the list, unless asked for.

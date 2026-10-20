@@ -554,10 +554,19 @@ pub fn NoteView(vault: String, note: String) -> impl IntoView {
                         let vtool = vtool.clone();
                         view! {
                             <div class="note-title-row">
-                                {move || entry_icon.get().map(|i| view! {
-                                    <button class="note-icon" title="Change icon" aria-label="Change icon" disabled=move || !writable.get()
-                                        on:click=move |_| open_icon.with_value(|f| f())>{i}</button>
-                                })}
+                                // The icon, or for writers a button to add one in its place,
+                                // so the title stays put when an icon comes or goes.
+                                {move || match entry_icon.get() {
+                                    Some(i) => view! {
+                                        <button class="note-icon" title="Change icon" aria-label="Change icon" disabled=move || !writable.get()
+                                            on:click=move |_| open_icon.with_value(|f| f())>{i}</button>
+                                    }.into_any(),
+                                    None if writable.get() => view! {
+                                        <button class="note-icon add" title="Add an icon" aria-label="Add an icon"
+                                            on:click=move |_| open_icon.with_value(|f| f())><Icon name="smile"/></button>
+                                    }.into_any(),
+                                    None => ().into_any(),
+                                }}
                                 <input class="note-title" node_ref=title_ref aria-label="Note title" placeholder="Untitled"
                                     readonly=move || !writable.get()
                                     prop:value=move || title_text.get()

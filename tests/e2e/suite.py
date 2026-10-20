@@ -362,6 +362,7 @@ def test_features(env):
         v.find(".ed .ln", 10)
         time.sleep(0.8)
         check(v.js("return document.querySelector('.ed').getAttribute('contenteditable')") == "false" and not v.js("return !!document.querySelector('.toolbar')"), "viewers get a read-only editor")
+        check(not v.js("return !!document.querySelector('.note-icon.add')"), "viewers aren't offered to add an icon")
         v.js("document.querySelector('.ed').focus()")
         v.keys("HACK")
         time.sleep(0.4)
@@ -1170,9 +1171,16 @@ def test_entry_icons(env):
         share(a, ".sb-bottom button:nth-child(2)", bn)
         new_note(a, "Trip", "Packing list")
         url = a.js("return location.pathname")
-        set_icon(a, "Trip", "🌱")
-        check(row_icon(a, "Trip") == "🌱" and a.js("return document.querySelector('.note-head .note-icon, .note-title-row .note-icon').textContent") == "🌱",
-              "a note's icon shows in the tree and next to its title")
+        # Before the title, a button to add one; the title stays where it is.
+        title_x = "return document.querySelector('.note-title').getBoundingClientRect().left"
+        x = a.js(title_x)
+        a.click(".note-title-row .note-icon.add")
+        a.find(".modal .icon-pick", 5)
+        a.js("document.querySelector('.modal .emoji-btn[aria-label=\"🌱\"]').click()")
+        a.wait("return !document.querySelector('.modal')", 5, "the dialog closes")
+        check(a.js("return document.querySelector('.note-title-row .note-icon').textContent") == "🌱" and a.js(title_x) == x,
+              "the button before the title adds an icon, without moving the title")
+        check(row_icon(a, "Trip") == "🌱", "a note's icon shows in the tree too")
         a.wait("return Array.from(document.querySelectorAll('.sb-link')).some(e => e.textContent.includes('Trip') && (e.querySelector('.entry-icon') || {}).textContent === '🌱')", 5, "Recent")
         check(True, "and in Recent")
         b.go(env.url.rstrip("/") + url)
@@ -1203,8 +1211,9 @@ def test_entry_icons(env):
         a.click(".note-title-row .note-icon")
         a.find(".modal .icon-pick", 5)
         a.click(".modal .icon-remove")
-        a.wait("return !document.querySelector('.modal') && !document.querySelector('.note-title-row .note-icon')", 5, "removed")
-        check(row_icon(a, "Trip") is None, "the icon by the title opens the choice, and Remove takes the icon away")
+        a.wait("return !document.querySelector('.modal') && !document.querySelector('.note-title-row .note-icon:not(.add)')", 5, "removed")
+        check(row_icon(a, "Trip") is None and a.js("return !!document.querySelector('.note-title-row .note-icon.add')"),
+              "the icon by the title opens the choice; Remove takes it away and the button to add one is back")
         b.wait("const r = " + row + "[0]; return !r.querySelector('.entry-icon')", 15, "removed for the member", "Trip")
         check(not severe_logs(a, b), "no browser errors")
     finally:

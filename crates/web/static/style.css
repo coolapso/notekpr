@@ -560,7 +560,11 @@ label.btn.disabled { opacity: .6; pointer-events: none; }
 .entry-icon { display: inline-flex; justify-content: center; width: 16px; font-size: 14px; line-height: 1; flex: none; }
 .note-title-row { display: flex; align-items: center; gap: 8px; }
 .note-title-row .note-title { flex: 1; min-width: 0; }
-.note-icon { flex: none; font-size: 32px; line-height: 1; padding: 4px; border: none; border-radius: 8px; background: none; cursor: pointer; }
+.note-icon { flex: none; width: 44px; height: 44px; display: flex; align-items: center; justify-content: center; font-size: 32px; line-height: 1; padding: 0; border: none; border-radius: 8px; background: none; cursor: pointer; }
+.note-icon.add { color: var(--muted); opacity: .35; }
+.note-icon.add .ic { width: 26px; height: 26px; }
+.note-title-row:hover .note-icon.add, .note-icon.add:focus-visible { opacity: 1; }
+@media (hover: none) { .note-icon.add { opacity: .6; } }
 .note-icon:hover:not(:disabled) { background: var(--bg-3); }
 .note-icon:disabled { cursor: default; }
 .nc-title .entry-icon { width: auto; margin-right: 6px; font-size: 1em; }

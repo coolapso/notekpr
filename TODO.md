@@ -119,6 +119,16 @@ Settled; don't reopen them without a new reason.
 
 ## Ideas for later
 
+- **Excalidraw** (parked 2026-10-20, to discuss): Excalidraw itself is a
+  JavaScript/React app — ruled out (no npm or JavaScript packages, and
+  third-party code would see decrypted notes and keys). Today `.excalidraw`
+  files already sync as encrypted attachments and open in Obsidian's
+  Excalidraw plugin through the Markdown folder. Options: a read-only preview
+  of drawings in notes (parse the documented JSON, also Obsidian's compressed
+  `.excalidraw.md`, and draw it in Rust — a few days; the hand-drawn look is
+  extra), or a drawing editor of our own in Rust saving Excalidraw's format,
+  synced as a CRDT like notes (several weeks).
+
 - **Mobile apps and a native desktop app** (Tauri around the web UI), keeping
   "use your own editor" first-class.
 - **Remote MCP connector**: an optional `coolpsonotes connector` speaking MCP

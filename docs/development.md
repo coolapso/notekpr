@@ -67,6 +67,12 @@ PROFILE=dev ./scripts/build-web.sh          # or omit PROFILE for an optimized b
 ./target/debug/coolpsonotes-server --dev-mode --web-dir dist/web
 ```
 
+A dev build of the web client is unoptimized (~15 MB): its first load takes
+a second or two, the optimized one well under one. Its function names are
+left out, so stack traces in the browser console show `wasm-function[…]`
+(panic messages keep their file and line); build with `WASM_NAMES=1` to keep
+them, at about 6 seconds per first load.
+
 Open <http://localhost:8080> and sign in as `alice`. Open a **second tab**
 (or another browser) and sign in as `bob`: each tab keeps its own session, and
 each user gets their own device keys in the browser. Share a vault from alice

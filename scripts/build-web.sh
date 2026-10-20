@@ -21,7 +21,12 @@ cargo build -p coolpsonotes-web --target wasm32-unknown-unknown --profile "$PROF
 dir="$PROFILE"; [ "$PROFILE" = "dev" ] && dir=debug
 rm -rf "$OUT"
 mkdir -p "$OUT/pkg"
-wasm-bindgen --target web --no-typescript --out-dir "$OUT/pkg" \
+# Function names make an unoptimized build ~7x bigger and take the browser
+# seconds to load; WASM_NAMES=1 keeps them for readable stack traces.
+# (Optimized builds are stripped by their profile anyway.)
+names=(--remove-name-section)
+[ "${WASM_NAMES:-}" = 1 ] && names=()
+wasm-bindgen --target web --no-typescript "${names[@]}" --out-dir "$OUT/pkg" \
   "$TARGET_DIR/wasm32-unknown-unknown/$dir/coolpsonotes_web.wasm"
 if command -v wasm-opt >/dev/null 2>&1 && [ "$PROFILE" != "dev" ]; then
   wasm-opt -Oz --enable-bulk-memory --enable-nontrapping-float-to-int -o "$OUT/pkg/coolpsonotes_web_bg.wasm" "$OUT/pkg/coolpsonotes_web_bg.wasm"

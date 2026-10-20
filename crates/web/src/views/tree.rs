@@ -117,6 +117,11 @@ fn build_rows(vault: &str, expanded: &BTreeSet<String>) -> Vec<Row> {
     out
 }
 
+/// `aria-level`, which Leptos has no typed attribute for.
+fn aria_level(el: web_sys::Element, level: usize) {
+    let _ = el.set_attribute("aria-level", &level.to_string());
+}
+
 #[component]
 pub fn Tree(vault: String) -> impl IntoView {
     let ui = ui();
@@ -217,7 +222,9 @@ pub fn Tree(vault: String) -> impl IntoView {
                     let dp2 = path.clone();
                     let dp3 = path.clone();
                     view! {
-                        <div class="tree-row" role="treeitem" class:active=active class:holds-open=holds_open class:folder=is_folder
+                        <div class="tree-row" role="treeitem" use:aria_level={row.depth + 1}
+                            aria-expanded=is_folder.then(|| row.expanded.to_string())
+                            class:active=active class:holds-open=holds_open class:folder=is_folder
                             class:drop=move || is_folder && drop_target.get().as_deref() == Some(dp3.as_str())
                             style=indent draggable="true"
                             on:dragstart=move |ev: web_sys::DragEvent| {
@@ -261,9 +268,7 @@ pub fn Tree(vault: String) -> impl IntoView {
                                 let name = row2.name.clone();
                                 let caret = if is_folder { if row2.expanded { "chevron-down" } else { "chevron-right" } } else { "" };
                                 view! {
-                                    <button class="tree-item" on:click=on_click.clone() title=row2.path.clone()
-                                        attr:aria-level=(row2.depth + 1).to_string()
-                                        attr:aria-expanded=is_folder.then(|| row2.expanded.to_string())>
+                                    <button class="tree-item" on:click=on_click.clone() title=row2.path.clone()>
                                         {(!caret.is_empty()).then(|| view! { <Icon name=caret class="caret"/> })}
                                         <Icon name=icon/>
                                         <span class="name">{name}</span>

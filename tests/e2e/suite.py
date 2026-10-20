@@ -960,9 +960,13 @@ def test_quick_notes(env):
         b.wait("return Array.from(document.querySelectorAll('.sidebar .sb-link')).some(e => e.textContent.includes('" + title + "'))", 10, "the note in Recent")
         check(b.js(marked) == ["Quick notes"],
               "the tree marks the closed Quick notes folder instead of opening it, and nothing else is marked")
+        folder = "document.querySelector('.tree-row.folder[aria-level=\"1\"]').getAttribute('aria-expanded')"
+        check(b.js("return " + folder) == "false", "the folder tells assistive tech it is closed")
         b.click(".tree-row.holds-open .tree-item")
         b.wait("return !!document.querySelector('.tree-row.active')", 5, "the folder opens")
         check(b.js(marked) == [title], "opened, the folder shows the note itself as the one marked place")
+        check(b.js("return " + folder) == "true" and b.js("return document.querySelector('.tree-row.active').getAttribute('aria-level')") == "2",
+              "and that it is open, the note its level")
         check(b.js("return document.querySelectorAll('.sb-quick .sb-link').length") == 1,
               "the Quick notes entry in the sidebar doesn't list the notes")
         # The overview page: capture several thoughts without leaving it.

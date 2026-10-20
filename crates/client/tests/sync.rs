@@ -389,7 +389,11 @@ async fn a_server_error_from_a_proxy_counts_as_offline() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn oversized_changes_are_split_or_set_aside_and_never_block_the_rest() {
     use coolpsonotes_core::doc::NoteDoc;
-    let srv = start_with(|c| c.max_update_kb = 64).await;
+    let srv = start_with(|c| {
+        c.max_update_kb = 64;
+        c.max_snapshot_kb = Some(128);
+    })
+    .await;
     let alice = login(&srv, "alice").await;
     let bob = login(&srv, "bob").await;
     manage::create_vault(&alice, "Big").await.unwrap();
@@ -415,8 +419,10 @@ async fn oversized_changes_are_split_or_set_aside_and_never_block_the_rest() {
         Some(big.as_str())
     );
 
-    // 2. A change that cannot be split (one huge CRDT update) is kept aside;
-    // the changes after it are uploaded anyway.
+    // 2. A change that cannot be split (one huge CRDT update), in a note
+    // larger than even a snapshot may be, is kept aside; the changes after
+    // it are uploaded anyway. (Smaller ones go out in a snapshot instead:
+    // `a_change_too_large_for_one_update_reaches_others_in_a_snapshot`.)
     {
         let mut g = v.lock().await;
         let w = g.create_note("Raw.md", "").unwrap();
@@ -452,5 +458,59 @@ async fn oversized_changes_are_split_or_set_aside_and_never_block_the_rest() {
     assert_eq!(
         note(&again, &vid, "Raw.md").await.map(|t| t.len()),
         Some(200_000)
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_change_too_large_for_one_update_reaches_others_in_a_snapshot() {
+    use coolpsonotes_core::doc::NoteDoc;
+    let srv = start_with(|c| c.max_update_kb = 8).await;
+    let alice = login(&srv, "alice").await;
+    let bob = login(&srv, "bob").await;
+    manage::create_vault(&alice, "Big").await.unwrap();
+    let ha = hub(&alice).await;
+    let v = ha.resolve("Big").await.unwrap();
+    let vid = v.lock().await.id().to_string();
+    manage::share(&alice, &v, "bob", Role::Editor, false)
+        .await
+        .unwrap();
+    ops::put_document(&ha, &vid, "Notes.md", "start\n", None)
+        .await
+        .unwrap();
+    ha.push(&vid).await.unwrap();
+    let hb = hub(&bob).await;
+    assert_eq!(
+        note(&hb, &vid, "Notes.md").await.as_deref(),
+        Some("start\n")
+    );
+
+    // A change made elsewhere (as from a copy in the file mirror) arrives
+    // as one update far larger than the server takes.
+    let big: String = (0..4000).map(|i| format!("line {i}\n")).collect();
+    {
+        let mut v = v.lock().await;
+        let id = v.find("Notes.md").unwrap().1.id;
+        let fork = NoteDoc::from_updates([v.replica.notes[&id].encode_state().as_slice()]).unwrap();
+        let update = fork.set_text(&big).unwrap();
+        assert!(update.len() > 8 * 1024);
+        v.merge_note_update(&id, update).unwrap();
+    }
+    let out = ha.push(&vid).await.unwrap();
+    assert_eq!((out.quarantined, out.carried), (1, 1));
+    assert_eq!(v.lock().await.outbox.held_count(), 0, "it went out");
+    // A small change that builds on it follows as usual.
+    let mut edited = big.clone();
+    edited.push_str("and one more\n");
+    ops::put_document(&ha, &vid, "Notes.md", &edited, None)
+        .await
+        .unwrap();
+    ha.push(&vid).await.unwrap();
+
+    // Bob, already up to date before it, catches up and has both.
+    let vb = hb.resolve("Big").await.unwrap();
+    hb.session.catch_up(&vb).await.unwrap();
+    assert_eq!(
+        note(&hb, &vid, "Notes.md").await.as_deref(),
+        Some(edited.as_str())
     );
 }

@@ -258,6 +258,11 @@ pub struct Config {
     )]
     pub max_update_kb: u64,
 
+    /// Largest snapshot (a note's full state). Default: 16 × the update
+    /// limit, at least 32 MiB; never below the update limit.
+    #[arg(long, env = "COOLPSONOTES_MAX_SNAPSHOT_KB", global = true)]
+    pub max_snapshot_kb: Option<u64>,
+
     /// Snapshots kept per document for revision history.
     #[arg(
         long,
@@ -350,7 +355,10 @@ impl Config {
 
     /// Snapshots can be larger than single updates (full document state).
     pub fn max_snapshot_bytes(&self) -> u64 {
-        (self.max_update_bytes() * 16).max(32 * 1024 * 1024)
+        match self.max_snapshot_kb {
+            Some(kb) => (kb * 1024).max(self.max_update_bytes()),
+            None => (self.max_update_bytes() * 16).max(32 * 1024 * 1024),
+        }
     }
 
     pub fn is_admin_identity(&self, issuer: &str, subject: &str) -> bool {

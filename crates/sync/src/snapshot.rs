@@ -4,7 +4,7 @@ use coolpsonotes_core::engine::VaultReplica;
 use coolpsonotes_core::keys::VaultKeyring;
 use coolpsonotes_core::protocol::{CreateSnapshotRequest, INDEX_OBJECT_ID, ObjectKeyUpdate};
 
-use crate::outbox::Outbox;
+use crate::outbox::{Limits, Outbox};
 
 /// A snapshot of `object_id` to upload now, if one may be stored: the
 /// replica can write and has caught up (`seq` ≥ 1), no local change of the
@@ -31,6 +31,49 @@ pub fn snapshot_now(
     let mut req = r.snapshot_request(object_id).ok()?;
     req.covers_seq = seq;
     Some(req)
+}
+
+/// A snapshot carrying held-back updates (see [`carrier_now`]).
+#[derive(Debug)]
+pub struct Carrier {
+    /// `POST /vaults/{v}/objects/{o}/snapshots`, with `carries` set.
+    pub request: CreateSnapshotRequest,
+    /// The held updates it carries: [`Outbox::carried`] once it is stored.
+    pub held: Vec<String>,
+}
+
+/// Updates of `object_id` too large to push (held back) can reach everyone
+/// in a snapshot of the object's full state, which may be much larger: the
+/// server sends it to everyone subscribed and with every catch-up from before
+/// it. `None` when nothing is held, it can't be written now (read-only,
+/// deleted, content waiting for a key) or even the whole state is larger than
+/// the server's snapshot limit. Callers must have applied every update of the
+/// object up to the cursor, as for any snapshot (protocol §6).
+pub fn carrier_now(
+    r: &VaultReplica,
+    outbox: &Outbox,
+    object_id: &str,
+    covers_seq: Option<i64>,
+    limits: &Limits,
+) -> Option<Carrier> {
+    let held: Vec<String> = outbox
+        .held
+        .iter()
+        .filter(|p| p.object_id == object_id)
+        .map(|p| p.client_update_id.clone())
+        .collect();
+    let exists = object_id == INDEX_OBJECT_ID || r.notes.contains_key(object_id);
+    let seq = covers_seq.unwrap_or(r.seq);
+    if held.is_empty() || !r.can_write() || r.purged.contains(object_id) || !exists || seq < 1 {
+        return None;
+    }
+    let mut request = r.snapshot_request(object_id).ok()?;
+    if request.payload.len() > limits.max_snapshot_bytes {
+        return None;
+    }
+    request.covers_seq = seq;
+    request.carries = true;
+    Some(Carrier { request, held })
 }
 
 /// What storing a snapshot of a note means right now.

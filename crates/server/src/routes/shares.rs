@@ -288,6 +288,7 @@ pub(crate) async fn apply_key_change(
             &snap.payload,
             snap.signature.as_deref(),
             now,
+            false,
         )
         .await?;
     }

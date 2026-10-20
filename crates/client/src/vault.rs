@@ -132,9 +132,11 @@ impl Vault {
         }
     }
 
-    /// Size local edits and pushes for a server accepting `max_update_bytes`.
-    pub fn set_update_limit(&mut self, max_update_bytes: u64) {
-        self.limits = Limits::new(max_update_bytes.min(usize::MAX as u64) as usize);
+    /// Size local edits, pushes and carrying snapshots for the server's limits.
+    pub fn set_limits(&mut self, l: &crate::profile::ServerLimits) {
+        let size = |n: u64| n.min(usize::MAX as u64) as usize;
+        self.limits =
+            Limits::new(size(l.max_update_bytes)).with_snapshot(size(l.max_snapshot_bytes));
     }
 
     pub fn limits(&self) -> Limits {
@@ -174,6 +176,15 @@ impl Vault {
             self.dirty_pending = true;
         }
         out
+    }
+
+    /// The server stored a snapshot of `object_id` carrying these held
+    /// updates: they are done.
+    pub fn carried(&mut self, object_id: &str, held: &[String]) {
+        self.outbox.carried(held);
+        self.replica.snapshot_created(object_id);
+        self.dirty_quarantine = true;
+        self.dirty_state = true;
     }
 
     /// The pushes to send now (merged, size-bounded, oversized ones held).

@@ -735,7 +735,10 @@ async fn server_limits_are_remembered_and_enforced_offline() {
     let store = ProfileStore::new(&srv.dirs("alice"), "alice").unwrap();
     assert_eq!(
         store.require().unwrap().server_limits,
-        Some(ServerLimits::default())
+        Some(ServerLimits {
+            max_snapshot_bytes: 32 << 20,
+            ..ServerLimits::default()
+        })
     );
 
     // Offline, with a (remembered) small attachment limit.
@@ -748,6 +751,7 @@ async fn server_limits_are_remembered_and_enforced_offline() {
             p.server_limits = Some(ServerLimits {
                 max_attachment_bytes: 10,
                 max_update_bytes: 2048 * 1024,
+                max_snapshot_bytes: 0,
             });
         })
         .unwrap();

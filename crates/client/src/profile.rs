@@ -153,6 +153,9 @@ impl SyncSettings {
 pub struct ServerLimits {
     pub max_attachment_bytes: u64,
     pub max_update_bytes: u64,
+    /// 0: not known (older servers; the sync crate applies their rule).
+    #[serde(default)]
+    pub max_snapshot_bytes: u64,
 }
 
 impl Default for ServerLimits {
@@ -161,6 +164,7 @@ impl Default for ServerLimits {
         ServerLimits {
             max_attachment_bytes: 25 * 1024 * 1024,
             max_update_bytes: 2048 * 1024,
+            max_snapshot_bytes: 0,
         }
     }
 }

@@ -227,9 +227,11 @@ Before trusting the Markdown mirror and the CLI with real notes.
       own the profile while running; changing commands wait 3 s then refuse;
       read commands use a read-only view.
 - [ ] Hand changing commands to the running daemon instead of refusing.
-- [ ] A single CRDT update too large to split is only quarantined; later
+- [x] A single CRDT update too large to split is only quarantined; later
       updates that depend on it stay invisible to others until it is
-      released — needs state-vector splitting or a snapshot upload (core, R1).
+      released — now it goes out in a snapshot of the whole note marked
+      `carries` (up to `max_snapshot_bytes`), which the server sends live and
+      with every catch-up from before it; both clients (`carrier_now`).
 - [ ] macOS NFD/NFC file-name normalization in the mirror (core helper).
 - [x] Server: explicit "device revoked" error on `PUT /me/session/device`
       (`device_revoked`, also on the envelope endpoint). The web client now

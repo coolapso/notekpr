@@ -37,7 +37,7 @@ pub async fn create_vault(session: &Session, name: &str) -> Result<Vault> {
         &info.owner_id,
         info.archived,
     );
-    v.set_update_limit(session.limits().max_update_bytes);
+    v.set_limits(&session.limits());
     v.save()?;
     Ok(v)
 }

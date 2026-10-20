@@ -156,6 +156,7 @@ async fn viewers_are_read_only_and_revocation_rotates_keys() {
         covers_seq: 1,
         payload: vec![1; 50],
         signature: None,
+        carries: false,
     };
     assert_eq!(
         carol
@@ -290,6 +291,7 @@ async fn pushes_are_idempotent_and_snapshots_compact() {
                 covers_seq: 3,
                 payload: s1,
                 signature: None,
+                carries: false,
             },
         )
         .await;
@@ -311,6 +313,7 @@ async fn pushes_are_idempotent_and_snapshots_compact() {
                 covers_seq: 4,
                 payload: s2,
                 signature: None,
+                carries: false,
             },
         )
         .await;
@@ -1267,6 +1270,7 @@ async fn individual_note_sharing() {
             .encrypt(Purpose::Snapshot, "n1", &n1.encode_state())
             .unwrap(),
         signature: None,
+        carries: false,
     };
     assert_eq!(
         alice
@@ -1797,6 +1801,7 @@ async fn writes_with_a_replaced_vault_key_are_refused() {
             .encrypt(Purpose::Snapshot, "n1", &note.encode_state())
             .unwrap(),
         signature: None,
+        carries: false,
     };
     assert_eq!(
         bob.api
@@ -1921,6 +1926,7 @@ async fn snapshots_of_one_note_by_one_person_have_a_cooldown() {
             .encrypt(Purpose::Snapshot, "n1", &note.encode_state())
             .unwrap(),
         signature: None,
+        carries: false,
     };
     let path = format!("/vaults/{v}/objects/n1/snapshots");
     assert_eq!(
@@ -2789,6 +2795,7 @@ async fn signed_content_is_required_once_the_log_says_so() {
         covers_seq: ch.head_seq,
         payload: payload.clone(),
         signature: None,
+        carries: false,
     };
     let path = format!("/vaults/{v}/objects/n1/snapshots");
     assert_eq!(
@@ -2991,4 +2998,113 @@ async fn members_reload_one_notes_keys() {
     );
     let r: ObjectKeysResponse = carol.api.get(&format!("/vaults/{v}/objects/n/keys")).await;
     assert!(r.member_envelopes.is_empty() && r.shared.is_none());
+}
+
+#[tokio::test]
+async fn a_snapshot_carrying_changes_the_log_lacks_reaches_everyone() {
+    let srv = start_with(|c| c.snapshot_retention = 2).await;
+    let mut alice = new_user(&srv.base, "alice").await;
+    let mut bob = new_user(&srv.base, "bob").await;
+    let v = alice.create_vault("Plans").await;
+    alice.share(&v, &bob.id, Role::Editor).await.unwrap();
+    bob.load_keys(&v).await.unwrap();
+    let note = NoteDoc::new();
+    let u = note.set_text("short").unwrap();
+    alice
+        .push(&v, vec![alice.encrypt_update(&v, "n", &u)])
+        .await
+        .unwrap();
+    let ch: ChangesResponse = bob.api.get(&format!("/vaults/{v}/changes?since=0")).await;
+    let head = ch.head_seq;
+    let mut wb = Ws::connect(&srv.ws, bob.api.token.as_ref().unwrap()).await;
+    wb.send(&ClientMessage::Subscribe {
+        vault_id: v.clone(),
+        since: Some(head),
+        object_id: None,
+    })
+    .await;
+    wb.until(|m| matches!(m, ServerMessage::Synced { .. }).then_some(()))
+        .await;
+
+    // Alice's change too large for one update goes out in a snapshot of
+    // the whole note, marked as carrying it.
+    note.set_text(&"a long line ".repeat(500)).unwrap();
+    let snapshot = |carries: bool, covers_seq: i64| CreateSnapshotRequest {
+        snapshot_id: random_id(),
+        covers_seq,
+        payload: alice
+            .ring(&v)
+            .encrypt(Purpose::Snapshot, "n", &note.encode_state())
+            .unwrap(),
+        signature: None,
+        carries,
+    };
+    let carrier = snapshot(true, head);
+    let _: SnapshotInfo = alice
+        .api
+        .post(&format!("/vaults/{v}/objects/n/snapshots"), &carrier)
+        .await;
+    // Live, to everyone subscribed...
+    let live = wb
+        .until(|m| match m {
+            ServerMessage::Snapshot { snapshot, .. } => Some(snapshot.clone()),
+            _ => None,
+        })
+        .await;
+    assert_eq!(live.id, carrier.snapshot_id);
+    let got = NoteDoc::new();
+    let plain = bob
+        .ring(&v)
+        .decrypt(Purpose::Snapshot, "n", &live.payload)
+        .unwrap();
+    got.apply_update(&plain).unwrap();
+    assert_eq!(got.text(), note.text());
+    // ...and with every catch-up from before it, also on later pages (which
+    // carry no snapshots otherwise).
+    let carried_in =
+        |ch: &ChangesResponse| ch.snapshots.iter().any(|s| s.id == carrier.snapshot_id);
+    let ch: ChangesResponse = bob
+        .api
+        .get(&format!("/vaults/{v}/changes?since={head}&snapshots=false"))
+        .await;
+    assert!(carried_in(&ch));
+    // Ordinary snapshots never come with a catch-up; nor does it after it.
+    let u2 = note.set_text("short again").unwrap();
+    alice
+        .push(&v, vec![alice.encrypt_update(&v, "n", &u2)])
+        .await
+        .unwrap();
+    let ordinary = snapshot(false, head + 1);
+    let _: SnapshotInfo = alice
+        .api
+        .post(&format!("/vaults/{v}/objects/n/snapshots"), &ordinary)
+        .await;
+    let ch: ChangesResponse = bob
+        .api
+        .get(&format!("/vaults/{v}/changes?since={head}&snapshots=false"))
+        .await;
+    assert!(!ch.snapshots.iter().any(|s| s.id == ordinary.snapshot_id));
+    let later: ChangesResponse = bob
+        .api
+        .get(&format!(
+            "/vaults/{v}/changes?since={}&snapshots=false",
+            head + 1
+        ))
+        .await;
+    assert!(!carried_in(&later));
+    // Revision retention keeps the newest one carrying changes.
+    for _ in 0..3 {
+        let _: SnapshotInfo = alice
+            .api
+            .post(
+                &format!("/vaults/{v}/objects/n/snapshots"),
+                &snapshot(false, head + 1),
+            )
+            .await;
+    }
+    let ch: ChangesResponse = bob
+        .api
+        .get(&format!("/vaults/{v}/changes?since={head}&snapshots=false"))
+        .await;
+    assert!(carried_in(&ch));
 }

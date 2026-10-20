@@ -104,8 +104,8 @@ fn pushes_respect_count_and_byte_limits() {
         edit(&mut r, &format!("n{i}"), &"x".repeat(3000));
     }
     let limits = Limits {
-        max_update_bytes: 10_000,
         max_push_count: 4,
+        ..Limits::new(10_000)
     };
     let plan = o.plan(&mut r, &limits);
     assert_eq!(plan.ids().len(), 30);
@@ -114,6 +114,45 @@ fn pushes_respect_count_and_byte_limits() {
         let bytes: usize = push.iter().map(|u| u.payload.len()).sum();
         assert!(bytes <= 10_000 || push.len() == 1);
     }
+}
+
+#[test]
+fn a_held_update_reaches_everyone_in_a_carrying_snapshot() {
+    let (mut r, mut o) = (replica(), Outbox::default());
+    r.seq = 3;
+    edit(&mut r, "big", &"y".repeat(50_000));
+    let limits = Limits::new(10_000);
+    o.plan(&mut r, &limits);
+    assert_eq!(o.carry_candidates(), vec!["big".to_string()]);
+    // An ordinary snapshot waits for it; a carrying one takes it along.
+    assert!(snapshot_now(&r, &o, "big", None).is_none());
+    let c = carrier_now(&r, &o, "big", None, &limits).unwrap();
+    assert!(c.request.carries);
+    assert_eq!((c.request.covers_seq, c.held.len()), (3, 1));
+    let mut other = VaultReplica::new("v1", Role::Editor, r.keyring.clone(), VaultMeta::default());
+    other
+        .apply_snapshot(&Snapshot {
+            id: c.request.snapshot_id.clone(),
+            object_id: "big".into(),
+            covers_seq: 3,
+            author_id: "a".into(),
+            payload: c.request.payload.clone(),
+            created_at: 0,
+            signature: None,
+        })
+        .unwrap();
+    assert_eq!(other.note_text("big"), "y".repeat(50_000));
+    // Not when even the whole note is larger than a snapshot may be.
+    let small = Limits {
+        max_snapshot_bytes: 1_000,
+        ..limits
+    };
+    assert!(carrier_now(&r, &o, "big", None, &small).is_none());
+    // Once stored, the held update is done.
+    o.carried(&c.held);
+    assert_eq!((o.held_count(), o.unsent(&r)), (0, 0));
+    assert!(o.carry_candidates().is_empty());
+    assert!(carrier_now(&r, &o, "big", None, &limits).is_none());
 }
 
 #[test]

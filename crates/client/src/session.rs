@@ -49,6 +49,8 @@ pub struct PushOutcome {
     pub offline: bool,
     /// Updates set aside in this push because the server can't accept them.
     pub quarantined: usize,
+    /// Notes whose set-aside updates went out in a snapshot carrying them.
+    pub carried: usize,
 }
 
 /// A fetched user whose account key passed verification.
@@ -140,6 +142,7 @@ impl Session {
         let fresh = ServerLimits {
             max_attachment_bytes: info.max_attachment_bytes,
             max_update_bytes: info.max_update_bytes,
+            max_snapshot_bytes: info.max_snapshot_bytes,
         };
         let changed = {
             let mut l = self.limits.lock().unwrap();
@@ -186,7 +189,7 @@ impl Session {
         let mut v = Vault::load(self.vault_store(vault_id)?)
             .with_context(|| format!("loading the local copy of vault {vault_id}"))?;
         if let Some(v) = &mut v {
-            v.set_update_limit(self.limits().max_update_bytes);
+            v.set_limits(&self.limits());
         }
         Ok(v)
     }
@@ -237,7 +240,7 @@ impl Session {
 
     /// Bring role, archive flag, keys and name in line with the server.
     pub async fn apply_info(&self, v: &mut Vault, info: &VaultInfo) -> Result<()> {
-        v.set_update_limit(self.limits().max_update_bytes);
+        v.set_limits(&self.limits());
         // (Copies from before notes had their own keys learn whether the
         // server keeps them.)
         if v.replica.keyring.current_epoch().unwrap_or(0) < info.key_epoch || !v.outbox.note_keys {
@@ -659,10 +662,10 @@ impl Session {
         }
         let mut rekeyed = false;
         // Known even offline (remembered), never "unlimited".
-        let max = self.limits().max_update_bytes;
+        let limits = self.limits();
         {
             let mut v = vault.lock().await;
-            v.set_update_limit(max);
+            v.set_limits(&limits);
             v.new_push_session();
         }
         'rounds: loop {
@@ -671,7 +674,7 @@ impl Session {
                 let plan = v.plan_push();
                 if !plan.held.is_empty() {
                     out.quarantined += plan.held.len();
-                    warn_too_large(v.name(), plan.held.len(), max as usize);
+                    warn_too_large(v.name(), plan.held.len(), limits.max_update_bytes as usize);
                 }
                 v.save()?;
                 plan
@@ -744,7 +747,11 @@ impl Session {
                         v.save()?;
                         if !reaction.held.is_empty() {
                             out.quarantined += reaction.held.len();
-                            warn_too_large(v.name(), reaction.held.len(), max as usize);
+                            warn_too_large(
+                                v.name(),
+                                reaction.held.len(),
+                                limits.max_update_bytes as usize,
+                            );
                         }
                         if !reaction.purged.is_empty() {
                             tracing::warn!(vault = %id, "dropped changes to {} document(s) permanently deleted elsewhere", reaction.purged.len());
@@ -777,7 +784,11 @@ impl Session {
                         v.save()?;
                         if !reaction.held.is_empty() {
                             out.quarantined += reaction.held.len();
-                            warn_too_large(v.name(), reaction.held.len(), max as usize);
+                            warn_too_large(
+                                v.name(),
+                                reaction.held.len(),
+                                limits.max_update_bytes as usize,
+                            );
                         }
                         drop(v);
                         if e.status() == Some(409) {
@@ -814,8 +825,53 @@ impl Session {
                 }
             }
         }
+        if !out.offline {
+            out.carried = self.carry(vault).await?;
+        }
         out.remaining = vault.lock().await.replica.pending.len();
         Ok(out)
+    }
+
+    /// Updates set aside as too large go out in snapshots of their notes,
+    /// which carry them to everyone (`coolpsonotes_sync::carrier_now`).
+    /// Returns how many notes went out.
+    async fn carry(&self, vault: &SharedVault) -> Result<usize> {
+        let (id, candidates) = {
+            let v = vault.lock().await;
+            (v.id().to_string(), v.outbox.carry_candidates())
+        };
+        if candidates.is_empty() {
+            return Ok(0);
+        }
+        // A snapshot's `covers_seq` is our cursor: catch up first (protocol §6).
+        match self.catch_up(vault).await {
+            Ok(_) => {}
+            Err(e) if e.is_offline() => return Ok(0),
+            Err(e) => return Err(anyhow!(e).context("catching up before a snapshot")),
+        }
+        let mut n = 0;
+        for oid in candidates {
+            let carrier = {
+                let v = vault.lock().await;
+                coolpsonotes_sync::carrier_now(&v.replica, &v.outbox, &oid, None, &v.limits())
+            };
+            let Some(mut c) = carrier else { continue };
+            members::sign_snapshot(&self.account, &id, &oid, &mut c.request);
+            match self.api.create_snapshot(&id, &oid, &c.request).await {
+                Ok(_) => {
+                    let mut v = vault.lock().await;
+                    v.carried(&oid, &c.held);
+                    v.save()?;
+                    n += 1;
+                }
+                // Offline, or the server's snapshot cooldown: the next push.
+                Err(e) if e.is_offline() || e.status() == Some(429) => {}
+                Err(e) => {
+                    return Err(anyhow!(e).context("uploading a note's changes in a snapshot"));
+                }
+            }
+        }
+        Ok(n)
     }
 
     /// Upload compacted snapshots for objects with many updates. `jitter`
@@ -1208,8 +1264,8 @@ impl Session {
 fn warn_too_large(vault_name: &str, n: usize, max: usize) {
     ui::warn(&format!(
         "vault '{vault_name}': {n} change(s) are larger than the server accepts ({max} bytes per change); they \
-         are kept on this device but not uploaded — ask the administrator to raise COOLPSONOTES_MAX_UPDATE_KB. \
-         Other changes keep syncing"
+         go out with a copy of the whole note instead. If even that is too large, they stay on this device — \
+         ask the administrator to raise COOLPSONOTES_MAX_UPDATE_KB. Other changes keep syncing"
     ));
 }
 

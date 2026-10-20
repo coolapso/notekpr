@@ -92,6 +92,10 @@ pub struct ServerInfo {
     pub oidc_display_name: Option<String>,
     pub max_attachment_bytes: u64,
     pub max_update_bytes: u64,
+    /// Largest snapshot (a note's full state) the server stores; absent on
+    /// older servers (then `max(16 × max_update_bytes, 32 MiB)`).
+    #[serde(default)]
+    pub max_snapshot_bytes: u64,
     /// Every note can have its own key (`PUT …/objects/{o}/key` with
     /// `private`); absent on older servers.
     #[serde(default)]
@@ -749,6 +753,11 @@ pub struct CreateSnapshotRequest {
     /// required once the vault's log says so.
     #[serde(default, with = "b64::opt", skip_serializing_if = "Option::is_none")]
     pub signature: Option<Vec<u8>>,
+    /// It carries changes the log doesn't have: an update too large to push
+    /// on its own. The server sends it to everyone subscribed and with every
+    /// catch-up from before it (protocol §6).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub carries: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]

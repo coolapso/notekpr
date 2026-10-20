@@ -34,6 +34,7 @@ pub async fn info(State(state): State<AppState>) -> Json<ServerInfo> {
         max_attachment_bytes: state.config.max_attachment_bytes(),
         max_update_bytes: state.config.max_update_bytes(),
         note_keys: true,
+        max_snapshot_bytes: state.config.max_snapshot_bytes(),
     })
 }
 

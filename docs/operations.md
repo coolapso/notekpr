@@ -147,6 +147,7 @@ compose or env file) counts as not set.
 | `--agent-token-ttl-secs` / `COOLPSONOTES_AGENT_TOKEN_TTL_SECS` | `3600` | agent access token lifetime |
 | `--max-attachment-mb` / `COOLPSONOTES_MAX_ATTACHMENT_MB` | `25` | maximum attachment size |
 | `--max-update-kb` / `COOLPSONOTES_MAX_UPDATE_KB` | `2048` | maximum size of one encrypted update |
+| `--max-snapshot-kb` / `COOLPSONOTES_MAX_SNAPSHOT_KB` | 16 × the update limit, at least 32 MiB | maximum size of one snapshot (a note's full state; also how a change too large for one update still reaches others) |
 | `--snapshot-retention` / `COOLPSONOTES_SNAPSHOT_RETENTION` | `100` | revisions kept per document |
 | `--snapshot-cooldown-secs` / `COOLPSONOTES_SNAPSHOT_COOLDOWN_SECS` | `30` | minimum time between two snapshots of one note by one person |
 | `--trust-proxy` / `COOLPSONOTES_TRUST_PROXY` | `false` | use `X-Forwarded-For` for rate limiting (only behind your proxy, §4) |

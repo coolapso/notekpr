@@ -27,6 +27,8 @@ pub struct Limits {
     pub max_update_bytes: usize,
     /// Most updates in one push.
     pub max_push_count: usize,
+    /// Largest snapshot the server stores (`/info` `max_snapshot_bytes`).
+    pub max_snapshot_bytes: usize,
 }
 
 impl Limits {
@@ -35,10 +37,21 @@ impl Limits {
     pub const MAX_PUSH_COUNT: usize = 200;
 
     pub fn new(max_update_bytes: usize) -> Limits {
+        let max_update_bytes = max_update_bytes.max(1024);
         Limits {
-            max_update_bytes: max_update_bytes.max(1024),
+            max_update_bytes,
             max_push_count: Self::MAX_PUSH_COUNT,
+            // The server's rule, for servers that don't say.
+            max_snapshot_bytes: max_update_bytes.saturating_mul(16).max(32 << 20),
         }
+    }
+
+    /// With the server's snapshot limit, if it told us (0: it didn't).
+    pub fn with_snapshot(mut self, max_snapshot_bytes: usize) -> Limits {
+        if max_snapshot_bytes > 0 {
+            self.max_snapshot_bytes = max_snapshot_bytes;
+        }
+        self
     }
 
     /// Bytes one local change may cost (see `edits`) so that its encrypted
@@ -320,6 +333,28 @@ impl Outbox {
                 .iter()
                 .chain(self.held.iter())
                 .any(|p| p.object_id == object_id)
+    }
+
+    /// Objects with updates held back: their full state can go out as a
+    /// snapshot carrying them instead ([`crate::carrier_now`]).
+    pub fn carry_candidates(&self) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        for p in &self.held {
+            if !out.contains(&p.object_id) {
+                out.push(p.object_id.clone());
+            }
+        }
+        out
+    }
+
+    /// The server stored a snapshot carrying these held updates: they went
+    /// out with it and are done.
+    pub fn carried(&mut self, ids: &[String]) {
+        self.held.retain(|p| !ids.contains(&p.client_update_id));
+        for id in ids {
+            self.held_under.remove(id);
+            self.reported.remove(id);
+        }
     }
 
     /// The connection was lost or replaced: everything not acknowledged is

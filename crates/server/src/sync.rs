@@ -141,6 +141,31 @@ pub async fn changes_since(
     }
     let next_since = if has_more { last } else { head };
     let upper = if has_more { last } else { head };
+    // Snapshots carrying changes the log doesn't have, stored while the
+    // log's head was within this page: every catch-up passes them once.
+    let carried = sqlx::query(
+        "SELECT s.id, s.object_id, s.covers_seq, s.author_id, s.payload, s.created_at, s.signature
+         FROM snapshots s
+         JOIN objects o ON o.vault_id = s.vault_id AND o.id = s.object_id AND o.purged_at IS NULL
+         WHERE s.vault_id = ? AND s.carries = 1 AND s.created_head >= ? AND s.created_head <= ?
+           AND (? IS NULL OR s.object_id = ?)
+           AND (? = 0 OR substr(s.payload, 2, 4) >= o.share_from)
+         ORDER BY s.created_head",
+    )
+    .bind(vault_id)
+    .bind(since)
+    .bind(upper)
+    .bind(object)
+    .bind(object)
+    .bind(doc_only)
+    .fetch_all(db)
+    .await?;
+    for r in &carried {
+        let s = row_snapshot(r);
+        if !snapshots.iter().any(|x: &Snapshot| x.id == s.id) {
+            snapshots.push(s);
+        }
+    }
     let purged = sqlx::query(
         "SELECT id, purged_seq FROM objects WHERE vault_id = ? AND purged_seq > ? AND purged_seq <= ? AND (? IS NULL OR id = ?)",
     )
@@ -548,6 +573,7 @@ pub async fn create_snapshot(
         covers_seq,
         payload,
         signature,
+        carries,
     } = req;
     let snapshot_id = snapshot_id.as_str();
     validate_object_id(object_id)?;
@@ -608,9 +634,27 @@ pub async fn create_snapshot(
         &payload,
         signature.as_deref(),
         now,
+        carries,
     )
     .await?;
     tx.commit().await?;
+    // One carrying changes the log doesn't have goes to everyone now.
+    if carries {
+        state.hub.publish(
+            vault_id,
+            VaultEvent::Snapshot {
+                snapshot: Snapshot {
+                    id: snapshot_id.to_string(),
+                    object_id: object_id.to_string(),
+                    covers_seq,
+                    author_id: who.user_id.clone(),
+                    payload: payload.clone(),
+                    created_at: now,
+                    signature: signature.clone(),
+                },
+            },
+        );
+    }
     state.hub.publish(
         vault_id,
         VaultEvent::SnapshotCreated {
@@ -630,7 +674,9 @@ pub async fn create_snapshot(
 }
 
 /// Insert a snapshot, prune the update generation covered by the previous
-/// snapshot, and apply revision retention. Runs inside the caller's transaction.
+/// snapshot, and apply revision retention (the newest carrying snapshot is
+/// kept too: it holds what the log doesn't). Runs inside the caller's
+/// transaction.
 #[allow(clippy::too_many_arguments)]
 pub async fn insert_snapshot(
     tx: &mut sqlx::Transaction<'static, sqlx::Sqlite>,
@@ -643,6 +689,7 @@ pub async fn insert_snapshot(
     payload: &[u8],
     signature: Option<&[u8]>,
     now: i64,
+    carries: bool,
 ) -> AppResult<()> {
     let signer = repo::users::account_key(&mut **tx, author_id)
         .await?
@@ -667,9 +714,13 @@ pub async fn insert_snapshot(
     .bind(object_id)
     .fetch_optional(&mut **tx)
     .await?;
+    let head: i64 = sqlx::query_scalar("SELECT head_seq FROM vaults WHERE id = ?")
+        .bind(vault_id)
+        .fetch_one(&mut **tx)
+        .await?;
     let r = sqlx::query(
-        "INSERT INTO snapshots (id, vault_id, object_id, covers_seq, author_id, payload, size, created_at, signature)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO snapshots (id, vault_id, object_id, covers_seq, author_id, payload, size, created_at, signature, carries, created_head)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(snapshot_id)
     .bind(vault_id)
@@ -680,6 +731,8 @@ pub async fn insert_snapshot(
     .bind(size)
     .bind(now)
     .bind(signature)
+    .bind(carries)
+    .bind(head)
     .execute(&mut **tx)
     .await;
     if let Err(sqlx::Error::Database(e)) = &r
@@ -702,13 +755,18 @@ pub async fn insert_snapshot(
     sqlx::query(
         "DELETE FROM snapshots WHERE vault_id = ? AND object_id = ? AND id NOT IN (
             SELECT id FROM snapshots WHERE vault_id = ? AND object_id = ?
-            ORDER BY covers_seq DESC, created_at DESC LIMIT ?)",
+            ORDER BY covers_seq DESC, created_at DESC LIMIT ?)
+          AND id NOT IN (
+            SELECT id FROM snapshots WHERE vault_id = ? AND object_id = ? AND carries = 1
+            ORDER BY created_head DESC, created_at DESC LIMIT 1)",
     )
     .bind(vault_id)
     .bind(object_id)
     .bind(vault_id)
     .bind(object_id)
     .bind(config.snapshot_retention.max(2))
+    .bind(vault_id)
+    .bind(object_id)
     .execute(&mut **tx)
     .await?;
     Ok(())

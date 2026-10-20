@@ -571,7 +571,78 @@ pub(super) fn send_planned(c: &mut Core, vault_id: &str) {
             o.not_sent(&ids);
         }
     }
+    carry(c, vault_id);
     update_pending_count(c);
+}
+
+/// Changes held back as too large go out in snapshots of their notes, which
+/// carry them to everyone (`coolpsonotes_sync::carrier_now`). One per note
+/// at a time, and within the server's snapshot cooldown.
+fn carry(c: &mut Core, vault_id: &str) {
+    let candidates = c
+        .outboxes
+        .get(vault_id)
+        .map(|o| o.carry_candidates())
+        .unwrap_or_default();
+    for object_id in candidates {
+        let key = (vault_id.to_string(), object_id.clone());
+        if c.snapshotting.contains(&key)
+            || c.last_snapshot
+                .get(&key)
+                .is_some_and(|t| util::now_ms() - t < SNAPSHOT_COOLDOWN_MS)
+        {
+            continue;
+        }
+        let carrier = (|| {
+            let r = c.replicas.get(vault_id)?;
+            // Our sequence number only means something for a shared note itself.
+            let covers = if r.member {
+                None
+            } else {
+                Some(c.shares.get(&key).filter(|s| s.synced)?.seq)
+            };
+            let o = c.outboxes.get(vault_id)?;
+            let mut carrier = coolpsonotes_sync::carrier_now(r, o, &object_id, covers, &limits())?;
+            coolpsonotes_sync::members::sign_snapshot(
+                c.account.as_ref()?,
+                vault_id,
+                &object_id,
+                &mut carrier.request,
+            );
+            Some(carrier)
+        })();
+        let Some(carrier) = carrier else { continue };
+        c.snapshotting.insert(key.clone());
+        let v = vault_id.to_string();
+        leptos::task::spawn_local(async move {
+            let res = api::post::<_, SnapshotInfo>(
+                &format!("/vaults/{v}/objects/{object_id}/snapshots"),
+                &carrier.request,
+            )
+            .await;
+            let again =
+                matches!(&res, Err(e) if e.status == 0 || e.status == 429 || e.status >= 500);
+            step(|c| {
+                c.snapshotting.remove(&key);
+                // The server's cooldown counts either way.
+                c.last_snapshot.insert(key.clone(), util::now_ms());
+                if res.is_ok() {
+                    if let (Some(o), Some(r)) = (c.outboxes.get_mut(&v), c.replicas.get_mut(&v)) {
+                        o.carried(&carrier.held);
+                        r.snapshot_created(&object_id);
+                    }
+                    persist_pending(c, &v);
+                    update_pending_count(c);
+                }
+            });
+            // Offline or too soon: once the cooldown is over.
+            if again {
+                util::set_timeout(SNAPSHOT_COOLDOWN_MS as i32 + 1_000, move || {
+                    step(|c| carry(c, &v))
+                });
+            }
+        });
+    }
 }
 
 /// Give a note created here its own key, registered before any of its
@@ -675,7 +746,11 @@ pub fn max_update_bytes() -> usize {
 
 /// The server's limits as far as known.
 pub fn limits() -> coolpsonotes_sync::Limits {
-    coolpsonotes_sync::Limits::new(max_update_bytes())
+    let snapshot = ui()
+        .server
+        .with_untracked(|s| s.as_ref().map(|s| s.max_snapshot_bytes))
+        .unwrap_or(0);
+    coolpsonotes_sync::Limits::new(max_update_bytes()).with_snapshot(snapshot as usize)
 }
 
 /// Tell the user (once per update) about changes held back as too large.

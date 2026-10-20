@@ -681,6 +681,7 @@ fn first_document_key(
             covers_seq,
             payload: ring.encrypt(Purpose::Snapshot, object_id, state)?,
             signature: None,
+            carries: false,
         }),
         None => None,
     };
@@ -727,6 +728,7 @@ pub fn start_sharing_keyed(
             covers_seq,
             payload: next.encrypt(Purpose::Snapshot, object_id, state)?,
             signature: None,
+            carries: false,
         }),
         private: false,
     };
@@ -759,6 +761,7 @@ pub fn start_sharing(
             covers_seq,
             payload: ring.encrypt(Purpose::Snapshot, object_id, state)?,
             signature: None,
+            carries: false,
         }),
         private: false,
     };
@@ -1328,6 +1331,7 @@ impl VaultReplica {
             covers_seq: self.seq,
             payload: self.encrypt_object(Purpose::Snapshot, object_id, &state)?,
             signature: None,
+            carries: false,
         })
     }
 

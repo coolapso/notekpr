@@ -244,7 +244,11 @@ has unsent edits to it, that person's client saves their version as a new
 ## 7. Browser client specifics
 
 * State lives in a non-reactive core (keys, replicas, socket) plus Leptos
-  signals for rendering.
+  signals for rendering. The core is taken only at the edges — event
+  handlers, socket messages, timers, each step of an async task, views —
+  and passed explicitly to everything they call, so nothing can take it
+  twice; work that calls back synchronously (the editor, DOM calls that
+  fire events) runs at the edges, outside it (`crates/web/src/state/mod.rs`).
 * The editor (`crates/editor`) renders every source character, one `div.ln`
   per line; syntax markers get a class that CSS hides on lines without the
   caret (live preview). Every edit is a transaction on the document model —

@@ -27,8 +27,8 @@ Phases 1–3 are done, and Phase 4 except the OS keyring for CLI secrets
   replay of recovery updates or preferences).
 - R4 done. R5 done (encrypted IndexedDB copies of vaults and shared notes,
   per-tab unsent changes, opt-in offline start). R7 done (weekly fuzzing).
-- R6 in progress: `state/` split and the editor crate are done; web state as
-  services with Leptos contexts instead of one global `RefCell` is next.
+- R6 done: `state/` split, the editor crate, and the web state passed
+  explicitly (taken only at edges) instead of borrowed from anywhere.
 
 ## Decisions (2026-10-19)
 
@@ -535,8 +535,15 @@ with SQLite; no SQL-dialect abstraction.
 - [x] Split `crates/web/src/state.rs` into modules by concern
       (`state/{session,prefs,vaults,shares,sync,presence,nav}.rs`, shared
       types in `state/mod.rs`) — mechanical, no behaviour change.
-- [ ] Then turn them into services with Leptos contexts/stores instead of one
-      global `RefCell` — no more re-entrancy footgun.
+- [x] Then turn them into services with Leptos contexts/stores instead of one
+      global `RefCell` — no more re-entrancy footgun. Done differently
+      (2026-10-20): most state is used outside components (socket, timers,
+      tasks), where contexts don't reach, so the state is passed explicitly
+      instead. Only edges take it (`state::step`); everything else gets
+      `c: &mut Core`, so the compiler rules out taking it twice there; a
+      nested take panics naming both places; work that must wait for the
+      step (navigation bookkeeping, browser events) goes through
+      `state::after_step`. Queries are methods on `Core`.
 - [x] The editor holds its own `RefCell` state across DOM calls that can fire
       events synchronously (one such panic fixed: `apply_mode_classes`);
       the editor crate's document model should make that impossible.

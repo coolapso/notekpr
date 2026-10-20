@@ -161,9 +161,16 @@ Without go-task, see the plain commands in the [Taskfile](Taskfile.yml) or
   subscribers rely on).
 
 **Web client**
-- `state::with(|core| …)` borrows a thread-local `RefCell`. Never call into
-  the editor, or anything that might call `with` again, while inside it —
-  copy what you need out first.
+- The app state (`state::Core`) is taken only at *edges* — event handlers,
+  socket messages, timers, each step of an async task (between `await`s),
+  views — with `state::step(|c| …)`. Everything else receives it as
+  `c: &mut Core` / `c: &Core`, so it can't be taken twice. Don't add
+  functions that take the state on their own; give them a `c` parameter.
+  Calling `step` while the state is taken panics, naming both places.
+- The editor and DOM calls that may fire events run at edges, outside
+  `step` (e.g. `after_apply` pushes received text into the editor after the
+  step that applied it). Code holding `c` that needs edge work done (e.g.
+  `navigate`) queues it with `state::after_step`.
 - The editor's DOM text must always equal the Markdown source (caret mapping
   depends on it): the editor element holds one `div.ln` per line and
   nothing else. Style with classes; hide syntax with CSS (`.mk`); anything

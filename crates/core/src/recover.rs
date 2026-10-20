@@ -112,6 +112,35 @@ fn decrypt_vault(account: &AccountSecret, user_id: &str, v: &ExportedVault) -> R
             errors.len()
         ));
     }
+    let files = vault_files(&replica, &rv.name, |id| {
+        v.attachments
+            .iter()
+            .find(|a| a.id == id)
+            .map(|a| a.data.clone())
+            .ok_or_else(|| "not in the export".to_string())
+    });
+    rv.problems.extend(files.problems);
+    RecoveredVault {
+        files: files.files,
+        folders: files.folders,
+        ..rv
+    }
+}
+
+/// One vault's files, as recovered: its notes and attachments at their
+/// paths (trashed ones under [`TRASH_DIR`]) and its explicit folders.
+/// `attachment` gives an attachment's ciphertext, or why it isn't there.
+/// Used for exports and for a device's local copy alike.
+pub fn vault_files(
+    replica: &VaultReplica,
+    name: &str,
+    attachment: impl Fn(&str) -> Result<Vec<u8>, String>,
+) -> RecoveredVault {
+    let mut rv = RecoveredVault {
+        vault_id: replica.id.clone(),
+        name: name.to_string(),
+        ..Default::default()
+    };
     let mut taken = BTreeSet::new();
     let place = |path: &str, trashed: bool, taken: &mut BTreeSet<String>| -> Option<String> {
         let p = paths::normalize(path).ok()?;
@@ -146,15 +175,14 @@ fn decrypt_vault(account: &AccountSecret, user_id: &str, v: &ExportedVault) -> R
                 });
             }
             EntryKind::Attachment => {
-                let Some(blob) = v.attachments.iter().find(|a| a.id == e.id) else {
-                    rv.problems
-                        .push(format!("attachment {} is not in the export", e.path));
-                    continue;
-                };
-                let data = match replica.decrypt_attachment(&e.id, &blob.data) {
+                let data = match attachment(&e.id).and_then(|ct| {
+                    replica
+                        .decrypt_attachment(&e.id, &ct)
+                        .map_err(|err| err.to_string())
+                }) {
                     Ok(d) => d,
-                    Err(err) => {
-                        rv.problems.push(format!("attachment {}: {err}", e.path));
+                    Err(why) => {
+                        rv.problems.push(format!("attachment {}: {why}", e.path));
                         continue;
                     }
                 };

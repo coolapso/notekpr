@@ -380,10 +380,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "coolpsonotes-editor"
+version = "0.1.0"
+dependencies = [
+ "coolpsonotes-core",
+ "js-sys",
+ "wasm-bindgen",
+ "web-sys",
+]
+
+[[package]]
 name = "coolpsonotes-fuzz"
 version = "0.0.0"
 dependencies = [
  "coolpsonotes-core",
+ "coolpsonotes-editor",
  "coolpsonotes-web",
  "libfuzzer-sys",
  "serde_json",
@@ -403,6 +414,7 @@ version = "0.1.0"
 dependencies = [
  "console_error_panic_hook",
  "coolpsonotes-core",
+ "coolpsonotes-editor",
  "coolpsonotes-sync",
  "crc32fast",
  "data-encoding",

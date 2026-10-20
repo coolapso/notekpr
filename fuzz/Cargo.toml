@@ -13,6 +13,7 @@ cargo-fuzz = true
 libfuzzer-sys = "0.4"
 coolpsonotes-core = { path = "../crates/core" }
 coolpsonotes-web = { path = "../crates/web" }
+coolpsonotes-editor = { path = "../crates/editor" }
 serde_json = "1"
 
 [workspace]
@@ -67,3 +68,9 @@ doc = false
 # yrs with fixes for panics on crafted updates (see vendor/yrs/COOLPSONOTES.md).
 [patch.crates-io]
 yrs = { path = "../vendor/yrs" }
+
+[[bin]]
+name = "editor"
+path = "fuzz_targets/editor.rs"
+test = false
+doc = false

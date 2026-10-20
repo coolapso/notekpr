@@ -189,9 +189,11 @@ written and never past content still waiting for a key; notes with unconfirmed
 local edits aren't written until the server acknowledges them (until then the
 edits live in the pending queue, and a stored state must never contain changes
 the server could miss). One tab per account writes (a Web Lock held while it
-is open), so a tab that is behind can't overwrite newer states. Copies are
-deleted when access ends, when a vault
-disappears from the account's list, and by "Forget this browser"
+is open), so a tab that is behind can't overwrite newer states. Notes shared
+with us individually (their vault's key isn't ours) get one record each: the
+note's state and how far it is complete, under the note's own key, written by
+the same rules. Copies are deleted when access ends, when a vault or shared
+note disappears from the account's lists, and by "Forget this browser"
 (`crates/web/src/cache.rs`).
 
 **Offline start (browser, opt-in).** Normally the browser asks the server for

@@ -983,7 +983,7 @@ pub fn snapshot(vault_id: String, object_id: String) {
             None
         } else {
             let s = c.shares.get(&key)?;
-            if !s.loaded || !s.info.role.can_write() {
+            if !s.synced || !s.info.role.can_write() {
                 return None;
             }
             Some(s.seq)

@@ -18,14 +18,17 @@ phase has an *interim* fix and the track owns the real one.
 ## Status (2026-10-20)
 
 Phases 1–3 are done, and Phase 4 except the OS keyring for CLI secrets
-[C-H9] (deferred). Redesign tracks: R5 mostly (encrypted IndexedDB copy,
-per-tab unsent changes, opt-in offline start; shared notes not cached yet),
-R6 started (`state/` split; the editor is its own crate with a document
-model, transactions and line-level rendering),
-R7 done (weekly fuzzing in CI). R1 done (sync engine crate, partial push
-acceptance), R2 done (every note has its own key; sharing starts a fresh,
-unlinked one). R3 done (signed membership log, signed content and note key grants, no
-replay of recovery updates or preferences). R7 done.
+[C-H9] (deferred). Redesign tracks:
+- R1 done (sync engine crate, partial push acceptance; catch-up and
+  subscriptions stay per client until a second transport exists).
+- R2 done (every note has its own key; sharing starts a fresh, unlinked one;
+  one note's keys reload alone).
+- R3 done (signed membership log, signed content and note key grants, no
+  replay of recovery updates or preferences).
+- R4 done. R5 done (encrypted IndexedDB copies of vaults and shared notes,
+  per-tab unsent changes, opt-in offline start). R7 done (weekly fuzzing).
+- R6 in progress: `state/` split and the editor crate are done; web state as
+  services with Leptos contexts instead of one global `RefCell` is next.
 
 ## Decisions (2026-10-19)
 
@@ -424,7 +427,7 @@ key). Single-note and folder sharing become the same mechanism.
       members fetch only that note's keys (`GET …/objects/{o}/keys` now
       carries the member envelopes, all chain links and the shared flag);
       older servers get the whole vault's keys as before.
-- [ ] Local copies of individually shared notes (with R5).
+- [x] Local copies of individually shared notes (with R5).
 - Resolves: the first-share races [S-M3, stale_key on first share] (sharing
   no longer depends on the note's history being under the vault key);
   prerequisite for folder sharing. Recipient metadata [S-L7: vault head_seq,
@@ -510,7 +513,9 @@ with SQLite; no SQL-dialect abstraction.
       non-extractable WebCrypto key: the device secret sits in the same
       profile, so a second key would not protect a copied profile, and the
       copy stays exactly as readable as the server's. Member vaults only.
-- [ ] Local copies for notes shared individually (recipient replicas).
+- [x] Local copies for notes shared individually (recipient replicas): one
+      record per note under its own key, shown at once on a page load and
+      caught up from; deleted when the note is no longer shared.
 - [x] Load vault keys in parallel at startup. Shares still load one by one
       (notes of one vault share a replica).
 - [x] Unsent edits of two tabs overwrote each other in localStorage [W-M4]:

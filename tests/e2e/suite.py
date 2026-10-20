@@ -574,6 +574,12 @@ def test_note_sharing(env):
         b.go(env.url.rstrip("/") + b.js("return location.pathname"))
         b.wait("return document.querySelector('.ed') && document.querySelector('.ed').textContent.includes('and hats')", 20, "pete reloads")
         check(True, "the shared note reopens after a reload")
+        time.sleep(3)
+        copy = local_copy(b)
+        check(any("~shares" in k and nid in k for k in copy["keys"]), "the recipient's browser keeps a copy of the shared note")
+        check("Pack sunscreen" not in copy["text"] and "and hats" not in copy["text"], "the copy is encrypted")
+        restored = [l.get("message", "") for l in b.logs() or [] if "shared note" in l.get("message", "") and "failed" in l.get("message", "")]
+        check(not restored, "the copy is read and written without errors")
         # Revoking removes access right away and renews the note's key.
         a.click(".note-head button[title^='Shared individually']")
         a.find(".people .person .icon-btn", 10)
@@ -584,6 +590,8 @@ def test_note_sharing(env):
               "revoking removes the note from the recipient's lists")
         b.find_text(".toast", "no longer shared", 5)
         check(True, "the recipient is told")
+        time.sleep(1)
+        check(not any("~shares" in k and nid in k for k in local_copy(b)["keys"]), "and its copy is deleted")
         a.find_text(".people p", "Not shared", 10)
         a.chord(KEYS["escape"])
         time.sleep(0.5)

@@ -34,6 +34,7 @@ pub(super) async fn refresh_shares_with(announce: bool) {
         .iter()
         .map(|s| (s.vault_id.clone(), s.object_id.clone()))
         .collect();
+    crate::cache::prune_shares(&keep);
     let removed: Vec<(String, String)> = with(|c| {
         c.shares
             .keys()
@@ -105,6 +106,7 @@ pub(super) async fn load_share(info: SharedNote) {
                     title: "Shared note".into(),
                     seq: 0,
                     loaded: false,
+                    synced: false,
                     error: None,
                 },
             )
@@ -112,6 +114,21 @@ pub(super) async fn load_share(info: SharedNote) {
     }
     reload_share_keys(&key.0, &key.1).await;
     if unsubscribed && with(|c| c.shares.get(&key).is_some_and(|s| s.error.is_none())) {
+        // This browser's copy first: shown right away, then caught up from.
+        if current.is_none() {
+            let uid = with(|c| c.user_id.clone());
+            if let Some(seq) = crate::cache::restore_share(&uid, &key.0, &key.1).await {
+                with(|c| {
+                    if let Some(s) = c.shares.get_mut(&key) {
+                        s.seq = s.seq.max(seq);
+                        s.loaded = true;
+                    }
+                });
+                if ui().route.get_untracked().shared() == Some((key.0.as_str(), key.1.as_str())) {
+                    ui().content_rev.update(|v| *v += 1);
+                }
+            }
+        }
         subscribe_share(&key.0, &key.1);
     }
 }
@@ -233,6 +250,7 @@ pub(super) fn drop_share(vault: &str, note: &str) {
     let Some(_) = with(|c| c.shares.remove(&key)) else {
         return;
     };
+    crate::cache::forget_share(vault, note);
     send(&ClientMessage::Unsubscribe {
         vault_id: vault.to_string(),
         object_id: Some(note.to_string()),
@@ -302,8 +320,9 @@ pub(super) fn on_share_synced(vault: &str, note: &str, head: i64) {
             return false;
         };
         s.seq = s.seq.max(head);
-        let first = !s.loaded;
+        let first = !s.synced;
         s.loaded = true;
+        s.synced = true;
         first
     });
     if first {
@@ -313,7 +332,7 @@ pub(super) fn on_share_synced(vault: &str, note: &str, head: i64) {
             c.shares
                 .iter()
                 .filter(|((v, _), _)| v == vault)
-                .all(|(_, s)| s.loaded || s.error.is_some())
+                .all(|(_, s)| s.synced || s.error.is_some())
                 && c.shares_restored.insert(vault.to_string())
         });
         if restore {
@@ -323,6 +342,11 @@ pub(super) fn on_share_synced(vault: &str, note: &str, head: i64) {
             ui().content_rev.update(|v| *v += 1);
             send_presence();
         }
+        // Keep this browser's copy current.
+        with(|c| {
+            c.cache.mark(vault, note);
+        });
+        crate::cache::schedule();
     }
     resend_pending(vault);
 }

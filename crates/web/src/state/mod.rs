@@ -153,7 +153,10 @@ pub struct ShareState {
     pub title: String,
     /// Highest sequence number of this note we have seen (for resubscribing).
     pub seq: i64,
+    /// Its content can be shown (restored from this browser's copy, or synced).
     pub loaded: bool,
+    /// Caught up with the server this session.
+    pub synced: bool,
     pub error: Option<String>,
 }
 

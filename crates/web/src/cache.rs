@@ -21,9 +21,14 @@
 //! meta record also counts the stored objects, so a copy that lost some of
 //! them (deleted by another tab while this one wrote) is not trusted.
 //!
+//! Notes shared with us individually (we don't have their vault's key) get
+//! one record each: the note's state and how far it is complete, encrypted
+//! with the note's key. They are written under the same rules.
+//!
 //! Layout (one object store, out-of-line keys):
 //! * `{user}\u{1}{vault}` → encrypted `Meta`
 //! * `{user}\u{1}{vault}\u{1}{object}` → encrypted state
+//! * `{user}\u{1}~shares\u{1}{vault}\u{1}{note}` → encrypted `ShareCopy`
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
@@ -50,6 +55,19 @@ const FORMAT: u32 = 1;
 const META_OBJECT: &str = "~cache";
 const SEP: char = '\u{1}';
 const SAVE_DELAY_MS: i32 = 1500;
+
+/// Where copies of notes shared with us live (not a vault id).
+const SHARES: &str = "~shares";
+
+/// The stored copy of a note shared with us.
+#[derive(Serialize, Deserialize)]
+struct ShareCopy {
+    format: u32,
+    /// The state contains every change of the note up to this sequence number.
+    seq: i64,
+    #[serde(with = "coolpsonotes_core::b64")]
+    state: Vec<u8>,
+}
 
 #[derive(Serialize, Deserialize)]
 struct Meta {
@@ -253,6 +271,16 @@ pub fn restore_into(
     }
 }
 
+impl Tracker {
+    /// Remember that an object of a vault is to be written.
+    pub fn mark(&mut self, vault: &str, object: &str) {
+        self.dirty
+            .entry(vault.to_string())
+            .or_default()
+            .insert(object.to_string());
+    }
+}
+
 /// Remember changed content of a vault for the next write.
 pub fn note_applied(vault: &str, applied: &Applied) {
     with(|c| {
@@ -318,6 +346,7 @@ async fn save_now() {
             }
         }
     }
+    let mut share_puts: Vec<(String, Vec<u8>)> = Vec::new();
     let jobs = with(|c| {
         if c.user_id != uid || c.cache.saving || !c.cache.listed {
             return vec![];
@@ -325,7 +354,43 @@ async fn save_now() {
         let mut jobs = Vec::new();
         let t = &mut c.cache;
         for (id, r) in &c.replicas {
-            if !r.member || t.off.contains(id) {
+            if !r.member {
+                // Notes shared with us: one record each.
+                let held = c.outboxes.get(id).map(|o| o.held.as_slice()).unwrap_or(&[]);
+                let dirty = t.dirty.entry(id.clone()).or_default();
+                let mut kept = BTreeSet::new();
+                for o in std::mem::take(dirty) {
+                    let Some(s) = c.shares.get(&(id.clone(), o.clone())) else {
+                        continue;
+                    };
+                    let waiting = r.pending.iter().chain(held).any(|p| p.object_id == o)
+                        || r.deferred.iter().any(|d| match d {
+                            Deferred::Update(u) => u.object_id == o,
+                            Deferred::Snapshot(s) => s.object_id == o,
+                        });
+                    let sealed = (!waiting && s.synced)
+                        .then(|| r.notes.get(&o))
+                        .flatten()
+                        .and_then(|n| {
+                            let copy = ShareCopy {
+                                format: FORMAT,
+                                seq: s.seq,
+                                state: n.encode_state(),
+                            };
+                            let plain = serde_json::to_vec(&copy).ok()?;
+                            r.encrypt_object(Purpose::LocalCache, &o, &plain).ok()
+                        });
+                    match sealed {
+                        Some(data) => share_puts.push((share_key(&uid, id, &o), data)),
+                        None => {
+                            kept.insert(o);
+                        }
+                    }
+                }
+                *dirty = kept;
+                continue;
+            }
+            if t.off.contains(id) {
                 continue;
             }
             let dirty = t.dirty.entry(id.clone()).or_default();
@@ -337,10 +402,18 @@ async fn save_now() {
                 jobs.push(job);
             }
         }
-        t.saving = !jobs.is_empty();
+        t.saving = !jobs.is_empty() || !share_puts.is_empty();
         jobs
     });
-    if jobs.is_empty() {
+    if !share_puts.is_empty()
+        && let Err(e) = put_raw(&share_puts).await
+    {
+        util::warn(&format!(
+            "writing the local copy of a shared note failed: {e}"
+        ));
+    }
+    let wrote = !jobs.is_empty() || !share_puts.is_empty();
+    if !wrote {
         return;
     }
     for job in jobs {
@@ -400,7 +473,7 @@ pub fn prune(vaults: &BTreeSet<String>) {
     leptos::task::spawn_local(async move {
         match stored_objects(&uid).await {
             Ok(stored) => {
-                for v in stored.keys().filter(|v| !keep.contains(*v)) {
+                for v in stored.keys().filter(|v| *v != SHARES && !keep.contains(*v)) {
                     spawn_remove(&uid, v);
                 }
             }
@@ -673,6 +746,111 @@ async fn stored_objects(user: &str) -> Result<HashMap<String, BTreeSet<String>>,
         };
     }
     Ok(out)
+}
+
+fn share_key(user: &str, vault: &str, note: &str) -> String {
+    format!("{user}{SEP}{SHARES}{SEP}{vault}{SEP}{note}")
+}
+
+/// Put the stored copy of a note shared with us into its replica (just
+/// created, the note's key loaded). Returns how far it is complete (to
+/// subscribe from), `None` if there is none or it can't be read.
+pub async fn restore_share(user: &str, vault: &str, note: &str) -> Option<i64> {
+    let sealed = match get_raw(&share_key(user, vault, note)).await {
+        Ok(v) => v?,
+        Err(e) => {
+            util::warn(&format!(
+                "reading the local copy of a shared note failed: {e}"
+            ));
+            return None;
+        }
+    };
+    let restored = with(|c| {
+        let r = c.replicas.get_mut(vault).filter(|r| !r.member)?;
+        let plain = r.decrypt_object(Purpose::LocalCache, note, &sealed).ok()?;
+        let copy: ShareCopy = serde_json::from_slice(&plain).ok()?;
+        if copy.format != FORMAT {
+            return None;
+        }
+        r.notes
+            .entry(note.to_string())
+            .or_default()
+            .apply_update(&copy.state)
+            .ok()?;
+        Some(copy.seq)
+    });
+    if restored.is_none() {
+        spawn_remove_share(user, vault, note);
+    }
+    restored
+}
+
+/// Forget the copy of a note no longer shared with us.
+pub fn forget_share(vault: &str, note: &str) {
+    let uid = with(|c| {
+        if let Some(d) = c.cache.dirty.get_mut(vault) {
+            d.remove(note);
+        }
+        c.user_id.clone()
+    });
+    spawn_remove_share(&uid, vault, note);
+}
+
+/// Delete copies of notes no longer shared with us (`keep`: those that are).
+pub fn prune_shares(keep: &BTreeSet<(String, String)>) {
+    let uid = with(|c| c.user_id.clone());
+    let keep = keep.clone();
+    leptos::task::spawn_local(async move {
+        let stored = match stored_objects(&uid).await {
+            Ok(s) => s,
+            Err(e) => return util::warn(&format!("listing local copies failed: {e}")),
+        };
+        for key in stored.get(SHARES).into_iter().flatten() {
+            if let Some((v, n)) = key.split_once(SEP)
+                && !keep.contains(&(v.to_string(), n.to_string()))
+            {
+                spawn_remove_share(&uid, v, n);
+            }
+        }
+    });
+}
+
+fn spawn_remove_share(user: &str, vault: &str, note: &str) {
+    let key = share_key(user, vault, note);
+    leptos::task::spawn_local(async move {
+        let run = async {
+            let db = db().await?;
+            let (tx, store) = write_tx(&db)?;
+            store.delete(&key.into()).map_err(err)?;
+            committed(&tx).await
+        };
+        if let Err(e) = run.await {
+            util::warn(&format!("deleting a local copy failed: {e}"));
+        }
+    });
+}
+
+async fn get_raw(key: &str) -> Result<Option<Vec<u8>>, String> {
+    let db = db().await?;
+    let tx = db.transaction_with_str(STORE).map_err(err)?;
+    let store = tx.object_store(STORE).map_err(err)?;
+    let req = store.get(&key.into()).map_err(err)?;
+    Ok(wait(&req)
+        .await?
+        .dyn_into::<Uint8Array>()
+        .ok()
+        .map(|a| a.to_vec()))
+}
+
+async fn put_raw(puts: &[(String, Vec<u8>)]) -> Result<(), String> {
+    let db = db().await?;
+    let (tx, store) = write_tx(&db)?;
+    for (key, data) in puts {
+        store
+            .put_with_key(&Uint8Array::from(data.as_slice()), &key.clone().into())
+            .map_err(err)?;
+    }
+    committed(&tx).await
 }
 
 /// Delete everything this browser stored for `user` ("forget this browser").

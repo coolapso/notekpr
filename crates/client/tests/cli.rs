@@ -230,3 +230,64 @@ async fn leaving_uploads_first_and_can_remove_the_mirror() {
     alice_hub.sync_vault(&fam_id).await.unwrap();
     assert!(fam.lock().await.is_folder("Made offline"));
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn changing_commands_are_handed_to_the_running_daemon() {
+    use coolpsonotes_client::control;
+    use coolpsonotes_client::profile::ProfileLock;
+    let srv = start().await;
+    login(&srv, "alice").await;
+    run(&srv, "alice", &["vault", "create", "Home"])
+        .await
+        .unwrap();
+
+    // A sync daemon owns the profile, and takes the changing commands.
+    let lock = ProfileLock::try_acquire(&srv.dirs("alice"), "alice")
+        .unwrap()
+        .expect("free");
+    let daemon = hub(&reopen(&srv, "alice", "alice").await).await;
+    let endpoint = control::serve(&srv.dirs("alice"), "alice", daemon.clone())
+        .await
+        .unwrap();
+    run(&srv, "alice", &["mkdir", "Home", "Ideas"])
+        .await
+        .unwrap();
+    run(
+        &srv,
+        "alice",
+        &["quick", "--vault", "Home", "call", "the", "dentist"],
+    )
+    .await
+    .unwrap();
+    // Done on the daemon's own copies.
+    let home = daemon.resolve("Home").await.unwrap();
+    {
+        let v = home.lock().await;
+        assert!(v.is_folder("Ideas"));
+        let quick: Vec<String> = v
+            .paths()
+            .into_iter()
+            .filter(|(p, _)| p.starts_with("Quick notes/"))
+            .map(|(_, e)| v.note_text(&e.id))
+            .collect();
+        assert_eq!(quick, ["call the dentist"]);
+    }
+    // Its errors come back as the command's own.
+    let err = run(&srv, "alice", &["rm", "Home", "Nope.md"])
+        .await
+        .unwrap_err();
+    assert!(format!("{err:#}").contains("Nope"), "{err:#}");
+    // Never `sync` itself.
+    let err = run(&srv, "alice", &["sync", "--once"]).await.unwrap_err();
+    assert!(format!("{err:#}").contains("in use"), "{err:#}");
+    // Without a daemon taking them, refused as before.
+    drop(endpoint);
+    let err = run(&srv, "alice", &["mkdir", "Home", "More"])
+        .await
+        .unwrap_err();
+    assert!(
+        format!("{err:#}").contains("in use by another coolpsonotes process"),
+        "{err:#}"
+    );
+    drop(lock);
+}

@@ -177,12 +177,17 @@ a profile's local copies (two would overwrite each other's files and lose
 queued or received changes). While `sync` or `gateway` runs, read commands
 (`ls`, `cat`, `search`, `backlinks`, `status`, `export`, `history`, `trash
 list`, `vault list`, `quick --list`) show that process's local copies read-only — it keeps
-them current — and commands that change something (`write`, `mv`, `rm`,
-`mkdir`, `import`, `vault …`, `sync --once`, …) wait up to 3 seconds for
-another one-shot command and then stop with "profile … is in use by another
-coolpsonotes process": edit the mirrored files or use the gateway instead, or
-stop the daemon. A second `sync` or `gateway` on the same profile refuses to
-start. (Use separate profiles for a mirror and a gateway at the same time.)
+them current — and commands that change something (`write`, `quick`, `mv`,
+`rm`, `mkdir`, `import`, `vault …`, `share-note`, …) are handed to it: it
+runs them on its own copies and sends back what they print and whether they
+failed, so they work as usual (through a loopback connection whose port and
+token are in `control.json` in the profile's data folder, readable by you
+only). It runs them only for vaults it keeps (`sync Family` keeps one), and a
+read-only gateway refuses changes. `sync --once` and `logout` are never
+handed over: they wait up to 3 seconds for another one-shot command and then
+stop with "profile … is in use by another coolpsonotes process", as do all
+changing commands while an older version of the daemon runs. A second `sync`
+or `gateway` on the same profile refuses to start. (Use separate profiles for a mirror and a gateway at the same time.)
 The lock is released automatically when a process ends, also after a crash. `--json` gives machine-readable output for listings, `-q`
 silences status lines. Status and warnings go to stderr, results to stdout.
 
@@ -454,9 +459,10 @@ The client fetches Bob's public account key, verifies its self-signature,
 prints its **fingerprint** and pins it (trust on first use, stored in the
 profile). Compare the fingerprint with Bob over a trusted channel (in person,
 a call): Bob sees his own with `coolpsonotes status`. If the server ever
-presents a different key for a pinned user, sharing and key rotation refuse to
-continue with a loud warning until you verify the new key and pass
-`--accept-new-key`.
+presents a different key for a pinned user, sharing refuses to continue with
+a loud warning until you verify the new key and pass `--accept-new-key`; key
+rotations go ahead without that person (and say so), who gets the new key
+once you share with them again with `--accept-new-key`.
 
 * People who have not set up encryption yet are added without a key; your
   client wraps the vault key for them automatically once they have (during

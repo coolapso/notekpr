@@ -226,7 +226,13 @@ Before trusting the Markdown mirror and the CLI with real notes.
       replica files** [C-H2, C-L9] — per-profile lock: `sync` and `gateway`
       own the profile while running; changing commands wait 3 s then refuse;
       read commands use a read-only view.
-- [ ] Hand changing commands to the running daemon instead of refusing.
+- [x] Hand changing commands to the running daemon instead of refusing:
+      `sync`/`gateway` open a loopback control endpoint (port and token in
+      `control.json`, 0600); a changing command that finds the profile in use
+      sends itself there (as its parsed form, with stdin and absolute paths)
+      and prints what the daemon's run printed (`control.rs`; output is
+      collected per command through `ui::capture`). Not `sync --once` or
+      `logout`; only vaults the daemon keeps.
 - [x] A single CRDT update too large to split is only quarantined; later
       updates that depend on it stay invisible to others until it is
       released — now it goes out in a snapshot of the whole note marked

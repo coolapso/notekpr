@@ -9,6 +9,7 @@ pub mod api;
 pub mod audit;
 pub mod cli;
 pub mod commands;
+pub mod control;
 pub mod fsutil;
 pub mod gateway;
 pub mod hub;

@@ -1,8 +1,9 @@
 //! Terminal interaction. Status and warnings go to **stderr** so stdout stays
 //! clean for command output.
 
-use std::io::{BufRead, IsTerminal, Write};
+use std::io::{BufRead, IsTerminal, Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
 use anyhow::{Result, bail};
 
@@ -19,18 +20,106 @@ pub fn set_non_interactive(on: bool) {
     NO_PROMPTS.store(on, Ordering::Relaxed);
 }
 
+/// What a command run for another process prints (a one-shot command
+/// handed to the running daemon, see `control`): collected here instead of
+/// going to this process's terminal.
+#[derive(Debug, Default)]
+pub struct Captured {
+    pub stdout: String,
+    pub stderr: String,
+    quiet: bool,
+    stdin: Option<Vec<u8>>,
+}
+
+tokio::task_local! {
+    static CAPTURE: Arc<Mutex<Captured>>;
+}
+
+/// Run `f` with what it prints collected, `stdin` as what it reads from
+/// stdin, never prompting, and its own `quiet` setting.
+pub async fn capture<F: std::future::Future>(
+    stdin: Option<Vec<u8>>,
+    quiet: bool,
+    f: F,
+) -> (F::Output, Captured) {
+    let cell = Arc::new(Mutex::new(Captured {
+        quiet,
+        stdin,
+        ..Default::default()
+    }));
+    let out = CAPTURE.scope(cell.clone(), f).await;
+    let c = std::mem::take(&mut *cell.lock().unwrap());
+    (out, c)
+}
+
+fn captured<R>(f: impl FnOnce(&mut Captured) -> R) -> Option<R> {
+    CAPTURE.try_with(|c| f(&mut c.lock().unwrap())).ok()
+}
+
+/// One line of command output (stdout); [`crate::out!`] formats it.
+pub fn out_line(line: &str) {
+    let kept = captured(|c| {
+        c.stdout.push_str(line);
+        c.stdout.push('\n');
+    });
+    if kept.is_none() {
+        println!("{line}");
+    }
+}
+
+/// Command output without a line break of its own (text that has one).
+pub fn out_text(text: &str) {
+    if captured(|c| c.stdout.push_str(text)).is_none() {
+        print!("{text}");
+    }
+}
+
+/// `println!` for command output, which may be collected ([`capture`]).
+#[macro_export]
+macro_rules! out {
+    () => {
+        $crate::ui::out_line("")
+    };
+    ($($t:tt)*) => {
+        $crate::ui::out_line(&format!($($t)*))
+    };
+}
+
 pub fn status(msg: &str) {
-    if !QUIET.load(Ordering::Relaxed) {
+    let kept = captured(|c| {
+        if !c.quiet {
+            c.stderr.push_str(msg);
+            c.stderr.push('\n');
+        }
+    });
+    if kept.is_none() && !QUIET.load(Ordering::Relaxed) {
         eprintln!("{msg}");
     }
 }
 
 pub fn warn(msg: &str) {
-    eprintln!("warning: {msg}");
+    let kept = captured(|c| {
+        c.stderr.push_str(&format!("warning: {msg}\n"));
+    });
+    if kept.is_none() {
+        eprintln!("warning: {msg}");
+    }
 }
 
 pub fn stdin_is_tty() -> bool {
-    !NO_PROMPTS.load(Ordering::Relaxed) && std::io::stdin().is_terminal()
+    captured(|_| ()).is_none()
+        && !NO_PROMPTS.load(Ordering::Relaxed)
+        && std::io::stdin().is_terminal()
+}
+
+/// All of stdin (for a collected command: what came with it).
+pub fn read_stdin() -> std::io::Result<Vec<u8>> {
+    if let Some(given) = captured(|c| c.stdin.take()) {
+        return Ok(given.unwrap_or_default());
+    }
+    let mut data = Vec::new();
+    std::io::stdin().read_to_end(&mut data)?;
+    Ok(data)
 }
 
 pub fn prompt_line(prompt: &str) -> Result<String> {

@@ -48,7 +48,7 @@ commands below; `task` lists them all.
 ```sh
 task setup                    # check the toolchain and say what's missing
 task dev                      # dev server on http://localhost:8080 (no OIDC), data in ./data
-task demo                     # a demo with users, vaults and shared notes on http://localhost:8090
+task demo                     # a demo with users, vaults and shared notes on http://localhost:8099
 task web:watch                # in a 2nd terminal: rebuild the web client on change, then reload the browser
 task cli:login DEV_USER=bob   # sign the CLI in as a test user (profile "bob")
 task cli -- --profile bob ls Family   # run any CLI command
@@ -63,7 +63,7 @@ task dev:reset                # wipe the dev database
 ## A demo with data
 
 ```sh
-task demo          # builds, creates the data on the first run, serves http://localhost:8090
+task demo          # builds, creates the data on the first run, serves http://localhost:8099
 task demo:reset    # start over
 task demo:cli -- --profile bob vault list   # the CLI as one of the demo users
 ```
@@ -91,7 +91,7 @@ within a couple of seconds (`--no-approve` turns that off; the recovery keys
 are in `data/demo/recovery-keys.txt`). The server's log goes to
 `data/demo/server.log`. The script refuses to seed a server that isn't in
 development mode. To change the content, edit the script and
-`task demo:reset`.
+`task demo:reset`. Port 8099 taken? `task demo DEMO_LISTEN=127.0.0.1:8098`.
 
 ## Run locally with several users (no OIDC)
 

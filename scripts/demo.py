@@ -1195,7 +1195,7 @@ def approve_pending(cli):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    ap.add_argument("--listen", default="127.0.0.1:8090")
+    ap.add_argument("--listen", default="127.0.0.1:8099")
     ap.add_argument("--data", default=str(ROOT / "data" / "demo"), help="where the demo lives")
     ap.add_argument("--no-approve", action="store_true", help="don't approve browsers automatically")
     ap.add_argument("--seed-only", action="store_true", help="stop once the data is there")
@@ -1212,7 +1212,10 @@ def main():
         if not p.exists():
             sys.exit(f"{p.relative_to(ROOT)} is missing: run `task demo` (it builds everything first)")
     if port_in_use(host, int(port)):
-        sys.exit(f"something already listens on {args.listen} (another `task demo`?); use --listen")
+        sys.exit(
+            f"something already listens on {args.listen} (another program, or a demo that is running).\n"
+            f"Choose another address: task demo DEMO_LISTEN=127.0.0.1:8098  (or --listen)"
+        )
     if data.exists() and not marker.exists() and any(data.iterdir()):
         sys.exit(f"{data} holds an unfinished demo: run `task demo:reset` and try again")
     data.mkdir(parents=True, exist_ok=True)

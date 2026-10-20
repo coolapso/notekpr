@@ -9,7 +9,7 @@ vars:
   PUBLIC_URL: http://localhost:8080
   DATA_DIR: data
   # `task demo`: its own server, database and CLI profiles, next to `task dev`.
-  DEMO_LISTEN: 127.0.0.1:8090
+  DEMO_LISTEN: 127.0.0.1:8099
   DEMO_DIR: data/demo
   BACKUP_DIR: backups
   # The web client is built in its own target directory so native and wasm
@@ -144,7 +144,7 @@ tasks:
       - rm -rf {{.DATA_DIR}}
 
   demo:
-    desc: "Run a demo on http://localhost:8090 — users, shared vaults and notes, a linked vault for the graph (created on the first run)"
+    desc: "Run a demo on http://localhost:8099 (another port: DEMO_LISTEN=127.0.0.1:PORT) — users, shared vaults and notes, a linked vault for the graph (created on the first run)"
     deps: [build:server, build:cli, build:web:dev]
     cmds:
       - python3 -u scripts/demo.py --listen {{.DEMO_LISTEN}} --data {{.DEMO_DIR}} {{.CLI_ARGS}}

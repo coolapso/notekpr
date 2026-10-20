@@ -795,7 +795,7 @@ impl Applied {
         self.objects.is_empty() && !self.index_changed && self.purged.is_empty()
     }
 
-    fn merge(&mut self, o: Applied) {
+    pub fn merge(&mut self, o: Applied) {
         self.objects.extend(o.objects);
         self.index_changed |= o.index_changed;
         self.purged.extend(o.purged);

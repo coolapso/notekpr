@@ -43,7 +43,7 @@ use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
 use web_sys::{IdbDatabase, IdbKeyRange, IdbRequest, IdbTransaction, IdbTransactionMode};
 
-use crate::state::step;
+use crate::state::{Core, step};
 use crate::util;
 
 const DB_NAME: &str = "coolpsonotes";
@@ -282,38 +282,30 @@ impl Tracker {
 }
 
 /// Remember changed content of a vault for the next write.
-pub fn note_applied(vault: &str, applied: &Applied) {
-    step(|c| {
-        let t = &mut c.cache;
-        let dirty = t.dirty.entry(vault.to_string()).or_default();
-        dirty.extend(applied.objects.iter().cloned());
-        if applied.index_changed {
-            dirty.insert(INDEX_OBJECT_ID.to_string());
-        }
-        if !applied.purged.is_empty() {
-            t.removed
-                .entry(vault.to_string())
-                .or_default()
-                .extend(applied.purged.iter().cloned());
-        }
-    });
-    schedule();
-}
-
-pub fn note_local(vault: &str, object: &str) {
-    step(|c| {
-        c.cache
-            .dirty
+pub fn note_applied(c: &mut Core, vault: &str, applied: &Applied) {
+    let t = &mut c.cache;
+    let dirty = t.dirty.entry(vault.to_string()).or_default();
+    dirty.extend(applied.objects.iter().cloned());
+    if applied.index_changed {
+        dirty.insert(INDEX_OBJECT_ID.to_string());
+    }
+    if !applied.purged.is_empty() {
+        t.removed
             .entry(vault.to_string())
             .or_default()
-            .insert(object.to_string())
-    });
-    schedule();
+            .extend(applied.purged.iter().cloned());
+    }
+    schedule(c);
+}
+
+pub fn note_local(c: &mut Core, vault: &str, object: &str) {
+    c.cache.mark(vault, object);
+    schedule(c);
 }
 
 /// Write soon (sync progress or confirmations may let the cursor move).
-pub fn schedule() {
-    if step(|c| std::mem::replace(&mut c.cache.scheduled, true)) {
+pub fn schedule(c: &mut Core) {
+    if std::mem::replace(&mut c.cache.scheduled, true) {
         return;
     }
     util::set_timeout(SAVE_DELAY_MS, || leptos::task::spawn_local(save_now()));
@@ -436,39 +428,30 @@ async fn save_now() {
             }
         }
     }
-    let again = step(|c| {
+    step(|c| {
         c.cache.saving = false;
-        std::mem::take(&mut c.cache.again)
+        if std::mem::take(&mut c.cache.again) {
+            schedule(c);
+        }
     });
-    if again {
-        schedule();
-    }
 }
 
 /// Forget a vault's copy (vault deleted, access lost).
-pub fn forget_vault(vault: &str) {
-    let uid = step(|c| {
-        c.cache.dirty.remove(vault);
-        c.cache.removed.remove(vault);
-        c.cache.cursor.remove(vault);
-        c.cache.stored.remove(vault);
-        c.user_id.clone()
-    });
-    spawn_remove(&uid, vault);
+pub fn forget_vault(c: &mut Core, vault: &str) {
+    c.cache.dirty.remove(vault);
+    c.cache.removed.remove(vault);
+    c.cache.cursor.remove(vault);
+    c.cache.stored.remove(vault);
+    spawn_remove(&c.user_id, vault);
 }
 
 /// Delete copies of vaults this account can no longer open (access lost while
 /// this browser was away). `vaults` is the server's current list.
-pub fn prune(vaults: &BTreeSet<String>) {
-    let (uid, first) = step(|c| {
-        (
-            c.user_id.clone(),
-            !std::mem::replace(&mut c.cache.pruned, true),
-        )
-    });
-    if !first {
+pub fn prune(c: &mut Core, vaults: &BTreeSet<String>) {
+    if std::mem::replace(&mut c.cache.pruned, true) {
         return;
     }
+    let uid = c.user_id.clone();
     let keep = vaults.clone();
     leptos::task::spawn_local(async move {
         match stored_objects(&uid).await {
@@ -529,7 +512,7 @@ fn writer(user: &str) -> bool {
         if !held {
             return JsValue::UNDEFINED;
         }
-        schedule();
+        step(schedule);
         // Never settles: the lock is held until the page goes away.
         Promise::new(&mut |_, _| {}).into()
     });
@@ -786,19 +769,16 @@ pub async fn restore_share(user: &str, vault: &str, note: &str) -> Option<i64> {
 }
 
 /// Forget the copy of a note no longer shared with us.
-pub fn forget_share(vault: &str, note: &str) {
-    let uid = step(|c| {
-        if let Some(d) = c.cache.dirty.get_mut(vault) {
-            d.remove(note);
-        }
-        c.user_id.clone()
-    });
-    spawn_remove_share(&uid, vault, note);
+pub fn forget_share(c: &mut Core, vault: &str, note: &str) {
+    if let Some(d) = c.cache.dirty.get_mut(vault) {
+        d.remove(note);
+    }
+    spawn_remove_share(&c.user_id, vault, note);
 }
 
 /// Delete copies of notes no longer shared with us (`keep`: those that are).
-pub fn prune_shares(keep: &BTreeSet<(String, String)>) {
-    let uid = step(|c| c.user_id.clone());
+pub fn prune_shares(c: &Core, keep: &BTreeSet<(String, String)>) {
+    let uid = c.user_id.clone();
     let keep = keep.clone();
     leptos::task::spawn_local(async move {
         let stored = match stored_objects(&uid).await {

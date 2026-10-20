@@ -14,15 +14,13 @@ use super::*;
 /// pinned in this account (trust on first use). `Ok(None)`: the server
 /// can't be reached; `Err`: a security problem.
 async fn owner_key(owner_id: &str) -> Result<Option<AccountPublic>, String> {
-    let own = step(|c| {
-        (c.user_id == owner_id)
+    let known = step(|c| {
+        let own = (c.user_id == owner_id)
             .then(|| c.account.as_ref().map(|a| a.public()))
-            .flatten()
+            .flatten();
+        own.or_else(|| c.owner_keys.get(owner_id).cloned())
     });
-    if let Some(k) = own {
-        return Ok(Some(k));
-    }
-    if let Some(k) = step(|c| c.owner_keys.get(owner_id).cloned()) {
+    if let Some(k) = known {
         return Ok(Some(k));
     }
     let owner: PublicUser = match api::get(&format!("/users/{owner_id}")).await {
@@ -36,20 +34,20 @@ async fn owner_key(owner_id: &str) -> Result<Option<AccountPublic>, String> {
         .ok_or("the vault's owner has no encryption key")?
         .verify()
         .map_err(|e| format!("the vault owner's key is invalid: {e}"))?;
-    let status = step(|c| engine::check_pin(&mut c.prefs.pins, owner_id, &key.fingerprint()));
-    match status {
-        engine::PinStatus::Changed => Err(format!(
-            "Security warning: the encryption key of {}, who owns this vault, changed since you last saw it. Membership changes can't be trusted until you compare fingerprints with them.",
-            owner.display_name
-        )),
-        engine::PinStatus::New | engine::PinStatus::Match => {
-            if status == engine::PinStatus::New {
-                save_prefs();
+    step(|c| {
+        match engine::check_pin(&mut c.prefs.pins, owner_id, &key.fingerprint()) {
+            engine::PinStatus::Changed => {
+                return Err(format!(
+                    "Security warning: the encryption key of {}, who owns this vault, changed since you last saw it. Membership changes can't be trusted until you compare fingerprints with them.",
+                    owner.display_name
+                ));
             }
-            step(|c| c.owner_keys.insert(owner_id.to_string(), key.clone()));
-            Ok(Some(key))
+            engine::PinStatus::New => save_prefs(c),
+            engine::PinStatus::Match => {}
         }
-    }
+        c.owner_keys.insert(owner_id.to_string(), key.clone());
+        Ok(Some(key))
+    })
 }
 
 /// Fetch and verify a vault's membership log and check `ring` against it.
@@ -113,8 +111,11 @@ pub async fn reload_log(vault_id: &str) {
     };
     match load_log(vault_id, &owner, &ring).await {
         Ok(Some(log)) => {
-            step(|c| c.member_logs.insert(vault_id.to_string(), log));
-            apply_authors(vault_id);
+            let applied = step(|c| {
+                c.member_logs.insert(vault_id.to_string(), log);
+                apply_authors(c, vault_id)
+            });
+            after_apply(vault_id, applied);
         }
         Ok(None) => {}
         Err(e) => error(e),
@@ -122,41 +123,36 @@ pub async fn reload_log(vault_id: &str) {
 }
 
 /// Check the vault's content against who may write it, from its log, and
-/// what waited for a fresh log once more.
-pub(super) fn apply_authors(vault_id: &str) {
-    let res = step(|c| {
-        let authors = c.member_logs.get(vault_id).and_then(|l| l.authors());
-        let r = c.replicas.get_mut(vault_id)?;
-        if !r.member {
-            return None;
-        }
-        let rechecked = r.needs_log();
-        let (applied, errors) = r.set_authors(authors);
-        let refused = errors
-            .iter()
-            .filter(|e| matches!(e, engine::EngineError::Author(_)))
-            .count();
-        Some((applied, refused, rechecked && r.needs_keys()))
-    });
-    let Some((applied, refused, needs_keys)) = res else {
-        return;
+/// what waited for a fresh log once more. Returns what that let through
+/// (for `after_apply`).
+pub(super) fn apply_authors(c: &mut Core, vault_id: &str) -> engine::Applied {
+    let authors = c.member_logs.get(vault_id).and_then(|l| l.authors());
+    let Some(r) = c.replicas.get_mut(vault_id).filter(|r| r.member) else {
+        return engine::Applied::default();
     };
+    let rechecked = r.needs_log();
+    let (applied, errors) = r.set_authors(authors);
+    let refused = errors
+        .iter()
+        .filter(|e| matches!(e, engine::EngineError::Author(_)))
+        .count();
+    let needs_keys = rechecked && r.needs_keys();
     if refused > 0 {
         util::warn(&format!(
             "refused {refused} change(s) not signed by someone who may write here"
         ));
     }
-    after_apply(vault_id, applied);
     // What passed may still need a key we don't have yet.
     if needs_keys {
-        keys_missing(vault_id);
+        keys_missing(c, vault_id);
     }
+    applied
 }
 
 /// Content by someone our copy of the log doesn't know yet waits for a
 /// fresh copy: reload it, then that content is checked again.
-pub(super) fn log_missing(vault_id: &str) {
-    if step(|c| c.replicas.get(vault_id).is_some_and(|r| r.needs_log())) {
+pub(super) fn log_missing(c: &Core, vault_id: &str) {
+    if c.replicas.get(vault_id).is_some_and(|r| r.needs_log()) {
         let v = vault_id.to_string();
         leptos::task::spawn_local(async move { reload_log(&v).await });
     }
@@ -164,7 +160,7 @@ pub(super) fn log_missing(vault_id: &str) {
 
 /// Owner: sign `body` into the vault's log.
 async fn append(vault_id: &str, body: LogBody) -> Result<(), String> {
-    let entry = log_entry(vault_id, body).ok_or("the vault has no membership log")?;
+    let entry = step(|c| log_entry(c, vault_id, body)).ok_or("the vault has no membership log")?;
     api::post::<_, ()>(
         &format!("/vaults/{vault_id}/log"),
         &AppendLogRequest { entry },
@@ -216,10 +212,10 @@ pub(super) async fn sign_missing_grants(vault_id: String) {
 }
 
 pub async fn sign_vault(vault_id: String) {
-    if !member_log(&vault_id).has_log() {
+    if !step(|c| member_log(c, &vault_id).has_log()) {
         start_log(vault_id.clone()).await;
     }
-    if !member_log(&vault_id).needs_signatures() {
+    if !step(|c| member_log(c, &vault_id).needs_signatures()) {
         return;
     }
     if let Err(e) = require_signatures(&vault_id).await {
@@ -245,17 +241,21 @@ async fn require_signatures(vault_id: &str) -> Result<(), String> {
             let Some(Ok(key)) = sh.user.account_key.as_ref().map(|k| k.verify()) else {
                 continue;
             };
-            let st =
-                step(|c| engine::check_pin(&mut c.prefs.pins, &sh.user.id, &key.fingerprint()));
+            let (st, logged) = step(|c| {
+                (
+                    engine::check_pin(&mut c.prefs.pins, &sh.user.id, &key.fingerprint()),
+                    member_log(c, vault_id).has_share(&note, &sh.user.id, sh.role, &key),
+                )
+            });
             if st == engine::PinStatus::Changed {
                 return Err(format!("the key of {} changed", sh.user.display_name));
             }
-            if !member_log(vault_id).has_share(&note, &sh.user.id, sh.role, &key) {
+            if !logged {
                 append(vault_id, rules::share(&note, &sh.user.id, sh.role, &key)).await?;
             }
         }
     }
-    save_prefs();
+    step(|c| save_prefs(c));
     let head = api::get::<VaultInfo>(&format!("/vaults/{vault_id}"))
         .await
         .map_err(|e| e.message)?
@@ -264,26 +264,24 @@ async fn require_signatures(vault_id: &str) -> Result<(), String> {
 }
 
 /// Sign `body` as the vault's next log entry (`None`: no log yet).
-pub fn log_entry(vault_id: &str, body: LogBody) -> Option<LogEntry> {
-    step(|c| {
-        let log = c.member_logs.get(vault_id)?;
-        log.next(
-            c.account.as_ref()?,
-            &c.user_id,
-            vault_id,
-            body,
-            util::now_ms(),
-        )
-    })
+pub fn log_entry(c: &Core, vault_id: &str, body: LogBody) -> Option<LogEntry> {
+    let log = c.member_logs.get(vault_id)?;
+    log.next(
+        c.account.as_ref()?,
+        &c.user_id,
+        vault_id,
+        body,
+        util::now_ms(),
+    )
 }
 
-pub fn member_log(vault_id: &str) -> MemberLog {
-    step(|c| c.member_logs.get(vault_id).cloned().unwrap_or_default())
+pub fn member_log(c: &Core, vault_id: &str) -> MemberLog {
+    c.member_logs.get(vault_id).cloned().unwrap_or_default()
 }
 
 /// Whether the owner's log lists the member with this role and key.
-pub fn vouched(vault_id: &str, m: &MemberInfo) -> bool {
-    step(|c| c.member_logs.get(vault_id).is_none_or(|l| l.vouches_for(m)))
+pub fn vouched(c: &Core, vault_id: &str, m: &MemberInfo) -> bool {
+    c.member_logs.get(vault_id).is_none_or(|l| l.vouches_for(m))
 }
 
 /// Owner: start the log of a vault from before it, with a checkpoint of the
@@ -313,14 +311,13 @@ async fn start_log(vault_id: String) {
         };
         list.push((m.user.id.clone(), m.role, key));
     }
-    save_prefs();
-    let Some(ring) = step(|c| c.replicas.get(&vault_id).map(|r| r.keyring.clone())) else {
-        return;
-    };
-    let Some(body) = rules::checkpoint(&vault_id, &ring, &list) else {
-        return;
-    };
-    let Some(entry) = log_entry(&vault_id, body) else {
+    let entry = step(|c| {
+        save_prefs(c);
+        let ring = c.replicas.get(&vault_id)?.keyring.clone();
+        let body = rules::checkpoint(&vault_id, &ring, &list)?;
+        log_entry(c, &vault_id, body)
+    });
+    let Some(entry) = entry else {
         return;
     };
     if api::post::<_, ()>(
@@ -344,7 +341,7 @@ pub async fn pin_member_key(
     let body = LogBody::Rekey {
         member: rules::log_member(user_id, role, Some(key)),
     };
-    let Some(entry) = log_entry(vault_id, body) else {
+    let Some(entry) = step(|c| log_entry(c, vault_id, body)) else {
         return Ok(());
     };
     api::post::<_, ()>(

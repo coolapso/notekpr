@@ -37,9 +37,8 @@ const WORKER: &str = "/sw.js";
 const APP_CACHE: &str = "coolpsonotes-app";
 
 /// Whether the signed-in person turned the setting on in this browser.
-pub fn enabled() -> bool {
-    let uid = step(|c| c.user_id.clone());
-    !uid.is_empty() && storage::offline_enabled(&uid)
+pub fn enabled(c: &Core) -> bool {
+    !c.user_id.is_empty() && storage::offline_enabled(&c.user_id)
 }
 
 /// Whether this browser can do it at all (service workers need HTTPS or localhost).
@@ -50,14 +49,14 @@ pub fn supported() -> bool {
 }
 
 /// Update the stored data, if the setting is on.
-pub(super) fn note(f: impl FnOnce(&mut Bundle)) {
-    let uid = step(|c| c.user_id.clone());
-    if uid.is_empty() || !storage::offline_enabled(&uid) {
+pub(super) fn note(c: &Core, f: impl FnOnce(&mut Bundle)) {
+    let uid = &c.user_id;
+    if uid.is_empty() || !storage::offline_enabled(uid) {
         return;
     }
-    let mut b = load(&uid).unwrap_or_default();
+    let mut b = load(uid).unwrap_or_default();
     f(&mut b);
-    save(&uid, &b);
+    save(uid, &b);
 }
 
 fn load(uid: &str) -> Option<Bundle> {
@@ -152,7 +151,7 @@ pub(super) fn signed_out(uid: &str) {
 
 /// (Re)install the service worker if the setting is on (a browser may drop it).
 pub(super) async fn ensure_worker() {
-    if enabled()
+    if step(|c| enabled(c))
         && supported()
         && let Err(e) = register_worker().await
     {
@@ -215,14 +214,14 @@ pub(super) async fn start(b: Bundle) {
         }
     }
     if let Some(p) = &b.prefs {
-        apply_prefs(p);
+        step(|c| apply_prefs(c, p));
     }
     let loads = b.vaults.iter().filter_map(|info| {
         let keys = b.keys.get(&info.id)?.clone();
         Some(load_vault_with(info.clone(), false, Some(keys)))
     });
     futures::future::join_all(loads).await;
-    publish_vaults();
+    step(|c| publish_vaults(c));
     // Keeps trying; [`finish_online`] runs once it is through.
     connect_socket();
     ui.phase.set(Phase::Ready);
@@ -245,8 +244,10 @@ pub(super) async fn finish_online() {
     };
     let uid = me.user.id.clone();
     ui().user.set(Some(me.user.clone()));
-    step(|c| c.me = Some(me.clone()));
-    note(|b| b.me = Some(me));
+    step(|c| {
+        c.me = Some(me.clone());
+        note(c, |b| b.me = Some(me));
+    });
     let Some(rec) = storage::device(&uid) else {
         return;
     };

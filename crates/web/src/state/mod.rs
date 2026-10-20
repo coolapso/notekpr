@@ -9,7 +9,7 @@
 //! it as a parameter (`c: &mut Core`), so it can't be taken a second time —
 //! the compiler sees to that. An edge called while the state is taken is a
 //! bug; the panic names both places. Browser events that may fire in the
-//! middle of our own work (focus, blur, …) go through [`on_event`], which
+//! middle of our own work (focus, blur, …) go through [`after_step`], which
 //! runs them right after it instead.
 //!
 //! Work that can call back into the app synchronously — the editor, DOM
@@ -331,9 +331,11 @@ pub fn busy() -> bool {
     TAKEN.get().is_some()
 }
 
-/// Handle a browser event that may fire in the middle of our own work
-/// (focus, blur, …): now, or right after the step that is running.
-pub fn on_event(f: impl FnOnce() + 'static) {
+/// Run `f` now, or right after the step that is running: for browser
+/// events that may fire in the middle of our own work (focus, blur, …), and
+/// for edge work that code holding the state asks for (e.g. [`navigate`]
+/// recording where we are).
+pub fn after_step(f: impl FnOnce() + 'static) {
     if busy() {
         LATER.with(|l| l.borrow_mut().push_back(Box::new(f)));
     } else {
@@ -526,54 +528,48 @@ pub use shares::*;
 pub use sync::*;
 pub use vaults::*;
 
-// ------------------------------------------------------------------ helpers used by views
+// ------------------------------------------------------------------ queries
 
-pub fn note_title(vault: &str, note: &str) -> Option<String> {
-    step(|c| {
-        c.replicas
+impl Core {
+    pub fn note_title(&self, vault: &str, note: &str) -> Option<String> {
+        self.replicas
             .get(vault)?
             .index
             .get(note)
             .map(|e| e.title().to_string())
-    })
-}
+    }
 
-pub fn entry(vault: &str, id: &str) -> Option<coolpsonotes_core::doc::Entry> {
-    step(|c| c.replicas.get(vault)?.index.get(id))
-}
+    pub fn entry(&self, vault: &str, id: &str) -> Option<coolpsonotes_core::doc::Entry> {
+        self.replicas.get(vault)?.index.get(id)
+    }
 
-pub fn vault_name(vault: &str) -> String {
-    step(|c| {
-        c.replicas
+    pub fn vault_name(&self, vault: &str) -> String {
+        self.replicas
             .get(vault)
             .map(|r| r.meta.name.clone())
             .unwrap_or_default()
-    })
-}
+    }
 
-pub fn role(vault: &str) -> Option<Role> {
-    step(|c| c.replicas.get(vault).map(|r| r.role))
-}
+    pub fn role(&self, vault: &str) -> Option<Role> {
+        self.replicas.get(vault).map(|r| r.role)
+    }
 
-pub fn can_write(vault: &str) -> bool {
-    role(vault).is_some_and(|r| r.can_write())
-}
+    pub fn can_write(&self, vault: &str) -> bool {
+        self.role(vault).is_some_and(|r| r.can_write())
+    }
 
-pub fn is_owner(vault: &str) -> bool {
-    role(vault) == Some(Role::Owner)
-}
+    pub fn is_owner(&self, vault: &str) -> bool {
+        self.role(vault) == Some(Role::Owner)
+    }
 
-pub fn ensure_note_loaded(vault: &str, note: &str) {
-    step(|c| {
-        if let Some(r) = c.replicas.get_mut(vault) {
+    pub fn ensure_note_loaded(&mut self, vault: &str, note: &str) {
+        if let Some(r) = self.replicas.get_mut(vault) {
             r.notes.entry(note.to_string()).or_insert_with(NoteDoc::new);
         }
-    });
-}
+    }
 
-pub fn live_entries(vault: &str) -> Vec<coolpsonotes_core::doc::Entry> {
-    step(|c| {
-        c.replicas
+    pub fn live_entries(&self, vault: &str) -> Vec<coolpsonotes_core::doc::Entry> {
+        self.replicas
             .get(vault)
             .map(|r| {
                 r.index
@@ -586,15 +582,15 @@ pub fn live_entries(vault: &str) -> Vec<coolpsonotes_core::doc::Entry> {
                     .collect()
             })
             .unwrap_or_default()
-    })
-}
+    }
 
-pub fn notes_of(vault: &str) -> Vec<(String, String)> {
-    live_entries(vault)
-        .into_iter()
-        .filter(|e| e.kind == EntryKind::Note)
-        .map(|e| (e.id, e.path))
-        .collect()
+    pub fn notes_of(&self, vault: &str) -> Vec<(String, String)> {
+        self.live_entries(vault)
+            .into_iter()
+            .filter(|e| e.kind == EntryKind::Note)
+            .map(|e| (e.id, e.path))
+            .collect()
+    }
 }
 
 pub fn new_id() -> String {

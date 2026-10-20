@@ -78,7 +78,7 @@ pub fn QuickPage() -> impl IntoView {
     let ui = ui();
     let show_archived = RwSignal::new(false);
     let data = Memo::new(move |_| latest(show_archived.get(), usize::MAX));
-    let vault_name = Memo::new(move |_| data.get().0.map(|v| state::vault_name(&v)));
+    let vault_name = Memo::new(move |_| data.get().0.map(|v| state::step(|c| c.vault_name(&v))));
     let text = RwSignal::new(String::new());
     let busy = RwSignal::new(false);
     let area = NodeRef::<html::Textarea>::new();
@@ -172,7 +172,7 @@ fn QuickCard(q: QuickNote) -> impl IntoView {
     let (v2, id2) = (q.vault.clone(), q.id.clone());
     let (v3, id3) = (q.vault.clone(), q.id.clone());
     let archived = q.archived;
-    let writable = state::can_write(&q.vault);
+    let writable = state::step(|c| c.can_write(&q.vault));
     view! {
         <div class="qn-card" class:archived=archived>
             <button class="qn-open" title=format!("Open {}", q.title) on:click=move |_| state::navigate(Route::Note(v.clone(), id.clone()))>
@@ -203,18 +203,22 @@ fn QuickCard(q: QuickNote) -> impl IntoView {
 #[component]
 pub fn PromoteDialog(vault: String, id: String) -> impl IntoView {
     let ui = ui();
-    let text = step(|c| c.replicas.get(&vault).map(|r| r.note_text(&id))).unwrap_or_default();
+    let (text, title, folders) = step(|c| {
+        let r = c.replicas.get(&vault);
+        (
+            r.map(|r| r.note_text(&id)).unwrap_or_default(),
+            c.entry(&vault, &id).map(|e| e.title().to_string()),
+            r.map(|r| r.index.folders()).unwrap_or_default(),
+        )
+    });
     let suggested = quick::promote_title(&text);
     let name = RwSignal::new(if suggested.is_empty() {
-        state::entry(&vault, &id)
-            .map(|e| e.title().to_string())
-            .unwrap_or_default()
+        title.unwrap_or_default()
     } else {
         suggested
     });
     let folder = RwSignal::new(String::new());
-    let folders: Vec<String> = step(|c| c.replicas.get(&vault).map(|r| r.index.folders()))
-        .unwrap_or_default()
+    let folders: Vec<String> = folders
         .into_iter()
         .filter(|f| f != quick::FOLDER && !coolpsonotes_core::paths::is_within(f, quick::FOLDER))
         .collect();

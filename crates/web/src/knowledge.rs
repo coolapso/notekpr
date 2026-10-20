@@ -44,12 +44,11 @@ pub fn analysis(vault: &str, note: &str, text: &str) -> Rc<NoteInfo> {
 
 /// All live notes `(id, path, text)` of a vault.
 pub fn notes_with_text(vault: &str) -> Vec<(String, String, String)> {
-    let entries = state::live_entries(vault);
     step(|c| {
         let Some(r) = c.replicas.get(vault) else {
             return vec![];
         };
-        entries
+        c.live_entries(vault)
             .into_iter()
             .filter(|e| e.kind == EntryKind::Note)
             .map(|e| {
@@ -61,7 +60,7 @@ pub fn notes_with_text(vault: &str) -> Vec<(String, String, String)> {
 }
 
 fn candidates(vault: &str) -> Vec<(String, String)> {
-    state::live_entries(vault)
+    state::step(|c| c.live_entries(vault))
         .into_iter()
         .map(|e| (e.id, e.path))
         .collect()
@@ -84,7 +83,7 @@ pub fn resolve_target(vault: &str, target: &str, from_path: &str) -> Option<Stri
 
 /// Like [`resolve_target`] but for an embed: also matches attachment file names.
 pub fn resolve_attachment(vault: &str, target: &str) -> Option<String> {
-    let entries = state::live_entries(vault);
+    let entries = state::step(|c| c.live_entries(vault));
     let t = target.trim().trim_start_matches("./").to_lowercase();
     let exact = entries
         .iter()
@@ -313,17 +312,18 @@ pub fn quick(query: &str) -> Vec<(String, String, String, String)> {
         .chars()
         .filter(|c| !c.is_whitespace())
         .collect();
-    let vaults: Vec<(String, String)> = step(|c| {
-        c.replicas
+    let (vaults, recent) = step(|c| {
+        let vaults: Vec<_> = c
+            .replicas
             .iter()
             .filter(|(_, r)| r.member)
-            .map(|(id, r)| (id.clone(), r.meta.name.clone()))
-            .collect()
+            .map(|(id, r)| (id.clone(), r.meta.name.clone(), c.live_entries(id)))
+            .collect();
+        (vaults, c.prefs.recent.clone())
     });
-    let recent: Vec<(String, String)> = step(|c| c.prefs.recent.clone());
     let mut scored = Vec::new();
-    for (vid, vname) in &vaults {
-        for e in state::live_entries(vid) {
+    for (vid, vname, entries) in &vaults {
+        for e in entries {
             if e.kind != EntryKind::Note {
                 continue;
             }

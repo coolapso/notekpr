@@ -88,13 +88,13 @@ pub fn Sidebar() -> impl IntoView {
     let vault = move || ui.route.get().vault().map(str::to_string);
     let writable = move || {
         ui.vaults.get();
-        vault().is_some_and(|v| state::can_write(&v))
+        vault().is_some_and(|v| state::step(|c| c.can_write(&v)))
     };
     let current_folder = move || {
         ui.route
             .get()
             .note()
-            .and_then(|(v, n)| state::entry(v, n))
+            .and_then(|(v, n)| state::step(|c| c.entry(v, n)))
             .map(|e| coolpsonotes_core::paths::parent(&e.path).to_string())
             .unwrap_or_default()
     };
@@ -159,7 +159,7 @@ pub fn Sidebar() -> impl IntoView {
                     let v2 = v.clone();
                     view! {
                         <button class="sb-link" on:click=move |_| state::navigate(Route::Trash(v1.clone()))><Icon name="trash"/>" Trash"</button>
-                        <Show when=move || state::is_owner(&v2)>
+                        <Show when=move || state::step(|c| c.is_owner(&v2))>
                             {
                                 let v3 = v.clone();
                                 view! { <button class="sb-link" on:click=move |_| ui.modal.set(Some(Modal::Share(v3.clone())))><Icon name="share"/>" Share vault"</button> }
@@ -196,10 +196,13 @@ fn Favorites() -> impl IntoView {
     let items = move || {
         ui.prefs_rev.get();
         ui.tree_rev.get();
-        let favs = state::step(|c| c.prefs.favorites.clone());
-        favs.into_iter()
-            .filter_map(|(v, n)| state::note_title(&v, &n).map(|t| (v, n, t)))
-            .collect::<Vec<_>>()
+        state::step(|c| {
+            c.prefs
+                .favorites
+                .iter()
+                .filter_map(|(v, n)| c.note_title(v, n).map(|t| (v.clone(), n.clone(), t)))
+                .collect::<Vec<_>>()
+        })
     };
     view! {
         <Show when=move || !items().is_empty()>
@@ -223,13 +226,15 @@ fn Recent() -> impl IntoView {
         ui.prefs_rev.get();
         ui.tree_rev.get();
         let cur = ui.route.get().vault().map(str::to_string);
-        let recent = state::step(|c| c.prefs.recent.clone());
-        recent
-            .into_iter()
-            .filter(|(v, _)| cur.as_ref().is_none_or(|c| c == v))
-            .filter_map(|(v, n)| state::note_title(&v, &n).map(|t| (v, n, t)))
-            .take(5)
-            .collect::<Vec<_>>()
+        state::step(|c| {
+            c.prefs
+                .recent
+                .iter()
+                .filter(|(v, _)| cur.as_ref().is_none_or(|x| x == v))
+                .filter_map(|(v, n)| c.note_title(v, n).map(|t| (v.clone(), n.clone(), t)))
+                .take(5)
+                .collect::<Vec<_>>()
+        })
     };
     view! {
         <Show when=move || !items().is_empty()>

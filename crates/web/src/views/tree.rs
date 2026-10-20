@@ -26,12 +26,13 @@ struct Row {
 }
 
 fn build_rows(vault: &str, expanded: &BTreeSet<String>) -> Vec<Row> {
-    let entries = state::live_entries(vault);
-    let shared: BTreeSet<String> = state::step(|c| {
-        c.replicas
+    let (entries, shared): (_, BTreeSet<String>) = state::step(|c| {
+        let shared = c
+            .replicas
             .get(vault)
             .map(|r| r.shared.clone())
-            .unwrap_or_default()
+            .unwrap_or_default();
+        (c.live_entries(vault), shared)
     });
     let folders: BTreeMap<String, Option<String>> = {
         let mut m: BTreeMap<String, Option<String>> = BTreeMap::new();
@@ -133,7 +134,7 @@ pub fn Tree(vault: String) -> impl IntoView {
     // Reveal the open note's folder.
     Effect::new(move |_| {
         if let Route::Note(v, n) = ui.route.get()
-            && let Some(e) = state::entry(&v, &n)
+            && let Some(e) = state::step(|c| c.entry(&v, &n))
         {
             let mut p = paths::parent(&e.path).to_string();
             expanded.update(|s| {
@@ -154,7 +155,7 @@ pub fn Tree(vault: String) -> impl IntoView {
         let v = vault.clone();
         move || {
             ui.vaults.get();
-            state::can_write(&v)
+            state::step(|c| c.can_write(&v))
         }
     };
     let can_write2 = can_write.clone();

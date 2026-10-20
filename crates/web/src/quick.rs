@@ -247,22 +247,30 @@ pub fn vault() -> Option<String> {
 /// Quick notes of `vault`, newest first: the archived ones too with
 /// `archived`, at most `limit`.
 pub fn notes(vault: &str, archived: bool, limit: usize) -> Vec<QuickNote> {
-    let mut list: Vec<_> = state::live_entries(vault)
-        .into_iter()
-        .filter(|e| e.kind == EntryKind::Note && is_quick(&e.path))
-        .filter(|e| archived || !is_archived(&e.path))
-        .collect();
-    list.sort_by(|a, b| {
-        b.created
-            .cmp(&a.created)
-            .then(b.modified.cmp(&a.modified))
-            .then(a.id.cmp(&b.id))
+    let list = step(|c| {
+        let mut list: Vec<_> = c
+            .live_entries(vault)
+            .into_iter()
+            .filter(|e| e.kind == EntryKind::Note && is_quick(&e.path))
+            .filter(|e| archived || !is_archived(&e.path))
+            .collect();
+        list.sort_by(|a, b| {
+            b.created
+                .cmp(&a.created)
+                .then(b.modified.cmp(&a.modified))
+                .then(a.id.cmp(&b.id))
+        });
+        list.truncate(limit);
+        let r = c.replicas.get(vault);
+        list.into_iter()
+            .map(|e| {
+                let text = r.map(|r| r.note_text(&e.id)).unwrap_or_default();
+                (e, text)
+            })
+            .collect::<Vec<_>>()
     });
-    list.truncate(limit);
     list.into_iter()
-        .map(|e| {
-            let text =
-                step(|c| c.replicas.get(vault).map(|r| r.note_text(&e.id))).unwrap_or_default();
+        .map(|(e, text)| {
             let title = e.title().to_string();
             QuickNote {
                 vault: vault.to_string(),
@@ -347,7 +355,7 @@ pub fn promote(vault: &str, id: &str, title: &str, folder: &str) -> Result<(), S
         return Err("Pick a folder outside Quick notes.".into());
     }
     let target = paths::normalize_note(&paths::join(&folder, title)).map_err(|e| e.to_string())?;
-    if state::live_entries(vault)
+    if state::step(|c| c.live_entries(vault))
         .iter()
         .any(|e| e.id != id && e.path.eq_ignore_ascii_case(&target))
     {

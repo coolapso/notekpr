@@ -217,7 +217,7 @@ fn install_shortcuts() {
                 if let Some(v) = route.vault() {
                     let folder = route
                         .note()
-                        .and_then(|(v, n)| state::entry(v, n))
+                        .and_then(|(v, n)| state::step(|c| c.entry(v, n)))
                         .map(|e| coolpsonotes_core::paths::parent(&e.path).to_string())
                         .unwrap_or_default();
                     crate::actions::new_note(v, &folder);
@@ -242,7 +242,7 @@ fn install_shortcuts() {
             (true, false, false, "s") => {
                 // Everything saves automatically; don't open the browser's save dialog.
                 e.prevent_default();
-                state::flush_now();
+                state::step(state::flush_now);
                 state::info("Changes are saved automatically.");
             }
             (true, false, false, "/") => {

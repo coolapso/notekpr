@@ -11,45 +11,44 @@ thread_local! {
 }
 
 /// Choose the vault quick notes go to (`None`: the default).
-pub fn set_quick_vault(vault: Option<String>) {
-    step(|c| c.prefs.quick_vault = vault);
+pub fn set_quick_vault(c: &mut Core, vault: Option<String>) {
+    c.prefs.quick_vault = vault;
     QUICK_VAULT_CHANGED.with(|f| f.set(true));
-    save_prefs();
+    save_prefs(c);
 }
 
 pub(super) async fn load_prefs() {
     let Ok(blob) = api::get::<PrefsBlob>("/me/prefs").await else {
         return;
     };
-    offline::note(|b| b.prefs = Some(blob.clone()));
-    apply_prefs(&blob);
+    step(|c| {
+        offline::note(c, |b| b.prefs = Some(blob.clone()));
+        apply_prefs(c, &blob);
+    });
 }
 
-pub(super) fn apply_prefs(blob: &PrefsBlob) {
-    let uid = step(|c| c.user_id.clone());
+pub(super) fn apply_prefs(c: &mut Core, blob: &PrefsBlob) {
+    let uid = c.user_id.clone();
     let local = storage::prefs_copy(&uid);
-    let open = |ct: &[u8]| {
-        step(|c| {
-            let pt = c.account.as_ref()?.open_private(&c.user_id, ct).ok()?;
-            serde_json::from_slice::<Prefs>(&pt).ok()
-        })
+    let open = |c: &Core, ct: &[u8]| {
+        let pt = c.account.as_ref()?.open_private(&c.user_id, ct).ok()?;
+        serde_json::from_slice::<Prefs>(&pt).ok()
     };
-    let server = blob.ciphertext.as_deref().and_then(open);
-    let mine = local.as_deref().and_then(open);
+    let server = blob.ciphertext.as_deref().and_then(|ct| open(c, ct));
+    let mine = local.as_deref().and_then(|ct| open(c, ct));
     let choice = choose_prefs(server, mine);
-    let (use_server, rolled_back) = (choice.from_server, choice.rolled_back);
-    step(|c| {
-        c.prefs_version = blob.version;
-        if let Some(p) = choice.prefs {
-            c.prefs = p;
-        }
-    });
-    if use_server && let Some(ct) = &blob.ciphertext {
+    c.prefs_version = blob.version;
+    if let Some(p) = choice.prefs {
+        c.prefs = p;
+    }
+    if choice.from_server
+        && let Some(ct) = &blob.ciphertext
+    {
         storage::set_prefs_copy(&uid, ct);
     }
-    if rolled_back {
+    if choice.rolled_back {
         util::warn("the server sent settings older than this browser's; keeping these");
-        save_prefs();
+        save_prefs(c);
     }
     ui().prefs_rev.update(|v| *v += 1);
 }
@@ -86,10 +85,10 @@ pub(super) fn choose_prefs(server: Option<Prefs>, mine: Option<Prefs>) -> PrefsC
     }
 }
 
-pub fn save_prefs() {
+/// Save the preferences soon (changes come in bursts).
+pub fn save_prefs(c: &Core) {
     ui().prefs_rev.update(|v| *v += 1);
-    let d = step(|c| c.prefs_save.clone());
-    d.run(1500, || {
+    c.prefs_save.run(1500, || {
         leptos::task::spawn_local(async {
             for _ in 0..3 {
                 let req = step(|c| {

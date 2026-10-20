@@ -173,7 +173,7 @@ fn toggle_task(vault: &str, note: &str, line: usize) {
     };
     *l = toggled;
     let new = lines.join("\n");
-    if state::set_note_text(vault, note, &new) > 0 {
+    if step(|c| state::set_note_text(c, vault, note, &new)) > 0 {
         if let Some(ed) = editor() {
             ed.set_text(new, false);
         }
@@ -194,24 +194,24 @@ pub fn NoteView(vault: String, note: String) -> impl IntoView {
     let (v, n2) = (vault.clone(), note.clone());
     let exists = Memo::new(move |_| {
         ui.tree_rev.get();
-        state::entry(&v, &n2).is_some_and(|e| e.is_live() && e.kind == EntryKind::Note)
+        state::step(|c| c.entry(&v, &n2)).is_some_and(|e| e.is_live() && e.kind == EntryKind::Note)
     });
     let (v, n3) = (vault.clone(), note.clone());
     let trashed = Memo::new(move |_| {
         ui.tree_rev.get();
-        state::entry(&v, &n3).is_some_and(|e| !e.is_live())
+        state::step(|c| c.entry(&v, &n3)).is_some_and(|e| !e.is_live())
     });
     let v = vault.clone();
     let writable = Memo::new(move |_| {
         ui.vaults.get();
-        state::can_write(&v)
+        state::step(|c| c.can_write(&v))
     });
 
     // Keep the title field in sync with the index (renames from elsewhere).
     let (v, n4) = (vault.clone(), note.clone());
     Effect::new(move |_| {
         ui.tree_rev.get();
-        if let Some(e) = state::entry(&v, &n4) {
+        if let Some(e) = state::step(|c| c.entry(&v, &n4)) {
             let focused = title_ref.get().is_some_and(|t| {
                 util::document()
                     .active_element()
@@ -232,7 +232,7 @@ pub fn NoteView(vault: String, note: String) -> impl IntoView {
         if !loaded.get() || !exists.get() {
             return;
         }
-        let ro = !state::can_write(&v);
+        let ro = !state::step(|c| c.can_write(&v));
         let Some(ed) = mount_editor(&container, NoteHost::new(&v, &nn), ro) else {
             return;
         };
@@ -255,7 +255,7 @@ pub fn NoteView(vault: String, note: String) -> impl IntoView {
     Effect::new(move |_| {
         ui.vaults.get();
         if let Some(ed) = editor() {
-            ed.set_readonly(!state::can_write(&v));
+            ed.set_readonly(!state::step(|c| c.can_write(&v)));
         }
     });
 
@@ -274,7 +274,7 @@ pub fn NoteView(vault: String, note: String) -> impl IntoView {
         if let Some((_, _, ed)) = ed {
             ed.destroy();
         }
-        state::note_closed(&v, &n);
+        step(|c| state::note_closed(c, &v, &n));
     });
 
     // Reading view HTML.
@@ -285,8 +285,15 @@ pub fn NoteView(vault: String, note: String) -> impl IntoView {
         }
         ui.content_rev.get();
         ui.tree_rev.get();
-        let text = step(|c| c.replicas.get(&v).map(|r| r.note_text(&n5))).unwrap_or_default();
-        let from = state::entry(&v, &n5).map(|e| e.path).unwrap_or_default();
+        let (text, from) = step(|c| {
+            (
+                c.replicas
+                    .get(&v)
+                    .map(|r| r.note_text(&n5))
+                    .unwrap_or_default(),
+                c.entry(&v, &n5).map(|e| e.path).unwrap_or_default(),
+            )
+        });
         let vv = v.clone();
         let note = move |t: &str| knowledge::resolve_target(&vv, t, &from);
         let va = v.clone();
@@ -347,7 +354,9 @@ pub fn NoteView(vault: String, note: String) -> impl IntoView {
         } else if let Some(a) = t.closest("[data-create]").ok().flatten() {
             ev.prevent_default();
             if let Some(name) = a.get_attribute("data-create") {
-                let from = state::entry(&vr, &nr).map(|e| e.path).unwrap_or_default();
+                let from = state::step(|c| c.entry(&vr, &nr))
+                    .map(|e| e.path)
+                    .unwrap_or_default();
                 actions::open_wiki(&vr, &name, &from);
             }
         } else if let Some(a) = t.closest("[data-tag]").ok().flatten() {
@@ -357,7 +366,7 @@ pub fn NoteView(vault: String, note: String) -> impl IntoView {
             }
         } else if t.class_list().contains("task") {
             ev.prevent_default();
-            if !state::can_write(&vr) {
+            if !state::step(|c| c.can_write(&vr)) {
                 return;
             }
             let Some(line) = t
@@ -373,7 +382,7 @@ pub fn NoteView(vault: String, note: String) -> impl IntoView {
     let (vt, nt) = (vault.clone(), note.clone());
     let commit_title = move || {
         let new = title_text.get_untracked();
-        if let Some(e) = state::entry(&vt, &nt) {
+        if let Some(e) = state::step(|c| c.entry(&vt, &nt)) {
             if new.trim() == e.title() {
                 return;
             }
@@ -388,9 +397,12 @@ pub fn NoteView(vault: String, note: String) -> impl IntoView {
     let (vb, nb) = (vault.clone(), note.clone());
     let breadcrumb = move || {
         ui.tree_rev.get();
-        let path = state::entry(&vb, &nb).map(|e| e.path).unwrap_or_default();
+        let (path, name) = state::step(|c| {
+            let path = c.entry(&vb, &nb).map(|e| e.path).unwrap_or_default();
+            (path, c.vault_name(&vb))
+        });
         let folder = paths::parent(&path).to_string();
-        let mut crumbs = vec![state::vault_name(&vb)];
+        let mut crumbs = vec![name];
         if !folder.is_empty() {
             crumbs.extend(folder.split('/').map(str::to_string));
         }
@@ -434,11 +446,11 @@ pub fn NoteView(vault: String, note: String) -> impl IntoView {
                     <button class:on=move || ui.mode.get() == ViewMode::Reading title=format!("Reading view ({}+E)", util::mod_key()) aria-label="Reading view" aria-pressed=move || (ui.mode.get() == ViewMode::Reading).to_string() on:click=move |_| ui.mode.set(ViewMode::Reading)><Icon name="book"/></button>
                 </div>
                 <button class="icon-btn" class:on=fav.clone() title="Favorite" aria-label="Favorite" aria-pressed=move || fav().to_string() on:click=move |_| actions::toggle_favorite(&vfa, &nfa)><Icon name="star"/></button>
-                <Show when=move || state::is_owner(&vs)>
+                <Show when=move || state::step(|c| c.is_owner(&vs))>
                     {
                         let (v, n) = (vault.clone(), note.clone());
                         let (v2, n2) = (vault.clone(), note.clone());
-                        let shared = move || { ui.tree_rev.get(); state::is_shared_note(&v2, &n2) };
+                        let shared = move || { ui.tree_rev.get(); step(|c| state::is_shared_note(c, &v2, &n2)) };
                         let shared2 = shared.clone();
                         view! { <button class="icon-btn" class:on=shared
                             title=move || if shared2() { "Shared individually — manage who can open this note" } else { "Share this note" }
@@ -463,12 +475,15 @@ pub fn NoteView(vault: String, note: String) -> impl IntoView {
                             view! {
                                 <div class="menu right" on:click=move |_| more.set(false)>
                                     <button on:click=move |_| {
-                                        let text = step(|c| c.replicas.get(&v).map(|r| r.note_text(&n))).unwrap_or_default();
-                                        let name = state::entry(&v, &n).map(|e| paths::file_name(&e.path).to_string()).unwrap_or_else(|| "note.md".into());
+                                        let (text, name) = step(|c| (
+                                            c.replicas.get(&v).map(|r| r.note_text(&n)).unwrap_or_default(),
+                                            c.entry(&v, &n).map(|e| paths::file_name(&e.path).to_string()),
+                                        ));
+                                        let name = name.unwrap_or_else(|| "note.md".into());
                                         util::download(&name, "text/markdown", text.as_bytes());
                                     }><Icon name="download"/>" Download as Markdown"</button>
                                     <button on:click=move |_| {
-                                        let t = state::entry(&v2, &n2).map(|e| e.title().to_string()).unwrap_or_default();
+                                        let t = state::step(|c| c.entry(&v2, &n2)).map(|e| e.title().to_string()).unwrap_or_default();
                                         util::copy_to_clipboard(&format!("[[{t}]]"));
                                         state::success("Link copied — paste it into another note.");
                                     }><Icon name="link"/>" Copy link to note"</button>
@@ -573,7 +588,7 @@ pub fn SharedNoteView(vault: String, note: String) -> impl IntoView {
         let Some(ed) = mount_editor(&container, NoteHost::for_shared(&v, &n), ro) else {
             return;
         };
-        state::send_presence();
+        step(|c| state::send_presence(c));
         if !ro && ui.mode.get_untracked() != ViewMode::Reading && !util::is_touch() {
             ed.focus();
         }
@@ -600,7 +615,7 @@ pub fn SharedNoteView(vault: String, note: String) -> impl IntoView {
         if let Some((_, _, ed)) = ed {
             ed.destroy();
         }
-        state::note_closed(&v, &n);
+        step(|c| state::note_closed(c, &v, &n));
     });
 
     let (v, n) = (vault.clone(), note.clone());

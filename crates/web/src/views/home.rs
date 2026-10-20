@@ -45,7 +45,7 @@ pub fn Home() -> impl IntoView {
                         };
                         let count = {
                             let id = id.clone();
-                            move || { ui.tree_rev.get(); state::notes_of(&id).len() }
+                            move || { ui.tree_rev.get(); state::step(|c| c.notes_of(&id)).len() }
                         };
                         view! {
                             <button class="card" class:archived=v.archived on:click=move |_| state::navigate(Route::Vault(id.clone()))>
@@ -89,11 +89,11 @@ pub fn VaultHome(vault: String) -> impl IntoView {
     let vid = StoredValue::new(vault.clone());
     let title = Memo::new(move |_| {
         ui.vaults.get();
-        state::vault_name(&vid.get_value())
+        state::step(|c| c.vault_name(&vid.get_value()))
     });
     let recent = Memo::new(move |_| {
         ui.tree_rev.get();
-        let mut e: Vec<_> = state::live_entries(&vid.get_value())
+        let mut e: Vec<_> = state::step(|c| c.live_entries(&vid.get_value()))
             .into_iter()
             .filter(|e| e.kind == EntryKind::Note)
             .collect();
@@ -116,7 +116,7 @@ pub fn VaultHome(vault: String) -> impl IntoView {
     });
     let writable = Memo::new(move |_| {
         ui.vaults.get();
-        state::can_write(&vid.get_value())
+        state::step(|c| c.can_write(&vid.get_value()))
     });
     view! {
         <div class="page">
@@ -200,7 +200,7 @@ pub fn Trash(vault: String) -> impl IntoView {
     let v = vault.clone();
     let writable = move || {
         ui.vaults.get();
-        state::can_write(&v)
+        state::step(|c| c.can_write(&v))
     };
     let items2 = items.clone();
     let ve = vault.clone();

@@ -15,24 +15,25 @@ pub async fn refresh_vaults() {
         }
     };
     let ids: BTreeSet<String> = infos.iter().map(|v| v.id.clone()).collect();
-    crate::cache::prune(&ids);
-    offline::note(|b| {
-        b.vaults = infos.clone();
-        b.keys.retain(|k, _| ids.contains(k));
-    });
-    let removed: Vec<String> = step(|c| {
-        c.replicas
+    step(|c| {
+        crate::cache::prune(c, &ids);
+        offline::note(c, |b| {
+            b.vaults = infos.clone();
+            b.keys.retain(|k, _| ids.contains(k));
+        });
+        let removed: Vec<String> = c
+            .replicas
             .iter()
             .filter(|(k, r)| r.member && !ids.contains(*k))
             .map(|(k, _)| k.clone())
-            .collect()
+            .collect();
+        for v in &removed {
+            drop_vault(c, v);
+        }
     });
-    for v in &removed {
-        drop_vault(v);
-    }
     // In parallel: each needs its own key request (and local copy read).
     futures::future::join_all(infos.into_iter().map(load_vault)).await;
-    publish_vaults();
+    step(|c| publish_vaults(c));
 }
 
 /// Load (or refresh) one vault's keys and metadata.
@@ -48,24 +49,37 @@ pub async fn reload_vault_keys(vault_id: String) {
     loop {
         if let Ok(info) = api::get::<VaultInfo>(&format!("/vaults/{vault_id}")).await {
             load_vault_with(info, true, None).await;
-            publish_vaults();
+            step(|c| publish_vaults(c));
         }
-        if !step(|c| c.reload_again.remove(&vault_id)) {
+        let done = step(|c| {
+            let again = c.reload_again.remove(&vault_id);
+            if !again {
+                c.reloading.remove(&vault_id);
+            }
+            !again
+        });
+        if done {
             break;
         }
     }
-    step(|c| c.reloading.remove(&vault_id));
 }
 
 /// Start reloading the keys behind `tag`. If a reload is already running,
 /// it may have fetched the keys before they changed: ask it to run once
 /// more, wait until it is done and return `false`.
 pub(super) async fn begin_reload(tag: &str) -> bool {
-    if step(|c| c.reloading.insert(tag.to_string())) {
-        step(|c| c.reload_again.remove(tag));
+    let first = step(|c| {
+        if c.reloading.insert(tag.to_string()) {
+            c.reload_again.remove(tag);
+            true
+        } else {
+            c.reload_again.insert(tag.to_string());
+            false
+        }
+    });
+    if first {
         return true;
     }
-    step(|c| c.reload_again.insert(tag.to_string()));
     while step(|c| c.reloading.contains(tag)) {
         util::sleep(50).await;
     }
@@ -92,8 +106,10 @@ pub(super) async fn load_vault_with(info: VaultInfo, force: bool, keys: Option<V
             Some(k) => k,
             None => match api::get::<VaultKeysResponse>(&format!("/vaults/{id}/keys")).await {
                 Ok(k) => {
-                    offline::note(|b| {
-                        b.keys.insert(id.clone(), k.clone());
+                    step(|c| {
+                        offline::note(c, |b| {
+                            b.keys.insert(id.clone(), k.clone());
+                        })
                     });
                     k
                 }
@@ -125,112 +141,122 @@ pub(super) async fn load_vault_with(info: VaultInfo, force: bool, keys: Option<V
                 let meta = VaultMeta::decrypt(&ring, &info.encrypted_meta)
                     .unwrap_or_else(|_| VaultMeta::named("(unreadable)"));
                 let docs = engine::object_keyrings(&ring, &keys);
-                // Notes shared with us individually are now reachable through the vault.
-                let was_recipient = step(|c| c.replicas.get(&id).is_some_and(|r| !r.member));
-                if was_recipient {
-                    for (v, o) in step(|c| {
-                        c.shares
-                            .keys()
-                            .filter(|(v, _)| *v == id)
-                            .cloned()
-                            .collect::<Vec<_>>()
-                    }) {
-                        send(&ClientMessage::Unsubscribe {
-                            vault_id: v.clone(),
-                            object_id: Some(o.clone()),
-                        });
-                        step(|c| c.shares.remove(&(v, o)));
-                    }
-                    step(|c| c.replicas.remove(&id));
-                    publish_shares();
-                }
                 let shared = engine::shared_objects(&keys);
                 let note_keys = keys.shared.is_some();
-                let (is_new, applied, docs_changed, restored, adopted) = step(|c| {
-                    c.vault_errors.remove(&id);
-                    match c.replicas.get_mut(&id) {
-                        Some(r) => {
-                            let epochs = |r: &VaultReplica| {
-                                r.doc_keys
-                                    .iter()
-                                    .map(|(o, k)| (o.clone(), k.current_epoch()))
-                                    .collect::<Vec<_>>()
-                            };
-                            let before = (epochs(r), r.shared.clone());
-                            r.keyring = ring;
-                            r.meta = meta;
-                            r.role = info.role;
-                            r.doc_keys = docs;
-                            r.shared = shared;
-                            // New notes' keys the server doesn't have yet stay.
-                            c.outboxes
-                                .entry(id.clone())
-                                .or_default()
-                                .keys_reloaded(r, note_keys);
-                            let docs_changed = before != (epochs(r), r.shared.clone());
-                            let (applied, _) = r.retry_deferred();
-                            (false, applied, docs_changed, false, None)
-                        }
-                        None => {
-                            let mut r = VaultReplica::new(&id, info.role, ring, meta);
-                            r.doc_keys = docs;
-                            r.shared = shared;
-                            r.max_head_seen = storage::head_seen(&uid, &id);
-                            // Keys of new notes not registered yet, before the
-                            // local copy and unsent changes that need them.
-                            let adopted = adopt_stored_new_keys(c, &id);
-                            c.outboxes
-                                .entry(id.clone())
-                                .or_default()
-                                .keys_reloaded(&mut r, note_keys);
-                            let restored =
-                                crate::cache::restore_into(&mut c.cache, &uid, &mut r, stored);
-                            if restored {
-                                c.loaded.insert(id.clone());
+                let (is_new, applied, docs_changed, restored, unsigned, offline_start) =
+                    step(|c| {
+                        // Notes shared with us individually are now reachable through the vault.
+                        if c.replicas.get(&id).is_some_and(|r| !r.member) {
+                            let notes: Vec<(String, String)> =
+                                c.shares.keys().filter(|(v, _)| *v == id).cloned().collect();
+                            for (v, o) in notes {
+                                send(
+                                    c,
+                                    &ClientMessage::Unsubscribe {
+                                        vault_id: v.clone(),
+                                        object_id: Some(o.clone()),
+                                    },
+                                );
+                                c.shares.remove(&(v, o));
                             }
-                            c.replicas.insert(id.clone(), r);
-                            (
-                                true,
-                                engine::Applied::default(),
-                                false,
-                                restored,
-                                Some(adopted),
-                            )
+                            c.replicas.remove(&id);
+                            publish_shares(c);
                         }
-                    }
-                });
-                if let Some(adopted) = adopted {
-                    persist_new_keys(&id, &adopted);
-                }
-                super::members::apply_authors(&id);
-                // Owners start the log of a vault from before it, and
-                // require signed changes.
-                let unsigned = step(|c| {
-                    c.member_logs
-                        .get(&id)
-                        .is_none_or(|l| !l.has_log() || l.needs_signatures())
-                });
-                if unsigned && info.role == Role::Owner && !step(|c| c.offline_start) {
-                    leptos::task::spawn_local(super::members::sign_vault(id.clone()));
-                }
-                if is_new && info.role == Role::Owner && !step(|c| c.offline_start) {
-                    leptos::task::spawn_local(super::members::sign_missing_grants(id.clone()));
-                }
-                if is_new {
-                    subscribe(&id);
-                    if restored {
-                        show_loaded(&id);
-                    }
-                } else {
-                    after_apply(&id, applied);
-                    if docs_changed {
-                        ui().tree_rev.update(|v| *v += 1);
-                        ui().shares_rev.update(|v| *v += 1);
-                        // Unsent edits of a note that just got its own key must be re-encrypted.
-                        if step(|c| c.loaded.contains(&id)) {
-                            resend_pending(&id);
+                        c.vault_errors.remove(&id);
+                        let (is_new, mut applied, docs_changed, restored, adopted) = match c
+                            .replicas
+                            .get_mut(&id)
+                        {
+                            Some(r) => {
+                                let epochs = |r: &VaultReplica| {
+                                    r.doc_keys
+                                        .iter()
+                                        .map(|(o, k)| (o.clone(), k.current_epoch()))
+                                        .collect::<Vec<_>>()
+                                };
+                                let before = (epochs(r), r.shared.clone());
+                                r.keyring = ring;
+                                r.meta = meta;
+                                r.role = info.role;
+                                r.doc_keys = docs;
+                                r.shared = shared;
+                                // New notes' keys the server doesn't have yet stay.
+                                c.outboxes
+                                    .entry(id.clone())
+                                    .or_default()
+                                    .keys_reloaded(r, note_keys);
+                                let docs_changed = before != (epochs(r), r.shared.clone());
+                                let (applied, _) = r.retry_deferred();
+                                (false, applied, docs_changed, false, None)
+                            }
+                            None => {
+                                let mut r = VaultReplica::new(&id, info.role, ring, meta);
+                                r.doc_keys = docs;
+                                r.shared = shared;
+                                r.max_head_seen = storage::head_seen(&uid, &id);
+                                // Keys of new notes not registered yet, before the
+                                // local copy and unsent changes that need them.
+                                let adopted = adopt_stored_new_keys(c, &id);
+                                c.outboxes
+                                    .entry(id.clone())
+                                    .or_default()
+                                    .keys_reloaded(&mut r, note_keys);
+                                let restored =
+                                    crate::cache::restore_into(&mut c.cache, &uid, &mut r, stored);
+                                if restored {
+                                    c.loaded.insert(id.clone());
+                                }
+                                c.replicas.insert(id.clone(), r);
+                                (
+                                    true,
+                                    engine::Applied::default(),
+                                    false,
+                                    restored,
+                                    Some(adopted),
+                                )
+                            }
+                        };
+                        if let Some(adopted) = &adopted {
+                            persist_new_keys(c, &id, adopted);
                         }
+                        applied.merge(super::members::apply_authors(c, &id));
+                        if is_new {
+                            subscribe(c, &id);
+                        } else if docs_changed && c.loaded.contains(&id) {
+                            // Unsent edits of a note that just got its own key
+                            // must be encrypted again.
+                            resend_pending(c, &id);
+                        }
+                        // Owners start the log of a vault from before it, and
+                        // require signed changes.
+                        let unsigned = c
+                            .member_logs
+                            .get(&id)
+                            .is_none_or(|l| !l.has_log() || l.needs_signatures());
+                        (
+                            is_new,
+                            applied,
+                            docs_changed,
+                            restored,
+                            unsigned,
+                            c.offline_start,
+                        )
+                    });
+                if info.role == Role::Owner && !offline_start {
+                    if unsigned {
+                        leptos::task::spawn_local(super::members::sign_vault(id.clone()));
                     }
+                    if is_new {
+                        leptos::task::spawn_local(super::members::sign_missing_grants(id.clone()));
+                    }
+                }
+                after_apply(&id, applied);
+                if is_new && restored {
+                    step(|c| show_loaded(c, &id));
+                }
+                if docs_changed {
+                    ui().tree_rev.update(|v| *v += 1);
+                    ui().shares_rev.update(|v| *v += 1);
                 }
             }
             Some(Err(e)) => {
@@ -272,25 +298,21 @@ pub(super) fn revoke_urls(urls: Vec<String>) {
     }
 }
 
-pub(super) fn drop_vault(v: &str) {
-    let urls = step(|c| {
-        c.replicas.remove(v);
-        c.vault_infos.remove(v);
-        c.loaded.remove(v);
-        c.synced.remove(v);
-        c.outboxes.remove(v);
-        take_attachment_urls(c, Some(v))
-    });
-    revoke_urls(urls);
-    crate::cache::forget_vault(v);
-    let ui = ui();
-    if ui.route.get_untracked().vault() == Some(v) {
+pub(super) fn drop_vault(c: &mut Core, v: &str) {
+    c.replicas.remove(v);
+    c.vault_infos.remove(v);
+    c.loaded.remove(v);
+    c.synced.remove(v);
+    c.outboxes.remove(v);
+    revoke_urls(take_attachment_urls(c, Some(v)));
+    crate::cache::forget_vault(c, v);
+    if ui().route.get_untracked().vault() == Some(v) {
         navigate(Route::Home);
     }
 }
 
-pub fn publish_vaults() {
-    let views = step(|c| {
+pub fn publish_vaults(c: &Core) {
+    let views = {
         let mut v: Vec<VaultView> = c
             .vault_infos
             .values()
@@ -317,6 +339,6 @@ pub fn publish_vaults() {
                 .then(a.name.to_lowercase().cmp(&b.name.to_lowercase()))
         });
         v
-    });
+    };
     ui().vaults.set(views);
 }

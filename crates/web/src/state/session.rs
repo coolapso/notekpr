@@ -172,15 +172,15 @@ pub async fn after_login() {
     ui.user.set(Some(me.user.clone()));
     let uid = me.user.id.clone();
     let has_key = me.account_key.is_some();
+    let server = ui.server.get_untracked();
     step(|c| {
         c.user_id = uid.clone();
         c.me = Some(me.clone());
-    });
-    let server = ui.server.get_untracked();
-    offline::note(|b| {
-        b.me = Some(me);
-        b.token = storage::token().unwrap_or_default();
-        b.server = server;
+        offline::note(c, |b| {
+            b.me = Some(me);
+            b.token = storage::token().unwrap_or_default();
+            b.server = server;
+        });
     });
     if !has_key {
         ui.phase.set(Phase::Setup);
@@ -255,11 +255,9 @@ pub(super) enum Unlock {
 pub(super) const WRONG_ACCOUNT: &str = "The server sent this browser keys of a different account than the one it was approved for. This can mean the server was tampered with. Nothing was decrypted with them; check your devices from another device before signing in here again.";
 
 /// The account key the server publishes for us, checked.
-pub(super) fn published_account(uid: &str) -> Option<AccountPublic> {
-    step(|c| {
-        let key = c.me.as_ref()?.account_key.as_ref()?;
-        engine::published_account(uid, key).ok()
-    })
+pub(super) fn published_account(c: &Core, uid: &str) -> Option<AccountPublic> {
+    let key = c.me.as_ref()?.account_key.as_ref()?;
+    engine::published_account(uid, key).ok()
 }
 
 pub(super) fn unlock_with_device(uid: &str, rec: &DeviceRecord, envelope: &[u8]) -> Unlock {
@@ -274,7 +272,10 @@ pub(super) fn unlock_with_device(uid: &str, rec: &DeviceRecord, envelope: &[u8])
     };
     // Pinned when the approval code was shown; records from before pinning
     // pin the published key now.
-    let Some(expected) = rec.account().or_else(|| published_account(uid)) else {
+    let Some(expected) = rec
+        .account()
+        .or_else(|| step(|c| published_account(c, uid)))
+    else {
         return Unlock::WrongAccount;
     };
     if engine::check_approved_account(&acct, &expected).is_err() {
@@ -285,11 +286,11 @@ pub(super) fn unlock_with_device(uid: &str, rec: &DeviceRecord, envelope: &[u8])
         r.pin(&expected);
         storage::set_device(uid, &r);
     }
-    offline::note(|b| {
-        b.device_id = rec.device_id.clone();
-        b.envelope = envelope.to_vec();
-    });
     step(|c| {
+        offline::note(c, |b| {
+            b.device_id = rec.device_id.clone();
+            b.envelope = envelope.to_vec();
+        });
         c.account = Some(acct);
         c.device_id = Some(rec.device_id.clone());
     });
@@ -309,7 +310,7 @@ pub(super) fn show_pending(uid: &str, mut rec: DeviceRecord) {
     let account = match rec.account() {
         Some(a) => a,
         None => {
-            let Some(a) = published_account(uid) else {
+            let Some(a) = step(|c| published_account(c, uid)) else {
                 ui.phase.set(Phase::Fatal(
                     "Your account key on the server failed verification.".into(),
                 ));
@@ -376,8 +377,8 @@ pub(super) fn poll_approval(uid: String, rec: DeviceRecord) {
 /// First device: generate keys, show the recovery key.
 pub async fn setup_keys() {
     let ui = ui();
-    let uid = step(|c| c.user_id.clone());
-    let boot = match step(|c| c.setup.take()) {
+    let (uid, setup) = step(|c| (c.user_id.clone(), c.setup.take()));
+    let boot = match setup {
         // A previous attempt whose upload failed: send the same keys again.
         Some(b) => b,
         None => {
@@ -544,11 +545,11 @@ pub async fn recover(input: String) {
 
 pub fn sign_out_local(error: Option<String>) {
     let ui = ui();
-    // Unsent changes go to local storage, to be sent after the next sign-in.
-    flush_now();
     storage::clear_token();
     api::set_token(None);
     let (sock, urls) = step(|c| {
+        // Unsent changes go to local storage, to be sent after the next sign-in.
+        flush_now(c);
         let s = c.socket.take();
         let urls = take_attachment_urls(c, None);
         *c = Core::default();
@@ -568,7 +569,7 @@ pub fn sign_out_local(error: Option<String>) {
 }
 
 pub async fn sign_out() {
-    flush_now();
+    step(flush_now);
     let _ = api::post_empty::<()>("/auth/logout").await;
     let uid = step(|c| c.user_id.clone());
     offline::signed_out(&uid);
@@ -579,8 +580,10 @@ pub async fn sign_out() {
 /// from the account and delete its key and unsent changes from local storage.
 /// Signing in here again needs approval from another device or the recovery key.
 pub async fn forget_browser() {
-    flush_now();
-    let unsent = step(|c| c.pending_count());
+    let unsent = step(|c| {
+        flush_now(c);
+        c.pending_count()
+    });
     let warn = if unsent > 0 {
         format!(
             " {unsent} note{} with changes that are not synced yet will lose them.",
@@ -659,12 +662,12 @@ pub(super) fn go_to_last_location() {
     let uid = step(|c| c.user_id.clone());
     if let Some(last) = storage::last_location(&uid) {
         let r = Route::parse(&last, "");
-        let known = match &r {
-            Route::Shared(v, n) => step(|c| c.shares.contains_key(&(v.clone(), n.clone()))),
+        let known = step(|c| match &r {
+            Route::Shared(v, n) => c.shares.contains_key(&(v.clone(), n.clone())),
             _ => r
                 .vault()
-                .is_some_and(|v| step(|c| c.replicas.get(v).is_some_and(|x| x.member))),
-        };
+                .is_some_and(|v| c.replicas.get(v).is_some_and(|x| x.member)),
+        });
         if known {
             navigate_replace(r);
         }

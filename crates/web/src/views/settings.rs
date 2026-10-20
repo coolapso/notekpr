@@ -160,7 +160,7 @@ fn Devices() -> impl IntoView {
 /// "Keep this browser usable offline" (see `state::offline`).
 #[component]
 fn OfflineSetting() -> impl IntoView {
-    let on = RwSignal::new(state::offline_enabled());
+    let on = RwSignal::new(step(|c| state::offline_enabled(c)));
     let busy = RwSignal::new(false);
     let supported = state::offline_supported();
     let toggle = move |want: bool| {
@@ -415,7 +415,7 @@ fn QuickNotesPrefs() -> impl IntoView {
             .collect();
         writable.sort_by_key(|(_, n)| n.to_lowercase());
         let default = crate::quick::choose_vault(None, &crate::quick::candidates())
-            .map(|v| state::vault_name(&v));
+            .map(|v| state::step(|c| c.vault_name(&v)));
         (chosen, writable, default)
     });
     view! {
@@ -429,7 +429,7 @@ fn QuickNotesPrefs() -> impl IntoView {
             <span class="small muted">"Vault for quick notes (synced to your other devices)"</span>
             <select class="input quick-vault" on:change=move |ev| {
                 let v = event_target_value(&ev);
-                state::set_quick_vault(if v.is_empty() { None } else { Some(v) });
+                step(|c| state::set_quick_vault(c, if v.is_empty() { None } else { Some(v) }));
             }>
                 {move || {
                     let (chosen, list, default) = choice.get();

@@ -20,7 +20,9 @@ pub fn RightPanel(vault: String, note: String) -> impl IntoView {
         let (v, n) = (vault.clone(), note.clone());
         move || {
             ui.tree_rev.get();
-            state::entry(&v, &n).map(|e| e.path).unwrap_or_default()
+            state::step(|c| c.entry(&v, &n))
+                .map(|e| e.path)
+                .unwrap_or_default()
         }
     };
     let (v1, n1) = (vault.clone(), note.clone());

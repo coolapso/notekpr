@@ -5,7 +5,7 @@ use std::cell::RefCell;
 use std::collections::{BTreeSet, HashMap};
 use std::rc::Rc;
 
-use coolpsonotes_core::doc::{EntryKind, NoteDoc};
+use coolpsonotes_core::doc::{EntryKind, IndexDoc, NoteDoc};
 use coolpsonotes_core::engine::{self, ObjectMeta, PinStatus, VaultMeta, VaultReplica};
 use coolpsonotes_core::memberlog::{LogBody, LogEntry};
 use coolpsonotes_core::protocol::*;
@@ -17,7 +17,7 @@ use wasm_bindgen::JsCast;
 
 use crate::editor::syntax::Target;
 use crate::editor::{self, Host};
-use crate::state::{self, Route, error, info, local_update, navigate, step, success};
+use crate::state::{self, Core, Route, error, info, local_update, navigate, step, success};
 use crate::{api, knowledge, render, util, zipfile};
 
 fn now() -> i64 {
@@ -52,43 +52,43 @@ pub async fn create_vault(name: String) -> Option<String> {
         }
     };
     let id = info.id.clone();
-    let log = step(|c| {
-        let a = c.account.as_ref()?.public();
-        coolpsonotes_sync::members::MemberLog::verify(
-            &id,
-            &a,
-            req.log_entry.clone().into_iter().collect(),
-            None,
-        )
-        .ok()
-    });
-    if let Some(log) = log {
-        let uid = step(|c| c.user_id.clone());
-        crate::storage::set_log_seen(&uid, &id, log.head());
-        step(|c| c.member_logs.insert(id.clone(), log));
-    }
     let note_keys = state::ui()
         .server
         .get_untracked()
         .is_some_and(|s| s.note_keys);
     step(|c| {
+        // Its membership log starts with its creation.
+        let log = c.account.as_ref().and_then(|a| {
+            coolpsonotes_sync::members::MemberLog::verify(
+                &id,
+                &a.public(),
+                req.log_entry.clone().into_iter().collect(),
+                None,
+            )
+            .ok()
+        });
+        if let Some(log) = log {
+            crate::storage::set_log_seen(&c.user_id, &id, log.head());
+            c.member_logs.insert(id.clone(), log);
+        }
         let r = VaultReplica::new(&id, Role::Owner, ring, VaultMeta::named(&name));
         c.replicas.insert(id.clone(), r);
         c.outboxes.entry(id.clone()).or_default().note_keys = note_keys;
         c.vault_infos.insert(id.clone(), info);
         // A brand-new vault has nothing to catch up on.
         c.loaded.insert(id.clone());
+        state::send(
+            c,
+            &ClientMessage::Subscribe {
+                vault_id: id.clone(),
+                since: Some(0),
+                object_id: None,
+            },
+        );
     });
-    if let Some(s) = step(|c| c.socket.clone()) {
-        s.send(&ClientMessage::Subscribe {
-            vault_id: id.clone(),
-            since: Some(0),
-            object_id: None,
-        });
-    }
     // Every change to the new vault is signed by its author from the start.
     state::sign_vault(id.clone()).await;
-    state::publish_vaults();
+    step(|c| state::publish_vaults(c));
     Some(id)
 }
 
@@ -108,10 +108,10 @@ pub async fn rename_vault(vault: &str, name: &str) {
     )
     .await
     {
-        Ok(i) => {
-            step(|c| c.vault_infos.insert(vault.to_string(), i));
-            state::publish_vaults();
-        }
+        Ok(i) => step(|c| {
+            c.vault_infos.insert(vault.to_string(), i);
+            state::publish_vaults(c);
+        }),
         Err(e) => error(format!("Rename failed: {e}")),
     }
 }
@@ -126,10 +126,10 @@ pub async fn set_archived(vault: &str, archived: bool) {
     )
     .await
     {
-        Ok(i) => {
-            step(|c| c.vault_infos.insert(vault.to_string(), i));
-            state::publish_vaults();
-        }
+        Ok(i) => step(|c| {
+            c.vault_infos.insert(vault.to_string(), i);
+            state::publish_vaults(c);
+        }),
         Err(e) => error(e.message),
     }
 }
@@ -140,8 +140,8 @@ pub async fn delete_vault(vault: &str) {
             step(|c| {
                 c.replicas.remove(vault);
                 c.vault_infos.remove(vault);
+                state::publish_vaults(c);
             });
-            state::publish_vaults();
             navigate(Route::Home);
             success("Vault deleted.");
         }
@@ -150,13 +150,12 @@ pub async fn delete_vault(vault: &str) {
 }
 
 pub async fn leave_vault(vault: &str) {
-    let uid = step(|c| c.user_id.clone());
-    let log_entry = state::log_entry(
-        vault,
-        LogBody::Leave {
-            user_id: uid.clone(),
-        },
-    );
+    let (uid, log_entry) = step(|c| {
+        let body = LogBody::Leave {
+            user_id: c.user_id.clone(),
+        };
+        (c.user_id.clone(), state::log_entry(c, vault, body))
+    });
     match api::delete_with(
         &format!("/vaults/{vault}/members/{uid}"),
         &RemoveMemberRequest { log_entry },
@@ -167,8 +166,8 @@ pub async fn leave_vault(vault: &str) {
             step(|c| {
                 c.replicas.remove(vault);
                 c.vault_infos.remove(vault);
+                state::publish_vaults(c);
             });
-            state::publish_vaults();
             navigate(Route::Home);
         }
         Err(e) => error(e.message),
@@ -197,8 +196,10 @@ pub fn pin_status(user: &PublicUser) -> Option<PinStatus> {
 /// Explicitly accept a (changed) key after verifying it out of band.
 pub fn trust_key(user: &PublicUser) {
     if let Some(fp) = fingerprint(user) {
-        step(|c| c.prefs.pins.insert(user.id.clone(), fp));
-        state::save_prefs();
+        step(|c| {
+            c.prefs.pins.insert(user.id.clone(), fp);
+            state::save_prefs(c);
+        });
     }
 }
 
@@ -206,18 +207,19 @@ fn check_trust(user: &PublicUser) -> Result<(), String> {
     let Some(fp) = fingerprint(user) else {
         return Ok(());
     };
-    let st = step(|c| engine::check_pin(&mut c.prefs.pins, &user.id, &fp));
-    match st {
-        PinStatus::Changed => Err(format!(
-            "The encryption key of {} changed since you last shared with them. This can happen if they reset their account — or if someone is intercepting. Compare fingerprints with them before continuing.",
-            user.display_name
-        )),
-        PinStatus::New => {
-            state::save_prefs();
-            Ok(())
-        }
-        PinStatus::Match => Ok(()),
-    }
+    step(
+        |c| match engine::check_pin(&mut c.prefs.pins, &user.id, &fp) {
+            PinStatus::Changed => Err(format!(
+                "The encryption key of {} changed since you last shared with them. This can happen if they reset their account — or if someone is intercepting. Compare fingerprints with them before continuing.",
+                user.display_name
+            )),
+            PinStatus::New => {
+                state::save_prefs(c);
+                Ok(())
+            }
+            PinStatus::Match => Ok(()),
+        },
+    )
 }
 
 pub async fn share(vault: &str, user: &PublicUser, role: Role) -> Result<(), String> {
@@ -249,7 +251,7 @@ pub async fn share(vault: &str, user: &PublicUser, role: Role) -> Result<(), Str
             user_id: user.id.clone(),
             role,
             key_envelope: envelope,
-            log_entry: state::log_entry(vault, LogBody::Add { member }),
+            log_entry: step(|c| state::log_entry(c, vault, LogBody::Add { member })),
         },
     )
     .await
@@ -268,13 +270,16 @@ pub async fn share(vault: &str, user: &PublicUser, role: Role) -> Result<(), Str
 }
 
 pub async fn set_role(vault: &str, user_id: &str, role: Role) {
-    let log_entry = state::log_entry(
-        vault,
-        LogBody::Role {
-            user_id: user_id.to_string(),
-            role,
-        },
-    );
+    let log_entry = step(|c| {
+        state::log_entry(
+            c,
+            vault,
+            LogBody::Role {
+                user_id: user_id.to_string(),
+                role,
+            },
+        )
+    });
     if let Err(e) = api::patch::<_, ()>(
         &format!("/vaults/{vault}/members/{user_id}"),
         &UpdateMemberRequest { role, log_entry },
@@ -289,12 +294,15 @@ pub async fn set_role(vault: &str, user_id: &str, role: Role) {
 /// Remove a member and rotate the vault key so they cannot read anything
 /// written afterwards.
 pub async fn remove_member(vault: &str, user_id: &str) {
-    let log_entry = state::log_entry(
-        vault,
-        LogBody::Remove {
-            user_id: user_id.to_string(),
-        },
-    );
+    let log_entry = step(|c| {
+        state::log_entry(
+            c,
+            vault,
+            LogBody::Remove {
+                user_id: user_id.to_string(),
+            },
+        )
+    });
     if let Err(e) = api::delete_with(
         &format!("/vaults/{vault}/members/{user_id}"),
         &RemoveMemberRequest { log_entry },
@@ -322,10 +330,13 @@ pub async fn rotate_keys(vault: &str) -> bool {
             }
         };
         // The new key goes only to members the owner vouched for.
-        if let Some(m) = members
-            .iter()
-            .find(|m| m.user.account_key.is_some() && !state::vouched(vault, m))
-        {
+        let unknown = step(|c| {
+            members
+                .iter()
+                .find(|m| m.user.account_key.is_some() && !state::vouched(c, vault, m))
+                .cloned()
+        });
+        if let Some(m) = unknown {
             error(format!(
                 "Security warning: the server lists {} as a member with a key you never added. The vault key was not renewed; tell your administrator.",
                 m.user.display_name
@@ -397,33 +408,26 @@ pub async fn rotate_keys(vault: &str) -> bool {
                 })
                 .collect();
             let mut ring = r.keyring.clone();
-            Some(
-                engine::rotate_with_notes(&mut ring, &members, &r.meta, &notes)
-                    .map(|(req, rings)| (ring, req, rings)),
-            )
-        });
-        let prepared = prepared.map(|p| {
-            p.map(|(ring, mut req, rings)| {
+            let made = engine::rotate_with_notes(&mut ring, &members, &r.meta, &notes);
+            Some(made.map(|(mut req, rings)| {
                 req.log_entry = coolpsonotes_sync::members::rotation(vault, &ring)
-                    .and_then(|body| state::log_entry(vault, body));
+                    .and_then(|body| state::log_entry(c, vault, body));
                 // Every note's new key for the people it is shared with.
-                step(|c| {
-                    if let Some(a) = &c.account {
-                        for o in &mut req.objects {
-                            if let Some(next) = rings.get(&o.object_id) {
-                                coolpsonotes_sync::members::sign_grants(
-                                    a,
-                                    vault,
-                                    &o.object_id,
-                                    next,
-                                    &mut o.update.envelopes,
-                                );
-                            }
+                if let Some(a) = &c.account {
+                    for o in &mut req.objects {
+                        if let Some(next) = rings.get(&o.object_id) {
+                            coolpsonotes_sync::members::sign_grants(
+                                a,
+                                vault,
+                                &o.object_id,
+                                next,
+                                &mut o.update.envelopes,
+                            );
                         }
                     }
-                });
+                }
                 (ring, req, rings)
-            })
+            }))
         });
         let (ring, req, rings) = match prepared {
             Some(Ok(x)) => x,
@@ -450,8 +454,8 @@ pub async fn rotate_keys(vault: &str) -> bool {
                             o.key_refused(r, &n);
                         }
                     }
+                    state::persist_new_keys(c, vault, &[]);
                 });
-                state::persist_new_keys(vault, &[]);
                 state::reload_log(vault).await;
                 return true;
             }
@@ -477,12 +481,14 @@ pub async fn grant_missing_keys(vault: &str) {
         .filter(|m| m.user.account_key.is_none() || check_trust(&m.user).is_ok())
         .collect();
     // Added before they had keys: pin their keys in the log first.
-    let to_pin: Vec<MemberInfo> = state::member_log(vault)
-        .to_pin(&trusted)
-        .into_iter()
-        .filter(|m| !m.has_current_key)
-        .cloned()
-        .collect();
+    let to_pin: Vec<MemberInfo> = step(|c| {
+        state::member_log(c, vault)
+            .to_pin(&trusted)
+            .into_iter()
+            .filter(|m| !m.has_current_key)
+            .cloned()
+            .collect()
+    });
     for m in &to_pin {
         let Some(Ok(key)) = m.user.account_key.as_ref().map(|k| k.verify()) else {
             continue;
@@ -492,11 +498,11 @@ pub async fn grant_missing_keys(vault: &str) {
         }
     }
     // Only members the owner's log vouches for get the vault key.
-    let trusted: Vec<MemberInfo> = trusted
-        .into_iter()
-        .filter(|m| state::vouched(vault, m))
-        .collect();
     let env = step(|c| {
+        let trusted: Vec<MemberInfo> = trusted
+            .into_iter()
+            .filter(|m| state::vouched(c, vault, m))
+            .collect();
         c.replicas
             .get(vault)
             .map(|r| engine::missing_grants(&r.keyring, &trusted))
@@ -591,14 +597,13 @@ pub async fn share_note(
         }
     });
     state::reload_log(vault).await;
+    let title = step(|c| {
+        state::send_presence(c);
+        c.note_title(vault, note).unwrap_or_default()
+    });
     state::ui().tree_rev.update(|v| *v += 1);
-    state::send_presence();
     state::ui().shares_rev.update(|v| *v += 1);
-    success(format!(
-        "Shared “{}” with {}.",
-        state::note_title(vault, note).unwrap_or_default(),
-        user.display_name
-    ));
+    success(format!("Shared “{title}” with {}.", user.display_name));
     Ok(())
 }
 
@@ -606,12 +611,12 @@ pub async fn share_note(
 /// content under it so people it is shared with can read it.
 async fn ensure_note_key(vault: &str, note: &str) -> Result<(), String> {
     for attempt in 0..3 {
-        if state::is_shared_note(vault, note) {
+        if step(|c| state::is_shared_note(c, vault, note)) {
             return Ok(());
         }
         // The new key's first snapshot must cover every stored change of the
         // note, including our own: send them and wait for the server.
-        state::flush_now();
+        step(state::flush_now);
         for _ in 0..50 {
             if !step(|c| {
                 c.replicas
@@ -631,25 +636,26 @@ async fn ensure_note_key(vault: &str, note: &str) -> Result<(), String> {
                 .unwrap_or_default();
             let st = r.note(note).map(|n| n.encode_state()).unwrap_or_default();
             let waiting = c.outboxes.get(vault).is_some_and(|o| o.waits_for_key(note));
-            Some(match r.doc_keys.get(note) {
+            let made = match r.doc_keys.get(note) {
                 // Its own key already: a fresh one without a link to it, so
                 // recipients never read what was written before.
                 Some(doc) if !waiting => {
                     engine::start_sharing_keyed(&r.keyring, doc, note, &title, &st, r.seq)
                 }
                 _ => engine::start_sharing(&r.keyring, note, &title, &st, r.seq),
-            })
+            };
+            Some(made.map(|(ring, mut req)| {
+                if let Some(a) = &c.account {
+                    coolpsonotes_sync::members::sign_key_update(a, vault, note, &mut req);
+                }
+                (ring, req)
+            }))
         });
-        let (ring, mut req) = match made {
+        let (ring, req) = match made {
             Some(Ok(x)) => x,
             Some(Err(e)) => return Err(e.to_string()),
             None => return Err("vault not loaded".into()),
         };
-        step(|c| {
-            if let Some(a) = &c.account {
-                coolpsonotes_sync::members::sign_key_update(a, vault, note, &mut req);
-            }
-        });
         match api::put::<_, ()>(&format!("/vaults/{vault}/objects/{note}/key"), &req).await {
             Ok(()) => {
                 step(|c| {
@@ -660,8 +666,8 @@ async fn ensure_note_key(vault: &str, note: &str) -> Result<(), String> {
                     if let Some(o) = c.outboxes.get_mut(vault) {
                         o.key_registered(note);
                     }
+                    state::persist_new_keys(c, vault, &[]);
                 });
-                state::persist_new_keys(vault, &[]);
                 return Ok(());
             }
             // Someone else started sharing it, or new changes arrived: reload and retry.
@@ -678,13 +684,16 @@ async fn ensure_note_key(vault: &str, note: &str) -> Result<(), String> {
 /// Stop sharing a note with someone, and give the note a new key so they
 /// can't read what is written from now on.
 pub async fn unshare_note(vault: &str, note: &str, user_id: &str) -> Result<(), String> {
-    let log_entry = state::log_entry(
-        vault,
-        LogBody::Unshare {
-            object_id: note.to_string(),
-            user_id: user_id.to_string(),
-        },
-    );
+    let log_entry = step(|c| {
+        state::log_entry(
+            c,
+            vault,
+            LogBody::Unshare {
+                object_id: note.to_string(),
+                user_id: user_id.to_string(),
+            },
+        )
+    });
     api::delete_with(
         &format!("/vaults/{vault}/objects/{note}/shares/{user_id}"),
         &RemoveMemberRequest { log_entry },
@@ -701,10 +710,13 @@ pub async fn unshare_note(vault: &str, note: &str, user_id: &str) -> Result<(), 
 /// vault has a log.
 fn share_entry(vault: &str, note: &str, user: &PublicUser, role: Role) -> Option<LogEntry> {
     let key = user.account_key.as_ref()?.verify().ok()?;
-    state::log_entry(
-        vault,
-        coolpsonotes_sync::members::share(note, &user.id, role, &key),
-    )
+    step(|c| {
+        state::log_entry(
+            c,
+            vault,
+            coolpsonotes_sync::members::share(note, &user.id, role, &key),
+        )
+    })
 }
 
 pub async fn set_note_share_role(
@@ -753,20 +765,25 @@ pub async fn rotate_note_key(vault: &str, note: &str) -> Result<(), String> {
                 .get(note)
                 .map(|e| e.title().to_string())
                 .unwrap_or_default();
-            Some(engine::rotate_object_key(
-                &r.keyring, ring, note, &title, &users,
-            ))
+            let made = engine::rotate_object_key(&r.keyring, ring, note, &title, &users);
+            Some(made.map(|(next, mut req)| {
+                if let Some(a) = &c.account {
+                    coolpsonotes_sync::members::sign_grants(
+                        a,
+                        vault,
+                        note,
+                        &next,
+                        &mut req.envelopes,
+                    );
+                }
+                (next, req)
+            }))
         });
-        let (next, mut req) = match made {
+        let (next, req) = match made {
             Some(Ok(x)) => x,
             Some(Err(e)) => return Err(e.to_string()),
             None => return Ok(()),
         };
-        step(|c| {
-            if let Some(a) = &c.account {
-                coolpsonotes_sync::members::sign_grants(a, vault, note, &next, &mut req.envelopes);
-            }
-        });
         match api::put::<_, ()>(&format!("/vaults/{vault}/objects/{note}/key"), &req).await {
             Ok(()) => {
                 step(|c| {
@@ -826,12 +843,23 @@ pub async fn leave_shared_note(vault: &str, note: &str) {
 
 // ------------------------------------------------------------------ notes & folders
 
-fn unique_path(vault: &str, path: &str) -> String {
-    let taken: Vec<String> = state::live_entries(vault)
+fn unique_path(c: &Core, vault: &str, path: &str) -> String {
+    let taken: Vec<String> = c
+        .live_entries(vault)
         .into_iter()
         .map(|e| e.path.to_lowercase())
         .collect();
     paths::unique(path, |p| taken.contains(&p.to_lowercase()))
+}
+
+/// Change the vault's file tree with `f` and send the change; false if
+/// nothing changed.
+fn change_index(c: &mut Core, vault: &str, f: impl FnOnce(&IndexDoc) -> Option<Vec<u8>>) -> bool {
+    let Some(u) = c.replicas.get(vault).and_then(|r| f(&r.index)) else {
+        return false;
+    };
+    local_update(c, vault, INDEX_OBJECT_ID, u);
+    true
 }
 
 pub async fn create_note_with(
@@ -840,7 +868,7 @@ pub async fn create_note_with(
     title: &str,
     text: &str,
 ) -> Option<String> {
-    if !state::can_write(vault) {
+    if !state::step(|c| c.can_write(vault)) {
         error("You can only read this vault.");
         return None;
     }
@@ -860,28 +888,24 @@ pub async fn create_note_with(
         })
         .collect();
     let path = match paths::normalize_note(&paths::join(folder, &safe)) {
-        Ok(p) => unique_path(vault, &p),
+        Ok(p) => p,
         Err(e) => {
             error(e.to_string());
             return None;
         }
     };
     let id = state::new_id();
-    // Its own key, registered before any of its content is sent.
-    state::new_note_key(vault, &id, paths::title(&path));
-    let up = step(|c| {
-        c.replicas
-            .get(vault)
-            .and_then(|r| r.index.create(&id, &path, EntryKind::Note, now()))
+    step(|c| {
+        let path = unique_path(c, vault, &path);
+        // Its own key, registered before any of its content is sent.
+        state::new_note_key(c, vault, &id, paths::title(&path));
+        change_index(c, vault, |ix| ix.create(&id, &path, EntryKind::Note, now()));
+        c.ensure_note_loaded(vault, &id);
+        if !text.is_empty() {
+            // Large texts become several updates, each within the server's limit.
+            state::set_note_text(c, vault, &id, text);
+        }
     });
-    if let Some(u) = up {
-        local_update(vault, INDEX_OBJECT_ID, u);
-    }
-    state::ensure_note_loaded(vault, &id);
-    if !text.is_empty() {
-        // Large texts become several updates, each within the server's limit.
-        state::set_note_text(vault, &id, text);
-    }
     state::ui().tree_rev.update(|v| *v += 1);
     Some(id)
 }
@@ -901,15 +925,12 @@ pub fn create_folder(vault: &str, path: &str) {
         error("Invalid folder name");
         return;
     };
-    let p = unique_path(vault, &p);
     let id = state::new_id();
-    let up = step(|c| {
-        c.replicas
-            .get(vault)
-            .and_then(|r| r.index.create(&id, &p, EntryKind::Folder, now()))
+    let made = step(|c| {
+        let p = unique_path(c, vault, &p);
+        change_index(c, vault, |ix| ix.create(&id, &p, EntryKind::Folder, now()))
     });
-    if let Some(u) = up {
-        local_update(vault, INDEX_OBJECT_ID, u);
+    if made {
         state::ui().tree_rev.update(|v| *v += 1);
     }
 }
@@ -917,7 +938,7 @@ pub fn create_folder(vault: &str, path: &str) {
 /// Rename a note, attachment or explicit folder. Wiki links pointing to a
 /// renamed note are updated in every note of the vault.
 pub fn rename_entry(vault: &str, id: &str, new_name: &str) -> Result<(), String> {
-    let e = state::entry(vault, id).ok_or("not found")?;
+    let e = state::step(|c| c.entry(vault, id)).ok_or("not found")?;
     let new_name = new_name.trim();
     if new_name.is_empty() || new_name.contains('/') {
         return Err("Names can't be empty or contain '/'.".into());
@@ -932,33 +953,22 @@ pub fn rename_entry(vault: &str, id: &str, new_name: &str) -> Result<(), String>
     if new_path == e.path {
         return Ok(());
     }
-    if state::live_entries(vault)
+    if state::step(|c| c.live_entries(vault))
         .iter()
         .any(|x| x.id != id && x.path.eq_ignore_ascii_case(&new_path))
     {
         return Err("Something with that name already exists here.".into());
     }
     if e.kind == EntryKind::Folder {
-        let up = step(|c| {
-            c.replicas
-                .get(vault)
-                .and_then(|r| r.index.rename_folder(&e.path, &new_path, now()))
-        });
-        if let Some(u) = up {
-            local_update(vault, INDEX_OBJECT_ID, u);
-        }
+        step(|c| change_index(c, vault, |ix| ix.rename_folder(&e.path, &new_path, now())));
     } else {
         let old_title = e.title().to_string();
         let old_path = e.path.clone();
-        let up = step(|c| {
-            c.replicas
-                .get(vault)
-                .and_then(|r| r.index.rename(id, &new_path, now()))
+        let shared = step(|c| {
+            change_index(c, vault, |ix| ix.rename(id, &new_path, now()));
+            state::is_shared_note(c, vault, id)
         });
-        if let Some(u) = up {
-            local_update(vault, INDEX_OBJECT_ID, u);
-        }
-        if state::is_shared_note(vault, id) && paths::title(&new_path) != old_title {
+        if shared && paths::title(&new_path) != old_title {
             leptos::task::spawn_local(update_note_meta(vault.to_string(), id.to_string()));
         }
         if e.kind == EntryKind::Note && paths::title(&new_path) != old_title {
@@ -971,7 +981,7 @@ pub fn rename_entry(vault: &str, id: &str, new_name: &str) -> Result<(), String>
 
 fn update_links_after_rename(vault: &str, id: &str, old_path: &str, new_title: &str) {
     // Resolve against the old tree so links that used the old name still match.
-    let mut cands: Vec<(String, String)> = state::live_entries(vault)
+    let mut cands: Vec<(String, String)> = state::step(|c| c.live_entries(vault))
         .into_iter()
         .map(|e| (e.id, e.path))
         .collect();
@@ -992,7 +1002,7 @@ fn update_links_after_rename(vault: &str, id: &str, old_path: &str, new_title: &
             markdown::resolve(l, &path, &cands) == Some(id)
         });
         if let Some(new_text) = rewritten
-            && state::set_note_text(vault, &nid, &new_text) > 0
+            && step(|c| state::set_note_text(c, vault, &nid, &new_text)) > 0
         {
             changed += 1;
         }
@@ -1023,23 +1033,23 @@ fn refresh_open_editor(vault: &str) {
 }
 
 pub fn move_entry(vault: &str, id: &str, folder: &str) -> Result<(), String> {
-    let e = state::entry(vault, id).ok_or("not found")?;
+    let e = state::step(|c| c.entry(vault, id)).ok_or("not found")?;
     let name = paths::file_name(&e.path).to_string();
     let target = paths::join(folder, &name);
     if e.kind == EntryKind::Folder && (folder == e.path || paths::is_within(folder, &e.path)) {
         return Err("A folder can't be moved into itself.".into());
     }
-    let target = unique_path(vault, &target);
-    let up = step(|c| {
-        let r = c.replicas.get(vault)?;
-        if e.kind == EntryKind::Folder {
-            r.index.rename_folder(&e.path, &target, now())
-        } else {
-            r.index.rename(id, &target, now())
-        }
+    let moved = step(|c| {
+        let target = unique_path(c, vault, &target);
+        change_index(c, vault, |ix| {
+            if e.kind == EntryKind::Folder {
+                ix.rename_folder(&e.path, &target, now())
+            } else {
+                ix.rename(id, &target, now())
+            }
+        })
     });
-    if let Some(u) = up {
-        local_update(vault, INDEX_OBJECT_ID, u);
+    if moved {
         state::ui().tree_rev.update(|v| *v += 1);
     }
     Ok(())
@@ -1049,44 +1059,28 @@ pub fn move_entry(vault: &str, id: &str, folder: &str) -> Result<(), String> {
 pub fn rename_implicit_folder(vault: &str, old: &str, new_name: &str) -> Result<(), String> {
     let new_path =
         paths::normalize(&paths::join(paths::parent(old), new_name)).map_err(|e| e.to_string())?;
-    let up = step(|c| {
-        c.replicas
-            .get(vault)
-            .and_then(|r| r.index.rename_folder(old, &new_path, now()))
-    });
-    if let Some(u) = up {
-        local_update(vault, INDEX_OBJECT_ID, u);
+    if step(|c| change_index(c, vault, |ix| ix.rename_folder(old, &new_path, now()))) {
         state::ui().tree_rev.update(|v| *v += 1);
     }
     Ok(())
 }
 
 pub fn trash(vault: &str, id: &str) {
-    let up = step(|c| c.replicas.get(vault).and_then(|r| r.index.trash(id, now())));
-    if let Some(u) = up {
-        local_update(vault, INDEX_OBJECT_ID, u);
+    if step(|c| change_index(c, vault, |ix| ix.trash(id, now()))) {
         state::ui().tree_rev.update(|v| *v += 1);
         info("Moved to trash.");
     }
 }
 
 pub fn trash_folder(vault: &str, folder: &str) {
-    let up = step(|c| {
-        c.replicas
-            .get(vault)
-            .and_then(|r| r.index.trash_folder(folder, now()))
-    });
-    if let Some(u) = up {
-        local_update(vault, INDEX_OBJECT_ID, u);
+    if step(|c| change_index(c, vault, |ix| ix.trash_folder(folder, now()))) {
         state::ui().tree_rev.update(|v| *v += 1);
         info("Folder moved to trash.");
     }
 }
 
 pub fn restore(vault: &str, id: &str) {
-    let up = step(|c| c.replicas.get(vault).and_then(|r| r.index.restore(id)));
-    if let Some(u) = up {
-        local_update(vault, INDEX_OBJECT_ID, u);
+    if step(|c| change_index(c, vault, |ix| ix.restore(id))) {
         state::ui().tree_rev.update(|v| *v += 1);
         success("Restored.");
     }
@@ -1094,7 +1088,7 @@ pub fn restore(vault: &str, id: &str) {
 
 /// Permanently delete a trashed entry (server data and index entry).
 pub async fn purge(vault: &str, id: &str) {
-    let kind = state::entry(vault, id).map(|e| e.kind);
+    let kind = state::step(|c| c.entry(vault, id)).map(|e| e.kind);
     let r = match kind {
         Some(EntryKind::Attachment) => {
             api::delete(&format!("/vaults/{vault}/attachments/{id}")).await
@@ -1104,10 +1098,7 @@ pub async fn purge(vault: &str, id: &str) {
     };
     match r {
         Ok(()) | Err(api::Error { status: 404, .. }) => {
-            let up = step(|c| c.replicas.get(vault).and_then(|r| r.index.remove(id)));
-            if let Some(u) = up {
-                local_update(vault, INDEX_OBJECT_ID, u);
-            }
+            step(|c| change_index(c, vault, |ix| ix.remove(id)));
             state::ui().tree_rev.update(|v| *v += 1);
         }
         Err(e) => error(e.message),
@@ -1140,8 +1131,8 @@ pub fn toggle_favorite(vault: &str, note: &str) {
         } else {
             c.prefs.favorites.push(key);
         }
+        state::save_prefs(c);
     });
-    state::save_prefs();
 }
 
 pub fn is_favorite(vault: &str, note: &str) -> bool {
@@ -1218,7 +1209,7 @@ pub fn open_wiki(vault: &str, target: &str, from_path: &str) {
         return;
     }
     if let Some(id) = knowledge::resolve_target(vault, name, from_path) {
-        match state::entry(vault, &id).map(|e| e.kind) {
+        match state::step(|c| c.entry(vault, &id)).map(|e| e.kind) {
             Some(EntryKind::Attachment) => {
                 let (v, i) = (vault.to_string(), id.clone());
                 leptos::task::spawn_local(async move { open_attachment(&v, &i).await });
@@ -1273,13 +1264,20 @@ pub async fn attachment_bytes(vault: &str, id: &str) -> Option<Vec<u8>> {
 /// Load, decrypt and cache an attachment as a blob URL.
 pub async fn load_attachment(vault: &str, id: &str) -> Option<String> {
     let key = format!("{vault}:{id}");
-    if let Some(u) = step(|c| c.attachment_urls.get(&key).cloned()) {
-        return Some(u);
-    }
-    if !step(|c| c.attachment_loading.insert(key.clone())) {
-        return None;
-    }
-    let name = state::entry(vault, id).map(|e| e.path).unwrap_or_default();
+    let start = step(|c| {
+        if let Some(u) = c.attachment_urls.get(&key) {
+            return Err(Some(u.clone()));
+        }
+        // Being loaded already.
+        if !c.attachment_loading.insert(key.clone()) {
+            return Err(None);
+        }
+        Ok(c.entry(vault, id).map(|e| e.path).unwrap_or_default())
+    });
+    let name = match start {
+        Ok(name) => name,
+        Err(done) => return done,
+    };
     let bytes = attachment_bytes(vault, id).await;
     let url = bytes.and_then(|b| util::blob_url(&b, util::mime_for(&name)));
     step(|c| {
@@ -1294,7 +1292,9 @@ pub async fn load_attachment(vault: &str, id: &str) -> Option<String> {
 /// Show an attachment in a new tab if the browser can display it safely
 /// (raster images, PDFs); download anything else.
 pub async fn open_attachment(vault: &str, id: &str) {
-    let name = state::entry(vault, id).map(|e| e.path).unwrap_or_default();
+    let name = state::step(|c| c.entry(vault, id))
+        .map(|e| e.path)
+        .unwrap_or_default();
     if !util::opens_inline(&name) {
         download_attachment(vault, id).await;
         return;
@@ -1309,7 +1309,7 @@ pub async fn open_attachment(vault: &str, id: &str) {
 }
 
 pub async fn download_attachment(vault: &str, id: &str) {
-    let name = state::entry(vault, id)
+    let name = state::step(|c| c.entry(vault, id))
         .map(|e| paths::file_name(&e.path).to_string())
         .unwrap_or_else(|| "file".into());
     // Never hand the browser a type it might render as a document of this origin.
@@ -1365,23 +1365,16 @@ pub async fn upload_bytes(vault: &str, path: &str, bytes: &[u8]) -> Option<Strin
         error(format!("Upload failed: {e}"));
         return None;
     }
-    let path = unique_path(vault, &paths::normalize(path).ok()?);
-    let mime = util::mime_for(&path);
-    let up = step(|c| {
-        c.replicas.get(vault).and_then(|r| {
-            r.index.create_with(
-                &id,
-                &path,
-                EntryKind::Attachment,
-                now(),
-                Some(bytes.len() as u64),
-                Some(mime),
-            )
-        })
+    let path = paths::normalize(path).ok()?;
+    let path = step(|c| {
+        let path = unique_path(c, vault, &path);
+        let mime = util::mime_for(&path);
+        let size = Some(bytes.len() as u64);
+        change_index(c, vault, |ix| {
+            ix.create_with(&id, &path, EntryKind::Attachment, now(), size, Some(mime))
+        });
+        path
     });
-    if let Some(u) = up {
-        local_update(vault, INDEX_OBJECT_ID, u);
-    }
     state::ui().tree_rev.update(|v| *v += 1);
     Some(path)
 }
@@ -1389,10 +1382,10 @@ pub async fn upload_bytes(vault: &str, path: &str, bytes: &[u8]) -> Option<Strin
 // ------------------------------------------------------------------ export / import
 
 pub async fn export_vault(vault: &str) {
-    let name = state::vault_name(vault);
+    let name = state::step(|c| c.vault_name(vault));
     info("Preparing export…");
     let mut entries = Vec::new();
-    for e in state::live_entries(vault) {
+    for e in state::step(|c| c.live_entries(vault)) {
         match e.kind {
             EntryKind::Note => {
                 let text =
@@ -1457,9 +1450,11 @@ pub async fn import(vault: &str, mut files: Vec<(String, Vec<u8>)>) {
     let max = state::max_update_bytes();
     for (i, (path, data)) in files.into_iter().enumerate() {
         // Send in pushes of bounded size as we go, and let the page breathe.
-        if state::outbox_bytes(vault) >= max {
-            state::flush_now();
-        }
+        step(|c| {
+            if state::outbox_bytes(c, vault) >= max {
+                state::flush_now(c);
+            }
+        });
         if i % 20 == 19 {
             util::sleep(0).await;
         }
@@ -1477,7 +1472,7 @@ pub async fn import(vault: &str, mut files: Vec<(String, Vec<u8>)>) {
             atts += 1;
         }
     }
-    state::flush_now();
+    step(state::flush_now);
     success(format!(
         "Imported {notes} notes and {atts} files (of {total})."
     ));
@@ -1509,7 +1504,7 @@ pub async fn files_to_import(files: Vec<web_sys::File>) -> Vec<(String, Vec<u8>)
 // ------------------------------------------------------------------ history
 
 pub fn restore_revision(vault: &str, note: &str, text: &str) {
-    if state::set_note_text(vault, note, text) > 0 {
+    if step(|c| state::set_note_text(c, vault, note, text)) > 0 {
         refresh_open_editor(vault);
         success("Restored this version. The previous text remains in history.");
     }
@@ -1535,7 +1530,7 @@ impl NoteHost {
     }
 
     fn with_mode(vault: &str, note: &str, shared: bool) -> Rc<NoteHost> {
-        state::ensure_note_loaded(vault, note);
+        state::step(|c| c.ensure_note_loaded(vault, note));
         step(|c| {
             if let Some(n) = c
                 .replicas
@@ -1554,19 +1549,19 @@ impl NoteHost {
     }
 
     fn path(&self) -> String {
-        state::entry(&self.vault, &self.note)
+        state::step(|c| c.entry(&self.vault, &self.note))
             .map(|e| e.path)
             .unwrap_or_default()
     }
 
     fn take(&self, f: impl FnOnce(&mut NoteDoc) -> Option<Vec<u8>>) -> Option<String> {
-        let (u, t) = step(|c| {
+        step(|c| {
             let n = c.replicas.get_mut(&self.vault)?.notes.get_mut(&self.note)?;
             let u = f(n)?;
-            Some((u, n.text()))
-        })?;
-        local_update(&self.vault, &self.note, u);
-        Some(t)
+            let t = n.text();
+            local_update(c, &self.vault, &self.note, u);
+            Some(t)
+        })
     }
 }
 
@@ -1621,10 +1616,12 @@ impl Host for NoteHost {
             });
         }
         if let Some(u) = update {
-            local_update(&self.vault, &self.note, u);
-            state::touch(&self.vault, &self.note, len);
+            let d = step(|c| {
+                local_update(c, &self.vault, &self.note, u);
+                state::touch(c, &self.vault, &self.note, len);
+                c.content_debounce.clone()
+            });
             let ui = state::ui();
-            let d = step(|c| c.content_debounce.clone());
             d.run(400, move || ui.content_rev.update(|v| *v += 1));
         }
         in_sync
@@ -1708,7 +1705,7 @@ impl Host for NoteHost {
 
     fn selection_changed(&self, anchor: usize, head: usize) {
         step(|c| c.cursor = Some((anchor, head)));
-        state::send_presence();
+        step(|c| state::send_presence(c));
     }
 
     fn insert_files(&self, files: Vec<web_sys::File>, at: usize) {

@@ -154,7 +154,7 @@ fn QuickSwitch() -> impl IntoView {
         let r = results.get_untracked();
         if let Some((v, id, _, _)) = r.get(i) {
             ui.modal.set(None);
-            state::navigate(if state::is_member(v) {
+            state::navigate(if step(|c| state::is_member(c, v)) {
                 Route::Note(v.clone(), id.clone())
             } else {
                 Route::Shared(v.clone(), id.clone())
@@ -162,7 +162,7 @@ fn QuickSwitch() -> impl IntoView {
         } else if let Some(v) = current_vault.clone() {
             // No match: create a note with that title.
             let title = q.get_untracked();
-            if !title.trim().is_empty() && state::can_write(&v) {
+            if !title.trim().is_empty() && state::step(|c| c.can_write(&v)) {
                 ui.modal.set(None);
                 leptos::task::spawn_local(async move {
                     if let Some(id) = actions::create_note_with(&v, "", &title, "").await {
@@ -353,11 +353,10 @@ fn Share(vault: String) -> impl IntoView {
     reload();
     let timer = StoredValue::new(None::<i32>);
     let do_search = move |text: String| search_people(text, q, found, timer);
-    let vname = state::vault_name(&vault);
+    let (vname, me) = step(|c| (c.vault_name(&vault), c.user_id.clone()));
     let (vs, vr, vm) = (vault.clone(), vault.clone(), vault.clone());
     let reload2 = reload.clone();
     let reload3 = reload.clone();
-    let me = step(|c| c.user_id.clone());
     view! {
         <Dialog title=format!("Share “{vname}”") wide=true>
             {move || err.get().map(|e| view! { <div class="alert error">{e}</div> })}
@@ -413,7 +412,7 @@ fn Share(vault: String) -> impl IntoView {
                     let reload = reload3.clone();
                     let reload_b = reload3.clone();
                     let fp = actions::fingerprint(&m.user);
-                    let vouched = state::vouched(&vr, &m);
+                    let vouched = step(|c| state::vouched(c, &vr, &m));
                     view! {
                         <div class="person">
                             {avatar(&m.user.display_name, &m.user.id)}
@@ -515,8 +514,8 @@ fn ShareNote(vault: String, note: String) -> impl IntoView {
             }
         });
     });
-    let title = state::note_title(&vault, &note).unwrap_or_else(|| "this note".into());
-    let vname = state::vault_name(&vault);
+    let (title, vname) = step(|c| (c.note_title(&vault, &note), c.vault_name(&vault)));
+    let title = title.unwrap_or_else(|| "this note".into());
     let (vs, ns) = (vault.clone(), note.clone());
     let (vr, nr) = (vault.clone(), note.clone());
     let vw = vault.clone();
@@ -630,9 +629,18 @@ fn ShareNote(vault: String, note: String) -> impl IntoView {
 #[component]
 fn VaultSettings(vault: String) -> impl IntoView {
     let ui = ui();
-    let name = RwSignal::new(state::vault_name(&vault));
-    let owner = state::is_owner(&vault);
-    let archived = step(|c| c.vault_infos.get(&vault).map(|i| i.archived)).unwrap_or(false);
+    let (name, owner, archived, epoch) = step(|c| {
+        (
+            c.vault_name(&vault),
+            c.is_owner(&vault),
+            c.vault_infos.get(&vault).is_some_and(|i| i.archived),
+            c.replicas
+                .get(&vault)
+                .and_then(|r| r.keyring.current_epoch())
+                .unwrap_or(0),
+        )
+    });
+    let name = RwSignal::new(name);
     let audit = RwSignal::new(Vec::<AuditEntry>::new());
     let show_audit = RwSignal::new(false);
     let (v1, v2, v3, v4, v5, v6, v7, v8) = (
@@ -645,12 +653,6 @@ fn VaultSettings(vault: String) -> impl IntoView {
         vault.clone(),
         vault.clone(),
     );
-    let epoch = step(|c| {
-        c.replicas
-            .get(&vault)
-            .and_then(|r| r.keyring.current_epoch())
-    })
-    .unwrap_or(0);
     view! {
         <Dialog title="Vault settings" wide=true>
             <Show when=move || owner fallback=|| view! { <p class="muted">"Only the owner can change this vault's settings."</p> }>
@@ -671,7 +673,7 @@ fn VaultSettings(vault: String) -> impl IntoView {
             <div class="settings-grid">
                 <button class="btn" on:click=move |_| { let v = v2.clone(); leptos::task::spawn_local(async move { actions::export_vault(&v).await }); }>
                     <Icon name="download"/>" Export as Markdown (.zip)"</button>
-                <Show when=move || state::can_write(&v3)>
+                <Show when=move || state::step(|c| c.can_write(&v3))>
                     {
                         let v = v4.clone();
                         view! { <button class="btn" on:click=move |_| ui.modal.set(Some(Modal::Import(v.clone())))><Icon name="upload"/>" Import notes"</button> }
@@ -712,7 +714,7 @@ fn VaultSettings(vault: String) -> impl IntoView {
             <div class="danger-zone">
                 {if owner {
                     let v = v8.clone();
-                    let vname = state::vault_name(&v8);
+                    let vname = state::step(|c| c.vault_name(&v8));
                     view! {
                         <button class="btn danger" on:click=move |_| {
                             let typed = util::window().prompt_with_message(&format!("This permanently deletes “{vname}” for everyone. Type the vault name to confirm:")).ok().flatten();
@@ -750,7 +752,7 @@ fn History(vault: String, note: String) -> impl IntoView {
     let preview = RwSignal::new(None::<(String, String)>);
     let (v, n) = (vault.clone(), note.clone());
     leptos::task::spawn_local(async move {
-        state::flush_now();
+        step(state::flush_now);
         if let Ok(l) =
             api::get::<Vec<SnapshotInfo>>(&format!("/vaults/{v}/objects/{n}/snapshots")).await
         {
@@ -775,15 +777,13 @@ fn History(vault: String, note: String) -> impl IntoView {
         });
     };
     let (vr, nr) = (vault.clone(), note.clone());
-    let writable = state::can_write_note(&vault, &note);
+    let writable = step(|c| state::can_write_note(c, &vault, &note));
     let vv = vault.clone();
     let names = move |uid: &str| {
-        step(|c| c.users.get(uid).map(|u| u.display_name.clone())).unwrap_or_else(|| {
-            if uid == step(|c| c.user_id.clone()) {
-                "you".into()
-            } else {
-                "someone".into()
-            }
+        step(|c| match c.users.get(uid) {
+            Some(u) => u.display_name.clone(),
+            None if uid == c.user_id => "you".into(),
+            None => "someone".into(),
         })
     };
     view! {
@@ -858,8 +858,7 @@ fn ApproveDevice(device: DeviceInfo) -> impl IntoView {
                     busy.set(true);
                     let d = d1.clone();
                     leptos::task::spawn_local(async move {
-                        let uid = step(|c| c.user_id.clone());
-                        let req = step(|c| c.account.as_ref().map(|a| coolpsonotes_core::engine::approve_device(a, &uid, &d.id, &d.enc_public)));
+                        let req = step(|c| c.account.as_ref().map(|a| coolpsonotes_core::engine::approve_device(a, &c.user_id, &d.id, &d.enc_public)));
                         match req {
                             Some(Ok(r)) => match api::post::<_, ()>(&format!("/devices/{}/activate", d.id), &r).await {
                                 Ok(()) => { state::success("Device approved."); ui.modal.set(None); }
@@ -936,7 +935,7 @@ fn Help() -> impl IntoView {
 fn RenameDialog(vault: String, id: String) -> impl IntoView {
     let ui = ui();
     let name = RwSignal::new(
-        state::entry(&vault, &id)
+        state::step(|c| c.entry(&vault, &id))
             .map(|e| e.title().to_string())
             .unwrap_or_default(),
     );
@@ -981,10 +980,17 @@ fn NewFolder(vault: String, parent: String) -> impl IntoView {
 #[component]
 fn MoveDialog(vault: String, id: String) -> impl IntoView {
     let ui = ui();
-    let folders = step(|c| c.replicas.get(&vault).map(|r| r.index.folders())).unwrap_or_default();
-    let current = state::entry(&vault, &id)
-        .map(|e| coolpsonotes_core::paths::parent(&e.path).to_string())
-        .unwrap_or_default();
+    let (folders, current) = step(|c| {
+        (
+            c.replicas
+                .get(&vault)
+                .map(|r| r.index.folders())
+                .unwrap_or_default(),
+            c.entry(&vault, &id)
+                .map(|e| coolpsonotes_core::paths::parent(&e.path).to_string())
+                .unwrap_or_default(),
+        )
+    });
     let mut all = vec![String::new()];
     all.extend(folders);
     view! {

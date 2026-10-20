@@ -1206,18 +1206,25 @@ impl VaultReplica {
 
     /// Apply one catch-up page. Decryption failures of individual items are
     /// collected rather than aborting, so one bad ciphertext cannot hide the rest.
+    /// Items that only wait for a key or a fresh membership log aren't errors:
+    /// they are kept and replayed ([`Deferred`], [`VaultReplica::needs_keys`]).
     pub fn apply_changes(&mut self, ch: &ChangesResponse) -> (Applied, Vec<EngineError>) {
         let mut all = Applied::default();
         let mut errors = Vec::new();
+        let waiting = |r: &Self| r.deferred.len() + r.unverified.len();
         for s in &ch.snapshots {
+            let before = waiting(self);
             match self.apply_snapshot(s) {
                 Ok(a) => all.merge(a),
+                Err(_) if waiting(self) > before => {}
                 Err(e) => errors.push(e),
             }
         }
         for u in &ch.updates {
+            let before = waiting(self);
             match self.apply_update(u) {
                 Ok(a) => all.merge(a),
+                Err(_) if waiting(self) > before => {}
                 Err(e) => errors.push(e),
             }
         }
@@ -1951,11 +1958,32 @@ mod tests {
         assert!(missing_key(&e));
         assert!(b.needs_keys());
         assert_eq!(b.seq, 2);
+        // In a catch-up page, content kept for later isn't reported as unreadable.
+        let up = a.notes.get("n").unwrap().set_text("one two three").unwrap();
+        let p2 = a.local_change("n", up).unwrap();
+        let page = ChangesResponse {
+            updates: vec![Update {
+                object_id: "n".into(),
+                seq: 3,
+                author_id: "a".into(),
+                payload: p2.payload,
+                created_at: 0,
+                signature: None,
+            }],
+            snapshots: vec![],
+            purged: vec![],
+            head_seq: 3,
+            has_more: false,
+            next_since: 3,
+        };
+        let (_, errs) = b.apply_changes(&page);
+        assert!(errs.is_empty(), "{errs:?}");
+        assert_eq!(b.deferred.len(), 2);
         b.doc_keys.insert("n".into(), doc);
         let (applied, errs) = b.retry_deferred();
         assert!(errs.is_empty());
         assert!(applied.objects.contains("n"));
-        assert_eq!(b.note_text("n"), "one two");
+        assert_eq!(b.note_text("n"), "one two three");
         assert!(!b.needs_keys());
     }
 

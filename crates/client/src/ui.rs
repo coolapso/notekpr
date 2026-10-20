@@ -8,11 +8,19 @@ use std::sync::{Arc, Mutex};
 use anyhow::{Result, bail};
 
 static QUIET: AtomicBool = AtomicBool::new(false);
+static SILENT: AtomicBool = AtomicBool::new(false);
 static NO_PROMPTS: AtomicBool = AtomicBool::new(false);
 
 /// Suppress informational status lines (warnings are still shown).
 pub fn set_quiet(q: bool) {
     QUIET.store(q, Ordering::Relaxed);
+}
+
+/// Print no status lines and no warnings at all: for programs that use
+/// this library for many clients at once (the load test) and show what
+/// happens their own way.
+pub fn set_silent(on: bool) {
+    SILENT.store(on, Ordering::Relaxed);
 }
 
 /// Never prompt, as if stdin were not a terminal (tests).
@@ -92,7 +100,7 @@ pub fn status(msg: &str) {
             c.stderr.push('\n');
         }
     });
-    if kept.is_none() && !QUIET.load(Ordering::Relaxed) {
+    if kept.is_none() && !QUIET.load(Ordering::Relaxed) && !SILENT.load(Ordering::Relaxed) {
         eprintln!("{msg}");
     }
 }
@@ -101,7 +109,7 @@ pub fn warn(msg: &str) {
     let kept = captured(|c| {
         c.stderr.push_str(&format!("warning: {msg}\n"));
     });
-    if kept.is_none() {
+    if kept.is_none() && !SILENT.load(Ordering::Relaxed) {
         eprintln!("warning: {msg}");
     }
 }

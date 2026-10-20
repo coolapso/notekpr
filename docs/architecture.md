@@ -287,19 +287,18 @@ has unsent edits to it, that person's client saves their version as a new
   writes under outdated keys (`stale_key`) so clients re-encrypt. Content that
   arrives before its key is kept and replayed once the key is loaded. See
   protocol.md §5.1.
-* **Sharing folders**: builds on the same mechanism — a shared folder would get
-  its own key and a small index object listing only its entries, with its
-  notes' keys wrapped under the folder key.
+* **Sharing folders**: not planned (decided 2026-10-20) — sharing a vault
+  covers it. It would have needed a folder key and a second, folder-only index.
 * **Sharing between instances** (much later): independent instances sharing
-  vaults, folders or notes with each other's users. To keep it possible, ids
-  stay random and globally unique, people are identified by their account
-  keys (instance-qualified user ids later), one instance owns each vault's
-  ordered log, and membership is to become verifiable without trusting a
-  server (signed membership log). Details and guardrails in
-  [TODO.md](../TODO.md#other).
-* **Signed updates**: updates could carry an Ed25519 signature by the author's
-  account key, letting clients verify authorship even against a colluding
-  server (see security.md, residual risks).
+  vaults or notes with each other's users. To keep it possible, ids stay
+  random and globally unique, people are identified by their account keys
+  (instance-qualified user ids later), one instance owns each vault's ordered
+  log, and membership is verifiable without trusting a server (the signed
+  membership log). Details and guardrails in
+  [TODO.md](../TODO.md#ideas-for-later).
+* **Signed updates** (implemented): every update and snapshot carries its
+  author's signature, so clients verify authorship even against a colluding
+  server (security.md, residual risks).
 * **Post-quantum key wrapping**: switch the HPKE KEM to X-Wing via the version
   byte; vault content encryption is already 256-bit symmetric.
 
@@ -314,6 +313,6 @@ has unsent edits to it, that person's client saves their version as a new
 | M5 Agents | agent identities, CLI and Markdown-folder access, gateway | done (`crates/client`); local MCP server removed, remote MCP connector considered for later |
 | M6 Packaging | Docker image, compose, Kubernetes, backup/restore docs | done |
 | M7 Note sharing | share single notes outside a vault: document keys, per-note subscriptions, web + CLI | done (S `individual_note_sharing`, D `single_note_sharing_end_to_end`, E `test_note_sharing`) |
-| Next | native desktop GUI shell (Tauri around the web UI), mobile apps, folder sharing, signed updates, offline start of the web app | planned |
+| Next | native desktop GUI shell (Tauri around the web UI), mobile apps — see [TODO.md](../TODO.md) | planned |
 
 Acceptance criteria and how each is verified: [acceptance.md](acceptance.md).

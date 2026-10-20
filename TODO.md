@@ -48,6 +48,8 @@ Phases 1–3 are done, and Phase 4 except the OS keyring for CLI secrets
   Obsidian vault.
 - The **shared sync engine** ([R1](#r1-one-sync-engine-for-all-clients--separate-session))
   gets its own session.
+- **No folder sharing** (2026-10-20): sharing a vault covers it; single notes
+  stay shareable on their own.
 
 ## Done
 
@@ -756,7 +758,9 @@ with a history.
 
 ### Other
 
-- [ ] Folder sharing (builds on R2).
+- [ ] ~~Folder sharing (builds on R2).~~ Decided against (2026-10-20): too
+      much complexity for little gain — to share a folder's worth of notes,
+      share a vault (or single notes).
 - [ ] Mobile apps; native desktop GUI.
 - [ ] **Sharing between instances** (very later): independent self-hosted
       instances share vaults, folders or notes with each other's users.

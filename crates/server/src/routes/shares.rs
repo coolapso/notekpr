@@ -222,9 +222,11 @@ pub(crate) async fn apply_key_change(
             ));
         }
     }
-    // Envelopes must cover exactly the current recipients that have keys.
-    let got: HashSet<String> = req.envelopes.iter().map(|e| e.user_id.clone()).collect();
-    if kind == KeyChange::Rotation && (got != recipients || got.len() != req.envelopes.len()) {
+    // Envelopes must cover exactly the current recipients that have keys,
+    // apart from those left out on purpose (their key changed).
+    if kind == KeyChange::Rotation
+        && !super::covers_exactly(&recipients, &req.envelopes, &req.without)
+    {
         return Err(conflict(
             "envelopes must cover exactly the people the note is shared with",
         ));
@@ -503,7 +505,12 @@ pub async fn add(
     }
     let now = db::now();
     if !repo::shares::insert(&mut *tx, &v, &o, &req.user_id, req.role, &who.user_id, now).await? {
-        return Err(conflict("the note is already shared with this person"));
+        // Shared already: only someone left without the current key (their
+        // key changed, and the owner has verified it since) gets it now.
+        if repo::keys::has_document_key(&mut *tx, &v, &o, cur, &req.user_id).await? {
+            return Err(conflict("the note is already shared with this person"));
+        }
+        repo::shares::set_role(&mut *tx, &v, &o, &req.user_id, req.role).await?;
     }
     repo::keys::put_document_key(
         &mut *tx,

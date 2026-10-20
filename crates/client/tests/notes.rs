@@ -134,23 +134,72 @@ async fn a_note_key_is_never_renewed_for_a_changed_account_key() {
         .await
         .unwrap();
     let v = ah.resolve("Private").await.unwrap();
+    let vid = v.lock().await.id().to_string();
     for who in ["bob", "carol"] {
         note_shares::share_note(&alice, &v, "Trip", who, Role::Editor, false)
             .await
             .unwrap();
     }
     // Carol's key now differs from the pinned one (as a server substituting
-    // it would make it look): renewing the key must not wrap it for her.
+    // it would make it look): renewing the key leaves her out of it.
+    let pins = ProfileStore::new(&srv.dirs("alice"), "alice").unwrap();
+    pins.update(|p| p.pins.insert(carol.user_id.clone(), "0000".into()))
+        .unwrap();
+    note_shares::unshare_note(&alice, &v, "Trip", "bob")
+        .await
+        .unwrap();
+    let note_id = v.lock().await.find_note("Trip").unwrap().1.id;
+    let carol_has_key = || async {
+        note_shares::note_shares(&alice, &vid, &note_id)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|s| s.user.id == carol.user_id)
+            .unwrap()
+            .has_current_key
+    };
+    assert!(!carol_has_key().await, "left out of the new key");
+    // Once verified, sharing again gives it back.
+    note_shares::share_note(&alice, &v, "Trip", "carol", Role::Editor, true)
+        .await
+        .unwrap();
+    assert!(carol_has_key().await);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_vault_key_rotation_leaves_out_a_member_whose_key_changed() {
+    use coolpsonotes_client::profile::ProfileStore;
+    let srv = start().await;
+    let alice = login(&srv, "alice").await;
+    let _bob = login(&srv, "bob").await;
+    let carol = login(&srv, "carol").await;
+    manage::create_vault(&alice, "Home").await.unwrap();
+    let v = hub(&alice).await.resolve("Home").await.unwrap();
+    let vid = v.lock().await.id().to_string();
+    for who in ["bob", "carol"] {
+        manage::share(&alice, &v, who, Role::Editor, false)
+            .await
+            .unwrap();
+    }
     ProfileStore::new(&srv.dirs("alice"), "alice")
         .unwrap()
         .update(|p| p.pins.insert(carol.user_id.clone(), "0000".into()))
         .unwrap();
-    let err = note_shares::unshare_note(&alice, &v, "Trip", "bob")
+    // The key is renewed for everyone else, instead of not at all.
+    alice.rotate_keys(&v).await.unwrap();
+    let has_key = |members: &[coolpsonotes_core::protocol::MemberInfo], id: &str| {
+        members
+            .iter()
+            .find(|m| m.user.id == id)
+            .unwrap()
+            .has_current_key
+    };
+    let members = alice.api.members(&vid).await.unwrap();
+    assert!(has_key(&members, &alice.user_id) && !has_key(&members, &carol.user_id));
+    // Once verified, sharing again gives it back.
+    manage::share(&alice, &v, "carol", Role::Editor, true)
         .await
-        .unwrap_err();
-    let msg = format!("{err:#}");
-    assert!(
-        msg.contains("changed since it was pinned") && msg.contains("rotate-note-key"),
-        "{msg}"
-    );
+        .unwrap();
+    let members = alice.api.members(&vid).await.unwrap();
+    assert!(has_key(&members, &carol.user_id));
 }

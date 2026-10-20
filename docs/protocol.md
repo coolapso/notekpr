@@ -140,7 +140,7 @@ device's public key, but the code would differ.
 | `GET /vaults/{v}/log?since=` | member: the membership log, `MemberLogResponse {entries}` (§5.2) |
 | `POST /vaults/{v}/log {entry}` | owner: a `checkpoint` (vaults without a log), a `rekey`, a `share` of a note already shared, `require_signed`, or a `remove` of someone who already left (§5.2) |
 | `POST /vaults/{v}/keys/grant {envelopes}` | owner fills missing envelopes for the current epoch |
-| `POST /vaults/{v}/keys/rotate {new_epoch, chain_link, encrypted_meta, envelopes, objects, log_entry?}` | owner; `new_epoch = current + 1`; envelopes must cover exactly the members that have account keys; `objects` (`ObjectKeyChange {object_id, update}`) moves **every** note with a document key to its next epoch in the same transaction (each a rotation as in §5.1, wrapped under the new vault key), else `409` |
+| `POST /vaults/{v}/keys/rotate {new_epoch, chain_link, encrypted_meta, envelopes, objects, log_entry?, without?}` | owner; `new_epoch = current + 1`; envelopes must cover exactly the members that have account keys, except those listed in `without` — left out on purpose because their account key changed and the owner hasn't verified it (they stay members without the current key and get it later through `keys/grant`); `objects` (`ObjectKeyChange {object_id, update}`) moves **every** note with a document key to its next epoch in the same transaction (each a rotation as in §5.1, wrapped under the new vault key), else `409` |
 | `GET /vaults/{v}/audit` | owner: membership, key and deletion events (no content) |
 | `GET /users/search?q=` | humans matching a display-name prefix or exact e-mail, plus the caller's own agents |
 | `GET /users/{id}` | public profile + account key of a user the caller may interact with |
@@ -171,7 +171,7 @@ member list, vault key, or the note's history from before it was shared.
 | `PUT /vaults/{v}/objects/{o}/keys/signatures {grants: [{user_id, epoch, signature}]}` | owner: grant signatures for keys given before grants were signed |
 | `PUT /vaults/{v}/objects/{o}/meta {encrypted_meta}` | writer: the title recipients see, under the current document key |
 | `GET /vaults/{v}/objects/{o}/shares` | member: `ObjectShareInfo {user, role, added_at, added_by, has_current_key, key_signed}` |
-| `POST /vaults/{v}/objects/{o}/shares {user_id, role, envelope, log_entry?}` | owner; `role` is `editor` or `viewer`; the envelope wraps the current document key to the person. Vault members are refused (`409`), and so is a note whose sharing has not started (`409`: give it a fresh key first). |
+| `POST /vaults/{v}/objects/{o}/shares {user_id, role, envelope, log_entry?}` | owner; `role` is `editor` or `viewer`; the envelope wraps the current document key to the person. Vault members are refused (`409`), and so is a note whose sharing has not started (`409`: give it a fresh key first). Someone it is shared with already is refused too (`409`), unless they lack the current key (left out of a rotation, `without`): then they get it, with this role. |
 | `PATCH /vaults/{v}/objects/{o}/shares/{u} {role}`, `DELETE …/shares/{u}` | owner; recipients may remove themselves. Clients rotate the document key after removing someone. |
 | `GET /shares` | notes shared with the caller: `SharedNote {vault_id, object_id, role, owner, shared_by, key_epoch, encrypted_meta, added_at}` |
 | `GET /vaults/{v}/objects/{o}/changes?since=` | that note's part of the log (same shape as `/changes`) |
@@ -182,7 +182,7 @@ The kinds of `PUT …/key`:
 |---|---|---|
 | **Private first key** | `private: true`, `epoch = 0x8000_0001`, no chain link, no envelopes; a covering `snapshot` only if the note has content already (lazy move of an older note) | any writer, agents included |
 | **Sharing starts** | `private: false` and either the first key (`0x8000_0001`) or `current + 1` **without** a chain link; a covering `snapshot` is required; no envelopes (people are added afterwards); refused (`409`) while the note has recipients | owner |
-| **Rotation** | `epoch = current + 1` with a `chain_link`, and `envelopes` for exactly the current recipients (else `409`) | owner |
+| **Rotation** | `epoch = current + 1` with a `chain_link`, and `envelopes` for exactly the current recipients (else `409`), apart from those listed in `without` (their key changed; sharing the note with them again gives them the key) | owner |
 
 **Grant signatures.** Every note key the owner gives someone it is shared
 with (`envelopes` of a share, a rotation or a vault rotation) carries

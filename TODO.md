@@ -381,9 +381,14 @@ Nobody's notes may be locked in because a server or an app is unavailable.
 - [x] Revocation can be left half-done [C-M12] — the error says how to
       finish (`vault rotate`, new `rotate-note-key`); purged shared notes no
       longer abort a vault rotation.
-- [ ] Rotate without (rather than abort on) members whose pin changed: the
-      server requires envelopes for exactly the current members, so this
-      needs a protocol change (R3).
+- [x] Rotate without (rather than abort on) members whose pin changed:
+      rotations (vault and note keys) list such people in `without`, so the
+      server knows it's deliberate; they keep their access but not the new
+      key, and get it once the owner verified their new key (web: "I verified
+      it" in the sharing dialogs, which re-pins them in the log with `Rekey`;
+      CLI: `vault share`/`share-note --accept-new-key`). The web flow has no
+      browser test (a changed account key can't be staged there yet); server
+      and CLI tests cover the rules.
 - [x] `vault share`/`share-note` accept a single prefix match ("bob" →
       "bobby") [C-M9] — exact id, e-mail or name only; near matches are
       suggested, never taken.

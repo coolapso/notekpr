@@ -53,11 +53,8 @@ async fn a_member_the_owner_never_added_gets_no_keys() {
             .filter(|m| m.member.user.id != eve.user_id)
             .all(|m| m.vouched)
     );
-    let err = alice.rotate_keys(&v).await.unwrap_err();
-    assert!(
-        format!("{err:#}").contains("with a key you never added"),
-        "{err:#}"
-    );
+    // A new key goes to everyone else, never to her.
+    alice.rotate_keys(&v).await.unwrap();
     assert!(eve.api.vault_keys(&vid).await.unwrap().envelopes.is_empty());
 }
 

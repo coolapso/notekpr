@@ -253,6 +253,7 @@ async fn viewers_are_read_only_and_revocation_rotates_keys() {
                 envelopes: vec![],
                 objects: vec![],
                 log_entry: None,
+                without: vec![],
             }),
         )
         .await;
@@ -3107,4 +3108,138 @@ async fn a_snapshot_carrying_changes_the_log_lacks_reaches_everyone() {
         .get(&format!("/vaults/{v}/changes?since={head}&snapshots=false"))
         .await;
     assert!(carried_in(&ch));
+}
+
+#[tokio::test]
+async fn a_rotation_can_leave_out_people_whose_key_changed_on_purpose() {
+    use coolpsonotes_core::engine;
+    let srv = start().await;
+    let mut alice = new_user(&srv.base, "alice").await;
+    let bob = new_user(&srv.base, "bob").await;
+    let mut carol = new_user(&srv.base, "carol").await;
+    let dave = new_user(&srv.base, "dave").await;
+    let v = alice.create_vault("Home").await;
+    alice.share(&v, &bob.id, Role::Editor).await.unwrap();
+    alice.share(&v, &carol.id, Role::Editor).await.unwrap();
+    // Dave isn't a member: one note is shared with him.
+    let note = NoteDoc::new();
+    let u = note.set_text("plans").unwrap();
+    alice
+        .push(&v, vec![alice.encrypt_update(&v, "n1", &u)])
+        .await
+        .unwrap();
+    let (ring, req) = engine::start_sharing(
+        alice.ring(&v),
+        "n1",
+        &engine::ObjectMeta::titled("Plans"),
+        &note.encode_state(),
+        1,
+    )
+    .unwrap();
+    let _: () = alice
+        .api
+        .put(&format!("/vaults/{v}/objects/n1/key"), &req)
+        .await;
+    let dave_pub: PublicUser = alice.api.get(&format!("/users/{}", dave.id)).await;
+    let share_dave = |ring: &keys::VaultKeyring| AddObjectShareRequest {
+        user_id: dave.id.clone(),
+        role: Role::Viewer,
+        envelope: engine::object_share_envelope(ring, "n1", &dave_pub).unwrap(),
+        log_entry: None,
+    };
+    let _: ObjectShareInfo = alice
+        .api
+        .post(
+            &format!("/vaults/{v}/objects/n1/shares"),
+            &share_dave(&ring),
+        )
+        .await;
+
+    // Carol's and Dave's keys changed: leaving them out unannounced is refused.
+    let out = [carol.id.as_str(), dave.id.as_str()];
+    assert_eq!(alice.rotate_leaving_out(&v, &out, false).await, 409);
+    // Said on purpose, the key is renewed without them.
+    let ok = alice.rotate_leaving_out(&v, &out, true).await;
+    assert!((200..300).contains(&ok), "{ok}");
+    let members: Vec<MemberInfo> = alice.api.get(&format!("/vaults/{v}/members")).await;
+    let has_key = |id: &str| {
+        members
+            .iter()
+            .find(|m| m.user.id == id)
+            .unwrap()
+            .has_current_key
+    };
+    assert!(has_key(&alice.id) && has_key(&bob.id) && !has_key(&carol.id));
+    let recipients = |shares: &[ObjectShareInfo]| {
+        shares
+            .iter()
+            .find(|s| s.user.id == dave.id)
+            .unwrap()
+            .has_current_key
+    };
+    let shares: Vec<ObjectShareInfo> = alice
+        .api
+        .get(&format!("/vaults/{v}/objects/n1/shares"))
+        .await;
+    assert!(!recipients(&shares));
+    assert_eq!(
+        carol.load_keys(&v).await,
+        Ok(()),
+        "Carol keeps the older key"
+    );
+
+    // Once verified, both get the key again: Carol as members do...
+    let carol_pub: PublicUser = alice.api.get(&format!("/users/{}", carol.id)).await;
+    let (epoch, key) = alice.ring(&v).current().unwrap();
+    let pk = carol_pub.account_key.as_ref().unwrap().verify().unwrap();
+    let _: () = alice
+        .api
+        .post(
+            &format!("/vaults/{v}/keys/grant"),
+            &GrantKeysRequest {
+                envelopes: vec![KeyEnvelope {
+                    user_id: carol.id.clone(),
+                    epoch,
+                    envelope: keys::wrap_vault_key(key, &v, epoch, &carol.id, &pk.enc_public)
+                        .unwrap(),
+                    signature: None,
+                }],
+            },
+        )
+        .await;
+    let members: Vec<MemberInfo> = alice.api.get(&format!("/vaults/{v}/members")).await;
+    assert!(
+        members
+            .iter()
+            .find(|m| m.user.id == carol.id)
+            .unwrap()
+            .has_current_key
+    );
+    // ...and Dave by sharing the note with him again.
+    let vk: VaultKeysResponse = alice.api.get(&format!("/vaults/{v}/keys")).await;
+    let rings = engine::object_keyrings(alice.ring(&v), &vk);
+    let _: ObjectShareInfo = alice
+        .api
+        .post(
+            &format!("/vaults/{v}/objects/n1/shares"),
+            &share_dave(&rings["n1"]),
+        )
+        .await;
+    let shares: Vec<ObjectShareInfo> = alice
+        .api
+        .get(&format!("/vaults/{v}/objects/n1/shares"))
+        .await;
+    assert!(recipients(&shares));
+    // Someone who has the key can't be added twice.
+    assert_eq!(
+        alice
+            .api
+            .status(
+                Method::POST,
+                &format!("/vaults/{v}/objects/n1/shares"),
+                Some(&share_dave(&rings["n1"]))
+            )
+            .await,
+        409
+    );
 }

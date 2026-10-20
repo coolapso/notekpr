@@ -414,7 +414,21 @@ fn Share(vault: String) -> impl IntoView {
                     let reload = reload3.clone();
                     let reload_b = reload3.clone();
                     let fp = actions::fingerprint(&m.user);
-                    let vouched = step(|c| state::vouched(c, &vr, &m));
+                    let (vouched, changed) = step(|c| {
+                        (state::vouched(c, &vr, &m), state::member_log(c, &vr).key_changed(&m))
+                    });
+                    let verify = (changed && !m.has_current_key).then(|| {
+                        let (u, v) = (m.user.clone(), vr.clone());
+                        let reload = reload3.clone();
+                        move |_| {
+                            actions::trust_key(&u);
+                            let (v, reload) = (v.clone(), reload.clone());
+                            leptos::task::spawn_local(async move {
+                                actions::grant_missing_keys(&v).await;
+                                reload();
+                            });
+                        }
+                    });
                     view! {
                         <div class="person">
                             {avatar(&m.user.display_name, &m.user.id)}
@@ -422,8 +436,10 @@ fn Share(vault: String) -> impl IntoView {
                                 <div>{m.user.display_name.clone()}{is_me.then_some(" (you)")}{(m.user.kind == PrincipalKind::Agent).then(|| view! { <span class="tag-agent">"agent"</span> })}</div>
                                 <div class="muted small">{m.user.email.clone().unwrap_or_default()}{(!m.has_current_key).then_some(" · waiting for keys")}</div>
                                 {fp.map(|f| view! { <div class="fp">{f}</div> })}
-                                {(!vouched).then(|| view! { <div class="alert error small unvouched">"Not added by the vault's owner: the server lists this person, but the owner's signed member list doesn't. They don't get the vault key; tell your administrator."</div> })}
+                                {(!vouched && changed).then(|| view! { <div class="alert error small key-changed">"Their encryption key changed since they were added — for example, they reset their account, or someone is intercepting. Until you've compared fingerprints with them, they don't get the vault's new key."</div> })}
+                                {(!vouched && !changed).then(|| view! { <div class="alert error small unvouched">"Not added by the vault's owner: the server lists this person, but the owner's signed member list doesn't. They don't get the vault key; tell your administrator."</div> })}
                             </div>
+                            {verify.map(|f| view! { <button class="btn small verify-key" on:click=f>"I verified it"</button> })}
                             {if m.role == Role::Owner {
                                 view! { <span class="muted small">"Owner"</span> }.into_any()
                             } else {
@@ -580,6 +596,22 @@ fn ShareNote(vault: String, note: String) -> impl IntoView {
                     let (v, n, uid) = (vr.clone(), nr.clone(), sh.user.id.clone());
                     let (v2, n2, uid2) = (vr.clone(), nr.clone(), sh.user.id.clone());
                     let fp = actions::fingerprint(&sh.user);
+                    // Left without the note's current key because their key
+                    // changed: once verified, sharing again gives it.
+                    let changed = !sh.has_current_key && actions::pin_status(&sh.user) == Some(PinStatus::Changed);
+                    let verify = changed.then(|| {
+                        let (v, n, u, r) = (vr.clone(), nr.clone(), sh.user.clone(), sh.role);
+                        move |_| {
+                            actions::trust_key(&u);
+                            let (v, n, u) = (v.clone(), n.clone(), u.clone());
+                            leptos::task::spawn_local(async move {
+                                if let Err(e) = actions::share_note(&v, &n, &u, r).await {
+                                    err.set(Some(e));
+                                }
+                                ui.shares_rev.update(|x| *x += 1);
+                            });
+                        }
+                    });
                     view! {
                         <div class="person">
                             {avatar(&sh.user.display_name, &sh.user.id)}
@@ -587,7 +619,9 @@ fn ShareNote(vault: String, note: String) -> impl IntoView {
                                 <div>{sh.user.display_name.clone()}{(sh.user.kind == PrincipalKind::Agent).then(|| view! { <span class="tag-agent">"agent"</span> })}</div>
                                 <div class="muted small">{sh.user.email.clone().unwrap_or_default()}{(!sh.has_current_key).then_some(" · waiting for the new key")}</div>
                                 {fp.map(|f| view! { <div class="fp">{f}</div> })}
+                                {changed.then(|| view! { <div class="alert error small key-changed">"Their encryption key changed — for example, they reset their account, or someone is intercepting. Until you've compared fingerprints with them, they don't get the note's new key."</div> })}
                             </div>
+                            {verify.map(|f| view! { <button class="btn small verify-key" on:click=f>"I verified it"</button> })}
                             <select class="input small" on:change=move |ev| {
                                 let r = if event_target_value(&ev) == "viewer" { Role::Viewer } else { Role::Editor };
                                 let (v, n, u) = (v.clone(), n.clone(), uid.clone());

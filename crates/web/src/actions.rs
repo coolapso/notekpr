@@ -417,28 +417,25 @@ pub async fn rotate_keys(vault: &str) -> bool {
                 return false;
             }
         };
-        // The new key goes only to members the owner vouched for.
-        let unknown = step(|c| {
-            members
-                .iter()
-                .find(|m| m.user.account_key.is_some() && !state::vouched(c, vault, m))
-                .cloned()
+        // The new key goes only to members the owner's log vouches for and
+        // whose key we still trust. Anyone else — a key that changed (they
+        // reset their account, or someone swaps keys) or someone the owner
+        // never added — is left out on purpose and gets it once verified.
+        let distrusted: BTreeSet<String> = members
+            .iter()
+            .filter(|m| m.user.account_key.is_some() && check_trust(&m.user).is_err())
+            .map(|m| m.user.id.clone())
+            .collect();
+        let (members, left_out): (Vec<MemberInfo>, Vec<MemberInfo>) = step(|c| {
+            members.into_iter().partition(|m| {
+                m.user.account_key.is_none()
+                    || (state::vouched(c, vault, m) && !distrusted.contains(&m.user.id))
+            })
         });
-        if let Some(m) = unknown {
-            error(format!(
-                "Security warning: the server lists {} as a member with a key you never added. The vault key was not renewed; tell your administrator.",
-                m.user.display_name
-            ));
-            return false;
-        }
-        for m in &members {
-            if m.user.account_key.is_some()
-                && let Err(e) = check_trust(&m.user)
-            {
-                error(e);
-                return false;
-            }
-        }
+        let mut not_given: BTreeSet<String> = left_out
+            .iter()
+            .map(|m| m.user.display_name.clone())
+            .collect();
         // Removed members knew every note's key too: they all move on, and
         // shared notes' new keys go to their current recipients.
         let (keyed, shared) = step(|c| {
@@ -455,6 +452,7 @@ pub async fn rotate_keys(vault: &str) -> bool {
             (keyed, r.shared.clone())
         });
         let mut recipients: HashMap<String, Vec<PublicUser>> = HashMap::new();
+        let mut recipients_out: HashMap<String, Vec<String>> = HashMap::new();
         for n in keyed.iter().filter(|n| shared.contains(*n)) {
             let users: Vec<PublicUser> = match api::get::<Vec<ObjectShareInfo>>(&format!(
                 "/vaults/{vault}/objects/{n}/shares"
@@ -468,13 +466,13 @@ pub async fn rotate_keys(vault: &str) -> bool {
                     return false;
                 }
             };
-            // Never wrap a new key to a key that changed since it was pinned.
-            for u in users.iter().filter(|u| u.account_key.is_some()) {
-                if let Err(e) = check_trust(u) {
-                    error(e);
-                    return false;
-                }
-            }
+            // Never wrap a new key to a key that changed since it was
+            // pinned: such people are left out of the note's new key.
+            let (users, changed): (Vec<PublicUser>, Vec<PublicUser>) = users
+                .into_iter()
+                .partition(|u| u.account_key.is_none() || check_trust(u).is_ok());
+            not_given.extend(changed.iter().map(|u| u.display_name.clone()));
+            recipients_out.insert(n.clone(), changed.into_iter().map(|u| u.id).collect());
             recipients.insert(n.clone(), users);
         }
         let prepared = step(|c| {
@@ -496,6 +494,15 @@ pub async fn rotate_keys(vault: &str) -> bool {
             Some(made.map(|(mut req, rings)| {
                 req.log_entry = coolpsonotes_sync::members::rotation(vault, &ring)
                     .and_then(|body| state::log_entry(c, vault, body));
+                // Left out on purpose, so the server knows it's no oversight.
+                req.without = left_out
+                    .iter()
+                    .filter(|m| m.user.account_key.is_some())
+                    .map(|m| m.user.id.clone())
+                    .collect();
+                for o in &mut req.objects {
+                    o.update.without = recipients_out.remove(&o.object_id).unwrap_or_default();
+                }
                 // Every note's new key for the people it is shared with.
                 if let Some(a) = &c.account {
                     for o in &mut req.objects {
@@ -541,6 +548,12 @@ pub async fn rotate_keys(vault: &str) -> bool {
                     state::persist_new_keys(c, vault, &[]);
                 });
                 state::reload_log(vault).await;
+                if !not_given.is_empty() {
+                    info(format!(
+                        "The new key went to everyone except {}: their encryption key changed (or the vault's owner never added them). Compare fingerprints with them, then press “I verified it” in People & sharing to give them access again.",
+                        not_given.into_iter().collect::<Vec<_>>().join(", ")
+                    ));
+                }
                 return true;
             }
             // Membership or notes changed meanwhile: retry once with fresh keys.
@@ -564,11 +577,14 @@ pub async fn grant_missing_keys(vault: &str) {
         .into_iter()
         .filter(|m| m.user.account_key.is_none() || check_trust(&m.user).is_ok())
         .collect();
-    // Added before they had keys: pin their keys in the log first.
+    // Added before they had keys, or their key changed and we verified the
+    // new one since: pin their keys in the log first.
     let to_pin: Vec<MemberInfo> = step(|c| {
-        state::member_log(c, vault)
-            .to_pin(&trusted)
+        let log = state::member_log(c, vault);
+        let changed = trusted.iter().filter(|m| log.key_changed(m));
+        log.to_pin(&trusted)
             .into_iter()
+            .chain(changed)
             .filter(|m| !m.has_current_key)
             .cloned()
             .collect()
@@ -592,17 +608,41 @@ pub async fn grant_missing_keys(vault: &str) {
             .map(|r| engine::missing_grants(&r.keyring, &trusted))
     })
     .unwrap_or_default();
-    if env.is_empty() {
-        return;
-    }
-    if api::post::<_, ()>(
-        &format!("/vaults/{vault}/keys/grant"),
-        &GrantKeysRequest { envelopes: env },
-    )
-    .await
-    .is_ok()
+    if !env.is_empty()
+        && api::post::<_, ()>(
+            &format!("/vaults/{vault}/keys/grant"),
+            &GrantKeysRequest { envelopes: env },
+        )
+        .await
+        .is_ok()
     {
         info("Shared vault keys with new members.");
+    }
+    // People single notes are shared with who were left without a note's
+    // current key (their key changed): once verified, sharing it again
+    // gives it to them.
+    let shared: Vec<String> = step(|c| {
+        c.replicas
+            .get(vault)
+            .map(|r| r.shared.iter().cloned().collect())
+            .unwrap_or_default()
+    });
+    for note in shared {
+        let Ok(shares) =
+            api::get::<Vec<ObjectShareInfo>>(&format!("/vaults/{vault}/objects/{note}/shares"))
+                .await
+        else {
+            continue;
+        };
+        for s in shares {
+            if !s.has_current_key
+                && s.user.account_key.is_some()
+                && check_trust(&s.user).is_ok()
+                && let Err(e) = share_note(vault, &note, &s.user, s.role).await
+            {
+                util::warn(&format!("could not give a note's key again: {e}"));
+            }
+        }
     }
 }
 

@@ -349,6 +349,15 @@ impl User {
 
     /// Rotate the vault key to a new epoch for the remaining members.
     pub async fn rotate(&mut self, vault_id: &str) {
+        let status = self.rotate_leaving_out(vault_id, &[], true).await;
+        assert!((200..300).contains(&status), "rotation refused: {status}");
+    }
+
+    /// Rotate the vault key (and every note's) without giving it to `out`,
+    /// members and note recipients alike, listing them as left out on
+    /// purpose if `declare`. Returns the server's status; the new key is kept
+    /// only if it accepted.
+    pub async fn rotate_leaving_out(&mut self, vault_id: &str, out: &[&str], declare: bool) -> u16 {
         let members: Vec<MemberInfo> = self.api.get(&format!("/vaults/{vault_id}/members")).await;
         let (epoch, old) = {
             let (e, k) = self.ring(vault_id).current().unwrap();
@@ -356,8 +365,10 @@ impl User {
         };
         let new_epoch = epoch + 1;
         let new = VaultKey::generate();
+        let left_out = |id: &str| out.contains(&id);
         let envelopes = members
             .iter()
+            .filter(|m| !left_out(&m.user.id))
             .filter_map(|m| {
                 m.user
                     .account_key
@@ -378,10 +389,18 @@ impl User {
                 signature: None,
             })
             .collect();
+        let without = |ids: Vec<String>| if declare { ids } else { vec![] };
+        let members_out = without(
+            members
+                .iter()
+                .filter(|m| left_out(&m.user.id))
+                .map(|m| m.user.id.clone())
+                .collect(),
+        );
         // Every note with its own key moves on too (R2).
         let vk: VaultKeysResponse = self.api.get(&format!("/vaults/{vault_id}/keys")).await;
         let doc_rings = coolpsonotes_core::engine::object_keyrings(self.ring(vault_id), &vk);
-        let ring = self.keyrings.get_mut(vault_id).unwrap();
+        let mut ring = self.ring(vault_id).clone();
         ring.insert(new_epoch, new.clone());
         let meta = ring.encrypt_meta(br#"{"name":"rotated"}"#).unwrap();
         let mut objects = Vec::new();
@@ -390,34 +409,44 @@ impl User {
                 .api
                 .get(&format!("/vaults/{vault_id}/objects/{oid}/shares"))
                 .await;
-            let users: Vec<PublicUser> = shares.into_iter().map(|s| s.user).collect();
-            let (_, update) = coolpsonotes_core::engine::rotate_object_key(
-                self.keyrings.get(vault_id).unwrap(),
+            let (gone, users): (Vec<PublicUser>, Vec<PublicUser>) = shares
+                .into_iter()
+                .map(|s| s.user)
+                .partition(|u| left_out(&u.id));
+            let (_, mut update) = coolpsonotes_core::engine::rotate_object_key(
+                &ring,
                 doc_ring,
                 oid,
                 &coolpsonotes_core::engine::ObjectMeta::titled("rotated"),
                 &users,
             )
             .unwrap();
+            update.without = without(gone.into_iter().map(|u| u.id).collect());
             objects.push(ObjectKeyChange {
                 object_id: oid.clone(),
                 update,
             });
         }
-        let _: () = self
+        let status = self
             .api
-            .post(
+            .status(
+                reqwest::Method::POST,
                 &format!("/vaults/{vault_id}/keys/rotate"),
-                &RotateKeysRequest {
+                Some(&RotateKeysRequest {
                     new_epoch,
                     chain_link: keys::encrypt_chain_link(&new, new_epoch, &old, vault_id),
                     encrypted_meta: meta,
                     envelopes,
                     objects,
                     log_entry: None,
-                },
+                    without: members_out,
+                }),
             )
             .await;
+        if (200..300).contains(&status) {
+            self.keyrings.insert(vault_id.to_string(), ring);
+        }
+        status
     }
 
     /// Rebuild a vault's index and notes from the server, decrypting everything.

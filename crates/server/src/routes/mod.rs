@@ -254,6 +254,22 @@ async fn observe(req: Request, next: Next) -> Response {
 }
 
 /// Collapse ids in paths so logs show route shapes rather than identifiers.
+/// Whether key `envelopes` and the people deliberately left `without` one
+/// are, together, exactly `need` — each person once, never in both.
+pub(crate) fn covers_exactly(
+    need: &std::collections::HashSet<String>,
+    envelopes: &[coolpsonotes_core::protocol::KeyEnvelope],
+    without: &[String],
+) -> bool {
+    let mut seen = std::collections::HashSet::new();
+    envelopes
+        .iter()
+        .map(|e| &e.user_id)
+        .chain(without)
+        .all(|u| need.contains(u) && seen.insert(u))
+        && seen.len() == need.len()
+}
+
 fn redact_path(path: &str) -> String {
     path.split('/')
         .map(|seg| {

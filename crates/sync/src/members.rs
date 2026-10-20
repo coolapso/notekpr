@@ -113,6 +113,20 @@ impl MemberLog {
         }
     }
 
+    /// A member the log lists, in this role, with a different account key
+    /// than they show now: they reset their account — or the server swaps
+    /// keys. Their new key is pinned (`Rekey`) only once the owner verified it.
+    pub fn key_changed(&self, m: &MemberInfo) -> bool {
+        let Some(logged) = self.state.as_ref().and_then(|s| s.member(&m.user.id)) else {
+            return false;
+        };
+        logged.role == m.role
+            && matches!(
+                (logged.public(), &m.user.account_key),
+                (Ok(Some(pinned)), Some(k)) if k.verify().is_ok_and(|k| k != pinned)
+            )
+    }
+
     /// Members the log doesn't vouch for (to warn about; never give them keys).
     pub fn unvouched<'a>(&self, members: &'a [MemberInfo]) -> Vec<&'a MemberInfo> {
         members.iter().filter(|m| !self.vouches_for(m)).collect()
@@ -402,6 +416,13 @@ mod tests {
                 k
             });
         assert!(!log.vouches_for(&fake));
+        // A changed key (Bob reset his account) is told apart from someone
+        // never added; an invalid one is neither.
+        assert!(!log.key_changed(&fake));
+        let reset = info(&p("bob"), Role::Editor, true);
+        assert!(!log.vouches_for(&reset) && log.key_changed(&reset));
+        assert!(!log.key_changed(&info(&bob, Role::Editor, true)));
+        assert!(!log.key_changed(&info(&eve, Role::Editor, true)));
         let all = [
             info(&alice, Role::Owner, true),
             info(&bob, Role::Editor, true),

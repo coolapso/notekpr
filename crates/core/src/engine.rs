@@ -439,6 +439,7 @@ pub fn rotate(
         envelopes,
         objects: vec![],
         log_entry: None,
+        without: vec![],
     })
 }
 
@@ -693,6 +694,7 @@ fn first_document_key(
         encrypted_meta: ObjectMeta::titled(title).encrypt(&ring, object_id)?,
         snapshot,
         private,
+        without: vec![],
     };
     Ok((ring, req))
 }
@@ -731,6 +733,7 @@ pub fn start_sharing_keyed(
             carries: false,
         }),
         private: false,
+        without: vec![],
     };
     Ok((next, req))
 }
@@ -764,6 +767,7 @@ pub fn start_sharing(
             carries: false,
         }),
         private: false,
+        without: vec![],
     };
     Ok((ring, req))
 }
@@ -807,6 +811,7 @@ pub fn rotate_object_key(
         encrypted_meta: meta.encrypt(&next, object_id)?,
         snapshot: None,
         private: false,
+        without: vec![],
     };
     Ok((next, req))
 }

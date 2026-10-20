@@ -481,6 +481,11 @@ pub struct ObjectKeyUpdate {
     pub snapshot: Option<CreateSnapshotRequest>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub private: bool,
+    /// People the note is shared with who are deliberately left without the
+    /// new key: their account key changed and the owner hasn't verified it.
+    /// They stay recipients; sharing the note with them again gives it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub without: Vec<String>,
 }
 
 /// A note's key rotated together with its vault's key.
@@ -617,6 +622,11 @@ pub struct RotateKeysRequest {
     /// `Rotate`, signed by the owner (required once the vault has a log).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub log_entry: Option<LogEntry>,
+    /// Members deliberately left without the new key: their account key
+    /// changed and the owner hasn't verified it. They stay members and get
+    /// the key once verified (`POST /vaults/{v}/keys/grant`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub without: Vec<String>,
 }
 
 /// One encrypted CRDT update as stored by the server.

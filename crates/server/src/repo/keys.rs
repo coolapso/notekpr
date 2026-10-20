@@ -284,6 +284,26 @@ pub async fn put_document_key(
     Ok(())
 }
 
+/// Whether `user_id` holds the note's key at `epoch`.
+pub async fn has_document_key(
+    db: impl SqliteExecutor<'_>,
+    vault_id: &str,
+    object_id: &str,
+    epoch: i64,
+    user_id: &str,
+) -> AppResult<bool> {
+    Ok(sqlx::query_scalar::<_, i64>(
+        "SELECT 1 FROM object_keys WHERE vault_id = ? AND object_id = ? AND epoch = ? AND user_id = ?",
+    )
+    .bind(vault_id)
+    .bind(object_id)
+    .bind(epoch)
+    .bind(user_id)
+    .fetch_optional(db)
+    .await?
+    .is_some())
+}
+
 /// Store the owner's grant signature for someone's key of a note (not for
 /// the members' copy, `user_id = ''`). Returns whether such a key exists.
 pub async fn set_grant_signature(

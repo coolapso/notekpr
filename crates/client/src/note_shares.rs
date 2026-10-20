@@ -14,6 +14,7 @@ use coolpsonotes_sync::members;
 use crate::api::ApiError;
 use crate::manage::{self, ShareOutcome};
 use crate::session::{Session, SharedVault};
+use crate::ui;
 
 /// Give a note its own key (first time) and share it with one person.
 pub async fn share_note(
@@ -251,12 +252,15 @@ pub async fn rotate_note_key(
     id: &str,
     note_id: &str,
 ) -> Result<()> {
-    let users: Vec<PublicUser> = note_shares(session, id, note_id)
-        .await?
-        .into_iter()
-        .map(|s| s.user)
-        .collect();
-    session.refuse_changed_keys(&users, "note")?;
+    // Never to a key that changed since it was pinned: such people are left
+    // out of the new key until verified (`share-note --accept-new-key`).
+    let (users, changed) = session.split_changed_keys(
+        note_shares(session, id, note_id)
+            .await?
+            .into_iter()
+            .map(|s| s.user)
+            .collect(),
+    );
     let (next, req) = {
         let v = vault.lock().await;
         let ring = v
@@ -273,8 +277,17 @@ pub async fn rotate_note_key(
         let (next, mut req) =
             engine::rotate_object_key(&v.replica.keyring, ring, note_id, &meta, &users)?;
         members::sign_grants(session.account(), id, note_id, &next, &mut req.envelopes);
+        req.without = changed.iter().map(|u| u.id.clone()).collect();
         (next, req)
     };
+    if !changed.is_empty() {
+        let names: Vec<&str> = changed.iter().map(|u| u.display_name.as_str()).collect();
+        ui::warn(&format!(
+            "the note's new key went to everyone except {}: their account key changed. Verify their \
+             fingerprint with them, then share the note with them again with --accept-new-key",
+            names.join(", ")
+        ));
+    }
     session
         .api
         .put::<_, ()>(&format!("/vaults/{id}/objects/{note_id}/key"), &req)
@@ -282,7 +295,7 @@ pub async fn rotate_note_key(
         .context("rotating the note key")?;
     let mut v = vault.lock().await;
     v.set_note_keyring(note_id, next);
-    if users.is_empty() {
+    if users.is_empty() && changed.is_empty() {
         v.replica.shared.remove(note_id);
     }
     v.save()

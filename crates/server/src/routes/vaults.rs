@@ -556,10 +556,11 @@ pub async fn rotate_keys(
         .await?
         .into_iter()
         .collect();
-    let got: HashSet<String> = req.envelopes.iter().map(|e| e.user_id.clone()).collect();
-    if got != need || got.len() != req.envelopes.len() {
+    // Everyone gets the new key, except members whose key the owner left
+    // out on purpose (it changed): listed, so none is forgotten by accident.
+    if !super::covers_exactly(&need, &req.envelopes, &req.without) {
         return Err(conflict(
-            "envelopes must cover exactly the current members with keys",
+            "envelopes must cover exactly the current members with keys (or leave them out on purpose)",
         ));
     }
     if req.envelopes.iter().any(|e| {

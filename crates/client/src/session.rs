@@ -449,8 +449,16 @@ impl Session {
     async fn start_member_log(&self, v: &mut Vault) -> Result<()> {
         let id = v.id().to_string();
         let members = self.api.members(&id).await?;
-        let users: Vec<PublicUser> = members.iter().map(|m| m.user.clone()).collect();
-        self.refuse_changed_keys(&users, "vault")?;
+        // The checkpoint vouches for everyone's key: never for a changed one.
+        let (_, changed) =
+            self.split_changed_keys(members.iter().map(|m| m.user.clone()).collect());
+        if let Some(u) = changed.first() {
+            bail!(
+                "the account key of {} changed since it was pinned; not starting the vault's membership \
+                 log. Verify it with them, then re-share with --accept-new-key and run this again",
+                u.display_name
+            );
+        }
         let list: Vec<(String, Role, Option<AccountPublic>)> = members
             .iter()
             .map(|m| {
@@ -1103,28 +1111,20 @@ impl Session {
         Ok(names)
     }
 
-    /// Refuse to wrap a new key for anyone whose account key no longer matches
-    /// its pin (the server may be substituting it); `what` names the key.
-    pub fn refuse_changed_keys(&self, users: &[PublicUser], what: &str) -> Result<()> {
-        for u in users {
-            if let Some(vu) = self.verify_user(u)?
-                && vu.pin == PinStatus::Changed
-            {
-                bail!(
-                    "the account key of {} changed since it was pinned (now {}); refusing to give them the new \
-                     {what} key. Verify it with them, then re-share with --accept-new-key (or stop sharing with \
-                     them) and run this again",
-                    u.display_name,
-                    vu.fingerprint
-                );
-            }
-        }
-        Ok(())
+    /// `users` whose account key still matches its pin (or who have none),
+    /// and those whose key changed or doesn't verify: a new key is never
+    /// wrapped to the latter — they are left out until it is verified.
+    pub fn split_changed_keys(&self, users: Vec<PublicUser>) -> (Vec<PublicUser>, Vec<PublicUser>) {
+        users.into_iter().partition(|u| {
+            matches!(self.verify_user(u), Ok(None))
+                || matches!(self.verify_user(u), Ok(Some(vu)) if vu.pin != PinStatus::Changed)
+        })
     }
 
     /// Move the vault to a new key epoch for the current members, and every
-    /// note's key with it (removed members knew those too). Refuses if a
-    /// member's or a recipient's key no longer matches its pin.
+    /// note's key with it (removed members knew those too). Members and
+    /// recipients whose key no longer matches its pin (or the vault's log)
+    /// are left out on purpose, and told how to give them access again.
     pub async fn rotate_keys(&self, vault: &SharedVault) -> Result<u32> {
         let id = vault.lock().await.id().to_string();
         for attempt in 0..2 {
@@ -1132,25 +1132,23 @@ impl Session {
             self.refresh_keys(vault).await?;
             self.reload_member_log(vault).await?;
             let members = self.api.members(&id).await?;
-            let users: Vec<PublicUser> = members.iter().map(|m| m.user.clone()).collect();
-            self.refuse_changed_keys(&users, "vault")?;
-            // The new key goes only to members the owner vouched for.
-            {
+            // The new key goes only to members the owner's log vouches for
+            // and whose key still matches its pin; anyone else is left out on
+            // purpose and gets it once verified.
+            let (_, changed) =
+                self.split_changed_keys(members.iter().map(|m| m.user.clone()).collect());
+            let (members, left_out): (Vec<MemberInfo>, Vec<MemberInfo>) = {
                 let v = vault.lock().await;
-                if let Some(m) = v
-                    .log
-                    .unvouched(&members)
-                    .into_iter()
-                    .find(|m| m.user.account_key.is_some())
-                {
-                    bail!(
-                        "SECURITY: the server lists {} as a member of '{}' with a key you never added. Not \
-                         renewing the vault key for them; tell your administrator",
-                        m.user.display_name,
-                        v.name()
-                    );
-                }
-            }
+                members.into_iter().partition(|m| {
+                    m.user.account_key.is_none()
+                        || (v.log.vouches_for(m) && !changed.iter().any(|u| u.id == m.user.id))
+                })
+            };
+            let mut not_given: Vec<String> = left_out
+                .iter()
+                .map(|m| m.user.display_name.clone())
+                .collect();
+            let mut recipients_out = std::collections::HashMap::new();
             let (keyed, shared) = {
                 let v = vault.lock().await;
                 let keyed: Vec<String> = v
@@ -1175,8 +1173,13 @@ impl Session {
                         return Err(anyhow!(e).context("listing a shared note's recipients"));
                     }
                 };
-                let users: Vec<PublicUser> = shares.into_iter().map(|s| s.user).collect();
-                self.refuse_changed_keys(&users, "note")?;
+                let (users, changed) =
+                    self.split_changed_keys(shares.into_iter().map(|s| s.user).collect());
+                not_given.extend(changed.iter().map(|u| u.display_name.clone()));
+                recipients_out.insert(
+                    oid.clone(),
+                    changed.into_iter().map(|u| u.id).collect::<Vec<_>>(),
+                );
                 recipients.insert(oid.clone(), users);
             }
             let (req, ring, rings) = {
@@ -1201,6 +1204,15 @@ impl Session {
                 let mut ring = v.replica.keyring.clone();
                 let (mut req, rings) =
                     engine::rotate_with_notes(&mut ring, &members, &v.replica.meta, &notes)?;
+                // Left out on purpose, so the server knows it's no oversight.
+                req.without = left_out
+                    .iter()
+                    .filter(|m| m.user.account_key.is_some())
+                    .map(|m| m.user.id.clone())
+                    .collect();
+                for o in &mut req.objects {
+                    o.update.without = recipients_out.remove(&o.object_id).unwrap_or_default();
+                }
                 for o in &mut req.objects {
                     if let Some(next) = rings.get(&o.object_id) {
                         members::sign_grants(
@@ -1249,6 +1261,16 @@ impl Session {
                         v.key_refused(&oid);
                     }
                     v.save()?;
+                    if !not_given.is_empty() {
+                        ui::warn(&format!(
+                            "the new key of '{}' went to everyone except {}: their account key changed (or the \
+                             owner never added them). Verify their fingerprint with them, then give them access \
+                             again with `coolpsonotes vault share` (or `share-note` for a single note) and \
+                             --accept-new-key",
+                            v.name(),
+                            not_given.join(", ")
+                        ));
+                    }
                     return Ok(req.new_epoch);
                 }
                 // Membership or notes changed meanwhile, or someone else

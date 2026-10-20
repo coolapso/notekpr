@@ -24,6 +24,9 @@ pub enum EngineError {
     Doc(#[from] DocError),
     #[error("{0}")]
     Invalid(String),
+    /// Content whose author can't be confirmed (R3): refused, not applied.
+    #[error(transparent)]
+    Author(#[from] memberlog::AuthorError),
 }
 
 pub type Result<T> = std::result::Result<T, EngineError>;
@@ -529,6 +532,7 @@ fn first_document_key(
             snapshot_id: random_id(),
             covers_seq,
             payload: ring.encrypt(Purpose::Snapshot, object_id, state)?,
+            signature: None,
         }),
         None => None,
     };
@@ -580,6 +584,7 @@ pub fn start_sharing_keyed(
             snapshot_id: random_id(),
             covers_seq,
             payload: next.encrypt(Purpose::Snapshot, object_id, state)?,
+            signature: None,
         }),
         private: false,
     };
@@ -614,6 +619,7 @@ pub fn start_sharing(
             snapshot_id: random_id(),
             covers_seq,
             payload: ring.encrypt(Purpose::Snapshot, object_id, state)?,
+            signature: None,
         }),
         private: false,
     };
@@ -773,6 +779,15 @@ pub struct VaultReplica {
     /// number. `seq` never moves past the first of them, so the next catch-up
     /// fetches them again instead of skipping them for good.
     pub dropped: BTreeMap<i64, String>,
+    /// Who may author content here, from the vault's verified membership
+    /// log (`None`: not checked, e.g. no log, or a recipient's replica).
+    /// Set it with [`VaultReplica::set_authors`].
+    pub authors: Option<memberlog::Authors>,
+    /// Content whose author our copy of the log doesn't know (or knows with
+    /// another key): perhaps the log moved on. Kept until the log is
+    /// reloaded ([`VaultReplica::needs_log`]); updates also stay in
+    /// `dropped`, so the cursor never passes them before that.
+    pub unverified: Vec<Deferred>,
 }
 
 impl VaultReplica {
@@ -794,6 +809,8 @@ impl VaultReplica {
             member: true,
             deferred: Vec::new(),
             dropped: BTreeMap::new(),
+            authors: None,
+            unverified: Vec::new(),
         }
     }
 
@@ -901,6 +918,24 @@ impl VaultReplica {
     }
 
     pub fn apply_snapshot(&mut self, s: &Snapshot) -> Result<Applied> {
+        self.apply_snapshot_checked(s, false)
+    }
+
+    fn apply_snapshot_checked(&mut self, s: &Snapshot, recheck: bool) -> Result<Applied> {
+        if let Some(a) = &self.authors
+            && let Err(e) = a.check_snapshot(
+                &s.object_id,
+                s.covers_seq,
+                &s.author_id,
+                &s.payload,
+                s.signature.as_deref(),
+            )
+        {
+            if !recheck && e.may_be_outdated() && self.unverified.len() < MAX_DEFERRED {
+                self.unverified.push(Deferred::Snapshot(s.clone()));
+            }
+            return Err(e.into());
+        }
         let plain = match self.decrypt_object(Purpose::Snapshot, &s.object_id, &s.payload) {
             Ok(p) => p,
             Err(e) => {
@@ -919,6 +954,30 @@ impl VaultReplica {
     /// out-of-order delivery can never drop content. Updates we cannot read
     /// yet are deferred (see [`Deferred`]).
     pub fn apply_update(&mut self, u: &Update) -> Result<Applied> {
+        self.apply_update_checked(u, false)
+    }
+
+    fn apply_update_checked(&mut self, u: &Update, recheck: bool) -> Result<Applied> {
+        if let Some(a) = &self.authors
+            && let Err(e) = a.check_update(
+                &u.object_id,
+                u.seq,
+                &u.author_id,
+                &u.payload,
+                u.signature.as_deref(),
+            )
+        {
+            if !recheck && e.may_be_outdated() && self.unverified.len() < MAX_DEFERRED {
+                // Until the log is reloaded: the cursor stops before it.
+                self.unverified.push(Deferred::Update(u.clone()));
+                self.dropped.insert(u.seq, u.object_id.clone());
+            } else {
+                // Refused for good (unsigned, or checked against a fresh log).
+                self.dropped.remove(&u.seq);
+            }
+            self.advance(u.seq);
+            return Err(e.into());
+        }
         let plain = match self.decrypt_object(Purpose::Update, &u.object_id, &u.payload) {
             Ok(p) => p,
             Err(e) => {
@@ -934,6 +993,34 @@ impl VaultReplica {
         let a = self.apply_plain(&u.object_id, &plain)?;
         *self.since_snapshot.entry(u.object_id.clone()).or_default() += 1;
         Ok(a)
+    }
+
+    /// Whether some received content waits for a fresh copy of the vault's
+    /// membership log (reload it, then call [`set_authors`](Self::set_authors)).
+    pub fn needs_log(&self) -> bool {
+        !self.unverified.is_empty()
+    }
+
+    /// Use who may author content from a (re)loaded log, and check the
+    /// content that waited for it once more; what fails now is refused.
+    pub fn set_authors(
+        &mut self,
+        authors: Option<memberlog::Authors>,
+    ) -> (Applied, Vec<EngineError>) {
+        self.authors = authors;
+        let mut all = Applied::default();
+        let mut errors = Vec::new();
+        for d in std::mem::take(&mut self.unverified) {
+            let r = match &d {
+                Deferred::Snapshot(s) => self.apply_snapshot_checked(s, true),
+                Deferred::Update(u) => self.apply_update_checked(u, true),
+            };
+            match r {
+                Ok(a) => all.merge(a),
+                Err(e) => errors.push(e),
+            }
+        }
+        (all, errors)
     }
 
     /// Whether some received content is waiting for keys (refresh them, then
@@ -1024,6 +1111,7 @@ impl VaultReplica {
             object_id: object_id.to_string(),
             client_update_id,
             payload,
+            signature: None,
         })
     }
 
@@ -1036,6 +1124,7 @@ impl VaultReplica {
                     object_id: p.object_id.clone(),
                     client_update_id: p.client_update_id.clone(),
                     payload: self.encrypt_object(Purpose::Update, &p.object_id, &p.update)?,
+                    signature: None,
                 })
             })
             .collect()
@@ -1100,6 +1189,7 @@ impl VaultReplica {
             snapshot_id: random_id(),
             covers_seq: self.seq,
             payload: self.encrypt_object(Purpose::Snapshot, object_id, &state)?,
+            signature: None,
         })
     }
 
@@ -1158,6 +1248,76 @@ pub struct Presence {
 mod tests {
     use super::*;
     use crate::doc::EntryKind;
+
+    #[test]
+    fn content_by_an_author_the_log_doesnt_know_yet_waits_for_it() {
+        use crate::memberlog::{self, LogBody, LogEntry, LogMember, LogState, key_commitment};
+        let alice = AccountSecret::generate();
+        let bob = AccountSecret::generate();
+        let mut ring = VaultKeyring::new("v");
+        ring.insert(1, VaultKey::generate());
+        let mut log = vec![LogEntry::sign(
+            &alice,
+            "alice",
+            "v",
+            None,
+            LogBody::Create {
+                owner: LogMember::new("alice", Role::Owner, &alice.public()),
+                key_commit: key_commitment("v", 1, ring.get(1).unwrap()),
+            },
+            1,
+        )];
+        let next = |log: &mut Vec<LogEntry>, body| {
+            let e = LogEntry::sign(&alice, "alice", "v", log.last(), body, 2);
+            log.push(e);
+        };
+        next(&mut log, LogBody::RequireSigned { from_seq: 0 });
+        let before_bob = LogState::verify("v", &alice.public(), &log)
+            .unwrap()
+            .authors();
+        next(
+            &mut log,
+            LogBody::Add {
+                member: LogMember::new("bob", Role::Editor, &bob.public()),
+            },
+        );
+        let with_bob = LogState::verify("v", &alice.public(), &log)
+            .unwrap()
+            .authors();
+
+        let mut r = VaultReplica::new("v", Role::Owner, ring.clone(), VaultMeta::named("V"));
+        r.set_authors(Some(before_bob.clone()));
+        let n = NoteDoc::new();
+        let payload = ring
+            .encrypt(Purpose::Update, "n1", &n.set_text("by bob").unwrap())
+            .unwrap();
+        let u = Update {
+            object_id: "n1".into(),
+            seq: 1,
+            author_id: "bob".into(),
+            signature: Some(memberlog::sign_update(&bob, "v", "n1", &payload)),
+            payload,
+            created_at: 0,
+        };
+        assert!(r.apply_update(&u).is_err());
+        assert!(r.needs_log());
+        assert_eq!(r.seq, 0, "the cursor waits for it");
+        // A fresh log knows Bob: his change is applied.
+        let (a, errors) = r.set_authors(Some(with_bob));
+        assert!(errors.is_empty() && a.objects.contains("n1"));
+        assert_eq!(r.note_text("n1"), "by bob");
+        assert!(!r.needs_log());
+
+        // Checked against a fresh log that still doesn't allow it: refused,
+        // and the cursor moves on.
+        let mut r2 = VaultReplica::new("v", Role::Owner, ring, VaultMeta::named("V"));
+        r2.set_authors(Some(before_bob.clone()));
+        assert!(r2.apply_update(&u).is_err());
+        let (_, errors) = r2.set_authors(Some(before_bob));
+        assert_eq!(errors.len(), 1);
+        assert!(!r2.needs_log() && r2.dropped.is_empty());
+        assert_eq!(r2.note_text("n1"), "");
+    }
 
     fn member(user_id: &str, account: &AccountSecret, role: Role, has_key: bool) -> MemberInfo {
         MemberInfo {
@@ -1229,6 +1389,7 @@ mod tests {
                     author_id: "alice".into(),
                     payload: p1.payload.clone(),
                     created_at: 0,
+                    signature: None,
                 },
                 Update {
                     object_id: p2.object_id.clone(),
@@ -1236,6 +1397,7 @@ mod tests {
                     author_id: "alice".into(),
                     payload: p2.payload.clone(),
                     created_at: 0,
+                    signature: None,
                 },
             ],
             snapshots: vec![],
@@ -1337,6 +1499,7 @@ mod tests {
             author_id: "alice".into(),
             payload: snap.payload,
             created_at: 0,
+            signature: None,
         })
         .unwrap();
         assert_eq!(b.note_text("n"), "hello bob");
@@ -1352,6 +1515,7 @@ mod tests {
             author_id: "bob".into(),
             payload: p.payload.clone(),
             created_at: 0,
+            signature: None,
         })
         .unwrap();
         assert_eq!(a.note_text("n"), "hello bob!");
@@ -1447,6 +1611,7 @@ mod tests {
             author_id: "a".into(),
             payload,
             created_at: 0,
+            signature: None,
         };
         b.apply_update(&up(1, p0.payload)).unwrap();
         let (doc, _) = start_sharing(&ring, "n", "N", &a.notes["n"].encode_state(), 1).unwrap();
@@ -1490,6 +1655,7 @@ mod tests {
             author_id: "a".into(),
             payload: p.payload.clone(),
             created_at: 0,
+            signature: None,
         };
         // Fill the deferral queue, then one more update can't be kept.
         for seq in 1..=MAX_DEFERRED as i64 {
@@ -1529,6 +1695,7 @@ mod tests {
             author_id: "a".into(),
             payload: p0.payload,
             created_at: 0,
+            signature: None,
         })
         .unwrap();
         // Alice gives the note its own key; Bob receives an update before the key.
@@ -1543,6 +1710,7 @@ mod tests {
                 author_id: "a".into(),
                 payload: p1.payload,
                 created_at: 0,
+                signature: None,
             })
             .unwrap_err();
         assert!(missing_key(&e));

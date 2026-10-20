@@ -454,7 +454,7 @@ mod shares;
 mod sync;
 mod vaults;
 
-pub use members::{log_entry, member_log, pin_member_key, reload_log, vouched};
+pub use members::{log_entry, member_log, pin_member_key, reload_log, sign_vault, vouched};
 pub use nav::*;
 pub use offline::{
     disable as disable_offline, enable as enable_offline, enabled as offline_enabled,

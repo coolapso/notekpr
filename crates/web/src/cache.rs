@@ -718,6 +718,7 @@ mod tests {
             author_id: "u2".into(),
             payload: from.encrypt_object(Purpose::Update, note, &state).unwrap(),
             created_at: 0,
+            signature: None,
         }
     }
 

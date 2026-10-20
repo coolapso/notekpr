@@ -135,7 +135,7 @@ device's public key, but the code would differ.
 | `PATCH /vaults/{v}/members/{u} {role, log_entry?}` | owner |
 | `DELETE /vaults/{v}/members/{u}` (optional body `{log_entry}`) | owner removes; any non-owner can remove themselves |
 | `GET /vaults/{v}/log?since=` | member: the membership log, `MemberLogResponse {entries}` (§5.2) |
-| `POST /vaults/{v}/log {entry}` | owner: a `checkpoint` (vaults without a log), a `rekey`, or a `remove` of someone who already left (§5.2) |
+| `POST /vaults/{v}/log {entry}` | owner: a `checkpoint` (vaults without a log), a `rekey`, a `share` of a note already shared, `require_signed`, or a `remove` of someone who already left (§5.2) |
 | `POST /vaults/{v}/keys/grant {envelopes}` | owner fills missing envelopes for the current epoch |
 | `POST /vaults/{v}/keys/rotate {new_epoch, chain_link, encrypted_meta, envelopes, objects, log_entry?}` | owner; `new_epoch = current + 1`; envelopes must cover exactly the members that have account keys; `objects` (`ObjectKeyChange {object_id, update}`) moves **every** note with a document key to its next epoch in the same transaction (each a rotation as in §5.1, wrapped under the new vault key), else `409` |
 | `GET /vaults/{v}/audit` | owner: membership, key and deletion events (no content) |
@@ -167,7 +167,7 @@ member list, vault key, or the note's history from before it was shared.
 | `GET /vaults/{v}/objects/{o}/keys` | member or recipient: `ObjectKeysResponse {role, current_epoch, envelopes (own), chain, encrypted_meta}`; the chain only from `share_from` on |
 | `PUT /vaults/{v}/objects/{o}/meta {encrypted_meta}` | writer: the title recipients see, under the current document key |
 | `GET /vaults/{v}/objects/{o}/shares` | member: `ObjectShareInfo {user, role, added_at, added_by, has_current_key}` |
-| `POST /vaults/{v}/objects/{o}/shares {user_id, role, envelope}` | owner; `role` is `editor` or `viewer`; the envelope wraps the current document key to the person. Vault members are refused (`409`), and so is a note whose sharing has not started (`409`: give it a fresh key first). |
+| `POST /vaults/{v}/objects/{o}/shares {user_id, role, envelope, log_entry?}` | owner; `role` is `editor` or `viewer`; the envelope wraps the current document key to the person. Vault members are refused (`409`), and so is a note whose sharing has not started (`409`: give it a fresh key first). |
 | `PATCH /vaults/{v}/objects/{o}/shares/{u} {role}`, `DELETE …/shares/{u}` | owner; recipients may remove themselves. Clients rotate the document key after removing someone. |
 | `GET /shares` | notes shared with the caller: `SharedNote {vault_id, object_id, role, owner, shared_by, key_epoch, encrypted_meta, added_at}` |
 | `GET /vaults/{v}/objects/{o}/changes?since=` | that note's part of the log (same shape as `/changes`) |
@@ -213,6 +213,9 @@ hand out vault keys the owner didn't make.
 | `rekey` | `member` | the owner pins a member's (new) account keys |
 | `remove` / `leave` | `user_id` | someone is removed by the owner / leaves |
 | `rotate` | `epoch`, `key_commit` | the vault key moves to `epoch` (current + 1) |
+| `share` | `object_id`, `member` | a note is shared with someone who isn't a member (or their role on it changes) |
+| `unshare` | `object_id`, `user_id` | a note is no longer shared with them |
+| `require_signed` | `from_seq` | content after log sequence `from_seq` (snapshots covering more) must be signed by its author |
 
 A member is `{user_id, role, enc_public, sign_public}`. The signature is
 Ed25519 over `statement("coolpsonotes/v1/sig/member-log", [vault_id,
@@ -235,7 +238,23 @@ Clients:
   before a checkpoint have none) and don't use a key that fails;
 * as the owner, wrap vault keys only for members the log lists with that role
   and key, and pin a pending member's keys (`rekey`) before granting them;
-* as the owner of a vault without a log, sign a `checkpoint` when they open it.
+* as the owner of a vault without a log, sign a `checkpoint` when they open it;
+  as the owner of a log without `require_signed`, sign a `share` for every
+  note already shared (keys checked against pins), then `require_signed` with
+  the vault's current head. New vaults get it right after `create`;
+* sign every update and snapshot (§6), and check what they receive: content
+  after `from_seq` must be signed, and a signature must verify with a key the
+  log ever pinned for the author while they could write the vault (or, for a
+  single note, while it was shared with them as an editor). Content by an
+  author the client's copy of the log doesn't know is kept aside (the sync
+  cursor stops before it) until the log is reloaded, then checked again;
+  what still fails is refused, never applied.
+
+The server refuses unsigned content once the requirement is set, and content
+whose signature doesn't verify with the caller's account key. Single-note
+shares (`POST`/`PATCH`/`DELETE …/objects/{o}/shares…`) carry their `share`
+or `unshare` entry (a recipient removing a note from their own list doesn't
+need one).
 
 ## 6. The encrypted log
 
@@ -246,16 +265,21 @@ vault's events in strictly increasing order without gaps.**
 
 | Endpoint | Notes |
 |---|---|
-| `POST /vaults/{v}/updates {updates: [{object_id, client_update_id, payload}]}` → `{results, head_seq, rejected?}` | editor/owner. Idempotent per `client_update_id`: a retry returns the original `seq`. Objects are created on first write. An update that can't be stored on its own merits is refused alone and listed in `rejected: [{client_update_id, object_id, code, message}]` with `code` `too_large` (over `max_update_bytes`), `purged` (the object was permanently deleted) or `stale_key` (encrypted with an outdated key: reload keys, re-encrypt, send again); the rest of the batch is stored. Malformed requests, a batch over 500 updates and missing write access still fail the whole push. (Servers before this answered `413` / `409` / `412` for the whole batch; clients handle both.) |
+| `POST /vaults/{v}/updates {updates: [{object_id, client_update_id, payload, signature?}]}` → `{results, head_seq, rejected?}` | editor/owner. Idempotent per `client_update_id`: a retry returns the original `seq`. Objects are created on first write. An update that can't be stored on its own merits is refused alone and listed in `rejected: [{client_update_id, object_id, code, message}]` with `code` `too_large` (over `max_update_bytes`), `purged` (the object was permanently deleted), `stale_key` (encrypted with an outdated key: reload keys, re-encrypt, send again), `unsigned` (the vault requires signed content, §5.2) or `bad_signature` (not signed with the author's account key); the rest of the batch is stored. Malformed requests, a batch over 500 updates and missing write access still fail the whole push. (Servers before this answered `413` / `409` / `412` for the whole batch; clients handle both.) |
 | `GET /vaults/{v}/changes?since=S&limit=N&snapshots=true` | `ChangesResponse {updates, snapshots, purged, head_seq, has_more, next_since}`. For any object whose latest snapshot covers part of `(S, head]`, the snapshot is returned **instead of** the updates it covers. Request further pages with `since=next_since&snapshots=false`. |
 | `GET /vaults/{v}/objects/{o}` | `ObjectState`: latest snapshot + updates after it |
-| `POST /vaults/{v}/objects/{o}/snapshots {snapshot_id, covers_seq, payload}` | editor/owner. Store a compaction (`payload` = encrypted full state). Updates covered by the *previous* snapshot are pruned — one generation is always kept so a bad snapshot is recoverable. One snapshot per person and note per `--snapshot-cooldown-secs` (default 30 s; `429` otherwise). |
+| `POST /vaults/{v}/objects/{o}/snapshots {snapshot_id, covers_seq, payload, signature?}` | editor/owner (`409` unsigned where signatures are required, `400` for a bad signature). Store a compaction (`payload` = encrypted full state). Updates covered by the *previous* snapshot are pruned — one generation is always kept so a bad snapshot is recoverable. One snapshot per person and note per `--snapshot-cooldown-secs` (default 30 s; `429` otherwise). |
 | `GET /vaults/{v}/objects/{o}/snapshots[/{id}]` | revision history (newest first); default retention 100 per object |
 | `DELETE /vaults/{v}/objects/{o}` | editor/owner: permanently delete (emptying the trash). Not allowed for `index`. |
 | `PUT/GET/DELETE /vaults/{v}/attachments/{id}` | raw encrypted bytes (`application/octet-stream`). Upload: editor/owner; immutable (same id+size re-upload is an idempotent retry). |
 
 **Client rules**
 
+* Sign every update and snapshot with your account key (§5.2): updates over
+  `statement("coolpsonotes/v1/sig/update", [vault_id, object_id, payload])`,
+  snapshots over `statement("coolpsonotes/v1/sig/snapshot", [vault_id,
+  object_id, covers_seq:i64be, payload])`. `Update` and `Snapshot` carry the
+  `signature` (null for content from before signing).
 * Encrypt every update with purpose `Update` (snapshots: `Snapshot`) and context `(vault_id, object_id)`, always using the **current** epoch. The server refuses older epochs with `412 stale_key` and unknown newer ones with `400`: reload keys, re-encrypt pending changes and send them again.
 * Pages of `/changes` are bounded by row count (`limit`, at most 5000) and by size (16 MiB of update payloads); keep requesting while `has_more`.
 * Apply updates idempotently (CRDT). Track `vault_seq` = highest sequence received (updates, acks, purges, `synced.head_seq`).

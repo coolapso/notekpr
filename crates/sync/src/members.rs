@@ -12,9 +12,11 @@
 
 use coolpsonotes_core::keys::{AccountPublic, AccountSecret, VaultKeyring};
 use coolpsonotes_core::memberlog::{
-    KeyCheckError, LogBody, LogEntry, LogError, LogMember, LogState, key_commitment,
+    self, Authors, KeyCheckError, LogBody, LogEntry, LogError, LogMember, LogState, key_commitment,
 };
-use coolpsonotes_core::protocol::{MemberInfo, Role};
+use coolpsonotes_core::protocol::{
+    CreateSnapshotRequest, MemberInfo, ObjectKeyUpdate, PushUpdate, Role,
+};
 
 /// A vault's verified membership log (or the lack of one: vaults from
 /// before the log until their owner signs a checkpoint).
@@ -131,6 +133,32 @@ impl MemberLog {
             .collect()
     }
 
+    /// Who may author content (for `VaultReplica::authors`).
+    pub fn authors(&self) -> Option<Authors> {
+        self.state.as_ref().map(|s| s.authors())
+    }
+
+    /// Whether the owner still has to require signed content (the log has
+    /// started, but without `require_signed` yet).
+    pub fn needs_signatures(&self) -> bool {
+        self.state.as_ref().is_some_and(|s| s.signed_from.is_none())
+    }
+
+    /// Whether the log has `user_id` on `object_id` with this role and key.
+    pub fn has_share(
+        &self,
+        object_id: &str,
+        user_id: &str,
+        role: Role,
+        key: &AccountPublic,
+    ) -> bool {
+        self.state.as_ref().is_some_and(|s| {
+            s.shares
+                .get(&(object_id.to_string(), user_id.to_string()))
+                .is_some_and(|m| m.role == role && m.public().ok().flatten().as_ref() == Some(key))
+        })
+    }
+
     /// Check every vault key we hold against the owner's commitments.
     /// Epochs from before a checkpoint have none and pass.
     pub fn check_keyring(&self, ring: &VaultKeyring) -> Result<(), KeyCheckError> {
@@ -171,6 +199,58 @@ pub fn checkpoint(
         epoch,
         key_commit: key_commitment(vault_id, epoch, key),
     })
+}
+
+/// Sign every update of planned pushes as their author.
+pub fn sign_pushes(account: &AccountSecret, vault_id: &str, pushes: &mut [Vec<PushUpdate>]) {
+    for u in pushes.iter_mut().flatten() {
+        sign_push(account, vault_id, u);
+    }
+}
+
+pub fn sign_push(account: &AccountSecret, vault_id: &str, u: &mut PushUpdate) {
+    u.signature = Some(memberlog::sign_update(
+        account,
+        vault_id,
+        &u.object_id,
+        &u.payload,
+    ));
+}
+
+/// Sign a snapshot as its author.
+pub fn sign_snapshot(
+    account: &AccountSecret,
+    vault_id: &str,
+    object_id: &str,
+    req: &mut CreateSnapshotRequest,
+) {
+    req.signature = Some(memberlog::sign_snapshot(
+        account,
+        vault_id,
+        object_id,
+        req.covers_seq,
+        &req.payload,
+    ));
+}
+
+/// Sign the snapshot a note key change carries, if any.
+pub fn sign_key_update(
+    account: &AccountSecret,
+    vault_id: &str,
+    object_id: &str,
+    u: &mut ObjectKeyUpdate,
+) {
+    if let Some(s) = &mut u.snapshot {
+        sign_snapshot(account, vault_id, object_id, s);
+    }
+}
+
+/// The entry for sharing a note with someone (their key pinned).
+pub fn share(object_id: &str, user_id: &str, role: Role, key: &AccountPublic) -> LogBody {
+    LogBody::Share {
+        object_id: object_id.to_string(),
+        member: LogMember::new(user_id, role, key),
+    }
 }
 
 /// The entry for moving to the newest epoch of `ring` (after `rotate`).

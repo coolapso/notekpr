@@ -134,7 +134,9 @@ Account public key ──── HPKE ─────▶ Vault key, epoch N  ─�
   verify it against the owner's pinned key, check each vault key against the
   owner's commitment, and the owner gives keys only to members the log
   vouches for — so a server can't add people or plant keys. Vaults from
-  before the log start it with an owner-signed checkpoint.
+  before the log start it with an owner-signed checkpoint. Authors sign
+  every update and snapshot; once the log requires it, clients accept
+  content only from people the log lets write it.
 * **Rotation / revocation**: removing a member triggers a new epoch: a fresh
   vault key, wrapped for remaining members, plus a chain link so members can
   still read history, and in the same request a new epoch of every note's key.

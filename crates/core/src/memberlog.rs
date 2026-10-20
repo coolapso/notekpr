@@ -129,6 +129,22 @@ pub enum LogBody {
         #[serde(with = "b64")]
         key_commit: Vec<u8>,
     },
+    /// A note is shared with someone who is not a member (their key pinned),
+    /// or their role on it changes.
+    Share {
+        object_id: String,
+        member: LogMember,
+    },
+    /// A note is no longer shared with someone.
+    Unshare {
+        object_id: String,
+        user_id: String,
+    },
+    /// From the log's sequence number `from_seq` on (updates with a higher
+    /// one, snapshots covering more), content must be signed by its author.
+    RequireSigned {
+        from_seq: i64,
+    },
 }
 
 impl LogBody {
@@ -179,6 +195,20 @@ impl LogBody {
                 parts.push(epoch.to_be_bytes().to_vec());
                 parts.push(key_commit.clone());
             }
+            LogBody::Share { object_id, member } => {
+                parts.push(b"share".to_vec());
+                parts.push(object_id.as_bytes().to_vec());
+                member.encode(&mut parts);
+            }
+            LogBody::Unshare { object_id, user_id } => {
+                parts.push(b"unshare".to_vec());
+                parts.push(object_id.as_bytes().to_vec());
+                parts.push(user_id.as_bytes().to_vec());
+            }
+            LogBody::RequireSigned { from_seq } => {
+                parts.push(b"require-signed".to_vec());
+                parts.push(from_seq.to_be_bytes().to_vec());
+            }
         }
         let refs: Vec<&[u8]> = parts.iter().map(|p| p.as_slice()).collect();
         crypto::statement("body", &refs)
@@ -190,8 +220,13 @@ impl LogBody {
             LogBody::Add { member } | LogBody::Rekey { member } => Some(&member.user_id),
             LogBody::Role { user_id, .. }
             | LogBody::Remove { user_id }
-            | LogBody::Leave { user_id } => Some(user_id),
-            LogBody::Create { .. } | LogBody::Checkpoint { .. } | LogBody::Rotate { .. } => None,
+            | LogBody::Leave { user_id }
+            | LogBody::Unshare { user_id, .. } => Some(user_id),
+            LogBody::Share { member, .. } => Some(&member.user_id),
+            LogBody::Create { .. }
+            | LogBody::Checkpoint { .. }
+            | LogBody::Rotate { .. }
+            | LogBody::RequireSigned { .. } => None,
         }
     }
 }
@@ -320,6 +355,14 @@ pub struct LogState {
     /// The last verified entry's sequence number and hash.
     pub head_seq: u64,
     pub head_hash: Key32,
+    /// Notes shared with people who are not members: (note, user) → them.
+    pub shares: BTreeMap<(String, String), LogMember>,
+    /// Content after this log sequence number must be signed.
+    pub signed_from: Option<i64>,
+    /// Every key ever pinned for someone while they could write the vault,
+    /// and for editors of single notes: who may have authored content.
+    writers: BTreeMap<String, Vec<AccountPublic>>,
+    note_editors: BTreeMap<(String, String), Vec<AccountPublic>>,
 }
 
 impl LogState {
@@ -356,6 +399,10 @@ impl LogState {
                     key_commits: BTreeMap::from([(1, key_commit.clone())]),
                     head_seq: 0,
                     head_hash: first.hash(),
+                    shares: BTreeMap::new(),
+                    signed_from: None,
+                    writers: BTreeMap::new(),
+                    note_editors: BTreeMap::new(),
                 }
             }
             LogBody::Checkpoint {
@@ -391,6 +438,10 @@ impl LogState {
                     key_commits: BTreeMap::from([(*epoch, key_commit.clone())]),
                     head_seq: 0,
                     head_hash: first.hash(),
+                    shares: BTreeMap::new(),
+                    signed_from: None,
+                    writers: BTreeMap::new(),
+                    note_editors: BTreeMap::new(),
                 }
             }
             _ => {
@@ -400,8 +451,23 @@ impl LogState {
                 ));
             }
         };
+        for m in state.members.values().cloned().collect::<Vec<_>>() {
+            state.note_writer(&m);
+        }
         state.extend(&entries[1..])?;
         Ok(state)
+    }
+
+    /// Remember `m`'s key as one that may have authored content.
+    fn note_writer(&mut self, m: &LogMember) {
+        if m.role.can_write()
+            && let Ok(Some(k)) = m.public()
+        {
+            let keys = self.writers.entry(m.user_id.clone()).or_default();
+            if !keys.contains(&k) {
+                keys.push(k);
+            }
+        }
     }
 
     /// Verify and apply entries that continue the log (e.g. fetched since
@@ -452,16 +518,22 @@ impl LogState {
                 if self.members.contains_key(&member.user_id) {
                     return Err(LogError::Invalid(n, "already a member"));
                 }
+                // Membership supersedes their single-note shares.
+                self.shares.retain(|(_, u), _| *u != member.user_id);
                 self.members.insert(member.user_id.clone(), member.clone());
+                self.note_writer(member);
             }
             LogBody::Role { user_id, role } => {
                 if *role == Role::Owner || *user_id == self.owner {
                     return Err(LogError::Invalid(n, "the owner's role doesn't change"));
                 }
-                self.members
+                let m = self
+                    .members
                     .get_mut(user_id)
-                    .ok_or(LogError::Invalid(n, "not a member"))?
-                    .role = *role;
+                    .ok_or(LogError::Invalid(n, "not a member"))?;
+                m.role = *role;
+                let m = m.clone();
+                self.note_writer(&m);
             }
             LogBody::Rekey { member } => {
                 member.keys(n)?;
@@ -473,6 +545,7 @@ impl LogState {
                     return Err(LogError::Invalid(n, "a new key keeps the role"));
                 }
                 *m = member.clone();
+                self.note_writer(member);
             }
             LogBody::Remove { user_id } | LogBody::Leave { user_id } => {
                 if *user_id == self.owner {
@@ -490,6 +563,44 @@ impl LogState {
                 self.epoch = *epoch;
                 self.key_commits.insert(*epoch, key_commit.clone());
             }
+            LogBody::Share { object_id, member } => {
+                let key = member.keys(n)?;
+                if self.members.contains_key(&member.user_id) {
+                    return Err(LogError::Invalid(
+                        n,
+                        "members don't need single notes shared",
+                    ));
+                }
+                if member.role == Role::Owner {
+                    return Err(LogError::Invalid(n, "notes are shared as editor or viewer"));
+                }
+                if member.role == Role::Editor {
+                    let keys = self
+                        .note_editors
+                        .entry((object_id.clone(), member.user_id.clone()))
+                        .or_default();
+                    if !keys.contains(&key) {
+                        keys.push(key);
+                    }
+                }
+                self.shares
+                    .insert((object_id.clone(), member.user_id.clone()), member.clone());
+            }
+            LogBody::Unshare { object_id, user_id } => {
+                if self
+                    .shares
+                    .remove(&(object_id.clone(), user_id.clone()))
+                    .is_none()
+                {
+                    return Err(LogError::Invalid(n, "the note isn't shared with them"));
+                }
+            }
+            LogBody::RequireSigned { from_seq } => {
+                if self.signed_from.is_some() || *from_seq < 0 {
+                    return Err(LogError::Invalid(n, "signatures are required once"));
+                }
+                self.signed_from = Some(*from_seq);
+            }
         }
         self.head_seq = n;
         self.head_hash = e.hash();
@@ -498,6 +609,16 @@ impl LogState {
 
     pub fn member(&self, user_id: &str) -> Option<&LogMember> {
         self.members.get(user_id)
+    }
+
+    /// Who may have authored the vault's content.
+    pub fn authors(&self) -> Authors {
+        Authors {
+            vault_id: self.vault_id.clone(),
+            signed_from: self.signed_from,
+            writers: self.writers.clone(),
+            note_editors: self.note_editors.clone(),
+        }
     }
 
     /// Whether a member's role and key are what the log says.
@@ -520,6 +641,193 @@ impl LogState {
             Some(_) => Err(KeyCheckError::Mismatch(epoch)),
             None => Ok(false),
         }
+    }
+}
+
+// ---------------------------------------------------------------- authorship
+
+const UPDATE_DOMAIN: &str = "coolpsonotes/v1/sig/update";
+const SNAPSHOT_DOMAIN: &str = "coolpsonotes/v1/sig/snapshot";
+
+fn update_statement(vault_id: &str, object_id: &str, payload: &[u8]) -> Vec<u8> {
+    crypto::statement(
+        UPDATE_DOMAIN,
+        &[vault_id.as_bytes(), object_id.as_bytes(), payload],
+    )
+}
+
+fn snapshot_statement(vault_id: &str, object_id: &str, covers_seq: i64, payload: &[u8]) -> Vec<u8> {
+    crypto::statement(
+        SNAPSHOT_DOMAIN,
+        &[
+            vault_id.as_bytes(),
+            object_id.as_bytes(),
+            &covers_seq.to_be_bytes(),
+            payload,
+        ],
+    )
+}
+
+/// The author's signature over an update's ciphertext.
+pub fn sign_update(
+    account: &AccountSecret,
+    vault_id: &str,
+    object_id: &str,
+    payload: &[u8],
+) -> Vec<u8> {
+    account
+        .sign(&update_statement(vault_id, object_id, payload))
+        .to_vec()
+}
+
+/// The author's signature over a snapshot (its ciphertext and what it covers).
+pub fn sign_snapshot(
+    account: &AccountSecret,
+    vault_id: &str,
+    object_id: &str,
+    covers_seq: i64,
+    payload: &[u8],
+) -> Vec<u8> {
+    account
+        .sign(&snapshot_statement(
+            vault_id, object_id, covers_seq, payload,
+        ))
+        .to_vec()
+}
+
+pub fn verify_update(
+    key: &AccountPublic,
+    vault_id: &str,
+    object_id: &str,
+    payload: &[u8],
+    signature: &[u8],
+) -> bool {
+    crypto::ed25519_verify(
+        &key.sign_public,
+        &update_statement(vault_id, object_id, payload),
+        signature,
+    )
+    .is_ok()
+}
+
+pub fn verify_snapshot(
+    key: &AccountPublic,
+    vault_id: &str,
+    object_id: &str,
+    covers_seq: i64,
+    payload: &[u8],
+    signature: &[u8],
+) -> bool {
+    crypto::ed25519_verify(
+        &key.sign_public,
+        &snapshot_statement(vault_id, object_id, covers_seq, payload),
+        signature,
+    )
+    .is_ok()
+}
+
+/// Who may have authored a vault's content, from its log: every key pinned
+/// for someone while they could write the vault, and for editors of single
+/// notes (that note only).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Authors {
+    vault_id: String,
+    signed_from: Option<i64>,
+    writers: BTreeMap<String, Vec<AccountPublic>>,
+    note_editors: BTreeMap<(String, String), Vec<AccountPublic>>,
+}
+
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+pub enum AuthorError {
+    #[error("a change wasn't signed by its author, but this vault requires it")]
+    Unsigned,
+    #[error("a change claims to be by {0} but doesn't carry their signature")]
+    BadSignature(String),
+    #[error("a change is signed by {0}, who could never write here")]
+    NotAWriter(String),
+}
+
+impl AuthorError {
+    /// A newer copy of the log might allow it (the author was added, or got
+    /// a new key, after our copy): check again after reloading the log.
+    pub fn may_be_outdated(&self) -> bool {
+        !matches!(self, AuthorError::Unsigned)
+    }
+}
+
+impl Authors {
+    fn keys<'a>(&'a self, object_id: &str, author: &str) -> Vec<&'a AccountPublic> {
+        let mut keys: Vec<&AccountPublic> =
+            self.writers.get(author).into_iter().flatten().collect();
+        keys.extend(
+            self.note_editors
+                .get(&(object_id.to_string(), author.to_string()))
+                .into_iter()
+                .flatten(),
+        );
+        keys
+    }
+
+    fn check(
+        &self,
+        object_id: &str,
+        author: &str,
+        required: bool,
+        signature: Option<&[u8]>,
+        verify: impl Fn(&AccountPublic, &[u8]) -> bool,
+    ) -> Result<(), AuthorError> {
+        let Some(sig) = signature else {
+            return if required {
+                Err(AuthorError::Unsigned)
+            } else {
+                Ok(())
+            };
+        };
+        let keys = self.keys(object_id, author);
+        if keys.is_empty() {
+            // Content from before the log may be signed by people it doesn't
+            // know (e.g. a note shared before it started).
+            return if required {
+                Err(AuthorError::NotAWriter(author.to_string()))
+            } else {
+                Ok(())
+            };
+        }
+        if keys.iter().any(|k| verify(k, sig)) {
+            Ok(())
+        } else {
+            Err(AuthorError::BadSignature(author.to_string()))
+        }
+    }
+
+    /// Check an update the server says `author` wrote, at log sequence `seq`.
+    pub fn check_update(
+        &self,
+        object_id: &str,
+        seq: i64,
+        author: &str,
+        payload: &[u8],
+        signature: Option<&[u8]>,
+    ) -> Result<(), AuthorError> {
+        let required = self.signed_from.is_some_and(|f| seq > f);
+        self.check(object_id, author, required, signature, |k, sig| {
+            verify_update(k, &self.vault_id, object_id, payload, sig)
+        })
+    }
+
+    /// Check a snapshot the server says `author` made, covering `covers_seq`.
+    pub fn check_snapshot(
+        &self,
+        object_id: &str,
+        covers_seq: i64,
+        author: &str,
+        payload: &[u8],
+        signature: Option<&[u8]>,
+    ) -> Result<(), AuthorError> {
+        let required = self.signed_from.is_some_and(|f| covers_seq > f);
+        self.check(object_id, author, required, signature, |k, sig| {
+            verify_snapshot(k, &self.vault_id, object_id, covers_seq, payload, sig)
+        })
     }
 }
 
@@ -921,6 +1229,177 @@ mod tests {
             Ok(false),
             "older epochs have no commitment"
         );
+    }
+
+    #[test]
+    fn content_must_come_from_someone_who_could_write_it() {
+        let (alice, bob, vic, rita, eve) = (
+            person("alice"),
+            person("bob"),
+            person("vic"),
+            person("rita"),
+            person("eve"),
+        );
+        let anchor = alice.secret.public();
+        let (mut log, _) = created(&alice);
+        append(
+            &mut log,
+            &alice,
+            LogBody::Add {
+                member: member(&bob, Role::Editor),
+            },
+        );
+        append(
+            &mut log,
+            &alice,
+            LogBody::Add {
+                member: member(&vic, Role::Viewer),
+            },
+        );
+        append(
+            &mut log,
+            &alice,
+            LogBody::Share {
+                object_id: "n1".into(),
+                member: member(&rita, Role::Editor),
+            },
+        );
+        let before = LogState::verify(V, &anchor, &log).unwrap().authors();
+        append(&mut log, &alice, LogBody::RequireSigned { from_seq: 10 });
+        // Bob is demoted later: what he wrote as an editor stays valid.
+        append(
+            &mut log,
+            &alice,
+            LogBody::Role {
+                user_id: "bob".into(),
+                role: Role::Viewer,
+            },
+        );
+        let a = LogState::verify(V, &anchor, &log).unwrap().authors();
+        let upd = |p: &Person, oid: &str| {
+            (
+                b"ciphertext".to_vec(),
+                sign_update(&p.secret, V, oid, b"ciphertext"),
+            )
+        };
+
+        let (pl, sig) = upd(&bob, "n1");
+        assert_eq!(a.check_update("n1", 11, "bob", &pl, Some(&sig)), Ok(()));
+        assert_eq!(
+            a.check_update("n1", 11, "bob", &pl, None),
+            Err(AuthorError::Unsigned)
+        );
+        assert_eq!(
+            a.check_update("n1", 9, "bob", &pl, None),
+            Ok(()),
+            "from before the requirement"
+        );
+        // Signed by Eve, but the server says Bob wrote it.
+        let (pl2, forged) = upd(&eve, "n1");
+        assert_eq!(
+            a.check_update("n1", 11, "bob", &pl2, Some(&forged)),
+            Err(AuthorError::BadSignature("bob".into()))
+        );
+        // A different ciphertext under Bob's signature.
+        assert!(
+            a.check_update("n1", 11, "bob", b"other", Some(&sig))
+                .is_err()
+        );
+        // Vic only ever viewed; Eve was never anywhere.
+        let (pl3, vsig) = upd(&vic, "n1");
+        assert_eq!(
+            a.check_update("n1", 11, "vic", &pl3, Some(&vsig)),
+            Err(AuthorError::NotAWriter("vic".into()))
+        );
+        assert!(
+            a.check_update("n1", 11, "eve", &pl2, Some(&forged))
+                .is_err()
+        );
+        // Rita may edit the one note shared with her, nothing else.
+        let (pl4, rsig) = upd(&rita, "n1");
+        assert_eq!(a.check_update("n1", 11, "rita", &pl4, Some(&rsig)), Ok(()));
+        let (pl5, rsig2) = upd(&rita, "n2");
+        assert!(
+            a.check_update("n2", 11, "rita", &pl5, Some(&rsig2))
+                .is_err()
+        );
+        // Snapshots: what they cover is signed too.
+        let ssig = sign_snapshot(&bob.secret, V, "n1", 12, b"state");
+        assert_eq!(
+            a.check_snapshot("n1", 12, "bob", b"state", Some(&ssig)),
+            Ok(())
+        );
+        assert!(
+            a.check_snapshot("n1", 99, "bob", b"state", Some(&ssig))
+                .is_err(),
+            "relabelled"
+        );
+        assert_eq!(
+            a.check_snapshot("n1", 12, "bob", b"state", None),
+            Err(AuthorError::Unsigned)
+        );
+        // Before the requirement nothing unsigned is refused.
+        assert_eq!(before.check_update("n1", 11, "bob", &pl, None), Ok(()));
+    }
+
+    #[test]
+    fn share_rules() {
+        let (alice, bob, rita) = (person("alice"), person("bob"), person("rita"));
+        let anchor = alice.secret.public();
+        let check = |bodies: Vec<LogBody>| {
+            let (mut log, _) = created(&alice);
+            append(
+                &mut log,
+                &alice,
+                LogBody::Add {
+                    member: member(&bob, Role::Editor),
+                },
+            );
+            for b in bodies {
+                append(&mut log, &alice, b);
+            }
+            LogState::verify(V, &anchor, &log)
+        };
+        let share = |p: &Person, role| LogBody::Share {
+            object_id: "n1".into(),
+            member: member(p, role),
+        };
+        assert!(
+            check(vec![share(&bob, Role::Viewer)]).is_err(),
+            "members have the vault"
+        );
+        assert!(check(vec![share(&rita, Role::Owner)]).is_err());
+        assert!(
+            check(vec![LogBody::Share {
+                object_id: "n1".into(),
+                member: LogMember::pending("rita", Role::Viewer)
+            }])
+            .is_err(),
+            "recipients need keys"
+        );
+        let un = LogBody::Unshare {
+            object_id: "n1".into(),
+            user_id: "rita".into(),
+        };
+        assert!(check(vec![un.clone()]).is_err(), "not shared");
+        let s = check(vec![share(&rita, Role::Viewer), share(&rita, Role::Editor)]).unwrap();
+        assert_eq!(
+            s.shares[&("n1".to_string(), "rita".to_string())].role,
+            Role::Editor
+        );
+        let s = check(vec![share(&rita, Role::Viewer), un]).unwrap();
+        assert!(s.shares.is_empty());
+        let req = LogBody::RequireSigned { from_seq: 0 };
+        assert!(check(vec![req.clone(), req]).is_err(), "once");
+        // Joining the vault ends their single-note shares.
+        let s = check(vec![
+            share(&rita, Role::Viewer),
+            LogBody::Add {
+                member: member(&rita, Role::Viewer),
+            },
+        ])
+        .unwrap();
+        assert!(s.shares.is_empty());
     }
 
     #[test]

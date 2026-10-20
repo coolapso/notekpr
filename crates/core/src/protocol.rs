@@ -464,6 +464,9 @@ pub struct AddObjectShareRequest {
     pub user_id: String,
     pub role: Role,
     pub envelope: KeyEnvelope,
+    /// `Share`, signed by the owner (required once the vault has a log).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub log_entry: Option<LogEntry>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -585,6 +588,10 @@ pub struct Update {
     #[serde(with = "b64")]
     pub payload: Vec<u8>,
     pub created_at: i64,
+    /// The author's signature (`memberlog::sign_update`/`sign_snapshot`);
+    /// required once the vault's log says so.
+    #[serde(default, with = "b64::opt", skip_serializing_if = "Option::is_none")]
+    pub signature: Option<Vec<u8>>,
 }
 
 /// An encrypted, compacted object state covering all updates up to `covers_seq`.
@@ -597,6 +604,10 @@ pub struct Snapshot {
     #[serde(with = "b64")]
     pub payload: Vec<u8>,
     pub created_at: i64,
+    /// The author's signature (`memberlog::sign_update`/`sign_snapshot`);
+    /// required once the vault's log says so.
+    #[serde(default, with = "b64::opt", skip_serializing_if = "Option::is_none")]
+    pub signature: Option<Vec<u8>>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -643,6 +654,10 @@ pub struct PushUpdate {
     pub client_update_id: String,
     #[serde(with = "b64")]
     pub payload: Vec<u8>,
+    /// The author's signature (`memberlog::sign_update`/`sign_snapshot`);
+    /// required once the vault's log says so.
+    #[serde(default, with = "b64::opt", skip_serializing_if = "Option::is_none")]
+    pub signature: Option<Vec<u8>>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -671,8 +686,8 @@ pub struct PushResponse {
 pub struct RejectedUpdate {
     pub client_update_id: String,
     pub object_id: String,
-    /// [`REJECT_TOO_LARGE`], [`REJECT_PURGED`], [`REJECT_STALE_KEY`] or
-    /// `bad_request`.
+    /// [`REJECT_TOO_LARGE`], [`REJECT_PURGED`], [`REJECT_STALE_KEY`],
+    /// [`REJECT_UNSIGNED`], [`REJECT_BAD_SIGNATURE`] or `bad_request`.
     pub code: String,
     pub message: String,
 }
@@ -683,6 +698,10 @@ pub const REJECT_TOO_LARGE: &str = "too_large";
 pub const REJECT_PURGED: &str = "purged";
 /// Encrypted with an outdated key: reload keys and send it again.
 pub const REJECT_STALE_KEY: &str = "stale_key";
+/// Not signed, but the vault requires signed content (update the app).
+pub const REJECT_UNSIGNED: &str = "unsigned";
+/// The signature doesn't match the author's account key.
+pub const REJECT_BAD_SIGNATURE: &str = "bad_signature";
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct CreateSnapshotRequest {
@@ -690,6 +709,10 @@ pub struct CreateSnapshotRequest {
     pub covers_seq: i64,
     #[serde(with = "b64")]
     pub payload: Vec<u8>,
+    /// The author's signature (`memberlog::sign_update`/`sign_snapshot`);
+    /// required once the vault's log says so.
+    #[serde(default, with = "b64::opt", skip_serializing_if = "Option::is_none")]
+    pub signature: Option<Vec<u8>>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -1043,6 +1066,7 @@ mod tests {
                 object_id: "o".into(),
                 client_update_id: "c".into(),
                 payload: vec![1, 2, 3],
+                signature: None,
             }],
         };
         let s = serde_json::to_string(&m).unwrap();

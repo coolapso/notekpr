@@ -24,7 +24,8 @@ R6 started (`state/` split; the editor is its own crate with a document
 model, transactions and line-level rendering),
 R7 done (weekly fuzzing in CI). R1 done (sync engine crate, partial push
 acceptance), R2 done (every note has its own key; sharing starts a fresh,
-unlinked one). R3: the signed membership log is done; signed updates next.
+unlinked one). R3: the signed membership log and signed content are done; the replay fixes
+[W-M10, S-L8] and committed note keys for recipients remain.
 
 ## Decisions (2026-10-19)
 
@@ -445,7 +446,15 @@ every client verifies; updates are signed by the author's key.
 - [ ] Commit the document keys of individually shared notes too (an owner
       signature on each share), so a server can't hand a recipient a note
       key of its own.
-- [ ] Signed updates (authorship verifiable even against a colluding server).
+- [x] Signed updates (authorship verifiable even against a colluding server):
+      every update and snapshot carries its author's signature; the log's
+      `require_signed` makes them mandatory (new vaults at once, older ones
+      when their owner's client next opens them, after signing existing
+      single-note shares in); clients accept content only from keys the log
+      ever let write it, keep content by authors their copy of the log
+      doesn't know until it is reloaded, and the server refuses unsigned and
+      mis-signed content. Residual: backdated content by former writers with
+      a colluding server (security.md).
 - [x] Bind the account key into device approval (interim fix): the
       verification code covers the account key; new devices pin it and refuse
       a secret of any other account, also on later unlocks [S-M5, W-M1].
@@ -458,7 +467,7 @@ every client verifies; updates are signed by the author's key.
   rolled back by replaying old prefs [W-M10]; recovery-key rotation replay
   [S-L8]; pin checks in rotations [C-M7]; residual risk #2 in
   [security.md](docs/security.md) (viewers forging content with a colluding
-  server).
+  server — done, apart from former writers backdating content).
 
 ### R4. Storage foundation (SQLite stays)
 

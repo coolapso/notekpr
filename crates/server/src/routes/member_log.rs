@@ -41,8 +41,21 @@ pub(crate) enum Expect<'a> {
     Rotate {
         epoch: u32,
     },
-    /// `POST /vaults/{v}/log`: `Checkpoint`, `Rekey`, or `Remove` of someone
-    /// who is no longer a member.
+    /// A note is shared with someone, or their role on it changes.
+    Share {
+        object_id: &'a str,
+        user_id: &'a str,
+        role: Role,
+    },
+    /// The owner stops sharing a note with someone, or they remove it from
+    /// their list.
+    Unshare {
+        object_id: &'a str,
+        user_id: &'a str,
+    },
+    /// `POST /vaults/{v}/log`: `Checkpoint`, `Rekey`, `Share` of a note
+    /// already shared (when the log starts), `RequireSigned`, or `Remove` of
+    /// someone who is no longer a member.
     Standalone,
 }
 
@@ -62,6 +75,7 @@ pub(crate) async fn check_and_append(
             // A vault without a log yet (older clients).
             (None, _) => Ok(()),
             (Some(_), Expect::Remove { user_id }) if *user_id == who.user_id => Ok(()),
+            (Some(_), Expect::Unshare { user_id, .. }) if *user_id == who.user_id => Ok(()),
             _ => Err(conflict(
                 "this vault's membership is signed; update the app to change it",
             )),
@@ -142,6 +156,42 @@ pub(crate) async fn check_and_append(
                 && !member.enc_public.is_empty()
                 && keys_match(tx, member).await?
         }
+        (
+            Expect::Share {
+                object_id,
+                user_id,
+                role,
+            },
+            LogBody::Share {
+                object_id: o,
+                member,
+            },
+        ) => {
+            o == object_id
+                && member.user_id == *user_id
+                && member.role == *role
+                && !member.enc_public.is_empty()
+                && keys_match(tx, member).await?
+        }
+        (
+            Expect::Unshare { object_id, user_id },
+            LogBody::Unshare {
+                object_id: o,
+                user_id: u,
+            },
+        ) => o == object_id && u == user_id && *user_id != who.user_id,
+        (Expect::Standalone, LogBody::Share { object_id, member }) => {
+            head.is_some()
+                && access::share_role(&mut **tx, vault_id, object_id, &member.user_id).await?
+                    == Some(member.role)
+                && !member.enc_public.is_empty()
+                && keys_match(tx, member).await?
+        }
+        (Expect::Standalone, LogBody::RequireSigned { from_seq }) => {
+            let (head_seq, signed) =
+                repo::vaults::head_and_signed_from(&mut **tx, vault_id).await?;
+            head.is_some() && signed.is_none() && (0..=head_seq).contains(from_seq)
+        }
         (Expect::Standalone, LogBody::Remove { user_id }) => {
             *user_id != who.user_id
                 && access::member_role_opt(&mut **tx, vault_id, user_id)
@@ -152,6 +202,9 @@ pub(crate) async fn check_and_append(
     };
     if !matches {
         return Err(bad("the membership log entry does not match the change"));
+    }
+    if let LogBody::RequireSigned { from_seq } = &e.body {
+        repo::vaults::set_signed_from(&mut **tx, vault_id, *from_seq).await?;
     }
     repo::member_log::append(&mut **tx, vault_id, e, now).await
 }
@@ -234,6 +287,8 @@ pub async fn append(
     let kind = match req.entry.body {
         LogBody::Checkpoint { .. } => "member_log.checkpoint",
         LogBody::Rekey { .. } => "member_log.rekey",
+        LogBody::Share { .. } => "member_log.share",
+        LogBody::RequireSigned { .. } => "member_log.require_signed",
         _ => "member_log.remove",
     };
     db::audit(

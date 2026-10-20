@@ -6,10 +6,12 @@
 
 use std::collections::HashMap;
 
+use coolpsonotes_core::keys::AccountPublic;
+use coolpsonotes_core::memberlog;
 use coolpsonotes_core::protocol::{
-    ChangesResponse, INDEX_OBJECT_ID, ObjectState, PurgedObject, PushResult, PushUpdate,
-    REJECT_PURGED, REJECT_STALE_KEY, REJECT_TOO_LARGE, RejectedUpdate, Snapshot, SnapshotInfo,
-    Update,
+    ChangesResponse, CreateSnapshotRequest, INDEX_OBJECT_ID, ObjectState, PurgedObject, PushResult,
+    PushUpdate, REJECT_BAD_SIGNATURE, REJECT_PURGED, REJECT_STALE_KEY, REJECT_TOO_LARGE,
+    REJECT_UNSIGNED, RejectedUpdate, Snapshot, SnapshotInfo, Update,
 };
 use sqlx::Row;
 
@@ -19,6 +21,7 @@ use crate::db::{self, Db};
 use crate::error::{AppError, AppResult, bad, conflict, forbidden};
 use crate::hub::Control;
 use crate::hub::VaultEvent;
+use crate::repo;
 use crate::state::AppState;
 
 pub const MAX_BATCH: usize = 500;
@@ -34,6 +37,7 @@ fn row_update(r: &sqlx::sqlite::SqliteRow) -> Update {
         author_id: r.get("author_id"),
         payload: r.get("payload"),
         created_at: r.get("created_at"),
+        signature: r.get("signature"),
     }
 }
 
@@ -45,6 +49,7 @@ fn row_snapshot(r: &sqlx::sqlite::SqliteRow) -> Snapshot {
         author_id: r.get("author_id"),
         payload: r.get("payload"),
         created_at: r.get("created_at"),
+        signature: r.get("signature"),
     }
 }
 
@@ -80,7 +85,7 @@ pub async fn changes_since(
     let mut covered: HashMap<String, i64> = HashMap::new();
     if include_snapshots {
         let rows = sqlx::query(
-            "SELECT s.id, s.object_id, s.covers_seq, s.author_id, s.payload, s.created_at
+            "SELECT s.id, s.object_id, s.covers_seq, s.author_id, s.payload, s.created_at, s.signature
              FROM snapshots s
              JOIN objects o ON o.vault_id = s.vault_id AND o.id = s.object_id AND o.purged_at IS NULL
              WHERE s.vault_id = ? AND s.covers_seq > ? AND (? IS NULL OR s.object_id = ?)
@@ -104,7 +109,7 @@ pub async fn changes_since(
         }
     }
     let rows = sqlx::query(
-        "SELECT object_id, seq, author_id, payload, created_at FROM updates
+        "SELECT object_id, seq, author_id, payload, created_at, signature FROM updates
          WHERE vault_id = ? AND seq > ? AND (? IS NULL OR object_id = ?) AND (? = 0 OR substr(payload, 2, 4) >= (SELECT ob.share_from FROM objects ob WHERE ob.vault_id = updates.vault_id AND ob.id = updates.object_id)) ORDER BY seq LIMIT ?",
     )
     .bind(vault_id)
@@ -186,7 +191,7 @@ pub async fn object_state(
         Some(None) => {}
     }
     let snapshot = sqlx::query(
-        "SELECT id, object_id, covers_seq, author_id, payload, created_at FROM snapshots
+        "SELECT id, object_id, covers_seq, author_id, payload, created_at, signature FROM snapshots
          WHERE vault_id = ? AND object_id = ? AND (? = 0 OR substr(payload, 2, 4) >= (SELECT ob.share_from FROM objects ob WHERE ob.vault_id = snapshots.vault_id AND ob.id = snapshots.object_id)) ORDER BY covers_seq DESC, created_at DESC LIMIT 1",
     )
     .bind(vault_id)
@@ -197,7 +202,7 @@ pub async fn object_state(
     .map(|r| row_snapshot(&r));
     let after = snapshot.as_ref().map(|s| s.covers_seq).unwrap_or(0);
     let updates = sqlx::query(
-        "SELECT object_id, seq, author_id, payload, created_at FROM updates
+        "SELECT object_id, seq, author_id, payload, created_at, signature FROM updates
          WHERE vault_id = ? AND object_id = ? AND seq > ? AND (? = 0 OR substr(payload, 2, 4) >= (SELECT ob.share_from FROM objects ob WHERE ob.vault_id = updates.vault_id AND ob.id = updates.object_id)) ORDER BY seq",
     )
     .bind(vault_id)
@@ -293,6 +298,29 @@ pub struct PushOutcome {
     pub head_seq: i64,
 }
 
+/// Why content can't be stored for its signature, if so: unsigned where the
+/// vault requires signatures, or not signed with the author's account key.
+/// (Clients check authorship themselves; this keeps honest servers clean.)
+pub fn signature_problem(
+    signed_from: Option<i64>,
+    signer: Option<&AccountPublic>,
+    signature: Option<&[u8]>,
+    verify: impl Fn(&AccountPublic, &[u8]) -> bool,
+) -> Option<(&'static str, &'static str)> {
+    match signature {
+        None if signed_from.is_some() => Some((
+            REJECT_UNSIGNED,
+            "this vault requires signed changes; update the app",
+        )),
+        None => None,
+        Some(sig) if signer.is_some_and(|k| verify(k, sig)) => None,
+        Some(_) => Some((
+            REJECT_BAD_SIGNATURE,
+            "the signature doesn't match your account key",
+        )),
+    }
+}
+
 fn rejected(u: &PushUpdate, code: &str, message: &str) -> RejectedUpdate {
     RejectedUpdate {
         client_update_id: u.client_update_id.clone(),
@@ -363,9 +391,13 @@ pub async fn push(
     for o in objects {
         write_access(&state.db, member, vault_id, o, &who.user_id).await?;
     }
+    let signer = repo::users::account_key(&state.db, &who.user_id)
+        .await?
+        .and_then(|k| k.verify().ok());
     let now = db::now();
     let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
     let vault_epoch = vault_key_epoch(&mut *tx, vault_id).await?;
+    let signed_from = repo::vaults::signed_from(&mut *tx, vault_id).await?;
     let mut results = Vec::with_capacity(updates.len());
     let mut duplicates = Vec::new();
     let mut fresh: Vec<(Update, String)> = Vec::new();
@@ -393,6 +425,15 @@ pub async fn push(
         .bind(&u.object_id)
         .fetch_optional(&mut *tx)
         .await?;
+        if let Some((code, message)) = signature_problem(
+            signed_from,
+            signer.as_ref(),
+            u.signature.as_deref(),
+            |k, sig| memberlog::verify_update(k, vault_id, &u.object_id, &u.payload, sig),
+        ) {
+            refused.push(rejected(&u, code, message));
+            continue;
+        }
         match check_payload_key(vault_epoch, obj.and_then(|o| o.1), &u.payload) {
             Ok(()) => {}
             Err(AppError::StaleKey(m)) => {
@@ -438,8 +479,8 @@ pub async fn push(
                 .fetch_one(&mut *tx)
                 .await?;
         sqlx::query(
-            "INSERT INTO updates (vault_id, seq, object_id, client_update_id, author_id, device_id, payload, created_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO updates (vault_id, seq, object_id, client_update_id, author_id, device_id, payload, created_at, signature)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(vault_id)
         .bind(seq)
@@ -449,6 +490,7 @@ pub async fn push(
         .bind(&who.device_id)
         .bind(&u.payload)
         .bind(now)
+        .bind(&u.signature)
         .execute(&mut *tx)
         .await?;
         results.push(PushResult {
@@ -462,6 +504,7 @@ pub async fn push(
                 author_id: who.user_id.clone(),
                 payload: u.payload,
                 created_at: now,
+                signature: u.signature,
             },
             u.client_update_id,
         ));
@@ -498,10 +541,15 @@ pub async fn create_snapshot(
     who: &Principal,
     vault_id: &str,
     object_id: &str,
-    snapshot_id: &str,
-    covers_seq: i64,
-    payload: Vec<u8>,
+    req: CreateSnapshotRequest,
 ) -> AppResult<SnapshotInfo> {
+    let CreateSnapshotRequest {
+        snapshot_id,
+        covers_seq,
+        payload,
+        signature,
+    } = req;
+    let snapshot_id = snapshot_id.as_str();
     validate_object_id(object_id)?;
     if !db::valid_id(snapshot_id) {
         return Err(bad("invalid snapshot id"));
@@ -558,6 +606,7 @@ pub async fn create_snapshot(
         snapshot_id,
         covers_seq,
         &payload,
+        signature.as_deref(),
         now,
     )
     .await?;
@@ -592,8 +641,24 @@ pub async fn insert_snapshot(
     snapshot_id: &str,
     covers_seq: i64,
     payload: &[u8],
+    signature: Option<&[u8]>,
     now: i64,
 ) -> AppResult<()> {
+    let signer = repo::users::account_key(&mut **tx, author_id)
+        .await?
+        .and_then(|k| k.verify().ok());
+    let required = repo::vaults::signed_from(&mut **tx, vault_id).await?;
+    if let Some((code, message)) =
+        signature_problem(required, signer.as_ref(), signature, |k, sig| {
+            memberlog::verify_snapshot(k, vault_id, object_id, covers_seq, payload, sig)
+        })
+    {
+        return Err(if code == REJECT_UNSIGNED {
+            conflict(message)
+        } else {
+            bad(message)
+        });
+    }
     let size = payload.len() as i64;
     let prev: Option<i64> = sqlx::query_scalar(
         "SELECT covers_seq FROM snapshots WHERE vault_id = ? AND object_id = ? ORDER BY covers_seq DESC LIMIT 1",
@@ -603,8 +668,8 @@ pub async fn insert_snapshot(
     .fetch_optional(&mut **tx)
     .await?;
     let r = sqlx::query(
-        "INSERT INTO snapshots (id, vault_id, object_id, covers_seq, author_id, payload, size, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO snapshots (id, vault_id, object_id, covers_seq, author_id, payload, size, created_at, signature)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(snapshot_id)
     .bind(vault_id)
@@ -614,6 +679,7 @@ pub async fn insert_snapshot(
     .bind(payload)
     .bind(size)
     .bind(now)
+    .bind(signature)
     .execute(&mut **tx)
     .await;
     if let Err(sqlx::Error::Database(e)) = &r
@@ -683,7 +749,7 @@ pub async fn get_snapshot(
     doc_only: bool,
 ) -> AppResult<Snapshot> {
     sqlx::query(
-        "SELECT id, object_id, covers_seq, author_id, payload, created_at FROM snapshots
+        "SELECT id, object_id, covers_seq, author_id, payload, created_at, signature FROM snapshots
          WHERE vault_id = ? AND object_id = ? AND id = ? AND (? = 0 OR substr(payload, 2, 4) >= (SELECT ob.share_from FROM objects ob WHERE ob.vault_id = snapshots.vault_id AND ob.id = snapshots.object_id))",
     )
     .bind(vault_id)

@@ -110,6 +110,7 @@ async fn people_can_recover_their_notes_offline() {
                 user_id: carol.id.clone(),
                 role: Role::Viewer,
                 envelope: env,
+                log_entry: None,
             },
         )
         .await;

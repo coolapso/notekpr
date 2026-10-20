@@ -23,7 +23,7 @@ use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 use tokio_tungstenite::{Connector, MaybeTlsStream, WebSocketStream};
 
 use crate::hub::Hub;
-use crate::session::random_duration;
+use crate::session::{SharedVault, random_duration};
 use crate::ui;
 
 type Ws = WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>;
@@ -372,6 +372,29 @@ fn spawn_push(hub: &Arc<Hub>, vault_id: &str) {
 /// shared note) missing from that note's keyring. Document epochs are always
 /// "greater" than vault epochs, so comparing them with the vault's current
 /// epoch made every page with a shared note refetch all keys.
+/// Content by someone our copy of the membership log doesn't know waits for
+/// a fresh copy: reload it in the background and check that content again.
+fn reload_log_if_needed(hub: &Arc<Hub>, v: &SharedVault) {
+    let (h, v) = (hub.clone(), v.clone());
+    tokio::spawn(async move {
+        if v.lock().await.replica.needs_log() {
+            match h.session.reload_member_log(&v).await {
+                Ok(a) => {
+                    let id = v.lock().await.id().to_string();
+                    h.emit_applied(&id, &a, false);
+                }
+                Err(e) => tracing::warn!("reloading the membership log: {e:#}"),
+            }
+            // What passed may still need a key we don't have yet.
+            if v.lock().await.replica.needs_keys()
+                && let Err(e) = h.session.refresh_keys(&v).await
+            {
+                tracing::warn!("refreshing vault keys: {e:#}");
+            }
+        }
+    });
+}
+
 pub(crate) fn missing_epoch<'a>(
     v: &crate::vault::Vault,
     mut items: impl Iterator<Item = (&'a str, &'a [u8])>,
@@ -429,6 +452,7 @@ async fn handle(
             let a = g.apply_changes(&changes);
             drop(g);
             hub.emit_applied(&vault_id, &a, false);
+            reload_log_if_needed(hub, &v);
         }
         ServerMessage::Synced {
             vault_id, head_seq, ..
@@ -485,6 +509,7 @@ async fn handle(
                     tracing::warn!(vault = %vault_id, "skipped an update that could not be applied: {e:#}")
                 }
             }
+            reload_log_if_needed(hub, &v);
         }
         ServerMessage::Snapshot { vault_id, snapshot } => {
             let Some(v) = hub.get(&vault_id) else {

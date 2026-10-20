@@ -125,6 +125,7 @@ mod tests {
             object_id: "o".into(),
             client_update_id: id.to_string(),
             payload: vec![0; len],
+            signature: None,
         }
     }
 

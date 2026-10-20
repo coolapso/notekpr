@@ -15,7 +15,8 @@ use axum::http::StatusCode;
 use coolpsonotes_core::keys::{FIRST_DOC_EPOCH, is_doc_epoch};
 use coolpsonotes_core::protocol::{
     AddObjectShareRequest, INDEX_OBJECT_ID, ObjectEventKind, ObjectKeyUpdate, ObjectKeysResponse,
-    ObjectMetaUpdate, ObjectShareInfo, Role, SharedNote, UpdateMemberRequest, UserEventKind,
+    ObjectMetaUpdate, ObjectShareInfo, RemoveMemberRequest, Role, SharedNote, UpdateMemberRequest,
+    UserEventKind,
 };
 use sqlx::SqliteExecutor;
 
@@ -26,6 +27,7 @@ use crate::error::{AppError, AppResult, bad, conflict, forbidden};
 use crate::hub::{Control, VaultEvent};
 use crate::repo;
 use crate::routes::me::notify_user;
+use crate::routes::member_log::{self, Expect};
 use crate::routes::users::public_user;
 use crate::state::AppState;
 use crate::sync;
@@ -281,6 +283,7 @@ pub(crate) async fn apply_key_change(
             &snap.snapshot_id,
             snap.covers_seq.max(0),
             &snap.payload,
+            snap.signature.as_deref(),
             now,
         )
         .await?;
@@ -472,6 +475,19 @@ pub async fn add(
         now,
     )
     .await?;
+    member_log::check_and_append(
+        &mut tx,
+        &v,
+        &who,
+        req.log_entry.as_ref(),
+        Expect::Share {
+            object_id: &o,
+            user_id: &req.user_id,
+            role: req.role,
+        },
+        now,
+    )
+    .await?;
     tx.commit().await?;
     drop(_w);
     db::audit(
@@ -514,6 +530,19 @@ pub async fn update(
         if repo::shares::set_role(&mut *tx, &v, &o, &u, req.role).await? == 0 {
             return Err(AppError::NotFound);
         }
+        member_log::check_and_append(
+            &mut tx,
+            &v,
+            &who,
+            req.log_entry.as_ref(),
+            Expect::Share {
+                object_id: &o,
+                user_id: &u,
+                role: req.role,
+            },
+            db::now(),
+        )
+        .await?;
         tx.commit().await?;
     }
     db::audit(
@@ -555,7 +584,9 @@ pub async fn remove(
     State(state): State<AppState>,
     who: Principal,
     Path((v, o, u)): Path<(String, String, String)>,
+    req: Option<Json<RemoveMemberRequest>>,
 ) -> AppResult<StatusCode> {
+    let req = req.map(|Json(r)| r).unwrap_or_default();
     may_remove(&state.db, &v, &o, &u, &who.user_id).await?;
     {
         let _w = state.write_lock.lock().await;
@@ -569,6 +600,18 @@ pub async fn remove(
             });
         }
         repo::keys::delete_document_keys_of(&mut *tx, &v, &o, &u).await?;
+        member_log::check_and_append(
+            &mut tx,
+            &v,
+            &who,
+            req.log_entry.as_ref(),
+            Expect::Unshare {
+                object_id: &o,
+                user_id: &u,
+            },
+            db::now(),
+        )
+        .await?;
         tx.commit().await?;
     }
     db::audit(

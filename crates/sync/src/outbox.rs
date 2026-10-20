@@ -410,6 +410,7 @@ impl Outbox {
                     object_id: p.object_id.clone(),
                     client_update_id: p.client_update_id.clone(),
                     payload,
+                    signature: None,
                 }),
                 Err(_) => plan.waiting_for_keys += 1,
             }
@@ -653,6 +654,7 @@ pub fn stored_copies(
                     object_id: p.object_id.clone(),
                     client_update_id: p.client_update_id.clone(),
                     payload,
+                    signature: None,
                 })
                 .or_else(|| {
                     previous

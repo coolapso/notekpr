@@ -103,16 +103,7 @@ pub async fn create_snapshot(
     Path((v, o)): Path<(String, String)>,
     Json(req): Json<CreateSnapshotRequest>,
 ) -> AppResult<(StatusCode, Json<SnapshotInfo>)> {
-    let info = sync::create_snapshot(
-        &state,
-        &who,
-        &v,
-        &o,
-        &req.snapshot_id,
-        req.covers_seq,
-        req.payload,
-    )
-    .await?;
+    let info = sync::create_snapshot(&state, &who, &v, &o, req).await?;
     Ok((StatusCode::CREATED, Json(info)))
 }
 

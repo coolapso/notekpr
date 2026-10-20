@@ -287,7 +287,28 @@ impl Session {
     /// Fetch and verify a vault's membership log, and check the vault keys
     /// we hold against the owner's commitments. Owners start the log of a
     /// vault that has none (a checkpoint of the current members).
-    pub async fn load_member_log(&self, v: &mut Vault) -> Result<()> {
+    pub async fn load_member_log(&self, v: &mut Vault) -> Result<Applied> {
+        let id = v.id().to_string();
+        self.verify_member_log(v).await?;
+        if v.role() == Role::Owner && v.read_only.is_none() {
+            if !v.log.has_log()
+                && let Err(e) = self.start_member_log(v).await
+            {
+                tracing::warn!(vault = %id, "could not start the membership log: {e:#}");
+            }
+            if v.log.needs_signatures()
+                && let Err(e) = self.require_signatures(v).await
+            {
+                tracing::warn!(vault = %id, "could not require signed changes: {e:#}");
+            }
+        }
+        // Content is checked against who may write it from now on.
+        let authors = v.log.authors();
+        Ok(v.set_authors(authors))
+    }
+
+    /// Fetch the vault's log, verify it, and check our vault keys against it.
+    async fn verify_member_log(&self, v: &mut Vault) -> Result<()> {
         let id = v.id().to_string();
         let anchor = self.owner_key(&v.owner_id).await?;
         for attempt in 0..2 {
@@ -326,14 +347,64 @@ impl Session {
                 ),
             }
         }
-        if !v.log.has_log()
-            && v.role() == Role::Owner
-            && v.read_only.is_none()
-            && let Err(e) = self.start_member_log(v).await
-        {
-            tracing::warn!(vault = %id, "could not start the membership log: {e:#}");
-        }
         Ok(())
+    }
+
+    /// Owner: sign `body` into the vault's log (`POST /vaults/{v}/log`).
+    async fn append_log(&self, v: &mut Vault, body: LogBody) -> Result<()> {
+        let id = v.id().to_string();
+        let entry = v
+            .log
+            .next(
+                &self.account,
+                &self.user_id,
+                &id,
+                body,
+                coolpsonotes_core::now_ms(),
+            )
+            .ok_or_else(|| anyhow!("the vault has no membership log"))?;
+        self.api
+            .post::<_, ()>(&format!("/vaults/{id}/log"), &AppendLogRequest { entry })
+            .await?;
+        self.verify_member_log(v).await
+    }
+
+    /// Owner: from now on, require every change to be signed by its author.
+    /// The people single notes are already shared with are signed into the
+    /// log first (their keys checked against our pins), so their edits keep
+    /// counting.
+    async fn require_signatures(&self, v: &mut Vault) -> Result<()> {
+        let id = v.id().to_string();
+        for oid in v.replica.shared.clone() {
+            let shares: Vec<ObjectShareInfo> = match self
+                .api
+                .get(&format!("/vaults/{id}/objects/{oid}/shares"))
+                .await
+            {
+                Ok(s) => s,
+                Err(e) if e.is_not_found() => continue,
+                Err(e) => return Err(e.into()),
+            };
+            for sh in shares {
+                let Some(vu) = self.verify_user(&sh.user)? else {
+                    continue;
+                };
+                if vu.pin == PinStatus::Changed {
+                    bail!(
+                        "the account key of {} changed since it was pinned; verify it before their edits can count",
+                        sh.user.display_name
+                    );
+                }
+                let key = sh.user.account_key.as_ref().expect("verified").verify()?;
+                if !v.log.has_share(&oid, &sh.user.id, sh.role, &key) {
+                    self.append_log(v, members::share(&oid, &sh.user.id, sh.role, &key))
+                        .await?;
+                }
+            }
+        }
+        let head = self.api.vault(&id).await?.head_seq;
+        self.append_log(v, LogBody::RequireSigned { from_seq: head })
+            .await
     }
 
     /// Owner: sign a checkpoint of the members as they are now (their keys
@@ -380,10 +451,12 @@ impl Session {
     }
 
     /// [`Session::load_member_log`] for an open vault (after a change).
-    pub async fn reload_member_log(&self, vault: &SharedVault) -> Result<()> {
+    /// Returns what content that waited for it could be applied.
+    pub async fn reload_member_log(&self, vault: &SharedVault) -> Result<Applied> {
         let mut v = vault.lock().await;
-        self.load_member_log(&mut v).await?;
-        v.save()
+        let a = self.load_member_log(&mut v).await?;
+        v.save()?;
+        Ok(a)
     }
 
     /// Owner: pin a member's (new) account key in the vault's log, after the
@@ -405,7 +478,7 @@ impl Session {
         self.api
             .post::<_, ()>(&format!("/vaults/{id}/log"), &AppendLogRequest { entry })
             .await?;
-        self.reload_member_log(vault).await
+        self.reload_member_log(vault).await.map(|_| ())
     }
 
     /// Sign `body` as the vault's next membership log entry (`None`: the
@@ -462,13 +535,19 @@ impl Session {
                 if let Err(e) = v.save() {
                     ui::warn(&format!("could not save the local copy: {e:#}"));
                 }
+                let needs_log = v.replica.needs_log();
+                drop(v);
+                // Some content is by someone our copy of the membership log
+                // doesn't know yet: reload it and check again.
+                if needs_log && let Err(e) = self.reload_member_log(vault).await {
+                    ui::warn(&format!("could not reload the membership log: {e:#}"));
+                }
                 // Some content needs a key we don't have yet (a note got its own
                 // key, or the vault key rotated): fetch keys and replay it.
-                if v.replica.needs_keys() {
-                    drop(v);
-                    if let Err(e) = self.refresh_keys(vault).await {
-                        ui::warn(&format!("could not refresh keys: {e:#}"));
-                    }
+                if vault.lock().await.replica.needs_keys()
+                    && let Err(e) = self.refresh_keys(vault).await
+                {
+                    ui::warn(&format!("could not refresh keys: {e:#}"));
                 }
                 return Ok(all);
             }
@@ -581,7 +660,9 @@ impl Session {
                     Err(e) => return Err(anyhow!(e).context("registering a new note's key")),
                 }
             }
-            let mut pushes = plan.pushes.into_iter();
+            let mut planned = plan.pushes;
+            members::sign_pushes(&self.account, &id, &mut planned);
+            let mut pushes = planned.into_iter();
             while let Some(batch) = pushes.next() {
                 let ids: Vec<String> = batch.iter().map(|p| p.client_update_id.clone()).collect();
                 // Whatever was not delivered goes out in a later round.
@@ -711,7 +792,14 @@ impl Session {
         let action = {
             let v = vault.lock().await;
             match coolpsonotes_sync::snapshot_action(&v.replica, &v.outbox, oid, None) {
-                Some(a) => a,
+                Some(SnapshotAction::Snapshot(mut req)) => {
+                    members::sign_snapshot(&self.account, id, oid, &mut req);
+                    SnapshotAction::Snapshot(req)
+                }
+                Some(SnapshotAction::AdoptKey { ring, mut update }) => {
+                    members::sign_key_update(&self.account, id, oid, &mut update);
+                    SnapshotAction::AdoptKey { ring, update }
+                }
                 None => return Ok(false),
             }
         };

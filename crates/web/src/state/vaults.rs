@@ -202,10 +202,16 @@ pub(super) async fn load_vault_with(info: VaultInfo, force: bool, keys: Option<V
                 if let Some(adopted) = adopted {
                     persist_new_keys(&id, &adopted);
                 }
-                // Owners start the log of a vault from before it.
-                let unsigned = with(|c| c.member_logs.get(&id).is_none_or(|l| !l.has_log()));
+                super::members::apply_authors(&id);
+                // Owners start the log of a vault from before it, and
+                // require signed changes.
+                let unsigned = with(|c| {
+                    c.member_logs
+                        .get(&id)
+                        .is_none_or(|l| !l.has_log() || l.needs_signatures())
+                });
                 if unsigned && info.role == Role::Owner && !with(|c| c.offline_start) {
-                    leptos::task::spawn_local(super::members::start_log(id.clone()));
+                    leptos::task::spawn_local(super::members::sign_vault(id.clone()));
                 }
                 if is_new {
                     subscribe(&id);

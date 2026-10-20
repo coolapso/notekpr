@@ -443,6 +443,23 @@ impl Vault {
         Ok(a)
     }
 
+    /// Check content against `authors` (from the vault's log) from now on,
+    /// and what waited for a fresh log once more (refused if it still fails).
+    pub fn set_authors(
+        &mut self,
+        authors: Option<coolpsonotes_core::memberlog::Authors>,
+    ) -> Applied {
+        let (a, errors) = self.replica.set_authors(authors);
+        for e in &errors {
+            if matches!(e, coolpsonotes_core::engine::EngineError::Author(_)) {
+                tracing::warn!(vault = %self.replica.id, "refused a change: {e}");
+            }
+        }
+        self.mark_applied(&a);
+        self.dirty_state = true;
+        a
+    }
+
     /// Replay content that arrived before we had its key.
     pub fn retry_deferred(&mut self) -> Applied {
         if !self.replica.needs_keys() {

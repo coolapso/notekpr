@@ -298,6 +298,7 @@ impl User {
                 .ring(vault_id)
                 .encrypt(Purpose::Update, object_id, update)
                 .unwrap(),
+            signature: None,
         }
     }
 

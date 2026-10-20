@@ -7,7 +7,9 @@
 
 use anyhow::{Context, Result, anyhow, bail};
 use coolpsonotes_core::engine::{self, ObjectMeta, PinStatus, VaultReplica};
+use coolpsonotes_core::memberlog::LogBody;
 use coolpsonotes_core::protocol::*;
+use coolpsonotes_sync::members;
 
 use crate::api::ApiError;
 use crate::manage::{self, ShareOutcome};
@@ -57,10 +59,19 @@ pub async fn share_note(
         let v = vault.lock().await;
         engine::object_share_envelope(&v.replica.doc_keys[&note_id], &note_id, &user)?
     };
+    // The owner signs who the note is shared with into the vault's log.
+    let key = user
+        .account_key
+        .as_ref()
+        .expect("verified above")
+        .verify()?;
     let req = AddObjectShareRequest {
         user_id: user.id.clone(),
         role,
         envelope,
+        log_entry: session
+            .log_entry(vault, members::share(&note_id, &user.id, role, &key))
+            .await,
     };
     let mut updated_role = false;
     match session
@@ -76,7 +87,9 @@ pub async fn share_note(
                     &format!("/vaults/{id}/objects/{note_id}/shares/{}", user.id),
                     &UpdateMemberRequest {
                         role,
-                        log_entry: None,
+                        log_entry: session
+                            .log_entry(vault, members::share(&note_id, &user.id, role, &key))
+                            .await,
                     },
                 )
                 .await?;
@@ -84,6 +97,7 @@ pub async fn share_note(
         }
         Err(e) => return Err(anyhow!(e).context("sharing the note")),
     }
+    session.reload_member_log(vault).await?;
     {
         let mut v = vault.lock().await;
         v.replica.shared.insert(note_id.clone());
@@ -145,6 +159,8 @@ async fn ensure_document_key(
                 _ => engine::start_sharing(keyring, note_id, &title, &state, v.replica.seq)?,
             }
         };
+        let mut req = req;
+        members::sign_key_update(session.account(), id, note_id, &mut req);
         match session
             .api
             .put::<_, ()>(&format!("/vaults/{id}/objects/{note_id}/key"), &req)
@@ -193,13 +209,23 @@ pub async fn unshare_note(
         })
         .cloned()
         .ok_or_else(|| anyhow!("the note is not shared with '{user_ref}'"))?;
+    let log_entry = session
+        .log_entry(
+            vault,
+            LogBody::Unshare {
+                object_id: note_id.clone(),
+                user_id: user.id.clone(),
+            },
+        )
+        .await;
     session
         .api
-        .delete(&format!(
-            "/vaults/{id}/objects/{note_id}/shares/{}",
-            user.id
-        ))
+        .delete_with(
+            &format!("/vaults/{id}/objects/{note_id}/shares/{}", user.id),
+            &RemoveMemberRequest { log_entry },
+        )
         .await?;
+    session.reload_member_log(vault).await?;
     rotate_note_key(session, vault, &id, &note_id)
         .await
         .with_context(|| {
@@ -398,7 +424,8 @@ pub async fn write_shared(
         let Some(update) = note.set_text(&new) else {
             return Ok(s);
         };
-        let push = r.local_change(&oid, update)?;
+        let mut push = r.local_change(&oid, update)?;
+        members::sign_push(session.account(), &s.info.vault_id, &mut push);
         match session.api.push(&s.info.vault_id, vec![push]).await {
             Ok(_) => return Ok(s),
             // The note's key was rotated meanwhile: reload keys and redo the edit.

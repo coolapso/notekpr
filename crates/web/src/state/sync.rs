@@ -93,6 +93,7 @@ pub(super) fn on_server_message(m: ServerMessage) {
                 if needs_keys {
                     keys_missing(&vault_id);
                 }
+                super::members::log_missing(&vault_id);
             }
         }
         ServerMessage::Synced {
@@ -123,6 +124,7 @@ pub(super) fn on_server_message(m: ServerMessage) {
                 Some(Err(e)) => util::warn(&format!("could not apply update: {e}")),
                 None => {}
             }
+            super::members::log_missing(&vault_id);
         }
         ServerMessage::Ack {
             vault_id,
@@ -527,7 +529,12 @@ pub(super) fn send_planned(vault_id: &str) {
     let plan = with(|c| {
         let r = c.replicas.get_mut(vault_id)?;
         let o = c.outboxes.entry(vault_id.to_string()).or_default();
-        Some(o.plan(r, &limits))
+        let mut plan = o.plan(r, &limits);
+        // Every change carries its author's signature.
+        if let Some(a) = &c.account {
+            coolpsonotes_sync::members::sign_pushes(a, vault_id, &mut plan.pushes);
+        }
+        Some(plan)
     });
     let Some(plan) = plan else { return };
     if !plan.held.is_empty() {
@@ -974,7 +981,26 @@ pub fn snapshot(vault_id: String, object_id: String) {
         };
         let empty = coolpsonotes_sync::Outbox::default();
         let o = c.outboxes.get(&vault_id).unwrap_or(&empty);
-        let action = coolpsonotes_sync::snapshot_action(r, o, &object_id, covers)?;
+        let action = match coolpsonotes_sync::snapshot_action(r, o, &object_id, covers)? {
+            SnapshotAction::Snapshot(mut req) => {
+                coolpsonotes_sync::members::sign_snapshot(
+                    c.account.as_ref()?,
+                    &vault_id,
+                    &object_id,
+                    &mut req,
+                );
+                SnapshotAction::Snapshot(req)
+            }
+            SnapshotAction::AdoptKey { ring, mut update } => {
+                coolpsonotes_sync::members::sign_key_update(
+                    c.account.as_ref()?,
+                    &vault_id,
+                    &object_id,
+                    &mut update,
+                );
+                SnapshotAction::AdoptKey { ring, update }
+            }
+        };
         c.snapshotting.insert(key.clone());
         Some(action)
     });

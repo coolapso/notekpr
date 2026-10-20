@@ -101,7 +101,12 @@ primitives. Formats:
   restores lost content). A server can still delay or drop *future* deliveries
   (availability is not protected).
 * **Injects content as a member?** It has no vault key, so it cannot produce
-  valid ciphertext.
+  valid ciphertext. Nor can it help someone who has the key but may not
+  write (a viewer, or someone removed): every update and snapshot is signed
+  by its author, and clients accept content only if the vault's log lists
+  that author with that key as someone who could write it. Content by an
+  author a client's copy of the log doesn't know yet waits until the log is
+  reloaded; it is never applied unchecked.
 * **Learns metadata** (see above). Mitigation: minimal metadata by design.
 
 ### Stolen credentials
@@ -234,11 +239,14 @@ reported, never applied partially. Duplicate deliveries are no-ops.
 
 1. First-contact key substitution by a malicious server (mitigated only by
    fingerprint comparison).
-2. Update authenticity among members with a colluding server: a viewer holds
-   the vault key and could forge content the server then accepts (planned:
-   signed updates). Membership itself is signed (§5.2 of the protocol).
-   Recipients of single notes don't see the vault's log; their note keys are
-   not committed to yet (planned: an owner signature on each share).
+2. Content authenticity with a colluding server: membership and content are
+   signed (protocol §5.2), but someone who *could* write once (an editor
+   since demoted or removed) still holds a valid signing key and could, with
+   the server's help, add backdated content under an old key epoch. Content
+   from before a vault required signatures is accepted unsigned. Recipients
+   of single notes don't see the vault's log, so their clients don't check
+   authors, and their note keys are not committed to yet (planned: an owner
+   signature on each share).
 3. Metadata visible to the server (sizes, timing, social graph).
 4. Browser key storage relies on the browser profile's security.
 5. Post-quantum: key wrapping uses X25519 today; the format is versioned for a

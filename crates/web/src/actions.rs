@@ -7,7 +7,7 @@ use std::rc::Rc;
 
 use coolpsonotes_core::doc::{EntryKind, NoteDoc};
 use coolpsonotes_core::engine::{self, ObjectMeta, PinStatus, VaultMeta, VaultReplica};
-use coolpsonotes_core::memberlog::LogBody;
+use coolpsonotes_core::memberlog::{LogBody, LogEntry};
 use coolpsonotes_core::protocol::*;
 use coolpsonotes_core::textdiff::Edit;
 use coolpsonotes_core::{markdown, paths};
@@ -86,6 +86,8 @@ pub async fn create_vault(name: String) -> Option<String> {
             object_id: None,
         });
     }
+    // Every change to the new vault is signed by its author from the start.
+    state::sign_vault(id.clone()).await;
     state::publish_vaults();
     Some(id)
 }
@@ -532,6 +534,7 @@ pub async fn share_note(
         user_id: user.id.clone(),
         role,
         envelope,
+        log_entry: share_entry(vault, note, user, role),
     };
     match api::post::<_, ObjectShareInfo>(&format!("/vaults/{vault}/objects/{note}/shares"), &req)
         .await
@@ -542,7 +545,7 @@ pub async fn share_note(
                 &format!("/vaults/{vault}/objects/{note}/shares/{}", user.id),
                 &UpdateMemberRequest {
                     role,
-                    log_entry: None,
+                    log_entry: share_entry(vault, note, user, role),
                 },
             )
             .await
@@ -567,6 +570,7 @@ pub async fn share_note(
             r.shared.insert(note.to_string());
         }
     });
+    state::reload_log(vault).await;
     state::ui().tree_rev.update(|v| *v += 1);
     state::send_presence();
     state::ui().shares_rev.update(|v| *v += 1);
@@ -616,11 +620,16 @@ async fn ensure_note_key(vault: &str, note: &str) -> Result<(), String> {
                 _ => engine::start_sharing(&r.keyring, note, &title, &st, r.seq),
             })
         });
-        let (ring, req) = match made {
+        let (ring, mut req) = match made {
             Some(Ok(x)) => x,
             Some(Err(e)) => return Err(e.to_string()),
             None => return Err("vault not loaded".into()),
         };
+        with(|c| {
+            if let Some(a) = &c.account {
+                coolpsonotes_sync::members::sign_key_update(a, vault, note, &mut req);
+            }
+        });
         match api::put::<_, ()>(&format!("/vaults/{vault}/objects/{note}/key"), &req).await {
             Ok(()) => {
                 with(|c| {
@@ -649,12 +658,33 @@ async fn ensure_note_key(vault: &str, note: &str) -> Result<(), String> {
 /// Stop sharing a note with someone, and give the note a new key so they
 /// can't read what is written from now on.
 pub async fn unshare_note(vault: &str, note: &str, user_id: &str) -> Result<(), String> {
-    api::delete(&format!("/vaults/{vault}/objects/{note}/shares/{user_id}"))
-        .await
-        .map_err(|e| e.message)?;
+    let log_entry = state::log_entry(
+        vault,
+        LogBody::Unshare {
+            object_id: note.to_string(),
+            user_id: user_id.to_string(),
+        },
+    );
+    api::delete_with(
+        &format!("/vaults/{vault}/objects/{note}/shares/{user_id}"),
+        &RemoveMemberRequest { log_entry },
+    )
+    .await
+    .map_err(|e| e.message)?;
+    state::reload_log(vault).await;
     rotate_note_key(vault, note).await?;
     state::ui().shares_rev.update(|v| *v += 1);
     Ok(())
+}
+
+/// The log entry for sharing a note with `user` (their key pinned), if the
+/// vault has a log.
+fn share_entry(vault: &str, note: &str, user: &PublicUser, role: Role) -> Option<LogEntry> {
+    let key = user.account_key.as_ref()?.verify().ok()?;
+    state::log_entry(
+        vault,
+        coolpsonotes_sync::members::share(note, &user.id, role, &key),
+    )
 }
 
 pub async fn set_note_share_role(
@@ -663,15 +693,24 @@ pub async fn set_note_share_role(
     user_id: &str,
     role: Role,
 ) -> Result<(), String> {
-    api::patch::<_, ()>(
+    let user = match with(|c| c.users.get(user_id).cloned()) {
+        Some(u) => u,
+        None => api::get::<PublicUser>(&format!("/users/{user_id}"))
+            .await
+            .map_err(|e| e.message)?,
+    };
+    check_trust(&user)?;
+    let r = api::patch::<_, ()>(
         &format!("/vaults/{vault}/objects/{note}/shares/{user_id}"),
         &UpdateMemberRequest {
             role,
-            log_entry: None,
+            log_entry: share_entry(vault, note, &user, role),
         },
     )
     .await
-    .map_err(|e| e.message)
+    .map_err(|e| e.message);
+    state::reload_log(vault).await;
+    r
 }
 
 /// New document key for a shared note, for its current recipients.

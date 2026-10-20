@@ -62,6 +62,7 @@ async fn private_vaults_are_isolated_and_sharing_works() {
             object_id: "n1".into(),
             client_update_id: random_id(),
             payload: vec![1; 64],
+            signature: None,
         }],
     };
     assert_eq!(
@@ -154,6 +155,7 @@ async fn viewers_are_read_only_and_revocation_rotates_keys() {
         snapshot_id: random_id(),
         covers_seq: 1,
         payload: vec![1; 50],
+        signature: None,
     };
     assert_eq!(
         carol
@@ -287,6 +289,7 @@ async fn pushes_are_idempotent_and_snapshots_compact() {
                 snapshot_id: random_id(),
                 covers_seq: 3,
                 payload: s1,
+                signature: None,
             },
         )
         .await;
@@ -307,6 +310,7 @@ async fn pushes_are_idempotent_and_snapshots_compact() {
                 snapshot_id: random_id(),
                 covers_seq: 4,
                 payload: s2,
+                signature: None,
             },
         )
         .await;
@@ -1051,6 +1055,7 @@ async fn attachments_prefs_admin_and_limits() {
             object_id: "n".into(),
             client_update_id: random_id(),
             payload: vec![0; 3 * 1024 * 1024],
+            signature: None,
         }],
     };
     let resp = alice.push(&v, big.updates).await.unwrap();
@@ -1248,6 +1253,7 @@ async fn individual_note_sharing() {
             .ring(&v)
             .encrypt(Purpose::Snapshot, "n1", &n1.encode_state())
             .unwrap(),
+        signature: None,
     };
     assert_eq!(
         alice
@@ -1299,6 +1305,7 @@ async fn individual_note_sharing() {
                 user_id: bob.id.clone(),
                 role: Role::Editor,
                 envelope: env,
+                log_entry: None,
             },
         )
         .await;
@@ -1395,6 +1402,7 @@ async fn individual_note_sharing() {
                 user_id: carol.id.clone(),
                 role: Role::Viewer,
                 envelope: env,
+                log_entry: None,
             }),
         )
         .await;
@@ -1482,6 +1490,7 @@ async fn individual_note_sharing() {
         object_id: "n2".into(),
         client_update_id: random_id(),
         payload: pb.payload.clone(),
+        signature: None,
     };
     assert_eq!(bob.push(&v, vec![forged]).await.unwrap_err().0, 404);
 
@@ -1495,6 +1504,7 @@ async fn individual_note_sharing() {
                 user_id: carol.id.clone(),
                 role: Role::Viewer,
                 envelope: carol_env,
+                log_entry: None,
             },
         )
         .await;
@@ -1599,6 +1609,7 @@ async fn individual_note_sharing() {
                 object_id: "n1".into(),
                 client_update_id: random_id(),
                 payload: old.payload,
+                signature: None,
             }],
         )
         .await
@@ -1756,6 +1767,7 @@ async fn writes_with_a_replaced_vault_key_are_refused() {
             .ring(&v)
             .encrypt(Purpose::Snapshot, "n1", &note.encode_state())
             .unwrap(),
+        signature: None,
     };
     assert_eq!(
         bob.api
@@ -1879,6 +1891,7 @@ async fn snapshots_of_one_note_by_one_person_have_a_cooldown() {
             .ring(&v)
             .encrypt(Purpose::Snapshot, "n1", &note.encode_state())
             .unwrap(),
+        signature: None,
     };
     let path = format!("/vaults/{v}/objects/n1/snapshots");
     assert_eq!(
@@ -1903,6 +1916,7 @@ async fn one_bad_update_does_not_block_its_batch() {
         object_id: "m".into(),
         client_update_id: random_id(),
         payload: vec![1; 3 * 1024 * 1024],
+        signature: None,
     };
     let big_id = big.client_update_id.clone();
     let resp = alice
@@ -1941,6 +1955,7 @@ async fn one_bad_update_does_not_block_its_batch() {
         object_id: "m".into(),
         client_update_id: random_id(),
         payload: vec![1; 3 * 1024 * 1024],
+        signature: None,
     };
     ws.send(&ClientMessage::Push {
         vault_id: v.clone(),
@@ -2019,6 +2034,7 @@ async fn role_dependent_writes_follow_role_changes() {
                 user_id: carol.id.clone(),
                 role: Role::Viewer,
                 envelope: engine::object_share_envelope(&doc_ring, "n1", &carol_pub).unwrap(),
+                log_entry: None,
             },
         )
         .await;
@@ -2202,6 +2218,7 @@ async fn notes_have_own_keys_and_recipients_never_get_the_history_before_sharing
         object_id: "n".into(),
         client_update_id: random_id(),
         payload: doc.encrypt(Purpose::Update, "n", &first).unwrap(),
+        signature: None,
     };
     let resp = bob.push(&v, vec![under_doc]).await.unwrap();
     assert_eq!(resp.results.len(), 1);
@@ -2222,6 +2239,7 @@ async fn notes_have_own_keys_and_recipients_never_get_the_history_before_sharing
         user_id: carol.id.clone(),
         role: Role::Viewer,
         envelope: env,
+        log_entry: None,
     };
     let st = alice
         .api
@@ -2654,4 +2672,113 @@ async fn an_existing_vault_starts_its_log_with_a_checkpoint() {
         )
         .await;
     assert_eq!(st, 409);
+}
+
+#[tokio::test]
+async fn signed_content_is_required_once_the_log_says_so() {
+    use coolpsonotes_core::memberlog::{self, LogBody};
+    let srv = start().await;
+    let mut alice = new_user(&srv.base, "alice").await;
+    let bob = new_user(&srv.base, "bob").await;
+    let v = alice.create_signed_vault("Signed").await;
+    let note = NoteDoc::new();
+    let mut u = alice.encrypt_update(&v, "n1", &note.set_text("before").unwrap());
+    // Before the requirement unsigned content is stored.
+    assert!(
+        alice
+            .push(&v, vec![u.clone()])
+            .await
+            .unwrap()
+            .rejected
+            .is_empty()
+    );
+
+    let log_path = format!("/vaults/{v}/log");
+    let too_far = alice
+        .sign_next(&v, LogBody::RequireSigned { from_seq: 99 })
+        .await;
+    let st = alice
+        .api
+        .status(
+            Method::POST,
+            &log_path,
+            Some(&AppendLogRequest { entry: too_far }),
+        )
+        .await;
+    assert_eq!(st, 400, "from_seq can't be in the future");
+    let entry = alice
+        .sign_next(&v, LogBody::RequireSigned { from_seq: 1 })
+        .await;
+    let st = alice
+        .api
+        .status(Method::POST, &log_path, Some(&AppendLogRequest { entry }))
+        .await;
+    assert_eq!(st, 204);
+
+    // Unsigned, or signed with someone else's key: refused alone.
+    u = alice.encrypt_update(&v, "n1", &note.set_text("after").unwrap());
+    let mut forged = u.clone();
+    forged.client_update_id = random_id();
+    forged.signature = Some(memberlog::sign_update(
+        &bob.account,
+        &v,
+        "n1",
+        &forged.payload,
+    ));
+    let mut good = u.clone();
+    good.client_update_id = random_id();
+    good.signature = Some(memberlog::sign_update(
+        &alice.account,
+        &v,
+        "n1",
+        &good.payload,
+    ));
+    let r = alice.push(&v, vec![u, forged, good.clone()]).await.unwrap();
+    let codes: Vec<&str> = r.rejected.iter().map(|x| x.code.as_str()).collect();
+    assert_eq!(codes, vec![REJECT_UNSIGNED, REJECT_BAD_SIGNATURE]);
+    assert_eq!(r.results.len(), 1);
+    // The signature is handed out with the update.
+    let ch: ChangesResponse = alice.api.get(&format!("/vaults/{v}/changes?since=0")).await;
+    let last = ch.updates.last().unwrap();
+    assert_eq!(last.signature.as_deref(), good.signature.as_deref());
+
+    // Snapshots too, over what they cover.
+    let ring = alice.ring(&v).clone();
+    let payload = ring
+        .encrypt(Purpose::Snapshot, "n1", &note.encode_state())
+        .unwrap();
+    let mut snap = CreateSnapshotRequest {
+        snapshot_id: random_id(),
+        covers_seq: ch.head_seq,
+        payload: payload.clone(),
+        signature: None,
+    };
+    let path = format!("/vaults/{v}/objects/n1/snapshots");
+    assert_eq!(
+        alice.api.status(Method::POST, &path, Some(&snap)).await,
+        409
+    );
+    snap.signature = Some(memberlog::sign_snapshot(
+        &alice.account,
+        &v,
+        "n1",
+        ch.head_seq - 1,
+        &payload,
+    ));
+    assert_eq!(
+        alice.api.status(Method::POST, &path, Some(&snap)).await,
+        400,
+        "covers something else"
+    );
+    snap.signature = Some(memberlog::sign_snapshot(
+        &alice.account,
+        &v,
+        "n1",
+        ch.head_seq,
+        &payload,
+    ));
+    assert_eq!(
+        alice.api.status(Method::POST, &path, Some(&snap)).await,
+        201
+    );
 }

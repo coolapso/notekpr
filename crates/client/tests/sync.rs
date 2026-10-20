@@ -151,7 +151,12 @@ async fn offline_edits_reconcile_and_pending_queue_survives_restart() {
         .replica
         .pending_pushes()
         .unwrap();
+    // Signed, as every client sends them.
+    let mut batch = vec![pushes];
+    coolpsonotes_sync::members::sign_pushes(session.account(), &vid, &mut batch);
+    let pushes = batch.pop().unwrap();
     let first = session.api.push(&vid, pushes).await.unwrap();
+    assert!(first.rejected.is_empty());
     let head_after_first = first.head_seq;
 
     // Restart again and sync: the same client_update_ids are retried and the

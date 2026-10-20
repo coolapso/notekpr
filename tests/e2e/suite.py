@@ -181,9 +181,13 @@ def test_collab(env):
         b.go(env.url.rstrip("/") + url)
         b.wait("return document.querySelector('.ed') && document.querySelector('.ed').textContent.includes('Thanks!')", 20, "ben sees the note")
         check(True, "shared note decrypts for the second user")
-        log = api_get(b, f"/vaults/{url.split('/')[2]}/log")
-        check([e["body"]["kind"] for e in log["entries"]] == ["create", "add"],
-              "the owner signed the vault's creation and ben's addition")
+        vid = url.split('/')[2]
+        log = api_get(b, f"/vaults/{vid}/log")
+        check([e["body"]["kind"] for e in log["entries"]] == ["create", "require_signed", "add"],
+              "the owner signed the vault's creation, the signature requirement and ben's addition")
+        ch = api_get(b, f"/vaults/{vid}/changes?since=0")
+        check(ch["updates"] and all(u.get("signature") for u in ch["updates"]),
+              "every change is signed by its author")
         b.js("const ed=document.querySelector('.ed'); ed.focus(); const s=getSelection(); s.selectAllChildren(ed); s.collapseToEnd();")
         b.keys(KEYS["enter"] + "bread")
         a.wait("return document.querySelector('.ed').textContent.includes('bread')", 10, "alice sees ben's edit")

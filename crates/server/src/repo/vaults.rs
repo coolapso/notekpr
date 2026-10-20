@@ -149,6 +149,44 @@ pub async fn key_epoch(db: impl SqliteExecutor<'_>, vault_id: &str) -> AppResult
     )
 }
 
+/// The log sequence number after which content must be signed (`None`:
+/// signatures not required yet).
+pub async fn signed_from(db: impl SqliteExecutor<'_>, vault_id: &str) -> AppResult<Option<i64>> {
+    Ok(
+        sqlx::query_scalar("SELECT signed_from FROM vaults WHERE id = ?")
+            .bind(vault_id)
+            .fetch_optional(db)
+            .await?
+            .flatten(),
+    )
+}
+
+/// `(head_seq, signed_from)` of a vault.
+pub async fn head_and_signed_from(
+    db: impl SqliteExecutor<'_>,
+    vault_id: &str,
+) -> AppResult<(i64, Option<i64>)> {
+    Ok(
+        sqlx::query_as("SELECT head_seq, signed_from FROM vaults WHERE id = ?")
+            .bind(vault_id)
+            .fetch_one(db)
+            .await?,
+    )
+}
+
+pub async fn set_signed_from(
+    db: impl SqliteExecutor<'_>,
+    vault_id: &str,
+    from_seq: i64,
+) -> AppResult<()> {
+    sqlx::query("UPDATE vaults SET signed_from = ? WHERE id = ?")
+        .bind(from_seq)
+        .bind(vault_id)
+        .execute(db)
+        .await?;
+    Ok(())
+}
+
 // --- Members ---
 
 /// A user's role in a vault (`None` if not a member, or no such vault).

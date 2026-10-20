@@ -232,6 +232,7 @@ mod tests {
             author_id: "u".into(),
             payload,
             created_at: 0,
+            signature: None,
         }
     }
 
@@ -391,6 +392,7 @@ mod tests {
                         author_id: "alice".into(),
                         payload: share_snapshot.payload.clone(),
                         created_at: 0,
+                        signature: None,
                     }],
                     purged: vec![],
                     head_seq: seq,

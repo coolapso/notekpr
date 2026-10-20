@@ -114,10 +114,116 @@ pub async fn reload_log(vault_id: &str) {
     match load_log(vault_id, &owner, &ring).await {
         Ok(Some(log)) => {
             with(|c| c.member_logs.insert(vault_id.to_string(), log));
+            apply_authors(vault_id);
         }
         Ok(None) => {}
         Err(e) => error(e),
     }
+}
+
+/// Check the vault's content against who may write it, from its log, and
+/// what waited for a fresh log once more.
+pub(super) fn apply_authors(vault_id: &str) {
+    let res = with(|c| {
+        let authors = c.member_logs.get(vault_id).and_then(|l| l.authors());
+        let r = c.replicas.get_mut(vault_id)?;
+        if !r.member {
+            return None;
+        }
+        let rechecked = r.needs_log();
+        let (applied, errors) = r.set_authors(authors);
+        let refused = errors
+            .iter()
+            .filter(|e| matches!(e, engine::EngineError::Author(_)))
+            .count();
+        Some((applied, refused, rechecked && r.needs_keys()))
+    });
+    let Some((applied, refused, needs_keys)) = res else {
+        return;
+    };
+    if refused > 0 {
+        util::warn(&format!(
+            "refused {refused} change(s) not signed by someone who may write here"
+        ));
+    }
+    after_apply(vault_id, applied);
+    // What passed may still need a key we don't have yet.
+    if needs_keys {
+        keys_missing(vault_id);
+    }
+}
+
+/// Content by someone our copy of the log doesn't know yet waits for a
+/// fresh copy: reload it, then that content is checked again.
+pub(super) fn log_missing(vault_id: &str) {
+    if with(|c| c.replicas.get(vault_id).is_some_and(|r| r.needs_log())) {
+        let v = vault_id.to_string();
+        leptos::task::spawn_local(async move { reload_log(&v).await });
+    }
+}
+
+/// Owner: sign `body` into the vault's log.
+async fn append(vault_id: &str, body: LogBody) -> Result<(), String> {
+    let entry = log_entry(vault_id, body).ok_or("the vault has no membership log")?;
+    api::post::<_, ()>(
+        &format!("/vaults/{vault_id}/log"),
+        &AppendLogRequest { entry },
+    )
+    .await
+    .map_err(|e| e.message)?;
+    reload_log(vault_id).await;
+    Ok(())
+}
+
+/// Owner: make sure the vault's log has started and requires every change
+/// to be signed by its author (signing in the people single notes are
+/// already shared with first, so their edits keep counting).
+pub async fn sign_vault(vault_id: String) {
+    if !member_log(&vault_id).has_log() {
+        start_log(vault_id.clone()).await;
+    }
+    if !member_log(&vault_id).needs_signatures() {
+        return;
+    }
+    if let Err(e) = require_signatures(&vault_id).await {
+        util::warn(&format!("could not require signed changes: {e}"));
+    }
+}
+
+async fn require_signatures(vault_id: &str) -> Result<(), String> {
+    let shared = with(|c| {
+        c.replicas
+            .get(vault_id)
+            .map(|r| r.shared.clone())
+            .unwrap_or_default()
+    });
+    for note in shared {
+        let shares: Vec<ObjectShareInfo> =
+            match api::get(&format!("/vaults/{vault_id}/objects/{note}/shares")).await {
+                Ok(s) => s,
+                Err(e) if e.status == 404 => continue,
+                Err(e) => return Err(e.message),
+            };
+        for sh in shares {
+            let Some(Ok(key)) = sh.user.account_key.as_ref().map(|k| k.verify()) else {
+                continue;
+            };
+            let st =
+                with(|c| engine::check_pin(&mut c.prefs.pins, &sh.user.id, &key.fingerprint()));
+            if st == engine::PinStatus::Changed {
+                return Err(format!("the key of {} changed", sh.user.display_name));
+            }
+            if !member_log(vault_id).has_share(&note, &sh.user.id, sh.role, &key) {
+                append(vault_id, rules::share(&note, &sh.user.id, sh.role, &key)).await?;
+            }
+        }
+    }
+    save_prefs();
+    let head = api::get::<VaultInfo>(&format!("/vaults/{vault_id}"))
+        .await
+        .map_err(|e| e.message)?
+        .head_seq;
+    append(vault_id, LogBody::RequireSigned { from_seq: head }).await
 }
 
 /// Sign `body` as the vault's next log entry (`None`: no log yet).
@@ -145,7 +251,7 @@ pub fn vouched(vault_id: &str, m: &MemberInfo) -> bool {
 
 /// Owner: start the log of a vault from before it, with a checkpoint of the
 /// members as they are now (their keys checked against our pins).
-pub(super) async fn start_log(vault_id: String) {
+async fn start_log(vault_id: String) {
     let Ok(members) = api::get::<Vec<MemberInfo>>(&format!("/vaults/{vault_id}/members")).await
     else {
         return;

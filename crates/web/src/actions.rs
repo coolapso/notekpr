@@ -482,15 +482,11 @@ pub async fn rotate_keys(vault: &str) -> bool {
             let notes: Vec<_> = keyed
                 .iter()
                 .filter_map(|n| {
-                    let title = r
-                        .index
-                        .get(n)
-                        .map(|e| e.title().to_string())
-                        .unwrap_or_default();
+                    let meta = r.index.get(n).map(|e| ObjectMeta::of(&e));
                     Some((
                         n.clone(),
                         r.doc_keys.get(n)?,
-                        title,
+                        meta.unwrap_or_default(),
                         recipients.remove(n).unwrap_or_default(),
                     ))
                 })
@@ -717,20 +713,17 @@ async fn ensure_note_key(vault: &str, note: &str) -> Result<(), String> {
         }
         let made = step(|c| {
             let r = c.replicas.get(vault)?;
-            let title = r
-                .index
-                .get(note)
-                .map(|e| e.title().to_string())
-                .unwrap_or_default();
+            let meta = r.index.get(note).map(|e| ObjectMeta::of(&e));
+            let meta = meta.unwrap_or_default();
             let st = r.note(note).map(|n| n.encode_state()).unwrap_or_default();
             let waiting = c.outboxes.get(vault).is_some_and(|o| o.waits_for_key(note));
             let made = match r.doc_keys.get(note) {
                 // Its own key already: a fresh one without a link to it, so
                 // recipients never read what was written before.
                 Some(doc) if !waiting => {
-                    engine::start_sharing_keyed(&r.keyring, doc, note, &title, &st, r.seq)
+                    engine::start_sharing_keyed(&r.keyring, doc, note, &meta, &st, r.seq)
                 }
-                _ => engine::start_sharing(&r.keyring, note, &title, &st, r.seq),
+                _ => engine::start_sharing(&r.keyring, note, &meta, &st, r.seq),
             };
             Some(made.map(|(ring, mut req)| {
                 if let Some(a) = &c.account {
@@ -848,12 +841,9 @@ pub async fn rotate_note_key(vault: &str, note: &str) -> Result<(), String> {
         let made = step(|c| {
             let r = c.replicas.get(vault)?;
             let ring = r.doc_keys.get(note)?;
-            let title = r
-                .index
-                .get(note)
-                .map(|e| e.title().to_string())
-                .unwrap_or_default();
-            let made = engine::rotate_object_key(&r.keyring, ring, note, &title, &users);
+            let meta = r.index.get(note).map(|e| ObjectMeta::of(&e));
+            let meta = meta.unwrap_or_default();
+            let made = engine::rotate_object_key(&r.keyring, ring, note, &meta, &users);
             Some(made.map(|(next, mut req)| {
                 if let Some(a) = &c.account {
                     coolpsonotes_sync::members::sign_grants(
@@ -895,14 +885,14 @@ pub async fn rotate_note_key(vault: &str, note: &str) -> Result<(), String> {
     Err("The note's recipients keep changing; please try again.".into())
 }
 
-/// Shared notes carry their title encrypted for their recipients.
+/// Shared notes carry their title and icon encrypted for their recipients.
 async fn update_note_meta(vault: String, note: String) {
     for _ in 0..2 {
         let ct = step(|c| {
             let r = c.replicas.get(&vault)?;
             let ring = r.doc_keys.get(&note)?;
-            let title = r.index.get(&note)?.title().to_string();
-            ObjectMeta { title }.encrypt(ring, &note).ok()
+            let meta = ObjectMeta::of(&r.index.get(&note)?);
+            meta.encrypt(ring, &note).ok()
         });
         let Some(encrypted_meta) = ct else { return };
         match api::put::<_, ()>(

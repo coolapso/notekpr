@@ -395,7 +395,7 @@ impl User {
                 self.keyrings.get(vault_id).unwrap(),
                 doc_ring,
                 oid,
-                "rotated",
+                &coolpsonotes_core::engine::ObjectMeta::titled("rotated"),
                 &users,
             )
             .unwrap();

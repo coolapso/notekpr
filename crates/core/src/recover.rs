@@ -292,8 +292,14 @@ mod tests {
 
         // n1 gets its own key and is shared with Bob.
         let bob = AccountSecret::generate();
-        let (doc, req) =
-            start_sharing(&ring, "n1", "Trip", &r.notes["n1"].encode_state(), seq).unwrap();
+        let (doc, req) = start_sharing(
+            &ring,
+            "n1",
+            &ObjectMeta::titled("Trip"),
+            &r.notes["n1"].encode_state(),
+            seq,
+        )
+        .unwrap();
         let bob_user = PublicUser {
             id: "bob".into(),
             display_name: "Bob".into(),

@@ -1284,9 +1284,14 @@ async fn individual_note_sharing() {
     // is one older than the newest existing snapshot (covers 3): readers would
     // otherwise get that one, which they can't decrypt.
     for covers in [1, 2] {
-        let (_, bad_req) =
-            engine::start_sharing(alice.ring(&v), "n1", "Trip", &n1.encode_state(), covers)
-                .unwrap();
+        let (_, bad_req) = engine::start_sharing(
+            alice.ring(&v),
+            "n1",
+            &engine::ObjectMeta::titled("Trip"),
+            &n1.encode_state(),
+            covers,
+        )
+        .unwrap();
         assert_eq!(
             alice
                 .api
@@ -1302,8 +1307,14 @@ async fn individual_note_sharing() {
     }
 
     // Alice shares n1 only.
-    let (ring, req) =
-        engine::start_sharing(alice.ring(&v), "n1", "Trip", &n1.encode_state(), 3).unwrap();
+    let (ring, req) = engine::start_sharing(
+        alice.ring(&v),
+        "n1",
+        &engine::ObjectMeta::titled("Trip"),
+        &n1.encode_state(),
+        3,
+    )
+    .unwrap();
     let _: () = alice
         .api
         .put(&format!("/vaults/{v}/objects/n1/key"), &req)
@@ -1579,8 +1590,14 @@ async fn individual_note_sharing() {
         .get(&format!("/vaults/{v}/objects/n1/shares"))
         .await;
     let users: Vec<PublicUser> = remaining.into_iter().map(|s| s.user).collect();
-    let (next, rot) =
-        engine::rotate_object_key(alice.ring(&v), &ring, "n1", "Trip", &users).unwrap();
+    let (next, rot) = engine::rotate_object_key(
+        alice.ring(&v),
+        &ring,
+        "n1",
+        &engine::ObjectMeta::titled("Trip"),
+        &users,
+    )
+    .unwrap();
     // Rotation must cover exactly the remaining recipients.
     let mut wrong = rot.clone();
     wrong.envelopes.clear();
@@ -1646,11 +1663,9 @@ async fn individual_note_sharing() {
         let r = &ar.doc_keys["n1"];
         (0, r.clone())
     };
-    let meta = engine::ObjectMeta {
-        title: "Coast trip".into(),
-    }
-    .encrypt(&cur, "n1")
-    .unwrap();
+    let meta = engine::ObjectMeta::titled("Coast trip")
+        .encrypt(&cur, "n1")
+        .unwrap();
     let _: () = alice
         .api
         .put(
@@ -2033,8 +2048,14 @@ async fn role_dependent_writes_follow_role_changes() {
         .push(&v, vec![alice.encrypt_update(&v, "n1", &u1)])
         .await
         .unwrap();
-    let (doc_ring, req) =
-        engine::start_sharing(alice.ring(&v), "n1", "Plans", &n1.encode_state(), 1).unwrap();
+    let (doc_ring, req) = engine::start_sharing(
+        alice.ring(&v),
+        "n1",
+        &engine::ObjectMeta::titled("Plans"),
+        &n1.encode_state(),
+        1,
+    )
+    .unwrap();
     let _: () = alice
         .api
         .put(&format!("/vaults/{v}/objects/n1/key"), &req)
@@ -2053,7 +2074,7 @@ async fn role_dependent_writes_follow_role_changes() {
         )
         .await;
     let title = |t: &str| ObjectMetaUpdate {
-        encrypted_meta: engine::ObjectMeta { title: t.into() }
+        encrypted_meta: engine::ObjectMeta::titled(t)
             .encrypt(&doc_ring, "n1")
             .unwrap(),
     };
@@ -2273,7 +2294,7 @@ async fn notes_have_own_keys_and_recipients_never_get_the_history_before_sharing
         alice.ring(&v),
         &doc,
         "n",
-        "Plans",
+        &engine::ObjectMeta::titled("Plans"),
         &note.encode_state(),
         covers,
     )
@@ -2819,7 +2840,7 @@ async fn note_key_grants_carry_the_owners_signature() {
     let (doc, start) = engine::start_sharing(
         alice.ring(&v),
         "n",
-        "Plans",
+        &engine::ObjectMeta::titled("Plans"),
         &note.encode_state(),
         head.head_seq,
     )
@@ -2937,9 +2958,15 @@ async fn members_reload_one_notes_keys() {
     let note = NoteDoc::new();
     let state = note.encode_state();
     let head: ChangesResponse = alice.api.get(&format!("/vaults/{v}/changes?since=0")).await;
-    let (doc2, start) =
-        engine::start_sharing_keyed(alice.ring(&v), &ring, "n", "Plans", &state, head.head_seq)
-            .unwrap();
+    let (doc2, start) = engine::start_sharing_keyed(
+        alice.ring(&v),
+        &ring,
+        "n",
+        &engine::ObjectMeta::titled("Plans"),
+        &state,
+        head.head_seq,
+    )
+    .unwrap();
     put_key(&alice, &v, "n", &start).await.unwrap();
     let carol_pub: PublicUser = alice.api.get(&format!("/users/{}", carol.id)).await;
     let _: ObjectShareInfo = alice

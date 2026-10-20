@@ -363,6 +363,23 @@ pub struct Entry {
     pub trashed: Option<i64>,
     pub size: Option<u64>,
     pub mime: Option<String>,
+    /// A note's or folder's icon, usually an emoji ([`clean_icon`]).
+    #[serde(default)]
+    pub icon: Option<String>,
+}
+
+/// Longest icon (of a vault, note or folder), in characters: one emoji can
+/// be several.
+pub const MAX_ICON_CHARS: usize = 16;
+
+/// An icon as stored: trimmed, without control characters. `Ok(None)` for
+/// a blank one; `Err` if longer than [`MAX_ICON_CHARS`].
+pub fn clean_icon(icon: &str) -> std::result::Result<Option<String>, String> {
+    let icon: String = icon.trim().chars().filter(|c| !c.is_control()).collect();
+    if icon.chars().count() > MAX_ICON_CHARS {
+        return Err("an icon is one emoji or a few characters".into());
+    }
+    Ok((!icon.is_empty()).then_some(icon))
 }
 
 impl Entry {
@@ -449,6 +466,8 @@ impl IndexDoc {
             trashed: any_num(m.get(txn, "trashed")).map(|n| n as i64),
             size: any_num(m.get(txn, "size")).map(|n| n as u64),
             mime: any_str(m.get(txn, "mime")),
+            // Anyone who can write sets it: only a valid one is shown.
+            icon: any_str(m.get(txn, "icon")).and_then(|i| clean_icon(&i).ok().flatten()),
         })
     }
 
@@ -629,6 +648,23 @@ impl IndexDoc {
         })
     }
 
+    /// Set an entry's icon (cleaned with [`clean_icon`] first), or remove it
+    /// with `None`. Not a change of its content: `modified` stays.
+    pub fn set_icon(&self, id: &str, icon: Option<&str>) -> Option<Vec<u8>> {
+        self.mutate(|txn| {
+            if let Some(m) = self.entry_map(txn, id) {
+                match icon {
+                    Some(i) => {
+                        m.try_update(txn, "icon", i);
+                    }
+                    None => {
+                        m.remove(txn, "icon");
+                    }
+                }
+            }
+        })
+    }
+
     pub fn restore(&self, id: &str) -> Option<Vec<u8>> {
         self.mutate(|txn| {
             if let Some(m) = self.entry_map(txn, id) {
@@ -781,6 +817,30 @@ mod tests {
         assert_eq!(a.text(), "hello world!");
         // Undo still restores the deleted text locally.
         assert!(a.undo().is_some());
+    }
+
+    #[test]
+    fn entry_icons() {
+        let a = IndexDoc::new();
+        let u = a.create("n", "Trip.md", EntryKind::Note, 5).unwrap();
+        let b = IndexDoc::from_updates([u.as_slice()]).unwrap();
+        assert_eq!(a.get("n").unwrap().icon, None);
+        let u = a.set_icon("n", Some("🏖️")).unwrap();
+        b.apply_update(&u).unwrap();
+        let e = b.get("n").unwrap();
+        assert_eq!((e.icon.as_deref(), e.modified), (Some("🏖️"), 5));
+        let u = b.set_icon("n", None).unwrap();
+        a.apply_update(&u).unwrap();
+        assert_eq!(a.get("n").unwrap().icon, None);
+        // One written by another client without the rules isn't shown.
+        let u = a
+            .set_icon("n", Some(&"x".repeat(MAX_ICON_CHARS + 1)))
+            .unwrap();
+        b.apply_update(&u).unwrap();
+        assert_eq!(b.get("n").unwrap().icon, None);
+        assert_eq!(clean_icon(" 📁\n").unwrap().as_deref(), Some("📁"));
+        assert_eq!(clean_icon("  ").unwrap(), None);
+        assert!(clean_icon(&"x".repeat(MAX_ICON_CHARS + 1)).is_err());
     }
 
     #[test]

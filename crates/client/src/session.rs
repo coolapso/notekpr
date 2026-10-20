@@ -1128,16 +1128,16 @@ impl Session {
                 let notes: Vec<_> = keyed
                     .iter()
                     .map(|oid| {
-                        let title = v
+                        let meta = v
                             .replica
                             .index
                             .get(oid)
-                            .map(|e| e.title().to_string())
+                            .map(|e| engine::ObjectMeta::of(&e))
                             .unwrap_or_default();
                         (
                             oid.clone(),
                             &v.replica.doc_keys[oid],
-                            title,
+                            meta,
                             recipients.remove(oid).unwrap_or_default(),
                         )
                     })

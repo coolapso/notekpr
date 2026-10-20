@@ -91,9 +91,6 @@ impl VaultPicture {
 }
 
 impl VaultMeta {
-    /// Longest icon, in characters (one emoji can be several).
-    pub const MAX_ICON_CHARS: usize = 16;
-
     pub fn named(name: &str) -> Self {
         VaultMeta {
             name: name.to_string(),
@@ -101,16 +98,9 @@ impl VaultMeta {
         }
     }
 
-    /// Set the icon, or clear it with a blank one. Trimmed, without control
-    /// characters, at most [`Self::MAX_ICON_CHARS`].
+    /// Set the icon, or clear it with a blank one ([`crate::doc::clean_icon`]).
     pub fn set_icon(&mut self, icon: &str) -> Result<()> {
-        let icon: String = icon.trim().chars().filter(|c| !c.is_control()).collect();
-        if icon.chars().count() > Self::MAX_ICON_CHARS {
-            return Err(EngineError::Invalid(
-                "a vault icon is one emoji or a few characters".into(),
-            ));
-        }
-        self.icon = (!icon.is_empty()).then_some(icon);
+        self.icon = crate::doc::clean_icon(icon).map_err(EngineError::Invalid)?;
         Ok(())
     }
 
@@ -454,18 +444,18 @@ pub fn rotate(
 
 /// [`rotate`], and move every note's document key to a new epoch wrapped
 /// under the new vault key (removed members knew the old ones). `notes` are
-/// the notes' keyrings with their titles and current recipients. Returns the
+/// the notes' keyrings with their metadata and current recipients. Returns the
 /// notes' new keyrings, to use once the server accepted the rotation.
 pub fn rotate_with_notes(
     ring: &mut VaultKeyring,
     members: &[MemberInfo],
     meta: &VaultMeta,
-    notes: &[(String, &VaultKeyring, String, Vec<PublicUser>)],
+    notes: &[(String, &VaultKeyring, ObjectMeta, Vec<PublicUser>)],
 ) -> Result<(RotateKeysRequest, HashMap<String, VaultKeyring>)> {
     let mut req = rotate(ring, members, meta)?;
     let mut rings = HashMap::new();
-    for (object_id, doc_ring, title, recipients) in notes {
-        let (next, update) = rotate_object_key(ring, doc_ring, object_id, title, recipients)?;
+    for (object_id, doc_ring, meta, recipients) in notes {
+        let (next, update) = rotate_object_key(ring, doc_ring, object_id, meta, recipients)?;
         req.objects.push(ObjectKeyChange {
             object_id: object_id.clone(),
             update,
@@ -491,9 +481,27 @@ pub fn shared_objects(r: &VaultKeysResponse) -> BTreeSet<String> {
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
 pub struct ObjectMeta {
     pub title: String,
+    /// The note's icon (see [`crate::doc::Entry::icon`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
 }
 
 impl ObjectMeta {
+    pub fn titled(title: &str) -> Self {
+        ObjectMeta {
+            title: title.to_string(),
+            icon: None,
+        }
+    }
+
+    /// What recipients see of a note's index entry.
+    pub fn of(e: &crate::doc::Entry) -> Self {
+        ObjectMeta {
+            title: e.title().to_string(),
+            icon: e.icon.clone(),
+        }
+    }
+
     pub fn encrypt(&self, doc_ring: &VaultKeyring, object_id: &str) -> Result<Vec<u8>> {
         Ok(doc_ring.encrypt(
             Purpose::ObjectMeta,
@@ -504,7 +512,13 @@ impl ObjectMeta {
 
     pub fn decrypt(doc_ring: &VaultKeyring, object_id: &str, ct: &[u8]) -> Result<Self> {
         let pt = doc_ring.decrypt(Purpose::ObjectMeta, object_id, ct)?;
-        serde_json::from_slice(&pt).map_err(|e| EngineError::Invalid(format!("note metadata: {e}")))
+        let mut m: Self = serde_json::from_slice(&pt)
+            .map_err(|e| EngineError::Invalid(format!("note metadata: {e}")))?;
+        // Any writer of the note sets it: only a valid one is shown.
+        m.icon = m
+            .icon
+            .and_then(|i| crate::doc::clean_icon(&i).ok().flatten());
+        Ok(m)
     }
 }
 
@@ -675,10 +689,7 @@ fn first_document_key(
         vault_envelope: keys::wrap_doc_key_for_vault(vault_ring, object_id, epoch, &dk)?,
         chain_link: None,
         envelopes: vec![],
-        encrypted_meta: ObjectMeta {
-            title: title.to_string(),
-        }
-        .encrypt(&ring, object_id)?,
+        encrypted_meta: ObjectMeta::titled(title).encrypt(&ring, object_id)?,
         snapshot,
         private,
     };
@@ -694,7 +705,7 @@ pub fn start_sharing_keyed(
     vault_ring: &VaultKeyring,
     doc_ring: &VaultKeyring,
     object_id: &str,
-    title: &str,
+    meta: &ObjectMeta,
     state: &[u8],
     covers_seq: i64,
 ) -> Result<(VaultKeyring, ObjectKeyUpdate)> {
@@ -710,10 +721,7 @@ pub fn start_sharing_keyed(
         vault_envelope: keys::wrap_doc_key_for_vault(vault_ring, object_id, epoch, &dk)?,
         chain_link: None,
         envelopes: vec![],
-        encrypted_meta: ObjectMeta {
-            title: title.to_string(),
-        }
-        .encrypt(&next, object_id)?,
+        encrypted_meta: meta.encrypt(&next, object_id)?,
         snapshot: Some(CreateSnapshotRequest {
             snapshot_id: random_id(),
             covers_seq,
@@ -732,7 +740,7 @@ pub fn start_sharing_keyed(
 pub fn start_sharing(
     vault_ring: &VaultKeyring,
     object_id: &str,
-    title: &str,
+    meta: &ObjectMeta,
     state: &[u8],
     covers_seq: i64,
 ) -> Result<(VaultKeyring, ObjectKeyUpdate)> {
@@ -745,10 +753,7 @@ pub fn start_sharing(
         vault_envelope: keys::wrap_doc_key_for_vault(vault_ring, object_id, epoch, &dk)?,
         chain_link: None,
         envelopes: vec![],
-        encrypted_meta: ObjectMeta {
-            title: title.to_string(),
-        }
-        .encrypt(&ring, object_id)?,
+        encrypted_meta: meta.encrypt(&ring, object_id)?,
         snapshot: Some(CreateSnapshotRequest {
             snapshot_id: random_id(),
             covers_seq,
@@ -766,7 +771,7 @@ pub fn rotate_object_key(
     vault_ring: &VaultKeyring,
     doc_ring: &VaultKeyring,
     object_id: &str,
-    title: &str,
+    meta: &ObjectMeta,
     recipients: &[PublicUser],
 ) -> Result<(VaultKeyring, ObjectKeyUpdate)> {
     let (epoch, old) = doc_ring.current().ok_or(CryptoError::MissingEpoch(0))?;
@@ -796,10 +801,7 @@ pub fn rotate_object_key(
         vault_envelope: keys::wrap_doc_key_for_vault(vault_ring, object_id, new_epoch, &nk)?,
         chain_link: Some(keys::encrypt_chain_link(&nk, new_epoch, old, &scope)),
         envelopes,
-        encrypted_meta: ObjectMeta {
-            title: title.to_string(),
-        }
-        .encrypt(&next, object_id)?,
+        encrypted_meta: meta.encrypt(&next, object_id)?,
         snapshot: None,
         private: false,
     };
@@ -1386,6 +1388,34 @@ mod tests {
     use crate::doc::EntryKind;
 
     #[test]
+    fn a_shared_notes_icon_reaches_its_recipients() {
+        let mut ring = VaultKeyring::new("v");
+        ring.insert(1, VaultKey::generate());
+        let meta = ObjectMeta {
+            title: "Trip".into(),
+            icon: Some("🏖️".into()),
+        };
+        let (doc, req) = start_sharing(&ring, "n", &meta, &[], 0).unwrap();
+        assert_eq!(
+            ObjectMeta::decrypt(&doc, "n", &req.encrypted_meta).unwrap(),
+            meta
+        );
+        // Metadata from before icons reads; an icon breaking the rules is dropped.
+        let old = doc
+            .encrypt(Purpose::ObjectMeta, "n", br#"{"title":"Trip"}"#)
+            .unwrap();
+        assert_eq!(
+            ObjectMeta::decrypt(&doc, "n", &old).unwrap(),
+            ObjectMeta::titled("Trip")
+        );
+        let long = format!(r#"{{"title":"Trip","icon":"{}"}}"#, "x".repeat(40));
+        let bad = doc
+            .encrypt(Purpose::ObjectMeta, "n", long.as_bytes())
+            .unwrap();
+        assert_eq!(ObjectMeta::decrypt(&doc, "n", &bad).unwrap().icon, None);
+    }
+
+    #[test]
     fn vault_icon_and_picture() {
         let mut ring = VaultKeyring::new("v");
         ring.insert(1, VaultKey::generate());
@@ -1402,7 +1432,7 @@ mod tests {
         // A family emoji is one icon of several characters.
         meta.set_icon("👨‍👩‍👧‍👦").unwrap();
         assert!(
-            meta.set_icon(&"x".repeat(VaultMeta::MAX_ICON_CHARS + 1))
+            meta.set_icon(&"x".repeat(crate::doc::MAX_ICON_CHARS + 1))
                 .is_err()
         );
         meta.set_icon(" ").unwrap();
@@ -1639,7 +1669,8 @@ mod tests {
         let note = a.notes.entry("n".into()).or_default();
         note.set_text("hello bob").unwrap();
         let state = note.encode_state();
-        let (ring, req) = start_sharing(&vring, "n", "Hello", &state, a.seq).unwrap();
+        let (ring, req) =
+            start_sharing(&vring, "n", &ObjectMeta::titled("Hello"), &state, a.seq).unwrap();
         a.doc_keys.insert("n".into(), ring.clone());
         let env = object_share_envelope(&ring, "n", &user("bob", &bob)).unwrap();
 
@@ -1726,8 +1757,14 @@ mod tests {
         );
 
         // Rotation for Carol only: Bob's old ring can't read new content.
-        let (next, rot) =
-            rotate_object_key(&vring, &ring, "n", "Hello", &[user("carol", &carol)]).unwrap();
+        let (next, rot) = rotate_object_key(
+            &vring,
+            &ring,
+            "n",
+            &ObjectMeta::titled("Hello"),
+            &[user("carol", &carol)],
+        )
+        .unwrap();
         assert_eq!(rot.envelopes.len(), 1);
         a.doc_keys.insert("n".into(), next);
         let up = a
@@ -1789,7 +1826,14 @@ mod tests {
             signature: None,
         };
         b.apply_update(&up(1, p0.payload)).unwrap();
-        let (doc, _) = start_sharing(&ring, "n", "N", &a.notes["n"].encode_state(), 1).unwrap();
+        let (doc, _) = start_sharing(
+            &ring,
+            "n",
+            &ObjectMeta::titled("N"),
+            &a.notes["n"].encode_state(),
+            1,
+        )
+        .unwrap();
         a.doc_keys.insert("n".into(), doc.clone());
         let u2 = a.notes.get("n").unwrap().set_text("one two").unwrap();
         let p1 = a.local_change("n", u2).unwrap();
@@ -1819,7 +1863,7 @@ mod tests {
             ring.clone(),
             VaultMeta::default(),
         );
-        let (doc, _) = start_sharing(&ring, "n", "N", &[], 0).unwrap();
+        let (doc, _) = start_sharing(&ring, "n", &ObjectMeta::titled("N"), &[], 0).unwrap();
         a.doc_keys.insert("n".into(), doc);
         let note = a.notes.entry("n".into()).or_default();
         let u = note.set_text("x").unwrap();
@@ -1874,7 +1918,14 @@ mod tests {
         })
         .unwrap();
         // Alice gives the note its own key; Bob receives an update before the key.
-        let (doc, _) = start_sharing(&ring, "n", "N", &a.notes["n"].encode_state(), 1).unwrap();
+        let (doc, _) = start_sharing(
+            &ring,
+            "n",
+            &ObjectMeta::titled("N"),
+            &a.notes["n"].encode_state(),
+            1,
+        )
+        .unwrap();
         a.doc_keys.insert("n".into(), doc.clone());
         let up = a.notes.get("n").unwrap().set_text("one two").unwrap();
         let p1 = a.local_change("n", up).unwrap();

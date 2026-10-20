@@ -138,11 +138,11 @@ async fn ensure_document_key(
             .map_err(|e| anyhow!(e).context("catching up before sharing"))?;
         let (ring, req) = {
             let v = vault.lock().await;
-            let title = v
+            let meta = v
                 .replica
                 .index
                 .get(note_id)
-                .map(|e| e.title().to_string())
+                .map(|e| ObjectMeta::of(&e))
                 .unwrap_or_default();
             let state = v
                 .replica
@@ -155,13 +155,13 @@ async fn ensure_document_key(
                     keyring,
                     doc,
                     note_id,
-                    &title,
+                    &meta,
                     &state,
                     v.replica.seq,
                 )?,
                 // No key yet, or a new note's key the server doesn't know
                 // (sharing starts with a key of its own instead).
-                _ => engine::start_sharing(keyring, note_id, &title, &state, v.replica.seq)?,
+                _ => engine::start_sharing(keyring, note_id, &meta, &state, v.replica.seq)?,
             }
         };
         let mut req = req;
@@ -264,14 +264,14 @@ pub async fn rotate_note_key(
             .doc_keys
             .get(note_id)
             .ok_or_else(|| anyhow!("this note is not shared"))?;
-        let title = v
+        let meta = v
             .replica
             .index
             .get(note_id)
-            .map(|e| e.title().to_string())
+            .map(|e| ObjectMeta::of(&e))
             .unwrap_or_default();
         let (next, mut req) =
-            engine::rotate_object_key(&v.replica.keyring, ring, note_id, &title, &users)?;
+            engine::rotate_object_key(&v.replica.keyring, ring, note_id, &meta, &users)?;
         members::sign_grants(session.account(), id, note_id, &next, &mut req.envelopes);
         (next, req)
     };

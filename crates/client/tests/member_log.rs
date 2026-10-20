@@ -181,7 +181,14 @@ async fn an_older_vault_gets_a_signed_checkpoint() {
     let p2 = r.local_change("n1", text).unwrap();
     let pushed = alice.api.push(&vid, vec![p1, p2]).await.unwrap();
     let state = r.note("n1").unwrap().encode_state();
-    let (doc, key) = engine::start_sharing(&ring, "n1", "Plan", &state, pushed.head_seq).unwrap();
+    let (doc, key) = engine::start_sharing(
+        &ring,
+        "n1",
+        &engine::ObjectMeta::titled("Plan"),
+        &state,
+        pushed.head_seq,
+    )
+    .unwrap();
     alice
         .api
         .put::<_, ()>(&format!("/vaults/{vid}/objects/n1/key"), &key)

@@ -30,7 +30,9 @@ always return `404` so their existence cannot be probed.
 | Attachment | id, size | name, type, path, content |
 
 Each vault has exactly one **index object** (`object_id = "index"`), a CRDT map
-from entry id to `{path, kind, created, modified, trashed?, size?, mime?}`. Every
+from entry id to `{path, kind, created, modified, trashed?, size?, mime?, icon?}`
+(`icon`: a note's or folder's emoji, at most 16 characters; longer ones are
+not shown). Every
 note is its own object holding a CRDT text with the Markdown source. Both are
 [Yjs/yrs](https://github.com/y-crdt/y-crdt) documents; payloads are yrs **update
 v1** encodings, encrypted.
@@ -62,8 +64,8 @@ Defined in `crates/core/src/crypto.rs` and `keys.rs`.
   says whether it is under the vault key or the note's own key. A document key
   is wrapped for vault members under the current vault key (purpose `DocKey`,
   context `vault_id, object_id, epoch`) and for recipients with HPKE (scope
-  `vault_id/object_id`). The note's title for recipients is encrypted under it
-  (purpose `ObjectMeta`). The vault index and attachments stay under the vault
+  `vault_id/object_id`). The note's title and icon for recipients are
+  encrypted under it (purpose `ObjectMeta`: `{title, icon?}` JSON). The vault index and attachments stay under the vault
   key.
 
 ## 3. Authentication

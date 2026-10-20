@@ -91,7 +91,7 @@ async fn people_can_recover_their_notes_offline() {
     let (doc, req) = engine::start_sharing(
         alice.ring(&v),
         "n1",
-        "Trip",
+        &engine::ObjectMeta::titled("Trip"),
         &trip.encode_state(),
         head.head_seq,
     )

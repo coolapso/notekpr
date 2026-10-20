@@ -232,7 +232,11 @@ Before trusting the Markdown mirror and the CLI with real notes.
       released — now it goes out in a snapshot of the whole note marked
       `carries` (up to `max_snapshot_bytes`), which the server sends live and
       with every catch-up from before it; both clients (`carrier_now`).
-- [ ] macOS NFD/NFC file-name normalization in the mirror (core helper).
+- [x] macOS NFD/NFC file-name normalization in the mirror (core helper):
+      `paths::normalize` writes names composed (NFC), so files from macOS
+      (and zips made there) map to the same notes; the mirror keeps each
+      file's own name and compares names normalized where the file system
+      ignores the difference (probed like case).
 - [x] Server: explicit "device revoked" error on `PUT /me/session/device`
       (`device_revoked`, also on the envelope endpoint). The web client now
       forgets its device key only on that code, not on any 404; the CLI still

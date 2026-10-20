@@ -771,3 +771,52 @@ async fn server_limits_are_remembered_and_enforced_offline() {
         Err(ops::OpError::BadRequest(_))
     ));
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_file_named_with_separate_accent_marks_is_the_same_note() {
+    use coolpsonotes_client::mirror::MirrorOptions;
+    let srv = start().await;
+    let alice = login(&srv, "alice").await;
+    manage::create_vault(&alice, "Notes").await.unwrap();
+    let h = hub(&alice).await;
+    let vid = h
+        .resolve("Notes")
+        .await
+        .unwrap()
+        .lock()
+        .await
+        .id()
+        .to_string();
+    let mut m = Mirror::with_options(h.clone(), &srv.path("mirror"), MirrorOptions::default())
+        .await
+        .unwrap();
+    m.reconcile_all(true).await.unwrap();
+    let dir = m.vault_dir(&vid).unwrap().to_path_buf();
+    // "Café.md" as macOS lists it (and zips made there name it): "e" and a
+    // separate accent mark.
+    let decomposed = "Cafe\u{301}.md";
+    write(&dir.join(decomposed), "croissants\n");
+    let r = m.reconcile_all(true).await.unwrap();
+    assert_eq!(r.created, 1, "{r:?}");
+    // The note's name is written the one usual way; the file keeps its own.
+    assert_eq!(
+        note(&h, &vid, "Caf\u{e9}.md").await.as_deref(),
+        Some("croissants\n")
+    );
+    // Changes made elsewhere go into that same file: never a second "Café".
+    ops::put_document(&h, &vid, "Caf\u{e9}.md", "croissants\nand coffee\n", None)
+        .await
+        .unwrap();
+    m.reconcile_all(true).await.unwrap();
+    let names: Vec<String> = std::fs::read_dir(&dir)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|n| !n.starts_with('.'))
+        .collect();
+    assert_eq!(names, [decomposed]);
+    assert_eq!(read(&dir.join(decomposed)), "croissants\nand coffee\n");
+    let r = m.reconcile_all(true).await.unwrap();
+    assert!(r.is_empty(), "{r:?}");
+    assert_eq!(h.get(&vid).unwrap().lock().await.notes().len(), 1);
+}

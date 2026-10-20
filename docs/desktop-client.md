@@ -311,6 +311,13 @@ separate folders, and notes whose paths differ only in case (`Idea.md`,
 overwriting each other. Renaming a file by changing only its case on disk is
 not synced.
 
+Accented letters can be written two ways — "é" as one character, or as "e"
+plus a separate accent mark, which is how macOS lists file names (and how zip
+files made there store them). Note names always use the first form, so
+`Café.md` from a Mac is the same note as `Café.md` typed anywhere else; the
+file keeps the name it has on disk. Where the file system ignores the
+difference (macOS, detected at start), the mirror compares names that way.
+
 ### Ignored files
 
 Dotfiles and dot-directories (`.git`, `.obsidian`, `.trash`, `.DS_Store`, our

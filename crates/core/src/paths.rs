@@ -21,7 +21,7 @@ pub fn normalize(input: &str) -> Result<String, PathError> {
     if input.chars().any(|c| c.is_control()) {
         return Err(PathError::ControlChar);
     }
-    let replaced = input.replace('\\', "/");
+    let replaced = nfc(input).replace('\\', "/");
     let mut segs = Vec::new();
     for seg in replaced.split('/') {
         let seg = seg.trim();
@@ -44,6 +44,14 @@ pub fn normalize(input: &str) -> Result<String, PathError> {
         return Err(PathError::TooLong);
     }
     Ok(out)
+}
+
+/// One way to write each name: accented letters composed (Unicode NFC).
+/// macOS hands out file names with accents as separate marks (NFD), and zip
+/// files made there keep them; "Café" must be the same name either way.
+pub fn nfc(s: &str) -> String {
+    use unicode_normalization::UnicodeNormalization;
+    s.nfc().collect()
 }
 
 /// Normalise a note path, appending `.md` if missing.
@@ -120,6 +128,16 @@ pub fn unique(path: &str, taken: impl Fn(&str) -> bool) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn accents_are_written_one_way() {
+        // "Café" with the accent as a separate mark (as macOS lists it).
+        let decomposed = "Notes/Cafe\u{301}.md";
+        assert_eq!(normalize(decomposed).unwrap(), "Notes/Caf\u{e9}.md");
+        assert_eq!(normalize_note("Cafe\u{301}").unwrap(), "Caf\u{e9}.md");
+        assert_eq!(normalize("Caf\u{e9}.md").unwrap(), "Caf\u{e9}.md");
+        assert_eq!(nfc("Cafe\u{301}"), nfc("Caf\u{e9}"));
+    }
 
     #[test]
     fn normalization() {

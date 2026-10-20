@@ -51,7 +51,7 @@ pub async fn export(
             .into_iter()
             .filter_map(|(p, e)| {
                 let ok = if zip {
-                    paths::normalize(&p).is_ok_and(|n| n == p)
+                    paths::normalize(&p).is_ok_and(|n| n == paths::nfc(&p))
                 } else {
                     is_safe_vault_path(&p)
                 };

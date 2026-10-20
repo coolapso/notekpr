@@ -105,8 +105,8 @@ struct MirrorVault {
     missing_since: BTreeMap<String, Instant>,
     /// Deletions are held: too many files (or the whole folder) vanished.
     held: bool,
-    /// The file system ignores case: compare paths case-folded.
-    fold: bool,
+    /// What the file system ignores when comparing names.
+    fold: Fold,
     warned: BTreeSet<String>,
 }
 
@@ -167,6 +167,9 @@ pub struct MirrorOptions {
     /// Treat the mirror directory as case-insensitive (`None` = detect).
     #[doc(hidden)]
     pub case_insensitive: Option<bool>,
+    /// Treat it as ignoring how accents are written (`None` = detect).
+    #[doc(hidden)]
+    pub unicode_insensitive: Option<bool>,
 }
 
 pub struct Mirror {
@@ -175,17 +178,27 @@ pub struct Mirror {
     vaults: BTreeMap<String, MirrorVault>,
     warned: BTreeSet<String>,
     opts: MirrorOptions,
-    /// The mirror directory ignores case (macOS and Windows defaults).
-    fold: bool,
+    /// What the mirror directory ignores when comparing names.
+    fold: Fold,
 }
 
-/// Comparison key of a path: case-folded on a case-insensitive file system.
-fn fold_key(fold: bool, p: &str) -> String {
-    if fold {
-        p.to_lowercase()
+/// What a file system ignores when it compares names: case (macOS and
+/// Windows defaults), and how accents are written (macOS: "é" composed or as
+/// "e" plus a separate mark is one name, and listings may give either).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Fold {
+    pub case: bool,
+    pub unicode: bool,
+}
+
+/// Comparison key of a path on a file system ignoring `fold`.
+fn fold_key(fold: Fold, p: &str) -> String {
+    let p = if fold.unicode {
+        paths::nfc(p)
     } else {
         p.to_string()
-    }
+    };
+    if fold.case { p.to_lowercase() } else { p }
 }
 
 /// Whether `dir` is on a case-insensitive file system: create a lower-case
@@ -202,6 +215,21 @@ pub fn is_case_insensitive(dir: &Path) -> std::io::Result<bool> {
     Ok(found)
 }
 
+/// Whether `dir` treats differently written accents as one name (macOS):
+/// create a probe with a composed "é" and look for it decomposed.
+pub fn is_unicode_insensitive(dir: &Path) -> std::io::Result<bool> {
+    let base = fsutil::temp_path(dir);
+    let name = base.file_name().and_then(|n| n.to_str()).unwrap_or("probe");
+    let probe = dir.join(format!("{name}-\u{e9}"));
+    fsutil::create_private_file(&probe, b"")?;
+    let found = dir
+        .join(format!("{name}-e\u{301}"))
+        .symlink_metadata()
+        .is_ok();
+    let _ = std::fs::remove_file(&probe);
+    Ok(found)
+}
+
 /// Where each live note and attachment goes on disk, relative to the vault
 /// folder. Normally its path; on a case-insensitive file system, entries
 /// whose paths differ only in case would share one file (and overwrite each
@@ -210,7 +238,7 @@ pub fn is_case_insensitive(dir: &Path) -> std::io::Result<bool> {
 fn assign_disk_paths(
     live: &BTreeMap<String, (String, coolpsonotes_core::doc::Entry)>,
     files: &BTreeMap<String, FileRecord>,
-    fold: bool,
+    fold: Fold,
 ) -> BTreeMap<String, String> {
     let mut out = BTreeMap::new();
     let mut used = BTreeSet::new();
@@ -381,7 +409,8 @@ pub fn is_safe_vault_path(p: &str) -> bool {
 
 /// [`is_safe_vault_path`] with the Windows rules switched on or off (tests).
 pub fn is_safe_vault_path_for(p: &str, windows: bool) -> bool {
-    paths::normalize(p).is_ok_and(|n| n == p)
+    // Normalizing may only change how accents are written (macOS names).
+    paths::normalize(p).is_ok_and(|n| n == paths::nfc(p))
         && p.split('/').all(|s| {
             !is_ignored_name(s) && !s.contains('\0') && (!windows || is_windows_safe_name(s))
         })
@@ -1481,14 +1510,19 @@ impl Mirror {
         let root = root
             .canonicalize()
             .with_context(|| format!("resolving {}", root.display()))?;
-        let fold = match opts.case_insensitive {
-            Some(f) => f,
-            None => is_case_insensitive(&root)
-                .with_context(|| format!("checking {}", root.display()))?,
+        let fold = Fold {
+            case: match opts.case_insensitive {
+                Some(f) => f,
+                None => is_case_insensitive(&root)
+                    .with_context(|| format!("checking {}", root.display()))?,
+            },
+            unicode: match opts.unicode_insensitive {
+                Some(f) => f,
+                None => is_unicode_insensitive(&root)
+                    .with_context(|| format!("checking {}", root.display()))?,
+            },
         };
-        if fold {
-            tracing::debug!("mirror: the directory is case-insensitive");
-        }
+        tracing::debug!(?fold, "mirror: what the directory ignores in names");
         let mut m = Mirror {
             hub,
             root,
@@ -2504,11 +2538,11 @@ mod tests {
         .collect();
         let none = BTreeMap::new();
         // Case-sensitive: everything at its own path.
-        let plain = assign_disk_paths(&live, &none, false);
+        let plain = assign_disk_paths(&live, &none, Fold::default());
         assert!(plain.iter().all(|(id, d)| *d == live[id].0), "{plain:?}");
         // Case-insensitive: "Idea.md" keeps the name, "idea.md" moves aside
         // without taking the real "idea 2.md".
-        let folded = assign_disk_paths(&live, &none, true);
+        let folded = assign_disk_paths(&live, &none, CASE);
         assert_eq!(folded["a"], "Idea.md");
         assert_eq!(folded["c"], "idea 2.md");
         assert_eq!(folded["b"], "idea 3.md");
@@ -2530,9 +2564,38 @@ mod tests {
                 bases: vec![],
             },
         );
-        let kept = assign_disk_paths(&live, &files, true);
+        let kept = assign_disk_paths(&live, &files, CASE);
         assert_eq!(kept["b"], "idea.md");
         assert_eq!(kept["a"], "Idea 3.md");
+    }
+
+    /// A case-insensitive file system (Windows; macOS ignores accents too).
+    const CASE: Fold = Fold {
+        case: true,
+        unicode: false,
+    };
+
+    #[test]
+    fn names_compare_as_the_file_system_does() {
+        let (decomposed, composed) = ("Notes/Cafe\u{301}.md", "Notes/Caf\u{e9}.md");
+        let mac = Fold {
+            case: true,
+            unicode: true,
+        };
+        assert_eq!(
+            fold_key(mac, decomposed),
+            fold_key(mac, "notes/caf\u{e9}.md")
+        );
+        // Elsewhere both are real, different names.
+        assert_ne!(
+            fold_key(Fold::default(), decomposed),
+            fold_key(Fold::default(), composed)
+        );
+        let d = tempfile::tempdir().unwrap();
+        std::fs::write(d.path().join("x\u{e9}"), "").unwrap();
+        let expected = d.path().join("xe\u{301}").exists();
+        assert_eq!(is_unicode_insensitive(d.path()).unwrap(), expected);
+        assert_eq!(std::fs::read_dir(d.path()).unwrap().count(), 1);
     }
 
     #[test]
@@ -2681,15 +2744,16 @@ mod path_properties {
                 .enumerate()
                 .map(|(i, p)| entry(&format!("n{i}"), p))
                 .collect();
-            let plain = assign_disk_paths(&live, &BTreeMap::new(), false);
+            let plain = assign_disk_paths(&live, &BTreeMap::new(), Fold::default());
             prop_assert!(live.iter().all(|(id, (p, _))| plain[id] == *p));
 
-            let folded = assign_disk_paths(&live, &BTreeMap::new(), true);
+            let case = Fold { case: true, unicode: false };
+            let folded = assign_disk_paths(&live, &BTreeMap::new(), case);
             prop_assert_eq!(folded.len(), live.len());
-            let keys: BTreeSet<String> = folded.values().map(|d| fold_key(true, d)).collect();
+            let keys: BTreeSet<String> = folded.values().map(|d| fold_key(case, d)).collect();
             prop_assert_eq!(keys.len(), folded.len(), "two notes share a file: {:?}", folded);
             for (id, (p, _)) in &live {
-                let clashes = live.values().filter(|(q, _)| fold_key(true, q) == fold_key(true, p)).count();
+                let clashes = live.values().filter(|(q, _)| fold_key(case, q) == fold_key(case, p)).count();
                 if clashes == 1 {
                     prop_assert_eq!(&folded[id], p);
                 }

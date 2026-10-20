@@ -93,10 +93,11 @@ class Browser:
     def text(self, css):
         return req("GET", self.p(f"/element/{self.find(css)}/text"))
 
-    def wait(self, cond_js, timeout=10, msg="condition"):
+    def wait(self, cond_js, timeout=10, msg="condition", *args):
+        """Until `cond_js` (given `args` as `arguments`) is true."""
         end = time.time() + timeout
         while time.time() < end:
-            if self.js(cond_js):
+            if self.js(cond_js, *args):
                 return
             time.sleep(0.2)
         self.shot("timeout")

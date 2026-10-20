@@ -131,6 +131,7 @@ pub fn ModalHost() -> impl IntoView {
             Modal::Move { vault, id } => view! { <MoveDialog vault=vault id=id/> }.into_any(),
             Modal::Import(v) => view! { <ImportDialog vault=v/> }.into_any(),
             Modal::Promote { vault, id } => view! { <super::quick::PromoteDialog vault=vault id=id/> }.into_any(),
+            Modal::EntryIcon { vault, id, path, folder } => view! { <EntryIconDialog vault=vault id=id path=path folder=folder/> }.into_any(),
         })}
     }
 }
@@ -195,11 +196,12 @@ fn QuickSwitch() -> impl IntoView {
                             let t = q.get();
                             return view! { <div class="palette-empty muted">{if t.trim().is_empty() { "No notes yet.".to_string() } else { format!("Press Enter to create “{t}”") }}</div> }.into_any();
                         }
-                        r.into_iter().enumerate().map(|(i, (_, _, path, vname))| {
+                        r.into_iter().enumerate().map(|(i, (vid, id, path, vname))| {
                             let open = open2.clone();
+                            let icon = step(|c| c.entry(&vid, &id)).and_then(|e| e.icon);
                             view! {
                                 <button class="palette-item" class:sel=move || sel.get() == i on:mouseenter=move |_| sel.set(i) on:click=move |_| open(i)>
-                                    <Icon name="file"/>
+                                    {super::entry_icon(icon, "file")}
                                     <span class="grow ellipsis">{coolpsonotes_core::paths::title(&path).to_string()}</span>
                                     <span class="muted small ellipsis">{match coolpsonotes_core::paths::parent(&path) {
                                         "" => vname,
@@ -626,11 +628,51 @@ fn ShareNote(vault: String, note: String) -> impl IntoView {
     }
 }
 
-/// Emoji offered for a vault's icon; any other can be typed.
-const VAULT_EMOJI: [&str; 24] = [
+/// Emoji offered for icons (of vaults, notes and folders); any other can be
+/// typed.
+const EMOJI: [&str; 24] = [
     "📓", "📚", "🏠", "💼", "🧪", "🎓", "💡", "🧠", "❤️", "⭐", "🔒", "🎨", "🎵", "🍳", "🌱", "✈️",
     "🏃", "💰", "🛠️", "🎮", "📷", "🗂️", "🐾", "🌍",
 ];
+
+/// Pick an emoji, type any, or remove the icon: `on_pick` gets the emoji,
+/// or "" to remove it. `children` are more actions, next to Remove.
+#[component]
+fn EmojiPicker(
+    #[prop(into)] chosen: Signal<Option<String>>,
+    #[prop(into)] removable: Signal<bool>,
+    on_pick: Callback<String>,
+    #[prop(optional)] children: Option<Children>,
+) -> impl IntoView {
+    let typed = RwSignal::new(String::new());
+    view! {
+        <div class="grow">
+            <div class="emoji-grid" role="group" aria-label="Icon">
+                {EMOJI.iter().map(|&e| {
+                    let on = move || chosen.get().as_deref() == Some(e);
+                    view! { <button type="button" class="emoji-btn" class:on=on aria-label=e on:click=move |_| on_pick.run(e.to_string())>{e}</button> }
+                }).collect_view()}
+            </div>
+            <div class="icon-actions">
+                <form class="row" on:submit=move |ev| {
+                    ev.prevent_default();
+                    let t = typed.get_untracked();
+                    if !t.trim().is_empty() {
+                        typed.set(String::new());
+                        on_pick.run(t);
+                    }
+                }>
+                    <input class="input icon-input" placeholder="Type an emoji" prop:value=move || typed.get() on:input=move |ev| typed.set(event_target_value(&ev))/>
+                    <button class="btn" type="submit">"Use"</button>
+                </form>
+                {children.map(|c| c())}
+                <Show when=move || removable.get()>
+                    <button class="btn icon-remove" on:click=move |_| on_pick.run(String::new())>"Remove"</button>
+                </Show>
+            </div>
+        </div>
+    }
+}
 
 /// The vault's icon: an emoji, or a picture made from an uploaded image.
 #[component]
@@ -643,7 +685,6 @@ fn VaultIconPicker(vault: String) -> impl IntoView {
             .into_iter()
             .find(|v| v.id == vid.get_value())
     });
-    let typed = RwSignal::new(String::new());
     let busy = RwSignal::new(false);
     let set = move |icon: String| {
         if busy.get_untracked() {
@@ -670,44 +711,63 @@ fn VaultIconPicker(vault: String) -> impl IntoView {
             busy.set(false);
         });
     };
-    let has_any = move || {
+    let chosen = Signal::derive(move || {
+        current
+            .get()
+            .filter(|v| v.picture.is_none())
+            .and_then(|v| v.icon)
+    });
+    let removable = Signal::derive(move || {
         current
             .get()
             .is_some_and(|v| v.icon.is_some() || v.picture.is_some())
-    };
+    });
     view! {
-        <div class="vault-icon-pick">
-            <div class="vault-icon-now">{move || super::vault_icon(current.get().as_ref())}</div>
-            <div class="grow">
-                <div class="emoji-grid" role="group" aria-label="Vault icon">
-                    {VAULT_EMOJI.iter().map(|e| {
-                        let (e1, e2) = (e.to_string(), e.to_string());
-                        let on = move || current.get().is_some_and(|v| v.picture.is_none() && v.icon.as_deref() == Some(e2.as_str()));
-                        view! { <button type="button" class="emoji-btn" class:on=on aria-label=e.to_string() on:click=move |_| set(e1.clone())>{e.to_string()}</button> }
-                    }).collect_view()}
-                </div>
-                <div class="vault-icon-actions">
-                    <form class="row" on:submit=move |ev| {
-                        ev.prevent_default();
-                        let t = typed.get_untracked();
-                        if !t.trim().is_empty() {
-                            set(t);
-                            typed.set(String::new());
-                        }
-                    }>
-                        <input class="input vault-icon-input" placeholder="Type an emoji" prop:value=move || typed.get() on:input=move |ev| typed.set(event_target_value(&ev))/>
-                        <button class="btn" type="submit">"Use"</button>
-                    </form>
-                    <label class="btn" class:disabled=move || busy.get()>
-                        <Icon name="image"/>" Upload picture…"
-                        <input type="file" class="vault-picture-input" accept="image/*" on:change=upload/>
-                    </label>
-                    <Show when=has_any>
-                        <button class="btn vault-icon-remove" on:click=move |_| set(String::new())>"Remove"</button>
-                    </Show>
-                </div>
-            </div>
+        <div class="icon-pick">
+            <div class="icon-now">{move || super::vault_icon(current.get().as_ref())}</div>
+            <EmojiPicker chosen=chosen removable=removable on_pick=Callback::new(set)>
+                <label class="btn" class:disabled=move || busy.get()>
+                    <Icon name="image"/>" Upload picture…"
+                    <input type="file" class="vault-picture-input" accept="image/*" on:change=upload/>
+                </label>
+            </EmojiPicker>
         </div>
+    }
+}
+
+/// A note's or folder's icon.
+#[component]
+fn EntryIconDialog(vault: String, id: Option<String>, path: String, folder: bool) -> impl IntoView {
+    let ui = ui();
+    let name = if folder {
+        coolpsonotes_core::paths::file_name(&path).to_string()
+    } else {
+        coolpsonotes_core::paths::title(&path).to_string()
+    };
+    let target = StoredValue::new((vault, id, path));
+    let current = Memo::new(move |_| {
+        ui.tree_rev.get();
+        let (v, id, _) = target.get_value();
+        id.and_then(|id| step(|c| c.entry(&v, &id)))
+            .and_then(|e| e.icon)
+    });
+    let pick = move |icon: String| {
+        let (v, id, path) = target.get_value();
+        if actions::set_entry_icon(&v, id.as_deref(), &path, &icon) {
+            ui.modal.set(None);
+        }
+    };
+    let fallback = if folder { "folder" } else { "file" };
+    view! {
+        <Dialog title=format!("Icon for “{name}”")>
+            <div class="icon-pick">
+                <div class="icon-now">{move || match current.get() {
+                    Some(i) => view! { <span class="entry-icon">{i}</span> }.into_any(),
+                    None => view! { <Icon name=fallback/> }.into_any(),
+                }}</div>
+                <EmojiPicker chosen=current removable=Signal::derive(move || current.get().is_some()) on_pick=Callback::new(pick)/>
+            </div>
+        </Dialog>
     }
 }
 

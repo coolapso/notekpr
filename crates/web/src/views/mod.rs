@@ -269,6 +269,14 @@ fn install_shortcuts() {
     cb.forget();
 }
 
+/// A note's or folder's icon (its emoji), else the `fallback` icon.
+pub fn entry_icon(icon: Option<String>, fallback: &'static str) -> AnyView {
+    match icon {
+        Some(i) => view! { <span class="entry-icon" aria-hidden="true">{i}</span> }.into_any(),
+        None => view! { <Icon name=fallback/> }.into_any(),
+    }
+}
+
 /// What identifies a vault: its picture, else its icon, else the generic one.
 pub fn vault_icon(v: Option<&state::VaultView>) -> AnyView {
     match v {

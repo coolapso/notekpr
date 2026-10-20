@@ -196,6 +196,24 @@ pub fn NoteView(vault: String, note: String) -> impl IntoView {
         ui.tree_rev.get();
         state::step(|c| c.entry(&v, &n2)).is_some_and(|e| e.is_live() && e.kind == EntryKind::Note)
     });
+    // The note's icon, if it has one (changed from the tree or the menu).
+    let (v, n6) = (vault.clone(), note.clone());
+    let entry_icon = Memo::new(move |_| {
+        ui.tree_rev.get();
+        state::step(|c| c.entry(&v, &n6)).and_then(|e| e.icon)
+    });
+    let (vi, ni) = (vault.clone(), note.clone());
+    let open_icon = StoredValue::new(move || {
+        let path = state::step(|c| c.entry(&vi, &ni))
+            .map(|e| e.path)
+            .unwrap_or_default();
+        ui.modal.set(Some(Modal::EntryIcon {
+            vault: vi.clone(),
+            id: Some(ni.clone()),
+            path,
+            folder: false,
+        }));
+    });
     let (v, n3) = (vault.clone(), note.clone());
     let trashed = Memo::new(move |_| {
         ui.tree_rev.get();
@@ -497,6 +515,7 @@ pub fn NoteView(vault: String, note: String) -> impl IntoView {
                                             let (v3, n3) = (v3.clone(), n3.clone());
                                             let (v4, n4) = (v4.clone(), n4.clone());
                                             view! {
+                                                <button on:click=move |_| open_icon.with_value(|f| f())><Icon name="smile"/>" Set icon…"</button>
                                                 <button on:click=move |_| ui.modal.set(Some(Modal::Move { vault: v3.clone(), id: n3.clone() }))><Icon name="move"/>" Move to…"</button>
                                                 <button class="danger" on:click=move |_| { actions::trash(&v4, &n4); state::navigate(Route::Vault(v4.clone())); }><Icon name="trash"/>" Move to trash"</button>
                                             }
@@ -534,18 +553,24 @@ pub fn NoteView(vault: String, note: String) -> impl IntoView {
                         let on_reading_click = on_reading_click.clone();
                         let vtool = vtool.clone();
                         view! {
-                            <input class="note-title" node_ref=title_ref aria-label="Note title" placeholder="Untitled"
-                                readonly=move || !writable.get()
-                                prop:value=move || title_text.get()
-                                on:input=move |ev| title_text.set(event_target_value(&ev))
-                                on:blur=move |_| c1()
-                                on:keydown=move |ev: web_sys::KeyboardEvent| {
-                                    if ev.key() == "Enter" || ev.key() == "ArrowDown" {
-                                        ev.prevent_default();
-                                        c2();
-                                        if let Some(ed) = editor() { ed.focus(); }
-                                    }
-                                }/>
+                            <div class="note-title-row">
+                                {move || entry_icon.get().map(|i| view! {
+                                    <button class="note-icon" title="Change icon" aria-label="Change icon" disabled=move || !writable.get()
+                                        on:click=move |_| open_icon.with_value(|f| f())>{i}</button>
+                                })}
+                                <input class="note-title" node_ref=title_ref aria-label="Note title" placeholder="Untitled"
+                                    readonly=move || !writable.get()
+                                    prop:value=move || title_text.get()
+                                    on:input=move |ev| title_text.set(event_target_value(&ev))
+                                    on:blur=move |_| c1()
+                                    on:keydown=move |ev: web_sys::KeyboardEvent| {
+                                        if ev.key() == "Enter" || ev.key() == "ArrowDown" {
+                                            ev.prevent_default();
+                                            c2();
+                                            if let Some(ed) = editor() { ed.focus(); }
+                                        }
+                                    }/>
+                            </div>
                             {move || (!writable.get()).then(|| view! {
                                 <div class="readonly-note"><Icon name="eye"/>" You can view this note. Ask the vault owner for edit access."</div>
                             })}
@@ -680,6 +705,7 @@ pub fn SharedNoteView(vault: String, note: String) -> impl IntoView {
     let (vd, nd) = (vault.clone(), note.clone());
     let (vl, nl) = (vault.clone(), note.clone());
     let title = move || info.get().map(|s| s.title).unwrap_or_default();
+    let icon = move || info.get().and_then(|s| s.icon);
 
     view! {
         <div class="note-page shared-note">
@@ -739,7 +765,10 @@ pub fn SharedNoteView(vault: String, note: String) -> impl IntoView {
                         }
                         let on_reading_click = on_reading_click.clone();
                         view! {
-                            <h1 class="note-title static" aria-label="Note title">{title}</h1>
+                            <div class="note-title-row">
+                                {move || icon().map(|i| view! { <span class="note-icon" aria-hidden="true">{i}</span> })}
+                                <h1 class="note-title static" aria-label="Note title">{title}</h1>
+                            </div>
                             {move || (!writable.get()).then(|| view! {
                                 <div class="readonly-note"><Icon name="eye"/>" You can view this note. Ask the person who shared it for edit access."</div>
                             })}

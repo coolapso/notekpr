@@ -150,6 +150,7 @@ pub struct SharedView {
     pub vault: String,
     pub note: String,
     pub title: String,
+    pub icon: Option<String>,
     pub role: Role,
     pub owner: String,
     pub added_at: i64,
@@ -161,6 +162,7 @@ pub struct SharedView {
 pub struct ShareState {
     pub info: SharedNote,
     pub title: String,
+    pub icon: Option<String>,
     /// Highest sequence number of this note we have seen (for resubscribing).
     pub seq: i64,
     /// Its content can be shown (restored from this browser's copy, or synced).
@@ -227,11 +229,31 @@ pub enum Modal {
     History(String, String),
     ApproveDevice(DeviceInfo),
     Help,
-    Rename { vault: String, id: String },
-    NewFolder { vault: String, parent: String },
-    Move { vault: String, id: String },
+    Rename {
+        vault: String,
+        id: String,
+    },
+    NewFolder {
+        vault: String,
+        parent: String,
+    },
+    Move {
+        vault: String,
+        id: String,
+    },
     Import(String),
-    Promote { vault: String, id: String },
+    Promote {
+        vault: String,
+        id: String,
+    },
+    /// Set the icon of a note or folder (`id` is `None` for a folder that
+    /// only exists as the parent of others).
+    EntryIcon {
+        vault: String,
+        id: Option<String>,
+        path: String,
+        folder: bool,
+    },
 }
 
 #[derive(Clone, Copy)]

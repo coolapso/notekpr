@@ -998,6 +998,42 @@ pub fn new_note(vault: &str, folder: &str) {
     });
 }
 
+/// Set a note's or folder's icon ("" removes it). A folder that only
+/// exists as the parent of others (`id` `None`) gets an entry for it first.
+/// `false` if nothing changed.
+pub fn set_entry_icon(vault: &str, id: Option<&str>, path: &str, icon: &str) -> bool {
+    let icon = match coolpsonotes_core::doc::clean_icon(icon) {
+        Ok(i) => i,
+        Err(e) => {
+            error(e);
+            return false;
+        }
+    };
+    let (changed, shared) = step(|c| {
+        let id = match id {
+            Some(id) => id.to_string(),
+            None if icon.is_none() => return (false, None),
+            None => {
+                let id = state::new_id();
+                change_index(c, vault, |ix| {
+                    ix.create(&id, path, EntryKind::Folder, now())
+                });
+                id
+            }
+        };
+        let changed = change_index(c, vault, |ix| ix.set_icon(&id, icon.as_deref()));
+        (changed, state::is_shared_note(c, vault, &id).then_some(id))
+    });
+    // People the note is shared with see its icon too.
+    if let Some(note) = shared {
+        leptos::task::spawn_local(update_note_meta(vault.to_string(), note));
+    }
+    if changed {
+        state::ui().tree_rev.update(|v| *v += 1);
+    }
+    changed
+}
+
 pub fn create_folder(vault: &str, path: &str) {
     let Ok(p) = paths::normalize(path) else {
         error("Invalid folder name");

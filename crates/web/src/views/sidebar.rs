@@ -10,7 +10,7 @@ use crate::util;
 use crate::views::icons::Icon;
 use crate::views::quick::QuickSection;
 use crate::views::tree::Tree;
-use crate::views::{SyncStatus, avatar, vault_icon};
+use crate::views::{SyncStatus, avatar, entry_icon, vault_icon};
 
 fn role_badge(role: Role, shared: bool) -> AnyView {
     match (role, shared) {
@@ -65,7 +65,7 @@ fn VaultSwitcher(vault: Memo<Option<String>>) -> impl IntoView {
                                 let (v, n) = (s.vault.clone(), s.note.clone());
                                 view! {
                                     <button title=format!("Shared by {}", s.owner) on:click=move |_| state::navigate(Route::Shared(v.clone(), n.clone()))>
-                                        <Icon name="file"/><span class="grow">{s.title.clone()}</span>
+                                        {entry_icon(s.icon.clone(), "file")}<span class="grow">{s.title.clone()}</span>
                                     </button>
                                 }
                             }).collect_view()}
@@ -219,7 +219,10 @@ fn Favorites() -> impl IntoView {
             c.prefs
                 .favorites
                 .iter()
-                .filter_map(|(v, n)| c.note_title(v, n).map(|t| (v.clone(), n.clone(), t)))
+                .filter_map(|(v, n)| {
+                    let e = c.entry(v, n)?;
+                    Some((v.clone(), n.clone(), e.title().to_string(), e.icon))
+                })
                 .collect::<Vec<_>>()
         })
     };
@@ -227,9 +230,9 @@ fn Favorites() -> impl IntoView {
         <Show when=move || !items().is_empty()>
             <div class="sb-section">
                 <div class="sb-label"><span>"Favorites"</span></div>
-                {move || items().into_iter().map(|(v, n, t)| {
+                {move || items().into_iter().map(|(v, n, t, icon)| {
                     view! { <button class="sb-link" on:click=move |_| state::navigate(Route::Note(v.clone(), n.clone()))>
-                        <Icon name="star"/><span class="grow ellipsis">{t}</span></button> }
+                        {entry_icon(icon, "star")}<span class="grow ellipsis">{t}</span></button> }
                 }).collect_view()}
             </div>
         </Show>
@@ -248,7 +251,10 @@ fn Recent(vault: Memo<Option<String>>) -> impl IntoView {
                 .recent
                 .iter()
                 .filter(|(v, _)| cur.as_ref().is_none_or(|x| x == v))
-                .filter_map(|(v, n)| c.note_title(v, n).map(|t| (v.clone(), n.clone(), t)))
+                .filter_map(|(v, n)| {
+                    let e = c.entry(v, n)?;
+                    Some((v.clone(), n.clone(), e.title().to_string(), e.icon))
+                })
                 .take(5)
                 .collect::<Vec<_>>()
         })
@@ -257,9 +263,9 @@ fn Recent(vault: Memo<Option<String>>) -> impl IntoView {
         <Show when=move || !items().is_empty()>
             <div class="sb-section">
                 <div class="sb-label"><span>"Recent"</span></div>
-                {move || items().into_iter().map(|(v, n, t)| {
+                {move || items().into_iter().map(|(v, n, t, icon)| {
                     view! { <button class="sb-link" on:click=move |_| state::navigate(Route::Note(v.clone(), n.clone()))>
-                        <Icon name="clock"/><span class="grow ellipsis">{t}</span></button> }
+                        {entry_icon(icon, "clock")}<span class="grow ellipsis">{t}</span></button> }
                 }).collect_view()}
             </div>
         </Show>
@@ -281,7 +287,7 @@ fn SharedWithMe() -> impl IntoView {
                     let hint = format!("Shared by {}{}", s.owner, if s.role.can_write() { "" } else { " · read only" });
                     view! {
                         <button class="sb-link" class:active=active title=hint on:click=move |_| state::navigate(Route::Shared(v.clone(), n.clone()))>
-                            <Icon name=if s.role.can_write() { "file" } else { "eye" }/><span class="grow ellipsis">{s.title.clone()}</span>
+                            {entry_icon(s.icon.clone(), if s.role.can_write() { "file" } else { "eye" })}<span class="grow ellipsis">{s.title.clone()}</span>
                         </button>
                     }
                 }).collect_view()}

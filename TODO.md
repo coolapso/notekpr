@@ -78,6 +78,14 @@ Phases 1–3 are done, and Phase 4 except the OS keyring for CLI secrets
       Both live in the encrypted `VaultMeta`, so members see them live
       (`meta_changed`) and the server doesn't. Shown in the vault switcher,
       its menu and the vault lists. The CLI doesn't show them yet.
+- [x] Note and folder icons (2026-10-20): an emoji per entry in the
+      encrypted index (`icon`), set by anyone who can write ("Set icon…" in
+      the tree's and the note's menus; the icon by a note's title changes
+      it). A folder that only exists as the parent of notes gets an entry
+      for it. Shared notes carry it in `ObjectMeta`, so recipients see it.
+      Shown in the tree, by the title, Favorites, Recent, the quick
+      switcher, the vault page and Shared with me. Not in the CLI or the
+      Markdown mirror.
 - [x] Sidebar marks the open note in one place only (2026-10-20): the tree,
       which no longer opens folders by itself — a closed folder holding the
       open note is marked instead. Favorites, Recent and the Quick notes

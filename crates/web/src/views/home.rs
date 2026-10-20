@@ -69,7 +69,7 @@ pub fn Home() -> impl IntoView {
                             let (v, n) = (s.vault.clone(), s.note.clone());
                             view! {
                                 <button class="card" on:click=move |_| state::navigate(Route::Shared(v.clone(), n.clone()))>
-                                    <div class="card-icon"><Icon name="file"/></div>
+                                    <div class="card-icon">{super::entry_icon(s.icon.clone(), "file")}</div>
                                     <div class="card-title">{s.title.clone()}</div>
                                     <div class="card-meta"><Icon name="users"/>" Shared by "{s.owner.clone()}</div>
                                     <div class="card-meta muted">{if s.role.can_write() { "Can edit" } else { "Read only" }}</div>
@@ -154,7 +154,7 @@ pub fn VaultHome(vault: String) -> impl IntoView {
                                         let snippet: String = text.lines().filter(|l| !l.trim().is_empty() && !l.starts_with('#') && !l.starts_with("---")).take(2).collect::<Vec<_>>().join(" ").chars().take(140).collect();
                                         view! {
                                             <button class="note-card" on:click=move |_| state::navigate(Route::Note(v2.clone(), id.clone()))>
-                                                <div class="nc-title">{e.title().to_string()}</div>
+                                                <div class="nc-title">{e.icon.clone().map(|i| view! { <span class="entry-icon" aria-hidden="true">{i}</span> })}{e.title().to_string()}</div>
                                                 <div class="nc-snip">{snippet}</div>
                                                 <div class="nc-meta">{if folder.is_empty() { String::new() } else { format!("{folder} · ") }}{util::relative_time(e.modified)}</div>
                                             </button>

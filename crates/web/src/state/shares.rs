@@ -75,9 +75,9 @@ pub(super) async fn load_share(info: SharedNote) {
             .map(|s| s.error.is_none() && s.info.key_epoch == info.key_epoch)
     });
     if current == Some(true) {
-        // Same key: only the title or role may have changed.
+        // Same key: only the title, icon or role may have changed.
         step(|c| {
-            let title = c
+            let meta = c
                 .replicas
                 .get(&key.0)
                 .and_then(|r| r.doc_keys.get(&key.1))
@@ -85,11 +85,10 @@ pub(super) async fn load_share(info: SharedNote) {
                     info.encrypted_meta
                         .as_ref()
                         .and_then(|m| ObjectMeta::decrypt(ring, &key.1, m).ok())
-                })
-                .map(|m| m.title);
+                });
             if let Some(s) = c.shares.get_mut(&key) {
-                if let Some(t) = title {
-                    s.title = t;
+                if let Some(m) = meta {
+                    (s.title, s.icon) = (m.title, m.icon);
                 }
                 s.info = info;
             }
@@ -105,6 +104,7 @@ pub(super) async fn load_share(info: SharedNote) {
                 ShareState {
                     info: info.clone(),
                     title: "Shared note".into(),
+                    icon: None,
                     seq: 0,
                     loaded: false,
                     synced: false,
@@ -190,17 +190,16 @@ pub(super) async fn reload_share_keys_once(vault: &str, note: &str) {
                 return None;
             }
         };
-        let title = keys
+        let meta = keys
             .encrypted_meta
             .as_ref()
-            .and_then(|m| ObjectMeta::decrypt(&ring, note, m).ok())
-            .map(|m| m.title);
+            .and_then(|m| ObjectMeta::decrypt(&ring, note, m).ok());
         if let Some(s) = c.shares.get_mut(&key) {
             s.error = None;
             s.info.role = keys.role;
             s.info.key_epoch = keys.current_epoch;
-            if let Some(t) = title {
-                s.title = t;
+            if let Some(m) = meta {
+                (s.title, s.icon) = (m.title, m.icon);
             }
         }
         // The replica's role only gates sending; each note's own role is checked by the server.
@@ -306,6 +305,7 @@ pub fn publish_shares(c: &Core) {
             vault: v.clone(),
             note: n.clone(),
             title: s.title.clone(),
+            icon: s.icon.clone(),
             role: s.info.role,
             owner: s.info.owner.display_name.clone(),
             added_at: s.info.added_at,

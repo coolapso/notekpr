@@ -592,6 +592,15 @@ def test_note_sharing(env):
         a.keys("Beach trip" + KEYS["enter"])
         b.wait("return document.querySelector('.note-title').textContent == 'Beach trip'", 10, "renamed title reaches pete")
         check(True, "renaming updates the recipient's title")
+        # So does its icon, set from the note's menu.
+        a.click(".note-head button[title='More']")
+        a.click_el(a.find_text(".note-head .menu button", "Set icon", 5))
+        a.find(".modal .icon-pick", 5)
+        a.js("document.querySelector('.modal .emoji-btn[aria-label=\"🌍\"]').click()")
+        b.wait("return (document.querySelector('.note-title-row .note-icon') || {}).textContent === '🌍'"
+               " && Array.from(document.querySelectorAll('.sb-link')).some(e => e.textContent.includes('Beach trip') && (e.querySelector('.entry-icon') || {}).textContent === '🌍')",
+               10, "the icon reaches pete")
+        check(True, "and its icon, shown by the title and in Shared with me")
         # A reload restores the shared note.
         b.go(env.url.rstrip("/") + b.js("return location.pathname"))
         b.wait("return document.querySelector('.ed') && document.querySelector('.ed').textContent.includes('and hats')", 20, "pete reloads")
@@ -1105,15 +1114,15 @@ def test_vault_icons(env):
         b.click_el(b.find_text(".vault-menu button", "All vaults", 10))
         b.wait("return !!" + shared_card, 15, "the shared vault's card")
         a.click(".sb-label button[title='Vault settings']")
-        a.find(".vault-icon-pick", 5)
+        a.find(".icon-pick", 5)
         a.js("document.querySelector('.emoji-btn[aria-label=\"🌱\"]').click()")
         a.wait("return " + btn_icon + " === '🌱'", 10, "the emoji in the switcher")
         check(True, "an emoji from the list becomes the vault's icon")
         b.wait("const c = " + shared_card + "; return (c.querySelector('.vault-emoji') || {}).textContent === '🌱'", 15, "the member's card")
         check(True, "members see it right away")
         # WebDriver can't type characters outside the BMP: set the box's value.
-        a.js("const i = document.querySelector('.vault-icon-input'); i.value = '🦊'; i.dispatchEvent(new Event('input'))")
-        a.click(".vault-icon-actions button[type=submit]")
+        a.js("const i = document.querySelector('.icon-input'); i.value = '🦊'; i.dispatchEvent(new Event('input'))")
+        a.click(".icon-actions button[type=submit]")
         a.wait("return " + btn_icon + " === '🦊'", 10, "the typed emoji")
         check(True, "any emoji can be typed instead")
         # A picture: made a small square from the image, shown instead of the emoji.
@@ -1134,7 +1143,7 @@ def test_vault_icons(env):
         stored = b"".join(open(os.path.join(env.data, f), "rb").read() for f in os.listdir(env.data) if f.startswith("coolpsonotes.db"))
         check("🦊".encode() not in stored and "🌱".encode() not in stored and b'"picture"' not in stored,
               "the server only ever stores icon and picture encrypted")
-        a.click(".vault-icon-remove")
+        a.click(".icon-remove")
         a.wait("return !document.querySelector('.vault-btn .vault-pic, .vault-btn .vault-emoji')", 10, "the generic icon")
         check(True, "Remove goes back to the generic icon")
         check(not severe_logs(a, b), "no browser errors")
@@ -1143,7 +1152,67 @@ def test_vault_icons(env):
         b.close()
 
 
-TESTS = [test_onboarding, test_collab, test_devices_and_recovery, test_features, test_attachments, test_note_sharing, test_tables, test_editor_safety, test_local_copy, test_ui_basics, test_offline_tabs, test_offline_start, test_mobile, test_quick_notes, test_vault_icons]
+def test_entry_icons(env):
+    a, b = Browser(), Browser()
+    row = "Array.from(document.querySelectorAll('.tree-row')).filter(r => r.textContent.trim().endsWith(arguments[0]))"
+    def row_icon(br, name):
+        return br.js("const r = " + row + "[0]; return r ? (r.querySelector('.entry-icon') || {}).textContent || null : 'missing'", name)
+    def set_icon(br, name, emoji):
+        br.js(row + "[0].querySelector('.tree-more').click()", name)
+        br.click_el(br.find_text(".tree-row .menu button", "Set icon", 5))
+        br.find(".modal .icon-pick", 5)
+        br.js("document.querySelector('.modal .emoji-btn[aria-label=\"' + arguments[0] + '\"]').click()", emoji)
+        br.wait("return !document.querySelector('.modal')", 5, "the dialog closes")
+    try:
+        an, bn = uniq("ora"), uniq("oto")
+        signup(a, an)
+        signup(b, bn)
+        share(a, ".sb-bottom button:nth-child(2)", bn)
+        new_note(a, "Trip", "Packing list")
+        url = a.js("return location.pathname")
+        set_icon(a, "Trip", "🌱")
+        check(row_icon(a, "Trip") == "🌱" and a.js("return document.querySelector('.note-head .note-icon, .note-title-row .note-icon').textContent") == "🌱",
+              "a note's icon shows in the tree and next to its title")
+        a.wait("return Array.from(document.querySelectorAll('.sb-link')).some(e => e.textContent.includes('Trip') && (e.querySelector('.entry-icon') || {}).textContent === '🌱')", 5, "Recent")
+        check(True, "and in Recent")
+        b.go(env.url.rstrip("/") + url)
+        b.wait("return " + row + ".length === 1", 20, "the tree", "Trip")
+        b.wait("const r = " + row + "[0]; return (r.querySelector('.entry-icon') || {}).textContent === '🌱'", 15, "the member's tree", "Trip")
+        check(True, "members see it")
+        # Folders: one with an entry, and one only there because notes are in it.
+        a.click(".sb-actions button[title='New folder']")
+        a.type(".modal input", "Travel")
+        a.click(".modal button[type=submit]")
+        a.wait("return " + row + ".length === 1", 10, "the folder", "Travel")
+        a.js(row + "[0].querySelector('.tree-more').click()", "Travel")
+        a.click_el(a.find_text(".tree-row .menu button", "Set icon", 5))
+        a.find(".modal .icon-pick", 5)
+        # WebDriver can't type characters outside the BMP: set the box's value.
+        a.js("const i = document.querySelector('.modal .icon-input'); i.value = '🧳'; i.dispatchEvent(new Event('input'))")
+        a.click(".modal .icon-actions button[type=submit]")
+        a.wait("return !document.querySelector('.modal')", 5, "the dialog closes")
+        check(row_icon(a, "Travel") == "🧳", "a folder gets an icon, any emoji can be typed")
+        a.chord(KEYS["ctrl"], KEYS["alt"], "q")
+        a.wait("return " + row + ".length === 1", 10, "the Quick notes folder", "Quick notes")
+        set_icon(a, "Quick notes", "💡")
+        check(row_icon(a, "Quick notes") == "💡" and a.js("return " + row + ".length", "Quick notes") == 1,
+              "so does a folder that only held notes, without showing twice")
+        # Clicking the icon by the title changes it; Remove takes it away.
+        a.go(env.url.rstrip("/") + url)
+        a.find(".note-title-row .note-icon", 15)
+        a.click(".note-title-row .note-icon")
+        a.find(".modal .icon-pick", 5)
+        a.click(".modal .icon-remove")
+        a.wait("return !document.querySelector('.modal') && !document.querySelector('.note-title-row .note-icon')", 5, "removed")
+        check(row_icon(a, "Trip") is None, "the icon by the title opens the choice, and Remove takes the icon away")
+        b.wait("const r = " + row + "[0]; return !r.querySelector('.entry-icon')", 15, "removed for the member", "Trip")
+        check(not severe_logs(a, b), "no browser errors")
+    finally:
+        a.close()
+        b.close()
+
+
+TESTS = [test_onboarding, test_collab, test_devices_and_recovery, test_features, test_attachments, test_note_sharing, test_tables, test_editor_safety, test_local_copy, test_ui_basics, test_offline_tabs, test_offline_start, test_mobile, test_quick_notes, test_vault_icons, test_entry_icons]
 
 
 def main():

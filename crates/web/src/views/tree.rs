@@ -23,6 +23,7 @@ struct Row {
     has_children: bool,
     /// A note shared individually with people outside the vault.
     shared: bool,
+    icon: Option<String>,
 }
 
 fn build_rows(vault: &str, expanded: &BTreeSet<String>) -> Vec<Row> {
@@ -34,11 +35,13 @@ fn build_rows(vault: &str, expanded: &BTreeSet<String>) -> Vec<Row> {
             .unwrap_or_default();
         (c.live_entries(vault), shared)
     });
-    let folders: BTreeMap<String, Option<String>> = {
-        let mut m: BTreeMap<String, Option<String>> = BTreeMap::new();
+    // Each folder's path, and its entry's id and icon unless it only exists
+    // as the parent of others.
+    let folders: BTreeMap<String, Option<(String, Option<String>)>> = {
+        let mut m: BTreeMap<String, Option<(String, Option<String>)>> = BTreeMap::new();
         for e in &entries {
             if e.kind == EntryKind::Folder {
-                m.insert(e.path.clone(), Some(e.id.clone()));
+                m.insert(e.path.clone(), Some((e.id.clone(), e.icon.clone())));
             }
             let mut p = paths::parent(&e.path);
             while !p.is_empty() {
@@ -49,11 +52,12 @@ fn build_rows(vault: &str, expanded: &BTreeSet<String>) -> Vec<Row> {
         m
     };
     let mut children: BTreeMap<String, Vec<Row>> = BTreeMap::new();
-    for (path, id) in &folders {
+    for (path, entry) in &folders {
         let parent = paths::parent(path).to_string();
         children.entry(parent).or_default().push(Row {
             key: format!("d:{path}"),
-            id: id.clone(),
+            id: entry.as_ref().map(|(id, _)| id.clone()),
+            icon: entry.as_ref().and_then(|(_, icon)| icon.clone()),
             kind: EntryKind::Folder,
             path: path.clone(),
             name: paths::file_name(path).to_string(),
@@ -85,6 +89,7 @@ fn build_rows(vault: &str, expanded: &BTreeSet<String>) -> Vec<Row> {
                 expanded: false,
                 has_children: false,
                 shared: shared.contains(&e.id),
+                icon: e.icon.clone(),
             });
     }
     for list in children.values_mut() {
@@ -175,7 +180,7 @@ pub fn Tree(vault: String) -> impl IntoView {
                         && let Err(e) = actions::move_entry(&v, &id, "") { state::error(e); }
                 }
             }>
-            <For each=move || rows.get() key=|r| format!("{}|{}|{}|{}|{}", r.key, r.name, r.expanded, r.depth, r.shared) let:row>
+            <For each=move || rows.get() key=|r| format!("{}|{}|{}|{}|{}|{:?}", r.key, r.name, r.expanded, r.depth, r.shared, r.icon) let:row>
                 {
                     let vault = v0.clone();
                     let row2 = row.clone();
@@ -270,7 +275,7 @@ pub fn Tree(vault: String) -> impl IntoView {
                                 view! {
                                     <button class="tree-item" on:click=on_click.clone() title=row2.path.clone()>
                                         {(!caret.is_empty()).then(|| view! { <Icon name=caret class="caret"/> })}
-                                        <Icon name=icon/>
+                                        {super::entry_icon(row2.icon.clone(), icon)}
                                         <span class="name">{name}</span>
                                         {row2.shared.then(|| view! { <span class="shared-mark" title="Shared individually with people outside the vault"><Icon name="users"/></span> })}
                                     </button>
@@ -369,6 +374,13 @@ fn RowMenu(
                 let (v, id) = (v4.clone(), id2.clone().unwrap_or_default());
                 view! { <button on:click=move |_| { close(); let (v, id) = (v.clone(), id.clone()); leptos::task::spawn_local(async move { actions::download_attachment(&v, &id).await }); }>
                     <Icon name="download"/>" Download"</button> }
+            })}
+            {(writable && kind != EntryKind::Attachment).then(|| {
+                let (v, id, p) = (vault.clone(), row_id.clone(), path.clone());
+                view! { <button on:click=move |_| {
+                    close();
+                    ui.modal.set(Some(Modal::EntryIcon { vault: v.clone(), id: id.clone(), path: p.clone(), folder: is_folder }));
+                }><Icon name="smile"/>" Set icon…"</button> }
             })}
             {writable.then(|| {
                 let name = name.clone();

@@ -504,7 +504,8 @@ coolpsonotes import Family ~/backup/family.zip
 
 Exports are a plain tree of `.md` files, attachments and (empty) folders — no
 proprietary metadata — readable by any Markdown tool. Trashed documents are not
-exported. An existing non-empty target is refused unless `--force`. Exports
+exported. Without the server, `export` uses the local copy: attachments this
+device never downloaded are left out and listed. An existing non-empty target is refused unless `--force`. Exports
 are decrypted, so they are written for the owner only (files `0600`, folders
 `0700`, also inside the zip); a failed zip export leaves no `.partial` file.
 
@@ -522,12 +523,16 @@ update or leave unchanged without changing anything.
 coolpsonotes export-encrypted --out ~/backup/coolpsonotes-$(date +%F).json
 coolpsonotes recover --from ~/backup/coolpsonotes-2026-10-19.json --out ~/Recovered
 coolpsonotes recover --out ~/Recovered          # with this signed-in device
+coolpsonotes recover --local --out ~/Recovered  # from this device's copies, no server
 ```
 
 `export-encrypted` saves everything the account can read, still encrypted, as
 one file that is safe to keep in backups. `recover` turns such a file into
 plain Markdown files without a server, unlocking it with the recovery key
-(asked for; or `--recovery-key-file`, or `COOLPSONOTES_RECOVERY_KEY`). See
+(asked for; or `--recovery-key-file`, or `COOLPSONOTES_RECOVERY_KEY`). Without
+`--from`, a signed-in device downloads the export, or, when the server can't be
+reached (or with `--local`), recovers from its local copies: what it synced and
+downloaded, without notes shared with you one by one. See
 [recovery.md](recovery.md).
 
 ## 10. Where data is stored and how it is protected

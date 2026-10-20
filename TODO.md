@@ -312,10 +312,13 @@ Nobody's notes may be locked in because a server or an app is unavailable.
       export-encrypted`): the user's vault ciphertexts, envelopes and chains,
       so hosted users without a server backup can leave too. `recover`
       without `--from` uses a signed-in device instead of the recovery key.
-- [ ] `recover` with a device's local profile fully offline (today the device
-      path downloads the export).
-- [ ] `coolpsonotes export` works fully offline from the local replica
-      (attachments cached or marked missing).
+- [x] `recover` with a device's local profile fully offline: without the
+      server (or with `--local`) it recovers from the device's copies, laid
+      out like an export (`core::recover::vault_files`). Notes shared one by
+      one aren't kept on devices, so only an export has them.
+- [x] `coolpsonotes export` works fully offline from the local replica
+      (attachments cached or marked missing) — it already did (the hub's
+      offline fallback); now tested (`tests/recover.rs`).
 - [x] Test: backup → recover → byte-identical notes and attachments; include
       rotated keys, shared notes and trashed entries (server `tests/export.rs`,
       core `recover` tests, client `tests/recover.rs`).

@@ -206,7 +206,8 @@ pub struct QuickArgs {
 #[derive(Args, Debug)]
 pub struct RecoverArgs {
     /// Encrypted export to decrypt (from `export-encrypted`, `GET /api/v1/me/export`
-    /// or `coolpsonotes-server export-user`). Without it, this device downloads one.
+    /// or `coolpsonotes-server export-user`). Without it, this device downloads
+    /// one, or uses its local copies (see --local).
     #[arg(long)]
     pub from: Option<PathBuf>,
     /// New (or empty) folder for the recovered files.
@@ -216,6 +217,11 @@ pub struct RecoverArgs {
     /// COOLPSONOTES_RECOVERY_KEY, or asked for).
     #[arg(long)]
     pub recovery_key_file: Option<PathBuf>,
+    /// Use this device's local copies, without contacting the server (done
+    /// anyway when the server can't be reached). They hold what this device
+    /// synced and the files it downloaded; not notes shared with you one by one.
+    #[arg(long, conflicts_with = "from")]
+    pub local: bool,
 }
 
 #[derive(Args, Debug)]

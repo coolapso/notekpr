@@ -14,6 +14,7 @@ use serde_json::json;
 use tokio::sync::watch;
 
 use crate::account::{self, AgentSetupOptions, LoginOptions};
+use crate::api::ApiError;
 use crate::audit::AuditLog;
 use crate::cli::*;
 use crate::gateway::{self, Gateway};
@@ -80,7 +81,6 @@ fn access(c: &Command) -> Access {
     match c {
         Command::Login(_)
         | Command::ExportEncrypted { .. }
-        | Command::Recover(_)
         | Command::Profiles
         | Command::Devices(_)
         | Command::Recovery(_)
@@ -99,6 +99,7 @@ fn access(c: &Command) -> Access {
         | Command::Search { .. }
         | Command::Backlinks { .. }
         | Command::Export { .. }
+        | Command::Recover(_)
         | Command::NoteShares { .. }
         | Command::Trash(TrashCmd::List { .. })
         | Command::Vault(VaultCmd::List) => Access::Read,
@@ -613,6 +614,7 @@ pub async fn run_in(cli: Cli, dirs: Dirs) -> Result<()> {
 }
 
 async fn recover_cmd(ctx: &Ctx, a: RecoverArgs) -> Result<()> {
+    let mut local = false;
     let report = match &a.from {
         Some(file) => {
             let export = recover::read_export(file)?;
@@ -637,8 +639,27 @@ async fn recover_cmd(ctx: &Ctx, a: RecoverArgs) -> Result<()> {
         }
         None => {
             let s = ctx.session()?;
-            let export = recover::download_export(&s).await?;
-            recover::recover_with_device(&s, &export, &a.out)?
+            if a.local {
+                local = true;
+                recover::recover_local(&s, &a.out)?
+            } else {
+                match recover::download_export(&s).await {
+                    Ok(export) => recover::recover_with_device(&s, &export, &a.out)?,
+                    // No server (or no longer signed in): what this device has.
+                    Err(e)
+                        if e.downcast_ref::<ApiError>().is_some_and(|e| {
+                            e.is_offline() || e.is_unauthorized() || matches!(e, ApiError::Auth(_))
+                        }) =>
+                    {
+                        ui::warn(&format!(
+                            "{e:#}; recovering from this device's local copies instead (they may miss the latest changes)"
+                        ));
+                        local = true;
+                        recover::recover_local(&s, &a.out)?
+                    }
+                    Err(e) => return Err(e),
+                }
+            }
         }
     };
     if ctx.json {
@@ -646,19 +667,30 @@ async fn recover_cmd(ctx: &Ctx, a: RecoverArgs) -> Result<()> {
             "vaults": report.vaults,
             "files": report.files,
             "problems": report.problems,
+            "source": if local { "device" } else { "export" },
         }));
     } else {
         println!(
-            "Recovered {} file(s) from {} vault(s) into {}.",
+            "Recovered {} file(s) from {} vault(s) into {}{}.",
             report.files,
             report.vaults,
-            a.out.display()
+            a.out.display(),
+            if local {
+                ", from this device's copies"
+            } else {
+                ""
+            }
         );
         if !report.problems.is_empty() {
             println!("Not recovered:");
             for p in &report.problems {
                 println!("  - {p}");
             }
+        }
+        if local {
+            ui::status(
+                "notes shared with you one by one aren't kept on devices: only an export has them",
+            );
         }
         ui::status("these files are decrypted plain text: keep the folder private");
     }

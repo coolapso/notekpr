@@ -1,7 +1,8 @@
 //! `coolpsonotes recover`: decrypt an encrypted export (from `GET /me/export`
 //! or `coolpsonotes-server export-user`) into plain Markdown files, offline,
 //! with nothing but the person's account key (unlocked from their recovery
-//! key). No server, no login, no other app needed.
+//! key). No server, no login, no other app needed. A signed-in device can
+//! also recover from its own local copies, without the server.
 
 use std::path::{Component, Path, PathBuf};
 
@@ -63,14 +64,49 @@ pub fn recover_to(
     account: &AccountSecret,
     out: &Path,
 ) -> Result<RecoverReport> {
+    check_empty(out)?;
+    write_recovered(&recover::decrypt_export(account, export), out)
+}
+
+/// Recover from this device's local copies, without the server: every vault
+/// it keeps a copy of, as far as it synced (and with its unsent edits), and
+/// the attachments it downloaded. Notes shared with the account one by one
+/// aren't kept on devices: only an export has them.
+pub fn recover_local(session: &Session, out: &Path) -> Result<RecoverReport> {
+    check_empty(out)?;
+    let mut vaults = Vec::new();
+    let mut problems = Vec::new();
+    for id in session.local_vault_ids() {
+        match session.load_local(&id) {
+            Ok(Some(v)) => vaults.push(recover::vault_files(&v.replica, v.name(), |a| {
+                match v.store().load_blob(a) {
+                    Ok(Some(ct)) => Ok(ct),
+                    Ok(None) => Err("never downloaded on this device".into()),
+                    Err(e) => Err(format!("{e:#}")),
+                }
+            })),
+            Ok(None) => {}
+            Err(e) => problems.push(format!("{e:#}")),
+        }
+    }
+    let mut report = write_recovered(&vaults, out)?;
+    report.problems.extend(problems);
+    Ok(report)
+}
+
+fn check_empty(out: &Path) -> Result<()> {
     if out.exists() && std::fs::read_dir(out)?.next().is_some() {
         bail!("{} is not empty; choose a new folder", out.display());
     }
+    Ok(())
+}
+
+/// Write every vault into its own folder under `out`.
+fn write_recovered(vaults: &[RecoveredVault], out: &Path) -> Result<RecoverReport> {
     fsutil::create_private_dir(out)?;
-    let vaults = recover::decrypt_export(account, export);
     let mut report = RecoverReport::default();
     let mut used = std::collections::BTreeSet::new();
-    for v in &vaults {
+    for v in vaults {
         let dir_name = unique_dir_name(v, &mut used);
         let base = out.join(&dir_name);
         fsutil::create_private_dir(&base)?;

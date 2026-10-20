@@ -47,6 +47,13 @@ it with this device's keys):
 coolpsonotes recover --out ~/Recovered
 ```
 
+If the server can't be reached (or this device is no longer signed in), the
+same command recovers from the device's own encrypted copies instead, and says
+so; `--local` does that without contacting the server at all. Those copies hold
+the vaults this device keeps, as far as it synced them (with its unsent edits),
+and the attachments it downloaded; others are listed as not recovered. Notes
+shared with you one by one aren't kept on devices: only an export has them.
+
 **From a server backup** (if you run the server, or can get its database
 file): first write your encrypted export from the backup with the server tool —
 it never decrypts anything — then recover as above.

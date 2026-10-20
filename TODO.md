@@ -24,8 +24,8 @@ R6 started (`state/` split; the editor is its own crate with a document
 model, transactions and line-level rendering),
 R7 done (weekly fuzzing in CI). R1 done (sync engine crate, partial push
 acceptance), R2 done (every note has its own key; sharing starts a fresh,
-unlinked one). R3 done (signed membership log, signed content, no replay of recovery
-updates or preferences) apart from committing note keys for recipients.
+unlinked one). R3 done (signed membership log, signed content and note key grants, no
+replay of recovery updates or preferences). R7 done.
 
 ## Decisions (2026-10-19)
 
@@ -443,9 +443,11 @@ every client verifies; updates are signed by the author's key.
       refuses unsigned changes once a vault has a log; older vaults get a
       checkpoint from their owner's client (core `memberlog`, sync
       `members`, web and CLI).
-- [ ] Commit the document keys of individually shared notes too (an owner
-      signature on each share), so a server can't hand a recipient a note
-      key of its own.
+- [x] Commit the document keys of individually shared notes too: the owner
+      signs each key grant (note, person, epoch, key commitment); recipients
+      use only their newest key, if signed by the owner's pinned key, and
+      derive older ones from the chain; owners' clients sign older grants
+      when they open the vault.
 - [x] Signed updates (authorship verifiable even against a colluding server):
       every update and snapshot carries its author's signature; the log's
       `require_signed` makes them mandatory (new vaults at once, older ones
@@ -583,8 +585,9 @@ with SQLite; no SQL-dialect abstraction.
       `task fuzz`, stable toolchain). First find: a 7-byte CRDT update made
       yrs reserve ~2 GB (any member could crash the others' tabs) — refused
       up front now (`doc::check_plausible`).
-- [ ] Editor syntax target once the editor crate lands (property tests cover
-      it meanwhile).
+- [x] Editor syntax target once the editor crate lands: `fuzz/fuzz_targets/
+      editor.rs` (incremental classification and line index under arbitrary
+      edits, styling every line), in the weekly run.
 - [x] Property tests: CRDT convergence under random concurrent edits, mirror
       path mapping (case-insensitive and Windows rules), table/key helpers
       (`crates/core/tests/properties.rs`, `crates/web/tests/properties.rs`,

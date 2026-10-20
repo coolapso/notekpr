@@ -351,3 +351,68 @@ async fn content_a_server_slips_in_is_refused() {
         Some("real\nand more\n")
     );
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_note_key_the_owner_never_gave_is_refused() {
+    let srv = start().await;
+    let alice = login(&srv, "alice").await;
+    let rita = login(&srv, "rita").await;
+    manage::create_vault(&alice, "Family").await.unwrap();
+    let ah = hub(&alice).await;
+    let v = ah.resolve("Family").await.unwrap();
+    let vid = v.lock().await.id().to_string();
+    ops::put_document(&ah, "Family", "Trip.md", "coast\n", None)
+        .await
+        .unwrap();
+    ah.sync_vault(&vid).await.unwrap();
+    note_shares::share_note(&alice, &v, "Trip", "rita", Role::Editor, false)
+        .await
+        .unwrap();
+    let (_, text) = note_shares::read_shared(&rita, "Trip").await.unwrap();
+    assert_eq!(text, "coast\n");
+    let oid = v.lock().await.find_note("Trip").unwrap().1.id;
+
+    // The server makes up a newer key for Rita, so it could read her edits.
+    let epoch: i64 =
+        sqlx::query_scalar("SELECT key_epoch FROM objects WHERE vault_id = ? AND id = ?")
+            .bind(&vid)
+            .bind(&oid)
+            .fetch_one(&srv.state.db)
+            .await
+            .unwrap();
+    let fake = VaultKey::generate();
+    let scope = keys::object_scope(&vid, &oid);
+    let env = keys::wrap_vault_key(
+        &fake,
+        &scope,
+        (epoch + 1) as u32,
+        &rita.user_id,
+        &rita.account().public().enc_public,
+    )
+    .unwrap();
+    sqlx::query("INSERT INTO object_keys (vault_id, object_id, epoch, user_id, envelope, created_at) VALUES (?, ?, ?, ?, ?, 0)")
+        .bind(&vid)
+        .bind(&oid)
+        .bind(epoch + 1)
+        .bind(&rita.user_id)
+        .bind(env)
+        .execute(&srv.state.db)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE objects SET key_epoch = ? WHERE vault_id = ? AND id = ?")
+        .bind(epoch + 1)
+        .bind(&vid)
+        .bind(&oid)
+        .execute(&srv.state.db)
+        .await
+        .unwrap();
+    // (Its title can't be read either: refer to it by id.)
+    let err = note_shares::write_shared(&rita, &oid, "secret plans\n", true)
+        .await
+        .err()
+        .expect("refused");
+    assert!(
+        format!("{err:#}").contains("confirmed by its owner"),
+        "{err:#}"
+    );
+}

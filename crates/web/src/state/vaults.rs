@@ -213,6 +213,9 @@ pub(super) async fn load_vault_with(info: VaultInfo, force: bool, keys: Option<V
                 if unsigned && info.role == Role::Owner && !with(|c| c.offline_start) {
                     leptos::task::spawn_local(super::members::sign_vault(id.clone()));
                 }
+                if is_new && info.role == Role::Owner && !with(|c| c.offline_start) {
+                    leptos::task::spawn_local(super::members::sign_missing_grants(id.clone()));
+                }
                 if is_new {
                     subscribe(&id);
                     if restored {

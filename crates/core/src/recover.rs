@@ -178,7 +178,7 @@ fn decrypt_shared_note(
     user_id: &str,
     n: &ExportedSharedNote,
 ) -> crate::engine::Result<(String, String)> {
-    let ring = engine::object_keyring_for_recipient(account, user_id, &n.vault_id, &n.keys)?;
+    let ring = engine::object_keyring_for_recipient(account, user_id, &n.vault_id, &n.keys, None)?;
     let oid = &n.keys.object_id;
     let title = n
         .keys

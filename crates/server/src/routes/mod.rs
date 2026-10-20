@@ -122,6 +122,10 @@ pub fn router(state: AppState) -> Router {
         .route("/vaults/{v}/objects/{o}/changes", get(sync::object_changes))
         .route("/vaults/{v}/objects/{o}/keys", get(shares::object_keys))
         .route(
+            "/vaults/{v}/objects/{o}/keys/signatures",
+            put(shares::sign_grants),
+        )
+        .route(
             "/vaults/{v}/objects/{o}/key",
             put(shares::set_key).layer(DefaultBodyLimit::max(b64(cfg.max_snapshot_bytes()))),
         )

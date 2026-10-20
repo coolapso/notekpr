@@ -178,6 +178,43 @@ async fn append(vault_id: &str, body: LogBody) -> Result<(), String> {
 /// Owner: make sure the vault's log has started and requires every change
 /// to be signed by its author (signing in the people single notes are
 /// already shared with first, so their edits keep counting).
+/// Owner: sign the keys of shared notes given before grants were signed,
+/// so the people they are shared with can use them.
+pub(super) async fn sign_missing_grants(vault_id: String) {
+    let shared = with(|c| {
+        c.replicas
+            .get(&vault_id)
+            .map(|r| r.shared.clone())
+            .unwrap_or_default()
+    });
+    for note in shared {
+        let Ok(shares) =
+            api::get::<Vec<ObjectShareInfo>>(&format!("/vaults/{vault_id}/objects/{note}/shares"))
+                .await
+        else {
+            continue;
+        };
+        let grants = with(|c| {
+            let ring = c.replicas.get(&vault_id)?.doc_keys.get(&note)?;
+            Some(rules::missing_grant_signatures(
+                c.account.as_ref()?,
+                &vault_id,
+                &note,
+                ring,
+                &shares,
+            ))
+        })
+        .unwrap_or_default();
+        if !grants.is_empty() {
+            let _ = api::put::<_, ()>(
+                &format!("/vaults/{vault_id}/objects/{note}/keys/signatures"),
+                &SignGrantsRequest { grants },
+            )
+            .await;
+        }
+    }
+}
+
 pub async fn sign_vault(vault_id: String) {
     if !member_log(&vault_id).has_log() {
         start_log(vault_id.clone()).await;

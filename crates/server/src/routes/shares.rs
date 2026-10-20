@@ -15,8 +15,8 @@ use axum::http::StatusCode;
 use coolpsonotes_core::keys::{FIRST_DOC_EPOCH, is_doc_epoch};
 use coolpsonotes_core::protocol::{
     AddObjectShareRequest, INDEX_OBJECT_ID, ObjectEventKind, ObjectKeyUpdate, ObjectKeysResponse,
-    ObjectMetaUpdate, ObjectShareInfo, RemoveMemberRequest, Role, SharedNote, UpdateMemberRequest,
-    UserEventKind,
+    ObjectMetaUpdate, ObjectShareInfo, RemoveMemberRequest, Role, SharedNote, SignGrantsRequest,
+    UpdateMemberRequest, UserEventKind,
 };
 use sqlx::SqliteExecutor;
 
@@ -259,6 +259,9 @@ pub(crate) async fn apply_key_change(
             now,
         )
         .await?;
+        if let Some(sig) = &e.signature {
+            repo::keys::set_grant_signature(&mut **tx, v, o, &e.user_id, epoch, sig).await?;
+        }
     }
     if let Some(link) = &req.chain_link {
         repo::keys::insert_document_chain_link(&mut **tx, v, o, epoch, link).await?;
@@ -337,6 +340,42 @@ pub async fn set_key(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// Owner: sign the grants of keys people already hold (made before grants
+/// were signed); people use only keys the owner signed giving them.
+pub async fn sign_grants(
+    State(state): State<AppState>,
+    who: Principal,
+    Path((v, o)): Path<(String, String)>,
+    Json(req): Json<SignGrantsRequest>,
+) -> AppResult<StatusCode> {
+    who.require_human()?;
+    access::require_owner(&state.db, &v, &who.user_id).await?;
+    if req.grants.len() > 1000 || req.grants.iter().any(|g| g.signature.len() != 64) {
+        return Err(bad("invalid grant signatures"));
+    }
+    let _w = state.write_lock.lock().await;
+    let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
+    access::require_owner(&mut *tx, &v, &who.user_id).await?;
+    for g in &req.grants {
+        if !repo::keys::set_grant_signature(
+            &mut *tx,
+            &v,
+            &o,
+            &g.user_id,
+            g.epoch as i64,
+            &g.signature,
+        )
+        .await?
+        {
+            return Err(AppError::NotFound);
+        }
+    }
+    tx.commit().await?;
+    drop(_w);
+    publish(&state, &v, &o, ObjectEventKind::SharesChanged);
+    Ok(StatusCode::NO_CONTENT)
+}
+
 /// Update the encrypted title of a shared note (after a rename).
 pub async fn set_meta(
     State(state): State<AppState>,
@@ -396,6 +435,7 @@ pub async fn list(
             added_at: r.added_at,
             added_by: r.added_by,
             has_current_key: r.has_current_key,
+            key_signed: r.key_signed,
         });
     }
     Ok(Json(out))
@@ -475,6 +515,9 @@ pub async fn add(
         now,
     )
     .await?;
+    if let Some(sig) = &env.signature {
+        repo::keys::set_grant_signature(&mut *tx, &v, &o, &req.user_id, cur, sig).await?;
+    }
     member_log::check_and_append(
         &mut tx,
         &v,
@@ -508,6 +551,7 @@ pub async fn add(
         added_at: now,
         added_by: Some(who.user_id.clone()),
         has_current_key: true,
+        key_signed: false,
     };
     Ok((StatusCode::CREATED, Json(info)))
 }

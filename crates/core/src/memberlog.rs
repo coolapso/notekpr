@@ -644,6 +644,81 @@ impl LogState {
     }
 }
 
+// ---------------------------------------------------------------- note key grants
+
+const GRANT_DOMAIN: &str = "coolpsonotes/v1/sig/note-key";
+const NOTE_COMMIT_CONTEXT: &str = "coolpsonotes v1 note key commitment";
+
+/// Commitment to a note's document key (as [`key_commitment`] for vault keys).
+pub fn note_key_commitment(vault_id: &str, object_id: &str, epoch: u32, key: &VaultKey) -> Vec<u8> {
+    let m = crypto::statement(
+        "note-key",
+        &[
+            vault_id.as_bytes(),
+            object_id.as_bytes(),
+            &epoch.to_be_bytes(),
+            &key.0,
+        ],
+    );
+    crypto::kdf_hash(NOTE_COMMIT_CONTEXT, &m).to_vec()
+}
+
+fn grant_statement(
+    vault_id: &str,
+    object_id: &str,
+    user_id: &str,
+    epoch: u32,
+    commit: &[u8],
+) -> Vec<u8> {
+    crypto::statement(
+        GRANT_DOMAIN,
+        &[
+            vault_id.as_bytes(),
+            object_id.as_bytes(),
+            user_id.as_bytes(),
+            &epoch.to_be_bytes(),
+            commit,
+        ],
+    )
+}
+
+/// The owner's signature on giving `user_id` a note's key at `epoch`: the
+/// person it is shared with checks it, so a server can't hand them a key of
+/// its own (and then read what they write).
+pub fn sign_note_grant(
+    owner: &AccountSecret,
+    vault_id: &str,
+    object_id: &str,
+    user_id: &str,
+    epoch: u32,
+    key: &VaultKey,
+) -> Vec<u8> {
+    let commit = note_key_commitment(vault_id, object_id, epoch, key);
+    owner
+        .sign(&grant_statement(
+            vault_id, object_id, user_id, epoch, &commit,
+        ))
+        .to_vec()
+}
+
+pub fn verify_note_grant(
+    owner: &AccountPublic,
+    vault_id: &str,
+    object_id: &str,
+    user_id: &str,
+    epoch: u32,
+    key: &VaultKey,
+    signature: &[u8],
+) -> bool {
+    let commit = note_key_commitment(vault_id, object_id, epoch, key);
+    crypto::ed25519_verify(
+        &owner.sign_public,
+        &grant_statement(vault_id, object_id, user_id, epoch, &commit),
+        signature,
+    )
+    .is_ok()
+}
+
 // ---------------------------------------------------------------- authorship
 
 const UPDATE_DOMAIN: &str = "coolpsonotes/v1/sig/update";
@@ -1400,6 +1475,28 @@ mod tests {
         ])
         .unwrap();
         assert!(s.shares.is_empty());
+    }
+
+    #[test]
+    fn note_grants_bind_the_key_the_person_and_the_note() {
+        let (alice, mallory) = (person("alice"), person("mallory"));
+        let k = VaultKey::generate();
+        let sig = sign_note_grant(&alice.secret, V, "n1", "rita", 0x8000_0002, &k);
+        let ok = |owner: &Person, o: &str, u: &str, e: u32, key: &VaultKey| {
+            verify_note_grant(&owner.secret.public(), V, o, u, e, key, &sig)
+        };
+        assert!(ok(&alice, "n1", "rita", 0x8000_0002, &k));
+        assert!(
+            !ok(&alice, "n1", "rita", 0x8000_0002, &VaultKey::generate()),
+            "another key"
+        );
+        assert!(!ok(&alice, "n2", "rita", 0x8000_0002, &k));
+        assert!(!ok(&alice, "n1", "eve", 0x8000_0002, &k));
+        assert!(!ok(&alice, "n1", "rita", 0x8000_0003, &k));
+        assert!(
+            !ok(&mallory, "n1", "rita", 0x8000_0002, &k),
+            "not by the owner"
+        );
     }
 
     #[test]

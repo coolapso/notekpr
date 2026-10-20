@@ -57,7 +57,12 @@ pub async fn share_note(
     ensure_document_key(session, vault, &id, &note_id).await?;
     let envelope = {
         let v = vault.lock().await;
-        engine::object_share_envelope(&v.replica.doc_keys[&note_id], &note_id, &user)?
+        let ring = &v.replica.doc_keys[&note_id];
+        let mut env = [engine::object_share_envelope(ring, &note_id, &user)?];
+        // Signed by us, so they can tell the key is really ours.
+        members::sign_grants(session.account(), &id, &note_id, ring, &mut env);
+        let [env] = env;
+        env
     };
     // The owner signs who the note is shared with into the vault's log.
     let key = user
@@ -265,7 +270,10 @@ pub async fn rotate_note_key(
             .get(note_id)
             .map(|e| e.title().to_string())
             .unwrap_or_default();
-        engine::rotate_object_key(&v.replica.keyring, ring, note_id, &title, &users)?
+        let (next, mut req) =
+            engine::rotate_object_key(&v.replica.keyring, ring, note_id, &title, &users)?;
+        members::sign_grants(session.account(), id, note_id, &next, &mut req.envelopes);
+        (next, req)
     };
     session
         .api
@@ -302,7 +310,7 @@ pub async fn shared_with_me(session: &Session) -> Result<Vec<SharedNoteView>> {
     let list: Vec<SharedNote> = session.api.get("/shares").await?;
     let mut out = Vec::with_capacity(list.len());
     for info in list {
-        let title = match recipient_ring(session, &info.vault_id, &info.object_id).await {
+        let title = match recipient_ring(session, &info).await {
             Ok((ring, _)) => info
                 .encrypted_meta
                 .as_ref()
@@ -316,17 +324,42 @@ pub async fn shared_with_me(session: &Session) -> Result<Vec<SharedNoteView>> {
     Ok(out)
 }
 
+/// The keys of a note shared with us, confirmed by the vault's owner (their
+/// key as pinned here): a server can't hand us a key of its own.
 async fn recipient_ring(
     session: &Session,
-    vault_id: &str,
-    note_id: &str,
+    info: &SharedNote,
 ) -> Result<(coolpsonotes_core::keys::VaultKeyring, Role)> {
+    let (vault_id, note_id) = (&info.vault_id, &info.object_id);
+    let owner = session
+        .verify_user(&info.owner)?
+        .ok_or_else(|| anyhow!("the note's owner has no encryption key"))?;
+    if owner.pin == PinStatus::Changed {
+        bail!(
+            "SECURITY: the account key of {}, who shared this note, changed since it was pinned (now {}); \
+             verify it with them before using the note",
+            info.owner.display_name,
+            owner.fingerprint
+        );
+    }
+    let owner_key = info
+        .owner
+        .account_key
+        .as_ref()
+        .expect("verified")
+        .verify()?;
     let keys: ObjectKeysResponse = session
         .api
         .get(&format!("/vaults/{vault_id}/objects/{note_id}/keys"))
         .await?;
     Ok((
-        engine::object_keyring_for_recipient(&session.account, &session.user_id, vault_id, &keys)?,
+        engine::object_keyring_for_recipient(
+            &session.account,
+            &session.user_id,
+            vault_id,
+            &keys,
+            Some(&owner_key),
+        )?,
         keys.role,
     ))
 }
@@ -356,7 +389,7 @@ pub async fn find_shared(session: &Session, reference: &str) -> Result<SharedNot
 
 /// Load a shared note into a recipient-only replica.
 async fn load(session: &Session, s: &SharedNoteView) -> Result<VaultReplica> {
-    let (ring, role) = recipient_ring(session, &s.info.vault_id, &s.info.object_id).await?;
+    let (ring, role) = recipient_ring(session, &s.info).await?;
     let mut r = VaultReplica::for_shared_notes(&s.info.vault_id);
     r.role = role;
     r.doc_keys.insert(s.info.object_id.clone(), ring);

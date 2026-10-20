@@ -1334,7 +1334,8 @@ async fn individual_note_sharing() {
     assert_eq!(mine.len(), 1);
     assert_eq!(mine[0].owner.id, alice.id);
     let keys: ObjectKeysResponse = bob.api.get(&format!("/vaults/{v}/objects/n1/keys")).await;
-    let bring = engine::object_keyring_for_recipient(&bob.account, &bob.id, &v, &keys).unwrap();
+    let bring =
+        engine::object_keyring_for_recipient(&bob.account, &bob.id, &v, &keys, None).unwrap();
     assert_eq!(
         engine::ObjectMeta::decrypt(&bring, "n1", mine[0].encrypted_meta.as_ref().unwrap())
             .unwrap()
@@ -1523,7 +1524,7 @@ async fn individual_note_sharing() {
         .await;
     let ckeys: ObjectKeysResponse = carol.api.get(&format!("/vaults/{v}/objects/n1/keys")).await;
     let cring =
-        engine::object_keyring_for_recipient(&carol.account, &carol.id, &v, &ckeys).unwrap();
+        engine::object_keyring_for_recipient(&carol.account, &carol.id, &v, &ckeys, None).unwrap();
     let mut cr = engine::VaultReplica::for_shared_notes(&v);
     cr.doc_keys.insert("n1".into(), cring);
     let ch: ChangesResponse = carol
@@ -1631,7 +1632,7 @@ async fn individual_note_sharing() {
     // Carol still reads everything through the key chain.
     let ckeys: ObjectKeysResponse = carol.api.get(&format!("/vaults/{v}/objects/n1/keys")).await;
     let cring =
-        engine::object_keyring_for_recipient(&carol.account, &carol.id, &v, &ckeys).unwrap();
+        engine::object_keyring_for_recipient(&carol.account, &carol.id, &v, &ckeys, None).unwrap();
     assert!(
         !cring
             .decrypt(Purpose::Update, "n1", &pn.payload)
@@ -2171,6 +2172,7 @@ async fn role_dependent_writes_follow_role_changes() {
                 &bob_pub.account_key.unwrap().verify().unwrap().enc_public,
             )
             .unwrap(),
+            signature: None,
         }],
     };
     assert_eq!(
@@ -2297,7 +2299,8 @@ async fn notes_have_own_keys_and_recipients_never_get_the_history_before_sharing
             .all(|e| e.epoch == FIRST_DOC_EPOCH + 1)
     );
     assert!(keys.chain.iter().all(|c| c.epoch > FIRST_DOC_EPOCH + 1));
-    let ring = engine::object_keyring_for_recipient(&carol.account, &carol.id, &v, &keys).unwrap();
+    let ring =
+        engine::object_keyring_for_recipient(&carol.account, &carol.id, &v, &keys, None).unwrap();
     assert!(ring.get(FIRST_DOC_EPOCH).is_none());
     let ch: ChangesResponse = carol
         .api
@@ -2794,4 +2797,114 @@ async fn signed_content_is_required_once_the_log_says_so() {
         alice.api.status(Method::POST, &path, Some(&snap)).await,
         201
     );
+}
+
+/// R3: the owner signs each note key given to someone a note is shared
+/// with; the server keeps the signature with that key and hands it out.
+#[tokio::test]
+async fn note_key_grants_carry_the_owners_signature() {
+    use coolpsonotes_core::{engine, memberlog};
+    let srv = start().await;
+    let mut alice = new_user(&srv.base, "alice").await;
+    let carol = new_user(&srv.base, "carol").await;
+    let rita = new_user(&srv.base, "rita").await;
+    let v = alice.create_vault("Home").await;
+    let note = NoteDoc::new();
+    let first = note.set_text("plans").unwrap();
+    alice
+        .push(&v, vec![alice.encrypt_update(&v, "n", &first)])
+        .await
+        .unwrap();
+    let head: ChangesResponse = alice.api.get(&format!("/vaults/{v}/changes?since=0")).await;
+    let (doc, start) = engine::start_sharing(
+        alice.ring(&v),
+        "n",
+        "Plans",
+        &note.encode_state(),
+        head.head_seq,
+    )
+    .unwrap();
+    put_key(&alice, &v, "n", &start).await.unwrap();
+    let carol_pub: PublicUser = alice.api.get(&format!("/users/{}", carol.id)).await;
+    let rita_pub: PublicUser = alice.api.get(&format!("/users/{}", rita.id)).await;
+    let share = |who: &PublicUser, signed: bool| {
+        let mut env = engine::object_share_envelope(&doc, "n", who).unwrap();
+        if signed {
+            let (epoch, key) = doc.current().unwrap();
+            env.signature = Some(memberlog::sign_note_grant(
+                &alice.account,
+                &v,
+                "n",
+                &who.id,
+                epoch,
+                key,
+            ));
+        }
+        AddObjectShareRequest {
+            user_id: who.id.clone(),
+            role: Role::Editor,
+            envelope: env,
+            log_entry: None,
+        }
+    };
+    let path = format!("/vaults/{v}/objects/n/shares");
+    let _: ObjectShareInfo = alice.api.post(&path, &share(&carol_pub, true)).await;
+    let _: ObjectShareInfo = alice.api.post(&path, &share(&rita_pub, false)).await;
+    let list: Vec<ObjectShareInfo> = alice.api.get(&path).await;
+    let signed = |id: &str| list.iter().find(|s| s.user.id == id).unwrap().key_signed;
+    assert!(signed(&carol.id) && !signed(&rita.id));
+
+    // Carol checks her key against the owner's signature.
+    let keys: ObjectKeysResponse = carol.api.get(&format!("/vaults/{v}/objects/n/keys")).await;
+    let owner = alice.account.public();
+    engine::object_keyring_for_recipient(&carol.account, &carol.id, &v, &keys, Some(&owner))
+        .unwrap();
+    // Rita's has none yet: not used, until the owner signs it.
+    let keys: ObjectKeysResponse = rita.api.get(&format!("/vaults/{v}/objects/n/keys")).await;
+    assert!(matches!(
+        engine::object_keyring_for_recipient(&rita.account, &rita.id, &v, &keys, Some(&owner)),
+        Err(engine::EngineError::UnconfirmedKey)
+    ));
+    let grants = unsigned_grants(&alice, &v, &doc, &list);
+    let sig_path = format!("/vaults/{v}/objects/n/keys/signatures");
+    let req = SignGrantsRequest { grants };
+    assert_eq!(
+        rita.api.status(Method::PUT, &sig_path, Some(&req)).await,
+        404,
+        "owner only"
+    );
+    assert_eq!(
+        alice.api.status(Method::PUT, &sig_path, Some(&req)).await,
+        204
+    );
+    let keys: ObjectKeysResponse = rita.api.get(&format!("/vaults/{v}/objects/n/keys")).await;
+    engine::object_keyring_for_recipient(&rita.account, &rita.id, &v, &keys, Some(&owner)).unwrap();
+    let list: Vec<ObjectShareInfo> = alice.api.get(&path).await;
+    assert!(list.iter().all(|s| s.key_signed));
+}
+
+/// The grant signatures an owner adds for keys given before they were signed.
+fn unsigned_grants(
+    owner: &User,
+    v: &str,
+    doc: &keys::VaultKeyring,
+    shares: &[ObjectShareInfo],
+) -> Vec<GrantSignature> {
+    let (epoch, key) = doc.current().unwrap();
+    shares
+        .iter()
+        .filter(|s| !s.key_signed)
+        .map(|s| GrantSignature {
+            user_id: s.user.id.clone(),
+            epoch,
+            signature: coolpsonotes_core::memberlog::sign_note_grant(
+                &owner.account,
+                v,
+                "n",
+                &s.user.id,
+                epoch,
+                key,
+            ),
+        })
+        .collect()
 }

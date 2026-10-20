@@ -15,7 +15,8 @@ use coolpsonotes_core::memberlog::{
     self, Authors, KeyCheckError, LogBody, LogEntry, LogError, LogMember, LogState, key_commitment,
 };
 use coolpsonotes_core::protocol::{
-    CreateSnapshotRequest, MemberInfo, ObjectKeyUpdate, PushUpdate, Role,
+    CreateSnapshotRequest, GrantSignature, KeyEnvelope, MemberInfo, ObjectKeyUpdate,
+    ObjectShareInfo, PushUpdate, Role,
 };
 
 /// A vault's verified membership log (or the lack of one: vaults from
@@ -243,6 +244,49 @@ pub fn sign_key_update(
     if let Some(s) = &mut u.snapshot {
         sign_snapshot(account, vault_id, object_id, s);
     }
+}
+
+/// Owner: sign giving each of `envelopes` its note key (taken from `ring`,
+/// the note's keyring), so the people it is shared with can check it.
+pub fn sign_grants(
+    owner: &AccountSecret,
+    vault_id: &str,
+    object_id: &str,
+    ring: &VaultKeyring,
+    envelopes: &mut [KeyEnvelope],
+) {
+    for e in envelopes {
+        if let Some(k) = ring.get(e.epoch) {
+            e.signature = Some(memberlog::sign_note_grant(
+                owner, vault_id, object_id, &e.user_id, e.epoch, k,
+            ));
+        }
+    }
+}
+
+/// Owner: grant signatures for the people a note is shared with whose
+/// current key carries none yet (shared before grants were signed).
+pub fn missing_grant_signatures(
+    owner: &AccountSecret,
+    vault_id: &str,
+    object_id: &str,
+    ring: &VaultKeyring,
+    shares: &[ObjectShareInfo],
+) -> Vec<GrantSignature> {
+    let Some((epoch, key)) = ring.current() else {
+        return vec![];
+    };
+    shares
+        .iter()
+        .filter(|s| s.has_current_key && !s.key_signed)
+        .map(|s| GrantSignature {
+            user_id: s.user.id.clone(),
+            epoch,
+            signature: memberlog::sign_note_grant(
+                owner, vault_id, object_id, &s.user.id, epoch, key,
+            ),
+        })
+        .collect()
 }
 
 /// The entry for sharing a note with someone (their key pinned).

@@ -226,6 +226,7 @@ impl User {
                         user_id: self.id.clone(),
                         epoch: 1,
                         envelope: env,
+                        signature: None,
                     },
                     log_entry: None,
                 },
@@ -338,6 +339,7 @@ impl User {
                         user_id: with.into(),
                         epoch,
                         envelope: env,
+                        signature: None,
                     }),
                     log_entry: None,
                 }),
@@ -373,6 +375,7 @@ impl User {
                     &pk.enc_public,
                 )
                 .unwrap(),
+                signature: None,
             })
             .collect();
         // Every note with its own key moves on too (R2).

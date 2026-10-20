@@ -78,7 +78,9 @@ primitives. Formats:
 * **Hands a member a vault key it made itself** (so it could read what they
   write next)? The owner commits to every epoch's key in the log; clients
   check each key they receive against the commitment and refuse a vault
-  whose key doesn't match or was never announced.
+  whose key doesn't match or was never announced. People a single note is
+  shared with use only a note key the owner signed giving them (checked
+  against the owner's pinned key).
 * **Rolls back or rewrites the membership log?** Clients remember the last
   entry they verified; a log that no longer contains it is a security error.
   Vaults from before the log are trusted as their owner's client saw them
@@ -254,8 +256,8 @@ reported, never applied partially. Duplicate deliveries are no-ops.
    the server's help, add backdated content under an old key epoch. Content
    from before a vault required signatures is accepted unsigned. Recipients
    of single notes don't see the vault's log, so their clients don't check
-   authors, and their note keys are not committed to yet (planned: an owner
-   signature on each share).
+   authors (their note keys are signed by the owner, so the keys themselves
+   can't be swapped).
 3. Metadata visible to the server (sizes, timing, social graph).
 4. Browser key storage relies on the browser profile's security.
 5. Post-quantum: key wrapping uses X25519 today; the format is versioned for a

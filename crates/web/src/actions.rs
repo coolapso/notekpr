@@ -406,6 +406,22 @@ pub async fn rotate_keys(vault: &str) -> bool {
             p.map(|(ring, mut req, rings)| {
                 req.log_entry = coolpsonotes_sync::members::rotation(vault, &ring)
                     .and_then(|body| state::log_entry(vault, body));
+                // Every note's new key for the people it is shared with.
+                with(|c| {
+                    if let Some(a) = &c.account {
+                        for o in &mut req.objects {
+                            if let Some(next) = rings.get(&o.object_id) {
+                                coolpsonotes_sync::members::sign_grants(
+                                    a,
+                                    vault,
+                                    &o.object_id,
+                                    next,
+                                    &mut o.update.envelopes,
+                                );
+                            }
+                        }
+                    }
+                });
                 (ring, req, rings)
             })
         });
@@ -519,11 +535,15 @@ pub async fn share_note(
     check_trust(user)?;
     ensure_note_key(vault, note).await?;
     let env = with(|c| {
-        c.replicas
-            .get(vault)?
-            .doc_keys
-            .get(note)
-            .map(|ring| engine::object_share_envelope(ring, note, user))
+        let ring = c.replicas.get(vault)?.doc_keys.get(note)?;
+        let account = c.account.as_ref()?;
+        // Signed by us, so they can tell the key is really ours.
+        Some(engine::object_share_envelope(ring, note, user).map(|env| {
+            let mut env = [env];
+            coolpsonotes_sync::members::sign_grants(account, vault, note, ring, &mut env);
+            let [env] = env;
+            env
+        }))
     });
     let envelope = match env {
         Some(Ok(e)) => e,
@@ -737,11 +757,16 @@ pub async fn rotate_note_key(vault: &str, note: &str) -> Result<(), String> {
                 &r.keyring, ring, note, &title, &users,
             ))
         });
-        let (next, req) = match made {
+        let (next, mut req) = match made {
             Some(Ok(x)) => x,
             Some(Err(e)) => return Err(e.to_string()),
             None => return Ok(()),
         };
+        with(|c| {
+            if let Some(a) = &c.account {
+                coolpsonotes_sync::members::sign_grants(a, vault, note, &next, &mut req.envelopes);
+            }
+        });
         match api::put::<_, ()>(&format!("/vaults/{vault}/objects/{note}/key"), &req).await {
             Ok(()) => {
                 with(|c| {

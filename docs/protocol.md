@@ -165,9 +165,10 @@ member list, vault key, or the note's history from before it was shared.
 | Endpoint | Role |
 |---|---|
 | `PUT /vaults/{v}/objects/{o}/key` `ObjectKeyUpdate {epoch, vault_envelope, chain_link?, envelopes, encrypted_meta, snapshot?, private?}` | See the three kinds below. `vault_envelope` must be wrapped under the vault's *current* epoch (else `412 stale_key`). A `snapshot` must be under the new key and its `covers_seq` must cover every stored update of the note (else `412 stale_key`). |
-| `GET /vaults/{v}/objects/{o}/keys` | member or recipient: `ObjectKeysResponse {role, current_epoch, envelopes (own), chain, encrypted_meta}`; the chain only from `share_from` on |
+| `GET /vaults/{v}/objects/{o}/keys` | member or recipient: `ObjectKeysResponse {role, current_epoch, envelopes (own), chain, encrypted_meta}`; the chain only from `share_from` on. A recipient's envelopes carry the owner's grant `signature` (below) |
+| `PUT /vaults/{v}/objects/{o}/keys/signatures {grants: [{user_id, epoch, signature}]}` | owner: grant signatures for keys given before grants were signed |
 | `PUT /vaults/{v}/objects/{o}/meta {encrypted_meta}` | writer: the title recipients see, under the current document key |
-| `GET /vaults/{v}/objects/{o}/shares` | member: `ObjectShareInfo {user, role, added_at, added_by, has_current_key}` |
+| `GET /vaults/{v}/objects/{o}/shares` | member: `ObjectShareInfo {user, role, added_at, added_by, has_current_key, key_signed}` |
 | `POST /vaults/{v}/objects/{o}/shares {user_id, role, envelope, log_entry?}` | owner; `role` is `editor` or `viewer`; the envelope wraps the current document key to the person. Vault members are refused (`409`), and so is a note whose sharing has not started (`409`: give it a fresh key first). |
 | `PATCH /vaults/{v}/objects/{o}/shares/{u} {role}`, `DELETE …/shares/{u}` | owner; recipients may remove themselves. Clients rotate the document key after removing someone. |
 | `GET /shares` | notes shared with the caller: `SharedNote {vault_id, object_id, role, owner, shared_by, key_epoch, encrypted_meta, added_at}` |
@@ -180,6 +181,17 @@ The kinds of `PUT …/key`:
 | **Private first key** | `private: true`, `epoch = 0x8000_0001`, no chain link, no envelopes; a covering `snapshot` only if the note has content already (lazy move of an older note) | any writer, agents included |
 | **Sharing starts** | `private: false` and either the first key (`0x8000_0001`) or `current + 1` **without** a chain link; a covering `snapshot` is required; no envelopes (people are added afterwards); refused (`409`) while the note has recipients | owner |
 | **Rotation** | `epoch = current + 1` with a `chain_link`, and `envelopes` for exactly the current recipients (else `409`) | owner |
+
+**Grant signatures.** Every note key the owner gives someone it is shared
+with (`envelopes` of a share, a rotation or a vault rotation) carries
+`signature`: Ed25519 by the owner over `statement("coolpsonotes/v1/sig/note-key",
+[vault_id, object_id, user_id, epoch:u32be, commitment])`, the commitment
+being BLAKE3 (context `coolpsonotes v1 note key commitment`) over
+`statement("note-key", [vault_id, object_id, epoch:u32be, key])`. Recipients
+use only their newest envelope, and only if the signature verifies with the
+owner's pinned key; older keys follow from the chain. So a server can't hand
+them a key of its own. Owners' clients sign the grants of keys given before
+this when they open the vault (`key_signed` says which).
 
 A repeated private first key for a note that has one is refused (`409`;
 clients reload keys and see it registered). Recipients use

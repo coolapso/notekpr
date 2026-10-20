@@ -151,11 +151,32 @@ pub(super) async fn reload_share_keys_once(vault: &str, note: &str) {
             return;
         }
     };
-    let ring = with(|c| {
-        c.account
-            .as_ref()
-            .map(|a| engine::object_keyring_for_recipient(a, &c.user_id, vault, &keys))
+    // Only a key the note's owner (as pinned) signed giving us.
+    let (ring, pinned) = with(|c| {
+        let Some(owner) = c.shares.get(&key).map(|s| s.info.owner.clone()) else {
+            return (None, false);
+        };
+        let Some(owner_key) = owner.account_key.as_ref().and_then(|k| k.verify().ok()) else {
+            let e = "the note's owner has no valid encryption key".to_string();
+            return (Some(Err(e)), false);
+        };
+        let pin = engine::check_pin(&mut c.prefs.pins, &owner.id, &owner_key.fingerprint());
+        if pin == engine::PinStatus::Changed {
+            let e = format!(
+                "Security warning: the encryption key of {}, who shared this note, changed since you last saw it. Compare fingerprints with them.",
+                owner.display_name
+            );
+            return (Some(Err(e)), false);
+        }
+        let ring = c.account.as_ref().map(|a| {
+            engine::object_keyring_for_recipient(a, &c.user_id, vault, &keys, Some(&owner_key))
+                .map_err(|e| e.to_string())
+        });
+        (ring, pin == engine::PinStatus::New)
     });
+    if pinned {
+        save_prefs();
+    }
     let ring = match ring {
         Some(Ok(r)) => r,
         Some(Err(e)) => {

@@ -301,6 +301,9 @@ impl Session {
             {
                 tracing::warn!(vault = %id, "could not require signed changes: {e:#}");
             }
+            if let Err(e) = self.sign_missing_grants(v).await {
+                tracing::warn!(vault = %id, "could not sign note keys: {e:#}");
+            }
         }
         // Content is checked against who may write it from now on.
         let authors = v.log.authors();
@@ -367,6 +370,37 @@ impl Session {
             .post::<_, ()>(&format!("/vaults/{id}/log"), &AppendLogRequest { entry })
             .await?;
         self.verify_member_log(v).await
+    }
+
+    /// Owner: sign the keys of shared notes given before grants were signed,
+    /// so the people they are shared with can use them.
+    async fn sign_missing_grants(&self, v: &mut Vault) -> Result<()> {
+        let id = v.id().to_string();
+        for oid in v.replica.shared.clone() {
+            let Some(ring) = v.replica.doc_keys.get(&oid).cloned() else {
+                continue;
+            };
+            let shares: Vec<ObjectShareInfo> = match self
+                .api
+                .get(&format!("/vaults/{id}/objects/{oid}/shares"))
+                .await
+            {
+                Ok(s) => s,
+                Err(e) if e.is_not_found() => continue,
+                Err(e) => return Err(e.into()),
+            };
+            let grants =
+                members::missing_grant_signatures(&self.account, &id, &oid, &ring, &shares);
+            if !grants.is_empty() {
+                self.api
+                    .put::<_, ()>(
+                        &format!("/vaults/{id}/objects/{oid}/keys/signatures"),
+                        &SignGrantsRequest { grants },
+                    )
+                    .await?;
+            }
+        }
+        Ok(())
     }
 
     /// Owner: from now on, require every change to be signed by its author.
@@ -1085,6 +1119,17 @@ impl Session {
                 let mut ring = v.replica.keyring.clone();
                 let (mut req, rings) =
                     engine::rotate_with_notes(&mut ring, &members, &v.replica.meta, &notes)?;
+                for o in &mut req.objects {
+                    if let Some(next) = rings.get(&o.object_id) {
+                        members::sign_grants(
+                            &self.account,
+                            &id,
+                            &o.object_id,
+                            next,
+                            &mut o.update.envelopes,
+                        );
+                    }
+                }
                 req.log_entry = members::rotation(&id, &ring).and_then(|body| {
                     v.log.next(
                         &self.account,

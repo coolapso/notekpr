@@ -34,6 +34,7 @@ pub async fn vault_keys(db: &Db, vault_id: &str, user_id: &str) -> AppResult<Vau
         user_id: user_id.to_string(),
         epoch: r.get::<i64, _>("epoch") as u32,
         envelope: r.get("envelope"),
+        signature: None,
     })
     .collect();
     let chain =
@@ -167,14 +168,14 @@ pub async fn document_keys(
     let Some((Some(epoch), meta)) = row else {
         return Err(AppError::NotFound);
     };
-    let envelopes = sqlx::query("SELECT epoch, envelope FROM object_keys WHERE vault_id = ? AND object_id = ? AND user_id = ? ORDER BY epoch")
+    let envelopes = sqlx::query("SELECT epoch, envelope, signature FROM object_keys WHERE vault_id = ? AND object_id = ? AND user_id = ? ORDER BY epoch")
         .bind(vault_id)
         .bind(object_id)
         .bind(user_id)
         .fetch_all(db)
         .await?
         .iter()
-        .map(|r| KeyEnvelope { user_id: user_id.to_string(), epoch: r.get::<i64, _>("epoch") as u32, envelope: r.get("envelope") })
+        .map(|r| KeyEnvelope { user_id: user_id.to_string(), epoch: r.get::<i64, _>("epoch") as u32, envelope: r.get("envelope"), signature: r.get("signature") })
         .collect();
     // Links within the shared epochs only (sharing started with a key that
     // has no link to the note's earlier, private keys).
@@ -251,6 +252,29 @@ pub async fn put_document_key(
     .execute(db)
     .await?;
     Ok(())
+}
+
+/// Store the owner's grant signature for someone's key of a note (not for
+/// the members' copy, `user_id = ''`). Returns whether such a key exists.
+pub async fn set_grant_signature(
+    db: impl SqliteExecutor<'_>,
+    vault_id: &str,
+    object_id: &str,
+    user_id: &str,
+    epoch: i64,
+    signature: &[u8],
+) -> AppResult<bool> {
+    let r = sqlx::query(
+        "UPDATE object_keys SET signature = ? WHERE vault_id = ? AND object_id = ? AND user_id = ? AND epoch = ? AND user_id != ''",
+    )
+    .bind(signature)
+    .bind(vault_id)
+    .bind(object_id)
+    .bind(user_id)
+    .bind(epoch)
+    .execute(db)
+    .await?;
+    Ok(r.rows_affected() == 1)
 }
 
 pub async fn insert_document_chain_link(

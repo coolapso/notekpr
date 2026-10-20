@@ -27,6 +27,10 @@ pub enum EngineError {
     /// Content whose author can't be confirmed (R3): refused, not applied.
     #[error(transparent)]
     Author(#[from] memberlog::AuthorError),
+    /// A shared note's key without the owner's grant signature (yet): not
+    /// used. The owner's app signs it the next time it opens the vault.
+    #[error("the note's key isn't confirmed by its owner yet; they need to open the app once")]
+    UnconfirmedKey,
 }
 
 pub type Result<T> = std::result::Result<T, EngineError>;
@@ -277,6 +281,7 @@ pub fn new_vault(
             user_id: user_id.to_string(),
             epoch: 1,
             envelope,
+            signature: None,
         },
         log_entry: Some(log_entry),
     };
@@ -326,6 +331,7 @@ pub fn share_envelope(ring: &VaultKeyring, user: &PublicUser) -> Result<KeyEnvel
         user_id: user.id.clone(),
         epoch,
         envelope: wrap_vault_key(vk, ring.vault_id(), epoch, &user.id, &public.enc_public)?,
+        signature: None,
     })
 }
 
@@ -367,6 +373,7 @@ pub fn rotate(
                 &m.user.id,
                 &public.enc_public,
             )?,
+            signature: None,
         });
     }
     let chain_link = keys::encrypt_chain_link(&new, new_epoch, &old, ring.vault_id());
@@ -475,14 +482,44 @@ pub fn object_keyring_for_recipient(
     user_id: &str,
     vault_id: &str,
     r: &ObjectKeysResponse,
+    owner: Option<&AccountPublic>,
 ) -> Result<VaultKeyring> {
     let scope = keys::object_scope(vault_id, &r.object_id);
     let mut ring = VaultKeyring::new(vault_id);
-    for e in r.envelopes.iter().filter(|e| e.user_id == user_id) {
-        ring.insert(
-            e.epoch,
-            keys::unwrap_vault_key(account, &e.envelope, &scope, e.epoch, user_id)?,
-        );
+    let mine: Vec<&KeyEnvelope> = r
+        .envelopes
+        .iter()
+        .filter(|e| e.user_id == user_id)
+        .collect();
+    match owner {
+        None => {
+            for e in &mine {
+                ring.insert(
+                    e.epoch,
+                    keys::unwrap_vault_key(account, &e.envelope, &scope, e.epoch, user_id)?,
+                );
+            }
+        }
+        Some(owner) => {
+            if let Some(e) = mine.iter().max_by_key(|e| e.epoch) {
+                let k = keys::unwrap_vault_key(account, &e.envelope, &scope, e.epoch, user_id)?;
+                let confirmed = e.signature.as_deref().is_some_and(|sig| {
+                    memberlog::verify_note_grant(
+                        owner,
+                        vault_id,
+                        &r.object_id,
+                        user_id,
+                        e.epoch,
+                        &k,
+                        sig,
+                    )
+                });
+                if !confirmed {
+                    return Err(EngineError::UnconfirmedKey);
+                }
+                ring.insert(e.epoch, k);
+            }
+        }
     }
     if ring.current_epoch().is_none() {
         return Err(EngineError::Invalid(
@@ -660,6 +697,7 @@ pub fn rotate_object_key(
             user_id: u.id.clone(),
             epoch: new_epoch,
             envelope: wrap_vault_key(&nk, &scope, new_epoch, &u.id, &public.enc_public)?,
+            signature: None,
         });
     }
     let mut next = doc_ring.clone();
@@ -701,6 +739,7 @@ pub fn object_share_envelope(
         user_id: user.id.clone(),
         epoch,
         envelope: wrap_vault_key(dk, &scope, epoch, &user.id, &public.enc_public)?,
+        signature: None,
     })
 }
 
@@ -1489,7 +1528,7 @@ mod tests {
             chain: vec![],
             encrypted_meta: Some(req.encrypted_meta.clone()),
         };
-        let bring = object_keyring_for_recipient(&bob, "bob", &vreq.id, &resp).unwrap();
+        let bring = object_keyring_for_recipient(&bob, "bob", &vreq.id, &resp, None).unwrap();
         assert_eq!(
             ObjectMeta::decrypt(&bring, "n", &req.encrypted_meta)
                 .unwrap()
@@ -1584,7 +1623,7 @@ mod tests {
             }],
             encrypted_meta: None,
         };
-        let cring = object_keyring_for_recipient(&carol, "carol", &vreq.id, &resp).unwrap();
+        let cring = object_keyring_for_recipient(&carol, "carol", &vreq.id, &resp, None).unwrap();
         assert_eq!(cring.epochs().count(), 2);
         assert!(cring.decrypt(Purpose::Update, "n", &p.payload).is_ok());
         assert!(cring.decrypt(Purpose::Update, "n", &p2.payload).is_ok());

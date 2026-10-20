@@ -333,6 +333,26 @@ pub struct KeyEnvelope {
     pub epoch: u32,
     #[serde(with = "b64")]
     pub envelope: Vec<u8>,
+    /// A note's key for someone it is shared with: the vault owner's grant
+    /// signature (`memberlog::sign_note_grant`), which they check.
+    #[serde(default, with = "b64::opt", skip_serializing_if = "Option::is_none")]
+    pub signature: Option<Vec<u8>>,
+}
+
+/// The owner's grant signature for a key someone already holds.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct GrantSignature {
+    pub user_id: String,
+    pub epoch: u32,
+    #[serde(with = "b64")]
+    pub signature: Vec<u8>,
+}
+
+/// `PUT /vaults/{v}/objects/{o}/keys/signatures` (owner): sign the grants of
+/// a note's keys made before grants were signed.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct SignGrantsRequest {
+    pub grants: Vec<GrantSignature>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -481,6 +501,9 @@ pub struct ObjectShareInfo {
     pub added_at: i64,
     pub added_by: Option<String>,
     pub has_current_key: bool,
+    /// Their key for the current epoch carries the owner's grant signature.
+    #[serde(default)]
+    pub key_signed: bool,
 }
 
 /// A note someone shared with the caller individually.

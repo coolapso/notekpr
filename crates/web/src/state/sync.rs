@@ -962,10 +962,19 @@ pub fn maybe_compact(vault_id: &str) {
     }
 }
 
+/// The server's default snapshot cooldown (`--snapshot-cooldown-secs`).
+const SNAPSHOT_COOLDOWN_MS: i64 = 30_000;
+
 pub fn snapshot(vault_id: String, object_id: String) {
     let key = (vault_id.clone(), object_id.clone());
     let action = with(|c| {
-        if c.snapshotting.contains(&key) {
+        // One at a time, and not again within the server's cooldown (it
+        // would refuse it; the next trigger stores it).
+        if c.snapshotting.contains(&key)
+            || c.last_snapshot
+                .get(&key)
+                .is_some_and(|t| util::now_ms() - t < SNAPSHOT_COOLDOWN_MS)
+        {
             return None;
         }
         let r = c.replicas.get(&vault_id)?;
@@ -1033,6 +1042,7 @@ pub fn snapshot(vault_id: String, object_id: String) {
         with(|c| {
             c.snapshotting.remove(&key);
             if res.is_ok() {
+                c.last_snapshot.insert(key.clone(), util::now_ms());
                 c.dirty.remove(&key);
                 if let Some(rep) = c.replicas.get_mut(&vault_id) {
                     if let Some(ring) = ring {

@@ -396,6 +396,9 @@ pub struct Core {
     pub dirty: BTreeSet<(String, String)>,
     pub last_touch: HashMap<(String, String), i64>,
     pub snapshotting: HashSet<(String, String)>,
+    /// When we last stored a snapshot of a note (the server allows one per
+    /// person and note every `SNAPSHOT_COOLDOWN_MS`).
+    pub last_snapshot: HashMap<(String, String), i64>,
     pub users: HashMap<String, PublicUser>,
     /// Notes shared with us individually, by (vault, note). Their content
     /// lives in a members-less replica of the vault (`VaultReplica::member == false`).

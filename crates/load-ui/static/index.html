@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>coolpsonotes under load</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #0a0d13; overflow: hidden; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+  noscript { color: #d6dde8; font: 14px system-ui, sans-serif; position: fixed; inset: 40% 0 auto; text-align: center; }
+</style>
+</head>
+<body>
+<canvas id="view" aria-label="Live view of the load test"></canvas>
+<noscript>This live view needs JavaScript (to run its WebAssembly).</noscript>
+<script type="module">
+  import init from "./pkg/coolpsonotes_load_ui.js";
+  init();
+</script>
+</body>
+</html>

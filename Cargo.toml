@@ -1,8 +1,9 @@
 [workspace]
 resolver = "3"
-members = ["crates/core", "crates/sync", "crates/server", "crates/client", "crates/editor", "crates/web"]
-# The web crate only makes sense for wasm32; build it with scripts/build-web.sh.
-default-members = ["crates/core", "crates/sync", "crates/server", "crates/client", "crates/editor"]
+members = ["crates/core", "crates/sync", "crates/server", "crates/client", "crates/editor", "crates/web", "crates/load-events", "crates/load", "crates/load-ui"]
+# The web crate (and the load test's dashboard) only make sense for wasm32;
+# build them with scripts/build-web.sh and scripts/build-load-ui.sh.
+default-members = ["crates/core", "crates/sync", "crates/server", "crates/client", "crates/editor", "crates/load-events", "crates/load"]
 
 [workspace.package]
 version = "0.1.0"

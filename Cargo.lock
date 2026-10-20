@@ -818,6 +818,48 @@ dependencies = [
 ]
 
 [[package]]
+name = "coolpsonotes-load"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "blake3",
+ "clap",
+ "coolpsonotes-client",
+ "coolpsonotes-core",
+ "coolpsonotes-load-events",
+ "data-encoding",
+ "futures",
+ "libc",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tower-http 0.7.1",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "coolpsonotes-load-events"
+version = "0.1.0"
+dependencies = [
+ "serde",
+]
+
+[[package]]
+name = "coolpsonotes-load-ui"
+version = "0.1.0"
+dependencies = [
+ "console_error_panic_hook",
+ "coolpsonotes-load-events",
+ "js-sys",
+ "serde_json",
+ "wasm-bindgen",
+ "web-sys",
+]
+
+[[package]]
 name = "coolpsonotes-server"
 version = "0.1.0"
 dependencies = [

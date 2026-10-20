@@ -23,6 +23,7 @@ The original requirements are in [spec.md](spec.md).
 | [docs/development.md](docs/development.md) | set up a machine, run things locally, run tests |
 | [docs/acceptance.md](docs/acceptance.md) | want to know which test proves which requirement |
 | [docs/desktop-client.md](docs/desktop-client.md), [docs/operations.md](docs/operations.md) | change the CLI or deployment/ops behaviour |
+| [docs/load-test.md](docs/load-test.md) | run or change the load test and its live view |
 
 Known work, review findings and decisions are tracked in [TODO.md](TODO.md) —
 check it before starting something, and keep it current.
@@ -82,6 +83,10 @@ crates/web      Leptos CSR → wasm32. state/ (Core + Ui in mod.rs; session, vau
                 editor.rs (re-exports crates/editor) · views/ · render.rs (reading view)
 crates/client   `coolpsonotes` CLI: session.rs + livesync.rs (sync), mirror.rs
                 (Markdown files), gateway.rs, ops.rs, note_shares.rs
+crates/load     load test (`task load`): simulated people = real clients (the CLI's
+                library) against the server image with CPU/memory limits; crash,
+                check, report. load-events: what it streams; load-ui: its live
+                dashboard (wasm32, canvas; scripts/build-load-ui.sh → dist/load)
 tests/e2e       browser tests: suite.py, cross_client.py, wd.py (stdlib WebDriver)
 site/           project website: static HTML + CSS, no build step, no third-party
                 requests (fonts, scripts, analytics) — keep it that way
@@ -99,6 +104,7 @@ rustup is not required. `task setup` checks everything.
 ```sh
 task dev                         # build + run a dev-mode server on http://localhost:8080
 task demo                        # a dev-mode server with demo users, vaults and shared notes (:8099)
+task load                        # load test with a live view (:8098): USERS= DURATION= CPUS= MEMORY=
 task web:watch                   # rebuild the web client on change (then reload the browser)
 task cli -- --profile alice ls Family   # run the CLI;  task cli:login DEV_USER=alice
 task fmt / task lint             # rustfmt; clippy with warnings as errors

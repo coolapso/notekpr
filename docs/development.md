@@ -49,6 +49,7 @@ commands below; `task` lists them all.
 task setup                    # check the toolchain and say what's missing
 task dev                      # dev server on http://localhost:8080 (no OIDC), data in ./data
 task demo                     # a demo with users, vaults and shared notes on http://localhost:8099
+task load                     # load test with a live view on http://localhost:8098 (needs Docker)
 task web:watch                # in a 2nd terminal: rebuild the web client on change, then reload the browser
 task cli:login DEV_USER=bob   # sign the CLI in as a test user (profile "bob")
 task cli -- --profile bob ls Family   # run any CLI command
@@ -103,6 +104,19 @@ created through the CLI where it can be, otherwise as a line in the "Things
 to try" list of alice's *Start here* note. Seeding stops at the first CLI
 command that fails, and the server log is in `data/demo/server.log`, so a
 broken CLI or server path shows up while seeding too.
+
+## A load test you can watch
+
+```sh
+task load                                  # 100 people against the server image (1 CPU, 512 MB); live view on :8098
+task load USERS=300 DURATION=5m CPUS=2 MEMORY=1g
+task load:native                           # no Docker: a local server process, no limits
+```
+
+Simulated people — real clients with real keys and encryption — sign up,
+share vaults, type together, upload pictures; the server is killed midway;
+at the end every copy of every note is compared. Needs Docker (`task load`
+builds the image). What it measures and how: [load-test.md](load-test.md).
 
 ## Run locally with several users (no OIDC)
 

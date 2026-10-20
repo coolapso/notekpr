@@ -112,6 +112,10 @@ read anything.
   or Kubernetes.
 * Backups, upgrades, Prometheus metrics and an admin page; size limits for
   changes, snapshots and attachments.
+* A load test you can watch (`task load`): a crowd of simulated people —
+  real clients with real encryption — against the server image with CPU and
+  memory limits, a crash in the middle, and a check that nothing was lost
+  ([load test](docs/load-test.md)).
 * A development mode where anyone can sign in as anyone (one session per
   browser tab) to try sharing and collaboration in one browser, and a demo
   with users, shared vaults and notes ready to explore (`task demo`).
@@ -184,7 +188,7 @@ provider setup, reverse proxies, Kubernetes, backups, upgrades and monitoring.
 * [Security model and threat analysis](docs/security.md)
 * [Sync protocol and HTTP API](docs/protocol.md)
 * [Operations](docs/operations.md) · [Development](docs/development.md)
-* [Acceptance criteria and how they are tested](docs/acceptance.md)
+* [Acceptance criteria and how they are tested](docs/acceptance.md) · [Load test with a live view](docs/load-test.md)
 * [Working on the code (rules for humans and AI agents)](AGENTS.md) · [TODO and roadmap](TODO.md)
 
 ## Status

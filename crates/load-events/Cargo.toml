@@ -1,0 +1,10 @@
+[package]
+name = "coolpsonotes-load-events"
+description = "What the coolpsonotes load test streams to its live dashboard"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }

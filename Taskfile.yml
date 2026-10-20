@@ -259,9 +259,10 @@ tasks:
     desc: Clippy on every crate (warnings are errors), including the web client for wasm32
     deps: [rust]
     cmds:
-      - cargo clippy --locked -p coolpsonotes-core -p coolpsonotes-server -p coolpsonotes-sync -p coolpsonotes-client -p coolpsonotes-editor --all-targets -- -D warnings
+      - cargo clippy --locked -p coolpsonotes-core -p coolpsonotes-server -p coolpsonotes-sync -p coolpsonotes-client -p coolpsonotes-editor -p coolpsonotes-load-events -p coolpsonotes-load -p coolpsonotes-load-ui --all-targets -- -D warnings
       - CARGO_TARGET_DIR={{.WEB_TARGET_DIR}} cargo clippy --locked -p coolpsonotes-web --target wasm32-unknown-unknown -- -D warnings -A clippy::type_complexity
       - CARGO_TARGET_DIR={{.WEB_TARGET_DIR}} cargo clippy --locked -p coolpsonotes-editor --target wasm32-unknown-unknown --all-targets -- -D warnings
+      - CARGO_TARGET_DIR={{.WEB_TARGET_DIR}} cargo clippy --locked -p coolpsonotes-load-ui --target wasm32-unknown-unknown -- -D warnings
 
   check:wasm:
     desc: Make sure the core crate still builds for the browser
@@ -317,6 +318,39 @@ tasks:
     desc: Stop the Docker development stack (data volumes are kept)
     cmds:
       - docker compose -f docker-compose.dev.yml --profile oidc down
+
+  # ------------------------------------------------------------------ load test
+
+  build:load-ui:
+    desc: Build the load test's live dashboard into dist/load
+    deps: [rust]
+    env:
+      CARGO_TARGET_DIR: "{{.WEB_TARGET_DIR}}"
+    cmds:
+      - ./scripts/build-load-ui.sh > /dev/null
+    silent: true
+
+  load:
+    desc: "Load test with a live view on http://localhost:8098: simulated people against the server image with CPU and memory limits (USERS=100 DURATION=3m CPUS=1 MEMORY=512m)"
+    deps: [docker:build, build:load-ui]
+    vars:
+      USERS: '{{.USERS | default "100"}}'
+      DURATION: '{{.DURATION | default "3m"}}'
+      CPUS: '{{.CPUS | default "1"}}'
+      MEMORY: '{{.MEMORY | default "512m"}}'
+    cmds:
+      - cargo build --release -p coolpsonotes-load
+      - ./target/release/coolpsonotes-load --open --users {{.USERS}} --duration {{.DURATION}} --cpus {{.CPUS}} --memory {{.MEMORY}} {{.CLI_ARGS}}
+
+  load:native:
+    desc: "Like load, without Docker: the server as a local process, no limits (USERS=100 DURATION=3m)"
+    deps: [build:load-ui, build:web]
+    vars:
+      USERS: '{{.USERS | default "100"}}'
+      DURATION: '{{.DURATION | default "3m"}}'
+    cmds:
+      - cargo build --release -p coolpsonotes-server -p coolpsonotes-load
+      - ./target/release/coolpsonotes-load --native --open --users {{.USERS}} --duration {{.DURATION}} {{.CLI_ARGS}}
 
   # ------------------------------------------------------------------ housekeeping
 

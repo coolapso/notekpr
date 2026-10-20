@@ -256,3 +256,58 @@ mod tests {
         }
     }
 }
+
+/// An image file, decoded (for [`encode_square`]); `None` if the browser
+/// can't read it as an image.
+pub async fn load_image(file: &web_sys::Blob) -> Option<web_sys::HtmlImageElement> {
+    let url = web_sys::Url::create_object_url_with_blob(file).ok()?;
+    let img = web_sys::HtmlImageElement::new().ok()?;
+    img.set_src(&url);
+    let decoded = wasm_bindgen_futures::JsFuture::from(img.decode())
+        .await
+        .is_ok();
+    let _ = web_sys::Url::revoke_object_url(&url);
+    (decoded && img.natural_width() > 0 && img.natural_height() > 0).then_some(img)
+}
+
+/// The middle square of `img`, `side` pixels wide, encoded as `mime`
+/// (`quality` 0–1 for lossy types; `opaque` puts it on white, for types
+/// without transparency): `(type, bytes)`. Browsers that can't encode
+/// `mime` use PNG, so check the type.
+pub fn encode_square(
+    img: &web_sys::HtmlImageElement,
+    side: u32,
+    mime: &str,
+    quality: f64,
+    opaque: bool,
+) -> Option<(String, Vec<u8>)> {
+    let (w, h) = (img.natural_width() as f64, img.natural_height() as f64);
+    let s = w.min(h);
+    let canvas: web_sys::HtmlCanvasElement =
+        document().create_element("canvas").ok()?.dyn_into().ok()?;
+    canvas.set_width(side);
+    canvas.set_height(side);
+    let ctx: web_sys::CanvasRenderingContext2d = canvas.get_context("2d").ok()??.dyn_into().ok()?;
+    let side = side as f64;
+    if opaque {
+        ctx.set_fill_style_str("#ffffff");
+        ctx.fill_rect(0.0, 0.0, side, side);
+    }
+    ctx.draw_image_with_html_image_element_and_sw_and_sh_and_dx_and_dy_and_dw_and_dh(
+        img,
+        (w - s) / 2.0,
+        (h - s) / 2.0,
+        s,
+        s,
+        0.0,
+        0.0,
+        side,
+        side,
+    )
+    .ok()?;
+    let url = canvas
+        .to_data_url_with_type_and_encoder_options(mime, &JsValue::from_f64(quality))
+        .ok()?;
+    let (ty, data) = url.strip_prefix("data:")?.split_once(";base64,")?;
+    Some((ty.to_string(), coolpsonotes_core::b64::decode(data).ok()?))
+}

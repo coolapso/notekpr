@@ -49,7 +49,7 @@ pub fn Home() -> impl IntoView {
                         };
                         view! {
                             <button class="card" class:archived=v.archived on:click=move |_| state::navigate(Route::Vault(id.clone()))>
-                                <div class="card-icon"><Icon name="vault"/></div>
+                                <div class="card-icon">{super::vault_icon(Some(&v))}</div>
                                 <div class="card-title">{v.name.clone()}</div>
                                 <div class="card-meta"><Icon name=icon/>" "{label}</div>
                                 <div class="card-meta muted">{move || if v.loaded { format!("{} notes", count()) } else { v.error.clone().unwrap_or_else(|| "Loading…".into()) }}</div>

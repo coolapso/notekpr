@@ -318,11 +318,23 @@ pub fn publish_vaults(c: &Core) {
             .values()
             .map(|i| {
                 let r = c.replicas.get(&i.id);
+                let meta = r.map(|r| &r.meta);
                 VaultView {
                     id: i.id.clone(),
-                    name: r
-                        .map(|r| r.meta.name.clone())
+                    name: meta
+                        .map(|m| m.name.clone())
                         .unwrap_or_else(|| "Locked vault".into()),
+                    icon: meta.and_then(|m| m.icon.clone()),
+                    picture: meta
+                        .and_then(|m| m.picture.as_ref())
+                        .filter(|p| p.is_valid())
+                        .map(|p| {
+                            format!(
+                                "data:{};base64,{}",
+                                p.mime,
+                                coolpsonotes_core::b64::encode(&p.data)
+                            )
+                        }),
                     role: i.role,
                     shared: i.member_count > 1,
                     archived: i.archived,

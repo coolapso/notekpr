@@ -10,7 +10,7 @@ use crate::util;
 use crate::views::icons::Icon;
 use crate::views::quick::QuickSection;
 use crate::views::tree::Tree;
-use crate::views::{SyncStatus, avatar};
+use crate::views::{SyncStatus, avatar, vault_icon};
 
 fn role_badge(role: Role, shared: bool) -> AnyView {
     match (role, shared) {
@@ -36,7 +36,7 @@ fn VaultSwitcher(vault: Memo<Option<String>>) -> impl IntoView {
     view! {
         <div class="vault-switch">
             <button class="vault-btn" on:click=move |_| open.update(|o| *o = !*o) aria-haspopup="true">
-                <Icon name="vault"/>
+                {move || vault_icon(current().as_ref())}
                 <span class="vname">{move || current().map(|v| v.name).unwrap_or_else(|| "All vaults".into())}</span>
                 {move || current().map(|v| role_badge(v.role, v.shared))}
                 <Icon name="chevron-down" class="caret"/>
@@ -49,7 +49,7 @@ fn VaultSwitcher(vault: Memo<Option<String>>) -> impl IntoView {
                         let err = v.error.clone();
                         view! {
                             <button class:archived=v.archived on:click=move |_| state::navigate(Route::Vault(id.clone()))>
-                                <Icon name="vault"/>
+                                {vault_icon(Some(&v))}
                                 <span class="grow">{v.name.clone()}</span>
                                 {role_badge(v.role, v.shared)}
                                 {err.map(|e| view! { <span class="small warn" title=e>"locked"</span> })}
@@ -166,7 +166,7 @@ pub fn Sidebar() -> impl IntoView {
                             {move || ui.vaults.get().into_iter().map(|v| {
                                 let id = v.id.clone();
                                 view! { <button class="sb-link" on:click=move |_| state::navigate(Route::Vault(id.clone()))>
-                                    <Icon name="vault"/><span class="grow">{v.name.clone()}</span>{role_badge(v.role, v.shared)}</button> }
+                                    {vault_icon(Some(&v))}<span class="grow">{v.name.clone()}</span>{role_badge(v.role, v.shared)}</button> }
                             }).collect_view()}
                         </div>
                     }.into_any(),

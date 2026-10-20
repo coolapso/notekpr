@@ -269,6 +269,19 @@ fn install_shortcuts() {
     cb.forget();
 }
 
+/// What identifies a vault: its picture, else its icon, else the generic one.
+pub fn vault_icon(v: Option<&state::VaultView>) -> AnyView {
+    match v {
+        Some(state::VaultView {
+            picture: Some(src), ..
+        }) => view! { <img class="vault-pic" src=src.clone() alt=""/> }.into_any(),
+        Some(state::VaultView { icon: Some(i), .. }) => {
+            view! { <span class="vault-emoji" aria-hidden="true">{i.clone()}</span> }.into_any()
+        }
+        _ => view! { <Icon name="vault"/> }.into_any(),
+    }
+}
+
 pub fn avatar(name: &str, user_id: &str) -> impl IntoView + use<> {
     let color = util::user_color(user_id);
     let initials = util::initials(name);

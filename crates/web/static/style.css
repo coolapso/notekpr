@@ -537,3 +537,23 @@ table.keys td:first-child { white-space: nowrap; width: 1%; padding-right: 16px;
   .qn-foot .btn.tiny { padding: 6px 9px; font-size: 13px; }
 }
 .note-title:focus-visible { box-shadow: 0 2px 0 0 var(--accent); }
+
+/* Vault icons: a picture, an emoji or the generic icon. */
+.vault-pic { width: 18px; height: 18px; border-radius: 4px; object-fit: cover; flex: none; }
+.vault-emoji { display: inline-flex; justify-content: center; width: 18px; font-size: 15px; line-height: 1; flex: none; }
+.card-icon .vault-pic { width: 36px; height: 36px; border-radius: 9px; }
+.card-icon .vault-emoji { width: auto; font-size: 22px; }
+.vault-icon-pick { display: flex; gap: 14px; align-items: flex-start; margin: 14px 0 4px; }
+.vault-icon-now { width: 56px; height: 56px; flex: none; display: flex; align-items: center; justify-content: center; border-radius: 12px; background: var(--accent-bg); color: var(--accent); }
+.vault-icon-now .vault-pic { width: 56px; height: 56px; border-radius: 12px; }
+.vault-icon-now .vault-emoji { width: auto; font-size: 32px; }
+.vault-icon-now .ic { width: 26px; height: 26px; }
+.emoji-grid { display: flex; flex-wrap: wrap; gap: 2px; margin-bottom: 8px; }
+.emoji-btn { width: 34px; height: 34px; border: 1px solid transparent; border-radius: 8px; background: none; cursor: pointer; font-size: 19px; line-height: 1; }
+.emoji-btn:hover { background: var(--bg-3); }
+.emoji-btn.on { border-color: var(--accent); background: var(--accent-bg); }
+.vault-icon-actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.vault-icon-input { width: 130px; }
+label.btn { position: relative; }
+label.btn.disabled { opacity: .6; pointer-events: none; }
+.vault-picture-input { position: absolute; width: 1px; height: 1px; opacity: 0; overflow: hidden; pointer-events: none; }

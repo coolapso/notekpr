@@ -626,6 +626,91 @@ fn ShareNote(vault: String, note: String) -> impl IntoView {
     }
 }
 
+/// Emoji offered for a vault's icon; any other can be typed.
+const VAULT_EMOJI: [&str; 24] = [
+    "📓", "📚", "🏠", "💼", "🧪", "🎓", "💡", "🧠", "❤️", "⭐", "🔒", "🎨", "🎵", "🍳", "🌱", "✈️",
+    "🏃", "💰", "🛠️", "🎮", "📷", "🗂️", "🐾", "🌍",
+];
+
+/// The vault's icon: an emoji, or a picture made from an uploaded image.
+#[component]
+fn VaultIconPicker(vault: String) -> impl IntoView {
+    let ui = ui();
+    let vid = StoredValue::new(vault);
+    let current = Memo::new(move |_| {
+        ui.vaults
+            .get()
+            .into_iter()
+            .find(|v| v.id == vid.get_value())
+    });
+    let typed = RwSignal::new(String::new());
+    let busy = RwSignal::new(false);
+    let set = move |icon: String| {
+        if busy.get_untracked() {
+            return;
+        }
+        busy.set(true);
+        leptos::task::spawn_local(async move {
+            actions::set_vault_icon(&vid.get_value(), &icon).await;
+            busy.set(false);
+        });
+    };
+    let upload = move |ev: leptos::ev::Event| {
+        let input: web_sys::HtmlInputElement = event_target(&ev);
+        let file = input.files().and_then(|l| l.get(0));
+        // The same file can be chosen again.
+        input.set_value("");
+        let Some(file) = file else { return };
+        if busy.get_untracked() {
+            return;
+        }
+        busy.set(true);
+        leptos::task::spawn_local(async move {
+            actions::set_vault_picture(&vid.get_value(), file).await;
+            busy.set(false);
+        });
+    };
+    let has_any = move || {
+        current
+            .get()
+            .is_some_and(|v| v.icon.is_some() || v.picture.is_some())
+    };
+    view! {
+        <div class="vault-icon-pick">
+            <div class="vault-icon-now">{move || super::vault_icon(current.get().as_ref())}</div>
+            <div class="grow">
+                <div class="emoji-grid" role="group" aria-label="Vault icon">
+                    {VAULT_EMOJI.iter().map(|e| {
+                        let (e1, e2) = (e.to_string(), e.to_string());
+                        let on = move || current.get().is_some_and(|v| v.picture.is_none() && v.icon.as_deref() == Some(e2.as_str()));
+                        view! { <button type="button" class="emoji-btn" class:on=on aria-label=e.to_string() on:click=move |_| set(e1.clone())>{e.to_string()}</button> }
+                    }).collect_view()}
+                </div>
+                <div class="vault-icon-actions">
+                    <form class="row" on:submit=move |ev| {
+                        ev.prevent_default();
+                        let t = typed.get_untracked();
+                        if !t.trim().is_empty() {
+                            set(t);
+                            typed.set(String::new());
+                        }
+                    }>
+                        <input class="input vault-icon-input" placeholder="Type an emoji" prop:value=move || typed.get() on:input=move |ev| typed.set(event_target_value(&ev))/>
+                        <button class="btn" type="submit">"Use"</button>
+                    </form>
+                    <label class="btn" class:disabled=move || busy.get()>
+                        <Icon name="image"/>" Upload picture…"
+                        <input type="file" class="vault-picture-input" accept="image/*" on:change=upload/>
+                    </label>
+                    <Show when=has_any>
+                        <button class="btn vault-icon-remove" on:click=move |_| set(String::new())>"Remove"</button>
+                    </Show>
+                </div>
+            </div>
+        </div>
+    }
+}
+
 #[component]
 fn VaultSettings(vault: String) -> impl IntoView {
     let ui = ui();
@@ -658,15 +743,17 @@ fn VaultSettings(vault: String) -> impl IntoView {
             <Show when=move || owner fallback=|| view! { <p class="muted">"Only the owner can change this vault's settings."</p> }>
                 {
                     let v1 = v1.clone();
+                    let vi = v1.clone();
                     view! {
                         <form class="row" on:submit=move |ev| {
                             ev.prevent_default();
                             let (v, n) = (v1.clone(), name.get_untracked());
-                            leptos::task::spawn_local(async move { actions::rename_vault(&v, &n).await; state::success("Renamed."); });
+                            leptos::task::spawn_local(async move { if actions::rename_vault(&v, &n).await { state::success("Renamed."); } });
                         }>
                             <input class="input grow" prop:value=move || name.get() on:input=move |ev| name.set(event_target_value(&ev))/>
                             <button class="btn" type="submit">"Rename"</button>
                         </form>
+                        <VaultIconPicker vault=vi/>
                     }
                 }
             </Show>

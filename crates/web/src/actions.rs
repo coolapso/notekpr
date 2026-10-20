@@ -6,7 +6,9 @@ use std::collections::{BTreeSet, HashMap};
 use std::rc::Rc;
 
 use coolpsonotes_core::doc::{EntryKind, IndexDoc, NoteDoc};
-use coolpsonotes_core::engine::{self, ObjectMeta, PinStatus, VaultMeta, VaultReplica};
+use coolpsonotes_core::engine::{
+    self, ObjectMeta, PinStatus, VaultMeta, VaultPicture, VaultReplica,
+};
 use coolpsonotes_core::memberlog::{LogBody, LogEntry};
 use coolpsonotes_core::protocol::*;
 use coolpsonotes_core::textdiff::Edit;
@@ -92,13 +94,28 @@ pub async fn create_vault(name: String) -> Option<String> {
     Some(id)
 }
 
-pub async fn rename_vault(vault: &str, name: &str) {
-    let ct = step(|c| {
-        let r = c.replicas.get_mut(vault)?;
-        r.meta.name = name.trim().to_string();
-        r.meta.encrypt(&r.keyring).ok()
+/// Change the vault's metadata (its name, icon or picture; the owner's to
+/// change) and store it, encrypted. `false` if that failed (and was said).
+pub async fn update_vault_meta(
+    vault: &str,
+    change: impl FnOnce(&mut VaultMeta) -> Result<(), String>,
+) -> bool {
+    let made = step(|c| {
+        let r = c.replicas.get(vault)?;
+        let mut meta = r.meta.clone();
+        Some(change(&mut meta).and_then(|()| {
+            let ct = meta.encrypt(&r.keyring).map_err(|e| e.to_string())?;
+            Ok((meta, ct))
+        }))
     });
-    let Some(ct) = ct else { return };
+    let (meta, ct) = match made {
+        Some(Ok(x)) => x,
+        Some(Err(e)) => {
+            error(e);
+            return false;
+        }
+        None => return false,
+    };
     match api::patch::<_, VaultInfo>(
         &format!("/vaults/{vault}"),
         &UpdateVaultRequest {
@@ -108,12 +125,83 @@ pub async fn rename_vault(vault: &str, name: &str) {
     )
     .await
     {
-        Ok(i) => step(|c| {
-            c.vault_infos.insert(vault.to_string(), i);
-            state::publish_vaults(c);
-        }),
-        Err(e) => error(format!("Rename failed: {e}")),
+        Ok(i) => {
+            step(|c| {
+                if let Some(r) = c.replicas.get_mut(vault) {
+                    r.meta = meta;
+                }
+                c.vault_infos.insert(vault.to_string(), i);
+                state::publish_vaults(c);
+            });
+            true
+        }
+        Err(e) => {
+            error(e.message);
+            false
+        }
     }
+}
+
+pub async fn rename_vault(vault: &str, name: &str) -> bool {
+    let name = name.trim().to_string();
+    update_vault_meta(vault, |m| {
+        m.name = name;
+        Ok(())
+    })
+    .await
+}
+
+/// An emoji (or a few characters) for the vault, instead of its picture;
+/// blank removes both.
+pub async fn set_vault_icon(vault: &str, icon: &str) -> bool {
+    update_vault_meta(vault, |m| {
+        m.set_icon(icon).map_err(|e| e.to_string())?;
+        m.picture = None;
+        Ok(())
+    })
+    .await
+}
+
+/// A picture for the vault, made from an image file.
+pub async fn set_vault_picture(vault: &str, file: web_sys::File) -> bool {
+    match vault_picture_from(&file).await {
+        Ok(p) => {
+            update_vault_meta(vault, |m| {
+                m.picture = Some(p);
+                Ok(())
+            })
+            .await
+        }
+        Err(e) => {
+            error(e);
+            false
+        }
+    }
+}
+
+/// The middle square of an image, at most [`VaultPicture::MAX_SIDE`] pixels,
+/// encoded again — WebP where the browser can — and smaller until it fits.
+async fn vault_picture_from(file: &web_sys::File) -> Result<VaultPicture, String> {
+    let img = util::load_image(file)
+        .await
+        .ok_or("That file isn't an image this browser can open.")?;
+    let largest = img
+        .natural_width()
+        .min(img.natural_height())
+        .min(VaultPicture::MAX_SIDE);
+    let mut sides = vec![largest];
+    sides.extend([96, 64, 48].into_iter().filter(|s| *s < largest));
+    // Keeping transparency first; JPEG (on white) only if nothing else fits.
+    for (mime, opaque) in [("image/webp", false), ("image/jpeg", true)] {
+        for &side in &sides {
+            if let Some((ty, data)) = util::encode_square(&img, side, mime, 0.85, opaque)
+                && let Ok(p) = VaultPicture::new(&ty, data)
+            {
+                return Ok(p);
+            }
+        }
+    }
+    Err("That picture couldn't be made small enough; try a simpler one.".into())
 }
 
 pub async fn set_archived(vault: &str, archived: bool) {

@@ -1059,7 +1059,69 @@ def test_quick_notes(env):
             m.close()
 
 
-TESTS = [test_onboarding, test_collab, test_devices_and_recovery, test_features, test_attachments, test_note_sharing, test_tables, test_editor_safety, test_local_copy, test_ui_basics, test_offline_tabs, test_offline_start, test_mobile, test_quick_notes]
+def png_file(path, w, h):
+    """Write a w×h RGB gradient PNG (stdlib only)."""
+    import struct, zlib
+    raw = b"".join(b"\x00" + bytes(v for x in range(w) for v in (x * 255 // w, y * 255 // h, 128)) for y in range(h))
+    def chunk(t, d):
+        return struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d) & 0xFFFFFFFF)
+    with open(path, "wb") as f:
+        f.write(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0))
+                + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
+
+
+def test_vault_icons(env):
+    a, b = Browser(), Browser()
+    btn_icon = "(document.querySelector('.vault-btn .vault-emoji') || {}).textContent"
+    shared_card = "Array.from(document.querySelectorAll('.card')).find(c => c.textContent.includes('Shared with you'))"
+    try:
+        an, bn = uniq("ivy"), uniq("ike")
+        signup(a, an)
+        signup(b, bn)
+        share(a, ".sb-bottom button:nth-child(2)", bn)
+        b.click(".vault-btn")
+        b.click_el(b.find_text(".vault-menu button", "All vaults", 10))
+        b.wait("return !!" + shared_card, 15, "the shared vault's card")
+        a.click(".sb-label button[title='Vault settings']")
+        a.find(".vault-icon-pick", 5)
+        a.js("document.querySelector('.emoji-btn[aria-label=\"🌱\"]').click()")
+        a.wait("return " + btn_icon + " === '🌱'", 10, "the emoji in the switcher")
+        check(True, "an emoji from the list becomes the vault's icon")
+        b.wait("const c = " + shared_card + "; return (c.querySelector('.vault-emoji') || {}).textContent === '🌱'", 15, "the member's card")
+        check(True, "members see it right away")
+        # WebDriver can't type characters outside the BMP: set the box's value.
+        a.js("const i = document.querySelector('.vault-icon-input'); i.value = '🦊'; i.dispatchEvent(new Event('input'))")
+        a.click(".vault-icon-actions button[type=submit]")
+        a.wait("return " + btn_icon + " === '🦊'", 10, "the typed emoji")
+        check(True, "any emoji can be typed instead")
+        # A picture: made a small square from the image, shown instead of the emoji.
+        text = os.path.join(env.data, "not-an-image.png")
+        with open(text, "w") as f:
+            f.write("hello")
+        a.type(".vault-picture-input", text)
+        a.find_text(".toast.error", "isn't an image", 10)
+        check(a.js("return " + btn_icon) == "🦊", "a file that isn't an image is refused with a message")
+        pic = os.path.join(env.data, "wide.png")
+        png_file(pic, 300, 200)
+        a.type(".vault-picture-input", pic)
+        a.wait("const i = document.querySelector('.vault-btn img.vault-pic'); return !!i && i.complete && i.naturalWidth > 0", 15, "the picture")
+        w, h, src = a.js("const i = document.querySelector('.vault-btn img.vault-pic'); return [i.naturalWidth, i.naturalHeight, i.src.slice(0, 11)]")
+        check(w == h == 128 and src == "data:image/", f"an uploaded image becomes a 128 px square picture ({w}×{h})")
+        b.wait("const c = " + shared_card + "; return !!c.querySelector('img.vault-pic')", 15, "the member's card")
+        check(True, "members see the picture too")
+        stored = b"".join(open(os.path.join(env.data, f), "rb").read() for f in os.listdir(env.data) if f.startswith("coolpsonotes.db"))
+        check("🦊".encode() not in stored and "🌱".encode() not in stored and b'"picture"' not in stored,
+              "the server only ever stores icon and picture encrypted")
+        a.click(".vault-icon-remove")
+        a.wait("return !document.querySelector('.vault-btn .vault-pic, .vault-btn .vault-emoji')", 10, "the generic icon")
+        check(True, "Remove goes back to the generic icon")
+        check(not severe_logs(a, b), "no browser errors")
+    finally:
+        a.close()
+        b.close()
+
+
+TESTS = [test_onboarding, test_collab, test_devices_and_recovery, test_features, test_attachments, test_note_sharing, test_tables, test_editor_safety, test_local_copy, test_ui_basics, test_offline_tabs, test_offline_start, test_mobile, test_quick_notes, test_vault_icons]
 
 
 def main():

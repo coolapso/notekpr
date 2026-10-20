@@ -72,6 +72,12 @@ Phases 1–3 are done, and Phase 4 except the OS keyring for CLI secrets
       changes. The small naming/preview/default-vault helpers exist in
       both clients (`crates/web/src/quick.rs`, `crates/client/src/ops.rs`);
       they could move to `crates/core`.
+- [x] Vault icons (2026-10-20): the owner picks an emoji (or types any) or
+      uploads a picture in Vault settings; the browser makes it a square of
+      at most 128 px, encoded again (WebP, else JPEG) until it fits 8 KiB.
+      Both live in the encrypted `VaultMeta`, so members see them live
+      (`meta_changed`) and the server doesn't. Shown in the vault switcher,
+      its menu and the vault lists. The CLI doesn't show them yet.
 - [x] Sidebar marks the open note in one place only (2026-10-20): the tree,
       which no longer opens folders by itself — a closed folder holding the
       open note is marked instead. Favorites, Recent and the Quick notes

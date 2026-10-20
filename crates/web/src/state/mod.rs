@@ -174,6 +174,10 @@ pub struct ShareState {
 pub struct VaultView {
     pub id: String,
     pub name: String,
+    /// The vault's icon (usually an emoji), if it has one.
+    pub icon: Option<String>,
+    /// Its picture as a `data:` URL, if it has a valid one.
+    pub picture: Option<String>,
     pub role: Role,
     pub shared: bool,
     pub archived: bool,

@@ -172,7 +172,9 @@ vault-relative, `.md` is optional for notes.
 
 Every command first catches up with the server (REST) and uploads queued
 changes; read commands fall back to the local copy when the server is
-unreachable.
+unreachable. Scripts sending many commands quickly may hit the server's rate
+limit: commands then wait as long as the server says and retry (for up to
+30 s) instead of failing.
 
 **One process per profile.** Only one coolpsonotes process at a time may own
 a profile's local copies (two would overwrite each other's files and lose

@@ -203,6 +203,7 @@ impl Api {
         body: Body<'_>,
     ) -> ApiResult<reqwest::Response> {
         let mut retried = false;
+        let mut waited = Duration::ZERO;
         loop {
             let token = self.token().await?;
             let mut req = self
@@ -217,6 +218,15 @@ impl Api {
                     .body(b.to_vec()),
             };
             let resp = req.send().await.map_err(net)?;
+            if let Some(wait) = retry_after(&resp)
+                && waited + wait <= MAX_RATE_LIMIT_WAIT
+            {
+                // Rate limited before it was handled: the same request, later.
+                tracing::debug!("rate limited; retrying in {} s", wait.as_secs());
+                tokio::time::sleep(wait).await;
+                waited += wait;
+                continue;
+            }
             if resp.status() == StatusCode::UNAUTHORIZED
                 && matches!(self.creds, Credentials::Agent { .. })
                 && !retried
@@ -451,6 +461,28 @@ impl Api {
         let q: String = url::form_urlencoded::byte_serialize(q.as_bytes()).collect();
         self.get(&format!("/users/search?q={q}")).await
     }
+}
+
+/// How long one request may keep waiting for the server's rate limit
+/// (scripts and agents sending many commands); then it fails as `429`.
+const MAX_RATE_LIMIT_WAIT: Duration = Duration::from_secs(30);
+
+/// How long a `429` says to wait. Only a `Retry-After` means "the same
+/// request will work then"; other `429`s (a snapshot within its cooldown)
+/// are answers, not a busy server.
+fn retry_after(resp: &reqwest::Response) -> Option<Duration> {
+    if resp.status() != StatusCode::TOO_MANY_REQUESTS {
+        return None;
+    }
+    let secs: u64 = resp
+        .headers()
+        .get(reqwest::header::RETRY_AFTER)?
+        .to_str()
+        .ok()?
+        .trim()
+        .parse()
+        .ok()?;
+    Some(Duration::from_secs(secs.clamp(1, 10)))
 }
 
 enum Body<'a> {

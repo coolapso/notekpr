@@ -1,10 +1,12 @@
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::num::NonZeroU32;
+use std::time::Duration;
 
 use axum::extract::{ConnectInfo, Request, State};
-use axum::http::HeaderMap;
+use axum::http::{HeaderMap, HeaderValue, header};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
+use governor::clock::{Clock, DefaultClock};
 use governor::{DefaultKeyedRateLimiter, Quota, RateLimiter};
 
 use crate::config::Config;
@@ -14,6 +16,7 @@ use crate::state::AppState;
 pub struct Limiters {
     pub api: DefaultKeyedRateLimiter<IpAddr>,
     pub auth: DefaultKeyedRateLimiter<IpAddr>,
+    clock: DefaultClock,
 }
 
 impl Limiters {
@@ -24,6 +27,7 @@ impl Limiters {
         Limiters {
             api: RateLimiter::keyed(Quota::per_second(rps).allow_burst(burst)),
             auth: RateLimiter::keyed(Quota::per_minute(per_min)),
+            clock: DefaultClock::default(),
         }
     }
 
@@ -67,25 +71,49 @@ fn peer(req: &Request) -> Option<SocketAddr> {
 
 pub async fn api_limit(State(state): State<AppState>, req: Request, next: Next) -> Response {
     let ip = client_ip(req.headers(), peer(&req), state.config.trust_proxy);
-    if state.limiters.api.check_key(&ip).is_err() {
+    if let Err(until) = state.limiters.api.check_key(&ip) {
         metrics::counter!("coolpsonotes_rate_limited_total", "scope" => "api").increment(1);
-        return AppError::RateLimited.into_response();
+        return limited(until.wait_time_from(state.limiters.clock.now()));
     }
     next.run(req).await
 }
 
 pub async fn auth_limit(State(state): State<AppState>, req: Request, next: Next) -> Response {
     let ip = client_ip(req.headers(), peer(&req), state.config.trust_proxy);
-    if state.limiters.auth.check_key(&ip).is_err() {
+    if let Err(until) = state.limiters.auth.check_key(&ip) {
         metrics::counter!("coolpsonotes_rate_limited_total", "scope" => "auth").increment(1);
-        return AppError::RateLimited.into_response();
+        return limited(until.wait_time_from(state.limiters.clock.now()));
     }
     next.run(req).await
+}
+
+/// `429` with `Retry-After`: the request wasn't handled at all, so the client
+/// may send it again, unchanged, after that many seconds.
+fn limited(wait: Duration) -> Response {
+    let mut r = AppError::RateLimited.into_response();
+    let secs = wait.as_secs() + u64::from(wait.subsec_nanos() > 0);
+    r.headers_mut()
+        .insert(header::RETRY_AFTER, HeaderValue::from(secs.max(1)));
+    r
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn says_when_to_come_back_in_whole_seconds() {
+        let after = |d| {
+            limited(d).headers()[header::RETRY_AFTER]
+                .to_str()
+                .unwrap()
+                .to_string()
+        };
+        assert_eq!(after(Duration::from_millis(1200)), "2");
+        assert_eq!(after(Duration::from_secs(3)), "3");
+        assert_eq!(after(Duration::ZERO), "1");
+        assert_eq!(limited(Duration::ZERO).status(), 429);
+    }
 
     #[test]
     fn uses_the_address_the_proxy_added() {

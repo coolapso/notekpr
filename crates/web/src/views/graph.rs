@@ -583,9 +583,9 @@ pub fn GraphCanvas(
     let count = move || {
         let g = data.get();
         format!(
-            "Graph of {} notes and {} links",
-            g.nodes.len(),
-            g.edges.len()
+            "Graph of {} and {}",
+            util::count(g.nodes.len(), "note", "notes"),
+            util::count(g.edges.len(), "link", "links")
         )
     };
     view! {

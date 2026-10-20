@@ -82,6 +82,11 @@ pub fn absolute_time(ms: i64) -> String {
     s
 }
 
+/// "1 note", "3 notes".
+pub fn count(n: usize, one: &str, many: &str) -> String {
+    format!("{n} {}", if n == 1 { one } else { many })
+}
+
 pub fn human_bytes(n: u64) -> String {
     const U: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
     let mut v = n as f64;

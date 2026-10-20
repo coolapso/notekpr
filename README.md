@@ -12,10 +12,6 @@ read anything.
   merging (CRDTs), also after working offline.
 * **Plain Markdown** — wiki links, backlinks, tags, embeds, export to a
   folder of `.md` files at any time.
-* **Quick notes** — capture a thought in a second (`Ctrl+Alt+Q`, a capture
-  box that works on phones, or `coolpsonotes quick …`), sort it out later:
-  promote it to a regular note or archive it. They are plain notes in a
-  `Quick notes/` folder.
 * **Use your own editor** — the desktop client keeps your vaults as a plain
   folder of Markdown files, synced live and both ways: edit with Obsidian,
   Neovim, VS Code or anything else while the server only stores ciphertext
@@ -28,6 +24,95 @@ read anything.
 * **Rust everywhere** — the server, the desktop client and the browser client
   (compiled to WebAssembly) share one core crate for all cryptography and
   syncing. No npm, no third-party JavaScript.
+
+## Features
+
+**Writing**
+
+* Live-preview Markdown editor: formatting shows as you type and the syntax
+  hides once the caret leaves the line; also a plain source mode and a reading
+  view (`Ctrl+E`).
+* A formatting toolbar and keyboard shortcuts (`Ctrl+/` lists them), optional
+  Vim keys, light and dark themes.
+* Tables you build with Enter and Tab, with aligned columns; task lists you
+  can tick in the reading view.
+* Images and other files: paste or drop them into a note — they are encrypted,
+  uploaded and shown inline.
+* Wiki links (`[[Note]]`, `[[Note#Heading]]`) that create the note if it's
+  missing; renaming a note updates every link to it.
+
+**Organizing and finding**
+
+* Vaults, folders and a note tree with drag and drop.
+* Icons: an emoji for each note and folder, an emoji or a picture for each
+  vault.
+* Favorites and recently opened notes in the sidebar.
+* Quick switcher (`Ctrl+P`), full-text search (`Ctrl+Shift+F`) with tag
+  filters, tags, and backlinks and outgoing links beside each note.
+* Quick notes: capture a thought in a second (`Ctrl+Alt+Q`, a capture page
+  that works on phones, or `coolpsonotes quick …`), then promote it to a
+  regular note or archive it.
+* A trash with restore, and the version history of every note with preview
+  and restore.
+
+**Working together**
+
+* Share a vault as editor or viewer, or a single note with someone outside
+  the vault.
+* Edit the same note at the same time and see each other's cursors and who is
+  where. Edits merge without conflicts (CRDTs), also after working offline.
+* You're told when something is shared with you; owners have an activity log
+  per vault.
+
+**Privacy and security**
+
+* End-to-end encrypted: note text, titles, file and folder names,
+  attachments, vault names and icons, presence and your settings. The server
+  only stores ciphertext and can't read any of it.
+* Every note has its own key; removing someone renews the keys, and sharing a
+  note never gives away its earlier history.
+* The vault's owner signs who belongs to it, and every change is signed by
+  its author, so even a compromised server can't add people or forge edits.
+* Key fingerprints to check who you share with, and a loud warning when
+  someone's key changes.
+* New devices are approved from one you already use (with a verification
+  code) or unlocked with your recovery key; any browser can be forgotten.
+* Sign in with your own identity provider (OIDC: Authelia, Keycloak,
+  Authentik, …).
+
+**Offline, and your own tools**
+
+* The browser keeps an encrypted copy of your vaults: they open at once, and
+  what you write offline syncs later. Optionally the app starts without the
+  server too.
+* Desktop/CLI client with a local encrypted copy, live sync, and a two-way
+  folder of plain Markdown files for Obsidian, Neovim, VS Code or anything
+  else ([how](docs/own-editor.md)).
+* The command line does everything: list, read, write, search, move, trash,
+  history, quick notes, sharing, import and export — also while its sync
+  daemon runs.
+* Import folders of Markdown and zip files (an Obsidian vault, say) with their
+  attachments; export a vault as plain `.md` files any time.
+* Never locked in: an encrypted export plus your recovery key turn back into
+  plain files without the server or the apps
+  ([recovery](docs/recovery.md)).
+
+**For AI agents**
+
+* Agents get their own identity and keys and see only the vaults you share
+  with them. They work through the CLI, a Markdown folder or a local HTTP
+  gateway with an audit log ([agents](docs/agents.md)).
+
+**Running it**
+
+* One Rust server with SQLite; Docker Compose with Caddy and automatic HTTPS,
+  or Kubernetes.
+* Backups, upgrades, Prometheus metrics and an admin page; size limits for
+  changes, snapshots and attachments.
+* A development mode where anyone can sign in as anyone (one session per
+  browser tab) to try sharing and collaboration in one browser.
+* No npm and no third-party JavaScript: the browser client is Rust compiled to
+  WebAssembly.
 
 ## Try it (development mode, no identity provider needed)
 
@@ -93,14 +178,10 @@ provider setup, reverse proxies, Kubernetes, backups, upgrades and monitoring.
 
 ## Status
 
-First release (0.1). Implemented: server, browser client, end-to-end
-encryption with device enrollment, recovery and key rotation, vault sharing
-with roles, sharing single notes with people outside a vault, live
-collaboration, offline sync, revision history, trash,
-search/backlinks/tags, import/export, agent identities, desktop/CLI client with
-agent gateway, Docker/Kubernetes packaging. Planned: native desktop GUI shell,
-mobile apps, sharing folders, signed updates
-([roadmap](docs/architecture.md#9-milestones)).
+First release (0.1): everything listed under [Features](#features) is
+implemented and covered by tests (unit, server API, CLI and browser
+end-to-end). Planned: a native desktop app (around the web UI) and mobile
+apps; what's still open is in [TODO.md](TODO.md).
 
 ## License
 

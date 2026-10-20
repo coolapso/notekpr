@@ -58,6 +58,9 @@ pub struct HubOptions {
 pub struct VaultSummary {
     pub id: String,
     pub name: String,
+    /// Its icon (an emoji), if it has one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
     pub role: Role,
     pub archived: bool,
     pub documents: usize,
@@ -629,6 +632,7 @@ pub fn summary(v: &Vault) -> VaultSummary {
     VaultSummary {
         id: v.id().to_string(),
         name: v.name().to_string(),
+        icon: v.replica.meta.icon.clone(),
         role: v.role(),
         archived: v.archived,
         documents: v.notes().len(),

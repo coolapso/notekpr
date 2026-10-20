@@ -1001,6 +1001,25 @@ impl Vault {
         Ok(id)
     }
 
+    /// Set a note's, attachment's or folder's icon (an emoji), or remove it
+    /// with `None`. A folder that only exists as the parent of others gets an
+    /// entry for it. Returns the entry's id.
+    pub fn set_icon(&mut self, path: &str, icon: Option<&str>) -> Result<String> {
+        self.require_writable()?;
+        let icon = match icon {
+            Some(i) => doc::clean_icon(i).map_err(|e| anyhow!(e))?,
+            None => None,
+        };
+        let id = match self.find(path) {
+            Some((_, e)) => e.id,
+            None if self.is_folder(path) => self.create_folder(path)?,
+            None => bail!("no document or folder '{path}'"),
+        };
+        let u = self.replica.index.set_icon(&id, icon.as_deref());
+        self.record_index(u)?;
+        Ok(id)
+    }
+
     /// Move or rename a note, attachment or folder. A target ending in `/`
     /// (or naming an existing folder) keeps the file name. Optionally rewrites
     /// wiki links in other notes that pointed at a moved note.

@@ -154,6 +154,7 @@ vault-relative, `.md` is optional for notes.
 |---|---|
 | `vault list` / `vault create <name>` | list (with role and document count) / create |
 | `vault rename <v> <name>` / `vault archive <v> [--undo]` / `vault delete <v>` | owner only; delete asks you to type the name |
+| `vault icon <v> <emoji>` / `vault icon <v> --remove` | owner only; the vault's icon (replaces a picture set in the browser) |
 | `vault members <v>` | members, roles, key fingerprints and pin status |
 | `vault share <v> <user> --role editor\|viewer` | see [§8](#8-sharing-members-and-keys) |
 | `vault unshare <v> <user>` / `vault rotate <v>` / `vault leave <v>` | removal always rotates the key |
@@ -162,6 +163,7 @@ vault-relative, `.md` is optional for notes.
 | `write <v> <path>` | create or update a note from stdin — diff-merged, never a blind overwrite; `--append`, `--attachment`, `--if-match <hash>` |
 | `quick [text…]` / `quick --list` | capture a quick note (text or stdin) / list the newest; see [Quick notes](#quick-notes) |
 | `mkdir <v> <path>`, `mv <v> <from> <to> [--update-links]`, `rm <v> <path>` | `rm` moves to the trash; `mv` into `dir/` keeps the name; `--update-links` rewrites `[[links]]` |
+| `icon <v> <path> <emoji>` / `icon <v> <path> --remove` | a note's, attachment's or folder's icon; `ls` and `vault list` show icons, and people a note is shared with see its icon and new name |
 | `trash list\|restore\|empty <v>` | restore by path or id; `empty` deletes permanently |
 | `search <query> [--vault v]` | terms, `"phrases"`, `tag:x`, `folder:x`, `title:x`, `vault:x` |
 | `backlinks <v> <path>` | notes linking to a note |

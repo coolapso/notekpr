@@ -203,3 +203,89 @@ async fn a_vault_key_rotation_leaves_out_a_member_whose_key_changed() {
     let members = alice.api.members(&vid).await.unwrap();
     assert!(has_key(&members, &carol.user_id));
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn icons_and_new_names_reach_the_people_a_note_is_shared_with() {
+    let srv = start().await;
+    let alice = login(&srv, "alice").await;
+    let bob = login(&srv, "bob").await;
+    manage::create_vault(&alice, "Home").await.unwrap();
+    let ah = hub(&alice).await;
+    ops::put_document(&ah, "Home", "Garden/Tomatoes.md", "water daily\n", None)
+        .await
+        .unwrap();
+    let v = ah.resolve("Home").await.unwrap();
+    note_shares::share_note(&alice, &v, "Garden/Tomatoes", "bob", Role::Viewer, false)
+        .await
+        .unwrap();
+
+    // A note's icon, and a folder that only existed as the note's parent.
+    let (_, id) = ops::set_icon(&ah, "Home", "Garden/Tomatoes.md", Some("🍅"))
+        .await
+        .unwrap();
+    note_shares::refresh_meta(&alice, &v, &id).await.unwrap();
+    let (_, folder) = ops::set_icon(&ah, "Home", "Garden", Some("🌱"))
+        .await
+        .unwrap();
+    {
+        let g = v.lock().await;
+        assert_eq!(
+            g.replica.index.get(&id).unwrap().icon.as_deref(),
+            Some("🍅")
+        );
+        let f = g.replica.index.get(&folder).unwrap();
+        assert_eq!((f.path.as_str(), f.icon.as_deref()), ("Garden", Some("🌱")));
+    }
+    let shared = note_shares::shared_with_me(&bob).await.unwrap();
+    assert_eq!(
+        (shared[0].title.as_str(), shared[0].icon.as_deref()),
+        ("Tomatoes", Some("🍅"))
+    );
+
+    // Renamed: Bob sees the new title with the icon.
+    let out = ops::move_document(
+        &ah,
+        "Home",
+        "Garden/Tomatoes.md",
+        "Garden/Cherry tomatoes.md",
+        true,
+    )
+    .await
+    .unwrap();
+    note_shares::refresh_meta(&alice, &v, out.id.as_deref().unwrap())
+        .await
+        .unwrap();
+    let shared = note_shares::shared_with_me(&bob).await.unwrap();
+    assert_eq!(
+        (shared[0].title.as_str(), shared[0].icon.as_deref()),
+        ("Cherry tomatoes", Some("🍅"))
+    );
+
+    // Icons are checked (one short emoji or text), and removable.
+    assert!(
+        ops::set_icon(&ah, "Home", "Garden", Some("a very long icon text"))
+            .await
+            .is_err()
+    );
+    assert!(
+        ops::set_icon(&ah, "Home", "Nowhere", Some("🌱"))
+            .await
+            .is_err()
+    );
+    ops::set_icon(&ah, "Home", "Garden", None).await.unwrap();
+    assert_eq!(
+        v.lock().await.replica.index.get(&folder).unwrap().icon,
+        None
+    );
+
+    // The vault's icon, which other members see.
+    manage::set_vault_icon(&alice, &v, Some("🏡"))
+        .await
+        .unwrap();
+    assert_eq!(v.lock().await.replica.meta.icon.as_deref(), Some("🏡"));
+    let fresh = hub(&alice).await;
+    let fv = fresh.resolve("Home").await.unwrap();
+    assert_eq!(fv.lock().await.replica.meta.icon.as_deref(), Some("🏡"));
+    manage::set_vault_icon(&alice, &v, None).await.unwrap();
+    assert_eq!(v.lock().await.replica.meta.icon, None);
+}

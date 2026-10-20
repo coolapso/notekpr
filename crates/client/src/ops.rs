@@ -57,6 +57,9 @@ pub struct DocInfo {
     pub size: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mime: Option<String>,
+    /// Its icon (an emoji), if it has one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -113,6 +116,7 @@ fn info(vault_id: &str, path: &str, e: &Entry, tags: Vec<String>) -> DocInfo {
         modified: e.modified,
         size: e.size.unwrap_or(0),
         mime: e.mime.clone(),
+        icon: e.icon.clone(),
     }
 }
 
@@ -341,6 +345,29 @@ pub async fn move_document(
         from: from.to_string(),
         to: new_path,
     })
+}
+
+/// Set (or with `None` remove) a document's or folder's icon. Returns the
+/// vault's and the entry's ids.
+pub async fn set_icon(
+    hub: &Hub,
+    vref: &str,
+    path: &str,
+    icon: Option<&str>,
+) -> OpResult<(String, String)> {
+    let v = vault(hub, vref).await?;
+    let (vault_id, id) = {
+        let mut g = v.lock().await;
+        check_write(hub, &g)?;
+        if g.find(path).is_none() && !g.is_folder(path) {
+            return Err(OpError::NotFound(format!("no document or folder '{path}'")));
+        }
+        let id = g.set_icon(path, icon).map_err(bad)?;
+        g.save()?;
+        (g.id().to_string(), id)
+    };
+    hub.local_changed(&vault_id, vec![], true).await;
+    Ok((vault_id, id))
 }
 
 /// Move a document (or folder) to the trash. Returns the trashed entry ids.

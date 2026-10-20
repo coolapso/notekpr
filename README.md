@@ -45,7 +45,7 @@ read anything.
 
 * Vaults, folders and a note tree with drag and drop.
 * Icons: an emoji for each note and folder, an emoji or a picture for each
-  vault.
+  vault (also from the command line).
 * Favorites and recently opened notes in the sidebar.
 * Quick switcher (`Ctrl+P`), full-text search (`Ctrl+Shift+F`) with tag
   filters, tags, and backlinks and outgoing links beside each note.
@@ -91,9 +91,9 @@ read anything.
 * Desktop/CLI client with a local encrypted copy, live sync, and a two-way
   folder of plain Markdown files for Obsidian, Neovim, VS Code or anything
   else ([how](docs/own-editor.md)).
-* The command line does everything: list, read, write, search, move, trash,
-  history, quick notes, sharing, import and export — also while its sync
-  daemon runs.
+* The command line does everything: list, read, write, search, move, icons,
+  trash, history, quick notes, sharing, import and export — also while its
+  sync daemon runs.
 * Import folders of Markdown and zip files (an Obsidian vault, say) with their
   attachments; export a vault as plain `.md` files any time.
 * Never locked in: an encrypted export plus your recovery key turn back into

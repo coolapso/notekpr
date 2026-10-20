@@ -312,10 +312,11 @@ pub async fn note_shares(
         .await?)
 }
 
-/// A note shared with us, with its decrypted title.
+/// A note shared with us, with its decrypted title and icon.
 pub struct SharedNoteView {
     pub info: SharedNote,
     pub title: String,
+    pub icon: Option<String>,
 }
 
 /// Notes shared with the signed-in user individually.
@@ -323,16 +324,18 @@ pub async fn shared_with_me(session: &Session) -> Result<Vec<SharedNoteView>> {
     let list: Vec<SharedNote> = session.api.get("/shares").await?;
     let mut out = Vec::with_capacity(list.len());
     for info in list {
-        let title = match recipient_ring(session, &info).await {
-            Ok((ring, _)) => info
+        let (title, icon) = match recipient_ring(session, &info).await {
+            Ok((ring, _)) => match info
                 .encrypted_meta
                 .as_ref()
                 .and_then(|m| ObjectMeta::decrypt(&ring, &info.object_id, m).ok())
-                .map(|m| m.title)
-                .unwrap_or_else(|| "(untitled)".into()),
-            Err(_) => "(key not available yet)".into(),
+            {
+                Some(m) => (m.title, m.icon),
+                None => ("(untitled)".into(), None),
+            },
+            Err(_) => ("(key not available yet)".into(), None),
         };
-        out.push(SharedNoteView { info, title });
+        out.push(SharedNoteView { info, title, icon });
     }
     Ok(out)
 }
@@ -398,6 +401,46 @@ pub async fn find_shared(session: &Session, reference: &str) -> Result<SharedNot
             "several shared notes are called '{reference}'; use the id from `coolpsonotes shared list`"
         ),
     }
+}
+
+/// People a note is shared with see its title and icon from its own
+/// metadata (they can't read the vault's index): send them again after a
+/// rename or an icon change. Nothing for notes that aren't shared.
+pub async fn refresh_meta(session: &Session, vault: &SharedVault, note_id: &str) -> Result<()> {
+    for attempt in 0..2 {
+        let (id, encrypted_meta) = {
+            let v = vault.lock().await;
+            let (Some(ring), Some(e)) = (
+                v.replica.doc_keys.get(note_id),
+                v.replica.index.get(note_id),
+            ) else {
+                return Ok(());
+            };
+            if !v.replica.is_shared_object(note_id) {
+                return Ok(());
+            }
+            (
+                v.id().to_string(),
+                ObjectMeta::of(&e).encrypt(ring, note_id)?,
+            )
+        };
+        match session
+            .api
+            .put::<_, ()>(
+                &format!("/vaults/{id}/objects/{note_id}/meta"),
+                &ObjectMetaUpdate { encrypted_meta },
+            )
+            .await
+        {
+            Ok(()) => return Ok(()),
+            // Its key changed meanwhile: fresh keys, then once more.
+            Err(e) if e.status() == Some(412) && attempt == 0 => {
+                session.refresh_keys(vault).await?
+            }
+            Err(e) => return Err(anyhow!(e).context("updating the shared note's title")),
+        }
+    }
+    Ok(())
 }
 
 /// Load a shared note into a recipient-only replica.

@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
-use coolpsonotes_core::doc::EntryKind;
+use coolpsonotes_core::doc::{Entry, EntryKind};
 use coolpsonotes_core::engine::PinStatus;
 use coolpsonotes_core::protocol::{DeviceStatus, PrincipalKind, Role};
 use serde::Serialize;
@@ -508,7 +508,7 @@ async fn execute(ctx: Ctx, command: Command) -> Result<()> {
                 SharedCmd::List => {
                     let list = note_shares::shared_with_me(&s).await?;
                     if ctx.json {
-                        ctx.print_json(&list.iter().map(|n| json!({ "id": n.info.object_id, "vault_id": n.info.vault_id, "title": n.title, "role": n.info.role, "owner": n.info.owner.display_name })).collect::<Vec<_>>());
+                        ctx.print_json(&list.iter().map(|n| json!({ "id": n.info.object_id, "vault_id": n.info.vault_id, "title": n.title, "icon": n.icon, "role": n.info.role, "owner": n.info.owner.display_name })).collect::<Vec<_>>());
                     } else if list.is_empty() {
                         crate::out!("no notes are shared with you individually");
                     } else {
@@ -518,7 +518,10 @@ async fn execute(ctx: Ctx, command: Command) -> Result<()> {
                                 n.info.object_id,
                                 n.info.role.as_str(),
                                 n.info.owner.display_name,
-                                n.title
+                                match &n.icon {
+                                    Some(i) => format!("{i} {}", n.title),
+                                    None => n.title,
+                                }
                             );
                         }
                     }
@@ -568,7 +571,29 @@ async fn execute(ctx: Ctx, command: Command) -> Result<()> {
         } => {
             let hub = ctx.hub(&[&vault]).await?;
             let out = op(ops::move_document(&hub, &vault, &from, &to, update_links).await)?;
+            // Recipients of a shared note see its new name.
+            if let Some(id) = &out.id {
+                let v = hub.resolve(&vault).await?;
+                note_shares::refresh_meta(&hub.session, &v, id).await?;
+            }
             crate::out!("moved to {}", out.to);
+            Ok(())
+        }
+        Command::Icon {
+            vault,
+            path,
+            icon,
+            remove,
+        } => {
+            let hub = ctx.hub(&[&vault]).await?;
+            let icon = if remove { None } else { icon };
+            let (_, id) = op(ops::set_icon(&hub, &vault, &path, icon.as_deref()).await)?;
+            let v = hub.resolve(&vault).await?;
+            note_shares::refresh_meta(&hub.session, &v, &id).await?;
+            match icon {
+                Some(i) => crate::out!("{i} {path}"),
+                None => crate::out!("removed the icon of {path}"),
+            }
             Ok(())
         }
         Command::Rm { vault, path } => {
@@ -1065,9 +1090,13 @@ async fn vault(ctx: &Ctx, c: VaultCmd) -> Result<()> {
                 crate::out!("no vaults yet — create one with `coolpsonotes vault create <name>`");
             }
             for s in list {
+                let name = match &s.icon {
+                    Some(i) => format!("{i} {}", s.name),
+                    None => s.name.clone(),
+                };
                 crate::out!(
                     "{:<28} {:<7} {:>4} docs{}{}  [{}]",
-                    s.name,
+                    name,
                     s.role.as_str(),
                     s.documents,
                     if s.archived { "  (archived)" } else { "" },
@@ -1093,6 +1122,21 @@ async fn vault(ctx: &Ctx, c: VaultCmd) -> Result<()> {
             let v = hub.resolve(&vault).await?;
             manage::rename_vault(&hub.session, &v, &name).await?;
             crate::out!("renamed to '{name}'");
+            Ok(())
+        }
+        VaultCmd::Icon {
+            vault,
+            icon,
+            remove,
+        } => {
+            let hub = ctx.hub(&[&vault]).await?;
+            let v = hub.resolve(&vault).await?;
+            let icon = if remove { None } else { icon };
+            manage::set_vault_icon(&hub.session, &v, icon.as_deref()).await?;
+            match icon {
+                Some(i) => crate::out!("{i} {vault}"),
+                None => crate::out!("removed the icon of {vault}"),
+            }
             Ok(())
         }
         VaultCmd::Archive { vault, undo } => {
@@ -1277,9 +1321,16 @@ async fn ls(ctx: &Ctx, vault: &str, folder: Option<&str>, recursive: bool) -> Re
         ctx.print_json(&j);
         return Ok(());
     }
+    let icon = |e: Option<&Entry>| {
+        e.and_then(|e| e.icon.as_ref())
+            .map(|i| format!("{i} "))
+            .unwrap_or_default()
+    };
     for l in list {
         match (l.kind, &l.entry) {
-            (ListKind::Folder, _) => crate::out!("{:>10}  {:<20}  {}/", "", "", l.path),
+            (ListKind::Folder, e) => {
+                crate::out!("{:>10}  {:<20}  {}{}/", "", "", icon(e.as_ref()), l.path)
+            }
             (_, Some(e)) => {
                 let size = if e.kind == EntryKind::Note {
                     g.note_text(&e.id).len() as u64
@@ -1287,9 +1338,10 @@ async fn ls(ctx: &Ctx, vault: &str, folder: Option<&str>, recursive: bool) -> Re
                     e.size.unwrap_or(0)
                 };
                 crate::out!(
-                    "{:>10}  {:<20}  {}",
+                    "{:>10}  {:<20}  {}{}",
                     ui::fmt_size(size),
                     ui::fmt_time(e.modified),
+                    icon(Some(e)),
                     l.path
                 )
             }

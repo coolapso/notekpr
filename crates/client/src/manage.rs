@@ -73,6 +73,30 @@ pub async fn rename_vault(session: &Session, vault: &SharedVault, name: &str) ->
     v.save()
 }
 
+/// The vault's icon (an emoji, replacing a picture), or with `None` neither.
+pub async fn set_vault_icon(
+    session: &Session,
+    vault: &SharedVault,
+    icon: Option<&str>,
+) -> Result<()> {
+    let (id, ct, meta) = {
+        let v = vault.lock().await;
+        require_owner(&v)?;
+        let mut meta = v.replica.meta.clone();
+        meta.set_icon(icon.unwrap_or(""))?;
+        meta.picture = None;
+        (v.id().to_string(), meta.encrypt(&v.replica.keyring)?, meta)
+    };
+    let req = UpdateVaultRequest {
+        encrypted_meta: Some(ct),
+        archived: None,
+    };
+    let _: VaultInfo = session.api.patch(&format!("/vaults/{id}"), &req).await?;
+    let mut v = vault.lock().await;
+    v.set_meta(meta);
+    v.save()
+}
+
 pub async fn set_archived(session: &Session, vault: &SharedVault, archived: bool) -> Result<()> {
     let id = {
         let v = vault.lock().await;

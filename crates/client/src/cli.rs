@@ -98,6 +98,15 @@ pub enum Command {
         #[arg(long)]
         update_links: bool,
     },
+    /// Give a note or folder an icon (an emoji), or take it away with --remove.
+    Icon {
+        vault: String,
+        path: String,
+        #[arg(required_unless_present = "remove")]
+        icon: Option<String>,
+        #[arg(long, conflicts_with = "icon")]
+        remove: bool,
+    },
     /// Move a document or folder to the trash.
     Rm { vault: String, path: String },
     /// Inspect, restore or empty the trash.
@@ -326,6 +335,14 @@ pub enum VaultCmd {
         /// Accept a changed account key after verifying it out of band.
         #[arg(long)]
         accept_new_key: bool,
+    },
+    /// Give the vault an icon (an emoji, replacing a picture), or take it away with --remove.
+    Icon {
+        vault: String,
+        #[arg(required_unless_present = "remove")]
+        icon: Option<String>,
+        #[arg(long, conflicts_with = "icon")]
+        remove: bool,
     },
     /// Remove a member and rotate the vault key.
     Unshare { vault: String, user: String },

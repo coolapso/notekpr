@@ -83,9 +83,9 @@ Settled; don't reopen them without a new reason.
       watchdog `set_interval` (`web/src/ws.rs`).
 - [ ] **Quick-notes helpers in core**: naming, preview and default-vault
       choice exist twice (`web/src/quick.rs`, `client/src/ops.rs`).
-- [ ] **Icons in the CLI**: vault, note and folder icons show in the web app
-      only. `ls`/`vault list` could print them; the Markdown mirror has no
-      place for them unless we add front matter (decide first).
+- [ ] **Icons in the Markdown mirror**: the CLI sets and lists icons (`icon`,
+      `vault icon`), but the mirrored files carry none; they'd need front
+      matter (decide first — it would show in every other editor).
 
 ## Product track (hosted offering)
 

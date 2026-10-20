@@ -472,6 +472,8 @@ pub fn NoteView(vault: String, note: String) -> impl IntoView {
                             let (v2, n2) = (vm.clone(), nm.clone());
                             let (v3, n3) = (vm.clone(), nm.clone());
                             let (v4, n4) = (vm.clone(), nm.clone());
+                            let owner = state::step(|c| c.is_owner(&vm));
+                            let share = (vm.clone(), nm.clone());
                             view! {
                                 <div class="menu right" on:click=move |_| more.set(false)>
                                     <button on:click=move |_| {
@@ -487,6 +489,9 @@ pub fn NoteView(vault: String, note: String) -> impl IntoView {
                                         util::copy_to_clipboard(&format!("[[{t}]]"));
                                         state::success("Link copied — paste it into another note.");
                                     }><Icon name="link"/>" Copy link to note"</button>
+                                    {owner.then(|| view! {
+                                        <button on:click=move |_| ui.modal.set(Some(Modal::ShareNote(share.0.clone(), share.1.clone())))><Icon name="share"/>" Share…"</button>
+                                    })}
                                     <Show when=move || writable.get()>
                                         {
                                             let (v3, n3) = (v3.clone(), n3.clone());

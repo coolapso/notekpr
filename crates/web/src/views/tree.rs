@@ -353,8 +353,17 @@ fn RowMenu(
             {(kind == EntryKind::Note).then(|| {
                 let (v, id) = (v3.clone(), id1.clone().unwrap_or_default());
                 let fav = actions::is_favorite(&v, &id);
-                view! { <button on:click=move |_| { close(); actions::toggle_favorite(&v, &id); }>
-                    <Icon name="star"/>{if fav { " Remove from favorites" } else { " Add to favorites" }}</button> }
+                // Owners share single notes, as from the note's header.
+                let owner = state::step(|c| c.is_owner(&v));
+                let share = (v.clone(), id.clone());
+                view! {
+                    <button on:click=move |_| { close(); actions::toggle_favorite(&v, &id); }>
+                        <Icon name="star"/>{if fav { " Remove from favorites" } else { " Add to favorites" }}</button>
+                    {owner.then(|| view! {
+                        <button on:click=move |_| { close(); ui.modal.set(Some(Modal::ShareNote(share.0.clone(), share.1.clone()))); }>
+                            <Icon name="share"/>" Share…"</button>
+                    })}
+                }
             })}
             {(kind == EntryKind::Attachment).then(|| {
                 let (v, id) = (v4.clone(), id2.clone().unwrap_or_default());

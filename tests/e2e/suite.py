@@ -181,6 +181,17 @@ def test_collab(env):
         b.go(env.url.rstrip("/") + url)
         b.wait("return document.querySelector('.ed') && document.querySelector('.ed').textContent.includes('Thanks!')", 20, "ben sees the note")
         check(True, "shared note decrypts for the second user")
+        offers_share = "return Array.from(document.querySelectorAll(arguments[0] + ' button')).map(e => e.textContent).join('|')"
+        b.js("Array.from(document.querySelectorAll('.tree-row')).find(r => r.textContent.trim() === 'Groceries').querySelector('.tree-more').click()")
+        b.find(".tree-row .menu button", 5)
+        in_tree = b.js(offers_share, ".tree-row .menu")
+        b.chord(KEYS["escape"])
+        b.click(".note-head button[title='More']")
+        b.find(".note-head .menu button", 5)
+        in_note = b.js(offers_share, ".note-head .menu")
+        b.chord(KEYS["escape"])
+        check("favorites" in in_tree and "Download" in in_note and "Share" not in in_tree + in_note,
+              "only the owner is offered to share a note")
         vid = url.split('/')[2]
         log = api_get(b, f"/vaults/{vid}/log")
         check([e["body"]["kind"] for e in log["entries"]] == ["create", "require_signed", "add"],
@@ -517,9 +528,20 @@ def test_note_sharing(env):
         ch = api_get(a, f"/vaults/{vid}/objects/{nid}/changes?since=0")
         check(ch["updates"] and all(payload_epoch(a, u["payload"]) >= DOC_EPOCH_1 for u in ch["updates"]),
               "none of its content is under the vault key")
-        # Share just this note with Pete.
+        # Share just this note with Pete: from the header, the note's "More"
+        # menu or its "…" in the tree.
         a.click(".note-head button[title='Share this note']")
         a.find_text(".modal h2", "Trip", 10)
+        a.chord(KEYS["escape"])
+        a.click(".note-head button[title='More']")
+        a.click_el(a.find_text(".note-head .menu button", "Share", 5))
+        a.find_text(".modal h2", "Trip", 10)
+        a.chord(KEYS["escape"])
+        row = "Array.from(document.querySelectorAll('.tree-row')).find(r => r.textContent.trim() === 'Trip')"
+        a.js(row + ".querySelector('.tree-more').click()")
+        a.click_el(a.find_text(".tree-row .menu button", "Share", 5))
+        a.find_text(".modal h2", "Trip", 10)
+        check(True, "the header, the note's More menu and its menu in the tree all open sharing")
         a.type(".share-add input", bn)
         a.find(".found .person", 10)
         a.click(".found .person .btn.primary")

@@ -98,6 +98,7 @@ rustup is not required. `task setup` checks everything.
 
 ```sh
 task dev                         # build + run a dev-mode server on http://localhost:8080
+task demo                        # a dev-mode server with demo users, vaults and shared notes (:8090)
 task web:watch                   # rebuild the web client on change (then reload the browser)
 task cli -- --profile alice ls Family   # run the CLI;  task cli:login DEV_USER=alice
 task fmt / task lint             # rustfmt; clippy with warnings as errors

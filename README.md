@@ -113,7 +113,8 @@ read anything.
 * Backups, upgrades, Prometheus metrics and an admin page; size limits for
   changes, snapshots and attachments.
 * A development mode where anyone can sign in as anyone (one session per
-  browser tab) to try sharing and collaboration in one browser.
+  browser tab) to try sharing and collaboration in one browser, and a demo
+  with users, shared vaults and notes ready to explore (`task demo`).
 * No npm and no third-party JavaScript: the browser client is Rust compiled to
   WebAssembly.
 
@@ -139,7 +140,14 @@ cargo build -p coolpsonotes-server
 
 Open <http://localhost:8080>, sign in as `alice`, then open another tab and
 sign in as `bob` — every tab keeps its own session, so you can test sharing and
-live collaboration between several users in one browser. Or with Docker:
+live collaboration between several users in one browser.
+
+To look around with data already there, `task demo` starts a separate demo
+server on <http://localhost:8090>: four users with their own and shared
+vaults, notes shared on their own, and a vault of linked notes to see the
+graph ([details](docs/development.md#a-demo-with-data)).
+
+Or with Docker:
 
 ```sh
 docker compose -f docker-compose.dev.yml up --build

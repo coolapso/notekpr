@@ -8,6 +8,9 @@ vars:
   LISTEN: 127.0.0.1:8080
   PUBLIC_URL: http://localhost:8080
   DATA_DIR: data
+  # `task demo`: its own server, database and CLI profiles, next to `task dev`.
+  DEMO_LISTEN: 127.0.0.1:8090
+  DEMO_DIR: data/demo
   BACKUP_DIR: backups
   # The web client is built in its own target directory so native and wasm
   # builds don't keep invalidating each other's dependencies.
@@ -139,6 +142,27 @@ tasks:
     prompt: "This deletes everything in {{.DATA_DIR}}/. Continue?"
     cmds:
       - rm -rf {{.DATA_DIR}}
+
+  demo:
+    desc: "Run a demo on http://localhost:8090 — users, shared vaults and notes, a linked vault for the graph (created on the first run)"
+    deps: [build:server, build:cli, build:web:dev]
+    cmds:
+      - python3 -u scripts/demo.py --listen {{.DEMO_LISTEN}} --data {{.DEMO_DIR}} {{.CLI_ARGS}}
+
+  demo:reset:
+    desc: Delete the demo's data (the next `task demo` creates it again)
+    prompt: "This deletes everything in {{.DEMO_DIR}}/. Continue?"
+    cmds:
+      - rm -rf {{.DEMO_DIR}}
+
+  demo:cli:
+    desc: "Run the CLI as a demo user, e.g. `task demo:cli -- --profile bob vault list`"
+    deps: [rust]
+    env:
+      COOLPSONOTES_CONFIG_DIR: "{{.ROOT_DIR}}/{{.DEMO_DIR}}/cli/config"
+      COOLPSONOTES_DATA_DIR: "{{.ROOT_DIR}}/{{.DEMO_DIR}}/cli/data"
+    cmds:
+      - cargo run -q -p coolpsonotes-client -- {{.CLI_ARGS}}
 
   cli:
     desc: "Run the CLI, e.g. `task cli -- --profile alice status`"

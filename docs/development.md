@@ -48,6 +48,7 @@ commands below; `task` lists them all.
 ```sh
 task setup                    # check the toolchain and say what's missing
 task dev                      # dev server on http://localhost:8080 (no OIDC), data in ./data
+task demo                     # a demo with users, vaults and shared notes on http://localhost:8090
 task web:watch                # in a 2nd terminal: rebuild the web client on change, then reload the browser
 task cli:login DEV_USER=bob   # sign the CLI in as a test user (profile "bob")
 task cli -- --profile bob ls Family   # run any CLI command
@@ -58,6 +59,39 @@ task lint                     # clippy, warnings are errors
 task ci                       # what CI runs
 task dev:reset                # wipe the dev database
 ```
+
+## A demo with data
+
+```sh
+task demo          # builds, creates the data on the first run, serves http://localhost:8090
+task demo:reset    # start over
+task demo:cli -- --profile bob vault list   # the CLI as one of the demo users
+```
+
+[`scripts/demo.py`](../scripts/demo.py) (Python standard library) starts a
+development-mode server with its own database and CLI profiles in
+`data/demo/` (apart from `task dev`'s, so both can run; `task dev:reset`
+deletes both) and fills it through the real CLI, so everything is encrypted
+like any other data:
+
+| User | Owns | Shared with them |
+|---|---|---|
+| alice | *Home* (~35 linked notes for the graph, pictures, quick notes, history, a note in the trash), *Work*, *Family*, *Assistant* (with an agent), *Old projects* (archived) | *Book club*; Bob's *Training plan* and Carol's *Logo ideas* as single notes |
+| bob | *Book club*, *Running* | *Family* (editor) |
+| carol | *Design* | *Family* (viewer), *Book club*; Alice's *Apple pie* and *Design brief* as single notes |
+| dave | — | *Work* (editor) |
+
+Icons, tables, tasks, code, footnotes, heading links, a link to a missing
+note and edits by several people are all in there; *Start here* in alice's
+*Home* lists things to try.
+
+Sign in as one of them (one per tab). A browser is a new device of its user:
+choose **Approve from another device** and the running demo approves it
+within a couple of seconds (`--no-approve` turns that off; the recovery keys
+are in `data/demo/recovery-keys.txt`). The server's log goes to
+`data/demo/server.log`. The script refuses to seed a server that isn't in
+development mode. To change the content, edit the script and
+`task demo:reset`.
 
 ## Run locally with several users (no OIDC)
 

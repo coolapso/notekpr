@@ -25,7 +25,7 @@ pub(super) async fn refresh_shares_with(announce: bool) {
         }
     };
     // Notes of vaults we are a member of are reachable through the vault.
-    let list: Vec<SharedNote> = with(|c| {
+    let list: Vec<SharedNote> = step(|c| {
         list.into_iter()
             .filter(|s| !c.replicas.get(&s.vault_id).is_some_and(|r| r.member))
             .collect()
@@ -35,7 +35,7 @@ pub(super) async fn refresh_shares_with(announce: bool) {
         .map(|s| (s.vault_id.clone(), s.object_id.clone()))
         .collect();
     crate::cache::prune_shares(&keep);
-    let removed: Vec<(String, String)> = with(|c| {
+    let removed: Vec<(String, String)> = step(|c| {
         c.shares
             .keys()
             .filter(|k| !keep.contains(*k))
@@ -45,13 +45,13 @@ pub(super) async fn refresh_shares_with(announce: bool) {
     for (v, o) in removed {
         drop_share(&v, &o);
     }
-    let before: BTreeSet<(String, String)> = with(|c| c.shares.keys().cloned().collect());
+    let before: BTreeSet<(String, String)> = step(|c| c.shares.keys().cloned().collect());
     for info in list {
         load_share(info).await;
     }
     publish_shares();
     if announce {
-        let new: Vec<(String, String)> = with(|c| {
+        let new: Vec<(String, String)> = step(|c| {
             c.shares
                 .iter()
                 .filter(|(k, s)| !before.contains(*k) && s.error.is_none())
@@ -68,14 +68,14 @@ pub(super) async fn refresh_shares_with(announce: bool) {
 
 pub(super) async fn load_share(info: SharedNote) {
     let key = (info.vault_id.clone(), info.object_id.clone());
-    let current = with(|c| {
+    let current = step(|c| {
         c.shares
             .get(&key)
             .map(|s| s.error.is_none() && s.info.key_epoch == info.key_epoch)
     });
     if current == Some(true) {
         // Same key: only the title or role may have changed.
-        with(|c| {
+        step(|c| {
             let title = c
                 .replicas
                 .get(&key.0)
@@ -96,9 +96,9 @@ pub(super) async fn load_share(info: SharedNote) {
         return;
     }
     // Not subscribed yet: new, or its key could not be loaded before.
-    let unsubscribed = with(|c| c.shares.get(&key).is_none_or(|s| s.error.is_some()));
+    let unsubscribed = step(|c| c.shares.get(&key).is_none_or(|s| s.error.is_some()));
     if current.is_none() {
-        with(|c| {
+        step(|c| {
             c.shares.insert(
                 key.clone(),
                 ShareState {
@@ -113,12 +113,12 @@ pub(super) async fn load_share(info: SharedNote) {
         });
     }
     reload_share_keys(&key.0, &key.1).await;
-    if unsubscribed && with(|c| c.shares.get(&key).is_some_and(|s| s.error.is_none())) {
+    if unsubscribed && step(|c| c.shares.get(&key).is_some_and(|s| s.error.is_none())) {
         // This browser's copy first: shown right away, then caught up from.
         if current.is_none() {
-            let uid = with(|c| c.user_id.clone());
+            let uid = step(|c| c.user_id.clone());
             if let Some(seq) = crate::cache::restore_share(&uid, &key.0, &key.1).await {
-                with(|c| {
+                step(|c| {
                     if let Some(s) = c.shares.get_mut(&key) {
                         s.seq = s.seq.max(seq);
                         s.loaded = true;
@@ -141,11 +141,11 @@ pub async fn reload_share_keys(vault: &str, note: &str) {
     }
     loop {
         reload_share_keys_once(vault, note).await;
-        if !with(|c| c.reload_again.remove(&tag)) {
+        if !step(|c| c.reload_again.remove(&tag)) {
             break;
         }
     }
-    with(|c| c.reloading.remove(&tag));
+    step(|c| c.reloading.remove(&tag));
 }
 
 pub(super) async fn reload_share_keys_once(vault: &str, note: &str) {
@@ -159,7 +159,7 @@ pub(super) async fn reload_share_keys_once(vault: &str, note: &str) {
             return;
         }
         Err(e) => {
-            with(|c| {
+            step(|c| {
                 if let Some(s) = c.shares.get_mut(&key) {
                     s.error = Some(e.message.clone());
                 }
@@ -169,7 +169,7 @@ pub(super) async fn reload_share_keys_once(vault: &str, note: &str) {
         }
     };
     // Only a key the note's owner (as pinned) signed giving us.
-    let (ring, pinned) = with(|c| {
+    let (ring, pinned) = step(|c| {
         let Some(owner) = c.shares.get(&key).map(|s| s.info.owner.clone()) else {
             return (None, false);
         };
@@ -197,7 +197,7 @@ pub(super) async fn reload_share_keys_once(vault: &str, note: &str) {
     let ring = match ring {
         Some(Ok(r)) => r,
         Some(Err(e)) => {
-            with(|c| {
+            step(|c| {
                 if let Some(s) = c.shares.get_mut(&key) {
                     s.error = Some(e.to_string());
                 }
@@ -207,7 +207,7 @@ pub(super) async fn reload_share_keys_once(vault: &str, note: &str) {
         }
         None => return,
     };
-    let applied = with(|c| {
+    let applied = step(|c| {
         let title = keys
             .encrypted_meta
             .as_ref()
@@ -247,7 +247,7 @@ pub(super) async fn reload_share_keys_once(vault: &str, note: &str) {
 
 pub(super) fn drop_share(vault: &str, note: &str) {
     let key = (vault.to_string(), note.to_string());
-    let Some(_) = with(|c| c.shares.remove(&key)) else {
+    let Some(_) = step(|c| c.shares.remove(&key)) else {
         return;
     };
     crate::cache::forget_share(vault, note);
@@ -255,7 +255,7 @@ pub(super) fn drop_share(vault: &str, note: &str) {
         vault_id: vault.to_string(),
         object_id: Some(note.to_string()),
     });
-    with(|c| {
+    step(|c| {
         let last = !c.shares.keys().any(|(v, _)| v == vault);
         if let Some(r) = c.replicas.get_mut(vault).filter(|r| !r.member) {
             r.doc_keys.remove(note);
@@ -277,7 +277,7 @@ pub(super) fn drop_share(vault: &str, note: &str) {
 }
 
 pub fn publish_shares() {
-    let mut views: Vec<SharedView> = with(|c| {
+    let mut views: Vec<SharedView> = step(|c| {
         c.shares
             .iter()
             .map(|((v, n), s)| SharedView {
@@ -300,7 +300,7 @@ pub fn publish_shares() {
 }
 
 pub(super) fn subscribe_share(vault: &str, note: &str) {
-    let since = with(|c| {
+    let since = step(|c| {
         c.shares
             .get(&(vault.to_string(), note.to_string()))
             .map(|s| s.seq)
@@ -315,7 +315,7 @@ pub(super) fn subscribe_share(vault: &str, note: &str) {
 }
 
 pub(super) fn on_share_synced(vault: &str, note: &str, head: i64) {
-    let first = with(|c| {
+    let first = step(|c| {
         let Some(s) = c.shares.get_mut(&(vault.to_string(), note.to_string())) else {
             return false;
         };
@@ -328,7 +328,7 @@ pub(super) fn on_share_synced(vault: &str, note: &str, head: i64) {
     if first {
         publish_shares();
         // Unsent changes from an earlier visit, once every shared note of this vault is loaded.
-        let restore = with(|c| {
+        let restore = step(|c| {
             c.shares
                 .iter()
                 .filter(|((v, _), _)| v == vault)
@@ -343,7 +343,7 @@ pub(super) fn on_share_synced(vault: &str, note: &str, head: i64) {
             send_presence();
         }
         // Keep this browser's copy current.
-        with(|c| {
+        step(|c| {
             c.cache.mark(vault, note);
         });
         crate::cache::schedule();
@@ -353,12 +353,12 @@ pub(super) fn on_share_synced(vault: &str, note: &str, head: i64) {
 
 /// Whether we reach this vault as a member (not only through shared notes).
 pub fn is_member(vault: &str) -> bool {
-    with(|c| c.replicas.get(vault).is_some_and(|r| r.member))
+    step(|c| c.replicas.get(vault).is_some_and(|r| r.member))
 }
 
 /// Whether a note of a vault we are a member of has its own key (is shared individually).
 pub fn is_shared_note(vault: &str, note: &str) -> bool {
-    with(|c| {
+    step(|c| {
         c.replicas
             .get(vault)
             .is_some_and(|r| r.member && r.is_shared_object(note))
@@ -367,7 +367,7 @@ pub fn is_shared_note(vault: &str, note: &str) -> bool {
 
 /// Whether we may edit a note (vault role, or the role of its individual share).
 pub fn can_write_note(vault: &str, note: &str) -> bool {
-    with(|c| match c.replicas.get(vault) {
+    step(|c| match c.replicas.get(vault) {
         Some(r) if r.member => r.can_write(),
         _ => c
             .shares
@@ -381,7 +381,7 @@ pub(super) fn keys_missing(vault: &str) {
     if is_member(vault) {
         leptos::task::spawn_local(reload_vault_keys(vault.to_string()));
     } else {
-        let notes: Vec<String> = with(|c| {
+        let notes: Vec<String> = step(|c| {
             c.shares
                 .keys()
                 .filter(|(v, _)| v == vault)
@@ -401,7 +401,7 @@ pub(super) fn keys_missing(vault: &str) {
 /// Reload one note's keys (it got or rotated its own key), or the whole
 /// vault's from servers that can't hand out one note's keys to members.
 async fn reload_note_keys(vault: String, note: String) {
-    let Some(ring) = with(|c| c.replicas.get(&vault).map(|r| r.keyring.clone())) else {
+    let Some(ring) = step(|c| c.replicas.get(&vault).map(|r| r.keyring.clone())) else {
         return;
     };
     let r = match api::get::<ObjectKeysResponse>(&format!("/vaults/{vault}/objects/{note}/keys"))
@@ -415,7 +415,7 @@ async fn reload_note_keys(vault: String, note: String) {
         return reload_vault_keys(vault).await;
     };
     let shared = r.shared.unwrap_or(false);
-    let res = with(|c| {
+    let res = step(|c| {
         let rep = c.replicas.get_mut(&vault)?;
         let changed = rep.doc_keys.get(&note).map(|k| k.current_epoch())
             != Some(doc.current_epoch())
@@ -467,7 +467,7 @@ pub(super) fn on_object_event(vault: String, note: String, event: ObjectEventKin
             leptos::task::spawn_local(refresh_shares())
         }
         ObjectEventKind::AccessRevoked | ObjectEventKind::Deleted => {
-            let title = with(|c| {
+            let title = step(|c| {
                 c.shares
                     .get(&(vault.clone(), note.clone()))
                     .map(|s| s.title.clone())

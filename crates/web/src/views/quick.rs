@@ -5,7 +5,7 @@ use leptos::html;
 use leptos::prelude::*;
 
 use crate::quick::{self, QuickNote};
-use crate::state::{self, Modal, Route, ui, with};
+use crate::state::{self, Modal, Route, step, ui};
 use crate::util;
 use crate::views::SyncStatus;
 use crate::views::dialogs::Dialog;
@@ -203,7 +203,7 @@ fn QuickCard(q: QuickNote) -> impl IntoView {
 #[component]
 pub fn PromoteDialog(vault: String, id: String) -> impl IntoView {
     let ui = ui();
-    let text = with(|c| c.replicas.get(&vault).map(|r| r.note_text(&id))).unwrap_or_default();
+    let text = step(|c| c.replicas.get(&vault).map(|r| r.note_text(&id))).unwrap_or_default();
     let suggested = quick::promote_title(&text);
     let name = RwSignal::new(if suggested.is_empty() {
         state::entry(&vault, &id)
@@ -213,7 +213,7 @@ pub fn PromoteDialog(vault: String, id: String) -> impl IntoView {
         suggested
     });
     let folder = RwSignal::new(String::new());
-    let folders: Vec<String> = with(|c| c.replicas.get(&vault).map(|r| r.index.folders()))
+    let folders: Vec<String> = step(|c| c.replicas.get(&vault).map(|r| r.index.folders()))
         .unwrap_or_default()
         .into_iter()
         .filter(|f| f != quick::FOLDER && !coolpsonotes_core::paths::is_within(f, quick::FOLDER))

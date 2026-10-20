@@ -40,7 +40,7 @@ pub async fn boot() {
         let ui = self::ui();
         if ui.phase.get_untracked() != (Phase::SignedOut { error: None }) {
             // The stored offline data holds this dead session's token.
-            offline::signed_out(&with(|c| c.user_id.clone()));
+            offline::signed_out(&step(|c| c.user_id.clone()));
             sign_out_local(Some("Your session ended. Please sign in again.".into()));
         }
     });
@@ -172,7 +172,7 @@ pub async fn after_login() {
     ui.user.set(Some(me.user.clone()));
     let uid = me.user.id.clone();
     let has_key = me.account_key.is_some();
-    with(|c| {
+    step(|c| {
         c.user_id = uid.clone();
         c.me = Some(me.clone());
     });
@@ -233,7 +233,7 @@ pub(super) async fn unconfirmed_recovery_key(uid: &str) -> Option<String> {
     let key = storage::pending_recovery(uid)?;
     let rk = RecoveryKey::parse(&key).ok();
     let env = api::get::<RecoveryEnvelope>("/me/recovery").await.ok()?;
-    let mine = with(|c| c.account.as_ref().map(|a| a.public()))?;
+    let mine = step(|c| c.account.as_ref().map(|a| a.public()))?;
     let opens = rk
         .and_then(|rk| rk.unwrap_account(&env.recovery_envelope, uid).ok())
         .is_some_and(|a| a.public() == mine);
@@ -256,7 +256,7 @@ pub(super) const WRONG_ACCOUNT: &str = "The server sent this browser keys of a d
 
 /// The account key the server publishes for us, checked.
 pub(super) fn published_account(uid: &str) -> Option<AccountPublic> {
-    with(|c| {
+    step(|c| {
         let key = c.me.as_ref()?.account_key.as_ref()?;
         engine::published_account(uid, key).ok()
     })
@@ -289,7 +289,7 @@ pub(super) fn unlock_with_device(uid: &str, rec: &DeviceRecord, envelope: &[u8])
         b.device_id = rec.device_id.clone();
         b.envelope = envelope.to_vec();
     });
-    with(|c| {
+    step(|c| {
         c.account = Some(acct);
         c.device_id = Some(rec.device_id.clone());
     });
@@ -376,8 +376,8 @@ pub(super) fn poll_approval(uid: String, rec: DeviceRecord) {
 /// First device: generate keys, show the recovery key.
 pub async fn setup_keys() {
     let ui = ui();
-    let uid = with(|c| c.user_id.clone());
-    let boot = match with(|c| c.setup.take()) {
+    let uid = step(|c| c.user_id.clone());
+    let boot = match step(|c| c.setup.take()) {
         // A previous attempt whose upload failed: send the same keys again.
         Some(b) => b,
         None => {
@@ -430,13 +430,13 @@ pub async fn setup_keys() {
         };
         if !stored {
             // Not stored, or we can't tell: retrying sends the same keys.
-            with(|c| c.setup = Some(boot));
+            step(|c| c.setup = Some(boot));
             error(format!("Could not save your keys: {e}"));
             return;
         }
     }
     let key = boot.recovery.to_display();
-    with(|c| {
+    step(|c| {
         c.account = Some(boot.account);
         c.device_id = Some(boot.device_id);
     });
@@ -445,9 +445,9 @@ pub async fn setup_keys() {
 
 /// After the recovery key was saved: create a first vault with a welcome note.
 pub async fn finish_setup() {
-    storage::clear_pending_recovery(&with(|c| c.user_id.clone()));
+    storage::clear_pending_recovery(&step(|c| c.user_id.clone()));
     enter_ready().await;
-    if with(|c| c.replicas.is_empty())
+    if step(|c| c.replicas.is_empty())
         && let Some(v) = crate::actions::create_vault("My notes".into()).await
     {
         let id = crate::actions::create_note_with(&v, "", "Welcome", WELCOME).await;
@@ -462,7 +462,7 @@ pub(super) const WELCOME: &str = "# Welcome to coolpsonotes 👋\n\nThis is your
 /// Register this browser as a new (pending) device and wait for approval.
 pub async fn request_approval() {
     let ui = ui();
-    let uid = with(|c| c.user_id.clone());
+    let uid = step(|c| c.user_id.clone());
     let (dev, reg) = engine::new_device(&device_name());
     if let Err(e) = api::post::<_, ()>("/devices", &reg).await {
         ui.phase.set(Phase::Enroll {
@@ -493,7 +493,7 @@ pub async fn recover(input: String) {
         fail("That doesn't look like a valid recovery key. Check for typos.".into());
         return;
     };
-    let uid = with(|c| c.user_id.clone());
+    let uid = step(|c| c.user_id.clone());
     let env: RecoveryEnvelope = match api::get("/me/recovery").await {
         Ok(e) => e,
         Err(e) => return fail(e.message),
@@ -534,7 +534,7 @@ pub async fn recover(input: String) {
     {
         return fail(e.message);
     }
-    with(|c| {
+    step(|c| {
         c.account = Some(account);
         c.device_id = Some(rec.device_id.clone());
     });
@@ -548,7 +548,7 @@ pub fn sign_out_local(error: Option<String>) {
     flush_now();
     storage::clear_token();
     api::set_token(None);
-    let (sock, urls) = with(|c| {
+    let (sock, urls) = step(|c| {
         let s = c.socket.take();
         let urls = take_attachment_urls(c, None);
         *c = Core::default();
@@ -570,7 +570,7 @@ pub fn sign_out_local(error: Option<String>) {
 pub async fn sign_out() {
     flush_now();
     let _ = api::post_empty::<()>("/auth/logout").await;
-    let uid = with(|c| c.user_id.clone());
+    let uid = step(|c| c.user_id.clone());
     offline::signed_out(&uid);
     sign_out_local(None);
 }
@@ -580,7 +580,7 @@ pub async fn sign_out() {
 /// Signing in here again needs approval from another device or the recovery key.
 pub async fn forget_browser() {
     flush_now();
-    let unsent = with(|c| c.pending_count());
+    let unsent = step(|c| c.pending_count());
     let warn = if unsent > 0 {
         format!(
             " {unsent} note{} with changes that are not synced yet will lose them.",
@@ -608,7 +608,7 @@ pub async fn forget_browser() {
     )) {
         return;
     }
-    let (uid, device) = with(|c| (c.user_id.clone(), c.device_id.clone()));
+    let (uid, device) = step(|c| (c.user_id.clone(), c.device_id.clone()));
     // Removing the device also ends its sessions, this one included.
     let removed = match &device {
         Some(d) => match api::delete(&format!("/devices/{d}")).await {
@@ -636,7 +636,7 @@ pub async fn forget_browser() {
 
 pub(super) async fn enter_ready() {
     let ui = ui();
-    let device_id = with(|c| c.device_id.clone());
+    let device_id = step(|c| c.device_id.clone());
     if let Some(d) = device_id {
         let _ = api::put::<_, ()>("/me/session/device", &BindDeviceRequest { device_id: d }).await;
     }
@@ -656,14 +656,14 @@ pub(super) fn go_to_last_location() {
     if !matches!(ui.route.get_untracked(), Route::Home) {
         return;
     }
-    let uid = with(|c| c.user_id.clone());
+    let uid = step(|c| c.user_id.clone());
     if let Some(last) = storage::last_location(&uid) {
         let r = Route::parse(&last, "");
         let known = match &r {
-            Route::Shared(v, n) => with(|c| c.shares.contains_key(&(v.clone(), n.clone()))),
+            Route::Shared(v, n) => step(|c| c.shares.contains_key(&(v.clone(), n.clone()))),
             _ => r
                 .vault()
-                .is_some_and(|v| with(|c| c.replicas.get(v).is_some_and(|x| x.member))),
+                .is_some_and(|v| step(|c| c.replicas.get(v).is_some_and(|x| x.member))),
         };
         if known {
             navigate_replace(r);

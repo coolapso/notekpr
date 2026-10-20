@@ -3,7 +3,7 @@
 use leptos::prelude::*;
 
 use crate::knowledge;
-use crate::state::{self, Modal, Route, ui, with};
+use crate::state::{self, Modal, Route, step, ui};
 use crate::views::icons::Icon;
 
 #[component]
@@ -13,7 +13,7 @@ pub fn RightPanel(vault: String, note: String) -> impl IntoView {
         let (v, n) = (vault.clone(), note.clone());
         move || {
             ui.content_rev.get();
-            with(|c| c.replicas.get(&v).map(|r| r.note_text(&n))).unwrap_or_default()
+            step(|c| c.replicas.get(&v).map(|r| r.note_text(&n))).unwrap_or_default()
         }
     };
     let path = {
@@ -107,7 +107,7 @@ pub fn RightPanel(vault: String, note: String) -> impl IntoView {
                         view! {
                             <button class="panel-item outline" style=format!("padding-left:{}px", 6 + (lvl as usize - 1) * 12)
                                 on:click=move |_| {
-                                    if let Some(ed) = with(|c| c.editor.as_ref().map(|(_, _, e)| e.clone())) {
+                                    if let Some(ed) = step(|c| c.editor.as_ref().map(|(_, _, e)| e.clone())) {
                                         ed.focus();
                                         ed.set_selection(off, off);
                                     }

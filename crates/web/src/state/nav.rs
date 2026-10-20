@@ -22,12 +22,12 @@ pub(super) fn push_route(route: Route, replace: bool) {
             h.push_state_with_url(&wasm_bindgen::JsValue::NULL, "", Some(&path))
         };
     }
-    let uid = with(|c| c.user_id.clone());
+    let uid = step(|c| c.user_id.clone());
     if (route.vault().is_some() || route.shared().is_some()) && !uid.is_empty() {
         storage::set_last_location(&uid, &path);
     }
     if let Route::Note(v, n) = &route {
-        with(|c| {
+        step(|c| {
             let r = (v.clone(), n.clone());
             c.prefs.recent.retain(|x| x != &r);
             c.prefs.recent.insert(0, r);
@@ -56,8 +56,8 @@ pub fn listen_popstate() {
     cb.forget();
     let cb = wasm_bindgen::closure::Closure::wrap(Box::new(|e: web_sys::Event| {
         flush_now();
-        if with(|c| c.pending_count()) > 0
-            && with(|c| c.socket.as_ref().is_some_and(|s| !s.is_ready()))
+        if step(|c| c.pending_count()) > 0
+            && step(|c| c.socket.as_ref().is_some_and(|s| !s.is_ready()))
         {
             // Unsent changes are kept in local storage; warn anyway.
             e.prevent_default();

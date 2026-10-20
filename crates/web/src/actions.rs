@@ -17,7 +17,7 @@ use wasm_bindgen::JsCast;
 
 use crate::editor::syntax::Target;
 use crate::editor::{self, Host};
-use crate::state::{self, Route, error, info, local_update, navigate, success, with};
+use crate::state::{self, Route, error, info, local_update, navigate, step, success};
 use crate::{api, knowledge, render, util, zipfile};
 
 fn now() -> i64 {
@@ -31,7 +31,7 @@ pub async fn create_vault(name: String) -> Option<String> {
     if name.is_empty() {
         return None;
     }
-    let made = with(|c| {
+    let made = step(|c| {
         c.account
             .as_ref()
             .map(|a| engine::new_vault(a, &c.user_id, &VaultMeta::named(&name), now()))
@@ -52,7 +52,7 @@ pub async fn create_vault(name: String) -> Option<String> {
         }
     };
     let id = info.id.clone();
-    let log = with(|c| {
+    let log = step(|c| {
         let a = c.account.as_ref()?.public();
         coolpsonotes_sync::members::MemberLog::verify(
             &id,
@@ -63,15 +63,15 @@ pub async fn create_vault(name: String) -> Option<String> {
         .ok()
     });
     if let Some(log) = log {
-        let uid = with(|c| c.user_id.clone());
+        let uid = step(|c| c.user_id.clone());
         crate::storage::set_log_seen(&uid, &id, log.head());
-        with(|c| c.member_logs.insert(id.clone(), log));
+        step(|c| c.member_logs.insert(id.clone(), log));
     }
     let note_keys = state::ui()
         .server
         .get_untracked()
         .is_some_and(|s| s.note_keys);
-    with(|c| {
+    step(|c| {
         let r = VaultReplica::new(&id, Role::Owner, ring, VaultMeta::named(&name));
         c.replicas.insert(id.clone(), r);
         c.outboxes.entry(id.clone()).or_default().note_keys = note_keys;
@@ -79,7 +79,7 @@ pub async fn create_vault(name: String) -> Option<String> {
         // A brand-new vault has nothing to catch up on.
         c.loaded.insert(id.clone());
     });
-    if let Some(s) = with(|c| c.socket.clone()) {
+    if let Some(s) = step(|c| c.socket.clone()) {
         s.send(&ClientMessage::Subscribe {
             vault_id: id.clone(),
             since: Some(0),
@@ -93,7 +93,7 @@ pub async fn create_vault(name: String) -> Option<String> {
 }
 
 pub async fn rename_vault(vault: &str, name: &str) {
-    let ct = with(|c| {
+    let ct = step(|c| {
         let r = c.replicas.get_mut(vault)?;
         r.meta.name = name.trim().to_string();
         r.meta.encrypt(&r.keyring).ok()
@@ -109,7 +109,7 @@ pub async fn rename_vault(vault: &str, name: &str) {
     .await
     {
         Ok(i) => {
-            with(|c| c.vault_infos.insert(vault.to_string(), i));
+            step(|c| c.vault_infos.insert(vault.to_string(), i));
             state::publish_vaults();
         }
         Err(e) => error(format!("Rename failed: {e}")),
@@ -127,7 +127,7 @@ pub async fn set_archived(vault: &str, archived: bool) {
     .await
     {
         Ok(i) => {
-            with(|c| c.vault_infos.insert(vault.to_string(), i));
+            step(|c| c.vault_infos.insert(vault.to_string(), i));
             state::publish_vaults();
         }
         Err(e) => error(e.message),
@@ -137,7 +137,7 @@ pub async fn set_archived(vault: &str, archived: bool) {
 pub async fn delete_vault(vault: &str) {
     match api::delete(&format!("/vaults/{vault}")).await {
         Ok(()) => {
-            with(|c| {
+            step(|c| {
                 c.replicas.remove(vault);
                 c.vault_infos.remove(vault);
             });
@@ -150,7 +150,7 @@ pub async fn delete_vault(vault: &str) {
 }
 
 pub async fn leave_vault(vault: &str) {
-    let uid = with(|c| c.user_id.clone());
+    let uid = step(|c| c.user_id.clone());
     let log_entry = state::log_entry(
         vault,
         LogBody::Leave {
@@ -164,7 +164,7 @@ pub async fn leave_vault(vault: &str) {
     .await
     {
         Ok(()) => {
-            with(|c| {
+            step(|c| {
                 c.replicas.remove(vault);
                 c.vault_infos.remove(vault);
             });
@@ -187,7 +187,7 @@ pub fn fingerprint(user: &PublicUser) -> Option<String> {
 
 pub fn pin_status(user: &PublicUser) -> Option<PinStatus> {
     let fp = fingerprint(user)?;
-    Some(with(|c| match c.prefs.pins.get(&user.id) {
+    Some(step(|c| match c.prefs.pins.get(&user.id) {
         None => PinStatus::New,
         Some(p) if *p == fp => PinStatus::Match,
         Some(_) => PinStatus::Changed,
@@ -197,7 +197,7 @@ pub fn pin_status(user: &PublicUser) -> Option<PinStatus> {
 /// Explicitly accept a (changed) key after verifying it out of band.
 pub fn trust_key(user: &PublicUser) {
     if let Some(fp) = fingerprint(user) {
-        with(|c| c.prefs.pins.insert(user.id.clone(), fp));
+        step(|c| c.prefs.pins.insert(user.id.clone(), fp));
         state::save_prefs();
     }
 }
@@ -206,7 +206,7 @@ fn check_trust(user: &PublicUser) -> Result<(), String> {
     let Some(fp) = fingerprint(user) else {
         return Ok(());
     };
-    let st = with(|c| engine::check_pin(&mut c.prefs.pins, &user.id, &fp));
+    let st = step(|c| engine::check_pin(&mut c.prefs.pins, &user.id, &fp));
     match st {
         PinStatus::Changed => Err(format!(
             "The encryption key of {} changed since you last shared with them. This can happen if they reset their account — or if someone is intercepting. Compare fingerprints with them before continuing.",
@@ -223,7 +223,7 @@ fn check_trust(user: &PublicUser) -> Result<(), String> {
 pub async fn share(vault: &str, user: &PublicUser, role: Role) -> Result<(), String> {
     let envelope = if user.account_key.is_some() {
         check_trust(user)?;
-        let env = with(|c| {
+        let env = step(|c| {
             c.replicas
                 .get(vault)
                 .map(|r| engine::share_envelope(&r.keyring, user))
@@ -255,7 +255,7 @@ pub async fn share(vault: &str, user: &PublicUser, role: Role) -> Result<(), Str
     .await
     .map_err(|e| e.message)?;
     state::reload_log(vault).await;
-    with(|c| c.users.insert(user.id.clone(), user.clone()));
+    step(|c| c.users.insert(user.id.clone(), user.clone()));
     if pending {
         info(format!(
             "{} will get access after their first sign-in.",
@@ -342,7 +342,7 @@ pub async fn rotate_keys(vault: &str) -> bool {
         }
         // Removed members knew every note's key too: they all move on, and
         // shared notes' new keys go to their current recipients.
-        let (keyed, shared) = with(|c| {
+        let (keyed, shared) = step(|c| {
             let Some(r) = c.replicas.get(vault) else {
                 return (vec![], BTreeSet::new());
             };
@@ -378,7 +378,7 @@ pub async fn rotate_keys(vault: &str) -> bool {
             }
             recipients.insert(n.clone(), users);
         }
-        let prepared = with(|c| {
+        let prepared = step(|c| {
             let r = c.replicas.get(vault)?;
             let notes: Vec<_> = keyed
                 .iter()
@@ -407,7 +407,7 @@ pub async fn rotate_keys(vault: &str) -> bool {
                 req.log_entry = coolpsonotes_sync::members::rotation(vault, &ring)
                     .and_then(|body| state::log_entry(vault, body));
                 // Every note's new key for the people it is shared with.
-                with(|c| {
+                step(|c| {
                     if let Some(a) = &c.account {
                         for o in &mut req.objects {
                             if let Some(next) = rings.get(&o.object_id) {
@@ -435,7 +435,7 @@ pub async fn rotate_keys(vault: &str) -> bool {
         };
         match api::post::<_, ()>(&format!("/vaults/{vault}/keys/rotate"), &req).await {
             Ok(()) => {
-                with(|c| {
+                step(|c| {
                     let Some(r) = c.replicas.get_mut(vault) else {
                         return;
                     };
@@ -496,7 +496,7 @@ pub async fn grant_missing_keys(vault: &str) {
         .into_iter()
         .filter(|m| state::vouched(vault, m))
         .collect();
-    let env = with(|c| {
+    let env = step(|c| {
         c.replicas
             .get(vault)
             .map(|r| engine::missing_grants(&r.keyring, &trusted))
@@ -534,7 +534,7 @@ pub async fn share_note(
     }
     check_trust(user)?;
     ensure_note_key(vault, note).await?;
-    let env = with(|c| {
+    let env = step(|c| {
         let ring = c.replicas.get(vault)?.doc_keys.get(note)?;
         let account = c.account.as_ref()?;
         // Signed by us, so they can tell the key is really ours.
@@ -584,7 +584,7 @@ pub async fn share_note(
         }
         Err(e) => return Err(e.message),
     }
-    with(|c| {
+    step(|c| {
         c.users.insert(user.id.clone(), user.clone());
         if let Some(r) = c.replicas.get_mut(vault) {
             r.shared.insert(note.to_string());
@@ -613,7 +613,7 @@ async fn ensure_note_key(vault: &str, note: &str) -> Result<(), String> {
         // note, including our own: send them and wait for the server.
         state::flush_now();
         for _ in 0..50 {
-            if !with(|c| {
+            if !step(|c| {
                 c.replicas
                     .get(vault)
                     .is_some_and(|r| r.pending.iter().any(|p| p.object_id == note))
@@ -622,7 +622,7 @@ async fn ensure_note_key(vault: &str, note: &str) -> Result<(), String> {
             }
             util::sleep(100).await;
         }
-        let made = with(|c| {
+        let made = step(|c| {
             let r = c.replicas.get(vault)?;
             let title = r
                 .index
@@ -645,14 +645,14 @@ async fn ensure_note_key(vault: &str, note: &str) -> Result<(), String> {
             Some(Err(e)) => return Err(e.to_string()),
             None => return Err("vault not loaded".into()),
         };
-        with(|c| {
+        step(|c| {
             if let Some(a) = &c.account {
                 coolpsonotes_sync::members::sign_key_update(a, vault, note, &mut req);
             }
         });
         match api::put::<_, ()>(&format!("/vaults/{vault}/objects/{note}/key"), &req).await {
             Ok(()) => {
-                with(|c| {
+                step(|c| {
                     if let Some(r) = c.replicas.get_mut(vault) {
                         r.doc_keys.insert(note.to_string(), ring);
                     }
@@ -713,7 +713,7 @@ pub async fn set_note_share_role(
     user_id: &str,
     role: Role,
 ) -> Result<(), String> {
-    let user = match with(|c| c.users.get(user_id).cloned()) {
+    let user = match step(|c| c.users.get(user_id).cloned()) {
         Some(u) => u,
         None => api::get::<PublicUser>(&format!("/users/{user_id}"))
             .await
@@ -745,7 +745,7 @@ pub async fn rotate_note_key(vault: &str, note: &str) -> Result<(), String> {
         for u in users.iter().filter(|u| u.account_key.is_some()) {
             check_trust(u)?;
         }
-        let made = with(|c| {
+        let made = step(|c| {
             let r = c.replicas.get(vault)?;
             let ring = r.doc_keys.get(note)?;
             let title = r
@@ -762,14 +762,14 @@ pub async fn rotate_note_key(vault: &str, note: &str) -> Result<(), String> {
             Some(Err(e)) => return Err(e.to_string()),
             None => return Ok(()),
         };
-        with(|c| {
+        step(|c| {
             if let Some(a) = &c.account {
                 coolpsonotes_sync::members::sign_grants(a, vault, note, &next, &mut req.envelopes);
             }
         });
         match api::put::<_, ()>(&format!("/vaults/{vault}/objects/{note}/key"), &req).await {
             Ok(()) => {
-                with(|c| {
+                step(|c| {
                     if let Some(r) = c.replicas.get_mut(vault) {
                         r.doc_keys.insert(note.to_string(), next);
                         if users.is_empty() {
@@ -793,7 +793,7 @@ pub async fn rotate_note_key(vault: &str, note: &str) -> Result<(), String> {
 /// Shared notes carry their title encrypted for their recipients.
 async fn update_note_meta(vault: String, note: String) {
     for _ in 0..2 {
-        let ct = with(|c| {
+        let ct = step(|c| {
             let r = c.replicas.get(&vault)?;
             let ring = r.doc_keys.get(&note)?;
             let title = r.index.get(&note)?.title().to_string();
@@ -814,7 +814,7 @@ async fn update_note_meta(vault: String, note: String) {
 
 /// Remove a note someone shared with us from our list.
 pub async fn leave_shared_note(vault: &str, note: &str) {
-    let uid = with(|c| c.user_id.clone());
+    let uid = step(|c| c.user_id.clone());
     match api::delete(&format!("/vaults/{vault}/objects/{note}/shares/{uid}")).await {
         Ok(()) | Err(api::Error { status: 404, .. }) => {
             state::navigate(Route::Home);
@@ -869,7 +869,7 @@ pub async fn create_note_with(
     let id = state::new_id();
     // Its own key, registered before any of its content is sent.
     state::new_note_key(vault, &id, paths::title(&path));
-    let up = with(|c| {
+    let up = step(|c| {
         c.replicas
             .get(vault)
             .and_then(|r| r.index.create(&id, &path, EntryKind::Note, now()))
@@ -903,7 +903,7 @@ pub fn create_folder(vault: &str, path: &str) {
     };
     let p = unique_path(vault, &p);
     let id = state::new_id();
-    let up = with(|c| {
+    let up = step(|c| {
         c.replicas
             .get(vault)
             .and_then(|r| r.index.create(&id, &p, EntryKind::Folder, now()))
@@ -939,7 +939,7 @@ pub fn rename_entry(vault: &str, id: &str, new_name: &str) -> Result<(), String>
         return Err("Something with that name already exists here.".into());
     }
     if e.kind == EntryKind::Folder {
-        let up = with(|c| {
+        let up = step(|c| {
             c.replicas
                 .get(vault)
                 .and_then(|r| r.index.rename_folder(&e.path, &new_path, now()))
@@ -950,7 +950,7 @@ pub fn rename_entry(vault: &str, id: &str, new_name: &str) -> Result<(), String>
     } else {
         let old_title = e.title().to_string();
         let old_path = e.path.clone();
-        let up = with(|c| {
+        let up = step(|c| {
             c.replicas
                 .get(vault)
                 .and_then(|r| r.index.rename(id, &new_path, now()))
@@ -1007,7 +1007,7 @@ fn update_links_after_rename(vault: &str, id: &str, old_path: &str, new_title: &
 }
 
 fn refresh_open_editor(vault: &str) {
-    let open = with(|c| {
+    let open = step(|c| {
         c.editor
             .as_ref()
             .map(|(v, n, e)| (v.clone(), n.clone(), e.clone()))
@@ -1015,7 +1015,7 @@ fn refresh_open_editor(vault: &str) {
     if let Some((v, n, ed)) = open
         && v == vault
     {
-        let t = with(|c| c.replicas.get(&v).map(|r| r.note_text(&n)));
+        let t = step(|c| c.replicas.get(&v).map(|r| r.note_text(&n)));
         if let Some(t) = t {
             ed.set_text(t, false);
         }
@@ -1030,7 +1030,7 @@ pub fn move_entry(vault: &str, id: &str, folder: &str) -> Result<(), String> {
         return Err("A folder can't be moved into itself.".into());
     }
     let target = unique_path(vault, &target);
-    let up = with(|c| {
+    let up = step(|c| {
         let r = c.replicas.get(vault)?;
         if e.kind == EntryKind::Folder {
             r.index.rename_folder(&e.path, &target, now())
@@ -1049,7 +1049,7 @@ pub fn move_entry(vault: &str, id: &str, folder: &str) -> Result<(), String> {
 pub fn rename_implicit_folder(vault: &str, old: &str, new_name: &str) -> Result<(), String> {
     let new_path =
         paths::normalize(&paths::join(paths::parent(old), new_name)).map_err(|e| e.to_string())?;
-    let up = with(|c| {
+    let up = step(|c| {
         c.replicas
             .get(vault)
             .and_then(|r| r.index.rename_folder(old, &new_path, now()))
@@ -1062,7 +1062,7 @@ pub fn rename_implicit_folder(vault: &str, old: &str, new_name: &str) -> Result<
 }
 
 pub fn trash(vault: &str, id: &str) {
-    let up = with(|c| c.replicas.get(vault).and_then(|r| r.index.trash(id, now())));
+    let up = step(|c| c.replicas.get(vault).and_then(|r| r.index.trash(id, now())));
     if let Some(u) = up {
         local_update(vault, INDEX_OBJECT_ID, u);
         state::ui().tree_rev.update(|v| *v += 1);
@@ -1071,7 +1071,7 @@ pub fn trash(vault: &str, id: &str) {
 }
 
 pub fn trash_folder(vault: &str, folder: &str) {
-    let up = with(|c| {
+    let up = step(|c| {
         c.replicas
             .get(vault)
             .and_then(|r| r.index.trash_folder(folder, now()))
@@ -1084,7 +1084,7 @@ pub fn trash_folder(vault: &str, folder: &str) {
 }
 
 pub fn restore(vault: &str, id: &str) {
-    let up = with(|c| c.replicas.get(vault).and_then(|r| r.index.restore(id)));
+    let up = step(|c| c.replicas.get(vault).and_then(|r| r.index.restore(id)));
     if let Some(u) = up {
         local_update(vault, INDEX_OBJECT_ID, u);
         state::ui().tree_rev.update(|v| *v += 1);
@@ -1104,7 +1104,7 @@ pub async fn purge(vault: &str, id: &str) {
     };
     match r {
         Ok(()) | Err(api::Error { status: 404, .. }) => {
-            let up = with(|c| c.replicas.get(vault).and_then(|r| r.index.remove(id)));
+            let up = step(|c| c.replicas.get(vault).and_then(|r| r.index.remove(id)));
             if let Some(u) = up {
                 local_update(vault, INDEX_OBJECT_ID, u);
             }
@@ -1115,7 +1115,7 @@ pub async fn purge(vault: &str, id: &str) {
 }
 
 pub async fn empty_trash(vault: &str) {
-    let ids: Vec<String> = with(|c| {
+    let ids: Vec<String> = step(|c| {
         c.replicas.get(vault).map(|r| {
             r.index
                 .entries()
@@ -1133,7 +1133,7 @@ pub async fn empty_trash(vault: &str) {
 }
 
 pub fn toggle_favorite(vault: &str, note: &str) {
-    with(|c| {
+    step(|c| {
         let key = (vault.to_string(), note.to_string());
         if let Some(i) = c.prefs.favorites.iter().position(|f| f == &key) {
             c.prefs.favorites.remove(i);
@@ -1145,7 +1145,7 @@ pub fn toggle_favorite(vault: &str, note: &str) {
 }
 
 pub fn is_favorite(vault: &str, note: &str) -> bool {
-    with(|c| {
+    step(|c| {
         c.prefs
             .favorites
             .iter()
@@ -1171,7 +1171,7 @@ fn try_jump(vault: &str, note: &str, heading: &str) -> bool {
     if state::current_route().note() != Some((vault, note)) {
         return false;
     }
-    let text = with(|c| c.replicas.get(vault).map(|r| r.note_text(note))).unwrap_or_default();
+    let text = step(|c| c.replicas.get(vault).map(|r| r.note_text(note))).unwrap_or_default();
     let want = heading.to_lowercase();
     let outline = knowledge::outline(vault, note, &text);
     let Some(i) = outline
@@ -1189,7 +1189,7 @@ fn try_jump(vault: &str, note: &str, heading: &str) -> bool {
             _ => false,
         };
     }
-    let ed = with(|c| {
+    let ed = step(|c| {
         c.editor
             .as_ref()
             .filter(|(v, n, _)| v == vault && n == note)
@@ -1260,29 +1260,29 @@ thread_local! {
 }
 
 pub fn cached_attachment_url(vault: &str, id: &str) -> Option<String> {
-    with(|c| c.attachment_urls.get(&format!("{vault}:{id}")).cloned())
+    step(|c| c.attachment_urls.get(&format!("{vault}:{id}")).cloned())
 }
 
 pub async fn attachment_bytes(vault: &str, id: &str) -> Option<Vec<u8>> {
     let ct = api::get_bytes(&format!("/vaults/{vault}/attachments/{id}"))
         .await
         .ok()?;
-    with(|c| c.replicas.get(vault)?.decrypt_attachment(id, &ct).ok())
+    step(|c| c.replicas.get(vault)?.decrypt_attachment(id, &ct).ok())
 }
 
 /// Load, decrypt and cache an attachment as a blob URL.
 pub async fn load_attachment(vault: &str, id: &str) -> Option<String> {
     let key = format!("{vault}:{id}");
-    if let Some(u) = with(|c| c.attachment_urls.get(&key).cloned()) {
+    if let Some(u) = step(|c| c.attachment_urls.get(&key).cloned()) {
         return Some(u);
     }
-    if !with(|c| c.attachment_loading.insert(key.clone())) {
+    if !step(|c| c.attachment_loading.insert(key.clone())) {
         return None;
     }
     let name = state::entry(vault, id).map(|e| e.path).unwrap_or_default();
     let bytes = attachment_bytes(vault, id).await;
     let url = bytes.and_then(|b| util::blob_url(&b, util::mime_for(&name)));
-    with(|c| {
+    step(|c| {
         c.attachment_loading.remove(&key);
         if let Some(u) = &url {
             c.attachment_urls.insert(key.clone(), u.clone());
@@ -1360,14 +1360,14 @@ pub async fn upload_files(vault: &str, files: Vec<web_sys::File>, folder: &str) 
 
 pub async fn upload_bytes(vault: &str, path: &str, bytes: &[u8]) -> Option<String> {
     let id = state::new_id();
-    let ct = with(|c| c.replicas.get(vault)?.encrypt_attachment(&id, bytes).ok())?;
+    let ct = step(|c| c.replicas.get(vault)?.encrypt_attachment(&id, bytes).ok())?;
     if let Err(e) = api::put_bytes(&format!("/vaults/{vault}/attachments/{id}"), &ct).await {
         error(format!("Upload failed: {e}"));
         return None;
     }
     let path = unique_path(vault, &paths::normalize(path).ok()?);
     let mime = util::mime_for(&path);
-    let up = with(|c| {
+    let up = step(|c| {
         c.replicas.get(vault).and_then(|r| {
             r.index.create_with(
                 &id,
@@ -1396,7 +1396,7 @@ pub async fn export_vault(vault: &str) {
         match e.kind {
             EntryKind::Note => {
                 let text =
-                    with(|c| c.replicas.get(vault).map(|r| r.note_text(&e.id))).unwrap_or_default();
+                    step(|c| c.replicas.get(vault).map(|r| r.note_text(&e.id))).unwrap_or_default();
                 entries.push(zipfile::Entry {
                     name: e.path.clone(),
                     data: text.into_bytes(),
@@ -1536,7 +1536,7 @@ impl NoteHost {
 
     fn with_mode(vault: &str, note: &str, shared: bool) -> Rc<NoteHost> {
         state::ensure_note_loaded(vault, note);
-        with(|c| {
+        step(|c| {
             if let Some(n) = c
                 .replicas
                 .get_mut(vault)
@@ -1560,7 +1560,7 @@ impl NoteHost {
     }
 
     fn take(&self, f: impl FnOnce(&mut NoteDoc) -> Option<Vec<u8>>) -> Option<String> {
-        let (u, t) = with(|c| {
+        let (u, t) = step(|c| {
             let n = c.replicas.get_mut(&self.vault)?.notes.get_mut(&self.note)?;
             let u = f(n)?;
             Some((u, n.text()))
@@ -1588,7 +1588,7 @@ impl Host for NoteHost {
         // during an IME composition: the editor's offsets are then relative to
         // an outdated text. Move simple edits onto the current text, or drop
         // them; either way the editor reloads the note's text afterwards.
-        let res = with(|c| {
+        let res = step(|c| {
             let n = c.replicas.get_mut(&self.vault)?.notes.get_mut(&self.note)?;
             let current = n.text();
             let in_sync = current == base;
@@ -1624,14 +1624,14 @@ impl Host for NoteHost {
             local_update(&self.vault, &self.note, u);
             state::touch(&self.vault, &self.note, len);
             let ui = state::ui();
-            let d = with(|c| c.content_debounce.clone());
+            let d = step(|c| c.content_debounce.clone());
             d.run(400, move || ui.content_rev.update(|v| *v += 1));
         }
         in_sync
     }
 
     fn text(&self) -> Option<String> {
-        with(|c| {
+        step(|c| {
             c.replicas
                 .get(&self.vault)?
                 .notes
@@ -1649,7 +1649,7 @@ impl Host for NoteHost {
     }
 
     fn boundary(&self) {
-        with(|c| {
+        step(|c| {
             if let Some(n) = c
                 .replicas
                 .get_mut(&self.vault)
@@ -1692,7 +1692,7 @@ impl Host for NoteHost {
         let v = self.vault.clone();
         leptos::task::spawn_local(async move {
             if load_attachment(&v, &id).await.is_some() {
-                let ed = with(|c| {
+                let ed = step(|c| {
                     c.editor
                         .as_ref()
                         .filter(|(ev, _, _)| *ev == v)
@@ -1707,7 +1707,7 @@ impl Host for NoteHost {
     }
 
     fn selection_changed(&self, anchor: usize, head: usize) {
-        with(|c| c.cursor = Some((anchor, head)));
+        step(|c| c.cursor = Some((anchor, head)));
         state::send_presence();
     }
 
@@ -1728,7 +1728,7 @@ impl Host for NoteHost {
 }
 
 fn open_editor(vault: &str, note: &str) -> Option<Rc<editor::Editor>> {
-    with(|c| {
+    step(|c| {
         c.editor
             .as_ref()
             .filter(|(v, n, _)| v == vault && n == note)

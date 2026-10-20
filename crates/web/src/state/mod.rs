@@ -1,9 +1,19 @@
 //! Application state.
 //!
-//! [`Core`] holds everything non-reactive (keys, CRDT replicas, the socket)
-//! in a thread-local `RefCell`. [`Ui`] is a bundle of Leptos signals the views
-//! render from. Rule: never call into the editor (or anything that may call
-//! back into `with`) while holding the `Core` borrow.
+//! [`Core`] holds everything non-reactive (keys, CRDT replicas, the socket).
+//! [`Ui`] is a bundle of Leptos signals the views render from.
+//!
+//! **Who may take the state.** Only *edges* take it, with [`step`]: event
+//! handlers, server messages, timers, each step of a background task between
+//! two `await`s, and views reading what they show. Everything they call gets
+//! it as a parameter (`c: &mut Core`), so it can't be taken a second time —
+//! the compiler sees to that. An edge called while the state is taken is a
+//! bug; the panic names both places. Browser events that may fire in the
+//! middle of our own work (focus, blur, …) go through [`on_event`], which
+//! runs them right after it instead.
+//!
+//! Work that can call back into the app synchronously — the editor, DOM
+//! calls that fire events — happens at edges, outside [`step`].
 //!
 //! The rest is split by concern: `session` (sign-in, setup, devices),
 //! `prefs`, `vaults`, `shares` (notes shared with us), `sync` (socket and
@@ -253,6 +263,11 @@ pub struct Ui {
 thread_local! {
     static UI: Cell<Option<Ui>> = const { Cell::new(None) };
     static CORE: RefCell<Core> = RefCell::new(Core::default());
+    /// Where the state was taken, while it is.
+    static TAKEN: Cell<Option<&'static std::panic::Location<'static>>> = const { Cell::new(None) };
+    /// Events that arrived while the state was taken: run right after.
+    static LATER: RefCell<std::collections::VecDeque<Box<dyn FnOnce()>>> =
+        RefCell::new(std::collections::VecDeque::new());
     static TOAST_ID: Cell<u64> = const { Cell::new(1) };
 }
 
@@ -295,8 +310,41 @@ pub fn ui() -> Ui {
     UI.with(|u| u.get()).expect("UI initialised")
 }
 
-pub fn with<R>(f: impl FnOnce(&mut Core) -> R) -> R {
-    CORE.with(|c| f(&mut c.borrow_mut()))
+/// Take the app state for one step of work (edges only; see the module
+/// docs). Taking it while it is taken is a bug: the panic says where both
+/// happened.
+#[track_caller]
+pub fn step<R>(f: impl FnOnce(&mut Core) -> R) -> R {
+    let here = std::panic::Location::caller();
+    if let Some(at) = TAKEN.get() {
+        panic!("the app state was taken at {here} while already taken at {at}");
+    }
+    TAKEN.set(Some(here));
+    let r = CORE.with(|c| f(&mut c.borrow_mut()));
+    TAKEN.set(None);
+    run_later();
+    r
+}
+
+/// Whether the state is taken (by the step running now).
+pub fn busy() -> bool {
+    TAKEN.get().is_some()
+}
+
+/// Handle a browser event that may fire in the middle of our own work
+/// (focus, blur, …): now, or right after the step that is running.
+pub fn on_event(f: impl FnOnce() + 'static) {
+    if busy() {
+        LATER.with(|l| l.borrow_mut().push_back(Box::new(f)));
+    } else {
+        f();
+    }
+}
+
+fn run_later() {
+    while let Some(f) = LATER.with(|l| l.borrow_mut().pop_front()) {
+        f();
+    }
 }
 
 pub fn current_route() -> Route {
@@ -481,7 +529,7 @@ pub use vaults::*;
 // ------------------------------------------------------------------ helpers used by views
 
 pub fn note_title(vault: &str, note: &str) -> Option<String> {
-    with(|c| {
+    step(|c| {
         c.replicas
             .get(vault)?
             .index
@@ -491,11 +539,11 @@ pub fn note_title(vault: &str, note: &str) -> Option<String> {
 }
 
 pub fn entry(vault: &str, id: &str) -> Option<coolpsonotes_core::doc::Entry> {
-    with(|c| c.replicas.get(vault)?.index.get(id))
+    step(|c| c.replicas.get(vault)?.index.get(id))
 }
 
 pub fn vault_name(vault: &str) -> String {
-    with(|c| {
+    step(|c| {
         c.replicas
             .get(vault)
             .map(|r| r.meta.name.clone())
@@ -504,7 +552,7 @@ pub fn vault_name(vault: &str) -> String {
 }
 
 pub fn role(vault: &str) -> Option<Role> {
-    with(|c| c.replicas.get(vault).map(|r| r.role))
+    step(|c| c.replicas.get(vault).map(|r| r.role))
 }
 
 pub fn can_write(vault: &str) -> bool {
@@ -516,7 +564,7 @@ pub fn is_owner(vault: &str) -> bool {
 }
 
 pub fn ensure_note_loaded(vault: &str, note: &str) {
-    with(|c| {
+    step(|c| {
         if let Some(r) = c.replicas.get_mut(vault) {
             r.notes.entry(note.to_string()).or_insert_with(NoteDoc::new);
         }
@@ -524,7 +572,7 @@ pub fn ensure_note_loaded(vault: &str, note: &str) {
 }
 
 pub fn live_entries(vault: &str) -> Vec<coolpsonotes_core::doc::Entry> {
-    with(|c| {
+    step(|c| {
         c.replicas
             .get(vault)
             .map(|r| {

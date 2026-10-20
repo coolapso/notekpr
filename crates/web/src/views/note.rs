@@ -10,7 +10,7 @@ use wasm_bindgen::JsCast;
 
 use crate::actions::{self, NoteHost};
 use crate::editor::{Command, Editor, Mode};
-use crate::state::{self, Modal, Route, ViewMode, ui, with};
+use crate::state::{self, Modal, Route, ViewMode, step, ui};
 use crate::views::icons::Icon;
 use crate::views::panels::RightPanel;
 use crate::views::{SyncStatus, avatar};
@@ -26,7 +26,7 @@ pub fn focus_title_soon() {
 }
 
 fn editor() -> Option<std::rc::Rc<Editor>> {
-    with(|c| c.editor.as_ref().map(|(_, _, e)| e.clone()))
+    step(|c| c.editor.as_ref().map(|(_, _, e)| e.clone()))
 }
 
 fn cmd(c: Command) {
@@ -85,7 +85,7 @@ fn Toolbar(vault: Option<String>) -> impl IntoView {
                     ev.prevent_default();
                     let v = vault.clone();
                     // The note the file is for: the one open now, not when the upload ends.
-                    let Some(n) = with(|c| c.editor.as_ref().filter(|(ev, _, _)| *ev == v).map(|(_, n, _)| n.clone())) else { return };
+                    let Some(n) = step(|c| c.editor.as_ref().filter(|(ev, _, _)| *ev == v).map(|(_, n, _)| n.clone())) else { return };
                     actions::pick_files(false, "", move |files| {
                         leptos::task::spawn_local(async move {
                             let embeds = actions::upload_files(&v, files, "attachments").await;
@@ -135,7 +135,7 @@ fn mount_editor(
 ) -> Option<std::rc::Rc<Editor>> {
     let ui = ui();
     let (v, n) = (host.vault.clone(), host.note.clone());
-    let mounted = with(|c| {
+    let mounted = step(|c| {
         c.editor
             .as_ref()
             .filter(|(ev, en, _)| *ev == v && *en == n)
@@ -146,7 +146,7 @@ fn mount_editor(
     {
         return None;
     }
-    let text = with(|c| c.replicas.get(&v).map(|r| r.note_text(&n))).unwrap_or_default();
+    let text = step(|c| c.replicas.get(&v).map(|r| r.note_text(&n))).unwrap_or_default();
     let mode = if ui.mode.get_untracked() == ViewMode::Source {
         Mode::Source
     } else {
@@ -155,7 +155,7 @@ fn mount_editor(
     let vim = ui.ui_prefs.get_untracked().vim;
     container.set_inner_html("");
     let ed = Editor::new(container.unchecked_ref(), text, host, mode, ro, vim);
-    let old = with(|c| c.editor.replace((v, n, ed.clone())));
+    let old = step(|c| c.editor.replace((v, n, ed.clone())));
     if let Some((_, _, o)) = old {
         o.destroy();
     }
@@ -165,7 +165,7 @@ fn mount_editor(
 
 /// Toggle the checkbox of a task line (clicked in the reading view).
 fn toggle_task(vault: &str, note: &str, line: usize) {
-    let text = with(|c| c.replicas.get(vault).map(|r| r.note_text(note))).unwrap_or_default();
+    let text = step(|c| c.replicas.get(vault).map(|r| r.note_text(note))).unwrap_or_default();
     let mut lines: Vec<String> = text.split('\n').map(str::to_string).collect();
     let Some(l) = lines.get_mut(line) else { return };
     let Some(toggled) = crate::editor::syntax::toggle_task(l) else {
@@ -261,7 +261,7 @@ pub fn NoteView(vault: String, note: String) -> impl IntoView {
 
     let (v, n) = (vault.clone(), note.clone());
     on_cleanup(move || {
-        let ed = with(|c| {
+        let ed = step(|c| {
             if c.editor
                 .as_ref()
                 .is_some_and(|(ev, en, _)| *ev == v && *en == n)
@@ -285,7 +285,7 @@ pub fn NoteView(vault: String, note: String) -> impl IntoView {
         }
         ui.content_rev.get();
         ui.tree_rev.get();
-        let text = with(|c| c.replicas.get(&v).map(|r| r.note_text(&n5))).unwrap_or_default();
+        let text = step(|c| c.replicas.get(&v).map(|r| r.note_text(&n5))).unwrap_or_default();
         let from = state::entry(&v, &n5).map(|e| e.path).unwrap_or_default();
         let vv = v.clone();
         let note = move |t: &str| knowledge::resolve_target(&vv, t, &from);
@@ -463,7 +463,7 @@ pub fn NoteView(vault: String, note: String) -> impl IntoView {
                             view! {
                                 <div class="menu right" on:click=move |_| more.set(false)>
                                     <button on:click=move |_| {
-                                        let text = with(|c| c.replicas.get(&v).map(|r| r.note_text(&n))).unwrap_or_default();
+                                        let text = step(|c| c.replicas.get(&v).map(|r| r.note_text(&n))).unwrap_or_default();
                                         let name = state::entry(&v, &n).map(|e| paths::file_name(&e.path).to_string()).unwrap_or_else(|| "note.md".into());
                                         util::download(&name, "text/markdown", text.as_bytes());
                                     }><Icon name="download"/>" Download as Markdown"</button>
@@ -587,7 +587,7 @@ pub fn SharedNoteView(vault: String, note: String) -> impl IntoView {
     });
     let (v, n) = (vault.clone(), note.clone());
     on_cleanup(move || {
-        let ed = with(|c| {
+        let ed = step(|c| {
             if c.editor
                 .as_ref()
                 .is_some_and(|(ev, en, _)| *ev == v && *en == n)
@@ -609,7 +609,7 @@ pub fn SharedNoteView(vault: String, note: String) -> impl IntoView {
             return String::new();
         }
         ui.content_rev.get();
-        let text = with(|c| c.replicas.get(&v).map(|r| r.note_text(&n))).unwrap_or_default();
+        let text = step(|c| c.replicas.get(&v).map(|r| r.note_text(&n))).unwrap_or_default();
         let none = |_: &str| None;
         render::to_html(
             &text,
@@ -685,7 +685,7 @@ pub fn SharedNoteView(vault: String, note: String) -> impl IntoView {
                             view! {
                                 <div class="menu right" on:click=move |_| more.set(false)>
                                     <button on:click=move |_| {
-                                        let text = with(|c| c.replicas.get(&v).map(|r| r.note_text(&n))).unwrap_or_default();
+                                        let text = step(|c| c.replicas.get(&v).map(|r| r.note_text(&n))).unwrap_or_default();
                                         let name = format!("{}.md", info.get_untracked().map(|s| s.title).unwrap_or_else(|| "note".into()));
                                         util::download(&name, "text/markdown", text.as_bytes());
                                     }><Icon name="download"/>" Download as Markdown"</button>

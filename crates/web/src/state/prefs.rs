@@ -12,7 +12,7 @@ thread_local! {
 
 /// Choose the vault quick notes go to (`None`: the default).
 pub fn set_quick_vault(vault: Option<String>) {
-    with(|c| c.prefs.quick_vault = vault);
+    step(|c| c.prefs.quick_vault = vault);
     QUICK_VAULT_CHANGED.with(|f| f.set(true));
     save_prefs();
 }
@@ -26,10 +26,10 @@ pub(super) async fn load_prefs() {
 }
 
 pub(super) fn apply_prefs(blob: &PrefsBlob) {
-    let uid = with(|c| c.user_id.clone());
+    let uid = step(|c| c.user_id.clone());
     let local = storage::prefs_copy(&uid);
     let open = |ct: &[u8]| {
-        with(|c| {
+        step(|c| {
             let pt = c.account.as_ref()?.open_private(&c.user_id, ct).ok()?;
             serde_json::from_slice::<Prefs>(&pt).ok()
         })
@@ -38,7 +38,7 @@ pub(super) fn apply_prefs(blob: &PrefsBlob) {
     let mine = local.as_deref().and_then(open);
     let choice = choose_prefs(server, mine);
     let (use_server, rolled_back) = (choice.from_server, choice.rolled_back);
-    with(|c| {
+    step(|c| {
         c.prefs_version = blob.version;
         if let Some(p) = choice.prefs {
             c.prefs = p;
@@ -88,11 +88,11 @@ pub(super) fn choose_prefs(server: Option<Prefs>, mine: Option<Prefs>) -> PrefsC
 
 pub fn save_prefs() {
     ui().prefs_rev.update(|v| *v += 1);
-    let d = with(|c| c.prefs_save.clone());
+    let d = step(|c| c.prefs_save.clone());
     d.run(1500, || {
         leptos::task::spawn_local(async {
             for _ in 0..3 {
-                let req = with(|c| {
+                let req = step(|c| {
                     let acct = c.account.as_ref()?;
                     c.prefs.counter += 1;
                     let pt = serde_json::to_vec(&c.prefs).ok()?;
@@ -104,7 +104,7 @@ pub fn save_prefs() {
                 let Some(req) = req else { return };
                 match api::put::<_, PrefsBlob>("/me/prefs", &req).await {
                     Ok(b) => {
-                        let uid = with(|c| {
+                        let uid = step(|c| {
                             c.prefs_version = b.version;
                             c.user_id.clone()
                         });
@@ -114,9 +114,9 @@ pub fn save_prefs() {
                     }
                     Err(e) if e.status == 409 => {
                         // Changed on another device: merge and retry.
-                        let mine = with(|c| c.prefs.clone());
+                        let mine = step(|c| c.prefs.clone());
                         load_prefs().await;
-                        with(|c| {
+                        step(|c| {
                             for f in mine.favorites {
                                 if !c.prefs.favorites.contains(&f) {
                                     c.prefs.favorites.push(f);

@@ -4,7 +4,7 @@
 use coolpsonotes_core::protocol::*;
 use leptos::prelude::*;
 
-use crate::state::{self, Modal, Route, ui, with};
+use crate::state::{self, Modal, Route, step, ui};
 use crate::util;
 use crate::views::icons::Icon;
 use crate::{api, views::avatar};
@@ -61,7 +61,7 @@ pub fn Settings(tab: String) -> impl IntoView {
 fn Account() -> impl IntoView {
     let ui = ui();
     let u = ui.user.get_untracked();
-    let fp = with(|c| c.account.as_ref().map(|a| a.public().fingerprint())).unwrap_or_default();
+    let fp = step(|c| c.account.as_ref().map(|a| a.public().fingerprint())).unwrap_or_default();
     view! {
         {u.map(|u| view! {
             <div class="person big">
@@ -261,7 +261,7 @@ fn Security() -> impl IntoView {
                 <button class="btn" on:click=move |_| {
                     if !util::confirm("Create a new recovery key? Your old recovery key will stop working.") { return; }
                     leptos::task::spawn_local(async move {
-                        let req = with(|c| c.account.as_ref().map(|a| coolpsonotes_core::engine::rotate_recovery(a, &c.user_id, util::now_ms().max(0) as u64)));
+                        let req = step(|c| c.account.as_ref().map(|a| coolpsonotes_core::engine::rotate_recovery(a, &c.user_id, util::now_ms().max(0) as u64)));
                         if let Some((rk, req)) = req {
                             match api::put::<_, ()>("/me/recovery", &req).await {
                                 Ok(()) => new_key.set(Some(rk.to_display())),
@@ -407,7 +407,7 @@ fn QuickNotesPrefs() -> impl IntoView {
     let choice = Memo::new(move |_| {
         ui.prefs_rev.get();
         ui.vaults.get();
-        let chosen = with(|c| c.prefs.quick_vault.clone());
+        let chosen = step(|c| c.prefs.quick_vault.clone());
         let mut writable: Vec<(String, String)> = crate::quick::candidates()
             .into_iter()
             .filter(|v| v.writable)
@@ -467,7 +467,7 @@ fn Admin() -> impl IntoView {
         });
     };
     reload();
-    let me = with(|c| c.user_id.clone());
+    let me = step(|c| c.user_id.clone());
     view! {
         <p class="muted">"Administrators manage accounts. They cannot read anyone's notes or vault names."</p>
         {move || stats.get().map(|s| view! {

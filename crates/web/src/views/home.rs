@@ -5,7 +5,7 @@ use coolpsonotes_core::protocol::Role;
 use leptos::prelude::*;
 
 use crate::actions;
-use crate::state::{self, Modal, Route, ui, with};
+use crate::state::{self, Modal, Route, step, ui};
 use crate::util;
 use crate::views::icons::Icon;
 use crate::{knowledge, views::SyncStatus};
@@ -150,7 +150,7 @@ pub fn VaultHome(vault: String) -> impl IntoView {
                                     {items.into_iter().map(|e| {
                                         let (v2, id) = (v.clone(), e.id.clone());
                                         let folder = coolpsonotes_core::paths::parent(&e.path).to_string();
-                                        let text = with(|c| c.replicas.get(&v).map(|r| r.note_text(&e.id))).unwrap_or_default();
+                                        let text = step(|c| c.replicas.get(&v).map(|r| r.note_text(&e.id))).unwrap_or_default();
                                         let snippet: String = text.lines().filter(|l| !l.trim().is_empty() && !l.starts_with('#') && !l.starts_with("---")).take(2).collect::<Vec<_>>().join(" ").chars().take(140).collect();
                                         view! {
                                             <button class="note-card" on:click=move |_| state::navigate(Route::Note(v2.clone(), id.clone()))>
@@ -185,7 +185,7 @@ pub fn Trash(vault: String) -> impl IntoView {
     let v = vault.clone();
     let items = move || {
         ui.tree_rev.get();
-        let mut e: Vec<_> = with(|c| {
+        let mut e: Vec<_> = step(|c| {
             c.replicas
                 .get(&v)
                 .map(|r| r.index.entries())

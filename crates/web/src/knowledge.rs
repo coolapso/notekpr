@@ -11,7 +11,7 @@ use coolpsonotes_core::{paths, search};
 
 use leptos::prelude::*;
 
-use crate::state::{self, with};
+use crate::state::{self, step};
 
 thread_local! {
     static ANALYSIS: RefCell<HashMap<(String, String), (u64, Rc<NoteInfo>)>> = RefCell::new(HashMap::new());
@@ -45,7 +45,7 @@ pub fn analysis(vault: &str, note: &str, text: &str) -> Rc<NoteInfo> {
 /// All live notes `(id, path, text)` of a vault.
 pub fn notes_with_text(vault: &str) -> Vec<(String, String, String)> {
     let entries = state::live_entries(vault);
-    with(|c| {
+    step(|c| {
         let Some(r) = c.replicas.get(vault) else {
             return vec![];
         };
@@ -265,7 +265,7 @@ pub fn search_all(query: &str, only_vault: Option<&str>) -> Vec<Hit> {
     if q.is_empty() {
         return vec![];
     }
-    let vaults: Vec<(String, String)> = with(|c| {
+    let vaults: Vec<(String, String)> = step(|c| {
         c.replicas
             .iter()
             .filter(|(_, r)| r.member)
@@ -313,14 +313,14 @@ pub fn quick(query: &str) -> Vec<(String, String, String, String)> {
         .chars()
         .filter(|c| !c.is_whitespace())
         .collect();
-    let vaults: Vec<(String, String)> = with(|c| {
+    let vaults: Vec<(String, String)> = step(|c| {
         c.replicas
             .iter()
             .filter(|(_, r)| r.member)
             .map(|(id, r)| (id.clone(), r.meta.name.clone()))
             .collect()
     });
-    let recent: Vec<(String, String)> = with(|c| c.prefs.recent.clone());
+    let recent: Vec<(String, String)> = step(|c| c.prefs.recent.clone());
     let mut scored = Vec::new();
     for (vid, vname) in &vaults {
         for e in state::live_entries(vid) {

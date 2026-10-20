@@ -17,7 +17,7 @@ use coolpsonotes_core::protocol::Role;
 use leptos::prelude::*;
 
 use crate::actions;
-use crate::state::{self, Route, ViewMode, with};
+use crate::state::{self, Route, ViewMode, step};
 
 /// Folder of the quick notes in their vault.
 pub const FOLDER: &str = "Quick notes";
@@ -221,7 +221,7 @@ pub struct QuickNote {
 
 /// The vaults that could hold quick notes (with their keys loaded).
 pub fn candidates() -> Vec<VaultCandidate> {
-    with(|c| {
+    step(|c| {
         c.vault_infos
             .values()
             .filter_map(|i| {
@@ -240,7 +240,7 @@ pub fn candidates() -> Vec<VaultCandidate> {
 
 /// The vault quick notes go to (`None`: no vault can be edited).
 pub fn vault() -> Option<String> {
-    let pref = with(|c| c.prefs.quick_vault.clone());
+    let pref = step(|c| c.prefs.quick_vault.clone());
     choose_vault(pref.as_deref(), &candidates())
 }
 
@@ -262,7 +262,7 @@ pub fn notes(vault: &str, archived: bool, limit: usize) -> Vec<QuickNote> {
     list.into_iter()
         .map(|e| {
             let text =
-                with(|c| c.replicas.get(vault).map(|r| r.note_text(&e.id))).unwrap_or_default();
+                step(|c| c.replicas.get(vault).map(|r| r.note_text(&e.id))).unwrap_or_default();
             let title = e.title().to_string();
             QuickNote {
                 vault: vault.to_string(),

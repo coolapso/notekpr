@@ -9,7 +9,7 @@ use leptos::prelude::Update;
 use leptos::prelude::*;
 
 use crate::actions;
-use crate::state::{self, Modal, Route, ui, with};
+use crate::state::{self, Modal, Route, step, ui};
 use crate::util;
 use crate::views::avatar;
 use crate::views::icons::Icon;
@@ -339,7 +339,7 @@ fn Share(vault: String) -> impl IntoView {
         leptos::task::spawn_local(async move {
             match api::get::<Vec<MemberInfo>>(&format!("/vaults/{v}/members")).await {
                 Ok(m) => {
-                    with(|c| {
+                    step(|c| {
                         for x in &m {
                             c.users.insert(x.user.id.clone(), x.user.clone());
                         }
@@ -357,7 +357,7 @@ fn Share(vault: String) -> impl IntoView {
     let (vs, vr, vm) = (vault.clone(), vault.clone(), vault.clone());
     let reload2 = reload.clone();
     let reload3 = reload.clone();
-    let me = with(|c| c.user_id.clone());
+    let me = step(|c| c.user_id.clone());
     view! {
         <Dialog title=format!("Share “{vname}”") wide=true>
             {move || err.get().map(|e| view! { <div class="alert error">{e}</div> })}
@@ -501,7 +501,7 @@ fn ShareNote(vault: String, note: String) -> impl IntoView {
             match api::get::<Vec<ObjectShareInfo>>(&format!("/vaults/{v}/objects/{n}/shares")).await
             {
                 Ok(l) => {
-                    with(|c| {
+                    step(|c| {
                         for x in &l {
                             c.users.insert(x.user.id.clone(), x.user.clone());
                         }
@@ -632,7 +632,7 @@ fn VaultSettings(vault: String) -> impl IntoView {
     let ui = ui();
     let name = RwSignal::new(state::vault_name(&vault));
     let owner = state::is_owner(&vault);
-    let archived = with(|c| c.vault_infos.get(&vault).map(|i| i.archived)).unwrap_or(false);
+    let archived = step(|c| c.vault_infos.get(&vault).map(|i| i.archived)).unwrap_or(false);
     let audit = RwSignal::new(Vec::<AuditEntry>::new());
     let show_audit = RwSignal::new(false);
     let (v1, v2, v3, v4, v5, v6, v7, v8) = (
@@ -645,7 +645,7 @@ fn VaultSettings(vault: String) -> impl IntoView {
         vault.clone(),
         vault.clone(),
     );
-    let epoch = with(|c| {
+    let epoch = step(|c| {
         c.replicas
             .get(&vault)
             .and_then(|r| r.keyring.current_epoch())
@@ -764,7 +764,7 @@ fn History(vault: String, note: String) -> impl IntoView {
         leptos::task::spawn_local(async move {
             match api::get::<Snapshot>(&format!("/vaults/{v}/objects/{n}/snapshots/{id}")).await {
                 Ok(s) => {
-                    let text = with(|c| c.replicas.get(&v).map(|r| r.decrypt_revision(&s)));
+                    let text = step(|c| c.replicas.get(&v).map(|r| r.decrypt_revision(&s)));
                     match text {
                         Some(Ok(t)) => preview.set(Some((s.id, t))),
                         _ => state::error("This version could not be decrypted."),
@@ -778,8 +778,8 @@ fn History(vault: String, note: String) -> impl IntoView {
     let writable = state::can_write_note(&vault, &note);
     let vv = vault.clone();
     let names = move |uid: &str| {
-        with(|c| c.users.get(uid).map(|u| u.display_name.clone())).unwrap_or_else(|| {
-            if uid == with(|c| c.user_id.clone()) {
+        step(|c| c.users.get(uid).map(|u| u.display_name.clone())).unwrap_or_else(|| {
+            if uid == step(|c| c.user_id.clone()) {
                 "you".into()
             } else {
                 "someone".into()
@@ -838,7 +838,7 @@ fn History(vault: String, note: String) -> impl IntoView {
 #[component]
 fn ApproveDevice(device: DeviceInfo) -> impl IntoView {
     let ui = ui();
-    let (uid, account) = with(|c| (c.user_id.clone(), c.account.as_ref().map(|a| a.public())));
+    let (uid, account) = step(|c| (c.user_id.clone(), c.account.as_ref().map(|a| a.public())));
     let code = account
         .and_then(|a| {
             coolpsonotes_core::engine::verification_code(&uid, &device.id, &device.enc_public, &a)
@@ -858,8 +858,8 @@ fn ApproveDevice(device: DeviceInfo) -> impl IntoView {
                     busy.set(true);
                     let d = d1.clone();
                     leptos::task::spawn_local(async move {
-                        let uid = with(|c| c.user_id.clone());
-                        let req = with(|c| c.account.as_ref().map(|a| coolpsonotes_core::engine::approve_device(a, &uid, &d.id, &d.enc_public)));
+                        let uid = step(|c| c.user_id.clone());
+                        let req = step(|c| c.account.as_ref().map(|a| coolpsonotes_core::engine::approve_device(a, &uid, &d.id, &d.enc_public)));
                         match req {
                             Some(Ok(r)) => match api::post::<_, ()>(&format!("/devices/{}/activate", d.id), &r).await {
                                 Ok(()) => { state::success("Device approved."); ui.modal.set(None); }
@@ -981,7 +981,7 @@ fn NewFolder(vault: String, parent: String) -> impl IntoView {
 #[component]
 fn MoveDialog(vault: String, id: String) -> impl IntoView {
     let ui = ui();
-    let folders = with(|c| c.replicas.get(&vault).map(|r| r.index.folders())).unwrap_or_default();
+    let folders = step(|c| c.replicas.get(&vault).map(|r| r.index.folders())).unwrap_or_default();
     let current = state::entry(&vault, &id)
         .map(|e| coolpsonotes_core::paths::parent(&e.path).to_string())
         .unwrap_or_default();

@@ -20,7 +20,7 @@ pub async fn refresh_vaults() {
         b.vaults = infos.clone();
         b.keys.retain(|k, _| ids.contains(k));
     });
-    let removed: Vec<String> = with(|c| {
+    let removed: Vec<String> = step(|c| {
         c.replicas
             .iter()
             .filter(|(k, r)| r.member && !ids.contains(*k))
@@ -50,23 +50,23 @@ pub async fn reload_vault_keys(vault_id: String) {
             load_vault_with(info, true, None).await;
             publish_vaults();
         }
-        if !with(|c| c.reload_again.remove(&vault_id)) {
+        if !step(|c| c.reload_again.remove(&vault_id)) {
             break;
         }
     }
-    with(|c| c.reloading.remove(&vault_id));
+    step(|c| c.reloading.remove(&vault_id));
 }
 
 /// Start reloading the keys behind `tag`. If a reload is already running,
 /// it may have fetched the keys before they changed: ask it to run once
 /// more, wait until it is done and return `false`.
 pub(super) async fn begin_reload(tag: &str) -> bool {
-    if with(|c| c.reloading.insert(tag.to_string())) {
-        with(|c| c.reload_again.remove(tag));
+    if step(|c| c.reloading.insert(tag.to_string())) {
+        step(|c| c.reload_again.remove(tag));
         return true;
     }
-    with(|c| c.reload_again.insert(tag.to_string()));
-    while with(|c| c.reloading.contains(tag)) {
+    step(|c| c.reload_again.insert(tag.to_string()));
+    while step(|c| c.reloading.contains(tag)) {
         util::sleep(50).await;
     }
     false
@@ -74,7 +74,7 @@ pub(super) async fn begin_reload(tag: &str) -> bool {
 
 /// Load a vault's keys (fetched, or `keys` from the offline data) and metadata.
 pub(super) async fn load_vault_with(info: VaultInfo, force: bool, keys: Option<VaultKeysResponse>) {
-    let (needs_keys, uid) = with(|c| {
+    let (needs_keys, uid) = step(|c| {
         let needs = match c.replicas.get(&info.id) {
             None => true,
             Some(r) => force || !r.member || r.keyring.current_epoch() < Some(info.key_epoch),
@@ -83,7 +83,7 @@ pub(super) async fn load_vault_with(info: VaultInfo, force: bool, keys: Option<V
     });
     let id = info.id.clone();
     if needs_keys {
-        let stored = if with(|c| c.replicas.get(&id).is_none_or(|r| !r.member)) {
+        let stored = if step(|c| c.replicas.get(&id).is_none_or(|r| !r.member)) {
             crate::cache::fetch(&uid, &id).await
         } else {
             None
@@ -98,12 +98,12 @@ pub(super) async fn load_vault_with(info: VaultInfo, force: bool, keys: Option<V
                     k
                 }
                 Err(e) => {
-                    with(|c| c.vault_errors.insert(id.clone(), e.message.clone()));
+                    step(|c| c.vault_errors.insert(id.clone(), e.message.clone()));
                     return;
                 }
             },
         };
-        let ring = with(|c| {
+        let ring = step(|c| {
             c.account
                 .as_ref()
                 .map(|a| engine::keyring_from_response(a, &uid, &id, &keys))
@@ -113,11 +113,11 @@ pub(super) async fn load_vault_with(info: VaultInfo, force: bool, keys: Option<V
                 // The owner's signed membership log, and our keys against it.
                 match super::members::load_log(&id, &info.owner_id, &ring).await {
                     Ok(Some(log)) => {
-                        with(|c| c.member_logs.insert(id.clone(), log));
+                        step(|c| c.member_logs.insert(id.clone(), log));
                     }
                     Ok(None) => {}
                     Err(msg) => {
-                        with(|c| c.vault_errors.insert(id.clone(), msg.clone()));
+                        step(|c| c.vault_errors.insert(id.clone(), msg.clone()));
                         error(msg);
                         return;
                     }
@@ -126,9 +126,9 @@ pub(super) async fn load_vault_with(info: VaultInfo, force: bool, keys: Option<V
                     .unwrap_or_else(|_| VaultMeta::named("(unreadable)"));
                 let docs = engine::object_keyrings(&ring, &keys);
                 // Notes shared with us individually are now reachable through the vault.
-                let was_recipient = with(|c| c.replicas.get(&id).is_some_and(|r| !r.member));
+                let was_recipient = step(|c| c.replicas.get(&id).is_some_and(|r| !r.member));
                 if was_recipient {
-                    for (v, o) in with(|c| {
+                    for (v, o) in step(|c| {
                         c.shares
                             .keys()
                             .filter(|(v, _)| *v == id)
@@ -139,14 +139,14 @@ pub(super) async fn load_vault_with(info: VaultInfo, force: bool, keys: Option<V
                             vault_id: v.clone(),
                             object_id: Some(o.clone()),
                         });
-                        with(|c| c.shares.remove(&(v, o)));
+                        step(|c| c.shares.remove(&(v, o)));
                     }
-                    with(|c| c.replicas.remove(&id));
+                    step(|c| c.replicas.remove(&id));
                     publish_shares();
                 }
                 let shared = engine::shared_objects(&keys);
                 let note_keys = keys.shared.is_some();
-                let (is_new, applied, docs_changed, restored, adopted) = with(|c| {
+                let (is_new, applied, docs_changed, restored, adopted) = step(|c| {
                     c.vault_errors.remove(&id);
                     match c.replicas.get_mut(&id) {
                         Some(r) => {
@@ -205,15 +205,15 @@ pub(super) async fn load_vault_with(info: VaultInfo, force: bool, keys: Option<V
                 super::members::apply_authors(&id);
                 // Owners start the log of a vault from before it, and
                 // require signed changes.
-                let unsigned = with(|c| {
+                let unsigned = step(|c| {
                     c.member_logs
                         .get(&id)
                         .is_none_or(|l| !l.has_log() || l.needs_signatures())
                 });
-                if unsigned && info.role == Role::Owner && !with(|c| c.offline_start) {
+                if unsigned && info.role == Role::Owner && !step(|c| c.offline_start) {
                     leptos::task::spawn_local(super::members::sign_vault(id.clone()));
                 }
-                if is_new && info.role == Role::Owner && !with(|c| c.offline_start) {
+                if is_new && info.role == Role::Owner && !step(|c| c.offline_start) {
                     leptos::task::spawn_local(super::members::sign_missing_grants(id.clone()));
                 }
                 if is_new {
@@ -227,19 +227,19 @@ pub(super) async fn load_vault_with(info: VaultInfo, force: bool, keys: Option<V
                         ui().tree_rev.update(|v| *v += 1);
                         ui().shares_rev.update(|v| *v += 1);
                         // Unsent edits of a note that just got its own key must be re-encrypted.
-                        if with(|c| c.loaded.contains(&id)) {
+                        if step(|c| c.loaded.contains(&id)) {
                             resend_pending(&id);
                         }
                     }
                 }
             }
             Some(Err(e)) => {
-                with(|c| c.vault_errors.insert(id.clone(), e.to_string()));
+                step(|c| c.vault_errors.insert(id.clone(), e.to_string()));
             }
             None => {}
         }
     } else {
-        with(|c| {
+        step(|c| {
             if let Some(r) = c.replicas.get_mut(&id) {
                 r.role = info.role;
                 if let Ok(m) = VaultMeta::decrypt(&r.keyring, &info.encrypted_meta) {
@@ -248,7 +248,7 @@ pub(super) async fn load_vault_with(info: VaultInfo, force: bool, keys: Option<V
             }
         });
     }
-    with(|c| c.vault_infos.insert(id, info));
+    step(|c| c.vault_infos.insert(id, info));
 }
 
 /// Remove the cached blob URLs of decrypted attachments (of one vault, or
@@ -273,7 +273,7 @@ pub(super) fn revoke_urls(urls: Vec<String>) {
 }
 
 pub(super) fn drop_vault(v: &str) {
-    let urls = with(|c| {
+    let urls = step(|c| {
         c.replicas.remove(v);
         c.vault_infos.remove(v);
         c.loaded.remove(v);
@@ -290,7 +290,7 @@ pub(super) fn drop_vault(v: &str) {
 }
 
 pub fn publish_vaults() {
-    let views = with(|c| {
+    let views = step(|c| {
         let mut v: Vec<VaultView> = c
             .vault_infos
             .values()

@@ -43,7 +43,7 @@ use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
 use web_sys::{IdbDatabase, IdbKeyRange, IdbRequest, IdbTransaction, IdbTransactionMode};
 
-use crate::state::with;
+use crate::state::step;
 use crate::util;
 
 const DB_NAME: &str = "coolpsonotes";
@@ -283,7 +283,7 @@ impl Tracker {
 
 /// Remember changed content of a vault for the next write.
 pub fn note_applied(vault: &str, applied: &Applied) {
-    with(|c| {
+    step(|c| {
         let t = &mut c.cache;
         let dirty = t.dirty.entry(vault.to_string()).or_default();
         dirty.extend(applied.objects.iter().cloned());
@@ -301,7 +301,7 @@ pub fn note_applied(vault: &str, applied: &Applied) {
 }
 
 pub fn note_local(vault: &str, object: &str) {
-    with(|c| {
+    step(|c| {
         c.cache
             .dirty
             .entry(vault.to_string())
@@ -313,14 +313,14 @@ pub fn note_local(vault: &str, object: &str) {
 
 /// Write soon (sync progress or confirmations may let the cursor move).
 pub fn schedule() {
-    if with(|c| std::mem::replace(&mut c.cache.scheduled, true)) {
+    if step(|c| std::mem::replace(&mut c.cache.scheduled, true)) {
         return;
     }
     util::set_timeout(SAVE_DELAY_MS, || leptos::task::spawn_local(save_now()));
 }
 
 async fn save_now() {
-    let (uid, listed) = with(|c| {
+    let (uid, listed) = step(|c| {
         c.cache.scheduled = false;
         if c.cache.saving {
             c.cache.again = true;
@@ -334,7 +334,7 @@ async fn save_now() {
     }
     if !listed {
         match stored_objects(&uid).await {
-            Ok(m) => with(|c| {
+            Ok(m) => step(|c| {
                 if c.user_id == uid {
                     c.cache.stored = m;
                     c.cache.listed = true;
@@ -347,7 +347,7 @@ async fn save_now() {
         }
     }
     let mut share_puts: Vec<(String, Vec<u8>)> = Vec::new();
-    let jobs = with(|c| {
+    let jobs = step(|c| {
         if c.user_id != uid || c.cache.saving || !c.cache.listed {
             return vec![];
         }
@@ -418,16 +418,16 @@ async fn save_now() {
     }
     for job in jobs {
         // Not for a vault dropped meanwhile (its copy is being deleted).
-        if !with(|c| c.user_id == uid && c.replicas.contains_key(&job.vault)) {
+        if !step(|c| c.user_id == uid && c.replicas.contains_key(&job.vault)) {
             continue;
         }
         match save(&uid, &job).await {
             Ok(()) => {
-                with(|c| c.cache.cursor.insert(job.vault.clone(), job.cursor));
+                step(|c| c.cache.cursor.insert(job.vault.clone(), job.cursor));
             }
             Err(e) => {
                 util::warn(&format!("writing the local copy failed: {e}"));
-                with(|c| {
+                step(|c| {
                     c.cache.off.insert(job.vault.clone());
                     c.cache.cursor.remove(&job.vault);
                     c.cache.stored.remove(&job.vault);
@@ -436,7 +436,7 @@ async fn save_now() {
             }
         }
     }
-    let again = with(|c| {
+    let again = step(|c| {
         c.cache.saving = false;
         std::mem::take(&mut c.cache.again)
     });
@@ -447,7 +447,7 @@ async fn save_now() {
 
 /// Forget a vault's copy (vault deleted, access lost).
 pub fn forget_vault(vault: &str) {
-    let uid = with(|c| {
+    let uid = step(|c| {
         c.cache.dirty.remove(vault);
         c.cache.removed.remove(vault);
         c.cache.cursor.remove(vault);
@@ -460,7 +460,7 @@ pub fn forget_vault(vault: &str) {
 /// Delete copies of vaults this account can no longer open (access lost while
 /// this browser was away). `vaults` is the server's current list.
 pub fn prune(vaults: &BTreeSet<String>) {
-    let (uid, first) = with(|c| {
+    let (uid, first) = step(|c| {
         (
             c.user_id.clone(),
             !std::mem::replace(&mut c.cache.pruned, true),
@@ -765,7 +765,7 @@ pub async fn restore_share(user: &str, vault: &str, note: &str) -> Option<i64> {
             return None;
         }
     };
-    let restored = with(|c| {
+    let restored = step(|c| {
         let r = c.replicas.get_mut(vault).filter(|r| !r.member)?;
         let plain = r.decrypt_object(Purpose::LocalCache, note, &sealed).ok()?;
         let copy: ShareCopy = serde_json::from_slice(&plain).ok()?;
@@ -787,7 +787,7 @@ pub async fn restore_share(user: &str, vault: &str, note: &str) -> Option<i64> {
 
 /// Forget the copy of a note no longer shared with us.
 pub fn forget_share(vault: &str, note: &str) {
-    let uid = with(|c| {
+    let uid = step(|c| {
         if let Some(d) = c.cache.dirty.get_mut(vault) {
             d.remove(note);
         }
@@ -798,7 +798,7 @@ pub fn forget_share(vault: &str, note: &str) {
 
 /// Delete copies of notes no longer shared with us (`keep`: those that are).
 pub fn prune_shares(keep: &BTreeSet<(String, String)>) {
-    let uid = with(|c| c.user_id.clone());
+    let uid = step(|c| c.user_id.clone());
     let keep = keep.clone();
     leptos::task::spawn_local(async move {
         let stored = match stored_objects(&uid).await {

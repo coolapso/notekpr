@@ -14,10 +14,10 @@ pub(super) fn connect_socket() {
         ui.conn.set(s);
     });
     let sock = Socket::new(token, on_message, on_state);
-    with(|c| c.socket = Some(sock));
+    step(|c| c.socket = Some(sock));
     // Reconnect promptly when the browser comes back online.
     let cb = wasm_bindgen::closure::Closure::wrap(Box::new(|| {
-        if let Some(s) = with(|c| c.socket.clone()) {
+        if let Some(s) = step(|c| c.socket.clone()) {
             s.kick();
         }
     }) as Box<dyn FnMut()>);
@@ -27,14 +27,14 @@ pub(super) fn connect_socket() {
 }
 
 pub(super) fn send(m: &ClientMessage) -> bool {
-    match with(|c| c.socket.clone()) {
+    match step(|c| c.socket.clone()) {
         Some(s) if s.is_ready() => s.send(m),
         _ => false,
     }
 }
 
 pub(super) fn subscribe(vault_id: &str) {
-    let since = with(|c| c.replicas.get(vault_id).map(|r| r.seq));
+    let since = step(|c| c.replicas.get(vault_id).map(|r| r.seq));
     if let Some(since) = since {
         send(&ClientMessage::Subscribe {
             vault_id: vault_id.to_string(),
@@ -47,11 +47,11 @@ pub(super) fn subscribe(vault_id: &str) {
 pub(super) fn on_server_message(m: ServerMessage) {
     match m {
         ServerMessage::Ready { conn_id, .. } => {
-            with(|c| {
+            step(|c| {
                 c.conn_id = conn_id;
                 c.presence_note = None;
             });
-            let vaults: Vec<String> = with(|c| {
+            let vaults: Vec<String> = step(|c| {
                 c.replicas
                     .iter()
                     .filter(|(_, r)| r.member)
@@ -61,7 +61,7 @@ pub(super) fn on_server_message(m: ServerMessage) {
             for v in vaults {
                 subscribe(&v);
             }
-            let shares: Vec<(String, String)> = with(|c| {
+            let shares: Vec<(String, String)> = step(|c| {
                 c.shares
                     .iter()
                     .filter(|(_, s)| s.error.is_none())
@@ -72,12 +72,12 @@ pub(super) fn on_server_message(m: ServerMessage) {
                 subscribe_share(&v, &n);
             }
             send_presence();
-            if with(|c| std::mem::take(&mut c.offline_start)) {
+            if step(|c| std::mem::take(&mut c.offline_start)) {
                 leptos::task::spawn_local(offline::finish_online());
             }
         }
         ServerMessage::Changes { vault_id, changes } => {
-            let res = with(|c| {
+            let res = step(|c| {
                 let r = c.replicas.get_mut(&vault_id)?;
                 let res = r.apply_changes(&changes);
                 Some((res, r.needs_keys()))
@@ -105,7 +105,7 @@ pub(super) fn on_server_message(m: ServerMessage) {
             None => on_synced(&vault_id, head_seq),
         },
         ServerMessage::Update { vault_id, update } => {
-            with(|c| {
+            step(|c| {
                 if let Some(s) = c
                     .shares
                     .get_mut(&(vault_id.clone(), update.object_id.clone()))
@@ -113,7 +113,7 @@ pub(super) fn on_server_message(m: ServerMessage) {
                     s.seq = s.seq.max(update.seq);
                 }
             });
-            let res = with(|c| {
+            let res = step(|c| {
                 c.replicas
                     .get_mut(&vault_id)
                     .map(|r| r.apply_update(&update))
@@ -132,7 +132,7 @@ pub(super) fn on_server_message(m: ServerMessage) {
             rejected,
         } => {
             let limits = limits();
-            let reaction = with(|c| {
+            let reaction = step(|c| {
                 let r = c.replicas.get_mut(&vault_id)?;
                 let o = c.outboxes.entry(vault_id.clone()).or_default();
                 o.on_ack(r, &results, true);
@@ -151,7 +151,7 @@ pub(super) fn on_server_message(m: ServerMessage) {
             object_id,
             ..
         } => {
-            with(|c| {
+            step(|c| {
                 if let Some(r) = c.replicas.get_mut(&vault_id) {
                     r.snapshot_created(&object_id);
                 }
@@ -164,7 +164,7 @@ pub(super) fn on_server_message(m: ServerMessage) {
         } => {
             // Someone permanently deleted a note we still had unsent edits
             // for: keep our version as a new note rather than losing it.
-            let rescue = with(|c| {
+            let rescue = step(|c| {
                 let r = c.replicas.get(&vault_id)?;
                 if !r.pending.iter().any(|p| p.object_id == object_id) {
                     return None;
@@ -187,7 +187,7 @@ pub(super) fn on_server_message(m: ServerMessage) {
                     ));
                 });
             }
-            let a = with(|c| {
+            let a = step(|c| {
                 let r = c.replicas.get_mut(&vault_id)?;
                 c.outboxes
                     .entry(vault_id.clone())
@@ -206,7 +206,7 @@ pub(super) fn on_server_message(m: ServerMessage) {
             }
         }
         ServerMessage::Snapshot { vault_id, snapshot } => {
-            let res = with(|c| {
+            let res = step(|c| {
                 c.replicas
                     .get_mut(&vault_id)
                     .map(|r| r.apply_snapshot(&snapshot))
@@ -302,7 +302,7 @@ pub(super) async fn reload_keys_and_resend(v: String) {
     if is_member(&v) {
         reload_vault_keys(v.clone()).await;
     } else {
-        let notes: Vec<String> = with(|c| {
+        let notes: Vec<String> = step(|c| {
             c.shares
                 .keys()
                 .filter(|(x, _)| *x == v)
@@ -323,7 +323,7 @@ pub(super) async fn reload_keys_and_resend(v: String) {
 /// Our unsent changes to a note were dropped because someone deleted it for
 /// good: keep our version as a new note rather than losing it.
 fn rescue_dropped(vault_id: &str, object_id: &str) {
-    let rescue = with(|c| {
+    let rescue = step(|c| {
         let r = c.replicas.get(vault_id)?;
         if r.purged.contains(object_id) || !r.member {
             return None;
@@ -350,7 +350,7 @@ fn rescue_dropped(vault_id: &str, object_id: &str) {
 
 /// Current key epochs of a replica (vault key and every document key).
 pub(super) fn key_epochs(vault: &str) -> Vec<(String, Option<u32>)> {
-    with(|c| {
+    step(|c| {
         let Some(r) = c.replicas.get(vault) else {
             return vec![];
         };
@@ -368,7 +368,7 @@ pub(super) fn key_epochs(vault: &str) -> Vec<(String, Option<u32>)> {
 /// Pending updates for purged objects can never succeed (the text is kept
 /// in a new note by the `Purged` handler). Returns whether any were dropped.
 pub(super) fn drop_rejected(vault_id: &str) -> bool {
-    let dropped = with(|c| {
+    let dropped = step(|c| {
         let Some(r) = c.replicas.get_mut(vault_id) else {
             return false;
         };
@@ -386,7 +386,7 @@ pub(super) fn drop_rejected(vault_id: &str) -> bool {
 }
 
 pub(super) fn on_synced(vault_id: &str, head: i64) {
-    let (rolled_back, uid, first) = with(|c| {
+    let (rolled_back, uid, first) = step(|c| {
         let uid = c.user_id.clone();
         c.loaded.insert(vault_id.to_string());
         let first = c.synced.insert(vault_id.to_string());
@@ -408,7 +408,7 @@ pub(super) fn on_synced(vault_id: &str, head: i64) {
     storage::set_head_seen(
         &uid,
         vault_id,
-        with(|c| {
+        step(|c| {
             c.replicas
                 .get(vault_id)
                 .map(|r| r.max_head_seen)
@@ -445,7 +445,7 @@ pub(super) fn show_loaded(vault_id: &str) {
 /// per update id. Their storage keys are removed once everything in them is
 /// stored under this page's key.
 pub(super) fn restore_stored_pending(vault_id: &str) {
-    let uid = with(|c| c.user_id.clone());
+    let uid = step(|c| c.user_id.clone());
     let stored = storage::all_pending(&uid, vault_id);
     if stored.is_empty() {
         return;
@@ -453,7 +453,7 @@ pub(super) fn restore_stored_pending(vault_id: &str) {
     let mut applied = engine::Applied::default();
     let mut adopted = 0;
     let mut done_keys = Vec::new();
-    with(|c| {
+    step(|c| {
         let Some(r) = c.replicas.get_mut(vault_id) else {
             return;
         };
@@ -513,7 +513,7 @@ pub(super) fn restore_stored_pending(vault_id: &str) {
 /// Send everything not acknowledged again (after a reconnect, new keys or a
 /// refused push).
 pub(super) fn resend_pending(vault_id: &str) {
-    with(|c| {
+    step(|c| {
         if let Some(o) = c.outboxes.get_mut(vault_id) {
             o.connection_reset();
         }
@@ -526,7 +526,7 @@ pub(super) fn resend_pending(vault_id: &str) {
 /// edits meanwhile.
 pub(super) fn send_planned(vault_id: &str) {
     let limits = limits();
-    let plan = with(|c| {
+    let plan = step(|c| {
         let r = c.replicas.get_mut(vault_id)?;
         let o = c.outboxes.entry(vault_id.to_string()).or_default();
         let mut plan = o.plan(r, &limits);
@@ -540,7 +540,7 @@ pub(super) fn send_planned(vault_id: &str) {
     if !plan.held.is_empty() {
         report_held(vault_id, &plan.held);
     }
-    let register: Vec<coolpsonotes_sync::NewKey> = with(|c| {
+    let register: Vec<coolpsonotes_sync::NewKey> = step(|c| {
         plan.register
             .into_iter()
             .filter(|k| {
@@ -559,7 +559,7 @@ pub(super) fn send_planned(vault_id: &str) {
             updates,
         });
         if !sent {
-            with(|c| {
+            step(|c| {
                 if let Some(o) = c.outboxes.get_mut(vault_id) {
                     o.not_sent(&ids);
                 }
@@ -572,7 +572,7 @@ pub(super) fn send_planned(vault_id: &str) {
 /// Give a note created here its own key, registered before any of its
 /// content is sent (so none of it is ever under the vault key).
 pub fn new_note_key(vault_id: &str, object_id: &str, title: &str) {
-    let made = with(|c| {
+    let made = step(|c| {
         let r = c.replicas.get_mut(vault_id)?;
         let o = c.outboxes.entry(vault_id.to_string()).or_default();
         Some(o.new_document_key(r, object_id, title))
@@ -585,7 +585,7 @@ pub fn new_note_key(vault_id: &str, object_id: &str, title: &str) {
 /// Store the vault's unregistered note keys under this page's key (and drop
 /// the other pages' entries in `adopted`, now kept here).
 pub fn persist_new_keys(vault_id: &str, adopted: &[String]) {
-    let (uid, keys) = with(|c| {
+    let (uid, keys) = step(|c| {
         (
             c.user_id.clone(),
             c.outboxes
@@ -623,7 +623,7 @@ async fn register_keys(vault_id: String, keys: Vec<coolpsonotes_sync::NewKey>) {
         match api::put::<_, ()>(&path, &k.update).await {
             Ok(()) => {
                 decided = true;
-                with(|c| {
+                step(|c| {
                     if let Some(o) = c.outboxes.get_mut(&vault_id) {
                         o.key_registered(&k.object_id);
                     }
@@ -638,7 +638,7 @@ async fn register_keys(vault_id: String, keys: Vec<coolpsonotes_sync::NewKey>) {
             Err(e) => {
                 decided = true;
                 super::reload_vault_keys(vault_id.clone()).await;
-                with(|c| {
+                step(|c| {
                     let (Some(r), Some(o)) =
                         (c.replicas.get_mut(&vault_id), c.outboxes.get_mut(&vault_id))
                     else {
@@ -651,7 +651,7 @@ async fn register_keys(vault_id: String, keys: Vec<coolpsonotes_sync::NewKey>) {
                 });
             }
         }
-        with(|c| {
+        step(|c| {
             c.registering
                 .remove(&(vault_id.clone(), k.object_id.clone()))
         });
@@ -681,7 +681,7 @@ pub(super) fn report_held(vault_id: &str, held: &[coolpsonotes_sync::Held]) {
     let Some(biggest) = held.iter().max_by_key(|h| h.bytes) else {
         return;
     };
-    let title = with(|c| {
+    let title = step(|c| {
         c.replicas
             .get(vault_id)
             .and_then(|r| r.index.get(&biggest.object_id))
@@ -727,7 +727,7 @@ pub(super) async fn on_too_large(vault_id: String) {
 
 /// Bytes of local changes of a vault not handed to the server yet.
 pub fn outbox_bytes(vault_id: &str) -> usize {
-    with(|c| {
+    step(|c| {
         let r = c.replicas.get(vault_id)?;
         Some(c.outboxes.get(vault_id).map_or_else(
             || r.pending.iter().map(|p| p.update.len()).sum(),
@@ -760,7 +760,7 @@ pub(super) fn on_vault_event(vault_id: String, event: VaultEventKind) {
             });
         }
         VaultEventKind::Deleted | VaultEventKind::AccessRevoked => {
-            let name = with(|c| c.replicas.get(&vault_id).map(|r| r.meta.name.clone()));
+            let name = step(|c| c.replicas.get(&vault_id).map(|r| r.meta.name.clone()));
             drop_vault(&vault_id);
             publish_vaults();
             if let Some(n) = name {
@@ -786,18 +786,18 @@ pub fn after_apply(vault_id: &str, applied: engine::Applied) {
         if applied.index_changed || !applied.purged.is_empty() {
             ui.tree_rev.update(|v| *v += 1);
         }
-        let d = with(|c| c.content_debounce.clone());
+        let d = step(|c| c.content_debounce.clone());
         d.run(250, move || ui.content_rev.update(|v| *v += 1));
     }
     // Push remote content into the open editor.
-    let open = with(|c| {
+    let open = step(|c| {
         c.editor
             .as_ref()
             .map(|(v, n, e)| (v.clone(), n.clone(), e.clone()))
     });
     if let Some((v, n, ed)) = open {
         if v == vault_id && applied.objects.contains(&n) {
-            let text = with(|c| c.replicas.get(&v).map(|r| r.note_text(&n)));
+            let text = step(|c| c.replicas.get(&v).map(|r| r.note_text(&n)));
             if let Some(t) = text {
                 ed.set_text(t, false);
             }
@@ -821,7 +821,7 @@ pub fn after_apply(vault_id: &str, applied: engine::Applied) {
 
 /// Record a local CRDT update and schedule sending it.
 pub fn local_update(vault_id: &str, object_id: &str, update: Vec<u8>) {
-    let ok = with(|c| {
+    let ok = step(|c| {
         let Some(r) = c.replicas.get_mut(vault_id) else {
             return false;
         };
@@ -840,13 +840,13 @@ pub fn local_update(vault_id: &str, object_id: &str, update: Vec<u8>) {
 }
 
 pub fn schedule_flush() {
-    let d = with(|c| c.flush.clone());
+    let d = step(|c| c.flush.clone());
     d.run(120, flush_now);
     update_pending_count();
 }
 
 pub fn flush_now() {
-    let vaults: Vec<String> = with(|c| {
+    let vaults: Vec<String> = step(|c| {
         c.replicas
             .iter()
             .filter(|(_, r)| !r.pending.is_empty())
@@ -862,9 +862,9 @@ pub fn flush_now() {
 
 /// Store this page's unsent updates of a vault; false if that failed.
 pub(super) fn persist_pending(vault_id: &str) -> bool {
-    let uid = with(|c| c.user_id.clone());
+    let uid = step(|c| c.user_id.clone());
     let previous = storage::pending(&uid, vault_id);
-    let copies = with(|c| {
+    let copies = step(|c| {
         let r = c.replicas.get(vault_id)?;
         let empty = coolpsonotes_sync::Outbox::default();
         let o = c.outboxes.get(vault_id).unwrap_or(&empty);
@@ -891,7 +891,7 @@ pub(super) fn persist_pending(vault_id: &str) -> bool {
 /// Tell the user (at most once a minute) that unsent changes can't be kept.
 pub(super) fn storage_full() {
     let now = now_ms();
-    if with(|c| std::mem::replace(&mut c.storage_warned_at, now)) > now - 60_000 {
+    if step(|c| std::mem::replace(&mut c.storage_warned_at, now)) > now - 60_000 {
         return;
     }
     error(
@@ -904,7 +904,7 @@ pub(super) fn storage_full() {
 /// server. Returns how many updates were made (0: unchanged or no such note).
 pub fn set_note_text(vault: &str, note: &str, text: &str) -> usize {
     let budget = limits().edit_budget();
-    let ups = with(|c| {
+    let ups = step(|c| {
         let n = c.replicas.get_mut(vault)?.notes.get_mut(note)?;
         Some(coolpsonotes_sync::edits::set_text(n, text, budget))
     })
@@ -917,7 +917,7 @@ pub fn set_note_text(vault: &str, note: &str, text: &str) -> usize {
 }
 
 pub(super) fn update_pending_count() {
-    let n = with(|c| c.pending_count());
+    let n = step(|c| c.pending_count());
     ui().pending.set(n);
 }
 
@@ -925,7 +925,7 @@ pub(super) fn update_pending_count() {
 pub fn touch(vault_id: &str, note_id: &str, size: usize) {
     let key = (vault_id.to_string(), note_id.to_string());
     let now = now_ms();
-    let due = with(|c| {
+    let due = step(|c| {
         let last = c.last_touch.get(&key).copied().unwrap_or(0);
         if now - last > 30_000 {
             c.last_touch.insert(key.clone(), now);
@@ -936,7 +936,7 @@ pub fn touch(vault_id: &str, note_id: &str, size: usize) {
     });
     if due {
         // People a single note is shared with can't see (or change) the vault index.
-        let up = with(|c| {
+        let up = step(|c| {
             c.replicas
                 .get(vault_id)
                 .filter(|r| r.member)
@@ -946,12 +946,12 @@ pub fn touch(vault_id: &str, note_id: &str, size: usize) {
             local_update(vault_id, INDEX_OBJECT_ID, u);
         }
     }
-    with(|c| c.dirty.insert(key));
+    step(|c| c.dirty.insert(key));
 }
 
 /// Compact objects with long update logs (and give history a revision).
 pub fn maybe_compact(vault_id: &str) {
-    let candidates = with(|c| {
+    let candidates = step(|c| {
         c.replicas
             .get(vault_id)
             .map(|r| r.compaction_candidates())
@@ -967,7 +967,7 @@ const SNAPSHOT_COOLDOWN_MS: i64 = 30_000;
 
 pub fn snapshot(vault_id: String, object_id: String) {
     let key = (vault_id.clone(), object_id.clone());
-    let action = with(|c| {
+    let action = step(|c| {
         // One at a time, and not again within the server's cooldown (it
         // would refuse it; the next trigger stores it).
         if c.snapshotting.contains(&key)
@@ -1039,7 +1039,7 @@ pub fn snapshot(vault_id: String, object_id: String) {
         };
         let adopted = ring.is_some();
         let refused = matches!(&res, Err(e) if e.status == 409 || e.status == 412);
-        with(|c| {
+        step(|c| {
             c.snapshotting.remove(&key);
             if res.is_ok() {
                 c.last_snapshot.insert(key.clone(), util::now_ms());
@@ -1062,7 +1062,7 @@ pub fn snapshot(vault_id: String, object_id: String) {
 /// Called when leaving a note: store a revision if it was edited.
 pub fn note_closed(vault_id: &str, note_id: &str) {
     flush_now();
-    let dirty = with(|c| {
+    let dirty = step(|c| {
         c.dirty
             .contains(&(vault_id.to_string(), note_id.to_string()))
     });

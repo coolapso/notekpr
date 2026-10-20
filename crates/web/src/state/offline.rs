@@ -38,7 +38,7 @@ const APP_CACHE: &str = "coolpsonotes-app";
 
 /// Whether the signed-in person turned the setting on in this browser.
 pub fn enabled() -> bool {
-    let uid = with(|c| c.user_id.clone());
+    let uid = step(|c| c.user_id.clone());
     !uid.is_empty() && storage::offline_enabled(&uid)
 }
 
@@ -51,7 +51,7 @@ pub fn supported() -> bool {
 
 /// Update the stored data, if the setting is on.
 pub(super) fn note(f: impl FnOnce(&mut Bundle)) {
-    let uid = with(|c| c.user_id.clone());
+    let uid = step(|c| c.user_id.clone());
     if uid.is_empty() || !storage::offline_enabled(&uid) {
         return;
     }
@@ -91,7 +91,7 @@ pub async fn enable() -> Result<(), String> {
     if !supported() {
         return Err("This needs the app to be served over HTTPS.".into());
     }
-    let (uid, device) = with(|c| (c.user_id.clone(), c.device_id.clone()));
+    let (uid, device) = step(|c| (c.user_id.clone(), c.device_id.clone()));
     let device = device.ok_or("This browser is not set up as a device yet.")?;
     let token = storage::token().ok_or("Not signed in.")?;
     let me: MeResponse = api::get("/me").await.map_err(|e| e.message)?;
@@ -129,7 +129,7 @@ pub async fn enable() -> Result<(), String> {
 
 /// Turn the setting off: delete the stored data and the app copy.
 pub async fn disable() {
-    let uid = with(|c| c.user_id.clone());
+    let uid = step(|c| c.user_id.clone());
     forget(&uid).await;
 }
 
@@ -197,7 +197,7 @@ pub(super) async fn start(b: Bundle) {
     let uid = me.user.id.clone();
     ui.server.set(b.server.clone());
     ui.user.set(Some(me.user.clone()));
-    with(|c| {
+    step(|c| {
         c.user_id = uid.clone();
         c.me = Some(me);
         c.offline_start = true;
@@ -239,13 +239,13 @@ pub(super) async fn finish_online() {
         Ok(m) => m,
         // 401 signs out (see `boot`); anything else: try at the next connection.
         Err(_) => {
-            with(|c| c.offline_start = true);
+            step(|c| c.offline_start = true);
             return;
         }
     };
     let uid = me.user.id.clone();
     ui().user.set(Some(me.user.clone()));
-    with(|c| c.me = Some(me.clone()));
+    step(|c| c.me = Some(me.clone()));
     note(|b| b.me = Some(me));
     let Some(rec) = storage::device(&uid) else {
         return;
@@ -258,7 +258,7 @@ pub(super) async fn finish_online() {
                 return;
             }
             Unlock::Unreadable => {
-                with(|c| c.offline_start = true);
+                step(|c| c.offline_start = true);
                 return;
             }
         },
@@ -272,7 +272,7 @@ pub(super) async fn finish_online() {
             return;
         }
         Err(_) => {
-            with(|c| c.offline_start = true);
+            step(|c| c.offline_start = true);
             return;
         }
     }

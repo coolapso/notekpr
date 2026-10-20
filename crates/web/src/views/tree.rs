@@ -27,7 +27,7 @@ struct Row {
 
 fn build_rows(vault: &str, expanded: &BTreeSet<String>) -> Vec<Row> {
     let entries = state::live_entries(vault);
-    let shared: BTreeSet<String> = state::with(|c| {
+    let shared: BTreeSet<String> = state::step(|c| {
         c.replicas
             .get(vault)
             .map(|r| r.shared.clone())

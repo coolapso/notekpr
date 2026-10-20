@@ -196,7 +196,7 @@ fn Favorites() -> impl IntoView {
     let items = move || {
         ui.prefs_rev.get();
         ui.tree_rev.get();
-        let favs = state::with(|c| c.prefs.favorites.clone());
+        let favs = state::step(|c| c.prefs.favorites.clone());
         favs.into_iter()
             .filter_map(|(v, n)| state::note_title(&v, &n).map(|t| (v, n, t)))
             .collect::<Vec<_>>()
@@ -223,7 +223,7 @@ fn Recent() -> impl IntoView {
         ui.prefs_rev.get();
         ui.tree_rev.get();
         let cur = ui.route.get().vault().map(str::to_string);
-        let recent = state::with(|c| c.prefs.recent.clone());
+        let recent = state::step(|c| c.prefs.recent.clone());
         recent
             .into_iter()
             .filter(|(v, _)| cur.as_ref().is_none_or(|c| c == v))

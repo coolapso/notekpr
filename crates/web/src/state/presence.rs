@@ -5,7 +5,7 @@ use super::*;
 // ------------------------------------------------------------------ presence
 
 pub fn send_presence() {
-    let d = with(|c| c.presence_debounce.clone());
+    let d = step(|c| c.presence_debounce.clone());
     d.run(200, || {
         let ui = ui();
         let route = ui.route.get_untracked();
@@ -14,9 +14,9 @@ pub fn send_presence() {
             .get_untracked()
             .map(|u| u.display_name)
             .unwrap_or_default();
-        let uid = with(|c| c.user_id.clone());
-        let cursor = with(|c| c.cursor);
-        let vaults: Vec<String> = with(|c| c.loaded.iter().cloned().collect());
+        let uid = step(|c| c.user_id.clone());
+        let cursor = step(|c| c.cursor);
+        let vaults: Vec<String> = step(|c| c.loaded.iter().cloned().collect());
         for v in vaults {
             let here = route.vault() == Some(v.as_str());
             let p = Presence {
@@ -37,7 +37,7 @@ pub fn send_presence() {
         let target = match &route {
             Route::Note(v, n) if is_shared_note(v, n) => Some((v.clone(), n.clone())),
             Route::Shared(v, n)
-                if with(|c| {
+                if step(|c| {
                     c.shares
                         .get(&(v.clone(), n.clone()))
                         .is_some_and(|s| s.loaded)
@@ -47,7 +47,7 @@ pub fn send_presence() {
             }
             _ => None,
         };
-        let prev = with(|c| std::mem::replace(&mut c.presence_note, target.clone()));
+        let prev = step(|c| std::mem::replace(&mut c.presence_note, target.clone()));
         let base = Presence {
             name,
             color: util::user_color(&uid),
@@ -73,7 +73,7 @@ pub fn send_presence() {
 }
 
 pub(super) fn announce(vault: &str, object_id: &str, p: &Presence) {
-    let payload = with(|c| {
+    let payload = step(|c| {
         let r = c.replicas.get(vault)?;
         r.encrypt_awareness(object_id, &serde_json::to_vec(p).ok()?)
             .ok()
@@ -98,7 +98,7 @@ pub(super) fn on_awareness(
     // note too; once we know a connection vault-wide, its note-level messages
     // add nothing (and may arrive out of order), so they are ignored.
     let scope = (!object_id.is_empty()).then(|| object_id.to_string());
-    let known_vault_wide = with(|c| {
+    let known_vault_wide = step(|c| {
         c.presence
             .get(&conn)
             .is_some_and(|e| e.scope.is_none() && now_ms() - e.seen < 45_000)
@@ -107,9 +107,9 @@ pub(super) fn on_awareness(
         return;
     }
     if payload.is_empty() {
-        with(|c| c.presence.remove(&conn));
+        step(|c| c.presence.remove(&conn));
     } else {
-        let p = with(|c| {
+        let p = step(|c| {
             c.replicas
                 .get(vault_id)
                 .and_then(|r| r.decrypt_awareness(object_id, payload).ok())
@@ -123,7 +123,7 @@ pub(super) fn on_awareness(
                 p.object_id = None;
             }
         }
-        let is_new = with(|c| {
+        let is_new = step(|c| {
             let new = !c.presence.contains_key(&conn);
             c.presence.insert(
                 conn,
@@ -149,7 +149,7 @@ pub fn publish_presence() {
     let ui = ui();
     let route = ui.route.get_untracked();
     let now = now_ms();
-    let (views, cursors, ed) = with(|c| {
+    let (views, cursors, ed) = step(|c| {
         c.presence.retain(|_, e| now - e.seen < 45_000);
         let v = route
             .vault()

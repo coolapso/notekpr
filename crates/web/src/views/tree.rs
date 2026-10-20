@@ -131,18 +131,14 @@ pub fn Tree(vault: String) -> impl IntoView {
     let drop_target = RwSignal::new(None::<String>);
     let v0 = vault.clone();
 
-    // Reveal the open note's folder.
-    Effect::new(move |_| {
-        if let Route::Note(v, n) = ui.route.get()
-            && let Some(e) = state::step(|c| c.entry(&v, &n))
-        {
-            let mut p = paths::parent(&e.path).to_string();
-            expanded.update(|s| {
-                while !p.is_empty() {
-                    s.insert(p.clone());
-                    p = paths::parent(&p).to_string();
-                }
-            });
+    // Folders open and close only when clicked, so nothing moves by itself.
+    // A closed folder holding the open note is marked instead.
+    let v_open = vault.clone();
+    let open_path = Memo::new(move |_| {
+        ui.tree_rev.track();
+        match ui.route.get() {
+            Route::Note(v, n) if v == v_open => state::step(|c| c.entry(&v, &n)).map(|e| e.path),
+            _ => None,
         }
     });
 
@@ -188,6 +184,11 @@ pub fn Tree(vault: String) -> impl IntoView {
                         let id = id.clone();
                         move || matches!(ui.route.get(), Route::Note(_, n) if Some(&n) == id.as_ref())
                     };
+                    let holds_open = {
+                        let path = path.clone();
+                        let closed = is_folder && !row.expanded;
+                        move || closed && open_path.get().is_some_and(|p| paths::is_within(&p, &path))
+                    };
                     let icon = match row.kind {
                         EntryKind::Folder => "folder",
                         EntryKind::Note => "file",
@@ -216,7 +217,7 @@ pub fn Tree(vault: String) -> impl IntoView {
                     let dp2 = path.clone();
                     let dp3 = path.clone();
                     view! {
-                        <div class="tree-row" role="treeitem" class:active=active class:folder=is_folder
+                        <div class="tree-row" role="treeitem" class:active=active class:holds-open=holds_open class:folder=is_folder
                             class:drop=move || is_folder && drop_target.get().as_deref() == Some(dp3.as_str())
                             style=indent draggable="true"
                             on:dragstart=move |ev: web_sys::DragEvent| {

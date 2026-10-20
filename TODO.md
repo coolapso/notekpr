@@ -64,7 +64,7 @@ Phases 1–3 are done, and Phase 4 except the OS keyring for CLI secrets
       vault — the synced `quick_vault` preference (Settings → Editor), else
       the person's oldest own vault, else the first writable one. Named by
       the local time (`2026-10-19 14.32`, no `:` for Windows mirrors; ` 2`
-      if taken); lists show the first line. Web: sidebar section above
+      if taken); lists show the first line. Web: a sidebar entry above
       Recent (can be turned off), `/quick` page with a capture box that
       stays put (Ctrl/Cmd+Enter), cards with promote (move + rename) and
       archive (`Quick notes/Archive/`), Ctrl/Cmd+Alt+Q. CLI:
@@ -72,6 +72,10 @@ Phases 1–3 are done, and Phase 4 except the OS keyring for CLI secrets
       changes. The small naming/preview/default-vault helpers exist in
       both clients (`crates/web/src/quick.rs`, `crates/client/src/ops.rs`);
       they could move to `crates/core`.
+- [x] Sidebar marks the open note in one place only (2026-10-20): the tree,
+      which no longer opens folders by itself — a closed folder holding the
+      open note is marked instead. Favorites, Recent and the Quick notes
+      entry (no longer a list) mark nothing.
 
 ---
 

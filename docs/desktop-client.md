@@ -195,9 +195,9 @@ five edits accumulated) and when it is compacted (every ~200 updates).
 Quick notes are for thoughts that don't have a home yet. They are ordinary
 notes in the `Quick notes/` folder of one vault, so they sync, mirror to
 Markdown files and open in any editor like every other note. The web app
-shows them in the sidebar and on its *Quick notes* page (`Ctrl+Alt+Q` makes
-one), where they can be promoted to a regular note or archived (moved to
-`Quick notes/Archive/`).
+lists them on its *Quick notes* page (the sidebar's *Quick notes* entry;
+`Ctrl+Alt+Q` makes one), where they can be promoted to a regular note or
+archived (moved to `Quick notes/Archive/`).
 
 ```sh
 coolpsonotes quick Call the dentist about Tuesday   # words are joined with spaces

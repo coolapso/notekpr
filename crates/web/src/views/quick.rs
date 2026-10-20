@@ -29,44 +29,27 @@ fn latest(archived: bool, limit: usize) -> (Option<String>, Vec<QuickNote>) {
     }
 }
 
-/// Sidebar section: "new quick note" and the latest five.
+/// Sidebar entry: the Quick notes page, and "new quick note". The notes
+/// themselves are in the tree and on the page; listing them here as well
+/// only marked the open note in one more place.
 #[component]
 pub fn QuickSection() -> impl IntoView {
     let ui = ui();
-    let data = Memo::new(move |_| latest(false, 5));
+    let has_vault = Memo::new(move |_| {
+        ui.prefs_rev.track();
+        ui.vaults.track();
+        quick::vault().is_some()
+    });
     view! {
         <Show when=move || ui.ui_prefs.get().quick_notes>
             <div class="sb-section sb-quick">
-                <div class="sb-label">
-                    <button class="sb-label-link" class:active=move || ui.route.get() == Route::Quick
-                        title="All quick notes" on:click=move |_| state::navigate(Route::Quick)>"Quick notes"</button>
-                    {move || data.get().0.is_some().then(|| view! {
-                        <button class="icon-btn tiny qn-add" title=format!("New quick note ({}+Alt+Q)", util::mod_key()) aria-label="New quick note"
-                            on:click=move |_| quick::new_and_open()><Icon name="plus"/></button>
-                    })}
-                </div>
-                {move || {
-                    let (v, items) = data.get();
-                    if v.is_none() {
-                        return view! { <p class="sb-hint muted small">"Quick notes need a vault you can edit."</p> }.into_any();
-                    }
-                    if items.is_empty() {
-                        return view! {
-                            <button class="sb-link" on:click=move |_| quick::new_and_open()>
-                                <Icon name="plus"/><span class="grow ellipsis">"New quick note"</span></button>
-                        }.into_any();
-                    }
-                    items.into_iter().map(|q| {
-                        let (v, id) = (q.vault.clone(), q.id.clone());
-                        let (v2, id2) = (q.vault.clone(), q.id.clone());
-                        let active = move || ui.route.get() == Route::Note(v2.clone(), id2.clone());
-                        view! {
-                            <button class="sb-link" class:active=active title=q.title.clone()
-                                on:click=move |_| state::navigate(Route::Note(v.clone(), id.clone()))>
-                                <Icon name="zap"/><span class="grow ellipsis">{q.preview.clone()}</span></button>
-                        }
-                    }).collect_view().into_any()
-                }}
+                <button class="sb-link" class:active=move || ui.route.get() == Route::Quick
+                    title="All quick notes" on:click=move |_| state::navigate(Route::Quick)>
+                    <Icon name="zap"/><span class="grow ellipsis">"Quick notes"</span></button>
+                <Show when=move || has_vault.get()>
+                    <button class="icon-btn tiny qn-add" title=format!("New quick note ({}+Alt+Q)", util::mod_key()) aria-label="New quick note"
+                        on:click=move |_| quick::new_and_open()><Icon name="plus"/></button>
+                </Show>
             </div>
         </Show>
     }

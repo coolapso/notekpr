@@ -940,7 +940,7 @@ def test_offline_start(env):
 def test_quick_notes(env):
     b, m = Browser(), None
     cards = "return Array.from(document.querySelectorAll('.qn-card .qn-text')).map(e => e.textContent)"
-    sidebar = "return Array.from(document.querySelectorAll('.sb-quick .sb-link')).map(e => e.textContent.trim())"
+    marked = "return Array.from(document.querySelectorAll('.sidebar .active, .sidebar .holds-open')).map(e => e.textContent.trim())"
     try:
         signup(b, uniq("quinn"))
         # The shortcut, even from inside the editor: a new quick note, ready to type.
@@ -953,12 +953,22 @@ def test_quick_notes(env):
         b.keys("Call the dentist")
         time.sleep(0.8)
         check(editor_text(b) == "Call the dentist", "typing goes into the quick note")
-        b.wait(sidebar + ".includes('Call the dentist')", 10, "the sidebar entry")
-        check(True, "the sidebar shows the quick note by its first line")
+        # The sidebar marks where the note is once, and nothing moves by itself:
+        # the tree keeps the Quick notes folder closed and marks it; the
+        # shortcut lists (Recent, the Quick notes entry) mark nothing.
+        title = b.js("return document.querySelector('.note-title').value")
+        b.wait("return Array.from(document.querySelectorAll('.sidebar .sb-link')).some(e => e.textContent.includes('" + title + "'))", 10, "the note in Recent")
+        check(b.js(marked) == ["Quick notes"],
+              "the tree marks the closed Quick notes folder instead of opening it, and nothing else is marked")
+        b.click(".tree-row.holds-open .tree-item")
+        b.wait("return !!document.querySelector('.tree-row.active')", 5, "the folder opens")
+        check(b.js(marked) == [title], "opened, the folder shows the note itself as the one marked place")
+        check(b.js("return document.querySelectorAll('.sb-quick .sb-link').length") == 1,
+              "the Quick notes entry in the sidebar doesn't list the notes")
         # The overview page: capture several thoughts without leaving it.
-        b.click(".sb-quick .sb-label-link")
+        b.click(".sb-quick .sb-link")
         b.find(".quick-capture textarea", 10)
-        check(b.js("return location.pathname") == "/quick", "the section header opens /quick")
+        check(b.js("return location.pathname") == "/quick", "the Quick notes entry opens /quick")
         b.click(".quick-capture textarea")
         b.keys("Garden plan" + KEYS["enter"] + "tomatoes and beans")
         b.chord(KEYS["ctrl"], KEYS["enter"])
@@ -971,8 +981,6 @@ def test_quick_notes(env):
         b.wait(cards + ".join('|') === 'Old thought|Garden plan|Call the dentist'", 10, "three cards")
         b.wait("return document.activeElement === document.querySelector('.quick-capture textarea')", 5, "focus back in the box")
         check(True, "the Save button saves too and leaves the focus in the box")
-        b.wait(sidebar + ".join('|') === 'Old thought|Garden plan|Call the dentist'", 10, "sidebar order")
-        check(True, "the sidebar lists the latest quick notes, newest first")
         # Promote: a name (default: the first line) and a folder.
         b.click_el(b.find_text(".qn-open", "Garden plan"))
         b.wait("return !!document.querySelector('.note-title') && document.querySelector('.note-title').value !== ''", 10, "the card opens its note")
@@ -996,13 +1004,12 @@ def test_quick_notes(env):
         b.wait("return document.querySelector('.note-title') && document.querySelector('.note-title').value === 'Vegetable garden'", 10, "the promoted note")
         check(b.js("return document.querySelector('.crumbs').textContent").endswith("Projects") and editor_text(b) == "Garden plan\ntomatoes and beans",
               "promoting moves and renames it out of Quick notes, keeping its text")
-        # Archive: hidden from the sidebar and the list, unless asked for.
-        b.click(".sb-quick .sb-label-link")
+        # Archive: hidden from the list, unless asked for.
+        b.click(".sb-quick .sb-link")
         b.find(".qn-card", 10)
         b.js("Array.from(document.querySelectorAll('.qn-card')).find(c => c.textContent.includes('Call the dentist')).querySelector('.qn-archive').click()")
         b.wait(cards + ".join('|') === 'Old thought'", 10, "archived note hidden")
-        b.wait(sidebar + ".join('|') === 'Old thought'", 10, "archived note gone from the sidebar")
-        check(True, "archiving hides a quick note from the list and the sidebar")
+        check(True, "archiving hides a quick note from the list")
         b.click(".qn-archived-toggle")
         b.wait(cards + ".join('|') === 'Old thought|Call the dentist'", 10, "archived shown")
         check(b.js("return Array.from(document.querySelectorAll('.qn-card.archived')).map(c => c.querySelector('.qn-text').textContent)") == ["Call the dentist"],

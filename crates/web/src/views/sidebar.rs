@@ -209,9 +209,7 @@ fn Favorites() -> impl IntoView {
             <div class="sb-section">
                 <div class="sb-label"><span>"Favorites"</span></div>
                 {move || items().into_iter().map(|(v, n, t)| {
-                    let (v2, n2) = (v.clone(), n.clone());
-                    let active = move || ui.route.get() == Route::Note(v2.clone(), n2.clone());
-                    view! { <button class="sb-link" class:active=active on:click=move |_| state::navigate(Route::Note(v.clone(), n.clone()))>
+                    view! { <button class="sb-link" on:click=move |_| state::navigate(Route::Note(v.clone(), n.clone()))>
                         <Icon name="star"/><span class="grow ellipsis">{t}</span></button> }
                 }).collect_view()}
             </div>
@@ -241,9 +239,7 @@ fn Recent() -> impl IntoView {
             <div class="sb-section">
                 <div class="sb-label"><span>"Recent"</span></div>
                 {move || items().into_iter().map(|(v, n, t)| {
-                    let (v2, n2) = (v.clone(), n.clone());
-                    let active = move || ui.route.get() == Route::Note(v2.clone(), n2.clone());
-                    view! { <button class="sb-link" class:active=active on:click=move |_| state::navigate(Route::Note(v.clone(), n.clone()))>
+                    view! { <button class="sb-link" on:click=move |_| state::navigate(Route::Note(v.clone(), n.clone()))>
                         <Icon name="clock"/><span class="grow ellipsis">{t}</span></button> }
                 }).collect_view()}
             </div>

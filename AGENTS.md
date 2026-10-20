@@ -128,6 +128,12 @@ Without go-task, see the plain commands in the [Taskfile](Taskfile.yml) or
 - Docs follow the code: API or wire change → `docs/protocol.md`; anything
   about keys, trust or metadata → `docs/security.md`; new CLI commands →
   `docs/desktop-client.md`; requirement coverage → `docs/acceptance.md`.
+- **Feature lists stay current.** A new user-facing feature, or a change to
+  one (including its shortcuts), goes into the feature lists in the same
+  change: the Features section of `README.md` and `site/features.html` — and
+  `site/index.html` ("In the box") for headline features. Remove what no
+  longer exists.
+- Finished work leaves `TODO.md` (it holds only what is still to be done).
 
 ## Things that are easy to get wrong
 

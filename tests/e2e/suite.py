@@ -1221,7 +1221,45 @@ def test_entry_icons(env):
         b.close()
 
 
-TESTS = [test_onboarding, test_collab, test_devices_and_recovery, test_features, test_attachments, test_note_sharing, test_tables, test_editor_safety, test_local_copy, test_ui_basics, test_offline_tabs, test_offline_start, test_mobile, test_quick_notes, test_vault_icons, test_entry_icons]
+def test_graph(env):
+    b = Browser()
+    canvas = ".graph-page canvas"
+    data = lambda css, key: "return (document.querySelector('" + css + "') || {dataset: {}}).dataset." + key
+    try:
+        signup(b, uniq("gil"))
+        new_note(b, "Garden", "Plant [[Tomatoes]], see [[Compost]]")
+        new_note(b, "Tomatoes", "Needs [[Compost]] and back to [[Garden]]")
+        new_note(b, "Compost", "Scraps")
+        new_note(b, "Trips", "Lisbon")
+        b.click(".sb-graph")
+        b.find(canvas, 10)
+        b.wait(data(canvas, "edges") + " === '3'", 10, "the links")
+        listed = b.js("return Array.from(document.querySelectorAll('.graph-page .graph-list button')).map(e => e.textContent)")
+        check(b.js(data(canvas, "nodes")) == "5" and all(any(l.startswith(n + " (") for l in listed) for n in ["Garden", "Tomatoes", "Compost", "Trips", "Welcome"]),
+              "the graph shows every note and the links between them")
+        check("Garden (2 links)" in listed and "Compost (2 links)" in listed, "a link counts once whichever way it goes")
+        b.click(".graph-orphans input")
+        b.wait(data(canvas, "nodes") + " === '3'", 5, "only linked notes")
+        check(True, "unlinked notes can be hidden")
+        b.click(".graph-orphans input")
+        # One note left: once laid out it is in the middle, where we click.
+        b.js("const i = document.querySelector('.graph-filter'); i.value = 'tomat'; i.dispatchEvent(new Event('input'))")
+        b.wait(data(canvas, "nodes") + " === '1'", 5, "the filter")
+        time.sleep(1.5)
+        b.click_at(canvas)
+        b.wait("return (document.querySelector('.note-title') || {}).value === 'Tomatoes'", 10, "the note opens")
+        check(True, "the filter narrows the graph, and clicking a note opens it")
+        b.wait(data(".local-graph canvas", "nodes") + " === '3'", 10, "the local graph")
+        check(True, "the side panel shows the note and its neighbours")
+        b.chord(KEYS["ctrl"], "g")
+        b.wait("return location.pathname.endsWith('/graph')", 5, "Ctrl+G")
+        check(True, "Ctrl+G opens the graph")
+        check(not severe_logs(b), "no browser errors")
+    finally:
+        b.close()
+
+
+TESTS = [test_onboarding, test_collab, test_devices_and_recovery, test_features, test_attachments, test_note_sharing, test_tables, test_editor_safety, test_local_copy, test_ui_basics, test_offline_tabs, test_offline_start, test_mobile, test_quick_notes, test_vault_icons, test_entry_icons, test_graph]
 
 
 def main():

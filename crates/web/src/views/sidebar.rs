@@ -153,7 +153,9 @@ pub fn Sidebar() -> impl IntoView {
                         view! {
                             <div class="sb-section">
                                 <div class="sb-label">
-                                    <span>"Notes"</span>
+                                    <span class="grow">"Notes"</span>
+                                    <button class="icon-btn tiny sb-graph" title=format!("Graph ({}+G)", util::mod_key()) aria-label="Graph"
+                                        on:click={ let v = v.clone(); move |_| state::navigate(Route::Graph(v.clone())) }><Icon name="graph"/></button>
                                     <button class="icon-btn tiny" title="Vault settings" aria-label="Vault settings" on:click=move |_| ui.modal.set(Some(Modal::VaultSettings(v2.clone())))><Icon name="settings"/></button>
                                 </div>
                                 <Tree vault=v/>

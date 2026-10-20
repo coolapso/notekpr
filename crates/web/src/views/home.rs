@@ -136,6 +136,7 @@ pub fn VaultHome(vault: String) -> impl IntoView {
                                 <button class="qa" on:click=move |_| actions::new_note(&vid.get_value(), "")><Icon name="file-plus"/><span>"New note"</span></button>
                                 <button class="qa" on:click=move |_| ui.modal.set(Some(Modal::Import(vid.get_value())))><Icon name="upload"/><span>"Import notes"</span></button>
                                 <button class="qa" on:click=move |_| ui.modal.set(Some(Modal::QuickSwitch))><Icon name="search"/><span>"Find a note"</span></button>
+                                <button class="qa" on:click=move |_| state::navigate(Route::Graph(vid.get_value()))><Icon name="graph"/><span>"Graph"</span></button>
                             </div>
                         })}
                         <h2>"Recently edited"</h2>

@@ -1,5 +1,6 @@
 pub mod auth;
 pub mod dialogs;
+pub mod graph;
 pub mod home;
 pub mod icons;
 pub mod note;
@@ -49,6 +50,7 @@ pub fn Shell() -> impl IntoView {
                     Route::Device(code) => view! { <settings::DeviceCodePage code=code/> }.into_any(),
                     Route::Shared(v, n) => view! { <note::SharedNoteView vault=v note=n/> }.into_any(),
                     Route::Quick => view! { <quick::QuickPage/> }.into_any(),
+                    Route::Graph(v) => view! { <graph::GraphPage vault=v/> }.into_any(),
                 }}
             </main>
             <dialogs::ModalHost/>
@@ -233,6 +235,12 @@ fn install_shortcuts() {
                             ViewMode::Reading
                         }
                     });
+                }
+            }
+            (true, false, false, "g") => {
+                if let Some(v) = route.vault() {
+                    e.prevent_default();
+                    state::navigate(Route::Graph(v.to_string()));
                 }
             }
             (true, false, false, "\\") => {

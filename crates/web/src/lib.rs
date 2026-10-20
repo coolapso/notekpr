@@ -8,6 +8,7 @@ pub mod actions;
 pub mod api;
 pub mod cache;
 pub mod editor;
+pub mod graph;
 pub mod knowledge;
 pub mod quick;
 pub mod render;

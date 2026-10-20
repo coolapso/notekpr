@@ -1079,6 +1079,7 @@ fn Help() -> impl IntoView {
         (format!("{m}+Alt+Q"), "New quick note"),
         (format!("{m}+E"), "Toggle reading view"),
         (format!("{m}+\\"), "Toggle side panel"),
+        (format!("{m}+G"), "Graph of the vault"),
         (format!("{m}+B / {m}+I"), "Bold / italic"),
         (format!("{m}+K (in editor)"), "Insert link"),
         (format!("{m}+`"), "Inline code"),

@@ -69,6 +69,8 @@ pub enum Route {
     Shared(String, String),
     /// All quick notes (see `crate::quick`).
     Quick,
+    /// A vault's notes and links as a graph.
+    Graph(String),
 }
 
 impl Route {
@@ -83,6 +85,7 @@ impl Route {
             Route::Device(None) => "/device".into(),
             Route::Shared(v, n) => format!("/s/{v}/{n}"),
             Route::Quick => "/quick".into(),
+            Route::Graph(v) => format!("/v/{v}/graph"),
         }
     }
 
@@ -95,6 +98,7 @@ impl Route {
         match parts.as_slice() {
             ["v", v] => Route::Vault(v.to_string()),
             ["v", v, "trash"] => Route::Trash(v.to_string()),
+            ["v", v, "graph"] => Route::Graph(v.to_string()),
             ["v", v, n] => Route::Note(v.to_string(), n.to_string()),
             ["s", v, n] => Route::Shared(v.to_string(), n.to_string()),
             ["quick"] => Route::Quick,
@@ -119,7 +123,7 @@ impl Route {
 
     pub fn vault(&self) -> Option<&str> {
         match self {
-            Route::Vault(v) | Route::Note(v, _) | Route::Trash(v) => Some(v),
+            Route::Vault(v) | Route::Note(v, _) | Route::Trash(v) | Route::Graph(v) => Some(v),
             _ => None,
         }
     }

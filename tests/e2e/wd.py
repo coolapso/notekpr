@@ -90,6 +90,13 @@ class Browser:
         up = [{"type": "keyUp", "value": k} for k in reversed(keys)]
         req("POST", self.p("/actions"), {"actions": [{"type": "key", "id": "kb", "actions": down + up}]})
 
+    def click_at(self, css, x=0, y=0):
+        """A real mouse click (pointer events) at (`x`, `y`) from the centre of `css`."""
+        el = {"element-6066-11e4-a52e-4f735466cecf": self.find(css)}
+        req("POST", self.p("/actions"), {"actions": [{"type": "pointer", "id": "mouse", "parameters": {"pointerType": "mouse"},
+            "actions": [{"type": "pointerMove", "origin": el, "x": x, "y": y},
+                        {"type": "pointerDown", "button": 0}, {"type": "pointerUp", "button": 0}]}]})
+
     def text(self, css):
         return req("GET", self.p(f"/element/{self.find(css)}/text"))
 

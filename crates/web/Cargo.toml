@@ -34,7 +34,7 @@ features = [
   "WebSocket", "MessageEvent", "CloseEvent", "ErrorEvent", "Event", "EventTarget", "KeyboardEvent",
   "MouseEvent", "InputEvent", "FocusEvent", "ClipboardEvent", "DataTransfer", "DragEvent",
   "HtmlInputElement", "HtmlTextAreaElement", "HtmlAnchorElement", "HtmlImageElement", "HtmlDivElement",
-  "HtmlCanvasElement", "CanvasRenderingContext2d",
+  "HtmlCanvasElement", "CanvasRenderingContext2d", "PointerEvent", "WheelEvent", "AddEventListenerOptions",
   "Blob", "BlobPropertyBag", "Url", "File", "FileList", "FileReader", "DomRect", "DomRectList",
   "CssStyleDeclaration", "ScrollIntoViewOptions", "ScrollBehavior", "ScrollLogicalPosition",
   "MediaQueryList", "Navigator", "Clipboard", "DomTokenList", "StaticRange", "TreeWalker", "NodeFilter",

@@ -162,6 +162,40 @@ pub fn clear_caches() {
     LINKS.with(|l| *l.borrow_mut() = None);
 }
 
+/// The vault's notes and the links between them, for the graph view.
+pub fn graph(vault: &str) -> crate::graph::Graph {
+    let (notes, entries) = step(|c| {
+        let Some(r) = c.replicas.get(vault) else {
+            return (vec![], vec![]);
+        };
+        let live = c.live_entries(vault);
+        let notes: Vec<_> = live
+            .iter()
+            .filter(|e| e.kind == EntryKind::Note)
+            .map(|e| {
+                (
+                    e.id.clone(),
+                    e.path.clone(),
+                    e.icon.clone(),
+                    r.note_text(&e.id),
+                )
+            })
+            .collect();
+        let entries = live.into_iter().map(|e| (e.id, e.path)).collect::<Vec<_>>();
+        (notes, entries)
+    });
+    let notes = notes
+        .into_iter()
+        .map(|(id, path, icon, text)| crate::graph::NoteLinks {
+            links: analysis(vault, &id, &text).links.clone(),
+            id,
+            path,
+            icon,
+        })
+        .collect();
+    crate::graph::Graph::build(notes, &entries)
+}
+
 pub struct Backlink {
     pub id: String,
     pub path: String,

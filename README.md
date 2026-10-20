@@ -49,6 +49,9 @@ read anything.
 * Favorites and recently opened notes in the sidebar.
 * Quick switcher (`Ctrl+P`), full-text search (`Ctrl+Shift+F`) with tag
   filters, tags, and backlinks and outgoing links beside each note.
+* A graph of how your notes link, like Obsidian's (`Ctrl+G`): the whole vault
+  with a filter, or the open note and its neighbours beside it. Drag, zoom,
+  click a note to open it.
 * Quick notes: capture a thought in a second (`Ctrl+Alt+Q`, a capture page
   that works on phones, or `coolpsonotes quick …`), then promote it to a
   regular note or archive it.

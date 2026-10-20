@@ -49,6 +49,7 @@ pub fn RightPanel(vault: String, note: String) -> impl IntoView {
     let text5 = text.clone();
     let tags = Memo::new(move |_| knowledge::analysis(&v5, &n5, &text5()).tags.clone());
     let vb = vault.clone();
+    let (vg, vg2, ng) = (vault.clone(), vault.clone(), note.clone());
     let vo = vault.clone();
     let vbr = vault.clone();
     let pbr = path.clone();
@@ -73,6 +74,13 @@ pub fn RightPanel(vault: String, note: String) -> impl IntoView {
                         }).collect_view().into_any()
                     }
                 }}
+            </section>
+            <section class="local-graph-section">
+                <h3><Icon name="graph"/>" Graph"
+                    <button class="icon-btn tiny" title="The vault's whole graph" aria-label="The vault's whole graph"
+                        on:click={ let v = vg.clone(); move |_| state::navigate(Route::Graph(v.clone())) }><Icon name="maximize"/></button>
+                </h3>
+                <div class="local-graph"><super::graph::GraphCanvas vault=vg2 focus=ng depth=1 compact=true/></div>
             </section>
             <Show when=move || !outgoing.get().is_empty()>
                 <section>

@@ -82,8 +82,9 @@ like any other data:
 | dave | — | *Work* (editor) |
 
 Icons, tables, tasks, code, footnotes, heading links, a link to a missing
-note and edits by several people are all in there; *Start here* in alice's
-*Home* lists things to try.
+note and edits by several people are all in there; alice is also the
+server's administrator. *Start here* in alice's *Home* lists things to try,
+including what the script can't set up (favorites, settings, pictures, …).
 
 Sign in as one of them (one per tab). A browser is a new device of its user:
 choose **Approve from another device** and the running demo approves it
@@ -92,6 +93,16 @@ are in `data/demo/recovery-keys.txt`). The server's log goes to
 `data/demo/server.log`. The script refuses to seed a server that isn't in
 development mode. To change the content, edit the script and
 `task demo:reset`. Port 8099 taken? `task demo DEMO_LISTEN=127.0.0.1:8098`.
+
+**Keep it complete.** The demo is meant to show every user-facing feature,
+so it doubles as a hands-on end-to-end check: after `task demo:reset && task
+demo` you can click through everything with real, encrypted data from
+several users. A new or changed feature gets demo data in the same change
+(the rule is in [AGENTS.md](../AGENTS.md#before-you-call-a-change-done)):
+created through the CLI where it can be, otherwise as a line in the "Things
+to try" list of alice's *Start here* note. Seeding stops at the first CLI
+command that fails, and the server log is in `data/demo/server.log`, so a
+broken CLI or server path shows up while seeding too.
 
 ## Run locally with several users (no OIDC)
 

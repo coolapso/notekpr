@@ -13,6 +13,10 @@ from another device" when signing in, and while this runs it approves the
 demo users' new devices for you (--no-approve turns that off; the recovery
 keys are in data/demo/recovery-keys.txt).
 
+Keep it complete: every user-facing feature should have something here to
+see it with (AGENTS.md, "The demo shows every feature"). What the CLI can't
+create goes into "Things to try" in the *Start here* note.
+
 Python standard library only. Development mode lets anyone sign in as
 anyone: never expose this server.
 """
@@ -145,6 +149,22 @@ HOME = [
         - [ ] Sign in as **bob** in another tab and edit *Shopping list* in the *Family* vault together
         - [ ] Click a link to a note that doesn't exist yet: [[Greenhouse]]
         - [ ] Look in the trash: a shopping list is waiting to be restored
+
+        ## More to try
+
+        - [ ] Star a note (☆ at the top): it shows under *Favorites* in the sidebar
+        - [ ] Rename a note, or drag it to another folder in the sidebar: links to it follow
+        - [ ] Drop or paste a picture into a note
+        - [ ] Give a note or folder an icon: *Set icon…* in its ⋯ menu in the sidebar
+        - [ ] *Quick notes* in the sidebar: promote one to a regular note
+        - [ ] *Vault settings* (⚙ next to a vault): its icon or a picture, *Export as Markdown (.zip)*, *Import notes*, the *Activity log*
+        - [ ] *Share vault* at the bottom of the sidebar: members, roles and key fingerprints
+        - [ ] Share a single note with **dave** (the share button at the top of a note)
+        - [ ] Settings → Editor: the theme and Vim keybindings
+        - [ ] Settings → Devices: the CLI and this browser; *Keep this browser usable offline*
+        - [ ] Settings → Administration: you run this server in the demo
+        - [ ] Settings → AI agents: the *Home assistant* agent, which writes in *Assistant*
+        - [ ] Your notes as plain Markdown files, synced both ways: `task demo:cli -- --profile alice sync --dir /tmp/alice-notes`
 
         ## Map of this vault
 
@@ -1232,6 +1252,8 @@ def main():
         [str(server_bin), "--dev-mode", "--web-dir", str(ROOT / "dist" / "web"),
          "--data-dir", str(data / "server"), "--listen", args.listen,
          "--public-url", url, "--log-format", "pretty",
+         # alice sees the administration page.
+         "--admin", "dev:alice",
          # The script edits faster than anyone types: without this, a note
          # gets one revision per 30 s however often it changes.
          "--snapshot-cooldown-secs", "0"],

@@ -134,6 +134,13 @@ Without go-task, see the plain commands in the [Taskfile](Taskfile.yml) or
   change: the Features section of `README.md` and `site/features.html` — and
   `site/index.html` ("In the box") for headline features. Remove what no
   longer exists.
+- **The demo shows every feature.** A new or changed user-facing feature
+  gets demo data in `scripts/demo.py` in the same change, so that
+  `task demo:reset && task demo` lets anyone see it working end to end. The
+  demo creates its data through the CLI; if the CLI can't create it yet, add
+  the command when it fits the CLI (the way icons were added), otherwise add a
+  line to the "Things to try" list in alice's *Start here* note (e.g.
+  browser-only settings). Then run the demo and click through what changed.
 - Finished work leaves `TODO.md` (it holds only what is still to be done).
 
 ## Things that are easy to get wrong

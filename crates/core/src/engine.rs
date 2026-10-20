@@ -41,16 +41,77 @@ pub struct VaultMeta {
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    /// A short text identifying the vault, usually one emoji
+    /// ([`VaultMeta::set_icon`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub icon: Option<String>,
+    /// A small picture identifying the vault, shown instead of `icon`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub picture: Option<VaultPicture>,
+}
+
+/// A vault's picture: a small raster image. Clients make it from what was
+/// chosen: a square of at most [`VaultPicture::MAX_SIDE`] pixels, encoded
+/// again, so it is never the original file.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct VaultPicture {
+    pub mime: String,
+    #[serde(with = "crate::b64")]
+    pub data: Vec<u8>,
+}
+
+impl VaultPicture {
+    pub const MAX_SIDE: u32 = 128;
+    /// Encoded size limit: keeps the metadata well inside the server's
+    /// 16 KiB for it.
+    pub const MAX_BYTES: usize = 8 * 1024;
+    /// Raster types only.
+    pub const TYPES: [&'static str; 3] = ["image/webp", "image/png", "image/jpeg"];
+
+    pub fn new(mime: &str, data: Vec<u8>) -> Result<Self> {
+        let p = VaultPicture {
+            mime: mime.to_string(),
+            data,
+        };
+        if !p.is_valid() {
+            return Err(EngineError::Invalid(format!(
+                "a vault picture must be a WebP, PNG or JPEG image of at most {} KiB",
+                Self::MAX_BYTES / 1024
+            )));
+        }
+        Ok(p)
+    }
+
+    /// Checked before showing one too: the owner chose what is stored.
+    pub fn is_valid(&self) -> bool {
+        Self::TYPES.contains(&self.mime.as_str())
+            && !self.data.is_empty()
+            && self.data.len() <= Self::MAX_BYTES
+    }
 }
 
 impl VaultMeta {
+    /// Longest icon, in characters (one emoji can be several).
+    pub const MAX_ICON_CHARS: usize = 16;
+
     pub fn named(name: &str) -> Self {
         VaultMeta {
             name: name.to_string(),
             ..Default::default()
         }
+    }
+
+    /// Set the icon, or clear it with a blank one. Trimmed, without control
+    /// characters, at most [`Self::MAX_ICON_CHARS`].
+    pub fn set_icon(&mut self, icon: &str) -> Result<()> {
+        let icon: String = icon.trim().chars().filter(|c| !c.is_control()).collect();
+        if icon.chars().count() > Self::MAX_ICON_CHARS {
+            return Err(EngineError::Invalid(
+                "a vault icon is one emoji or a few characters".into(),
+            ));
+        }
+        self.icon = (!icon.is_empty()).then_some(icon);
+        Ok(())
     }
 
     pub fn encrypt(&self, ring: &VaultKeyring) -> Result<Vec<u8>> {
@@ -1323,6 +1384,41 @@ pub struct Presence {
 mod tests {
     use super::*;
     use crate::doc::EntryKind;
+
+    #[test]
+    fn vault_icon_and_picture() {
+        let mut ring = VaultKeyring::new("v");
+        ring.insert(1, VaultKey::generate());
+        // Metadata from before icons and pictures still reads.
+        let old = ring.encrypt_meta(br#"{"name":"Home"}"#).unwrap();
+        assert_eq!(
+            VaultMeta::decrypt(&ring, &old).unwrap(),
+            VaultMeta::named("Home")
+        );
+
+        let mut meta = VaultMeta::named(&"n".repeat(200));
+        meta.set_icon("  🏡\n").unwrap();
+        assert_eq!(meta.icon.as_deref(), Some("🏡"));
+        // A family emoji is one icon of several characters.
+        meta.set_icon("👨‍👩‍👧‍👦").unwrap();
+        assert!(
+            meta.set_icon(&"x".repeat(VaultMeta::MAX_ICON_CHARS + 1))
+                .is_err()
+        );
+        meta.set_icon(" ").unwrap();
+        assert_eq!(meta.icon, None);
+
+        assert!(VaultPicture::new("image/svg+xml", vec![1]).is_err());
+        assert!(VaultPicture::new("image/png", vec![]).is_err());
+        assert!(VaultPicture::new("image/png", vec![0; VaultPicture::MAX_BYTES + 1]).is_err());
+        // The largest picture, a long name and an icon fit the server's limit.
+        meta.set_icon("👨‍👩‍👧‍👦").unwrap();
+        meta.picture =
+            Some(VaultPicture::new("image/webp", vec![0xff; VaultPicture::MAX_BYTES]).unwrap());
+        let ct = meta.encrypt(&ring).unwrap();
+        assert!(ct.len() <= 16 * 1024, "{} bytes", ct.len());
+        assert_eq!(VaultMeta::decrypt(&ring, &ct).unwrap(), meta);
+    }
 
     #[test]
     fn content_by_an_author_the_log_doesnt_know_yet_waits_for_it() {

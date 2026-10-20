@@ -17,7 +17,7 @@
 |---|---|---|
 | Note text, titles, file and folder names, tags, links | XChaCha20-Poly1305 with per-vault keys, client-side | no |
 | Attachments (bytes, names, types) | same | size only |
-| Vault names/descriptions | same (`encrypted_meta`) | no |
+| Vault names, descriptions, icons and pictures | same (`encrypted_meta`) | no; the size of `encrypted_meta` roughly shows whether a vault has a picture |
 | Revision history | encrypted snapshots | count, size, time, author |
 | Presence (which note, cursor) | encrypted awareness messages | that a user is connected to a vault |
 | Favorites, recent notes, key pins | account-key encryption | no |

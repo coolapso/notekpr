@@ -24,7 +24,7 @@ always return `404` so their existence cannot be probed.
 | User | id, kind (human/agent), display name, e-mail (informational), OIDC `iss`+`sub` | passwords (none exist) |
 | Account key | X25519 + Ed25519 public keys, self-signature | the account secret |
 | Device | name, X25519 public key, status | device secret; account secret (only an HPKE ciphertext to the device) |
-| Vault | id, owner, members + roles, key epoch, sequence head | name/description (encrypted `encrypted_meta`), vault keys (HPKE envelopes only) |
+| Vault | id, owner, members + roles, key epoch, sequence head | name, description, icon and picture (encrypted `encrypted_meta`: `VaultMeta` JSON; the picture is a raster image of at most 128 px and 8 KiB, base64), vault keys (HPKE envelopes only) |
 | Object | id (random), vault, created/updated time, size of ciphertexts | whether it is a note or the index, its path, title or content |
 | Update / snapshot | ciphertext, author, sequence number | content |
 | Attachment | id, size | name, type, path, content |

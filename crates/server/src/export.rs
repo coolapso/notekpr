@@ -73,7 +73,8 @@ pub async fn user_export(
     let mut shared_notes = Vec::with_capacity(shares.len());
     for (vault_id, object_id, role) in shares {
         shared_notes.push(ExportedSharedNote {
-            keys: repo::keys::document_keys(db, &vault_id, &object_id, user_id, role).await?,
+            keys: repo::keys::document_keys(db, &vault_id, &object_id, user_id, role, false)
+                .await?,
             changes: full_log(db, &vault_id, Some(&object_id), true).await?,
             vault_id,
         });

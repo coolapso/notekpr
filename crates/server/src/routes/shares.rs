@@ -93,9 +93,9 @@ pub async fn object_keys(
     who: Principal,
     Path((v, o)): Path<(String, String)>,
 ) -> AppResult<Json<ObjectKeysResponse>> {
-    let role = access::object_role(&state.db, &v, &o, &who.user_id).await?;
+    let (role, member) = access::object_access(&state.db, &v, &o, &who.user_id).await?;
     Ok(Json(
-        repo::keys::document_keys(&state.db, &v, &o, &who.user_id, role).await?,
+        repo::keys::document_keys(&state.db, &v, &o, &who.user_id, role, member).await?,
     ))
 }
 

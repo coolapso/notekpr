@@ -617,14 +617,17 @@ async fn handle(
             }
         }
         ServerMessage::ObjectEvent {
-            vault_id, event, ..
+            vault_id,
+            object_id,
+            event,
         } => {
-            // A note of a vault we sync got (or rotated) its own key.
+            // A note of a vault we sync got (or rotated) its own key: reload
+            // that note's keys only.
             if matches!(event, ObjectEventKind::Shared | ObjectEventKind::KeyRotated)
                 && let Some(v) = hub.get(&vault_id)
-                && let Err(e) = session.refresh_keys(&v).await
+                && let Err(e) = session.refresh_note_keys(&v, &object_id).await
             {
-                ui::warn(&format!("could not fetch the shared note's key: {e:#}"));
+                ui::warn(&format!("could not fetch the note's key: {e:#}"));
             }
         }
         ServerMessage::UserEvent { event } => match event {

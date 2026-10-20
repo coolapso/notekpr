@@ -536,6 +536,32 @@ impl Session {
         v.save()
     }
 
+    /// Reload one note's keys (it got or rotated its own key), or the whole
+    /// vault's from servers that can't hand out one note's keys to members.
+    pub async fn refresh_note_keys(&self, vault: &SharedVault, object_id: &str) -> Result<()> {
+        let (id, ring) = {
+            let v = vault.lock().await;
+            (v.id().to_string(), v.replica.keyring.clone())
+        };
+        let r: ObjectKeysResponse = match self
+            .api
+            .get(&format!("/vaults/{id}/objects/{object_id}/keys"))
+            .await
+        {
+            Ok(r) => r,
+            Err(e) if e.is_not_found() => return Ok(()),
+            Err(e) => return Err(e.into()),
+        };
+        match engine::object_keyring_for_member(&ring, &r) {
+            Some(doc) => {
+                let mut v = vault.lock().await;
+                v.set_note_keys(object_id, doc, r.shared.unwrap_or(false));
+                v.save()
+            }
+            None => self.refresh_keys(vault).await,
+        }
+    }
+
     pub async fn refresh_vault(&self, vault: &SharedVault) -> Result<()> {
         let id = vault.lock().await.id().to_string();
         let info = self.api.vault(&id).await?;

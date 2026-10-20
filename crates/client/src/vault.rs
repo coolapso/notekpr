@@ -517,6 +517,14 @@ impl Vault {
         self.retry_deferred();
     }
 
+    /// One note's keys, reloaded alone (see `Outbox::note_keys_reloaded`).
+    pub fn set_note_keys(&mut self, object_id: &str, ring: VaultKeyring, shared: bool) {
+        self.outbox
+            .note_keys_reloaded(&mut self.replica, object_id, ring, shared);
+        self.dirty_state = true;
+        self.retry_deferred();
+    }
+
     /// The server stored a new note's key.
     pub fn key_registered(&mut self, object_id: &str) {
         self.outbox.key_registered(object_id);

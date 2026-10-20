@@ -158,6 +158,7 @@ pub async fn document_keys(
     object_id: &str,
     user_id: &str,
     role: Role,
+    member: bool,
 ) -> AppResult<ObjectKeysResponse> {
     let row: Option<(Option<i64>, Option<Vec<u8>>)> =
         sqlx::query_as("SELECT key_epoch, encrypted_meta FROM objects WHERE vault_id = ? AND id = ? AND purged_at IS NULL")
@@ -177,11 +178,38 @@ pub async fn document_keys(
         .iter()
         .map(|r| KeyEnvelope { user_id: user_id.to_string(), epoch: r.get::<i64, _>("epoch") as u32, envelope: r.get("envelope"), signature: r.get("signature") })
         .collect();
-    // Links within the shared epochs only (sharing started with a key that
-    // has no link to the note's earlier, private keys).
-    let from = super::shares::share_from(db, vault_id, object_id)
-        .await?
-        .unwrap_or(coolpsonotes_core::keys::FIRST_DOC_EPOCH);
+    // Recipients: links within the shared epochs only (sharing started with
+    // a key that has no link to the note's earlier, private keys). Members:
+    // every link, and the keys wrapped under the vault key.
+    let from = if member {
+        0
+    } else {
+        super::shares::share_from(db, vault_id, object_id)
+            .await?
+            .unwrap_or(coolpsonotes_core::keys::FIRST_DOC_EPOCH)
+    };
+    let (member_envelopes, shared) = if member {
+        let rows = sqlx::query("SELECT epoch, envelope FROM object_keys WHERE vault_id = ? AND object_id = ? AND user_id = '' ORDER BY epoch")
+            .bind(vault_id)
+            .bind(object_id)
+            .fetch_all(db)
+            .await?;
+        let envs = rows
+            .iter()
+            .map(|r| KeyEnvelope {
+                user_id: String::new(),
+                epoch: r.get::<i64, _>("epoch") as u32,
+                envelope: r.get("envelope"),
+                signature: None,
+            })
+            .collect();
+        let shared = !super::shares::recipients(db, vault_id, object_id, 0)
+            .await?
+            .is_empty();
+        (envs, Some(shared))
+    } else {
+        (vec![], None)
+    };
     let chain = sqlx::query("SELECT epoch, link FROM object_key_chain WHERE vault_id = ? AND object_id = ? AND epoch > ? ORDER BY epoch")
         .bind(vault_id)
         .bind(object_id)
@@ -198,6 +226,8 @@ pub async fn document_keys(
         envelopes,
         chain,
         encrypted_meta: meta,
+        member_envelopes,
+        shared,
     })
 }
 

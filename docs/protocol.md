@@ -165,7 +165,7 @@ member list, vault key, or the note's history from before it was shared.
 | Endpoint | Role |
 |---|---|
 | `PUT /vaults/{v}/objects/{o}/key` `ObjectKeyUpdate {epoch, vault_envelope, chain_link?, envelopes, encrypted_meta, snapshot?, private?}` | See the three kinds below. `vault_envelope` must be wrapped under the vault's *current* epoch (else `412 stale_key`). A `snapshot` must be under the new key and its `covers_seq` must cover every stored update of the note (else `412 stale_key`). |
-| `GET /vaults/{v}/objects/{o}/keys` | member or recipient: `ObjectKeysResponse {role, current_epoch, envelopes (own), chain, encrypted_meta}`; the chain only from `share_from` on. A recipient's envelopes carry the owner's grant `signature` (below) |
+| `GET /vaults/{v}/objects/{o}/keys` | member or recipient: `ObjectKeysResponse {role, current_epoch, envelopes (own), chain, encrypted_meta, member_envelopes?, shared?}`. Recipients: the chain only from `share_from` on; their envelopes carry the owner's grant `signature` (below). Members: the note's key at every epoch wrapped under the vault key (`member_envelopes`), every chain link, and whether it is `shared` — so after a note's `key_rotated` / `shared` event they reload that note's keys alone, not the vault's |
 | `PUT /vaults/{v}/objects/{o}/keys/signatures {grants: [{user_id, epoch, signature}]}` | owner: grant signatures for keys given before grants were signed |
 | `PUT /vaults/{v}/objects/{o}/meta {encrypted_meta}` | writer: the title recipients see, under the current document key |
 | `GET /vaults/{v}/objects/{o}/shares` | member: `ObjectShareInfo {user, role, added_at, added_by, has_current_key, key_signed}` |

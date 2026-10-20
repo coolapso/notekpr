@@ -476,7 +476,35 @@ pub fn object_keyrings(
     rings
 }
 
+/// A vault member's keyring of one note (from `GET …/objects/{o}/keys`):
+/// `None` if the answer has no keys for members (older servers: reload the
+/// whole vault's keys instead).
+pub fn object_keyring_for_member(
+    vault_ring: &VaultKeyring,
+    r: &ObjectKeysResponse,
+) -> Option<VaultKeyring> {
+    let mut ring = VaultKeyring::new(vault_ring.vault_id());
+    for e in &r.member_envelopes {
+        if let Ok(k) =
+            keys::unwrap_doc_key_for_vault(vault_ring, &r.object_id, e.epoch, &e.envelope)
+        {
+            ring.insert(e.epoch, k);
+        }
+    }
+    ring.current_epoch()?;
+    let chain: BTreeMap<u32, Vec<u8>> = r.chain.iter().map(|c| (c.epoch, c.link.clone())).collect();
+    let _ = ring.fill_from_chain_with(
+        &chain,
+        &keys::object_scope(vault_ring.vault_id(), &r.object_id),
+    );
+    Some(ring)
+}
+
 /// Document keyring of a note shared with us individually.
+/// With `owner` (the vault owner's key, as pinned): only the newest key
+/// given to us is used, and only if the owner signed giving it to us; older
+/// ones follow from the key chain. So a server can't hand us a key of its
+/// own. Without: every envelope as is (tests, older owners).
 pub fn object_keyring_for_recipient(
     account: &AccountSecret,
     user_id: &str,
@@ -1527,6 +1555,8 @@ mod tests {
             envelopes: vec![env],
             chain: vec![],
             encrypted_meta: Some(req.encrypted_meta.clone()),
+            member_envelopes: vec![],
+            shared: None,
         };
         let bring = object_keyring_for_recipient(&bob, "bob", &vreq.id, &resp, None).unwrap();
         assert_eq!(
@@ -1622,6 +1652,8 @@ mod tests {
                 link: rot.chain_link.clone().unwrap(),
             }],
             encrypted_meta: None,
+            member_envelopes: vec![],
+            shared: None,
         };
         let cring = object_keyring_for_recipient(&carol, "carol", &vreq.id, &resp, None).unwrap();
         assert_eq!(cring.epochs().count(), 2);

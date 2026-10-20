@@ -441,6 +441,14 @@ pub struct ObjectKeysResponse {
     pub chain: Vec<ChainLink>,
     #[serde(default, with = "b64::opt")]
     pub encrypted_meta: Option<Vec<u8>>,
+    /// Vault members: the note's key at every epoch, wrapped under the vault
+    /// key (`user_id` empty), so one note's keys can be reloaded alone; `chain`
+    /// then has every link. Empty for others and from older servers.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub member_envelopes: Vec<KeyEnvelope>,
+    /// Vault members: whether the note is shared with someone individually.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shared: Option<bool>,
 }
 
 /// A note's document key: its first key, a fresh key to start sharing it,

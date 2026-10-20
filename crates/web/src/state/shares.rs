@@ -374,11 +374,55 @@ pub(super) fn keys_missing(vault: &str) {
     }
 }
 
+/// Reload one note's keys (it got or rotated its own key), or the whole
+/// vault's from servers that can't hand out one note's keys to members.
+async fn reload_note_keys(vault: String, note: String) {
+    let Some(ring) = with(|c| c.replicas.get(&vault).map(|r| r.keyring.clone())) else {
+        return;
+    };
+    let r = match api::get::<ObjectKeysResponse>(&format!("/vaults/{vault}/objects/{note}/keys"))
+        .await
+    {
+        Ok(r) => r,
+        Err(e) if e.status == 404 => return,
+        Err(_) => return reload_vault_keys(vault).await,
+    };
+    let Some(doc) = engine::object_keyring_for_member(&ring, &r) else {
+        return reload_vault_keys(vault).await;
+    };
+    let shared = r.shared.unwrap_or(false);
+    let res = with(|c| {
+        let rep = c.replicas.get_mut(&vault)?;
+        let changed = rep.doc_keys.get(&note).map(|k| k.current_epoch())
+            != Some(doc.current_epoch())
+            || rep.shared.contains(&note) != shared;
+        c.outboxes
+            .entry(vault.clone())
+            .or_default()
+            .note_keys_reloaded(rep, &note, doc, shared);
+        let (applied, _) = rep.retry_deferred();
+        Some((applied, changed, c.loaded.contains(&vault)))
+    });
+    let Some((applied, changed, loaded)) = res else {
+        return;
+    };
+    after_apply(&vault, applied);
+    persist_new_keys(&vault, &[]);
+    if changed {
+        ui().tree_rev.update(|v| *v += 1);
+        ui().shares_rev.update(|v| *v += 1);
+        // Unsent edits of the note are encrypted again with its new key.
+        if loaded {
+            resend_pending(&vault);
+        }
+    }
+}
+
 pub(super) fn on_object_event(vault: String, note: String, event: ObjectEventKind) {
     if is_member(&vault) {
         match event {
             ObjectEventKind::Shared | ObjectEventKind::KeyRotated => {
-                leptos::task::spawn_local(reload_vault_keys(vault))
+                leptos::task::spawn_local(reload_note_keys(vault, note))
             }
             ObjectEventKind::SharesChanged => ui().shares_rev.update(|v| *v += 1),
             // Members read titles from the vault index.

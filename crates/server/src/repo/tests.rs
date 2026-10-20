@@ -342,7 +342,7 @@ async fn key_envelopes_are_per_member_and_per_note() {
 
     // A note that isn't individually shared has no document keys.
     assert!(matches!(
-        keys::document_keys(&t.db, "v", "note", "bob", Role::Viewer).await,
+        keys::document_keys(&t.db, "v", "note", "bob", Role::Viewer, false).await,
         Err(AppError::NotFound)
     ));
     share(db, "v", "note", "bob", Role::Viewer).await;
@@ -356,7 +356,7 @@ async fn key_envelopes_are_per_member_and_per_note() {
     keys::insert_document_key(db, "v", "note", doc, "bob", b"for-bob", "owner", NOW)
         .await
         .unwrap();
-    let dk = keys::document_keys(db, "v", "note", "bob", Role::Viewer)
+    let dk = keys::document_keys(db, "v", "note", "bob", Role::Viewer, false)
         .await
         .unwrap();
     assert_eq!(dk.current_epoch, doc as u32);
@@ -381,7 +381,7 @@ async fn key_envelopes_are_per_member_and_per_note() {
     keys::delete_document_keys_of(db, "v", "note", "bob")
         .await
         .unwrap();
-    let dk = keys::document_keys(db, "v", "note", "bob", Role::Viewer)
+    let dk = keys::document_keys(db, "v", "note", "bob", Role::Viewer, false)
         .await
         .unwrap();
     assert!(dk.envelopes.is_empty());

@@ -420,10 +420,10 @@ key). Single-note and folder sharing become the same mechanism.
       the guarantee "recipients never get the history from before sharing"
       holds against the ciphertext too, not only by server filtering
       (`objects.share_from`).
-- [ ] Incremental key reloads: every new note publishes `KeyRotated`, and
-      members then fetch the whole `GET /vaults/{v}/keys` (all notes' keys).
-      Fine for thousands of notes; a per-note member endpoint would scale
-      further.
+- [x] Incremental key reloads: after a note's `KeyRotated`/`Shared` event,
+      members fetch only that note's keys (`GET …/objects/{o}/keys` now
+      carries the member envelopes, all chain links and the shared flag);
+      older servers get the whole vault's keys as before.
 - [ ] Local copies of individually shared notes (with R5).
 - Resolves: the first-share races [S-M3, stale_key on first share] (sharing
   no longer depends on the note's history being under the vault key);

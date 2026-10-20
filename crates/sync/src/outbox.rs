@@ -233,6 +233,25 @@ impl Outbox {
     /// The client replaced `r.doc_keys` with the keys the server has: new
     /// notes whose key is among them are registered (an answer that got lost),
     /// the others get their key back.
+    /// One note's keys were reloaded from the server (`GET …/objects/{o}/keys`,
+    /// after it got or rotated its key): use them; the server has the key,
+    /// so a new note's key counts as registered.
+    pub fn note_keys_reloaded(
+        &mut self,
+        r: &mut VaultReplica,
+        object_id: &str,
+        ring: coolpsonotes_core::keys::VaultKeyring,
+        shared: bool,
+    ) {
+        r.doc_keys.insert(object_id.to_string(), ring);
+        if shared {
+            r.shared.insert(object_id.to_string());
+        } else {
+            r.shared.remove(object_id);
+        }
+        self.key_registered(object_id);
+    }
+
     pub fn keys_reloaded(&mut self, r: &mut VaultReplica, note_keys: bool) {
         self.note_keys = note_keys;
         self.new_keys

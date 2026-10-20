@@ -2908,3 +2908,60 @@ fn unsigned_grants(
         })
         .collect()
 }
+
+/// R2: a vault member can reload one note's keys alone (after it got or
+/// rotated its key) instead of every note's; recipients get only theirs.
+#[tokio::test]
+async fn members_reload_one_notes_keys() {
+    use coolpsonotes_core::engine;
+    let srv = start().await;
+    let mut alice = new_user(&srv.base, "alice").await;
+    let mut bob = new_user(&srv.base, "bob").await;
+    let v = alice.create_vault("Home").await;
+    alice.share(&v, &bob.id, Role::Editor).await.unwrap();
+    bob.load_keys(&v).await.unwrap();
+    let (doc, req) = engine::new_document_key(bob.ring(&v), "n", "Plans").unwrap();
+    put_key(&bob, &v, "n", &req).await.unwrap();
+
+    let r: ObjectKeysResponse = alice.api.get(&format!("/vaults/{v}/objects/n/keys")).await;
+    assert_eq!(r.shared, Some(false));
+    assert!(
+        r.envelopes.is_empty(),
+        "members hold no envelope of their own"
+    );
+    let ring = engine::object_keyring_for_member(alice.ring(&v), &r).unwrap();
+    assert_eq!(ring.current().unwrap().1.0, doc.current().unwrap().1.0);
+
+    // Once shared, a recipient gets no member keys.
+    let carol = new_user(&srv.base, "carol").await;
+    let note = NoteDoc::new();
+    let state = note.encode_state();
+    let head: ChangesResponse = alice.api.get(&format!("/vaults/{v}/changes?since=0")).await;
+    let (doc2, start) =
+        engine::start_sharing_keyed(alice.ring(&v), &ring, "n", "Plans", &state, head.head_seq)
+            .unwrap();
+    put_key(&alice, &v, "n", &start).await.unwrap();
+    let carol_pub: PublicUser = alice.api.get(&format!("/users/{}", carol.id)).await;
+    let _: ObjectShareInfo = alice
+        .api
+        .post(
+            &format!("/vaults/{v}/objects/n/shares"),
+            &AddObjectShareRequest {
+                user_id: carol.id.clone(),
+                role: Role::Viewer,
+                envelope: engine::object_share_envelope(&doc2, "n", &carol_pub).unwrap(),
+                log_entry: None,
+            },
+        )
+        .await;
+    let r: ObjectKeysResponse = alice.api.get(&format!("/vaults/{v}/objects/n/keys")).await;
+    assert_eq!(r.shared, Some(true));
+    assert_eq!(
+        engine::object_keyring_for_member(alice.ring(&v), &r)
+            .unwrap()
+            .current_epoch(),
+        doc2.current_epoch()
+    );
+    let r: ObjectKeysResponse = carol.api.get(&format!("/vaults/{v}/objects/n/keys")).await;
+    assert!(r.member_envelopes.is_empty() && r.shared.is_none());
+}

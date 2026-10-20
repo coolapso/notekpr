@@ -382,6 +382,8 @@ mod tests {
                     envelopes: vec![bob_env],
                     chain: vec![],
                     encrypted_meta: Some(req.encrypted_meta.clone()),
+                    member_envelopes: vec![],
+                    shared: None,
                 },
                 changes: ChangesResponse {
                     updates: vec![],

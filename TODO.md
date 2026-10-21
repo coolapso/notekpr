@@ -84,6 +84,14 @@ Settled; don't reopen them without a new reason.
       is (WebSocket buffers and tasks per connection, the per-vault event
       channels — already cut from 2048 to 256 slots —, glibc's per-thread
       malloc arenas) before changing more.
+- [ ] **One writer for all vaults**: every push takes the global write lock
+      (`state.write_lock`) and does its access checks, duplicate and object
+      lookups and signature checks inside it, so a server tops out at about
+      1,200 pushes a second however many cores it has (load test: 4,000
+      realistic people on 2 cores used one and delivery fell behind). First:
+      check signatures before taking the lock; then see whether pushes to
+      different vaults need to wait for each other at all (SQLite has one
+      writer, but the transaction itself is short).
 - [ ] **Small web leaks** [W-L5, rest]: `actions::pick_files` forgets its
       change listener (`cb.forget()`), and every socket starts its own
       watchdog `set_interval` (`web/src/ws.rs`).

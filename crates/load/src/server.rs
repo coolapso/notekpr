@@ -1,6 +1,7 @@
 //! The server under load: the real image in a Docker container with CPU and
-//! memory limits (or, with `--native`, a plain process without limits), and
-//! how much CPU and memory it uses.
+//! memory limits (or, with `--native`, a plain process without limits, or
+//! with `--server`, one that runs elsewhere), and how much CPU and memory it
+//! uses.
 
 use std::path::PathBuf;
 use std::process::Stdio;
@@ -46,6 +47,12 @@ pub enum Kind {
         log: PathBuf,
         child: Option<Child>,
     },
+    /// Elsewhere: started, limited and removed by whoever runs it; killed
+    /// and started again for outages with these commands, if given.
+    Remote {
+        kill: Option<String>,
+        start: Option<String>,
+    },
 }
 
 /// The latest CPU and memory sample.
@@ -90,6 +97,12 @@ impl Server {
         )
     }
 
+    pub fn remote(url: &str, kill: Option<String>, start: Option<String>) -> Server {
+        let mut s = Server::new(Kind::Remote { kill, start }, 0);
+        s.url = url.trim_end_matches('/').to_string();
+        s
+    }
+
     fn new(kind: Kind, port: u16) -> Server {
         Server {
             kind,
@@ -98,6 +111,25 @@ impl Server {
             usage: Arc::default(),
             sampler: None,
         }
+    }
+
+    pub fn mode(&self) -> &'static str {
+        match self.kind {
+            Kind::Docker { .. } => "docker",
+            Kind::Native { .. } => "native",
+            Kind::Remote { .. } => "remote",
+        }
+    }
+
+    /// Whether it runs with this run's CPU and memory limits.
+    pub fn limited(&self) -> bool {
+        matches!(self.kind, Kind::Docker { .. })
+    }
+
+    /// Whether its CPU and memory are measured from here (otherwise: from
+    /// its own metrics).
+    pub fn measures_usage(&self) -> bool {
+        !matches!(self.kind, Kind::Remote { .. })
     }
 
     /// Where the latest CPU and memory sample is kept (across restarts).
@@ -152,6 +184,12 @@ impl Server {
                 }
             }
             Kind::Native { .. } => self.spawn_native()?,
+            Kind::Remote { .. } => {
+                return self
+                    .wait_healthy(Duration::from_secs(20))
+                    .await
+                    .with_context(|| format!("reaching {}", self.url));
+            }
         }
         self.wait_healthy(Duration::from_secs(60)).await?;
         self.start_sampler();
@@ -207,6 +245,10 @@ impl Server {
                     c.kill().await?;
                 }
             }
+            Kind::Remote { kill, .. } => {
+                let kill = kill.as_deref().context("no --kill-command")?;
+                shell(kill).await.context("--kill-command")?;
+            }
         }
         *self.usage.lock().unwrap() = Usage::default();
         Ok(())
@@ -226,6 +268,10 @@ impl Server {
                 }
             }
             Kind::Native { .. } => self.spawn_native()?,
+            Kind::Remote { start, .. } => {
+                let start = start.as_deref().context("no --start-command")?;
+                shell(start).await.context("--start-command")?;
+            }
         }
         self.wait_healthy(Duration::from_secs(60)).await?;
         self.start_sampler();
@@ -250,6 +296,8 @@ impl Server {
                     let _ = c.start_kill();
                 }
             }
+            // Not ours to remove.
+            Kind::Remote { .. } => {}
         }
     }
 
@@ -280,6 +328,8 @@ impl Server {
                 Ok(Some(status)) => Some(format!("it stopped by itself ({status})")),
                 _ => None,
             },
+            // Only that it stops answering shows.
+            Kind::Remote { .. } => None,
         }
     }
 
@@ -317,8 +367,26 @@ impl Server {
                 let pid = child.as_ref().and_then(|c| c.id()).unwrap_or(0);
                 tokio::spawn(proc_stats(pid, usage))
             }
+            Kind::Remote { .. } => return,
         });
     }
+}
+
+/// Run a command line with `sh -c`; an error if it fails.
+async fn shell(cmd: &str) -> Result<()> {
+    let out = Command::new("sh")
+        .args(["-c", cmd])
+        .stdin(Stdio::null())
+        .output()
+        .await?;
+    if !out.status.success() {
+        bail!(
+            "`{cmd}` failed ({}): {}",
+            out.status,
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+    }
+    Ok(())
 }
 
 impl Drop for Server {

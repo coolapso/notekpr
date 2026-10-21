@@ -111,7 +111,9 @@ broken CLI or server path shows up while seeding too.
 task load                                  # 10 levels, 100 → 1000 people, against the server image (1 CPU, 512 MB); live view on :8098
 task load LEVELS=1 DURATION=2m             # one crowd of 100
 task load USERS=300 STEP=300 LEVELS=3 CPUS=2 MEMORY=1g
+task load REALISTIC=1 USERS=500 STEP=500   # people as busy as real ones
 task load:native                           # no Docker: a local server process, no limits
+task load:remote SERVER=https://…          # a throwaway dev-mode server elsewhere
 ```
 
 Simulated people — real clients with real keys and encryption — sign up,

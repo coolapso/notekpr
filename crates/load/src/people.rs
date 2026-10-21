@@ -107,33 +107,38 @@ pub struct World {
     pub clients: Mutex<Vec<Option<Client>>>,
     /// How fast people are (2 = twice as fast as the defaults).
     pub speed: f64,
+    /// As busy as real people (see [`Person::work`]).
+    pub realistic: bool,
     /// When the run started.
     pub t0: Instant,
 }
 
 impl World {
-    pub fn new(
-        bus: Bus,
-        server_url: String,
-        root: PathBuf,
-        people: u32,
-        team_of: Vec<u32>,
-        speed: f64,
-    ) -> World {
+    pub fn new(bus: Bus, server_url: String, root: PathBuf, people: world::People) -> World {
+        let names = (0..people.count)
+            .map(|id| {
+                let (display, login) = world::person_name(id);
+                match &people.tag {
+                    Some(tag) => (display, format!("{login}-{tag}")),
+                    None => (display, login),
+                }
+            })
+            .collect();
         World {
             bus,
-            speed,
+            speed: people.speed,
+            realistic: people.realistic,
             t0: Instant::now(),
             server_url,
             root,
-            names: (0..people).map(world::person_name).collect(),
-            team_of,
+            names,
+            team_of: people.team_of,
             teams: Mutex::default(),
             typed: Mutex::default(),
             credited: Mutex::default(),
             sentences: Mutex::default(),
             typing: Mutex::default(),
-            clients: Mutex::new(vec![None; people as usize]),
+            clients: Mutex::new(vec![None; people.count as usize]),
         }
     }
 
@@ -244,6 +249,20 @@ impl Person {
     /// A pause of `lo..=hi` ms at normal speed.
     fn pause(&mut self, lo: u64, hi: u64) -> Duration {
         Duration::from_millis(self.rng.range(lo, hi)).div_f64(self.world.speed.max(0.05))
+    }
+
+    /// Between two things. Busy people: a moment's thought. Realistic
+    /// ones, with the app open: mostly reading or thinking for a while,
+    /// sometimes away for minutes (about a minute and a half on average).
+    fn think(&mut self) -> Duration {
+        if !self.world.realistic {
+            return self.pause(400, 1800);
+        }
+        match self.rng.weighted(&[60, 30, 10]) {
+            0 => self.pause(10_000, 60_000),
+            1 => self.pause(60_000, 180_000),
+            _ => self.pause(180_000, 600_000),
+        }
     }
 
     /// As a team's owner: when the shared note gets long, start a fresh page
@@ -406,6 +425,13 @@ impl Person {
     /// Do what people do until told to stop.
     pub async fn work(mut self, stop: watch::Receiver<bool>) -> Person {
         let mut next_revision = Instant::now() + Duration::from_secs(self.rng.range(10, 25));
+        // Real people don't all start at once: some are reading first.
+        if self.world.realistic {
+            let first = self.pause(0, 90_000);
+            if sleep_or_stop(first, &stop).await {
+                return self;
+            }
+        }
         while !*stop.borrow() {
             let r = match self.rng.weighted(&[74, 7, 3, 7, 2, 2, 2]) {
                 0 => self.type_some(&stop).await,
@@ -437,7 +463,7 @@ impl Person {
                 }
                 next_revision = Instant::now() + Duration::from_secs(self.rng.range(15, 30));
             }
-            let think = self.pause(400, 1800);
+            let think = self.think();
             if sleep_or_stop(think, &stop).await {
                 break;
             }
@@ -483,7 +509,11 @@ impl Person {
             _ => return Ok(()),
         }
         let sentence = world::sentence(&mut self.rng);
-        let keys = world::keystrokes(&mut self.rng, &sentence);
+        // Busy people: 18 characters a second, a few per upload. Realistic
+        // ones: about 40 words a minute, each key on its own (as the
+        // browser sends them at that pace).
+        let realistic = self.world.realistic;
+        let keys = world::keystrokes(&mut self.rng, &sentence, realistic);
         let started_ms = self.world.t0.elapsed().as_millis() as u64;
         let started_phase = self
             .world
@@ -523,7 +553,12 @@ impl Person {
                 done = false;
                 break;
             }
-            tokio::time::sleep(self.pause(60, 180)).await;
+            let gap = if realistic {
+                self.pause(120, 450)
+            } else {
+                self.pause(60, 180)
+            };
+            tokio::time::sleep(gap).await;
         }
         if let Some(set) = self.world.typing.lock().unwrap().get_mut(&note_id) {
             set.remove(&self.id);

@@ -73,6 +73,11 @@ struct Args {
     /// How fast people are: 2 = twice as fast as the defaults.
     #[arg(long, default_value_t = 1.0)]
     speed: f64,
+    /// People as busy as real ones: mostly reading or away, now and then a
+    /// sentence at about 40 words a minute (by default they are busier than
+    /// anyone, on purpose).
+    #[arg(long)]
+    realistic: bool,
     /// The server container's CPU limit (cores).
     #[arg(long, default_value_t = 1.0)]
     cpus: f32,
@@ -83,8 +88,25 @@ struct Args {
     #[arg(long, default_value = "coolpsonotes:latest")]
     image: String,
     /// Run the server as a local process instead (no limits; Linux).
-    #[arg(long)]
+    #[arg(long, conflicts_with = "server")]
     native: bool,
+    /// Use a server that runs elsewhere instead, e.g.
+    /// https://notes-test.example.com — a throwaway one in development mode
+    /// with raised rate limits (see docs/load-test.md). Without
+    /// --kill-command and --start-command there are no outages.
+    #[arg(long)]
+    server: Option<String>,
+    /// With --server: how to kill it for an outage, e.g.
+    /// "ssh test-box docker kill coolpsonotes" (run with sh -c).
+    #[arg(long, requires = "server", requires = "start_command")]
+    kill_command: Option<String>,
+    /// With --server: how to start it again after an outage, e.g.
+    /// "ssh test-box docker start coolpsonotes".
+    #[arg(long, requires = "server", requires = "kill_command")]
+    start_command: Option<String>,
+    /// The server's /metrics token, if it has one.
+    #[arg(long, env = "COOLPSONOTES_METRICS_TOKEN", hide_env_values = true)]
+    metrics_token: Option<String>,
     #[arg(long, default_value = "target/release/coolpsonotes-server")]
     server_bin: PathBuf,
     #[arg(long, default_value = "dist/web")]
@@ -158,12 +180,18 @@ fn settings(a: &Args) -> Settings {
         cpus: a.cpus,
         memory: a.memory.clone(),
         speed: a.speed,
-        outages: !a.no_crash,
+        outages: !a.no_crash && a.can_crash(),
         keep_going: a.keep_going,
+        realistic: a.realistic,
     }
 }
 
 impl Args {
+    /// Whether the server can be killed and started for outages.
+    fn can_crash(&self) -> bool {
+        self.server.is_none() || self.kill_command.is_some()
+    }
+
     /// These flags with what was chosen on the start screen (kept sane).
     fn with(&self, s: &Settings) -> Args {
         let mut a = self.clone();
@@ -177,8 +205,9 @@ impl Args {
             a.memory = s.memory.clone();
         }
         a.speed = s.speed.clamp(0.05, 20.0);
-        a.no_crash = !s.outages;
+        a.no_crash = !s.outages || !a.can_crash();
         a.keep_going = s.keep_going;
+        a.realistic = s.realistic;
         a
     }
 }
@@ -233,9 +262,11 @@ async fn session(args: Args) -> ExitCode {
         if !right_away {
             bus.menu(Menu {
                 settings: chosen.clone(),
-                docker: !args.native,
+                docker: !args.native && args.server.is_none(),
                 downtimes: args.downtimes.iter().map(|d| d.as_secs() as u32).collect(),
                 error: error.take(),
+                remote: args.server.clone(),
+                no_outages: !args.can_crash(),
             });
             println!("Choose the run on the start screen ({view}); Ctrl+C to stop.");
             loop {
@@ -438,7 +469,7 @@ async fn run(args: Args, root: PathBuf, bus: Bus) -> Result<Report> {
     let levels = args.levels.max(1);
     let total = args.users + args.step * (levels - 1);
     let downs = downtimes(&args.downtimes, levels);
-    let memory_bytes = if args.native {
+    let memory_bytes = if args.native || args.server.is_some() {
         0
     } else {
         server::docker_memory(&args.memory).ok_or_else(|| anyhow!("--memory: use 512m, 1g, …"))?
@@ -446,7 +477,9 @@ async fn run(args: Args, root: PathBuf, bus: Bus) -> Result<Report> {
     people::clean(&root);
     std::fs::create_dir_all(&root)?;
     std::fs::create_dir_all(&args.out)?;
-    let mut server = if args.native {
+    let mut server = if let Some(url) = &args.server {
+        Server::remote(url, args.kill_command.clone(), args.start_command.clone())
+    } else if args.native {
         let _ = std::fs::remove_dir_all(args.out.join("server-data"));
         Server::native(
             args.server_bin.clone(),
@@ -461,17 +494,19 @@ async fn run(args: Args, root: PathBuf, bus: Bus) -> Result<Report> {
         seed,
         users: total,
         duration_s: args.duration.as_secs() as u32,
-        mode: if args.native { "native" } else { "docker" }.into(),
-        cpus: if args.native { 0.0 } else { args.cpus },
+        mode: server.mode().into(),
+        cpus: if server.limited() { args.cpus } else { 0.0 },
         memory: memory_bytes,
         started_ms: now_ms(),
         server_url: server.url.clone(),
         levels,
         replay: !(args.now || args.exit),
+        realistic: args.realistic,
     });
     println!(
-        "{} people{}, {} s each level, seed {seed}, server: {}",
+        "{} {}people{}, {} s each level, seed {seed}, server: {}",
         total,
+        if args.realistic { "realistic " } else { "" },
         if levels > 1 {
             format!(
                 " in {levels} levels ({} first, then {} more each)",
@@ -481,7 +516,9 @@ async fn run(args: Args, root: PathBuf, bus: Bus) -> Result<Report> {
             String::new()
         },
         args.duration.as_secs(),
-        if args.native {
+        if args.server.is_some() {
+            format!("{} (elsewhere)", server.url)
+        } else if args.native {
             "local process (no limits)".to_string()
         } else {
             format!(
@@ -525,21 +562,34 @@ async fn run(args: Args, root: PathBuf, bus: Bus) -> Result<Report> {
         }
         cohorts.push((start..end, teams));
     }
+    // A server elsewhere keeps its accounts from run to run: this run's
+    // people sign in with names of their own.
+    let tag = args
+        .server
+        .is_some()
+        .then(|| world::base36(now_ms() as u64 / 1000));
     let world = Arc::new(World::new(
         bus.clone(),
         server.url.clone(),
         root,
-        total,
-        team_of,
-        args.speed,
+        world::People {
+            count: total,
+            team_of,
+            speed: args.speed,
+            realistic: args.realistic,
+            tag,
+        },
     ));
     let up = Arc::new(AtomicBool::new(true));
     let peaks = Arc::new(Mutex::new(Peaks::default()));
     let t_start = Instant::now();
+    // CPU and memory: from Docker or /proc, or else from the server's own
+    // numbers.
+    let usage = server.measures_usage().then(|| server.usage_handle());
     tokio::spawn(stats_loop(
         world.clone(),
-        server.usage_handle(),
-        server.url.clone(),
+        usage,
+        metrics::Rates::new(&server.url, args.metrics_token.clone()),
         up.clone(),
         peaks.clone(),
         t_start,
@@ -1034,14 +1084,17 @@ fn now_ms() -> i64 {
 /// what the crowd did.
 async fn stats_loop(
     world: Arc<World>,
-    usage: Arc<Mutex<server::Usage>>,
-    server_url: String,
+    usage: Option<Arc<Mutex<server::Usage>>>,
+    mut rates: metrics::Rates,
     up: Arc<AtomicBool>,
     peaks: Arc<Mutex<Peaks>>,
     t_start: Instant,
 ) {
-    let mut rates = metrics::Rates::new(&server_url);
     let mut tick = tokio::time::interval(Duration::from_secs(1));
+    // After a slow round, carry on a second later rather than catching up
+    // with several rounds at once.
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let mut told_rate_limited = false;
     loop {
         tick.tick().await;
         let server_up = up.load(Ordering::Relaxed);
@@ -1050,7 +1103,23 @@ async fn stats_loop(
         } else {
             None
         };
-        let u = *usage.lock().unwrap();
+        let u = match &usage {
+            Some(u) => *u.lock().unwrap(),
+            None => m
+                .map(|m| server::Usage {
+                    cpu_pct: m.cpu_pct,
+                    mem_bytes: m.mem_bytes,
+                })
+                .unwrap_or_default(),
+        };
+        if m.is_some_and(|m| m.rate_limited_ps > 0.0) && !told_rate_limited {
+            told_rate_limited = true;
+            let why = "the server turns requests away (rate limits): every simulated person \
+                       comes from this machine — raise COOLPSONOTES_RATE_LIMIT_RPS and \
+                       COOLPSONOTES_AUTH_RATE_LIMIT_PER_MIN on it";
+            eprintln!("warning: {why}");
+            world.bus.feed(Action::Revision, format!("⚠ {why}"));
+        }
         let clients: Vec<_> = world
             .clients
             .lock()

@@ -92,6 +92,13 @@ pub struct Menu {
     /// Why the last run couldn't start, if it couldn't.
     #[serde(default)]
     pub error: Option<String>,
+    /// A server elsewhere (`--server`): its address.
+    #[serde(default)]
+    pub remote: Option<String>,
+    /// Outages can't be had (a remote server without commands to kill and
+    /// start it).
+    #[serde(default)]
+    pub no_outages: bool,
 }
 
 /// Level `index`'s outage (0-based) in seconds: as given (the last
@@ -126,6 +133,11 @@ pub struct Settings {
     /// Play every level even after the server couldn't take one.
     #[serde(default)]
     pub keep_going: bool,
+    /// People as busy as real ones: mostly reading or away, now and then a
+    /// sentence at about 40 words a minute. Otherwise busier than anyone,
+    /// on purpose.
+    #[serde(default)]
+    pub realistic: bool,
 }
 
 /// What the dashboard asks the runner (sent over the same WebSocket).
@@ -143,7 +155,8 @@ pub struct Hello {
     pub seed: u64,
     pub users: u32,
     pub duration_s: u32,
-    /// "docker" (limited container) or "native" (a process, no limits).
+    /// "docker" (limited container), "native" (a process, no limits) or
+    /// "remote" (a server elsewhere, `server_url`).
     pub mode: String,
     /// CPU limit in cores (0 = none).
     pub cpus: f32,
@@ -159,6 +172,9 @@ pub struct Hello {
     /// Whether there is a start screen to go back to afterwards.
     #[serde(default)]
     pub replay: bool,
+    /// People as busy as real ones (see [`Settings::realistic`]).
+    #[serde(default)]
+    pub realistic: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]

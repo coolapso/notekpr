@@ -14,14 +14,17 @@ task load USERS=200 STEP=200 LEVELS=5 CPUS=2 MEMORY=1g SPEED=2
 task load -- --seed 42                     # repeat a run (same people, teams and choices)
 task load -- --downtimes 5s,10s,20s        # choose the outages (the last repeats)
 task load FROM=6 CPUS=2 MEMORY=1g          # start right at level 6 (600 people), e.g. after a game over there
+task load REALISTIC=1 USERS=500 STEP=500   # people as busy as real ones: 500, 1000, … 5000
 task load:native                           # without Docker: the server as a local process, no limits
+task load:remote SERVER=https://notes-test.example.com   # a server elsewhere (see below)
 ```
 
 `task load` builds the server image (`task docker:build`), the dashboard and
 the load runner and opens <http://localhost:8098> on the **start screen**:
 choose the level to start at, how many levels, people per level, the
-server's CPU and memory, typing speed, how long each level lasts, whether
-there are outages and whether a game over ends the run or it keeps going
+crowd (busy or [realistic](#realistic-people)), the server's CPU and
+memory, typing speed, how long each level lasts, whether there are outages
+and whether a game over ends the run or it keeps going
 (arrow keys or clicks; the `task load` variables are the starting choices),
 then PRESS START. After the report — or a GAME
 OVER — *insert coin* takes you back to the start screen, starting at the
@@ -81,7 +84,8 @@ Each level (`--levels`; the first has `--users` people, each next one
    renaming notes (links in other notes follow), trashing old quick notes,
    sharing a note with someone from another team, and saving revisions.
    When a shared note passes about 16 KB, its team starts a fresh page.
-   `--speed` makes everyone faster or slower.
+   `--speed` makes everyone faster or slower; `--realistic` makes them as
+   busy as [real people](#realistic-people).
 4. **The crash** (halfway through the level, unless `--no-crash`): `docker
    kill` (SIGKILL), the level's outage (`--downtimes`; by default from 2 s
    in the first level up to 90 s in the tenth), `docker start` on the same
@@ -127,6 +131,65 @@ times, waiting longer each time); someone who still can't get in is counted
 as an error and the run goes on without them, as does a team whose vault
 couldn't be set up.
 
+## Realistic people
+
+By default the crowd is busier than anyone, on purpose: everyone types
+nonstop, about 4–5 requests a second each. That finds the server's limits
+with a few hundred people, but says little about how many *real* people a
+server can take. With `--realistic` (`REALISTIC=1`, or CROWD on the start
+screen) people behave like someone with the app open:
+
+* most of the time they read, think or are elsewhere: between two things,
+  10 s to a minute (60 %), one to three minutes (30 %) or three to ten
+  minutes away (10 %) — about a minute and a half on average;
+* when they write, it's a sentence or two at about 40 words a minute, each
+  key sent on its own (as the browser does at that pace);
+* they don't start in step: each one first reads for up to 90 s.
+
+That's about one upload every 3 s per person (some 0.35 requests a second),
+a twelfth of a busy one, so levels need more people: `task load
+REALISTIC=1 USERS=500 STEP=500`. Every connected person still holds a
+WebSocket, and still reconnects and catches up after an outage, so
+connections and comebacks weigh relatively more than with busy people.
+
+## Against a server elsewhere
+
+`--server URL` (`task load:remote SERVER=…`) runs the crowd against a
+server you run somewhere else — the real network, TLS and proxy in
+between — instead of starting one here. It has to be a **throwaway server
+in development mode**: the people sign in without an identity provider.
+Anyone who can reach it can sign in as anyone, so give it no real data,
+limit who can reach it (a firewall rule for the load machine's address)
+and take it down afterwards. For example, on the test machine:
+
+```sh
+docker run -d --name coolpsonotes-loadtest -p 8080:8080 -v /data \
+  -e COOLPSONOTES_DEV_MODE=true -e COOLPSONOTES_DEV_MODE_ANYWHERE=true \
+  -e COOLPSONOTES_RATE_LIMIT_RPS=1000000 -e COOLPSONOTES_AUTH_RATE_LIMIT_PER_MIN=1000000 \
+  -e COOLPSONOTES_PUBLIC_URL=https://notes-test.example.com \
+  --cpus 1 --memory 512m coolpsonotes:latest
+```
+
+(behind your HTTPS proxy, or `http://` and a port for a quick try). The
+rate limits must be raised because every simulated person comes from the
+load machine; if they aren't, the run says so as soon as the server turns
+requests away.
+
+* **Outages** need a way to kill and start it: `--kill-command "ssh
+  test-box docker kill coolpsonotes-loadtest" --start-command "ssh test-box
+  docker start coolpsonotes-loadtest"` (run with `sh -c`). Without them
+  there are none.
+* **CPU and memory** come from the server's own `/metrics`
+  (`process_cpu_seconds_total`, `process_resident_memory_bytes`; Linux
+  servers): 100 % is one core, there are no limit lines. If `/metrics` needs
+  a token, pass `--metrics-token` (or `COOLPSONOTES_METRICS_TOKEN`); if the
+  proxy hides `/metrics` (the bundled Caddyfiles do), the CPU, memory and
+  request charts stay empty, and the rest works.
+* **Accounts stay** on that server: each run's people sign in with names of
+  their own (`anika-…`), so runs don't collide.
+* The clients still run on this machine, so it needs the CPU and memory for
+  them (see [below](#what-is-real-and-what-isnt)).
+
 ## What is real and what isn't
 
 * **The server is the real image**, limited with Docker's `--cpus` and
@@ -147,16 +210,18 @@ couldn't be set up.
   queueing. A thousand people need several cores of their own; the runner
   raises its open-files limit for their connections.
 * **People type fast**: about 18 characters a second while they type, each
-  few characters an upload — busier than most people, on purpose. Treat the numbers as a picture of the server's behaviour under a
-  given load, not of a deployment on the internet.
+  few characters an upload — busier than most people, on purpose (unless
+  [realistic](#realistic-people)). Treat the numbers as a picture of the
+  server's behaviour under a given load; against a server here, not of a
+  deployment on the internet.
 * **Keystroke → others' copies** is measured exactly: only its writer
   adds to their part of a note, so each keystroke is recorded with the length
   of the part after it, and another person's copy having that much of the
   part means the keystroke reached them. The report's p50/p99 leave out the
   crash and the recovery (the live chart doesn't).
 * **CPU and memory** come from `docker stats` (with `--native`, from
-  `/proc`); **requests, request times and stored changes** from the server's
-  own `/metrics`.
+  `/proc`; with `--server`, from the server's `/metrics`); **requests,
+  request times and stored changes** from the server's own `/metrics`.
 * The dashboard shows note text because the load runner *is* the clients:
   it reads its people's decrypted copies, as their own apps would. The
   server's side is the ciphertext panel.
@@ -174,10 +239,14 @@ on.
 | `--duration D` | 60s | how long everyone works in each level (`90s`, `3m`) |
 | `--downtimes LIST` | see above | each level's outage, e.g. `5s,10s,30s` (the last repeats) |
 | `--speed X` | 1 | how fast people are (2 = twice as fast) |
+| `--realistic` | | people as busy as [real ones](#realistic-people) (`task load REALISTIC=1`) |
 | `--arrive D` | 10s | over how long each level's newcomers arrive (`0` = all at once) |
 | `--cpus N`, `--memory M` | 1, 512m | the container's limits |
 | `--image I` | coolpsonotes:latest | the server image |
 | `--native` | | run `target/release/coolpsonotes-server` as a process instead (Linux; no limits) |
+| `--server URL` | | a [server elsewhere](#against-a-server-elsewhere) instead (`task load:remote SERVER=…`) |
+| `--kill-command C`, `--start-command C` | | with `--server`: how to kill and start it for the outages |
+| `--metrics-token T` | `$COOLPSONOTES_METRICS_TOKEN` | with `--server`: its `/metrics` token |
 | `--seed N` | random | repeat a run |
 | `--no-crash` | | don't kill the server midway |
 | `--dashboard ADDR` | 127.0.0.1:8098 | where the live view is served |

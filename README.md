@@ -116,7 +116,9 @@ read anything.
   real clients with real encryption — growing level by level to a thousand,
   against the server image with CPU and memory limits, an outage in every
   level, a GAME OVER when it can't keep up, and a check that nothing was
-  lost; choose the run on its start screen ([load test](docs/load-test.md)).
+  lost; choose the run on its start screen, with people busier than anyone
+  or as busy as real ones, against a server here or one elsewhere
+  ([load test](docs/load-test.md)).
 * A development mode where anyone can sign in as anyone (one session per
   browser tab) to try sharing and collaboration in one browser, and a demo
   with users, shared vaults and notes ready to explore (`task demo`).

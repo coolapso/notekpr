@@ -358,33 +358,34 @@ impl App {
             _ => None,
         };
         if let Some(m) = &mut self.menu {
-            let docker = m.menu.docker;
+            let menu = m.menu.clone();
+            let menu = &menu;
             match (i, hit) {
                 (Input::Up, _) => m.selected = (m.selected + OPTIONS) % (OPTIONS + 1),
                 (Input::Down, _) => m.selected = (m.selected + 1) % (OPTIONS + 1),
                 (Input::Left, _) if m.selected < OPTIONS => {
-                    change(&mut m.settings, m.selected, -1, docker)
+                    change(&mut m.settings, m.selected, -1, menu)
                 }
                 (Input::Right, _) if m.selected < OPTIONS => {
-                    change(&mut m.settings, m.selected, 1, docker)
+                    change(&mut m.settings, m.selected, 1, menu)
                 }
                 (Input::Enter, _) if m.selected < OPTIONS => {
-                    change(&mut m.settings, m.selected, 1, docker)
+                    change(&mut m.settings, m.selected, 1, menu)
                 }
                 (Input::Enter, _) | (_, Some(Hit::Start)) => {
                     return Some(Command::Start(m.settings.clone()));
                 }
                 (_, Some(Hit::Row(r))) => {
                     m.selected = r;
-                    change(&mut m.settings, r, 1, docker);
+                    change(&mut m.settings, r, 1, menu);
                 }
                 (_, Some(Hit::Dec(r))) => {
                     m.selected = r;
-                    change(&mut m.settings, r, -1, docker);
+                    change(&mut m.settings, r, -1, menu);
                 }
                 (_, Some(Hit::Inc(r))) => {
                     m.selected = r;
-                    change(&mut m.settings, r, 1, docker);
+                    change(&mut m.settings, r, 1, menu);
                 }
                 _ => {}
             }
@@ -442,13 +443,17 @@ pub struct MenuState {
 }
 
 /// How many settings there are (START comes after them).
-pub const OPTIONS: usize = 9;
+pub const OPTIONS: usize = 10;
+const CPU: usize = 4;
+const MEMORY: usize = 5;
+const OUTAGES: usize = 8;
 
 pub fn option_label(i: usize) -> &'static str {
     [
         "START AT LEVEL",
         "LEVELS",
         "PEOPLE PER LEVEL",
+        "CROWD",
         "SERVER CPU",
         "SERVER MEMORY",
         "TYPING SPEED",
@@ -458,23 +463,63 @@ pub fn option_label(i: usize) -> &'static str {
     ][i]
 }
 
-pub fn option_value(s: &Settings, i: usize, docker: bool) -> String {
+/// Whether a setting can be chosen here: limits only for the server in
+/// Docker; outages only when it can be killed.
+pub fn option_enabled(menu: &Menu, i: usize) -> bool {
+    match i {
+        CPU | MEMORY => menu.docker,
+        OUTAGES => !menu.no_outages,
+        _ => true,
+    }
+}
+
+pub fn option_value(s: &Settings, i: usize, menu: &Menu) -> String {
+    let fixed = || {
+        if menu.remote.is_some() {
+            "its own"
+        } else {
+            "no limit"
+        }
+        .to_string()
+    };
     match i {
         0 => s.from_level.to_string(),
         1 => s.levels.to_string(),
         2 => s.step.max(s.users).to_string(),
-        3 if !docker => "no limit".into(),
-        3 => format!(
+        3 => if s.realistic { "REALISTIC" } else { "BUSY" }.into(),
+        CPU if !menu.docker => fixed(),
+        CPU => format!(
             "{} {}",
             trim(s.cpus as f64),
             if s.cpus == 1.0 { "core" } else { "cores" }
         ),
-        4 if !docker => "no limit".into(),
-        4 => memory_label(&s.memory),
-        5 => format!("{}×", trim(s.speed)),
-        6 => format!("{} s", s.duration_s),
-        7 => if s.outages { "ON" } else { "OFF" }.into(),
+        MEMORY if !menu.docker => fixed(),
+        MEMORY => memory_label(&s.memory),
+        6 => format!("{}×", trim(s.speed)),
+        7 => format!("{} s", s.duration_s),
+        OUTAGES => if s.outages && !menu.no_outages {
+            "ON"
+        } else {
+            "OFF"
+        }
+        .into(),
         _ => if s.keep_going { "KEEP GOING" } else { "STOP" }.into(),
+    }
+}
+
+/// What a setting means, under the options.
+pub fn option_hint(s: &Settings, i: usize, menu: &Menu) -> &'static str {
+    match i {
+        3 if s.realistic => {
+            "like people with the app open: mostly reading or away, now and then a sentence at 40 words a minute"
+        }
+        3 => "busier than anyone, on purpose: 18 characters a second, a short thought, again",
+        OUTAGES if menu.no_outages => {
+            "no outages: --server without --kill-command and --start-command"
+        }
+        OUTAGES => "midway through each level the server is killed, and down longer each level",
+        9 => "after a level the server couldn't take: stop there, or play the rest anyway",
+        _ => "",
     }
 }
 
@@ -492,7 +537,10 @@ fn memory_label(m: &str) -> String {
 }
 
 /// The next or previous choice of a setting (wrapping around).
-pub fn change(s: &mut Settings, i: usize, dir: i32, docker: bool) {
+pub fn change(s: &mut Settings, i: usize, dir: i32, menu: &Menu) {
+    if !option_enabled(menu, i) {
+        return;
+    }
     fn step<T: PartialOrd + Copy>(list: &[T], now: T, dir: i32) -> T {
         let i = list.iter().position(|v| *v >= now).unwrap_or(0) as i32;
         let exact = list.get(i as usize).is_some_and(|v| *v == now);
@@ -513,12 +561,17 @@ pub fn change(s: &mut Settings, i: usize, dir: i32, docker: bool) {
             s.from_level = s.from_level.min(s.levels);
         }
         2 => {
-            let n = step(&[25, 50, 100, 200, 300, 500], s.step.max(s.users), dir);
+            let n = step(
+                &[25, 50, 100, 200, 300, 500, 1000, 2000],
+                s.step.max(s.users),
+                dir,
+            );
             s.users = n;
             s.step = n;
         }
-        3 if docker => s.cpus = step(&[0.25, 0.5, 1.0, 2.0, 4.0, 8.0], s.cpus, dir),
-        4 if docker => {
+        3 => s.realistic = !s.realistic,
+        CPU => s.cpus = step(&[0.25, 0.5, 1.0, 2.0, 4.0, 8.0], s.cpus, dir),
+        MEMORY => {
             let sizes = ["128m", "256m", "512m", "1g", "2g", "4g"];
             let mb = |m: &str| {
                 let m = m.trim().to_lowercase();
@@ -533,10 +586,10 @@ pub fn change(s: &mut Settings, i: usize, dir: i32, docker: bool) {
             let k = values.iter().position(|x| *x == v).unwrap_or(2);
             s.memory = sizes[k].to_string();
         }
-        5 => s.speed = step(&[0.5, 1.0, 2.0, 4.0], s.speed, dir),
-        6 => s.duration_s = step(&[20, 30, 45, 60, 90, 120], s.duration_s, dir),
-        7 => s.outages = !s.outages,
-        8 => s.keep_going = !s.keep_going,
+        6 => s.speed = step(&[0.5, 1.0, 2.0, 4.0], s.speed, dir),
+        7 => s.duration_s = step(&[20, 30, 45, 60, 90, 120, 180, 300], s.duration_s, dir),
+        OUTAGES => s.outages = !s.outages,
+        9 => s.keep_going = !s.keep_going,
         _ => {}
     }
 }
@@ -546,8 +599,11 @@ pub fn start_preview(m: &MenuState) -> String {
     let s = &m.settings;
     let level = s.from_level.max(1);
     let people = s.users + s.step * (level - 1);
-    let mut out = format!("level {level}: {people} people");
-    if s.outages {
+    let mut out = format!(
+        "level {level}: {people} {}people",
+        if s.realistic { "realistic " } else { "" }
+    );
+    if s.outages && !m.menu.no_outages {
         let down =
             coolpsonotes_load_events::outage_s(level as usize - 1, s.levels, &m.menu.downtimes);
         out.push_str(&format!(", {down} s outage"));
@@ -587,6 +643,7 @@ mod tests {
                 server_url: String::new(),
                 levels: 1,
                 replay: false,
+                realistic: false,
             }),
             1.0,
         );
@@ -644,21 +701,29 @@ mod tests {
             speed: 1.0,
             outages: true,
             keep_going: false,
+            realistic: false,
         }
     }
 
-    fn menu_app() -> App {
+    fn docker_menu() -> Menu {
+        Menu {
+            settings: settings(),
+            docker: true,
+            downtimes: vec![],
+            error: None,
+            remote: None,
+            no_outages: false,
+        }
+    }
+
+    fn menu_app_with(menu: Menu) -> App {
         let mut a = App::new();
-        a.apply(
-            Event::Menu(Menu {
-                settings: settings(),
-                docker: true,
-                downtimes: vec![],
-                error: None,
-            }),
-            0.0,
-        );
+        a.apply(Event::Menu(menu), 0.0);
         a
+    }
+
+    fn menu_app() -> App {
+        menu_app_with(docker_menu())
     }
 
     #[test]
@@ -676,17 +741,22 @@ mod tests {
             start_preview(m),
             "level 6: 600 people, 17 s outage · then up to level 10 (1000 people)"
         );
-        // More CPU and memory.
+        // A realistic crowd, then more CPU and memory.
         for _ in 0..3 {
             a.input(Input::Down);
         }
         a.input(Input::Right);
         a.input(Input::Down);
         a.input(Input::Right);
+        a.input(Input::Down);
+        a.input(Input::Right);
+        let menu = docker_menu();
         let s = &a.menu.as_ref().unwrap().settings;
+        assert!(s.realistic);
+        assert_eq!(option_value(s, 3, &menu), "REALISTIC");
         assert_eq!((s.cpus, s.memory.as_str()), (2.0, "1g"));
-        assert_eq!(option_value(s, 3, true), "2 cores");
-        assert_eq!(option_value(s, 4, true), "1 GB");
+        assert_eq!(option_value(s, CPU, &menu), "2 cores");
+        assert_eq!(option_value(s, MEMORY, &menu), "1 GB");
         // Wrapping round, and back.
         a.input(Input::Left);
         a.input(Input::Left);
@@ -696,15 +766,46 @@ mod tests {
         a.input(Input::Right);
         let s = &a.menu.as_ref().unwrap().settings;
         assert!(s.keep_going);
-        assert_eq!(option_value(s, OPTIONS - 1, true), "KEEP GOING");
+        assert_eq!(option_value(s, OPTIONS - 1, &menu), "KEEP GOING");
         // START sends the settings.
         a.menu.as_mut().unwrap().selected = OPTIONS;
         match a.input(Input::Enter) {
-            Some(Command::Start(s)) => {
-                assert_eq!((s.from_level, s.cpus, s.keep_going), (6, 2.0, true))
-            }
+            Some(Command::Start(s)) => assert_eq!(
+                (s.from_level, s.cpus, s.keep_going, s.realistic),
+                (6, 2.0, true, true)
+            ),
             other => panic!("{other:?}"),
         }
+    }
+
+    #[test]
+    fn a_remote_server_has_its_own_limits_and_maybe_no_outages() {
+        let mut menu = docker_menu();
+        menu.docker = false;
+        menu.remote = Some("https://notes-test.example.com".into());
+        menu.no_outages = true;
+        menu.settings.outages = false;
+        let mut a = menu_app_with(menu.clone());
+        // Choosing CPU, memory or outages changes nothing.
+        for i in [CPU, MEMORY, OUTAGES] {
+            assert!(!option_enabled(&menu, i));
+            a.menu.as_mut().unwrap().selected = i;
+            a.input(Input::Right);
+        }
+        let s = &a.menu.as_ref().unwrap().settings;
+        assert_eq!((s.cpus, s.memory.as_str(), s.outages), (1.0, "512m", false));
+        assert_eq!(option_value(s, CPU, &menu), "its own");
+        assert_eq!(option_value(s, OUTAGES, &menu), "OFF");
+        assert_eq!(
+            start_preview(a.menu.as_ref().unwrap()),
+            "level 1: 100 people · then up to level 10 (1000 people)"
+        );
+        // People per level go up to crowds for realistic people.
+        a.menu.as_mut().unwrap().selected = 2;
+        for _ in 0..4 {
+            a.input(Input::Right);
+        }
+        assert_eq!(a.menu.as_ref().unwrap().settings.users, 1000);
     }
 
     #[test]
@@ -722,6 +823,7 @@ mod tests {
                 server_url: String::new(),
                 levels: 1,
                 replay,
+                realistic: false,
             })
         };
         a.apply(hello(true), 0.0);

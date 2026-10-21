@@ -216,8 +216,12 @@ pub fn sentence(rng: &mut Rng) -> String {
     s
 }
 
-/// Split text the way people type it: a few characters at a time.
-pub fn keystrokes(rng: &mut Rng, text: &str) -> Vec<String> {
+/// Split text the way people type it: a few characters at a time (or, at
+/// the pace of real people, one at a time).
+pub fn keystrokes(rng: &mut Rng, text: &str, one_by_one: bool) -> Vec<String> {
+    if one_by_one {
+        return text.chars().map(String::from).collect();
+    }
     let chars: Vec<char> = text.chars().collect();
     let mut out = Vec::new();
     let mut i = 0;
@@ -246,6 +250,35 @@ pub fn teams(rng: &mut Rng, people: u32) -> Vec<Vec<u32>> {
         out.last_mut().unwrap().extend(last);
     }
     out
+}
+
+/// Who takes part in a run.
+pub struct People {
+    pub count: u32,
+    /// Each person's team.
+    pub team_of: Vec<u32>,
+    /// How fast they are (2 = twice as fast as the defaults).
+    pub speed: f64,
+    /// As busy as real people, rather than busier than anyone.
+    pub realistic: bool,
+    /// Added to everyone's sign-in name (a server that keeps the accounts
+    /// of earlier runs).
+    pub tag: Option<String>,
+}
+
+/// `n` in digits and lowercase letters.
+pub fn base36(mut n: u64) -> String {
+    let digits = b"0123456789abcdefghijklmnopqrstuvwxyz";
+    let mut out = Vec::new();
+    loop {
+        out.push(digits[(n % 36) as usize]);
+        n /= 36;
+        if n == 0 {
+            break;
+        }
+    }
+    out.reverse();
+    String::from_utf8(out).unwrap()
 }
 
 /// The person's display name and their (unique) sign-in name.
@@ -372,7 +405,19 @@ mod tests {
     fn keystrokes_add_up_to_the_text() {
         let mut rng = Rng::new(3);
         let s = "Grandma's recipe uses brown sugar, not white — ünïcode too.";
-        assert_eq!(keystrokes(&mut rng, s).concat(), s);
+        assert_eq!(keystrokes(&mut rng, s, false).concat(), s);
+        let one_by_one = keystrokes(&mut rng, s, true);
+        assert_eq!(one_by_one.concat(), s);
+        assert_eq!(one_by_one.len(), s.chars().count());
+    }
+
+    #[test]
+    fn tags_are_short_and_fit_a_sign_in_name() {
+        assert_eq!(base36(0), "0");
+        assert_eq!(base36(35), "z");
+        assert_eq!(base36(36), "10");
+        // Seconds since the epoch, for a long while: six characters.
+        assert_eq!(base36(1_792_574_908).len(), 6);
     }
 
     #[test]

@@ -243,7 +243,13 @@ fn header(app: &App, c: &Ctx, w: f64, head: f64) {
             )),
             _ => right.push(format!("{} · {} people", clock(t), hl.users)),
         }
-        if hl.cpus > 0.0 {
+        if hl.realistic {
+            right.push("realistic crowd".into());
+        }
+        if hl.mode == "remote" {
+            let host = hl.server_url.split("://").last().unwrap_or(&hl.server_url);
+            right.push(format!("server: {host}"));
+        } else if hl.cpus > 0.0 {
             right.push(format!("server: {} CPU · {:.0} MB", hl.cpus, mb(hl.memory)));
         } else {
             right.push("server: local process, no limits".into());
@@ -1618,7 +1624,6 @@ fn draw_menu(app: &mut App, c: &Ctx, w: f64, h: f64, now: f64) {
     let Some(m) = app.menu.clone() else {
         return;
     };
-    let docker = m.menu.docker;
     let cx = w / 2.0;
     let mut y = (h * 0.12).clamp(40.0, 110.0);
     let tf = format!("900 50px {MONO}");
@@ -1650,7 +1655,7 @@ fn draw_menu(app: &mut App, c: &Ctx, w: f64, h: f64, now: f64) {
     // The options.
     let pw = (w - 40.0).min(620.0);
     let px = cx - pw / 2.0;
-    let row_h = 38.0;
+    let row_h = 36.0;
     rrect(c, px, y, pw, row_h * state::OPTIONS as f64 + 16.0, 14.0);
     c.set_fill_style_str(PANEL);
     c.fill();
@@ -1662,7 +1667,7 @@ fn draw_menu(app: &mut App, c: &Ctx, w: f64, h: f64, now: f64) {
     for i in 0..state::OPTIONS {
         let ry = y + 8.0 + i as f64 * row_h;
         let selected = m.selected == i;
-        let disabled = !docker && (i == 3 || i == 4);
+        let disabled = !state::option_enabled(&m.menu, i);
         if selected {
             rrect(c, px + 6.0, ry + 2.0, pw - 12.0, row_h - 4.0, 8.0);
             c.set_fill_style_str("rgba(76,201,240,0.10)");
@@ -1685,7 +1690,7 @@ fn draw_menu(app: &mut App, c: &Ctx, w: f64, h: f64, now: f64) {
             color,
             "left",
         );
-        let value = state::option_value(&m.settings, i, docker);
+        let value = state::option_value(&m.settings, i, &m.menu);
         let vx = px + pw - 70.0;
         text(
             c,
@@ -1706,7 +1711,20 @@ fn draw_menu(app: &mut App, c: &Ctx, w: f64, h: f64, now: f64) {
         }
         app.hits.push((px, ry, pw, row_h, Hit::Row(i)));
     }
-    y += row_h * state::OPTIONS as f64 + 16.0 + 28.0;
+    y += row_h * state::OPTIONS as f64 + 16.0 + 18.0;
+    if m.selected < state::OPTIONS {
+        let hint = state::option_hint(&m.settings, m.selected, &m.menu);
+        text(
+            c,
+            hint,
+            cx,
+            y,
+            &format!("italic 400 12px {SANS}"),
+            DIM,
+            "center",
+        );
+    }
+    y += 24.0;
     text(
         c,
         &state::start_preview(&m),
@@ -1717,12 +1735,22 @@ fn draw_menu(app: &mut App, c: &Ctx, w: f64, h: f64, now: f64) {
         "center",
     );
     y += 20.0;
-    let server = if docker {
-        "server: the coolpsonotes image in Docker, with these limits"
-    } else {
-        "server: a local process, without limits"
+    let server = match &m.menu.remote {
+        Some(url) => format!("server: {url}, as it runs there"),
+        None if m.menu.docker => {
+            "server: the coolpsonotes image in Docker, with these limits".into()
+        }
+        None => "server: a local process, without limits".into(),
     };
-    text(c, server, cx, y, &format!("400 12px {SANS}"), DIM, "center");
+    text(
+        c,
+        &server,
+        cx,
+        y,
+        &format!("400 12px {SANS}"),
+        DIM,
+        "center",
+    );
     if let Some(e) = &m.menu.error {
         y += 22.0;
         text(

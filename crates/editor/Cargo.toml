@@ -19,7 +19,7 @@ features = [
   "DataTransfer", "DragEvent", "File", "FileList", "DomRect", "CssStyleDeclaration", "ScrollIntoViewOptions",
   "ScrollLogicalPosition", "DomTokenList", "StaticRange", "TreeWalker", "NodeFilter", "CompositionEvent",
   "MutationObserver", "MutationObserverInit", "MutationRecord", "CaretPosition", "Navigator", "Clipboard",
-  "HtmlTemplateElement", "DocumentFragment",
+  "HtmlTemplateElement", "DocumentFragment", "ResizeObserver", "DomRectList",
 ]
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]

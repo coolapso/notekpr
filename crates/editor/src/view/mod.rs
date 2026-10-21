@@ -53,7 +53,7 @@ use web_sys::{
 use crate::change::{Assoc, ChangeSet};
 use crate::commands::{self, Command};
 use crate::state::{
-    Anchor, Applied, EditorState, Mode, Origin, RemoteCursor, Report, Selection, Transaction,
+    Anchor, Applied, EditorState, Mark, Mode, Origin, RemoteCursor, Report, Selection, Transaction,
     merge_native,
 };
 use crate::syntax::{self, Target};
@@ -136,11 +136,14 @@ type Listener = (
 );
 type Queued = Box<dyn FnOnce(&Editor)>;
 type Observer = (MutationObserver, Closure<dyn FnMut(js_sys::Array)>);
+type Resize = (web_sys::ResizeObserver, Closure<dyn FnMut(js_sys::Array)>);
 
 pub struct Editor {
     wrap: HtmlElement,
     root: HtmlElement,
     overlay: HtmlElement,
+    /// Behind the text: the highlights of [`Mark`]s.
+    marks: HtmlElement,
     host: Rc<dyn Host>,
     /// The document model. Borrowed only inside [`Editor::model`].
     state: RefCell<EditorState>,
@@ -158,6 +161,9 @@ pub struct Editor {
     /// Mutation records seen by the observer callback but not handled yet.
     records: RefCell<Vec<MutationRecord>>,
     observer: RefCell<Option<Observer>>,
+    /// Redraws the overlays when the text's size changes (wrapping,
+    /// images loading).
+    resize: RefCell<Option<Resize>>,
     listeners: RefCell<Vec<Listener>>,
     /// Pending animation frame (cursor drawing, scrolling) and its callback.
     frame: Cell<Option<i32>>,
@@ -240,12 +246,15 @@ impl Editor {
             e
         };
         let (wrap, root, overlay) = (el("ed-wrap"), el("ed"), el("ed-cursors"));
+        let marks = el("ed-marks");
+        let _ = marks.set_attribute("aria-hidden", "true");
         let _ = root.set_attribute("spellcheck", "true");
         let _ = root.set_attribute("autocapitalize", "sentences");
         let _ = root.set_attribute("role", "textbox");
         let _ = root.set_attribute("aria-multiline", "true");
         let _ = root.set_attribute("aria-label", "Note text");
         let _ = overlay.set_attribute("aria-hidden", "true");
+        let _ = wrap.append_child(&marks);
         let _ = wrap.append_child(&root);
         let _ = wrap.append_child(&overlay);
         let _ = container.append_child(&wrap);
@@ -257,6 +266,7 @@ impl Editor {
             wrap,
             root,
             overlay,
+            marks,
             host,
             state: RefCell::new(st),
             view: RefCell::new(View::default()),
@@ -267,6 +277,7 @@ impl Editor {
             deferred: Cell::new(0),
             records: RefCell::new(vec![]),
             observer: RefCell::new(None),
+            resize: RefCell::new(None),
             listeners: RefCell::new(vec![]),
             frame: Cell::new(None),
             frame_cb: RefCell::new(None),
@@ -374,6 +385,7 @@ impl Editor {
         self.op(move |ed| {
             ed.model(move |st| st.mode = mode);
             ed.apply_mode_classes();
+            ed.request_frame(false, true);
         });
     }
 
@@ -485,6 +497,31 @@ impl Editor {
             ed.model(move |st| st.set_cursors(cursors));
             ed.request_frame(false, true);
         });
+    }
+
+    /// Highlight these ranges (replacing earlier ones). They follow edits
+    /// until set again.
+    pub fn set_marks(&self, marks: Vec<Mark>) {
+        self.op(move |ed| {
+            ed.model(move |st| st.set_marks(marks));
+            ed.request_frame(false, true);
+        });
+    }
+
+    /// Ids of the highlighted ranges around offset `pos`.
+    pub fn marks_at(&self, pos: usize) -> Vec<String> {
+        self.model(move |st| st.marks_at(pos))
+    }
+
+    /// Where a highlighted range is now (byte offsets), if it still is.
+    pub fn mark_range(&self, id: &str) -> Option<(usize, usize)> {
+        let id = id.to_string();
+        self.model(move |st| {
+            st.marks()
+                .iter()
+                .find(|m| m.id == id)
+                .map(|m| (m.start, m.end))
+        })
     }
 
     /// Remove the editor from the page and stop listening.
@@ -816,7 +853,10 @@ impl Editor {
             self.place_dom_selection(applied.selection, applied.scroll);
         }
         self.sync_active();
-        if !self.model(|st| st.cursors().is_empty()) {
+        // (Also when the last mark just went: its highlight is still drawn.)
+        if !self.model(|st| st.cursors().is_empty() && st.marks().is_empty())
+            || self.marks.child_element_count() > 0
+        {
             self.request_frame(false, true);
         }
         if !remote && applied.origin != Origin::History {
@@ -1217,6 +1257,10 @@ impl Editor {
     /// Mark the lines of the selection `active` (their syntax shows) while
     /// the editor has the focus.
     fn sync_active(&self) {
+        // Markers shown or hidden on these lines move the highlights.
+        if !self.model(|st| st.marks().is_empty()) {
+            self.request_frame(false, true);
+        }
         let lines = self.model(|st| {
             let s = st.selection();
             st.doc().line_of(s.from())..st.doc().line_of(s.to()) + 1
@@ -1287,6 +1331,7 @@ impl Editor {
         }
         if self.frame_cursors.replace(false) {
             self.draw_cursors();
+            self.draw_marks();
         }
     }
 
@@ -1304,6 +1349,73 @@ impl Editor {
             let opts = web_sys::ScrollIntoViewOptions::new();
             opts.set_block(web_sys::ScrollLogicalPosition::Nearest);
             el.scroll_into_view_with_scroll_into_view_options(&opts);
+        }
+    }
+
+    /// The client rectangles of the text from `start` to `end` (byte
+    /// offsets), line by line.
+    fn text_rects(&self, start: usize, end: usize) -> Vec<web_sys::DomRect> {
+        let lines = self.model(move |st| {
+            let d = st.doc();
+            let (first, last) = (d.line_of(start), d.line_of(end));
+            (first..=last)
+                .map(|l| {
+                    let ls = d.line_start(l);
+                    let text = d.line(l).to_string();
+                    let from = start.saturating_sub(ls).min(text.len());
+                    let to = end.saturating_sub(ls).min(text.len());
+                    (l, text, from, to)
+                })
+                .filter(|(_, _, from, to)| from < to)
+                .collect::<Vec<_>>()
+        });
+        let doc = document();
+        let mut out = Vec::new();
+        for (line, text, from, to) in lines {
+            let Some(lv) = self.view.borrow().lines.get(line).map(|l| l.el.clone()) else {
+                continue;
+            };
+            let (sn, so) = dom::offset_to_dom(&lv, &text, from);
+            let (en, eo) = dom::offset_to_dom(&lv, &text, to);
+            let Ok(range) = doc.create_range() else {
+                continue;
+            };
+            if range.set_start(&sn, so).is_err() || range.set_end(&en, eo).is_err() {
+                continue;
+            }
+            if let Some(rects) = range.get_client_rects() {
+                for i in 0..rects.length() {
+                    if let Some(r) = rects.get(i)
+                        && r.width() > 0.0
+                    {
+                        out.push(r);
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    fn draw_marks(&self) {
+        let marks = self.model(|st| st.marks().to_vec());
+        self.marks.set_inner_html("");
+        if marks.is_empty() {
+            return;
+        }
+        let base = self.marks.get_bounding_client_rect();
+        let doc = document();
+        for m in marks {
+            for r in self.text_rects(m.start, m.end) {
+                let el: HtmlElement = doc.create_element("div").unwrap().unchecked_into();
+                el.set_class_name(&format!("hl {}", m.class));
+                let _ = el.set_attribute("data-mark", &m.id);
+                let style = el.style();
+                let _ = style.set_property("left", &format!("{}px", r.left() - base.left()));
+                let _ = style.set_property("top", &format!("{}px", r.top() - base.top()));
+                let _ = style.set_property("width", &format!("{}px", r.width()));
+                let _ = style.set_property("height", &format!("{}px", r.height()));
+                let _ = self.marks.append_child(&el);
+            }
         }
     }
 
@@ -1476,6 +1588,16 @@ impl Editor {
             opts.set_character_data(true);
             let _ = obs.observe_with_options(&this.root, &opts);
             *this.observer.borrow_mut() = Some((obs, cb));
+        }
+        let weak = Rc::downgrade(this);
+        let cb = Closure::wrap(Box::new(move |_: js_sys::Array| {
+            if let Some(ed) = weak.upgrade() {
+                ed.op(|ed| ed.request_frame(false, true));
+            }
+        }) as Box<dyn FnMut(js_sys::Array)>);
+        if let Ok(obs) = web_sys::ResizeObserver::new(cb.as_ref().unchecked_ref()) {
+            obs.observe(&this.root);
+            *this.resize.borrow_mut() = Some((obs, cb));
         }
         let weak = Rc::downgrade(this);
         *this.frame_cb.borrow_mut() = Some(Closure::wrap(Box::new(move || {
@@ -1904,6 +2026,9 @@ impl Editor {
             let _ = t.remove_event_listener_with_callback(name, cb.as_ref().unchecked_ref());
         }
         if let Some((o, _cb)) = self.observer.borrow_mut().take() {
+            o.disconnect();
+        }
+        if let Some((o, _cb)) = self.resize.borrow_mut().take() {
             o.disconnect();
         }
         if let Some(w) = web_sys::window() {

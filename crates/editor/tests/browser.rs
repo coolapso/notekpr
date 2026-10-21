@@ -16,7 +16,7 @@ use std::rc::Rc;
 
 use coolpsonotes_core::textdiff::{self, Edit};
 use coolpsonotes_editor::syntax::Target;
-use coolpsonotes_editor::{Editor, Host, Mode, RemoteCursor};
+use coolpsonotes_editor::{Editor, Host, Mark, Mode, RemoteCursor};
 use wasm_bindgen::JsCast;
 use wasm_bindgen_test::*;
 use web_sys::{Element, HtmlElement};
@@ -743,6 +743,44 @@ async fn remote_cursors_are_drawn() {
     frame().await;
     frame().await;
     assert_eq!(f.container.query_selector_all(".rc").unwrap().length(), 1);
+}
+
+#[wasm_bindgen_test]
+async fn marks_are_drawn_behind_the_text_and_follow_it() {
+    let f = setup("one two\nthree");
+    f.ed.set_marks(vec![Mark {
+        start: 4,
+        end: 13,
+        class: "c".into(),
+        id: "m1".into(),
+    }]);
+    frame().await;
+    frame().await;
+    // Across two lines: a highlight per line, behind the text, and the
+    // text itself untouched.
+    let hl = f.container.query_selector_all(".ed-marks .hl.c").unwrap();
+    assert_eq!(hl.length(), 2);
+    assert_text(&f, "one two\nthree");
+    assert_eq!(f.ed.marks_at(6), ["m1"]);
+    assert!(f.ed.marks_at(1).is_empty());
+    // Typed before it: it moves along.
+    caret_at(&f, 0);
+    type_str(&f, ">");
+    frame().await;
+    assert_eq!(f.ed.mark_range("m1"), Some((5, 14)));
+    // Its text deleted: gone.
+    f.ed.set_text(">one".into(), false);
+    *f.host.text.borrow_mut() = ">one".into();
+    frame().await;
+    frame().await;
+    assert_eq!(f.ed.mark_range("m1"), None);
+    assert_eq!(
+        f.container
+            .query_selector_all(".ed-marks .hl")
+            .unwrap()
+            .length(),
+        0
+    );
 }
 
 /// Nothing keeps the editor (or its host) alive once it is destroyed [W-L5].

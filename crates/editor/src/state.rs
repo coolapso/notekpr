@@ -31,6 +31,20 @@ pub struct RemoteCursor {
     pub head: usize,
 }
 
+/// A highlighted range of the text (e.g. what a comment is about), drawn
+/// behind it. It follows edits; text typed right before or after it isn't
+/// added to it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Mark {
+    /// Byte offsets.
+    pub start: usize,
+    pub end: usize,
+    /// CSS classes of its highlight.
+    pub class: String,
+    /// The host's name for it.
+    pub id: String,
+}
+
 /// Byte offsets; `anchor` stays put while `head` moves.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Selection {
@@ -215,6 +229,7 @@ pub struct EditorState {
     pub mode: Mode,
     pub vim: Option<Vim>,
     cursors: Vec<RemoteCursor>,
+    marks: Vec<Mark>,
     anchors: Vec<Weak<Cell<usize>>>,
     id: usize,
 }
@@ -231,6 +246,7 @@ impl EditorState {
             mode: Mode::Live,
             vim: None,
             cursors: vec![],
+            marks: vec![],
             anchors: vec![],
             id: NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
         }
@@ -276,6 +292,33 @@ impl EditorState {
 
     pub fn set_cursors(&mut self, cursors: Vec<RemoteCursor>) {
         self.cursors = cursors;
+    }
+
+    pub fn marks(&self) -> &[Mark] {
+        &self.marks
+    }
+
+    /// Set the highlighted ranges (clamped onto the text; empty ones are
+    /// dropped).
+    pub fn set_marks(&mut self, marks: Vec<Mark>) {
+        self.marks = marks
+            .into_iter()
+            .map(|m| Mark {
+                start: self.doc.floor(m.start),
+                end: self.doc.floor(m.end),
+                ..m
+            })
+            .filter(|m| m.start < m.end)
+            .collect();
+    }
+
+    /// Ids of the marks around `pos` (from their start up to their end).
+    pub fn marks_at(&self, pos: usize) -> Vec<String> {
+        self.marks
+            .iter()
+            .filter(|m| m.start <= pos && pos <= m.end)
+            .map(|m| m.id.clone())
+            .collect()
     }
 
     /// A key for vim mode (`None`: vim is off, or the key is not vim's).
@@ -327,6 +370,11 @@ impl EditorState {
                 c.anchor = changes.map_pos(c.anchor, Assoc::Before);
                 c.head = changes.map_pos(c.head, Assoc::Before);
             }
+            for m in &mut self.marks {
+                m.start = changes.map_pos(m.start, Assoc::After);
+                m.end = changes.map_pos(m.end, Assoc::Before);
+            }
+            self.marks.retain(|m| m.start < m.end);
             self.anchors.retain(|w| match w.upgrade() {
                 Some(p) => {
                     p.set(changes.map_pos(p.get(), Assoc::Before));
@@ -409,6 +457,45 @@ mod tests {
         // An anchor of another editor is not valid here.
         let other = EditorState::new(String::new()).anchor(0);
         assert_eq!(st.anchor_pos(&other), None);
+    }
+
+    #[test]
+    fn marks_follow_edits_without_growing() {
+        let mut st = EditorState::new("buy milk today".into());
+        st.set_marks(vec![
+            Mark {
+                start: 4,
+                end: 8,
+                class: "c".into(),
+                id: "m".into(),
+            },
+            Mark {
+                start: 2,
+                end: 2,
+                class: "c".into(),
+                id: "empty".into(),
+            },
+        ]);
+        assert_eq!(st.marks().len(), 1, "empty ones are dropped");
+        let edit = |st: &mut EditorState, at: usize, del: usize, ins: &str| {
+            let len = st.doc().len();
+            st.apply(Transaction::new(
+                ChangeSet::replace(len, at, at + del, ins),
+                Origin::Input,
+            ));
+        };
+        // Typed right before and right after: not part of it; inside: is.
+        edit(&mut st, 4, 0, "(");
+        edit(&mut st, 9, 0, ")");
+        edit(&mut st, 6, 0, "i");
+        assert_eq!(st.text(), "buy (miilk) today");
+        let m = &st.marks()[0];
+        assert_eq!((m.start, m.end), (5, 10));
+        assert_eq!(st.marks_at(7), ["m"]);
+        assert!(st.marks_at(12).is_empty());
+        // Gone with its text.
+        edit(&mut st, 5, 5, "");
+        assert!(st.marks().is_empty());
     }
 
     #[test]

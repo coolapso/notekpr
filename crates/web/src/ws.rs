@@ -1,9 +1,10 @@
-//! Reconnecting WebSocket to `/api/v1/ws`.
+//! Reconnecting WebSocket to `/api/v1/ws`: with backoff after a failure,
+//! about every second for a while when the server says it's restarting.
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-use coolpsonotes_core::protocol::{ClientMessage, ServerMessage};
+use coolpsonotes_core::protocol::{CLOSE_RESTARTING, ClientMessage, ServerMessage};
 use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
 use web_sys::{CloseEvent, MessageEvent, WebSocket};
@@ -26,6 +27,9 @@ pub struct Socket {
     state: Cell<ConnState>,
     ready: Cell<bool>,
     attempts: Cell<u32>,
+    /// When the server said it's restarting (ms; 0 = it didn't): retrying
+    /// quickly for a while since then.
+    restart_at: Cell<i64>,
     last_rx: Cell<i64>,
     stopped: Cell<bool>,
     on_message: OnMessage,
@@ -33,6 +37,11 @@ pub struct Socket {
     // Keep JS callbacks alive for the current connection.
     callbacks: RefCell<Vec<Closure<dyn FnMut(JsValue)>>>,
 }
+
+/// How long to keep retrying quickly after the server said it's restarting,
+/// and to show "connecting" rather than "offline" meanwhile.
+const RESTART_WINDOW_MS: i64 = 60_000;
+const RESTART_QUIET_MS: i64 = 15_000;
 
 fn ws_url() -> String {
     let loc = util::window().location();
@@ -62,6 +71,7 @@ impl Socket {
             state: Cell::new(ConnState::Connecting),
             ready: Cell::new(false),
             attempts: Cell::new(0),
+            restart_at: Cell::new(0),
             last_rx: Cell::new(now_ms()),
             stopped: Cell::new(false),
             on_message,
@@ -167,6 +177,7 @@ impl Socket {
                 Ok(m) => {
                     if let ServerMessage::Ready { .. } = &m {
                         s.ready.set(true);
+                        s.restart_at.set(0);
                         s.set_state(ConnState::Open);
                     }
                     (s.on_message)(m);
@@ -180,10 +191,22 @@ impl Socket {
         let me = Rc::downgrade(this);
         let onclose = Closure::wrap(Box::new(move |e: JsValue| {
             let Some(s) = me.upgrade() else { return };
-            let _ = e.dyn_into::<CloseEvent>();
+            let restarting = e
+                .dyn_into::<CloseEvent>()
+                .is_ok_and(|e| e.code() == CLOSE_RESTARTING);
             s.ready.set(false);
             s.ws.borrow_mut().take();
-            s.set_state(ConnState::Offline);
+            if restarting {
+                s.attempts.set(0);
+                s.restart_at.set(now_ms());
+            }
+            // An update: back in a moment — "offline" only if it takes long.
+            let since = now_ms() - s.restart_at.get();
+            if s.restart_at.get() > 0 && since < RESTART_QUIET_MS {
+                s.set_state(ConnState::Connecting);
+            } else {
+                s.set_state(ConnState::Offline);
+            }
             Socket::retry(&s);
         }) as Box<dyn FnMut(JsValue)>);
         ws.set_onclose(Some(onclose.as_ref().unchecked_ref()));
@@ -197,11 +220,18 @@ impl Socket {
         if this.stopped.get() {
             return;
         }
-        let n = this.attempts.get() + 1;
-        this.attempts.set(n);
-        // Exponential backoff with jitter, capped at 30 s.
-        let base = (500.0 * 2f64.powi(n.min(6) as i32)).min(30_000.0);
-        let delay = (base * (0.5 + js_sys::Math::random() * 0.5)) as i32;
+        let restart = this.restart_at.get();
+        let delay = if restart > 0 && now_ms() - restart < RESTART_WINDOW_MS {
+            // The server is restarting: about every second, spread out so
+            // not everyone comes back in the same instant.
+            (250.0 + js_sys::Math::random() * 1000.0) as i32
+        } else {
+            let n = this.attempts.get() + 1;
+            this.attempts.set(n);
+            // Exponential backoff with jitter, capped at 30 s.
+            let base = (500.0 * 2f64.powi(n.min(6) as i32)).min(30_000.0);
+            (base * (0.5 + js_sys::Math::random() * 0.5)) as i32
+        };
         let me = Rc::downgrade(this);
         util::set_timeout(delay, move || {
             if let Some(s) = me.upgrade()

@@ -51,8 +51,16 @@ class Env:
         raise RuntimeError("server did not start")
 
     def stop_server(self):
+        """Stop it as an update does (SIGTERM): it tells clients it's restarting."""
         if self.server:
             self.server.terminate()
+            self.server.wait(10)
+            self.server = None
+
+    def kill_server(self):
+        """Kill it without a word (SIGKILL), as a crash would."""
+        if self.server:
+            self.server.kill()
             self.server.wait(10)
             self.server = None
 
@@ -390,8 +398,16 @@ def test_features(env):
         time.sleep(1)
         check("garden" in (a.js("return (document.querySelector('.h-preview .reading')||{}).textContent") or ""), "revisions decrypt for preview")
         a.chord(KEYS["escape"])
-        # Offline editing across a server restart.
+        # An update: the server restarts. The page says "Connecting", not
+        # "Offline", and is back within seconds on its own.
         env.stop_server()
+        time.sleep(0.5)
+        check((a.js("return document.querySelector('.sync .lbl').textContent") or "") == "Connecting", "a restart shows connecting, not offline")
+        env.start_server()
+        a.wait("return (document.querySelector('.sync .lbl')||{}).textContent == 'Synced'", 8, "back after the restart")
+        check(True, "back within seconds after a restart")
+        # Offline editing across a crash.
+        env.kill_server()
         time.sleep(1)
         a.js("const ed=document.querySelector('.ed'); ed.focus(); const s=getSelection(); s.selectAllChildren(ed); s.collapseToEnd();")
         a.keys(KEYS["enter"] + "written while offline")

@@ -3,7 +3,8 @@
 //! The loop subscribes to every open vault with `since = local seq`, applies
 //! catch-up pages and live updates as they arrive (the server guarantees
 //! per-vault order without gaps), reacts to vault and user events, and
-//! reconnects with exponential backoff plus jitter. Local edits are uploaded
+//! reconnects with exponential backoff plus jitter — or, when the server
+//! says it's restarting, about every second for a while. Local edits are uploaded
 //! over REST by [`Hub::push`]; they come back over the socket like any other
 //! update and are merged idempotently.
 
@@ -19,7 +20,7 @@ use coolpsonotes_core::protocol::*;
 use futures::{SinkExt, StreamExt};
 use tokio::sync::watch;
 use tokio_tungstenite::tungstenite::Message;
-use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
+use tokio_tungstenite::tungstenite::protocol::{CloseFrame, WebSocketConfig};
 use tokio_tungstenite::{Connector, MaybeTlsStream, WebSocketStream};
 
 use crate::hub::Hub;
@@ -38,7 +39,24 @@ const MAINTENANCE_EVERY: Duration = Duration::from_secs(60);
 enum Exit {
     Shutdown,
     Reconnect(String),
+    /// The server is going away to be started again (an update).
+    Restarting,
 }
+
+/// How the server closed the connection.
+fn closed(frame: Option<CloseFrame>) -> Exit {
+    match frame {
+        Some(f) if u16::from(f.code) == CLOSE_RESTARTING => Exit::Restarting,
+        _ => Exit::Reconnect("connection closed by the server".into()),
+    }
+}
+
+/// After the server said it's restarting, retry this often (spread out, so
+/// not everyone comes back in the same instant) for up to `RESTART_WINDOW`,
+/// instead of backing off.
+const RESTART_RETRY: Duration = Duration::from_millis(250);
+const RESTART_SPREAD: Duration = Duration::from_millis(1000);
+const RESTART_WINDOW: Duration = Duration::from_secs(60);
 
 /// An error that reconnecting cannot fix.
 #[derive(Debug, thiserror::Error)]
@@ -47,10 +65,15 @@ pub struct Fatal(pub String);
 
 struct Backoff {
     attempt: u32,
+    /// Retrying quickly until then: the server is restarting.
+    quick_until: Option<Instant>,
 }
 
 impl Backoff {
     fn next(&mut self) -> Duration {
+        if self.quick_until.is_some_and(|t| Instant::now() < t) {
+            return RESTART_RETRY + random_duration(RESTART_SPREAD);
+        }
         let base = Duration::from_secs(1u64 << self.attempt.min(6)).min(Duration::from_secs(60));
         self.attempt += 1;
         // ±25% jitter so many clients do not reconnect in lockstep after an outage.
@@ -59,6 +82,13 @@ impl Backoff {
 
     fn reset(&mut self) {
         self.attempt = 0;
+        self.quick_until = None;
+    }
+
+    /// The server is restarting: retry about every second for a while.
+    fn restarting(&mut self) {
+        self.attempt = 0;
+        self.quick_until = Some(Instant::now() + RESTART_WINDOW);
     }
 }
 
@@ -72,6 +102,8 @@ enum Next {
     Stop,
     Fail(anyhow::Error),
     Retry(String),
+    /// The server is restarting: come back soon.
+    RetrySoon,
 }
 
 /// Only a [`Fatal`] error (session revoked or expired) ends live sync; any
@@ -82,6 +114,7 @@ fn after_session(r: Result<Exit>) -> Next {
     match r {
         Ok(Exit::Shutdown) => Next::Stop,
         Ok(Exit::Reconnect(reason)) => Next::Retry(reason),
+        Ok(Exit::Restarting) => Next::RetrySoon,
         Err(e) if e.is::<Fatal>() => Next::Fail(e),
         Err(e) => Next::Retry(format!("{e:#}")),
     }
@@ -89,13 +122,18 @@ fn after_session(r: Result<Exit>) -> Next {
 
 /// Run until `shutdown` becomes true or a fatal error (session revoked).
 pub async fn run(hub: Arc<Hub>, mut shutdown: watch::Receiver<bool>) -> Result<()> {
-    let mut backoff = Backoff { attempt: 0 };
+    let mut backoff = Backoff {
+        attempt: 0,
+        quick_until: None,
+    };
     loop {
         if *shutdown.borrow() {
             return Ok(());
         }
         let next = match connect(&hub).await {
             Ok(ws) => {
+                // Back: a restart is over.
+                backoff.quick_until = None;
                 let started = Instant::now();
                 let r = session_loop(&hub, ws, &mut shutdown).await;
                 // A connection that fails right away again and again keeps
@@ -119,6 +157,10 @@ pub async fn run(hub: Arc<Hub>, mut shutdown: watch::Receiver<bool>) -> Result<(
                 return Err(e);
             }
             Next::Retry(reason) => reason,
+            Next::RetrySoon => {
+                backoff.restarting();
+                "the server is restarting".to_string()
+            }
         };
         hub.set_online(false);
         hub.set_push_now(false);
@@ -286,7 +328,7 @@ async fn session_loop(
                 last_rx = Instant::now();
                 let text = match msg {
                     Message::Text(t) => t,
-                    Message::Close(_) => return Ok(Exit::Reconnect("connection closed by the server".into())),
+                    Message::Close(frame) => return Ok(closed(frame)),
                     _ => continue,
                 };
                 let parsed: ServerMessage = match serde_json::from_str(text.as_str()) {
@@ -725,9 +767,46 @@ mod tests {
         ));
         assert!(matches!(after_session(Ok(Exit::Shutdown)), Next::Stop));
         assert!(matches!(
+            after_session(Ok(Exit::Restarting)),
+            Next::RetrySoon
+        ));
+        assert!(matches!(
             after_session(Err(Fatal("session revoked".into()).into())),
             Next::Fail(_)
         ));
+    }
+
+    #[test]
+    fn a_restarting_server_is_retried_about_every_second() {
+        use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
+        let frame = |code: u16| {
+            Some(CloseFrame {
+                code: CloseCode::from(code),
+                reason: "".into(),
+            })
+        };
+        assert!(matches!(closed(frame(CLOSE_RESTARTING)), Exit::Restarting));
+        assert!(matches!(closed(frame(1000)), Exit::Reconnect(_)));
+        assert!(matches!(closed(None), Exit::Reconnect(_)));
+
+        let mut b = Backoff {
+            attempt: 0,
+            quick_until: None,
+        };
+        // A failure backs off further each time…
+        let failures: Vec<Duration> = (0..4).map(|_| b.next()).collect();
+        assert!(failures[3] >= Duration::from_secs(6), "{failures:?}");
+        // …a restart is retried quickly, however often it takes.
+        b.restarting();
+        for _ in 0..10 {
+            let d = b.next();
+            assert!(
+                (RESTART_RETRY..RESTART_RETRY + RESTART_SPREAD).contains(&d),
+                "{d:?}"
+            );
+        }
+        b.reset();
+        assert!(b.next() >= Duration::from_millis(750));
     }
 
     #[test]

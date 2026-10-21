@@ -56,16 +56,15 @@
         <h2>Run it for real</h2>
         <p>You need a machine with Docker (or a Kubernetes cluster), a domain name pointing at it, a reverse proxy for HTTPS, and an OpenID Connect provider such as Authelia, Keycloak, Authentik or Google.</p>
         <p>coolpsonotes serves plain HTTP and leaves certificates and HTTPS to the proxy you already use. If you don't have one, the documentation has examples for Caddy (automatic HTTPS in one command), Traefik and nginx.</p>
-        <p>Register coolpsonotes with your provider, with the redirect address <code>https://your.domain/api/v1/auth/oidc/callback</code>, and put the details in <code>.env</code>.</p>
+        <p>Register coolpsonotes with your provider, with the redirect address <code>https://your.domain/api/v1/auth/oidc/callback</code>, and hand the details to Compose through the environment, from wherever you keep your secrets.</p>
         <p>The first person to sign in becomes the administrator.</p>
       </div>
 <pre><span class="p">$ </span>git clone https://github.com/coolapso/coolpsonotes
 <span class="p">$ </span>cd coolpsonotes
-<span class="p">$ </span>cp .env.example .env
-<span class="c"># PUBLIC_HOST=notes.example.com
-# OIDC_ISSUER=https://auth.example.com
-# OIDC_CLIENT_ID=coolpsonotes
-# OIDC_CLIENT_SECRET=…</span>
+<span class="p">$ </span>export COOLPSONOTES_PUBLIC_URL=https://notes.example.com
+<span class="p">$ </span>export COOLPSONOTES_OIDC_ISSUER=https://auth.example.com
+<span class="p">$ </span>export COOLPSONOTES_OIDC_CLIENT_ID=coolpsonotes
+<span class="p">$ </span>export COOLPSONOTES_OIDC_CLIENT_SECRET=…  <span class="c"># from your secret store</span>
 <span class="p">$ </span>docker compose up -d --build
 <span class="c"># coolpsonotes on 127.0.0.1:8080: point your proxy at it</span></pre>
     </div>

@@ -168,8 +168,11 @@ docker compose -f docker-compose.dev.yml up --build
 ## Run it for real
 
 ```sh
-cp .env.example .env         # your domain and OIDC client (Authelia, Keycloak, Authentik, …)
-docker compose up -d --build # coolpsonotes on 127.0.0.1:8080
+export COOLPSONOTES_PUBLIC_URL=https://notes.example.com
+export COOLPSONOTES_OIDC_ISSUER=https://auth.example.com   # Authelia, Keycloak, Authentik, …
+export COOLPSONOTES_OIDC_CLIENT_ID=coolpsonotes
+export COOLPSONOTES_OIDC_CLIENT_SECRET=…                    # from wherever you keep secrets
+docker compose up -d --build                               # coolpsonotes on 127.0.0.1:8080
 ```
 
 Put the reverse proxy you use in front of it for HTTPS: coolpsonotes serves

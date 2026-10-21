@@ -1,5 +1,6 @@
 # Caddy obtains and renews TLS certificates automatically.
-{$PUBLIC_HOST} {
+# The site is the server's public URL (COOLPSONOTES_PUBLIC_URL, https://…).
+{$COOLPSONOTES_PUBLIC_URL} {
 	encode zstd gzip
 	# Prometheus metrics are for monitoring inside your network, not for the
 	# internet: scrape coolpsonotes:8080/metrics directly.

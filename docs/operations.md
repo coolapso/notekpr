@@ -80,13 +80,24 @@ files` in its log).
 
 ```sh
 git clone https://github.com/coolapso/coolpsonotes && cd coolpsonotes
-cp .env.example .env          # PUBLIC_HOST and your OIDC client (§3)
+export COOLPSONOTES_PUBLIC_URL=https://notes.example.com   # what people type in the browser
+export COOLPSONOTES_OIDC_ISSUER=https://auth.example.com   # your identity provider (§3)
+export COOLPSONOTES_OIDC_CLIENT_ID=coolpsonotes
+export COOLPSONOTES_OIDC_CLIENT_SECRET=…                    # from wherever you keep secrets
 docker compose up -d --build  # coolpsonotes on 127.0.0.1:8080
 ```
 
-Point your reverse proxy at `127.0.0.1:8080`, with TLS for `PUBLIC_HOST`
-(§4). Then open `https://<PUBLIC_HOST>` and sign in: the first person to sign
-in becomes the administrator (§5).
+Compose passes these on from the environment it runs in, along with
+`COOLPSONOTES_ADMINS` and `COOLPSONOTES_METRICS_TOKEN` if set (§2). Hand
+secrets over from where you keep them — a secret manager, your CI — when you
+deploy, rather than writing them into a file on the machine. Settings left
+unset aren't passed on: without the OIDC issuer and client the server
+refuses to start (`docker compose logs`), and without the public URL sign-in
+can't work.
+
+Point your reverse proxy at `127.0.0.1:8080`, with TLS for the public URL's
+host (§4). Then open the public URL and sign in: the first person to sign in
+becomes the administrator (§5).
 
 ### Kubernetes
 
@@ -184,7 +195,8 @@ The server refuses to start without a login method (OIDC or dev mode).
 
 Create an OIDC client of type *confidential* (or public with PKCE) with:
 
-* redirect URI: `https://<PUBLIC_HOST>/api/v1/auth/oidc/callback`
+* redirect URI: `<public URL>/api/v1/auth/oidc/callback`, e.g.
+  `https://notes.example.com/api/v1/auth/oidc/callback`
 * grant type: authorization code; scopes `openid profile email`
 * token endpoint auth: `client_secret_basic` or `client_secret_post` — the
   server uses what the provider advertises (`--oidc-token-auth` to force one)
@@ -250,7 +262,7 @@ coolpsonotes serves plain HTTP. TLS — required in production — comes from a
 reverse proxy in front of it, whichever you use. What the server needs from
 it:
 
-* **HTTPS** for `PUBLIC_HOST`, forwarding every path to the server (Compose:
+* **HTTPS** for the public URL's host, forwarding every path to the server (Compose:
   `127.0.0.1:8080`; Kubernetes: the `coolpsonotes` Service) — except
   `/metrics` (below).
 * **WebSockets** at `/api/v1/ws`, open for a long time: allow long idle
@@ -283,14 +295,11 @@ docker compose -f docker-compose.yml -f deploy/examples/caddy/compose.yml up -d 
 ```
 
 On a home network without public DNS, Caddy can issue certificates from its
-own certificate authority instead. In `.env`:
+own certificate authority instead:
 
 ```sh
-PUBLIC_HOST=notes.home.arpa     # any name your devices resolve to this machine (router DNS, /etc/hosts)
-CADDYFILE=deploy/examples/caddy/Caddyfile.lan
-```
-
-```sh
+export COOLPSONOTES_PUBLIC_URL=https://notes.home.arpa   # any name your devices resolve to this machine (router DNS, /etc/hosts)
+export CADDYFILE=deploy/examples/caddy/Caddyfile.lan
 docker compose -f docker-compose.yml -f deploy/examples/caddy/compose.yml up -d --build
 # Caddy's root certificate, to install once on every device that uses coolpsonotes:
 docker compose -f docker-compose.yml -f deploy/examples/caddy/compose.yml cp caddy:/data/caddy/pki/authorities/local/root.crt ./caddy-root.crt

@@ -37,6 +37,7 @@
       <div class="stack">
         <h2>Try it first</h2>
         <p>Development mode needs no sign-in provider. Sign in as any name, then open a second browser tab and sign in as someone else to try sharing and live editing between two people.</p>
+        <p>Or run <code>task demo</code> for a server with users, shared vaults and linked notes already in it.</p>
         <p>Never expose development mode to a network: anyone can sign in as anyone.</p>
       </div>
 <pre><span class="c"># with Docker</span>
@@ -101,7 +102,10 @@
         <li><b>Kubernetes</b><span>Manifests for a single replica with a persistent volume and a backup CronJob.</span></li>
         <li><b>Other reverse proxies</b><span>nginx and Traefik work too; the server needs WebSockets and the forwarded client address.</span></li>
         <li><b>Monitoring</b><span>Prometheus metrics, health and readiness endpoints.</span></li>
-        <li><b>Upgrades</b><span>Database migrations run on start, after an automatic backup.</span></li>
+        <li><b>Upgrades</b><span>Database migrations run on start, after an automatic backup. The server tells connected apps it's restarting; they keep working and are back about a second after it is.</span></li>
+        <li><b>Admin page</b><span>Accounts, who is an administrator, disabling an account, and server statistics. Administrators can't read anyone's notes or vault names.</span></li>
+        <li><b>Size limits</b><span>Set how large a single change, a snapshot and an attachment may be.</span></li>
+        <li><b>How big a server?</b><span>A load test you can watch, <code>task load</code>: a crowd of simulated people with real encryption against the server image with CPU and memory limits.</span></li>
       </ul>
       <p>Configuration, identity providers, proxies, backups and upgrades are covered in <a href="https://github.com/coolapso/coolpsonotes/blob/dev/docs/operations.md">docs/operations.md</a>.</p>
     </div>

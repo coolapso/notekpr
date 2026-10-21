@@ -39,9 +39,9 @@
         <table>
           <thead><tr><th>Data</th><th>Protected by</th><th>Server can see</th></tr></thead>
           <tbody>
-            <tr><td>Note text, titles, file and folder names, tags, links</td><td>Encryption with the vault's key, on your device</td><td class="no">No</td></tr>
-            <tr><td>Attachments</td><td>Same</td><td>Size only</td></tr>
-            <tr><td>Vault names and descriptions</td><td>Same</td><td class="no">No</td></tr>
+            <tr><td>Note text, titles, file and folder names, tags, links</td><td>Encryption on your device: each note with its own key, names and folders with the vault's key</td><td class="no">No</td></tr>
+            <tr><td>Attachments</td><td>Encryption with the vault's key, on your device</td><td>Size only</td></tr>
+            <tr><td>Vault names, icons and pictures</td><td>Same</td><td class="no">No</td></tr>
             <tr><td>Version history</td><td>Encrypted snapshots</td><td>Count, size, time, author</td></tr>
             <tr><td>Who is looking at which note, cursors</td><td>Encrypted presence messages</td><td>That someone is connected to a vault</td></tr>
             <tr><td>Favorites, recent notes, trusted keys</td><td>Encryption with your account key</td><td class="no">No</td></tr>
@@ -60,8 +60,8 @@
         <li><span class="name">Account key</span><span class="what">Your identity. Every other key is wrapped to it. Its fingerprint is what people compare.</span><span class="where">on your devices only</span></li>
         <li><span class="name">Device keys</span><span class="what">Each browser and computer gets its own. A new device is approved by one you already use.</span><span class="where">one per device</span></li>
         <li><span class="name">Recovery key</span><span class="what">256 random bits, shown once when you set up. Unlocks your account if every device is lost.</span><span class="where">written down by you</span></li>
-        <li><span class="name">Vault keys</span><span class="what">Encrypt a vault's notes. Wrapped to each member's account key; replaced when someone is removed.</span><span class="where">one per vault, with versions</span></li>
-        <li><span class="name">Note keys</span><span class="what">A note shared on its own gets its own key, so the person sees that note and nothing else.</span><span class="where">only for individually shared notes</span></li>
+        <li><span class="name">Vault keys</span><span class="what">Encrypt the vault's name, its index of note and folder names, and its attachments, and wrap each note's key. Wrapped to each member's account key; replaced when someone is removed.</span><span class="where">one per vault, with versions</span></li>
+        <li><span class="name">Note keys</span><span class="what">Every note has its own key, wrapped under the vault key for members. Sharing a note on its own starts a fresh one, so the person sees that note from then on and nothing else.</span><span class="where">one per note, with versions</span></li>
       </ul>
       <div class="prose">
         <p>Notes are encrypted with XChaCha20-Poly1305. Keys are wrapped for people and devices with HPKE (RFC 9180, X25519), and account keys sign with Ed25519. Every ciphertext is bound to its vault, note and purpose, so it can't be moved somewhere else and still decrypt.</p>
@@ -86,6 +86,19 @@
   <section class="section">
     <div class="wrap split">
       <div class="stack">
+        <h2>Signed membership</h2>
+        <p>The vault's owner signs every change to who belongs to it, and to its keys, into a chained log that every app checks. A server can't add someone on its own, hand out a vault key the owner didn't make, or quietly roll the log back.</p>
+      </div>
+      <div class="stack">
+        <h2>Signed edits</h2>
+        <p>Every change and every history snapshot is signed by the person who made it. Apps accept content only from people the vault's log lets write, so neither the server nor a viewer can slip in edits under someone's name.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="section">
+    <div class="wrap split">
+      <div class="stack">
         <h2>Removing someone</h2>
         <p>Removing a member gives the vault a new key, so they can't read anything written afterwards, even with a copy of the encrypted data. What they already saw or downloaded can't be taken back.</p>
       </div>
@@ -102,7 +115,7 @@
       <div class="prose">
         <ul>
           <li><strong>No independent audit yet.</strong> The cryptography uses standard, audited building blocks, but the design and code have not been reviewed by an outside firm.</li>
-          <li><strong>The first key you see is trusted.</strong> A malicious server could hand out a wrong key the first time you share with someone. Comparing fingerprints catches this. A signed membership log that removes this trust is planned.</li>
+          <li><strong>The first key you see is trusted.</strong> A malicious server could hand out a wrong key the first time you share with someone. The owner-signed membership log stops a server from adding people or planting keys, but the first key you see for someone is trusted until you compare fingerprints.</li>
           <li><strong>Metadata is visible.</strong> The server knows who shares with whom, sizes and timing, as listed above.</li>
           <li><strong>Plain text on disk is your choice.</strong> The Markdown folder is ordinary files; protect your computer with full-disk encryption.</li>
           <li><strong>Browsers are browsers.</strong> In the web app your device key and an encrypted copy of your vaults live in the browser profile, as safe as that profile. "Forget this browser" removes both. If you turn on offline use for a browser, it also keeps the keys to open that copy, so a copy of the profile can be read without the server; it is off unless you choose it.</li>

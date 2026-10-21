@@ -29,12 +29,15 @@ alternatives were considered. The wire protocol is in
 
 | Crate | Role |
 |---|---|
-| `crates/core` | Everything security-sensitive or shared: cryptographic formats, key hierarchy, the CRDT document model (vault index + notes), protocol types, client engine logic (`engine.rs`), Markdown link/tag analysis, search, path rules. Compiled natively and to wasm32. |
-| `crates/sync` | The client sync engine both clients use (`coolpsonotes-sync`): what to upload next (unsent updates merged per object, held back when too large, size-bounded pushes), what acknowledgements and refusals mean, rollback recovery, snapshot readiness, splitting large edits. *Sans-IO*: clients do the networking, storage and timers and feed it what happened, so it is identical on wasm and tokio and tested without a network. |
+| `crates/core` | Everything security-sensitive or shared: cryptographic formats, key hierarchy, the CRDT document model (vault index + notes), the signed membership log (`memberlog.rs`), protocol types, client engine logic (`engine.rs`), offline recovery of an encrypted export (`recover.rs`), Markdown link/tag analysis, search, path rules. Compiled natively and to wasm32. |
+| `crates/sync` | The client sync engine both clients use (`coolpsonotes-sync`): what to upload next (unsent updates merged per object, held back when too large, size-bounded pushes), what acknowledgements and refusals mean, rollback recovery, snapshot readiness, splitting large edits, and the client side of the membership log (`members.rs`: verifying it, signing the next entry, deciding whom to trust). *Sans-IO*: clients do the networking, storage and timers and feed it what happened, so it is identical on wasm and tokio and tested without a network. |
 | `crates/server` | Headless sync server: OIDC relying party, sessions, OAuth device and client-credentials grants, users/devices/agents, vaults/members/key envelopes, the ordered encrypted log, snapshots, attachments, WebSocket fan-out, rate limiting, metrics, backup/restore. Works without the web client. |
 | `crates/editor` | The live-preview Markdown editor: a pure-Rust document model (text with a line index, change sets, transactions, incrementally updated decorations, commands) tested natively, and a `contenteditable` DOM view tested in a headless browser. |
 | `crates/web` | Browser client compiled to WebAssembly; served as static files by the server. Hosts the editor, all decryption in the browser. |
 | `crates/client` | Desktop/CLI client: login (device flow), enrollment, encrypted local replica, live sync daemon with plaintext Markdown mirror, export/import, agent gateway (local HTTP API). |
+| `crates/load` | The load test (`task load`): simulated people — real clients built on the CLI's library, with real keys — against the server image with CPU and memory limits; kills the server midway through each level, starts it again, and checks that nothing was lost ([load-test.md](load-test.md)). |
+| `crates/load-events` | The event types the load test streams to its live dashboard. |
+| `crates/load-ui` | The load test's live dashboard: Rust compiled to wasm32, drawing on a canvas (`scripts/build-load-ui.sh`). |
 
 The server never links any code path that could decrypt content: it only
 handles opaque byte strings and public keys.
@@ -45,7 +48,7 @@ handles opaque byte strings and public keys.
 |---|---|
 | `routes/`, `ws.rs` | HTTP and WebSocket handlers: validate requests, ask `access.rs`, write through `repo/` or `sync.rs`, publish events. No SQL. |
 | `access.rs` | Authorization decisions (`404` without access so ids can't be probed, `403` for too low a role). A write that depends on a role checks it again inside its own transaction; membership, role and share changes run under the write lock in a transaction too, so a write can't land after a removal or demotion. |
-| `repo/` | All SQL except the log's, as small functions per table group (users, sessions, devices, vaults and members, keys, shares, agents, audit, attachments). One place to review and test authorization-sensitive queries; unit tests run against a migrated database. |
+| `repo/` | All SQL except the log's, as small functions per table group (users, sessions, devices, vaults and members, keys, shares, the membership log, agents, audit, attachments, usage statistics for administrators). One place to review and test authorization-sensitive queries; unit tests run against a migrated database. |
 | `sync.rs` | The encrypted log: push, catch-up pages, snapshots, purges, the key-epoch checks. |
 | `hub.rs` | `EventBus`: vault events and per-user control messages to live connections. Today in-process channels. Its interface states what another backend (polling the log, a message broker) must guarantee — per-vault order, nothing lost after `subscribe` returns, gaps reported as lag, connection ids unique across processes — so an instance could later run as several processes on one database without touching callers. |
 | `blobs.rs` | Attachment bytes. Stored in SQLite today; a directory or S3-compatible store can be added as another variant. |
@@ -62,7 +65,7 @@ which is what makes each vault's live stream gapless and ordered.
 | Server framework | axum 0.8 + tokio + tower-http | actix-web, warp | Mature, minimal, first-class WebSockets, tower middleware ecosystem. |
 | Database | SQLite (WAL) via sqlx, single file — **SQLite only, by decision**, also for a hosted offering (one database per instance; grow by adding instances) | PostgreSQL | Zero extra services for self-hosting; a single file is a complete, consistent backup (`VACUUM INTO`); a notes workload with no server-side content processing fits one SQLite instance for a very large number of users. The SQL is SQLite-specific (e.g. `VACUUM INTO`, `BEGIN IMMEDIATE`). Storage access sits behind small interfaces (queries in `repo/`, attachment bytes in `blobs.rs`, live events in `hub.rs`, see §1.1) so the decision stays cheap to revisit, but there are no plans for another database. |
 | Attachments | Encrypted blobs inside SQLite | Filesystem/S3 | Atomic with metadata, one-file backups. Tradeoff: very large media libraries make the DB big (limit configurable, default 25 MB per file). |
-| CRDT | yrs 0.28 (Rust port of Yjs, update format v1) | Automerge, diamond-types, custom OT | Mature, fast, compact updates, text + map types, undo manager, sticky indices for cursors; binary compatible with the Yjs ecosystem. |
+| CRDT | yrs 0.28 (Rust port of Yjs, update format v1), vendored as 0.28.0 with fixes for panics on crafted updates found by fuzzing (`vendor/yrs`, wired in with `[patch.crates-io]`; see `vendor/yrs/COOLPSONOTES.md`) | Automerge, diamond-types, custom OT | Mature, fast, compact updates, text + map types, undo manager, sticky indices for cursors; binary compatible with the Yjs ecosystem. |
 | Document model | One `Y.Text` with the Markdown source per note; one `Y.Map` index per vault | Rich-text CRDT (ProseMirror/XmlFragment) with Markdown export | Markdown stays the canonical format, so external editors (Neovim, Obsidian) map to text diffs and nothing proprietary is needed for portability. |
 | Symmetric crypto | XChaCha20-Poly1305 (RustCrypto, audited) | AES-256-GCM | 192-bit random nonces are safe without counters across many devices; fast in software/WASM. |
 | Public-key crypto | HPKE RFC 9180 (X25519, HKDF-SHA256, ChaCha20-Poly1305) via `hpke`; Ed25519 (`ed25519-dalek`, strict) | libsodium sealed boxes, age | Standardized construction with domain-separated info/AAD. Suite id in every envelope allows migrating to X-Wing (ML-KEM hybrid, already in the `hpke` crate) later. |
@@ -81,16 +84,19 @@ which is what makes each vault's live stream gapless and ordered.
 ## 3. Data model
 
 * **Vault** — id (random), owner, members with roles (owner/editor/viewer),
-  key epoch, sequence head, `encrypted_meta` (name, description).
+  key epoch, sequence head, `encrypted_meta` (name, icon, picture; the
+  format also has a description no client sets yet).
 * **Vault index object** (`object_id = "index"`): CRDT map
-  `entry id → {path, kind: note|attachment|folder, created, modified, trashed?, size?, mime?}`.
+  `entry id → {path, kind: note|attachment|folder, created, modified, trashed?, size?, mime?, icon?}`.
   Paths, folder structure, file names and the trash all live here, encrypted.
   Renames and moves are map writes, so concurrent offline reorganisations merge.
 * **Note objects**: one per note, CRDT text holding the Markdown source.
 * **Attachments**: encrypted blobs addressed by a random id; their name and
   type are in the index.
-* **Per-user private data** (favorites, recent notes, key pins): one blob
-  encrypted with the user's account key.
+* **Per-user private data** (favorites, recent notes, key pins, the vault
+  for quick notes, and a counter that goes up with every save so an older
+  copy handed out by the server is noticed): one blob encrypted with the
+  user's account key.
 
 The server sees: how many objects a vault has, their sizes and change times,
 who wrote each update, and membership. It does not see names, paths, folder
@@ -309,7 +315,7 @@ has unsent edits to it, that person's client saves their version as a new
 | M1 Core | crypto formats, key hierarchy, CRDT model, protocol | done (`cargo test -p coolpsonotes-core`) |
 | M2 Server | auth (OIDC, dev, device flow, client credentials), vaults, sharing, log, snapshots, attachments, WebSocket, ops | done (`cargo test -p coolpsonotes-server`) |
 | M3 Web client | onboarding, devices, recovery, editor, collaboration, sharing, history, search, import/export, settings, admin | done (browser e2e tests in `tests/e2e`) |
-| M4 Desktop client | login, enrollment, offline replica, live sync, Markdown mirror, export/import | see `crates/client` |
+| M4 Desktop client | login, enrollment, offline replica, live sync, Markdown mirror, export/import | done (`cargo test -p coolpsonotes-client`) |
 | M5 Agents | agent identities, CLI and Markdown-folder access, gateway | done (`crates/client`); local MCP server removed, remote MCP connector considered for later |
 | M6 Packaging | Docker image, compose, Kubernetes, backup/restore docs | done |
 | M7 Note sharing | share single notes outside a vault: document keys, per-note subscriptions, web + CLI | done (S `individual_note_sharing`, D `single_note_sharing_end_to_end`, E `test_note_sharing`) |

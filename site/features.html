@@ -36,14 +36,15 @@
     <div class="wrap stack-lg">
       <h2>Writing</h2>
       <ul class="grid-list">
-        <li><b>Live preview</b><span>Markdown formats as you type; the syntax shows only on the line you are editing. Switch to source or reading view at any time.</span></li>
+        <li><b>Live preview</b><span>Markdown formats as you type; the syntax shows only on the line you are editing. Switch to source or reading view (<kbd>Ctrl E</kbd>) at any time.</span></li>
         <li><b>A toolbar for everyone</b><span>Headings, bold, lists, checklists, quotes, code, links, tables and dividers without knowing Markdown.</span></li>
         <li><b>Tables</b><span>Rendered as real tables while you edit. Enter adds a row, Tab moves between cells, alignment comes from the header row.</span></li>
         <li><b>Task lists</b><span><code>- [ ]</code> checkboxes you can tick in the editor and in reading view.</span></li>
         <li><b>Code blocks</b><span>Fenced code with syntax highlighting.</span></li>
         <li><b>Images and files</b><span>Paste or drop images and files into a note; they are encrypted like everything else.</span></li>
         <li><b>Vim keys</b><span>Optional Vim keybindings: normal, insert and visual modes with the common motions and operators.</span></li>
-        <li><b>Keyboard first</b><span>Shortcuts for formatting, a quick switcher on <kbd>Ctrl P</kbd>, and a shortcuts overview on <kbd>Ctrl /</kbd>.</span></li>
+        <li><b>Keyboard first</b><span>Shortcuts for formatting, a quick switcher on <kbd>Ctrl P</kbd>, search on <kbd>Ctrl Shift F</kbd>, a new note on <kbd>Ctrl Alt N</kbd>, the side panel on <kbd>Ctrl \</kbd>, and a shortcuts overview on <kbd>Ctrl /</kbd>. On a Mac, <kbd>⌘</kbd> instead of <kbd>Ctrl</kbd>.</span></li>
+        <li><b>Your way</b><span>Light, dark or the system's theme, and full-width notes if you like.</span></li>
       </ul>
     </div>
   </section>
@@ -52,15 +53,16 @@
     <div class="wrap stack-lg">
       <h2>Organizing</h2>
       <ul class="grid-list">
-        <li><b>Vaults</b><span>Separate spaces with their own members and keys: one for the family, one for work, one just for you.</span></li>
+        <li><b>Vaults</b><span>Separate spaces with their own members and keys: one for the family, one for work, one just for you. Each opens on a home page with recently edited notes and its tags. Its owner can archive it while it isn't needed, or delete it.</span></li>
         <li><b>Folders</b><span>Nest notes in folders, drag them around, rename them; links follow renames.</span></li>
-        <li><b>Wiki links and backlinks</b><span><code>[[Note]]</code>, <code>[[Note|alias]]</code> and embeds like <code>![[photo.jpg]]</code>. The side panel lists what links here and the outline of the note.</span></li>
+        <li><b>Wiki links and backlinks</b><span><code>[[Note]]</code>, <code>[[Note#Heading]]</code>, <code>[[Note|alias]]</code> and embeds like <code>![[photo.jpg]]</code>; a link to a missing note creates it. The side panel lists what links here, unresolved links to create, the outline and tags.</span></li>
         <li><b>Graph view</b><span>See how your notes link, like in Obsidian: the whole vault on <kbd>Ctrl G</kbd>, with a filter, or the open note and its neighbours in the side panel. Drag, zoom, click a note to open it.</span></li>
-        <li><b>Icons</b><span>Give notes and folders an emoji, and each vault an emoji or a picture, so you see at a glance where you are — in the browser or from the command line.</span></li>
+        <li><b>Icons</b><span>Give notes and folders an emoji, and each vault an emoji or a picture, so you see at a glance where you are. Emojis also from the command line; pictures in the browser.</span></li>
         <li><b>Quick notes</b><span>Capture a thought in a second with <kbd>Ctrl Alt Q</kbd>, a capture page that works on phones, or the command line. Sort it out later: promote it to a regular note or archive it.</span></li>
-        <li><b>Tags</b><span><code>#tags</code> anywhere in a note, searchable with <code>tag:</code>.</span></li>
-        <li><b>Search</b><span>Full-text search across your vaults with <code>tag:</code>, <code>folder:</code>, <code>title:</code> and <code>vault:</code> filters and phrases.</span></li>
+        <li><b>Tags</b><span><code>#tags</code> anywhere in a note, searchable with <code>tag:</code> or <code>#tag</code>.</span></li>
+        <li><b>Search</b><span>Full-text search across your vaults with <code>tag:</code>, <code>folder:</code> (or <code>path:</code>), <code>title:</code> and <code>vault:</code> filters and <code>"phrases"</code>. The quick switcher creates the note when nothing matches.</span></li>
         <li><b>Favorites and recent</b><span>Pin the notes you use most; recent notes are one click away.</span></li>
+        <li><b>Take a note along</b><span>Download a note as Markdown, or copy a <code>[[link]]</code> to it, from its menu.</span></li>
         <li><b>History</b><span>Earlier versions of each note are kept. Preview one and restore it; the current text stays in history too.</span></li>
         <li><b>Trash</b><span>Deleted notes and folders go to the trash first and can be restored.</span></li>
       </ul>
@@ -71,13 +73,28 @@
     <div class="wrap stack-lg">
       <h2>Working together</h2>
       <ul class="grid-list">
-        <li><b>Share a vault</b><span>Invite people by name or e-mail as editor or viewer. Removing someone gives the vault a new key.</span></li>
-        <li><b>Share a single note</b><span>Share one note with someone outside the vault. They get that one note, not the vault: no other notes, file names or attachments.</span></li>
+        <li><b>Share a vault</b><span>Invite people by name or e-mail as editor or viewer. Removing someone gives the vault a new key. Owners have an activity log per vault; members can leave.</span></li>
+        <li><b>Share a single note</b><span>Share one note with someone outside the vault. They get that one note, not the vault: no other notes, file names or attachments. They're told when it arrives, and can remove it from their list.</span></li>
         <li><b>Live editing</b><span>Edit the same note at the same time and see each other's cursors. Changes merge character by character.</span></li>
         <li><b>No lost edits</b><span>Changes made offline, or at the same moment as someone else, are merged when they sync. Nobody's work is overwritten.</span></li>
-        <li><b>Who is here</b><span>See who is in the vault and on which note.</span></li>
+        <li><b>Who is here</b><span>See who else is on the note you are on.</span></li>
         <li><b>Verified people</b><span>Each person's key has a fingerprint you can compare. You are warned if a key ever changes.</span></li>
       </ul>
+    </div>
+  </section>
+
+  <section class="section">
+    <div class="wrap stack-lg">
+      <h2>Privacy and security</h2>
+      <ul class="grid-list">
+        <li><b>End-to-end encrypted</b><span>Note text, titles, file and folder names, attachments, vault names and icons, presence and your settings are encrypted on your devices.</span></li>
+        <li><b>A key per note</b><span>Every note has its own key. Removing someone renews the keys, sharing a note never gives away its earlier history, and owners can renew a vault's key by hand.</span></li>
+        <li><b>Signed changes</b><span>The owner signs who belongs to a vault and every edit is signed by its author, so even a compromised server can't add people or forge edits.</span></li>
+        <li><b>Your devices</b><span>A new device is approved from one you already use, with a verification code, or unlocked with your recovery key. Any browser can be forgotten.</span></li>
+        <li><b>Sessions and recovery</b><span>See where you are signed in and sign out remotely. Make a new recovery key whenever you need one.</span></li>
+        <li><b>Your sign-in</b><span>Sign in with your own OpenID Connect provider: Authelia, Keycloak, Authentik and others.</span></li>
+      </ul>
+      <p><a href="security.html">How the encryption works</a></p>
     </div>
   </section>
 
@@ -87,13 +104,15 @@
         <h2>Your files, your tools</h2>
         <p>The <code>coolpsonotes</code> desktop client keeps an encrypted copy of your vaults for offline use. With <code>sync --dir</code> it also keeps them as an ordinary folder of Markdown files, synced both ways, so you can write in Obsidian, Neovim, VS Code or any editor you like.</p>
         <p>The web app keeps an encrypted copy in your browser too: vaults open at once, and what you write offline syncs when you are back. If you like, it even starts without the server.</p>
+        <p>The command line does everything: list, read, write, search, move, icons, trash, history, quick notes, sharing, archiving, key rotation, devices and recovery keys — also while it syncs.</p>
         <p>Export a vault as a zip of <code>.md</code> files and attachments at any time, from the web app or the command line, and import folders or zips of Markdown.</p>
         <p>No lock-in, even if the server is gone: keep an encrypted export, and <code>coolpsonotes recover</code> turns it back into Markdown files with nothing but your recovery key. No server, no account, no network.</p>
       </div>
       <div class="stack">
         <h2>AI agents</h2>
         <p>Give an assistant or a script its own identity with its own keys. It sees only the vaults you share with it, as viewer or editor, and everything it writes is attributed to it and can be reviewed in history.</p>
-        <p>Agents work with notes through the command line, a synced folder of files, or a local HTTP API on their own machine. The server never decrypts anything for them.</p>
+        <p>Agents work with notes through the command line, a synced folder of files, or a local HTTP API on their own machine that logs every write. The server never decrypts anything for them.</p>
+        <p>Create agents, give them new secrets, and revoke or delete them in Settings or from the command line.</p>
       </div>
     </div>
   </section>

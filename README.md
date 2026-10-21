@@ -32,23 +32,32 @@ read anything.
 * Live-preview Markdown editor: formatting shows as you type and the syntax
   hides once the caret leaves the line; also a plain source mode and a reading
   view (`Ctrl+E`).
-* A formatting toolbar and keyboard shortcuts (`Ctrl+/` lists them), optional
-  Vim keys, light and dark themes.
+* A formatting toolbar and keyboard shortcuts (`Ctrl+/` lists them; `⌘`
+  instead of `Ctrl` on a Mac), optional Vim keys, light, dark or system
+  theme, and full-width notes if you like.
 * Tables you build with Enter and Tab, with aligned columns; task lists you
-  can tick in the reading view.
+  can tick in the editor and the reading view; code blocks with syntax
+  highlighting.
 * Images and other files: paste or drop them into a note — they are encrypted,
   uploaded and shown inline.
-* Wiki links (`[[Note]]`, `[[Note#Heading]]`) that create the note if it's
-  missing; renaming a note updates every link to it.
+* Wiki links (`[[Note]]`, `[[Note#Heading]]`, `[[Note|alias]]`) that create
+  the note if it's missing; renaming a note updates every link to it.
+* Each note's menu downloads it as Markdown or copies a `[[link]]` to it.
 
 **Organizing and finding**
 
-* Vaults, folders and a note tree with drag and drop.
+* Vaults, folders and a note tree with drag and drop; a new note with
+  `Ctrl+Alt+N`. Each vault opens on a home page with its recently edited
+  notes and tags; its owner can archive it while it isn't needed, or delete
+  it.
 * Icons: an emoji for each note and folder, an emoji or a picture for each
-  vault (also from the command line).
+  vault (emojis also from the command line, pictures in the browser).
 * Favorites and recently opened notes in the sidebar.
-* Quick switcher (`Ctrl+P`), full-text search (`Ctrl+Shift+F`) with tag
-  filters, tags, and backlinks and outgoing links beside each note.
+* Quick switcher (`Ctrl+P`) that creates the note when nothing matches;
+  full-text search (`Ctrl+Shift+F`) with `tag:` (or `#tag`), `folder:` (or
+  `path:`), `title:` and `vault:` filters and `"phrases"`.
+* A side panel beside each note (`Ctrl+\`): backlinks, outgoing links,
+  unresolved links you click to create, the outline and tags.
 * A graph of how your notes link, like Obsidian's (`Ctrl+G`): the whole vault
   with a filter, or the open note and its neighbours beside it. Drag, zoom,
   click a note to open it.
@@ -61,10 +70,12 @@ read anything.
 **Working together**
 
 * Share a vault as editor or viewer, or a single note with someone outside
-  the vault.
-* Edit the same note at the same time and see each other's cursors and who is
-  where. Edits merge without conflicts (CRDTs), also after working offline.
-* You're told when something is shared with you; owners have an activity log
+  the vault. Leave a vault shared with you, or remove a shared note from your
+  list.
+* Edit the same note at the same time with live cursors, and see who else is
+  on the note you're on. Edits merge without conflicts (CRDTs), also after
+  working offline.
+* You're told when a note is shared with you; owners have an activity log
   per vault.
 
 **Privacy and security**
@@ -73,13 +84,16 @@ read anything.
   attachments, vault names and icons, presence and your settings. The server
   only stores ciphertext and can't read any of it.
 * Every note has its own key; removing someone renews the keys, and sharing a
-  note never gives away its earlier history.
+  note never gives away its earlier history. Owners can also renew a vault's
+  key by hand.
 * The vault's owner signs who belongs to it, and every change is signed by
   its author, so even a compromised server can't add people or forge edits.
 * Key fingerprints to check who you share with, and a loud warning when
   someone's key changes.
 * New devices are approved from one you already use (with a verification
   code) or unlocked with your recovery key; any browser can be forgotten.
+  See where you're signed in and sign out remotely, and make a new recovery
+  key whenever you need one.
 * Sign in with your own identity provider (OIDC: Authelia, Keycloak,
   Authentik, …).
 
@@ -92,8 +106,8 @@ read anything.
   folder of plain Markdown files for Obsidian, Neovim, VS Code or anything
   else ([how](docs/own-editor.md)).
 * The command line does everything: list, read, write, search, move, icons,
-  trash, history, quick notes, sharing, import and export — also while its
-  sync daemon runs.
+  trash, history, quick notes, sharing, archiving, key rotation, devices and
+  recovery keys, import and export — also while its sync daemon runs.
 * Import folders of Markdown and zip files (an Obsidian vault, say) with their
   attachments; export a vault as plain `.md` files any time.
 * Never locked in: an encrypted export plus your recovery key turn back into
@@ -105,6 +119,8 @@ read anything.
 * Agents get their own identity and keys and see only the vaults you share
   with them. They work through the CLI, a Markdown folder or a local HTTP
   gateway with an audit log ([agents](docs/agents.md)).
+* Create agents, give them new secrets, revoke or delete them in Settings or
+  from the CLI.
 
 **Running it**
 
@@ -113,8 +129,9 @@ read anything.
   nginx).
 * Updates without fuss: the server tells connected apps it's restarting;
   they keep working and are back about a second after it is.
-* Backups, upgrades, Prometheus metrics and an admin page; size limits for
-  changes, snapshots and attachments.
+* Backups, upgrades, Prometheus metrics, and an admin page for accounts
+  (make admins, disable accounts) and server statistics — never content;
+  size limits for changes, snapshots and attachments.
 * A load test you can watch (`task load`): a crowd of simulated people —
   real clients with real encryption — growing level by level to a thousand,
   against the server image with CPU and memory limits, an outage in every

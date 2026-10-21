@@ -12,6 +12,14 @@ license = "AGPL-3.0-or-later"
 repository = "https://github.com/coolapso/coolpsonotes"
 rust-version = "1.94"
 
+# Debug builds and tests keep only line tables: panics and backtraces still
+# name file and line, but each of the ~30 test binaries no longer carries the
+# full debug info of every dependency. That halves target/ (a fresh `task ci`
+# went from ~15 GB to ~7.6 GB) and ran CI out of disk before. For a debugger
+# that shows variables: CARGO_PROFILE_DEV_DEBUG=true.
+[profile.dev]
+debug = "line-tables-only"
+
 [profile.release]
 lto = "thin"
 codegen-units = 4

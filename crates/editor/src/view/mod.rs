@@ -201,6 +201,28 @@ fn handled_input(t: &str) -> bool {
         || (t.starts_with("insert") && t.ends_with("List"))
 }
 
+/// Ctrl+Alt+0…6 (⌘+Option on macs): a heading level. On macs Option
+/// changes the key ("¡", "™", …), so the physical key counts there;
+/// elsewhere the key must be the digit itself, so AltGr+0 ("}" on some
+/// layouts) still types.
+fn heading_level(ev: &KeyboardEvent) -> Option<u8> {
+    if !ev.alt_key() || ev.shift_key() {
+        return None;
+    }
+    let level = |s: &str| {
+        (s.len() == 1 && "0123456".contains(s))
+            .then(|| s.parse().ok())
+            .flatten()
+    };
+    if ev.meta_key() && !ev.ctrl_key() {
+        let code = ev.code();
+        return level(&ev.key()).or_else(|| code.strip_prefix("Digit").and_then(level));
+    }
+    if ev.ctrl_key() && !ev.meta_key() && !ev.get_modifier_state("AltGraph") {
+        return level(&ev.key());
+    }
+    None
+}
 impl Editor {
     /// Build an editor inside `container` (which should be empty).
     pub fn new(
@@ -1622,7 +1644,9 @@ impl Editor {
         let m = ev.ctrl_key() || ev.meta_key();
         let key = ev.key();
         let shift = ev.shift_key();
+        let heading = heading_level(ev);
         let cmd = match (m, shift, key.as_str()) {
+            _ if heading.is_some() => heading.map(Command::Heading),
             (true, false, "z") | (true, false, "Z") => Some(Command::Undo),
             (true, true, "z") | (true, true, "Z") | (true, false, "y") => Some(Command::Redo),
             (true, false, "b") => Some(Command::Bold),
@@ -1635,9 +1659,6 @@ impl Editor {
             (true, true, "&") | (true, true, "7") => Some(Command::Numbered),
             (true, true, "(") | (true, true, "9") => Some(Command::Task),
             (true, true, ">") | (true, true, ".") => Some(Command::Quote),
-            (true, false, d) if d.len() == 1 && ("0123456".contains(d)) && ev.alt_key() => {
-                Some(Command::Heading(d.parse().unwrap_or(0)))
-            }
             (false, _, "Tab") if !readonly => {
                 ev.prevent_default();
                 let dom_sel = self.read_selection();

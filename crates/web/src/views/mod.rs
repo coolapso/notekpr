@@ -176,18 +176,19 @@ pub fn close_on_outside(open: RwSignal<bool>) {
     });
 }
 
-/// Ctrl+Alt+Q (⌘+Alt+Q on macs): a new quick note. On macs Alt changes the
-/// key ("œ"), so the physical key counts there; elsewhere the key must be a
-/// "q", so AltGr+Q (which types "@" on some layouts) never triggers it.
-fn is_quick_note_key(e: &web_sys::KeyboardEvent) -> bool {
+/// Ctrl+Alt+`letter` (⌘+Alt on macs), e.g. Q for a quick note. On macs Alt
+/// changes the key ("œ" for Q, a dead key for N), so the physical key counts
+/// there; elsewhere the key must be the letter itself, so AltGr+Q (which
+/// types "@" on some layouts) never triggers it.
+fn is_ctrl_alt_letter(e: &web_sys::KeyboardEvent, letter: char) -> bool {
     if !e.alt_key() || e.shift_key() {
         return false;
     }
-    let q = e.key().eq_ignore_ascii_case("q");
+    let typed = e.key().eq_ignore_ascii_case(&letter.to_string());
     if e.meta_key() && !e.ctrl_key() {
-        return q || e.code() == "KeyQ";
+        return typed || e.code() == format!("Key{}", letter.to_ascii_uppercase());
     }
-    e.ctrl_key() && !e.meta_key() && q && !e.get_modifier_state("AltGraph")
+    e.ctrl_key() && !e.meta_key() && typed && !e.get_modifier_state("AltGraph")
 }
 
 fn install_shortcuts() {
@@ -200,9 +201,21 @@ fn install_shortcuts() {
         let m = e.ctrl_key() || e.meta_key();
         let key = e.key();
         let route = ui.route.get_untracked();
-        if is_quick_note_key(&e) {
+        if is_ctrl_alt_letter(&e, 'q') {
             e.prevent_default();
             crate::quick::new_and_open();
+            return;
+        }
+        if is_ctrl_alt_letter(&e, 'n') {
+            e.prevent_default();
+            if let Some(v) = route.vault() {
+                let folder = route
+                    .note()
+                    .and_then(|(v, n)| state::step(|c| c.entry(v, n)))
+                    .map(|e| coolpsonotes_core::paths::parent(&e.path).to_string())
+                    .unwrap_or_default();
+                crate::actions::new_note(v, &folder);
+            }
             return;
         }
         match (m, e.shift_key(), e.alt_key(), key.as_str()) {
@@ -214,19 +227,9 @@ fn install_shortcuts() {
                 e.prevent_default();
                 ui.modal.set(Some(Modal::Search(String::new())));
             }
-            (true, false, true, "n") | (true, false, true, "N") => {
-                e.prevent_default();
-                if let Some(v) = route.vault() {
-                    let folder = route
-                        .note()
-                        .and_then(|(v, n)| state::step(|c| c.entry(v, n)))
-                        .map(|e| coolpsonotes_core::paths::parent(&e.path).to_string())
-                        .unwrap_or_default();
-                    crate::actions::new_note(v, &folder);
-                }
-            }
             (true, false, false, "e") => {
-                if route.note().is_some() {
+                // Your own notes and notes shared with you.
+                if route.any_note().is_some() {
                     e.prevent_default();
                     ui.mode.update(|m| {
                         *m = if *m == ViewMode::Reading {

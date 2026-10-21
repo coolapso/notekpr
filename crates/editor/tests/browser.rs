@@ -592,6 +592,36 @@ fn commands_and_shortcuts() {
     assert!(lines(&f)[0].is_same_node(Some(&before[0])));
 }
 
+/// A keydown with the key it types and the physical key it is.
+fn key_at(f: &Fixture, k: &str, code: &str, ctrl: bool, meta: bool, alt: bool) -> bool {
+    let init = web_sys::KeyboardEventInit::new();
+    init.set_key(k);
+    init.set_code(code);
+    init.set_ctrl_key(ctrl);
+    init.set_meta_key(meta);
+    init.set_alt_key(alt);
+    init.set_bubbles(true);
+    init.set_cancelable(true);
+    let ev = web_sys::KeyboardEvent::new_with_keyboard_event_init_dict("keydown", &init).unwrap();
+    root(f).dispatch_event(&ev).unwrap();
+    ev.default_prevented()
+}
+
+#[wasm_bindgen_test]
+fn heading_shortcuts_on_macs_and_elsewhere() {
+    let f = setup("title\nmore");
+    caret_at(&f, 0);
+    // A Mac: ⌘+Option+2 types "™".
+    assert!(key_at(&f, "™", "Digit2", false, true, true));
+    assert_text(&f, "## title\nmore");
+    // Elsewhere: Ctrl+Alt+1.
+    assert!(key_at(&f, "1", "Digit1", true, false, true));
+    assert_text(&f, "# title\nmore");
+    // AltGr+0 (Ctrl+Alt on Windows) types "}" on some layouts: no heading.
+    assert!(!key_at(&f, "}", "Digit0", true, false, true));
+    assert_text(&f, "# title\nmore");
+}
+
 #[wasm_bindgen_test]
 fn vim_keys() {
     let f = setup("one two\nthree");

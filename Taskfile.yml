@@ -187,7 +187,7 @@ tasks:
   # ------------------------------------------------------------------ test & lint
 
   test:
-    desc: Run all Rust tests (core, server, CLI client, web)
+    desc: Run all Rust tests (every crate in the workspace)
     deps: [rust]
     cmds:
       - cargo test --workspace
@@ -238,7 +238,7 @@ tasks:
       - CHROMEDRIVER="${CHROMEDRIVER:-$(command -v chromedriver)}" cargo test -p coolpsonotes-editor --target wasm32-unknown-unknown --test browser {{.CLI_ARGS}}
 
   test:e2e:
-    desc: "Headless browser tests and browser ↔ CLI test (needs chromium + chromedriver); filter with `task test:e2e -- -k collab`"
+    desc: "Headless browser tests and browser ↔ CLI test (needs chromium + chromedriver); filter the browser tests with `task test:e2e -- -k collab` (the browser ↔ CLI test always runs)"
     deps: [rust]
     cmds:
       - tests/e2e/run.sh {{.CLI_ARGS}}
@@ -348,7 +348,7 @@ tasks:
       - ./target/release/coolpsonotes-load --open --users {{.USERS}} --step {{.STEP}} --levels {{.LEVELS}} --from-level {{.FROM}} --duration {{.DURATION}} --speed {{.SPEED}} --cpus {{.CPUS}} --memory {{.MEMORY}} {{if .REALISTIC}}--realistic{{end}} {{.CLI_ARGS}}
 
   load:remote:
-    desc: "Like load, against a server elsewhere: SERVER=https://… (a throwaway one in development mode with raised rate limits, see docs/load-test.md); no outages unless -- --kill-command … --start-command … (USERS=100 STEP=100 LEVELS=10 DURATION=45s SPEED=1 REALISTIC=)"
+    desc: "Like load, against a server elsewhere: SERVER=https://… (a throwaway one in development mode with raised rate limits, see docs/load-test.md); no outages unless -- --kill-command … --start-command … (USERS=100 STEP=100 LEVELS=10 FROM=1 DURATION=45s SPEED=1 REALISTIC=)"
     deps: [build:load-ui]
     requires:
       vars: [SERVER]
@@ -365,7 +365,7 @@ tasks:
       - ./target/release/coolpsonotes-load --server {{.SERVER}} --open --users {{.USERS}} --step {{.STEP}} --levels {{.LEVELS}} --from-level {{.FROM}} --duration {{.DURATION}} --speed {{.SPEED}} {{if .REALISTIC}}--realistic{{end}} {{.CLI_ARGS}}
 
   load:native:
-    desc: "Like load, without Docker: the server as a local process, no limits (USERS=100 STEP=100 LEVELS=10 DURATION=45s SPEED=1)"
+    desc: "Like load, without Docker: the server as a local process, no limits; realistic people with -- --realistic (USERS=100 STEP=100 LEVELS=10 FROM=1 DURATION=45s SPEED=1)"
     deps: [build:load-ui, build:web]
     vars:
       USERS: '{{.USERS | default "100"}}'

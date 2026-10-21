@@ -64,9 +64,13 @@ Breaking one of these is a bug, even if everything compiles and tests pass.
 crates/core     crypto.rs (envelopes, HPKE, signatures) · keys.rs (account/device/
                 recovery/vault/document keys) · engine.rs (VaultReplica: apply,
                 encrypt, defer, snapshot; sharing helpers) · doc.rs (yrs CRDT index
-                + notes) · protocol.rs (every API/WS type) · markdown, search, paths, textdiff
+                + notes) · protocol.rs (every API/WS type) · memberlog.rs (owner-signed
+                membership log) · recover.rs (offline export decryption) · markdown,
+                search, paths, textdiff
 crates/sync     the client sync engine both clients use (sans-IO): outbox (merge, hold,
-                batch pushes, acks and refusals), rollback recovery, edit splitting
+                batch pushes, acks and refusals), rollback recovery, edit splitting ·
+                members.rs (membership log checks, whom to trust) · snapshot.rs (when
+                a snapshot may be stored)
 crates/server   axum + SQLite. routes/ (REST) · ws.rs (WebSocket, subscriptions) ·
                 sync.rs (encrypted log, snapshots, key checks) · access.rs (who may
                 do what) · repo/ (all other SQL) · hub.rs (EventBus: live events) ·
@@ -77,9 +81,9 @@ crates/editor   the live-preview Markdown editor. Pure model (native tests): tex
                 (incremental block classification) · syntax.rs · commands.rs · vim.rs.
                 DOM view: view/ (contenteditable, line patches, IME, native edits)
 crates/web      Leptos CSR → wasm32. state/ (Core + Ui in mod.rs; session, vaults,
-                shares, sync, presence, prefs, nav, offline) · cache.rs (IndexedDB
-                copy) · static/sw.js (service worker, only with offline use on) ·
-                actions.rs (user operations; NoteHost = the editor's Host) ·
+                members, shares, sync, presence, prefs, nav, offline) · cache.rs
+                (IndexedDB copy) · static/sw.js (service worker, only with offline
+                use on) · actions.rs (user operations; NoteHost = the editor's Host) ·
                 editor.rs (re-exports crates/editor) · views/ · render.rs (reading view)
 crates/client   `coolpsonotes` CLI: session.rs + livesync.rs (sync), mirror.rs
                 (Markdown files), gateway.rs, ops.rs, note_shares.rs
@@ -87,7 +91,12 @@ crates/load     load test (`task load`): simulated people = real clients (the CL
                 library) against the server image with CPU/memory limits; crash,
                 check, report. load-events: what it streams; load-ui: its live
                 dashboard (wasm32, canvas; scripts/build-load-ui.sh → dist/load)
-tests/e2e       browser tests: suite.py, cross_client.py, wd.py (stdlib WebDriver)
+tests/e2e       browser tests: run.sh (entry point) → suite.py, cross_client.py;
+                perf.py (typing latency) · wd.py (stdlib WebDriver)
+scripts/        build-web.sh, build-load-ui.sh (wasm builds) · demo.py (task demo)
+fuzz/           fuzz targets, a separate workspace (fuzz/run.sh, task fuzz)
+vendor/yrs      yrs 0.28 with fixes for panics found by fuzzing, via [patch.crates-io];
+                the changes are in vendor/yrs/COOLPSONOTES.md — re-apply on upgrade
 site/           project website: static HTML + CSS, no build step, no third-party
                 requests (fonts, scripts, analytics) — keep it that way
 deploy/         Kubernetes manifests, Dex (dev OIDC), examples/ (optional reverse
@@ -99,8 +108,11 @@ deploy/         Kubernetes manifests, Dex (dev OIDC), examples/ (optional revers
 
 Requires Rust ≥ 1.94 with the `wasm32-unknown-unknown` target and the
 `wasm-bindgen` CLI **exactly** matching the crate pin in
-`crates/web/Cargo.toml` (currently 0.2.128). Distribution packages are fine;
-rustup is not required. `task setup` checks everything.
+`crates/web/Cargo.toml` (currently 0.2.128). The same pin is in
+`crates/editor` and `crates/load-ui` and the Dockerfile's
+`WASM_BINDGEN_VERSION`: upgrade them all together with the CLI.
+Distribution packages are fine; rustup is not required. `task setup` checks
+everything.
 
 ```sh
 task dev                         # build + run a dev-mode server on http://localhost:8080
@@ -121,18 +133,22 @@ Without go-task, see the plain commands in the [Taskfile](Taskfile.yml) or
 ## Before you call a change done
 
 - `task fmt`, `task lint` and `task test` pass. Run the relevant browser test
-  (`task test:e2e -- -k <name>`) for UI changes, and the whole suite for
-  changes to sync, keys or the editor.
+  (`task test:e2e -- -k <name>`; `-k` filters `suite.py`, the browser ↔ CLI
+  test always runs) for UI changes, and the whole suite for changes to sync,
+  keys or the editor.
 - New behaviour has a test at the right level:
   - crypto, formats, CRDT, Markdown → unit tests in `crates/core`
   - API, authorization, sync rules → `crates/server/tests/api.rs` (real
     client-side crypto against an in-process server)
+  - outbox, refusals, snapshots, membership-log rules → unit and property
+    tests in `crates/sync` (`src/tests.rs`, `tests/properties.rs`)
   - CLI, mirror, gateway → `crates/client/tests/`
   - editor model, syntax, commands → unit and property tests in
     `crates/editor` (native); the editor's DOM behaviour (typing, IME,
     selection, native edits) → `crates/editor/tests/browser.rs`
     (`task test:editor`)
   - UI flows → `tests/e2e/suite.py` (several users = several browsers)
+  - load test → unit tests in `crates/load`, `crates/load-events`
 - Docs follow the code: API or wire change → `docs/protocol.md`; anything
   about keys, trust or metadata → `docs/security.md`; new CLI commands →
   `docs/desktop-client.md`; requirement coverage → `docs/acceptance.md`.
@@ -213,15 +229,17 @@ Without go-task, see the plain commands in the [Taskfile](Taskfile.yml) or
   the sidebar search button (relevant for browser tests).
 
 **Builds and tests**
-- Build the web crate with `CARGO_TARGET_DIR=target-web` (the Taskfile does)
-  so native and wasm builds don't keep invalidating each other.
+- Build the web crate with `CARGO_TARGET_DIR=target-web` (the Taskfile does,
+  except `task test:e2e`: `tests/e2e/run.sh` builds into `target/`) so native
+  and wasm builds don't keep invalidating each other.
 - `scripts/build-web.sh` replaces its output directory (`dist/web` by
   default) on every run.
 - Browser tests start their own server and chromedriver on free ports with a
   temporary database; screenshots land in `target/e2e/`. Python buffers output
   when redirected — use `python3 -u` to follow progress.
-- CLI tests or manual runs create real profiles under your config directory;
-  remove throwaway ones with `coolpsonotes --profile NAME logout --forget --yes`.
+- Manual CLI runs (`task cli`, `task cli:login`) create real profiles under
+  your config directory (CLI tests use temporary ones); remove throwaway ones
+  with `coolpsonotes --profile NAME logout --forget --yes`.
 - Don't `pkill -f` broad patterns like `coolpsonotes`: they can match your own
   shell's command line. Kill by PID.
 

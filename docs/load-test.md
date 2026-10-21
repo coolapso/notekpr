@@ -90,11 +90,12 @@ Each level (`--levels`; the first has `--users` people, each next one
    `--speed` makes everyone faster or slower; `--realistic` makes them as
    busy as [real people](#realistic-people).
 4. **The crash** (halfway through the level, unless `--no-crash`): `docker
-   kill` (SIGKILL), the level's outage (`--downtimes`; by default from 2 s
-   in the first level up to 90 s in the tenth), `docker start` on the same
-   data. People notice, keep writing offline, reconnect with backoff (which
-   grows up to a minute, so long outages also mean slower comebacks) and
-   upload what they wrote.
+   kill` (SIGKILL), the level's outage (`--downtimes`; by default growing
+   from 2 s in the first level to 90 s in the last, e.g. 2, 13 and 90 s over
+   three levels; 6 s for a single level), `docker start` on the same data.
+   People notice, keep writing offline, reconnect with backoff (which grows
+   up to a minute, so long outages also mean slower comebacks) and upload
+   what they wrote.
 
 **Game over**: when the server can't take a level — after the outage not
 everyone is connected again within two minutes, or the changes made during
@@ -133,6 +134,12 @@ At the end:
    (This is how the load test found that opening a newly shared vault twice
    at once could lose what was written into the first copy.)
 
+A run in which no note could be compared at all fails too (exit code 1).
+Exit code 2 means the run itself failed: the live view couldn't start,
+Docker or the image is missing, or the server didn't come up (with the
+start screen, a run's error is shown there instead, to try again); 130,
+that it was stopped with Ctrl+C before a run finished.
+
 A run that was killed outright (not Ctrl+C) leaves its container and
 people's copies behind; the next run removes them.
 
@@ -146,8 +153,9 @@ couldn't be set up.
 By default the crowd is busier than anyone, on purpose: everyone types
 nonstop, about 4–5 requests a second each. That finds the server's limits
 with a few hundred people, but says little about how many *real* people a
-server can take. With `--realistic` (`REALISTIC=1`, or CROWD on the start
-screen) people behave like someone with the app open:
+server can take. With `--realistic` (`REALISTIC=1`; `task load:native --
+--realistic`; or CROWD on the start screen) people behave like someone with
+the app open:
 
 * most of the time they read, think or are elsewhere: between two things,
   10 s to a minute (60 %), one to three minutes (30 %) or three to ten
@@ -211,7 +219,8 @@ requests away.
 * **The people are real clients**: the same library as the `coolpsonotes`
   CLI — real account and device keys, end-to-end encryption, signed changes,
   the membership log, a WebSocket each for live changes. Their copies live
-  in `target/load/people/`.
+  in memory (`/dev/shm/coolpsonotes-load-<pid>`), or in `people/` under
+  `--out` where there is no `/dev/shm`; `--people-dir` chooses.
 * **Their uploads go over HTTP**, as the CLI's do; the browser sends edits
   over its WebSocket instead. They send no presence (cursors) to the
   server, which the browser does.
@@ -240,27 +249,34 @@ requests away.
 ## Options
 
 `coolpsonotes-load --help` lists them all; `task load -- --flag` passes them
-on.
+on. The `task load` variables and their defaults: `USERS=100 STEP=100
+LEVELS=10 FROM=1 DURATION=45s CPUS=1 MEMORY=512m SPEED=1 REALISTIC=`;
+`task load:native` takes them without `CPUS`, `MEMORY` and `REALISTIC`,
+`task load:remote` without `CPUS` and `MEMORY`, and needs `SERVER`.
 
 | Flag | Default | |
 |---|---|---|
 | `--users N` | 100 | how many people (in the first level) |
 | `--levels N`, `--step N` | 1, 100 | levels, and people added in each (`task load`: 10 levels) |
 | `--from-level N` | 1 | start at level N (its people and everyone before arrive at once) |
-| `--duration D` | 60s | how long everyone works in each level (`90s`, `3m`) |
+| `--duration D` | 60s | how long everyone works in each level, e.g. `90s`, `3m` (`task load`: 45s) |
 | `--downtimes LIST` | see above | each level's outage, e.g. `5s,10s,30s` (the last repeats) |
 | `--speed X` | 1 | how fast people are (2 = twice as fast) |
 | `--realistic` | | people as busy as [real ones](#realistic-people) (`task load REALISTIC=1`) |
 | `--arrive D` | 10s | over how long each level's newcomers arrive (`0` = all at once) |
 | `--cpus N`, `--memory M` | 1, 512m | the container's limits |
 | `--image I` | coolpsonotes:latest | the server image |
-| `--native` | | run `target/release/coolpsonotes-server` as a process instead (Linux; no limits) |
+| `--native` | | run `target/release/coolpsonotes-server` as a process instead (Linux; no limits; see `--server-bin`) |
+| `--server-bin PATH` | target/release/coolpsonotes-server | with `--native`: the server binary |
+| `--web-dir DIR` | dist/web | with `--native`: the web client it serves |
+| `--server-port N` | 18099 | the local server's port (Docker or `--native`) |
 | `--server URL` | | a [server elsewhere](#against-a-server-elsewhere) instead (`task load:remote SERVER=…`) |
 | `--kill-command C`, `--start-command C` | | with `--server`: how to kill and start it for the outages |
 | `--metrics-token T` | `$COOLPSONOTES_METRICS_TOKEN` | with `--server`: its `/metrics` token |
 | `--seed N` | random | repeat a run |
 | `--no-crash` | | don't kill the server midway |
 | `--dashboard ADDR` | 127.0.0.1:8098 | where the live view is served |
+| `--dashboard-dir DIR` | dist/load | the built live view (`task build:load-ui`) |
 | `--open` | | open the live view in the browser (`task load` does) |
 | `--now` | | start right away with these settings, no start screen |
 | `--exit` | | stop when done instead of keeping the live view up (scripts, CI; implies `--now`) |

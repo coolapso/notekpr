@@ -1234,7 +1234,7 @@ def main():
     if port_in_use(host, int(port)):
         sys.exit(
             f"something already listens on {args.listen} (another program, or a demo that is running).\n"
-            f"Choose another address: task demo DEMO_LISTEN=127.0.0.1:8098  (or --listen)"
+            f"Choose another address: task demo DEMO_LISTEN=127.0.0.1:8097  (or --listen)"
         )
     if data.exists() and not marker.exists() and any(data.iterdir()):
         sys.exit(f"{data} holds an unfinished demo: run `task demo:reset` and try again")

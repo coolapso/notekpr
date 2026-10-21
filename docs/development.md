@@ -4,12 +4,19 @@
 
 ```
 crates/core     shared crypto, keys, CRDT model, protocol, engine, markdown, search
+crates/sync     client sync engine both clients use (outbox, refusals, snapshots, membership log)
 crates/server   sync server (axum + SQLite)            → coolpsonotes-server
 crates/editor   live-preview Markdown editor (model + DOM view), used by crates/web
 crates/web      browser client (Leptos → wasm32)       → dist/web
 crates/client   desktop/CLI client, mirror, gateway    → coolpsonotes
+crates/load     load test runner (task load)           → coolpsonotes-load
+crates/load-events  what the load runner streams to its live view
+crates/load-ui  the load test's live view (wasm32)     → dist/load
+scripts/        build-web.sh, build-load-ui.sh, demo.py (task demo)
 site/           project website: static HTML + CSS, no build step (task site)
 tests/e2e       browser end-to-end tests (Python stdlib + chromedriver)
+fuzz/           fuzz targets, a separate workspace (fuzz/run.sh, task fuzz)
+vendor/yrs      yrs 0.28 with fixes, via [patch.crates-io] (see its COOLPSONOTES.md)
 deploy/         Kubernetes, Dex (dev OIDC), examples/ (optional reverse proxies)
 docs/           architecture, protocol, security, operations, agents, desktop client
 ```
@@ -27,18 +34,22 @@ get it.
 | go-task | the `task …` shortcuts (optional) | `go-task` | taskfile.dev |
 | `wasm-opt` | smaller release web builds (optional) | `binaryen` | binaryen releases |
 | Chromium + chromedriver, Python 3 | browser tests (`task test:e2e`) | `chromium` (includes chromedriver), `python` | matching Chrome/Chromium + chromedriver |
-| cargo-deny, cargo-audit | supply-chain checks (`task audit`) | `cargo-deny`, `cargo-audit` | `cargo install` |
-| Docker + Compose | container image, Docker dev stack, local Dex for OIDC | `docker`, `docker-compose`, `docker-buildx` | Docker docs |
+| cargo-deny | supply-chain checks (`task audit`) | `cargo-deny` | `cargo install cargo-deny --locked` |
+| Docker + Compose | container image, Docker dev stack, local Dex for OIDC, the load test (`task load`) | `docker`, `docker-compose`, `docker-buildx` | Docker docs |
 
-The `wasm-bindgen` CLI must match the `wasm-bindgen` crate pinned in
-`crates/web/Cargo.toml`. When you upgrade one, upgrade the other. A
-`cargo install` puts it in `~/.cargo/bin`, which then has to come before
-`/usr/bin` in `PATH`.
+The `wasm-bindgen` CLI must match the `wasm-bindgen` crate pinned
+(`=0.2.128`) in `crates/web/Cargo.toml`, `crates/editor/Cargo.toml` and
+`crates/load-ui/Cargo.toml`; the Dockerfile installs the CLI version in its
+`ARG WASM_BINDGEN_VERSION`. `scripts/build-web.sh` and
+`scripts/build-load-ui.sh` check the CLI against their crate's pin. When you
+upgrade, upgrade all of them together with the CLI. A `cargo install` puts
+it in `~/.cargo/bin`, which then has to come before `/usr/bin` in `PATH`.
 
 **Not needed:** rustup (distribution Rust packages work), Node.js, npm or any
 JavaScript tooling. The few static files of the web client
-(`crates/web/static`: `index.html`, a 6-line `boot.js` loader, `style.css`)
-are hand-written. The server needs no external database: it embeds SQLite.
+(`crates/web/static`: `index.html`, a small `boot.js` loader, `style.css`,
+the `sw.js` service worker, an icon and a web app manifest) are
+hand-written. The server needs no external database: it embeds SQLite.
 
 ## Common tasks
 
@@ -58,7 +69,13 @@ task test:editor              # the editor's DOM view in headless Chromium (wasm
 task fmt                      # rustfmt (default style); CI checks it with task fmt:check
 task lint                     # clippy, warnings are errors
 task ci                       # what CI runs
+task audit                    # supply-chain checks (cargo deny check)
 task dev:reset                # wipe the dev database
+task build                    # debug build of server, CLI and web client;  task release  for release builds
+task check:wasm               # build the core for wasm32 (catches wasm-only issues)
+task backup                   # a timestamped backup of ./data into backups/ (keeps the newest 10)
+task docker:dev               # the dev server in Docker (docker:dev:oidc adds Dex, docker:dev:down stops it)
+task clean                    # remove build outputs (keeps the dev database)
 ```
 
 ## A demo with data
@@ -91,9 +108,11 @@ Sign in as one of them (one per tab). A browser is a new device of its user:
 choose **Approve from another device** and the running demo approves it
 within a couple of seconds (`--no-approve` turns that off; the recovery keys
 are in `data/demo/recovery-keys.txt`). The server's log goes to
-`data/demo/server.log`. The script refuses to seed a server that isn't in
-development mode. To change the content, edit the script and
-`task demo:reset`. Port 8099 taken? `task demo DEMO_LISTEN=127.0.0.1:8098`.
+`data/demo/server.log`. `task demo -- --seed-only` stops once the data is
+there; `task demo -- -v` prints every CLI command it runs. The script
+refuses to seed a server that isn't in development mode. To change the
+content, edit the script and `task demo:reset`. Port 8099 taken? `task demo
+DEMO_LISTEN=127.0.0.1:8097`.
 
 **Keep it complete.** The demo is meant to show every user-facing feature,
 so it doubles as a hands-on end-to-end check: after `task demo:reset && task
@@ -126,7 +145,7 @@ builds the image). What it measures and how: [load-test.md](load-test.md).
 
 ```sh
 cargo build -p coolpsonotes-server
-PROFILE=dev ./scripts/build-web.sh          # or omit PROFILE for an optimized build
+CARGO_TARGET_DIR=target-web PROFILE=dev ./scripts/build-web.sh   # or omit PROFILE for an optimized build
 ./target/debug/coolpsonotes-server --dev-mode --web-dir dist/web
 ```
 
@@ -149,10 +168,11 @@ cargo run -p coolpsonotes-client -- --profile alice login --server http://localh
 cargo run -p coolpsonotes-client -- --profile bob   login --server http://localhost:8080 --dev-user bob
 ```
 
-With Docker: `docker compose -f docker-compose.dev.yml up --build`
-(add `--profile oidc` to also run a local Dex OIDC provider on port 5556 and
-an OIDC-enabled coolpsonotes on <http://localhost:8081>; this profile uses host
-networking, so it works on Linux only).
+With Docker: `task docker:dev` (`docker compose -f docker-compose.dev.yml up
+--build`); `task docker:dev:oidc` (`--profile oidc`) also runs a local Dex
+OIDC provider on port 5556 and an OIDC-enabled coolpsonotes on
+<http://localhost:8081> — this profile uses host networking, so it works on
+Linux only. `task docker:dev:down` stops the stack and keeps its data.
 
 ## Tests
 
@@ -163,19 +183,26 @@ cargo test -p coolpsonotes-editor    # editor model: change sets, incremental bl
 cargo test -p coolpsonotes-sync      # the shared sync engine: outbox, refusals, no-loss property test
 cargo test -p coolpsonotes-web       # safe rendering, zip
 cargo test -p coolpsonotes-client    # sync engine, mirror, gateway against an in-process server
-tests/e2e/run.sh                     # headless browsers: onboarding, collaboration, devices,
-                                     # recovery, viewers, history, trash, search, offline,
-                                     # attachments, mobile — then browser ↔ CLI mirror sync
+cargo test -p coolpsonotes-load -p coolpsonotes-load-events   # the load test: world, outages, metrics, verdict
+tests/e2e/run.sh                     # headless browsers: every UI flow (TESTS in suite.py:
+                                     # onboarding, collaboration, devices and recovery, offline,
+                                     # attachments, note sharing, tables, editor, mobile, icons,
+                                     # graph, …) — then browser ↔ CLI mirror sync
 ```
 
 The browser suite starts its own dev-mode server on a free port with a
-temporary database; screenshots land in `target/e2e/`.
+temporary database; screenshots land in `target/e2e/` (`CPN_E2E_OUT`
+changes that). It runs `/usr/bin/chromium`; for another browser set
+`CPN_CHROME=/path/to/chrome` (with a matching chromedriver on `PATH`).
+`-k NAME` (`task test:e2e -- -k collab`) runs only the matching tests of
+`suite.py`; the browser ↔ CLI test (`cross_client.py`) always runs in full.
 
 Property tests (`proptest`) run with `cargo test`; `PROPTEST_CASES=20000`
 searches harder. Fuzz targets for everything that parses untrusted input
-(Markdown, diffs, envelopes, protocol JSON, zip import, CRDT updates) live in
-`fuzz/` and run on the stable toolchain — libFuzzer with coverage
-instrumentation through `RUSTFLAGS`, no nightly needed:
+(Markdown, diffs, envelopes, protocol JSON, zip import, CRDT updates) and
+for the editor's model live in `fuzz/` (a separate workspace) and run on the
+stable toolchain — libFuzzer with coverage instrumentation through
+`RUSTFLAGS`, no nightly needed:
 
 ```sh
 task fuzz                 # every target, 60 s each
@@ -190,7 +217,9 @@ works too and adds AddressSanitizer.
 Also build the core for the browser to catch wasm-only issues:
 
 ```sh
-cargo build -p coolpsonotes-core --target wasm32-unknown-unknown
+task check:wasm
+# or:
+CARGO_TARGET_DIR=target-web cargo build -p coolpsonotes-core --target wasm32-unknown-unknown
 ```
 
 ### Editor browser tests
@@ -218,12 +247,12 @@ it types into a 5,000-line note and prints median/p95 per keystroke.
 ## Supply-chain checks
 
 ```sh
-cargo install cargo-audit cargo-deny
-cargo audit
-cargo deny check licenses advisories
+task audit                # or: cargo deny check
 ```
 
-`Cargo.lock` is committed; release images are built with `--locked`.
+`cargo deny check` checks advisories (RustSec), licenses, banned crates and
+sources as `deny.toml` sets them; CI runs the same check. `Cargo.lock` is
+committed; release images are built with `--locked`.
 
 ## Conventions
 

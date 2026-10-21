@@ -544,6 +544,117 @@ async fn an_owner_shares_a_new_vault_with_several_people_in_a_row() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn writing_into_a_note_before_it_arrived_still_merges() {
+    let srv = start().await;
+    let alice = login(&srv, "alice").await;
+    let bob = login(&srv, "bob").await;
+    manage::create_vault(&alice, "Team").await.unwrap();
+    let ah = hub(&alice).await;
+    let v = ah.resolve("Team").await.unwrap();
+    manage::share(&alice, &v, "bob", Role::Editor, false)
+        .await
+        .unwrap();
+    let bh = hub(&bob).await;
+    let vid = v.lock().await.id().to_string();
+    // Alice starts a page; Bob writes into it before his copy has it.
+    let page = ops::put_document(&ah, "Team", "Page 2.md", "# Page 2\n\n## Bob\n", None)
+        .await
+        .unwrap();
+    let bv = bh.get(&vid).unwrap();
+    {
+        let mut g = bv.lock().await;
+        assert!(g.set_note_text(&page.id, "hello from bob").unwrap());
+        g.save().unwrap();
+    }
+    bh.local_changed(&vid, vec![page.id.clone()], false).await;
+    for _ in 0..2 {
+        bh.sync_vault(&vid).await.unwrap();
+        ah.sync_vault(&vid).await.unwrap();
+    }
+    let a = v.lock().await.note_text(&page.id);
+    let b = bv.lock().await.note_text(&page.id);
+    assert_eq!(a, b);
+    assert!(
+        a.contains("## Bob") && a.contains("hello from bob"),
+        "{a:?}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_rename_from_an_older_copy_keeps_what_others_typed_meanwhile() {
+    let srv = start().await;
+    let alice = login(&srv, "alice").await;
+    let bob = login(&srv, "bob").await;
+    let carol = login(&srv, "carol").await;
+    manage::create_vault(&alice, "Team").await.unwrap();
+    let ah = hub(&alice).await;
+    let v = ah.resolve("Team").await.unwrap();
+    for p in ["bob", "carol"] {
+        manage::share(&alice, &v, p, Role::Editor, false)
+            .await
+            .unwrap();
+    }
+    let n1 = "# Goals 1\n\nSee also [[Goals 2]].\n\n## Bob\n\n## Carol\n";
+    let n3 = "# Goals 3\n\nSee also [[Goals 1]], [[Plan]].\n\n## Bob\n\n## Carol\n";
+    ops::put_document(&ah, "Team", "Goals 1.md", n1, None)
+        .await
+        .unwrap();
+    ops::put_document(&ah, "Team", "Goals 3.md", n3, None)
+        .await
+        .unwrap();
+    let vid = v.lock().await.id().to_string();
+    let bh = hub(&bob).await;
+    let ch = hub(&carol).await;
+    // Bob types a sentence into Goals 3, a few characters at a time.
+    let id3 = bh
+        .get(&vid)
+        .unwrap()
+        .lock()
+        .await
+        .find("Goals 3")
+        .unwrap()
+        .1
+        .id;
+    let sentence = "The bikes need new chains before the tour.";
+    let bv = bh.get(&vid).unwrap();
+    for (i, chunk) in sentence.as_bytes().chunks(3).enumerate() {
+        let chunk = std::str::from_utf8(chunk).unwrap();
+        {
+            let mut g = bv.lock().await;
+            let t = g.note_text(&id3);
+            let at = t.find("## Bob\n").unwrap() + "## Bob\n".len();
+            let mut end = t[at..].find("\n## ").map(|e| at + e).unwrap();
+            while end > at && t.as_bytes()[end - 1] == b'\n' {
+                end -= 1;
+            }
+            let mut new = t.clone();
+            new.insert_str(end, chunk);
+            if i == 0 {
+                new.insert(end + chunk.len(), '\n');
+            }
+            g.set_note_text(&id3, &new).unwrap();
+        }
+        bh.local_changed(&vid, vec![id3.clone()], false).await;
+        // Halfway, Carol (who hasn't seen Bob's typing) renames Goals 1.
+        if i == 5 {
+            ops::move_document(&ch, "Team", "Goals 1.md", "Map 957.md", true)
+                .await
+                .unwrap();
+        }
+    }
+    for _ in 0..3 {
+        for h in [&ah, &bh, &ch] {
+            h.sync_vault(&vid).await.unwrap();
+        }
+    }
+    for (who, h) in [("alice", &ah), ("bob", &bh), ("carol", &ch)] {
+        let t = h.get(&vid).unwrap().lock().await.note_text(&id3);
+        assert!(t.contains(sentence), "{who} lost it: {t:?}");
+        assert!(t.contains("[[Map 957]]"), "{who}: {t:?}");
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn opening_a_new_vault_twice_at_once_keeps_one_copy() {
     let srv = start().await;
     let alice = login(&srv, "alice").await;

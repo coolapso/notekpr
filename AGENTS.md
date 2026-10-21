@@ -4,12 +4,12 @@ Guide for anyone — AI coding agents and humans — changing this repository.
 Read this first; it is short on purpose and links to the detailed docs.
 
 > Not to be confused with [docs/agents.md](docs/agents.md), which documents
-> the *product feature* that lets AI agents use coolpsonotes as a knowledge base
+> the *product feature* that lets AI agents use notekpr as a knowledge base
 > (CLI, Markdown folder, local HTTP gateway).
 
 ## What this is
 
-coolpsonotes is a self-hosted, local-first, **end-to-end encrypted**
+notekpr is a self-hosted, local-first, **end-to-end encrypted**
 Markdown notes platform with real-time collaboration, written entirely in
 Rust: a zero-knowledge sync server, a browser client compiled to WebAssembly,
 and a desktop/CLI client (sync daemon, Markdown mirror, agent gateway).
@@ -90,7 +90,7 @@ crates/web      Leptos CSR → wasm32. state/ (Core + Ui in mod.rs; session, vau
                 (IndexedDB copy) · static/sw.js (service worker, only with offline
                 use on) · actions.rs (user operations; NoteHost = the editor's Host) ·
                 editor.rs (re-exports crates/editor) · views/ · render.rs (reading view)
-crates/client   `coolpsonotes` CLI: session.rs + livesync.rs (sync), mirror.rs
+crates/client   `notekpr` CLI: session.rs + livesync.rs (sync), mirror.rs
                 (Markdown files), gateway.rs, ops.rs, note_shares.rs
 crates/load     load test (`task load`): simulated people = real clients (the CLI's
                 library) against the server image with CPU/memory limits; crash,
@@ -101,7 +101,7 @@ tests/e2e       browser tests: run.sh (entry point) → suite.py, cross_client.p
 scripts/        build-web.sh, build-load-ui.sh (wasm builds) · demo.py (task demo)
 fuzz/           fuzz targets, a separate workspace (fuzz/run.sh, task fuzz)
 vendor/yrs      yrs 0.28 with fixes for panics found by fuzzing, via [patch.crates-io];
-                the changes are in vendor/yrs/COOLPSONOTES.md — re-apply on upgrade
+                the changes are in vendor/yrs/NOTEKPR.md — re-apply on upgrade
 site/           project website: static HTML + CSS, no build step, no third-party
                 requests (fonts, scripts, analytics) — keep it that way
 deploy/         Kubernetes manifests, Dex (dev OIDC), examples/ (optional reverse
@@ -249,8 +249,8 @@ Without go-task, see the plain commands in the [Taskfile](Taskfile.yml) or
   when redirected — use `python3 -u` to follow progress.
 - Manual CLI runs (`task cli`, `task cli:login`) create real profiles under
   your config directory (CLI tests use temporary ones); remove throwaway ones
-  with `coolpsonotes --profile NAME logout --forget --yes`.
-- Don't `pkill -f` broad patterns like `coolpsonotes`: they can match your own
+  with `notekpr --profile NAME logout --forget --yes`.
+- Don't `pkill -f` broad patterns like `notekpr`: they can match your own
   shell's command line. Kill by PID.
 
 ## Git

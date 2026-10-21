@@ -47,7 +47,7 @@ pub async fn migrate(db: &Db, path: &Path) -> anyhow::Result<()> {
     if pending > 0 && !applied.is_empty() {
         let dir = path.parent().unwrap_or(Path::new(".")).join("backups");
         std::fs::create_dir_all(&dir)?;
-        let out = dir.join(format!("pre-migration-{}.db", coolpsonotes_core::now_ms()));
+        let out = dir.join(format!("pre-migration-{}.db", notekpr_core::now_ms()));
         backup_to(db, &out).await?;
         tracing::info!(backup = %out.display(), pending, "backed up database before migration");
     }
@@ -87,8 +87,8 @@ pub async fn restore_from(
         let versions: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM _sqlx_migrations")
             .fetch_one(&pool)
             .await
-            .context("file is not a coolpsonotes database backup")?;
-        anyhow::ensure!(versions > 0, "file is not a coolpsonotes database backup");
+            .context("file is not a notekpr database backup")?;
+        anyhow::ensure!(versions > 0, "file is not a notekpr database backup");
         pool.close().await;
     }
     if let Some(dir) = target.parent() {
@@ -115,7 +115,7 @@ pub async fn restore_from(
 }
 
 pub fn now() -> i64 {
-    coolpsonotes_core::now_ms()
+    notekpr_core::now_ms()
 }
 
 pub fn sha256(data: &[u8]) -> Vec<u8> {
@@ -123,7 +123,7 @@ pub fn sha256(data: &[u8]) -> Vec<u8> {
 }
 
 fn random<const N: usize>() -> [u8; N] {
-    coolpsonotes_core::crypto::random_bytes::<N>()
+    notekpr_core::crypto::random_bytes::<N>()
 }
 
 /// New opaque bearer secret. Returns `(secret, sha256(secret))`; only the hash is stored.

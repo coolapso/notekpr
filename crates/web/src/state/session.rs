@@ -267,7 +267,7 @@ pub(super) fn published_account(c: &Core, uid: &str) -> Option<AccountPublic> {
 }
 
 pub(super) fn unlock_with_device(uid: &str, rec: &DeviceRecord, envelope: &[u8]) -> Unlock {
-    let Some(secret) = coolpsonotes_core::b64::decode32(&rec.secret) else {
+    let Some(secret) = notekpr_core::b64::decode32(&rec.secret) else {
         return Unlock::Unreadable;
     };
     let Ok(dev) = DeviceKey::from_secret(secret) else {
@@ -305,7 +305,7 @@ pub(super) fn unlock_with_device(uid: &str, rec: &DeviceRecord, envelope: &[u8])
 
 pub(super) fn show_pending(uid: &str, mut rec: DeviceRecord) {
     let ui = ui();
-    let Some(secret) = coolpsonotes_core::b64::decode32(&rec.secret) else {
+    let Some(secret) = notekpr_core::b64::decode32(&rec.secret) else {
         return;
     };
     let Ok(dev) = DeviceKey::from_secret(secret) else {
@@ -413,7 +413,7 @@ pub async fn setup_keys() {
     storage::set_device(&uid, &{
         let mut r = DeviceRecord {
             device_id: boot.device_id.clone(),
-            secret: coolpsonotes_core::b64::encode(&boot.device.secret),
+            secret: notekpr_core::b64::encode(&boot.device.secret),
             account: None,
         };
         r.pin(&boot.account.public());
@@ -464,7 +464,7 @@ pub async fn finish_setup() {
     }
 }
 
-pub(super) const WELCOME: &str = "# Welcome to coolpsonotes 👋\n\nThis is your private vault. Everything you write is **encrypted on this device** before it is synced — the server never sees your notes.\n\n## Getting started\n\n- [ ] Write something here — just start typing\n- [ ] Create a new note with the **+** button (or Ctrl+Alt+N)\n- [ ] Link notes by typing `[[` and a note name, like [[Ideas]]\n- [ ] Add #tags anywhere\n- [ ] Share a vault with family from the vault menu\n\nUse the toolbar for formatting, or Markdown if you know it: `**bold**`, `*italic*`, `# Heading`, `- list`.\n\nPress **Ctrl+P** (⌘P on a Mac) to jump to any note, and **Ctrl+/** for all keyboard shortcuts.\n";
+pub(super) const WELCOME: &str = "# Welcome to notekpr 👋\n\nThis is your private vault. Everything you write is **encrypted on this device** before it is synced — the server never sees your notes.\n\n## Getting started\n\n- [ ] Write something here — just start typing\n- [ ] Create a new note with the **+** button (or Ctrl+Alt+N)\n- [ ] Link notes by typing `[[` and a note name, like [[Ideas]]\n- [ ] Add #tags anywhere\n- [ ] Share a vault with family from the vault menu\n\nUse the toolbar for formatting, or Markdown if you know it: `**bold**`, `*italic*`, `# Heading`, `- list`.\n\nPress **Ctrl+P** (⌘P on a Mac) to jump to any note, and **Ctrl+/** for all keyboard shortcuts.\n";
 
 /// Register this browser as a new (pending) device and wait for approval.
 pub async fn request_approval() {
@@ -480,7 +480,7 @@ pub async fn request_approval() {
     }
     let rec = DeviceRecord {
         device_id: reg.device_id.clone(),
-        secret: coolpsonotes_core::b64::encode(&dev.secret),
+        secret: notekpr_core::b64::encode(&dev.secret),
         account: None,
     };
     storage::set_device(&uid, &rec);
@@ -519,7 +519,7 @@ pub async fn recover(input: String) {
             }
             DeviceRecord {
                 device_id: reg.device_id.clone(),
-                secret: coolpsonotes_core::b64::encode(&dev.secret),
+                secret: notekpr_core::b64::encode(&dev.secret),
                 account: None,
             }
         }
@@ -527,7 +527,7 @@ pub async fn recover(input: String) {
     // The recovery key opened the real account secret: this is the key to expect.
     rec.pin(&account.public());
     storage::set_device(&uid, &rec);
-    let Some(secret) = coolpsonotes_core::b64::decode32(&rec.secret) else {
+    let Some(secret) = notekpr_core::b64::decode32(&rec.secret) else {
         return fail("Corrupt device record".into());
     };
     let Ok(dev) = DeviceKey::from_secret(secret) else {

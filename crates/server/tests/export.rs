@@ -1,14 +1,14 @@
 //! Encrypted exports and offline recovery: GET /me/export and
-//! `coolpsonotes-server export-user`, decrypted with only the person's keys.
+//! `notekpr-server export-user`, decrypted with only the person's keys.
 
 mod common;
 
 use common::*;
-use coolpsonotes_core::crypto::Purpose;
-use coolpsonotes_core::doc::{EntryKind, IndexDoc, NoteDoc};
-use coolpsonotes_core::engine;
-use coolpsonotes_core::protocol::*;
-use coolpsonotes_core::recover::{self, RecoveredVault};
+use notekpr_core::crypto::Purpose;
+use notekpr_core::doc::{EntryKind, IndexDoc, NoteDoc};
+use notekpr_core::engine;
+use notekpr_core::protocol::*;
+use notekpr_core::recover::{self, RecoveredVault};
 use reqwest::Method;
 
 fn file<'a>(v: &'a RecoveredVault, path: &str) -> Option<&'a [u8]> {
@@ -147,7 +147,7 @@ async fn people_can_recover_their_notes_offline() {
     assert_eq!(file(&got[0], "Trip.md"), Some(&b"Pack sunscreen"[..]));
 
     // Offline from a backup file with the server tool, then decrypted again.
-    let bin = env!("CARGO_BIN_EXE_coolpsonotes-server");
+    let bin = env!("CARGO_BIN_EXE_notekpr-server");
     let data = srv.dir.path();
     let out = tempfile::tempdir().unwrap();
     let backup = out.path().join("backup.db");

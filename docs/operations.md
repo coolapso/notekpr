@@ -1,6 +1,6 @@
-# Operating coolpsonotes
+# Operating notekpr
 
-coolpsonotes is a single binary (`coolpsonotes-server`) plus static files for
+notekpr is a single binary (`notekpr-server`) plus static files for
 the browser client. State is one SQLite database in the data directory. Run one
 instance per database.
 
@@ -15,7 +15,7 @@ instance per database.
 Every setup also needs:
 
 * **a reverse proxy with TLS in front** — the one you already use, or one of
-  the examples in §4 (Caddy, Traefik, nginx). coolpsonotes serves plain HTTP
+  the examples in §4 (Caddy, Traefik, nginx). notekpr serves plain HTTP
   and leaves certificates and HTTPS to it, by design;
 * **an OpenID Connect provider** for sign-in (§3).
 
@@ -79,16 +79,16 @@ files` in its log).
 ### Docker Compose
 
 ```sh
-git clone https://github.com/coolapso/coolpsonotes && cd coolpsonotes
-export COOLPSONOTES_PUBLIC_URL=https://notes.example.com   # what people type in the browser
-export COOLPSONOTES_OIDC_ISSUER=https://auth.example.com   # your identity provider (§3)
-export COOLPSONOTES_OIDC_CLIENT_ID=coolpsonotes
-export COOLPSONOTES_OIDC_CLIENT_SECRET=…                    # from wherever you keep secrets
-docker compose up -d --build  # coolpsonotes on 127.0.0.1:8080
+git clone https://github.com/coolapso/notekpr && cd notekpr
+export NOTEKPR_PUBLIC_URL=https://notes.example.com   # what people type in the browser
+export NOTEKPR_OIDC_ISSUER=https://auth.example.com   # your identity provider (§3)
+export NOTEKPR_OIDC_CLIENT_ID=notekpr
+export NOTEKPR_OIDC_CLIENT_SECRET=…                    # from wherever you keep secrets
+docker compose up -d --build  # notekpr on 127.0.0.1:8080
 ```
 
 Compose passes these on from the environment it runs in, along with
-`COOLPSONOTES_ADMINS` and `COOLPSONOTES_METRICS_TOKEN` if set (§2). Hand
+`NOTEKPR_ADMINS` and `NOTEKPR_METRICS_TOKEN` if set (§2). Hand
 secrets over from where you keep them — a secret manager, your CI — when you
 deploy, rather than writing them into a file on the machine. Settings left
 unset aren't passed on: without the OIDC issuer and client the server
@@ -101,55 +101,55 @@ becomes the administrator (§5).
 
 ### Kubernetes
 
-Edit and apply [`deploy/kubernetes/coolpsonotes.yaml`](../deploy/kubernetes/coolpsonotes.yaml)
+Edit and apply [`deploy/kubernetes/notekpr.yaml`](../deploy/kubernetes/notekpr.yaml)
 (single replica, `Recreate` strategy, a `ReadWriteOnce` volume) and optionally
 [`backup-cronjob.yaml`](../deploy/kubernetes/backup-cronjob.yaml). The image
 it references isn't published yet: build it (`docker build -t
-registry.example.com/coolpsonotes:0.1.0 .`) and push it to your registry,
+registry.example.com/notekpr:0.1.0 .`) and push it to your registry,
 then set that image in both files. For a cluster with arm64 nodes, or a
 mix: `docker buildx build --platform linux/amd64,linux/arm64 -t
-registry.example.com/coolpsonotes:0.1.0 --push .` builds and pushes both in
+registry.example.com/notekpr:0.1.0 --push .` builds and pushes both in
 one image. The Dockerfile cross-compiles, so this doesn't need QEMU and
 takes about as long as one native build per architecture. Put your ingress
-in front of the `coolpsonotes` Service, with TLS (§4; for Traefik:
+in front of the `notekpr` Service, with TLS (§4; for Traefik:
 [`deploy/examples/traefik/`](../deploy/examples/traefik/ingressroute.yaml)).
 
 ### From source
 
 ```sh
-cargo build --release --locked -p coolpsonotes-server
+cargo build --release --locked -p notekpr-server
 ./scripts/build-web.sh                 # needs the wasm32 target and wasm-bindgen 0.2.128
-sudo install -Dm755 target/release/coolpsonotes-server /usr/local/bin/coolpsonotes-server
-sudo mkdir -p /usr/local/share/coolpsonotes && sudo cp -r dist/web /usr/local/share/coolpsonotes/
+sudo install -Dm755 target/release/notekpr-server /usr/local/bin/notekpr-server
+sudo mkdir -p /usr/local/share/notekpr && sudo cp -r dist/web /usr/local/share/notekpr/
 ```
 
 Serve a copy of the web client outside the checkout: `build-web.sh` replaces
 `dist/web` every time it runs (also during development).
 
 ```ini
-# /etc/systemd/system/coolpsonotes.service
+# /etc/systemd/system/notekpr.service
 [Unit]
-Description=coolpsonotes
+Description=notekpr
 After=network-online.target
 [Service]
-ExecStart=/usr/local/bin/coolpsonotes-server
-EnvironmentFile=/etc/coolpsonotes.env
+ExecStart=/usr/local/bin/notekpr-server
+EnvironmentFile=/etc/notekpr.env
 DynamicUser=yes
-StateDirectory=coolpsonotes
-Environment=COOLPSONOTES_DATA_DIR=/var/lib/coolpsonotes
-Environment=COOLPSONOTES_WEB_DIR=/usr/local/share/coolpsonotes/web
+StateDirectory=notekpr
+Environment=NOTEKPR_DATA_DIR=/var/lib/notekpr
+Environment=NOTEKPR_WEB_DIR=/usr/local/share/notekpr/web
 Restart=on-failure
 [Install]
 WantedBy=multi-user.target
 ```
 
 ```sh
-# /etc/coolpsonotes.env (mode 0600): secrets don't belong on the command line
-COOLPSONOTES_PUBLIC_URL=https://notes.example.com
-COOLPSONOTES_OIDC_ISSUER=https://auth.example.com
-COOLPSONOTES_OIDC_CLIENT_ID=coolpsonotes
-COOLPSONOTES_OIDC_CLIENT_SECRET=…
-COOLPSONOTES_TRUST_PROXY=true
+# /etc/notekpr.env (mode 0600): secrets don't belong on the command line
+NOTEKPR_PUBLIC_URL=https://notes.example.com
+NOTEKPR_OIDC_ISSUER=https://auth.example.com
+NOTEKPR_OIDC_CLIENT_ID=notekpr
+NOTEKPR_OIDC_CLIENT_SECRET=…
+NOTEKPR_TRUST_PROXY=true
 ```
 
 Put a TLS reverse proxy in front (§4).
@@ -162,37 +162,37 @@ env file) counts as not set.
 
 | Flag / variable | Default | Meaning |
 |---|---|---|
-| `--listen` / `COOLPSONOTES_LISTEN` | `127.0.0.1:8080` | bind address (container image: `0.0.0.0:8080`) |
-| `--data-dir` / `COOLPSONOTES_DATA_DIR` | `./data` | holds `coolpsonotes.db` and automatic pre-migration backups (container image: `/data`) |
-| `--public-url` / `COOLPSONOTES_PUBLIC_URL` | `http://localhost:8080` | external URL; used for the OIDC redirect URI and device-login links |
-| `--web-dir` / `COOLPSONOTES_WEB_DIR` | unset | built browser client; unset = API only (container image: `/usr/share/coolpsonotes/web`) |
-| `--oidc-issuer` / `COOLPSONOTES_OIDC_ISSUER` | unset | issuer URL (discovery at `/.well-known/openid-configuration`) |
-| `--oidc-client-id` / `COOLPSONOTES_OIDC_CLIENT_ID` | unset | client id |
-| `--oidc-client-secret` / `COOLPSONOTES_OIDC_CLIENT_SECRET` | unset | client secret (omit for a public client; PKCE is always used) |
-| `--oidc-token-auth` / `COOLPSONOTES_OIDC_TOKEN_AUTH` | `auto` | how the secret is sent: `auto` (what the provider advertises), `client_secret_basic` or `client_secret_post` |
-| `--oidc-ca-file` / `COOLPSONOTES_OIDC_CA_FILE` | unset | extra CA certificates (PEM) to trust for the provider, e.g. a private CA; the system trust store is always used |
-| `--oidc-allow-unverified-email` / `COOLPSONOTES_OIDC_ALLOW_UNVERIFIED_EMAIL` | `false` | also accept e-mail addresses the provider doesn't mark `email_verified` |
-| `--oidc-scopes` / `COOLPSONOTES_OIDC_SCOPES` | `openid profile email` | requested scopes |
-| `--oidc-display-name` / `COOLPSONOTES_OIDC_DISPLAY_NAME` | `Single sign-on` | login button label |
-| `--dev-mode` / `COOLPSONOTES_DEV_MODE` | `false` | **development only**: password-less login as any user name (§9) |
-| `--dev-mode-anywhere` / `COOLPSONOTES_DEV_MODE_ANYWHERE` | `false` | allow dev mode on a non-loopback address, with an https URL or with OIDC (§9) |
-| `--admin` / `COOLPSONOTES_ADMINS` | empty | comma-separated `issuer\|subject` (or `dev:<name>`) administrators |
-| `--first-user-admin <true\|false>` / `COOLPSONOTES_FIRST_USER_ADMIN` | `true` | first person to sign in becomes administrator |
-| `--user-directory` / `COOLPSONOTES_USER_DIRECTORY` | `search` | `search` (name prefix or exact e-mail) or `exact-email` |
-| `--session-ttl-days` / `COOLPSONOTES_SESSION_TTL_DAYS` | `30` | browser session lifetime |
-| `--device-session-ttl-days` / `COOLPSONOTES_DEVICE_SESSION_TTL_DAYS` | `180` | CLI/desktop session lifetime |
-| `--agent-token-ttl-secs` / `COOLPSONOTES_AGENT_TOKEN_TTL_SECS` | `3600` | agent access token lifetime |
-| `--max-attachment-mb` / `COOLPSONOTES_MAX_ATTACHMENT_MB` | `25` | maximum attachment size |
-| `--max-update-kb` / `COOLPSONOTES_MAX_UPDATE_KB` | `2048` | maximum size of one encrypted update |
-| `--max-snapshot-kb` / `COOLPSONOTES_MAX_SNAPSHOT_KB` | 16 × the update limit, at least 32 MiB | maximum size of one snapshot (a note's full state; also how a change too large for one update still reaches others) |
-| `--snapshot-retention` / `COOLPSONOTES_SNAPSHOT_RETENTION` | `100` | revisions kept per document (never fewer than 2) |
-| `--snapshot-cooldown-secs` / `COOLPSONOTES_SNAPSHOT_COOLDOWN_SECS` | `30` | minimum time between two snapshots of one note by one person |
-| `--trust-proxy` / `COOLPSONOTES_TRUST_PROXY` | `false` | use `X-Forwarded-For` (or, without a usable one, `X-Real-IP`) for rate limiting (only behind your proxy, §4) |
-| `--rate-limit-rps` / `COOLPSONOTES_RATE_LIMIT_RPS` | `50` | API requests per second per IP (burst ×4) |
-| `--auth-rate-limit-per-min` / `COOLPSONOTES_AUTH_RATE_LIMIT_PER_MIN` | `30` | login/token requests per minute per IP |
-| `--metrics <true\|false>` / `COOLPSONOTES_METRICS` | `true` | expose Prometheus metrics at `/metrics`; `--metrics false` turns them off (`/metrics` then answers `404`) |
-| `--metrics-token` / `COOLPSONOTES_METRICS_TOKEN` | unset | require `Authorization: Bearer <token>` for `/metrics` |
-| `--log-format` / `COOLPSONOTES_LOG_FORMAT` | `pretty` | `json` for structured logs (container image: `json`); level via `COOLPSONOTES_LOG` (e.g. `info,sqlx=warn`) |
+| `--listen` / `NOTEKPR_LISTEN` | `127.0.0.1:8080` | bind address (container image: `0.0.0.0:8080`) |
+| `--data-dir` / `NOTEKPR_DATA_DIR` | `./data` | holds `notekpr.db` and automatic pre-migration backups (container image: `/data`) |
+| `--public-url` / `NOTEKPR_PUBLIC_URL` | `http://localhost:8080` | external URL; used for the OIDC redirect URI and device-login links |
+| `--web-dir` / `NOTEKPR_WEB_DIR` | unset | built browser client; unset = API only (container image: `/usr/share/notekpr/web`) |
+| `--oidc-issuer` / `NOTEKPR_OIDC_ISSUER` | unset | issuer URL (discovery at `/.well-known/openid-configuration`) |
+| `--oidc-client-id` / `NOTEKPR_OIDC_CLIENT_ID` | unset | client id |
+| `--oidc-client-secret` / `NOTEKPR_OIDC_CLIENT_SECRET` | unset | client secret (omit for a public client; PKCE is always used) |
+| `--oidc-token-auth` / `NOTEKPR_OIDC_TOKEN_AUTH` | `auto` | how the secret is sent: `auto` (what the provider advertises), `client_secret_basic` or `client_secret_post` |
+| `--oidc-ca-file` / `NOTEKPR_OIDC_CA_FILE` | unset | extra CA certificates (PEM) to trust for the provider, e.g. a private CA; the system trust store is always used |
+| `--oidc-allow-unverified-email` / `NOTEKPR_OIDC_ALLOW_UNVERIFIED_EMAIL` | `false` | also accept e-mail addresses the provider doesn't mark `email_verified` |
+| `--oidc-scopes` / `NOTEKPR_OIDC_SCOPES` | `openid profile email` | requested scopes |
+| `--oidc-display-name` / `NOTEKPR_OIDC_DISPLAY_NAME` | `Single sign-on` | login button label |
+| `--dev-mode` / `NOTEKPR_DEV_MODE` | `false` | **development only**: password-less login as any user name (§9) |
+| `--dev-mode-anywhere` / `NOTEKPR_DEV_MODE_ANYWHERE` | `false` | allow dev mode on a non-loopback address, with an https URL or with OIDC (§9) |
+| `--admin` / `NOTEKPR_ADMINS` | empty | comma-separated `issuer\|subject` (or `dev:<name>`) administrators |
+| `--first-user-admin <true\|false>` / `NOTEKPR_FIRST_USER_ADMIN` | `true` | first person to sign in becomes administrator |
+| `--user-directory` / `NOTEKPR_USER_DIRECTORY` | `search` | `search` (name prefix or exact e-mail) or `exact-email` |
+| `--session-ttl-days` / `NOTEKPR_SESSION_TTL_DAYS` | `30` | browser session lifetime |
+| `--device-session-ttl-days` / `NOTEKPR_DEVICE_SESSION_TTL_DAYS` | `180` | CLI/desktop session lifetime |
+| `--agent-token-ttl-secs` / `NOTEKPR_AGENT_TOKEN_TTL_SECS` | `3600` | agent access token lifetime |
+| `--max-attachment-mb` / `NOTEKPR_MAX_ATTACHMENT_MB` | `25` | maximum attachment size |
+| `--max-update-kb` / `NOTEKPR_MAX_UPDATE_KB` | `2048` | maximum size of one encrypted update |
+| `--max-snapshot-kb` / `NOTEKPR_MAX_SNAPSHOT_KB` | 16 × the update limit, at least 32 MiB | maximum size of one snapshot (a note's full state; also how a change too large for one update still reaches others) |
+| `--snapshot-retention` / `NOTEKPR_SNAPSHOT_RETENTION` | `100` | revisions kept per document (never fewer than 2) |
+| `--snapshot-cooldown-secs` / `NOTEKPR_SNAPSHOT_COOLDOWN_SECS` | `30` | minimum time between two snapshots of one note by one person |
+| `--trust-proxy` / `NOTEKPR_TRUST_PROXY` | `false` | use `X-Forwarded-For` (or, without a usable one, `X-Real-IP`) for rate limiting (only behind your proxy, §4) |
+| `--rate-limit-rps` / `NOTEKPR_RATE_LIMIT_RPS` | `50` | API requests per second per IP (burst ×4) |
+| `--auth-rate-limit-per-min` / `NOTEKPR_AUTH_RATE_LIMIT_PER_MIN` | `30` | login/token requests per minute per IP |
+| `--metrics <true\|false>` / `NOTEKPR_METRICS` | `true` | expose Prometheus metrics at `/metrics`; `--metrics false` turns them off (`/metrics` then answers `404`) |
+| `--metrics-token` / `NOTEKPR_METRICS_TOKEN` | unset | require `Authorization: Bearer <token>` for `/metrics` |
+| `--log-format` / `NOTEKPR_LOG_FORMAT` | `pretty` | `json` for structured logs (container image: `json`); level via `NOTEKPR_LOG` (e.g. `info,sqlx=warn`) |
 
 The server refuses to start without a login method (OIDC or dev mode).
 
@@ -232,8 +232,8 @@ group). Signing in never grants access to any vault by itself.
 identity_providers:
   oidc:
     clients:
-      - client_id: coolpsonotes
-        client_name: coolpsonotes
+      - client_id: notekpr
+        client_name: notekpr
         client_secret: '$pbkdf2-sha512$…'   # hash of the secret
         authorization_policy: two_factor
         redirect_uris: ['https://notes.example.com/api/v1/auth/oidc/callback']
@@ -244,9 +244,9 @@ identity_providers:
 ```
 
 Issuer: `https://auth.example.com`. Recent Authelia versions put the profile
-only in the userinfo response by default; coolpsonotes reads it from there.
+only in the userinfo response by default; notekpr reads it from there.
 
-**Keycloak**: create client `coolpsonotes`, *Client authentication* on,
+**Keycloak**: create client `notekpr`, *Client authentication* on,
 *Standard flow* only, valid redirect URI as above, advanced setting
 *Proof Key for Code Exchange* = S256. Issuer:
 `https://kc.example.com/realms/<realm>`.
@@ -259,16 +259,16 @@ confidential client, redirect URI as above, signing key selected, scopes
 
 Agents (AI assistants, automation) do not use the identity provider: their
 owners create them in Settings → AI agents, which issues OAuth client
-credentials from coolpsonotes itself (see [agents.md](agents.md)).
+credentials from notekpr itself (see [agents.md](agents.md)).
 
 ## 4. Reverse proxy and TLS
 
-coolpsonotes serves plain HTTP. TLS — required in production — comes from a
+notekpr serves plain HTTP. TLS — required in production — comes from a
 reverse proxy in front of it, whichever you use. What the server needs from
 it:
 
 * **HTTPS** for the public URL's host, forwarding every path to the server (Compose:
-  `127.0.0.1:8080`; Kubernetes: the `coolpsonotes` Service) — except
+  `127.0.0.1:8080`; Kubernetes: the `notekpr` Service) — except
   `/metrics` (below).
 * **WebSockets** at `/api/v1/ws`, open for a long time: allow idle timeouts
   well above 30 s (the browser pings every 20 s, the CLI and the server every
@@ -308,10 +308,10 @@ On a home network without public DNS, Caddy can issue certificates from its
 own certificate authority instead:
 
 ```sh
-export COOLPSONOTES_PUBLIC_URL=https://notes.home.arpa   # any name your devices resolve to this machine (router DNS, /etc/hosts)
+export NOTEKPR_PUBLIC_URL=https://notes.home.arpa   # any name your devices resolve to this machine (router DNS, /etc/hosts)
 export CADDYFILE=deploy/examples/caddy/Caddyfile.lan
 docker compose -f docker-compose.yml -f deploy/examples/caddy/compose.yml up -d --build
-# Caddy's root certificate, to install once on every device that uses coolpsonotes:
+# Caddy's root certificate, to install once on every device that uses notekpr:
 docker compose -f docker-compose.yml -f deploy/examples/caddy/compose.yml cp caddy:/data/caddy/pki/authorities/local/root.crt ./caddy-root.crt
 ```
 
@@ -321,7 +321,7 @@ CA). The CLI uses the operating system's trust store, so it works once the
 root is installed there.
 
 **Traefik on Kubernetes** ([`deploy/examples/traefik/ingressroute.yaml`](../deploy/examples/traefik/ingressroute.yaml)):
-an IngressRoute for the `coolpsonotes` Service with TLS from a cert-manager
+an IngressRoute for the `notekpr` Service with TLS from a cert-manager
 Certificate (or your own) and `/metrics` left out. Its comments say what to
 check on the entry point: that it knows the client's real address, and its
 timeouts for long-lived WebSockets and large uploads.
@@ -380,11 +380,11 @@ yourself right after installing. Administrators manage accounts in Settings →
 Administration, including giving other people the administrator role; they
 never see content.
 
-To name administrators up front instead, set `COOLPSONOTES_ADMINS` to
+To name administrators up front instead, set `NOTEKPR_ADMINS` to
 `issuer|subject` pairs: the issuer URL and your account's `sub` claim at the
 provider (in Keycloak, the user's ID; for other providers see their
 documentation). Signing in first is usually simpler. Removing someone from
-`COOLPSONOTES_ADMINS` does not take the role away; do that in Settings →
+`NOTEKPR_ADMINS` does not take the role away; do that in Settings →
 Administration.
 
 Don't reuse a development-mode data directory for real use: start with an
@@ -393,19 +393,19 @@ empty one.
 ## 6. Backup and restore
 
 Everything — accounts, memberships, encrypted notes, history, attachments and
-key envelopes — is in `coolpsonotes.db`. Note content in it is end-to-end
+key envelopes — is in `notekpr.db`. Note content in it is end-to-end
 encrypted, but the file still contains metadata; store backups securely.
 
 ```sh
 # consistent online backup (safe while the server runs)
-coolpsonotes-server backup --data-dir /var/lib/coolpsonotes --out /backups/coolpsonotes-$(date +%F).db
+notekpr-server backup --data-dir /var/lib/notekpr --out /backups/notekpr-$(date +%F).db
 # or timestamped into a directory (created if missing), keeping the newest 14
-coolpsonotes-server backup --data-dir /var/lib/coolpsonotes --out-dir /backups --keep 14
+notekpr-server backup --data-dir /var/lib/notekpr --out-dir /backups --keep 14
 ```
 
 `--out` needs an existing directory and a file name that doesn't exist yet.
-`--out-dir` names files `coolpsonotes-YYYYMMDD-HHMMSS.db` (UTC); `--keep`
-prunes only files named `coolpsonotes-*.db` there, so the automatic
+`--out-dir` names files `notekpr-YYYYMMDD-HHMMSS.db` (UTC); `--keep`
+prunes only files named `notekpr-*.db` there, so the automatic
 `pre-migration-*.db` backups (§7), which land in `<data dir>/backups`, stay
 until you delete them.
 
@@ -413,14 +413,14 @@ until you delete them.
 machine.
 
 ```sh
-docker compose exec coolpsonotes coolpsonotes-server backup --out-dir /data/backups --keep 14
-docker compose cp coolpsonotes:/data/backups ./backups      # then store ./backups elsewhere
+docker compose exec notekpr notekpr-server backup --out-dir /data/backups --keep 14
+docker compose cp notekpr:/data/backups ./backups      # then store ./backups elsewhere
 ```
 
 Schedule it with cron or a systemd timer on the host, for example daily:
 
 ```
-15 3 * * *  cd /srv/coolpsonotes && docker compose exec -T coolpsonotes coolpsonotes-server backup --out-dir /data/backups --keep 14 && docker compose cp coolpsonotes:/data/backups /srv/backups/coolpsonotes
+15 3 * * *  cd /srv/notekpr && docker compose exec -T notekpr notekpr-server backup --out-dir /data/backups --keep 14 && docker compose cp notekpr:/data/backups /srv/backups/notekpr
 ```
 
 If you replace the named volume with a host directory (`./data:/data`), make
@@ -429,18 +429,18 @@ it writable by the image's user: `sudo chown -R 65532:65532 ./data`.
 **Restore** (stop the server first):
 
 ```sh
-coolpsonotes-server restore --data-dir /var/lib/coolpsonotes --from /backups/coolpsonotes-2026-10-01.db
+notekpr-server restore --data-dir /var/lib/notekpr --from /backups/notekpr-2026-10-01.db
 
 # docker compose
-docker compose stop coolpsonotes
-docker compose cp ./backups/coolpsonotes-2026-10-01.db coolpsonotes:/data/backups/restore.db
-docker compose run --rm --no-deps coolpsonotes restore --from /data/backups/restore.db
-docker compose start coolpsonotes
+docker compose stop notekpr
+docker compose cp ./backups/notekpr-2026-10-01.db notekpr:/data/backups/restore.db
+docker compose run --rm --no-deps notekpr restore --from /data/backups/restore.db
+docker compose start notekpr
 ```
 
 The backup file and its directory must be writable by the server's user
 during the restore. `restore` checks integrity, moves the current database
-aside (`coolpsonotes.db.pre-restore-<timestamp>`), installs the backup and
+aside (`notekpr.db.pre-restore-<timestamp>`), installs the backup and
 applies migrations for the current version.
 
 What a restore means for people: notes come back as they were in the backup,
@@ -455,22 +455,22 @@ the same as `GET /me/export`: their vaults and the notes shared with them, as
 stored — to a new file (mode 0600), from the live database or from a backup:
 
 ```sh
-coolpsonotes-server export-user --data-dir /var/lib/coolpsonotes --user alice@example.com --out alice.json
-coolpsonotes-server export-user --backup /backups/coolpsonotes-2026-10-01.db --user alice@example.com --out alice.json
+notekpr-server export-user --data-dir /var/lib/notekpr --user alice@example.com --out alice.json
+notekpr-server export-user --backup /backups/notekpr-2026-10-01.db --user alice@example.com --out alice.json
 
 # docker compose
-docker compose exec coolpsonotes coolpsonotes-server export-user --user alice@example.com --out /data/alice.json
-docker compose cp coolpsonotes:/data/alice.json ./alice.json
+docker compose exec notekpr notekpr-server export-user --user alice@example.com --out /data/alice.json
+docker compose cp notekpr:/data/alice.json ./alice.json
 ```
 
 `--user` takes a user id, an e-mail address or a display name. A backup is
 read through a migrated temporary copy; the backup itself isn't changed.
 Nothing in the file is readable without the person's keys: they decrypt it
-offline with `coolpsonotes recover` ([recovery.md](recovery.md)).
+offline with `notekpr recover` ([recovery.md](recovery.md)).
 
 Users should additionally export important vaults as Markdown (vault
-settings → Export, or `coolpsonotes export`) — exports do not depend on
-coolpsonotes at all.
+settings → Export, or `notekpr export`) — exports do not depend on
+notekpr at all.
 
 ## 7. Upgrades
 
@@ -483,12 +483,12 @@ coolpsonotes at all.
    # docker compose
    git pull && docker compose build --pull && docker compose up -d
    # from source
-   git pull && cargo build --release --locked -p coolpsonotes-server && ./scripts/build-web.sh
+   git pull && cargo build --release --locked -p notekpr-server && ./scripts/build-web.sh
    # then install the binary and web client as in §1 and restart the service
    ```
 3. Clients are forward compatible within a protocol version (`/api/v1`).
 
-`coolpsonotes-server migrate` applies migrations without starting the server.
+`notekpr-server migrate` applies migrations without starting the server.
 
 **What people notice.** On SIGTERM the server tells every connected app it is
 restarting, finishes the requests under way and exits; the new one is up
@@ -504,14 +504,14 @@ proxy answers then (§4, "Holding requests during an update").
 ## 8. Monitoring
 
 * `GET /healthz` — process is alive. `GET /readyz` — database reachable.
-  `coolpsonotes-server healthcheck` probes `/readyz` (used by the image).
-* `GET /metrics` — Prometheus: `coolpsonotes_http_requests_total{method,status}`
+  `notekpr-server healthcheck` probes `/readyz` (used by the image).
+* `GET /metrics` — Prometheus: `notekpr_http_requests_total{method,status}`
   (`status` is the class: `2xx`, `4xx`, …),
-  `coolpsonotes_http_request_duration_seconds` (a summary with quantiles: no
-  histogram buckets are configured), `coolpsonotes_updates_total`,
-  `coolpsonotes_attachment_bytes_total`, `coolpsonotes_ws_connections` (live
-  connections) and `coolpsonotes_ws_connected_users` (people with at least
-  one), `coolpsonotes_rate_limited_total{scope}`,
+  `notekpr_http_request_duration_seconds` (a summary with quantiles: no
+  histogram buckets are configured), `notekpr_updates_total`,
+  `notekpr_attachment_bytes_total`, `notekpr_ws_connections` (live
+  connections) and `notekpr_ws_connected_users` (people with at least
+  one), `notekpr_rate_limited_total{scope}`,
   and on Linux the process's own `process_cpu_seconds_total` (a gauge) and
   `process_resident_memory_bytes`. Keep it internal (§4).
 * Logs: one line per request (method, redacted path, status, latency) plus
@@ -521,14 +521,14 @@ proxy answers then (§4, "Holding requests during an update").
 
 ## 9. Development mode
 
-`coolpsonotes-server --dev-mode` (or `docker compose -f docker-compose.dev.yml up`,
+`notekpr-server --dev-mode` (or `docker compose -f docker-compose.dev.yml up`,
 or `task dev`) lets anyone sign in as any user name without a password. It is
 meant for trying things out and testing multi-user features locally:
 
 * open `http://localhost:8080`, sign in as `alice`; open another tab and sign in
   as `bob` — each tab keeps its own session;
 * the CLI supports the same with
-  `coolpsonotes --profile bob login --server http://localhost:8080 --dev-user bob`.
+  `notekpr --profile bob login --server http://localhost:8080 --dev-user bob`.
 
 Safety rails:
 
@@ -536,7 +536,7 @@ Safety rails:
   address, has an `https` public URL or has OIDC configured — unless
   `--dev-mode-anywhere`. The dev compose file sets it, because its port is
   published on `127.0.0.1` only.
-* `docker-compose.dev.yml` is its own compose project (`coolpsonotes-dev`), so
+* `docker-compose.dev.yml` is its own compose project (`notekpr-dev`), so
   it can't replace production containers on the same machine.
 * When the server runs without dev mode, sessions of accounts created in dev
   mode are ended, and those accounts never count as "the first user" for the
@@ -548,14 +548,14 @@ deliberate exception, a demo that starts over on its own (§10).
 
 ## 10. A public demo
 
-To let a few people try coolpsonotes without accounts: the demo of
+To let a few people try notekpr without accounts: the demo of
 `task demo` (users, vaults, shared notes, history — [development.md](development.md#a-demo-with-data))
 on a server that deletes everything and starts over every hour.
 
 ```sh
-task docker:build:demo    # coolpsonotes-demo:latest — tag and push it to your registry
+task docker:build:demo    # notekpr-demo:latest — tag and push it to your registry
 # or for amd64 and arm64 at once, straight to your registry:
-docker buildx build --platform linux/amd64,linux/arm64 --target demo -t registry.example.com/coolpsonotes-demo:0.1.0 --push .
+docker buildx build --platform linux/amd64,linux/arm64 --target demo -t registry.example.com/notekpr-demo:0.1.0 --push .
 ```
 
 The project's own demo is published with `task docker:push:demo`: amd64
@@ -575,9 +575,9 @@ in development mode).
 On Kubernetes: [`deploy/kubernetes/demo.yaml`](../deploy/kubernetes/demo.yaml)
 (its own namespace; the data on an `emptyDir`; ready once the data is seeded,
 so the ingress waits during the reset). Set the image and `--public-url` to
-your host name and route to the `coolpsonotes-demo` Service with TLS as for
+your host name and route to the `notekpr-demo` Service with TLS as for
 the real server (§4). Elsewhere, any restart policy works the same, e.g.
-`docker run --restart always -p 127.0.0.1:8096:8080 coolpsonotes-demo --public-url https://demo.example.com`
+`docker run --restart always -p 127.0.0.1:8096:8080 notekpr-demo --public-url https://demo.example.com`
 behind your proxy. `--lifetime 30m` (after the image's own) resets more often.
 
 What to know before sharing the link:

@@ -1,17 +1,17 @@
-//! The `coolpsonotes` command line itself: confirmations, profile settings
+//! The `notekpr` command line itself: confirmations, profile settings
 //! and refusals that protect data.
 
 mod common;
 
 use clap::Parser;
 use common::*;
-use coolpsonotes_client::cli::Cli;
-use coolpsonotes_client::commands;
-use coolpsonotes_client::profile::ProfileStore;
+use notekpr_client::cli::Cli;
+use notekpr_client::commands;
+use notekpr_client::profile::ProfileStore;
 
 /// Run a command line for the test client `who` (its own config/data dirs).
 async fn run(srv: &TestServer, who: &str, args: &[&str]) -> anyhow::Result<()> {
-    let mut argv = vec!["coolpsonotes", "-q", "--profile", who];
+    let mut argv = vec!["notekpr", "-q", "--profile", who];
     argv.extend_from_slice(args);
     commands::run_in(Cli::try_parse_from(argv)?, srv.dirs(who)).await
 }
@@ -114,7 +114,7 @@ fn files(dir: &std::path::Path) -> std::collections::BTreeMap<std::path::PathBuf
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn commands_do_not_overwrite_a_running_daemons_local_copies() {
-    use coolpsonotes_client::profile::ProfileLock;
+    use notekpr_client::profile::ProfileLock;
     let srv = start().await;
     login(&srv, "alice").await;
     run(&srv, "alice", &["vault", "create", "Home"])
@@ -133,7 +133,7 @@ async fn commands_do_not_overwrite_a_running_daemons_local_copies() {
         .await
         .unwrap_err();
     assert!(
-        format!("{err:#}").contains("in use by another coolpsonotes process"),
+        format!("{err:#}").contains("in use by another notekpr process"),
         "{err:#}"
     );
     // A second daemon is refused right away.
@@ -163,8 +163,8 @@ async fn commands_do_not_overwrite_a_running_daemons_local_copies() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn leaving_uploads_first_and_can_remove_the_mirror() {
-    use coolpsonotes_client::manage;
-    use coolpsonotes_core::protocol::Role;
+    use notekpr_client::manage;
+    use notekpr_core::protocol::Role;
     let srv = start().await;
     let alice = login(&srv, "alice").await;
     login(&srv, "bob").await;
@@ -233,9 +233,9 @@ async fn leaving_uploads_first_and_can_remove_the_mirror() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_read_only_gateway_runs_no_changing_commands() {
-    use coolpsonotes_client::control;
-    use coolpsonotes_client::hub::{Hub, HubOptions};
-    use coolpsonotes_client::profile::ProfileLock;
+    use notekpr_client::control;
+    use notekpr_client::hub::{Hub, HubOptions};
+    use notekpr_client::profile::ProfileLock;
     let srv = start().await;
     login(&srv, "alice").await;
     run(&srv, "alice", &["vault", "create", "Home"])
@@ -279,9 +279,9 @@ async fn a_read_only_gateway_runs_no_changing_commands() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_gateway_logs_the_commands_handed_to_it() {
-    use coolpsonotes_client::audit::AuditLog;
-    use coolpsonotes_client::control;
-    use coolpsonotes_client::profile::ProfileLock;
+    use notekpr_client::audit::AuditLog;
+    use notekpr_client::control;
+    use notekpr_client::profile::ProfileLock;
     let srv = start().await;
     login(&srv, "alice").await;
     run(&srv, "alice", &["vault", "create", "Home"])
@@ -350,8 +350,8 @@ async fn a_gateway_logs_the_commands_handed_to_it() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn changing_commands_are_handed_to_the_running_daemon() {
-    use coolpsonotes_client::control;
-    use coolpsonotes_client::profile::ProfileLock;
+    use notekpr_client::control;
+    use notekpr_client::profile::ProfileLock;
     let srv = start().await;
     login(&srv, "alice").await;
     run(&srv, "alice", &["vault", "create", "Home"])
@@ -410,7 +410,7 @@ async fn changing_commands_are_handed_to_the_running_daemon() {
         .await
         .unwrap_err();
     assert!(
-        format!("{err:#}").contains("in use by another coolpsonotes process"),
+        format!("{err:#}").contains("in use by another notekpr process"),
         "{err:#}"
     );
     drop(lock);

@@ -7,12 +7,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
-use coolpsonotes_core::engine::{self, Applied, PinStatus, VaultMeta, VaultReplica};
-use coolpsonotes_core::keys::{AccountPublic, AccountSecret, VaultKeyring};
-use coolpsonotes_core::memberlog::{KeyCheckError, LogBody, LogEntry};
-use coolpsonotes_core::protocol::*;
-use coolpsonotes_sync::SnapshotAction;
-use coolpsonotes_sync::members::{self, MemberLog};
+use notekpr_core::engine::{self, Applied, PinStatus, VaultMeta, VaultReplica};
+use notekpr_core::keys::{AccountPublic, AccountSecret, VaultKeyring};
+use notekpr_core::memberlog::{KeyCheckError, LogBody, LogEntry};
+use notekpr_core::protocol::*;
+use notekpr_sync::SnapshotAction;
+use notekpr_sync::members::{self, MemberLog};
 use tokio::sync::{Mutex, OnceCell};
 
 use crate::api::{Api, ApiError, Credentials};
@@ -67,13 +67,11 @@ impl Session {
         let profiles = ProfileStore::new(dirs, profile)?;
         let p = profiles.require()?;
         let user_id = p.user_id.clone().ok_or_else(|| {
-            anyhow!(
-                "profile '{profile}' is not signed in; run `coolpsonotes --profile {profile} login`"
-            )
+            anyhow!("profile '{profile}' is not signed in; run `notekpr --profile {profile} login`")
         })?;
         if p.device_pending {
             bail!(
-                "this device is still waiting for approval; run `coolpsonotes --profile {profile} login` again to \
+                "this device is still waiting for approval; run `notekpr --profile {profile} login` again to \
                  finish (approve it from another device, or use your recovery key)"
             );
         }
@@ -85,7 +83,7 @@ impl Session {
         crate::fsutil::remove_stale_temp_files(&dirs.profiles_dir(), 1, stale);
         let account = secrets.load_account(&user_id)?.ok_or_else(|| {
             anyhow!(
-                "no account keys on this device for profile '{profile}'; run `coolpsonotes --profile {profile} login`"
+                "no account keys on this device for profile '{profile}'; run `notekpr --profile {profile} login`"
             )
         })?;
         let creds = match p.kind {
@@ -368,7 +366,7 @@ impl Session {
                 &self.user_id,
                 &id,
                 body,
-                coolpsonotes_core::now_ms(),
+                notekpr_core::now_ms(),
             )
             .ok_or_else(|| anyhow!("the vault has no membership log"))?;
         self.api
@@ -480,7 +478,7 @@ impl Session {
                 &self.user_id,
                 &id,
                 body,
-                coolpsonotes_core::now_ms(),
+                notekpr_core::now_ms(),
             )
             .ok_or_else(|| anyhow!("the vault has a membership log already"))?;
         self.api
@@ -537,7 +535,7 @@ impl Session {
             &self.user_id,
             v.id(),
             body,
-            coolpsonotes_core::now_ms(),
+            notekpr_core::now_ms(),
         )
     }
 
@@ -604,7 +602,7 @@ impl Session {
             merge_applied(&mut all, v.apply_changes(&ch));
             since = ch.next_since;
             if !ch.has_more {
-                v.last_sync = Some(coolpsonotes_core::now_ms());
+                v.last_sync = Some(notekpr_core::now_ms());
                 if let Err(e) = v.save() {
                     ui::warn(&format!("could not save the local copy: {e:#}"));
                 }
@@ -845,7 +843,7 @@ impl Session {
     }
 
     /// Updates set aside as too large go out in snapshots of their notes,
-    /// which carry them to everyone (`coolpsonotes_sync::carrier_now`).
+    /// which carry them to everyone (`notekpr_sync::carrier_now`).
     /// Returns how many notes went out.
     async fn carry(&self, vault: &SharedVault) -> Result<usize> {
         let (id, candidates) = {
@@ -865,7 +863,7 @@ impl Session {
         for oid in candidates {
             let carrier = {
                 let v = vault.lock().await;
-                coolpsonotes_sync::carrier_now(&v.replica, &v.outbox, &oid, None, &v.limits())
+                notekpr_sync::carrier_now(&v.replica, &v.outbox, &oid, None, &v.limits())
             };
             let Some(mut c) = carrier else { continue };
             members::sign_snapshot(&self.account, &id, &oid, &mut c.request);
@@ -919,7 +917,7 @@ impl Session {
         }
         let action = {
             let v = vault.lock().await;
-            match coolpsonotes_sync::snapshot_action(&v.replica, &v.outbox, oid, None) {
+            match notekpr_sync::snapshot_action(&v.replica, &v.outbox, oid, None) {
                 Some(SnapshotAction::Snapshot(mut req)) => {
                     members::sign_snapshot(&self.account, id, oid, &mut req);
                     SnapshotAction::Snapshot(req)
@@ -1059,7 +1057,7 @@ impl Session {
             match self.verify_user(&m.user) {
                 Ok(Some(vu)) if vu.pin == PinStatus::Changed => ui::warn(&format!(
                     "NOT sharing keys with {}: their account key changed since it was pinned (now {}). \
-                     Verify it with them, then run `coolpsonotes vault share` again with --accept-new-key",
+                     Verify it with them, then run `notekpr vault share` again with --accept-new-key",
                     m.user.display_name, vu.fingerprint
                 )),
                 Ok(Some(vu)) => {
@@ -1166,7 +1164,7 @@ impl Session {
             };
             let mut recipients = std::collections::HashMap::new();
             for oid in keyed.iter().filter(|o| shared.contains(*o)) {
-                let shares: Vec<coolpsonotes_core::protocol::ObjectShareInfo> = match self
+                let shares: Vec<notekpr_core::protocol::ObjectShareInfo> = match self
                     .api
                     .get(&format!("/vaults/{id}/objects/{oid}/shares"))
                     .await
@@ -1234,7 +1232,7 @@ impl Session {
                         &self.user_id,
                         &id,
                         body,
-                        coolpsonotes_core::now_ms(),
+                        notekpr_core::now_ms(),
                     )
                 });
                 (req, ring, rings)
@@ -1269,7 +1267,7 @@ impl Session {
                         ui::warn(&format!(
                             "the new key of '{}' went to everyone except {}: their account key changed (or the \
                              owner never added them). Verify their fingerprint with them, then give them access \
-                             again with `coolpsonotes vault share` (or `share-note` for a single note) and \
+                             again with `notekpr vault share` (or `share-note` for a single note) and \
                              --accept-new-key",
                             v.name(),
                             not_given.join(", ")
@@ -1291,13 +1289,13 @@ fn warn_too_large(vault_name: &str, n: usize, max: usize) {
     ui::warn(&format!(
         "vault '{vault_name}': {n} change(s) are larger than the server accepts ({max} bytes per change); they \
          go out with a copy of the whole note instead. If even that is too large, they stay on this device — \
-         ask the administrator to raise COOLPSONOTES_MAX_UPDATE_KB. Other changes keep syncing"
+         ask the administrator to raise NOTEKPR_MAX_UPDATE_KB. Other changes keep syncing"
     ));
 }
 
 /// Uniformly random duration in `[0, max)`.
 pub fn random_duration(max: Duration) -> Duration {
-    let r = u64::from_le_bytes(coolpsonotes_core::crypto::random_bytes::<8>());
+    let r = u64::from_le_bytes(notekpr_core::crypto::random_bytes::<8>());
     let ms = max.as_millis().max(1) as u64;
     Duration::from_millis(r % ms)
 }

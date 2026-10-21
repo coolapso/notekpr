@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""Browser end-to-end tests for coolpsonotes (stdlib + chromedriver only).
+"""Browser end-to-end tests for notekpr (stdlib + chromedriver only).
 
 Starts a development-mode server and chromedriver, then drives several
 independent headless Chromium profiles as different users.
 
-    python3 tests/e2e/suite.py --server target/debug/coolpsonotes-server --web dist/web
+    python3 tests/e2e/suite.py --server target/debug/notekpr-server --web dist/web
     python3 tests/e2e/suite.py -k collab        # run only matching tests
 
-Screenshots are written to $CPN_E2E_OUT (default target/e2e).
+Screenshots are written to $NOTEKPR_E2E_OUT (default target/e2e).
 """
 import argparse, json, os, shutil, socket, subprocess, sys, tempfile, time, traceback
 
@@ -26,11 +26,11 @@ def free_port():
 class Env:
     def __init__(self, server, web):
         self.server_bin, self.web = os.path.abspath(server), os.path.abspath(web)
-        self.data = tempfile.mkdtemp(prefix="cpn-e2e-")
+        self.data = tempfile.mkdtemp(prefix="notekpr-e2e-")
         self.port, self.wd_port = free_port(), free_port()
         self.url = f"http://localhost:{self.port}/"
-        os.environ["CPN_URL"] = self.url
-        os.environ["CPN_WEBDRIVER"] = f"http://127.0.0.1:{self.wd_port}"
+        os.environ["NOTEKPR_URL"] = self.url
+        os.environ["NOTEKPR_WEBDRIVER"] = f"http://127.0.0.1:{self.wd_port}"
         self.server = None
         self.driver = subprocess.Popen([shutil.which("chromedriver") or "chromedriver", f"--port={self.wd_port}"],
                                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -316,7 +316,7 @@ def test_devices_and_recovery(env):
         b3.js("window.confirm = () => true")
         b3.click_el(forget)
         b3.find(".dev-box input", 15)
-        check(b3.js("return Object.keys(localStorage).filter(k => k.startsWith('cpn.device.') || k.startsWith('cpn.pending.') || k.startsWith('cpn.newkeys.') || k.startsWith('cpn.head.')).length") == 0,
+        check(b3.js("return Object.keys(localStorage).filter(k => k.startsWith('notekpr.device.') || k.startsWith('notekpr.pending.') || k.startsWith('notekpr.newkeys.') || k.startsWith('notekpr.head.')).length") == 0,
               "forgetting the browser deletes its device key and sync data")
         b3.type(".dev-box input", name)
         b3.click(".dev-box button[type=submit]")
@@ -503,14 +503,14 @@ def test_attachments(env):
 
 API_GET = """
 window.__api = undefined;
-fetch('/api/v1' + arguments[0], {headers: {Authorization: 'Bearer ' + sessionStorage.getItem('cpn.token')}})
+fetch('/api/v1' + arguments[0], {headers: {Authorization: 'Bearer ' + sessionStorage.getItem('notekpr.token')}})
   .then(r => r.ok ? r.json() : null).then(j => { window.__api = j; }, () => { window.__api = null; });
 """
 
 
 API_DELETE = """
 window.__api = undefined;
-fetch('/api/v1' + arguments[0], {method: 'DELETE', headers: {Authorization: 'Bearer ' + sessionStorage.getItem('cpn.token')}})
+fetch('/api/v1' + arguments[0], {method: 'DELETE', headers: {Authorization: 'Bearer ' + sessionStorage.getItem('notekpr.token')}})
   .then(r => { window.__api = r.status; }, () => { window.__api = 0; });
 """
 
@@ -595,7 +595,7 @@ def test_note_sharing(env):
         path = a.js("return location.pathname")
         vid, nid = path.split("/")[2], path.split("/")[3]
         # The note has its own key from the start: none of it under the vault key.
-        a.wait("return Object.keys(localStorage).filter(k => k.startsWith('cpn.pending.') || k.startsWith('cpn.newkeys.')).length === 0", 15, "olga's edits are sent")
+        a.wait("return Object.keys(localStorage).filter(k => k.startsWith('notekpr.pending.') || k.startsWith('notekpr.newkeys.')).length === 0", 15, "olga's edits are sent")
         keys = None
         for _ in range(50):
             keys = api_get(a, f"/vaults/{vid}/keys")
@@ -838,7 +838,7 @@ def test_editor_safety(env):
 
 IDB_READ = """
 window.__idb = null;
-const r = indexedDB.open('coolpsonotes');
+const r = indexedDB.open('notekpr');
 r.onsuccess = () => {
   const db = r.result;
   const st = db.transaction('cache').objectStore('cache');
@@ -887,7 +887,7 @@ def test_local_copy(env):
         check("tent and stove" not in copy["text"] and "Packing" not in copy["text"], "the local copy is encrypted")
         b.js("window.__locks = null; navigator.locks.query().then(q => window.__locks = q.held.map(l => l.name))")
         b.wait("return window.__locks !== null", 10, "querying locks")
-        check(sum(n.startswith("coolpsonotes-cache-") for n in b.js("return window.__locks")) == 1, "one tab holds the right to write the copy")
+        check(sum(n.startswith("notekpr-cache-") for n in b.js("return window.__locks")) == 1, "one tab holds the right to write the copy")
         # Away while the note changes, then back: the copy is shown and catches up.
         b.go("about:blank")
         start = "const ed=document.querySelector('.ed'); ed.focus(); const s=getSelection(); s.selectAllChildren(ed); s.collapseToEnd();"
@@ -998,7 +998,7 @@ def test_offline_tabs(env):
         check(True, "unsent changes of a closed tab survive another tab's")
         # Acknowledged by the server: nothing unsent is left, the closed tab's
         # stored changes included.
-        b.wait("return Object.keys(localStorage).filter(k => k.startsWith('cpn.pending.')).length === 0", 30, "everything sent")
+        b.wait("return Object.keys(localStorage).filter(k => k.startsWith('notekpr.pending.')).length === 0", 30, "everything sent")
         check(True, "the taken-over changes are sent and their storage is cleared")
         check(not severe_logs(b), "no browser errors")
     finally:
@@ -1016,7 +1016,7 @@ def test_offline_start(env):
         b.find(".offline-toggle", 15)
         b.js("window.confirm = () => true")
         b.click(".offline-toggle")
-        b.wait("return !!navigator.serviceWorker.controller && Object.keys(localStorage).some(k => k.startsWith('cpn.offline.data.'))", 20,
+        b.wait("return !!navigator.serviceWorker.controller && Object.keys(localStorage).some(k => k.startsWith('notekpr.offline.data.'))", 20,
                "the offline setting to take effect")
         check(True, "offline use can be turned on")
         env.stop_server()
@@ -1028,9 +1028,9 @@ def test_offline_start(env):
         b.js(end)
         b.keys(" and a stove")
         time.sleep(1)
-        check(b.js("return Object.keys(localStorage).some(k => k.startsWith('cpn.pending.'))"), "offline edits are kept")
+        check(b.js("return Object.keys(localStorage).some(k => k.startsWith('notekpr.pending.'))"), "offline edits are kept")
         env.start_server()
-        b.wait("return Object.keys(localStorage).filter(k => k.startsWith('cpn.pending.')).length === 0", 60, "the edit to sync")
+        b.wait("return Object.keys(localStorage).filter(k => k.startsWith('notekpr.pending.')).length === 0", 60, "the edit to sync")
         check(True, "edits made after an offline start sync when the server is back")
         b.go(note_url)
         b.wait("return document.querySelector('.ed') && document.querySelector('.ed').textContent.includes('and a stove')", 20, "the synced note")
@@ -1039,7 +1039,7 @@ def test_offline_start(env):
         check(b.js("return document.querySelector('.offline-toggle').checked"), "the setting shows as on")
         b.click(".offline-toggle")
         b.js("window.__regs = null; navigator.serviceWorker.getRegistrations().then(r => window.__regs = r.length)")
-        b.wait("return !Object.keys(localStorage).some(k => k.startsWith('cpn.offline.')) && window.__regs !== null", 20, "the offline data to go")
+        b.wait("return !Object.keys(localStorage).some(k => k.startsWith('notekpr.offline.')) && window.__regs !== null", 20, "the offline data to go")
         b.wait("navigator.serviceWorker.getRegistrations().then(r => window.__regs = r.length); return window.__regs === 0", 20, "the app copy to go")
         check(True, "turning it off removes the stored keys and the app copy")
         check(not severe_logs(b), "no browser errors")
@@ -1219,7 +1219,7 @@ def test_vault_icons(env):
         check(w == h == 128 and src == "data:image/", f"an uploaded image becomes a 128 px square picture ({w}×{h})")
         b.wait("const c = " + shared_card + "; return !!c.querySelector('img.vault-pic')", 15, "the member's card")
         check(True, "members see the picture too")
-        stored = b"".join(open(os.path.join(env.data, f), "rb").read() for f in os.listdir(env.data) if f.startswith("coolpsonotes.db"))
+        stored = b"".join(open(os.path.join(env.data, f), "rb").read() for f in os.listdir(env.data) if f.startswith("notekpr.db"))
         check("🦊".encode() not in stored and "🌱".encode() not in stored and b'"picture"' not in stored,
               "the server only ever stores icon and picture encrypted")
         a.click(".icon-remove")
@@ -1589,7 +1589,7 @@ TESTS = [test_onboarding, test_collab, test_devices_and_recovery, test_features,
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--server", default="target/debug/coolpsonotes-server")
+    ap.add_argument("--server", default="target/debug/notekpr-server")
     ap.add_argument("--web", default="dist/web")
     ap.add_argument("-k", default="")
     args = ap.parse_args()

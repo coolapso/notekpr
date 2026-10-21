@@ -8,18 +8,18 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Result, anyhow, bail};
-use coolpsonotes_core::b64;
-use coolpsonotes_core::doc::{self, Entry, EntryKind, NoteDoc};
-use coolpsonotes_core::engine::{Applied, Pending, VaultMeta, VaultReplica};
-use coolpsonotes_core::keys::{AccountSecret, VaultKey, VaultKeyring};
-use coolpsonotes_core::protocol::{
+use notekpr_core::b64;
+use notekpr_core::doc::{self, Entry, EntryKind, NoteDoc};
+use notekpr_core::engine::{Applied, Pending, VaultMeta, VaultReplica};
+use notekpr_core::keys::{AccountSecret, VaultKey, VaultKeyring};
+use notekpr_core::protocol::{
     ChangesResponse, INDEX_OBJECT_ID, PushResult, REJECT_PURGED, RejectedUpdate, Role, Snapshot,
     Update, comments_note, comments_object,
 };
-use coolpsonotes_core::textdiff::{self, Edit};
-use coolpsonotes_core::{comments, markdown, now_ms, order, paths, random_id, search};
-use coolpsonotes_sync::members::MemberLog;
-use coolpsonotes_sync::{Limits, Outbox, Plan, Reaction};
+use notekpr_core::textdiff::{self, Edit};
+use notekpr_core::{comments, markdown, now_ms, order, paths, random_id, search};
+use notekpr_sync::members::MemberLog;
+use notekpr_sync::{Limits, Outbox, Plan, Reaction};
 
 use crate::store::{StoredState, VaultStore};
 
@@ -75,12 +75,12 @@ pub struct Vault {
     pub read_only: Option<String>,
     pub pending_blobs: BTreeSet<String>,
     pub last_sync: Option<i64>,
-    /// What to upload next (`coolpsonotes_sync`). Its `held` updates — too
+    /// What to upload next (`notekpr_sync`). Its `held` updates — too
     /// large for the server — are kept (and applied locally), not uploaded,
     /// so they never block the rest of the queue; stored as `quarantine`.
     pub outbox: Outbox,
     /// The vault's verified membership log (loaded from the server per
-    /// session; `coolpsonotes_sync::members`).
+    /// session; `notekpr_sync::members`).
     pub log: MemberLog,
     /// The last log entry verified here, `(seq, hash)`: kept across sessions.
     pub log_seen: Option<(u64, Vec<u8>)>,
@@ -120,9 +120,9 @@ pub struct Keys {
 }
 
 /// Apply text edits to a note as one or more updates within `budget`
-/// bytes each (see `coolpsonotes_sync::edits`).
+/// bytes each (see `notekpr_sync::edits`).
 pub fn apply_edits_chunked(doc: &NoteDoc, edits: &[Edit], budget: usize) -> Vec<Vec<u8>> {
-    coolpsonotes_sync::edits::apply_chunked(doc, edits, budget)
+    notekpr_sync::edits::apply_chunked(doc, edits, budget)
 }
 
 impl Vault {
@@ -504,13 +504,10 @@ impl Vault {
 
     /// Check content against `authors` (from the vault's log) from now on,
     /// and what waited for a fresh log once more (refused if it still fails).
-    pub fn set_authors(
-        &mut self,
-        authors: Option<coolpsonotes_core::memberlog::Authors>,
-    ) -> Applied {
+    pub fn set_authors(&mut self, authors: Option<notekpr_core::memberlog::Authors>) -> Applied {
         let (a, errors) = self.replica.set_authors(authors);
         for e in &errors {
-            if matches!(e, coolpsonotes_core::engine::EngineError::Author(_)) {
+            if matches!(e, notekpr_core::engine::EngineError::Author(_)) {
                 tracing::warn!(vault = %self.replica.id, "refused a change: {e}");
             }
         }
@@ -632,7 +629,7 @@ impl Vault {
             self.replica.seq = self.replica.seq.min(head);
             self.replica.max_head_seen = head;
         } else {
-            let queued = coolpsonotes_sync::recover_from_rollback(&mut self.replica, head);
+            let queued = notekpr_sync::recover_from_rollback(&mut self.replica, head);
             if queued > 0 {
                 self.dirty_pending = true;
                 self.dirty_objects.extend(
@@ -1587,13 +1584,12 @@ pub fn fork_note(state: &[u8]) -> Result<NoteDoc> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use coolpsonotes_core::keys::AccountSecret;
+    use notekpr_core::keys::AccountSecret;
 
     fn vault(dir: &std::path::Path) -> Vault {
         let account = AccountSecret::generate();
         let (req, ring) =
-            coolpsonotes_core::engine::new_vault(&account, "u1", &VaultMeta::named("T"), 1)
-                .unwrap();
+            notekpr_core::engine::new_vault(&account, "u1", &VaultMeta::named("T"), 1).unwrap();
         let key = std::sync::Arc::new(crate::secrets::LocalKey::load_or_create(dir).unwrap());
         let store = VaultStore::new(dir.join("vaults"), key, &req.id).unwrap();
         Vault::new(

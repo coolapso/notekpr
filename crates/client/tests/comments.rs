@@ -3,9 +3,9 @@
 mod common;
 
 use common::*;
-use coolpsonotes_client::vault::CommentAct;
-use coolpsonotes_client::{manage, ops};
-use coolpsonotes_core::protocol::Role;
+use notekpr_client::vault::CommentAct;
+use notekpr_client::{manage, ops};
+use notekpr_core::protocol::Role;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn viewers_comment_and_everyone_sees_the_threads() {
@@ -126,8 +126,8 @@ async fn viewers_comment_and_everyone_sees_the_threads() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_note_is_shared_with_its_comments_unless_told_otherwise() {
-    use coolpsonotes_client::note_shares;
-    use coolpsonotes_core::protocol::ChangesResponse;
+    use notekpr_client::note_shares;
+    use notekpr_core::protocol::ChangesResponse;
     let srv = start().await;
     let alice = login(&srv, "alice").await;
     let rita = login(&srv, "rita").await;
@@ -149,7 +149,7 @@ async fn a_note_is_shared_with_its_comments_unless_told_otherwise() {
         let id = |p: &str| g.find(p).unwrap().1.id;
         (g.id().to_string(), id("Trip"), id("Diary"))
     };
-    let comments_for = |who: &std::sync::Arc<coolpsonotes_client::session::Session>, note: &str| {
+    let comments_for = |who: &std::sync::Arc<notekpr_client::session::Session>, note: &str| {
         let (who, path) = (
             who.clone(),
             format!("/vaults/{vid}/objects/{note}/changes?since=0"),

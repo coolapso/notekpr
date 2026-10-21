@@ -4,7 +4,7 @@
 //! encrypted to each recipient), plus the chains linking each epoch to the
 //! previous one.
 
-use coolpsonotes_core::protocol::{
+use notekpr_core::protocol::{
     ChainLink, KeyEnvelope, ObjectChainLink, ObjectKeyEnvelope, ObjectKeysResponse, Role,
     VaultKeysResponse,
 };
@@ -188,7 +188,7 @@ pub async fn document_keys(
     } else {
         super::shares::share_from(db, vault_id, object_id)
             .await?
-            .unwrap_or(coolpsonotes_core::keys::FIRST_DOC_EPOCH)
+            .unwrap_or(notekpr_core::keys::FIRST_DOC_EPOCH)
     };
     let (member_envelopes, shared) = if member {
         let rows = sqlx::query("SELECT epoch, envelope FROM object_keys WHERE vault_id = ? AND object_id = ? AND user_id = '' ORDER BY epoch")

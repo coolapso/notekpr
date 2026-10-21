@@ -1,6 +1,6 @@
 # Desktop and command-line client
 
-`coolpsonotes` is the native client (Linux first; it also builds for macOS and
+`notekpr` is the native client (Linux first; it also builds for macOS and
 Windows). It keeps an **encrypted local replica** of your vaults for offline
 use, syncs live over the WebSocket, can **mirror vaults as ordinary Markdown
 files** you edit with Neovim, VS Code or Obsidian, and imports/exports plain
@@ -29,9 +29,9 @@ ciphertext.
 Requires a Rust toolchain (1.94+). No Node.js or other tooling.
 
 ```sh
-cargo build --release -p coolpsonotes-client
-install -m 0755 target/release/coolpsonotes ~/.local/bin/
-coolpsonotes --help
+cargo build --release -p notekpr-client
+install -m 0755 target/release/notekpr ~/.local/bin/
+notekpr --help
 ```
 
 ## 2. Signing in
@@ -39,19 +39,19 @@ coolpsonotes --help
 ### With your identity provider (normal use)
 
 ```sh
-coolpsonotes login --server https://notes.example.com
+notekpr login --server https://notes.example.com
 ```
 
 The client starts an OAuth 2.0 device authorization (RFC 8628) and prints a
 link and a short code. Open the link in a browser where you are signed in to
-the coolpsonotes web app (via your OIDC provider), check that the code matches
+the notekpr web app (via your OIDC provider), check that the code matches
 and approve. The client polls the server (honouring `interval`/`slow_down`)
 and receives a session token. Nothing is typed into the terminal, so this also
 works over SSH.
 
 `--server` is only needed for a profile's first login; later ones use the
 server it remembers. `--device-name NAME` sets the name shown in your device
-list (default: `coolpsonotes CLI on <hostname>`).
+list (default: `notekpr CLI on <hostname>`).
 
 ### Development mode (no OIDC) and several users side by side
 
@@ -60,19 +60,19 @@ useful for testing sharing between several people on one machine. Each
 **profile** is an independent identity with its own keys and data:
 
 ```sh
-cargo run -p coolpsonotes-server -- --dev-mode          # http://127.0.0.1:8080
+cargo run -p notekpr-server -- --dev-mode          # http://127.0.0.1:8080
 
-coolpsonotes --profile alice login --server http://127.0.0.1:8080 --dev-user alice
-coolpsonotes --profile bob   login --server http://127.0.0.1:8080 --dev-user bob
+notekpr --profile alice login --server http://127.0.0.1:8080 --dev-user alice
+notekpr --profile bob   login --server http://127.0.0.1:8080 --dev-user bob
 
-coolpsonotes -p alice vault create "Family"
-coolpsonotes -p alice vault share Family bob --role editor
-echo "# Groceries" | coolpsonotes -p alice write Family Groceries.md
-coolpsonotes -p bob cat Family Groceries
+notekpr -p alice vault create "Family"
+notekpr -p alice vault share Family bob --role editor
+echo "# Groceries" | notekpr -p alice write Family Groceries.md
+notekpr -p bob cat Family Groceries
 ```
 
-`--profile` can also be set with `COOLPSONOTES_PROFILE`; the default profile is
-`default`. `coolpsonotes profiles` lists them. `--dev-user` is refused unless
+`--profile` can also be set with `NOTEKPR_PROFILE`; the default profile is
+`default`. `notekpr profiles` lists them. `--dev-user` is refused unless
 the server reports development mode in `/api/v1/info`.
 
 Plain `http://` is only accepted for `localhost`, `127.0.0.1` and `::1`; any
@@ -94,7 +94,7 @@ ciphertexts, and prints the recovery key once:
 
 Store it in a password manager or on paper. It is the only way back in if you
 lose every device; nobody, including the server administrator, can recover
-your notes without it. Replace it any time with `coolpsonotes recovery rotate`
+your notes without it. Replace it any time with `notekpr recovery rotate`
 (it asks first; `--yes` skips that).
 
 The keys are saved (sealed) on this device before anything is uploaded. If
@@ -110,16 +110,16 @@ verification code:
 
 ```
 This device must be approved by one of your other devices.
-On a signed-in device run `coolpsonotes devices approve 6225…` (or open Devices in the web app)
+On a signed-in device run `notekpr devices approve 6225…` (or open Devices in the web app)
 and approve only if it shows this verification code:
 
     HORY-OK2F-B62Y
 ```
 
-Approve it from another device — `coolpsonotes devices approve <id>` shows the
+Approve it from another device — `notekpr devices approve <id>` shows the
 same code and asks for confirmation (`--yes` skips the prompt) — or type your
 recovery key at the prompt (or pass `--recovery-key-file FILE`, or set
-`COOLPSONOTES_RECOVERY_KEY`) to unlock the account and approve the device
+`NOTEKPR_RECOVERY_KEY`) to unlock the account and approve the device
 yourself. The key is never accepted as a command-line argument, which shells
 keep in their history. If you interrupt the wait, run `login` again: it resumes with the
 same pending device.
@@ -135,20 +135,20 @@ directory, never deleted) and enrolls the computer as a new device.
 
 ### Logging out
 
-* `coolpsonotes logout` ends the session; local encrypted copies stay (read
+* `notekpr logout` ends the session; local encrypted copies stay (read
   them offline; `login` again to sync).
-* `coolpsonotes logout --forget` also removes this device from the account and
+* `notekpr logout --forget` also removes this device from the account and
   deletes the profile and all of its local data. It uploads queued changes
   first; if some cannot be uploaded (offline, too large) it says how many
   would be lost before asking (`--yes` confirms). The decrypted Markdown
   mirror folders of the profile are deleted only when you agree to it at the
   prompt or pass `--remove-mirror`; otherwise they are left in place (and
   named). `vault leave` works the same way for one vault.
-* `coolpsonotes devices list | approve <id> | revoke <id>` manages devices
+* `notekpr devices list | approve <id> | revoke <id>` manages devices
   (`approve` and `revoke` ask first; `--yes` skips that). Revoking a device
   ends its sessions; if it might be compromised, also rotate the keys of
   shared vaults (`vault rotate`).
-* `coolpsonotes status` shows profile, server, account fingerprint, devices,
+* `notekpr status` shows profile, server, account fingerprint, devices,
   vaults, pending changes and sync state (`--json` for scripts).
 
 ## 3. Everyday commands
@@ -188,7 +188,7 @@ unreachable. Scripts sending many commands quickly may hit the server's rate
 limit: commands then wait as long as the server says and retry (for up to
 30 s) instead of failing.
 
-**One process per profile.** Only one coolpsonotes process at a time may own
+**One process per profile.** Only one notekpr process at a time may own
 a profile's local copies (two would overwrite each other's files and lose
 queued or received changes). While `sync` or `gateway` runs, read commands
 (`ls`, `cat`, `search`, `backlinks`, `status`, `export`, `history`, `trash
@@ -204,7 +204,7 @@ folder, readable by you only). It runs them only for vaults it keeps
 refuses every command handed to it ("the running gateway is read-only: it
 makes no changes"). `sync --once` and `logout --forget` are never handed
 over: they wait up to 3 seconds for another one-shot command and then stop
-with "profile … is in use by another coolpsonotes process", as do all
+with "profile … is in use by another notekpr process", as do all
 changing commands while an older version of the daemon runs. Commands that
 don't use the local copies run right away, whatever else is running:
 `login`, `logout` (without `--forget`), `profiles`, `devices …`,
@@ -230,11 +230,11 @@ lists them on its *Quick notes* page (the sidebar's *Quick notes* entry;
 archived (moved to `Quick notes/Archive/`).
 
 ```sh
-coolpsonotes quick Call the dentist about Tuesday   # words are joined with spaces
-echo "Gift ideas: a kite" | coolpsonotes quick      # or the text from stdin
-coolpsonotes quick --vault Work "Ask about the release date"
-coolpsonotes quick --list                           # newest first: name and first line
-coolpsonotes quick --list --archived --limit 50 --json
+notekpr quick Call the dentist about Tuesday   # words are joined with spaces
+echo "Gift ideas: a kite" | notekpr quick      # or the text from stdin
+notekpr quick --vault Work "Ask about the release date"
+notekpr quick --list                           # newest first: name and first line
+notekpr quick --list --archived --limit 50 --json
 ```
 
 A new quick note is named by the local time, e.g.
@@ -254,19 +254,19 @@ For a step-by-step guide to working in Obsidian, Neovim or any other editor
 with an always-running mirror, see [own-editor.md](own-editor.md).
 
 ```sh
-coolpsonotes sync                       # encrypted replicas, live (+ the remembered mirror, see below)
-coolpsonotes sync --dir ~/Notes         # + plaintext Markdown mirror, live; remembered for next time
-coolpsonotes sync --dir ~/Notes --once  # catch up, ingest disk changes, push, exit
-coolpsonotes sync --vault Family        # restrict to some vaults (repeatable)
-coolpsonotes sync --no-dir              # forget the remembered mirror directory
-coolpsonotes sync --once --allow-mass-delete   # confirm that many files were deleted on purpose (§7)
-coolpsonotes sync --once --restore-missing     # write vanished files (or a missing mirror) back
+notekpr sync                       # encrypted replicas, live (+ the remembered mirror, see below)
+notekpr sync --dir ~/Notes         # + plaintext Markdown mirror, live; remembered for next time
+notekpr sync --dir ~/Notes --once  # catch up, ingest disk changes, push, exit
+notekpr sync --vault Family        # restrict to some vaults (repeatable)
+notekpr sync --no-dir              # forget the remembered mirror directory
+notekpr sync --once --allow-mass-delete   # confirm that many files were deleted on purpose (§7)
+notekpr sync --once --restore-missing     # write vanished files (or a missing mirror) back
 ```
 
 The directory given with `--dir` is remembered in the profile: a later plain
-`coolpsonotes sync` mirrors into it again and says so when it starts
+`notekpr sync` mirrors into it again and says so when it starts
 ("mirroring decrypted files into … (remembered …)"). `sync --no-dir` forgets
-it, so `sync` keeps only the encrypted replicas. `coolpsonotes status` shows
+it, so `sync` keeps only the encrypted replicas. `notekpr status` shows
 which directory is mirrored.
 
 `sync` subscribes to every vault over the WebSocket (`since` = the local
@@ -280,11 +280,11 @@ before they had keys. Stop it with Ctrl-C or SIGTERM; it flushes and saves
 before exiting. To run it permanently, use a systemd user unit:
 
 ```ini
-# ~/.config/systemd/user/coolpsonotes-sync.service
+# ~/.config/systemd/user/notekpr-sync.service
 [Unit]
-Description=coolpsonotes sync
+Description=notekpr sync
 [Service]
-ExecStart=%h/.local/bin/coolpsonotes sync
+ExecStart=%h/.local/bin/notekpr sync
 Restart=on-failure
 [Install]
 WantedBy=default.target
@@ -331,9 +331,9 @@ bytes. If the suffixed name is taken too, ` 2`, ` 3`, … follows
 (`Work (3f2a1c) 2`).
 
 The directory name is chosen once per vault and kept, even if the vault is
-renamed later. A small `.coolpsonotes-vault` file in it records which vault it
+renamed later. A small `.notekpr-vault` file in it records which vault it
 mirrors: a folder that already holds other files — left behind by a deleted or
-left vault with the same name, or not created by coolpsonotes at all — is never
+left vault with the same name, or not created by notekpr at all — is never
 adopted (its files would be imported into the vault); the vault gets a
 suffixed folder (`Diary (3f2a1c)`) instead. Entries whose path has a hidden
 segment (`.git/…`, `.obsidian/…`) are never written to disk: a collaborator
@@ -448,7 +448,7 @@ the remote edit.
   survive; the older keeps the name and the other is shown as `Idea 2.md`
   (everywhere, deterministically — nothing is renamed in the shared state).
 * **Deleting a file** moves the note to the vault's **trash** (never a
-  permanent delete). `coolpsonotes trash list|restore` or the web app bring it
+  permanent delete). `notekpr trash list|restore` or the web app bring it
   back, and the mirror writes it again.
 * **Many files vanishing at once is not a deletion.** If a vault's whole
   folder disappears, or more than 10 of its mirrored files and more than half
@@ -456,7 +456,7 @@ the remote edit.
   a sync tool gone wrong), nothing is moved to the trash — not even by
   `--once` — and the folder is not re-created; the client warns and waits for
   the files to come back. If you really deleted them, stop the daemon and run
-  `coolpsonotes sync --once --allow-mass-delete` (asked interactively with
+  `notekpr sync --once --allow-mass-delete` (asked interactively with
   `--once` on a terminal); `--restore-missing` writes them back from the local
   copies instead.
 * **A missing mirror directory** is never re-created silently: `sync` refuses
@@ -490,13 +490,13 @@ the remote edit.
 ## 8. Sharing, members and keys
 
 ```sh
-coolpsonotes vault share Family "Bob" --role editor
+notekpr vault share Family "Bob" --role editor
 ```
 
 The client fetches Bob's public account key, verifies its self-signature,
 prints its **fingerprint** and pins it (trust on first use, stored in the
 profile). Compare the fingerprint with Bob over a trusted channel (in person,
-a call): Bob sees his own with `coolpsonotes status`. If the server ever
+a call): Bob sees his own with `notekpr status`. If the server ever
 presents a different key for a pinned user, sharing refuses to continue with
 a loud warning until you verify the new key and pass `--accept-new-key`; key
 rotations go ahead without that person (and say so), who gets the new key
@@ -518,9 +518,9 @@ once you share with them again with `--accept-new-key`.
 Share one note with someone without giving them the vault:
 
 ```sh
-coolpsonotes share-note Family "Plans/Trip.md" "Bob" --role viewer
-coolpsonotes note-shares Family "Plans/Trip.md"      # who has it
-coolpsonotes unshare-note Family "Plans/Trip.md" "Bob"   # also renews the note's key
+notekpr share-note Family "Plans/Trip.md" "Bob" --role viewer
+notekpr note-shares Family "Plans/Trip.md"      # who has it
+notekpr unshare-note Family "Plans/Trip.md" "Bob"   # also renews the note's key
 ```
 
 The first share gives the note its own key; Bob receives only that key and
@@ -538,15 +538,15 @@ their role.
 A new key is never wrapped for someone whose account key changed since it was
 pinned: the rotation stops and says who. Verify the fingerprint with them and
 re-share with `--accept-new-key` (or stop sharing with them), then finish an
-interrupted removal with `coolpsonotes rotate-note-key Family "Plans/Trip.md"`
-(or `coolpsonotes vault rotate Family` for a vault).
+interrupted removal with `notekpr rotate-note-key Family "Plans/Trip.md"`
+(or `notekpr vault rotate Family` for a vault).
 
 Notes shared *with you*:
 
 ```sh
-coolpsonotes shared list
-coolpsonotes shared cat "Trip"
-echo "- sunscreen" | coolpsonotes shared write "Trip" --append
+notekpr shared list
+notekpr shared cat "Trip"
+echo "- sunscreen" | notekpr shared write "Trip" --append
 ```
 
 `shared write` merges your text as a diff into the current version, so
@@ -556,10 +556,10 @@ Markdown mirror.
 ## 9. Export and import
 
 ```sh
-coolpsonotes export Family --out ~/backup/family           # directory
-coolpsonotes export Family --out ~/backup/family.zip       # zip archive
-coolpsonotes import Family ~/old-obsidian-vault [--into Imported] [--skip-existing] [--dry-run]
-coolpsonotes import Family ~/backup/family.zip
+notekpr export Family --out ~/backup/family           # directory
+notekpr export Family --out ~/backup/family.zip       # zip archive
+notekpr import Family ~/old-obsidian-vault [--into Imported] [--skip-existing] [--dry-run]
+notekpr import Family ~/backup/family.zip
 ```
 
 Exports are a plain tree of `.md` files, attachments and (empty) folders — no
@@ -584,17 +584,17 @@ unchanged without changing anything.
 ### Encrypted export and offline recovery
 
 ```sh
-coolpsonotes export-encrypted --out ~/backup/coolpsonotes-$(date +%F).json
-coolpsonotes recover --from ~/backup/coolpsonotes-2026-10-19.json --out ~/Recovered
-coolpsonotes recover --out ~/Recovered          # with this signed-in device
-coolpsonotes recover --local --out ~/Recovered  # from this device's copies, no server
+notekpr export-encrypted --out ~/backup/notekpr-$(date +%F).json
+notekpr recover --from ~/backup/notekpr-2026-10-19.json --out ~/Recovered
+notekpr recover --out ~/Recovered          # with this signed-in device
+notekpr recover --local --out ~/Recovered  # from this device's copies, no server
 ```
 
 `export-encrypted` saves everything the account can read, still encrypted, as
 one file that is safe to keep in backups (an existing file is replaced only
 with `--force`). `recover` turns such a file into plain Markdown files
 without a server, unlocking it with the recovery key (asked for; or
-`--recovery-key-file`, or `COOLPSONOTES_RECOVERY_KEY`). Without
+`--recovery-key-file`, or `NOTEKPR_RECOVERY_KEY`). Without
 `--from`, a signed-in device downloads the export, or, when the server can't be
 reached (or with `--local`), recovers from its local copies: what it synced and
 downloaded, without notes shared with you one by one. `--out` must be a new or
@@ -605,13 +605,13 @@ empty folder; `--json` prints `{vaults, files, problems, source}` (`source`:
 
 | Path | Content |
 |---|---|
-| `$XDG_CONFIG_HOME/coolpsonotes/profiles/<profile>.json` (mode `0600`) | server URL, session token, identity, device id, TOFU pins, sync settings, gateway token |
-| `$XDG_DATA_HOME/coolpsonotes/<profile>/local.key` (`0600`) | random 256-bit local key |
+| `$XDG_CONFIG_HOME/notekpr/profiles/<profile>.json` (mode `0600`) | server URL, session token, identity, device id, TOFU pins, sync settings, gateway token |
+| `$XDG_DATA_HOME/notekpr/<profile>/local.key` (`0600`) | random 256-bit local key |
 | `…/<profile>/account.sealed`, `device.sealed` | account and device secrets, sealed with the local key |
 | `…/<profile>/vaults/<id>/` | sealed replica: state, pending journal, document states, mirror bookkeeping; attachment blobs (vault-key ciphertext) |
 | `…/<profile>/audit.jsonl` | gateway write log (no content) |
 
-`COOLPSONOTES_CONFIG_DIR` and `COOLPSONOTES_DATA_DIR` override the two roots.
+`NOTEKPR_CONFIG_DIR` and `NOTEKPR_DATA_DIR` override the two roots.
 
 Honest limits: `local.key` lives in the same profile directory as the sealed
 data, so **a copy of that directory (a backup, a synced folder) can be
@@ -630,7 +630,7 @@ lost-or-stolen-laptop case. Session tokens in the profile grant server access
 * **"this device is still waiting for approval"** — run `login` again to keep
   waiting, approve it from another device (`devices approve`), or use the
   recovery key.
-* **"the session expired or was revoked"** — run `coolpsonotes login` again;
+* **"the session expired or was revoked"** — run `notekpr login` again;
   local data and queued changes are kept and uploaded afterwards.
 * **"the account key … CHANGED"** — someone's key differs from the pinned one.
   Verify the new fingerprint with them before using `--accept-new-key`.
@@ -651,10 +651,10 @@ lost-or-stolen-laptop case. Session tokens in the profile grant server access
   limit (`/info`, remembered for offline use). A change that cannot be split
   is kept on this device (still visible locally, counted as "TOO LARGE" in
   `status`) and set aside, so everything else keeps uploading; it goes out by
-  itself once the administrator raises `COOLPSONOTES_MAX_UPDATE_KB`.
-* **Environment overlap** — the server also reads `COOLPSONOTES_DATA_DIR`; do
+  itself once the administrator raises `NOTEKPR_MAX_UPDATE_KB`.
+* **Environment overlap** — the server also reads `NOTEKPR_DATA_DIR`; do
   not export it in a shell that also starts a server, or use separate shells.
-* **More detail** — `COOLPSONOTES_LOG=debug coolpsonotes sync` logs to stderr.
+* **More detail** — `NOTEKPR_LOG=debug notekpr sync` logs to stderr.
   Logs never contain tokens, keys or note content; document paths appear only
   at debug level (and in the direct output of commands you ran, such as
   `export`). Default status lines show counts, not names.

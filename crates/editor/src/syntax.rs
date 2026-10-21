@@ -273,7 +273,7 @@ fn continues_table(line: &str) -> bool {
     is_table_line(line)
         || (!table_pipes(line).is_empty()
             && !line.trim().is_empty()
-            && coolpsonotes_core::markdown::heading(line).is_none()
+            && notekpr_core::markdown::heading(line).is_none()
             && !line.trim_start().starts_with('>')
             && list_marker(line).is_none())
 }
@@ -370,7 +370,7 @@ fn normal_line(line: &str, next: Option<&str>) -> (Block, LineState) {
     }
     if line.trim().is_empty() {
         normal(Block::Blank)
-    } else if let Some((lvl, _)) = coolpsonotes_core::markdown::heading(line) {
+    } else if let Some((lvl, _)) = notekpr_core::markdown::heading(line) {
         normal(Block::Heading(lvl))
     } else if is_hr(line) && !line.trim_start().starts_with("- ") {
         normal(Block::Hr)
@@ -792,8 +792,8 @@ pub fn style_line(line: &str, block: &Block, resolves: &dyn Fn(&str) -> bool) ->
         && let Some(i) = body.find("](")
     {
         let target = &body[i + 2..body.len() - 1];
-        if coolpsonotes_core::markdown::is_internal_target(target) {
-            s.image = Some(coolpsonotes_core::markdown::percent_decode(target));
+        if notekpr_core::markdown::is_internal_target(target) {
+            s.image = Some(notekpr_core::markdown::percent_decode(target));
         }
     }
     for f in &mut s.flags {
@@ -912,8 +912,8 @@ fn inline(line: &str, from: usize, s: &mut Styled, resolves: &dyn Fn(&str) -> bo
                     set(&mut s.flags, open, i + 1, MK | PROTECT);
                     set(&mut s.flags, i + 1, text_end, LINK);
                     set(&mut s.flags, text_end, url_end + 1, MK | PROTECT);
-                    let target = if coolpsonotes_core::markdown::is_internal_target(&url) {
-                        Target::Wiki(coolpsonotes_core::markdown::percent_decode(&url))
+                    let target = if notekpr_core::markdown::is_internal_target(&url) {
+                        Target::Wiki(notekpr_core::markdown::percent_decode(&url))
                     } else {
                         Target::Url(url)
                     };

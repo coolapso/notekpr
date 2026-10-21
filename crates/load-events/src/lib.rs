@@ -1,5 +1,5 @@
-//! What the load test (`coolpsonotes-load`) streams to its live dashboard
-//! (`coolpsonotes-load-ui`): one JSON array of [`Event`]s per WebSocket
+//! What the load test (`notekpr-load`) streams to its live dashboard
+//! (`notekpr-load-ui`): one JSON array of [`Event`]s per WebSocket
 //! message.
 //!
 //! Everything here comes from something that really happened: a simulated

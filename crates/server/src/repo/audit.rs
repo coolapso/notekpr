@@ -1,7 +1,7 @@
 //! The audit log: who did what, when, to which vault or object. Entries
 //! hold ids and small details — never content, titles, names or tokens.
 
-use coolpsonotes_core::protocol::AuditEntry;
+use notekpr_core::protocol::AuditEntry;
 use sqlx::{Row, SqliteExecutor};
 
 use crate::db;

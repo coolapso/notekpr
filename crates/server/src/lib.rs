@@ -1,4 +1,4 @@
-//! coolpsonotes headless synchronization server.
+//! notekpr headless synchronization server.
 //!
 //! The server coordinates; clients own the data and the keys. It authenticates
 //! principals (OIDC users, agents), enforces vault roles, orders and relays
@@ -49,12 +49,9 @@ pub async fn build(
 /// Sessions of accounts created in development mode stop working once the
 /// server runs without it (e.g. a dev database reused for real use).
 async fn end_dev_sessions(state: &AppState) -> anyhow::Result<()> {
-    let n = repo::sessions::revoke_for_issuer(
-        &state.db,
-        coolpsonotes_core::protocol::DEV_ISSUER,
-        db::now(),
-    )
-    .await?;
+    let n =
+        repo::sessions::revoke_for_issuer(&state.db, notekpr_core::protocol::DEV_ISSUER, db::now())
+            .await?;
     if n > 0 {
         tracing::warn!(
             sessions = n,

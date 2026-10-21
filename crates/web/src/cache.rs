@@ -32,12 +32,12 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
-use coolpsonotes_core::comments::CommentLog;
-use coolpsonotes_core::crypto::Purpose;
-use coolpsonotes_core::doc::{IndexDoc, NoteDoc};
-use coolpsonotes_core::engine::{Applied, Deferred, VaultReplica};
-use coolpsonotes_core::protocol::{INDEX_OBJECT_ID, comments_note, comments_object};
 use js_sys::{Array, Function, Promise, Uint8Array};
+use notekpr_core::comments::CommentLog;
+use notekpr_core::crypto::Purpose;
+use notekpr_core::doc::{IndexDoc, NoteDoc};
+use notekpr_core::engine::{Applied, Deferred, VaultReplica};
+use notekpr_core::protocol::{INDEX_OBJECT_ID, comments_note, comments_object};
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
@@ -47,7 +47,7 @@ use web_sys::{IdbDatabase, IdbKeyRange, IdbRequest, IdbTransaction, IdbTransacti
 use crate::state::{Core, step};
 use crate::util;
 
-const DB_NAME: &str = "coolpsonotes";
+const DB_NAME: &str = "notekpr";
 const DB_VERSION: u32 = 1;
 const STORE: &str = "cache";
 /// Bump to discard copies written in an older layout.
@@ -66,12 +66,12 @@ struct ShareCopy {
     format: u32,
     /// The state contains every change of the note up to this sequence number.
     seq: i64,
-    #[serde(with = "coolpsonotes_core::b64")]
+    #[serde(with = "notekpr_core::b64")]
     state: Vec<u8>,
     /// Its comments ([`VaultReplica::comments_state`]).
     #[serde(
         default,
-        with = "coolpsonotes_core::b64::opt",
+        with = "notekpr_core::b64::opt",
         skip_serializing_if = "Option::is_none"
     )]
     comments: Option<Vec<u8>>,
@@ -148,7 +148,7 @@ fn prepare(
     removed: BTreeSet<String>,
     cursor: Option<i64>,
     stored: &mut BTreeSet<String>,
-    held: &[coolpsonotes_core::engine::Pending],
+    held: &[notekpr_core::engine::Pending],
 ) -> Option<Job> {
     let mut puts = Vec::new();
     let mut kept = BTreeSet::new();
@@ -548,7 +548,7 @@ fn writer(user: &str) -> bool {
         // Never settles: the lock is held until the page goes away.
         Promise::new(&mut |_, _| {}).into()
     });
-    let name = JsValue::from_str(&format!("coolpsonotes-cache-{user}"));
+    let name = JsValue::from_str(&format!("notekpr-cache-{user}"));
     if request.call3(&locks, &name, &opts, &granted).is_err() {
         set(Lock::Held);
         return true;
@@ -886,9 +886,9 @@ pub async fn forget_user(user: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use coolpsonotes_core::engine::VaultMeta;
-    use coolpsonotes_core::keys::{VaultKey, VaultKeyring};
-    use coolpsonotes_core::protocol::{Role, Update};
+    use notekpr_core::engine::VaultMeta;
+    use notekpr_core::keys::{VaultKey, VaultKeyring};
+    use notekpr_core::protocol::{Role, Update};
 
     fn ring(epoch: u32) -> VaultKeyring {
         let mut ring = VaultKeyring::new("v1");

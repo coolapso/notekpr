@@ -238,7 +238,7 @@ fn share_keyring(
     vault: &str,
     note: &str,
     keys: &ObjectKeysResponse,
-) -> Option<Result<coolpsonotes_core::keys::VaultKeyring, String>> {
+) -> Option<Result<notekpr_core::keys::VaultKeyring, String>> {
     let owner = c
         .shares
         .get(&(vault.to_string(), note.to_string()))?

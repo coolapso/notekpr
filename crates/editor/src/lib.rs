@@ -1,4 +1,4 @@
-//! The live-preview Markdown editor of the coolpsonotes web client.
+//! The live-preview Markdown editor of the notekpr web client.
 //!
 //! Two layers:
 //!

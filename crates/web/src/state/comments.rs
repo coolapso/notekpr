@@ -1,10 +1,10 @@
 //! Comments on notes (docs/comments.md): what the views show, sending
 //! records, and the editor's highlights of what they are about.
 
-use coolpsonotes_core::comments::{self, Action, Record, Signed, Trust};
-use coolpsonotes_core::keys::AccountPublic;
-use coolpsonotes_core::protocol::comments_object;
 use leptos::prelude::*;
+use notekpr_core::comments::{self, Action, Record, Signed, Trust};
+use notekpr_core::keys::AccountPublic;
+use notekpr_core::protocol::comments_object;
 
 use super::{Core, step, ui};
 use crate::editor::Mark;
@@ -165,7 +165,7 @@ pub async fn learn_commenters(vault: String, note: String) {
     let who = step(|c| unknown_authors(c, &vault, &note));
     let mut learned = false;
     for id in who {
-        let Ok(u) = crate::api::get::<coolpsonotes_core::protocol::PublicUser>(&format!(
+        let Ok(u) = crate::api::get::<notekpr_core::protocol::PublicUser>(&format!(
             "/users/{}",
             crate::api::q(&id)
         ))
@@ -175,10 +175,10 @@ pub async fn learn_commenters(vault: String, note: String) {
         };
         step(|c| {
             if let Some(k) = u.account_key.as_ref()
-                && let Ok(key) = coolpsonotes_core::engine::published_account(&u.id, k)
+                && let Ok(key) = notekpr_core::engine::published_account(&u.id, k)
             {
                 let fp = key.fingerprint();
-                use coolpsonotes_core::engine::{PinStatus, check_pin};
+                use notekpr_core::engine::{PinStatus, check_pin};
                 match check_pin(&mut c.prefs.pins, &u.id, &fp) {
                     PinStatus::Changed => {}
                     status => {

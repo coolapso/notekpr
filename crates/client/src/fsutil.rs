@@ -12,7 +12,7 @@ use std::time::Duration;
 /// file whose own name is close to the 255-byte limit can still be replaced
 /// (`ENAMETOOLONG`), and dot-prefixed, so the mirror watcher and editors
 /// ignore them.
-const TMP_PREFIX: &str = ".cpn-";
+const TMP_PREFIX: &str = ".notekpr-";
 const TMP_SUFFIX: &str = ".tmp";
 /// Marker of the temporary names used by older versions (`.{name}.cpn-tmp-{hex}`).
 const LEGACY_TMP_MARK: &str = ".cpn-tmp-";
@@ -31,7 +31,7 @@ pub fn is_temp_name(name: &str) -> bool {
 }
 
 pub(crate) fn temp_path(dir: &Path) -> std::path::PathBuf {
-    let suffix = data_encoding::HEXLOWER.encode(&coolpsonotes_core::crypto::random_bytes::<6>());
+    let suffix = data_encoding::HEXLOWER.encode(&notekpr_core::crypto::random_bytes::<6>());
     dir.join(format!("{TMP_PREFIX}{suffix}{TMP_SUFFIX}"))
 }
 
@@ -204,9 +204,14 @@ mod tests {
         assert_eq!(fs::read(&p).unwrap(), b"two");
         let t = temp_path(d.path());
         let name = t.file_name().unwrap().to_str().unwrap();
-        assert!(name.len() < 24 && is_temp_name(name), "{name}");
+        assert!(name.len() < 32 && is_temp_name(name), "{name}");
         assert!(is_temp_name(".note.md.cpn-tmp-0a1b2c"));
-        for n in ["note.md", ".cpn-.tmp", ".cpn-xyz.tmp", "a.cpn-tmp-00"] {
+        for n in [
+            "note.md",
+            ".notekpr-.tmp",
+            ".notekpr-xyz.tmp",
+            "a.cpn-tmp-00",
+        ] {
             assert!(!is_temp_name(n), "{n}");
         }
     }
@@ -229,18 +234,18 @@ mod tests {
         fs::create_dir_all(d.path().join("a/b")).unwrap();
         fs::create_dir_all(d.path().join(".git")).unwrap();
         for p in [
-            "a/.cpn-0123456789ab.tmp",
+            "a/.notekpr-0123456789ab.tmp",
             "a/b/.Note.md.cpn-tmp-abcdef",
-            ".git/.cpn-0123456789ab.tmp",
+            ".git/.notekpr-0123456789ab.tmp",
             "a/keep.md",
         ] {
             fs::write(d.path().join(p), "x").unwrap();
         }
         assert_eq!(remove_stale_temp_files(d.path(), 8, Duration::ZERO), 2);
         assert!(d.path().join("a/keep.md").exists());
-        assert!(d.path().join(".git/.cpn-0123456789ab.tmp").exists());
+        assert!(d.path().join(".git/.notekpr-0123456789ab.tmp").exists());
         // Young files are kept (a write may be in progress).
-        fs::write(d.path().join("a/.cpn-0123456789ab.tmp"), "x").unwrap();
+        fs::write(d.path().join("a/.notekpr-0123456789ab.tmp"), "x").unwrap();
         assert_eq!(
             remove_stale_temp_files(d.path(), 8, Duration::from_secs(3600)),
             0

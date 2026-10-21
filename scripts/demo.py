@@ -139,7 +139,7 @@ HOME = [
     ("Start here.md", "👋", note("""
         # Start here
 
-        Welcome to the **coolpsonotes demo**. A script wrote all of this through
+        Welcome to the **notekpr demo**. A script wrote all of this through
         the command-line client — encrypted on the client like any other note.
         The server only ever stored ciphertext.
 
@@ -552,7 +552,7 @@ HOME = [
 
         ```sh
         # nightly backup of the notes server
-        coolpsonotes-server backup --data-dir /srv/notes --out-dir /mnt/backup --keep 14
+        notekpr-server backup --data-dir /srv/notes --out-dir /mnt/backup --keep 14
         ```
 
         #ideas #homelab
@@ -990,7 +990,7 @@ class Cli:
         p = subprocess.run(cmd, input=stdin, capture_output=True, env=self.env)
         out, err = p.stdout.decode(), p.stderr.decode()
         if check and p.returncode != 0:
-            sys.exit(f"\ncoolpsonotes {' '.join(cmd[1:])} failed:\n{err}{out}")
+            sys.exit(f"\nnotekpr {' '.join(cmd[1:])} failed:\n{err}{out}")
         return out, err
 
     def write(self, profile, vault, path, text):
@@ -1283,8 +1283,8 @@ def main():
                     help="let others reach it: the server refuses development mode on a public "
                          "address or an https URL without this. Anyone who reaches it can sign in as anyone")
     ap.add_argument("--server-log", metavar="PATH", help="where the server logs to ('-': here; default: server.log in --data)")
-    ap.add_argument("--server-bin", type=Path, default=ROOT / "target" / "debug" / "coolpsonotes-server")
-    ap.add_argument("--cli-bin", type=Path, default=ROOT / "target" / "debug" / "coolpsonotes")
+    ap.add_argument("--server-bin", type=Path, default=ROOT / "target" / "debug" / "notekpr-server")
+    ap.add_argument("--cli-bin", type=Path, default=ROOT / "target" / "debug" / "notekpr")
     ap.add_argument("--web-dir", type=Path, default=ROOT / "dist" / "web")
     ap.add_argument("-v", "--verbose", action="store_true", help="print every CLI command")
     args = ap.parse_args()
@@ -1312,10 +1312,10 @@ def main():
     data.mkdir(parents=True, exist_ok=True)
 
     env = dict(os.environ)
-    env["COOLPSONOTES_CONFIG_DIR"] = str(data / "cli" / "config")
-    env["COOLPSONOTES_DATA_DIR"] = str(data / "cli" / "data")
-    env.pop("COOLPSONOTES_PROFILE", None)
-    env.pop("COOLPSONOTES_RECOVERY_KEY", None)
+    env["NOTEKPR_CONFIG_DIR"] = str(data / "cli" / "config")
+    env["NOTEKPR_DATA_DIR"] = str(data / "cli" / "data")
+    env.pop("NOTEKPR_PROFILE", None)
+    env.pop("NOTEKPR_RECOVERY_KEY", None)
     cli = Cli(cli_bin, env, args.verbose)
 
     log_path = Path(args.server_log) if args.server_log not in (None, "-") else data / "server.log"

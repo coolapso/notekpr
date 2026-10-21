@@ -6,10 +6,10 @@
 //! from then on only. They never receive the vault key or the vault index.
 
 use anyhow::{Context, Result, anyhow, bail};
-use coolpsonotes_core::engine::{self, ObjectMeta, PinStatus, VaultReplica};
-use coolpsonotes_core::memberlog::LogBody;
-use coolpsonotes_core::protocol::*;
-use coolpsonotes_sync::members;
+use notekpr_core::engine::{self, ObjectMeta, PinStatus, VaultReplica};
+use notekpr_core::memberlog::LogBody;
+use notekpr_core::protocol::*;
+use notekpr_sync::members;
 
 use crate::api::ApiError;
 use crate::manage::{self, ShareOutcome};
@@ -252,7 +252,7 @@ pub async fn unshare_note(
         .with_context(|| {
             format!(
                 "{} no longer has access, but the note's key could not be renewed, so they could still read \
-                 new changes if the server passed them on. Finish with `coolpsonotes rotate-note-key \
+                 new changes if the server passed them on. Finish with `notekpr rotate-note-key \
                  \"{vault_name}\" \"{path}\"`",
                 user.display_name
             )
@@ -360,7 +360,7 @@ pub async fn shared_with_me(session: &Session) -> Result<Vec<SharedNoteView>> {
 async fn recipient_ring(
     session: &Session,
     info: &SharedNote,
-) -> Result<(coolpsonotes_core::keys::VaultKeyring, Role)> {
+) -> Result<(notekpr_core::keys::VaultKeyring, Role)> {
     let (vault_id, note_id) = (&info.vault_id, &info.object_id);
     let owner = session
         .verify_user(&info.owner)?
@@ -410,10 +410,10 @@ pub async fn find_shared(session: &Session, reference: &str) -> Result<SharedNot
     match matches.as_slice() {
         [i] => Ok(all.remove(*i)),
         [] => {
-            bail!("no note named '{reference}' is shared with you (see `coolpsonotes shared list`)")
+            bail!("no note named '{reference}' is shared with you (see `notekpr shared list`)")
         }
         _ => bail!(
-            "several shared notes are called '{reference}'; use the id from `coolpsonotes shared list`"
+            "several shared notes are called '{reference}'; use the id from `notekpr shared list`"
         ),
     }
 }

@@ -7,12 +7,12 @@
 //! renames it out of `Quick notes/`.
 //!
 //! The pure helpers at the top are shared in spirit with the CLI
-//! (`coolpsonotes quick`, `crates/client/src/ops.rs`): same folder, naming
+//! (`notekpr quick`, `crates/client/src/ops.rs`): same folder, naming
 //! and default-vault rule.
 
-use coolpsonotes_core::doc::EntryKind;
-use coolpsonotes_core::paths;
-use coolpsonotes_core::protocol::Role;
+use notekpr_core::doc::EntryKind;
+use notekpr_core::paths;
+use notekpr_core::protocol::Role;
 
 use leptos::prelude::*;
 

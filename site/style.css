@@ -1,4 +1,4 @@
-/* coolpsonotes website. Hand-written, no build step, no third-party requests.
+/* notekpr website. Hand-written, no build step, no third-party requests.
    Layout: one long-read column with wide feature rows; headings show the
    Markdown markers they would have in a note, like the app's live preview.
    Palette and type stacks follow the app (crates/web/static/style.css). */

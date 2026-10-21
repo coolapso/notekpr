@@ -2,7 +2,7 @@
 """Typing latency of the live editor on a large note (not part of the suite:
 timings depend on the machine, so nothing is asserted).
 
-    python3 tests/e2e/perf.py --server target/debug/coolpsonotes-server --web dist/web [--lines 5000]
+    python3 tests/e2e/perf.py --server target/debug/notekpr-server --web dist/web [--lines 5000]
 
 Pastes a note of LINES lines of mixed Markdown, puts the caret in the middle
 and dispatches `beforeinput` events the way typing does. Each sample is the
@@ -59,7 +59,7 @@ def stats(name, xs):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--server", default="target/debug/coolpsonotes-server")
+    ap.add_argument("--server", default="target/debug/notekpr-server")
     ap.add_argument("--web", default="dist/web")
     ap.add_argument("--lines", type=int, default=5000)
     ap.add_argument("--keys", type=int, default=60)

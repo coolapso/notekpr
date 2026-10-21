@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use coolpsonotes_load_events::{Action, Event, Hello, Menu, Phase, Report, Stats};
+use notekpr_load_events::{Action, Event, Hello, Menu, Phase, Report, Stats};
 use tokio::sync::broadcast;
 
 /// How many of the latest events of a kind a late dashboard gets (stats:

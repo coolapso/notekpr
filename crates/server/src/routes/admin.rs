@@ -3,7 +3,7 @@
 
 use axum::Json;
 use axum::extract::{Path, State};
-use coolpsonotes_core::protocol::{AdminStats, AdminUpdateUser, AdminUser};
+use notekpr_core::protocol::{AdminStats, AdminUpdateUser, AdminUser};
 
 use crate::auth::Principal;
 use crate::db;

@@ -1,14 +1,13 @@
-//! `coolpsonotes`: desktop/CLI client for coolpsonotes.
+//! `notekpr`: desktop/CLI client for notekpr.
 
 use clap::Parser;
 use tracing_subscriber::EnvFilter;
 
 fn main() {
-    let cli = coolpsonotes_client::cli::Cli::parse();
+    let cli = notekpr_client::cli::Cli::parse();
     // Logs go to stderr (stdout carries command output).
-    // The default level only shows warnings; COOLPSONOTES_LOG=debug for more.
-    let filter =
-        EnvFilter::try_from_env("COOLPSONOTES_LOG").unwrap_or_else(|_| EnvFilter::new("warn"));
+    // The default level only shows warnings; NOTEKPR_LOG=debug for more.
+    let filter = EnvFilter::try_from_env("NOTEKPR_LOG").unwrap_or_else(|_| EnvFilter::new("warn"));
     tracing_subscriber::fmt()
         .with_env_filter(filter)
         .with_writer(std::io::stderr)
@@ -24,7 +23,7 @@ fn main() {
             std::process::exit(1);
         }
     };
-    if let Err(e) = rt.block_on(coolpsonotes_client::commands::run(cli)) {
+    if let Err(e) = rt.block_on(notekpr_client::commands::run(cli)) {
         eprintln!("error: {e:#}");
         std::process::exit(1);
     }

@@ -1,9 +1,7 @@
 //! Principals (people and agents), their OIDC identities, public account
 //! keys, private preferences, and the people directory.
 
-use coolpsonotes_core::protocol::{
-    AdminUser, PrincipalKind, PublicAccountKey, PublicUser, UserInfo,
-};
+use notekpr_core::protocol::{AdminUser, PrincipalKind, PublicAccountKey, PublicUser, UserInfo};
 use sqlx::{Row, SqliteExecutor};
 
 use crate::db::Db;

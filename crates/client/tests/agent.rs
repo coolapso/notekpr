@@ -6,14 +6,14 @@ mod common;
 use std::sync::Arc;
 
 use common::*;
-use coolpsonotes_client::account::{self, AgentSetupOptions};
-use coolpsonotes_client::audit::AuditLog;
-use coolpsonotes_client::gateway::{self, Gateway};
-use coolpsonotes_client::hub::{Hub, HubOptions};
-use coolpsonotes_client::session::Session;
-use coolpsonotes_client::{manage, ops};
-use coolpsonotes_core::engine::PinStatus;
-use coolpsonotes_core::protocol::Role;
+use notekpr_client::account::{self, AgentSetupOptions};
+use notekpr_client::audit::AuditLog;
+use notekpr_client::gateway::{self, Gateway};
+use notekpr_client::hub::{Hub, HubOptions};
+use notekpr_client::session::Session;
+use notekpr_client::{manage, ops};
+use notekpr_core::engine::PinStatus;
+use notekpr_core::protocol::Role;
 use serde_json::Value;
 
 async fn start_gateway(hub: Arc<Hub>, token: &str) -> String {
@@ -62,7 +62,7 @@ async fn agent_gateway_is_scoped_audited_and_syncs() {
     // The owner creates the agent; its secret goes into a 0600 file.
     let created = manage::create_agent(&alice, "Assistant").await.unwrap();
     let secret_file = srv.path("assistant.secret");
-    coolpsonotes_client::fsutil::create_private_file(
+    notekpr_client::fsutil::create_private_file(
         &secret_file,
         created.credential.client_secret.as_bytes(),
     )
@@ -469,7 +469,7 @@ async fn a_rotated_secret_that_cannot_be_saved_revokes_nothing() {
     let alice = login(&srv, "alice").await;
     let created = manage::create_agent(&alice, "helper").await.unwrap();
     let id = created.agent.id.clone();
-    let live = |agents: Vec<coolpsonotes_core::protocol::AgentInfo>| {
+    let live = |agents: Vec<notekpr_core::protocol::AgentInfo>| {
         agents
             .into_iter()
             .find(|a| a.id == id)

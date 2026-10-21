@@ -5,18 +5,18 @@
 ```
 crates/core     shared crypto, keys, CRDT model, protocol, engine, markdown, search
 crates/sync     client sync engine both clients use (outbox, refusals, snapshots, membership log)
-crates/server   sync server (axum + SQLite)            → coolpsonotes-server
+crates/server   sync server (axum + SQLite)            → notekpr-server
 crates/editor   live-preview Markdown editor (model + DOM view), used by crates/web
 crates/web      browser client (Leptos → wasm32)       → dist/web
-crates/client   desktop/CLI client, mirror, gateway    → coolpsonotes
-crates/load     load test runner (task load)           → coolpsonotes-load
+crates/client   desktop/CLI client, mirror, gateway    → notekpr
+crates/load     load test runner (task load)           → notekpr-load
 crates/load-events  what the load runner streams to its live view
 crates/load-ui  the load test's live view (wasm32)     → dist/load
 scripts/        build-web.sh, build-load-ui.sh, demo.py (task demo)
 site/           project website: static HTML + CSS, no build step (task site)
 tests/e2e       browser end-to-end tests (Python stdlib + chromedriver)
 fuzz/           fuzz targets, a separate workspace (fuzz/run.sh, task fuzz)
-vendor/yrs      yrs 0.28 with fixes, via [patch.crates-io] (see its COOLPSONOTES.md)
+vendor/yrs      yrs 0.28 with fixes, via [patch.crates-io] (see its NOTEKPR.md)
 deploy/         Kubernetes, Dex (dev OIDC), examples/ (optional reverse proxies)
 docs/           architecture, protocol, security, operations, agents, desktop client
 ```
@@ -145,9 +145,9 @@ builds the image). What it measures and how: [load-test.md](load-test.md).
 ## Run locally with several users (no OIDC)
 
 ```sh
-cargo build -p coolpsonotes-server
+cargo build -p notekpr-server
 CARGO_TARGET_DIR=target-web PROFILE=dev ./scripts/build-web.sh   # or omit PROFILE for an optimized build
-./target/debug/coolpsonotes-server --dev-mode --web-dir dist/web
+./target/debug/notekpr-server --dev-mode --web-dir dist/web
 ```
 
 A dev build of the web client is unoptimized (~15 MB): its first load takes
@@ -165,26 +165,26 @@ tabs to see live collaboration, presence and cursors.
 The CLI supports multiple users via profiles:
 
 ```sh
-cargo run -p coolpsonotes-client -- --profile alice login --server http://localhost:8080 --dev-user alice
-cargo run -p coolpsonotes-client -- --profile bob   login --server http://localhost:8080 --dev-user bob
+cargo run -p notekpr-client -- --profile alice login --server http://localhost:8080 --dev-user alice
+cargo run -p notekpr-client -- --profile bob   login --server http://localhost:8080 --dev-user bob
 ```
 
 With Docker: `task docker:dev` (`docker compose -f docker-compose.dev.yml up
 --build`); `task docker:dev:oidc` (`--profile oidc`) also runs a local Dex
-OIDC provider on port 5556 and an OIDC-enabled coolpsonotes on
+OIDC provider on port 5556 and an OIDC-enabled notekpr on
 <http://localhost:8081> — this profile uses host networking, so it works on
 Linux only. `task docker:dev:down` stops the stack and keeps its data.
 
 ## Tests
 
 ```sh
-cargo test -p coolpsonotes-core      # crypto, key hierarchy, CRDT model, diffs, markdown, search
-cargo test -p coolpsonotes-server    # end-to-end API tests with real client-side crypto
-cargo test -p coolpsonotes-editor    # editor model: change sets, incremental blocks, commands, syntax
-cargo test -p coolpsonotes-sync      # the shared sync engine: outbox, refusals, no-loss property test
-cargo test -p coolpsonotes-web       # safe rendering, zip
-cargo test -p coolpsonotes-client    # sync engine, mirror, gateway against an in-process server
-cargo test -p coolpsonotes-load -p coolpsonotes-load-events   # the load test: world, outages, metrics, verdict
+cargo test -p notekpr-core      # crypto, key hierarchy, CRDT model, diffs, markdown, search
+cargo test -p notekpr-server    # end-to-end API tests with real client-side crypto
+cargo test -p notekpr-editor    # editor model: change sets, incremental blocks, commands, syntax
+cargo test -p notekpr-sync      # the shared sync engine: outbox, refusals, no-loss property test
+cargo test -p notekpr-web       # safe rendering, zip
+cargo test -p notekpr-client    # sync engine, mirror, gateway against an in-process server
+cargo test -p notekpr-load -p notekpr-load-events   # the load test: world, outages, metrics, verdict
 tests/e2e/run.sh                     # headless browsers: every UI flow (TESTS in suite.py:
                                      # onboarding, collaboration, devices and recovery, offline,
                                      # attachments, note sharing, tables, editor, mobile, icons,
@@ -192,9 +192,9 @@ tests/e2e/run.sh                     # headless browsers: every UI flow (TESTS i
 ```
 
 The browser suite starts its own dev-mode server on a free port with a
-temporary database; screenshots land in `target/e2e/` (`CPN_E2E_OUT`
+temporary database; screenshots land in `target/e2e/` (`NOTEKPR_E2E_OUT`
 changes that). It runs `/usr/bin/chromium`; for another browser set
-`CPN_CHROME=/path/to/chrome` (with a matching chromedriver on `PATH`).
+`NOTEKPR_CHROME=/path/to/chrome` (with a matching chromedriver on `PATH`).
 `-k NAME` (`task test:e2e -- -k collab`) runs only the tests whose name
 contains NAME; the browser ↔ CLI test is `cross_client`.
 
@@ -220,7 +220,7 @@ Also build the core for the browser to catch wasm-only issues:
 ```sh
 task check:wasm
 # or:
-CARGO_TARGET_DIR=target-web cargo build -p coolpsonotes-core --target wasm32-unknown-unknown
+CARGO_TARGET_DIR=target-web cargo build -p notekpr-core --target wasm32-unknown-unknown
 ```
 
 ### Editor browser tests
@@ -237,12 +237,12 @@ task test:editor
 # or:
 CARGO_TARGET_DIR=target-web CHROMEDRIVER=$(command -v chromedriver) \
   CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=wasm-bindgen-test-runner \
-  cargo test -p coolpsonotes-editor --target wasm32-unknown-unknown --test browser
+  cargo test -p notekpr-editor --target wasm32-unknown-unknown --test browser
 ```
 
 Add `-- --nocapture` to see the typing-latency line of `typing_on_a_large_note`.
 For the latency in the real app (CRDT, sync, Leptos around the editor), run
-`python3 tests/e2e/perf.py --server target/debug/coolpsonotes-server --web dist/web`:
+`python3 tests/e2e/perf.py --server target/debug/notekpr-server --web dist/web`:
 it types into a 5,000-line note and prints median/p95 per keystroke.
 
 ## Supply-chain checks

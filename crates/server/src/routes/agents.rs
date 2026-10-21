@@ -8,7 +8,7 @@
 use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
-use coolpsonotes_core::protocol::{
+use notekpr_core::protocol::{
     AgentInfo, CreateAgentRequest, CreateAgentResponse, CreatedCredential, UserEventKind,
 };
 
@@ -37,8 +37,8 @@ async fn load(state: &AppState, owner: &str, agent_id: &str) -> AppResult<AgentI
 }
 
 async fn new_credential(state: &AppState, agent_id: &str) -> AppResult<CreatedCredential> {
-    let client_id = format!("agent_{}", &coolpsonotes_core::random_id()[..16]);
-    let (secret, hash) = db::new_secret("cpn_cs_");
+    let client_id = format!("agent_{}", &notekpr_core::random_id()[..16]);
+    let (secret, hash) = db::new_secret("notekpr_cs_");
     repo::agents::insert_credential(&state.db, &client_id, agent_id, &hash, db::now()).await?;
     Ok(CreatedCredential {
         agent_id: agent_id.to_string(),

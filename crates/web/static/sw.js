@@ -4,15 +4,15 @@
 // network first, so a new server version is picked up at once; the copy is
 // only used when that fails. Registered and removed by the app (Settings).
 
-const CACHE = "coolpsonotes-app";
+const CACHE = "notekpr-app";
 const SHELL = [
   "/",
   "/boot.js",
   "/style.css",
   "/favicon.svg",
   "/manifest.webmanifest",
-  "/pkg/coolpsonotes_web.js",
-  "/pkg/coolpsonotes_web_bg.wasm",
+  "/pkg/notekpr_web.js",
+  "/pkg/notekpr_web_bg.wasm",
 ];
 
 self.addEventListener("install", (event) => {

@@ -74,7 +74,7 @@ impl Server {
     pub fn docker(image: &str, cpus: f32, memory: &str, port: u16) -> Server {
         Server::new(
             Kind::Docker {
-                name: format!("coolpsonotes-load-{}", std::process::id()),
+                name: format!("notekpr-load-{}", std::process::id()),
                 image: image.to_string(),
                 cpus,
                 memory: memory.to_string(),
@@ -171,7 +171,7 @@ impl Server {
                     .args(["-v", "/data"])
                     // Development mode inside a container listens on all of
                     // its interfaces; the port is published on loopback only.
-                    .args(["-e", "COOLPSONOTES_DEV_MODE_ANYWHERE=true"])
+                    .args(["-e", "NOTEKPR_DEV_MODE_ANYWHERE=true"])
                     .arg(image.as_str())
                     .args(&flags)
                     .output()

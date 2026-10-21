@@ -360,77 +360,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "coolpsonotes-core"
-version = "0.1.0"
-dependencies = [
- "blake3",
- "chacha20poly1305",
- "data-encoding",
- "ed25519-dalek",
- "getrandom",
- "hkdf",
- "hpke",
- "serde",
- "serde_json",
- "sha2 0.11.1",
- "similar",
- "thiserror 2.0.21",
- "yrs",
- "zeroize",
-]
-
-[[package]]
-name = "coolpsonotes-editor"
-version = "0.1.0"
-dependencies = [
- "coolpsonotes-core",
- "js-sys",
- "wasm-bindgen",
- "web-sys",
-]
-
-[[package]]
-name = "coolpsonotes-fuzz"
-version = "0.0.0"
-dependencies = [
- "coolpsonotes-core",
- "coolpsonotes-editor",
- "coolpsonotes-web",
- "libfuzzer-sys",
- "serde_json",
-]
-
-[[package]]
-name = "coolpsonotes-sync"
-version = "0.1.0"
-dependencies = [
- "coolpsonotes-core",
- "serde",
-]
-
-[[package]]
-name = "coolpsonotes-web"
-version = "0.1.0"
-dependencies = [
- "console_error_panic_hook",
- "coolpsonotes-core",
- "coolpsonotes-editor",
- "coolpsonotes-sync",
- "crc32fast",
- "data-encoding",
- "futures",
- "js-sys",
- "leptos",
- "miniz_oxide",
- "pulldown-cmark",
- "serde",
- "serde_json",
- "wasm-bindgen",
- "wasm-bindgen-futures",
- "web-sys",
-]
-
-[[package]]
 name = "cpufeatures"
 version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1313,6 +1242,78 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "60993920e071b0c9b66f14e2b32740a4e27ffc82854dcd72035887f336a09a28"
 
 [[package]]
+name = "notekpr-core"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "chacha20poly1305",
+ "data-encoding",
+ "ed25519-dalek",
+ "getrandom",
+ "hkdf",
+ "hpke",
+ "serde",
+ "serde_json",
+ "sha2 0.11.1",
+ "similar",
+ "thiserror 2.0.21",
+ "unicode-normalization",
+ "yrs",
+ "zeroize",
+]
+
+[[package]]
+name = "notekpr-editor"
+version = "0.1.0"
+dependencies = [
+ "js-sys",
+ "notekpr-core",
+ "wasm-bindgen",
+ "web-sys",
+]
+
+[[package]]
+name = "notekpr-fuzz"
+version = "0.0.0"
+dependencies = [
+ "libfuzzer-sys",
+ "notekpr-core",
+ "notekpr-editor",
+ "notekpr-web",
+ "serde_json",
+]
+
+[[package]]
+name = "notekpr-sync"
+version = "0.1.0"
+dependencies = [
+ "notekpr-core",
+ "serde",
+]
+
+[[package]]
+name = "notekpr-web"
+version = "0.1.0"
+dependencies = [
+ "console_error_panic_hook",
+ "crc32fast",
+ "data-encoding",
+ "futures",
+ "js-sys",
+ "leptos",
+ "miniz_oxide",
+ "notekpr-core",
+ "notekpr-editor",
+ "notekpr-sync",
+ "pulldown-cmark",
+ "serde",
+ "serde_json",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
+]
+
+[[package]]
 name = "oco_ref"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2003,6 +2004,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "tinyvec"
+version = "1.13.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fd3ca314f692efd6c868f8408f53fe444634a845f96c028b97d35f6a1f79f0ee"
+
+[[package]]
 name = "toml"
 version = "1.1.8+spec-1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2078,6 +2085,15 @@ name = "unicode-ident"
 version = "1.0.27"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2c754d6c33795a1c324727428e5a7dedb5b06195f9890bdbcba760d3e246563"
+
+[[package]]
+name = "unicode-normalization"
+version = "0.1.26"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "75cd3fb03d5288b3ba9a1ee103ac7e9cbb59f0b03d64f8ddfcc04dd42758a85d"
+dependencies = [
+ "tinyvec",
+]
 
 [[package]]
 name = "unicode-segmentation"

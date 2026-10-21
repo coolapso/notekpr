@@ -47,7 +47,7 @@ struct LocalUpdates(Arc<Mutex<Vec<Vec<u8>>>>);
 impl LocalUpdates {
     fn attach(&self, doc: &Doc) {
         let sink = self.0.clone();
-        doc.observe_update_v1("coolpsonotes-local", move |txn, e| {
+        doc.observe_update_v1("notekpr-local", move |txn, e| {
             if !is_remote(txn.origin()) {
                 sink.lock().unwrap().push(e.update.clone());
             }

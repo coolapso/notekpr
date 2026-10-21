@@ -1,18 +1,18 @@
 //! Profiles: one signed-in identity (person or agent) on one server.
 //!
-//! * `$XDG_CONFIG_HOME/coolpsonotes/profiles/<name>.json` (mode 0600) holds the
+//! * `$XDG_CONFIG_HOME/notekpr/profiles/<name>.json` (mode 0600) holds the
 //!   server URL, session token, identity, TOFU key pins and sync settings.
-//! * `$XDG_DATA_HOME/coolpsonotes/<name>/` holds the local key, the encrypted
+//! * `$XDG_DATA_HOME/notekpr/<name>/` holds the local key, the encrypted
 //!   account/device secrets and the encrypted vault replicas.
 //!
-//! `COOLPSONOTES_CONFIG_DIR` / `COOLPSONOTES_DATA_DIR` override both roots.
+//! `NOTEKPR_CONFIG_DIR` / `NOTEKPR_DATA_DIR` override both roots.
 //! Several profiles can be used side by side (`--profile alice`, `--profile bob`).
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow, bail};
-use coolpsonotes_core::protocol::PrincipalKind;
+use notekpr_core::protocol::PrincipalKind;
 use serde::{Deserialize, Serialize};
 
 use crate::fsutil;
@@ -33,26 +33,30 @@ fn env_path(name: &str) -> Option<PathBuf> {
 }
 
 fn home() -> Result<PathBuf> {
-    env_path("HOME").or_else(|| env_path("USERPROFILE")).ok_or_else(|| {
-        anyhow!("cannot determine the home directory; set COOLPSONOTES_CONFIG_DIR and COOLPSONOTES_DATA_DIR")
-    })
+    env_path("HOME")
+        .or_else(|| env_path("USERPROFILE"))
+        .ok_or_else(|| {
+            anyhow!(
+                "cannot determine the home directory; set NOTEKPR_CONFIG_DIR and NOTEKPR_DATA_DIR"
+            )
+        })
 }
 
 impl Dirs {
     /// Resolve from the environment (XDG base directories with overrides).
     pub fn from_env() -> Result<Dirs> {
-        let config = match env_path("COOLPSONOTES_CONFIG_DIR") {
+        let config = match env_path("NOTEKPR_CONFIG_DIR") {
             Some(p) => p,
             None => match env_path("XDG_CONFIG_HOME").or_else(|| env_path("APPDATA")) {
-                Some(p) => p.join("coolpsonotes"),
-                None => home()?.join(".config").join("coolpsonotes"),
+                Some(p) => p.join("notekpr"),
+                None => home()?.join(".config").join("notekpr"),
             },
         };
-        let data = match env_path("COOLPSONOTES_DATA_DIR") {
+        let data = match env_path("NOTEKPR_DATA_DIR") {
             Some(p) => p,
             None => match env_path("XDG_DATA_HOME").or_else(|| env_path("LOCALAPPDATA")) {
-                Some(p) => p.join("coolpsonotes"),
-                None => home()?.join(".local").join("share").join("coolpsonotes"),
+                Some(p) => p.join("notekpr"),
+                None => home()?.join(".local").join("share").join("notekpr"),
             },
         };
         Ok(Dirs { config, data })
@@ -271,7 +275,7 @@ impl ProfileStore {
     pub fn require(&self) -> Result<Profile> {
         self.load()?.ok_or_else(|| {
             anyhow!(
-                "profile '{}' is not set up; run `coolpsonotes --profile {} login --server URL` \
+                "profile '{}' is not set up; run `notekpr --profile {} login --server URL` \
                  (or `agent setup` for an agent)",
                 self.name,
                 self.name

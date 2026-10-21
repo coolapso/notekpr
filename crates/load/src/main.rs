@@ -1,4 +1,4 @@
-//! `coolpsonotes-load`: a crowd of simulated people — real clients with real
+//! `notekpr-load`: a crowd of simulated people — real clients with real
 //! keys and end-to-end encryption — against the real server image with CPU
 //! and memory limits, with a live dashboard of everything that happens.
 //!
@@ -28,11 +28,11 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Result, anyhow};
 use clap::Parser;
-use coolpsonotes_load_events::{
+use futures::StreamExt;
+use notekpr_load_events::{
     Action, Command, Cursor, Event, GameOver, Hello, LevelResult, Menu, Phase, Report, Screen,
     Settings, Stats, Verdict, outage_s,
 };
-use futures::StreamExt;
 use tokio::sync::{mpsc, watch};
 
 use crate::bus::Bus;
@@ -85,7 +85,7 @@ struct Args {
     #[arg(long, default_value = "512m")]
     memory: String,
     /// The server image (`task docker:build`).
-    #[arg(long, default_value = "coolpsonotes:latest")]
+    #[arg(long, default_value = "notekpr:latest")]
     image: String,
     /// Run the server as a local process instead (no limits; Linux).
     #[arg(long, conflicts_with = "server")]
@@ -97,17 +97,17 @@ struct Args {
     #[arg(long)]
     server: Option<String>,
     /// With --server: how to kill it for an outage, e.g.
-    /// "ssh test-box docker kill coolpsonotes" (run with sh -c).
+    /// "ssh test-box docker kill notekpr" (run with sh -c).
     #[arg(long, requires = "server", requires = "start_command")]
     kill_command: Option<String>,
     /// With --server: how to start it again after an outage, e.g.
-    /// "ssh test-box docker start coolpsonotes".
+    /// "ssh test-box docker start notekpr".
     #[arg(long, requires = "server", requires = "kill_command")]
     start_command: Option<String>,
     /// The server's /metrics token, if it has one.
-    #[arg(long, env = "COOLPSONOTES_METRICS_TOKEN", hide_env_values = true)]
+    #[arg(long, env = "NOTEKPR_METRICS_TOKEN", hide_env_values = true)]
     metrics_token: Option<String>,
-    #[arg(long, default_value = "target/release/coolpsonotes-server")]
+    #[arg(long, default_value = "target/release/notekpr-server")]
     server_bin: PathBuf,
     #[arg(long, default_value = "dist/web")]
     web_dir: PathBuf,
@@ -221,8 +221,8 @@ fn main() -> ExitCode {
         )
         .with_writer(std::io::stderr)
         .init();
-    coolpsonotes_client::ui::set_silent(true);
-    coolpsonotes_client::ui::set_non_interactive(true);
+    notekpr_client::ui::set_silent(true);
+    notekpr_client::ui::set_non_interactive(true);
     raise_open_files();
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -392,7 +392,7 @@ fn raise_open_files() {
 /// process is gone. Linux (it looks in /proc).
 fn clean_stale_runs() {
     let gone = |name: &str| -> bool {
-        name.strip_prefix("coolpsonotes-load-")
+        name.strip_prefix("notekpr-load-")
             .and_then(|pid| pid.parse::<u32>().ok())
             .is_some_and(|pid| !Path::new(&format!("/proc/{pid}")).exists())
     };
@@ -404,7 +404,7 @@ fn clean_stale_runs() {
             "ps",
             "-a",
             "--filter",
-            "name=coolpsonotes-load-",
+            "name=notekpr-load-",
             "--format",
             "{{.Names}}",
         ])
@@ -434,7 +434,7 @@ fn people_dir(given: Option<&Path>, out: &Path) -> PathBuf {
     }
     let shm = Path::new("/dev/shm");
     if shm.is_dir() {
-        shm.join(format!("coolpsonotes-load-{}", std::process::id()))
+        shm.join(format!("notekpr-load-{}", std::process::id()))
     } else {
         out.join("people")
     }
@@ -1242,8 +1242,8 @@ async fn stats_loop(
         if m.is_some_and(|m| m.rate_limited_ps > 0.0) && !told_rate_limited {
             told_rate_limited = true;
             let why = "the server turns requests away (rate limits): every simulated person \
-                       comes from this machine — raise COOLPSONOTES_RATE_LIMIT_RPS and \
-                       COOLPSONOTES_AUTH_RATE_LIMIT_PER_MIN on it";
+                       comes from this machine — raise NOTEKPR_RATE_LIMIT_RPS and \
+                       NOTEKPR_AUTH_RATE_LIMIT_PER_MIN on it";
             eprintln!("warning: {why}");
             world.bus.feed(Action::Revision, format!("⚠ {why}"));
         }

@@ -1,7 +1,7 @@
-use coolpsonotes_core::doc::{EntryKind, NoteDoc};
-use coolpsonotes_core::engine::{VaultMeta, VaultReplica};
-use coolpsonotes_core::keys::{VaultKey, VaultKeyring};
-use coolpsonotes_core::protocol::*;
+use notekpr_core::doc::{EntryKind, NoteDoc};
+use notekpr_core::engine::{VaultMeta, VaultReplica};
+use notekpr_core::keys::{VaultKey, VaultKeyring};
+use notekpr_core::protocol::*;
 
 use crate::*;
 
@@ -254,8 +254,8 @@ fn a_batch_an_older_server_refused_is_retried_one_by_one() {
 
 /// A comment on `note` by a fresh account, queued.
 fn comment(r: &mut VaultReplica, note: &str, body: &str) {
-    use coolpsonotes_core::comments::{Action, Record, Signed};
-    let me = coolpsonotes_core::keys::AccountSecret::generate();
+    use notekpr_core::comments::{Action, Record, Signed};
+    let me = notekpr_core::keys::AccountSecret::generate();
     let doc = r.notes.entry(note.to_string()).or_default();
     if doc.text().is_empty() {
         doc.set_text("some text");
@@ -265,7 +265,7 @@ fn comment(r: &mut VaultReplica, note: &str, body: &str) {
         1,
         Action::Comment {
             body: body.into(),
-            anchor: coolpsonotes_core::comments::anchor(doc, 0, doc.text().len()).unwrap(),
+            anchor: notekpr_core::comments::anchor(doc, 0, doc.text().len()).unwrap(),
         },
     );
     let id = r.id.clone();
@@ -398,9 +398,9 @@ fn a_new_note_waits_for_its_key_then_goes_out_under_it() {
     assert!(plan.register.is_empty());
     let u = &plan.pushes[0][0];
     assert_eq!(u.object_id, "n1");
-    let epoch = coolpsonotes_core::crypto::sym_epoch(&u.payload).unwrap();
+    let epoch = notekpr_core::crypto::sym_epoch(&u.payload).unwrap();
     assert!(
-        coolpsonotes_core::keys::is_doc_epoch(epoch),
+        notekpr_core::keys::is_doc_epoch(epoch),
         "never under the vault key"
     );
 }
@@ -413,8 +413,8 @@ fn a_refused_key_falls_back_to_the_vault_key() {
     o.key_refused(&mut r, "n1");
     let plan = o.plan(&mut r, &Limits::default());
     let u = &plan.pushes[0][0];
-    let epoch = coolpsonotes_core::crypto::sym_epoch(&u.payload).unwrap();
-    assert!(!coolpsonotes_core::keys::is_doc_epoch(epoch));
+    let epoch = notekpr_core::crypto::sym_epoch(&u.payload).unwrap();
+    assert!(!notekpr_core::keys::is_doc_epoch(epoch));
 }
 
 #[test]
@@ -460,7 +460,7 @@ fn a_key_wrapped_under_an_old_vault_key_is_replaced() {
     o.key_refused(&mut r, "n1");
     assert_eq!(o.new_keys.len(), 1);
     let env = &o.new_keys[0].update.vault_envelope;
-    assert_eq!(coolpsonotes_core::crypto::sym_epoch(env).unwrap(), 2);
+    assert_eq!(notekpr_core::crypto::sym_epoch(env).unwrap(), 2);
     assert_ne!(r.doc_keys["n1"].current().unwrap().1.0, old);
     // Refused again under the current key: it stays under the vault key.
     o.key_refused(&mut r, "n1");

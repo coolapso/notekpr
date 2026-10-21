@@ -1,39 +1,39 @@
-# coolpsonotes with Docker Compose. It serves plain HTTP on 127.0.0.1:8080
+# notekpr with Docker Compose. It serves plain HTTP on 127.0.0.1:8080
 # only: put the TLS reverse proxy you use in front of it (examples, all
 # optional: deploy/examples/ and docs/operations.md §4).
 #
 # Its settings come from the environment you run `docker compose` in — hand
 # secrets over from wherever you keep them (a secret manager, your CI) at
 # deploy time; don't write them into files here:
-#   export COOLPSONOTES_PUBLIC_URL=https://notes.example.com
-#   export COOLPSONOTES_OIDC_ISSUER=https://auth.example.com
-#   export COOLPSONOTES_OIDC_CLIENT_ID=coolpsonotes
-#   export COOLPSONOTES_OIDC_CLIENT_SECRET=…
+#   export NOTEKPR_PUBLIC_URL=https://notes.example.com
+#   export NOTEKPR_OIDC_ISSUER=https://auth.example.com
+#   export NOTEKPR_OIDC_CLIENT_ID=notekpr
+#   export NOTEKPR_OIDC_CLIENT_SECRET=…
 #   docker compose up -d
 # The rest of the settings: docs/operations.md §2.
 # The project name keeps this stack apart from docker-compose.dev.yml, so the
 # two can never replace each other's containers.
-name: coolpsonotes
+name: notekpr
 services:
-  coolpsonotes:
+  notekpr:
     build: .
-    image: coolpsonotes:latest
+    image: notekpr:latest
     restart: unless-stopped
     environment:
       # Passed on from the environment when set there.
-      - COOLPSONOTES_PUBLIC_URL
-      - COOLPSONOTES_OIDC_ISSUER
-      - COOLPSONOTES_OIDC_CLIENT_ID
-      - COOLPSONOTES_OIDC_CLIENT_SECRET
-      - COOLPSONOTES_ADMINS
-      - COOLPSONOTES_METRICS_TOKEN
+      - NOTEKPR_PUBLIC_URL
+      - NOTEKPR_OIDC_ISSUER
+      - NOTEKPR_OIDC_CLIENT_ID
+      - NOTEKPR_OIDC_CLIENT_SECRET
+      - NOTEKPR_ADMINS
+      - NOTEKPR_METRICS_TOKEN
       # Behind a proxy: the client's address comes from X-Forwarded-For.
-      - COOLPSONOTES_TRUST_PROXY=true
+      - NOTEKPR_TRUST_PROXY=true
     volumes:
-      - coolpsonotes-data:/data
+      - notekpr-data:/data
     ports:
       # Only reachable from this machine, where your proxy forwards to it.
       - "127.0.0.1:8080:8080"
 
 volumes:
-  coolpsonotes-data:
+  notekpr-data:

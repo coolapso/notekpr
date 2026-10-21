@@ -10,8 +10,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
 
 use anyhow::{Result, anyhow, bail};
-use coolpsonotes_core::engine::Applied;
-use coolpsonotes_core::protocol::{INDEX_OBJECT_ID, Role, VaultInfo};
+use notekpr_core::engine::Applied;
+use notekpr_core::protocol::{INDEX_OBJECT_ID, Role, VaultInfo};
 use serde::Serialize;
 use tokio::sync::{Mutex, broadcast};
 
@@ -166,7 +166,7 @@ impl Hub {
                     ));
                 } else {
                     ui::warn(&format!(
-                        "{e}; showing local copies only (run `coolpsonotes login`)"
+                        "{e}; showing local copies only (run `notekpr login`)"
                     ));
                 }
                 for id in self.session.local_vault_ids() {
@@ -459,7 +459,7 @@ impl Hub {
         }
         match matches.len() {
             1 => Ok(matches.remove(0)),
-            0 => bail!("no vault '{reference}' (see `coolpsonotes vault list`)"),
+            0 => bail!("no vault '{reference}' (see `notekpr vault list`)"),
             _ => bail!("vault name '{reference}' is ambiguous; use the vault id"),
         }
     }

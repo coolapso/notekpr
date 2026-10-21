@@ -3,9 +3,9 @@
 mod common;
 
 use common::*;
-use coolpsonotes_client::{manage, ops};
-use coolpsonotes_core::engine::PinStatus;
-use coolpsonotes_core::protocol::Role;
+use notekpr_client::{manage, ops};
+use notekpr_core::engine::PinStatus;
+use notekpr_core::protocol::Role;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn shared_vault_reaches_running_sync_live() {
@@ -71,7 +71,7 @@ async fn dead_url() -> String {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn offline_edits_reconcile_and_pending_queue_survives_restart() {
-    use coolpsonotes_client::profile::ProfileStore;
+    use notekpr_client::profile::ProfileStore;
     let srv = start().await;
     let alice = login(&srv, "alice").await;
     let bob = login(&srv, "bob").await;
@@ -153,7 +153,7 @@ async fn offline_edits_reconcile_and_pending_queue_survives_restart() {
         .unwrap();
     // Signed, as every client sends them.
     let mut batch = vec![pushes];
-    coolpsonotes_sync::members::sign_pushes(session.account(), &vid, &mut batch);
+    notekpr_sync::members::sign_pushes(session.account(), &vid, &mut batch);
     let pushes = batch.pop().unwrap();
     let first = session.api.push(&vid, pushes).await.unwrap();
     assert!(first.rejected.is_empty());
@@ -161,9 +161,9 @@ async fn offline_edits_reconcile_and_pending_queue_survives_restart() {
 
     // Restart again and sync: the same client_update_ids are retried and the
     // server recognises them (same sequence numbers, head unchanged).
-    let bob_hub = coolpsonotes_client::hub::Hub::start(
+    let bob_hub = notekpr_client::hub::Hub::start(
         session.clone(),
-        coolpsonotes_client::hub::HubOptions {
+        notekpr_client::hub::HubOptions {
             offline_ok: true,
             ..Default::default()
         },
@@ -335,7 +335,7 @@ async fn live_uploads_resume_after_a_reconnect_with_a_read_only_vault() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_server_error_from_a_proxy_counts_as_offline() {
-    use coolpsonotes_client::profile::ProfileStore;
+    use notekpr_client::profile::ProfileStore;
     let srv = start().await;
     let alice = login(&srv, "alice").await;
     manage::create_vault(&alice, "Notes").await.unwrap();
@@ -388,7 +388,7 @@ async fn a_server_error_from_a_proxy_counts_as_offline() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn oversized_changes_are_split_or_set_aside_and_never_block_the_rest() {
-    use coolpsonotes_core::doc::NoteDoc;
+    use notekpr_core::doc::NoteDoc;
     let srv = start_with(|c| {
         c.max_update_kb = 64;
         c.max_snapshot_kb = Some(128);
@@ -463,7 +463,7 @@ async fn oversized_changes_are_split_or_set_aside_and_never_block_the_rest() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_change_too_large_for_one_update_reaches_others_in_a_snapshot() {
-    use coolpsonotes_core::doc::NoteDoc;
+    use notekpr_core::doc::NoteDoc;
     let srv = start_with(|c| c.max_update_kb = 8).await;
     let alice = login(&srv, "alice").await;
     let bob = login(&srv, "bob").await;
@@ -743,8 +743,8 @@ async fn typing_into_a_note_whose_key_has_not_arrived_keeps_the_text() {
 async fn deleted_while_unsent(
     srv: &TestServer,
 ) -> (
-    std::sync::Arc<coolpsonotes_client::hub::Hub>,
-    std::sync::Arc<coolpsonotes_client::hub::Hub>,
+    std::sync::Arc<notekpr_client::hub::Hub>,
+    std::sync::Arc<notekpr_client::hub::Hub>,
     String,
 ) {
     let alice = login(srv, "alice").await;

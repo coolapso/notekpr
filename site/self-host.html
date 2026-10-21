@@ -3,24 +3,24 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Self-host · coolpsonotes</title>
-<meta name="description" content="Run coolpsonotes on your own server: try it in development mode, deploy with Docker Compose or Kubernetes behind your own HTTPS proxy, sign in with your OpenID Connect provider, back it up.">
+<title>Self-host · notekpr</title>
+<meta name="description" content="Run notekpr on your own server: try it in development mode, deploy with Docker Compose or Kubernetes behind your own HTTPS proxy, sign in with your OpenID Connect provider, back it up.">
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
 <header class="site-head">
   <div class="wrap">
-    <a class="brand" href="./" aria-label="coolpsonotes home">
+    <a class="brand" href="./" aria-label="notekpr home">
       <svg viewBox="0 0 64 64" aria-hidden="true"><rect width="64" height="64" rx="14" style="fill: var(--accent)"/><path d="M32 12 50 32 32 52 14 32Z" style="fill: var(--bg)"/><path d="M32 22 42 32 32 42 22 32Z" style="fill: var(--accent)"/></svg>
-      coolpsonotes
+      notekpr
     </a>
     <nav class="site-nav" aria-label="Main">
       <a href="./">Home</a>
       <a href="features.html">Features</a>
       <a href="security.html">Security</a>
       <a href="self-host.html" aria-current="page">Self-host</a>
-      <a href="https://github.com/coolapso/coolpsonotes">Source</a>
+      <a href="https://github.com/coolapso/notekpr">Source</a>
     </nav>
   </div>
 </header>
@@ -29,7 +29,7 @@
   <header class="wrap page-head">
     <p class="eyebrow">Self-host</p>
     <h1>Run it yourself</h1>
-    <p class="lede">coolpsonotes is one small server: a Rust binary, a SQLite file and the web app. Here is how to try it, run it for real, and keep it safe.</p>
+    <p class="lede">notekpr is one small server: a Rust binary, a SQLite file and the web app. Here is how to try it, run it for real, and keep it safe.</p>
   </header>
 
   <section class="section">
@@ -56,18 +56,18 @@
       <div class="stack">
         <h2>Run it for real</h2>
         <p>You need a machine with Docker (or a Kubernetes cluster), a domain name pointing at it, a reverse proxy for HTTPS, and an OpenID Connect provider such as Authelia, Keycloak, Authentik or Google.</p>
-        <p>coolpsonotes serves plain HTTP and leaves certificates and HTTPS to the proxy you already use. If you don't have one, the documentation has examples for Caddy (automatic HTTPS in one command), Traefik and nginx.</p>
-        <p>Register coolpsonotes with your provider, with the redirect address <code>https://your.domain/api/v1/auth/oidc/callback</code>, and hand the details to Compose through the environment, from wherever you keep your secrets.</p>
+        <p>notekpr serves plain HTTP and leaves certificates and HTTPS to the proxy you already use. If you don't have one, the documentation has examples for Caddy (automatic HTTPS in one command), Traefik and nginx.</p>
+        <p>Register notekpr with your provider, with the redirect address <code>https://your.domain/api/v1/auth/oidc/callback</code>, and hand the details to Compose through the environment, from wherever you keep your secrets.</p>
         <p>The first person to sign in becomes the administrator.</p>
       </div>
-<pre><span class="p">$ </span>git clone https://github.com/coolapso/coolpsonotes
-<span class="p">$ </span>cd coolpsonotes
-<span class="p">$ </span>export COOLPSONOTES_PUBLIC_URL=https://notes.example.com
-<span class="p">$ </span>export COOLPSONOTES_OIDC_ISSUER=https://auth.example.com
-<span class="p">$ </span>export COOLPSONOTES_OIDC_CLIENT_ID=coolpsonotes
-<span class="p">$ </span>export COOLPSONOTES_OIDC_CLIENT_SECRET=…  <span class="c"># from your secret store</span>
+<pre><span class="p">$ </span>git clone https://github.com/coolapso/notekpr
+<span class="p">$ </span>cd notekpr
+<span class="p">$ </span>export NOTEKPR_PUBLIC_URL=https://notes.example.com
+<span class="p">$ </span>export NOTEKPR_OIDC_ISSUER=https://auth.example.com
+<span class="p">$ </span>export NOTEKPR_OIDC_CLIENT_ID=notekpr
+<span class="p">$ </span>export NOTEKPR_OIDC_CLIENT_SECRET=…  <span class="c"># from your secret store</span>
 <span class="p">$ </span>docker compose up -d --build
-<span class="c"># coolpsonotes on 127.0.0.1:8080: point your proxy at it</span></pre>
+<span class="c"># notekpr on 127.0.0.1:8080: point your proxy at it</span></pre>
     </div>
   </section>
 
@@ -77,8 +77,8 @@
         <h2>Back it up</h2>
         <p>Everything lives in one SQLite database: encrypted notes, attachments and keys wrapped for members. A backup is a consistent copy of that file, made while the server runs. Backups are encrypted data too; they need people's own keys to read.</p>
       </div>
-<pre><span class="p">$ </span>docker compose exec coolpsonotes \
-    coolpsonotes-server backup --out-dir /data/backups --keep 14</pre>
+<pre><span class="p">$ </span>docker compose exec notekpr \
+    notekpr-server backup --out-dir /data/backups --keep 14</pre>
     </div>
   </section>
 
@@ -86,12 +86,12 @@
     <div class="wrap split">
       <div class="stack">
         <h2>The desktop client</h2>
-        <p>Build the <code>coolpsonotes</code> command-line client, sign in once per computer, and keep your vaults as a folder of Markdown files that you edit with any editor.</p>
-        <p><a href="https://github.com/coolapso/coolpsonotes/blob/dev/docs/own-editor.md">Use your own editor</a> · <a href="https://github.com/coolapso/coolpsonotes/blob/dev/docs/desktop-client.md">All CLI commands</a></p>
+        <p>Build the <code>notekpr</code> command-line client, sign in once per computer, and keep your vaults as a folder of Markdown files that you edit with any editor.</p>
+        <p><a href="https://github.com/coolapso/notekpr/blob/dev/docs/own-editor.md">Use your own editor</a> · <a href="https://github.com/coolapso/notekpr/blob/dev/docs/desktop-client.md">All CLI commands</a></p>
       </div>
 <pre><span class="p">$ </span>cargo install --path crates/client --locked
-<span class="p">$ </span>coolpsonotes login --server https://notes.example.com
-<span class="p">$ </span>coolpsonotes sync --dir ~/Notes</pre>
+<span class="p">$ </span>notekpr login --server https://notes.example.com
+<span class="p">$ </span>notekpr sync --dir ~/Notes</pre>
     </div>
   </section>
 
@@ -107,20 +107,20 @@
         <li><b>Size limits</b><span>Set how large a single change, a snapshot and an attachment may be.</span></li>
         <li><b>How big a server?</b><span>A load test you can watch, <code>task load</code>: a crowd of simulated people with real encryption against the server image with CPU and memory limits.</span></li>
       </ul>
-      <p>Configuration, identity providers, proxies, backups and upgrades are covered in <a href="https://github.com/coolapso/coolpsonotes/blob/dev/docs/operations.md">docs/operations.md</a>.</p>
+      <p>Configuration, identity providers, proxies, backups and upgrades are covered in <a href="https://github.com/coolapso/notekpr/blob/dev/docs/operations.md">docs/operations.md</a>.</p>
     </div>
   </section>
 </main>
 
 <footer class="site-foot">
   <div class="wrap">
-    <span>coolpsonotes · AGPL-3.0-or-later</span>
+    <span>notekpr · AGPL-3.0-or-later</span>
     <nav aria-label="Footer">
       <a href="features.html">Features</a>
       <a href="security.html">Security</a>
       <a href="self-host.html">Self-host</a>
-      <a href="https://github.com/coolapso/coolpsonotes">Source code</a>
-      <a href="https://github.com/coolapso/coolpsonotes/tree/dev/docs">Documentation</a>
+      <a href="https://github.com/coolapso/notekpr">Source code</a>
+      <a href="https://github.com/coolapso/notekpr/tree/dev/docs">Documentation</a>
     </nav>
   </div>
 </footer>

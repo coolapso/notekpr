@@ -5,8 +5,8 @@ pub mod layout;
 
 use std::collections::{BTreeSet, HashMap, VecDeque};
 
-use coolpsonotes_core::markdown::{self, Link};
-use coolpsonotes_core::paths;
+use notekpr_core::markdown::{self, Link};
+use notekpr_core::paths;
 
 /// One note in the graph.
 #[derive(Clone, Debug, PartialEq)]

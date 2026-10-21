@@ -27,7 +27,7 @@ impl Decode for Range<u32> {
     fn decode<D: Decoder>(decoder: &mut D) -> Result<Self, Error> {
         let clock = decoder.read_ds_clock()?;
         let len = decoder.read_ds_len()?;
-        // coolpsonotes patch: a range past u32::MAX wrapped around.
+        // notekpr patch: a range past u32::MAX wrapped around.
         let end = clock.checked_add(len).ok_or(Error::UnexpectedValue)?;
         Ok(clock..end)
     }

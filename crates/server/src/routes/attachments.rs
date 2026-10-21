@@ -37,7 +37,7 @@ pub async fn put(
     match state.blobs.put(&v, &id, &who.user_id, &body).await? {
         Stored::AlreadyThere => Ok(StatusCode::OK),
         Stored::Created => {
-            metrics::counter!("coolpsonotes_attachment_bytes_total").increment(body.len() as u64);
+            metrics::counter!("notekpr_attachment_bytes_total").increment(body.len() as u64);
             Ok(StatusCode::CREATED)
         }
     }

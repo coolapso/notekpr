@@ -1,4 +1,4 @@
-//! Shared core of coolpsonotes: cryptography, key hierarchy, wire protocol and
+//! Shared core of notekpr: cryptography, key hierarchy, wire protocol and
 //! the CRDT document model. Compiled natively for the server, desktop client
 //! and agent gateway, and to WebAssembly for the browser client, so every
 //! component encrypts and merges documents with exactly the same code.

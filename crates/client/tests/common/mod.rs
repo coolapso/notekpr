@@ -8,11 +8,11 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use coolpsonotes_client::account::{self, LoginOptions};
-use coolpsonotes_client::hub::{Hub, HubOptions};
-use coolpsonotes_client::livesync;
-use coolpsonotes_client::profile::Dirs;
-use coolpsonotes_client::session::Session;
+use notekpr_client::account::{self, LoginOptions};
+use notekpr_client::hub::{Hub, HubOptions};
+use notekpr_client::livesync;
+use notekpr_client::profile::Dirs;
+use notekpr_client::session::Session;
 use tokio::sync::watch;
 
 pub struct TestServer {
@@ -20,7 +20,7 @@ pub struct TestServer {
     pub dir: tempfile::TempDir,
     /// The server's state: tests that play a compromised server change its
     /// database directly.
-    pub state: coolpsonotes_server::state::AppState,
+    pub state: notekpr_server::state::AppState,
 }
 
 pub async fn start() -> TestServer {
@@ -28,20 +28,18 @@ pub async fn start() -> TestServer {
 }
 
 /// [`start`] with a changed server configuration (e.g. smaller limits).
-pub async fn start_with(
-    configure: impl FnOnce(&mut coolpsonotes_server::config::Config),
-) -> TestServer {
-    coolpsonotes_client::ui::set_quiet(std::env::var_os("TEST_LOG").is_none());
+pub async fn start_with(configure: impl FnOnce(&mut notekpr_server::config::Config)) -> TestServer {
+    notekpr_client::ui::set_quiet(std::env::var_os("TEST_LOG").is_none());
     // Never wait for a prompt, even when `cargo test` runs in a terminal.
-    coolpsonotes_client::ui::set_non_interactive(true);
+    notekpr_client::ui::set_non_interactive(true);
     let _ = tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_env("TEST_LOG"))
         .with_writer(std::io::stderr)
         .try_init();
     let dir = tempfile::tempdir().unwrap();
-    let mut cfg = coolpsonotes_server::config::Config::for_tests(dir.path().join("server"));
+    let mut cfg = notekpr_server::config::Config::for_tests(dir.path().join("server"));
     configure(&mut cfg);
-    let (app, state) = coolpsonotes_server::build(cfg, None).await.unwrap();
+    let (app, state) = notekpr_server::build(cfg, None).await.unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move {

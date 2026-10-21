@@ -245,7 +245,7 @@ fn install_shortcuts() {
                 let folder = route
                     .note()
                     .and_then(|(v, n)| state::step(|c| c.entry(v, n)))
-                    .map(|e| coolpsonotes_core::paths::parent(&e.path).to_string())
+                    .map(|e| notekpr_core::paths::parent(&e.path).to_string())
                     .unwrap_or_default();
                 crate::actions::new_note(v, &folder);
             }

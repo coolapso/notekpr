@@ -5,9 +5,9 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
 use std::rc::Rc;
 
-use coolpsonotes_core::doc::EntryKind;
-use coolpsonotes_core::markdown::{self, Link, LinkKind, NoteInfo};
-use coolpsonotes_core::{paths, search};
+use notekpr_core::doc::EntryKind;
+use notekpr_core::markdown::{self, Link, LinkKind, NoteInfo};
+use notekpr_core::{paths, search};
 
 use leptos::prelude::*;
 

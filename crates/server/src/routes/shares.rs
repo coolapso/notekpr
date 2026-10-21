@@ -12,8 +12,8 @@ use std::collections::HashSet;
 use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
-use coolpsonotes_core::keys::{FIRST_DOC_EPOCH, is_doc_epoch};
-use coolpsonotes_core::protocol::{
+use notekpr_core::keys::{FIRST_DOC_EPOCH, is_doc_epoch};
+use notekpr_core::protocol::{
     AddObjectShareRequest, INDEX_OBJECT_ID, ObjectEventKind, ObjectKeyUpdate, ObjectKeysResponse,
     ObjectMetaUpdate, ObjectShareInfo, RemoveMemberRequest, Role, SharedNote, SignGrantsRequest,
     UpdateMemberRequest, UserEventKind,
@@ -36,7 +36,7 @@ const MAX_META_BYTES: usize = 16 * 1024;
 const MAX_ENVELOPE_BYTES: usize = 1024;
 
 fn epoch_of(b: &[u8]) -> AppResult<u32> {
-    coolpsonotes_core::crypto::sym_epoch(b).map_err(|_| bad("malformed ciphertext"))
+    notekpr_core::crypto::sym_epoch(b).map_err(|_| bad("malformed ciphertext"))
 }
 
 fn check_object(o: &str) -> AppResult<()> {
@@ -44,7 +44,7 @@ fn check_object(o: &str) -> AppResult<()> {
     if o == INDEX_OBJECT_ID {
         return Err(bad("the vault index cannot be shared"));
     }
-    if coolpsonotes_core::protocol::comments_note(o).is_some() {
+    if notekpr_core::protocol::comments_note(o).is_some() {
         return Err(bad("comments are shared with their note"));
     }
     Ok(())

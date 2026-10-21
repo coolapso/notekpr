@@ -10,11 +10,11 @@
 //! * The owner wraps vault keys only for members the log vouches for (role
 //!   and pinned account key); the server's member list alone is not enough.
 
-use coolpsonotes_core::keys::{AccountPublic, AccountSecret, VaultKeyring};
-use coolpsonotes_core::memberlog::{
+use notekpr_core::keys::{AccountPublic, AccountSecret, VaultKeyring};
+use notekpr_core::memberlog::{
     self, Authors, KeyCheckError, LogBody, LogEntry, LogError, LogMember, LogState, key_commitment,
 };
-use coolpsonotes_core::protocol::{
+use notekpr_core::protocol::{
     CreateSnapshotRequest, GrantSignature, KeyEnvelope, MemberInfo, ObjectKeyUpdate,
     ObjectShareInfo, PushUpdate, Role,
 };
@@ -323,8 +323,8 @@ pub fn rotation(vault_id: &str, ring: &VaultKeyring) -> Option<LogBody> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use coolpsonotes_core::keys::VaultKey;
-    use coolpsonotes_core::protocol::{PrincipalKind, PublicAccountKey, PublicUser};
+    use notekpr_core::keys::VaultKey;
+    use notekpr_core::protocol::{PrincipalKind, PublicAccountKey, PublicUser};
 
     struct P {
         id: String,

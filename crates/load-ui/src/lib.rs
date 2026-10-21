@@ -1,5 +1,5 @@
 //! The load test's live dashboard: a canvas that draws what the run streams
-//! over its WebSocket (`/events`, see `coolpsonotes-load-events`). Rust
+//! over its WebSocket (`/events`, see `notekpr-load-events`). Rust
 //! compiled to WebAssembly, no JavaScript packages.
 
 pub mod state;
@@ -13,7 +13,7 @@ mod web {
     use std::cell::RefCell;
     use std::rc::Rc;
 
-    use coolpsonotes_load_events::{Command, Event};
+    use notekpr_load_events::{Command, Event};
     use wasm_bindgen::JsCast;
     use wasm_bindgen::prelude::*;
     use web_sys::{

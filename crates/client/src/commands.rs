@@ -6,9 +6,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
-use coolpsonotes_core::doc::{Entry, EntryKind};
-use coolpsonotes_core::engine::PinStatus;
-use coolpsonotes_core::protocol::{DeviceStatus, PrincipalKind, Role};
+use notekpr_core::doc::{Entry, EntryKind};
+use notekpr_core::engine::PinStatus;
+use notekpr_core::protocol::{DeviceStatus, PrincipalKind, Role};
 use serde::Serialize;
 use serde_json::json;
 use tokio::sync::watch;
@@ -56,7 +56,7 @@ impl Ctx {
             for v in vaults {
                 if hub.resolve(v).await.is_err() {
                     bail!(
-                        "the running coolpsonotes process (sync daemon or gateway) doesn't keep vault '{v}' on \
+                        "the running notekpr process (sync daemon or gateway) doesn't keep vault '{v}' on \
                          this device; stop it, or run it for this vault too"
                     );
                 }
@@ -144,7 +144,7 @@ async fn lock_profile(
 ) -> Result<(Option<ProfileLock>, bool)> {
     let in_use = || {
         anyhow!(
-            "profile '{profile}' is in use by another coolpsonotes process (a running `sync` daemon or \
+            "profile '{profile}' is in use by another notekpr process (a running `sync` daemon or \
              `gateway`); two processes would overwrite each other's local copies. Edit the mirrored files or use \
              the gateway instead, or stop that process and try again"
         )
@@ -160,7 +160,7 @@ async fn lock_profile(
             Some(l) => Ok((Some(l), false)),
             None => {
                 ui::status(
-                    "another coolpsonotes process (sync daemon or gateway) keeps this profile in sync; showing its \
+                    "another notekpr process (sync daemon or gateway) keeps this profile in sync; showing its \
                      local copies (read-only)",
                 );
                 Ok((None, true))
@@ -644,7 +644,7 @@ async fn execute(ctx: Ctx, command: Command) -> Result<()> {
             let hub = ctx.hub(&[&vault]).await?;
             let (_, ids) = op(ops::delete_document(&hub, &vault, &path).await)?;
             crate::out!(
-                "moved {} item(s) to the trash (restore with `coolpsonotes trash restore`)",
+                "moved {} item(s) to the trash (restore with `notekpr trash restore`)",
                 ids.len()
             );
             Ok(())
@@ -707,7 +707,7 @@ async fn execute(ctx: Ctx, command: Command) -> Result<()> {
                 .with_context(|| format!("writing {}", out.display()))?;
             crate::out!(
                 "Saved an encrypted export of {} vault(s) and {} shared note(s) to {} ({}). Keep it with your \
-                 backups; `coolpsonotes recover --from {}` turns it into Markdown files with your recovery key.",
+                 backups; `notekpr recover --from {}` turns it into Markdown files with your recovery key.",
                 export.vaults.len(),
                 export.shared_notes.len(),
                 out.display(),
@@ -755,7 +755,7 @@ async fn serve_control(
         Ok(c) => Some(c),
         Err(e) => {
             ui::warn(&format!(
-                "other coolpsonotes commands can't hand changes to this process: {e:#}"
+                "other notekpr commands can't hand changes to this process: {e:#}"
             ));
             None
         }
@@ -770,19 +770,19 @@ async fn recover_cmd(ctx: &Ctx, a: RecoverArgs) -> Result<()> {
             let key = match &a.recovery_key_file {
                 Some(f) => std::fs::read_to_string(f)
                     .with_context(|| format!("reading {}", f.display()))?,
-                None => match std::env::var("COOLPSONOTES_RECOVERY_KEY") {
+                None => match std::env::var("NOTEKPR_RECOVERY_KEY") {
                     Ok(k) if !k.trim().is_empty() => k,
                     _ => {
                         if !ui::stdin_is_tty() {
                             bail!(
-                                "no recovery key: pass --recovery-key-file or set COOLPSONOTES_RECOVERY_KEY"
+                                "no recovery key: pass --recovery-key-file or set NOTEKPR_RECOVERY_KEY"
                             );
                         }
                         ui::prompt_secret("Recovery key: ")?
                     }
                 },
             };
-            let account = coolpsonotes_core::recover::unlock_with_recovery_key(&export, key.trim())
+            let account = notekpr_core::recover::unlock_with_recovery_key(&export, key.trim())
                 .map_err(|e| anyhow!("the recovery key does not open this export: {e}"))?;
             recover::recover_to(&export, &account, &a.out)?
         }
@@ -910,7 +910,7 @@ async fn login(ctx: &Ctx, a: LoginArgs) -> Result<()> {
                         .trim()
                         .to_string(),
                 ),
-                None => std::env::var("COOLPSONOTES_RECOVERY_KEY")
+                None => std::env::var("NOTEKPR_RECOVERY_KEY")
                     .ok()
                     .filter(|k| !k.trim().is_empty()),
             },
@@ -978,14 +978,14 @@ async fn status(ctx: &Ctx) -> Result<()> {
         p.user_id.clone().unwrap_or_default()
     );
     if p.device_pending {
-        crate::out!("Device:    waiting for approval — run `coolpsonotes login` again to continue");
+        crate::out!("Device:    waiting for approval — run `notekpr login` again to continue");
         return Ok(());
     }
     let session = ctx.session()?;
     crate::out!("Key:       {}", session.fingerprint());
     match (&p.session_token, p.kind) {
         (None, PrincipalKind::Human) => {
-            crate::out!("Session:   signed out (local copies only) — run `coolpsonotes login`")
+            crate::out!("Session:   signed out (local copies only) — run `notekpr login`")
         }
         (_, PrincipalKind::Agent) => crate::out!(
             "Session:   agent client credentials ({})",
@@ -1094,7 +1094,7 @@ async fn devices(ctx: &Ctx, c: DevicesCmd) -> Result<()> {
                 .collect();
             if !pending.is_empty() {
                 crate::out!(
-                    "\n{} device(s) waiting: `coolpsonotes devices approve <id>`",
+                    "\n{} device(s) waiting: `notekpr devices approve <id>`",
                     pending.len()
                 );
             }
@@ -1135,7 +1135,7 @@ async fn vault(ctx: &Ctx, c: VaultCmd) -> Result<()> {
                 return Ok(());
             }
             if list.is_empty() {
-                crate::out!("no vaults yet — create one with `coolpsonotes vault create <name>`");
+                crate::out!("no vaults yet — create one with `notekpr vault create <name>`");
             }
             for s in list {
                 let name = match &s.icon {
@@ -1296,7 +1296,7 @@ async fn vault(ctx: &Ctx, c: VaultCmd) -> Result<()> {
                 }
                 (None, _) => crate::out!(
                     "{} has not set up encryption yet; the vault key is shared automatically by your client \
-                     (run `coolpsonotes sync` or `vault members`) once they have.",
+                     (run `notekpr sync` or `vault members`) once they have.",
                     out.user.display_name
                 ),
             }
@@ -1591,7 +1591,7 @@ async fn quick(ctx: &Ctx, a: QuickArgs) -> Result<()> {
     }
     let no_vault = || {
         anyhow!(
-            "quick notes need a vault you can edit: create one with `coolpsonotes vault create <name>`"
+            "quick notes need a vault you can edit: create one with `notekpr vault create <name>`"
         )
     };
     // Decided before opening the hub, so only that vault is synced.
@@ -1625,7 +1625,7 @@ async fn quick(ctx: &Ctx, a: QuickArgs) -> Result<()> {
         if ctx.json {
             ctx.print_json(&notes);
         } else if notes.is_empty() {
-            crate::out!("no quick notes yet — add one with `coolpsonotes quick <text>`");
+            crate::out!("no quick notes yet — add one with `notekpr quick <text>`");
         } else {
             for n in notes {
                 crate::out!(
@@ -1735,7 +1735,7 @@ async fn history(ctx: &Ctx, h: HistoryArgs) -> Result<()> {
         None => {
             let (Some(vault), Some(path)) = (h.vault, h.path) else {
                 bail!(
-                    "usage: coolpsonotes history <vault> <path>  |  history show <vault> <path> <revision>"
+                    "usage: notekpr history <vault> <path>  |  history show <vault> <path> <revision>"
                 );
             };
             let hub = ctx.hub(&[&vault]).await?;
@@ -1865,7 +1865,7 @@ async fn sync(ctx: &Ctx, a: SyncArgs) -> Result<()> {
         bail!(
             "the remembered mirror directory {} does not exist (moved, renamed or not mounted?). Nothing was \
              changed. Put it back and start again, use --dir to mirror somewhere else, --restore-missing to write \
-             a fresh copy there, or `coolpsonotes sync --no-dir` to stop mirroring",
+             a fresh copy there, or `notekpr sync --no-dir` to stop mirroring",
             d.display()
         );
     }
@@ -1887,7 +1887,7 @@ async fn sync(ctx: &Ctx, a: SyncArgs) -> Result<()> {
             let answer = ui::prompt_line("Type 'yes' to enable the plaintext mirror: ")?;
             if answer != "yes" {
                 bail!(
-                    "cancelled; run `coolpsonotes sync` without --dir to keep only encrypted local copies"
+                    "cancelled; run `notekpr sync` without --dir to keep only encrypted local copies"
                 );
             }
         } else if a.dir.is_some() {
@@ -1897,7 +1897,7 @@ async fn sync(ctx: &Ctx, a: SyncArgs) -> Result<()> {
             // Plain `sync` reuses the remembered mirror: say so.
             ui::status(&format!(
                 "mirroring decrypted files into {} (remembered from an earlier `sync --dir`; \
-                 `coolpsonotes sync --no-dir` stops that)",
+                 `notekpr sync --no-dir` stops that)",
                 d.display()
             ));
         }
@@ -2032,10 +2032,7 @@ fn write_secret_file(path: &Path, secret: &str) -> Result<()> {
         .with_context(|| format!("writing {}", path.display()))
 }
 
-async fn resolve_agent(
-    s: &Session,
-    reference: &str,
-) -> Result<coolpsonotes_core::protocol::AgentInfo> {
+async fn resolve_agent(s: &Session, reference: &str) -> Result<notekpr_core::protocol::AgentInfo> {
     let list = manage::agents(s).await?;
     let mut found: Vec<_> = list
         .into_iter()
@@ -2043,7 +2040,7 @@ async fn resolve_agent(
         .collect();
     match found.len() {
         1 => Ok(found.remove(0)),
-        0 => bail!("no agent '{reference}' (see `coolpsonotes agent list`)"),
+        0 => bail!("no agent '{reference}' (see `notekpr agent list`)"),
         _ => bail!("several agents are named '{reference}'; use the id"),
     }
 }
@@ -2080,7 +2077,7 @@ async fn agent(ctx: &Ctx, c: AgentCmd) -> Result<()> {
             crate::out!("Agent key fingerprint: {}", out.fingerprint);
             crate::out!(
                 "Ask the owner to check this fingerprint before sharing a vault with the agent\n\
-                 (`coolpsonotes vault share <vault> \"{}\"` shows the same value).",
+                 (`notekpr vault share <vault> \"{}\"` shows the same value).",
                 out.display_name
             );
             Ok(())
@@ -2100,7 +2097,7 @@ async fn agent(ctx: &Ctx, c: AgentCmd) -> Result<()> {
                 secret_out.display()
             );
             crate::out!(
-                "On the agent's machine run:\n  coolpsonotes --profile <name> agent setup --server {} --client-id {} \
+                "On the agent's machine run:\n  notekpr --profile <name> agent setup --server {} --client-id {} \
                  --client-secret-file <file>",
                 s.profile.server,
                 created.credential.client_id
@@ -2235,7 +2232,7 @@ async fn gateway_cmd(ctx: &Ctx, a: GatewayArgs) -> Result<()> {
     }
     let (token, created) = gateway_token(&store, false)?;
     if created {
-        ui::status("created a gateway token; show it with `coolpsonotes gateway token`");
+        ui::status("created a gateway token; show it with `notekpr gateway token`");
     }
     let session = ctx.session()?;
     let audit = Arc::new(AuditLog::open(&session.data_dir()));

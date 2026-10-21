@@ -47,7 +47,7 @@ impl ClientBlockList {
     /// Given a block's identifier clock value, return an offset under which this block could be
     /// found using binary search algorithm, or a index under which this block should be inserted.
     pub(crate) fn find_index(&self, clock: u32) -> Option<usize> {
-        // coolpsonotes patch: a plain binary search. The original guessed the
+        // notekpr patch: a plain binary search. The original guessed the
         // first probe as `(clock / end) * right`, which divides by zero when
         // the last block ends at clock 0, and computed `mid - 1` and
         // `len() - 1` without guarding against underflow — a crafted update
@@ -307,7 +307,7 @@ impl BlockStore {
                     Some(last) if last.as_ref().next_clock() != block.clock_start() => {
                         // this replaces an integrated skip
                         let clock_start = block.clock_start();
-                        // coolpsonotes patch: only a skip that covers the
+                        // notekpr patch: only a skip that covers the
                         // whole block can be replaced; a crafted update
                         // claiming anything else panicked here (unwrap,
                         // underflowing differences). Such a block is ignored.

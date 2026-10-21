@@ -2,7 +2,7 @@
 
 use std::cell::RefCell;
 
-use coolpsonotes_core::protocol::ApiError;
+use notekpr_core::protocol::ApiError;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use wasm_bindgen::{JsCast, JsValue};

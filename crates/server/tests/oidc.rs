@@ -11,14 +11,14 @@ use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use coolpsonotes_core::protocol::{ExchangeRequest, SessionResponse};
+use notekpr_core::protocol::{ExchangeRequest, SessionResponse};
 use openidconnect::core::{CoreJwsSigningAlgorithm, CoreRsaPrivateSigningKey};
 use openidconnect::{JsonWebKeyId, PrivateSigningKey};
 use serde_json::{Value, json};
 
 /// Throwaway RSA key used only to sign the mock provider's ID tokens in tests.
 const TEST_KEY_PEM: &str = "-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQEAqxioZbIfZDcyQC3MGiogJQch171NXKPaaQ+k6QDCqvOHWQHl\nBo4dI15avgJXzacdsm2CO0f7h3J7691dAvPJs6Ag+xnEdp6VNWi7/rAwkaAn7lp+\nVIk/qL6eI8DqytRRQ/xumv2qFzoH51dWsqE6psXiJWa0JvyDK40yFfBhufUN97GI\nLTvLbJ4qr9yfbRlQY4V29heeMsUj34DuXYkrE6FwyLwoja4gDO0lXUufuQxmB8Gs\nhZKHpELTuJArJpP8S6+azgC3yVIf2ZhRSBySG8ICXjC8MFhP79WAAJ/KqmCDjwPn\nXvA9bgNzAzz/jWnz/uoVBCmxe3NJPAag//UITwIDAQABAoIBABpQ0JXTr8BaPQBi\nCuJ7WDZZwnrMQvncudsu7M5pr4dbrZWjFPbNJO4rtQlEkvyul4K6FS3JBIbwtN6y\nTXwGwx89odT9QZp9CbYNRd0GfHHpkDq48HVQJtptdyVIptRLk7RBP0HXgjHQWybZ\n6BvRcJP2G7Jk+ZCFhidMsEdvkZhoOClMOGZGkBkv0ahy6CIaMruWwvExkkEU8Nhe\n6O2FhspNimaduE7yLd6BtTt5aVQI/DOh4qgKNS4U3HPfSsAyI+ywbDVG8qeZOY5D\nVDD5fQFPCXZkuCEhCqB0gcgHccdEM6jcEpsuy6VZm/7XugaozM2SKMt7AvVDEf9e\n6UduigECgYEA26DxI7GI/PtknzofXPYskGi015BTo2vC1MgTwG7y/Yf3N691cxYK\nnK2mytW8M1egxoyeV337OsS43r7OHSw6WMMbmyz8JOFNjAdpzLEQmUBAMBXsz9p1\nwUCyAD33facMfccLRfEoePGboAMJufOiGKzxlvO7NhOaCS1AB+cQIfcCgYEAx241\nYMM+BbZOZkWslaOQYsdfseM2e4XPd2NrhWM/hBou+tJdfeHV+zpOysDj0nBlhY+B\nCgJjW7KV4T/CFu49FvdmqvataebnSnztcJHSumlsau6CIdM2x4j2vm0W/C6n3AB1\n5rrzetTbMXcqg2giYnkBrUK44jR+2zibTir7NmkCgYEAyDYz/MTXyz7koF5cvuLP\nByncSXIRPLV8m3p0vwSlUEeFLuctGyepruCCXv9unCMytiz0H3AB+LXijXPE80Uh\nP09FODVO+dPFXHRZlzaGmh2/Jdam1Wgh1nTCj4PtvEbvFS3A8haAPZiKtNhwImqd\nhv8JEQHI1OgTkHAGoe2agEsCgYAm+AwKGlyWNSdgqKCupMVj5911HxbYUC9X/t9V\nsy0IHS2s6UpHfMeZTa1zxPk/d6L+1Cm80PalRmIvH4xHesoJINK4+XatSOdNENg8\ntOHedxcuVeirv1/m4YaFcz+Yi21VeemP6lwFVm52Xfi6sLB3WXnQZ0dFPEjFgWwn\nfBKWcQKBgQCVCZ2z7sgB/JBjmuuz8Ghna/5VhCXZAyA/sqeNfffQkQ8p6950HhUa\nDEZRXc9eK0ZZ1tCSqOiCjQEXpeM+a3c/oPMbUb2aB9aYTHfit+JYyLimOrW9IZzQ\nCvcuiv7fSSTU7TBCWzIao2Q48TqvV0KePBdJxSbUKLOjWBu5GCyIHg==\n-----END RSA PRIVATE KEY-----";
-const CLIENT_ID: &str = "coolpsonotes";
+const CLIENT_ID: &str = "notekpr";
 const CLIENT_SECRET: &str = "s3cret";
 
 #[derive(Clone)]
@@ -191,13 +191,13 @@ async fn setup(
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let dir = tempfile::tempdir().unwrap();
-    let mut cfg = coolpsonotes_server::config::Config::for_tests(dir.path().to_path_buf());
+    let mut cfg = notekpr_server::config::Config::for_tests(dir.path().to_path_buf());
     cfg.dev_mode = false;
     cfg.public_url = format!("http://{addr}");
     cfg.oidc_issuer = Some(issuer);
     cfg.oidc_client_id = Some(CLIENT_ID.into());
     cfg.oidc_client_secret = Some(CLIENT_SECRET.into());
-    let (app, _state) = coolpsonotes_server::build(cfg, None).await.unwrap();
+    let (app, _state) = notekpr_server::build(cfg, None).await.unwrap();
     tokio::spawn(async move {
         axum::serve(
             listener,
@@ -237,7 +237,7 @@ impl Setup {
             .get_all(header::SET_COOKIE)
             .iter()
             .map(|v| v.to_str().unwrap().to_string())
-            .find(|c| c.starts_with("cpn_login="))
+            .find(|c| c.starts_with("notekpr_login="))
             .expect("login cookie");
         assert!(cookie.contains("HttpOnly") && cookie.contains("SameSite=Lax"));
         let cookie = cookie.split(';').next().unwrap().to_string();
@@ -318,9 +318,9 @@ async fn dev_accounts_never_take_the_first_admin_role() {
     let s = setup(vec!["client_secret_basic"], true, true).await;
     // The same database was used in development mode before.
     let dir = s._dir.path().to_path_buf();
-    let mut cfg = coolpsonotes_server::config::Config::for_tests(dir.clone());
+    let mut cfg = notekpr_server::config::Config::for_tests(dir.clone());
     cfg.public_url = s.base.clone();
-    let (dev_app, _) = coolpsonotes_server::build(cfg, None).await.unwrap();
+    let (dev_app, _) = notekpr_server::build(cfg, None).await.unwrap();
     let dev_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let dev_base = format!("http://{}", dev_listener.local_addr().unwrap());
     tokio::spawn(async move {
@@ -346,11 +346,11 @@ async fn dev_accounts_never_take_the_first_admin_role() {
     assert!(session.user.is_admin);
 
     // Restarting without development mode ends the dev account's sessions.
-    let mut cfg = coolpsonotes_server::config::Config::for_tests(dir);
+    let mut cfg = notekpr_server::config::Config::for_tests(dir);
     cfg.dev_mode = false;
     cfg.oidc_issuer = Some(s.idp.0.issuer.clone());
     cfg.oidc_client_id = Some(CLIENT_ID.into());
-    let (app, _) = coolpsonotes_server::build(cfg, None).await.unwrap();
+    let (app, _) = notekpr_server::build(cfg, None).await.unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
     tokio::spawn(async move {

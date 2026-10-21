@@ -34,7 +34,7 @@ jobs:
           sudo apt-get update && sudo apt-get install -y chromium-driver || true
           # The runner image ships Chrome and a matching chromedriver too.
           [ -n "${CHROMEWEBDRIVER:-}" ] && echo "$CHROMEWEBDRIVER" >> "$GITHUB_PATH"
-          echo "CPN_CHROME=$(command -v chromium || command -v chromium-browser || command -v google-chrome)" >> "$GITHUB_ENV"
+          echo "NOTEKPR_CHROME=$(command -v chromium || command -v chromium-browser || command -v google-chrome)" >> "$GITHUB_ENV"
       - name: The toolchain
         run: task setup
       - name: task ci:check

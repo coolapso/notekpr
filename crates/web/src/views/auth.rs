@@ -12,7 +12,7 @@ fn Card(children: Children) -> impl IntoView {
     view! {
         <div class="auth">
             <div class="auth-card">
-                <div class="brand"><span class="logo">"◆"</span>" coolpsonotes"</div>
+                <div class="brand"><span class="logo">"◆"</span>" notekpr"</div>
                 {children()}
             </div>
             <p class="auth-foot">"End-to-end encrypted · self-hosted · open source"</p>
@@ -125,7 +125,7 @@ pub fn Setup() -> impl IntoView {
     view! {
         <Card>
             <h1>{format!("Welcome, {name}!")}</h1>
-            <p>"Before you start, coolpsonotes creates your personal encryption keys on this device. Your notes are encrypted with them before anything is uploaded — not even the server administrator can read them."</p>
+            <p>"Before you start, notekpr creates your personal encryption keys on this device. Your notes are encrypted with them before anything is uploaded — not even the server administrator can read them."</p>
             <ul class="bullets">
                 <li><Icon name="lock"/>" Keys are created and kept on your devices."</li>
                 <li><Icon name="key"/>" You'll get a recovery key to keep somewhere safe."</li>
@@ -153,10 +153,10 @@ pub fn ShowRecovery(key: String) -> impl IntoView {
             <div class="row">
                 <button class="btn" on:click=move |_| { util::copy_to_clipboard(&k1); state::success("Copied to clipboard"); }><Icon name="copy"/>" Copy"</button>
                 <button class="btn" on:click=move |_| {
-                    let text = format!("coolpsonotes recovery key\n\nAccount: {}\nServer: {}\n\n{}\n\nKeep this somewhere safe and private (a password manager or a printed copy). Anyone with this key and access to your account can read your notes.\n",
+                    let text = format!("notekpr recovery key\n\nAccount: {}\nServer: {}\n\n{}\n\nKeep this somewhere safe and private (a password manager or a printed copy). Anyone with this key and access to your account can read your notes.\n",
                         ui().user.get_untracked().map(|u| u.display_name).unwrap_or_default(),
                         util::window().location().host().unwrap_or_default(), k2);
-                    util::download("coolpsonotes-recovery-key.txt", "text/plain", text.as_bytes());
+                    util::download("notekpr-recovery-key.txt", "text/plain", text.as_bytes());
                 }><Icon name="download"/>" Download"</button>
             </div>
             <label class="check">
@@ -182,7 +182,7 @@ pub fn Enroll(pending: Option<(String, String)>, error: Option<String>) -> impl 
             {error.map(|e| view! { <div class="alert error">{e}</div> })}
             {match pending {
                 Some((_, code)) => view! {
-                    <p>"Open coolpsonotes on a device that is already set up. It will ask you to approve this browser. Check that it shows this code:"</p>
+                    <p>"Open notekpr on a device that is already set up. It will ask you to approve this browser. Check that it shows this code:"</p>
                     <div class="verify-code">{code}</div>
                     <p class="muted small"><span class="spinner inline"></span>" Waiting for approval…"</p>
                 }.into_any(),

@@ -42,7 +42,7 @@ impl AuditLog {
     /// itself (it already happened locally).
     pub fn record(&self, via: &str, op: &str, vault: &str, document: Option<&str>, bytes: usize) {
         let line = Line {
-            at: coolpsonotes_core::now_ms(),
+            at: notekpr_core::now_ms(),
             via,
             op,
             vault,

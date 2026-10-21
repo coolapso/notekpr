@@ -1,19 +1,19 @@
-//! `coolpsonotes quick`: quick notes land in `Quick notes/` of the
+//! `notekpr quick`: quick notes land in `Quick notes/` of the
 //! quick-notes vault (--vault, the synced preference, or the default).
 
 mod common;
 
 use clap::Parser;
 use common::*;
-use coolpsonotes_client::cli::Cli;
-use coolpsonotes_client::commands;
-use coolpsonotes_client::hub::Hub;
-use coolpsonotes_client::ops;
-use coolpsonotes_client::session::Session;
-use coolpsonotes_core::protocol::{PrefsBlob, PutPrefsRequest};
+use notekpr_client::cli::Cli;
+use notekpr_client::commands;
+use notekpr_client::hub::Hub;
+use notekpr_client::ops;
+use notekpr_client::session::Session;
+use notekpr_core::protocol::{PrefsBlob, PutPrefsRequest};
 
 async fn run(srv: &TestServer, who: &str, args: &[&str]) -> anyhow::Result<()> {
-    let mut argv = vec!["coolpsonotes", "-q", "--profile", who];
+    let mut argv = vec!["notekpr", "-q", "--profile", who];
     argv.extend_from_slice(args);
     commands::run_in(Cli::try_parse_from(argv)?, srv.dirs(who)).await
 }

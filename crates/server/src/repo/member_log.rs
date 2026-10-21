@@ -1,6 +1,6 @@
 //! The vault membership log (`member_log`).
 
-use coolpsonotes_core::memberlog::LogEntry;
+use notekpr_core::memberlog::LogEntry;
 use sqlx::{Row, SqliteExecutor};
 
 use crate::error::{AppError, AppResult};

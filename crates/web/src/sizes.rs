@@ -7,8 +7,8 @@
 //! size, local changes are split (or refused) before they become updates,
 //! and updates that can never be stored are held back instead of sent.
 
-use coolpsonotes_core::protocol::PushUpdate;
-use coolpsonotes_core::textdiff::Edit;
+use notekpr_core::protocol::PushUpdate;
+use notekpr_core::textdiff::Edit;
 
 /// The limit used until the server told us its own.
 pub const DEFAULT_MAX_UPDATE: usize = 2 << 20;
@@ -118,7 +118,7 @@ pub fn batches(ups: Vec<PushUpdate>, max_update: usize) -> (Vec<Vec<PushUpdate>>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use coolpsonotes_core::textdiff;
+    use notekpr_core::textdiff;
 
     fn up(id: usize, len: usize) -> PushUpdate {
         PushUpdate {

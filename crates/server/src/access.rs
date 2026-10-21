@@ -20,7 +20,7 @@
 //!   change above holds the same lock); with several processes writing one
 //!   database those checks must move into the transaction too.
 
-use coolpsonotes_core::protocol::{INDEX_OBJECT_ID, Role, comments_note};
+use notekpr_core::protocol::{INDEX_OBJECT_ID, Role, comments_note};
 use sqlx::SqliteExecutor;
 
 use crate::db::Db;

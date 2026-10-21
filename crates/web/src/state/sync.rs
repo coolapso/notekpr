@@ -6,7 +6,7 @@
 //! [`after_apply`], which pushes received content into the open editor.
 
 use super::*;
-use coolpsonotes_sync::SnapshotAction;
+use notekpr_sync::SnapshotAction;
 
 // ------------------------------------------------------------------ socket
 
@@ -312,8 +312,8 @@ pub(super) fn on_server_message(m: ServerMessage) {
     }
 }
 
-/// What to do after the server's answer to a push (see `coolpsonotes_sync::Reaction`).
-pub(super) fn react(c: &mut Core, vault_id: &str, re: coolpsonotes_sync::Reaction) {
+/// What to do after the server's answer to a push (see `notekpr_sync::Reaction`).
+pub(super) fn react(c: &mut Core, vault_id: &str, re: notekpr_sync::Reaction) {
     if !re.held.is_empty() {
         report_held(c, vault_id, &re.held);
     }
@@ -431,7 +431,7 @@ pub(super) fn on_synced(vault_id: &str, head: i64) {
                 // The server's history went backwards: queue our full state.
                 let rb = head < r.max_head_seen;
                 if rb {
-                    coolpsonotes_sync::recover_from_rollback(r, head);
+                    notekpr_sync::recover_from_rollback(r, head);
                 }
                 r.synced(head);
                 rb
@@ -505,8 +505,7 @@ pub(super) fn restore_stored_pending(c: &mut Core, vault_id: &str) -> engine::Ap
                 match r.decrypt_object(Purpose::Update, &p.object_id, &p.payload) {
                     Ok(plain) => {
                         adopted += 1;
-                        if let Some(note) = coolpsonotes_core::protocol::comments_note(&p.object_id)
-                        {
+                        if let Some(note) = notekpr_core::protocol::comments_note(&p.object_id) {
                             // Shown again, marked as not stored yet.
                             let pending = engine::Pending {
                                 client_update_id: p.client_update_id.clone(),
@@ -579,12 +578,12 @@ pub(super) fn send_planned(c: &mut Core, vault_id: &str) {
     };
     // Every change carries its author's signature.
     if let Some(a) = &c.account {
-        coolpsonotes_sync::members::sign_pushes(a, vault_id, &mut plan.pushes);
+        notekpr_sync::members::sign_pushes(a, vault_id, &mut plan.pushes);
     }
     if !plan.held.is_empty() {
         report_held(c, vault_id, &plan.held);
     }
-    let register: Vec<coolpsonotes_sync::NewKey> = plan
+    let register: Vec<notekpr_sync::NewKey> = plan
         .register
         .into_iter()
         .filter(|k| {
@@ -613,7 +612,7 @@ pub(super) fn send_planned(c: &mut Core, vault_id: &str) {
 }
 
 /// Changes held back as too large go out in snapshots of their notes, which
-/// carry them to everyone (`coolpsonotes_sync::carrier_now`). One per note
+/// carry them to everyone (`notekpr_sync::carrier_now`). One per note
 /// at a time, and within the server's snapshot cooldown.
 fn carry(c: &mut Core, vault_id: &str) {
     let candidates = c
@@ -639,8 +638,8 @@ fn carry(c: &mut Core, vault_id: &str) {
                 Some(c.shares.get(&key).filter(|s| s.synced)?.seq)
             };
             let o = c.outboxes.get(vault_id)?;
-            let mut carrier = coolpsonotes_sync::carrier_now(r, o, &object_id, covers, &limits())?;
-            coolpsonotes_sync::members::sign_snapshot(
+            let mut carrier = notekpr_sync::carrier_now(r, o, &object_id, covers, &limits())?;
+            notekpr_sync::members::sign_snapshot(
                 c.account.as_ref()?,
                 vault_id,
                 &object_id,
@@ -724,7 +723,7 @@ pub(super) fn adopt_stored_new_keys(c: &mut Core, vault_id: &str) -> Vec<String>
 }
 
 /// Register new notes' keys, then send their content.
-async fn register_keys(vault_id: String, keys: Vec<coolpsonotes_sync::NewKey>) {
+async fn register_keys(vault_id: String, keys: Vec<notekpr_sync::NewKey>) {
     let mut decided = false;
     for k in keys {
         let path = format!("/vaults/{vault_id}/objects/{}/key", k.object_id);
@@ -778,20 +777,20 @@ pub fn max_update_bytes() -> usize {
     ui().server
         .get_untracked()
         .map(|s| s.max_update_bytes as usize)
-        .unwrap_or(coolpsonotes_sync::Limits::DEFAULT_MAX_UPDATE)
+        .unwrap_or(notekpr_sync::Limits::DEFAULT_MAX_UPDATE)
 }
 
 /// The server's limits as far as known.
-pub fn limits() -> coolpsonotes_sync::Limits {
+pub fn limits() -> notekpr_sync::Limits {
     let snapshot = ui()
         .server
         .with_untracked(|s| s.as_ref().map(|s| s.max_snapshot_bytes))
         .unwrap_or(0);
-    coolpsonotes_sync::Limits::new(max_update_bytes()).with_snapshot(snapshot as usize)
+    notekpr_sync::Limits::new(max_update_bytes()).with_snapshot(snapshot as usize)
 }
 
 /// Tell the user (once per update) about changes held back as too large.
-pub(super) fn report_held(c: &Core, vault_id: &str, held: &[coolpsonotes_sync::Held]) {
+pub(super) fn report_held(c: &Core, vault_id: &str, held: &[notekpr_sync::Held]) {
     let Some(biggest) = held.iter().max_by_key(|h| h.bytes) else {
         return;
     };
@@ -987,9 +986,9 @@ pub(super) fn persist_pending(c: &mut Core, vault_id: &str) -> bool {
     let uid = c.user_id.clone();
     let previous = storage::pending(&uid, vault_id);
     let copies = c.replicas.get(vault_id).map(|r| {
-        let empty = coolpsonotes_sync::Outbox::default();
+        let empty = notekpr_sync::Outbox::default();
         let o = c.outboxes.get(vault_id).unwrap_or(&empty);
-        coolpsonotes_sync::stored_copies(r, o, &previous)
+        notekpr_sync::stored_copies(r, o, &previous)
     });
     let ups = match copies {
         // The replica is gone (e.g. the last note shared with us from this vault).
@@ -1032,7 +1031,7 @@ pub fn set_note_text(c: &mut Core, vault: &str, note: &str, text: &str) -> usize
     else {
         return 0;
     };
-    let ups = coolpsonotes_sync::edits::set_text(n, text, budget);
+    let ups = notekpr_sync::edits::set_text(n, text, budget);
     let count = ups.len();
     for u in ups {
         local_update(c, vault, note, u);
@@ -1156,22 +1155,17 @@ fn snapshot_action(c: &Core, vault_id: &str, object_id: &str) -> Option<Snapshot
         }
         Some(s.seq)
     };
-    let empty = coolpsonotes_sync::Outbox::default();
+    let empty = notekpr_sync::Outbox::default();
     let o = c.outboxes.get(vault_id).unwrap_or(&empty);
     let account = c.account.as_ref()?;
     Some(
-        match coolpsonotes_sync::snapshot_action(r, o, object_id, covers)? {
+        match notekpr_sync::snapshot_action(r, o, object_id, covers)? {
             SnapshotAction::Snapshot(mut req) => {
-                coolpsonotes_sync::members::sign_snapshot(account, vault_id, object_id, &mut req);
+                notekpr_sync::members::sign_snapshot(account, vault_id, object_id, &mut req);
                 SnapshotAction::Snapshot(req)
             }
             SnapshotAction::AdoptKey { ring, mut update } => {
-                coolpsonotes_sync::members::sign_key_update(
-                    account,
-                    vault_id,
-                    object_id,
-                    &mut update,
-                );
+                notekpr_sync::members::sign_key_update(account, vault_id, object_id, &mut update);
                 SnapshotAction::AdoptKey { ring, update }
             }
         },

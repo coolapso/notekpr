@@ -1,11 +1,11 @@
-# Optional example: Caddy in front of coolpsonotes, with automatic HTTPS for
-# COOLPSONOTES_PUBLIC_URL (certificates from Let's Encrypt; on a home network
+# Optional example: Caddy in front of notekpr, with automatic HTTPS for
+# NOTEKPR_PUBLIC_URL (certificates from Let's Encrypt; on a home network
 # from Caddy's own CA, with CADDYFILE=deploy/examples/caddy/Caddyfile.lan in
 # the environment). Added to the main Compose file:
 #   docker compose -f docker-compose.yml -f deploy/examples/caddy/compose.yml up -d
 # See docs/operations.md §4.
 services:
-  coolpsonotes:
+  notekpr:
     # Reached by Caddy over the project's network; nothing published.
     ports: !reset []
   caddy:
@@ -16,13 +16,13 @@ services:
       - "443:443"
       - "443:443/udp"
     environment:
-      - COOLPSONOTES_PUBLIC_URL
+      - NOTEKPR_PUBLIC_URL
     volumes:
       - ./${CADDYFILE:-deploy/examples/caddy/Caddyfile}:/etc/caddy/Caddyfile:ro
       - caddy-data:/data
       - caddy-config:/config
     depends_on:
-      - coolpsonotes
+      - notekpr
 
 volumes:
   caddy-data:

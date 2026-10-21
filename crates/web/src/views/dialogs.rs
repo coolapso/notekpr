@@ -1,12 +1,12 @@
 //! Modal dialogs.
 
 use super::focus_on_mount;
-use coolpsonotes_core::doc::EntryKind;
-use coolpsonotes_core::engine::PinStatus;
-use coolpsonotes_core::protocol::*;
 use leptos::html;
 use leptos::prelude::Update;
 use leptos::prelude::*;
+use notekpr_core::doc::EntryKind;
+use notekpr_core::engine::PinStatus;
+use notekpr_core::protocol::*;
 
 use crate::actions;
 use crate::state::{self, Modal, Route, step, ui};
@@ -202,8 +202,8 @@ fn QuickSwitch() -> impl IntoView {
                             view! {
                                 <button class="palette-item" class:sel=move || sel.get() == i on:mouseenter=move |_| sel.set(i) on:click=move |_| open(i)>
                                     {super::entry_icon(icon, "file")}
-                                    <span class="grow ellipsis">{coolpsonotes_core::paths::title(&path).to_string()}</span>
-                                    <span class="muted small ellipsis">{match coolpsonotes_core::paths::parent(&path) {
+                                    <span class="grow ellipsis">{notekpr_core::paths::title(&path).to_string()}</span>
+                                    <span class="muted small ellipsis">{match notekpr_core::paths::parent(&path) {
                                         "" => vname,
                                         folder => format!("{vname} · {folder}"),
                                     }}</span>
@@ -286,7 +286,7 @@ fn SearchDialog(initial: String) -> impl IntoView {
                         let html = highlighted(&snippet, &hl);
                         view! {
                             <button class="result" on:click=move |_| { ui.modal.set(None); state::navigate(Route::Note(v.clone(), id.clone())); }>
-                                <div class="r-title">{coolpsonotes_core::paths::title(&path).to_string()}<span class="muted small">{format!("  {vname} / {path}")}</span></div>
+                                <div class="r-title">{notekpr_core::paths::title(&path).to_string()}<span class="muted small">{format!("  {vname} / {path}")}</span></div>
                                 <div class="r-snip" inner_html=html></div>
                             </button>
                         }
@@ -785,9 +785,9 @@ fn VaultIconPicker(vault: String) -> impl IntoView {
 fn EntryIconDialog(vault: String, id: Option<String>, path: String, folder: bool) -> impl IntoView {
     let ui = ui();
     let name = if folder {
-        coolpsonotes_core::paths::file_name(&path).to_string()
+        notekpr_core::paths::file_name(&path).to_string()
     } else {
-        coolpsonotes_core::paths::title(&path).to_string()
+        notekpr_core::paths::title(&path).to_string()
     };
     let target = StoredValue::new((vault, id, path));
     let current = Memo::new(move |_| {
@@ -1052,7 +1052,7 @@ fn ApproveDevice(device: DeviceInfo) -> impl IntoView {
     let (uid, account) = step(|c| (c.user_id.clone(), c.account.as_ref().map(|a| a.public())));
     let code = account
         .and_then(|a| {
-            coolpsonotes_core::engine::verification_code(&uid, &device.id, &device.enc_public, &a)
+            notekpr_core::engine::verification_code(&uid, &device.id, &device.enc_public, &a)
         })
         .unwrap_or_default();
     let busy = RwSignal::new(false);
@@ -1069,7 +1069,7 @@ fn ApproveDevice(device: DeviceInfo) -> impl IntoView {
                     busy.set(true);
                     let d = d1.clone();
                     leptos::task::spawn_local(async move {
-                        let req = step(|c| c.account.as_ref().map(|a| coolpsonotes_core::engine::approve_device(a, &c.user_id, &d.id, &d.enc_public)));
+                        let req = step(|c| c.account.as_ref().map(|a| notekpr_core::engine::approve_device(a, &c.user_id, &d.id, &d.enc_public)));
                         match req {
                             Some(Ok(r)) => match api::post::<_, ()>(&format!("/devices/{}/activate", d.id), &r).await {
                                 Ok(()) => { state::success("Device approved."); ui.modal.set(None); }
@@ -1181,7 +1181,7 @@ fn NewFolder(vault: String, parent: String) -> impl IntoView {
                 ev.prevent_default();
                 let n = name.get_untracked();
                 if n.trim().is_empty() { return; }
-                actions::create_folder(&vault, &coolpsonotes_core::paths::join(&parent, n.trim()));
+                actions::create_folder(&vault, &notekpr_core::paths::join(&parent, n.trim()));
                 ui.modal.set(None);
             }>
                 <input class="input" use:focus_on_mount placeholder="Folder name" prop:value=move || name.get() on:input=move |ev| name.set(event_target_value(&ev))/>
@@ -1201,7 +1201,7 @@ fn MoveDialog(vault: String, id: String) -> impl IntoView {
                 .map(|r| r.index.folders())
                 .unwrap_or_default(),
             c.entry(&vault, &id)
-                .map(|e| coolpsonotes_core::paths::parent(&e.path).to_string())
+                .map(|e| notekpr_core::paths::parent(&e.path).to_string())
                 .unwrap_or_default(),
         )
     });

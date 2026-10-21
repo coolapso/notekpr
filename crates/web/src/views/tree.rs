@@ -3,9 +3,9 @@
 use super::focus_on_mount;
 use std::collections::{BTreeMap, BTreeSet};
 
-use coolpsonotes_core::doc::EntryKind;
-use coolpsonotes_core::{order, paths};
 use leptos::prelude::*;
+use notekpr_core::doc::EntryKind;
+use notekpr_core::{order, paths};
 use wasm_bindgen::JsCast;
 
 use crate::actions::{self, Spot};
@@ -274,7 +274,7 @@ pub fn Tree(vault: String) -> impl IntoView {
                             on:dragstart=move |ev: web_sys::DragEvent| {
                                 if let Some(dt) = ev.data_transfer() {
                                     dt.set_effect_allowed("move");
-                                    let _ = dt.set_data("text/x-cpn-entry", &p4);
+                                    let _ = dt.set_data("text/x-notekpr-entry", &p4);
                                 }
                                 dragging.set(Some(Dragged { path: p4.clone(), folder: is_folder }));
                             }

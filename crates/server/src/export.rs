@@ -1,9 +1,9 @@
 //! Encrypted exports: everything one person can read, as ciphertext plus
 //! their key envelopes, so they can decrypt it offline with
-//! `coolpsonotes recover` (see `coolpsonotes_core::recover`). The server
+//! `notekpr recover` (see `notekpr_core::recover`). The server
 //! assembles stored bytes only; it can't read any of it.
 
-use coolpsonotes_core::protocol::{
+use notekpr_core::protocol::{
     ChangesResponse, EXPORT_FORMAT, EncryptedExport, ExportedAttachment, ExportedSharedNote,
     ExportedVault,
 };

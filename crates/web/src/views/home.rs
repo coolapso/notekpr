@@ -1,8 +1,8 @@
 //! Home (all vaults), a vault's overview page, and the trash.
 
-use coolpsonotes_core::doc::EntryKind;
-use coolpsonotes_core::protocol::Role;
 use leptos::prelude::*;
+use notekpr_core::doc::EntryKind;
+use notekpr_core::protocol::Role;
 
 use crate::actions;
 use crate::state::{self, Modal, Route, step, ui};
@@ -150,7 +150,7 @@ pub fn VaultHome(vault: String) -> impl IntoView {
                                 <div class="note-list">
                                     {items.into_iter().map(|e| {
                                         let (v2, id) = (v.clone(), e.id.clone());
-                                        let folder = coolpsonotes_core::paths::parent(&e.path).to_string();
+                                        let folder = notekpr_core::paths::parent(&e.path).to_string();
                                         let text = step(|c| c.replicas.get(&v).map(|r| r.note_text(&e.id))).unwrap_or_default();
                                         let snippet: String = text.lines().filter(|l| !l.trim().is_empty() && !l.starts_with('#') && !l.starts_with("---")).take(2).collect::<Vec<_>>().join(" ").chars().take(140).collect();
                                         view! {

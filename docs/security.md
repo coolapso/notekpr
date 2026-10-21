@@ -208,10 +208,10 @@ reported, never applied partially. Duplicate deliveries are no-ops.
 * All devices *and* the recovery key lost: the notes cannot be recovered — by
   design there is no server-side master key. Export your vaults regularly.
 * **No lock-in**: with the recovery key (or a device) and an encrypted export
-  (`coolpsonotes export-encrypted`, `GET /me/export`, or
-  `coolpsonotes-server export-user` from any server backup), everything a
+  (`notekpr export-encrypted`, `GET /me/export`, or
+  `notekpr-server export-user` from any server backup), everything a
   person could read decrypts offline into Markdown files with
-  `coolpsonotes recover`, without the server ([recovery.md](recovery.md)).
+  `notekpr recover`, without the server ([recovery.md](recovery.md)).
 
 ### Web application threats
 

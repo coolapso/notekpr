@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1.7
-# coolpsonotes server image: the zero-knowledge sync server plus the browser
+# notekpr server image: the zero-knowledge sync server plus the browser
 # client (Rust → WebAssembly). Built with the Rust toolchain only — no npm.
 #
 # Multi-platform: `docker buildx build --platform linux/amd64,linux/arm64`.
@@ -15,12 +15,12 @@ ARG WASM_BINDGEN_VERSION=0.2.128
 RUN rustup target add wasm32-unknown-unknown
 # wasm-opt makes the browser bundle much smaller.
 RUN apt-get update && apt-get install -y --no-install-recommends binaryen && rm -rf /var/lib/apt/lists/*
-RUN --mount=type=cache,id=coolpsonotes-registry-web,target=/usr/local/cargo/registry \
+RUN --mount=type=cache,id=notekpr-registry-web,target=/usr/local/cargo/registry \
     cargo install wasm-bindgen-cli --version ${WASM_BINDGEN_VERSION} --locked
 WORKDIR /src
 COPY . .
-RUN --mount=type=cache,id=coolpsonotes-registry-web,target=/usr/local/cargo/registry \
-    --mount=type=cache,id=coolpsonotes-target-web,target=/src/target \
+RUN --mount=type=cache,id=notekpr-registry-web,target=/usr/local/cargo/registry \
+    --mount=type=cache,id=notekpr-target-web,target=/src/target \
     ./scripts/build-web.sh \
  && mkdir -p /out \
  && cp -r dist/web /out/web
@@ -50,12 +50,12 @@ ENV CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=x86_64-linux-gnu-gcc \
     CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc
 WORKDIR /src
 COPY . .
-RUN --mount=type=cache,id=coolpsonotes-registry-$TARGETARCH,target=/usr/local/cargo/registry \
-    --mount=type=cache,id=coolpsonotes-target-$TARGETARCH,target=/src/target \
+RUN --mount=type=cache,id=notekpr-registry-$TARGETARCH,target=/usr/local/cargo/registry \
+    --mount=type=cache,id=notekpr-target-$TARGETARCH,target=/src/target \
     target=$(cat /rust-target) \
- && cargo build --release --locked --target "$target" -p coolpsonotes-server -p coolpsonotes-client \
+ && cargo build --release --locked --target "$target" -p notekpr-server -p notekpr-client \
  && mkdir -p /out/bin /out/data \
- && cp "target/$target/release/coolpsonotes-server" "target/$target/release/coolpsonotes" /out/bin/
+ && cp "target/$target/release/notekpr-server" "target/$target/release/notekpr" /out/bin/
 
 # A public demo that starts over every hour (docs/operations.md §10): the
 # server and CLI, plus Python for scripts/demo.py, which seeds the demo data
@@ -65,33 +65,33 @@ RUN --mount=type=cache,id=coolpsonotes-registry-$TARGETARCH,target=/usr/local/ca
 # target is the server image below.
 FROM python:3.13-slim-trixie AS demo
 COPY --from=build /out/bin/ /usr/local/bin/
-COPY --from=web /out/web /usr/share/coolpsonotes/web
-COPY scripts/demo.py /usr/share/coolpsonotes/demo.py
+COPY --from=web /out/web /usr/share/notekpr/web
+COPY scripts/demo.py /usr/share/notekpr/demo.py
 COPY --from=build --chown=65532:65532 /out/data /data
 EXPOSE 8080
 USER 65532:65532
-ENTRYPOINT ["python3", "-u", "/usr/share/coolpsonotes/demo.py", \
-    "--server-bin", "/usr/local/bin/coolpsonotes-server", "--cli-bin", "/usr/local/bin/coolpsonotes", \
-    "--web-dir", "/usr/share/coolpsonotes/web", "--data", "/data/demo", "--server-log", "-", \
+ENTRYPOINT ["python3", "-u", "/usr/share/notekpr/demo.py", \
+    "--server-bin", "/usr/local/bin/notekpr-server", "--cli-bin", "/usr/local/bin/notekpr", \
+    "--web-dir", "/usr/share/notekpr/web", "--data", "/data/demo", "--server-log", "-", \
     "--listen", "0.0.0.0:8080", "--dev-mode-anywhere", "--fresh", "--lifetime", "1h"]
 
 FROM gcr.io/distroless/cc-debian13:nonroot
-LABEL org.opencontainers.image.title="coolpsonotes" \
+LABEL org.opencontainers.image.title="notekpr" \
       org.opencontainers.image.description="Self-hosted, end-to-end encrypted, collaborative Markdown notes" \
       org.opencontainers.image.licenses="AGPL-3.0-or-later"
 COPY --from=build /out/bin/ /usr/local/bin/
-COPY --from=web /out/web /usr/share/coolpsonotes/web
+COPY --from=web /out/web /usr/share/notekpr/web
 COPY --from=build --chown=65532:65532 /out/data /data
-ENV COOLPSONOTES_LISTEN=0.0.0.0:8080 \
-    COOLPSONOTES_DATA_DIR=/data \
-    COOLPSONOTES_WEB_DIR=/usr/share/coolpsonotes/web \
-    COOLPSONOTES_LOG_FORMAT=json
+ENV NOTEKPR_LISTEN=0.0.0.0:8080 \
+    NOTEKPR_DATA_DIR=/data \
+    NOTEKPR_WEB_DIR=/usr/share/notekpr/web \
+    NOTEKPR_LOG_FORMAT=json
 VOLUME ["/data"]
 EXPOSE 8080
 USER 65532:65532
 # Checked every second while starting, so a new container counts as healthy
 # (and proxies that wait for that, like Traefik's Docker provider, route to
 # it) within a second of an update, not after the first 30 s interval.
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --start-interval=1s CMD ["coolpsonotes-server", "healthcheck"]
-ENTRYPOINT ["coolpsonotes-server"]
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --start-interval=1s CMD ["notekpr-server", "healthcheck"]
+ENTRYPOINT ["notekpr-server"]
 CMD ["serve"]

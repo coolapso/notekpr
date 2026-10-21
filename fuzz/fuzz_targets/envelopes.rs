@@ -1,7 +1,7 @@
 //! Ciphertext parsing: malformed or tampered envelopes are refused, never
 //! panic, and never decrypt.
 #![no_main]
-use coolpsonotes_core::crypto::{self, Purpose};
+use notekpr_core::crypto::{self, Purpose};
 use libfuzzer_sys::fuzz_target;
 
 fuzz_target!(|data: &[u8]| {

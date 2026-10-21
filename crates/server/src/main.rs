@@ -3,13 +3,13 @@ use std::path::Path;
 
 use anyhow::{Context, bail};
 use clap::Parser;
-use coolpsonotes_server::config::{Cli, Command, Config, LogFormat};
-use coolpsonotes_server::db;
+use notekpr_server::config::{Cli, Command, Config, LogFormat};
+use notekpr_server::db;
 use tracing_subscriber::EnvFilter;
 
 fn init_logging(format: LogFormat) {
-    let filter = EnvFilter::try_from_env("COOLPSONOTES_LOG")
-        .unwrap_or_else(|_| EnvFilter::new("info,sqlx=warn"));
+    let filter =
+        EnvFilter::try_from_env("NOTEKPR_LOG").unwrap_or_else(|_| EnvFilter::new("info,sqlx=warn"));
     let builder = tracing_subscriber::fmt()
         .with_env_filter(filter)
         .with_target(false);
@@ -42,7 +42,7 @@ async fn main() -> anyhow::Result<()> {
                     std::fs::create_dir_all(dir)?;
                     let ts = time::OffsetDateTime::now_utc();
                     dir.join(format!(
-                        "coolpsonotes-{:04}{:02}{:02}-{:02}{:02}{:02}.db",
+                        "notekpr-{:04}{:02}{:02}-{:02}{:02}{:02}.db",
                         ts.year(),
                         ts.month() as u8,
                         ts.day(),
@@ -62,7 +62,7 @@ async fn main() -> anyhow::Result<()> {
                     .filter(|p| {
                         p.file_name()
                             .and_then(|n| n.to_str())
-                            .is_some_and(|n| n.starts_with("coolpsonotes-") && n.ends_with(".db"))
+                            .is_some_and(|n| n.starts_with("notekpr-") && n.ends_with(".db"))
                     })
                     .collect();
                 files.sort();
@@ -92,11 +92,11 @@ async fn export_user(
     anyhow::ensure!(!out.exists(), "{} already exists", out.display());
     // A backup may be from an older version: work on a migrated copy so the
     // backup itself is never modified.
-    let scratch = std::env::temp_dir().join(format!("coolpsonotes-export-{}", db::new_id()));
+    let scratch = std::env::temp_dir().join(format!("notekpr-export-{}", db::new_id()));
     let path = match backup {
         Some(b) => {
             std::fs::create_dir_all(&scratch)?;
-            let copy = scratch.join("coolpsonotes.db");
+            let copy = scratch.join("notekpr.db");
             std::fs::copy(b, &copy).with_context(|| format!("reading {}", b.display()))?;
             copy
         }
@@ -109,9 +109,9 @@ async fn export_user(
             db::migrate(&pool, &path).await?;
         }
         let id = find_user(&pool, user).await?;
-        let export = coolpsonotes_server::export::user_export(
+        let export = notekpr_server::export::user_export(
             &pool,
-            &coolpsonotes_server::blobs::Blobs::Sqlite(pool.clone()),
+            &notekpr_server::blobs::Blobs::Sqlite(pool.clone()),
             &id,
         )
         .await
@@ -133,7 +133,7 @@ async fn export_user(
 
 /// A user by id, exact e-mail or exact display name (case-insensitive).
 async fn find_user(pool: &db::Db, user: &str) -> anyhow::Result<String> {
-    let ids = coolpsonotes_server::repo::users::find(pool, user).await?;
+    let ids = notekpr_server::repo::users::find(pool, user).await?;
     match ids.as_slice() {
         [one] => Ok(one.clone()),
         [] => bail!("no user {user:?} in this database"),
@@ -159,7 +159,7 @@ async fn serve(config: Config) -> anyhow::Result<()> {
     if !config.oidc_enabled() && !config.dev_mode {
         bail!(
             "no login method configured: set --oidc-issuer and --oidc-client-id \
-             (COOLPSONOTES_OIDC_ISSUER / COOLPSONOTES_OIDC_CLIENT_ID), or --dev-mode for local development"
+             (NOTEKPR_OIDC_ISSUER / NOTEKPR_OIDC_CLIENT_ID), or --dev-mode for local development"
         );
     }
     if config.demo_resets_at.is_some() && !config.dev_mode {
@@ -186,7 +186,7 @@ async fn serve(config: Config) -> anyhow::Result<()> {
             .collect();
         if !reasons.is_empty() && !config.dev_mode_anywhere {
             bail!(
-                "refusing to start in development mode because {}. Development mode lets anyone sign in as anyone. If this server really is reachable only by you (e.g. a container published on 127.0.0.1), add --dev-mode-anywhere (COOLPSONOTES_DEV_MODE_ANYWHERE=true).",
+                "refusing to start in development mode because {}. Development mode lets anyone sign in as anyone. If this server really is reachable only by you (e.g. a container published on 127.0.0.1), add --dev-mode-anywhere (NOTEKPR_DEV_MODE_ANYWHERE=true).",
                 reasons.join(" and ")
             );
         }
@@ -197,7 +197,7 @@ async fn serve(config: Config) -> anyhow::Result<()> {
             tracing::warn!("development mode allowed although {r}");
         }
     }
-    match coolpsonotes_server::process::raise_open_files_limit() {
+    match notekpr_server::process::raise_open_files_limit() {
         // Each connected person needs about three: a WebSocket and HTTP
         // connections.
         Some(n) if n < 8192 => tracing::warn!(
@@ -222,11 +222,11 @@ async fn serve(config: Config) -> anyhow::Result<()> {
     };
     let listen = config.listen;
     let public_url = config.public_url();
-    let (app, state) = coolpsonotes_server::build(config, metrics).await?;
+    let (app, state) = notekpr_server::build(config, metrics).await?;
     let listener = tokio::net::TcpListener::bind(listen)
         .await
         .with_context(|| format!("binding {listen}"))?;
-    tracing::info!(%listen, %public_url, version = env!("CARGO_PKG_VERSION"), "coolpsonotes server ready");
+    tracing::info!(%listen, %public_url, version = env!("CARGO_PKG_VERSION"), "notekpr server ready");
     axum::serve(
         listener,
         app.into_make_service_with_connect_info::<SocketAddr>(),

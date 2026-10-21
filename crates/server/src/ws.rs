@@ -1,6 +1,6 @@
 //! Live sync over WebSocket.
 //!
-//! Protocol (JSON text frames, see `coolpsonotes_core::protocol`):
+//! Protocol (JSON text frames, see `notekpr_core::protocol`):
 //! 1. client sends `auth` (browsers cannot set headers on WebSockets);
 //! 2. client `subscribe`s to vaults, optionally with `since` to catch up;
 //! 3. server streams `changes` pages, then `synced`, then live events in
@@ -15,11 +15,11 @@ use std::time::{Duration, Instant};
 use axum::extract::State;
 use axum::extract::ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade};
 use axum::response::Response;
-use coolpsonotes_core::protocol::{
+use futures::{SinkExt, StreamExt};
+use notekpr_core::protocol::{
     CLOSE_RESTARTING, ClientMessage, ObjectEventKind, PushResult, ServerMessage, UserEventKind,
     VaultEventKind, comments_note,
 };
-use futures::{SinkExt, StreamExt};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
@@ -85,7 +85,7 @@ async fn connection(socket: WebSocket, state: AppState) {
 
     let (conn_id, mut control) = state.hub.connect(&who.user_id);
     let (out_tx, mut out_rx) = mpsc::channel::<Out>(OUTBOUND_QUEUE);
-    metrics::gauge!("coolpsonotes_ws_connections").increment(1.0);
+    metrics::gauge!("notekpr_ws_connections").increment(1.0);
 
     let writer = tokio::spawn(async move {
         while let Some(o) = out_rx.recv().await {
@@ -224,7 +224,7 @@ async fn connection(socket: WebSocket, state: AppState) {
     let _ = writer.await;
     // Gone only now that the close went out (a shutdown waits for it).
     state.hub.disconnect(&conn.who.user_id, conn_id);
-    metrics::gauge!("coolpsonotes_ws_connections").decrement(1.0);
+    metrics::gauge!("notekpr_ws_connections").decrement(1.0);
 }
 
 struct Conn {
@@ -271,7 +271,7 @@ impl Conn {
                 | ClientMessage::Unsubscribe { .. }
         ) && !self.requests.take()
         {
-            metrics::counter!("coolpsonotes_rate_limited_total", "scope" => "ws").increment(1);
+            metrics::counter!("notekpr_rate_limited_total", "scope" => "ws").increment(1);
             self.send(error_msg(&AppError::RateLimited, None)).await;
             return true;
         }

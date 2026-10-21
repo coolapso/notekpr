@@ -17,9 +17,9 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail};
-use coolpsonotes_core::engine;
-use coolpsonotes_core::keys::{AccountSecret, DeviceKey, RecoveryKey};
-use coolpsonotes_core::protocol::*;
+use notekpr_core::engine;
+use notekpr_core::keys::{AccountSecret, DeviceKey, RecoveryKey};
+use notekpr_core::protocol::*;
 
 use crate::api::{Api, Credentials, DevicePoll};
 use crate::fsutil;
@@ -99,7 +99,7 @@ pub fn host_name() -> String {
 }
 
 fn default_device_name() -> String {
-    format!("coolpsonotes CLI on {}", host_name())
+    format!("notekpr CLI on {}", host_name())
 }
 
 async fn device_flow(api: &Api, client_name: &str) -> Result<TokenResponse> {
@@ -108,7 +108,7 @@ async fn device_flow(api: &Api, client_name: &str) -> Result<TokenResponse> {
         .await
         .context("starting the device login")?;
     ui::status(&format!(
-        "\nTo sign in, open this address in a browser where you are signed in to coolpsonotes:\n\n    {}\n\n\
+        "\nTo sign in, open this address in a browser where you are signed in to notekpr:\n\n    {}\n\n\
          and check that it shows the code  {}\n",
         da.verification_uri_complete, da.user_code
     ));
@@ -117,14 +117,14 @@ async fn device_flow(api: &Api, client_name: &str) -> Result<TokenResponse> {
     loop {
         tokio::time::sleep(interval).await;
         if Instant::now() > deadline {
-            bail!("the login code expired; run `coolpsonotes login` again");
+            bail!("the login code expired; run `notekpr login` again");
         }
         match api.poll_device_token(&da.device_code).await {
             Ok(DevicePoll::Pending) => {}
             Ok(DevicePoll::SlowDown) => interval += Duration::from_secs(5),
             Ok(DevicePoll::Denied) => bail!("the login was declined in the browser"),
             Ok(DevicePoll::Expired) => {
-                bail!("the login code expired; run `coolpsonotes login` again")
+                bail!("the login code expired; run `notekpr login` again")
             }
             Ok(DevicePoll::Token(t)) => return Ok(t),
             Err(e) if e.is_network() => {}
@@ -178,13 +178,13 @@ pub async fn login(dirs: &Dirs, profile: &str, opts: LoginOptions) -> Result<Log
             let me = api.me().await?;
             (
                 t.access_token,
-                coolpsonotes_core::now_ms() + t.expires_in as i64 * 1000,
+                notekpr_core::now_ms() + t.expires_in as i64 * 1000,
                 me.user,
             )
         }
     };
     if user.kind != PrincipalKind::Human {
-        bail!("these credentials belong to an agent; use `coolpsonotes agent setup`");
+        bail!("these credentials belong to an agent; use `notekpr agent setup`");
     }
     if let Some(uid) = existing.as_ref().and_then(|p| p.user_id.as_ref())
         && *uid != user.id
@@ -320,7 +320,7 @@ pub async fn login(dirs: &Dirs, profile: &str, opts: LoginOptions) -> Result<Log
         })?;
         api.put::<_, ()>("/me/account-key", &b.request)
             .await
-            .context("uploading the new account key (run `coolpsonotes login` again to retry)")?;
+            .context("uploading the new account key (run `notekpr login` again to retry)")?;
         return Ok(LoginOutcome {
             user,
             device_id: b.device_id,
@@ -389,7 +389,7 @@ pub async fn login(dirs: &Dirs, profile: &str, opts: LoginOptions) -> Result<Log
         None => {
             ui::status(&format!(
                 "\nThis device must be approved by one of your other devices.\n\
-                 On a signed-in device run `coolpsonotes devices approve {device_id}` (or open Devices in the web app)\n\
+                 On a signed-in device run `notekpr devices approve {device_id}` (or open Devices in the web app)\n\
                  and approve only if it shows this verification code:\n\n    {code}\n"
             ));
             wait_for_approval(
@@ -499,7 +499,7 @@ async fn wait_for_approval(
             Err(e) => return Err(anyhow!(e).context("checking the approval")),
         }
         if Instant::now() > deadline {
-            bail!("no approval yet; run `coolpsonotes login` again later to keep waiting");
+            bail!("no approval yet; run `notekpr login` again later to keep waiting");
         }
         tokio::select! {
             _ = tokio::time::sleep(delay) => {}

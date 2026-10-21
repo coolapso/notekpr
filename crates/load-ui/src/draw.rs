@@ -1,6 +1,6 @@
 //! Drawing one frame on the canvas.
 
-use coolpsonotes_load_events::{Action, GameOver, LevelResult, Phase, Report, Stats, Verdict};
+use notekpr_load_events::{Action, GameOver, LevelResult, Phase, Report, Stats, Verdict};
 use web_sys::CanvasRenderingContext2d as Ctx;
 
 use crate::state::{self, App, Hit, SLOTS};
@@ -196,14 +196,14 @@ pub fn frame(app: &mut App, c: &Ctx, w: f64, h: f64, now: f64) {
 fn header(app: &App, c: &Ctx, w: f64, head: f64) {
     text(
         c,
-        "coolpsonotes",
+        "notekpr",
         18.0,
         36.0,
         &format!("700 20px {SANS}"),
         TEXT,
         "left",
     );
-    let tw = width(c, "coolpsonotes", &format!("700 20px {SANS}"));
+    let tw = width(c, "notekpr", &format!("700 20px {SANS}"));
     text(
         c,
         "under load",
@@ -1660,16 +1660,8 @@ fn draw_menu(app: &mut App, c: &Ctx, w: f64, h: f64, now: f64) {
     let cx = w / 2.0;
     let mut y = (h * 0.12).clamp(40.0, 110.0);
     let tf = format!("900 50px {MONO}");
-    text(
-        c,
-        "COOLPSONOTES",
-        cx + 4.0,
-        y + 4.0,
-        &tf,
-        "#0b3a4a",
-        "center",
-    );
-    text(c, "COOLPSONOTES", cx, y, &tf, CYAN, "center");
+    text(c, "NOTEKPR", cx + 4.0, y + 4.0, &tf, "#0b3a4a", "center");
+    text(c, "NOTEKPR", cx, y, &tf, CYAN, "center");
     y += 44.0;
     let sf = format!("900 30px {MONO}");
     text(c, "UNDER LOAD", cx + 3.0, y + 3.0, &sf, "#4a3410", "center");
@@ -1770,9 +1762,7 @@ fn draw_menu(app: &mut App, c: &Ctx, w: f64, h: f64, now: f64) {
     y += 20.0;
     let server = match &m.menu.remote {
         Some(url) => format!("server: {url}, as it runs there"),
-        None if m.menu.docker => {
-            "server: the coolpsonotes image in Docker, with these limits".into()
-        }
+        None if m.menu.docker => "server: the notekpr image in Docker, with these limits".into(),
         None => "server: a local process, without limits".into(),
     };
     text(

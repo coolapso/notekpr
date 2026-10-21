@@ -3,7 +3,7 @@
 use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
-use coolpsonotes_core::protocol::{
+use notekpr_core::protocol::{
     ChangesResponse, CreateSnapshotRequest, ObjectState, PushRequest, PushResponse, Snapshot,
     SnapshotInfo,
 };

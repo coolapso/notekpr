@@ -5,12 +5,12 @@
 mod common;
 
 use common::*;
-use coolpsonotes_client::{manage, note_shares, ops};
-use coolpsonotes_core::doc::EntryKind;
-use coolpsonotes_core::engine::{self, VaultMeta, VaultReplica};
-use coolpsonotes_core::keys::{self, VaultKey};
-use coolpsonotes_core::memberlog::LogBody;
-use coolpsonotes_core::protocol::*;
+use notekpr_client::{manage, note_shares, ops};
+use notekpr_core::doc::EntryKind;
+use notekpr_core::engine::{self, VaultMeta, VaultReplica};
+use notekpr_core::keys::{self, VaultKey};
+use notekpr_core::memberlog::LogBody;
+use notekpr_core::protocol::*;
 
 async fn sql(srv: &TestServer, q: &'static str, binds: &[&str]) {
     let mut query = sqlx::query(q);
@@ -277,7 +277,7 @@ async fn slip_in(
     .bind(vault_id)
     .bind(seq)
     .bind(object_id)
-    .bind(coolpsonotes_core::random_id())
+    .bind(notekpr_core::random_id())
     .bind(author)
     .bind(payload)
     .bind(signature)
@@ -288,8 +288,8 @@ async fn slip_in(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn content_a_server_slips_in_is_refused() {
-    use coolpsonotes_core::crypto::Purpose;
-    use coolpsonotes_core::memberlog;
+    use notekpr_core::crypto::Purpose;
+    use notekpr_core::memberlog;
     let srv = start().await;
     let alice = login(&srv, "alice").await;
     let bob = login(&srv, "bob").await;
@@ -317,7 +317,7 @@ async fn content_a_server_slips_in_is_refused() {
     let oid = vv.find_note("Plan").unwrap().1.id;
     let forged = {
         let n = vv.replica.notes.get(&oid).unwrap();
-        let fork = coolpsonotes_client::vault::fork_note(&n.encode_state()).unwrap();
+        let fork = notekpr_client::vault::fork_note(&n.encode_state()).unwrap();
         fork.set_text("forged\n").unwrap()
     };
     let payload = vv

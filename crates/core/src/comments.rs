@@ -28,7 +28,7 @@ pub const MAX_QUOTE_CHARS: usize = 300;
 const MAX_POSITION_BYTES: usize = 256;
 const MAX_ID_LEN: usize = 64;
 
-const COMMENT_DOMAIN: &str = "coolpsonotes/v1/sig/comment";
+const COMMENT_DOMAIN: &str = "notekpr/v1/sig/comment";
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum CommentError {

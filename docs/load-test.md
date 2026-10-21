@@ -182,11 +182,11 @@ limit who can reach it (a firewall rule for the load machine's address)
 and take it down afterwards. For example, on the test machine:
 
 ```sh
-docker run -d --name coolpsonotes-loadtest -p 8080:8080 -v /data \
-  -e COOLPSONOTES_DEV_MODE=true -e COOLPSONOTES_DEV_MODE_ANYWHERE=true \
-  -e COOLPSONOTES_RATE_LIMIT_RPS=1000000 -e COOLPSONOTES_AUTH_RATE_LIMIT_PER_MIN=1000000 \
-  -e COOLPSONOTES_PUBLIC_URL=https://notes-test.example.com \
-  --cpus 1 --memory 512m coolpsonotes:latest
+docker run -d --name notekpr-loadtest -p 8080:8080 -v /data \
+  -e NOTEKPR_DEV_MODE=true -e NOTEKPR_DEV_MODE_ANYWHERE=true \
+  -e NOTEKPR_RATE_LIMIT_RPS=1000000 -e NOTEKPR_AUTH_RATE_LIMIT_PER_MIN=1000000 \
+  -e NOTEKPR_PUBLIC_URL=https://notes-test.example.com \
+  --cpus 1 --memory 512m notekpr:latest
 ```
 
 (behind your HTTPS proxy, or `http://` and a port for a quick try). The
@@ -195,13 +195,13 @@ load machine; if they aren't, the run says so as soon as the server turns
 requests away.
 
 * **Outages** need a way to kill and start it: `--kill-command "ssh
-  test-box docker kill coolpsonotes-loadtest" --start-command "ssh test-box
-  docker start coolpsonotes-loadtest"` (run with `sh -c`). Without them
+  test-box docker kill notekpr-loadtest" --start-command "ssh test-box
+  docker start notekpr-loadtest"` (run with `sh -c`). Without them
   there are none.
 * **CPU and memory** come from the server's own `/metrics`
   (`process_cpu_seconds_total`, `process_resident_memory_bytes`; Linux
   servers): 100 % is one core, there are no limit lines. If `/metrics` needs
-  a token, pass `--metrics-token` (or `COOLPSONOTES_METRICS_TOKEN`); if the
+  a token, pass `--metrics-token` (or `NOTEKPR_METRICS_TOKEN`); if the
   proxy hides `/metrics` (as it should, from the internet), the CPU, memory and
   request charts stay empty, and the rest works.
 * **Accounts stay** on that server: each run's people sign in with names of
@@ -216,10 +216,10 @@ requests away.
   127.0.0.1 only) so the crowd can sign in without an identity provider.
   Its per-address rate limits are raised: every simulated person comes from
   this machine, and the limits would treat them as one.
-* **The people are real clients**: the same library as the `coolpsonotes`
+* **The people are real clients**: the same library as the `notekpr`
   CLI — real account and device keys, end-to-end encryption, signed changes,
   the membership log, a WebSocket each for live changes. Their copies live
-  in memory (`/dev/shm/coolpsonotes-load-<pid>`), or in `people/` under
+  in memory (`/dev/shm/notekpr-load-<pid>`), or in `people/` under
   `--out` where there is no `/dev/shm`; `--people-dir` chooses.
 * **Their uploads go over HTTP**, as the CLI's do; the browser sends edits
   over its WebSocket instead. They send no presence (cursors) to the
@@ -248,7 +248,7 @@ requests away.
 
 ## Options
 
-`coolpsonotes-load --help` lists them all; `task load -- --flag` passes them
+`notekpr-load --help` lists them all; `task load -- --flag` passes them
 on. The `task load` variables and their defaults: `USERS=100 STEP=100
 LEVELS=10 FROM=1 DURATION=45s CPUS=1 MEMORY=512m SPEED=1 REALISTIC=`;
 `task load:native` and `task load:remote` take them without `CPUS` and
@@ -265,14 +265,14 @@ LEVELS=10 FROM=1 DURATION=45s CPUS=1 MEMORY=512m SPEED=1 REALISTIC=`;
 | `--realistic` | | people as busy as [real ones](#realistic-people) (`task load REALISTIC=1`) |
 | `--arrive D` | 10s | over how long each level's newcomers arrive (`0` = all at once) |
 | `--cpus N`, `--memory M` | 1, 512m | the container's limits |
-| `--image I` | coolpsonotes:latest | the server image |
-| `--native` | | run `target/release/coolpsonotes-server` as a process instead (Linux; no limits; see `--server-bin`) |
-| `--server-bin PATH` | target/release/coolpsonotes-server | with `--native`: the server binary |
+| `--image I` | notekpr:latest | the server image |
+| `--native` | | run `target/release/notekpr-server` as a process instead (Linux; no limits; see `--server-bin`) |
+| `--server-bin PATH` | target/release/notekpr-server | with `--native`: the server binary |
 | `--web-dir DIR` | dist/web | with `--native`: the web client it serves |
 | `--server-port N` | 18099 | the local server's port (Docker or `--native`) |
 | `--server URL` | | a [server elsewhere](#against-a-server-elsewhere) instead (`task load:remote SERVER=…`) |
 | `--kill-command C`, `--start-command C` | | with `--server`: how to kill and start it for the outages |
-| `--metrics-token T` | `$COOLPSONOTES_METRICS_TOKEN` | with `--server`: its `/metrics` token |
+| `--metrics-token T` | `$NOTEKPR_METRICS_TOKEN` | with `--server`: its `/metrics` token |
 | `--seed N` | random | repeat a run |
 | `--no-crash` | | don't kill the server midway |
 | `--dashboard ADDR` | 127.0.0.1:8098 | where the live view is served |
@@ -284,7 +284,7 @@ LEVELS=10 FROM=1 DURATION=45s CPUS=1 MEMORY=512m SPEED=1 REALISTIC=`;
 | `--out DIR` | target/load | the reports |
 | `--people-dir DIR` | /dev/shm/… | people's local copies (in memory where possible; removed afterwards) |
 
-Failed actions are logged with `LOAD_LOG=coolpsonotes_load=warn`.
+Failed actions are logged with `LOAD_LOG=notekpr_load=warn`.
 
 ## The code
 

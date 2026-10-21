@@ -4,8 +4,8 @@
 //! The popups sit in the note's `.editor-area`, at positions taken from the
 //! page (the selection, a highlight, a click) when they open.
 
-use coolpsonotes_core::comments::Action;
 use leptos::prelude::*;
+use notekpr_core::comments::Action;
 use wasm_bindgen::JsCast;
 
 use super::icons::Icon;

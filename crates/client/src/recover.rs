@@ -1,5 +1,5 @@
-//! `coolpsonotes recover`: decrypt an encrypted export (from `GET /me/export`
-//! or `coolpsonotes-server export-user`) into plain Markdown files, offline,
+//! `notekpr recover`: decrypt an encrypted export (from `GET /me/export`
+//! or `notekpr-server export-user`) into plain Markdown files, offline,
 //! with nothing but the person's account key (unlocked from their recovery
 //! key). No server, no login, no other app needed. A signed-in device can
 //! also recover from its own local copies, without the server.
@@ -7,9 +7,9 @@
 use std::path::{Component, Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
-use coolpsonotes_core::keys::AccountSecret;
-use coolpsonotes_core::protocol::EncryptedExport;
-use coolpsonotes_core::recover::{self, RecoveredVault};
+use notekpr_core::keys::AccountSecret;
+use notekpr_core::protocol::EncryptedExport;
+use notekpr_core::recover::{self, RecoveredVault};
 
 use crate::fsutil;
 use crate::session::Session;
@@ -24,12 +24,12 @@ pub struct RecoverReport {
 pub fn read_export(path: &Path) -> Result<EncryptedExport> {
     let data = std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
     let export: EncryptedExport =
-        serde_json::from_slice(&data).context("this is not a coolpsonotes encrypted export")?;
-    if export.format != coolpsonotes_core::protocol::EXPORT_FORMAT {
+        serde_json::from_slice(&data).context("this is not a notekpr encrypted export")?;
+    if export.format != notekpr_core::protocol::EXPORT_FORMAT {
         bail!(
             "export format {} is not supported by this version (expected {})",
             export.format,
-            coolpsonotes_core::protocol::EXPORT_FORMAT
+            notekpr_core::protocol::EXPORT_FORMAT
         );
     }
     Ok(export)

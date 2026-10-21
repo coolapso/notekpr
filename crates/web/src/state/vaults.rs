@@ -335,7 +335,7 @@ pub fn publish_vaults(c: &Core) {
                             format!(
                                 "data:{};base64,{}",
                                 p.mime,
-                                coolpsonotes_core::b64::encode(&p.data)
+                                notekpr_core::b64::encode(&p.data)
                             )
                         }),
                     role: i.role,

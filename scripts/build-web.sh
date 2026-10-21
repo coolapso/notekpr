@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Build the browser client with the Rust toolchain only (no npm):
 #   cargo (wasm32-unknown-unknown) + wasm-bindgen CLI (version must match the crate).
-# Output: dist/web (serve with `coolpsonotes-server --web-dir dist/web`).
+# Output: dist/web (serve with `notekpr-server --web-dir dist/web`).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -17,7 +17,7 @@ if [ "$want" != "$have" ]; then
   exit 1
 fi
 
-cargo build -p coolpsonotes-web --target wasm32-unknown-unknown --profile "$PROFILE"
+cargo build -p notekpr-web --target wasm32-unknown-unknown --profile "$PROFILE"
 dir="$PROFILE"; [ "$PROFILE" = "dev" ] && dir=debug
 rm -rf "$OUT"
 mkdir -p "$OUT/pkg"
@@ -27,9 +27,9 @@ mkdir -p "$OUT/pkg"
 names=(--remove-name-section)
 [ "${WASM_NAMES:-}" = 1 ] && names=()
 wasm-bindgen --target web --no-typescript "${names[@]}" --out-dir "$OUT/pkg" \
-  "$TARGET_DIR/wasm32-unknown-unknown/$dir/coolpsonotes_web.wasm"
+  "$TARGET_DIR/wasm32-unknown-unknown/$dir/notekpr_web.wasm"
 if command -v wasm-opt >/dev/null 2>&1 && [ "$PROFILE" != "dev" ]; then
-  wasm-opt -Oz --enable-bulk-memory --enable-nontrapping-float-to-int -o "$OUT/pkg/coolpsonotes_web_bg.wasm" "$OUT/pkg/coolpsonotes_web_bg.wasm"
+  wasm-opt -Oz --enable-bulk-memory --enable-nontrapping-float-to-int -o "$OUT/pkg/notekpr_web_bg.wasm" "$OUT/pkg/notekpr_web_bg.wasm"
 fi
 cp crates/web/static/* "$OUT/"
 ls -la "$OUT/pkg"

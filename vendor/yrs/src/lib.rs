@@ -1,4 +1,4 @@
-// coolpsonotes patch: built like a registry dependency (whose warnings cargo
+// notekpr patch: built like a registry dependency (whose warnings cargo
 // caps), so its own warnings don't drown ours.
 #![allow(warnings)]
 #![doc(

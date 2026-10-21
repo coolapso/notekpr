@@ -742,194 +742,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "coolpsonotes-client"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "axum",
- "blake3",
- "clap",
- "coolpsonotes-core",
- "coolpsonotes-server",
- "coolpsonotes-sync",
- "data-encoding",
- "futures",
- "libc",
- "mime_guess",
- "notify",
- "proptest",
- "reqwest",
- "rpassword",
- "rustls",
- "rustls-platform-verifier",
- "serde",
- "serde_json",
- "similar",
- "sqlx",
- "subtle",
- "tempfile",
- "thiserror 2.0.21",
- "time",
- "tokio",
- "tokio-stream",
- "tokio-tungstenite 0.30.0",
- "tracing",
- "tracing-subscriber",
- "url",
- "walkdir",
- "yrs",
- "zeroize",
- "zip",
-]
-
-[[package]]
-name = "coolpsonotes-core"
-version = "0.1.0"
-dependencies = [
- "blake3",
- "chacha20poly1305",
- "data-encoding",
- "ed25519-dalek 3.0.0",
- "getrandom 0.4.3",
- "hkdf 0.13.0",
- "hpke",
- "proptest",
- "serde",
- "serde_json",
- "sha2 0.11.1",
- "similar",
- "thiserror 2.0.21",
- "unicode-normalization",
- "yrs",
- "zeroize",
-]
-
-[[package]]
-name = "coolpsonotes-editor"
-version = "0.1.0"
-dependencies = [
- "coolpsonotes-core",
- "js-sys",
- "proptest",
- "wasm-bindgen",
- "wasm-bindgen-futures",
- "wasm-bindgen-test",
- "web-sys",
-]
-
-[[package]]
-name = "coolpsonotes-load"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "axum",
- "blake3",
- "clap",
- "coolpsonotes-client",
- "coolpsonotes-core",
- "coolpsonotes-load-events",
- "data-encoding",
- "futures",
- "libc",
- "reqwest",
- "serde",
- "serde_json",
- "tokio",
- "tower-http 0.7.1",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
-name = "coolpsonotes-load-events"
-version = "0.1.0"
-dependencies = [
- "serde",
-]
-
-[[package]]
-name = "coolpsonotes-load-ui"
-version = "0.1.0"
-dependencies = [
- "console_error_panic_hook",
- "coolpsonotes-load-events",
- "js-sys",
- "serde_json",
- "wasm-bindgen",
- "web-sys",
-]
-
-[[package]]
-name = "coolpsonotes-server"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "axum",
- "clap",
- "coolpsonotes-core",
- "dashmap",
- "data-encoding",
- "futures",
- "getrandom 0.4.3",
- "governor",
- "libc",
- "metrics",
- "metrics-exporter-prometheus",
- "openidconnect",
- "reqwest",
- "serde",
- "serde_json",
- "serde_urlencoded",
- "sha2 0.11.1",
- "sqlx",
- "subtle",
- "tempfile",
- "thiserror 2.0.21",
- "time",
- "tokio",
- "tokio-tungstenite 0.30.0",
- "tower",
- "tower-http 0.7.1",
- "tracing",
- "tracing-subscriber",
- "url",
- "uuid",
-]
-
-[[package]]
-name = "coolpsonotes-sync"
-version = "0.1.0"
-dependencies = [
- "coolpsonotes-core",
- "proptest",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "coolpsonotes-web"
-version = "0.1.0"
-dependencies = [
- "console_error_panic_hook",
- "coolpsonotes-core",
- "coolpsonotes-editor",
- "coolpsonotes-sync",
- "crc32fast",
- "data-encoding",
- "futures",
- "js-sys",
- "leptos",
- "miniz_oxide",
- "proptest",
- "pulldown-cmark",
- "serde",
- "serde_json",
- "wasm-bindgen",
- "wasm-bindgen-futures",
- "web-sys",
-]
-
-[[package]]
 name = "core-foundation"
 version = "0.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2813,6 +2625,194 @@ name = "nonzero_ext"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "38bf9645c8b145698bb0b18a4637dcacbc421ea49bef2317e4fd8065a387cf21"
+
+[[package]]
+name = "notekpr-client"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "blake3",
+ "clap",
+ "data-encoding",
+ "futures",
+ "libc",
+ "mime_guess",
+ "notekpr-core",
+ "notekpr-server",
+ "notekpr-sync",
+ "notify",
+ "proptest",
+ "reqwest",
+ "rpassword",
+ "rustls",
+ "rustls-platform-verifier",
+ "serde",
+ "serde_json",
+ "similar",
+ "sqlx",
+ "subtle",
+ "tempfile",
+ "thiserror 2.0.21",
+ "time",
+ "tokio",
+ "tokio-stream",
+ "tokio-tungstenite 0.30.0",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+ "walkdir",
+ "yrs",
+ "zeroize",
+ "zip",
+]
+
+[[package]]
+name = "notekpr-core"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "chacha20poly1305",
+ "data-encoding",
+ "ed25519-dalek 3.0.0",
+ "getrandom 0.4.3",
+ "hkdf 0.13.0",
+ "hpke",
+ "proptest",
+ "serde",
+ "serde_json",
+ "sha2 0.11.1",
+ "similar",
+ "thiserror 2.0.21",
+ "unicode-normalization",
+ "yrs",
+ "zeroize",
+]
+
+[[package]]
+name = "notekpr-editor"
+version = "0.1.0"
+dependencies = [
+ "js-sys",
+ "notekpr-core",
+ "proptest",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "wasm-bindgen-test",
+ "web-sys",
+]
+
+[[package]]
+name = "notekpr-load"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "blake3",
+ "clap",
+ "data-encoding",
+ "futures",
+ "libc",
+ "notekpr-client",
+ "notekpr-core",
+ "notekpr-load-events",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tower-http 0.7.1",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "notekpr-load-events"
+version = "0.1.0"
+dependencies = [
+ "serde",
+]
+
+[[package]]
+name = "notekpr-load-ui"
+version = "0.1.0"
+dependencies = [
+ "console_error_panic_hook",
+ "js-sys",
+ "notekpr-load-events",
+ "serde_json",
+ "wasm-bindgen",
+ "web-sys",
+]
+
+[[package]]
+name = "notekpr-server"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "clap",
+ "dashmap",
+ "data-encoding",
+ "futures",
+ "getrandom 0.4.3",
+ "governor",
+ "libc",
+ "metrics",
+ "metrics-exporter-prometheus",
+ "notekpr-core",
+ "openidconnect",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "serde_urlencoded",
+ "sha2 0.11.1",
+ "sqlx",
+ "subtle",
+ "tempfile",
+ "thiserror 2.0.21",
+ "time",
+ "tokio",
+ "tokio-tungstenite 0.30.0",
+ "tower",
+ "tower-http 0.7.1",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+ "uuid",
+]
+
+[[package]]
+name = "notekpr-sync"
+version = "0.1.0"
+dependencies = [
+ "notekpr-core",
+ "proptest",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "notekpr-web"
+version = "0.1.0"
+dependencies = [
+ "console_error_panic_hook",
+ "crc32fast",
+ "data-encoding",
+ "futures",
+ "js-sys",
+ "leptos",
+ "miniz_oxide",
+ "notekpr-core",
+ "notekpr-editor",
+ "notekpr-sync",
+ "proptest",
+ "pulldown-cmark",
+ "serde",
+ "serde_json",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
+]
 
 [[package]]
 name = "notify"

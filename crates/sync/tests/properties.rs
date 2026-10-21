@@ -4,12 +4,12 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use coolpsonotes_core::crypto::Purpose;
-use coolpsonotes_core::doc::NoteDoc;
-use coolpsonotes_core::engine::{VaultMeta, VaultReplica};
-use coolpsonotes_core::keys::{VaultKey, VaultKeyring};
-use coolpsonotes_core::protocol::{PushResult, Role};
-use coolpsonotes_sync::{Limits, Outbox};
+use notekpr_core::crypto::Purpose;
+use notekpr_core::doc::NoteDoc;
+use notekpr_core::engine::{VaultMeta, VaultReplica};
+use notekpr_core::keys::{VaultKey, VaultKeyring};
+use notekpr_core::protocol::{PushResult, Role};
+use notekpr_sync::{Limits, Outbox};
 use proptest::prelude::*;
 
 #[derive(Debug, Clone)]

@@ -13,11 +13,11 @@ use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use anyhow::{Result, anyhow};
-use coolpsonotes_core::crypto::{self, CryptoError};
-use coolpsonotes_core::engine::EngineError;
-use coolpsonotes_core::keys;
-use coolpsonotes_core::protocol::*;
 use futures::{SinkExt, StreamExt};
+use notekpr_core::crypto::{self, CryptoError};
+use notekpr_core::engine::EngineError;
+use notekpr_core::keys;
+use notekpr_core::protocol::*;
 use tokio::sync::watch;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::protocol::{CloseFrame, WebSocketConfig};
@@ -232,7 +232,7 @@ async fn connect(hub: &Hub) -> Result<Ws> {
                 Err(anyhow!("agent token rejected; requesting a new one"))
             } else {
                 Err(Fatal(
-                    "the session expired or was revoked; run `coolpsonotes login` again (local data is kept)".into(),
+                    "the session expired or was revoked; run `notekpr login` again (local data is kept)".into(),
                 )
                 .into())
             }
@@ -516,7 +516,7 @@ async fn handle(
                 let mut g = v.lock().await;
                 g.check_rollback(head_seq);
                 g.synced(head_seq);
-                g.last_sync = Some(coolpsonotes_core::now_ms());
+                g.last_sync = Some(notekpr_core::now_ms());
                 if let Err(e) = g.save() {
                     ui::warn(&format!("saving the local copy: {e:#}"));
                 }
@@ -718,16 +718,16 @@ async fn handle(
                     return Ok(Some(Exit::Reconnect("agent token expired".into())));
                 }
                 return Err(Fatal(
-                    "this session was revoked or expired; run `coolpsonotes login` again (local data is kept)".into(),
+                    "this session was revoked or expired; run `notekpr login` again (local data is kept)".into(),
                 )
                 .into());
             }
             UserEventKind::DevicePending => {
-                ui::status("a new device is waiting for approval: run `coolpsonotes devices list`")
+                ui::status("a new device is waiting for approval: run `notekpr devices list`")
             }
             UserEventKind::DevicesChanged => {}
             UserEventKind::SharesChanged => {
-                ui::status("a note was shared with you (or unshared): `coolpsonotes shared list`")
+                ui::status("a note was shared with you (or unshared): `notekpr shared list`")
             }
         },
         ServerMessage::Error {
@@ -740,7 +740,7 @@ async fn handle(
                     session.api.invalidate_token().await;
                     return Ok(Some(Exit::Reconnect("agent token expired".into())));
                 }
-                return Err(Fatal(format!("{message}; run `coolpsonotes login` again")).into());
+                return Err(Fatal(format!("{message}; run `notekpr login` again")).into());
             }
             match vault_id {
                 Some(v) if code == "stale_key" => {
@@ -765,9 +765,9 @@ async fn handle(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use coolpsonotes_core::crypto::Purpose;
-    use coolpsonotes_core::engine::{VaultMeta, VaultReplica};
-    use coolpsonotes_core::keys::{AccountSecret, FIRST_DOC_EPOCH, VaultKey, VaultKeyring};
+    use notekpr_core::crypto::Purpose;
+    use notekpr_core::engine::{VaultMeta, VaultReplica};
+    use notekpr_core::keys::{AccountSecret, FIRST_DOC_EPOCH, VaultKey, VaultKeyring};
 
     #[test]
     fn only_a_revoked_session_ends_live_sync() {
@@ -832,7 +832,7 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let account = AccountSecret::generate();
         let meta = VaultMeta::named("T");
-        let (req, ring) = coolpsonotes_core::engine::new_vault(&account, "u1", &meta, 1).unwrap();
+        let (req, ring) = notekpr_core::engine::new_vault(&account, "u1", &meta, 1).unwrap();
         let key = Arc::new(crate::secrets::LocalKey::load_or_create(d.path()).unwrap());
         let store = crate::store::VaultStore::new(d.path().join("vaults"), key, &req.id).unwrap();
         let mut replica = VaultReplica::new(&req.id, Role::Owner, ring, meta);

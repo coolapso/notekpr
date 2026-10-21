@@ -26,7 +26,7 @@ pub(super) struct Bundle {
     pub(super) server: Option<ServerInfo>,
     pub(super) me: Option<MeResponse>,
     pub(super) device_id: String,
-    #[serde(with = "coolpsonotes_core::b64")]
+    #[serde(with = "notekpr_core::b64")]
     pub(super) envelope: Vec<u8>,
     pub(super) vaults: Vec<VaultInfo>,
     pub(super) keys: BTreeMap<String, VaultKeysResponse>,
@@ -34,7 +34,7 @@ pub(super) struct Bundle {
 }
 
 const WORKER: &str = "/sw.js";
-const APP_CACHE: &str = "coolpsonotes-app";
+const APP_CACHE: &str = "notekpr-app";
 
 /// Whether the signed-in person turned the setting on in this browser.
 pub fn enabled(c: &Core) -> bool {

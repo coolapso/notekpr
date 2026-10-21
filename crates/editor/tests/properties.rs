@@ -1,16 +1,16 @@
 //! Property tests for the editor's document model (native: `cargo test -p
-//! coolpsonotes-editor`). Random text is biased towards Markdown syntax and
+//! notekpr-editor`). Random text is biased towards Markdown syntax and
 //! multibyte characters — the inputs behind the crashes found in review.
 //! `PROPTEST_CASES` raises the number of cases.
 #![cfg(not(target_arch = "wasm32"))]
 
-use coolpsonotes_core::textdiff;
-use coolpsonotes_editor::change::{Assoc, ChangeSet};
-use coolpsonotes_editor::decorations::Decorations;
-use coolpsonotes_editor::state::{EditorState, Selection, merge_native};
-use coolpsonotes_editor::syntax::{self, Block, TableKey};
-use coolpsonotes_editor::text::Text;
-use coolpsonotes_editor::{commands, edits_fit, rebase};
+use notekpr_core::textdiff;
+use notekpr_editor::change::{Assoc, ChangeSet};
+use notekpr_editor::decorations::Decorations;
+use notekpr_editor::state::{EditorState, Selection, merge_native};
+use notekpr_editor::syntax::{self, Block, TableKey};
+use notekpr_editor::text::Text;
+use notekpr_editor::{commands, edits_fit, rebase};
 use proptest::prelude::*;
 
 const ALPHABET: &[char] = &[
@@ -124,7 +124,7 @@ fn reference_classify(lines: &[&str]) -> Vec<Block> {
         is_table_line(line)
             || (!syntax::table_pipes(line).is_empty()
                 && !line.trim().is_empty()
-                && coolpsonotes_core::markdown::heading(line).is_none()
+                && notekpr_core::markdown::heading(line).is_none()
                 && !line.trim_start().starts_with('>')
                 && list_marker(line).is_none())
     };
@@ -202,7 +202,7 @@ fn reference_classify(lines: &[&str]) -> Vec<Block> {
         }
         if line.trim().is_empty() {
             out.push(Block::Blank);
-        } else if let Some((lvl, _)) = coolpsonotes_core::markdown::heading(line) {
+        } else if let Some((lvl, _)) = notekpr_core::markdown::heading(line) {
             out.push(Block::Heading(lvl));
         } else if is_hr(line) && !line.trim_start().starts_with("- ") {
             out.push(Block::Hr);

@@ -1,5 +1,5 @@
 [package]
-name = "coolpsonotes-load"
+name = "notekpr-load"
 description = "Load test with a live dashboard: simulated people, real clients, against a real server with CPU and memory limits"
 version.workspace = true
 edition.workspace = true
@@ -7,13 +7,13 @@ license.workspace = true
 publish = false
 
 [[bin]]
-name = "coolpsonotes-load"
+name = "notekpr-load"
 path = "src/main.rs"
 
 [dependencies]
-coolpsonotes-client = { path = "../client" }
-coolpsonotes-core = { path = "../core" }
-coolpsonotes-load-events = { path = "../load-events" }
+notekpr-client = { path = "../client" }
+notekpr-core = { path = "../core" }
+notekpr-load-events = { path = "../load-events" }
 tokio = { version = "1", features = ["full"] }
 axum = { version = "0.8", features = ["ws"] }
 tower-http = { version = "0.7", features = ["fs"] }

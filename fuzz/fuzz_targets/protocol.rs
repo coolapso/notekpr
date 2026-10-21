@@ -1,7 +1,7 @@
 //! Every message a client or server parses from the network: arbitrary JSON
 //! never panics.
 #![no_main]
-use coolpsonotes_core::protocol::{ChangesResponse, ClientMessage, ServerMessage};
+use notekpr_core::protocol::{ChangesResponse, ClientMessage, ServerMessage};
 use libfuzzer_sys::fuzz_target;
 
 fuzz_target!(|data: &[u8]| {

@@ -1,8 +1,8 @@
 # Release acceptance criteria (spec §21) and how they are verified
 
-Legend: **S** = `cargo test -p coolpsonotes-server` (`crates/server/tests/api.rs`),
-**C** = `cargo test -p coolpsonotes-core`, **E** = browser suite `tests/e2e/run.sh`,
-**D** = desktop client tests `cargo test -p coolpsonotes-client` (`crates/client/tests`),
+Legend: **S** = `cargo test -p notekpr-server` (`crates/server/tests/api.rs`),
+**C** = `cargo test -p notekpr-core`, **E** = browser suite `tests/e2e/run.sh`,
+**D** = desktop client tests `cargo test -p notekpr-client` (`crates/client/tests`),
 **X** = browser ↔ CLI test `tests/e2e/cross_client.py`.
 
 | # | Criterion | Verified by |

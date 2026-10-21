@@ -9,7 +9,7 @@ default-members = ["crates/core", "crates/sync", "crates/server", "crates/client
 version = "0.1.0"
 edition = "2024"
 license = "AGPL-3.0-or-later"
-repository = "https://github.com/coolapso/coolpsonotes"
+repository = "https://github.com/coolapso/notekpr"
 rust-version = "1.94"
 
 # Debug builds and tests keep only line tables: panics and backtraces still
@@ -39,6 +39,6 @@ strip = true
 [profile.dev.package.yrs]
 debug-assertions = false
 
-# yrs with fixes for panics on crafted updates (see vendor/yrs/COOLPSONOTES.md).
+# yrs with fixes for panics on crafted updates (see vendor/yrs/NOTEKPR.md).
 [patch.crates-io]
 yrs = { path = "vendor/yrs" }

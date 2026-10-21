@@ -4,7 +4,7 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-use coolpsonotes_core::protocol::{CLOSE_RESTARTING, ClientMessage, ServerMessage};
+use notekpr_core::protocol::{CLOSE_RESTARTING, ClientMessage, ServerMessage};
 use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
 use web_sys::{CloseEvent, MessageEvent, WebSocket};

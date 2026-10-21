@@ -25,9 +25,9 @@ use crate::crypto::{self, CryptoError, Key32};
 use crate::keys::{AccountPublic, AccountSecret, VaultKey};
 use crate::protocol::Role;
 
-const SIG_DOMAIN: &str = "coolpsonotes/v1/sig/member-log";
-const HASH_CONTEXT: &str = "coolpsonotes v1 member-log entry";
-const COMMIT_CONTEXT: &str = "coolpsonotes v1 vault key commitment";
+const SIG_DOMAIN: &str = "notekpr/v1/sig/member-log";
+const HASH_CONTEXT: &str = "notekpr v1 member-log entry";
+const COMMIT_CONTEXT: &str = "notekpr v1 vault key commitment";
 
 /// A member as the owner vouches for them: their account keys are pinned
 /// here, so a server can't swap them. Both keys are empty for someone added
@@ -662,8 +662,8 @@ impl LogState {
 
 // ---------------------------------------------------------------- note key grants
 
-const GRANT_DOMAIN: &str = "coolpsonotes/v1/sig/note-key";
-const NOTE_COMMIT_CONTEXT: &str = "coolpsonotes v1 note key commitment";
+const GRANT_DOMAIN: &str = "notekpr/v1/sig/note-key";
+const NOTE_COMMIT_CONTEXT: &str = "notekpr v1 note key commitment";
 
 /// Commitment to a note's document key (as [`key_commitment`] for vault keys).
 pub fn note_key_commitment(vault_id: &str, object_id: &str, epoch: u32, key: &VaultKey) -> Vec<u8> {
@@ -737,8 +737,8 @@ pub fn verify_note_grant(
 
 // ---------------------------------------------------------------- authorship
 
-const UPDATE_DOMAIN: &str = "coolpsonotes/v1/sig/update";
-const SNAPSHOT_DOMAIN: &str = "coolpsonotes/v1/sig/snapshot";
+const UPDATE_DOMAIN: &str = "notekpr/v1/sig/update";
+const SNAPSHOT_DOMAIN: &str = "notekpr/v1/sig/snapshot";
 
 fn update_statement(vault_id: &str, object_id: &str, payload: &[u8]) -> Vec<u8> {
     crypto::statement(

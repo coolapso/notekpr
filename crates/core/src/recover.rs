@@ -1,5 +1,5 @@
 //! Turning an [`EncryptedExport`] back into plain files, without a server:
-//! the escape hatch behind `coolpsonotes recover`. Given the person's account
+//! the escape hatch behind `notekpr recover`. Given the person's account
 //! secret (from their recovery key or a device), every vault they could read
 //! becomes a folder of Markdown files and attachments again.
 //!

@@ -2,7 +2,7 @@
 
 use axum::Json;
 use axum::extract::{Path, Query, State};
-use coolpsonotes_core::protocol::{PublicAccountKey, PublicUser};
+use notekpr_core::protocol::{PublicAccountKey, PublicUser};
 use serde::Deserialize;
 
 use crate::auth::Principal;

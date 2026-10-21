@@ -5,9 +5,9 @@
 
 use std::collections::BTreeSet;
 
-use coolpsonotes_core::doc::{Entry, EntryKind};
-use coolpsonotes_core::protocol::{INDEX_OBJECT_ID, PrefsBlob, Role, Snapshot, SnapshotInfo};
-use coolpsonotes_core::{paths, search};
+use notekpr_core::doc::{Entry, EntryKind};
+use notekpr_core::protocol::{INDEX_OBJECT_ID, PrefsBlob, Role, Snapshot, SnapshotInfo};
+use notekpr_core::{paths, search};
 use serde::Serialize;
 
 use crate::api::ApiError;
@@ -188,7 +188,7 @@ pub async fn read_document(hub: &Hub, vref: &str, path: &str) -> OpResult<Docume
         )));
     }
     let content = g.note_text(&e.id);
-    let links = coolpsonotes_core::markdown::analyze(&content)
+    let links = notekpr_core::markdown::analyze(&content)
         .links
         .into_iter()
         .map(|l| l.target)
@@ -467,11 +467,11 @@ pub async fn comments(hub: &Hub, vref: &str, path: &str) -> OpResult<NoteComment
             .comments(path)
             .map_err(|e| OpError::NotFound(format!("{e:#}")))?;
         let doc = g.replica.notes.get(&note);
-        let raw: Vec<(coolpsonotes_core::comments::Thread, bool)> = threads
+        let raw: Vec<(notekpr_core::comments::Thread, bool)> = threads
             .into_iter()
             .map(|t| {
-                let on = doc
-                    .is_some_and(|d| coolpsonotes_core::comments::locate(d, &t.anchor).is_some());
+                let on =
+                    doc.is_some_and(|d| notekpr_core::comments::locate(d, &t.anchor).is_some());
                 (t, on)
             })
             .collect();
@@ -492,7 +492,7 @@ pub async fn comments(hub: &Hub, vref: &str, path: &str) -> OpResult<NoteComment
             }
         }
     }
-    let item = |c: &coolpsonotes_core::comments::Comment| CommentItem {
+    let item = |c: &notekpr_core::comments::Comment| CommentItem {
         id: c.id.clone(),
         author: c.author.clone(),
         author_name: names.get(&c.author).cloned().flatten(),
@@ -500,7 +500,7 @@ pub async fn comments(hub: &Hub, vref: &str, path: &str) -> OpResult<NoteComment
         created: c.created,
         edited: c.edited,
         pending: c.pending,
-        verified: c.trust == coolpsonotes_core::comments::Trust::Verified,
+        verified: c.trust == notekpr_core::comments::Trust::Verified,
     };
     let threads = raw
         .iter()
@@ -1054,7 +1054,7 @@ pub async fn local_quick_vault(hub: &Hub) -> Option<String> {
 /// Create a quick note with `text` in `Quick notes/` of a vault.
 pub async fn create_quick_note(hub: &Hub, vref: &str, text: &str) -> OpResult<PutOutcome> {
     let text = text.trim_end().trim_start_matches(['\n', '\r']);
-    let name = quick_note_name(coolpsonotes_core::now_ms());
+    let name = quick_note_name(notekpr_core::now_ms());
     let v = vault(hub, vref).await?;
     let (vault_id, res) = {
         let mut g = v.lock().await;
@@ -1127,7 +1127,7 @@ mod quick_tests {
 
     #[test]
     fn quick_note_names_are_local_minutes() {
-        let n = quick_note_name(coolpsonotes_core::now_ms());
+        let n = quick_note_name(notekpr_core::now_ms());
         let b = n.as_bytes();
         assert_eq!(n.len(), 16, "{n}");
         assert!(

@@ -2,7 +2,7 @@
 
 > **Principle:** the server coordinates; clients own the data and the keys.
 
-This document describes how coolpsonotes is built, why, and which
+This document describes how notekpr is built, why, and which
 alternatives were considered. The wire protocol is in
 [protocol.md](protocol.md) and the threat model in [security.md](security.md).
 
@@ -12,16 +12,16 @@ alternatives were considered. The wire protocol is in
                  ┌────────────────────────── trusted clients ───────────────────────────┐
                  │                                                                      │
  Browser ──────▶ │  Web client (Rust → WebAssembly, Leptos)                             │
-                 │  Desktop client `coolpsonotes` (Rust): sync daemon, Markdown mirror  │
+                 │  Desktop client `notekpr` (Rust): sync daemon, Markdown mirror       │
  AI agents ────▶ │  same client: CLI commands, a Markdown folder, local HTTP gateway    │
                  │                                                                      │
-                 │      all of them link coolpsonotes-core: crypto · keys · CRDT ·       │
+                 │      all of them link notekpr-core: crypto · keys · CRDT ·            │
                  │      protocol types · Markdown analysis · search                      │
                  └──────────────────────────────┬───────────────────────────────────────┘
                                                 │ HTTPS + WebSocket (TLS at the proxy)
                                                 │ ciphertext, public keys, metadata only
                                      ┌──────────▼───────────┐       ┌──────────────┐
-                                     │ coolpsonotes-server  │◀─────▶│ OIDC provider │
+                                     │ notekpr-server       │◀─────▶│ OIDC provider │
                                      │ (Rust, axum, SQLite) │       │ (Authelia,    │
                                      └──────────────────────┘       │ Keycloak, …)  │
                                                                     └──────────────┘
@@ -30,7 +30,7 @@ alternatives were considered. The wire protocol is in
 | Crate | Role |
 |---|---|
 | `crates/core` | Everything security-sensitive or shared: cryptographic formats, key hierarchy, the CRDT document model (vault index + notes), the signed membership log (`memberlog.rs`), protocol types, client engine logic (`engine.rs`), offline recovery of an encrypted export (`recover.rs`), Markdown link/tag analysis, search, path rules. Compiled natively and to wasm32. |
-| `crates/sync` | The client sync engine both clients use (`coolpsonotes-sync`): what to upload next (unsent updates merged per object, held back when too large, size-bounded pushes), what acknowledgements and refusals mean, rollback recovery, snapshot readiness, splitting large edits, and the client side of the membership log (`members.rs`: verifying it, signing the next entry, deciding whom to trust). *Sans-IO*: clients do the networking, storage and timers and feed it what happened, so it is identical on wasm and tokio and tested without a network. |
+| `crates/sync` | The client sync engine both clients use (`notekpr-sync`): what to upload next (unsent updates merged per object, held back when too large, size-bounded pushes), what acknowledgements and refusals mean, rollback recovery, snapshot readiness, splitting large edits, and the client side of the membership log (`members.rs`: verifying it, signing the next entry, deciding whom to trust). *Sans-IO*: clients do the networking, storage and timers and feed it what happened, so it is identical on wasm and tokio and tested without a network. |
 | `crates/server` | Headless sync server: OIDC relying party, sessions, OAuth device and client-credentials grants, users/devices/agents, vaults/members/key envelopes, the ordered encrypted log, snapshots, attachments, WebSocket fan-out, rate limiting, metrics, backup/restore. Works without the web client. |
 | `crates/editor` | The live-preview Markdown editor: a pure-Rust document model (text with a line index, change sets, transactions, incrementally updated decorations, commands) tested natively, and a `contenteditable` DOM view tested in a headless browser. |
 | `crates/web` | Browser client compiled to WebAssembly; served as static files by the server. Hosts the editor, all decryption in the browser. |
@@ -65,7 +65,7 @@ which is what makes each vault's live stream gapless and ordered.
 | Server framework | axum 0.8 + tokio + tower-http | actix-web, warp | Mature, minimal, first-class WebSockets, tower middleware ecosystem. |
 | Database | SQLite (WAL) via sqlx, single file — **SQLite only, by decision**, also for a hosted offering (one database per instance; grow by adding instances) | PostgreSQL | Zero extra services for self-hosting; a single file is a complete, consistent backup (`VACUUM INTO`); a notes workload with no server-side content processing fits one SQLite instance for a very large number of users. The SQL is SQLite-specific (e.g. `VACUUM INTO`, `BEGIN IMMEDIATE`). Storage access sits behind small interfaces (queries in `repo/`, attachment bytes in `blobs.rs`, live events in `hub.rs`, see §1.1) so the decision stays cheap to revisit, but there are no plans for another database. |
 | Attachments | Encrypted blobs inside SQLite | Filesystem/S3 | Atomic with metadata, one-file backups. Tradeoff: very large media libraries make the DB big (limit configurable, default 25 MB per file). |
-| CRDT | yrs 0.28 (Rust port of Yjs, update format v1), vendored as 0.28.0 with fixes for panics on crafted updates found by fuzzing (`vendor/yrs`, wired in with `[patch.crates-io]`; see `vendor/yrs/COOLPSONOTES.md`) | Automerge, diamond-types, custom OT | Mature, fast, compact updates, text + map types, undo manager, sticky indices for cursors; binary compatible with the Yjs ecosystem. |
+| CRDT | yrs 0.28 (Rust port of Yjs, update format v1), vendored as 0.28.0 with fixes for panics on crafted updates found by fuzzing (`vendor/yrs`, wired in with `[patch.crates-io]`; see `vendor/yrs/NOTEKPR.md`) | Automerge, diamond-types, custom OT | Mature, fast, compact updates, text + map types, undo manager, sticky indices for cursors; binary compatible with the Yjs ecosystem. |
 | Document model | One `Y.Text` with the Markdown source per note; one `Y.Map` index per vault | Rich-text CRDT (ProseMirror/XmlFragment) with Markdown export | Markdown stays the canonical format, so external editors (Neovim, Obsidian) map to text diffs and nothing proprietary is needed for portability. |
 | Symmetric crypto | XChaCha20-Poly1305 (RustCrypto, audited) | AES-256-GCM | 192-bit random nonces are safe without counters across many devices; fast in software/WASM. |
 | Public-key crypto | HPKE RFC 9180 (X25519, HKDF-SHA256, ChaCha20-Poly1305) via `hpke`; Ed25519 (`ed25519-dalek`, strict) | libsodium sealed boxes, age | Standardized construction with domain-separated info/AAD. Suite id in every envelope allows migrating to X-Wing (ML-KEM hybrid, already in the `hpke` crate) later. |
@@ -314,10 +314,10 @@ has unsent edits to it, that person's client saves their version as a new
 
 | Milestone | Scope | Status |
 |---|---|---|
-| M1 Core | crypto formats, key hierarchy, CRDT model, protocol | done (`cargo test -p coolpsonotes-core`) |
-| M2 Server | auth (OIDC, dev, device flow, client credentials), vaults, sharing, log, snapshots, attachments, WebSocket, ops | done (`cargo test -p coolpsonotes-server`) |
+| M1 Core | crypto formats, key hierarchy, CRDT model, protocol | done (`cargo test -p notekpr-core`) |
+| M2 Server | auth (OIDC, dev, device flow, client credentials), vaults, sharing, log, snapshots, attachments, WebSocket, ops | done (`cargo test -p notekpr-server`) |
 | M3 Web client | onboarding, devices, recovery, editor, collaboration, sharing, history, search, import/export, settings, admin | done (browser e2e tests in `tests/e2e`) |
-| M4 Desktop client | login, enrollment, offline replica, live sync, Markdown mirror, export/import | done (`cargo test -p coolpsonotes-client`) |
+| M4 Desktop client | login, enrollment, offline replica, live sync, Markdown mirror, export/import | done (`cargo test -p notekpr-client`) |
 | M5 Agents | agent identities, CLI and Markdown-folder access, gateway | done (`crates/client`); local MCP server removed, remote MCP connector considered for later |
 | M6 Packaging | Docker image, compose, Kubernetes, backup/restore docs | done |
 | M7 Note sharing | share single notes outside a vault: document keys, per-note subscriptions, web + CLI | done (S `individual_note_sharing`, D `single_note_sharing_end_to_end`, E `test_note_sharing`) |

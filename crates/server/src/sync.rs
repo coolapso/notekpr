@@ -6,9 +6,9 @@
 
 use std::collections::HashMap;
 
-use coolpsonotes_core::keys::AccountPublic;
-use coolpsonotes_core::memberlog;
-use coolpsonotes_core::protocol::{
+use notekpr_core::keys::AccountPublic;
+use notekpr_core::memberlog;
+use notekpr_core::protocol::{
     ChangesResponse, CreateSnapshotRequest, INDEX_OBJECT_ID, ObjectState, PurgedObject, PushResult,
     PushUpdate, REJECT_BAD_SIGNATURE, REJECT_PURGED, REJECT_STALE_KEY, REJECT_TOO_LARGE,
     REJECT_UNSIGNED, RejectedUpdate, Snapshot, SnapshotInfo, Update, comments_note,
@@ -282,9 +282,9 @@ pub fn check_payload_key(
     object_key_epoch: Option<i64>,
     payload: &[u8],
 ) -> AppResult<()> {
-    use coolpsonotes_core::keys::is_doc_epoch;
+    use notekpr_core::keys::is_doc_epoch;
     let epoch =
-        coolpsonotes_core::crypto::sym_epoch(payload).map_err(|_| bad("malformed ciphertext"))?;
+        notekpr_core::crypto::sym_epoch(payload).map_err(|_| bad("malformed ciphertext"))?;
     match object_key_epoch {
         Some(cur) if !is_doc_epoch(epoch) || (epoch as i64) < cur => Err(AppError::StaleKey(
             "this note now has its own key; reload keys and encrypt with it".into(),
@@ -313,7 +313,7 @@ async fn vault_key_epoch(db: impl sqlx::SqliteExecutor<'_>, vault_id: &str) -> A
 /// [`access::comment_access`].
 async fn write_access(
     db: &Db,
-    member: Option<coolpsonotes_core::protocol::Role>,
+    member: Option<notekpr_core::protocol::Role>,
     vault_id: &str,
     object_id: &str,
     user_id: &str,
@@ -574,7 +574,7 @@ pub async fn push(
         .fetch_one(&mut *tx)
         .await?;
     tx.commit().await?;
-    metrics::counter!("coolpsonotes_updates_total").increment(fresh.len() as u64);
+    metrics::counter!("notekpr_updates_total").increment(fresh.len() as u64);
     for (update, client_update_id) in fresh {
         state.hub.publish(
             vault_id,
@@ -951,7 +951,7 @@ pub async fn purge(
         );
         state.hub.control(
             &u,
-            Control::User(coolpsonotes_core::protocol::UserEventKind::SharesChanged),
+            Control::User(notekpr_core::protocol::UserEventKind::SharesChanged),
         );
     }
     db::audit(

@@ -48,10 +48,8 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use coolpsonotes_core::protocol::{
-    ObjectEventKind, Snapshot, Update, UserEventKind, VaultEventKind,
-};
 use dashmap::DashMap;
+use notekpr_core::protocol::{ObjectEventKind, Snapshot, Update, UserEventKind, VaultEventKind};
 use tokio::sync::{broadcast, mpsc};
 
 /// Live events kept per vault for subscribers that fall behind. A

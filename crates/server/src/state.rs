@@ -26,7 +26,7 @@ pub struct Inner {
     pub limiters: Limiters,
     pub metrics: Option<PrometheusHandle>,
     /// Becomes true when the server shuts down: live connections close with
-    /// [`CLOSE_RESTARTING`](coolpsonotes_core::protocol::CLOSE_RESTARTING).
+    /// [`CLOSE_RESTARTING`](notekpr_core::protocol::CLOSE_RESTARTING).
     pub shutting_down: tokio::sync::watch::Sender<bool>,
 }
 

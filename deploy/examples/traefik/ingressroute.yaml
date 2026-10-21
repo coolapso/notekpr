@@ -1,11 +1,11 @@
-# Optional example: Traefik (its Kubernetes CRDs) in front of coolpsonotes,
-# next to deploy/kubernetes/coolpsonotes.yaml. See docs/operations.md §4.
+# Optional example: Traefik (its Kubernetes CRDs) in front of notekpr,
+# next to deploy/kubernetes/notekpr.yaml. See docs/operations.md §4.
 #
-# * TLS: from the Secret coolpsonotes-tls — made here by cert-manager (the
+# * TLS: from the Secret notekpr-tls — made here by cert-manager (the
 #   Certificate below; use your issuer), or whatever your Traefik already
 #   does for TLS.
-# * Client addresses: coolpsonotes takes them from X-Forwarded-For
-#   (COOLPSONOTES_TRUST_PROXY=true), for its per-person rate limits. Traefik
+# * Client addresses: notekpr takes them from X-Forwarded-For
+#   (NOTEKPR_TRUST_PROXY=true), for its per-person rate limits. Traefik
 #   sets that header; its entry point must know the real client: trust the
 #   forwarded headers or proxy protocol of whatever sits in front of it
 #   (`forwardedHeaders.trustedIPs` / `proxyProtocol.trustedIPs`).
@@ -18,12 +18,12 @@
 apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:
-  name: coolpsonotes-tls
-  namespace: coolpsonotes
+  name: notekpr-tls
+  namespace: notekpr
 spec:
   dnsNames:
     - notes.example.com
-  secretName: coolpsonotes-tls
+  secretName: notekpr-tls
   issuerRef:
     name: letsencrypt
     kind: ClusterIssuer
@@ -31,8 +31,8 @@ spec:
 apiVersion: traefik.io/v1alpha1
 kind: IngressRoute
 metadata:
-  name: coolpsonotes
-  namespace: coolpsonotes
+  name: notekpr
+  namespace: notekpr
 spec:
   entryPoints:
     - websecure
@@ -40,7 +40,7 @@ spec:
     - match: Host(`notes.example.com`) && !PathPrefix(`/metrics`)
       kind: Rule
       services:
-        - name: coolpsonotes
+        - name: notekpr
           port: 80
       # Untested possibility — holding requests while the pod is replaced
       # (docs/operations.md, "Holding requests during an update"): with
@@ -52,19 +52,19 @@ spec:
       # before relying on it.
       #
       # middlewares:
-      #   - name: coolpsonotes-retry
+      #   - name: notekpr-retry
       # services:
-      #   - name: coolpsonotes
+      #   - name: notekpr
       #     port: 80
       #     nativeLB: true
   tls:
-    secretName: coolpsonotes-tls
+    secretName: notekpr-tls
 # ---
 # apiVersion: traefik.io/v1alpha1
 # kind: Middleware
 # metadata:
-#   name: coolpsonotes-retry
-#   namespace: coolpsonotes
+#   name: notekpr-retry
+#   namespace: notekpr
 # spec:
 #   retry:
 #     attempts: 6

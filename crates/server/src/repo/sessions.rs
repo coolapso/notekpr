@@ -2,7 +2,7 @@
 //! records of the login flows: OIDC states, one-time login codes and
 //! RFC 8628 device grants.
 
-use coolpsonotes_core::protocol::SessionEntry;
+use notekpr_core::protocol::SessionEntry;
 use sqlx::{Row, SqliteExecutor};
 
 use crate::error::AppResult;

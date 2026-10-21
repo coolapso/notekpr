@@ -1,7 +1,7 @@
 //! A person's devices: public keys, approval status and the account secret
 //! encrypted to each active device.
 
-use coolpsonotes_core::protocol::{DeviceInfo, DeviceStatus};
+use notekpr_core::protocol::{DeviceInfo, DeviceStatus};
 use sqlx::{Row, SqliteExecutor};
 
 use crate::error::AppResult;

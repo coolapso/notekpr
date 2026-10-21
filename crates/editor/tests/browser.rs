@@ -3,7 +3,7 @@
 //!
 //! ```sh
 //! CARGO_TARGET_DIR=target-web CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=wasm-bindgen-test-runner \
-//!   cargo test -p coolpsonotes-editor --target wasm32-unknown-unknown --test browser
+//!   cargo test -p notekpr-editor --target wasm32-unknown-unknown --test browser
 //! ```
 //!
 //! Events are dispatched the way the browser sends them (`beforeinput`,
@@ -14,9 +14,9 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-use coolpsonotes_core::textdiff::{self, Edit};
-use coolpsonotes_editor::syntax::Target;
-use coolpsonotes_editor::{Editor, Host, Mark, Mode, RemoteCursor};
+use notekpr_core::textdiff::{self, Edit};
+use notekpr_editor::syntax::Target;
+use notekpr_editor::{Editor, Host, Mark, Mode, RemoteCursor};
 use wasm_bindgen::JsCast;
 use wasm_bindgen_test::*;
 use web_sys::{Element, HtmlElement};
@@ -59,7 +59,7 @@ impl Host for MockHost {
         if inserted > self.limit.get() || *self.text.borrow() != base {
             return false;
         }
-        assert!(coolpsonotes_editor::edits_fit(base, edits));
+        assert!(notekpr_editor::edits_fit(base, edits));
         let new = textdiff::apply(base, edits);
         self.history.borrow_mut().push(base.to_string());
         self.future.borrow_mut().clear();
@@ -578,10 +578,10 @@ fn commands_and_shortcuts() {
     f.ed.set_selection(0, 4);
     key(&f, "b", true, false);
     assert_text(&f, "**word** and more\nsecond");
-    f.ed.command(coolpsonotes_editor::Command::Heading(2));
+    f.ed.command(notekpr_editor::Command::Heading(2));
     assert_text(&f, "## **word** and more\nsecond");
     f.ed.set_selection(21, 27);
-    f.ed.command(coolpsonotes_editor::Command::Task);
+    f.ed.command(notekpr_editor::Command::Task);
     assert_text(&f, "## **word** and more\n- [ ] second");
     key(&f, "Enter", true, false);
     assert_text(&f, "## **word** and more\n- [x] second");

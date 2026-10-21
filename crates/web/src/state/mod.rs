@@ -23,14 +23,14 @@ use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::rc::Rc;
 
-use coolpsonotes_core::crypto::Purpose;
-use coolpsonotes_core::doc::{EntryKind, NoteDoc};
-use coolpsonotes_core::engine::{self, ObjectMeta, Presence, VaultMeta, VaultReplica};
-use coolpsonotes_core::keys::{AccountPublic, AccountSecret, DeviceKey, RecoveryKey};
-use coolpsonotes_core::protocol::*;
-use coolpsonotes_core::{paths, random_id};
 use leptos::prelude::Update;
 use leptos::prelude::*;
+use notekpr_core::crypto::Purpose;
+use notekpr_core::doc::{EntryKind, NoteDoc};
+use notekpr_core::engine::{self, ObjectMeta, Presence, VaultMeta, VaultReplica};
+use notekpr_core::keys::{AccountPublic, AccountSecret, DeviceKey, RecoveryKey};
+use notekpr_core::protocol::*;
+use notekpr_core::{paths, random_id};
 use serde::{Deserialize, Serialize};
 
 use crate::api;
@@ -468,14 +468,14 @@ pub struct Core {
     pub cache: crate::cache::Tracker,
     pub socket: Option<Rc<Socket>>,
     pub conn_id: u64,
-    /// Upload bookkeeping per replica (`coolpsonotes_sync::Outbox`).
-    pub outboxes: BTreeMap<String, coolpsonotes_sync::Outbox>,
+    /// Upload bookkeeping per replica (`notekpr_sync::Outbox`).
+    pub outboxes: BTreeMap<String, notekpr_sync::Outbox>,
     /// New notes' keys being registered, by (vault, note).
     pub registering: HashSet<(String, String)>,
     /// Verified membership logs, by vault (`state::members`).
-    pub member_logs: BTreeMap<String, coolpsonotes_sync::members::MemberLog>,
+    pub member_logs: BTreeMap<String, notekpr_sync::members::MemberLog>,
     /// Vault owners' account keys, checked against our pins this session.
-    pub owner_keys: HashMap<String, coolpsonotes_core::keys::AccountPublic>,
+    pub owner_keys: HashMap<String, notekpr_core::keys::AccountPublic>,
     pub prefs: Prefs,
     pub prefs_version: i64,
     pub editor: Option<(String, String, Rc<Editor>)>,
@@ -491,7 +491,7 @@ pub struct Core {
     pub users: HashMap<String, PublicUser>,
     /// Commenters' account keys beyond the membership logs (people a note
     /// is shared with see members' comments), checked against our pins.
-    pub comment_keys: HashMap<String, coolpsonotes_core::keys::AccountPublic>,
+    pub comment_keys: HashMap<String, notekpr_core::keys::AccountPublic>,
     /// Notes shared with us individually, by (vault, note). Their content
     /// lives in a members-less replica of the vault (`VaultReplica::member == false`).
     pub shares: BTreeMap<(String, String), ShareState>,
@@ -580,7 +580,7 @@ impl Core {
             .map(|e| e.title().to_string())
     }
 
-    pub fn entry(&self, vault: &str, id: &str) -> Option<coolpsonotes_core::doc::Entry> {
+    pub fn entry(&self, vault: &str, id: &str) -> Option<notekpr_core::doc::Entry> {
         self.replicas.get(vault)?.index.get(id)
     }
 
@@ -609,7 +609,7 @@ impl Core {
         }
     }
 
-    pub fn live_entries(&self, vault: &str) -> Vec<coolpsonotes_core::doc::Entry> {
+    pub fn live_entries(&self, vault: &str) -> Vec<notekpr_core::doc::Entry> {
         self.replicas
             .get(vault)
             .map(|r| {

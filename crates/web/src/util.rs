@@ -294,7 +294,7 @@ pub fn encode_square(
         .to_data_url_with_type_and_encoder_options(mime, &JsValue::from_f64(quality))
         .ok()?;
     let (ty, data) = url.strip_prefix("data:")?.split_once(";base64,")?;
-    Some((ty.to_string(), coolpsonotes_core::b64::decode(data).ok()?))
+    Some((ty.to_string(), notekpr_core::b64::decode(data).ok()?))
 }
 
 #[cfg(test)]

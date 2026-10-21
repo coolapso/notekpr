@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Parser, Clone, Debug, Serialize, Deserialize)]
 #[command(
-    name = "coolpsonotes",
+    name = "notekpr",
     version,
     about = "End-to-end encrypted, local-first Markdown notes: desktop sync, file mirror and agent gateway",
     after_help = "Use several profiles side by side, e.g. `--profile alice` and `--profile bob`.\n\
@@ -20,7 +20,7 @@ pub struct Cli {
         long,
         short = 'p',
         global = true,
-        env = "COOLPSONOTES_PROFILE",
+        env = "NOTEKPR_PROFILE",
         default_value = "default"
     )]
     pub profile: String,
@@ -239,7 +239,7 @@ pub struct QuickArgs {
 #[derive(Args, Clone, Debug, Serialize, Deserialize)]
 pub struct RecoverArgs {
     /// Encrypted export to decrypt (from `export-encrypted`, `GET /api/v1/me/export`
-    /// or `coolpsonotes-server export-user`). Without it, this device downloads
+    /// or `notekpr-server export-user`). Without it, this device downloads
     /// one, or uses its local copies (see --local).
     #[arg(long)]
     pub from: Option<PathBuf>,
@@ -247,7 +247,7 @@ pub struct RecoverArgs {
     #[arg(long)]
     pub out: PathBuf,
     /// Read the recovery key from this file (otherwise from
-    /// COOLPSONOTES_RECOVERY_KEY, or asked for).
+    /// NOTEKPR_RECOVERY_KEY, or asked for).
     #[arg(long)]
     pub recovery_key_file: Option<PathBuf>,
     /// Use this device's local copies, without contacting the server (done
@@ -269,7 +269,7 @@ pub struct LoginArgs {
     #[arg(long)]
     pub device_name: Option<String>,
     /// Unlock this device with your recovery key (read from this file) instead of
-    /// approving it from another device. Also COOLPSONOTES_RECOVERY_KEY, or type
+    /// approving it from another device. Also NOTEKPR_RECOVERY_KEY, or type
     /// it while waiting for approval. Never on the command line: shells keep history.
     #[arg(long)]
     pub recovery_key_file: Option<PathBuf>,

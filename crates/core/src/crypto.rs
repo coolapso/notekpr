@@ -34,8 +34,8 @@ pub const TAG_LEN: usize = 16;
 /// Per-ciphertext overhead of the symmetric envelope.
 pub const SYM_OVERHEAD: usize = SYM_HEADER_LEN + TAG_LEN;
 
-const HKDF_SALT: &[u8] = b"coolpsonotes/v1/hkdf";
-const AAD_PREFIX: &[u8] = b"coolpsonotes/v1/aead";
+const HKDF_SALT: &[u8] = b"notekpr/v1/hkdf";
+const AAD_PREFIX: &[u8] = b"notekpr/v1/aead";
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum CryptoError {
@@ -82,17 +82,17 @@ pub enum Purpose {
 impl Purpose {
     fn label(self) -> &'static [u8] {
         match self {
-            Purpose::Update => b"coolpsonotes/v1/key/update",
-            Purpose::Snapshot => b"coolpsonotes/v1/key/snapshot",
-            Purpose::VaultMeta => b"coolpsonotes/v1/key/vault-meta",
-            Purpose::Awareness => b"coolpsonotes/v1/key/awareness",
-            Purpose::Attachment => b"coolpsonotes/v1/key/attachment",
-            Purpose::KeyChain => b"coolpsonotes/v1/key/key-chain",
-            Purpose::Prefs => b"coolpsonotes/v1/key/prefs",
-            Purpose::LocalCache => b"coolpsonotes/v1/key/local-cache",
-            Purpose::Recovery => b"coolpsonotes/v1/key/recovery",
-            Purpose::DocKey => b"coolpsonotes/v1/key/doc-key",
-            Purpose::ObjectMeta => b"coolpsonotes/v1/key/object-meta",
+            Purpose::Update => b"notekpr/v1/key/update",
+            Purpose::Snapshot => b"notekpr/v1/key/snapshot",
+            Purpose::VaultMeta => b"notekpr/v1/key/vault-meta",
+            Purpose::Awareness => b"notekpr/v1/key/awareness",
+            Purpose::Attachment => b"notekpr/v1/key/attachment",
+            Purpose::KeyChain => b"notekpr/v1/key/key-chain",
+            Purpose::Prefs => b"notekpr/v1/key/prefs",
+            Purpose::LocalCache => b"notekpr/v1/key/local-cache",
+            Purpose::Recovery => b"notekpr/v1/key/recovery",
+            Purpose::DocKey => b"notekpr/v1/key/doc-key",
+            Purpose::ObjectMeta => b"notekpr/v1/key/object-meta",
         }
     }
 }

@@ -10,8 +10,8 @@
 use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
-use coolpsonotes_core::memberlog::{LogBody, LogEntry, LogMember};
-use coolpsonotes_core::protocol::{AppendLogRequest, MemberLogResponse, Role, VaultEventKind};
+use notekpr_core::memberlog::{LogBody, LogEntry, LogMember};
+use notekpr_core::protocol::{AppendLogRequest, MemberLogResponse, Role, VaultEventKind};
 use serde::Deserialize;
 use sqlx::Sqlite;
 

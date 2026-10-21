@@ -5,16 +5,14 @@ use std::cell::RefCell;
 use std::collections::{BTreeSet, HashMap};
 use std::rc::Rc;
 
-use coolpsonotes_core::doc::{EntryKind, IndexDoc, NoteDoc};
-use coolpsonotes_core::engine::{
-    self, ObjectMeta, PinStatus, VaultMeta, VaultPicture, VaultReplica,
-};
-use coolpsonotes_core::memberlog::{LogBody, LogEntry};
-use coolpsonotes_core::protocol::*;
-use coolpsonotes_core::textdiff::Edit;
-use coolpsonotes_core::{markdown, order, paths};
 use leptos::prelude::Update;
 use leptos::prelude::*;
+use notekpr_core::doc::{EntryKind, IndexDoc, NoteDoc};
+use notekpr_core::engine::{self, ObjectMeta, PinStatus, VaultMeta, VaultPicture, VaultReplica};
+use notekpr_core::memberlog::{LogBody, LogEntry};
+use notekpr_core::protocol::*;
+use notekpr_core::textdiff::Edit;
+use notekpr_core::{markdown, order, paths};
 use wasm_bindgen::JsCast;
 
 use crate::editor::syntax::Target;
@@ -61,7 +59,7 @@ pub async fn create_vault(name: String) -> Option<String> {
     step(|c| {
         // Its membership log starts with its creation.
         let log = c.account.as_ref().and_then(|a| {
-            coolpsonotes_sync::members::MemberLog::verify(
+            notekpr_sync::members::MemberLog::verify(
                 &id,
                 &a.public(),
                 req.log_entry.clone().into_iter().collect(),
@@ -354,7 +352,7 @@ pub async fn share(vault: &str, user: &PublicUser, role: Role) -> Result<(), Str
         Some(k) => Some(k.verify().map_err(|e| e.to_string())?),
         None => None,
     };
-    let member = coolpsonotes_sync::members::log_member(&user.id, role, key.as_ref());
+    let member = notekpr_sync::members::log_member(&user.id, role, key.as_ref());
     api::post::<_, MemberInfo>(
         &format!("/vaults/{vault}/members"),
         &AddMemberRequest {
@@ -514,7 +512,7 @@ pub async fn rotate_keys(vault: &str) -> bool {
             let mut ring = r.keyring.clone();
             let made = engine::rotate_with_notes(&mut ring, &members, &r.meta, &notes);
             Some(made.map(|(mut req, rings)| {
-                req.log_entry = coolpsonotes_sync::members::rotation(vault, &ring)
+                req.log_entry = notekpr_sync::members::rotation(vault, &ring)
                     .and_then(|body| state::log_entry(c, vault, body));
                 // Left out on purpose, so the server knows it's no oversight.
                 req.without = left_out
@@ -529,7 +527,7 @@ pub async fn rotate_keys(vault: &str) -> bool {
                 if let Some(a) = &c.account {
                     for o in &mut req.objects {
                         if let Some(next) = rings.get(&o.object_id) {
-                            coolpsonotes_sync::members::sign_grants(
+                            notekpr_sync::members::sign_grants(
                                 a,
                                 vault,
                                 &o.object_id,
@@ -695,7 +693,7 @@ pub async fn share_note(
         // Signed by us, so they can tell the key is really ours.
         Some(engine::object_share_envelope(ring, note, user).map(|env| {
             let mut env = [env];
-            coolpsonotes_sync::members::sign_grants(account, vault, note, ring, &mut env);
+            notekpr_sync::members::sign_grants(account, vault, note, ring, &mut env);
             let [env] = env;
             env
         }))
@@ -807,7 +805,7 @@ async fn ensure_note_key(vault: &str, note: &str) -> Result<(), String> {
             };
             Some(made.map(|(ring, mut req)| {
                 if let Some(a) = &c.account {
-                    coolpsonotes_sync::members::sign_key_update(a, vault, note, &mut req);
+                    notekpr_sync::members::sign_key_update(a, vault, note, &mut req);
                 }
                 (ring, req)
             }))
@@ -875,7 +873,7 @@ fn share_entry(vault: &str, note: &str, user: &PublicUser, role: Role) -> Option
         state::log_entry(
             c,
             vault,
-            coolpsonotes_sync::members::share(note, &user.id, role, &key),
+            notekpr_sync::members::share(note, &user.id, role, &key),
         )
     })
 }
@@ -926,13 +924,7 @@ pub async fn rotate_note_key(vault: &str, note: &str) -> Result<(), String> {
             let made = engine::rotate_object_key(&r.keyring, ring, note, &meta, &users);
             Some(made.map(|(next, mut req)| {
                 if let Some(a) = &c.account {
-                    coolpsonotes_sync::members::sign_grants(
-                        a,
-                        vault,
-                        note,
-                        &next,
-                        &mut req.envelopes,
-                    );
+                    notekpr_sync::members::sign_grants(a, vault, note, &next, &mut req.envelopes);
                 }
                 (next, req)
             }))
@@ -1082,7 +1074,7 @@ pub fn new_note(vault: &str, folder: &str) {
 /// exists as the parent of others (`id` `None`) gets an entry for it first.
 /// `false` if nothing changed.
 pub fn set_entry_icon(vault: &str, id: Option<&str>, path: &str, icon: &str) -> bool {
-    let icon = match coolpsonotes_core::doc::clean_icon(icon) {
+    let icon = match notekpr_core::doc::clean_icon(icon) {
         Ok(i) => i,
         Err(e) => {
             error(e);

@@ -79,7 +79,7 @@ pub fn RightPanel(vault: String, note: String) -> impl IntoView {
                             let v = vb.clone();
                             view! {
                                 <button class="panel-item" on:click=move |_| state::navigate(Route::Note(v.clone(), id.clone()))>
-                                    <span class="pi-title">{coolpsonotes_core::paths::title(&path).to_string()}</span>
+                                    <span class="pi-title">{notekpr_core::paths::title(&path).to_string()}</span>
                                     <span class="pi-snip">{snippet}</span>
                                 </button>
                             }
@@ -102,7 +102,7 @@ pub fn RightPanel(vault: String, note: String) -> impl IntoView {
                         move || outgoing.get().into_iter().map(|(id, path)| {
                             let v = vo.clone();
                             view! { <button class="panel-item" on:click=move |_| state::navigate(Route::Note(v.clone(), id.clone()))>
-                                <span class="pi-title">{coolpsonotes_core::paths::title(&path).to_string()}</span></button> }
+                                <span class="pi-title">{notekpr_core::paths::title(&path).to_string()}</span></button> }
                         }).collect_view()
                     }
                 </section>

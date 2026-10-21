@@ -1,43 +1,43 @@
-# coolpsonotes on Kubernetes.
+# notekpr on Kubernetes.
 # Single replica by design: the server uses SQLite and an in-process event hub.
-# Apply with:  kubectl apply -f deploy/kubernetes/coolpsonotes.yaml
+# Apply with:  kubectl apply -f deploy/kubernetes/notekpr.yaml
 # (edit the ConfigMap and Secret first). It serves plain HTTP inside the
 # cluster: put the ingress you use in front of the Service, with TLS — e.g.
 # deploy/examples/traefik/ingressroute.yaml (docs/operations.md §4).
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: coolpsonotes
+  name: notekpr
 ---
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: coolpsonotes
-  namespace: coolpsonotes
+  name: notekpr
+  namespace: notekpr
 data:
-  COOLPSONOTES_PUBLIC_URL: "https://notes.example.com"
-  COOLPSONOTES_OIDC_ISSUER: "https://auth.example.com"
-  COOLPSONOTES_OIDC_CLIENT_ID: "coolpsonotes"
-  COOLPSONOTES_TRUST_PROXY: "true"
-  COOLPSONOTES_LOG_FORMAT: "json"
+  NOTEKPR_PUBLIC_URL: "https://notes.example.com"
+  NOTEKPR_OIDC_ISSUER: "https://auth.example.com"
+  NOTEKPR_OIDC_CLIENT_ID: "notekpr"
+  NOTEKPR_TRUST_PROXY: "true"
+  NOTEKPR_LOG_FORMAT: "json"
 ---
 apiVersion: v1
 kind: Secret
 metadata:
-  name: coolpsonotes
-  namespace: coolpsonotes
+  name: notekpr
+  namespace: notekpr
 type: Opaque
 stringData:
-  COOLPSONOTES_OIDC_CLIENT_SECRET: "change-me"
+  NOTEKPR_OIDC_CLIENT_SECRET: "change-me"
   # Optional bearer token protecting /metrics (recommended if your ingress
   # routes every path, /metrics included).
-  # COOLPSONOTES_METRICS_TOKEN: change-me
+  # NOTEKPR_METRICS_TOKEN: change-me
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: coolpsonotes-data
-  namespace: coolpsonotes
+  name: notekpr-data
+  namespace: notekpr
 spec:
   accessModes: ["ReadWriteOnce"]
   resources:
@@ -47,19 +47,19 @@ spec:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: coolpsonotes
-  namespace: coolpsonotes
+  name: notekpr
+  namespace: notekpr
 spec:
   replicas: 1
   strategy:
     type: Recreate
   selector:
     matchLabels:
-      app: coolpsonotes
+      app: notekpr
   template:
     metadata:
       labels:
-        app: coolpsonotes
+        app: notekpr
     spec:
       securityContext:
         runAsNonRoot: true
@@ -69,14 +69,14 @@ spec:
         seccompProfile:
           type: RuntimeDefault
       containers:
-        - name: coolpsonotes
-          image: ghcr.io/coolapso/coolpsonotes:latest
+        - name: notekpr
+          image: ghcr.io/coolapso/notekpr:latest
           args: ["serve"]
           envFrom:
             - configMapRef:
-                name: coolpsonotes
+                name: notekpr
             - secretRef:
-                name: coolpsonotes
+                name: notekpr
           ports:
             - name: http
               containerPort: 8080
@@ -107,16 +107,16 @@ spec:
       volumes:
         - name: data
           persistentVolumeClaim:
-            claimName: coolpsonotes-data
+            claimName: notekpr-data
 ---
 apiVersion: v1
 kind: Service
 metadata:
-  name: coolpsonotes
-  namespace: coolpsonotes
+  name: notekpr
+  namespace: notekpr
 spec:
   selector:
-    app: coolpsonotes
+    app: notekpr
   ports:
     - name: http
       port: 80

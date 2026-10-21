@@ -1,4 +1,4 @@
-# coolpsonotes
+# notekpr
 
 A self-hosted, open-source, local-first Markdown knowledge base: Obsidian's
 plain-Markdown philosophy and offline access, Notion's friendly interface and
@@ -64,7 +64,7 @@ read anything.
   with a filter, or the open note and its neighbours beside it. Drag, zoom,
   click a note to open it.
 * Quick notes: capture a thought in a second (`Alt+Q`, a capture page
-  that works on phones, or `coolpsonotes quick …`), then promote it to a
+  that works on phones, or `notekpr quick …`), then promote it to a
   regular note or archive it.
 * A trash with restore, and the version history of every note with preview
   and restore.
@@ -82,7 +82,7 @@ read anything.
   reply, resolve, edit or delete. Viewers can comment too (the vault's owner
   can turn that off), comments follow the text through edits — also edits
   from your own editor — and a note can be shared with its comments. Also
-  from the command line (`coolpsonotes comments`) and for AI agents.
+  from the command line (`notekpr comments`) and for AI agents.
 * You're told when a note is shared with you; owners have an activity log
   per vault.
 
@@ -168,9 +168,9 @@ task dev       # builds everything and starts a dev server on http://localhost:8
 or without go-task:
 
 ```sh
-cargo build -p coolpsonotes-server
+cargo build -p notekpr-server
 ./scripts/build-web.sh
-./target/debug/coolpsonotes-server --dev-mode --web-dir dist/web
+./target/debug/notekpr-server --dev-mode --web-dir dist/web
 ```
 
 Open <http://localhost:8080>, sign in as `alice`, then open another tab and
@@ -193,14 +193,14 @@ docker compose -f docker-compose.dev.yml up --build
 ## Run it for real
 
 ```sh
-export COOLPSONOTES_PUBLIC_URL=https://notes.example.com
-export COOLPSONOTES_OIDC_ISSUER=https://auth.example.com   # Authelia, Keycloak, Authentik, …
-export COOLPSONOTES_OIDC_CLIENT_ID=coolpsonotes
-export COOLPSONOTES_OIDC_CLIENT_SECRET=…                    # from wherever you keep secrets
-docker compose up -d --build                               # coolpsonotes on 127.0.0.1:8080
+export NOTEKPR_PUBLIC_URL=https://notes.example.com
+export NOTEKPR_OIDC_ISSUER=https://auth.example.com   # Authelia, Keycloak, Authentik, …
+export NOTEKPR_OIDC_CLIENT_ID=notekpr
+export NOTEKPR_OIDC_CLIENT_SECRET=…                   # from wherever you keep secrets
+docker compose up -d --build                          # notekpr on 127.0.0.1:8080
 ```
 
-Put the reverse proxy you use in front of it for HTTPS: coolpsonotes serves
+Put the reverse proxy you use in front of it for HTTPS: notekpr serves
 plain HTTP and leaves TLS to the proxy, by design. There are optional
 examples for Caddy (automatic HTTPS in one command), Traefik on Kubernetes
 and nginx, and setups for Kubernetes and from source, in
@@ -242,7 +242,7 @@ provider setup, reverse proxies, Kubernetes, backups, upgrades and monitoring.
 | Client | |
 |---|---|
 | Browser | served by the server; works on desktop and phones |
-| Desktop / CLI (`coolpsonotes`) | offline replica, live sync, optional Markdown mirror, export/import — [docs/desktop-client.md](docs/desktop-client.md) |
+| Desktop / CLI (`notekpr`) | offline replica, live sync, optional Markdown mirror, export/import — [docs/desktop-client.md](docs/desktop-client.md) |
 | Agents | CLI, Markdown folder or local HTTP gateway — [docs/agents.md](docs/agents.md) |
 
 ## Documentation

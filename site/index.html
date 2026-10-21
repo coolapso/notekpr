@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>coolpsonotes</title>
+<title>notekpr</title>
 <meta name="description" content="Self-hosted Markdown notes with live collaboration and end-to-end encryption. Use the web app or your own editor; the server only stores ciphertext.">
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="style.css">
@@ -11,16 +11,16 @@
 <body>
 <header class="site-head">
   <div class="wrap">
-    <a class="brand" href="./" aria-label="coolpsonotes home">
+    <a class="brand" href="./" aria-label="notekpr home">
       <svg viewBox="0 0 64 64" aria-hidden="true"><rect width="64" height="64" rx="14" style="fill: var(--accent)"/><path d="M32 12 50 32 32 52 14 32Z" style="fill: var(--bg)"/><path d="M32 22 42 32 32 42 22 32Z" style="fill: var(--accent)"/></svg>
-      coolpsonotes
+      notekpr
     </a>
     <nav class="site-nav" aria-label="Main">
       <a href="./" aria-current="page">Home</a>
       <a href="features.html">Features</a>
       <a href="security.html">Security</a>
       <a href="self-host.html">Self-host</a>
-      <a href="https://github.com/coolapso/coolpsonotes">Source</a>
+      <a href="https://github.com/coolapso/notekpr">Source</a>
     </nav>
   </div>
 </header>
@@ -31,7 +31,7 @@
       <div class="hero-copy">
         <p class="eyebrow">Self-hosted · end-to-end encrypted · plain Markdown</p>
         <h1>Write in Markdown. Your server only sees noise.</h1>
-        <p class="lede">coolpsonotes is a notes app you run yourself. Notes are encrypted on your devices before they sync, so the server stores ciphertext and nothing else. Write in the browser with live collaboration, or keep your vaults as a folder of Markdown files and use your own editor.</p>
+        <p class="lede">notekpr is a notes app you run yourself. Notes are encrypted on your devices before they sync, so the server stores ciphertext and nothing else. Write in the browser with live collaboration, or keep your vaults as a folder of Markdown files and use your own editor.</p>
         <div class="btns">
           <a class="btn primary" href="self-host.html">Run it yourself</a>
           <a class="btn" href="security.html">How the encryption works</a>
@@ -89,13 +89,13 @@
       <div class="stack">
         <h2>Use your own editor</h2>
         <p>The desktop client keeps your vaults as an ordinary folder of Markdown files, always up to date. Edit them in Obsidian, Neovim, VS Code or anything else. Changes sync both ways and merge with what others write in the web app at the same time.</p>
-        <p>The files are plain text on your machine. The server still only ever sees them encrypted, so coolpsonotes works as an end-to-end encrypted sync server for an Obsidian vault, with a web app and collaboration on top.</p>
+        <p>The files are plain text on your machine. The server still only ever sees them encrypted, so notekpr works as an end-to-end encrypted sync server for an Obsidian vault, with a web app and collaboration on top.</p>
         <div class="editors" aria-label="Works with"><span>Obsidian</span><span>Neovim</span><span>VS Code</span><span>Emacs</span><span>grep &amp; sed</span></div>
-        <p><a href="https://github.com/coolapso/coolpsonotes/blob/dev/docs/own-editor.md">Set it up in a few minutes</a></p>
+        <p><a href="https://github.com/coolapso/notekpr/blob/dev/docs/own-editor.md">Set it up in a few minutes</a></p>
       </div>
       <div class="stack">
-<pre><span class="p">$ </span>coolpsonotes login --server https://notes.example.com
-<span class="p">$ </span>coolpsonotes sync --dir ~/Notes
+<pre><span class="p">$ </span>notekpr login --server https://notes.example.com
+<span class="p">$ </span>notekpr sync --dir ~/Notes
 <span class="c">syncing 2 vaults, watching ~/Notes</span></pre>
 <div class="tree" aria-label="Example folder"><span class="d">~/Notes/</span>
   <span class="d">Family/</span>
@@ -142,13 +142,13 @@
     <div class="wrap split">
       <div class="stack">
         <h2>Run it yourself</h2>
-        <p>coolpsonotes is open source under the AGPL. You need a machine with Docker or a Kubernetes cluster, a domain name, a reverse proxy for HTTPS (yours, or one of the examples) and an OpenID Connect provider for sign-in.</p>
+        <p>notekpr is open source under the AGPL. You need a machine with Docker or a Kubernetes cluster, a domain name, a reverse proxy for HTTPS (yours, or one of the examples) and an OpenID Connect provider for sign-in.</p>
         <p>Want to look around first? Development mode runs without a sign-in provider: open two browser tabs, sign in as two people and share a vault between them. Or run <code>task demo</code> for a server with users, shared vaults and linked notes already in it.</p>
         <div class="btns"><a class="btn primary" href="self-host.html">Self-hosting guide</a></div>
       </div>
-<pre><span class="p">$ </span>git clone https://github.com/coolapso/coolpsonotes
-<span class="p">$ </span>cd coolpsonotes
-<span class="p">$ </span>export COOLPSONOTES_PUBLIC_URL=… COOLPSONOTES_OIDC_ISSUER=…  <span class="c"># domain, sign-in</span>
+<pre><span class="p">$ </span>git clone https://github.com/coolapso/notekpr
+<span class="p">$ </span>cd notekpr
+<span class="p">$ </span>export NOTEKPR_PUBLIC_URL=… NOTEKPR_OIDC_ISSUER=…  <span class="c"># domain, sign-in</span>
 <span class="p">$ </span>docker compose up -d --build</pre>
     </div>
   </section>
@@ -157,7 +157,7 @@
     <div class="wrap">
       <div class="callout">
         <span class="eyebrow">Early release · 0.1</span>
-        <p>coolpsonotes is young. It works, it is tested, and known issues are tracked in the open. Keep backups, and read the <a href="security.html">security notes</a> before you rely on it for important data.</p>
+        <p>notekpr is young. It works, it is tested, and known issues are tracked in the open. Keep backups, and read the <a href="security.html">security notes</a> before you rely on it for important data.</p>
       </div>
     </div>
   </section>
@@ -165,13 +165,13 @@
 
 <footer class="site-foot">
   <div class="wrap">
-    <span>coolpsonotes · AGPL-3.0-or-later</span>
+    <span>notekpr · AGPL-3.0-or-later</span>
     <nav aria-label="Footer">
       <a href="features.html">Features</a>
       <a href="security.html">Security</a>
       <a href="self-host.html">Self-host</a>
-      <a href="https://github.com/coolapso/coolpsonotes">Source code</a>
-      <a href="https://github.com/coolapso/coolpsonotes/tree/dev/docs">Documentation</a>
+      <a href="https://github.com/coolapso/notekpr">Source code</a>
+      <a href="https://github.com/coolapso/notekpr/tree/dev/docs">Documentation</a>
     </nav>
   </div>
 </footer>

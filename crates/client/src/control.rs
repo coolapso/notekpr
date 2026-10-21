@@ -40,7 +40,7 @@ struct Endpoint {
 struct Request {
     token: String,
     cli: Cli,
-    #[serde(default, with = "coolpsonotes_core::b64::opt")]
+    #[serde(default, with = "notekpr_core::b64::opt")]
     stdin: Option<Vec<u8>>,
 }
 
@@ -256,9 +256,9 @@ pub async fn forward(dirs: &Dirs, mut cli: Cli) -> Result<bool> {
     let mut raw = Vec::new();
     conn.read_to_end(&mut raw).await?;
     let reply: Reply = serde_json::from_slice(&raw)
-        .context("the running coolpsonotes process didn't answer properly")?;
+        .context("the running notekpr process didn't answer properly")?;
     if !quiet {
-        eprintln!("(run by the coolpsonotes process that keeps this profile in sync)");
+        eprintln!("(run by the notekpr process that keeps this profile in sync)");
     }
     eprint!("{}", reply.stderr);
     print!("{}", reply.stdout);

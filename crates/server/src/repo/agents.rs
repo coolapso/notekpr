@@ -1,7 +1,7 @@
 //! Agent identities (users of kind `agent`, owned by a person) and their
 //! OAuth client credentials (only secret hashes are stored).
 
-use coolpsonotes_core::protocol::CredentialInfo;
+use notekpr_core::protocol::CredentialInfo;
 use sqlx::{Row, SqliteExecutor};
 
 use crate::error::AppResult;

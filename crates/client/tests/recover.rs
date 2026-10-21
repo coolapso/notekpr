@@ -3,7 +3,7 @@
 mod common;
 
 use common::*;
-use coolpsonotes_client::{manage, ops, recover};
+use notekpr_client::{manage, ops, recover};
 
 #[tokio::test]
 async fn an_encrypted_export_decrypts_into_plain_files() {
@@ -60,9 +60,9 @@ async fn an_encrypted_export_decrypts_into_plain_files() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_cli_saves_an_export_and_recovers_it_with_the_recovery_key() {
     use clap::Parser;
-    use coolpsonotes_client::account::{self, LoginOptions};
-    use coolpsonotes_client::cli::Cli;
-    use coolpsonotes_client::commands;
+    use notekpr_client::account::{self, LoginOptions};
+    use notekpr_client::cli::Cli;
+    use notekpr_client::commands;
 
     let srv = start().await;
     let dirs = srv.dirs("carol");
@@ -91,7 +91,7 @@ async fn the_cli_saves_an_export_and_recovers_it_with_the_recovery_key() {
         h.push(&id).await.unwrap();
     }
     let run = |args: &[&str]| {
-        let mut argv = vec!["coolpsonotes", "-q", "--profile", "carol"];
+        let mut argv = vec!["notekpr", "-q", "--profile", "carol"];
         argv.extend_from_slice(args);
         commands::run_in(Cli::try_parse_from(argv).unwrap(), srv.dirs("carol"))
     };
@@ -160,9 +160,9 @@ async fn the_cli_saves_an_export_and_recovers_it_with_the_recovery_key() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn without_the_server_a_device_exports_and_recovers_from_its_local_copies() {
     use clap::Parser;
-    use coolpsonotes_client::account::{self, LoginOptions};
-    use coolpsonotes_client::cli::Cli;
-    use coolpsonotes_client::commands;
+    use notekpr_client::account::{self, LoginOptions};
+    use notekpr_client::cli::Cli;
+    use notekpr_client::commands;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -234,7 +234,7 @@ async fn without_the_server_a_device_exports_and_recovers_from_its_local_copies(
     drop(h);
 
     let run = |args: &[&str]| {
-        let mut argv = vec!["coolpsonotes", "-q", "--profile", "dana"];
+        let mut argv = vec!["notekpr", "-q", "--profile", "dana"];
         argv.extend_from_slice(args);
         commands::run_in(Cli::try_parse_from(argv).unwrap(), srv.dirs("dana"))
     };

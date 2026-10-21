@@ -9,7 +9,7 @@ use axum::extract::{Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::{Form, Json};
-use coolpsonotes_core::protocol::{
+use notekpr_core::protocol::{
     DeviceAuthorizationResponse, DeviceCodeDecision, DeviceCodeLookup, OAuthError, TokenResponse,
 };
 use serde::Deserialize;
@@ -52,12 +52,12 @@ pub async fn device_authorization(
     let client_name: String = f
         .client_name
         .or(f.client_id)
-        .unwrap_or_else(|| "coolpsonotes client".into())
+        .unwrap_or_else(|| "notekpr client".into())
         .chars()
         .filter(|c| !c.is_control())
         .take(80)
         .collect();
-    let (device_code, hash) = db::new_secret("cpn_d_");
+    let (device_code, hash) = db::new_secret("notekpr_d_");
     let now = db::now();
     repo::sessions::delete_device_grants_expired_before(&state.db, now - DAY_MS).await?;
     let mut user_code = db::new_user_code();

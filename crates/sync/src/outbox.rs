@@ -10,14 +10,14 @@
 
 use std::collections::BTreeSet;
 
-use coolpsonotes_core::crypto::Purpose;
-use coolpsonotes_core::doc;
-use coolpsonotes_core::engine::{Pending, VaultReplica};
-use coolpsonotes_core::protocol::{
+use notekpr_core::crypto::Purpose;
+use notekpr_core::doc;
+use notekpr_core::engine::{Pending, VaultReplica};
+use notekpr_core::protocol::{
     ObjectKeyUpdate, PushResult, PushUpdate, REJECT_PURGED, REJECT_STALE_KEY, REJECT_TOO_LARGE,
     RejectedUpdate, comments_note,
 };
-use coolpsonotes_core::random_id;
+use notekpr_core::random_id;
 use serde::{Deserialize, Serialize};
 
 /// The server's limits, as far as the client knows them.
@@ -203,7 +203,7 @@ impl Outbox {
             return false;
         }
         let Ok((ring, update)) =
-            coolpsonotes_core::engine::new_document_key(&r.keyring, object_id, title)
+            notekpr_core::engine::new_document_key(&r.keyring, object_id, title)
         else {
             return false;
         };
@@ -232,7 +232,7 @@ impl Outbox {
         };
         let k = self.new_keys.remove(pos);
         r.doc_keys.remove(object_id);
-        let wrapped_under = coolpsonotes_core::crypto::sym_epoch(&k.update.vault_envelope).ok();
+        let wrapped_under = notekpr_core::crypto::sym_epoch(&k.update.vault_envelope).ok();
         if wrapped_under < r.keyring.current_epoch() {
             let title = r
                 .index
@@ -253,7 +253,7 @@ impl Outbox {
         &mut self,
         r: &mut VaultReplica,
         object_id: &str,
-        ring: coolpsonotes_core::keys::VaultKeyring,
+        ring: notekpr_core::keys::VaultKeyring,
         shared: bool,
     ) {
         r.doc_keys.insert(object_id.to_string(), ring);
@@ -281,14 +281,14 @@ impl Outbox {
             if r.doc_keys.contains_key(&k.object_id) {
                 return true;
             }
-            match coolpsonotes_core::keys::unwrap_doc_key_for_vault(
+            match notekpr_core::keys::unwrap_doc_key_for_vault(
                 &r.keyring,
                 &k.object_id,
                 k.update.epoch,
                 &k.update.vault_envelope,
             ) {
                 Ok(dk) => {
-                    let mut ring = coolpsonotes_core::keys::VaultKeyring::new(&vault_id);
+                    let mut ring = notekpr_core::keys::VaultKeyring::new(&vault_id);
                     ring.insert(k.update.epoch, dk);
                     r.doc_keys.insert(k.object_id.clone(), ring);
                     true
@@ -685,7 +685,7 @@ pub fn recover_from_rollback(r: &mut VaultReplica, head: i64) -> usize {
         return n;
     }
     let mut items = vec![(
-        coolpsonotes_core::protocol::INDEX_OBJECT_ID.to_string(),
+        notekpr_core::protocol::INDEX_OBJECT_ID.to_string(),
         r.index.encode_state(),
     )];
     for (id, n) in &r.notes {

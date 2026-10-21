@@ -33,7 +33,7 @@ change the note's text.
   included); vault owners can delete any comment.
 * **Own editors and the CLI:** comments are not written into the Markdown
   files (they would stop being plain Markdown; Notion's export drops them
-  too). `coolpsonotes comments …` lists, adds, replies to and resolves them,
+  too). `notekpr comments …` lists, adds, replies to and resolves them,
   so AI agents can take part ([agents.md](agents.md)); the gateway gets the
   same.
 

@@ -1,8 +1,8 @@
 //! When a client may store a snapshot (compaction or a revision).
 
-use coolpsonotes_core::engine::VaultReplica;
-use coolpsonotes_core::keys::VaultKeyring;
-use coolpsonotes_core::protocol::{CreateSnapshotRequest, INDEX_OBJECT_ID, ObjectKeyUpdate};
+use notekpr_core::engine::VaultReplica;
+use notekpr_core::keys::VaultKeyring;
+use notekpr_core::protocol::{CreateSnapshotRequest, INDEX_OBJECT_ID, ObjectKeyUpdate};
 
 use crate::outbox::{Limits, Outbox};
 
@@ -112,7 +112,7 @@ pub fn snapshot_action(
         .get(object_id)
         .map(|e| e.title().to_string())
         .unwrap_or_default();
-    let (ring, update) = coolpsonotes_core::engine::adopt_document_key(
+    let (ring, update) = notekpr_core::engine::adopt_document_key(
         &r.keyring,
         object_id,
         &title,

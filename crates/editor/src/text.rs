@@ -287,8 +287,8 @@ mod tests {
         let c = ChangeSet::from_edits(
             t.as_str(),
             &[
-                coolpsonotes_core::textdiff::Edit::Delete { at: 14, len: 1 },
-                coolpsonotes_core::textdiff::Edit::Insert {
+                notekpr_core::textdiff::Edit::Delete { at: 14, len: 1 },
+                notekpr_core::textdiff::Edit::Insert {
                     at: 2,
                     text: "\n".into(),
                 },

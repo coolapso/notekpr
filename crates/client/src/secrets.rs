@@ -15,8 +15,8 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow, bail};
-use coolpsonotes_core::crypto::random_bytes;
-use coolpsonotes_core::keys::{self, AccountSecret, DeviceKey};
+use notekpr_core::crypto::random_bytes;
+use notekpr_core::keys::{self, AccountSecret, DeviceKey};
 use zeroize::Zeroizing;
 
 use crate::fsutil;
@@ -56,7 +56,7 @@ impl LocalKey {
             bail!(
                 "{} is missing, but {} contains encrypted local data (account keys, vault copies) that only \
                  this key can open. Restore local.key from a backup and try again. To start over instead, run \
-                 `coolpsonotes logout --forget` for this profile and sign in again (changes that were never \
+                 `notekpr logout --forget` for this profile and sign in again (changes that were never \
                  uploaded are lost)",
                 path.display(),
                 data_dir.display()
@@ -208,7 +208,7 @@ impl SecretStore {
     /// removed from the account) — never delete them: they may be the only
     /// copy of the account secret. Returns the new name of the account file.
     pub fn set_aside_account(&self) -> Result<Option<PathBuf>> {
-        let stamp = coolpsonotes_core::now_ms();
+        let stamp = notekpr_core::now_ms();
         let mut moved = None;
         for f in [ACCOUNT_FILE, DEVICE_FILE] {
             let to = self.dir.join(format!("{f}.removed-{stamp}"));
@@ -234,7 +234,7 @@ impl SecretStore {
                 && std::fs::read_dir(data_dir)?.next().is_some()
             {
                 bail!(
-                    "{} does not look like a coolpsonotes data directory; not deleting it",
+                    "{} does not look like a notekpr data directory; not deleting it",
                     data_dir.display()
                 );
             }

@@ -42,7 +42,7 @@ use std::collections::{BTreeSet, VecDeque};
 use std::ops::Range;
 use std::rc::{Rc, Weak};
 
-use coolpsonotes_core::textdiff::Edit;
+use notekpr_core::textdiff::Edit;
 use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
 use web_sys::{

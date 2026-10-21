@@ -348,7 +348,7 @@ fn map_lines(st: &EditorState, f: impl Fn(&str, usize) -> String) -> Option<Tran
 }
 
 fn strip_prefix(line: &str) -> (&str, &str) {
-    if let Some((lvl, _)) = coolpsonotes_core::markdown::heading(line) {
+    if let Some((lvl, _)) = notekpr_core::markdown::heading(line) {
         let cut = line.find('#').unwrap_or(0) + lvl as usize;
         let cut = cut + line[cut..].chars().take_while(|c| *c == ' ').count();
         return (&line[..0], &line[cut..]);
@@ -402,7 +402,7 @@ pub fn command(st: &EditorState, cmd: Command) -> Option<Transaction> {
         }
         Command::Heading(n) => map_lines(st, |l, _| {
             let (_, body) = strip_prefix(l);
-            let cur = coolpsonotes_core::markdown::heading(l).map(|h| h.0);
+            let cur = notekpr_core::markdown::heading(l).map(|h| h.0);
             if n == 0 || cur == Some(n) {
                 body.to_string()
             } else {

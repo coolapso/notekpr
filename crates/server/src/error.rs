@@ -1,7 +1,7 @@
 use axum::Json;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use coolpsonotes_core::protocol::ApiError;
+use notekpr_core::protocol::ApiError;
 
 #[derive(Debug, thiserror::Error)]
 pub enum AppError {

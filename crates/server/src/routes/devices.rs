@@ -10,7 +10,7 @@
 use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
-use coolpsonotes_core::protocol::{
+use notekpr_core::protocol::{
     ActivateDeviceRequest, DeviceEnvelope, DeviceInfo, DeviceRegistration, RenameRequest,
     UserEventKind,
 };

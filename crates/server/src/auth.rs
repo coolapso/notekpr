@@ -6,14 +6,14 @@
 
 use axum::extract::FromRequestParts;
 use axum::http::request::Parts;
-use coolpsonotes_core::protocol::{PrincipalKind, UserInfo};
+use notekpr_core::protocol::{PrincipalKind, UserInfo};
 
 use crate::db::{self, Db};
 use crate::error::{AppError, AppResult, forbidden};
 use crate::repo;
 use crate::state::AppState;
 
-pub const SESSION_PREFIX: &str = "cpn_s_";
+pub const SESSION_PREFIX: &str = "notekpr_s_";
 
 #[derive(Debug, Clone)]
 pub struct Principal {
@@ -153,10 +153,9 @@ pub async fn provision_user(
         // "First user" counts real accounts and development-mode accounts
         // separately, so test users from dev mode never take the admin role
         // from the first real person signing in on the same database.
-        let dev = issuer == coolpsonotes_core::protocol::DEV_ISSUER;
+        let dev = issuer == notekpr_core::protocol::DEV_ISSUER;
         let humans =
-            repo::users::count_humans(&state.db, coolpsonotes_core::protocol::DEV_ISSUER, dev)
-                .await?;
+            repo::users::count_humans(&state.db, notekpr_core::protocol::DEV_ISSUER, dev).await?;
         let is_admin = configured_admin || (state.config.first_user_admin && humans == 0);
         let id = db::new_id();
         let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;

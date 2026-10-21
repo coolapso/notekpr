@@ -17,7 +17,7 @@
 //! (the note's CRDT) speaks [`Edit`] lists — sequential splices — and
 //! [`ChangeSet::to_edits`] / [`ChangeSet::from_edits`] convert.
 
-use coolpsonotes_core::textdiff::{self, Edit};
+use notekpr_core::textdiff::{self, Edit};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Op {

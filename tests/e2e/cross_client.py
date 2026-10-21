@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Browser user ↔ desktop CLI user with a live Markdown mirror.
 
-    python3 tests/e2e/cross_client.py --server target/debug/coolpsonotes-server \
-        --cli target/debug/coolpsonotes --web dist/web
+    python3 tests/e2e/cross_client.py --server target/debug/notekpr-server \
+        --cli target/debug/notekpr --web dist/web
 """
 import argparse, os, subprocess, sys, tempfile, time
 
@@ -13,13 +13,13 @@ from wd import Browser, KEYS, editor_text, signup  # noqa: E402
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--server", default="target/debug/coolpsonotes-server")
-    ap.add_argument("--cli", default="target/debug/coolpsonotes")
+    ap.add_argument("--server", default="target/debug/notekpr-server")
+    ap.add_argument("--cli", default="target/debug/notekpr")
     ap.add_argument("--web", default="dist/web")
     args = ap.parse_args()
     env = Env(args.server, args.web)
-    home = tempfile.mkdtemp(prefix="cpn-cli-")
-    cenv = dict(os.environ, COOLPSONOTES_CONFIG_DIR=f"{home}/config", COOLPSONOTES_DATA_DIR=f"{home}/data")
+    home = tempfile.mkdtemp(prefix="notekpr-cli-")
+    cenv = dict(os.environ, NOTEKPR_CONFIG_DIR=f"{home}/config", NOTEKPR_DATA_DIR=f"{home}/data")
     cli = lambda *a, **kw: subprocess.run([os.path.abspath(args.cli), "-p", "bob", *a], env=cenv, capture_output=True, text=True, timeout=60, **kw)
     a = Browser()
     daemon = None

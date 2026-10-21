@@ -21,8 +21,8 @@ use zeroize::{Zeroize, ZeroizeOnDrop};
 use crate::crypto::{self, CryptoError, Key32, Purpose, Result};
 
 const ACCOUNT_SECRET_VERSION: u8 = 1;
-const INFO_ACCOUNT_TO_DEVICE: &[u8] = b"coolpsonotes/v1/hpke/account-to-device";
-const INFO_VAULT_KEY: &[u8] = b"coolpsonotes/v1/hpke/vault-key";
+const INFO_ACCOUNT_TO_DEVICE: &[u8] = b"notekpr/v1/hpke/account-to-device";
+const INFO_VAULT_KEY: &[u8] = b"notekpr/v1/hpke/vault-key";
 
 /// A user's (or agent's) long-term secret key material.
 #[derive(Clone, Zeroize, ZeroizeOnDrop)]
@@ -142,7 +142,7 @@ impl AccountPublic {
         let mut m = Vec::with_capacity(64);
         m.extend_from_slice(&self.sign_public);
         m.extend_from_slice(&self.enc_public);
-        let h = crypto::kdf_hash("coolpsonotes v1 account fingerprint", &m);
+        let h = crypto::kdf_hash("notekpr v1 account fingerprint", &m);
         let hex = data_encoding::HEXUPPER.encode(&h[..16]);
         hex.as_bytes()
             .chunks(4)
@@ -204,21 +204,21 @@ impl AccountPublic {
 
 pub fn recovery_update_statement(user_id: &str, envelope: &[u8]) -> Vec<u8> {
     crypto::statement(
-        "coolpsonotes/v1/sig/recovery-update",
+        "notekpr/v1/sig/recovery-update",
         &[user_id.as_bytes(), envelope],
     )
 }
 
 pub fn recovery_update_statement_v2(user_id: &str, version: u64, envelope: &[u8]) -> Vec<u8> {
     crypto::statement(
-        "coolpsonotes/v1/sig/recovery-update-v2",
+        "notekpr/v1/sig/recovery-update-v2",
         &[user_id.as_bytes(), &version.to_be_bytes(), envelope],
     )
 }
 
 pub fn account_key_statement(user_id: &str, key_version: u32, public: &AccountPublic) -> Vec<u8> {
     crypto::statement(
-        "coolpsonotes/v1/sig/account-key",
+        "notekpr/v1/sig/account-key",
         &[
             user_id.as_bytes(),
             &key_version.to_be_bytes(),
@@ -230,7 +230,7 @@ pub fn account_key_statement(user_id: &str, key_version: u32, public: &AccountPu
 
 pub fn device_approval_statement(user_id: &str, device_id: &str, device_public: &Key32) -> Vec<u8> {
     crypto::statement(
-        "coolpsonotes/v1/sig/device-approval",
+        "notekpr/v1/sig/device-approval",
         &[user_id.as_bytes(), device_id.as_bytes(), device_public],
     )
 }
@@ -305,7 +305,7 @@ pub fn device_verification_code(
             &account.enc_public,
         ],
     );
-    let h = crypto::kdf_hash("coolpsonotes v1 device verification code", &m);
+    let h = crypto::kdf_hash("notekpr v1 device verification code", &m);
     // 60 bits -> 12 base32 characters.
     let s = data_encoding::BASE32_NOPAD.encode(&h[..8]);
     let s = &s[..12];
@@ -376,7 +376,7 @@ impl RecoveryKey {
 }
 
 fn checksum(key: &Key32) -> [u8; 2] {
-    let h = crypto::kdf_hash("coolpsonotes v1 recovery checksum", key);
+    let h = crypto::kdf_hash("notekpr v1 recovery checksum", key);
     [h[0], h[1]]
 }
 

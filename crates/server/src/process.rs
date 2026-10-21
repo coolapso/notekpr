@@ -87,11 +87,10 @@ mod tests {
 
     #[test]
     fn reads_cpu_time_and_memory() {
-        let stat =
-            "4242 (coolpsonotes (x)) S 1 4242 4242 0 -1 4194560 12 0 0 0 250 125 0 0 20 0 9 0";
+        let stat = "4242 (notekpr (x)) S 1 4242 4242 0 -1 4194560 12 0 0 0 250 125 0 0 20 0 9 0";
         assert_eq!(cpu_seconds(stat), Some(3.75));
         assert_eq!(cpu_seconds("garbage"), None);
-        let status = "Name:\tcoolpsonotes\nVmPeak:\t  90000 kB\nVmRSS:\t   41000 kB\nThreads:\t9\n";
+        let status = "Name:\tnotekpr\nVmPeak:\t  90000 kB\nVmRSS:\t   41000 kB\nThreads:\t9\n";
         assert_eq!(resident_bytes(status), Some(41_000 * 1024));
     }
 

@@ -1,12 +1,12 @@
 //! Property tests: random input, biased towards Markdown syntax, multibyte
 //! text and the characters that trip byte-offset code. These would have
 //! caught the multibyte slicing crashes found in review, and keep parsers,
-//! diffs and merging honest. Run with `cargo test -p coolpsonotes-core`;
-//! more cases: `PROPTEST_CASES=20000 cargo test -p coolpsonotes-core --test properties`.
+//! diffs and merging honest. Run with `cargo test -p notekpr-core`;
+//! more cases: `PROPTEST_CASES=20000 cargo test -p notekpr-core --test properties`.
 
-use coolpsonotes_core::crypto::{self, Purpose};
-use coolpsonotes_core::doc::NoteDoc;
-use coolpsonotes_core::{markdown, paths, search, textdiff};
+use notekpr_core::crypto::{self, Purpose};
+use notekpr_core::doc::NoteDoc;
+use notekpr_core::{markdown, paths, search, textdiff};
 use proptest::prelude::*;
 
 /// Characters that matter to the code under test, plus multibyte ones.

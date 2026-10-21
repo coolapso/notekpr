@@ -8,6 +8,6 @@ fuzz_target!(|data: &[u8]| {
     // Split the input into an old and a new text at a char boundary.
     let mid = (0..=s.len() / 2).rev().find(|&i| s.is_char_boundary(i)).unwrap_or(0);
     let (old, new) = s.split_at(mid);
-    let edits = coolpsonotes_core::textdiff::diff(old, new);
-    assert_eq!(coolpsonotes_core::textdiff::apply(old, &edits), new);
+    let edits = notekpr_core::textdiff::diff(old, new);
+    assert_eq!(notekpr_core::textdiff::apply(old, &edits), new);
 });

@@ -5,9 +5,9 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 
 #[derive(Parser, Debug)]
 #[command(
-    name = "coolpsonotes-server",
+    name = "notekpr-server",
     version,
-    about = "Zero-knowledge sync server for coolpsonotes"
+    about = "Zero-knowledge sync server for notekpr"
 )]
 pub struct Cli {
     #[command(subcommand)]
@@ -41,7 +41,7 @@ pub enum Command {
     },
     /// Write one person's encrypted export: their vaults and the notes shared
     /// with them, exactly as stored (ciphertext and key envelopes). They
-    /// decrypt it offline with `coolpsonotes recover` and their recovery key.
+    /// decrypt it offline with `notekpr recover` and their recovery key.
     /// Works on a backup file too, without a running server.
     ExportUser {
         /// User id, e-mail address or display name.
@@ -88,7 +88,7 @@ pub struct Config {
     /// Address to listen on.
     #[arg(
         long,
-        env = "COOLPSONOTES_LISTEN",
+        env = "NOTEKPR_LISTEN",
         default_value = "127.0.0.1:8080",
         global = true
     )]
@@ -97,7 +97,7 @@ pub struct Config {
     /// Directory holding the SQLite database.
     #[arg(
         long,
-        env = "COOLPSONOTES_DATA_DIR",
+        env = "NOTEKPR_DATA_DIR",
         default_value = "./data",
         global = true
     )]
@@ -107,27 +107,27 @@ pub struct Config {
     /// OIDC redirect URI and device-login links.
     #[arg(
         long,
-        env = "COOLPSONOTES_PUBLIC_URL",
+        env = "NOTEKPR_PUBLIC_URL",
         default_value = "http://localhost:8080",
         global = true
     )]
     pub public_url: String,
 
     /// Directory with the built web client. If unset, the server is API-only.
-    #[arg(long, env = "COOLPSONOTES_WEB_DIR", global = true)]
+    #[arg(long, env = "NOTEKPR_WEB_DIR", global = true)]
     pub web_dir: Option<PathBuf>,
 
     /// OIDC issuer URL (e.g. https://auth.example.com, https://kc.example.com/realms/home).
-    #[arg(long, env = "COOLPSONOTES_OIDC_ISSUER", global = true)]
+    #[arg(long, env = "NOTEKPR_OIDC_ISSUER", global = true)]
     pub oidc_issuer: Option<String>,
 
-    #[arg(long, env = "COOLPSONOTES_OIDC_CLIENT_ID", global = true)]
+    #[arg(long, env = "NOTEKPR_OIDC_CLIENT_ID", global = true)]
     pub oidc_client_id: Option<String>,
 
     /// Client secret (omit for a public client; PKCE is always used).
     #[arg(
         long,
-        env = "COOLPSONOTES_OIDC_CLIENT_SECRET",
+        env = "NOTEKPR_OIDC_CLIENT_SECRET",
         global = true,
         hide_env_values = true
     )]
@@ -135,7 +135,7 @@ pub struct Config {
 
     #[arg(
         long,
-        env = "COOLPSONOTES_OIDC_SCOPES",
+        env = "NOTEKPR_OIDC_SCOPES",
         default_value = "openid profile email",
         global = true
     )]
@@ -145,7 +145,7 @@ pub struct Config {
     /// the provider advertises (`client_secret_basic` when both are offered).
     #[arg(
         long,
-        env = "COOLPSONOTES_OIDC_TOKEN_AUTH",
+        env = "NOTEKPR_OIDC_TOKEN_AUTH",
         value_enum,
         default_value = "auto",
         global = true
@@ -154,14 +154,14 @@ pub struct Config {
 
     /// Extra CA certificates (PEM bundle) to trust for the identity provider,
     /// e.g. a private homelab CA. The system's trust store is always used.
-    #[arg(long, env = "COOLPSONOTES_OIDC_CA_FILE", global = true)]
+    #[arg(long, env = "NOTEKPR_OIDC_CA_FILE", global = true)]
     pub oidc_ca_file: Option<PathBuf>,
 
     /// Accept e-mail addresses the provider doesn't mark as verified
     /// (`email_verified`). They are used for finding people to share with.
     #[arg(
         long,
-        env = "COOLPSONOTES_OIDC_ALLOW_UNVERIFIED_EMAIL",
+        env = "NOTEKPR_OIDC_ALLOW_UNVERIFIED_EMAIL",
         default_value_t = false,
         global = true
     )]
@@ -170,19 +170,14 @@ pub struct Config {
     /// Name shown on the login button.
     #[arg(
         long,
-        env = "COOLPSONOTES_OIDC_DISPLAY_NAME",
+        env = "NOTEKPR_OIDC_DISPLAY_NAME",
         default_value = "Single sign-on",
         global = true
     )]
     pub oidc_display_name: String,
 
     /// DEVELOPMENT ONLY: allow signing in as any user name without OIDC.
-    #[arg(
-        long,
-        env = "COOLPSONOTES_DEV_MODE",
-        default_value_t = false,
-        global = true
-    )]
+    #[arg(long, env = "NOTEKPR_DEV_MODE", default_value_t = false, global = true)]
     pub dev_mode: bool,
 
     /// Allow development mode where it could be reachable by others: a
@@ -190,7 +185,7 @@ pub struct Config {
     /// only published on localhost), an https public URL, or with OIDC.
     #[arg(
         long,
-        env = "COOLPSONOTES_DEV_MODE_ANYWHERE",
+        env = "NOTEKPR_DEV_MODE_ANYWHERE",
         default_value_t = false,
         global = true
     )]
@@ -199,25 +194,25 @@ pub struct Config {
     /// Demo only (needs --dev-mode): when everything on this server will be
     /// deleted, in Unix seconds. The web app tells people (`task demo`'s
     /// `--lifetime` sets it).
-    #[arg(long, env = "COOLPSONOTES_DEMO_RESETS_AT", global = true)]
+    #[arg(long, env = "NOTEKPR_DEMO_RESETS_AT", global = true)]
     pub demo_resets_at: Option<i64>,
 
     /// Identities ("issuer|subject", or "dev:<name>" in dev mode) that are administrators.
     #[arg(
         long = "admin",
-        env = "COOLPSONOTES_ADMINS",
+        env = "NOTEKPR_ADMINS",
         value_delimiter = ',',
         global = true
     )]
     pub admins: Vec<String>,
 
     /// Make the first user that signs in an administrator.
-    #[arg(long, env = "COOLPSONOTES_FIRST_USER_ADMIN", default_value_t = true, action = clap::ArgAction::Set, global = true)]
+    #[arg(long, env = "NOTEKPR_FIRST_USER_ADMIN", default_value_t = true, action = clap::ArgAction::Set, global = true)]
     pub first_user_admin: bool,
 
     #[arg(
         long,
-        env = "COOLPSONOTES_USER_DIRECTORY",
+        env = "NOTEKPR_USER_DIRECTORY",
         value_enum,
         default_value = "search",
         global = true
@@ -226,7 +221,7 @@ pub struct Config {
 
     #[arg(
         long,
-        env = "COOLPSONOTES_SESSION_TTL_DAYS",
+        env = "NOTEKPR_SESSION_TTL_DAYS",
         default_value_t = 30,
         global = true
     )]
@@ -234,7 +229,7 @@ pub struct Config {
 
     #[arg(
         long,
-        env = "COOLPSONOTES_DEVICE_SESSION_TTL_DAYS",
+        env = "NOTEKPR_DEVICE_SESSION_TTL_DAYS",
         default_value_t = 180,
         global = true
     )]
@@ -242,7 +237,7 @@ pub struct Config {
 
     #[arg(
         long,
-        env = "COOLPSONOTES_AGENT_TOKEN_TTL_SECS",
+        env = "NOTEKPR_AGENT_TOKEN_TTL_SECS",
         default_value_t = 3600,
         global = true
     )]
@@ -250,7 +245,7 @@ pub struct Config {
 
     #[arg(
         long,
-        env = "COOLPSONOTES_MAX_ATTACHMENT_MB",
+        env = "NOTEKPR_MAX_ATTACHMENT_MB",
         default_value_t = 25,
         global = true
     )]
@@ -258,7 +253,7 @@ pub struct Config {
 
     #[arg(
         long,
-        env = "COOLPSONOTES_MAX_UPDATE_KB",
+        env = "NOTEKPR_MAX_UPDATE_KB",
         default_value_t = 2048,
         global = true
     )]
@@ -266,13 +261,13 @@ pub struct Config {
 
     /// Largest snapshot (a note's full state). Default: 16 × the update
     /// limit, at least 32 MiB; never below the update limit.
-    #[arg(long, env = "COOLPSONOTES_MAX_SNAPSHOT_KB", global = true)]
+    #[arg(long, env = "NOTEKPR_MAX_SNAPSHOT_KB", global = true)]
     pub max_snapshot_kb: Option<u64>,
 
     /// Snapshots kept per document for revision history.
     #[arg(
         long,
-        env = "COOLPSONOTES_SNAPSHOT_RETENTION",
+        env = "NOTEKPR_SNAPSHOT_RETENTION",
         default_value_t = 100,
         global = true
     )]
@@ -282,7 +277,7 @@ pub struct Config {
     /// person (keeps history from being flooded).
     #[arg(
         long,
-        env = "COOLPSONOTES_SNAPSHOT_COOLDOWN_SECS",
+        env = "NOTEKPR_SNAPSHOT_COOLDOWN_SECS",
         default_value_t = 30,
         global = true
     )]
@@ -291,7 +286,7 @@ pub struct Config {
     /// Trust X-Forwarded-For / X-Real-IP (only behind a reverse proxy you control).
     #[arg(
         long,
-        env = "COOLPSONOTES_TRUST_PROXY",
+        env = "NOTEKPR_TRUST_PROXY",
         default_value_t = false,
         global = true
     )]
@@ -300,7 +295,7 @@ pub struct Config {
     /// Requests per second allowed per client IP on the API.
     #[arg(
         long,
-        env = "COOLPSONOTES_RATE_LIMIT_RPS",
+        env = "NOTEKPR_RATE_LIMIT_RPS",
         default_value_t = 50,
         global = true
     )]
@@ -309,20 +304,20 @@ pub struct Config {
     /// Requests per minute allowed per client IP on login endpoints.
     #[arg(
         long,
-        env = "COOLPSONOTES_AUTH_RATE_LIMIT_PER_MIN",
+        env = "NOTEKPR_AUTH_RATE_LIMIT_PER_MIN",
         default_value_t = 30,
         global = true
     )]
     pub auth_rate_limit_per_min: u32,
 
     /// Expose Prometheus metrics at /metrics.
-    #[arg(long, env = "COOLPSONOTES_METRICS", default_value_t = true, action = clap::ArgAction::Set, global = true)]
+    #[arg(long, env = "NOTEKPR_METRICS", default_value_t = true, action = clap::ArgAction::Set, global = true)]
     pub metrics: bool,
 
     /// If set, /metrics requires `Authorization: Bearer <token>`.
     #[arg(
         long,
-        env = "COOLPSONOTES_METRICS_TOKEN",
+        env = "NOTEKPR_METRICS_TOKEN",
         global = true,
         hide_env_values = true
     )]
@@ -330,7 +325,7 @@ pub struct Config {
 
     #[arg(
         long,
-        env = "COOLPSONOTES_LOG_FORMAT",
+        env = "NOTEKPR_LOG_FORMAT",
         value_enum,
         default_value = "pretty",
         global = true
@@ -348,7 +343,7 @@ impl Config {
     }
 
     pub fn db_path(&self) -> PathBuf {
-        self.data_dir.join("coolpsonotes.db")
+        self.data_dir.join("notekpr.db")
     }
 
     pub fn max_attachment_bytes(&self) -> u64 {
@@ -371,7 +366,7 @@ impl Config {
         self.admins.iter().any(|a| {
             let a = a.trim();
             if let Some(name) = a.strip_prefix("dev:") {
-                return issuer == coolpsonotes_core::protocol::DEV_ISSUER && subject == name;
+                return issuer == notekpr_core::protocol::DEV_ISSUER && subject == name;
             }
             match a.split_once('|') {
                 Some((i, s)) => {
@@ -406,7 +401,7 @@ impl Config {
 
     pub fn for_tests(data_dir: PathBuf) -> Self {
         let cli = Cli::parse_from([
-            "coolpsonotes-server",
+            "notekpr-server",
             "--dev-mode",
             "--data-dir",
             data_dir.to_str().unwrap(),

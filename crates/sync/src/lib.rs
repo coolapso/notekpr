@@ -16,7 +16,7 @@
 //! what it returns. That keeps it the same on wasm and tokio (no `Send`
 //! questions, no async traits) and lets one test suite cover the logic
 //! without a network. Replica state itself (CRDT documents, keys, deferred
-//! content, acknowledgements) stays in `coolpsonotes_core::engine::VaultReplica`.
+//! content, acknowledgements) stays in `notekpr_core::engine::VaultReplica`.
 
 pub mod edits;
 pub mod members;

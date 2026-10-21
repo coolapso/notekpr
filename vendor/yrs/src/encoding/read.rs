@@ -172,7 +172,7 @@ pub trait Read: Sized {
     }
 }
 
-/// coolpsonotes patch: the most elements reserved up front for a count read
+/// notekpr patch: the most elements reserved up front for a count read
 /// from an update. Counts are attacker-controlled, and a fallible
 /// reservation still allocates (and, for hash maps, initialises) whatever can
 /// be had — a few bytes declaring a billion entries cost gigabytes. Larger

@@ -5,7 +5,7 @@ use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Redirect, Response};
-use coolpsonotes_core::protocol::{
+use notekpr_core::protocol::{
     DEV_ISSUER, DevLoginRequest, ExchangeRequest, ServerInfo, SessionEntry, SessionResponse,
 };
 use serde::Deserialize;
@@ -23,7 +23,7 @@ const OIDC_STATE_TTL_MS: i64 = 600_000;
 
 pub async fn info(State(state): State<AppState>) -> Json<ServerInfo> {
     Json(ServerInfo {
-        name: "coolpsonotes".into(),
+        name: "notekpr".into(),
         version: env!("CARGO_PKG_VERSION").into(),
         dev_mode: state.config.dev_mode,
         oidc_enabled: state.oidc.is_some(),
@@ -62,7 +62,7 @@ fn safe_return_to(r: Option<String>) -> String {
 
 /// Cookie that ties an OIDC login to the browser that started it, so a
 /// login link prepared by someone else can't sign this browser in as them.
-const LOGIN_COOKIE: &str = "cpn_login";
+const LOGIN_COOKIE: &str = "notekpr_login";
 
 fn login_cookie(state: &AppState, value: &str, max_age_secs: i64) -> HeaderValue {
     let secure = if state.config.public_url().starts_with("https://") {
@@ -192,7 +192,7 @@ async fn oidc_callback_inner(
         Err(AppError::Forbidden(_)) => return Ok(complete_redirect("error=account_disabled")),
         Err(e) => return Err(e),
     };
-    let (code, hash) = db::new_secret("cpn_l_");
+    let (code, hash) = db::new_secret("notekpr_l_");
     repo::sessions::insert_login_code(&state.db, &hash, &user_id, db::now() + LOGIN_CODE_TTL_MS)
         .await?;
     let encoded: String = url::form_urlencoded::byte_serialize(row.return_to.as_bytes()).collect();

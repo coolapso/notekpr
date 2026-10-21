@@ -3,8 +3,8 @@
 mod common;
 
 use common::*;
-use coolpsonotes_client::{manage, note_shares, ops};
-use coolpsonotes_core::protocol::Role;
+use notekpr_client::{manage, note_shares, ops};
+use notekpr_core::protocol::Role;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn single_note_sharing_end_to_end() {
@@ -123,7 +123,7 @@ async fn sharing_needs_an_exact_name_not_a_prefix() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_note_key_is_never_renewed_for_a_changed_account_key() {
-    use coolpsonotes_client::profile::ProfileStore;
+    use notekpr_client::profile::ProfileStore;
     let srv = start().await;
     let alice = login(&srv, "alice").await;
     let _bob = login(&srv, "bob").await;
@@ -168,7 +168,7 @@ async fn a_note_key_is_never_renewed_for_a_changed_account_key() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_vault_key_rotation_leaves_out_a_member_whose_key_changed() {
-    use coolpsonotes_client::profile::ProfileStore;
+    use notekpr_client::profile::ProfileStore;
     let srv = start().await;
     let alice = login(&srv, "alice").await;
     let _bob = login(&srv, "bob").await;
@@ -187,7 +187,7 @@ async fn a_vault_key_rotation_leaves_out_a_member_whose_key_changed() {
         .unwrap();
     // The key is renewed for everyone else, instead of not at all.
     alice.rotate_keys(&v).await.unwrap();
-    let has_key = |members: &[coolpsonotes_core::protocol::MemberInfo], id: &str| {
+    let has_key = |members: &[notekpr_core::protocol::MemberInfo], id: &str| {
         members
             .iter()
             .find(|m| m.user.id == id)
@@ -302,7 +302,7 @@ async fn notes_and_folders_keep_the_order_they_are_put_in() {
     }
     let v = ah.resolve("Home").await.unwrap();
     v.lock().await.create_folder("Books").unwrap();
-    let top = |v: coolpsonotes_client::session::SharedVault| async move {
+    let top = |v: notekpr_client::session::SharedVault| async move {
         let g = v.lock().await;
         g.list("", false)
             .unwrap()

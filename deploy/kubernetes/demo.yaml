@@ -1,4 +1,4 @@
-# A public demo of coolpsonotes that starts over every hour
+# A public demo of notekpr that starts over every hour
 # (docs/operations.md §10). The demo image (`task docker:build:demo`; push it
 # where your cluster pulls images from) seeds users, vaults and notes through
 # the CLI, serves them for an hour, then exits; Kubernetes restarts the
@@ -14,24 +14,24 @@
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: coolpsonotes-demo
+  name: notekpr-demo
 ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: coolpsonotes-demo
-  namespace: coolpsonotes-demo
+  name: notekpr-demo
+  namespace: notekpr-demo
 spec:
   replicas: 1
   strategy:
     type: Recreate
   selector:
     matchLabels:
-      app: coolpsonotes-demo
+      app: notekpr-demo
   template:
     metadata:
       labels:
-        app: coolpsonotes-demo
+        app: notekpr-demo
     spec:
       securityContext:
         runAsNonRoot: true
@@ -42,14 +42,14 @@ spec:
           type: RuntimeDefault
       containers:
         - name: demo
-          image: registry.example.com/coolpsonotes-demo:latest
+          image: registry.example.com/notekpr-demo:latest
           # Added to the image's: --fresh --lifetime 1h --dev-mode-anywhere …
           # (a later --lifetime, e.g. 30m, replaces its 1h).
           args: ["--public-url", "https://demo.example.com"]
           env:
             # Client addresses from the ingress's X-Forwarded-For, for the
             # per-person rate limits (see the Traefik example's notes).
-            - name: COOLPSONOTES_TRUST_PROXY
+            - name: NOTEKPR_TRUST_PROXY
               value: "true"
           ports:
             - name: http
@@ -86,11 +86,11 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: coolpsonotes-demo
-  namespace: coolpsonotes-demo
+  name: notekpr-demo
+  namespace: notekpr-demo
 spec:
   selector:
-    app: coolpsonotes-demo
+    app: notekpr-demo
   ports:
     - name: http
       port: 80

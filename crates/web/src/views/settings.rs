@@ -1,8 +1,8 @@
 //! Settings: account, devices, sessions, recovery, agents, editor, admin.
 //! Also the page used to approve a desktop/CLI sign-in code.
 
-use coolpsonotes_core::protocol::*;
 use leptos::prelude::*;
+use notekpr_core::protocol::*;
 
 use crate::state::{self, Modal, Route, step, ui};
 use crate::util;
@@ -152,7 +152,7 @@ fn Devices() -> impl IntoView {
         </div>
         <OfflineSetting/>
         <h3>"Add the desktop app"</h3>
-        <p class="muted small">"Install the coolpsonotes command-line client and run " <code>{format!("coolpsonotes login --server {}", util::window().location().origin().unwrap_or_default())}</code>
+        <p class="muted small">"Install the notekpr command-line client and run " <code>{format!("notekpr login --server {}", util::window().location().origin().unwrap_or_default())}</code>
             ". It will show a code to confirm here, then ask this device to approve it."</p>
     }
 }
@@ -253,7 +253,7 @@ fn Security() -> impl IntoView {
                     <div class="recovery-key">{k.clone()}</div>
                     <div class="row">
                         <button class="btn" on:click=move |_| { util::copy_to_clipboard(&k2); state::success("Copied."); }><Icon name="copy"/>" Copy"</button>
-                        <button class="btn" on:click=move |_| util::download("coolpsonotes-recovery-key.txt", "text/plain", format!("coolpsonotes recovery key\n\n{k}\n").as_bytes())><Icon name="download"/>" Download"</button>
+                        <button class="btn" on:click=move |_| util::download("notekpr-recovery-key.txt", "text/plain", format!("notekpr recovery key\n\n{k}\n").as_bytes())><Icon name="download"/>" Download"</button>
                     </div>
                 }.into_any()
             }
@@ -261,7 +261,7 @@ fn Security() -> impl IntoView {
                 <button class="btn" on:click=move |_| {
                     if !util::confirm("Create a new recovery key? Your old recovery key will stop working.") { return; }
                     leptos::task::spawn_local(async move {
-                        let req = step(|c| c.account.as_ref().map(|a| coolpsonotes_core::engine::rotate_recovery(a, &c.user_id, util::now_ms().max(0) as u64)));
+                        let req = step(|c| c.account.as_ref().map(|a| notekpr_core::engine::rotate_recovery(a, &c.user_id, util::now_ms().max(0) as u64)));
                         if let Some((rk, req)) = req {
                             match api::put::<_, ()>("/me/recovery", &req).await {
                                 Ok(()) => new_key.set(Some(rk.to_display())),
@@ -297,7 +297,7 @@ fn Agents() -> impl IntoView {
     reload();
     let origin = util::window().location().origin().unwrap_or_default();
     view! {
-        <p>"An agent is a separate identity for an AI assistant or automation. It has its own keys and only sees the vaults you explicitly share with it (as viewer or editor), through the coolpsonotes CLI, the local agent gateway or a Markdown folder it edits."</p>
+        <p>"An agent is a separate identity for an AI assistant or automation. It has its own keys and only sees the vaults you explicitly share with it (as viewer or editor), through the notekpr CLI, the local agent gateway or a Markdown folder it edits."</p>
         <form class="row" on:submit=move |ev| {
             ev.prevent_default();
             let n = name.get_untracked();
@@ -314,7 +314,7 @@ fn Agents() -> impl IntoView {
         </form>
         {move || created.get().map(|c| {
             let origin = origin.clone();
-            let setup = format!("echo '{}' > agent.secret && chmod 600 agent.secret\ncoolpsonotes agent setup --server {} --client-id {} --client-secret-file agent.secret", c.client_secret, origin, c.client_id);
+            let setup = format!("echo '{}' > agent.secret && chmod 600 agent.secret\nnotekpr agent setup --server {} --client-id {} --client-secret-file agent.secret", c.client_secret, origin, c.client_id);
             let s2 = setup.clone();
             view! {
                 <div class="alert">
@@ -336,7 +336,7 @@ fn Agents() -> impl IntoView {
                             <Icon name="bot"/>
                             <div class="grow">
                                 <div>{a.display_name.clone()}</div>
-                                <div class="muted small">{match &fp { Some(f) => format!("key {f}"), None => "not set up yet — run `coolpsonotes agent setup`".into() }}</div>
+                                <div class="muted small">{match &fp { Some(f) => format!("key {f}"), None => "not set up yet — run `notekpr agent setup`".into() }}</div>
                             </div>
                             <button class="btn small" on:click=move |_| {
                                 let id = id.clone();
@@ -577,7 +577,7 @@ pub fn DeviceCodePage(code: Option<String>) -> impl IntoView {
         <div class="page">
             <header class="page-head"><h1>"Sign in a device"</h1></header>
             <div class="page-body narrow">
-                <p>"Enter the code shown by the coolpsonotes desktop app or command-line client."</p>
+                <p>"Enter the code shown by the notekpr desktop app or command-line client."</p>
                 <form class="row" on:submit=move |ev| { ev.prevent_default(); lookup(); }>
                     <input class="input mono grow" placeholder="ABCD-EFGH" prop:value=move || code_in.get() on:input=move |ev| code_in.set(event_target_value(&ev))/>
                     <button class="btn" type="submit">"Continue"</button>

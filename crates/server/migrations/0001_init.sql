@@ -1,4 +1,4 @@
--- coolpsonotes server schema v1.
+-- notekpr server schema v1.
 -- The server stores identities, authorization state, public keys and
 -- ciphertext. It never stores plaintext note content, paths or vault names.
 

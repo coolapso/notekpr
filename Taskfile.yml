@@ -86,13 +86,13 @@ tasks:
     desc: Build the server (debug)
     deps: [rust]
     cmds:
-      - cargo build -p coolpsonotes-server
+      - cargo build -p notekpr-server
 
   build:cli:
-    desc: Build the desktop/CLI client `coolpsonotes` (debug)
+    desc: Build the desktop/CLI client `notekpr` (debug)
     deps: [rust]
     cmds:
-      - cargo build -p coolpsonotes-client
+      - cargo build -p notekpr-client
 
   build:web:
     desc: Build the optimized web client into dist/web
@@ -117,7 +117,7 @@ tasks:
     desc: Release build of the server and CLI (target/release) plus the optimized web client
     deps: [rust]
     cmds:
-      - cargo build --release --locked -p coolpsonotes-server -p coolpsonotes-client
+      - cargo build --release --locked -p notekpr-server -p notekpr-client
       - task: build:web
 
   # ------------------------------------------------------------------ run
@@ -126,7 +126,7 @@ tasks:
     desc: "Run the server in development mode on {{.PUBLIC_URL}}: no OIDC, sign in as any user (one per browser tab)"
     deps: [build:server, build:web:dev]
     cmds:
-      - ./target/debug/coolpsonotes-server --dev-mode --web-dir dist/web --data-dir {{.DATA_DIR}} --listen {{.LISTEN}} --public-url {{.PUBLIC_URL}} --log-format pretty {{.CLI_ARGS}}
+      - ./target/debug/notekpr-server --dev-mode --web-dir dist/web --data-dir {{.DATA_DIR}} --listen {{.LISTEN}} --public-url {{.PUBLIC_URL}} --log-format pretty {{.CLI_ARGS}}
 
   web:watch:
     desc: Rebuild the web client whenever its code changes (run next to `task dev`, then reload the browser)
@@ -161,16 +161,16 @@ tasks:
     desc: "Run the CLI as a demo user, e.g. `task demo:cli -- --profile bob vault list`"
     deps: [rust]
     env:
-      COOLPSONOTES_CONFIG_DIR: "{{.ROOT_DIR}}/{{.DEMO_DIR}}/cli/config"
-      COOLPSONOTES_DATA_DIR: "{{.ROOT_DIR}}/{{.DEMO_DIR}}/cli/data"
+      NOTEKPR_CONFIG_DIR: "{{.ROOT_DIR}}/{{.DEMO_DIR}}/cli/config"
+      NOTEKPR_DATA_DIR: "{{.ROOT_DIR}}/{{.DEMO_DIR}}/cli/data"
     cmds:
-      - cargo run -q -p coolpsonotes-client -- {{.CLI_ARGS}}
+      - cargo run -q -p notekpr-client -- {{.CLI_ARGS}}
 
   cli:
     desc: "Run the CLI, e.g. `task cli -- --profile alice status`"
     deps: [rust]
     cmds:
-      - cargo run -q -p coolpsonotes-client -- {{.CLI_ARGS}}
+      - cargo run -q -p notekpr-client -- {{.CLI_ARGS}}
 
   cli:login:
     desc: "Sign the CLI in to the dev server as a test user, e.g. `task cli:login DEV_USER=alice` (profile = user name)"
@@ -178,13 +178,13 @@ tasks:
     requires:
       vars: [DEV_USER]
     cmds:
-      - cargo run -q -p coolpsonotes-client -- --profile {{.DEV_USER}} login --server {{.PUBLIC_URL}} --dev-user {{.DEV_USER}}
+      - cargo run -q -p notekpr-client -- --profile {{.DEV_USER}} login --server {{.PUBLIC_URL}} --dev-user {{.DEV_USER}}
 
   backup:
     desc: "Write a timestamped backup of {{.DATA_DIR}} into {{.BACKUP_DIR}}/ (safe while the server runs; keeps the newest 10)"
     deps: [build:server]
     cmds:
-      - ./target/debug/coolpsonotes-server backup --data-dir {{.DATA_DIR}} --out-dir {{.BACKUP_DIR}} --keep 10
+      - ./target/debug/notekpr-server backup --data-dir {{.DATA_DIR}} --out-dir {{.BACKUP_DIR}} --keep 10
 
   # ------------------------------------------------------------------ test & lint
 
@@ -198,25 +198,25 @@ tasks:
     desc: Crypto, key hierarchy, CRDT model, protocol
     deps: [rust]
     cmds:
-      - cargo test -p coolpsonotes-core
+      - cargo test -p notekpr-core
 
   test:server:
     desc: Server API tests with real client-side crypto
     deps: [rust]
     cmds:
-      - cargo test -p coolpsonotes-server
+      - cargo test -p notekpr-server
 
   test:cli:
     desc: Sync engine, Markdown mirror and gateway against an in-process server
     deps: [rust]
     cmds:
-      - cargo test -p coolpsonotes-client
+      - cargo test -p notekpr-client
 
   test:web:
     desc: Safe rendering, zip (natively)
     deps: [rust]
     cmds:
-      - cargo test -p coolpsonotes-web
+      - cargo test -p notekpr-web
 
   fuzz:
     desc: "Fuzz the parsers (stable toolchain, libFuzzer): `task fuzz` (every target, SECS=60 each) or `task fuzz -- zip 300`"
@@ -238,8 +238,8 @@ tasks:
       - sh: command -v chromedriver
         msg: "chromedriver is needed (Arch: chromium)"
     cmds:
-      - cargo test -p coolpsonotes-editor
-      - CHROMEDRIVER="${CHROMEDRIVER:-$(command -v chromedriver)}" cargo test -p coolpsonotes-editor --target wasm32-unknown-unknown --test browser {{.CLI_ARGS}}
+      - cargo test -p notekpr-editor
+      - CHROMEDRIVER="${CHROMEDRIVER:-$(command -v chromedriver)}" cargo test -p notekpr-editor --target wasm32-unknown-unknown --test browser {{.CLI_ARGS}}
 
   test:e2e:
     desc: "Headless browser tests and browser ↔ CLI test (needs chromium + chromedriver); only some with `task test:e2e -- -k collab` (the browser ↔ CLI test is cross_client)"
@@ -263,18 +263,18 @@ tasks:
     desc: Clippy on every crate (warnings are errors), including the web client for wasm32
     deps: [rust]
     cmds:
-      - cargo clippy --locked -p coolpsonotes-core -p coolpsonotes-server -p coolpsonotes-sync -p coolpsonotes-client -p coolpsonotes-editor -p coolpsonotes-load-events -p coolpsonotes-load -p coolpsonotes-load-ui --all-targets -- -D warnings
+      - cargo clippy --locked -p notekpr-core -p notekpr-server -p notekpr-sync -p notekpr-client -p notekpr-editor -p notekpr-load-events -p notekpr-load -p notekpr-load-ui --all-targets -- -D warnings
       # The web client's tests run natively.
-      - cargo clippy --locked -p coolpsonotes-web --tests -- -D warnings -A clippy::type_complexity
-      - CARGO_TARGET_DIR={{.WEB_TARGET_DIR}} cargo clippy --locked -p coolpsonotes-web --target wasm32-unknown-unknown -- -D warnings -A clippy::type_complexity
-      - CARGO_TARGET_DIR={{.WEB_TARGET_DIR}} cargo clippy --locked -p coolpsonotes-editor --target wasm32-unknown-unknown --all-targets -- -D warnings
-      - CARGO_TARGET_DIR={{.WEB_TARGET_DIR}} cargo clippy --locked -p coolpsonotes-load-ui --target wasm32-unknown-unknown -- -D warnings
+      - cargo clippy --locked -p notekpr-web --tests -- -D warnings -A clippy::type_complexity
+      - CARGO_TARGET_DIR={{.WEB_TARGET_DIR}} cargo clippy --locked -p notekpr-web --target wasm32-unknown-unknown -- -D warnings -A clippy::type_complexity
+      - CARGO_TARGET_DIR={{.WEB_TARGET_DIR}} cargo clippy --locked -p notekpr-editor --target wasm32-unknown-unknown --all-targets -- -D warnings
+      - CARGO_TARGET_DIR={{.WEB_TARGET_DIR}} cargo clippy --locked -p notekpr-load-ui --target wasm32-unknown-unknown -- -D warnings
 
   check:wasm:
     desc: Make sure the core crate still builds for the browser
     deps: [rust]
     cmds:
-      - CARGO_TARGET_DIR={{.WEB_TARGET_DIR}} cargo build --locked -p coolpsonotes-core --target wasm32-unknown-unknown
+      - CARGO_TARGET_DIR={{.WEB_TARGET_DIR}} cargo build --locked -p notekpr-core --target wasm32-unknown-unknown
 
   audit:
     desc: Supply-chain checks (licenses, advisories, sources) with cargo-deny
@@ -335,14 +335,14 @@ tasks:
         echo $GHCR_PASSWORD | docker login ghcr.io -u coolapso --password-stdin
 
   docker:build:
-    desc: Build the container image coolpsonotes:latest
+    desc: Build the container image notekpr:latest
     cmds:
-      - docker build -t coolpsonotes:latest .
+      - docker build -t notekpr:latest .
 
   docker:build:demo:
-    desc: "Build the public demo image (coolpsonotes-demo:latest): seeds the demo, serves it an hour, exits to start over — docs/operations.md §10"
+    desc: "Build the public demo image (notekpr-demo:latest): seeds the demo, serves it an hour, exits to start over — docs/operations.md §10"
     cmds:
-      - docker build --target demo -t coolpsonotes-demo:latest .
+      - docker build --target demo -t notekpr-demo:latest .
 
   docker:push:demo:
     desc: "Build the public demo image for amd64 and arm64 and push it to ghcr.io/coolapso/notekpr-demo, tagged with the short commit hash and latest"
@@ -398,8 +398,8 @@ tasks:
       SPEED: '{{.SPEED | default "1"}}'
       REALISTIC: '{{.REALISTIC | default ""}}'
     cmds:
-      - cargo build --release -p coolpsonotes-load
-      - ./target/release/coolpsonotes-load --open --users {{.USERS}} --step {{.STEP}} --levels {{.LEVELS}} --from-level {{.FROM}} --duration {{.DURATION}} --speed {{.SPEED}} --cpus {{.CPUS}} --memory {{.MEMORY}} {{if .REALISTIC}}--realistic{{end}} {{.CLI_ARGS}}
+      - cargo build --release -p notekpr-load
+      - ./target/release/notekpr-load --open --users {{.USERS}} --step {{.STEP}} --levels {{.LEVELS}} --from-level {{.FROM}} --duration {{.DURATION}} --speed {{.SPEED}} --cpus {{.CPUS}} --memory {{.MEMORY}} {{if .REALISTIC}}--realistic{{end}} {{.CLI_ARGS}}
 
   load:remote:
     desc: "Like load, against a server elsewhere: SERVER=https://… (a throwaway one in development mode with raised rate limits, see docs/load-test.md); no outages unless -- --kill-command … --start-command … (USERS=100 STEP=100 LEVELS=10 FROM=1 DURATION=45s SPEED=1 REALISTIC=)"
@@ -415,8 +415,8 @@ tasks:
       SPEED: '{{.SPEED | default "1"}}'
       REALISTIC: '{{.REALISTIC | default ""}}'
     cmds:
-      - cargo build --release -p coolpsonotes-load
-      - ./target/release/coolpsonotes-load --server {{.SERVER}} --open --users {{.USERS}} --step {{.STEP}} --levels {{.LEVELS}} --from-level {{.FROM}} --duration {{.DURATION}} --speed {{.SPEED}} {{if .REALISTIC}}--realistic{{end}} {{.CLI_ARGS}}
+      - cargo build --release -p notekpr-load
+      - ./target/release/notekpr-load --server {{.SERVER}} --open --users {{.USERS}} --step {{.STEP}} --levels {{.LEVELS}} --from-level {{.FROM}} --duration {{.DURATION}} --speed {{.SPEED}} {{if .REALISTIC}}--realistic{{end}} {{.CLI_ARGS}}
 
   load:native:
     desc: "Like load, without Docker: the server as a local process, no limits (USERS=100 STEP=100 LEVELS=10 FROM=1 DURATION=45s SPEED=1 REALISTIC=)"
@@ -430,8 +430,8 @@ tasks:
       SPEED: '{{.SPEED | default "1"}}'
       REALISTIC: '{{.REALISTIC | default ""}}'
     cmds:
-      - cargo build --release -p coolpsonotes-server -p coolpsonotes-load
-      - ./target/release/coolpsonotes-load --native --open --users {{.USERS}} --step {{.STEP}} --levels {{.LEVELS}} --from-level {{.FROM}} --duration {{.DURATION}} --speed {{.SPEED}} {{if .REALISTIC}}--realistic{{end}} {{.CLI_ARGS}}
+      - cargo build --release -p notekpr-server -p notekpr-load
+      - ./target/release/notekpr-load --native --open --users {{.USERS}} --step {{.STEP}} --levels {{.LEVELS}} --from-level {{.FROM}} --duration {{.DURATION}} --speed {{.SPEED}} {{if .REALISTIC}}--realistic{{end}} {{.CLI_ARGS}}
 
   # ------------------------------------------------------------------ housekeeping
 

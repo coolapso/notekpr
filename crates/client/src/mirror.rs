@@ -27,9 +27,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
-use coolpsonotes_core::b64;
-use coolpsonotes_core::doc::{EntryKind, NoteDoc};
-use coolpsonotes_core::{paths, textdiff};
+use notekpr_core::b64;
+use notekpr_core::doc::{EntryKind, NoteDoc};
+use notekpr_core::{paths, textdiff};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, mpsc, watch};
 
@@ -239,7 +239,7 @@ pub fn is_unicode_insensitive(dir: &Path) -> std::io::Result<bool> {
 /// other), so all but one get a distinct name (`idea 2.md`). Entries already
 /// on disk stay where they are.
 fn assign_disk_paths(
-    live: &BTreeMap<String, (String, coolpsonotes_core::doc::Entry)>,
+    live: &BTreeMap<String, (String, notekpr_core::doc::Entry)>,
     files: &BTreeMap<String, FileRecord>,
     fold: Fold,
 ) -> BTreeMap<String, String> {
@@ -283,7 +283,7 @@ fn assign_disk_paths(
 }
 
 /// Live entries that may be mirrored (safe paths), by id.
-fn mirrored_entries(v: &Vault) -> BTreeMap<String, (String, coolpsonotes_core::doc::Entry)> {
+fn mirrored_entries(v: &Vault) -> BTreeMap<String, (String, notekpr_core::doc::Entry)> {
     v.paths()
         .into_iter()
         .filter(|(p, _)| is_safe_vault_path(p))
@@ -293,7 +293,7 @@ fn mirrored_entries(v: &Vault) -> BTreeMap<String, (String, coolpsonotes_core::d
 
 /// Marker in each vault folder naming the vault it mirrors, so a folder left
 /// behind by a deleted or left vault is never imported into another one.
-const VAULT_MARKER: &str = ".coolpsonotes-vault";
+const VAULT_MARKER: &str = ".notekpr-vault";
 
 fn vault_marker(dir: &Path) -> Option<String> {
     std::fs::read_to_string(dir.join(VAULT_MARKER))
@@ -302,7 +302,7 @@ fn vault_marker(dir: &Path) -> Option<String> {
 }
 
 /// The vault folders below a mirror directory that mirror one of `vault_ids`
-/// (by their `.coolpsonotes-vault` marker). Folders without a marker (or of
+/// (by their `.notekpr-vault` marker). Folders without a marker (or of
 /// other vaults) are never included.
 pub fn mirrored_folders(root: &Path, vault_ids: &BTreeSet<String>) -> Vec<PathBuf> {
     let Ok(rd) = std::fs::read_dir(root) else {
@@ -766,7 +766,7 @@ fn replace_with_hook(
 }
 
 fn conflict_name(path: &str, taken: impl Fn(&str) -> bool) -> String {
-    let stamp = ui::fmt_time(coolpsonotes_core::now_ms())
+    let stamp = ui::fmt_time(notekpr_core::now_ms())
         .replace(':', "")
         .replace('T', " ")
         .replace('Z', "");
@@ -920,7 +920,7 @@ impl MirrorVault {
             &format!("err:{key}"),
             &format!(
                 "vault '{vault_name}': a file could not be synced and was skipped ({e:#}); \
-                 COOLPSONOTES_LOG=debug shows which"
+                 NOTEKPR_LOG=debug shows which"
             ),
         );
     }
@@ -1830,8 +1830,8 @@ impl Mirror {
                 };
                 ui::warn(&format!(
                     "vault '{name}': {what}. Nothing was moved to the trash. If the folder was moved, renamed or \
-                     unmounted, put it back. If you deleted the files on purpose, stop `coolpsonotes sync` and run \
-                     `coolpsonotes sync --once --allow-mass-delete` (moves them to the trash), or \
+                     unmounted, put it back. If you deleted the files on purpose, stop `notekpr sync` and run \
+                     `notekpr sync --once --allow-mass-delete` (moves them to the trash), or \
                      `--restore-missing` to get the files back"
                 ));
             }
@@ -1954,8 +1954,7 @@ impl Mirror {
             }
             name = v.name().to_string();
             let writable = !self.hub.read_only && v.require_writable().is_ok();
-            let mut live: BTreeMap<String, (String, coolpsonotes_core::doc::Entry)> =
-                BTreeMap::new();
+            let mut live: BTreeMap<String, (String, notekpr_core::doc::Entry)> = BTreeMap::new();
             for (p, e) in v.paths() {
                 if !is_safe_vault_path(&p) {
                     mv.warn_once(
@@ -2523,8 +2522,8 @@ mod tests {
         assert!(rec.bases[0].read);
     }
 
-    fn entry(id: &str, path: &str) -> (String, (String, coolpsonotes_core::doc::Entry)) {
-        let e = coolpsonotes_core::doc::Entry {
+    fn entry(id: &str, path: &str) -> (String, (String, notekpr_core::doc::Entry)) {
+        let e = notekpr_core::doc::Entry {
             id: id.into(),
             path: path.into(),
             kind: EntryKind::Note,
@@ -2656,7 +2655,7 @@ mod tests {
 #[cfg(test)]
 mod path_properties {
     use super::*;
-    use coolpsonotes_core::doc::Entry;
+    use notekpr_core::doc::Entry;
     use proptest::prelude::*;
 
     const ALPHABET: &[char] = &[

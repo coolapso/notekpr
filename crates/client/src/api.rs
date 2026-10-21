@@ -7,7 +7,7 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use coolpsonotes_core::protocol::*;
+use notekpr_core::protocol::*;
 use reqwest::{Method, StatusCode};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -133,7 +133,7 @@ impl Api {
     /// `server` is the origin as stored in the profile (see `normalize_server_url`).
     pub fn new(server: &str, creds: Credentials) -> ApiResult<Api> {
         let http = reqwest::Client::builder()
-            .user_agent(concat!("coolpsonotes-client/", env!("CARGO_PKG_VERSION")))
+            .user_agent(concat!("notekpr-client/", env!("CARGO_PKG_VERSION")))
             .connect_timeout(Duration::from_secs(10))
             .timeout(Duration::from_secs(120))
             .build()
@@ -174,13 +174,13 @@ impl Api {
             } => {
                 let mut cache = self.agent_token.lock().await;
                 if let Some((t, exp)) = &*cache
-                    && *exp - coolpsonotes_core::now_ms() > 60_000
+                    && *exp - notekpr_core::now_ms() > 60_000
                 {
                     return Ok(t.clone());
                 }
                 let secret = zeroize::Zeroizing::new(read_secret_file(secret_file)?);
                 let tok = self.client_credentials(client_id, &secret).await?;
-                let exp = coolpsonotes_core::now_ms() + (tok.expires_in as i64) * 1000;
+                let exp = notekpr_core::now_ms() + (tok.expires_in as i64) * 1000;
                 *cache = Some((tok.access_token.clone(), exp));
                 Ok(tok.access_token)
             }
@@ -332,10 +332,7 @@ impl Api {
         let resp = self
             .http
             .post(self.url("/oauth/device_authorization"))
-            .form(&[
-                ("client_id", "coolpsonotes-cli"),
-                ("client_name", client_name),
-            ])
+            .form(&[("client_id", "notekpr-cli"), ("client_name", client_name)])
             .send()
             .await
             .map_err(net)?;

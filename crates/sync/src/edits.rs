@@ -5,8 +5,8 @@
 //! is refused forever: edits are grouped so that each group's update stays
 //! within a byte budget, cutting long insertions at character boundaries.
 
-use coolpsonotes_core::doc::NoteDoc;
-use coolpsonotes_core::textdiff::{self, Edit};
+use notekpr_core::doc::NoteDoc;
+use notekpr_core::textdiff::{self, Edit};
 
 /// Assumed encoding cost of one edit besides its inserted text (CRDT item
 /// headers, ids, lengths).

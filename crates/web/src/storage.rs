@@ -12,8 +12,8 @@
 //! * Only with "Keep this browser usable offline": what starting without the
 //!   server needs (see `state::offline`), `localStorage`.
 
-use coolpsonotes_core::protocol::PushUpdate;
-use coolpsonotes_sync::NewKey;
+use notekpr_core::protocol::PushUpdate;
+use notekpr_sync::NewKey;
 use serde::{Deserialize, Serialize};
 use web_sys::Storage;
 
@@ -51,7 +51,7 @@ fn remove(s: Option<Storage>, k: &str) {
 }
 
 fn recovery_slot(user_id: &str) -> String {
-    format!("cpn.recovery.{user_id}")
+    format!("notekpr.recovery.{user_id}")
 }
 
 /// The recovery key of a setup whose recovery screen wasn't confirmed yet, so
@@ -69,8 +69,8 @@ pub fn clear_pending_recovery(user_id: &str) {
     remove(session(), &recovery_slot(user_id));
 }
 
-const TOKEN: &str = "cpn.token";
-const LAST_TOKEN: &str = "cpn.token.last";
+const TOKEN: &str = "notekpr.token";
+const LAST_TOKEN: &str = "notekpr.token.last";
 
 pub fn token() -> Option<String> {
     get(session(), TOKEN).or_else(|| {
@@ -106,26 +106,26 @@ pub struct DeviceRecord {
 }
 
 impl DeviceRecord {
-    pub fn account(&self) -> Option<coolpsonotes_core::keys::AccountPublic> {
-        let b = coolpsonotes_core::b64::decode(self.account.as_deref()?).ok()?;
+    pub fn account(&self) -> Option<notekpr_core::keys::AccountPublic> {
+        let b = notekpr_core::b64::decode(self.account.as_deref()?).ok()?;
         if b.len() != 64 {
             return None;
         }
-        Some(coolpsonotes_core::keys::AccountPublic {
+        Some(notekpr_core::keys::AccountPublic {
             sign_public: b[..32].try_into().ok()?,
             enc_public: b[32..].try_into().ok()?,
         })
     }
 
-    pub fn pin(&mut self, a: &coolpsonotes_core::keys::AccountPublic) {
-        self.account = Some(coolpsonotes_core::b64::encode(
+    pub fn pin(&mut self, a: &notekpr_core::keys::AccountPublic) {
+        self.account = Some(notekpr_core::b64::encode(
             &[a.sign_public, a.enc_public].concat(),
         ));
     }
 }
 
 fn device_key(user_id: &str) -> String {
-    format!("cpn.device.{user_id}")
+    format!("notekpr.device.{user_id}")
 }
 
 pub fn device(user_id: &str) -> Option<DeviceRecord> {
@@ -147,11 +147,11 @@ pub fn clear_device(user_id: &str) {
 thread_local! {
     /// This page load: unsent changes are stored per page, so two tabs never
     /// overwrite each other's (each later load takes over what is left).
-    static PAGE: String = coolpsonotes_core::random_id();
+    static PAGE: String = notekpr_core::random_id();
 }
 
 fn pending_key(user_id: &str, vault_id: &str) -> String {
-    PAGE.with(|p| format!("cpn.pending.{user_id}.{vault_id}.{p}"))
+    PAGE.with(|p| format!("notekpr.pending.{user_id}.{vault_id}.{p}"))
 }
 
 /// This page's unsent updates of a vault.
@@ -165,7 +165,7 @@ pub fn pending(user_id: &str, vault_id: &str) -> Vec<PushUpdate> {
 /// and the single key of older versions), by storage key.
 pub fn all_pending(user_id: &str, vault_id: &str) -> Vec<(String, Vec<PushUpdate>)> {
     let Some(s) = local() else { return vec![] };
-    let legacy = format!("cpn.pending.{user_id}.{vault_id}");
+    let legacy = format!("notekpr.pending.{user_id}.{vault_id}");
     let prefix = format!("{legacy}.");
     let n = s.length().unwrap_or(0);
     let keys: Vec<String> = (0..n)
@@ -186,7 +186,7 @@ pub fn is_own_pending_key(user_id: &str, vault_id: &str, key: &str) -> bool {
 }
 
 pub fn remove_pending_key(key: &str) {
-    if key.starts_with("cpn.pending.") {
+    if key.starts_with("notekpr.pending.") {
         remove(local(), key);
     }
 }
@@ -205,7 +205,7 @@ pub fn set_pending(user_id: &str, vault_id: &str, p: &[PushUpdate]) -> Result<()
 }
 
 fn new_keys_key(user_id: &str, vault_id: &str) -> String {
-    PAGE.with(|p| format!("cpn.newkeys.{user_id}.{vault_id}.{p}"))
+    PAGE.with(|p| format!("notekpr.newkeys.{user_id}.{vault_id}.{p}"))
 }
 
 /// Keys of new notes not registered with the server yet, stored by any page
@@ -213,7 +213,7 @@ fn new_keys_key(user_id: &str, vault_id: &str) -> String {
 /// Each is wrapped under the vault key.
 pub fn all_new_keys(user_id: &str, vault_id: &str) -> Vec<(String, Vec<NewKey>)> {
     let Some(s) = local() else { return vec![] };
-    let prefix = format!("cpn.newkeys.{user_id}.{vault_id}.");
+    let prefix = format!("notekpr.newkeys.{user_id}.{vault_id}.");
     let n = s.length().unwrap_or(0);
     let keys: Vec<String> = (0..n)
         .filter_map(|i| s.key(i).ok().flatten())
@@ -239,7 +239,7 @@ pub fn set_new_keys(user_id: &str, vault_id: &str, keys: &[NewKey], adopted: &[S
     };
     if stored {
         for k in adopted {
-            if *k != own && k.starts_with("cpn.newkeys.") {
+            if *k != own && k.starts_with("notekpr.newkeys.") {
                 remove(local(), k);
             }
         }
@@ -255,15 +255,15 @@ pub fn forget_user(user_id: &str) {
     let exact = [
         device_key(user_id),
         prefs_copy_key(user_id),
-        format!("cpn.last.{user_id}"),
+        format!("notekpr.last.{user_id}"),
         offline_flag(user_id),
         offline_data_key(user_id),
     ];
     let prefixes = [
-        format!("cpn.pending.{user_id}."),
-        format!("cpn.newkeys.{user_id}."),
-        format!("cpn.logseen.{user_id}."),
-        format!("cpn.head.{user_id}."),
+        format!("notekpr.pending.{user_id}."),
+        format!("notekpr.newkeys.{user_id}."),
+        format!("notekpr.logseen.{user_id}."),
+        format!("notekpr.head.{user_id}."),
     ];
     let n = s.length().unwrap_or(0);
     let keys: Vec<String> = (0..n)
@@ -276,11 +276,11 @@ pub fn forget_user(user_id: &str) {
 }
 
 fn offline_flag(user_id: &str) -> String {
-    format!("cpn.offline.on.{user_id}")
+    format!("notekpr.offline.on.{user_id}")
 }
 
 fn offline_data_key(user_id: &str) -> String {
-    format!("cpn.offline.data.{user_id}")
+    format!("notekpr.offline.data.{user_id}")
 }
 
 /// Whether the person turned on "Keep this browser usable offline" here.
@@ -314,13 +314,13 @@ pub fn all_offline_data() -> Vec<String> {
     let n = s.length().unwrap_or(0);
     let keys: Vec<String> = (0..n)
         .filter_map(|i| s.key(i).ok().flatten())
-        .filter(|k| k.starts_with("cpn.offline.data."))
+        .filter(|k| k.starts_with("notekpr.offline.data."))
         .collect();
     keys.iter().filter_map(|k| get(local(), k)).collect()
 }
 
 fn head_key(user_id: &str, vault_id: &str) -> String {
-    format!("cpn.head.{user_id}.{vault_id}")
+    format!("notekpr.head.{user_id}.{vault_id}")
 }
 
 pub fn head_seen(user_id: &str, vault_id: &str) -> i64 {
@@ -334,40 +334,37 @@ pub fn set_head_seen(user_id: &str, vault_id: &str, head: i64) {
 }
 
 fn prefs_copy_key(user_id: &str) -> String {
-    format!("cpn.prefs.{user_id}")
+    format!("notekpr.prefs.{user_id}")
 }
 
 /// This browser's copy of the user's encrypted preferences (as sealed with
 /// the account key), so an older copy from the server can't replace them.
 pub fn prefs_copy(user_id: &str) -> Option<Vec<u8>> {
-    coolpsonotes_core::b64::decode(&get(local(), &prefs_copy_key(user_id))?).ok()
+    notekpr_core::b64::decode(&get(local(), &prefs_copy_key(user_id))?).ok()
 }
 
 pub fn set_prefs_copy(user_id: &str, ciphertext: &[u8]) {
     set(
         local(),
         &prefs_copy_key(user_id),
-        &coolpsonotes_core::b64::encode(ciphertext),
+        &notekpr_core::b64::encode(ciphertext),
     );
 }
 
 fn log_seen_key(user_id: &str, vault_id: &str) -> String {
-    format!("cpn.logseen.{user_id}.{vault_id}")
+    format!("notekpr.logseen.{user_id}.{vault_id}")
 }
 
 /// The last membership log entry verified in this browser: `(seq, hash)`.
 pub fn log_seen(user_id: &str, vault_id: &str) -> Option<(u64, Vec<u8>)> {
     let s = get(local(), &log_seen_key(user_id, vault_id))?;
     let (seq, hash) = s.split_once(':')?;
-    Some((
-        seq.parse().ok()?,
-        coolpsonotes_core::b64::decode(hash).ok()?,
-    ))
+    Some((seq.parse().ok()?, notekpr_core::b64::decode(hash).ok()?))
 }
 
 pub fn set_log_seen(user_id: &str, vault_id: &str, seen: Option<(u64, Vec<u8>)>) {
     if let Some((seq, hash)) = seen {
-        let v = format!("{seq}:{}", coolpsonotes_core::b64::encode(&hash));
+        let v = format!("{seq}:{}", notekpr_core::b64::encode(&hash));
         set(local(), &log_seen_key(user_id, vault_id), &v);
     }
 }
@@ -412,19 +409,19 @@ impl Default for UiPrefs {
 }
 
 pub fn ui_prefs() -> UiPrefs {
-    get(local(), "cpn.ui")
+    get(local(), "notekpr.ui")
         .and_then(|s| serde_json::from_str(&s).ok())
         .unwrap_or_default()
 }
 
 pub fn set_ui_prefs(p: &UiPrefs) {
-    set(local(), "cpn.ui", &serde_json::to_string(p).unwrap());
+    set(local(), "notekpr.ui", &serde_json::to_string(p).unwrap());
 }
 
 pub fn last_location(user_id: &str) -> Option<String> {
-    get(local(), &format!("cpn.last.{user_id}"))
+    get(local(), &format!("notekpr.last.{user_id}"))
 }
 
 pub fn set_last_location(user_id: &str, path: &str) {
-    set(local(), &format!("cpn.last.{user_id}"), path);
+    set(local(), &format!("notekpr.last.{user_id}"), path);
 }

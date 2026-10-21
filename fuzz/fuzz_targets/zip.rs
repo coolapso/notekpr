@@ -4,5 +4,5 @@
 use libfuzzer_sys::fuzz_target;
 
 fuzz_target!(|data: &[u8]| {
-    let _ = coolpsonotes_web::zipfile::read(data);
+    let _ = notekpr_web::zipfile::read(data);
 });

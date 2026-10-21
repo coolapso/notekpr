@@ -19,11 +19,11 @@ Settled; don't reopen them without a new reason.
   revisit only if profiling shows contention.
 - **No local MCP server.** Agents use the CLI, a synced Markdown folder or the
   local gateway ([docs/agents.md §8](docs/agents.md#8-why-there-is-no-mcp-server)).
-- **Nobody's notes may ever be locked in**: `coolpsonotes recover` rebuilds
+- **Nobody's notes may ever be locked in**: `notekpr recover` rebuilds
   everything from an encrypted export and the recovery key, without server or
   apps ([docs/recovery.md](docs/recovery.md)).
 - **"Use your own editor" is a core principle**: the Markdown folder stays a
-  first-class way to use coolpsonotes, even if a native app arrives.
+  first-class way to use notekpr, even if a native app arrives.
 - **No folder sharing** (2026-10-20): sharing a vault covers it; single notes
   stay shareable on their own.
 - **Key epochs**: document keys keep the top-bit epochs, and sharing a note
@@ -146,7 +146,7 @@ Settled; don't reopen them without a new reason.
 
 - **Comments, what's left** ([docs/comments.md](docs/comments.md)): highlights
   in the reading view (its list switches to the editor today); comments on
-  notes shared with you from the CLI (`coolpsonotes shared …`); @mentions with
+  notes shared with you from the CLI (`notekpr shared …`); @mentions with
   notifications; comments in exports (`export`, the encrypted export's
   recovery).
 - **Excalidraw** (parked 2026-10-20, to discuss): Excalidraw itself is a
@@ -164,7 +164,7 @@ Settled; don't reopen them without a new reason.
 
 - **Mobile apps and a native desktop app** (Tauri around the web UI), keeping
   "use your own editor" first-class.
-- **Remote MCP connector**: an optional `coolpsonotes connector` speaking MCP
+- **Remote MCP connector**: an optional `notekpr connector` speaking MCP
   over HTTP for hosted assistants and cloud agents that can't install
   anything. It runs with an agent identity, sees only vaults shared with that
   agent, and is never part of the sync server. Whoever operates it can read

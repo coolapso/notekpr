@@ -266,9 +266,9 @@ pub fn to_html(src: &str, ctx: &Ctx) -> String {
                     dest = format!("mailto:{dest}");
                 }
                 let html = if matches!(link_type, LinkType::WikiLink { .. })
-                    || coolpsonotes_core::markdown::is_internal_target(&dest)
+                    || notekpr_core::markdown::is_internal_target(&dest)
                 {
-                    let target = coolpsonotes_core::markdown::percent_decode(&dest);
+                    let target = notekpr_core::markdown::percent_decode(&dest);
                     let name = target.split('#').next().unwrap_or(&target).to_string();
                     let heading = target
                         .split_once('#')
@@ -336,7 +336,7 @@ pub fn to_html(src: &str, ctx: &Ctx) -> String {
 }
 
 fn image_html(target: &str, alt: &str, wiki: bool, ctx: &Ctx) -> String {
-    let target = coolpsonotes_core::markdown::percent_decode(target);
+    let target = notekpr_core::markdown::percent_decode(target);
     if !wiki && safe_external(&target) {
         let label = if alt.is_empty() {
             "external image"

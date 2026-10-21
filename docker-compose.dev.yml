@@ -9,20 +9,20 @@
 #   then open http://localhost:8081 and sign in as olivia@example.com / password
 #
 # Never run this on a production host: it is a separate compose project
-# ("coolpsonotes-dev"), so it can't replace the production containers, but
+# ("notekpr-dev"), so it can't replace the production containers, but
 # anyone who can reach a dev-mode server can sign in as anyone.
-name: coolpsonotes-dev
+name: notekpr-dev
 services:
-  coolpsonotes:
+  notekpr:
     build: .
-    image: coolpsonotes:latest
+    image: notekpr:latest
     environment:
-      COOLPSONOTES_DEV_MODE: "true"
+      NOTEKPR_DEV_MODE: "true"
       # Inside the container the server listens on 0.0.0.0; the port is only
       # published on 127.0.0.1 below, so dev mode is reachable just from here.
-      COOLPSONOTES_DEV_MODE_ANYWHERE: "true"
-      COOLPSONOTES_PUBLIC_URL: http://localhost:8080
-      COOLPSONOTES_LOG_FORMAT: pretty
+      NOTEKPR_DEV_MODE_ANYWHERE: "true"
+      NOTEKPR_PUBLIC_URL: http://localhost:8080
+      NOTEKPR_LOG_FORMAT: pretty
     ports:
       - "127.0.0.1:8080:8080"
     volumes:
@@ -36,18 +36,18 @@ services:
     volumes:
       - ./deploy/dex/config.yaml:/etc/dex/config.yaml:ro
 
-  coolpsonotes-oidc:
+  notekpr-oidc:
     profiles: ["oidc"]
-    image: coolpsonotes:latest
+    image: notekpr:latest
     network_mode: host
     environment:
-      COOLPSONOTES_LISTEN: 127.0.0.1:8081
-      COOLPSONOTES_PUBLIC_URL: http://localhost:8081
-      COOLPSONOTES_OIDC_ISSUER: http://127.0.0.1:5556/dex
-      COOLPSONOTES_OIDC_CLIENT_ID: coolpsonotes
-      COOLPSONOTES_OIDC_CLIENT_SECRET: devsecret
-      COOLPSONOTES_OIDC_DISPLAY_NAME: Dex (local)
-      COOLPSONOTES_LOG_FORMAT: pretty
+      NOTEKPR_LISTEN: 127.0.0.1:8081
+      NOTEKPR_PUBLIC_URL: http://localhost:8081
+      NOTEKPR_OIDC_ISSUER: http://127.0.0.1:5556/dex
+      NOTEKPR_OIDC_CLIENT_ID: notekpr
+      NOTEKPR_OIDC_CLIENT_SECRET: devsecret
+      NOTEKPR_OIDC_DISPLAY_NAME: Dex (local)
+      NOTEKPR_LOG_FORMAT: pretty
     volumes:
       - dev-oidc-data:/data
     depends_on:

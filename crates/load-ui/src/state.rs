@@ -3,7 +3,7 @@
 
 use std::collections::{BTreeMap, VecDeque};
 
-use coolpsonotes_load_events::{
+use notekpr_load_events::{
     Action, Command, Event, Hello, LevelResult, Menu, Phase, Report, Screen, Settings, Stats,
 };
 
@@ -604,8 +604,7 @@ pub fn start_preview(m: &MenuState) -> String {
         if s.realistic { "realistic " } else { "" }
     );
     if s.outages && !m.menu.no_outages {
-        let down =
-            coolpsonotes_load_events::outage_s(level as usize - 1, s.levels, &m.menu.downtimes);
+        let down = notekpr_load_events::outage_s(level as usize - 1, s.levels, &m.menu.downtimes);
         out.push_str(&format!(", {down} s outage"));
     }
     if s.levels > level {

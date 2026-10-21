@@ -203,7 +203,7 @@ pub fn PromoteDialog(vault: String, id: String) -> impl IntoView {
     let folder = RwSignal::new(String::new());
     let folders: Vec<String> = folders
         .into_iter()
-        .filter(|f| f != quick::FOLDER && !coolpsonotes_core::paths::is_within(f, quick::FOLDER))
+        .filter(|f| f != quick::FOLDER && !notekpr_core::paths::is_within(f, quick::FOLDER))
         .collect();
     view! {
         <Dialog title="Promote to a note">

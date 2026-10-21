@@ -8,7 +8,7 @@ use std::collections::HashSet;
 use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
-use coolpsonotes_core::protocol::{
+use notekpr_core::protocol::{
     AddMemberRequest, AuditEntry, CreateVaultRequest, GrantKeysRequest, MemberInfo,
     ObjectEventKind, RemoveMemberRequest, Role, RotateKeysRequest, UpdateMemberRequest,
     UpdateVaultRequest, UserEventKind, VaultEventKind, VaultInfo, VaultKeysResponse,

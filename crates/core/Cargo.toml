@@ -1,6 +1,6 @@
 [package]
-name = "coolpsonotes-core"
-description = "Shared cryptography, protocol types and document model for coolpsonotes"
+name = "notekpr-core"
+description = "Shared cryptography, protocol types and document model for notekpr"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

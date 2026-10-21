@@ -185,9 +185,7 @@ pub fn router(state: AppState) -> Router {
                     .service(spa),
             )
         }
-        None => {
-            app.fallback(|| async { (StatusCode::NOT_FOUND, "coolpsonotes server (API only)") })
-        }
+        None => app.fallback(|| async { (StatusCode::NOT_FOUND, "notekpr server (API only)") }),
     };
 
     let hsts = cfg.public_url.starts_with("https://");
@@ -239,8 +237,8 @@ async fn observe(req: Request, next: Next) -> Response {
     let status = resp.status().as_u16();
     let elapsed = start.elapsed();
     let class = format!("{}xx", status / 100);
-    metrics::counter!("coolpsonotes_http_requests_total", "method" => method.to_string(), "status" => class).increment(1);
-    metrics::histogram!("coolpsonotes_http_request_duration_seconds").record(elapsed.as_secs_f64());
+    metrics::counter!("notekpr_http_requests_total", "method" => method.to_string(), "status" => class).increment(1);
+    metrics::histogram!("notekpr_http_request_duration_seconds").record(elapsed.as_secs_f64());
     let quiet = matches!(path.as_str(), "/healthz" | "/readyz" | "/metrics");
     let path = redact_path(&path);
     if quiet {
@@ -258,7 +256,7 @@ async fn observe(req: Request, next: Next) -> Response {
 /// are, together, exactly `need` — each person once, never in both.
 pub(crate) fn covers_exactly(
     need: &std::collections::HashSet<String>,
-    envelopes: &[coolpsonotes_core::protocol::KeyEnvelope],
+    envelopes: &[notekpr_core::protocol::KeyEnvelope],
     without: &[String],
 ) -> bool {
     let mut seen = std::collections::HashSet::new();
@@ -310,7 +308,7 @@ async fn metrics(State(state): State<AppState>, headers: HeaderMap) -> Response 
             return StatusCode::UNAUTHORIZED.into_response();
         }
     }
-    metrics::gauge!("coolpsonotes_ws_connected_users").set(state.hub.connected_users() as f64);
+    metrics::gauge!("notekpr_ws_connected_users").set(state.hub.connected_users() as f64);
     crate::process::record();
     (
         [(header::CONTENT_TYPE, "text/plain; version=0.0.4")],

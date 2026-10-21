@@ -1,4 +1,4 @@
-# coolpsonotes sync protocol and HTTP API (v1)
+# notekpr sync protocol and HTTP API (v1)
 
 All endpoints live under `/api/v1`, except the operations endpoints at the
 root (§10). Requests and responses are JSON unless noted. Binary values (keys,
@@ -52,8 +52,8 @@ Defined in `crates/core/src/crypto.rs` and `keys.rs`.
 
 * **Symmetric envelope** (every update, snapshot, vault meta, attachment, key-chain link, prefs):
   `0x01 || epoch:u32be || nonce:24 || XChaCha20-Poly1305(ciphertext || tag)`.
-  The key is `HKDF-SHA256(salt="coolpsonotes/v1/hkdf", ikm=vault_key_epoch, info=purpose-label)`.
-  AAD = `"coolpsonotes/v1/aead" || purpose:u8 || header || len32(vault_id) || vault_id || len32(object_id) || object_id`.
+  The key is `HKDF-SHA256(salt="notekpr/v1/hkdf", ikm=vault_key_epoch, info=purpose-label)`.
+  AAD = `"notekpr/v1/aead" || purpose:u8 || header || len32(vault_id) || vault_id || len32(object_id) || object_id`.
   A ciphertext therefore cannot be moved to another vault, object, purpose or epoch.
 * **HPKE sealed box** (vault key → member, account secret → device):
   `0x01 || enc:32 || ciphertext` using RFC 9180 base mode, DHKEM(X25519, HKDF-SHA256),
@@ -82,8 +82,8 @@ Defined in `crates/core/src/crypto.rs` and `keys.rs`.
 | Endpoint | Purpose |
 |---|---|
 | `GET /info` | server name, version, `dev_mode`, `oidc_enabled`, `oidc_display_name` (the login button's label; null without OIDC), size limits (`max_attachment_bytes`, `max_update_bytes`, `max_snapshot_bytes`; older servers omit the last: it is `max(16 × max_update_bytes, 32 MiB)`), `note_keys` (notes can have their own keys, §5.1) (no auth) |
-| `GET /auth/oidc/start?return_to=/path` | 303 to the identity provider (authorization code + PKCE + nonce); sets an HttpOnly, SameSite=Lax `cpn_login` cookie that binds the login to this browser |
-| `GET /auth/oidc/callback` | provider redirect target; requires the `cpn_login` cookie of the browser that started the login (otherwise `#error=login_failed`, which closes login CSRF); redirects to `/auth/complete#code=…&return_to=…` |
+| `GET /auth/oidc/start?return_to=/path` | 303 to the identity provider (authorization code + PKCE + nonce); sets an HttpOnly, SameSite=Lax `notekpr_login` cookie that binds the login to this browser |
+| `GET /auth/oidc/callback` | provider redirect target; requires the `notekpr_login` cookie of the browser that started the login (otherwise `#error=login_failed`, which closes login CSRF); redirects to `/auth/complete#code=…&return_to=…` |
 | `POST /auth/exchange {code}` | one-time code (120 s) → `SessionResponse {token, expires_at, user}` |
 | `POST /auth/dev-login {username, display_name?}` | **development mode only** (`--dev-mode`), otherwise 404 |
 | `POST /auth/logout` | revoke the current session |
@@ -123,7 +123,7 @@ unless noted), not the `{error, message}` shape above; an unknown
 | `GET /me/recovery` | the recovery envelope (encrypted under the recovery key) |
 | `PUT /me/recovery {recovery_envelope, signature, version?}` | rotate the recovery key; signature by the account key. With a `version` (clients use the time in ms) the signature covers it and the server accepts only a higher one than the last (`409` otherwise); once one is stored, unversioned updates are refused too, so older updates can't be replayed |
 | `GET/PUT /me/prefs` | encrypted per-user data with `expected_version` optimistic concurrency. Inside the encryption the web client keeps a `counter` that goes up with every save, and its own sealed copy: an older copy from the server is not used |
-| `GET /me/export` | `EncryptedExport`: everything the caller can read, as stored — vaults (keys, the whole log, attachments) and individually shared notes, plus the recovery envelope. For offline decryption with `coolpsonotes recover`; nothing in it is readable without the caller's keys. `coolpsonotes-server export-user` writes the same from a database or backup file. |
+| `GET /me/export` | `EncryptedExport`: everything the caller can read, as stored — vaults (keys, the whole log, attachments) and individually shared notes, plus the recovery envelope. For offline decryption with `notekpr recover`; nothing in it is readable without the caller's keys. `notekpr-server export-user` writes the same from a database or backup file. |
 | `GET /me/audit` | the newest 200 audit entries about the caller (devices, keys, agents, sessions) |
 | `PUT /me/session/device {device_id}` | label the current session with its device |
 | `GET /devices` | own non-revoked devices |
@@ -202,9 +202,9 @@ The kinds of `PUT …/key`:
 
 **Grant signatures.** Every note key the owner gives someone it is shared
 with (`envelopes` of a share, a rotation or a vault rotation) carries
-`signature`: Ed25519 by the owner over `statement("coolpsonotes/v1/sig/note-key",
+`signature`: Ed25519 by the owner over `statement("notekpr/v1/sig/note-key",
 [vault_id, object_id, user_id, epoch:u32be, commitment])`, the commitment
-being BLAKE3 (context `coolpsonotes v1 note key commitment`) over
+being BLAKE3 (context `notekpr v1 note key commitment`) over
 `statement("note-key", [vault_id, object_id, epoch:u32be, key])`. Recipients
 use only their newest envelope, and only if the signature verifies with the
 owner's pinned key; older keys follow from the chain. So a server can't hand
@@ -250,11 +250,11 @@ hand out vault keys the owner didn't make.
 | `require_signed` | `from_seq` | content after log sequence `from_seq` (snapshots covering more) must be signed by its author |
 
 A member is `{user_id, role, enc_public, sign_public}`. The signature is
-Ed25519 over `statement("coolpsonotes/v1/sig/member-log", [vault_id,
+Ed25519 over `statement("notekpr/v1/sig/member-log", [vault_id,
 seq:u64be, prev, signer, signed_at:i64be, body])`, where `body` is a
 length-prefixed encoding of the fields (never JSON). An entry's hash is
-BLAKE3 (derive-key mode, context `coolpsonotes v1 member-log entry`) over its
-fields and signature. A key commitment is BLAKE3 (context `coolpsonotes v1
+BLAKE3 (derive-key mode, context `notekpr v1 member-log entry`) over its
+fields and signature. A key commitment is BLAKE3 (context `notekpr v1
 vault key commitment`) over `statement("key", [vault_id, epoch:u32be, key])`.
 
 The server appends the entry that comes with a membership or key change in
@@ -308,8 +308,8 @@ vault's events in strictly increasing order without gaps.**
 **Client rules**
 
 * Sign every update and snapshot with your account key (§5.2): updates over
-  `statement("coolpsonotes/v1/sig/update", [vault_id, object_id, payload])`,
-  snapshots over `statement("coolpsonotes/v1/sig/snapshot", [vault_id,
+  `statement("notekpr/v1/sig/update", [vault_id, object_id, payload])`,
+  snapshots over `statement("notekpr/v1/sig/snapshot", [vault_id,
   object_id, covers_seq:i64be, payload])`. `Update` and `Snapshot` carry the
   `signature` (null for content from before signing).
 * Encrypt every update with purpose `Update` (snapshots: `Snapshot`) and context `(vault_id, object_id)`, always using the **current** epoch. The server refuses older epochs as `stale_key` (in a push, that update is listed in `rejected`; a snapshot gets `412`) and unknown newer ones with `400`: reload keys, re-encrypt pending changes and send them again.
@@ -335,7 +335,7 @@ records. The plaintext of an update is `{"record": b64, "signature": b64}`:
   `delete {target}`, `resolve {thread}`, `reopen {thread}`; bodies ≤ 10 000
   characters;
 * `signature`: Ed25519 by the author's account key over
-  `statement("coolpsonotes/v1/sig/comment", [vault_id, note_id, record])` —
+  `statement("notekpr/v1/sig/comment", [vault_id, note_id, record])` —
   over the content, so a record still verifies after it is encrypted again
   under another key.
 

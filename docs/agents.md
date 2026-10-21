@@ -1,9 +1,9 @@
 # AI agents and integrations
 
-coolpsonotes can be the long-term knowledge base and memory of AI agents and
+notekpr can be the long-term knowledge base and memory of AI agents and
 scripts — without giving them your account, your keys or access to every note.
 Because the server cannot decrypt anything, plaintext access always goes
-through a **trusted client that holds keys** — the `coolpsonotes` CLI, running
+through a **trusted client that holds keys** — the `notekpr` CLI, running
 on the agent's machine with the agent's own identity. An agent can use it in
 three ways (§3): CLI commands, a folder of plain Markdown files kept in sync,
 or a local HTTP API (the gateway).
@@ -11,7 +11,7 @@ or a local HTTP API (the gateway).
 ## 1. The agent model
 
 * An **agent is a separate identity** owned by a person. It authenticates with
-  OAuth 2.0 client credentials issued by coolpsonotes (not your identity
+  OAuth 2.0 client credentials issued by notekpr (not your identity
   provider), receives short-lived access tokens (1 h by default, refreshed
   automatically) and cannot create vaults, manage members, devices or agents.
 * It has **its own key pair**, generated on the machine that runs it. Its
@@ -33,7 +33,7 @@ or a local HTTP API (the gateway).
 **Owner** (web app: Settings → AI agents → Create agent; or the CLI):
 
 ```sh
-coolpsonotes -p alice agent create "Home assistant" --secret-out ./agent.secret
+notekpr -p alice agent create "Home assistant" --secret-out ./agent.secret
 # created agent 'Home assistant' [1d0a1bfc-…]
 # client id:     agent_515257752d3e5580
 # client secret: written to ./agent.secret (mode 0600)
@@ -45,10 +45,10 @@ file to the agent's machine over a secure channel and keep it `0600`.
 **Agent machine:**
 
 ```sh
-coolpsonotes --profile assistant agent setup \
+notekpr --profile assistant agent setup \
     --server https://notes.example.com \
     --client-id agent_515257752d3e5580 \
-    --client-secret-file /etc/coolpsonotes/agent.secret
+    --client-secret-file /etc/notekpr/agent.secret
 # Agent 'Home assistant' is set up in profile 'assistant' (new key pair created).
 # Agent key fingerprint: A1E1 02F5 C9BC 4E63 4FFE 2DC1 5C55 8462
 ```
@@ -65,15 +65,15 @@ other hosts.
 **Owner, share a vault after checking the fingerprint:**
 
 ```sh
-coolpsonotes -p alice agent fingerprint "Home assistant"   # compare with the agent's output
-coolpsonotes -p alice vault share "Agent memory" "Home assistant" --role editor
+notekpr -p alice agent fingerprint "Home assistant"   # compare with the agent's output
+notekpr -p alice vault share "Agent memory" "Home assistant" --role editor
 # shared with Home assistant (agent) as editor
 # Their key fingerprint: A1E1 02F5 C9BC 4E63 4FFE 2DC1 5C55 8462
 ```
 
 The fingerprint printed by `agent setup` must match what `vault share` (or the
 web app's share dialog) shows; it is then pinned and you are warned if it ever
-changes. Use `--role viewer` for read-only agents. `coolpsonotes agent list`
+changes. Use `--role viewer` for read-only agents. `notekpr agent list`
 shows your agents, their fingerprints and active credentials.
 
 ## 3. How an agent works with notes
@@ -85,12 +85,12 @@ and every write is an encrypted CRDT update merged with concurrent edits.
 jobs). Composable, nothing extra to run:
 
 ```sh
-coolpsonotes -p assistant ls "Agent memory" People
-coolpsonotes -p assistant cat "Agent memory" People/Alice.md
-coolpsonotes -p assistant search tag:project deadline
-echo "- met Alice about the roadmap" | coolpsonotes -p assistant write "Agent memory" Journal.md --append
-coolpsonotes -p assistant cat "Agent memory" Plan.md --json     # includes the content hash
-coolpsonotes -p assistant write "Agent memory" Plan.md --if-match <hash> < Plan.md
+notekpr -p assistant ls "Agent memory" People
+notekpr -p assistant cat "Agent memory" People/Alice.md
+notekpr -p assistant search tag:project deadline
+echo "- met Alice about the roadmap" | notekpr -p assistant write "Agent memory" Journal.md --append
+notekpr -p assistant cat "Agent memory" Plan.md --json     # includes the content hash
+notekpr -p assistant write "Agent memory" Plan.md --if-match <hash> < Plan.md
 ```
 
 `write` merges the new text as a diff, so it never overwrites what someone else
@@ -102,7 +102,7 @@ Codex, editors with AI features). Keep the agent's vaults mirrored and let the
 agent read, grep and edit ordinary files:
 
 ```sh
-coolpsonotes -p assistant sync --dir ~/agent-notes --plaintext-ok
+notekpr -p assistant sync --dir ~/agent-notes --plaintext-ok
 ```
 
 Edits on disk are picked up, merged and synced; changes from people appear in
@@ -123,10 +123,10 @@ refuses every command handed to it. Details:
 ## 4. The gateway (local HTTP API)
 
 ```sh
-coolpsonotes -p assistant gateway                       # 127.0.0.1:7878
-coolpsonotes -p assistant gateway --read-only --vault "Agent memory"
-coolpsonotes -p assistant gateway token                 # print the bearer token
-coolpsonotes -p assistant gateway token --rotate        # replace it
+notekpr -p assistant gateway                       # 127.0.0.1:7878
+notekpr -p assistant gateway --read-only --vault "Agent memory"
+notekpr -p assistant gateway token                 # print the bearer token
+notekpr -p assistant gateway token --rotate        # replace it
 ```
 
 The gateway keeps the agent's replicas in sync live (WebSocket), serves
@@ -161,7 +161,7 @@ Request bodies are limited to 16 MiB and attachment uploads to 128 MiB;
 larger ones get `413` (plain text, not JSON).
 
 ```sh
-export T=$(coolpsonotes -p assistant gateway token)
+export T=$(notekpr -p assistant gateway token)
 G=http://127.0.0.1:7878/v1
 ```
 
@@ -227,7 +227,7 @@ tells you if some are still queued) and retried automatically.
 
 ## 5. Credential and key rotation
 
-* **Client secret**: `coolpsonotes agent rotate-secret <agent> --secret-out
+* **Client secret**: `notekpr agent rotate-secret <agent> --secret-out
   new.secret` issues a new credential, writes it to the file and then — after
   asking, or with `--yes` — revokes all the old ones (their sessions end
   immediately). If the file can't be written, nothing is revoked. For a
@@ -235,12 +235,12 @@ tells you if some are still queued) and retried automatically.
   the web app (Settings → AI agents → Revoke) once the agent uses the new one;
   the CLI can't revoke a single credential. Re-run `agent setup` with the new
   client id and file — the agent's key pair stays the same.
-* **Gateway token**: `coolpsonotes gateway token --rotate`, then restart the
+* **Gateway token**: `notekpr gateway token --rotate`, then restart the
   gateway.
 * **Vault keys**: removing the agent from a vault (`vault unshare`) rotates the
   key; `vault rotate` does it on demand. Content written afterwards is
   unreadable for anyone without the new key.
-* **Compromised agent machine**: delete the agent (`coolpsonotes agent delete`,
+* **Compromised agent machine**: delete the agent (`notekpr agent delete`,
   or the web app) — this removes its memberships and sessions — and rotate the
   keys of the vaults it could read. Create a new agent rather than reusing
   keys.
@@ -248,7 +248,7 @@ tells you if some are still queued) and retried automatically.
 ## 6. Audit log
 
 Every write through the gateway is appended to
-`$XDG_DATA_HOME/coolpsonotes/<profile>/audit.jsonl` (mode 0600):
+`$XDG_DATA_HOME/notekpr/<profile>/audit.jsonl` (mode 0600):
 
 ```json
 {"at":1792378331454,"via":"gateway","op":"put_document","vault":"6ad6…","document":"052b…","bytes":18}
@@ -293,7 +293,7 @@ see membership and key events in the vault audit
 
 ## 8. Why there is no MCP server
 
-Earlier versions shipped `coolpsonotes mcp`, a Model Context Protocol server on
+Earlier versions shipped `notekpr mcp`, a Model Context Protocol server on
 stdio. It was removed on purpose (2026-10).
 
 **What MCP is good at** is giving an AI application a standard way to reach a
@@ -322,7 +322,7 @@ anything and can only connect to a URL. That is the remote connector below.
 
 ### Considered for later: a remote MCP connector
 
-A separate, optional service — `coolpsonotes connector`, the same binary —
+A separate, optional service — `notekpr connector`, the same binary —
 that speaks MCP over HTTP (Streamable HTTP transport) to remote AI clients:
 
 * It runs with an **agent identity**, holds only that agent's key and can only

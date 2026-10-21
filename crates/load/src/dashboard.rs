@@ -14,7 +14,7 @@ use futures::{SinkExt, StreamExt};
 use tokio::sync::broadcast::error::RecvError;
 use tower_http::services::ServeDir;
 
-use coolpsonotes_load_events::Command;
+use notekpr_load_events::Command;
 use tokio::sync::mpsc;
 
 use crate::bus::Bus;

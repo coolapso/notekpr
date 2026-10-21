@@ -1,12 +1,12 @@
 [package]
-name = "coolpsonotes-sync"
-description = "The client sync engine shared by the coolpsonotes browser and desktop clients"
+name = "notekpr-sync"
+description = "The client sync engine shared by the notekpr browser and desktop clients"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [dependencies]
-coolpsonotes-core = { path = "../core" }
+notekpr-core = { path = "../core" }
 serde = { version = "1", features = ["derive"] }
 
 [dev-dependencies]

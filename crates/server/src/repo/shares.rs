@@ -1,7 +1,7 @@
 //! Individually shared notes: the note's document-key state and encrypted
 //! title (columns of `objects`), and who it is shared with (`object_shares`).
 
-use coolpsonotes_core::protocol::Role;
+use notekpr_core::protocol::Role;
 use sqlx::{Row, SqliteExecutor};
 
 use crate::error::AppResult;

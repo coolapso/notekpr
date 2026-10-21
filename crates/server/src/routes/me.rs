@@ -3,8 +3,8 @@
 use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
-use coolpsonotes_core::keys::AccountPublic;
-use coolpsonotes_core::protocol::{
+use notekpr_core::keys::AccountPublic;
+use notekpr_core::protocol::{
     AccountSetupRequest, AuditEntry, BindDeviceRequest, MeResponse, PrefsBlob, PutPrefsRequest,
     RecoveryEnvelope, RecoveryUpdate, SessionInfo, UserEventKind,
 };
@@ -20,11 +20,11 @@ use crate::state::AppState;
 const MAX_PREFS_BYTES: usize = 512 * 1024;
 
 /// Everything the caller can read, encrypted as stored, for offline
-/// decryption with `coolpsonotes recover` (see docs).
+/// decryption with `notekpr recover` (see docs).
 pub async fn export(
     State(state): State<AppState>,
     who: Principal,
-) -> AppResult<Json<coolpsonotes_core::protocol::EncryptedExport>> {
+) -> AppResult<Json<notekpr_core::protocol::EncryptedExport>> {
     Ok(Json(
         crate::export::user_export(&state.db, &state.blobs, &who.user_id).await?,
     ))
@@ -142,7 +142,7 @@ pub fn device_name(raw: &str) -> String {
 pub async fn insert_device(
     tx: &mut sqlx::Transaction<'static, sqlx::Sqlite>,
     user_id: &str,
-    reg: &coolpsonotes_core::protocol::DeviceRegistration,
+    reg: &notekpr_core::protocol::DeviceRegistration,
     envelope: Option<&[u8]>,
     now: i64,
 ) -> AppResult<()> {

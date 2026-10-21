@@ -2,11 +2,11 @@
 //! key pinning), key rotation, devices, recovery keys and agent identities.
 
 use anyhow::{Context, Result, anyhow, bail};
-use coolpsonotes_core::engine::{self, PinStatus, VaultMeta, VaultReplica};
-use coolpsonotes_core::keys::RecoveryKey;
-use coolpsonotes_core::memberlog::LogBody;
-use coolpsonotes_core::protocol::*;
-use coolpsonotes_sync::members;
+use notekpr_core::engine::{self, PinStatus, VaultMeta, VaultReplica};
+use notekpr_core::keys::RecoveryKey;
+use notekpr_core::memberlog::LogBody;
+use notekpr_core::protocol::*;
+use notekpr_sync::members;
 
 use crate::hub::Hub;
 use crate::session::{Session, SharedVault, VerifiedUser};
@@ -27,7 +27,7 @@ pub async fn create_vault(session: &Session, name: &str) -> Result<Vault> {
         session.account(),
         &session.user_id,
         &meta,
-        coolpsonotes_core::now_ms(),
+        notekpr_core::now_ms(),
     )?;
     let info: VaultInfo = session.api.post("/vaults", &req).await?;
     let replica = VaultReplica::new(&info.id, info.role, ring, meta);
@@ -463,7 +463,7 @@ pub async fn unshare(
     let epoch = session.rotate_keys(vault).await.with_context(|| {
         format!(
             "{} was removed, but the vault key could not be renewed, so they could still read new notes if \
-             the server passed them on. Finish with `coolpsonotes vault rotate \"{name}\"`",
+             the server passed them on. Finish with `notekpr vault rotate \"{name}\"`",
             user.display_name
         )
     })?;
@@ -524,7 +524,7 @@ pub async fn rotate_recovery(session: &Session) -> Result<String> {
     let (rk, req): (RecoveryKey, RecoveryUpdate) = engine::rotate_recovery(
         session.account(),
         &session.user_id,
-        coolpsonotes_core::now_ms().max(0) as u64,
+        notekpr_core::now_ms().max(0) as u64,
     );
     session.api.put::<_, ()>("/me/recovery", &req).await?;
     Ok(rk.to_display())

@@ -35,13 +35,13 @@ pub fn parse(text: &str) -> Scrape {
             None => (key, ""),
         };
         match name {
-            "coolpsonotes_http_requests_total" => s.http_requests += v,
-            "coolpsonotes_updates_total" => s.updates += v,
-            "coolpsonotes_ws_connections" => s.ws_connections += v,
-            "coolpsonotes_rate_limited_total" => s.rate_limited += v,
+            "notekpr_http_requests_total" => s.http_requests += v,
+            "notekpr_updates_total" => s.updates += v,
+            "notekpr_ws_connections" => s.ws_connections += v,
+            "notekpr_rate_limited_total" => s.rate_limited += v,
             "process_cpu_seconds_total" => s.cpu_seconds = v,
             "process_resident_memory_bytes" => s.rss_bytes = v,
-            "coolpsonotes_http_request_duration_seconds" if v.is_finite() => {
+            "notekpr_http_request_duration_seconds" if v.is_finite() => {
                 if labels.contains("quantile=\"0.5\"") {
                     s.http_p50 = v;
                 } else if labels.contains("quantile=\"0.99\"") {
@@ -162,16 +162,16 @@ mod tests {
     #[test]
     fn sums_labels_and_reads_quantiles() {
         let text = r#"
-# TYPE coolpsonotes_http_requests_total counter
-coolpsonotes_http_requests_total{method="GET",status="2xx"} 10
-coolpsonotes_http_requests_total{method="POST",status="2xx"} 5
-coolpsonotes_updates_total 7
-coolpsonotes_ws_connections 3
-coolpsonotes_http_request_duration_seconds{quantile="0.5"} 0.002
-coolpsonotes_http_request_duration_seconds{quantile="0.99"} 0.04
-coolpsonotes_http_request_duration_seconds_sum 1.5
-coolpsonotes_rate_limited_total{scope="api"} 2
-coolpsonotes_rate_limited_total{scope="auth"} 1
+# TYPE notekpr_http_requests_total counter
+notekpr_http_requests_total{method="GET",status="2xx"} 10
+notekpr_http_requests_total{method="POST",status="2xx"} 5
+notekpr_updates_total 7
+notekpr_ws_connections 3
+notekpr_http_request_duration_seconds{quantile="0.5"} 0.002
+notekpr_http_request_duration_seconds{quantile="0.99"} 0.04
+notekpr_http_request_duration_seconds_sum 1.5
+notekpr_rate_limited_total{scope="api"} 2
+notekpr_rate_limited_total{scope="auth"} 1
 process_cpu_seconds_total 12.5
 process_resident_memory_bytes 41943040
 "#;

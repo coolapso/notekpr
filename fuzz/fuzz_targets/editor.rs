@@ -5,10 +5,10 @@
 //! Input: the text, then (after a `\x01`) an edit script of three bytes per
 //! edit: start, end (scaled to the text) and which snippet to insert.
 #![no_main]
-use coolpsonotes_editor::change::ChangeSet;
-use coolpsonotes_editor::decorations::Decorations;
-use coolpsonotes_editor::syntax;
-use coolpsonotes_editor::text::{Text, floor_char};
+use notekpr_editor::change::ChangeSet;
+use notekpr_editor::decorations::Decorations;
+use notekpr_editor::syntax;
+use notekpr_editor::text::{Text, floor_char};
 use libfuzzer_sys::fuzz_target;
 
 const SNIPPETS: &[&str] = &[

@@ -32,7 +32,7 @@ pub fn comments_note(object_id: &str) -> Option<&str> {
         .filter(|n| !n.is_empty() && *n != INDEX_OBJECT_ID && !n.starts_with(COMMENTS_PREFIX))
 }
 /// Issuer used for identities created by the development login.
-pub const DEV_ISSUER: &str = "urn:coolpsonotes:dev";
+pub const DEV_ISSUER: &str = "urn:notekpr:dev";
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[serde(rename_all = "lowercase")]
@@ -1111,7 +1111,7 @@ pub const EXPORT_FORMAT: u32 = 1;
 /// the apps: the ciphertexts and key envelopes of what they can access.
 /// Nothing in it is readable without their account key (the recovery key or
 /// one of their devices). Produced by `GET /me/export` and by
-/// `coolpsonotes-server export-user`; decrypted by `coolpsonotes recover`.
+/// `notekpr-server export-user`; decrypted by `notekpr recover`.
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct EncryptedExport {
     pub format: u32,

@@ -5,7 +5,7 @@
 # Requirements: chromium (or chrome) + a matching chromedriver on PATH, python3.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
-cargo build -p coolpsonotes-server -p coolpsonotes-client
+cargo build -p notekpr-server -p notekpr-client
 # Its own copy of the web client: `task dev`, `task demo` or `task web:watch`
 # rebuild dist/web, which would pull the app from under a running test. The
 # wasm build has its own target directory, as in the Taskfile, so native and
@@ -18,7 +18,7 @@ args=("$@")
 for ((i = 0; i < ${#args[@]}; i++)); do
   if [ "${args[i]}" = "-k" ]; then filter="${args[i + 1]:-}"; fi
 done
-python3 tests/e2e/suite.py --server target/debug/coolpsonotes-server --web "$web" "$@"
+python3 tests/e2e/suite.py --server target/debug/notekpr-server --web "$web" "$@"
 if [ -z "$filter" ] || [[ "cross_client" == *"$filter"* ]]; then
-  python3 tests/e2e/cross_client.py --server target/debug/coolpsonotes-server --cli target/debug/coolpsonotes --web "$web"
+  python3 tests/e2e/cross_client.py --server target/debug/notekpr-server --cli target/debug/notekpr --web "$web"
 fi

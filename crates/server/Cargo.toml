@@ -1,16 +1,16 @@
 [package]
-name = "coolpsonotes-server"
-description = "Headless, zero-knowledge synchronization server for coolpsonotes"
+name = "notekpr-server"
+description = "Headless, zero-knowledge synchronization server for notekpr"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [[bin]]
-name = "coolpsonotes-server"
+name = "notekpr-server"
 path = "src/main.rs"
 
 [dependencies]
-coolpsonotes-core = { path = "../core" }
+notekpr-core = { path = "../core" }
 axum = { version = "0.8", features = ["ws", "macros"] }
 tokio = { version = "1", features = ["full"] }
 tower = "0.5"

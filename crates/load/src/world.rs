@@ -2,7 +2,7 @@
 //! they write. Everything is derived from one seed, so a run can be repeated.
 
 /// A small, fast pseudo-random generator (SplitMix64). Not for secrets —
-/// the clients' keys come from the real crypto in `coolpsonotes-core`.
+/// the clients' keys come from the real crypto in `notekpr-core`.
 #[derive(Clone)]
 pub struct Rng(u64);
 

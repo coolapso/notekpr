@@ -1,7 +1,7 @@
 //! Repository tests against a real, migrated SQLite database (a temporary
 //! file with the production settings: WAL, foreign keys).
 
-use coolpsonotes_core::protocol::{PublicAccountKey, Role};
+use notekpr_core::protocol::{PublicAccountKey, Role};
 
 use super::*;
 use crate::access;

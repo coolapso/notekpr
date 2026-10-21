@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use coolpsonotes_client::hub::Hub;
+use notekpr_client::hub::Hub;
 
 use crate::people::{Person, World};
 
@@ -274,8 +274,8 @@ fn report_missing(world: &World, note: &str, sentence: &str, who: &[u32], text: 
 /// writer's keys): when did the sentence appear, and whose change took it
 /// away?
 async fn replay(world: &World, writer: u32, vault: &str, note: &str, sentence: &str) {
-    use coolpsonotes_core::crypto::Purpose;
-    use coolpsonotes_core::doc::NoteDoc;
+    use notekpr_core::crypto::Purpose;
+    use notekpr_core::doc::NoteDoc;
     let Some((session, hub)) = world.clients.lock().unwrap()[writer as usize].clone() else {
         return;
     };

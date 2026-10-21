@@ -1,12 +1,12 @@
 //! The vault membership log in the browser (R3; rules in
-//! `coolpsonotes_sync::members`): verified whenever a vault's keys load,
+//! `notekpr_sync::members`): verified whenever a vault's keys load,
 //! with the vault keys checked against the owner's commitments. Owners sign
 //! every membership change and give vault keys only to members the log
 //! vouches for.
 
-use coolpsonotes_core::keys::{AccountPublic, VaultKeyring};
-use coolpsonotes_core::memberlog::{KeyCheckError, LogBody, LogEntry};
-use coolpsonotes_sync::members::{self as rules, MemberLog};
+use notekpr_core::keys::{AccountPublic, VaultKeyring};
+use notekpr_core::memberlog::{KeyCheckError, LogBody, LogEntry};
+use notekpr_sync::members::{self as rules, MemberLog};
 
 use super::*;
 

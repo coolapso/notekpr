@@ -8,13 +8,13 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow};
-use coolpsonotes_client::account::{self, LoginOptions};
-use coolpsonotes_client::hub::{Hub, HubEvent, HubOptions};
-use coolpsonotes_client::profile::Dirs;
-use coolpsonotes_client::session::Session;
-use coolpsonotes_client::{livesync, manage, note_shares, ops};
-use coolpsonotes_core::protocol::Role;
-use coolpsonotes_load_events::Action;
+use notekpr_client::account::{self, LoginOptions};
+use notekpr_client::hub::{Hub, HubEvent, HubOptions};
+use notekpr_client::profile::Dirs;
+use notekpr_client::session::Session;
+use notekpr_client::{livesync, manage, note_shares, ops};
+use notekpr_core::protocol::Role;
+use notekpr_load_events::Action;
 use tokio::sync::{broadcast, watch};
 
 use crate::bus::Bus;
@@ -225,7 +225,7 @@ impl Person {
         // Listen first, so no change is missed, then tell where it stands:
         // starting may have found the server already.
         tokio::spawn(watch_hub(world.clone(), id, hub.clone(), hub.subscribe()));
-        world.bus.send(coolpsonotes_load_events::Event::Online {
+        world.bus.send(notekpr_load_events::Event::Online {
             id,
             online: hub.is_online(),
         });
@@ -861,7 +861,7 @@ impl Person {
     }
 }
 
-/// Whether it worked (failures go to the log: `LOAD_LOG=coolpsonotes_load=warn`).
+/// Whether it worked (failures go to the log: `LOAD_LOG=notekpr_load=warn`).
 fn ok<T, E: std::fmt::Display>(r: &std::result::Result<T, E>) -> bool {
     if let Err(e) = r {
         tracing::warn!("{e:#}");
@@ -881,7 +881,7 @@ async fn watch_hub(
             Ok(HubEvent::Connection { online }) => {
                 world
                     .bus
-                    .send(coolpsonotes_load_events::Event::Online { id, online });
+                    .send(notekpr_load_events::Event::Online { id, online });
             }
             Ok(HubEvent::Changed {
                 vault_id,

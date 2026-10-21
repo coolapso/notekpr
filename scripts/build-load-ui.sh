@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Build the load test's live dashboard with the Rust toolchain only (no npm):
 #   cargo (wasm32-unknown-unknown) + the wasm-bindgen CLI, as for the web client.
-# Output: dist/load (the load test serves it, `coolpsonotes-load --dashboard-dir`).
+# Output: dist/load (the load test serves it, `notekpr-load --dashboard-dir`).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -17,15 +17,15 @@ if [ "$want" != "$have" ]; then
   exit 1
 fi
 
-cargo build -p coolpsonotes-load-ui --target wasm32-unknown-unknown --profile "$PROFILE"
+cargo build -p notekpr-load-ui --target wasm32-unknown-unknown --profile "$PROFILE"
 dir="$PROFILE"; [ "$PROFILE" = "dev" ] && dir=debug
 rm -rf "$OUT"
 mkdir -p "$OUT/pkg"
 wasm-bindgen --target web --no-typescript --out-dir "$OUT/pkg" \
-  "$TARGET_DIR/wasm32-unknown-unknown/$dir/coolpsonotes_load_ui.wasm"
+  "$TARGET_DIR/wasm32-unknown-unknown/$dir/notekpr_load_ui.wasm"
 if command -v wasm-opt >/dev/null 2>&1 && [ "$PROFILE" != "dev" ]; then
   wasm-opt -Oz --enable-bulk-memory --enable-nontrapping-float-to-int \
-    -o "$OUT/pkg/coolpsonotes_load_ui_bg.wasm" "$OUT/pkg/coolpsonotes_load_ui_bg.wasm"
+    -o "$OUT/pkg/notekpr_load_ui_bg.wasm" "$OUT/pkg/notekpr_load_ui_bg.wasm"
 fi
 cp crates/load-ui/static/* "$OUT/"
 echo "load test dashboard built into $OUT"

@@ -1,6 +1,6 @@
 //! Vaults, their members and roles.
 
-use coolpsonotes_core::protocol::{Role, VaultInfo};
+use notekpr_core::protocol::{Role, VaultInfo};
 use sqlx::{Row, SqliteExecutor};
 
 use crate::error::AppResult;

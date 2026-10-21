@@ -23,9 +23,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{Context, Result, anyhow};
-use coolpsonotes_core::b64;
-use coolpsonotes_core::engine::{Pending, VaultMeta};
-use coolpsonotes_core::protocol::Role;
+use notekpr_core::b64;
+use notekpr_core::engine::{Pending, VaultMeta};
+use notekpr_core::protocol::Role;
 use serde::{Deserialize, Serialize};
 
 use crate::fsutil;
@@ -63,9 +63,9 @@ pub struct StoredState {
     #[serde(default)]
     pub share_from: BTreeMap<String, u32>,
     /// Keys of new notes not registered with the server yet (wrapped under
-    /// the vault key; see `coolpsonotes_sync::Outbox::new_keys`).
+    /// the vault key; see `notekpr_sync::Outbox::new_keys`).
     #[serde(default)]
-    pub new_keys: Vec<coolpsonotes_sync::NewKey>,
+    pub new_keys: Vec<notekpr_sync::NewKey>,
     /// The server keeps a key per note.
     #[serde(default)]
     pub note_keys: bool,
@@ -75,7 +75,7 @@ pub struct StoredState {
     pub log_seen: Option<(u64, String)>,
     /// Received content waiting for a key (already encrypted).
     #[serde(default)]
-    pub deferred: Vec<coolpsonotes_core::engine::Deferred>,
+    pub deferred: Vec<notekpr_core::engine::Deferred>,
     pub seq: i64,
     pub max_head_seen: i64,
     #[serde(default)]

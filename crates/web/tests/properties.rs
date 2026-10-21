@@ -1,11 +1,11 @@
 //! Property tests for the browser client's pure parts (run natively with
-//! `cargo test -p coolpsonotes-web`): the reading-view renderer and zip
+//! `cargo test -p notekpr-web`): the reading-view renderer and zip
 //! import. Random text is biased towards Markdown syntax and multibyte
 //! characters; these are the inputs behind the crashes found in review. The
 //! live editor's syntax engine, table keys and task toggling are tested in
 //! `crates/editor/tests/properties.rs`.
 
-use coolpsonotes_web::{render, zipfile};
+use notekpr_web::{render, zipfile};
 use proptest::prelude::*;
 
 const ALPHABET: &[char] = &[

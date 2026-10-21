@@ -4,7 +4,7 @@ import base64, json, time, urllib.request
 
 import os
 def _wd():
-    return os.environ.get("CPN_WEBDRIVER", "http://127.0.0.1:19515")
+    return os.environ.get("NOTEKPR_WEBDRIVER", "http://127.0.0.1:19515")
 KEYS = {"enter": "", "backspace": "", "tab": "", "escape": "", "ctrl": "", "alt": "",
         "shift": "", "left": "", "right": "", "up": "", "down": "", "home": "", "end": ""}
 
@@ -23,7 +23,7 @@ class Browser:
     def __init__(self, width=1400, height=900):
         caps = {"capabilities": {"alwaysMatch": {
             "browserName": "chrome",
-            "goog:chromeOptions": {"binary": os.environ.get("CPN_CHROME") or "/usr/bin/chromium",
+            "goog:chromeOptions": {"binary": os.environ.get("NOTEKPR_CHROME") or "/usr/bin/chromium",
                                    "args": ["--headless=new", "--no-sandbox", f"--window-size={width},{height}",
                                             "--disable-gpu", "--lang=en-US"]},
             "goog:loggingPrefs": {"browser": "ALL"}}}}
@@ -112,7 +112,7 @@ class Browser:
 
     def shot(self, name):
         png = req("GET", self.p("/screenshot"))
-        out = os.environ.get("CPN_E2E_OUT", "target/e2e")
+        out = os.environ.get("NOTEKPR_E2E_OUT", "target/e2e")
         os.makedirs(out, exist_ok=True)
         path = os.path.join(out, f"{name}.png")
         open(path, "wb").write(base64.b64decode(png))
@@ -147,7 +147,7 @@ class Browser:
             pass
 
 def base_url():
-    return os.environ.get("CPN_URL", "http://localhost:18080/")
+    return os.environ.get("NOTEKPR_URL", "http://localhost:18080/")
 
 
 def editor_text(b):

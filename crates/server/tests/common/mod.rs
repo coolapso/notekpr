@@ -4,13 +4,11 @@ use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::time::Duration;
 
-use coolpsonotes_core::doc::{IndexDoc, NoteDoc};
-use coolpsonotes_core::keys::{
-    self, AccountSecret, DeviceKey, RecoveryKey, VaultKey, VaultKeyring,
-};
-use coolpsonotes_core::protocol::*;
-use coolpsonotes_core::{crypto::Purpose, random_id};
 use futures::{SinkExt, StreamExt};
+use notekpr_core::doc::{IndexDoc, NoteDoc};
+use notekpr_core::keys::{self, AccountSecret, DeviceKey, RecoveryKey, VaultKey, VaultKeyring};
+use notekpr_core::protocol::*;
+use notekpr_core::{crypto::Purpose, random_id};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use tokio_tungstenite::tungstenite::Message;
@@ -19,18 +17,18 @@ pub struct TestServer {
     pub base: String,
     pub ws: String,
     pub dir: tempfile::TempDir,
-    pub state: coolpsonotes_server::state::AppState,
+    pub state: notekpr_server::state::AppState,
 }
 
 pub async fn start() -> TestServer {
     start_with(|_| {}).await
 }
 
-pub async fn start_with(f: impl FnOnce(&mut coolpsonotes_server::config::Config)) -> TestServer {
+pub async fn start_with(f: impl FnOnce(&mut notekpr_server::config::Config)) -> TestServer {
     let dir = tempfile::tempdir().unwrap();
-    let mut cfg = coolpsonotes_server::config::Config::for_tests(dir.path().to_path_buf());
+    let mut cfg = notekpr_server::config::Config::for_tests(dir.path().to_path_buf());
     f(&mut cfg);
-    let (app, state) = coolpsonotes_server::build(cfg, None).await.unwrap();
+    let (app, state) = notekpr_server::build(cfg, None).await.unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move {
@@ -240,9 +238,9 @@ impl User {
 
     /// A vault whose membership log starts with its creation (R3).
     pub async fn create_signed_vault(&mut self, name: &str) -> String {
-        let meta = coolpsonotes_core::engine::VaultMeta::named(name);
+        let meta = notekpr_core::engine::VaultMeta::named(name);
         let (req, ring) =
-            coolpsonotes_core::engine::new_vault(&self.account, &self.id, &meta, 1).unwrap();
+            notekpr_core::engine::new_vault(&self.account, &self.id, &meta, 1).unwrap();
         let _: VaultInfo = self.api.post("/vaults", &req).await;
         self.keyrings.insert(req.id.clone(), ring);
         req.id
@@ -258,7 +256,7 @@ impl User {
     pub async fn sign_next(
         &self,
         vault_id: &str,
-        body: coolpsonotes_core::memberlog::LogBody,
+        body: notekpr_core::memberlog::LogBody,
     ) -> LogEntry {
         let log = self.member_log(vault_id).await;
         LogEntry::sign(&self.account, &self.id, vault_id, log.last(), body, 1)
@@ -401,7 +399,7 @@ impl User {
         );
         // Every note with its own key moves on too (R2).
         let vk: VaultKeysResponse = self.api.get(&format!("/vaults/{vault_id}/keys")).await;
-        let doc_rings = coolpsonotes_core::engine::object_keyrings(self.ring(vault_id), &vk);
+        let doc_rings = notekpr_core::engine::object_keyrings(self.ring(vault_id), &vk);
         let mut ring = self.ring(vault_id).clone();
         ring.insert(new_epoch, new.clone());
         let meta = ring.encrypt_meta(br#"{"name":"rotated"}"#).unwrap();
@@ -415,11 +413,11 @@ impl User {
                 .into_iter()
                 .map(|s| s.user)
                 .partition(|u| left_out(&u.id));
-            let (_, mut update) = coolpsonotes_core::engine::rotate_object_key(
+            let (_, mut update) = notekpr_core::engine::rotate_object_key(
                 &ring,
                 doc_ring,
                 oid,
-                &coolpsonotes_core::engine::ObjectMeta::titled("rotated"),
+                &notekpr_core::engine::ObjectMeta::titled("rotated"),
                 &users,
             )
             .unwrap();

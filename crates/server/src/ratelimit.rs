@@ -72,7 +72,7 @@ fn peer(req: &Request) -> Option<SocketAddr> {
 pub async fn api_limit(State(state): State<AppState>, req: Request, next: Next) -> Response {
     let ip = client_ip(req.headers(), peer(&req), state.config.trust_proxy);
     if let Err(until) = state.limiters.api.check_key(&ip) {
-        metrics::counter!("coolpsonotes_rate_limited_total", "scope" => "api").increment(1);
+        metrics::counter!("notekpr_rate_limited_total", "scope" => "api").increment(1);
         return limited(until.wait_time_from(state.limiters.clock.now()));
     }
     next.run(req).await
@@ -81,7 +81,7 @@ pub async fn api_limit(State(state): State<AppState>, req: Request, next: Next) 
 pub async fn auth_limit(State(state): State<AppState>, req: Request, next: Next) -> Response {
     let ip = client_ip(req.headers(), peer(&req), state.config.trust_proxy);
     if let Err(until) = state.limiters.auth.check_key(&ip) {
-        metrics::counter!("coolpsonotes_rate_limited_total", "scope" => "auth").increment(1);
+        metrics::counter!("notekpr_rate_limited_total", "scope" => "auth").increment(1);
         return limited(until.wait_time_from(state.limiters.clock.now()));
     }
     next.run(req).await

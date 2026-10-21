@@ -1,13 +1,13 @@
 //! Portable export and bulk import: a plain tree of Markdown files and
 //! attachments (as a directory or a `.zip`), with no proprietary metadata, so
-//! a vault stays usable without coolpsonotes.
+//! a vault stays usable without notekpr.
 
 use std::io::{Read, Write};
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
-use coolpsonotes_core::doc::EntryKind;
-use coolpsonotes_core::paths;
+use notekpr_core::doc::EntryKind;
+use notekpr_core::paths;
 
 use crate::fsutil;
 use crate::hub::Hub;

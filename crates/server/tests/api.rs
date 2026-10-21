@@ -3,12 +3,12 @@
 mod common;
 
 use common::*;
-use coolpsonotes_core::crypto::Purpose;
-use coolpsonotes_core::doc::{EntryKind, IndexDoc, NoteDoc};
-use coolpsonotes_core::engine::VaultMeta;
-use coolpsonotes_core::keys::{self, DeviceKey};
-use coolpsonotes_core::protocol::*;
-use coolpsonotes_core::random_id;
+use notekpr_core::crypto::Purpose;
+use notekpr_core::doc::{EntryKind, IndexDoc, NoteDoc};
+use notekpr_core::engine::VaultMeta;
+use notekpr_core::keys::{self, DeviceKey};
+use notekpr_core::protocol::*;
+use notekpr_core::random_id;
 use reqwest::Method;
 
 #[tokio::test]
@@ -216,10 +216,7 @@ async fn viewers_are_read_only_and_revocation_rotates_keys() {
 
     let ch: ChangesResponse = alice.api.get(&format!("/vaults/{v}/changes?since=0")).await;
     let last = ch.updates.last().unwrap();
-    assert_eq!(
-        coolpsonotes_core::crypto::sym_epoch(&last.payload).unwrap(),
-        2
-    );
+    assert_eq!(notekpr_core::crypto::sym_epoch(&last.payload).unwrap(), 2);
     // Bob's old keyring (epoch 1) cannot decrypt post-rotation content even if he obtained it.
     assert!(
         bob.ring(&v)
@@ -648,7 +645,7 @@ async fn device_enrollment_and_recovery() {
     );
 
     // A session without the account secret cannot activate a device.
-    let bogus = coolpsonotes_core::keys::AccountSecret::generate();
+    let bogus = notekpr_core::keys::AccountSecret::generate();
     let bad = ActivateDeviceRequest {
         account_envelope: vec![1; 100],
         signature: bogus
@@ -693,7 +690,7 @@ async fn device_enrollment_and_recovery() {
     let (api3, _) = dev_login(&srv.base, "alice").await;
     let rec: RecoveryEnvelope = api3.get("/me/recovery").await;
     let shown = alice.recovery.to_display();
-    let rk = coolpsonotes_core::keys::RecoveryKey::parse(&shown).unwrap();
+    let rk = notekpr_core::keys::RecoveryKey::parse(&shown).unwrap();
     let recovered = rk
         .unwrap_account(&rec.recovery_envelope, &alice.id)
         .unwrap();
@@ -748,7 +745,7 @@ async fn device_enrollment_and_recovery() {
     assert_eq!(body.error, "device_revoked");
 
     // Rotating the recovery key requires an account signature.
-    let new_rk = coolpsonotes_core::keys::RecoveryKey::generate();
+    let new_rk = notekpr_core::keys::RecoveryKey::generate();
     let env = new_rk.wrap_account(&alice.account, &alice.id);
     let bad = RecoveryUpdate {
         recovery_envelope: env.clone(),
@@ -774,16 +771,16 @@ async fn device_enrollment_and_recovery() {
     assert_eq!(put(&good).await, 204);
     // Versioned updates only go forward [S-L8]: once one is stored, neither
     // an older nor an unversioned (replayed) update replaces it.
-    let (_, v10) = coolpsonotes_core::engine::rotate_recovery(&alice.account, &alice.id, 10);
+    let (_, v10) = notekpr_core::engine::rotate_recovery(&alice.account, &alice.id, 10);
     let mut forged = v10.clone();
     forged.version = Some(11);
     assert_eq!(put(&forged).await, 403, "the version is signed");
     assert_eq!(put(&v10).await, 204);
     assert_eq!(put(&v10).await, 409, "replayed");
-    let (_, v5) = coolpsonotes_core::engine::rotate_recovery(&alice.account, &alice.id, 5);
+    let (_, v5) = notekpr_core::engine::rotate_recovery(&alice.account, &alice.id, 5);
     assert_eq!(put(&v5).await, 409, "older");
     assert_eq!(put(&good).await, 409, "unversioned, after a versioned one");
-    let (_, v11) = coolpsonotes_core::engine::rotate_recovery(&alice.account, &alice.id, 11);
+    let (_, v11) = notekpr_core::engine::rotate_recovery(&alice.account, &alice.id, 11);
     assert_eq!(put(&v11).await, 204);
 }
 
@@ -794,10 +791,7 @@ async fn device_authorization_grant_for_cli() {
     let http = reqwest::Client::new();
     let da: DeviceAuthorizationResponse = http
         .post(format!("{}/oauth/device_authorization", srv.base))
-        .form(&[
-            ("client_id", "coolpsonotes-cli"),
-            ("client_name", "test laptop"),
-        ])
+        .form(&[("client_id", "notekpr-cli"), ("client_name", "test laptop")])
         .send()
         .await
         .unwrap()
@@ -893,7 +887,7 @@ async fn agents_are_scoped_to_shared_vaults() {
     agent_api.token = Some(tok.access_token);
 
     // The agent generates its own key pair; no device or recovery needed.
-    let agent_secret = coolpsonotes_core::keys::AccountSecret::generate();
+    let agent_secret = notekpr_core::keys::AccountSecret::generate();
     let aid = created.agent.id.clone();
     let _: () = agent_api
         .put(
@@ -940,7 +934,7 @@ async fn agents_are_scoped_to_shared_vaults() {
         account: agent_secret,
         device: DeviceKey::generate(),
         device_id: String::new(),
-        recovery: coolpsonotes_core::keys::RecoveryKey::generate(),
+        recovery: notekpr_core::keys::RecoveryKey::generate(),
         keyrings: Default::default(),
     };
     agent.load_keys(&shared).await.unwrap();
@@ -1160,9 +1154,9 @@ async fn a_demo_says_when_it_resets() {
 async fn backup_and_restore_roundtrip() {
     let dir = tempfile::tempdir().unwrap();
     let data = dir.path().join("live");
-    let mut cfg = coolpsonotes_server::config::Config::for_tests(data.clone());
+    let mut cfg = notekpr_server::config::Config::for_tests(data.clone());
     cfg.dev_mode = true;
-    let (app, state) = coolpsonotes_server::build(cfg, None).await.unwrap();
+    let (app, state) = notekpr_server::build(cfg, None).await.unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move {
@@ -1200,7 +1194,7 @@ async fn backup_and_restore_roundtrip() {
 
     // Online backup while the server is running.
     let backup = dir.path().join("backup.db");
-    coolpsonotes_server::db::backup_to(&state.db, &backup)
+    notekpr_server::db::backup_to(&state.db, &backup)
         .await
         .unwrap();
     assert!(
@@ -1209,15 +1203,15 @@ async fn backup_and_restore_roundtrip() {
 
     // Restore into a fresh data directory and run a new server on it.
     let restored = dir.path().join("restored");
-    let target = restored.join("coolpsonotes.db");
+    let target = restored.join("notekpr.db");
     assert!(
-        coolpsonotes_server::db::restore_from(&target, &backup)
+        notekpr_server::db::restore_from(&target, &backup)
             .await
             .unwrap()
             .is_none()
     );
-    let cfg2 = coolpsonotes_server::config::Config::for_tests(restored.clone());
-    let (app2, _s2) = coolpsonotes_server::build(cfg2, None).await.unwrap();
+    let cfg2 = notekpr_server::config::Config::for_tests(restored.clone());
+    let (app2, _s2) = notekpr_server::build(cfg2, None).await.unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr2 = listener.local_addr().unwrap();
     tokio::spawn(async move {
@@ -1252,25 +1246,19 @@ async fn backup_and_restore_roundtrip() {
         b"file bytes"
     );
     // Restoring over an existing database keeps the previous copy aside.
-    let aside = coolpsonotes_server::db::restore_from(
-        &dir.path().join("restored2/coolpsonotes.db"),
-        &backup,
-    )
-    .await
-    .unwrap();
+    let aside = notekpr_server::db::restore_from(&dir.path().join("restored2/notekpr.db"), &backup)
+        .await
+        .unwrap();
     assert!(aside.is_none());
-    let aside = coolpsonotes_server::db::restore_from(
-        &dir.path().join("restored2/coolpsonotes.db"),
-        &backup,
-    )
-    .await
-    .unwrap();
+    let aside = notekpr_server::db::restore_from(&dir.path().join("restored2/notekpr.db"), &backup)
+        .await
+        .unwrap();
     assert!(aside.is_some_and(|p| p.exists()));
 }
 
 #[tokio::test]
 async fn individual_note_sharing() {
-    use coolpsonotes_core::engine;
+    use notekpr_core::engine;
     let srv = start().await;
     let mut alice = new_user(&srv.base, "alice").await;
     let mut bob = new_user(&srv.base, "bob").await;
@@ -2086,7 +2074,7 @@ async fn put_attachment(u: &User, v: &str, id: &str) -> u16 {
 /// handlers themselves.
 #[tokio::test]
 async fn role_dependent_writes_follow_role_changes() {
-    use coolpsonotes_core::engine;
+    use notekpr_core::engine;
     let srv = start().await;
     let mut alice = new_user(&srv.base, "alice").await;
     let mut bob = new_user(&srv.base, "bob").await;
@@ -2289,8 +2277,8 @@ async fn put_key(u: &User, v: &str, o: &str, req: &ObjectKeyUpdate) -> Result<()
 /// starts with a fresh key, so recipients never get what was written before.
 #[tokio::test]
 async fn notes_have_own_keys_and_recipients_never_get_the_history_before_sharing() {
-    use coolpsonotes_core::engine;
-    use coolpsonotes_core::keys::FIRST_DOC_EPOCH;
+    use notekpr_core::engine;
+    use notekpr_core::keys::FIRST_DOC_EPOCH;
     let srv = start().await;
     let mut alice = new_user(&srv.base, "alice").await;
     let mut bob = new_user(&srv.base, "bob").await;
@@ -2385,11 +2373,11 @@ async fn notes_have_own_keys_and_recipients_never_get_the_history_before_sharing
     let epochs: Vec<u32> = ch
         .updates
         .iter()
-        .map(|u| coolpsonotes_core::crypto::sym_epoch(&u.payload).unwrap())
+        .map(|u| notekpr_core::crypto::sym_epoch(&u.payload).unwrap())
         .chain(
             ch.snapshots
                 .iter()
-                .map(|s| coolpsonotes_core::crypto::sym_epoch(&s.payload).unwrap()),
+                .map(|s| notekpr_core::crypto::sym_epoch(&s.payload).unwrap()),
         )
         .collect();
     assert!(!epochs.is_empty());
@@ -2448,7 +2436,7 @@ async fn notes_have_own_keys_and_recipients_never_get_the_history_before_sharing
 
 #[tokio::test]
 async fn membership_changes_carry_owner_signed_log_entries() {
-    use coolpsonotes_core::memberlog::{LogBody, LogEntry, LogMember, LogState, key_commitment};
+    use notekpr_core::memberlog::{LogBody, LogEntry, LogMember, LogState, key_commitment};
     let srv = start().await;
     let mut alice = new_user(&srv.base, "alice").await;
     let bob = new_user(&srv.base, "bob").await;
@@ -2598,8 +2586,7 @@ async fn membership_changes_carry_owner_signed_log_entries() {
     // Rotation needs its entry with the new key's commitment.
     let mut ring = alice.ring(&v).clone();
     let ms: Vec<MemberInfo> = alice.api.get(&members).await;
-    let mut req =
-        coolpsonotes_core::engine::rotate(&mut ring, &ms, &VaultMeta::named("S")).unwrap();
+    let mut req = notekpr_core::engine::rotate(&mut ring, &ms, &VaultMeta::named("S")).unwrap();
     let st = alice
         .api
         .status(
@@ -2681,7 +2668,7 @@ async fn membership_changes_carry_owner_signed_log_entries() {
 
 #[tokio::test]
 async fn an_existing_vault_starts_its_log_with_a_checkpoint() {
-    use coolpsonotes_core::memberlog::{LogBody, LogEntry, LogMember, LogState, key_commitment};
+    use notekpr_core::memberlog::{LogBody, LogEntry, LogMember, LogState, key_commitment};
     let srv = start().await;
     let mut alice = new_user(&srv.base, "alice").await;
     let bob = new_user(&srv.base, "bob").await;
@@ -2768,7 +2755,7 @@ async fn an_existing_vault_starts_its_log_with_a_checkpoint() {
 
 #[tokio::test]
 async fn signed_content_is_required_once_the_log_says_so() {
-    use coolpsonotes_core::memberlog::{self, LogBody};
+    use notekpr_core::memberlog::{self, LogBody};
     let srv = start().await;
     let mut alice = new_user(&srv.base, "alice").await;
     let bob = new_user(&srv.base, "bob").await;
@@ -2880,7 +2867,7 @@ async fn signed_content_is_required_once_the_log_says_so() {
 /// with; the server keeps the signature with that key and hands it out.
 #[tokio::test]
 async fn note_key_grants_carry_the_owners_signature() {
-    use coolpsonotes_core::{engine, memberlog};
+    use notekpr_core::{engine, memberlog};
     let srv = start().await;
     let mut alice = new_user(&srv.base, "alice").await;
     let carol = new_user(&srv.base, "carol").await;
@@ -2974,7 +2961,7 @@ fn unsigned_grants(
         .map(|s| GrantSignature {
             user_id: s.user.id.clone(),
             epoch,
-            signature: coolpsonotes_core::memberlog::sign_note_grant(
+            signature: notekpr_core::memberlog::sign_note_grant(
                 &owner.account,
                 v,
                 "n",
@@ -2990,7 +2977,7 @@ fn unsigned_grants(
 /// rotated its key) instead of every note's; recipients get only theirs.
 #[tokio::test]
 async fn members_reload_one_notes_keys() {
-    use coolpsonotes_core::engine;
+    use notekpr_core::engine;
     let srv = start().await;
     let mut alice = new_user(&srv.base, "alice").await;
     let mut bob = new_user(&srv.base, "bob").await;
@@ -3160,7 +3147,7 @@ async fn a_snapshot_carrying_changes_the_log_lacks_reaches_everyone() {
 
 #[tokio::test]
 async fn a_rotation_can_leave_out_people_whose_key_changed_on_purpose() {
-    use coolpsonotes_core::engine;
+    use notekpr_core::engine;
     let srv = start().await;
     let mut alice = new_user(&srv.base, "alice").await;
     let bob = new_user(&srv.base, "bob").await;
@@ -3301,7 +3288,7 @@ fn comment_update(
     ring: &keys::VaultKeyring,
     body: &str,
 ) -> PushUpdate {
-    use coolpsonotes_core::comments::{Action, Anchor, Record, Signed};
+    use notekpr_core::comments::{Action, Anchor, Record, Signed};
     let record = Record::new(
         &u.id,
         1,
@@ -3328,7 +3315,7 @@ fn comment_update(
 
 #[tokio::test]
 async fn whoever_can_read_a_note_can_comment_on_it() {
-    use coolpsonotes_core::engine;
+    use notekpr_core::engine;
     let srv = start().await;
     let mut alice = new_user(&srv.base, "alice").await;
     let mut bob = new_user(&srv.base, "bob").await;
@@ -3473,7 +3460,7 @@ async fn whoever_can_read_a_note_can_comment_on_it() {
     let comments: Vec<&Update> = ch.updates.iter().filter(|u| u.object_id == "c_m").collect();
     assert_eq!(comments.len(), 1);
     assert!(keys::is_doc_epoch(
-        coolpsonotes_core::crypto::sym_epoch(&comments[0].payload).unwrap()
+        notekpr_core::crypto::sym_epoch(&comments[0].payload).unwrap()
     ));
     // She comments (a read-only recipient), but not on other notes.
     let keys_resp: ObjectKeysResponse = erin.api.get(&format!("/vaults/{v}/objects/m/keys")).await;

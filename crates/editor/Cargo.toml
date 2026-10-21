@@ -1,13 +1,13 @@
 [package]
-name = "coolpsonotes-editor"
-description = "Live-preview Markdown editor of the coolpsonotes web client: a document model (pure Rust) and a contenteditable DOM view"
+name = "notekpr-editor"
+description = "Live-preview Markdown editor of the notekpr web client: a document model (pure Rust) and a contenteditable DOM view"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 publish = false
 
 [dependencies]
-coolpsonotes-core = { path = "../core" }
+notekpr-core = { path = "../core" }
 wasm-bindgen = "=0.2.128"
 js-sys = "0.3"
 

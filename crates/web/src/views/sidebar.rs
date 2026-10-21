@@ -1,8 +1,8 @@
 //! Left sidebar: vault switcher, quick actions, favorites, quick notes,
 //! recent, file tree.
 
-use coolpsonotes_core::protocol::Role;
 use leptos::prelude::*;
+use notekpr_core::protocol::Role;
 
 use crate::actions;
 use crate::state::{self, Modal, Route, ui};
@@ -114,7 +114,7 @@ pub fn Sidebar() -> impl IntoView {
             .get()
             .note()
             .and_then(|(v, n)| state::step(|c| c.entry(v, n)))
-            .map(|e| coolpsonotes_core::paths::parent(&e.path).to_string())
+            .map(|e| notekpr_core::paths::parent(&e.path).to_string())
             .unwrap_or_default()
     };
     view! {

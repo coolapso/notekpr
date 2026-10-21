@@ -1,4 +1,4 @@
-//! coolpsonotes browser client.
+//! notekpr browser client.
 //!
 //! Written in Rust and compiled to WebAssembly: the same core crate that the
 //! server and desktop client use does all cryptography and CRDT merging here,

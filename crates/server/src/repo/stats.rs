@@ -1,6 +1,6 @@
 //! Usage counts for administrators (no content, names or ids).
 
-use coolpsonotes_core::protocol::AdminStats;
+use notekpr_core::protocol::AdminStats;
 
 use crate::db::Db;
 use crate::error::AppResult;

@@ -2,10 +2,10 @@
 
 use std::cell::Cell;
 
-use coolpsonotes_core::doc::EntryKind;
-use coolpsonotes_core::paths;
 use leptos::html;
 use leptos::prelude::*;
+use notekpr_core::doc::EntryKind;
+use notekpr_core::paths;
 use wasm_bindgen::JsCast;
 
 use crate::actions::{self, NoteHost};

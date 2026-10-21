@@ -44,7 +44,7 @@ pub fn new_token() -> String {
     format!(
         "cpgw_{}",
         data_encoding::BASE32_NOPAD
-            .encode(&coolpsonotes_core::crypto::random_bytes::<20>())
+            .encode(&notekpr_core::crypto::random_bytes::<20>())
             .to_lowercase()
     )
 }

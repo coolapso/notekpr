@@ -5,9 +5,9 @@ mod common;
 use std::collections::BTreeMap;
 
 use common::*;
-use coolpsonotes_client::hub::Hub;
-use coolpsonotes_client::{manage, ops, transfer};
-use coolpsonotes_core::doc::EntryKind;
+use notekpr_client::hub::Hub;
+use notekpr_client::{manage, ops, transfer};
+use notekpr_core::doc::EntryKind;
 
 async fn snapshot(hub: &Hub, vault: &str) -> BTreeMap<String, Vec<u8>> {
     let v = hub.resolve(vault).await.unwrap();

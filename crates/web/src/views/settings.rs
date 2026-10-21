@@ -275,9 +275,9 @@ fn Security() -> impl IntoView {
         <h3>"How your notes are protected"</h3>
         <ul class="bullets small">
             <li>"Notes, file names, folders, attachments and history are encrypted on your devices (XChaCha20-Poly1305) before upload."</li>
-            <li>"Each vault has its own key, shared with members via public-key encryption (HPKE, X25519). The server only stores encrypted copies."</li>
+            <li>"Every note has its own key, and each vault a key that wraps them, shared with members via public-key encryption (HPKE, X25519). The server only stores encrypted copies."</li>
             <li>"Signing in (OIDC) proves who you are, but never gives anyone your keys."</li>
-            <li>"Removing a member or device rotates keys so they can't read anything new."</li>
+            <li>"Removing a member gives the vault new keys, so they can't read anything written afterwards. Removing a device signs it out; if it was lost or stolen, also rotate the keys of your vaults (“Rotate encryption key” in each vault’s settings)."</li>
         </ul>
     }
 }

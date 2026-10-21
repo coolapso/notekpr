@@ -133,9 +133,9 @@ Without go-task, see the plain commands in the [Taskfile](Taskfile.yml) or
 ## Before you call a change done
 
 - `task fmt`, `task lint` and `task test` pass. Run the relevant browser test
-  (`task test:e2e -- -k <name>`; `-k` filters `suite.py`, the browser ↔ CLI
-  test always runs) for UI changes, and the whole suite for changes to sync,
-  keys or the editor.
+  (`task test:e2e -- -k <name>`; the browser ↔ CLI test is `cross_client`)
+  for UI changes, and the whole suite for changes to sync, keys or the
+  editor.
 - New behaviour has a test at the right level:
   - crypto, formats, CRDT, Markdown → unit tests in `crates/core`
   - API, authorization, sync rules → `crates/server/tests/api.rs` (real
@@ -229,9 +229,9 @@ Without go-task, see the plain commands in the [Taskfile](Taskfile.yml) or
   the sidebar search button (relevant for browser tests).
 
 **Builds and tests**
-- Build the web crate with `CARGO_TARGET_DIR=target-web` (the Taskfile does,
-  except `task test:e2e`: `tests/e2e/run.sh` builds into `target/`) so native
-  and wasm builds don't keep invalidating each other.
+- Build the web crate with `CARGO_TARGET_DIR=target-web` (the Taskfile and
+  `tests/e2e/run.sh` do) so native and wasm builds don't keep invalidating
+  each other.
 - `scripts/build-web.sh` replaces its output directory (`dist/web` by
   default) on every run.
 - Browser tests start their own server and chromedriver on free ports with a

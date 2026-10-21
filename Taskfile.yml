@@ -238,7 +238,7 @@ tasks:
       - CHROMEDRIVER="${CHROMEDRIVER:-$(command -v chromedriver)}" cargo test -p coolpsonotes-editor --target wasm32-unknown-unknown --test browser {{.CLI_ARGS}}
 
   test:e2e:
-    desc: "Headless browser tests and browser ↔ CLI test (needs chromium + chromedriver); filter the browser tests with `task test:e2e -- -k collab` (the browser ↔ CLI test always runs)"
+    desc: "Headless browser tests and browser ↔ CLI test (needs chromium + chromedriver); only some with `task test:e2e -- -k collab` (the browser ↔ CLI test is cross_client)"
     deps: [rust]
     cmds:
       - tests/e2e/run.sh {{.CLI_ARGS}}

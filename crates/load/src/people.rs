@@ -222,8 +222,13 @@ impl Person {
             },
         )
         .await?;
-        // Listen first, so the first "connected" isn't missed.
+        // Listen first, so no change is missed, then tell where it stands:
+        // starting may have found the server already.
         tokio::spawn(watch_hub(world.clone(), id, hub.clone(), hub.subscribe()));
+        world.bus.send(coolpsonotes_load_events::Event::Online {
+            id,
+            online: hub.is_online(),
+        });
         let (live_stop, rx) = watch::channel(false);
         let live = tokio::spawn(livesync::run(hub.clone(), rx));
         world.clients.lock().unwrap()[id as usize] = Some((session.clone(), hub.clone()));

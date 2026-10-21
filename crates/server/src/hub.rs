@@ -54,7 +54,13 @@ use coolpsonotes_core::protocol::{
 use dashmap::DashMap;
 use tokio::sync::{broadcast, mpsc};
 
-const VAULT_CHANNEL_CAPACITY: usize = 2048;
+/// Live events kept per vault for subscribers that fall behind. A
+/// subscriber more than this behind is told it lagged and catches up from
+/// the log instead (`ws::forward`), so this only needs to cover bursts. Each
+/// slot keeps its last event until it is overwritten: with thousands of
+/// vaults, a bigger number costs memory (2048 cost about a quarter more per
+/// connected person in the load test, for no gain).
+const VAULT_CHANNEL_CAPACITY: usize = 256;
 
 #[derive(Debug, Clone)]
 pub enum VaultEvent {

@@ -106,8 +106,12 @@ Edit and apply [`deploy/kubernetes/coolpsonotes.yaml`](../deploy/kubernetes/cool
 [`backup-cronjob.yaml`](../deploy/kubernetes/backup-cronjob.yaml). The image
 it references isn't published yet: build it (`docker build -t
 registry.example.com/coolpsonotes:0.1.0 .`) and push it to your registry,
-then set that image in both files. Put your ingress in front of the
-`coolpsonotes` Service, with TLS (§4; for Traefik:
+then set that image in both files. For a cluster with arm64 nodes, or a
+mix: `docker buildx build --platform linux/amd64,linux/arm64 -t
+registry.example.com/coolpsonotes:0.1.0 --push .` builds and pushes both in
+one image. The Dockerfile cross-compiles, so this doesn't need QEMU and
+takes about as long as one native build per architecture. Put your ingress
+in front of the `coolpsonotes` Service, with TLS (§4; for Traefik:
 [`deploy/examples/traefik/`](../deploy/examples/traefik/ingressroute.yaml)).
 
 ### From source

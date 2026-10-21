@@ -8,7 +8,8 @@ a device that is still signed in) and an **encrypted export**.
 ## The pieces
 
 * **Encrypted export** — one JSON file with everything you can read, exactly as
-  the server stores it: encrypted notes, their history, attachments, and your
+  the server stores it: encrypted notes (the latest snapshot of each and the
+  changes made after it — not their older revisions), attachments, and your
   copies of the keys, themselves encrypted. Nobody can read it without your
   keys, so it is safe to keep in a backup.
 * **Recovery key** — shown once when you set up your account (11 groups of
@@ -78,10 +79,12 @@ isn't changed (the tool works on a copy).
     Weekend trip.md
 ```
 
-Folders are private to you (mode 0700, files 0600) — the files are plain text
-now, so treat the folder like any private document. Anything that couldn't be
-decrypted (for example content written under a key you never received) is
-listed at the end; everything else is still recovered.
+`--out` must be a new or empty folder. Each note is written with its current
+text (older revisions aren't recovered). Folders are private to you (mode
+0700, files 0600) — the files are plain text now, so treat the folder like any
+private document. Anything that couldn't be decrypted (for example content
+written under a key you never received) is listed at the end; everything else
+is still recovered.
 
 ## Without any coolpsonotes software
 

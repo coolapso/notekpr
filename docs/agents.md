@@ -58,7 +58,9 @@ coolpsonotes --profile assistant agent setup \
 self-signature, and stores the secret half sealed in the profile's data
 directory. The client secret itself is never copied into the profile; it is
 re-read from the file whenever a new token is needed. Re-running the command is
-harmless (it verifies the existing key).
+harmless (it verifies the existing key). As with `login`, plain `http://` is
+accepted only for a server on this machine; `--insecure-http` allows it for
+other hosts.
 
 **Owner, share a vault after checking the fingerprint:**
 
@@ -111,11 +113,12 @@ and JSON, or need change events. Described next.
 
 **One process per profile.** `sync` and `gateway` own their profile's local
 data while they run, so they can't share one profile. While one of them runs,
-read commands (`ls`, `cat`, `search`) still work on the profile; changing
-commands (`write`, `mv`, `rm`, …) wait a few seconds and then refuse. An agent
-that edits through the mirror or the gateway should therefore not also call
-changing CLI commands on the same profile — use the files or the gateway's API
-for writes, or give the CLI its own agent profile.
+read commands (`ls`, `cat`, `search`) show its local copies, and changing
+commands (`write`, `mv`, `rm`, …) are handed to it: it runs them on its own
+copies and passes back what they print, so they work as usual (each one first
+waits up to 3 seconds for the profile). A gateway started with `--read-only`
+refuses every command handed to it. Details:
+[desktop-client.md §3](desktop-client.md#3-everyday-commands).
 
 ## 4. The gateway (local HTTP API)
 
@@ -132,14 +135,30 @@ refused unless `--allow-non-loopback`, which should only ever sit behind a TLS
 proxy you control), and requires `Authorization: Bearer <token>` on every
 request. The token is generated once and stored in the profile (mode 0600).
 `--vault` (repeatable) restricts it to some of the agent's vaults; other vaults
-answer `404` as if they did not exist. `--read-only` refuses every write with
-`403`. No endpoint ever returns key material.
+answer `404` as if they did not exist, and a `--vault` that matches none of
+them stops the gateway from starting. `--read-only` refuses every write with
+`403` (and every CLI command handed to it, §3). No endpoint ever returns key
+material. If live sync ends for good (the session was revoked), the gateway
+shuts down with an error instead of serving copies nobody keeps current.
 
 Vaults are addressed by id or name, document paths are vault-relative (URL
 encode spaces as `%20`; `.md` is optional). Errors are JSON
-`{"error": "<code>", "message": "…"}` with `401` (token), `403` (read-only or
-viewer), `404`, `409` (already exists), `412` (`If-Match` failed), `503`
-(not available offline).
+`{"error": "<code>", "message": "…"}`:
+
+| Status | `error` | When |
+|---|---|---|
+| `400` | `bad_request` | a body that isn't UTF-8 (documents) or the expected JSON (move), an invalid path, an attachment read through the documents endpoint, an empty attachment, one over the server's limit or a `.md` path on the attachments endpoint, an empty search |
+| `401` | `unauthorized` | missing or wrong token |
+| `403` | `read_only` | the gateway runs with `--read-only` |
+| `403` | `forbidden` | the agent can't write to the vault (viewer, or a read-only local copy) |
+| `404` | `not_found` | no such vault, document, revision or endpoint |
+| `409` | `conflict` | already exists, or exists as another kind |
+| `412` | `precondition_failed` | `If-Match` failed |
+| `500` | `internal` | anything else (e.g. the local copy could not be saved) |
+| `503` | `unavailable` | not available offline (history, attachments not downloaded yet) |
+
+Request bodies are limited to 16 MiB and attachment uploads to 128 MiB;
+larger ones get `413` (plain text, not JSON).
 
 ```sh
 export T=$(coolpsonotes -p assistant gateway token)
@@ -148,19 +167,32 @@ G=http://127.0.0.1:7878/v1
 
 | Endpoint | |
 |---|---|
-| `GET /v1/status` | identity, online state, read-only flag |
-| `GET /v1/vaults` | `[{id, name, role, archived, documents, pending_changes, seq, last_sync}]` |
-| `GET /v1/vaults/{v}/documents[?folder=F&all=true]` | `[{vault, path, id, title, kind, tags, created, modified, size}]` (`all` adds attachments) |
+| `GET /v1/status` | `{user_id, kind, online, read_only, vaults}` (`kind`: `human` or `agent`; `vaults`: how many are exposed) |
+| `GET /v1/vaults` | `[{id, name, role, archived, documents, pending_changes, seq, last_sync}]`, plus `icon`, `read_only` (why) and `too_large_changes` when set |
+| `GET /v1/vaults/{v}/documents[?folder=F&all=true]` | everything below `F` (recursively): `[{vault, path, id, title, kind, tags, created, modified, size}]`, plus `mime` and `icon` when set (`all` adds attachments) |
 | `GET /v1/vaults/{v}/documents/{path}` | Markdown body, `ETag: "<content hash>"`; `?format=json` → `{…info, hash, links, content}` |
-| `PUT /v1/vaults/{v}/documents/{path}` | create (`201`) or update (`200`) with the request body; `If-Match: "<hash>"` → `412` if it changed meanwhile; `If-None-Match: *` → create only |
-| `POST /v1/vaults/{v}/move` | `{"from": …, "to": …, "update_links": false}`; a `to` ending in `/` keeps the name |
-| `DELETE /v1/vaults/{v}/documents/{path}` | move a document or folder to the trash |
-| `GET /v1/search?q=…[&vault=v&limit=n]` | `[{vault, vault_name, path, id, title, score, snippet}]` |
+| `PUT /v1/vaults/{v}/documents/{path}` | create (`201`) or update (`200`) with the request body → `{vault, path, id, created, changed, hash, bytes, pending_changes}` and the new `ETag`; `If-Match: "<hash>"` → `412` if it changed meanwhile (`If-Match: *`: it must exist); `If-None-Match: *` → create only |
+| `POST /v1/vaults/{v}/move` | `{"from": …, "to": …, "update_links": false}` → `{vault, id, from, to}`; a `to` ending in `/` keeps the name |
+| `DELETE /v1/vaults/{v}/documents/{path}` | move a document or folder to the trash → `{vault, trashed: [ids]}` |
+| `GET /v1/search?q=…[&vault=v&limit=n]` | `[{vault, vault_name, path, id, title, score, snippet}]`; `limit` 50 by default, at most 500 |
 | `GET /v1/vaults/{v}/backlinks/{path}` | documents linking to it |
 | `GET /v1/vaults/{v}/history/{path}[?revision=ID]` | revisions `[{id, created_at, covers_seq, author_id, size}]`, or one revision's Markdown |
 | `GET /v1/vaults/{v}/attachments/{path}` | raw bytes (`Content-Disposition: attachment`, `nosniff`) |
-| `PUT /v1/vaults/{v}/attachments/{path}` | upload (`Content-Type` is stored as the MIME type) |
-| `GET /v1/events` | Server-Sent Events: `document_changed {vault, id, path, origin}`, `index_changed`, `document_deleted`, `vault_added`, `vault_closed`, `connection` — ids and paths only, never content |
+| `PUT /v1/vaults/{v}/attachments/{path}` | upload (`Content-Type` is stored as the MIME type); answers like a document `PUT`, without `ETag` |
+| `GET /v1/events` | Server-Sent Events (below) — ids and paths only, never content |
+
+Each event is named after its `type` and carries it as JSON, e.g.
+`{"type": "document_changed", "vault": …, "id": …, "path": …, "origin": "remote"}`:
+
+| Event | Fields | |
+|---|---|---|
+| `document_changed` | `vault, id, path, origin` | a note's text changed; `origin` is `local` (on this machine) or `remote` |
+| `index_changed` | `vault, origin` | the vault's entries changed: created, moved, renamed, trashed, … |
+| `document_deleted` | `vault, id` | a document was deleted permanently (trash emptied); moving it to the trash is an `index_changed` |
+| `vault_added` | `vault` | a vault became available (newly shared) |
+| `vault_closed` | `vault, reason` | the vault was deleted or access revoked; its local copy stays read-only |
+| `connection` | `online` | the connection to the server went down or came back |
+| `lagged` | `missed` | the client read too slowly and missed that many events; re-read what it keeps track of |
 
 Examples:
 
@@ -195,10 +227,12 @@ tells you if some are still queued) and retried automatically.
 
 * **Client secret**: `coolpsonotes agent rotate-secret <agent> --secret-out
   new.secret` issues a new credential, writes it to the file and then — after
-  asking, or with `--yes` — revokes the old ones (their sessions end
-  immediately; `--keep-old` for a zero-downtime switch, then delete the old
-  one later). If the file can't be written, nothing is revoked. Re-run `agent setup` with the new client id and file — the
-  agent's key pair stays the same.
+  asking, or with `--yes` — revokes all the old ones (their sessions end
+  immediately). If the file can't be written, nothing is revoked. For a
+  zero-downtime switch pass `--keep-old`, then revoke the old credential in
+  the web app (Settings → AI agents → Revoke) once the agent uses the new one;
+  the CLI can't revoke a single credential. Re-run `agent setup` with the new
+  client id and file — the agent's key pair stays the same.
 * **Gateway token**: `coolpsonotes gateway token --rotate`, then restart the
   gateway.
 * **Vault keys**: removing the agent from a vault (`vault unshare`) rotates the
@@ -218,13 +252,16 @@ Every write through the gateway is appended to
 {"at":1792378331454,"via":"gateway","op":"put_document","vault":"6ad6…","document":"052b…","bytes":18}
 ```
 
-Operations are named after the call (`put_document`, `put_attachment`).
-Entries contain time, channel, vault id, document id and size — never content,
-titles or paths. (CLI commands and the Markdown folder are not audited
-separately; their writes are attributed to the agent on the server like any
-other.) On the server side, each update is
-attributed to the agent's identity, and owners see membership and key events
-in the vault audit (`GET /api/v1/vaults/{v}/audit`).
+Operations are named after the call: `put_document` and `put_attachment`
+(only when the content changed), `trash_document` (one line per trashed
+entry) and `move_document`. Entries contain time, channel, vault id, document
+id (left out when there is none, e.g. a folder without an entry of its own)
+and size — never content, titles or paths. (CLI commands, also those handed to
+a running gateway, and the Markdown folder are not audited separately; their
+writes are attributed to the agent on the server like any other.) On the
+server side, each update is attributed to the agent's identity, and owners
+see membership and key events in the vault audit
+(`GET /api/v1/vaults/{v}/audit`).
 
 ## 7. Threat notes
 

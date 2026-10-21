@@ -23,9 +23,10 @@ by others are kept, not overwritten), encrypts it and uploads it. Changes from
 others are decrypted and written into the files within a fraction of a second.
 Details: [desktop-client.md §4–7](desktop-client.md#4-sync-and-the-markdown-mirror).
 
-The daemon still keeps a small encrypted copy of each note's history next to
-the folder. It needs it to merge concurrent edits, and it is what the server
-accepts — the server never takes plaintext.
+The daemon still keeps a small encrypted copy of each note's history in the
+profile's data directory (only a `.coolpsonotes-vault` marker file sits in
+each vault's folder). It needs it to merge concurrent edits, and it is what
+the server accepts — the server never takes plaintext.
 
 ## Set it up
 
@@ -108,7 +109,7 @@ reload on change pick up remote edits cleanly.
   for confirming a deliberate mass deletion.
 * **CLI commands while the daemon runs:** reading ones (`cat`, `ls`,
   `search`, …) work and show the daemon's copies; changing ones (`write`,
-  `mv`, …) are refused while it owns the profile — edit the files instead.
-  Details:
+  `mv`, …) are handed to the daemon, which runs them on its copies (of the
+  vaults it keeps) and updates the files. Details:
   [desktop-client.md §3](desktop-client.md#3-everyday-commands).
 * **Phones and tablets:** there is no mobile client yet; use the web app.

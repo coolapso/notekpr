@@ -49,6 +49,10 @@ and approve. The client polls the server (honouring `interval`/`slow_down`)
 and receives a session token. Nothing is typed into the terminal, so this also
 works over SSH.
 
+`--server` is only needed for a profile's first login; later ones use the
+server it remembers. `--device-name NAME` sets the name shown in your device
+list (default: `coolpsonotes CLI on <hostname>`).
+
 ### Development mode (no OIDC) and several users side by side
 
 A server started with `--dev-mode` lets anyone sign in as any user name —
@@ -90,7 +94,8 @@ ciphertexts, and prints the recovery key once:
 
 Store it in a password manager or on paper. It is the only way back in if you
 lose every device; nobody, including the server administrator, can recover
-your notes without it. Replace it any time with `coolpsonotes recovery rotate`.
+your notes without it. Replace it any time with `coolpsonotes recovery rotate`
+(it asks first; `--yes` skips that).
 
 The keys are saved (sealed) on this device before anything is uploaded. If
 the setup is interrupted — the network fails, the process is killed — run
@@ -139,9 +144,10 @@ directory, never deleted) and enrolls the computer as a new device.
   mirror folders of the profile are deleted only when you agree to it at the
   prompt or pass `--remove-mirror`; otherwise they are left in place (and
   named). `vault leave` works the same way for one vault.
-* `coolpsonotes devices list | approve <id> | revoke <id>` manages devices.
-  Revoking a device ends its sessions; if it might be compromised, also rotate
-  the keys of shared vaults (`vault rotate`).
+* `coolpsonotes devices list | approve <id> | revoke <id>` manages devices
+  (`approve` and `revoke` ask first; `--yes` skips that). Revoking a device
+  ends its sessions; if it might be compromised, also rotate the keys of
+  shared vaults (`vault rotate`).
 * `coolpsonotes status` shows profile, server, account fingerprint, devices,
   vaults, pending changes and sync state (`--json` for scripts).
 
@@ -153,22 +159,23 @@ vault-relative, `.md` is optional for notes.
 | Command | |
 |---|---|
 | `vault list` / `vault create <name>` | list (with role and document count) / create |
-| `vault rename <v> <name>` / `vault archive <v> [--undo]` / `vault delete <v>` | owner only; delete asks you to type the name |
+| `vault rename <v> <name>` / `vault archive <v> [--undo]` / `vault delete <v>` | owner only; delete asks you to type the name (`--yes` skips that; without a terminal it is required) |
 | `vault icon <v> <emoji>` / `vault icon <v> --remove` | owner only; the vault's icon (replaces a picture set in the browser) |
 | `vault members <v>` | members, roles, key fingerprints and pin status |
-| `vault share <v> <user> --role editor\|viewer` | see [§8](#8-sharing-members-and-keys) |
-| `vault unshare <v> <user>` / `vault rotate <v>` / `vault leave <v>` | removal always rotates the key |
+| `vault share <v> <user> --role editor\|viewer` | owner only; for an existing member it changes their role; see [§8](#8-sharing-members-and-keys) |
+| `vault unshare <v> <user>` / `vault rotate <v>` / `vault leave <v>` | unshare and rotate: owner only; removal always rotates the key; the owner can't leave (delete instead) |
 | `ls <v> [folder] [-r]` | folders, notes and attachments |
 | `cat <v> <path>` | note text (or attachment bytes) |
-| `write <v> <path>` | create or update a note from stdin — diff-merged, never a blind overwrite; `--append`, `--attachment`, `--if-match <hash>` |
+| `write <v> <path>` | create or update a note from stdin — diff-merged, never a blind overwrite; `--append`, `--attachment`, `--if-match <hash>` (ignored with the other two) |
 | `quick [text…]` / `quick --list` | capture a quick note (text or stdin) / list the newest; see [Quick notes](#quick-notes) |
 | `mkdir <v> <path>`, `mv <v> <from> <to> [--update-links]`, `rm <v> <path>` | `rm` moves to the trash; `mv` into `dir/` keeps the name; `--update-links` rewrites `[[links]]` |
 | `icon <v> <path> <emoji>` / `icon <v> <path> --remove` | a note's, attachment's or folder's icon; `ls` and `vault list` show icons, and people a note is shared with see its icon and new name |
-| `trash list\|restore\|empty <v>` | restore by path or id; `empty` deletes permanently |
-| `search <query> [--vault v]` | terms, `"phrases"`, `tag:x`, `folder:x`, `title:x`, `vault:x` |
+| `trash list\|restore\|empty <v>` | restore by path or id; `empty` deletes permanently (asks first; `--yes`) |
+| `search <query> [--vault v] [--limit n]` | terms, `"phrases"`, `tag:x`, `folder:x`, `title:x`, `vault:x`; 20 results unless `--limit` |
 | `backlinks <v> <path>` | notes linking to a note |
 | `history <v> <path>`, `history show\|restore <v> <path> <rev>` | encrypted revisions stored on the server |
 | `export <v> --out <dir\|file.zip>`, `import <v> <dir\|file.zip>` | see [§9](#9-export-and-import) |
+| `agent …`, `gateway …` | AI agents and the local HTTP API: see [agents.md §2](agents.md#2-setting-up-an-agent) and [§4](agents.md#4-the-gateway-local-http-api) |
 
 Every command first catches up with the server (REST) and uploads queued
 changes; read commands fall back to the local copy when the server is
@@ -180,20 +187,29 @@ limit: commands then wait as long as the server says and retry (for up to
 a profile's local copies (two would overwrite each other's files and lose
 queued or received changes). While `sync` or `gateway` runs, read commands
 (`ls`, `cat`, `search`, `backlinks`, `status`, `export`, `history`, `trash
-list`, `vault list`, `quick --list`) show that process's local copies read-only — it keeps
-them current — and commands that change something (`write`, `quick`, `mv`,
-`rm`, `mkdir`, `import`, `vault …`, `share-note`, …) are handed to it: it
-runs them on its own copies and sends back what they print and whether they
-failed, so they work as usual (through a loopback connection whose port and
-token are in `control.json` in the profile's data folder, readable by you
-only). It runs them only for vaults it keeps (`sync Family` keeps one), and a
-read-only gateway refuses changes. `sync --once` and `logout` are never
-handed over: they wait up to 3 seconds for another one-shot command and then
-stop with "profile … is in use by another coolpsonotes process", as do all
-changing commands while an older version of the daemon runs. A second `sync`
-or `gateway` on the same profile refuses to start. (Use separate profiles for a mirror and a gateway at the same time.)
-The lock is released automatically when a process ends, also after a crash. `--json` gives machine-readable output for listings, `-q`
-silences status lines. Status and warnings go to stderr, results to stdout.
+list`, `vault list`, `quick --list`, `note-shares`, `recover`) show that
+process's local copies read-only — it keeps them current — and commands that
+change something (`write`, `quick`, `mv`, `rm`, `mkdir`, `import`,
+`vault …`, `share-note`, …) are handed to it once they have waited up to 3
+seconds for the profile: it runs them on its own copies and sends back what
+they print and whether they failed, so they work as usual (through a loopback
+connection whose port and token are in `control.json` in the profile's data
+folder, readable by you only). It runs them only for vaults it keeps
+(`sync --vault Family` keeps one), and a gateway started with `--read-only`
+refuses every command handed to it ("the running gateway is read-only: it
+makes no changes"). `sync --once` and `logout --forget` are never handed
+over: they wait up to 3 seconds for another one-shot command and then stop
+with "profile … is in use by another coolpsonotes process", as do all
+changing commands while an older version of the daemon runs. Commands that
+don't use the local copies run right away, whatever else is running:
+`login`, `logout` (without `--forget`), `profiles`, `devices …`,
+`recovery …`, `shared …`, `agent …`, `export-encrypted`, `gateway token` and
+`sync --no-dir`. A second
+`sync` or `gateway` on the same profile refuses to start. (Use separate
+profiles for a mirror and a gateway at the same time.) The lock is released
+automatically when a process ends, also after a crash. `--json` gives
+machine-readable output for listings, `-q` silences status lines. Status and
+warnings go to stderr, results to stdout.
 
 Revisions: a note gets a revision when an editing session ends (after a CLI
 write, when `sync`/the gateway stop, or after two idle minutes, once at least
@@ -250,12 +266,13 @@ which directory is mirrored.
 
 `sync` subscribes to every vault over the WebSocket (`since` = the local
 cursor), applies catch-up pages and live updates as they arrive, uploads local
-changes, reconnects with exponential backoff and jitter, and reacts to server
-events: rotated keys are fetched, vaults shared with you appear, revoked or
-deleted vaults become read-only local copies, and as an owner your client hands
-the vault key to members who joined before they had keys. Stop it with Ctrl-C
-or SIGTERM; it flushes and saves before exiting. To run it permanently, use a
-systemd user unit:
+changes, reconnects with exponential backoff (1 s, doubling up to 60 s, ±25 %
+jitter; when the server announces a restart, about every 0.25–1.25 s for up
+to a minute), and reacts to server events: rotated keys are fetched, vaults
+shared with you appear, revoked or deleted vaults become read-only local
+copies, and as an owner your client hands the vault key to members who joined
+before they had keys. Stop it with Ctrl-C or SIGTERM; it flushes and saves
+before exiting. To run it permanently, use a systemd user unit:
 
 ```ini
 # ~/.config/systemd/user/coolpsonotes-sync.service
@@ -302,6 +319,12 @@ are unaffected.
   Work (3f2a1c)/          <- a second vault with the same name gets its id suffix
 ```
 
+Besides the characters shown, control characters become `_`, surrounding
+spaces, leading dots and trailing dots are dropped, Windows device names get
+a `_` prefix (`con` → `_con`, on every system) and names are cut to 200
+bytes. If the suffixed name is taken too, ` 2`, ` 3`, … follows
+(`Work (3f2a1c) 2`).
+
 The directory name is chosen once per vault and kept, even if the vault is
 renamed later. A small `.coolpsonotes-vault` file in it records which vault it
 mirrors: a folder that already holds other files — left behind by a deleted or
@@ -330,9 +353,10 @@ difference (macOS, detected at start), the mirror compares names that way.
 ### Ignored files
 
 Dotfiles and dot-directories (`.git`, `.obsidian`, `.trash`, `.DS_Store`, our
-own temporary files), editor swap/backup/lock files (`*.swp`, `*.swo`, `*~`,
-`.#*`, `#*#`, `4913`, `~$*`, `*.tmp`, `*.part`, `*.bak`) and symlinks are never
-synced. Markdown files must be UTF-8.
+own temporary files), editor swap/backup/lock files (`*.swp`, `*.swo`,
+`*.swx`, `*.swn`, `*.kate-swp`, `*~`, `.#*`, `#*#`, `4913`, `~$*`, `*.tmp`,
+`*.part`, `*.crdownload`, `*.bak`), `Thumbs.db`, `desktop.ini` and symlinks
+are never synced. Markdown files must be UTF-8.
 
 ### How changes are detected
 
@@ -450,8 +474,9 @@ the remote edit.
   synced as its own note.
 * **Attachments** are immutable blobs; changing one on disk uploads a new
   version and moves the previous one to the trash.
-* **Viewer access**: local edits are not uploaded (you are warned) and the file
-  is left as is.
+* **Viewer access** (or a read-only local copy): local edits are not uploaded
+  (you are warned) and the file is left as is; deleted files are written back,
+  and new files are ignored.
 
 ## 8. Sharing, members and keys
 
@@ -468,6 +493,9 @@ a loud warning until you verify the new key and pass `--accept-new-key`; key
 rotations go ahead without that person (and say so), who gets the new key
 once you share with them again with `--accept-new-key`.
 
+* Only the owner can share, unshare and rotate. Running `vault share` again
+  for someone who is already a member changes their role to the given
+  `--role`.
 * People who have not set up encryption yet are added without a key; your
   client wraps the vault key for them automatically once they have (during
   `sync`, `vault members`, or any sync of that vault).
@@ -491,6 +519,9 @@ can't see the vault's other notes, file names, attachments or members. Key
 fingerprints are checked and pinned exactly as for vault sharing. Vault members
 keep working on the note as usual (their clients pick up the note's key
 automatically). Rotating the vault key also renews the keys of shared notes.
+Only the vault's owner can share a note, stop sharing it or renew its key;
+running `share-note` again for someone who already has the note changes
+their role.
 
 A new key is never wrapped for someone whose account key changed since it was
 pinned: the rotation stops and says who. Verify the fingerprint with them and
@@ -521,18 +552,22 @@ coolpsonotes import Family ~/backup/family.zip
 
 Exports are a plain tree of `.md` files, attachments and (empty) folders — no
 proprietary metadata — readable by any Markdown tool. Trashed documents are not
-exported. Without the server, `export` uses the local copy: attachments this
-device never downloaded are left out and listed. An existing non-empty target is refused unless `--force`. Exports
+exported. A directory export leaves out (and lists) paths the mirror wouldn't
+write either — hidden segments such as `.obsidian/…`, names Windows can't
+store when run there; a zip keeps hidden ones. Without the server, `export`
+uses the local copy: attachments this device never downloaded are left out
+and listed. An existing non-empty target is refused unless `--force`. Exports
 are decrypted, so they are written for the owner only (files `0600`, folders
 `0700`, also inside the zip); a failed zip export leaves no `.partial` file.
 
 Import walks a directory or zip, keeping folders: `.md` files become notes
 (existing notes at the same path are diff-merged; `--skip-existing` leaves
-them alone — "the same path" ignoring case, exactly as `write` matches notes),
-other files become attachments, empty directories become folders. Hidden
-files and editor leftovers are skipped, as are files over the server's
-attachment limit (reported). `--dry-run` reports what an import would create,
-update or leave unchanged without changing anything.
+them, and existing attachments, alone — "the same path" ignoring case,
+exactly as `write` matches notes), other files become attachments, empty
+directories become folders. Hidden files and editor leftovers are skipped, as
+are empty attachment files and files over the server's attachment limit
+(reported). `--dry-run` reports what an import would create, update or leave
+unchanged without changing anything.
 
 ### Encrypted export and offline recovery
 
@@ -544,13 +579,15 @@ coolpsonotes recover --local --out ~/Recovered  # from this device's copies, no 
 ```
 
 `export-encrypted` saves everything the account can read, still encrypted, as
-one file that is safe to keep in backups. `recover` turns such a file into
-plain Markdown files without a server, unlocking it with the recovery key
-(asked for; or `--recovery-key-file`, or `COOLPSONOTES_RECOVERY_KEY`). Without
+one file that is safe to keep in backups (an existing file is replaced only
+with `--force`). `recover` turns such a file into plain Markdown files
+without a server, unlocking it with the recovery key (asked for; or
+`--recovery-key-file`, or `COOLPSONOTES_RECOVERY_KEY`). Without
 `--from`, a signed-in device downloads the export, or, when the server can't be
 reached (or with `--local`), recovers from its local copies: what it synced and
-downloaded, without notes shared with you one by one. See
-[recovery.md](recovery.md).
+downloaded, without notes shared with you one by one. `--out` must be a new or
+empty folder; `--json` prints `{vaults, files, problems, source}` (`source`:
+`export` or `device`). See [recovery.md](recovery.md).
 
 ## 10. Where data is stored and how it is protected
 

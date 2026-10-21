@@ -5,6 +5,8 @@
 version: "3"
 
 vars:
+  CI_INFISICAL_PROJECT_ID: "7897aa98-f8e5-40f2-a83d-f4926cdba05b"
+  CLI_INFISICAL_PROJECT_ID: "4f12d18e-e075-4a6c-ba6c-367bec3e62e7"
   LISTEN: 127.0.0.1:8080
   PUBLIC_URL: http://localhost:8080
   DATA_DIR: data
@@ -307,6 +309,18 @@ tasks:
 
   # ------------------------------------------------------------------ docker
 
+  docker:login:
+    desc: "Login to GHCR"
+    cmds:
+      - |
+        if [[ -z $GHCR_PASSWORD ]]; then
+           GHCR_PASSWORD=$(infisical secrets get --plain \
+             --domain="https://eu.infisical.com" \
+             --projectId {{.CI_INFISICAL_PROJECT_ID}} \
+             --env ci ghcr)
+        fi
+        echo $GHCR_PASSWORD | docker login ghcr.io -u coolapso --password-stdin
+
   docker:build:
     desc: Build the container image coolpsonotes:latest
     cmds:
@@ -316,6 +330,20 @@ tasks:
     desc: "Build the public demo image (coolpsonotes-demo:latest): seeds the demo, serves it an hour, exits to start over — docs/operations.md §10"
     cmds:
       - docker build --target demo -t coolpsonotes-demo:latest .
+
+  docker:push:demo:
+    desc: "Build the public demo image for amd64 and arm64 and push it to ghcr.io/coolapso/notekpr-demo, tagged with the short commit hash and latest"
+    deps: [docker:login]
+    vars:
+      IMAGE: ghcr.io/coolapso/notekpr-demo
+      PLATFORMS: linux/amd64,linux/arm64
+      # The short commit hash, with -dev if there are uncommitted changes.
+      TAG:
+        sh: git describe --always --dirty=-dev --exclude='*'
+    cmds:
+      - >-
+        docker buildx build --push --platform {{.PLATFORMS}} --target demo
+        -t {{.IMAGE}}:{{.TAG}} -t {{.IMAGE}}:latest .
 
   docker:dev:
     desc: Run the development server in Docker on http://localhost:8080 (no OIDC)

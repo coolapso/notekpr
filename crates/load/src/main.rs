@@ -860,7 +860,8 @@ async fn run(args: Args, root: PathBuf, bus: Bus) -> Result<Report> {
         let teams = world.teams.lock().unwrap().len() as u32;
         Report {
             duration_s: t_start.elapsed().as_secs_f32(),
-            users: total,
+            // The people who took part: fewer than planned after a game over.
+            users: results.last().map_or(total, |r| r.users),
             teams,
             vaults: t.vaults,
             notes: t.notes + teams * 4,

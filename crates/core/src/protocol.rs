@@ -942,6 +942,12 @@ pub enum UserEventKind {
     SharesChanged,
 }
 
+/// The WebSocket close code a server sends when it shuts down to be
+/// started again (an update): "service restart" (RFC 6455 registry). Clients
+/// reconnect within a second or so, again and again for a while, instead of
+/// backing off as after a failure.
+pub const CLOSE_RESTARTING: u16 = 1012;
+
 /// WebSocket messages sent by clients.
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(tag = "type", rename_all = "snake_case")]

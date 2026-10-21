@@ -19,6 +19,7 @@ pub struct TestServer {
     pub base: String,
     pub ws: String,
     pub dir: tempfile::TempDir,
+    pub state: coolpsonotes_server::state::AppState,
 }
 
 pub async fn start() -> TestServer {
@@ -29,7 +30,7 @@ pub async fn start_with(f: impl FnOnce(&mut coolpsonotes_server::config::Config)
     let dir = tempfile::tempdir().unwrap();
     let mut cfg = coolpsonotes_server::config::Config::for_tests(dir.path().to_path_buf());
     f(&mut cfg);
-    let (app, _state) = coolpsonotes_server::build(cfg, None).await.unwrap();
+    let (app, state) = coolpsonotes_server::build(cfg, None).await.unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move {
@@ -44,6 +45,7 @@ pub async fn start_with(f: impl FnOnce(&mut coolpsonotes_server::config::Config)
         base: format!("http://{addr}/api/v1"),
         ws: format!("ws://{addr}/api/v1/ws"),
         dir,
+        state,
     }
 }
 

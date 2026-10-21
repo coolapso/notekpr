@@ -327,6 +327,13 @@ Server → client: `ready {user_id, session_id, conn_id}`,
 `user_event {event}` (`device_pending`, `devices_changed`, `vaults_changed`, `shares_changed`, `session_revoked`),
 `error {code, message, vault_id?}`, `pong {nonce}`.
 
+When the server shuts down to be started again (an update), it closes every
+connection with code **1012** ("service restart", `CLOSE_RESTARTING`) before
+it exits. Clients then reconnect soon — about every second, jittered, for up
+to a minute — rather than backing off as after a failure, and may show the
+connection as briefly *connecting* rather than *offline*. Any other close, or
+a connection that just drops, is a failure: reconnect with backoff.
+
 A client must subscribe to a vault before pushing to it over the socket.
 Pushes and (un)subscriptions share a per-connection budget (20 per second,
 bursts of 400); beyond it the server answers `error {code: "rate_limited"}`

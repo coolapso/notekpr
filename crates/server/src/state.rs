@@ -25,6 +25,9 @@ pub struct Inner {
     pub blobs: crate::blobs::Blobs,
     pub limiters: Limiters,
     pub metrics: Option<PrometheusHandle>,
+    /// Becomes true when the server shuts down: live connections close with
+    /// [`CLOSE_RESTARTING`](coolpsonotes_core::protocol::CLOSE_RESTARTING).
+    pub shutting_down: tokio::sync::watch::Sender<bool>,
 }
 
 impl AppState {
@@ -41,7 +44,18 @@ impl AppState {
             oidc,
             limiters,
             metrics,
+            shutting_down: tokio::sync::watch::Sender::new(false),
         })))
+    }
+
+    /// Tell every live connection the server is going away to be started
+    /// again, then wait (at most `wait`) until they have closed.
+    pub async fn close_connections(&self, wait: std::time::Duration) {
+        self.shutting_down.send_replace(true);
+        let deadline = tokio::time::Instant::now() + wait;
+        while self.hub.connection_count() > 0 && tokio::time::Instant::now() < deadline {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
     }
 }
 

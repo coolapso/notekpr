@@ -219,7 +219,7 @@ async fn serve(config: Config) -> anyhow::Result<()> {
     };
     let listen = config.listen;
     let public_url = config.public_url();
-    let (app, _state) = coolpsonotes_server::build(config, metrics).await?;
+    let (app, state) = coolpsonotes_server::build(config, metrics).await?;
     let listener = tokio::net::TcpListener::bind(listen)
         .await
         .with_context(|| format!("binding {listen}"))?;
@@ -228,8 +228,20 @@ async fn serve(config: Config) -> anyhow::Result<()> {
         listener,
         app.into_make_service_with_connect_info::<SocketAddr>(),
     )
-    .with_graceful_shutdown(shutdown_signal())
+    .with_graceful_shutdown({
+        let state = state.clone();
+        async move {
+            shutdown_signal().await;
+            tracing::info!("shutting down: live connections are told it's a restart");
+            state.shutting_down.send_replace(true);
+        }
+    })
     .await?;
+    // No new connections and every request answered; WebSockets aren't
+    // among what the server waits for, so give their closes a moment.
+    state
+        .close_connections(std::time::Duration::from_secs(3))
+        .await;
     tracing::info!("shut down cleanly");
     Ok(())
 }

@@ -5,15 +5,19 @@
 //! 2. client `subscribe`s to vaults, optionally with `since` to catch up;
 //! 3. server streams `changes` pages, then `synced`, then live events in
 //!    sequence order; the client's own pushes come back as `ack` in that order.
+//!
+//! When the server shuts down it closes every connection with
+//! [`CLOSE_RESTARTING`]: clients come back as soon as it's up again.
 
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use axum::extract::State;
-use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
+use axum::extract::ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade};
 use axum::response::Response;
 use coolpsonotes_core::protocol::{
-    ClientMessage, ObjectEventKind, PushResult, ServerMessage, UserEventKind, VaultEventKind,
+    CLOSE_RESTARTING, ClientMessage, ObjectEventKind, PushResult, ServerMessage, UserEventKind,
+    VaultEventKind,
 };
 use futures::{SinkExt, StreamExt};
 use tokio::sync::mpsc;
@@ -38,7 +42,8 @@ const OUTBOUND_QUEUE: usize = 1024;
 enum Out {
     Msg(ServerMessage),
     Ping,
-    Close,
+    /// With a close code, or just the end of the connection.
+    Close(Option<u16>),
 }
 
 pub async fn handler(State(state): State<AppState>, ws: WebSocketUpgrade) -> Response {
@@ -90,7 +95,14 @@ async fn connection(socket: WebSocket, state: AppState) {
                     Err(_) => continue,
                 },
                 Out::Ping => sink.send(Message::Ping(Vec::new().into())).await,
-                Out::Close => {
+                Out::Close(code) => {
+                    if let Some(code) = code {
+                        let frame = CloseFrame {
+                            code,
+                            reason: "restarting".into(),
+                        };
+                        let _ = sink.send(Message::Close(Some(frame))).await;
+                    }
                     let _ = sink.close().await;
                     break;
                 }
@@ -125,9 +137,12 @@ async fn connection(socket: WebSocket, state: AppState) {
     let mut revalidate = tokio::time::interval(Duration::from_secs(60));
     keepalive.tick().await;
     revalidate.tick().await;
+    let mut shutting_down = state.shutting_down.subscribe();
+    let mut restarting = *shutting_down.borrow_and_update();
 
-    loop {
+    while !restarting {
         tokio::select! {
+            _ = shutting_down.changed() => restarting = *shutting_down.borrow(),
             msg = stream.next() => match msg {
                 Some(Ok(Message::Text(t))) => {
                     if !conn.handle_text(&t).await {
@@ -202,11 +217,14 @@ async fn connection(socket: WebSocket, state: AppState) {
             },
         );
     }
-    state.hub.disconnect(&conn.who.user_id, conn_id);
-    metrics::gauge!("coolpsonotes_ws_connections").decrement(1.0);
-    let _ = out_tx.send(Out::Close).await;
+    let _ = out_tx
+        .send(Out::Close(restarting.then_some(CLOSE_RESTARTING)))
+        .await;
     drop(out_tx);
     let _ = writer.await;
+    // Gone only now that the close went out (a shutdown waits for it).
+    state.hub.disconnect(&conn.who.user_id, conn_id);
+    metrics::gauge!("coolpsonotes_ws_connections").decrement(1.0);
 }
 
 struct Conn {

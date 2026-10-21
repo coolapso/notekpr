@@ -575,6 +575,37 @@ async fn websocket_live_sync_acks_and_presence() {
 }
 
 #[tokio::test]
+async fn live_connections_are_told_when_the_server_restarts() {
+    use futures::StreamExt;
+    use tokio_tungstenite::tungstenite::Message;
+    let srv = start().await;
+    let alice = new_user(&srv.base, "alice").await;
+    let token = alice.api.token.clone().unwrap();
+    let mut ws = Ws::connect(&srv.ws, &token).await;
+    async fn close_code(ws: &mut Ws) -> Option<u16> {
+        loop {
+            match tokio::time::timeout(std::time::Duration::from_secs(5), ws.stream.next())
+                .await
+                .expect("no close within 5 s")
+            {
+                Some(Ok(Message::Close(f))) => return f.map(|f| f.code.into()),
+                Some(Ok(_)) => continue,
+                _ => return None,
+            }
+        }
+    }
+    // Shutting down waits until every connection was told.
+    srv.state
+        .close_connections(std::time::Duration::from_secs(3))
+        .await;
+    assert_eq!(srv.state.hub.connection_count(), 0);
+    assert_eq!(close_code(&mut ws).await, Some(CLOSE_RESTARTING));
+    // Someone connecting meanwhile hears the same right away.
+    let mut late = Ws::connect(&srv.ws, &token).await;
+    assert_eq!(close_code(&mut late).await, Some(CLOSE_RESTARTING));
+}
+
+#[tokio::test]
 async fn device_enrollment_and_recovery() {
     let srv = start().await;
     let alice = new_user(&srv.base, "alice").await;

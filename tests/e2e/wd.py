@@ -23,7 +23,7 @@ class Browser:
     def __init__(self, width=1400, height=900):
         caps = {"capabilities": {"alwaysMatch": {
             "browserName": "chrome",
-            "goog:chromeOptions": {"binary": os.environ.get("CPN_CHROME", "/usr/bin/chromium"),
+            "goog:chromeOptions": {"binary": os.environ.get("CPN_CHROME") or "/usr/bin/chromium",
                                    "args": ["--headless=new", "--no-sandbox", f"--window-size={width},{height}",
                                             "--disable-gpu", "--lang=en-US"]},
             "goog:loggingPrefs": {"browser": "ALL"}}}}

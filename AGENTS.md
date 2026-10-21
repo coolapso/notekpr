@@ -124,7 +124,7 @@ task fmt / task lint             # rustfmt; clippy with warnings as errors
 task test                        # all Rust tests
 task test:e2e -- -k sharing      # browser tests (chromium + chromedriver + python3)
 task test:editor                 # the editor's DOM view in headless Chromium (wasm-bindgen-test)
-task ci                          # what CI runs (CI also runs cargo-deny: task audit)
+task ci                          # exactly what CI runs (incl. task audit and the image)
 ```
 
 Without go-task, see the plain commands in the [Taskfile](Taskfile.yml) or

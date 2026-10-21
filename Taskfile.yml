@@ -61,10 +61,10 @@ tasks:
           if command -v chromedriver >/dev/null && command -v python3 >/dev/null; then
             echo "✓ chromedriver + python3 (browser tests)"
           else
-            echo "· optional: chromium (with chromedriver) and python3 for task test:e2e (Arch: chromium python)"
+            echo "· for the browser tests (task test:e2e, task test:editor, task ci): chromium with chromedriver, and python3 (Arch: chromium python)"
           fi
-          command -v cargo-deny >/dev/null && echo "✓ cargo-deny (task audit)" || echo "· optional: cargo-deny for task audit (Arch: cargo-deny)"
-          command -v docker >/dev/null && echo "✓ docker (container image, Docker dev stack)" || echo "· optional: docker + compose for the docker:* tasks (Arch: docker docker-compose docker-buildx)"
+          command -v cargo-deny >/dev/null && echo "✓ cargo-deny (task audit)" || echo "· for task audit and task ci: cargo-deny (Arch: cargo-deny; or cargo install cargo-deny --locked)"
+          command -v docker >/dev/null && echo "✓ docker (container image, Docker dev stack)" || echo "· for the docker:* tasks, task load and task ci: docker + compose (Arch: docker docker-compose docker-buildx)"
           [ "$ok" = 1 ]
 
   rust:
@@ -190,7 +190,7 @@ tasks:
     desc: Run all Rust tests (every crate in the workspace)
     deps: [rust]
     cmds:
-      - cargo test --workspace
+      - cargo test --locked --workspace
 
   test:core:
     desc: Crypto, key hierarchy, CRDT model, protocol
@@ -217,10 +217,12 @@ tasks:
       - cargo test -p coolpsonotes-web
 
   fuzz:
-    desc: "Fuzz the parsers (stable toolchain, libFuzzer): `task fuzz` (60 s per target) or `task fuzz -- zip 300`"
+    desc: "Fuzz the parsers (stable toolchain, libFuzzer): `task fuzz` (every target, SECS=60 each) or `task fuzz -- zip 300`"
     deps: [rust]
+    vars:
+      SECS: '{{.SECS | default "60"}}'
     cmds:
-      - fuzz/run.sh {{.CLI_ARGS}}
+      - fuzz/run.sh {{if .CLI_ARGS}}{{.CLI_ARGS}}{{else}}"" {{.SECS}}{{end}}
 
   test:editor:
     desc: "The editor: its model natively, then its DOM view in headless Chromium (wasm-bindgen-test; needs chromedriver); `task test:editor -- --nocapture` shows timings"
@@ -260,6 +262,8 @@ tasks:
     deps: [rust]
     cmds:
       - cargo clippy --locked -p coolpsonotes-core -p coolpsonotes-server -p coolpsonotes-sync -p coolpsonotes-client -p coolpsonotes-editor -p coolpsonotes-load-events -p coolpsonotes-load -p coolpsonotes-load-ui --all-targets -- -D warnings
+      # The web client's tests run natively.
+      - cargo clippy --locked -p coolpsonotes-web --tests -- -D warnings -A clippy::type_complexity
       - CARGO_TARGET_DIR={{.WEB_TARGET_DIR}} cargo clippy --locked -p coolpsonotes-web --target wasm32-unknown-unknown -- -D warnings -A clippy::type_complexity
       - CARGO_TARGET_DIR={{.WEB_TARGET_DIR}} cargo clippy --locked -p coolpsonotes-editor --target wasm32-unknown-unknown --all-targets -- -D warnings
       - CARGO_TARGET_DIR={{.WEB_TARGET_DIR}} cargo clippy --locked -p coolpsonotes-load-ui --target wasm32-unknown-unknown -- -D warnings
@@ -279,7 +283,7 @@ tasks:
       - cargo deny check
 
   ci:
-    desc: Everything CI runs (format check, lint, tests, wasm build, browser tests)
+    desc: "Exactly what CI runs (it installs the tooling, then this): format check, lint, every test, the wasm build, the editor's and the browser tests, the supply-chain check and the container image"
     cmds:
       - task: fmt:check
       - task: lint
@@ -287,6 +291,8 @@ tasks:
       - task: check:wasm
       - task: test:editor
       - task: test:e2e
+      - task: audit
+      - task: docker:build
 
   # ------------------------------------------------------------------ website
 

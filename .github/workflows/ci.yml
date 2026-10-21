@@ -3,58 +3,37 @@ on:
   push:
   pull_request:
 
+# CI is a fresh developer machine: it installs the tooling, then runs the
+# same task a developer runs (`task ci`, see Taskfile.yml). Nothing is done
+# here that can't be done locally.
 jobs:
-  test:
+  ci:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Rust, with the wasm32 target, clippy and rustfmt
+        uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
-      - name: Formatting
-        run: cargo fmt --all -- --check
-      - name: Lint
-        run: cargo clippy --locked -p coolpsonotes-core -p coolpsonotes-server -p coolpsonotes-client -p coolpsonotes-editor --all-targets -- -D warnings
-      - name: Lint the browser client
-        run: |
-          cargo clippy --locked -p coolpsonotes-web --target wasm32-unknown-unknown -- -D warnings -A clippy::type_complexity
-          cargo clippy --locked -p coolpsonotes-editor --target wasm32-unknown-unknown --all-targets -- -D warnings
-      - name: Unit and integration tests
-        run: cargo test --locked -p coolpsonotes-core -p coolpsonotes-server -p coolpsonotes-client -p coolpsonotes-editor -p coolpsonotes-web
-      - name: Core builds for the browser
-        run: cargo build --locked -p coolpsonotes-core --target wasm32-unknown-unknown
-      - name: Install wasm-bindgen
+      - name: go-task
+        uses: arduino/setup-task@v2
+        with:
+          version: 3.x
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: The wasm-bindgen CLI the crates pin, and cargo-deny
         run: |
           v=$(sed -nE 's/^wasm-bindgen = "=([0-9.]+)".*/\1/p' crates/web/Cargo.toml)
           cargo install wasm-bindgen-cli --version "$v" --locked
-      - name: Build browser client
-        run: ./scripts/build-web.sh
-      - name: Browser end-to-end tests
+          cargo install cargo-deny --locked
+      - name: Chromium and chromedriver
         run: |
           sudo apt-get update && sudo apt-get install -y chromium-driver || true
-          CPN_CHROME=$(command -v chromium || command -v chromium-browser || command -v google-chrome) \
-            tests/e2e/run.sh
-      - name: Editor browser tests (wasm-bindgen-test)
-        run: |
-          CHROMEDRIVER=$(command -v chromedriver) CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=wasm-bindgen-test-runner \
-            cargo test --locked -p coolpsonotes-editor --target wasm32-unknown-unknown --test browser
-
-  supply-chain:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: EmbarkStudios/cargo-deny-action@v2
-
-  image:
-    runs-on: ubuntu-latest
-    needs: test
-    steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/build-push-action@v6
-        with:
-          context: .
-          push: false
-          tags: coolpsonotes:ci
+          # The runner image ships Chrome and a matching chromedriver too.
+          [ -n "${CHROMEWEBDRIVER:-}" ] && echo "$CHROMEWEBDRIVER" >> "$GITHUB_PATH"
+          echo "CPN_CHROME=$(command -v chromium || command -v chromium-browser || command -v google-chrome)" >> "$GITHUB_ENV"
+      - name: The toolchain
+        run: task setup
+      - name: task ci
+        run: task ci

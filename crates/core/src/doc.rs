@@ -21,8 +21,8 @@ use yrs::{
     Transact, Update,
 };
 
-use crate::paths;
 use crate::textdiff::{self, Edit};
+use crate::{order, paths};
 
 /// Transaction origin used for edits made by the local user.
 pub const LOCAL_ORIGIN: &str = "local";
@@ -366,6 +366,10 @@ pub struct Entry {
     /// A note's or folder's icon, usually an emoji ([`clean_icon`]).
     #[serde(default)]
     pub icon: Option<String>,
+    /// Its place among its siblings when put there by hand
+    /// ([`order`](crate::order)).
+    #[serde(default)]
+    pub order: Option<String>,
 }
 
 /// Longest icon (of a vault, note or folder), in characters: one emoji can
@@ -468,6 +472,7 @@ impl IndexDoc {
             mime: any_str(m.get(txn, "mime")),
             // Anyone who can write sets it: only a valid one is shown.
             icon: any_str(m.get(txn, "icon")).and_then(|i| clean_icon(&i).ok().flatten()),
+            order: any_str(m.get(txn, "order")).filter(|k| order::valid_key(k)),
         })
     }
 
@@ -577,16 +582,23 @@ impl IndexDoc {
         })
     }
 
+    /// Rename or move an entry. An order key only means something among
+    /// siblings, so one moved to another folder loses it.
     pub fn rename(&self, id: &str, new_path: &str, now: i64) -> Option<Vec<u8>> {
         self.mutate(|txn| {
             if let Some(m) = self.entry_map(txn, id) {
+                let old = any_str(m.get(txn, "path")).unwrap_or_default();
+                if paths::parent(&old) != paths::parent(new_path) {
+                    m.remove(txn, "order");
+                }
                 m.try_update(txn, "path", new_path);
                 m.try_update(txn, "modified", now as f64);
             }
         })
     }
 
-    /// Rename a folder: moves every entry beneath it (and the folder entry itself).
+    /// Rename a folder: moves every entry beneath it (and the folder entry
+    /// itself, which loses its order key if it moves to another folder).
     pub fn rename_folder(&self, old_folder: &str, new_folder: &str, now: i64) -> Option<Vec<u8>> {
         let moves: Vec<(String, String)> = self
             .entries()
@@ -601,8 +613,12 @@ impl IndexDoc {
             return None;
         }
         self.mutate(|txn| {
+            let moved_away = paths::parent(old_folder) != paths::parent(new_folder);
             for (id, p) in &moves {
                 if let Some(m) = self.entry_map(txn, id) {
+                    if moved_away && p == new_folder {
+                        m.remove(txn, "order");
+                    }
                     m.try_update(txn, "path", p.as_str());
                     m.try_update(txn, "modified", now as f64);
                 }
@@ -659,6 +675,30 @@ impl IndexDoc {
                     }
                     None => {
                         m.remove(txn, "icon");
+                    }
+                }
+            }
+        })
+    }
+
+    /// Set or remove (`None`) the order keys of entries ([`order`]); invalid
+    /// keys are skipped. Not a change of their content: `modified` stays.
+    pub fn set_order<'a>(
+        &self,
+        keys: impl IntoIterator<Item = (&'a str, Option<&'a str>)>,
+    ) -> Option<Vec<u8>> {
+        self.mutate(|txn| {
+            for (id, key) in keys {
+                let Some(m) = self.entry_map(txn, id) else {
+                    continue;
+                };
+                match key {
+                    Some(k) if order::valid_key(k) => {
+                        m.try_update(txn, "order", k);
+                    }
+                    Some(_) => {}
+                    None => {
+                        m.remove(txn, "order");
                     }
                 }
             }
@@ -841,6 +881,42 @@ mod tests {
         assert_eq!(clean_icon(" 📁\n").unwrap().as_deref(), Some("📁"));
         assert_eq!(clean_icon("  ").unwrap(), None);
         assert!(clean_icon(&"x".repeat(MAX_ICON_CHARS + 1)).is_err());
+    }
+
+    #[test]
+    fn entry_order() {
+        let a = IndexDoc::new();
+        a.create("f", "Trips", EntryKind::Folder, 1);
+        a.create("n", "Trips/Rome.md", EntryKind::Note, 1);
+        a.create("m", "Trips/Oslo.md", EntryKind::Note, 1);
+        let b = IndexDoc::from_updates([a.encode_state().as_slice()]).unwrap();
+        let u = a
+            .set_order([("n", Some("V")), ("m", Some("k")), ("f", Some("G"))])
+            .unwrap();
+        b.apply_update(&u).unwrap();
+        let e = b.get("n").unwrap();
+        assert_eq!((e.order.as_deref(), e.modified), (Some("V"), 1));
+        // A rename within the folder keeps it, a move elsewhere drops it.
+        b.rename("n", "Trips/Roma.md", 2);
+        assert_eq!(b.get("n").unwrap().order.as_deref(), Some("V"));
+        b.rename("n", "Roma.md", 3);
+        assert_eq!(b.get("n").unwrap().order, None);
+        // Moving a folder: its own key goes, those of its contents stay.
+        b.rename_folder("Trips", "Archive/Trips", 4);
+        assert_eq!(b.get("f").unwrap().order, None);
+        assert_eq!(b.get("m").unwrap().order.as_deref(), Some("k"));
+        // Removing it; invalid keys are neither written nor shown.
+        b.set_order([("m", None), ("f", Some("a0"))]);
+        assert_eq!(
+            (b.get("m").unwrap().order, b.get("f").unwrap().order),
+            (None, None)
+        );
+        {
+            let mut txn = a.doc.transact_mut();
+            let m = a.entry_map(&txn, "m").unwrap();
+            m.insert(&mut txn, "order", "not a key");
+        }
+        assert_eq!(a.get("m").unwrap().order, None);
     }
 
     #[test]

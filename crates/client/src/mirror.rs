@@ -2534,6 +2534,7 @@ mod tests {
             mime: None,
             trashed: None,
             icon: None,
+            order: None,
         };
         (id.to_string(), (path.to_string(), e))
     }
@@ -2695,6 +2696,7 @@ mod path_properties {
             size: None,
             mime: None,
             icon: None,
+            order: None,
         };
         (id.to_string(), (path.to_string(), e))
     }

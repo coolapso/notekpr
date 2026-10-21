@@ -12,7 +12,7 @@ use coolpsonotes_core::engine::{
 use coolpsonotes_core::memberlog::{LogBody, LogEntry};
 use coolpsonotes_core::protocol::*;
 use coolpsonotes_core::textdiff::Edit;
-use coolpsonotes_core::{markdown, paths};
+use coolpsonotes_core::{markdown, order, paths};
 use leptos::prelude::Update;
 use leptos::prelude::*;
 use wasm_bindgen::JsCast;
@@ -1050,17 +1050,10 @@ pub fn set_entry_icon(vault: &str, id: Option<&str>, path: &str, icon: &str) -> 
         }
     };
     let (changed, shared) = step(|c| {
-        let id = match id {
-            Some(id) => id.to_string(),
-            None if icon.is_none() => return (false, None),
-            None => {
-                let id = state::new_id();
-                change_index(c, vault, |ix| {
-                    ix.create(&id, path, EntryKind::Folder, now())
-                });
-                id
-            }
-        };
+        if id.is_none() && icon.is_none() {
+            return (false, None);
+        }
+        let id = folder_entry(c, vault, path, id);
         let changed = change_index(c, vault, |ix| ix.set_icon(&id, icon.as_deref()));
         (changed, state::is_shared_note(c, vault, &id).then_some(id))
     });
@@ -1072,6 +1065,19 @@ pub fn set_entry_icon(vault: &str, id: Option<&str>, path: &str, icon: &str) -> 
         state::ui().tree_rev.update(|v| *v += 1);
     }
     changed
+}
+
+/// The id of the entry at `path`, else (a folder that only exists as the
+/// parent of others) of a new folder entry for it.
+fn folder_entry(c: &mut Core, vault: &str, path: &str, id: Option<&str>) -> String {
+    if let Some(id) = id {
+        return id.to_string();
+    }
+    let id = state::new_id();
+    change_index(c, vault, |ix| {
+        ix.create(&id, path, EntryKind::Folder, now())
+    });
+    id
 }
 
 pub fn create_folder(vault: &str, path: &str) {
@@ -1188,25 +1194,123 @@ fn refresh_open_editor(vault: &str) {
 
 pub fn move_entry(vault: &str, id: &str, folder: &str) -> Result<(), String> {
     let e = state::step(|c| c.entry(vault, id)).ok_or("not found")?;
-    let name = paths::file_name(&e.path).to_string();
-    let target = paths::join(folder, &name);
-    if e.kind == EntryKind::Folder && (folder == e.path || paths::is_within(folder, &e.path)) {
-        return Err("A folder can't be moved into itself.".into());
-    }
-    let moved = step(|c| {
-        let target = unique_path(c, vault, &target);
-        change_index(c, vault, |ix| {
-            if e.kind == EntryKind::Folder {
-                ix.rename_folder(&e.path, &target, now())
-            } else {
-                ix.rename(id, &target, now())
-            }
-        })
-    });
-    if moved {
+    let me = order::Child {
+        path: e.path.clone(),
+        entry: Some(e),
+    };
+    if step(|c| move_into(c, vault, &me, folder))?.is_some() {
         state::ui().tree_rev.update(|v| *v += 1);
     }
     Ok(())
+}
+
+/// Move `me` into `folder`; its new path, `None` if it is already there.
+fn move_into(
+    c: &mut Core,
+    vault: &str,
+    me: &order::Child,
+    folder: &str,
+) -> Result<Option<String>, String> {
+    if paths::parent(&me.path) == folder {
+        return Ok(None);
+    }
+    if me.is_folder() && (folder == me.path || paths::is_within(folder, &me.path)) {
+        return Err("A folder can't be moved into itself.".into());
+    }
+    let target = unique_path(c, vault, &paths::join(folder, paths::file_name(&me.path)));
+    change_index(c, vault, |ix| match &me.entry {
+        Some(e) if e.kind != EntryKind::Folder => ix.rename(&e.id, &target, now()),
+        _ => ix.rename_folder(&me.path, &target, now()),
+    });
+    Ok(Some(target))
+}
+
+/// Where an entry dragged in the file tree lands.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Spot {
+    /// Into a folder ("" = the top of the vault), after what is there.
+    Into(String),
+    /// Just before or after the entry at this path, in its folder; folders
+    /// stay above notes, so only next to one of the same kind.
+    Before(String),
+    After(String),
+}
+
+/// Move the entry at `path` (folders without an entry too) to `spot`. Its
+/// place among its new siblings is kept in order keys ([`order`]).
+pub fn place_entry(vault: &str, path: &str, spot: &Spot) -> Result<(), String> {
+    let (folder, anchor) = match spot {
+        Spot::Into(f) => (f.as_str(), None),
+        Spot::Before(p) => (paths::parent(p), Some((p.as_str(), 0))),
+        Spot::After(p) => (paths::parent(p), Some((p.as_str(), 1))),
+    };
+    let tree = step(|c| order::tree(&c.live_entries(vault)));
+    let me = tree
+        .get(paths::parent(path))
+        .and_then(|l| l.iter().find(|c| c.path == path))
+        .ok_or("not found")?;
+    // Its kind in that folder, in order, with and without it.
+    let kind: Vec<&order::Child> = tree
+        .get(folder)
+        .into_iter()
+        .flatten()
+        .filter(|c| c.is_folder() == me.is_folder())
+        .collect();
+    let others: Vec<&order::Child> = kind.iter().copied().filter(|c| c.path != path).collect();
+    let at = match anchor {
+        Some((p, after)) => others.iter().position(|c| c.path == p).ok_or("not found")? + after,
+        None => others.len(),
+    };
+    if kind.iter().position(|c| c.path == path) == Some(at) {
+        return Ok(());
+    }
+    step(|c| -> Result<(), String> {
+        let moved = move_into(c, vault, me, folder)?;
+        if anchor.is_none() {
+            return Ok(());
+        }
+        let keys: Vec<Option<&str>> = others.iter().map(|c| c.order()).collect();
+        let place = order::place(&keys, at);
+        let new_path = moved.as_deref().unwrap_or(path);
+        let my_id = me.entry.as_ref().map(|e| e.id.as_str());
+        let mut writes = vec![(folder_entry(c, vault, new_path, my_id), place.key)];
+        for (i, key) in place.others {
+            let o = others[i];
+            let id = folder_entry(c, vault, &o.path, o.entry.as_ref().map(|e| e.id.as_str()));
+            writes.push((id, key));
+        }
+        change_index(c, vault, |ix| {
+            ix.set_order(writes.iter().map(|(id, k)| (id.as_str(), Some(k.as_str()))))
+        });
+        Ok(())
+    })?;
+    state::ui().tree_rev.update(|v| *v += 1);
+    Ok(())
+}
+
+/// Whether the entries directly in `folder` were put in order by hand.
+pub fn has_custom_order(vault: &str, folder: &str) -> bool {
+    step(|c| c.live_entries(vault))
+        .iter()
+        .any(|e| e.order.is_some() && paths::parent(&e.path) == folder)
+}
+
+/// Put the entries directly in `folder` back in A–Z order.
+pub fn sort_folder(vault: &str, folder: &str) {
+    let changed = step(|c| {
+        let ids: Vec<String> = c
+            .live_entries(vault)
+            .into_iter()
+            .filter(|e| e.order.is_some() && paths::parent(&e.path) == folder)
+            .map(|e| e.id)
+            .collect();
+        change_index(c, vault, |ix| {
+            ix.set_order(ids.iter().map(|id| (id.as_str(), None)))
+        })
+    });
+    if changed {
+        state::ui().tree_rev.update(|v| *v += 1);
+    }
 }
 
 /// Move a folder that only exists implicitly (no folder entry).

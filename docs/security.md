@@ -15,7 +15,7 @@
 
 | Asset | Protected by | Server can see |
 |---|---|---|
-| Note text, titles, file and folder names and icons, tags, links | XChaCha20-Poly1305 with per-vault keys, client-side | no |
+| Note text, titles, file and folder names, icons and order, tags, links | XChaCha20-Poly1305 with per-vault keys, client-side | no |
 | Attachments (bytes, names, types) | same | size, uploader and upload time |
 | Vault names, descriptions, icons and pictures | same (`encrypted_meta`) | no; the size of `encrypted_meta` roughly shows whether a vault has a picture |
 | Revision history | encrypted snapshots | count, size, time, author |

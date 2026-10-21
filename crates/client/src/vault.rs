@@ -17,7 +17,7 @@ use coolpsonotes_core::protocol::{
     Update,
 };
 use coolpsonotes_core::textdiff::{self, Edit};
-use coolpsonotes_core::{markdown, now_ms, paths, random_id, search};
+use coolpsonotes_core::{markdown, now_ms, order, paths, random_id, search};
 use coolpsonotes_sync::members::MemberLog;
 use coolpsonotes_sync::{Limits, Outbox, Plan, Reaction};
 
@@ -719,7 +719,9 @@ impl Vault {
             .collect()
     }
 
-    /// Entries directly inside `folder` ("" = root), or everything below it.
+    /// Entries directly inside `folder` ("" = root), or everything below it,
+    /// in the order the sidebar shows them (each folder followed by what is
+    /// in it).
     pub fn list(&self, folder: &str, recursive: bool) -> Result<Vec<Listing>> {
         let folder = if folder.trim_matches('/').is_empty() {
             String::new()
@@ -729,59 +731,131 @@ impl Vault {
         if !folder.is_empty() && !self.is_folder(&folder) {
             bail!("no folder '{folder}' in vault '{}'", self.name());
         }
-        let mut folders: BTreeSet<String> = BTreeSet::new();
-        let mut files = Vec::new();
-        for f in self.replica.index.folders() {
-            if paths::is_within(&f, &folder) && f != folder {
-                let rel = if folder.is_empty() {
-                    f.as_str()
-                } else {
-                    &f[folder.len() + 1..]
+        fn walk(
+            tree: &BTreeMap<String, Vec<order::Child>>,
+            folder: &str,
+            recursive: bool,
+            out: &mut Vec<Listing>,
+        ) {
+            for c in tree.get(folder).into_iter().flatten() {
+                let kind = match c.entry.as_ref().map(|e| e.kind) {
+                    Some(EntryKind::Note) => ListKind::Note,
+                    Some(EntryKind::Attachment) => ListKind::Attachment,
+                    _ => ListKind::Folder,
                 };
-                if recursive || !rel.contains('/') {
-                    folders.insert(f.clone());
-                }
-            }
-        }
-        for (p, e) in self.paths() {
-            if e.kind == EntryKind::Folder || !paths::is_within(&p, &folder) {
-                continue;
-            }
-            let rel = if folder.is_empty() {
-                p.as_str()
-            } else {
-                &p[folder.len() + 1..]
-            };
-            if recursive || !rel.contains('/') {
-                let kind = if e.kind == EntryKind::Note {
-                    ListKind::Note
-                } else {
-                    ListKind::Attachment
-                };
-                files.push(Listing {
-                    path: p.clone(),
+                out.push(Listing {
+                    path: c.path.clone(),
                     kind,
-                    entry: Some(e),
+                    entry: c.entry.clone(),
                 });
+                if recursive && kind == ListKind::Folder {
+                    walk(tree, &c.path, recursive, out);
+                }
             }
         }
-        let mut out: Vec<Listing> = folders
+        let mut out = Vec::new();
+        walk(&self.tree(), &folder, recursive, &mut out);
+        Ok(out)
+    }
+
+    /// Every folder's entries in order ([`order::tree`]), by display path.
+    fn tree(&self) -> BTreeMap<String, Vec<order::Child>> {
+        let entries: Vec<Entry> = self
+            .paths()
             .into_iter()
-            .map(|f| {
-                let entry = self
-                    .paths()
-                    .get(&f)
-                    .filter(|e| e.kind == EntryKind::Folder)
-                    .cloned();
-                Listing {
-                    path: f,
-                    kind: ListKind::Folder,
-                    entry,
-                }
+            .map(|(p, mut e)| {
+                e.path = p;
+                e
             })
             .collect();
-        out.extend(files);
-        Ok(out)
+        order::tree(&entries)
+    }
+
+    /// The display path of the document or folder `reference`.
+    fn tree_path(&self, reference: &str) -> Result<String> {
+        match self.find(reference) {
+            Some((p, _)) => Ok(p),
+            None if self.is_folder(reference) => Ok(paths::normalize(reference)?),
+            None => bail!("no document or folder '{reference}'"),
+        }
+    }
+
+    /// Put the document or folder `path` just before (or `after`) `other`,
+    /// in the sidebar's order of their folder. Folders stay above notes and
+    /// attachments, so both must be of the same kind. Returns its id.
+    pub fn place(&mut self, path: &str, other: &str, after: bool) -> Result<String> {
+        self.require_writable()?;
+        let (path, other) = (self.tree_path(path)?, self.tree_path(other)?);
+        if path == other {
+            bail!("'{path}' can't go next to itself");
+        }
+        let folder = paths::parent(&path);
+        if paths::parent(&other) != folder {
+            bail!("'{path}' and '{other}' are in different folders: move it with `mv` first");
+        }
+        let tree = self.tree();
+        let here = tree.get(folder).map(Vec::as_slice).unwrap_or_default();
+        let me = here
+            .iter()
+            .find(|c| c.path == path)
+            .ok_or_else(|| anyhow!("no document or folder '{path}'"))?;
+        let others: Vec<&order::Child> = here
+            .iter()
+            .filter(|c| c.is_folder() == me.is_folder() && c.path != path)
+            .collect();
+        let Some(i) = others.iter().position(|c| c.path == other) else {
+            bail!(
+                "folders stay above notes: put a folder next to a folder, a note next to a note or attachment"
+            );
+        };
+        let keys: Vec<Option<&str>> = others.iter().map(|c| c.order()).collect();
+        let place = order::place(&keys, i + usize::from(after));
+        let id = self.child_id(me)?;
+        let mut writes = vec![(id.clone(), place.key)];
+        for (i, key) in place.others {
+            writes.push((self.child_id(others[i])?, key));
+        }
+        let u = self
+            .replica
+            .index
+            .set_order(writes.iter().map(|(id, k)| (id.as_str(), Some(k.as_str()))));
+        self.record_index(u)?;
+        Ok(id)
+    }
+
+    /// An entry's id; a folder that only exists as the parent of others gets
+    /// an entry for it.
+    fn child_id(&mut self, c: &order::Child) -> Result<String> {
+        match &c.entry {
+            Some(e) => Ok(e.id.clone()),
+            None => self.create_folder(&c.path),
+        }
+    }
+
+    /// Put the entries directly in `folder` ("" = the top) back in A–Z
+    /// order. Returns how many had been put in place by hand.
+    pub fn sort_folder(&mut self, folder: &str) -> Result<usize> {
+        self.require_writable()?;
+        let folder = if folder.trim_matches('/').is_empty() {
+            String::new()
+        } else {
+            paths::normalize(folder)?
+        };
+        if !folder.is_empty() && !self.is_folder(&folder) {
+            bail!("no folder '{folder}' in vault '{}'", self.name());
+        }
+        let ids: Vec<String> = self
+            .paths()
+            .into_iter()
+            .filter(|(p, e)| e.order.is_some() && paths::parent(p) == folder)
+            .map(|(_, e)| e.id)
+            .collect();
+        let u = self
+            .replica
+            .index
+            .set_order(ids.iter().map(|id| (id.as_str(), None)));
+        self.record_index(u)?;
+        Ok(ids.len())
     }
 
     /// `(id, path)` of all live entries, for link resolution.

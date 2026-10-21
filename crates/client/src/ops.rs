@@ -377,6 +377,50 @@ pub async fn set_icon(
     Ok((vault_id, id))
 }
 
+/// Put a document or folder just before (or `after`) another in its
+/// folder's order. Returns the vault's and the entry's id.
+pub async fn place(
+    hub: &Hub,
+    vref: &str,
+    path: &str,
+    other: &str,
+    after: bool,
+) -> OpResult<(String, String)> {
+    let v = vault(hub, vref).await?;
+    let (vault_id, id) = {
+        let mut g = v.lock().await;
+        check_write(hub, &g)?;
+        for p in [path, other] {
+            if g.find(p).is_none() && !g.is_folder(p) {
+                return Err(OpError::NotFound(format!("no document or folder '{p}'")));
+            }
+        }
+        let id = g.place(path, other, after).map_err(bad)?;
+        g.save()?;
+        (g.id().to_string(), id)
+    };
+    hub.local_changed(&vault_id, vec![], true).await;
+    Ok((vault_id, id))
+}
+
+/// Put the contents of `folder` ("" or "/" = the top) back in A–Z order.
+/// Returns how many entries had been put in place by hand.
+pub async fn sort_folder(hub: &Hub, vref: &str, folder: &str) -> OpResult<usize> {
+    let v = vault(hub, vref).await?;
+    let (vault_id, n) = {
+        let mut g = v.lock().await;
+        check_write(hub, &g)?;
+        if !folder.trim_matches('/').is_empty() && !g.is_folder(folder) {
+            return Err(OpError::NotFound(format!("no folder '{folder}'")));
+        }
+        let n = g.sort_folder(folder).map_err(bad)?;
+        g.save()?;
+        (g.id().to_string(), n)
+    };
+    hub.local_changed(&vault_id, vec![], true).await;
+    Ok(n)
+}
+
 /// Move a document (or folder) to the trash. Returns the trashed entry ids.
 pub async fn delete_document(hub: &Hub, vref: &str, path: &str) -> OpResult<(String, Vec<String>)> {
     let v = vault(hub, vref).await?;

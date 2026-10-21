@@ -65,8 +65,9 @@ crates/core     crypto.rs (envelopes, HPKE, signatures) · keys.rs (account/devi
                 recovery/vault/document keys) · engine.rs (VaultReplica: apply,
                 encrypt, defer, snapshot; sharing helpers) · doc.rs (yrs CRDT index
                 + notes) · protocol.rs (every API/WS type) · memberlog.rs (owner-signed
-                membership log) · recover.rs (offline export decryption) · markdown,
-                search, paths, textdiff
+                membership log) · recover.rs (offline export decryption) · order.rs
+                (the file tree's order: folders first, places set by drag and
+                drop, A–Z) · markdown, search, paths, textdiff
 crates/sync     the client sync engine both clients use (sans-IO): outbox (merge, hold,
                 batch pushes, acks and refusals), rollback recovery, edit splitting ·
                 members.rs (membership log checks, whom to trust) · snapshot.rs (when
@@ -225,6 +226,11 @@ Without go-task, see the plain commands in the [Taskfile](Taskfile.yml) or
 - Leptos 0.8: share values between several closures with `StoredValue` or
   `Memo` instead of cloning chains; `impl IntoView` returns sometimes need
   `+ use<>`.
+- Don't use `<For>` for lists whose items change places: tachys 0.2's keyed
+  diff can leave an item in the wrong place when items move and others appear
+  or go in the same update. Render such lists with `collect_view` (as the file
+  tree does). Leptos also delegates events, so `current_target()` isn't the
+  element with the handler: find it with `closest`.
 - `Ctrl+K` inside the editor inserts a link; the quick switcher opens from
   the sidebar search button (relevant for browser tests).
 

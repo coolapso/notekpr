@@ -9,7 +9,7 @@ independent headless Chromium profiles as different users.
 
 Screenshots are written to $CPN_E2E_OUT (default target/e2e).
 """
-import argparse, os, shutil, socket, subprocess, sys, tempfile, time, traceback
+import argparse, json, os, shutil, socket, subprocess, sys, tempfile, time, traceback
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -1279,6 +1279,85 @@ def test_entry_icons(env):
         b.close()
 
 
+def test_tree_order(env):
+    a, b = Browser(), Browser()
+    names = "Array.from(document.querySelectorAll('.tree-row')).map(r => r.textContent.trim()).filter(n => ['Garden', 'Kitchen', 'Alpha', 'Bravo', 'Charlie'].includes(n))"
+    row = "Array.from(document.querySelectorAll('.tree-row')).find(r => r.textContent.trim() === arguments[0])"
+    def wait_order(br, want, what):
+        try:
+            br.wait("return JSON.stringify(" + names + ") === arguments[0]", 15, what, json.dumps(want, separators=(",", ":")))
+        except RuntimeError:
+            raise RuntimeError(f"{what}: {br.js('return ' + names)}, not {want}")
+        check(True, what)
+    # WebDriver can't drive HTML5 drag and drop: fire the events a real drag
+    # fires, `frac` of the way down the target row.
+    def drag_over(br, src, dst, frac):
+        br.js("""const find = n => Array.from(document.querySelectorAll('.tree-row')).find(r => r.textContent.trim() === n);
+            const src = find(arguments[0]), dst = find(arguments[1]), r = dst.getBoundingClientRect();
+            window.__drag = {src, dst, dt: new DataTransfer()};
+            window.__drag.at = {bubbles: true, cancelable: true, dataTransfer: window.__drag.dt, clientX: r.left + r.width / 2, clientY: r.top + r.height * arguments[2]};
+            src.dispatchEvent(new DragEvent('dragstart', {bubbles: true, dataTransfer: window.__drag.dt}));
+            dst.querySelector('.tree-item').dispatchEvent(new DragEvent('dragover', window.__drag.at));""", src, dst, frac)
+    def drop(br):
+        br.js("""const d = window.__drag;
+            d.dst.querySelector('.tree-item').dispatchEvent(new DragEvent('drop', d.at));
+            d.src.dispatchEvent(new DragEvent('dragend', {bubbles: true, dataTransfer: d.dt}));""")
+    def drag(br, src, dst, frac, mark):
+        drag_over(br, src, dst, frac)
+        br.wait("return " + row + ".classList.contains(arguments[1])", 5, "the drop mark", dst, mark)
+        drop(br)
+    try:
+        an, bn = uniq("nadia"), uniq("nils")
+        signup(a, an)
+        signup(b, bn)
+        share(a, ".sb-bottom button:nth-child(2)", bn)
+        for t in ["Bravo", "Alpha", "Charlie"]:
+            new_note(a, t, t.lower())
+        url = a.js("return location.pathname")
+        for f in ["Kitchen", "Garden"]:
+            a.click(".sb-actions button[title='New folder']")
+            a.type(".modal input", f)
+            a.click(".modal button[type=submit]")
+            a.wait("return !!" + row, 10, "the folder", f)
+        wait_order(a, ["Garden", "Kitchen", "Alpha", "Bravo", "Charlie"], "folders first, then notes, each A–Z")
+        check(not a.js("return !!document.querySelector('.sb-sort')"), "nothing to sort back yet")
+
+        # Between two notes: a line shows where it goes.
+        drag_over(a, "Charlie", "Alpha", 0.2)
+        a.wait("return " + row + ".classList.contains('drop-before')", 5, "the line", "Alpha")
+        check(a.js("return getComputedStyle(" + row + ", '::before').height", "Alpha") == "2px", "a line above the row shows where it will go")
+        drop(a)
+        wait_order(a, ["Garden", "Kitchen", "Charlie", "Alpha", "Bravo"], "dropped above Alpha, it stays there")
+        drag(a, "Alpha", "Bravo", 0.8, "drop-after")
+        wait_order(a, ["Garden", "Kitchen", "Charlie", "Bravo", "Alpha"], "and below Bravo")
+        drag(a, "Kitchen", "Garden", 0.1, "drop-before")
+        wait_order(a, ["Kitchen", "Garden", "Charlie", "Bravo", "Alpha"], "folders are put in order among folders")
+        # Folders stay above notes: over a note, a folder goes into the note's folder.
+        drag_over(a, "Garden", "Charlie", 0.5)
+        a.wait("return document.querySelector('.tree').classList.contains('drop') && !document.querySelector('.drop-before, .drop-after')", 5, "the top level marked")
+        drop(a)
+        check(a.js("return JSON.stringify(" + names + ")") == json.dumps(["Kitchen", "Garden", "Charlie", "Bravo", "Alpha"], separators=(",", ":")),
+              "a folder can't go between notes")
+
+        # Members see the same order.
+        b.go(env.url.rstrip("/") + url)
+        wait_order(b, ["Kitchen", "Garden", "Charlie", "Bravo", "Alpha"], "members see the same order")
+
+        # Onto a folder: into it.
+        drag(a, "Bravo", "Garden", 0.5, "drop")
+        a.wait("return " + row + ".getAttribute('aria-level') === '2'", 10, "Bravo inside Garden", "Bravo")
+        check(True, "dropped on a folder, a note goes into it")
+
+        # Back to A–Z.
+        a.click(".sb-sort")
+        wait_order(a, ["Garden", "Bravo", "Kitchen", "Alpha", "Charlie"], "Sort A–Z puts the top level back in order")
+        wait_order(b, ["Garden", "Kitchen", "Alpha", "Charlie"], "for members too")
+        check(not severe_logs(a, b), "no browser errors")
+    finally:
+        a.close()
+        b.close()
+
+
 def test_graph(env):
     b = Browser()
     canvas = ".graph-page canvas"
@@ -1357,7 +1436,7 @@ def test_recovered_copy(env):
         b.close()
 
 
-TESTS = [test_onboarding, test_collab, test_devices_and_recovery, test_features, test_attachments, test_note_sharing, test_tables, test_editor_safety, test_local_copy, test_ui_basics, test_offline_tabs, test_offline_start, test_mobile, test_quick_notes, test_vault_icons, test_entry_icons, test_graph, test_recovered_copy]
+TESTS = [test_onboarding, test_collab, test_devices_and_recovery, test_features, test_attachments, test_note_sharing, test_tables, test_editor_safety, test_local_copy, test_ui_basics, test_offline_tabs, test_offline_start, test_mobile, test_quick_notes, test_vault_icons, test_entry_icons, test_tree_order, test_graph, test_recovered_copy]
 
 
 def main():

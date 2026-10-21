@@ -154,6 +154,7 @@ HOME = [
 
         - [ ] Star a note (☆ at the top): it shows under *Favorites* in the sidebar
         - [ ] Rename a note, or drag it to another folder in the sidebar: links to it follow
+        - [ ] Drag a note between two others in the sidebar: a line shows where it goes, and it stays there for everyone (this note and the *Recipes* overview were put first that way, from the command line); *Sort A–Z* in a folder's ⋯ menu undoes it
         - [ ] Drop or paste a picture into a note
         - [ ] Give a note or folder an icon: *Set icon…* in its ⋯ menu in the sidebar
         - [ ] *Quick notes* in the sidebar: promote one to a regular note
@@ -1055,6 +1056,10 @@ def seed(cli, url, data):
         cli.icon(a, "Home", folder, icon)
     # A rename that rewrites the links pointing at it.
     cli.run(a, "-q", "mv", "--update-links", "Home", "Ideas/Rust.md", "Ideas/Learning Rust.md")
+    # An order of her own: this note on top, the recipes' overview and plan first.
+    cli.run(a, "-q", "order", "Home", "Start here", "--before", "Random thoughts")
+    cli.run(a, "-q", "order", "Home", "Recipes/Recipes", "--before", "Recipes/Apple pie")
+    cli.run(a, "-q", "order", "Home", "Recipes/Weekly meal plan", "--after", "Recipes/Recipes")
 
     step("alice: the garden plan's history (eleven edits)")
     for text in GARDEN_PLAN_VERSIONS:

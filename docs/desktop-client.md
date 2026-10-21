@@ -164,11 +164,12 @@ vault-relative, `.md` is optional for notes.
 | `vault members <v>` | members, roles, key fingerprints and pin status |
 | `vault share <v> <user> --role editor\|viewer` | owner only; for an existing member it changes their role; see [§8](#8-sharing-members-and-keys) |
 | `vault unshare <v> <user>` / `vault rotate <v>` / `vault leave <v>` | unshare and rotate: owner only; removal always rotates the key; the owner can't leave (delete instead) |
-| `ls <v> [folder] [-r]` | folders, notes and attachments |
+| `ls <v> [folder] [-r]` | folders, notes and attachments, in the sidebar's order (`-r`: each folder followed by what's in it) |
 | `cat <v> <path>` | note text (or attachment bytes) |
 | `write <v> <path>` | create or update a note from stdin — diff-merged, never a blind overwrite; `--append`, `--attachment`, `--if-match <hash>` (ignored with the other two) |
 | `quick [text…]` / `quick --list` | capture a quick note (text or stdin) / list the newest; see [Quick notes](#quick-notes) |
 | `mkdir <v> <path>`, `mv <v> <from> <to> [--update-links]`, `rm <v> <path>` | `rm` moves to the trash; `mv` into `dir/` keeps the name; `--update-links` rewrites `[[links]]` |
+| `order <v> <path> --before\|--after <other>` / `order <v> <folder> --reset` | put a note, attachment or folder just before or after another of the same folder (the order the sidebar and `ls` show; folders stay above notes; a folder only made by its notes gets an entry), or a folder's contents (`/` = the top level) back to A–Z; moving something to another folder drops its place |
 | `icon <v> <path> <emoji>` / `icon <v> <path> --remove` | a note's, attachment's or folder's icon; `ls` and `vault list` show icons, and people a note is shared with see its icon and new name |
 | `trash list\|restore\|empty <v>` | restore by path or id; `empty` deletes permanently (asks first; `--yes`) |
 | `search <query> [--vault v] [--limit n]` | terms, `"phrases"`, `tag:x`, `folder:x`, `title:x`, `vault:x`; 20 results unless `--limit` |

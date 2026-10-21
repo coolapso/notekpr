@@ -606,6 +606,29 @@ async fn execute(ctx: Ctx, command: Command) -> Result<()> {
             }
             Ok(())
         }
+        Command::Order {
+            vault,
+            path,
+            before,
+            after,
+            reset,
+        } => {
+            let hub = ctx.hub(&[&vault]).await?;
+            if reset {
+                let n = op(ops::sort_folder(&hub, &vault, &path).await)?;
+                crate::out!("{path}: A–Z ({n} item(s) had a place set by hand)");
+                return Ok(());
+            }
+            let (other, after) = match (before, after) {
+                (Some(o), _) => (o, false),
+                (None, Some(o)) => (o, true),
+                (None, None) => bail!("say where: --before OTHER or --after OTHER"),
+            };
+            op(ops::place(&hub, &vault, &path, &other, after).await)?;
+            let side = if after { "after" } else { "before" };
+            crate::out!("{path} is now {side} {other}");
+            Ok(())
+        }
         Command::Rm { vault, path } => {
             let hub = ctx.hub(&[&vault]).await?;
             let (_, ids) = op(ops::delete_document(&hub, &vault, &path).await)?;

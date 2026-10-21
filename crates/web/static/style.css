@@ -217,6 +217,10 @@ textarea.input { resize: vertical; }
 .tree-row.active .tree-item { color: var(--accent); }
 .tree-row.holds-open .tree-item, .tree-row.holds-open .tree-item .ic { color: var(--accent); }
 .tree-row.drop { outline: 2px solid var(--accent); }
+/* Where a dragged entry goes between two others. */
+.tree-row.drop-before::before, .tree-row.drop-after::after { content: ""; position: absolute; left: var(--indent, 8px); right: 4px; height: 2px; border-radius: 1px; background: var(--accent); pointer-events: none; }
+.tree-row.drop-before::before { top: -1.5px; }
+.tree-row.drop-after::after { bottom: -1.5px; }
 .tree-item { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; padding: 4px 4px; border: none; background: none; cursor: pointer; text-align: left; font-size: 14px; color: var(--fg-2); }
 .tree-item .ic { width: 16px; height: 16px; color: var(--muted); }
 .tree-item .caret { width: 13px; height: 13px; margin-left: -2px; }

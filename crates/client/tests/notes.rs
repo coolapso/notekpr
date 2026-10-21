@@ -288,3 +288,67 @@ async fn icons_and_new_names_reach_the_people_a_note_is_shared_with() {
     manage::set_vault_icon(&alice, &v, None).await.unwrap();
     assert_eq!(v.lock().await.replica.meta.icon, None);
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn notes_and_folders_keep_the_order_they_are_put_in() {
+    let srv = start().await;
+    let alice = login(&srv, "alice").await;
+    manage::create_vault(&alice, "Home").await.unwrap();
+    let ah = hub(&alice).await;
+    for p in ["B.md", "A.md", "C.md", "Garden/Tomatoes.md"] {
+        ops::put_document(&ah, "Home", p, "x\n", None)
+            .await
+            .unwrap();
+    }
+    let v = ah.resolve("Home").await.unwrap();
+    v.lock().await.create_folder("Books").unwrap();
+    let top = |v: coolpsonotes_client::session::SharedVault| async move {
+        let g = v.lock().await;
+        g.list("", false)
+            .unwrap()
+            .into_iter()
+            .map(|l| l.path)
+            .collect::<Vec<_>>()
+    };
+    // Folders first, each kind A–Z, until put in order by hand.
+    assert_eq!(
+        top(v.clone()).await,
+        ["Books", "Garden", "A.md", "B.md", "C.md"]
+    );
+    ops::place(&ah, "Home", "C", "A", false).await.unwrap();
+    // A folder that only exists as the parent of a note gets an entry.
+    ops::place(&ah, "Home", "Garden", "Books", false)
+        .await
+        .unwrap();
+    ops::place(&ah, "Home", "B.md", "C.md", true).await.unwrap();
+    let want = ["Garden", "Books", "C.md", "B.md", "A.md"];
+    assert_eq!(top(v.clone()).await, want);
+    // Folders stay above notes; places are within one folder.
+    assert!(
+        ops::place(&ah, "Home", "A.md", "Books", true)
+            .await
+            .is_err()
+    );
+    assert!(
+        ops::place(&ah, "Home", "A.md", "Garden/Tomatoes.md", false)
+            .await
+            .is_err()
+    );
+
+    // Everyone sees the same order (it is in the vault's index).
+    let fresh = hub(&alice).await;
+    let fv = fresh.resolve("Home").await.unwrap();
+    assert_eq!(top(fv).await, want);
+
+    // Moved to another folder, a note loses its place.
+    ops::move_document(&ah, "Home", "C.md", "Garden/", false)
+        .await
+        .unwrap();
+    let c = v.lock().await.find("Garden/C.md").unwrap().1;
+    assert_eq!(c.order, None);
+
+    // Back to A–Z. Only what was moved has a place set (Garden and B; A
+    // stayed last A–Z after them).
+    assert_eq!(ops::sort_folder(&ah, "Home", "/").await.unwrap(), 2);
+    assert_eq!(top(v.clone()).await, ["Books", "Garden", "A.md", "B.md"]);
+}

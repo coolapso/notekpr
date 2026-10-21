@@ -87,7 +87,9 @@ which is what makes each vault's live stream gapless and ordered.
   key epoch, sequence head, `encrypted_meta` (name, icon, picture; the
   format also has a description no client sets yet).
 * **Vault index object** (`object_id = "index"`): CRDT map
-  `entry id → {path, kind: note|attachment|folder, created, modified, trashed?, size?, mime?, icon?}`.
+  `entry id → {path, kind: note|attachment|folder, created, modified, trashed?, size?, mime?, icon?, order?}`
+  (`order`: a fractional key for a place set by hand, so a move rewrites
+  only the moved entry and merges like any other change).
   Paths, folder structure, file names and the trash all live here, encrypted.
   Renames and moves are map writes, so concurrent offline reorganisations merge.
 * **Note objects**: one per note, CRDT text holding the Markdown source.

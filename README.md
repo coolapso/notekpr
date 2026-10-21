@@ -46,8 +46,10 @@ read anything.
 
 **Organizing and finding**
 
-* Vaults, folders and a note tree with drag and drop; a new note with
-  `Ctrl+Alt+N`. Each vault opens on a home page with its recently edited
+* Vaults, folders and a note tree with drag and drop: drop onto a folder to
+  move something into it, or between two entries to put it there (a line
+  shows where; folders stay above notes, and *Sort A–Z* undoes it). Everyone
+  in the vault sees the same order. A new note with `Ctrl+Alt+N`. Each vault opens on a home page with its recently edited
   notes and tags; its owner can archive it while it isn't needed, or delete
   it.
 * Icons: an emoji for each note and folder, an emoji or a picture for each

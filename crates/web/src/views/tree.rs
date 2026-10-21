@@ -4,10 +4,11 @@ use super::focus_on_mount;
 use std::collections::{BTreeMap, BTreeSet};
 
 use coolpsonotes_core::doc::EntryKind;
-use coolpsonotes_core::paths;
+use coolpsonotes_core::{order, paths};
 use leptos::prelude::*;
+use wasm_bindgen::JsCast;
 
-use crate::actions;
+use crate::actions::{self, Spot};
 use crate::state::{self, Modal, Route, ui};
 use crate::views::icons::Icon;
 
@@ -35,91 +36,99 @@ fn build_rows(vault: &str, expanded: &BTreeSet<String>) -> Vec<Row> {
             .unwrap_or_default();
         (c.live_entries(vault), shared)
     });
-    // Each folder's path, and its entry's id and icon unless it only exists
-    // as the parent of others.
-    let folders: BTreeMap<String, Option<(String, Option<String>)>> = {
-        let mut m: BTreeMap<String, Option<(String, Option<String>)>> = BTreeMap::new();
-        for e in &entries {
-            if e.kind == EntryKind::Folder {
-                m.insert(e.path.clone(), Some((e.id.clone(), e.icon.clone())));
-            }
-            let mut p = paths::parent(&e.path);
-            while !p.is_empty() {
-                m.entry(p.to_string()).or_insert(None);
-                p = paths::parent(p);
-            }
-        }
-        m
-    };
-    let mut children: BTreeMap<String, Vec<Row>> = BTreeMap::new();
-    for (path, entry) in &folders {
-        let parent = paths::parent(path).to_string();
-        children.entry(parent).or_default().push(Row {
-            key: format!("d:{path}"),
-            id: entry.as_ref().map(|(id, _)| id.clone()),
-            icon: entry.as_ref().and_then(|(_, icon)| icon.clone()),
-            kind: EntryKind::Folder,
-            path: path.clone(),
-            name: paths::file_name(path).to_string(),
-            depth: 0,
-            expanded: expanded.contains(path),
-            has_children: false,
-            shared: false,
-        });
-    }
-    for e in &entries {
-        if e.kind == EntryKind::Folder {
-            continue;
-        }
-        let name = if e.kind == EntryKind::Note {
-            e.title().to_string()
-        } else {
-            paths::file_name(&e.path).to_string()
-        };
-        children
-            .entry(paths::parent(&e.path).to_string())
-            .or_default()
-            .push(Row {
-                key: format!("f:{}", e.id),
-                id: Some(e.id.clone()),
-                kind: e.kind,
-                path: e.path.clone(),
-                name,
-                depth: 0,
-                expanded: false,
-                has_children: false,
-                shared: shared.contains(&e.id),
-                icon: e.icon.clone(),
-            });
-    }
-    for list in children.values_mut() {
-        list.sort_by(|a, b| {
-            let fa = a.kind != EntryKind::Folder;
-            let fb = b.kind != EntryKind::Folder;
-            fa.cmp(&fb)
-                .then(a.name.to_lowercase().cmp(&b.name.to_lowercase()))
-        });
-    }
+    let children = order::tree(&entries);
     let mut out = Vec::new();
-    fn walk(parent: &str, depth: usize, children: &BTreeMap<String, Vec<Row>>, out: &mut Vec<Row>) {
-        let Some(list) = children.get(parent) else {
-            return;
-        };
-        for r in list {
-            let mut r = r.clone();
-            r.depth = depth;
-            r.has_children =
-                r.kind == EntryKind::Folder && children.get(&r.path).is_some_and(|c| !c.is_empty());
-            let recurse = r.kind == EntryKind::Folder && r.expanded;
-            let p = r.path.clone();
-            out.push(r);
-            if recurse {
-                walk(&p, depth + 1, children, out);
+    let walk = Walk {
+        children: &children,
+        expanded,
+        shared: &shared,
+    };
+    walk.rows("", 0, &mut out);
+    out
+}
+
+/// The rows of the open part of the tree, each folder's children in order.
+struct Walk<'a> {
+    children: &'a BTreeMap<String, Vec<order::Child>>,
+    expanded: &'a BTreeSet<String>,
+    shared: &'a BTreeSet<String>,
+}
+
+impl Walk<'_> {
+    fn rows(&self, parent: &str, depth: usize, out: &mut Vec<Row>) {
+        for c in self.children.get(parent).into_iter().flatten() {
+            let folder = c.is_folder();
+            let e = c.entry.as_ref();
+            let expanded = folder && self.expanded.contains(&c.path);
+            out.push(Row {
+                key: match e {
+                    Some(e) if !folder => format!("f:{}", e.id),
+                    _ => format!("d:{}", c.path),
+                },
+                id: e.map(|e| e.id.clone()),
+                kind: e.map_or(EntryKind::Folder, |e| e.kind),
+                path: c.path.clone(),
+                name: c.name().to_string(),
+                depth,
+                expanded,
+                has_children: folder && self.children.get(&c.path).is_some_and(|l| !l.is_empty()),
+                shared: !folder && e.is_some_and(|e| self.shared.contains(&e.id)),
+                icon: e.and_then(|e| e.icon.clone()),
+            });
+            if expanded {
+                self.rows(&c.path, depth + 1, out);
             }
         }
     }
-    walk("", 0, &children, &mut out);
-    out
+}
+
+/// What is being dragged in the tree.
+#[derive(Clone, Debug, PartialEq)]
+struct Dragged {
+    path: String,
+    folder: bool,
+}
+
+/// Where `d` lands when dropped `f` of the way down the row of `path`
+/// (`open`: an expanded folder showing its contents below it). Folders stay
+/// above notes, so each only goes between its own kind; otherwise into the
+/// folder. `None`: not on itself or into itself.
+fn spot_for(d: &Dragged, path: &str, folder: bool, open: bool, f: f64) -> Option<Spot> {
+    if d.path == path || (d.folder && paths::is_within(path, &d.path)) {
+        return None;
+    }
+    Some(match (d.folder, folder) {
+        (true, false) => Spot::Into(paths::parent(path).to_string()),
+        (false, true) => Spot::Into(path.to_string()),
+        (true, true) if f < 0.25 => Spot::Before(path.to_string()),
+        (true, true) if f > 0.75 && !open => Spot::After(path.to_string()),
+        (true, true) => Spot::Into(path.to_string()),
+        (false, false) if f < 0.5 => Spot::Before(path.to_string()),
+        (false, false) => Spot::After(path.to_string()),
+    })
+}
+
+/// The element of the event's target matching `css` (Leptos delegates
+/// events, so `current_target` isn't the element with the handler).
+fn target_within(ev: &web_sys::Event, css: &str) -> Option<web_sys::Element> {
+    ev.target()?
+        .dyn_into::<web_sys::Element>()
+        .ok()?
+        .closest(css)
+        .ok()
+        .flatten()
+}
+
+/// How far down the row under the pointer it is, from 0 to 1.
+fn fraction_down(ev: &web_sys::DragEvent) -> f64 {
+    let Some(row) = target_within(ev, ".tree-row") else {
+        return 0.5;
+    };
+    let r = row.get_bounding_client_rect();
+    if r.height() <= 0.0 {
+        return 0.5;
+    }
+    ((f64::from(ev.client_y()) - r.top()) / r.height()).clamp(0.0, 1.0)
 }
 
 /// `aria-level`, which Leptos has no typed attribute for.
@@ -138,7 +147,14 @@ pub fn Tree(vault: String) -> impl IntoView {
     });
     let renaming = RwSignal::new(None::<String>);
     let rename_text = RwSignal::new(String::new());
-    let drop_target = RwSignal::new(None::<String>);
+    let dragging = RwSignal::new(None::<Dragged>);
+    let drop_target = RwSignal::new(None::<Spot>);
+    // Set on every `dragover` (many a second): only notify on a change.
+    let aim = move |s: Option<Spot>| {
+        if drop_target.with_untracked(|t| *t != s) {
+            drop_target.set(s);
+        }
+    };
     let v0 = vault.clone();
 
     // Folders open and close only when clicked, so nothing moves by itself.
@@ -169,19 +185,42 @@ pub fn Tree(vault: String) -> impl IntoView {
 
     view! {
         <div class="tree" role="tree"
-            class:drop=move || drop_target.get().as_deref() == Some("")
-            on:dragover=move |ev| { ev.prevent_default(); }
+            class:drop=move || drop_target.with(|t| matches!(t, Some(Spot::Into(f)) if f.is_empty()))
+            // Rows say where a drop over them lands; elsewhere it's the top level.
+            on:dragover=move |ev: web_sys::DragEvent| {
+                if dragging.with_untracked(Option::is_some) {
+                    ev.prevent_default();
+                    aim(Some(Spot::Into(String::new())));
+                }
+            }
+            on:dragleave=move |ev: web_sys::DragEvent| {
+                // Only when leaving the tree, not when moving between rows.
+                let tree = target_within(&ev, ".tree");
+                let to = ev.related_target().and_then(|t| t.dyn_into::<web_sys::Node>().ok());
+                if !tree.is_some_and(|t| t.contains(to.as_ref())) {
+                    aim(None);
+                }
+            }
             on:drop={
                 let v = vroot.clone();
                 move |ev: web_sys::DragEvent| {
                     ev.prevent_default();
+                    let (d, spot) = (dragging.get_untracked(), drop_target.get_untracked());
+                    dragging.set(None);
                     drop_target.set(None);
-                    if let Some(id) = ev.data_transfer().and_then(|d| d.get_data("text/x-cpn-entry").ok()).filter(|s| !s.is_empty())
-                        && let Err(e) = actions::move_entry(&v, &id, "") { state::error(e); }
+                    let (Some(d), Some(spot)) = (d, spot) else { return };
+                    if let Spot::Into(f) = &spot && !f.is_empty() {
+                        expanded.update(|s| { s.insert(f.clone()); });
+                    }
+                    if let Err(e) = actions::place_entry(&v, &d.path, &spot) { state::error(e); }
                 }
             }>
-            <For each=move || rows.get() key=|r| format!("{}|{}|{}|{}|{}|{:?}", r.key, r.name, r.expanded, r.depth, r.shared, r.icon) let:row>
-                {
+            // Not `<For>`: tachys 0.2's keyed diff can put a row in the wrong
+            // place when rows move and others appear or go in one update.
+            {move || {
+                // Only those who can change the vault move things.
+                let draggable = if can_write2() { "true" } else { "false" };
+                rows.get().into_iter().map(|row| {
                     let vault = v0.clone();
                     let row2 = row.clone();
                     let is_folder = row.kind == EntryKind::Folder;
@@ -204,7 +243,8 @@ pub fn Tree(vault: String) -> impl IntoView {
                         EntryKind::Note => "file",
                         EntryKind::Attachment => if crate::util::is_image(&row.name) { "image" } else { "paperclip" },
                     };
-                    let indent = format!("padding-left:{}px", 8 + row.depth * 14);
+                    let indent = 8 + row.depth * 14;
+                    let indent = format!("padding-left:{indent}px;--indent:{indent}px");
                     let on_click = {
                         let vault = vault.clone();
                         let id = id.clone();
@@ -221,34 +261,37 @@ pub fn Tree(vault: String) -> impl IntoView {
                             }
                         }
                     };
-                    let drag_id = id.clone();
-                    let drop_path = path.clone();
-                    let drop_vault = vault.clone();
-                    let dp2 = path.clone();
-                    let dp3 = path.clone();
+                    let open = row.expanded && row.has_children;
+                    let (p1, p2, p3, p4, p5) = (path.clone(), path.clone(), path.clone(), path.clone(), path.clone());
                     view! {
                         <div class="tree-row" role="treeitem" use:aria_level={row.depth + 1}
                             aria-expanded=is_folder.then(|| row.expanded.to_string())
                             class:active=active class:holds-open=holds_open class:folder=is_folder
-                            class:drop=move || is_folder && drop_target.get().as_deref() == Some(dp3.as_str())
-                            style=indent draggable="true"
+                            class:drop=move || drop_target.with(|t| matches!(t, Some(Spot::Into(f)) if *f == p1))
+                            class:drop-before=move || drop_target.with(|t| matches!(t, Some(Spot::Before(p)) if *p == p2))
+                            class:drop-after=move || drop_target.with(|t| matches!(t, Some(Spot::After(p)) if *p == p3))
+                            style=indent draggable=draggable
                             on:dragstart=move |ev: web_sys::DragEvent| {
-                                if let (Some(dt), Some(id)) = (ev.data_transfer(), drag_id.clone()) {
-                                    let _ = dt.set_data("text/x-cpn-entry", &id);
+                                if let Some(dt) = ev.data_transfer() {
+                                    dt.set_effect_allowed("move");
+                                    let _ = dt.set_data("text/x-cpn-entry", &p4);
                                 }
+                                dragging.set(Some(Dragged { path: p4.clone(), folder: is_folder }));
+                            }
+                            on:dragend=move |_| {
+                                dragging.set(None);
+                                aim(None);
                             }
                             on:dragover=move |ev: web_sys::DragEvent| {
-                                if is_folder { ev.prevent_default(); ev.stop_propagation(); drop_target.set(Some(dp2.clone())); }
-                            }
-                            on:dragleave=move |_| drop_target.set(None)
-                            on:drop=move |ev: web_sys::DragEvent| {
-                                if !is_folder { return; }
-                                ev.prevent_default(); ev.stop_propagation();
-                                drop_target.set(None);
-                                if let Some(id) = ev.data_transfer().and_then(|d| d.get_data("text/x-cpn-entry").ok()).filter(|s| !s.is_empty()) {
-                                    if let Err(e) = actions::move_entry(&drop_vault, &id, &drop_path) { state::error(e); }
-                                    expanded.update(|s| { s.insert(drop_path.clone()); });
+                                let Some(spot) = dragging.with_untracked(|d| {
+                                    d.as_ref().map(|d| spot_for(d, &p5, is_folder, open, fraction_down(&ev)))
+                                }) else { return };
+                                // Here, not the tree's top level (nowhere when on itself).
+                                ev.stop_propagation();
+                                if spot.is_some() {
+                                    ev.prevent_default();
                                 }
+                                aim(spot);
                             }>
                             {move || if renaming.get().as_deref() == Some(key3.as_str()) {
                                 let row = row2.clone();
@@ -280,26 +323,26 @@ pub fn Tree(vault: String) -> impl IntoView {
                                         {row2.shared.then(|| view! { <span class="shared-mark" title="Shared individually with people outside the vault"><Icon name="users"/></span> })}
                                     </button>
                                 }.into_any()
-                            }}
-                            <button class="tree-more" title="More" aria-label="More" on:click={
-                                let key = key.clone();
-                                move |ev: web_sys::MouseEvent| { ev.stop_propagation(); menu.update(|m| *m = if m.as_deref() == Some(key.as_str()) { None } else { Some(key.clone()) }); }
-                            }><Icon name="more"/></button>
-                            {
+                        }}
+                        <button class="tree-more" title="More" aria-label="More" on:click={
+                            let key = key.clone();
+                            move |ev: web_sys::MouseEvent| { ev.stop_propagation(); menu.update(|m| *m = if m.as_deref() == Some(key.as_str()) { None } else { Some(key.clone()) }); }
+                        }><Icon name="more"/></button>
+                        {
+                            let row = row.clone();
+                            let can_write = can_write2.clone();
+                            let vault = v0.clone();
+                            move || (menu.get().as_deref() == Some(key2.as_str())).then(|| {
                                 let row = row.clone();
-                                let can_write = can_write2.clone();
-                                let vault = v0.clone();
-                                move || (menu.get().as_deref() == Some(key2.as_str())).then(|| {
-                                    let row = row.clone();
-                                    let writable = can_write();
-                                    view! { <RowMenu vault=vault.clone() row_id=row.id.clone() kind=row.kind path=row.path.clone() name=row.name.clone()
-                                        writable=writable menu=menu renaming=renaming rename_text=rename_text expanded=expanded row_key=row.key.clone()/> }
-                                })
-                            }
-                        </div>
-                    }
+                                let writable = can_write();
+                                view! { <RowMenu vault=vault.clone() row_id=row.id.clone() kind=row.kind path=row.path.clone() name=row.name.clone()
+                                    writable=writable menu=menu renaming=renaming rename_text=rename_text expanded=expanded row_key=row.key.clone()/> }
+                            })
+                        }
+                    </div>
                 }
-            </For>
+                }).collect_view()
+            }}
             {
                 let v = vault.clone();
                 move || (rows.get().is_empty() && ui.vaults.get().iter().any(|x| x.id == v && x.loaded)).then(|| view! {
@@ -354,6 +397,11 @@ fn RowMenu(
                     <Icon name="file-plus"/>" New note here"</button>
                 <button on:click=move |_| { close(); ui.modal.set(Some(Modal::NewFolder { vault: v2.clone(), parent: p2.clone() })); }>
                     <Icon name="folder-plus"/>" New folder here"</button>
+            })}
+            {(is_folder && writable && actions::has_custom_order(&vault, &path)).then(|| {
+                let (v, p) = (vault.clone(), path.clone());
+                view! { <button on:click=move |_| { close(); actions::sort_folder(&v, &p); }>
+                    <Icon name="sort"/>" Sort A–Z"</button> }
             })}
             {(kind == EntryKind::Note).then(|| {
                 let (v, id) = (v3.clone(), id1.clone().unwrap_or_default());

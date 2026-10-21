@@ -107,6 +107,20 @@ pub enum Command {
         #[arg(long, conflicts_with = "icon")]
         remove: bool,
     },
+    /// Put a document or folder just before or after another in its folder
+    /// (the order the sidebar and `ls` show; folders stay above notes), or a
+    /// folder's contents back to A–Z with --reset.
+    Order {
+        vault: String,
+        /// The document or folder; with --reset, the folder ("/" = the top).
+        path: String,
+        #[arg(long, value_name = "OTHER", required_unless_present_any = ["after", "reset"], conflicts_with_all = ["after", "reset"])]
+        before: Option<String>,
+        #[arg(long, value_name = "OTHER", conflicts_with = "reset")]
+        after: Option<String>,
+        #[arg(long)]
+        reset: bool,
+    },
     /// Move a document or folder to the trash.
     Rm { vault: String, path: String },
     /// Inspect, restore or empty the trash.

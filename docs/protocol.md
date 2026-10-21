@@ -35,9 +35,13 @@ always return `404` so their existence cannot be probed.
 | Attachment | id, size, uploader, upload time | name, type, path, content |
 
 Each vault has exactly one **index object** (`object_id = "index"`), a CRDT map
-from entry id to `{path, kind, created, modified, trashed?, size?, mime?, icon?}`
+from entry id to `{path, kind, created, modified, trashed?, size?, mime?, icon?, order?}`
 (`icon`: a note's or folder's emoji, at most 16 characters; longer ones are
-not shown). Every
+not shown. `order`: its place among the entries of its folder when put there
+by hand, a string of base-62 digits `0-9A-Za-z` compared bytewise, not ending
+in `0`, at most 32 long; others are ignored. Folders come first, then entries
+with an `order` by it, then the rest A–Z; equal keys sort A–Z. Clients drop
+it when an entry moves to another folder — `crates/core/src/order.rs`). Every
 note is its own object holding a CRDT text with the Markdown source. Both are
 [Yjs/yrs](https://github.com/y-crdt/y-crdt) documents; payloads are yrs **update
 v1** encodings, encrypted.

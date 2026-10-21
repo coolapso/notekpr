@@ -85,6 +85,26 @@ pub(super) fn on_server_message(m: ServerMessage) {
         }
         ServerMessage::Changes { vault_id, changes } => {
             let applied = step(|c| {
+                // Notes deleted for good while we had unsent edits of them
+                // (we were offline, say): keep our version as a new note
+                // before the purge drops it, as for a live `purged`.
+                let rescued: Vec<String> = c
+                    .replicas
+                    .get(&vault_id)
+                    .map(|r| {
+                        changes
+                            .purged
+                            .iter()
+                            .map(|p| p.object_id.clone())
+                            .filter(|o| {
+                                !r.purged.contains(o) && r.pending.iter().any(|p| &p.object_id == o)
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                for o in &rescued {
+                    rescue(c, &vault_id, o);
+                }
                 let r = c.replicas.get_mut(&vault_id)?;
                 let (applied, errors) = r.apply_changes(&changes);
                 if !errors.is_empty() {

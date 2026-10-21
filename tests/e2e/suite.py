@@ -70,7 +70,8 @@ class Env:
         shutil.rmtree(self.data, ignore_errors=True)
 
 
-from wd import Browser, KEYS, editor_text, signup  # noqa: E402  (after env vars are set)
+import wd  # noqa: E402  (after env vars are set)
+from wd import Browser, KEYS, editor_text, signup  # noqa: E402
 
 
 def uniq(prefix):
@@ -503,6 +504,47 @@ window.__api = undefined;
 fetch('/api/v1' + arguments[0], {headers: {Authorization: 'Bearer ' + sessionStorage.getItem('cpn.token')}})
   .then(r => r.ok ? r.json() : null).then(j => { window.__api = j; }, () => { window.__api = null; });
 """
+
+
+API_DELETE = """
+window.__api = undefined;
+fetch('/api/v1' + arguments[0], {method: 'DELETE', headers: {Authorization: 'Bearer ' + sessionStorage.getItem('cpn.token')}})
+  .then(r => { window.__api = r.status; }, () => { window.__api = 0; });
+"""
+
+
+def api_delete(b, path):
+    """DELETE an API path with the browser's session; the status (0 on error)."""
+    b.js(API_DELETE, path)
+    b.wait("return window.__api !== undefined", 10, "API answer")
+    return b.js("return window.__api")
+
+
+def cdp(b, cmd, params=None):
+    """A Chrome DevTools command, through ChromeDriver."""
+    return wd.req("POST", b.p("/goog/cdp/execute"), {"cmd": cmd, "params": params or {}})
+
+
+# Keeps the page's WebSockets in window.__sockets (installed before it loads),
+# so a test can drop them as a lost connection would.
+TRACK_SOCKETS = """
+(() => {
+  const W = window.WebSocket;
+  window.__sockets = [];
+  window.WebSocket = class extends W {
+    constructor(...a) { super(...a); window.__sockets.push(this); }
+  };
+})();
+"""
+
+
+def set_offline(b, offline):
+    """Cut this browser off the network (ChromeDriver's network conditions), or reconnect it."""
+    if offline:
+        wd.req("POST", b.p("/chromium/network_conditions"),
+               {"network_conditions": {"offline": True, "latency": 0, "download_throughput": 0, "upload_throughput": 0}})
+    else:
+        wd.req("DELETE", b.p("/chromium/network_conditions"))
 
 
 def api_get(b, path):
@@ -1275,7 +1317,47 @@ def test_graph(env):
         b.close()
 
 
-TESTS = [test_onboarding, test_collab, test_devices_and_recovery, test_features, test_attachments, test_note_sharing, test_tables, test_editor_safety, test_local_copy, test_ui_basics, test_offline_tabs, test_offline_start, test_mobile, test_quick_notes, test_vault_icons, test_entry_icons, test_graph]
+def test_recovered_copy(env):
+    a, b = Browser(), Browser()
+    try:
+        an, bn = uniq("rho"), uniq("rex")
+        signup(a, an)
+        signup(b, bn)
+        a.click(".vault-btn")
+        a.click_el(a.find_text(".vault-menu button", "New vault"))
+        a.type(".modal input", "Kitchen")
+        a.click(".modal button[type=submit]")
+        a.find_text(".page-head h1", "Kitchen", 15)
+        new_note(a, "Soup", "leeks and potatoes")
+        path = a.js("return location.pathname")
+        vid, oid = path.split("/")[2], path.split("/")[3]
+        share(a, ".sb-bottom button:nth-child(2)", bn)
+        cdp(b, "Page.addScriptToEvaluateOnNewDocument", {"source": TRACK_SOCKETS})
+        b.go(env.url.rstrip("/") + path)
+        b.wait("return document.querySelector('.ed') && document.querySelector('.ed').textContent.includes('potatoes')", 20, "rex sees the note")
+        # Rex loses his connection and keeps writing; meanwhile the owner
+        # deletes the note for good.
+        set_offline(b, True)
+        b.js("window.__sockets.forEach(s => s.close())")
+        b.wait("return (document.querySelector('.sync .lbl')||{}).textContent.startsWith('Offline')", 20, "rex offline")
+        b.js("const ed=document.querySelector('.ed'); ed.focus(); const s=getSelection(); s.selectAllChildren(ed); s.collapseToEnd();")
+        b.keys(" and a pinch of salt")
+        time.sleep(1)
+        check(api_delete(a, f"/vaults/{vid}/objects/{oid}") == 204, "the owner deletes the note permanently")
+        set_offline(b, False)
+        b.wait("return Array.from(document.querySelectorAll('.tree-row')).some(r => r.textContent.includes('Soup (recovered)'))", 40,
+               "the recovered copy")
+        check(True, "unsent edits of a note deleted meanwhile are kept as a \"(recovered)\" copy")
+        b.js("Array.from(document.querySelectorAll('.tree-row')).find(r => r.textContent.includes('Soup (recovered)')).querySelector('.tree-item').click()")
+        b.wait("return document.querySelector('.ed') && document.querySelector('.ed').textContent.includes('pinch of salt')", 20, "its text")
+        check(True, "the copy holds what was written offline")
+        check(not severe_logs(a, b), "no browser errors")
+    finally:
+        a.close()
+        b.close()
+
+
+TESTS = [test_onboarding, test_collab, test_devices_and_recovery, test_features, test_attachments, test_note_sharing, test_tables, test_editor_safety, test_local_copy, test_ui_basics, test_offline_tabs, test_offline_start, test_mobile, test_quick_notes, test_vault_icons, test_entry_icons, test_graph, test_recovered_copy]
 
 
 def main():

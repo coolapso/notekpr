@@ -285,7 +285,15 @@ tasks:
       - cargo deny check
 
   ci:
-    desc: "Exactly what CI runs (it installs the tooling, then this): format check, lint, every test, the wasm build, the editor's and the browser tests, the supply-chain check and the container images"
+    desc: "Exactly what CI runs (it installs the tooling, then this): ci:check and ci:image"
+    cmds:
+      - task: ci:check
+      - task: ci:image
+
+  # CI runs these two as separate jobs: one machine's disk (14 GB guaranteed
+  # on GitHub's runners) doesn't hold the test builds and the image build.
+  ci:check:
+    desc: "Format check, lint, every test, the wasm build, the editor's and the browser tests, the supply-chain check"
     cmds:
       - task: fmt:check
       - task: lint
@@ -294,6 +302,10 @@ tasks:
       - task: test:editor
       - task: test:e2e
       - task: audit
+
+  ci:image:
+    desc: "The container images: the server's and the public demo's"
+    cmds:
       - task: docker:build
       # Shares the build stage: only checks the demo's own layer still builds.
       - task: docker:build:demo

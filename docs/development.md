@@ -68,7 +68,7 @@ task test                     # all Rust tests;  task test:e2e -- -k collab  for
 task test:editor              # the editor's DOM view in headless Chromium (wasm-bindgen-test)
 task fmt                      # rustfmt (default style); CI checks it with task fmt:check
 task lint                     # clippy, warnings are errors
-task ci                       # exactly what CI runs: checks, every test, audit, the image
+task ci                       # exactly what CI runs: checks, every test, audit, the images
 task audit                    # supply-chain checks (cargo deny check)
 task dev:reset                # wipe the dev database
 task build                    # debug build of server, CLI and web client;  task release  for release builds
@@ -258,7 +258,10 @@ committed; release images are built with `--locked`.
 **CI** is a fresh developer machine: the workflows in `.github/workflows/`
 only install the tooling and then run tasks — `task setup`, then `task ci`
 (and `task fuzz SECS=300` once a week). Anything CI does, `task ci` does
-here; a check that should run in CI goes into a task first.
+here; a check that should run in CI goes into a task first. CI runs `task ci`'s
+two halves, `task ci:check` and `task ci:image`, as separate jobs: one GitHub
+runner's disk (14 GB guaranteed) doesn't hold the test builds and the image
+build together.
 
 ## Conventions
 

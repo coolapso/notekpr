@@ -5,9 +5,10 @@ on:
 
 # CI is a fresh developer machine: it installs the tooling, then runs the
 # same task a developer runs (`task ci`, see Taskfile.yml). Nothing is done
-# here that can't be done locally.
+# here that can't be done locally. The two jobs are task ci's two halves, on
+# separate machines: one runner's disk doesn't hold both builds.
 jobs:
-  ci:
+  check:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -35,5 +36,18 @@ jobs:
           echo "CPN_CHROME=$(command -v chromium || command -v chromium-browser || command -v google-chrome)" >> "$GITHUB_ENV"
       - name: The toolchain
         run: task setup
-      - name: task ci
-        run: task ci
+      - name: task ci:check
+        run: task ci:check
+
+  # The images build everything inside Docker: no Rust needed here.
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: go-task
+        uses: arduino/setup-task@v2
+        with:
+          version: 3.x
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: task ci:image
+        run: task ci:image

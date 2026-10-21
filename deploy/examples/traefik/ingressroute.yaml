@@ -10,8 +10,9 @@
 #   forwarded headers or proxy protocol of whatever sits in front of it
 #   (`forwardedHeaders.trustedIPs` / `proxyProtocol.trustedIPs`).
 # * Long-lived WebSockets and large uploads: check the entry point's
-#   `transport.respondingTimeouts` (readTimeout) against your attachment
-#   size limit (--max-attachment-mb).
+#   `transport.respondingTimeouts` (readTimeout) against your largest
+#   uploads — attachments up to --max-attachment-mb, and snapshots of up to
+#   4/3 of the snapshot limit (docs/operations.md §4).
 # * /metrics is left out of the route: scrape it inside the cluster.
 ---
 apiVersion: cert-manager.io/v1

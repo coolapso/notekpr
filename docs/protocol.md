@@ -1,18 +1,21 @@
 # coolpsonotes sync protocol and HTTP API (v1)
 
-All endpoints live under `/api/v1`. Requests and responses are JSON unless
-noted. Binary values (keys, ciphertexts) are **standard base64 with padding**.
-Timestamps are Unix **milliseconds**. The authoritative type definitions are in
+All endpoints live under `/api/v1`, except the operations endpoints at the
+root (§10). Requests and responses are JSON unless noted. Binary values (keys,
+ciphertexts) are **standard base64 with padding**. Timestamps are Unix
+**milliseconds**. The authoritative type definitions are in
 [`crates/core/src/protocol.rs`](../crates/core/src/protocol.rs), shared by the
 server and every Rust client (CLI, agent gateway, browser).
 
 Authenticated calls send `Authorization: Bearer <token>`. Errors return
-`{"error": "<code>", "message": "..."}` with codes `bad_request`,
-`unauthorized`, `forbidden`, `not_found`, `conflict`, `stale_key` (412: content
-was encrypted with an outdated key — the vault's or an individually shared
-note's; reload keys and re-encrypt), `too_large`, `rate_limited` (429; with
-`Retry-After: <seconds>` when the request wasn't handled at all, so the same
-request may be sent again then — the CLI waits and retries up to 30 s),
+`{"error": "<code>", "message": "..."}` (`/oauth/token` uses the OAuth shape
+instead, §3) with codes `bad_request`, `unauthorized`, `forbidden`,
+`not_found`, `conflict`, `stale_key` (412: content was encrypted with an
+outdated key — the vault's or an individually shared note's; reload keys and
+re-encrypt; pushes list it per update instead, §6), `too_large`,
+`rate_limited` (429; with `Retry-After: <seconds>` when the request wasn't
+handled at all, so the same request may be sent again then — the CLI waits
+and retries up to 30 s),
 `device_revoked` (404 from `GET /devices/{id}/envelope` and
 `PUT /me/session/device`: the device was removed from the account or never
 belonged to it — the only 404 after which a client may forget a device's
@@ -27,9 +30,9 @@ always return `404` so their existence cannot be probed.
 | Account key | X25519 + Ed25519 public keys, self-signature | the account secret |
 | Device | name, X25519 public key, status | device secret; account secret (only an HPKE ciphertext to the device) |
 | Vault | id, owner, members + roles, key epoch, sequence head | name, description, icon and picture (encrypted `encrypted_meta`: `VaultMeta` JSON; the picture is a raster image of at most 128 px and 8 KiB, base64), vault keys (HPKE envelopes only) |
-| Object | id (random), vault, created/updated time, size of ciphertexts | whether it is a note or the index, its path, title or content |
-| Update / snapshot | ciphertext, author, sequence number | content |
-| Attachment | id, size | name, type, path, content |
+| Object | id (random; the index's is always `index`), vault, creator, created/updated time, size of ciphertexts | its path, title or content |
+| Update / snapshot | ciphertext, author (for updates also the author's device), sequence number, time | content |
+| Attachment | id, size, uploader, upload time | name, type, path, content |
 
 Each vault has exactly one **index object** (`object_id = "index"`), a CRDT map
 from entry id to `{path, kind, created, modified, trashed?, size?, mime?, icon?}`
@@ -74,8 +77,8 @@ Defined in `crates/core/src/crypto.rs` and `keys.rs`.
 
 | Endpoint | Purpose |
 |---|---|
-| `GET /info` | server name, version, `dev_mode`, `oidc_enabled`, size limits (`max_attachment_bytes`, `max_update_bytes`, `max_snapshot_bytes`; older servers omit the last: it is `max(16 × max_update_bytes, 32 MiB)`), `note_keys` (notes can have their own keys, §5.1) (no auth) |
-| `GET /auth/oidc/start?return_to=/path` | 302 to the identity provider (authorization code + PKCE + nonce); sets an HttpOnly, SameSite=Lax `cpn_login` cookie that binds the login to this browser |
+| `GET /info` | server name, version, `dev_mode`, `oidc_enabled`, `oidc_display_name` (the login button's label; null without OIDC), size limits (`max_attachment_bytes`, `max_update_bytes`, `max_snapshot_bytes`; older servers omit the last: it is `max(16 × max_update_bytes, 32 MiB)`), `note_keys` (notes can have their own keys, §5.1) (no auth) |
+| `GET /auth/oidc/start?return_to=/path` | 303 to the identity provider (authorization code + PKCE + nonce); sets an HttpOnly, SameSite=Lax `cpn_login` cookie that binds the login to this browser |
 | `GET /auth/oidc/callback` | provider redirect target; requires the `cpn_login` cookie of the browser that started the login (otherwise `#error=login_failed`, which closes login CSRF); redirects to `/auth/complete#code=…&return_to=…` |
 | `POST /auth/exchange {code}` | one-time code (120 s) → `SessionResponse {token, expires_at, user}` |
 | `POST /auth/dev-login {username, display_name?}` | **development mode only** (`--dev-mode`), otherwise 404 |
@@ -94,11 +97,18 @@ identity. Successful login creates the user but grants access to nothing.
    `POST /oauth/device/decision {user_code, approve}`.
 3. The client polls `POST /oauth/token` (form: `grant_type=urn:ietf:params:oauth:grant-type:device_code`,
    `device_code`) and gets `authorization_pending`, `slow_down`, `access_denied`,
-   `expired_token` or a `TokenResponse`.
+   `expired_token`, `invalid_grant` (unknown or used code), `invalid_request`
+   (no `device_code`) or a `TokenResponse`.
 
 **Agents** use the client credentials grant: `POST /oauth/token`
 `grant_type=client_credentials` with HTTP Basic (`client_id:client_secret`) or
-form fields. Tokens are short-lived (default 1 h).
+form fields. Tokens are short-lived (default 1 h). Missing or wrong
+credentials (or a revoked secret, a disabled agent or owner) get `401
+invalid_client`.
+
+Errors from `/oauth/token` are RFC 6749 `{error, error_description?}` (`400`
+unless noted), not the `{error, message}` shape above; an unknown
+`grant_type` gets `unsupported_grant_type`.
 
 ## 4. Account keys, devices, recovery
 
@@ -113,8 +123,8 @@ form fields. Tokens are short-lived (default 1 h).
 | `GET /me/audit` | the newest 200 audit entries about the caller (devices, keys, agents, sessions) |
 | `PUT /me/session/device {device_id}` | label the current session with its device |
 | `GET /devices` | own non-revoked devices |
-| `POST /devices {device_id, name, enc_public}` | register a **pending** device; other connections get `user_event: device_pending` |
-| `GET /devices/{id}/envelope` | account secret encrypted to that device (only when active) |
+| `POST /devices {device_id, name, enc_public}` | register a **pending** device; other connections get `user_event: device_pending`. `409` before the account has keys, or while 10 devices are pending |
+| `GET /devices/{id}/envelope` | account secret encrypted to that device (only when active; `409` while pending) |
 | `POST /devices/{id}/activate {account_envelope, signature}` | approve; `signature` = account signature over the device approval statement. Used by an existing device, or by the new device itself after recovery. |
 | `PATCH /devices/{id} {name}`, `DELETE /devices/{id}` | rename / remove (revokes the device's sessions) |
 
@@ -136,16 +146,16 @@ device's public key, but the code would differ.
 | `GET/PATCH/DELETE /vaults/{v}` | read: member; update (`encrypted_meta`, `archived`): owner; delete: owner |
 | `GET /vaults/{v}/keys` | member: own envelopes for every epoch granted + full key chain; the notes' document keys (`objects`, `object_chain`) and which notes are shared individually (`shared`; absent on servers from before notes had their own keys) |
 | `GET /vaults/{v}/members` | member: `MemberInfo {user (with account key), role, has_current_key}` |
-| `POST /vaults/{v}/members {user_id, role, key_envelope?, log_entry?}` | owner. Without an envelope the member is "pending keys" until the owner's client grants them |
+| `POST /vaults/{v}/members {user_id, role, key_envelope?, log_entry?}` | owner. Without an envelope the member is "pending keys" until the owner's client grants them. Role `owner` is refused (`400`); an agent can be added only by its owner (`404` otherwise). Membership supersedes single-note shares: adding someone removes their shares of notes in that vault and those notes' keys |
 | `PATCH /vaults/{v}/members/{u} {role, log_entry?}` | owner |
 | `DELETE /vaults/{v}/members/{u}` (optional body `{log_entry}`) | owner removes; any non-owner can remove themselves |
 | `GET /vaults/{v}/log?since=` | member: the membership log, `MemberLogResponse {entries}` (§5.2) |
 | `POST /vaults/{v}/log {entry}` | owner: a `checkpoint` (vaults without a log), a `rekey`, a `share` of a note already shared, `require_signed`, or a `remove` of someone who already left (§5.2) |
 | `POST /vaults/{v}/keys/grant {envelopes}` | owner fills missing envelopes for the current epoch |
 | `POST /vaults/{v}/keys/rotate {new_epoch, chain_link, encrypted_meta, envelopes, objects, log_entry?, without?}` | owner; `new_epoch = current + 1`; envelopes must cover exactly the members that have account keys, except those listed in `without` — left out on purpose because their account key changed and the owner hasn't verified it (they stay members without the current key and get it later through `keys/grant`); `objects` (`ObjectKeyChange {object_id, update}`) moves **every** note with a document key to its next epoch in the same transaction (each a rotation as in §5.1, wrapped under the new vault key), else `409` |
-| `GET /vaults/{v}/audit` | owner: membership, key and deletion events (no content) |
-| `GET /users/search?q=` | humans matching a display-name prefix or exact e-mail, plus the caller's own agents |
-| `GET /users/{id}` | public profile + account key of a user the caller may interact with |
+| `GET /vaults/{v}/audit` | owner: the newest 500 membership, key and deletion events (no content) |
+| `GET /users/search?q=` | humans matching a display-name prefix or exact e-mail (with `--user-directory exact-email`: exact e-mail only), plus the caller's own agents; at least 2 characters (shorter: no results), at most 10 results |
+| `GET /users/{id}` | public profile + account key of a user the caller may interact with; without the e-mail for people connected only through an individually shared note |
 
 Clients **must** call `PublicAccountKey::verify()` before wrapping a key to a
 fetched public key, and should pin fingerprints (trust on first use) and show
@@ -168,13 +178,13 @@ member list, vault key, or the note's history from before it was shared.
 
 | Endpoint | Role |
 |---|---|
-| `PUT /vaults/{v}/objects/{o}/key` `ObjectKeyUpdate {epoch, vault_envelope, chain_link?, envelopes, encrypted_meta, snapshot?, private?}` | See the three kinds below. `vault_envelope` must be wrapped under the vault's *current* epoch (else `412 stale_key`). A `snapshot` must be under the new key and its `covers_seq` must cover every stored update of the note (else `412 stale_key`). |
-| `GET /vaults/{v}/objects/{o}/keys` | member or recipient: `ObjectKeysResponse {role, current_epoch, envelopes (own), chain, encrypted_meta, member_envelopes?, shared?}`. Recipients: the chain only from `share_from` on; their envelopes carry the owner's grant `signature` (below). Members: the note's key at every epoch wrapped under the vault key (`member_envelopes`), every chain link, and whether it is `shared` — so after a note's `key_rotated` / `shared` event they reload that note's keys alone, not the vault's |
+| `PUT /vaults/{v}/objects/{o}/key` `ObjectKeyUpdate {epoch, vault_envelope, chain_link?, envelopes, encrypted_meta, snapshot?, private?, without?}` | See the three kinds below. `vault_envelope` must be wrapped under the vault's *current* epoch (else `412 stale_key`). A `snapshot` must be under the new key and its `covers_seq` must cover every stored update of the note (else `412 stale_key`). |
+| `GET /vaults/{v}/objects/{o}/keys` | member or recipient: `ObjectKeysResponse {object_id, role, current_epoch, envelopes (own), chain, encrypted_meta, member_envelopes?, shared?}`. Recipients: the chain only from `share_from` on; their envelopes carry the owner's grant `signature` (below). Members: the note's key at every epoch wrapped under the vault key (`member_envelopes`), every chain link, and whether it is `shared` — so after a note's `key_rotated` / `shared` event they reload that note's keys alone, not the vault's |
 | `PUT /vaults/{v}/objects/{o}/keys/signatures {grants: [{user_id, epoch, signature}]}` | owner: grant signatures for keys given before grants were signed |
-| `PUT /vaults/{v}/objects/{o}/meta {encrypted_meta}` | writer: the title recipients see, under the current document key |
+| `PUT /vaults/{v}/objects/{o}/meta {encrypted_meta}` | writer: the title recipients see, under the current document key (else `412 stale_key`) |
 | `GET /vaults/{v}/objects/{o}/shares` | member: `ObjectShareInfo {user, role, added_at, added_by, has_current_key, key_signed}` |
-| `POST /vaults/{v}/objects/{o}/shares {user_id, role, envelope, log_entry?}` | owner; `role` is `editor` or `viewer`; the envelope wraps the current document key to the person. Vault members are refused (`409`), and so is a note whose sharing has not started (`409`: give it a fresh key first). Someone it is shared with already is refused too (`409`), unless they lack the current key (left out of a rotation, `without`): then they get it, with this role. |
-| `PATCH /vaults/{v}/objects/{o}/shares/{u} {role}`, `DELETE …/shares/{u}` | owner; recipients may remove themselves. Clients rotate the document key after removing someone. |
+| `POST /vaults/{v}/objects/{o}/shares {user_id, role, envelope, log_entry?}` | owner; `role` is `editor` or `viewer`; the envelope wraps the current document key to the person (else `412 stale_key`). Vault members are refused (`409`), and so is a note whose sharing has not started (`409`: give it a fresh key first). Someone it is shared with already is refused too (`409`), unless they lack the current key (left out of a rotation, `without`): then they get it, with this role. |
+| `PATCH /vaults/{v}/objects/{o}/shares/{u} {role, log_entry?}`, `DELETE …/shares/{u}` (optional body `{log_entry}`) | owner; recipients may remove themselves. Clients rotate the document key after removing someone. |
 | `GET /shares` | notes shared with the caller: `SharedNote {vault_id, object_id, role, owner, shared_by, key_epoch, encrypted_meta, added_at}` |
 | `GET /vaults/{v}/objects/{o}/changes?since=` | that note's part of the log (same shape as `/changes`) |
 
@@ -204,10 +214,11 @@ clients reload keys and see it registered). Recipients use
 return **only payloads under a document epoch at or after `share_from`**.
 
 Once a note has a document key, the server accepts its updates and snapshots
-only under the **current** document epoch; anything else is refused with
-`412 stale_key` (an older client still using the vault key, or a key that was
-just rotated). Clients reload keys and re-send. Rotating the vault key renews
-every note's key in the same request (removed members knew them).
+only under the **current** document epoch; anything else (an older client
+still using the vault key, or a key that was just rotated) is refused as
+`stale_key` — in a push, that update alone is listed in `rejected` (§6); a
+snapshot gets `412`. Clients reload keys and re-send. Rotating the vault key
+renews every note's key in the same request (removed members knew them).
 
 ### 5.2 The membership log
 
@@ -285,10 +296,10 @@ vault's events in strictly increasing order without gaps.**
 | `POST /vaults/{v}/updates {updates: [{object_id, client_update_id, payload, signature?}]}` → `{results, head_seq, rejected?}` | editor/owner. Idempotent per `client_update_id`: a retry returns the original `seq`. Objects are created on first write. An update that can't be stored on its own merits is refused alone and listed in `rejected: [{client_update_id, object_id, code, message}]` with `code` `too_large` (over `max_update_bytes`), `purged` (the object was permanently deleted), `stale_key` (encrypted with an outdated key: reload keys, re-encrypt, send again), `unsigned` (the vault requires signed content, §5.2) or `bad_signature` (not signed with the author's account key); the rest of the batch is stored. Malformed requests, a batch over 500 updates and missing write access still fail the whole push. (Servers before this answered `413` / `409` / `412` for the whole batch; clients handle both.) |
 | `GET /vaults/{v}/changes?since=S&limit=N&snapshots=true` | `ChangesResponse {updates, snapshots, purged, head_seq, has_more, next_since}`. For any object whose latest snapshot covers part of `(S, head]`, the snapshot is returned **instead of** the updates it covers. Request further pages with `since=next_since&snapshots=false`. Every page also holds the snapshots *carrying* changes (below) stored while the head was within it, so each catch-up passes them once. |
 | `GET /vaults/{v}/objects/{o}` | `ObjectState`: latest snapshot + updates after it |
-| `POST /vaults/{v}/objects/{o}/snapshots {snapshot_id, covers_seq, payload, signature?, carries?}` | editor/owner (`409` unsigned where signatures are required, `400` for a bad signature). Store a compaction (`payload` = encrypted full state). Updates covered by the *previous* snapshot are pruned — one generation is always kept so a bad snapshot is recoverable. One snapshot per person and note per `--snapshot-cooldown-secs` (default 30 s; `429` otherwise). `carries: true`: the state holds changes the log doesn't have — an update too large to push (`too_large`), which a client sends this way instead; the server sends the snapshot to everyone subscribed (`snapshot`) and with catch-ups (above), and its retention keeps the newest such snapshot of each note. |
-| `GET /vaults/{v}/objects/{o}/snapshots[/{id}]` | revision history (newest first); default retention 100 per object |
+| `POST /vaults/{v}/objects/{o}/snapshots {snapshot_id, covers_seq, payload, signature?, carries?}` | editor/owner (`409` unsigned where signatures are required, `400` for a bad signature). `404` if the object doesn't exist yet or was purged (a snapshot never creates an object), `409` for a `snapshot_id` already used, `413` over `max_snapshot_bytes`. Store a compaction (`payload` = encrypted full state). Updates covered by the *previous* snapshot are pruned — one generation is always kept so a bad snapshot is recoverable. One snapshot per person and note per `--snapshot-cooldown-secs` (default 30 s; `429` otherwise). `carries: true`: the state holds changes the log doesn't have — an update too large to push (`too_large`), which a client sends this way instead; the server sends the snapshot to everyone subscribed (`snapshot`) and with catch-ups (above), and its retention keeps the newest such snapshot of each note. |
+| `GET /vaults/{v}/objects/{o}/snapshots[/{id}]` | revision history (newest first); default retention 100 per object, never fewer than 2 |
 | `DELETE /vaults/{v}/objects/{o}` | editor/owner: permanently delete (emptying the trash). Not allowed for `index`. |
-| `PUT/GET/DELETE /vaults/{v}/attachments/{id}` | raw encrypted bytes (`application/octet-stream`). Upload: editor/owner; immutable (same id+size re-upload is an idempotent retry). |
+| `PUT/GET/DELETE /vaults/{v}/attachments/{id}` | raw encrypted bytes (`application/octet-stream`). Upload: editor/owner; immutable: `201` when stored, `200` for a retry (same id and size), `409` for the same id with another size. Download: vault members only, never people a single note is shared with. Delete: editor/owner. |
 
 **Client rules**
 
@@ -297,7 +308,7 @@ vault's events in strictly increasing order without gaps.**
   snapshots over `statement("coolpsonotes/v1/sig/snapshot", [vault_id,
   object_id, covers_seq:i64be, payload])`. `Update` and `Snapshot` carry the
   `signature` (null for content from before signing).
-* Encrypt every update with purpose `Update` (snapshots: `Snapshot`) and context `(vault_id, object_id)`, always using the **current** epoch. The server refuses older epochs with `412 stale_key` and unknown newer ones with `400`: reload keys, re-encrypt pending changes and send them again.
+* Encrypt every update with purpose `Update` (snapshots: `Snapshot`) and context `(vault_id, object_id)`, always using the **current** epoch. The server refuses older epochs as `stale_key` (in a push, that update is listed in `rejected`; a snapshot gets `412`) and unknown newer ones with `400`: reload keys, re-encrypt pending changes and send them again.
 * Pages of `/changes` are bounded by row count (`limit`, at most 5000) and by size (16 MiB of update payloads); keep requesting while `has_more`.
 * Apply updates idempotently (CRDT). Track `vault_seq` = highest sequence received (updates, acks, purges, `synced.head_seq`).
 * A snapshot's `covers_seq` must be ≥ 1 and ≤ the client's `vault_seq` at the time it encoded the state, and the client must have applied every update of that object up to there. REST push responses do not advance `vault_seq` (they can overtake other clients' updates); a REST-only client therefore catches up via `/changes` before creating a snapshot.
@@ -316,16 +327,24 @@ Client → server: `auth {token}` (must be first, within 10 s),
 `ping {nonce}`.
 
 Server → client: `ready {user_id, session_id, conn_id}`,
-`changes {vault_id, changes}` (catch-up pages after `subscribe` with `since`),
+`changes {vault_id, changes}` (catch-up pages after `subscribe` with `since`, and after falling behind: below),
 `synced {vault_id, head_seq, object_id?}`, `update {vault_id, update}`,
 `ack {vault_id, results, rejected?}` (your own pushes, delivered in log order; `rejected` as for the REST push),
-`snapshot {vault_id, snapshot}` (a snapshot someone else stored), `snapshot_created {…}` (yours),
+`snapshot {vault_id, snapshot}` (a snapshot stored with `carries: true`, §6),
+`snapshot_created {vault_id, object_id, snapshot_id, covers_seq}` (every snapshot stored),
 `purged {vault_id, object_id, seq}`,
 `awareness {vault_id, object_id, from_user, from_conn, payload}` (empty payload = that connection left),
 `vault_event {vault_id, event}` (`members_changed`, `key_rotated`, `meta_changed`, `deleted`, `access_revoked`, `role_changed`),
 `object_event {vault_id, object_id, event}` (`shared`, `key_rotated`, `meta_changed`, `shares_changed`, `access_revoked`, `deleted`),
 `user_event {event}` (`device_pending`, `devices_changed`, `vaults_changed`, `shares_changed`, `session_revoked`),
 `error {code, message, vault_id?}`, `pong {nonce}`.
+
+Only `update` and `awareness` skip the connection they came from (your own
+pushes come back as `ack`); `snapshot` and `snapshot_created` reach every
+subscriber, the author's own connection included. A subscriber that falls too
+far behind live events gets the gap replayed from the log as `changes`, then
+`synced` again; awareness, `snapshot_created`, `vault_event` and
+`object_event` messages missed in the gap are not replayed.
 
 When the server shuts down to be started again (an update), it closes every
 connection with code **1012** ("service restart", `CLOSE_RESTARTING`) before
@@ -335,11 +354,23 @@ connection as briefly *connecting* rather than *offline*. Any other close, or
 a connection that just drops, is a failure: reconnect with backoff.
 
 A client must subscribe to a vault before pushing to it over the socket.
-Pushes and (un)subscriptions share a per-connection budget (20 per second,
-bursts of 400); beyond it the server answers `error {code: "rate_limited"}`
-and drops the message, so clients keep the changes pending and retry.
 Awareness payloads are encrypted by clients (purpose `Awareness`); the server
-only relays them (rate-limited, ≤ 16 KiB).
+only relays them. Limits per connection:
+
+* pushes and (un)subscriptions share a budget (20 per second, bursts of
+  400); beyond it the server answers `error {code: "rate_limited"}` and drops
+  the message, so clients keep the changes pending and retry;
+* at most 200 subscriptions; another one gets `error {code: "bad_request"}`
+  ("too many subscriptions");
+* awareness: 30 per second, bursts of 60, payloads ≤ 16 KiB, `object_id` ≤ 64
+  characters, and only where the connection is subscribed; anything else is
+  dropped without an answer;
+* messages and frames up to 2 × `max_update_bytes` + 1 MiB (a larger one
+  ends the connection); binary frames get an `error`.
+
+The server pings every 30 s and checks the session again every 60 s; once it
+is no longer valid, the server sends `user_event {event: "session_revoked"}`
+and closes the connection.
 
 **Single-note subscriptions** (`object_id` set) are for recipients of an
 individually shared note: they deliver only that note's updates, snapshots,
@@ -355,7 +386,7 @@ announced itself on.
 
 | Endpoint | Notes |
 |---|---|
-| `GET /agents`, `POST /agents {name}` | owner's agents; creation returns a client id + secret **once** |
+| `GET /agents`, `POST /agents {name}` | owner's agents; creation returns a client id + secret **once**; at most 50 agents per owner (`400` beyond) |
 | `DELETE /agents/{id}` | deletes the agent, its memberships and sessions |
 | `POST /agents/{id}/credentials`, `DELETE /agents/{id}/credentials/{client_id}` | rotate / revoke secrets (revocation ends sessions) |
 
@@ -373,5 +404,7 @@ Agents cannot create vaults, manage members, devices or agents.
 
 ## 10. Operations endpoints
 
-`/healthz` (liveness), `/readyz` (database reachable), `/metrics` (Prometheus;
-optional bearer token). All responses carry a strict CSP and security headers.
+`/healthz` (liveness), `/readyz` (database reachable, else `503`), `/metrics`
+(Prometheus; optional bearer token) live at the root, not under `/api/v1`.
+`/metrics` answers `404` when metrics are turned off and `401` without the
+right token. All responses carry a strict CSP and security headers.

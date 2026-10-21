@@ -152,15 +152,16 @@ Put a TLS reverse proxy in front (§4).
 
 ## 2. Configuration
 
-Every flag can be set as an environment variable. An empty value (`FOO=` in a
-compose or env file) counts as not set.
+Every flag below can be set as an environment variable (the subcommands' own
+flags, such as `backup --out`, can't). An empty value (`FOO=` in a compose or
+env file) counts as not set.
 
 | Flag / variable | Default | Meaning |
 |---|---|---|
 | `--listen` / `COOLPSONOTES_LISTEN` | `127.0.0.1:8080` | bind address (container image: `0.0.0.0:8080`) |
-| `--data-dir` / `COOLPSONOTES_DATA_DIR` | `./data` | holds `coolpsonotes.db` and automatic pre-migration backups |
+| `--data-dir` / `COOLPSONOTES_DATA_DIR` | `./data` | holds `coolpsonotes.db` and automatic pre-migration backups (container image: `/data`) |
 | `--public-url` / `COOLPSONOTES_PUBLIC_URL` | `http://localhost:8080` | external URL; used for the OIDC redirect URI and device-login links |
-| `--web-dir` / `COOLPSONOTES_WEB_DIR` | unset | built browser client; unset = API only |
+| `--web-dir` / `COOLPSONOTES_WEB_DIR` | unset | built browser client; unset = API only (container image: `/usr/share/coolpsonotes/web`) |
 | `--oidc-issuer` / `COOLPSONOTES_OIDC_ISSUER` | unset | issuer URL (discovery at `/.well-known/openid-configuration`) |
 | `--oidc-client-id` / `COOLPSONOTES_OIDC_CLIENT_ID` | unset | client id |
 | `--oidc-client-secret` / `COOLPSONOTES_OIDC_CLIENT_SECRET` | unset | client secret (omit for a public client; PKCE is always used) |
@@ -169,10 +170,10 @@ compose or env file) counts as not set.
 | `--oidc-allow-unverified-email` / `COOLPSONOTES_OIDC_ALLOW_UNVERIFIED_EMAIL` | `false` | also accept e-mail addresses the provider doesn't mark `email_verified` |
 | `--oidc-scopes` / `COOLPSONOTES_OIDC_SCOPES` | `openid profile email` | requested scopes |
 | `--oidc-display-name` / `COOLPSONOTES_OIDC_DISPLAY_NAME` | `Single sign-on` | login button label |
-| `--dev-mode` / `COOLPSONOTES_DEV_MODE` | `false` | **development only**: password-less login as any user name (§8) |
-| `--dev-mode-anywhere` / `COOLPSONOTES_DEV_MODE_ANYWHERE` | `false` | allow dev mode on a non-loopback address, with an https URL or with OIDC (§8) |
+| `--dev-mode` / `COOLPSONOTES_DEV_MODE` | `false` | **development only**: password-less login as any user name (§9) |
+| `--dev-mode-anywhere` / `COOLPSONOTES_DEV_MODE_ANYWHERE` | `false` | allow dev mode on a non-loopback address, with an https URL or with OIDC (§9) |
 | `--admin` / `COOLPSONOTES_ADMINS` | empty | comma-separated `issuer\|subject` (or `dev:<name>`) administrators |
-| `--first-user-admin` / `COOLPSONOTES_FIRST_USER_ADMIN` | `true` | first person to sign in becomes administrator |
+| `--first-user-admin <true\|false>` / `COOLPSONOTES_FIRST_USER_ADMIN` | `true` | first person to sign in becomes administrator |
 | `--user-directory` / `COOLPSONOTES_USER_DIRECTORY` | `search` | `search` (name prefix or exact e-mail) or `exact-email` |
 | `--session-ttl-days` / `COOLPSONOTES_SESSION_TTL_DAYS` | `30` | browser session lifetime |
 | `--device-session-ttl-days` / `COOLPSONOTES_DEVICE_SESSION_TTL_DAYS` | `180` | CLI/desktop session lifetime |
@@ -180,14 +181,14 @@ compose or env file) counts as not set.
 | `--max-attachment-mb` / `COOLPSONOTES_MAX_ATTACHMENT_MB` | `25` | maximum attachment size |
 | `--max-update-kb` / `COOLPSONOTES_MAX_UPDATE_KB` | `2048` | maximum size of one encrypted update |
 | `--max-snapshot-kb` / `COOLPSONOTES_MAX_SNAPSHOT_KB` | 16 × the update limit, at least 32 MiB | maximum size of one snapshot (a note's full state; also how a change too large for one update still reaches others) |
-| `--snapshot-retention` / `COOLPSONOTES_SNAPSHOT_RETENTION` | `100` | revisions kept per document |
+| `--snapshot-retention` / `COOLPSONOTES_SNAPSHOT_RETENTION` | `100` | revisions kept per document (never fewer than 2) |
 | `--snapshot-cooldown-secs` / `COOLPSONOTES_SNAPSHOT_COOLDOWN_SECS` | `30` | minimum time between two snapshots of one note by one person |
-| `--trust-proxy` / `COOLPSONOTES_TRUST_PROXY` | `false` | use `X-Forwarded-For` for rate limiting (only behind your proxy, §4) |
+| `--trust-proxy` / `COOLPSONOTES_TRUST_PROXY` | `false` | use `X-Forwarded-For` (or, without a usable one, `X-Real-IP`) for rate limiting (only behind your proxy, §4) |
 | `--rate-limit-rps` / `COOLPSONOTES_RATE_LIMIT_RPS` | `50` | API requests per second per IP (burst ×4) |
 | `--auth-rate-limit-per-min` / `COOLPSONOTES_AUTH_RATE_LIMIT_PER_MIN` | `30` | login/token requests per minute per IP |
-| `--metrics` / `COOLPSONOTES_METRICS` | `true` | expose Prometheus metrics at `/metrics` |
+| `--metrics <true\|false>` / `COOLPSONOTES_METRICS` | `true` | expose Prometheus metrics at `/metrics`; `--metrics false` turns them off (`/metrics` then answers `404`) |
 | `--metrics-token` / `COOLPSONOTES_METRICS_TOKEN` | unset | require `Authorization: Bearer <token>` for `/metrics` |
-| `--log-format` / `COOLPSONOTES_LOG_FORMAT` | `pretty` | `json` for structured logs; level via `COOLPSONOTES_LOG` (e.g. `info,sqlx=warn`) |
+| `--log-format` / `COOLPSONOTES_LOG_FORMAT` | `pretty` | `json` for structured logs (container image: `json`); level via `COOLPSONOTES_LOG` (e.g. `info,sqlx=warn`) |
 
 The server refuses to start without a login method (OIDC or dev mode).
 
@@ -265,14 +266,19 @@ it:
 * **HTTPS** for the public URL's host, forwarding every path to the server (Compose:
   `127.0.0.1:8080`; Kubernetes: the `coolpsonotes` Service) — except
   `/metrics` (below).
-* **WebSockets** at `/api/v1/ws`, open for a long time: allow long idle
-  timeouts (the apps ping every 20 s).
-* **Request bodies** a little larger than `--max-attachment-mb`.
+* **WebSockets** at `/api/v1/ws`, open for a long time: allow idle timeouts
+  well above 30 s (the browser pings every 20 s, the CLI and the server every
+  30 s).
+* **Request bodies** of at least the larger of `--max-attachment-mb` and 4/3 ×
+  the snapshot limit (`--max-snapshot-kb`; snapshots travel base64-encoded):
+  about 43 MiB with the defaults.
 * **The client's address**: set `--trust-proxy` (the Compose file and the
   Kubernetes manifest do). The server then takes it from the **last** entry
-  of `X-Forwarded-For` (the one your proxy added) for rate limiting. If
-  several proxies are chained, the outermost must be the only one that adds
-  an entry, or set the header to the client address at the edge.
+  of `X-Forwarded-For` (the one your proxy added) for rate limiting, or from
+  `X-Real-IP` when there's no usable `X-Forwarded-For`, so the proxy must
+  replace or remove an `X-Real-IP` a client sent. If several proxies are
+  chained, the outermost must be the only one that adds an entry, or set the
+  header to the client address at the edge.
 * **`/metrics` kept inside**: don't route it from the internet; scrape the
   server directly, or set `--metrics-token`.
 
@@ -394,6 +400,10 @@ coolpsonotes-server backup --data-dir /var/lib/coolpsonotes --out-dir /backups -
 ```
 
 `--out` needs an existing directory and a file name that doesn't exist yet.
+`--out-dir` names files `coolpsonotes-YYYYMMDD-HHMMSS.db` (UTC); `--keep`
+prunes only files named `coolpsonotes-*.db` there, so the automatic
+`pre-migration-*.db` backups (§7), which land in `<data dir>/backups`, stay
+until you delete them.
 
 **Docker Compose**: backups land in the data volume; copy them off the
 machine.
@@ -436,6 +446,24 @@ backup is gone from the server: accounts, devices and sessions (people may
 need to sign in again and re-approve devices), memberships and shares, key
 rotations, agent credentials. Members' own keys are unaffected.
 
+**One person's data.** `export-user` writes one person's encrypted export —
+the same as `GET /me/export`: their vaults and the notes shared with them, as
+stored — to a new file (mode 0600), from the live database or from a backup:
+
+```sh
+coolpsonotes-server export-user --data-dir /var/lib/coolpsonotes --user alice@example.com --out alice.json
+coolpsonotes-server export-user --backup /backups/coolpsonotes-2026-10-01.db --user alice@example.com --out alice.json
+
+# docker compose
+docker compose exec coolpsonotes coolpsonotes-server export-user --user alice@example.com --out /data/alice.json
+docker compose cp coolpsonotes:/data/alice.json ./alice.json
+```
+
+`--user` takes a user id, an e-mail address or a display name. A backup is
+read through a migrated temporary copy; the backup itself isn't changed.
+Nothing in the file is readable without the person's keys: they decrypt it
+offline with `coolpsonotes recover` ([recovery.md](recovery.md)).
+
 Users should additionally export important vaults as Markdown (vault
 settings → Export, or `coolpsonotes export`) — exports do not depend on
 coolpsonotes at all.
@@ -473,8 +501,10 @@ proxy answers then (§4, "Holding requests during an update").
 
 * `GET /healthz` — process is alive. `GET /readyz` — database reachable.
   `coolpsonotes-server healthcheck` probes `/readyz` (used by the image).
-* `GET /metrics` — Prometheus: `coolpsonotes_http_requests_total{method,status}`,
-  `coolpsonotes_http_request_duration_seconds`, `coolpsonotes_updates_total`,
+* `GET /metrics` — Prometheus: `coolpsonotes_http_requests_total{method,status}`
+  (`status` is the class: `2xx`, `4xx`, …),
+  `coolpsonotes_http_request_duration_seconds` (a summary with quantiles: no
+  histogram buckets are configured), `coolpsonotes_updates_total`,
   `coolpsonotes_attachment_bytes_total`, `coolpsonotes_ws_connections`,
   `coolpsonotes_ws_connected_users`, `coolpsonotes_rate_limited_total{scope}`,
   and on Linux the process's own `process_cpu_seconds_total` (a gauge) and

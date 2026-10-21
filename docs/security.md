@@ -16,10 +16,10 @@
 | Asset | Protected by | Server can see |
 |---|---|---|
 | Note text, titles, file and folder names and icons, tags, links | XChaCha20-Poly1305 with per-vault keys, client-side | no |
-| Attachments (bytes, names, types) | same | size only |
+| Attachments (bytes, names, types) | same | size, uploader and upload time |
 | Vault names, descriptions, icons and pictures | same (`encrypted_meta`) | no; the size of `encrypted_meta` roughly shows whether a vault has a picture |
 | Revision history | encrypted snapshots | count, size, time, author |
-| Presence (which note, cursor) | encrypted awareness messages | that a user is connected to a vault |
+| Presence (which note, cursor) | encrypted awareness messages | that a user is connected to a vault; on individually shared notes also which of them someone has open, and when (clients announce themselves on the note too, under its id) |
 | Favorites, recent notes, key pins | account-key encryption | no |
 | Vault keys | HPKE to each member's account key | no |
 | Document keys (every note has its own) | wrapped under the vault key for members, HPKE to each person a note is shared with | no; it learns which notes are shared, with whom, and when sharing started |
@@ -138,9 +138,11 @@ primitives. Formats:
 ### Malicious collaborators
 
 * **Viewers** cannot write: the server rejects their pushes, snapshots,
-  attachment uploads and purges. (They do hold the vault key, so in collusion
-  with a malicious server they could forge content; signing updates with the
-  author's key is planned to close this.)
+  attachment uploads and purges. They do hold the vault key, but every update
+  and snapshot is signed by its author and clients accept only authors the
+  log lists as writers, so a viewer can't forge content even with the
+  server's help (for what remains, see
+  [residual risks](#residual-risks-and-planned-hardening), 2).
 * **Editors** can change or trash content but not manage members or keys.
   Their writes are attributed (author and device are recorded per update) and
   history allows restoring earlier versions. Permanent deletes are recorded in
@@ -225,7 +227,8 @@ reported, never applied partially. Duplicate deliveries are no-ops.
   audience checked by `openidconnect`; HTTP redirects disabled and response
   sizes capped for provider calls; the provider's certificate is checked
   against the system trust store (plus an optional CA file). Only e-mail
-  addresses the provider marks verified are used to find people.
+  addresses the provider marks verified are used to find people, unless
+  `--oidc-allow-unverified-email`.
 * Identities are keyed by `iss`+`sub`, never e-mail. Authentication grants no
   vault access.
 * Authorization is checked on every request and every WebSocket push (under the

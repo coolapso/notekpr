@@ -1071,7 +1071,7 @@ fn Help() -> impl IntoView {
     let m = util::mod_key();
     let rows: Vec<(String, &str)> = vec![
         (
-            format!("{m}+P (or {m}+K outside the editor)"),
+            format!("{m}+P (or {m}+O, or {m}+K outside the editor)"),
             "Jump to a note / create one",
         ),
         (format!("{m}+Shift+F"), "Search all notes"),
@@ -1085,8 +1085,8 @@ fn Help() -> impl IntoView {
         (format!("{m}+`"), "Inline code"),
         (format!("{m}+Shift+X / H"), "Strikethrough / highlight"),
         (
-            format!("{m}+Shift+8 / 7 / 9"),
-            "Bullet / numbered / task list",
+            format!("{m}+Shift+8 / 7 / 9 / ."),
+            "Bullet / numbered / task list / quote",
         ),
         (format!("{m}+Alt+1…6, 0"), "Heading level / normal text"),
         (format!("{m}+Enter"), "Toggle checkbox"),
@@ -1098,7 +1098,8 @@ fn Help() -> impl IntoView {
             "Enter (in a table)".into(),
             "New row; on an empty row, end the table",
         ),
-        (format!("{m}+Z / {m}+Shift+Z"), "Undo / redo"),
+        (format!("{m}+Z / {m}+Shift+Z or {m}+Y"), "Undo / redo"),
+        (format!("{m}+click a link"), "Follow it while editing"),
         ("[[".into(), "Link to another note"),
         ("#word".into(), "Add a tag"),
         (format!("{m}+/ (or ? outside the editor)"), "This help"),

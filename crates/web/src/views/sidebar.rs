@@ -122,7 +122,7 @@ pub fn Sidebar() -> impl IntoView {
             <div class="sb-top">
                 <VaultSwitcher vault=shown/>
                 <button class="sb-search" on:click=move |_| ui.modal.set(Some(Modal::QuickSwitch))>
-                    <Icon name="search"/><span>"Search"</span><kbd>{format!("{}K", util::mod_key())}</kbd>
+                    <Icon name="search"/><span>"Search"</span><kbd>{format!("{}+P", util::mod_key())}</kbd>
                 </button>
                 <Show when=writable>
                     <div class="sb-actions">

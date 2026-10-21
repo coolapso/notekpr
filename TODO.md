@@ -154,6 +154,9 @@ Settled; don't reopen them without a new reason.
   extra), or a drawing editor of our own in Rust saving Excalidraw's format,
   synced as a CRDT like notes (several weeks).
 
+- **AI Support**: Support either remote or local AI to talk with and transform the thoughts into written notes.
+- **Puliic Notes**: Allow a note to be shared as a public note / link. When viewing the note from the public link, the note is read only and in reading mode.
+
 - **Mobile apps and a native desktop app** (Tauri around the web UI), keeping
   "use your own editor" first-class.
 - **Remote MCP connector**: an optional `coolpsonotes connector` speaking MCP
@@ -185,5 +188,5 @@ Settled; don't reopen them without a new reason.
   - still needed then: instance identity and server-to-server auth,
     discovery (`/.well-known`), abuse limits, and documenting what a remote
     instance learns (members, timing).
-
+- **admin**: Server admin, the server admin / superuser can configure servers settings such as ammount of users, amount of storage allowed. This feature can be toggled on and off and can be assigned to regular users or exist just as a server backend feature, the idea is to allow the hosted environment to be ablte to set programatically / on the fly those things without haveing to restart the server.
   See also [architecture.md §8](docs/architecture.md#8-accommodating-future-work).

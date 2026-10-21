@@ -30,7 +30,7 @@ use anyhow::{Result, anyhow};
 use clap::Parser;
 use coolpsonotes_load_events::{
     Action, Command, Cursor, Event, GameOver, Hello, LevelResult, Menu, Phase, Report, Screen,
-    Settings, Stats, outage_s,
+    Settings, Stats, Verdict, outage_s,
 };
 use futures::StreamExt;
 use tokio::sync::{mpsc, watch};
@@ -297,8 +297,11 @@ async fn session(args: Args) -> ExitCode {
             }
         };
         let code = match &outcome {
-            Ok(r) if r.passed() => ExitCode::SUCCESS,
-            Ok(_) => ExitCode::from(1),
+            Ok(r) => match r.verdict() {
+                Verdict::Passed => ExitCode::SUCCESS,
+                Verdict::Failed => ExitCode::from(1),
+                Verdict::Unfinished => ExitCode::from(3),
+            },
             Err(e) => {
                 eprintln!("error: {e:#}");
                 ExitCode::from(2)
@@ -685,25 +688,30 @@ async fn run(args: Args, root: PathBuf, bus: Bus) -> Result<Report> {
             })
             .collect();
         let begin = Instant::now();
-        let arrived: Vec<Option<Person>> = futures::stream::iter(range.clone())
-            .map(|id| {
-                let at = begin + starts[(id - range.start) as usize];
-                let world = world.clone();
-                async move {
-                    tokio::time::sleep_until(at.into()).await;
-                    arrive(world, id, seed).await
-                }
-            })
-            .buffer_unordered(64)
-            .collect()
-            .await;
+        let (arrived, died): (Vec<Option<Person>>, _) = watched(
+            &mut server,
+            &up,
+            &bus,
+            futures::stream::iter(range.clone())
+                .map(|id| {
+                    let at = begin + starts[(id - range.start) as usize];
+                    let world = world.clone();
+                    async move {
+                        tokio::time::sleep_until(at.into()).await;
+                        arrive(world, id, seed).await
+                    }
+                })
+                .buffer_unordered(64)
+                .collect(),
+        )
+        .await;
         let mut persons: HashMap<u32, Person> = HashMap::new();
         for p in arrived.into_iter().flatten() {
             persons.insert(p.id, p);
         }
         // Why the server couldn't take this level, if it couldn't.
-        let mut lost: Option<String> = None;
-        if persons.len() * 2 < range.len() {
+        let mut lost: Option<String> = died;
+        if lost.is_none() && persons.len() * 2 < range.len() {
             lost = Some(format!(
                 "only {} of {} newcomers could even sign up",
                 persons.len(),
@@ -747,7 +755,12 @@ async fn run(args: Args, root: PathBuf, bus: Bus) -> Result<Report> {
                 (p, r)
             });
         }
-        for (p, team) in futures::future::join_all(founders).await {
+        let (founded, died) =
+            watched(&mut server, &up, &bus, futures::future::join_all(founders)).await;
+        if let Some(why) = died {
+            lost.get_or_insert(why);
+        }
+        for (p, team) in founded {
             match team {
                 Ok(team) => {
                     bus.send(Event::Team {
@@ -779,7 +792,13 @@ async fn run(args: Args, root: PathBuf, bus: Bus) -> Result<Report> {
                 }
             }
         });
-        futures::future::join_all(joins).await;
+        if let ((), Some(why)) = watched(&mut server, &up, &bus, async {
+            futures::future::join_all(joins).await;
+        })
+        .await
+        {
+            lost.get_or_insert(why);
+        }
         if i == 0 {
             // The spotlight: the biggest teams there are at the start.
             let mut biggest = all_teams.clone();
@@ -920,7 +939,27 @@ async fn run(args: Args, root: PathBuf, bus: Bus) -> Result<Report> {
         "waiting for every change to reach everyone, then comparing every copy",
     );
     println!("{:>7.1} s  checking", t_start.elapsed().as_secs_f32());
-    check::settle(&world, Duration::from_secs(300)).await;
+    // After a game over the server is at its limit: lift it for the check,
+    // so it can take what everyone wrote, and find out whether anything
+    // was lost rather than whether it could keep up.
+    let mut limits_lifted = false;
+    if game_over.is_some() {
+        match server.lift_limits().await {
+            Ok(lifted) => limits_lifted = lifted,
+            Err(e) => eprintln!("warning: couldn't lift the limits for the check: {e:#}"),
+        }
+        if limits_lifted {
+            println!(
+                "{:>7.1} s  the server's limits are lifted for the check",
+                t_start.elapsed().as_secs_f32()
+            );
+            bus.feed(
+                Action::Revision,
+                "limits lifted for the check: can the server take everything now?",
+            );
+        }
+    }
+    settle(&mut server, &world, &up, &bus, Duration::from_secs(300)).await;
     let outcome = check::run(&world).await;
     let report = {
         let t = world.bus.tally.lock().unwrap();
@@ -951,16 +990,15 @@ async fn run(args: Args, root: PathBuf, bus: Bus) -> Result<Report> {
             mismatches: outcome.mismatches,
             sentences: outcome.sentences,
             sentences_missing: outcome.sentences_missing,
+            waiting: outcome.waiting,
+            sentences_waiting: outcome.sentences_waiting,
+            limits_lifted,
             levels: results,
             game_over: game_over.clone(),
         }
     };
     bus.report(report.clone());
-    let verdict = if report.passed() {
-        "every copy of every note is the same, nothing was lost"
-    } else {
-        "some copies differ — see the report"
-    };
+    let verdict = report.verdict_text();
     match &game_over {
         Some(g) => bus.phase(
             Phase::GameOver,
@@ -978,6 +1016,63 @@ async fn run(args: Args, root: PathBuf, bus: Bus) -> Result<Report> {
     futures::future::join_all(persons.into_iter().map(|p| p.leave())).await;
     server.remove();
     Ok(report)
+}
+
+/// Wait until everyone is online with nothing left to upload (at most
+/// `timeout`), starting the server again whenever it dies meanwhile.
+async fn settle(server: &mut Server, world: &World, up: &AtomicBool, bus: &Bus, timeout: Duration) {
+    let end = Instant::now() + timeout;
+    while Instant::now() < end {
+        let step = Duration::from_secs(5).min(end - Instant::now());
+        if check::settle(world, step).await.is_some() {
+            return;
+        }
+        if let Some(why) = server.died().await {
+            eprintln!("the server died while everyone caught up ({why}); starting it again");
+            up.store(false, Ordering::Relaxed);
+            if server.restart().await.is_err() {
+                return;
+            }
+            up.store(true, Ordering::Relaxed);
+            bus.send(Event::Server {
+                up: true,
+                down_for_s: None,
+            });
+        }
+    }
+}
+
+/// Wait for `f` (arrivals, teams forming) while watching the server: if it
+/// dies meanwhile, it is started again right away, so what's under way can
+/// finish, and why it died comes back with the result.
+async fn watched<T>(
+    server: &mut Server,
+    up: &AtomicBool,
+    bus: &Bus,
+    f: impl std::future::Future<Output = T>,
+) -> (T, Option<String>) {
+    let mut f = std::pin::pin!(f);
+    let mut why = None;
+    loop {
+        tokio::select! {
+            out = &mut f => return (out, why),
+            _ = tokio::time::sleep(Duration::from_secs(2)) => {
+                let Some(w) = server.died().await else {
+                    continue;
+                };
+                eprintln!("the server died ({w}); starting it again");
+                why.get_or_insert(w);
+                up.store(false, Ordering::Relaxed);
+                if server.restart().await.is_ok() {
+                    up.store(true, Ordering::Relaxed);
+                    bus.send(Event::Server {
+                        up: true,
+                        down_for_s: None,
+                    });
+                }
+            }
+        }
+    }
 }
 
 /// Let everyone work for `d`, checking every few seconds that the server is
@@ -1397,17 +1492,33 @@ fn print_report(r: &Report) {
             g.level, g.users, g.reason
         );
     }
+    if r.limits_lifted {
+        println!("The server's limits were lifted for the check");
+    }
     println!(
-        "Checked {} notes ({} copies): {} differ; {} of {} finished sentences missing",
-        r.notes_checked, r.copies_checked, r.mismatches, r.sentences_missing, r.sentences
+        "Checked {} notes ({} copies): {} differ; {} of {} finished sentences missing{}",
+        r.notes_checked,
+        r.copies_checked,
+        r.mismatches,
+        r.sentences_missing,
+        r.sentences,
+        if r.waiting > 0 || r.sentences_waiting > 0 {
+            format!(
+                "; {} changes still waiting on devices, {} sentences only on their writers' devices",
+                r.waiting, r.sentences_waiting
+            )
+        } else {
+            String::new()
+        }
     );
     println!(
-        "{}",
-        if r.passed() {
-            "✓ every copy is the same and nothing was lost"
-        } else {
-            "✗ copies differ or something was lost"
-        }
+        "{} {}",
+        match r.verdict() {
+            Verdict::Passed => "✓",
+            Verdict::Unfinished => "?",
+            Verdict::Failed => "✗",
+        },
+        r.verdict_text()
     );
 }
 

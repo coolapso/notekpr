@@ -338,6 +338,19 @@ pub struct Report {
     /// from the final text (should be 0).
     pub sentences: u32,
     pub sentences_missing: u32,
+    /// Changes still waiting on people's devices when the copies were
+    /// compared (the server couldn't take them): then copies may differ for
+    /// now without anything being lost.
+    #[serde(default)]
+    pub waiting: u32,
+    /// Finished sentences not on the server yet: in their writer's copy,
+    /// waiting to be uploaded (not counted as missing).
+    #[serde(default)]
+    pub sentences_waiting: u32,
+    /// The server's limits were lifted for the check (after a game over),
+    /// so it could take everyone's uploads.
+    #[serde(default)]
+    pub limits_lifted: bool,
     #[serde(default)]
     pub levels: Vec<LevelResult>,
     /// Where the server gave up, if it did.
@@ -401,8 +414,89 @@ impl LevelResult {
     }
 }
 
+/// What the check found.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Verdict {
+    /// Every copy the same, every sentence there.
+    Passed,
+    /// Changes were still waiting on people's devices: copies can differ
+    /// for now, but nothing was found lost.
+    Unfinished,
+    /// Something is missing or copies differ with nothing left to upload.
+    Failed,
+}
+
 impl Report {
+    pub fn verdict(&self) -> Verdict {
+        if self.notes_checked == 0
+            || self.sentences_missing > 0
+            || (self.mismatches > 0 && self.waiting == 0)
+        {
+            Verdict::Failed
+        } else if self.waiting > 0 || self.mismatches > 0 || self.sentences_waiting > 0 {
+            Verdict::Unfinished
+        } else {
+            Verdict::Passed
+        }
+    }
+
     pub fn passed(&self) -> bool {
-        self.mismatches == 0 && self.sentences_missing == 0 && self.notes_checked > 0
+        self.verdict() == Verdict::Passed
+    }
+
+    /// The check's outcome in a sentence.
+    pub fn verdict_text(&self) -> String {
+        match self.verdict() {
+            Verdict::Passed => "every copy of every note is the same, nothing was lost".into(),
+            Verdict::Unfinished => format!(
+                "the check couldn't finish: {} changes still wait on people's devices (the \
+                 server couldn't take them), so {} copies differ for now and {} sentences \
+                 are only on their writers' devices — nothing was found lost",
+                self.waiting, self.mismatches, self.sentences_waiting
+            ),
+            Verdict::Failed => format!(
+                "{} copies differ, {} of {} finished sentences missing",
+                self.mismatches, self.sentences_missing, self.sentences
+            ),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn changes_still_on_devices_are_not_called_lost() {
+        let checked = Report {
+            notes_checked: 10,
+            copies_checked: 40,
+            sentences: 100,
+            ..Default::default()
+        };
+        assert_eq!(checked.verdict(), Verdict::Passed);
+        // Copies differ while changes still wait on devices: unfinished.
+        let waiting = Report {
+            mismatches: 3,
+            waiting: 120,
+            sentences_waiting: 2,
+            ..checked.clone()
+        };
+        assert_eq!(waiting.verdict(), Verdict::Unfinished);
+        assert!(waiting.verdict_text().contains("nothing was found lost"));
+        // A sentence gone from its writer's copy, or copies that differ with
+        // nothing left to upload: failed.
+        let lost = Report {
+            sentences_missing: 1,
+            ..waiting.clone()
+        };
+        assert_eq!(lost.verdict(), Verdict::Failed);
+        let differ = Report {
+            mismatches: 1,
+            ..checked.clone()
+        };
+        assert_eq!(differ.verdict(), Verdict::Failed);
+        // Nothing compared is no pass.
+        assert_eq!(Report::default().verdict(), Verdict::Failed);
     }
 }

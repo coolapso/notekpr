@@ -1,6 +1,6 @@
 //! Drawing one frame on the canvas.
 
-use coolpsonotes_load_events::{Action, GameOver, LevelResult, Phase, Report, Stats};
+use coolpsonotes_load_events::{Action, GameOver, LevelResult, Phase, Report, Stats, Verdict};
 use web_sys::CanvasRenderingContext2d as Ctx;
 
 use crate::state::{self, App, Hit, SLOTS};
@@ -765,7 +765,12 @@ fn level_table(
         } else {
             (x + f * w, "right")
         };
-        text(c, LEVEL_HEADS[i], cx, y, &hf, DIM, align);
+        // The corner is narrow: shorter headings there.
+        let head = match i {
+            6 if !full => "KEYSTROKE",
+            _ => LEVEL_HEADS[i],
+        };
+        text(c, head, cx, y, &hf, DIM, align);
     }
     let mut ry = y + row_h;
     let rf = format!("500 11px {MONO}");
@@ -1359,14 +1364,14 @@ fn report(c: &Ctx, world: &Rect, r: &Report, age: f64) {
     rrect(c, x, y, w, h, 16.0);
     c.set_fill_style_str(PANEL_2);
     c.fill();
-    let ok = r.passed();
-    c.set_stroke_style_str(if ok { GREEN } else { RED });
+    let color = verdict_color(r);
+    c.set_stroke_style_str(color);
     c.set_line_width(2.0);
     c.stroke();
-    let headline = if ok {
-        "✓  Every copy is the same. Nothing was lost."
-    } else {
-        "✗  Some copies differ"
+    let headline = match r.verdict() {
+        Verdict::Passed => "✓  Every copy is the same. Nothing was lost.",
+        Verdict::Unfinished => "?  The check couldn't finish",
+        Verdict::Failed => "✗  Some copies differ",
     };
     text(
         c,
@@ -1374,7 +1379,7 @@ fn report(c: &Ctx, world: &Rect, r: &Report, age: f64) {
         x + w / 2.0,
         y + 44.0,
         &format!("700 19px {SANS}"),
-        if ok { GREEN } else { RED },
+        color,
         "center",
     );
     let lines = [
@@ -1423,11 +1428,20 @@ fn report(c: &Ctx, world: &Rect, r: &Report, age: f64) {
             thousands(r.copies_checked as u64),
             r.mismatches
         ),
-        format!(
-            "{} of {} finished sentences missing",
-            r.sentences_missing,
-            thousands(r.sentences as u64)
-        ),
+        if r.waiting > 0 {
+            format!(
+                "{} of {} finished sentences missing · {} changes still on devices",
+                r.sentences_missing,
+                thousands(r.sentences as u64),
+                thousands(r.waiting as u64)
+            )
+        } else {
+            format!(
+                "{} of {} finished sentences missing",
+                r.sentences_missing,
+                thousands(r.sentences as u64)
+            )
+        },
     ];
     let mut ly = y + 84.0;
     for (i, l) in lines.iter().enumerate() {
@@ -1457,14 +1471,14 @@ fn report_levels(c: &Ctx, world: &Rect, r: &Report) {
     rrect(c, x, y, w, h, 16.0);
     c.set_fill_style_str(PANEL_2);
     c.fill();
-    let ok = r.passed();
-    c.set_stroke_style_str(if ok { GREEN } else { RED });
+    let color = verdict_color(r);
+    c.set_stroke_style_str(color);
     c.set_line_width(2.0);
     c.stroke();
-    let headline = if ok {
-        "✓  Every copy is the same. Nothing was lost."
-    } else {
-        "✗  Some copies differ"
+    let headline = match r.verdict() {
+        Verdict::Passed => "✓  Every copy is the same. Nothing was lost.",
+        Verdict::Unfinished => "?  The check couldn't finish",
+        Verdict::Failed => "✗  Some copies differ",
     };
     text(
         c,
@@ -1472,7 +1486,7 @@ fn report_levels(c: &Ctx, world: &Rect, r: &Report) {
         x + w / 2.0,
         y + 36.0,
         &format!("700 18px {SANS}"),
-        if ok { GREEN } else { RED },
+        color,
         "center",
     );
     text(
@@ -1568,19 +1582,21 @@ fn report_game_over(c: &Ctx, world: &Rect, r: &Report, g: &GameOver, age: f64) {
     let row_h = ((h - 300.0) / r.levels.len().max(1) as f64).clamp(14.0, 20.0);
     let used = level_table(c, x + 24.0, table_y, w - 48.0, &r.levels, None, row_h, true);
     // And yet: did anything get lost?
-    let ok = r.passed();
-    let verdict = if ok {
-        format!(
+    let verdict = match r.verdict() {
+        Verdict::Passed => format!(
             "✓  AND NOTHING WAS LOST: {} copies of {} notes identical, all {} sentences there",
             thousands(r.copies_checked as u64),
             thousands(r.notes_checked as u64),
             thousands(r.sentences as u64)
-        )
-    } else {
-        format!(
+        ),
+        Verdict::Unfinished => format!(
+            "?  NOT CHECKED TO THE END: {} changes still on people's devices — nothing found lost",
+            thousands(r.waiting as u64)
+        ),
+        Verdict::Failed => format!(
             "✗  {} copies differ, {} of {} sentences missing",
             r.mismatches, r.sentences_missing, r.sentences
-        )
+        ),
     };
     let vy = (table_y + used + 26.0).min(y + h - 52.0);
     text(
@@ -1589,9 +1605,18 @@ fn report_game_over(c: &Ctx, world: &Rect, r: &Report, g: &GameOver, age: f64) {
         cx,
         vy,
         &format!("700 13px {SANS}"),
-        if ok { GREEN } else { RED },
+        verdict_color(r),
         "center",
     );
+}
+
+/// Green, amber (couldn't check to the end) or red.
+fn verdict_color(r: &Report) -> &'static str {
+    match r.verdict() {
+        Verdict::Passed => GREEN,
+        Verdict::Unfinished => AMBER,
+        Verdict::Failed => RED,
+    }
 }
 
 /// After a run: the way back to the start screen (click, or Enter).

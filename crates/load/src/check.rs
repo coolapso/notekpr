@@ -16,6 +16,10 @@ pub struct Outcome {
     pub mismatches: u32,
     pub sentences: u32,
     pub sentences_missing: u32,
+    /// Changes still waiting on people's devices when copies were compared.
+    pub waiting: u32,
+    /// Finished sentences in their writer's copy, not uploaded yet.
+    pub sentences_waiting: u32,
 }
 
 fn hubs(world: &World) -> Vec<(u32, Arc<Hub>)> {
@@ -101,6 +105,7 @@ pub async fn run(world: &World) -> Outcome {
         count: HashMap<blake3::Hash, u32>,
         n: u32,
     }
+    let waiting = queued(world).await as u32;
     let mut copies: HashMap<(String, String), Copies> = HashMap::new();
     for (_, h) in &hubs {
         for v in h.vaults() {
@@ -117,7 +122,10 @@ pub async fn run(world: &World) -> Outcome {
             }
         }
     }
-    let mut out = Outcome::default();
+    let mut out = Outcome {
+        waiting,
+        ..Default::default()
+    };
     for c in copies.values().filter(|c| c.n > 1) {
         out.notes_checked += 1;
         out.copies_checked += c.n;
@@ -142,7 +150,9 @@ pub async fn run(world: &World) -> Outcome {
         for (s, (n, who, when)) in wanted {
             out.sentences += n;
             let missing = n.saturating_sub(text.matches(s).count() as u32);
-            if missing > 0 {
+            if missing > 0 && on_writers_device(&hubs, &key.0, &key.1, s, &who).await {
+                out.sentences_waiting += missing;
+            } else if missing > 0 {
                 out.sentences_missing += missing;
                 eprintln!("  typed at: {}", when.join("; "));
                 report_missing(world, &key.1, s, &who, text);
@@ -157,6 +167,30 @@ pub async fn run(world: &World) -> Outcome {
         }
     }
     out
+}
+
+/// Whether a writer's own copy has the sentence while changes to the note
+/// still wait on their device: not on the server yet, but not lost.
+async fn on_writers_device(
+    hubs: &[(u32, Arc<Hub>)],
+    vault: &str,
+    note: &str,
+    sentence: &str,
+    who: &[u32],
+) -> bool {
+    for (id, h) in hubs.iter().filter(|(id, _)| who.contains(id)) {
+        let Some(v) = h.get(vault) else {
+            continue;
+        };
+        let g = v.lock().await;
+        let pending = g.replica.pending.iter().any(|p| p.object_id == note)
+            || g.outbox.held.iter().any(|p| p.object_id == note);
+        if pending && g.note_text(note).contains(sentence) {
+            tracing::debug!("{}'s sentence is still on their device", id);
+            return true;
+        }
+    }
+    false
 }
 
 /// What each client knows of a note that lost a sentence.

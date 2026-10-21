@@ -278,6 +278,39 @@ impl Server {
         Ok(())
     }
 
+    /// For the check after a game over: raise the container's limits (to 4
+    /// CPUs and 4 GB, or four times what it had if that is more), so it can
+    /// take everyone's uploads. False if it has no limits of ours.
+    pub async fn lift_limits(&mut self) -> Result<bool> {
+        let Kind::Docker {
+            name, cpus, memory, ..
+        } = &self.kind
+        else {
+            return Ok(false);
+        };
+        let mem = docker_memory(memory).unwrap_or(0).max(1 << 30) * 4;
+        let mem = format!("{}m", mem >> 20);
+        let cpus = (*cpus * 4.0).max(4.0).to_string();
+        let st = Command::new("docker")
+            .args([
+                "update",
+                "--cpus",
+                &cpus,
+                "--memory",
+                &mem,
+                "--memory-swap",
+                &mem,
+            ])
+            .arg(name.as_str())
+            .stdout(Stdio::null())
+            .status()
+            .await?;
+        if !st.success() {
+            bail!("docker update failed");
+        }
+        Ok(true)
+    }
+
     /// Remove it (container and data).
     pub fn remove(&mut self) {
         if let Some(s) = self.sampler.take() {

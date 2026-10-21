@@ -101,8 +101,11 @@ it aren't worked off within two minutes, or it dies by itself (stops
 answering for 20 s, or Docker kills it for running out of memory), or most
 of a level's newcomers can't even sign up — there are no more levels: the
 live view says GAME OVER, with the level, the reason and the best level it
-survived (`--keep-going` goes on regardless). The copies are still checked;
-"game over, but nothing was lost" is the interesting part. To try that
+survived (`--keep-going` goes on regardless). The copies are still checked —
+with the container's limits lifted (`docker update`: 4 CPUs and 4 GB, or
+four times its limits), so the server can take what everyone wrote meanwhile
+and the check shows whether anything was *lost*, not whether the server
+could keep up: "game over, but nothing was lost" is the interesting part. To try that
 level again with more CPU or memory without replaying the ones before it,
 start there: `task load FROM=6 CPUS=2` — everyone up to level 6 arrives at
 once (spread over a warm-up as long as their levels' arrivals together),
@@ -117,8 +120,12 @@ At the end:
    * every sentence anyone finished typing must be in the note.
 
    The run passes (exit code 0) only if both hold — a game over is a
-   capacity limit, not a failure; otherwise it exits 1
-   and says, for each missing sentence, who typed it into which note, what
+   capacity limit, not a failure. If changes are still waiting on people's
+   devices when the copies are compared (the server couldn't take them even
+   so; it is started again whenever it dies meanwhile), copies can differ
+   for now and sentences can be only on their writer's device: the check
+   couldn't finish (exit code 3, amber), which is not a loss. Otherwise it
+   exits 1 and says, for each missing sentence, who typed it into which note, what
    every member's copy holds of that note (in the index, pending, held,
    waiting for a key), and a replay of the note's changes as the server
    stores them — when the sentence appeared and whose change removed it.

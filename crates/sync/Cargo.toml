@@ -4,6 +4,7 @@ description = "The client sync engine shared by the notekpr browser and desktop 
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+publish = false
 
 [dependencies]
 notekpr-core = { path = "../core" }

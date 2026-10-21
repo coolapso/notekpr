@@ -4,6 +4,7 @@ description = "Headless, zero-knowledge synchronization server for notekpr"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+publish = false
 
 [[bin]]
 name = "notekpr-server"

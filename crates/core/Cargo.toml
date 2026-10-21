@@ -4,6 +4,7 @@ description = "Shared cryptography, protocol types and document model for notekp
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+publish = false
 
 [dependencies]
 hpke = { version = "0.14", default-features = false, features = ["alloc", "getrandom", "x25519", "chacha"] }

@@ -290,8 +290,9 @@ tasks:
       - task: ci:check
       - task: ci:image
 
-  # CI runs these two as separate jobs: one machine's disk (14 GB guaranteed
-  # on GitHub's runners) doesn't hold the test builds and the image build.
+  # CI runs these two as separate jobs, ci:image once ci:check passes: one
+  # machine's disk (14 GB guaranteed on GitHub's runners) doesn't hold the
+  # test builds and the image build.
   ci:check:
     desc: "Format check, lint, every test, the wasm build, the editor's and the browser tests, the supply-chain check"
     cmds:

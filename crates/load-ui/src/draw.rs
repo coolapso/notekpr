@@ -1,6 +1,6 @@
 //! Drawing one frame on the canvas.
 
-use coolpsonotes_load_events::{Action, Phase, Report, Stats};
+use coolpsonotes_load_events::{Action, LevelResult, Phase, Report, Stats};
 use web_sys::CanvasRenderingContext2d as Ctx;
 
 use crate::state::{App, SLOTS};
@@ -212,20 +212,17 @@ fn header(app: &App, c: &Ctx, w: f64, head: f64) {
         phase_color(app.phase),
         "left",
     );
-    text(
-        c,
-        &app.detail,
-        x + pw + 12.0,
-        34.5,
-        &format!("400 13px {SANS}"),
-        DIM,
-        "left",
-    );
-
     let mut right = Vec::new();
     if let Some(hl) = &app.hello {
         let t = app.latest().map(|s| s.t_ms).unwrap_or(0);
-        right.push(format!("{} · {} people", clock(t), hl.users));
+        match app.level {
+            Some((level, of, users, _)) if of > 1 => right.push(format!(
+                "{} · level {level}/{of} · {users} of {} people",
+                clock(t),
+                hl.users
+            )),
+            _ => right.push(format!("{} · {} people", clock(t), hl.users)),
+        }
         if hl.cpus > 0.0 {
             right.push(format!("server: {} CPU · {:.0} MB", hl.cpus, mb(hl.memory)));
         } else {
@@ -233,15 +230,20 @@ fn header(app: &App, c: &Ctx, w: f64, head: f64) {
         }
         right.push(format!("seed {}", hl.seed));
     }
-    text(
-        c,
-        &right.join("   "),
-        w - 18.0,
-        34.5,
-        &format!("500 13px {MONO}"),
-        DIM,
-        "right",
-    );
+    let right = right.join("   ");
+    let rf = format!("500 13px {MONO}");
+    text(c, &right, w - 18.0, 34.5, &rf, DIM, "right");
+    // The phase's detail, cut to the room left.
+    let df = format!("400 13px {SANS}");
+    let room = w - 18.0 - width(c, &right, &rf) - 24.0 - (x + pw + 12.0);
+    let mut detail = app.detail.clone();
+    if width(c, &detail, &df) > room {
+        while !detail.is_empty() && width(c, &format!("{detail}…"), &df) > room {
+            detail.pop();
+        }
+        detail.push('…');
+    }
+    text(c, &detail, x + pw + 12.0, 34.5, &df, DIM, "left");
     c.set_fill_style_str(LINE);
     c.fill_rect(0.0, head, w, 1.0);
 }
@@ -373,13 +375,7 @@ fn draw_world(app: &mut App, c: &Ctx, r: &Rect, now: f64) {
 
     // People.
     let n = app.people.len();
-    let radius = if n <= 40 {
-        9.0
-    } else if n <= 120 {
-        7.0
-    } else {
-        5.0
-    };
+    let radius = app.dot_radius.max(2.5);
     let label_all = n <= 50;
     let on_screen: std::collections::BTreeSet<u32> = app
         .screens
@@ -399,7 +395,13 @@ fn draw_world(app: &mut App, c: &Ctx, r: &Rect, now: f64) {
             let pulse = 0.5 + 0.5 * ((now / 140.0) + i as f64).sin();
             c.set_global_alpha(0.25 + 0.35 * pulse);
             c.begin_path();
-            let _ = c.arc(x, y, radius + 4.0 + pulse * 2.0, 0.0, std::f64::consts::TAU);
+            let _ = c.arc(
+                x,
+                y,
+                radius * 1.4 + 2.0 + pulse * 2.0,
+                0.0,
+                std::f64::consts::TAU,
+            );
             c.set_stroke_style_str(&person_color(id, 66));
             c.set_line_width(1.5);
             c.stroke();
@@ -482,11 +484,27 @@ fn draw_world(app: &mut App, c: &Ctx, r: &Rect, now: f64) {
         );
         text(
             c,
-            "killed with SIGKILL · restarting",
+            "killed with SIGKILL",
             server.0,
             by + 76.0,
             &format!("500 11px {SANS}"),
             DIM,
+            "center",
+        );
+        let left = app
+            .down_for
+            .map(|(secs, at)| (secs as f64 - (now - at) / 1000.0).max(0.0));
+        let msg = match left {
+            Some(l) if l >= 0.5 => format!("back in {l:.0} s"),
+            _ => "starting again…".to_string(),
+        };
+        text(
+            c,
+            &msg,
+            server.0,
+            by + 98.0,
+            &format!("700 14px {MONO}"),
+            AMBER,
             "center",
         );
     } else {
@@ -590,6 +608,7 @@ fn draw_world(app: &mut App, c: &Ctx, r: &Rect, now: f64) {
     c.set_line_width(1.5);
     c.stroke();
     text(c, "offline", lx + 9.0, ly, &lf, DIM, "left");
+    levels_panel(app, c, r);
     let shown = app.feed.len().min(6);
     if shown > 0 {
         let ff = format!("500 12px {SANS}");
@@ -623,6 +642,156 @@ fn draw_world(app: &mut App, c: &Ctx, r: &Rect, now: f64) {
         fy -= 18.0;
     }
     c.set_global_alpha(1.0);
+}
+
+/// A row of a levels table: (text, right edge) per column.
+fn level_cells(l: &LevelResult) -> Vec<String> {
+    vec![
+        l.level.to_string(),
+        l.users.to_string(),
+        format!("{:.0}", l.avg_http_rps),
+        format!("{:.0}", l.peak_http_rps),
+        format!("{:.0}%", l.peak_cpu_pct),
+        format!("{:.0} MB", mb(l.peak_mem_bytes)),
+        format!("{:.0} / {:.0}", l.propagation_p50_ms, l.propagation_p99_ms),
+        format!("{} s", l.downtime_s),
+        l.online_s
+            .map(|s| format!("{s:.1} s"))
+            .unwrap_or_else(|| "—".into()),
+        l.recovery_s
+            .map(|s| format!("{s:.1} s"))
+            .unwrap_or_else(|| "never".into()),
+        thousands(l.max_queued as u64),
+    ]
+}
+
+const LEVEL_HEADS: [&str; 11] = [
+    "LEVEL",
+    "PEOPLE",
+    "REQ/S",
+    "PEAK",
+    "CPU",
+    "MEMORY",
+    "KEYSTROKE MS",
+    "DOWN",
+    "ONLINE IN",
+    "CAUGHT UP",
+    "MOST QUEUED",
+];
+
+/// Which columns, and their right edges as fractions of the width (the
+/// first is left-aligned): all of them, or a compact set for the corner.
+fn level_columns(full: bool) -> Vec<(usize, f64)> {
+    if full {
+        vec![
+            (0, 0.0),
+            (1, 0.12),
+            (2, 0.21),
+            (3, 0.29),
+            (4, 0.36),
+            (5, 0.46),
+            (6, 0.61),
+            (7, 0.68),
+            (8, 0.78),
+            (9, 0.88),
+            (10, 1.0),
+        ]
+    } else {
+        vec![
+            (0, 0.0),
+            (1, 0.22),
+            (2, 0.36),
+            (4, 0.48),
+            (6, 0.72),
+            (7, 0.85),
+            (9, 1.0),
+        ]
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn level_table(
+    c: &Ctx,
+    x: f64,
+    y: f64,
+    w: f64,
+    rows: &[LevelResult],
+    now_row: Option<Vec<String>>,
+    row_h: f64,
+    full: bool,
+) -> f64 {
+    let cols = level_columns(full);
+    let hf = format!("700 9px {SANS}");
+    for &(i, f) in &cols {
+        let (cx, align) = if f == 0.0 {
+            (x, "left")
+        } else {
+            (x + f * w, "right")
+        };
+        text(c, LEVEL_HEADS[i], cx, y, &hf, DIM, align);
+    }
+    let mut ry = y + row_h;
+    let rf = format!("500 11px {MONO}");
+    let all: Vec<(Vec<String>, &str)> = rows
+        .iter()
+        .map(|l| (level_cells(l), TEXT))
+        .chain(now_row.map(|r| (r, AMBER)))
+        .collect();
+    for (cells, color) in &all {
+        for &(i, f) in &cols {
+            let (cx, align) = if f == 0.0 {
+                (x, "left")
+            } else {
+                (x + f * w, "right")
+            };
+            text(c, &cells[i], cx, ry, &rf, color, align);
+        }
+        ry += row_h;
+    }
+    ry - y
+}
+
+/// The levels so far, in the world's top-right corner.
+fn levels_panel(app: &App, c: &Ctx, r: &Rect) {
+    let Some((level, of, users, down)) = app.level else {
+        return;
+    };
+    if of < 2 || app.report.is_some() {
+        return;
+    }
+    let shown: Vec<LevelResult> = app.levels.iter().rev().take(5).rev().cloned().collect();
+    let current = (app.levels.iter().all(|l| l.level != level)).then(|| {
+        vec![
+            level.to_string(),
+            users.to_string(),
+            "…".into(),
+            "".into(),
+            "".into(),
+            "".into(),
+            "".into(),
+            format!("{down} s"),
+            "".into(),
+            "now".into(),
+            "".into(),
+        ]
+    });
+    let rows = shown.len() + usize::from(current.is_some());
+    let w = 400.0_f64.min(r.w * 0.45);
+    let h = 34.0 + rows as f64 * 15.0;
+    let (x, y) = (r.x + r.w - w - 12.0, r.y + 10.0);
+    rrect(c, x, y, w, h, 10.0);
+    c.set_fill_style_str("rgba(10,13,19,0.88)");
+    c.fill();
+    level_table(
+        c,
+        x + 12.0,
+        y + 18.0,
+        w - 24.0,
+        &shown,
+        current,
+        15.0,
+        false,
+    );
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -659,6 +828,16 @@ fn draw_charts(app: &App, c: &Ctx, r: &Rect) {
     let mem_limit = hello.as_ref().map(|h| mb(h.memory)).filter(|m| *m > 0.0);
     let series = |f: &dyn Fn(&Stats) -> f64| -> Vec<f64> { s.iter().map(|x| f(x)).collect() };
     let users = hello.as_ref().map(|h| h.users).unwrap_or(0);
+    let marks: Vec<f64> = match (s.first(), s.last()) {
+        (Some(a), Some(b)) if b.t_ms > a.t_ms => app
+            .level_starts
+            .iter()
+            .skip(1)
+            .map(|&t| (t.saturating_sub(a.t_ms)) as f64 / (b.t_ms - a.t_ms) as f64)
+            .filter(|f| (0.0..=1.0).contains(f))
+            .collect(),
+        _ => Vec::new(),
+    };
     let cards: Vec<Card> = vec![
         Card {
             title: "SERVER CPU",
@@ -669,6 +848,7 @@ fn draw_charts(app: &App, c: &Ctx, r: &Rect) {
             sub: String::new(),
             lines: vec![(series(&|x| x.cpu_pct as f64), GREEN)],
             limit: cpu_limit,
+            marks: marks.clone(),
         },
         Card {
             title: "SERVER MEMORY",
@@ -678,6 +858,7 @@ fn draw_charts(app: &App, c: &Ctx, r: &Rect) {
                 .unwrap_or_default(),
             lines: vec![(series(&|x| mb(x.mem_bytes)), PURPLE)],
             limit: mem_limit,
+            marks: marks.clone(),
         },
         Card {
             title: "REQUESTS / S",
@@ -685,6 +866,7 @@ fn draw_charts(app: &App, c: &Ctx, r: &Rect) {
             sub: format!("p99 {:.1} ms at the server", last.http_p99_ms),
             lines: vec![(series(&|x| x.http_rps as f64), CYAN)],
             limit: None,
+            marks: marks.clone(),
         },
         Card {
             title: "EDITS / S",
@@ -692,6 +874,7 @@ fn draw_charts(app: &App, c: &Ctx, r: &Rect) {
             sub: format!("{} edits in all", thousands(last.edits)),
             lines: vec![(series(&|x| x.actions_ps as f64), "#60a5fa")],
             limit: None,
+            marks: marks.clone(),
         },
         Card {
             title: "KEYSTROKE → OTHERS' SCREENS",
@@ -702,6 +885,7 @@ fn draw_charts(app: &App, c: &Ctx, r: &Rect) {
                 (series(&|x| x.propagation_p50_ms as f64), AMBER),
             ],
             limit: None,
+            marks: marks.clone(),
         },
         Card {
             title: "PEOPLE ONLINE",
@@ -712,6 +896,7 @@ fn draw_charts(app: &App, c: &Ctx, r: &Rect) {
             ),
             lines: vec![(series(&|x| x.online as f64), GREEN)],
             limit: Some(users as f64),
+            marks: marks.clone(),
         },
     ];
     let cols = if r.w > 840.0 { 6 } else { 3 };
@@ -732,6 +917,22 @@ struct Card {
     sub: String,
     lines: Vec<(Vec<f64>, &'static str)>,
     limit: Option<f64>,
+    /// Where levels began, as fractions of the run so far.
+    marks: Vec<f64>,
+}
+
+/// At most `n` points: each the highest of its share of `v`.
+fn downsample(v: &[f64], n: usize) -> Vec<f64> {
+    if v.len() <= n {
+        return v.to_vec();
+    }
+    (0..n)
+        .map(|i| {
+            let a = i * v.len() / n;
+            let b = ((i + 1) * v.len() / n).max(a + 1);
+            v[a..b].iter().copied().fold(f64::MIN, f64::max)
+        })
+        .collect()
 }
 
 fn chart(c: &Ctx, r: &Rect, card: &Card) {
@@ -770,10 +971,16 @@ fn chart(c: &Ctx, r: &Rect, card: &Card) {
     if gh < 12.0 {
         return;
     }
-    let n = 150usize;
+    // The whole run, a bucket per two pixels (each bucket's highest value).
+    let n = ((gw / 2.0) as usize).max(2);
+    let lines: Vec<(Vec<f64>, &str)> = card
+        .lines
+        .iter()
+        .map(|(s, color)| (downsample(s, n), *color))
+        .collect();
     let mut max = card.limit.unwrap_or(0.0);
-    for (s, _) in &card.lines {
-        for v in s.iter().rev().take(n) {
+    for (s, _) in &lines {
+        for v in s {
             max = max.max(*v);
         }
     }
@@ -790,13 +997,18 @@ fn chart(c: &Ctx, r: &Rect, card: &Card) {
         c.set_global_alpha(1.0);
         let _ = c.set_line_dash(&js_sys::Array::new());
     }
-    for (s, color) in &card.lines {
-        let pts: Vec<f64> = s.iter().rev().take(n).rev().copied().collect();
+    // Where levels began.
+    for f in &card.marks {
+        let x = gx + gw * f;
+        c.set_fill_style_str(LINE);
+        c.fill_rect(x, gy, 1.0, gh);
+    }
+    for (pts, color) in &lines {
         if pts.len() < 2 {
             continue;
         }
-        let step = gw / (n - 1) as f64;
-        let x0 = gx + gw - step * (pts.len() - 1) as f64;
+        let step = gw / (pts.len() - 1) as f64;
+        let x0 = gx;
         c.begin_path();
         for (i, v) in pts.iter().enumerate() {
             let x = x0 + step * i as f64;
@@ -1098,6 +1310,9 @@ fn report(c: &Ctx, world: &Rect, r: &Report, age: f64) {
     rrect(c, world.x, world.y, world.w, world.h, 12.0);
     c.fill();
     c.set_global_alpha(a);
+    if r.levels.len() > 1 {
+        return report_levels(c, world, r);
+    }
     let (w, h) = (world.w.min(620.0), 380.0_f64.min(world.h - 20.0));
     let (x, y) = (world.x + (world.w - w) / 2.0, world.y + (world.h - h) / 2.0);
     rrect(c, x, y, w, h, 16.0);
@@ -1154,9 +1369,12 @@ fn report(c: &Ctx, world: &Rect, r: &Report, age: f64) {
             "Keystroke → others' screens: p50 {:.0} ms · p99 {:.0} ms",
             r.propagation_p50_ms, r.propagation_p99_ms
         ),
-        match r.recovery_s {
-            Some(s) => format!("After the crash, everyone was back and caught up in {s:.1} s"),
-            None => "No crash this run".to_string(),
+        match (r.recovery_s, r.levels.first().map(|l| l.downtime_s)) {
+            (Some(s), _) => format!("After the crash, everyone was back and caught up in {s:.1} s"),
+            (None, Some(d)) if d > 0 => {
+                "After the crash, it didn't catch up within two minutes".to_string()
+            }
+            _ => "No crash this run".to_string(),
         },
         format!(
             "Compared {} notes ({} copies): {} differ",
@@ -1185,4 +1403,56 @@ fn report(c: &Ctx, world: &Rect, r: &Report, age: f64) {
         ly += 30.0;
     }
     c.set_global_alpha(1.0);
+}
+
+/// The end of a run with levels: how each level went, and the check.
+fn report_levels(c: &Ctx, world: &Rect, r: &Report) {
+    let rows = r.levels.len() as f64;
+    let (w, h) = (
+        (world.w - 40.0).min(900.0),
+        (150.0 + rows * 21.0).min(world.h - 20.0),
+    );
+    let (x, y) = (world.x + (world.w - w) / 2.0, world.y + (world.h - h) / 2.0);
+    rrect(c, x, y, w, h, 16.0);
+    c.set_fill_style_str(PANEL_2);
+    c.fill();
+    let ok = r.passed();
+    c.set_stroke_style_str(if ok { GREEN } else { RED });
+    c.set_line_width(2.0);
+    c.stroke();
+    let headline = if ok {
+        "✓  Every copy is the same. Nothing was lost."
+    } else {
+        "✗  Some copies differ"
+    };
+    text(
+        c,
+        headline,
+        x + w / 2.0,
+        y + 36.0,
+        &format!("700 18px {SANS}"),
+        if ok { GREEN } else { RED },
+        "center",
+    );
+    text(
+        c,
+        &format!(
+            "{} people in {} teams · {:.0} s · {} edits · compared {} notes ({} copies): {} differ · {} of {} sentences missing",
+            r.users,
+            r.teams,
+            r.duration_s,
+            thousands(r.edits),
+            thousands(r.notes_checked as u64),
+            thousands(r.copies_checked as u64),
+            r.mismatches,
+            r.sentences_missing,
+            thousands(r.sentences as u64)
+        ),
+        x + w / 2.0,
+        y + 60.0,
+        &format!("500 12px {SANS}"),
+        DIM,
+        "center",
+    );
+    level_table(c, x + 24.0, y + 92.0, w - 48.0, &r.levels, None, 21.0, true);
 }

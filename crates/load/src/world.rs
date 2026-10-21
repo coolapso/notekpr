@@ -222,7 +222,7 @@ pub fn keystrokes(rng: &mut Rng, text: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut i = 0;
     while i < chars.len() {
-        let n = (rng.range(1, 6) as usize).min(chars.len() - i);
+        let n = (rng.range(1, 4) as usize).min(chars.len() - i);
         out.push(chars[i..i + n].iter().collect());
         i += n;
     }

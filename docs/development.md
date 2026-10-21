@@ -108,14 +108,16 @@ broken CLI or server path shows up while seeding too.
 ## A load test you can watch
 
 ```sh
-task load                                  # 100 people against the server image (1 CPU, 512 MB); live view on :8098
-task load USERS=300 DURATION=5m CPUS=2 MEMORY=1g
+task load                                  # 10 levels, 100 → 1000 people, against the server image (1 CPU, 512 MB); live view on :8098
+task load LEVELS=1 DURATION=2m             # one crowd of 100
+task load USERS=300 STEP=300 LEVELS=3 CPUS=2 MEMORY=1g
 task load:native                           # no Docker: a local server process, no limits
 ```
 
 Simulated people — real clients with real keys and encryption — sign up,
-share vaults, type together, upload pictures; the server is killed midway;
-at the end every copy of every note is compared. Needs Docker (`task load`
+share vaults, type together, upload pictures; the crowd grows level by
+level and the server is killed in each, for longer each time; at the end
+every copy of every note is compared. Needs Docker (`task load`
 builds the image). What it measures and how: [load-test.md](load-test.md).
 
 ## Run locally with several users (no OIDC)

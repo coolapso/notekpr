@@ -3,10 +3,10 @@
 
 use std::collections::{BTreeMap, VecDeque};
 
-use coolpsonotes_load_events::{Action, Event, Hello, Phase, Report, Screen, Stats};
+use coolpsonotes_load_events::{Action, Event, Hello, LevelResult, Phase, Report, Screen, Stats};
 
 pub const SLOTS: usize = 3;
-const KEEP_STATS: usize = 900;
+const KEEP_STATS: usize = 3600;
 const KEEP_FEED: usize = 30;
 /// More flying at once than this and new deliveries aren't drawn.
 const MAX_PARTICLES: usize = 3000;
@@ -72,6 +72,15 @@ pub struct App {
     pub teams: BTreeMap<u32, TeamView>,
     pub server_up: bool,
     pub server_changed: f64,
+    /// While down: for how long, and since when (page clock).
+    pub down_for: Option<(u32, f64)>,
+    /// The level now: (level, of, people in all, its outage in s).
+    pub level: Option<(u32, u32, u32, u32)>,
+    pub levels: Vec<LevelResult>,
+    /// When each level began (run time, ms).
+    pub level_starts: Vec<u64>,
+    /// How big people are drawn (from the layout).
+    pub dot_radius: f64,
     pub stats: VecDeque<Stats>,
     pub feed: VecDeque<(String, Action, f64)>,
     pub screens: [Option<Screen>; SLOTS],
@@ -227,11 +236,29 @@ impl App {
                     });
                 }
             }
-            Event::Server { up } => {
+            Event::Server { up, down_for_s } => {
                 if self.server_up != up {
                     self.server_changed = now;
                 }
                 self.server_up = up;
+                self.down_for = down_for_s.filter(|_| !up).map(|s| (s, now));
+            }
+            Event::Level {
+                level,
+                of,
+                users,
+                downtime_s,
+            } => {
+                if self.level_starts.len() < level as usize {
+                    let t = self.latest().map(|s| s.t_ms).unwrap_or(0);
+                    self.level_starts.push(t);
+                }
+                self.level = Some((level, of, users, downtime_s));
+            }
+            Event::LevelDone(r) => {
+                if self.levels.iter().all(|l| l.level != r.level) {
+                    self.levels.push(r);
+                }
             }
             Event::Stats(s) => {
                 if self.stats.back().is_none_or(|l| s.t_ms > l.t_ms) {
@@ -268,13 +295,22 @@ impl App {
     }
 
     /// Place people around the server, team by team, on as many rings as
-    /// it takes to give everyone some room.
+    /// it takes to give everyone some room (sizing them to fit).
     pub fn place(&mut self, cx: f64, cy: f64, rx: f64, ry: f64) {
         let teams = self.team_members();
         let n = self.people.len().max(1) as f64;
         let circumference = std::f64::consts::PI * (rx + ry);
-        let rings = ((24.0 * n) / circumference).ceil().clamp(1.0, 4.0) as usize;
+        let rings = ((16.0 * n) / circumference).ceil().clamp(1.0, 10.0) as usize;
         let per_ring = (n / rings as f64).ceil();
+        // Rings close together, so a team stays one cluster.
+        let ring_step = if rings > 1 {
+            (0.45 / (rings - 1) as f64).min(0.08)
+        } else {
+            0.0
+        };
+        let along = circumference / per_ring.max(1.0);
+        let across = if rings > 1 { ry * ring_step } else { f64::MAX };
+        self.dot_radius = (along.min(across) * 0.36).clamp(2.5, 9.0);
         // Each team gets a slice, with a gap between teams.
         let gap = 0.6;
         let slots: f64 = teams
@@ -288,7 +324,7 @@ impl App {
                 let ring = j % rings;
                 let k = (j / rings) as f64;
                 let a = angle + k * step;
-                let scale = 1.0 - ring as f64 * 0.13;
+                let scale = 1.0 - ring as f64 * ring_step;
                 self.people[id as usize].pos =
                     (cx + a.cos() * rx * scale, cy + a.sin() * ry * scale);
             }
@@ -335,6 +371,7 @@ mod tests {
                 memory: 0,
                 started_ms: 0,
                 server_url: String::new(),
+                levels: 1,
             }),
             1.0,
         );

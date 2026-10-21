@@ -331,26 +331,32 @@ tasks:
     silent: true
 
   load:
-    desc: "Load test with a live view on http://localhost:8098: simulated people against the server image with CPU and memory limits (USERS=100 DURATION=3m CPUS=1 MEMORY=512m)"
+    desc: "Load test with a live view on http://localhost:8098: levels of people (100 → 1000) against the server image with CPU and memory limits, each level with a longer outage (USERS=100 STEP=100 LEVELS=10 DURATION=45s CPUS=1 MEMORY=512m SPEED=1)"
     deps: [docker:build, build:load-ui]
     vars:
       USERS: '{{.USERS | default "100"}}'
-      DURATION: '{{.DURATION | default "3m"}}'
+      STEP: '{{.STEP | default "100"}}'
+      LEVELS: '{{.LEVELS | default "10"}}'
+      DURATION: '{{.DURATION | default "45s"}}'
       CPUS: '{{.CPUS | default "1"}}'
       MEMORY: '{{.MEMORY | default "512m"}}'
+      SPEED: '{{.SPEED | default "1"}}'
     cmds:
       - cargo build --release -p coolpsonotes-load
-      - ./target/release/coolpsonotes-load --open --users {{.USERS}} --duration {{.DURATION}} --cpus {{.CPUS}} --memory {{.MEMORY}} {{.CLI_ARGS}}
+      - ./target/release/coolpsonotes-load --open --users {{.USERS}} --step {{.STEP}} --levels {{.LEVELS}} --duration {{.DURATION}} --speed {{.SPEED}} --cpus {{.CPUS}} --memory {{.MEMORY}} {{.CLI_ARGS}}
 
   load:native:
-    desc: "Like load, without Docker: the server as a local process, no limits (USERS=100 DURATION=3m)"
+    desc: "Like load, without Docker: the server as a local process, no limits (USERS=100 STEP=100 LEVELS=10 DURATION=45s SPEED=1)"
     deps: [build:load-ui, build:web]
     vars:
       USERS: '{{.USERS | default "100"}}'
-      DURATION: '{{.DURATION | default "3m"}}'
+      STEP: '{{.STEP | default "100"}}'
+      LEVELS: '{{.LEVELS | default "10"}}'
+      DURATION: '{{.DURATION | default "45s"}}'
+      SPEED: '{{.SPEED | default "1"}}'
     cmds:
       - cargo build --release -p coolpsonotes-server -p coolpsonotes-load
-      - ./target/release/coolpsonotes-load --native --open --users {{.USERS}} --duration {{.DURATION}} {{.CLI_ARGS}}
+      - ./target/release/coolpsonotes-load --native --open --users {{.USERS}} --step {{.STEP}} --levels {{.LEVELS}} --duration {{.DURATION}} --speed {{.SPEED}} {{.CLI_ARGS}}
 
   # ------------------------------------------------------------------ housekeeping
 

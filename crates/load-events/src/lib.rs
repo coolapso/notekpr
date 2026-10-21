@@ -54,8 +54,22 @@ pub enum Event {
         size: u32,
         hex: String,
     },
-    /// The server went down (crashed on purpose) or came back.
-    Server { up: bool },
+    /// The server went down (crashed on purpose) or came back; while down,
+    /// for how long it will be.
+    Server {
+        up: bool,
+        #[serde(default)]
+        down_for_s: Option<u32>,
+    },
+    /// A level starts: `users` people in all, a crash of `downtime_s`.
+    Level {
+        level: u32,
+        of: u32,
+        users: u32,
+        downtime_s: u32,
+    },
+    /// A level is over.
+    LevelDone(LevelResult),
     /// Measurements, about once a second.
     Stats(Stats),
     /// A line for the activity feed.
@@ -79,6 +93,9 @@ pub struct Hello {
     pub started_ms: i64,
     /// The server under load, for watching it in a browser.
     pub server_url: String,
+    /// How many levels (1 = a single crowd).
+    #[serde(default)]
+    pub levels: u32,
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
@@ -238,6 +255,38 @@ pub struct Report {
     /// from the final text (should be 0).
     pub sentences: u32,
     pub sentences_missing: u32,
+    #[serde(default)]
+    pub levels: Vec<LevelResult>,
+}
+
+/// One level of the run: how the server did with this many people, and
+/// how it came back from this long an outage.
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+pub struct LevelResult {
+    pub level: u32,
+    pub users: u32,
+    pub duration_s: f32,
+    pub actions: u64,
+    pub edits: u64,
+    pub errors: u64,
+    pub avg_http_rps: f32,
+    pub peak_http_rps: f32,
+    pub peak_cpu_pct: f32,
+    pub peak_mem_bytes: u64,
+    pub http_p99_ms: f32,
+    /// Keystroke to others' copies, outside the outage.
+    pub propagation_p50_ms: f32,
+    pub propagation_p99_ms: f32,
+    pub downtime_s: u32,
+    /// From the restart until everyone was connected again.
+    #[serde(default)]
+    pub online_s: Option<f32>,
+    /// From the restart until the outage's backlog was worked off (changes
+    /// waiting on devices back down to where they were before the crash);
+    /// none if not within two minutes.
+    pub recovery_s: Option<f32>,
+    /// The most changes waiting on people's devices at once.
+    pub max_queued: u32,
 }
 
 impl Report {

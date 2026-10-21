@@ -31,10 +31,56 @@ pub struct Team {
     /// The note everyone writes in together.
     pub hot_id: String,
     pub hot_title: String,
+    /// How many fresh pages the shared note has had.
+    pub page: u32,
 }
 
-/// Per writer: their part's length after each keystroke, and when.
-pub type Keystrokes = HashMap<u32, Vec<(usize, Instant)>>;
+/// Per writer: their keystrokes in a note.
+pub type Keystrokes = HashMap<u32, KeyLog>;
+
+/// How long keystrokes are remembered for measuring when they arrive.
+const KEEP_KEYSTROKES: Duration = Duration::from_secs(300);
+/// A team's shared note longer than this gets a fresh page.
+const PAGE_BYTES: usize = 16_000;
+
+/// A writer's keystrokes in one note: the length of their part after each,
+/// and when. Old ones are forgotten (`base` counts them).
+#[derive(Default)]
+pub struct KeyLog {
+    base: usize,
+    entries: std::collections::VecDeque<(usize, Instant)>,
+}
+
+impl KeyLog {
+    fn push(&mut self, len: usize, at: Instant) {
+        self.entries.push_back((len, at));
+        while self
+            .entries
+            .front()
+            .is_some_and(|(_, t)| at.duration_since(*t) > KEEP_KEYSTROKES)
+        {
+            self.entries.pop_front();
+            self.base += 1;
+        }
+    }
+
+    /// The keystrokes from `*next` on that a part of length `have` contains:
+    /// their time, and `*next` moves past them.
+    fn arrived(&self, next: &mut usize, have: usize, now: Instant, out: &mut Vec<Duration>) {
+        *next = (*next).max(self.base);
+        while let Some(&(len, at)) = self.entries.get(*next - self.base) {
+            if len > have {
+                break;
+            }
+            out.push(now.duration_since(at));
+            *next += 1;
+        }
+    }
+}
+/// A finished sentence, and who typed it.
+/// A finished sentence: what, who typed it, when (ms into the run) and in
+/// which phase it was started.
+pub type Said = (String, u32, u64, String);
 /// A person's client: their session and their copies of the vaults.
 pub type Client = (Arc<Session>, Arc<Hub>);
 
@@ -54,11 +100,15 @@ pub struct World {
     /// How many of a writer's keystrokes each reader has been credited with.
     pub credited: Mutex<HashMap<(u32, String, u32), usize>>,
     /// Sentences people finished, per (vault, note).
-    pub sentences: Mutex<HashMap<(String, String), Vec<String>>>,
+    pub sentences: Mutex<HashMap<(String, String), Vec<Said>>>,
     /// Who is typing in which note right now.
     pub typing: Mutex<HashMap<String, BTreeSet<u32>>>,
     /// Every person's client, by id (filled as they arrive).
     pub clients: Mutex<Vec<Option<Client>>>,
+    /// How fast people are (2 = twice as fast as the defaults).
+    pub speed: f64,
+    /// When the run started.
+    pub t0: Instant,
 }
 
 impl World {
@@ -68,9 +118,12 @@ impl World {
         root: PathBuf,
         people: u32,
         team_of: Vec<u32>,
+        speed: f64,
     ) -> World {
         World {
             bus,
+            speed,
+            t0: Instant::now(),
             server_url,
             root,
             names: (0..people).map(world::person_name).collect(),
@@ -188,6 +241,70 @@ impl Person {
         self.world.display(self.id).to_string()
     }
 
+    /// A pause of `lo..=hi` ms at normal speed.
+    fn pause(&mut self, lo: u64, hi: u64) -> Duration {
+        Duration::from_millis(self.rng.range(lo, hi)).div_f64(self.world.speed.max(0.05))
+    }
+
+    /// As a team's owner: when the shared note gets long, start a fresh page
+    /// for everyone (people do; it also keeps notes a sensible size).
+    async fn new_page_if_long(&mut self) -> Result<()> {
+        let Some(team) = self.world.team(self.team) else {
+            return Ok(());
+        };
+        if team.owner != self.id {
+            return Ok(());
+        }
+        let Some(v) = self.hub.get(&team.vault_id) else {
+            return Ok(());
+        };
+        if v.lock().await.note_text(&team.hot_id).len() < PAGE_BYTES {
+            return Ok(());
+        }
+        let page = team.page + 1;
+        let title = format!(
+            "{} {page}",
+            team.hot_title
+                .trim_end_matches(|c: char| c.is_ascii_digit() || c == ' ')
+        );
+        let names: Vec<String> = team
+            .members
+            .iter()
+            .map(|&m| self.world.display(m).to_string())
+            .collect();
+        let previous = team.hot_title.clone();
+        // Never over someone's note of that name: then just not now.
+        let out = ops::create_document(
+            &self.hub,
+            &team.vault_id,
+            &format!("{title}.md"),
+            &sectioned(&title, std::slice::from_ref(&previous), &names),
+        )
+        .await
+        .map_err(|e| anyhow!("{e}"))?;
+        if let Some(t) = self
+            .world
+            .teams
+            .lock()
+            .unwrap()
+            .iter_mut()
+            .find(|t| t.id == team.id)
+        {
+            t.hot_id = out.id;
+            t.hot_title = title.clone();
+            t.page = page;
+        }
+        self.world.bus.feed(
+            Action::Note,
+            format!(
+                "{} started a new page in {}: “{title}”",
+                self.display(),
+                team.name
+            ),
+        );
+        Ok(())
+    }
+
     /// As a team's owner: create its vault, share it with everyone in it and
     /// write the first notes.
     pub async fn found_team(&mut self, team: u32, name: &str, members: &[u32]) -> Result<Team> {
@@ -267,6 +384,7 @@ impl Person {
             vault_id,
             hot_id: hot.id,
             hot_title,
+            page: 1,
         })
     }
 
@@ -289,7 +407,7 @@ impl Person {
     pub async fn work(mut self, stop: watch::Receiver<bool>) -> Person {
         let mut next_revision = Instant::now() + Duration::from_secs(self.rng.range(10, 25));
         while !*stop.borrow() {
-            let r = match self.rng.weighted(&[62, 9, 4, 8, 3, 2, 2]) {
+            let r = match self.rng.weighted(&[74, 7, 3, 7, 2, 2, 2]) {
                 0 => self.type_some(&stop).await,
                 1 => self.new_note().await,
                 2 => self.picture().await,
@@ -299,6 +417,9 @@ impl Person {
                 _ => self.share_note().await,
             };
             if let Err(e) = r {
+                tracing::debug!(person = self.id, "{e:#}");
+            }
+            if let Err(e) = self.new_page_if_long().await {
                 tracing::debug!(person = self.id, "{e:#}");
             }
             if Instant::now() >= next_revision {
@@ -316,7 +437,7 @@ impl Person {
                 }
                 next_revision = Instant::now() + Duration::from_secs(self.rng.range(15, 30));
             }
-            let think = Duration::from_millis(self.rng.range(600, 3500));
+            let think = self.pause(400, 1800);
             if sleep_or_stop(think, &stop).await {
                 break;
             }
@@ -328,7 +449,7 @@ impl Person {
     fn team_note(&mut self) -> Option<(String, String)> {
         let team = self.world.team(self.team)?;
         let v = self.hub.get(&team.vault_id)?;
-        if self.rng.chance(0.55) {
+        if self.rng.chance(0.7) {
             return Some((team.vault_id, team.hot_id));
         }
         let g = v.try_lock().ok()?;
@@ -351,8 +472,28 @@ impl Person {
         let Some((vault_id, note_id)) = self.team_note() else {
             return Ok(());
         };
+        // As people do: write in your part once you can see it. (A note
+        // someone just created can be listed before its text and key arrive;
+        // typing into the empty note then would put the first keystrokes
+        // outside your part — merged, not lost, but the sentence would be
+        // in two pieces.)
+        let heading = format!("## {}\n", self.display());
+        match self.hub.get(&vault_id) {
+            Some(v) if v.lock().await.note_text(&note_id).contains(&heading) => {}
+            _ => return Ok(()),
+        }
         let sentence = world::sentence(&mut self.rng);
         let keys = world::keystrokes(&mut self.rng, &sentence);
+        let started_ms = self.world.t0.elapsed().as_millis() as u64;
+        let started_phase = self
+            .world
+            .bus
+            .tally
+            .lock()
+            .unwrap()
+            .phase
+            .map(|p| p.label().to_string())
+            .unwrap_or_default();
         self.world
             .typing
             .lock()
@@ -382,7 +523,7 @@ impl Person {
                 done = false;
                 break;
             }
-            tokio::time::sleep(Duration::from_millis(self.rng.range(70, 280))).await;
+            tokio::time::sleep(self.pause(60, 180)).await;
         }
         if let Some(set) = self.world.typing.lock().unwrap().get_mut(&note_id) {
             set.remove(&self.id);
@@ -394,7 +535,7 @@ impl Person {
                 .unwrap()
                 .entry((vault_id, note_id))
                 .or_default()
-                .push(sentence);
+                .push((sentence, self.id, started_ms, started_phase));
         }
         Ok(())
     }
@@ -413,11 +554,12 @@ impl Person {
             .ok_or_else(|| anyhow!("vault not open"))?;
         let t0 = Instant::now();
         {
+            // Saved with the live loop's rhythm (every 2 s), like the
+            // CLI's daemon, not on every keystroke.
             let mut g = v.lock().await;
             let current = g.note_text(note_id);
             let new = insert_in_section(&current, &self.display(), text, starts_sentence);
             g.set_note_text(note_id, &new)?;
-            g.save()?;
             let len = section_len(&new, &self.display());
             self.world
                 .typed
@@ -427,7 +569,7 @@ impl Person {
                 .or_default()
                 .entry(self.id)
                 .or_default()
-                .push((len, t0));
+                .push(len, t0);
         }
         self.hub
             .local_changed(vault_id, vec![note_id.to_string()], false)
@@ -482,7 +624,7 @@ impl Person {
             return Ok(());
         };
         self.pictures += 1;
-        let kib = self.rng.range(20, 180) as u32;
+        let kib = self.rng.range(15, 90) as u32;
         let data = world::picture(&mut self.rng, kib);
         let name = format!(
             "photo-{}-{}.png",
@@ -619,7 +761,9 @@ impl Person {
     async fn share_note(&mut self) -> Result<()> {
         let people = self.world.names.len() as u64;
         let other = self.rng.range(0, people - 1) as u32;
-        if self.world.team_of[other as usize] == self.team {
+        // Someone from another team who has arrived (later levels haven't yet).
+        let arrived = self.world.clients.lock().unwrap()[other as usize].is_some();
+        if !arrived || self.world.team_of[other as usize] == self.team {
             return Ok(());
         }
         let title = format!(
@@ -716,18 +860,19 @@ async fn watch_hub(
                     };
                     let text = v.lock().await.note_text(&o);
                     let now = Instant::now();
+                    let haves: Vec<(u32, usize)> = writers
+                        .into_iter()
+                        .map(|w| (w, section_len(&text, world.display(w))))
+                        .collect();
                     let mut arrived = Vec::new();
                     {
                         let typed = world.typed.lock().unwrap();
                         let mut credited = world.credited.lock().unwrap();
-                        for w in writers {
-                            let have = section_len(&text, world.display(w));
-                            let log = &typed[&o][&w];
+                        for (w, have) in haves {
+                            let mut times = Vec::new();
                             let next = credited.entry((id, o.clone(), w)).or_default();
-                            while *next < log.len() && log[*next].0 <= have {
-                                arrived.push((w, now.duration_since(log[*next].1)));
-                                *next += 1;
-                            }
+                            typed[&o][&w].arrived(next, have, now, &mut times);
+                            arrived.extend(times.into_iter().map(|t| (w, t)));
                         }
                     }
                     for (from, latency) in arrived {

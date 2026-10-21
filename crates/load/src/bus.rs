@@ -8,8 +8,12 @@ use std::time::{Duration, Instant};
 use coolpsonotes_load_events::{Action, Event, Hello, Phase, Report, Stats};
 use tokio::sync::broadcast;
 
-/// How many of the latest events of a kind a late dashboard gets.
-const KEEP_STATS: usize = 900;
+/// How many of the latest events of a kind a late dashboard gets (stats:
+/// an hour, one a second).
+const KEEP_STATS: usize = 3600;
+/// At most this many edits (up, and arriving) a second are drawn; the
+/// numbers count all of them.
+const DRAWN_PER_SECOND: f64 = 1200.0;
 const KEEP_FEED: usize = 40;
 /// Latencies over this window make the live percentiles.
 const WINDOW: Duration = Duration::from_secs(5);
@@ -24,6 +28,8 @@ struct Sticky {
     screens: BTreeMap<u8, Event>,
     ciphers: BTreeMap<u8, Event>,
     server: Option<Event>,
+    level: Option<Event>,
+    levels: Vec<Event>,
     stats: VecDeque<Event>,
     feed: VecDeque<Event>,
     report: Option<Event>,
@@ -43,9 +49,47 @@ pub struct Tally {
     pub delivered_total: u64,
     recent_actions: VecDeque<Instant>,
     recent_delivered: VecDeque<(Instant, u32)>,
-    /// Steady-state propagation latencies (outside the crash), for the report.
-    pub steady: Vec<u32>,
+    /// Propagation latencies outside outages, for the report: this level's
+    /// and the whole run's (a fair random sample of each).
+    pub steady: Reservoir,
+    pub steady_all: Reservoir,
     pub phase: Option<Phase>,
+}
+
+/// A uniform random sample of at most `CAP` values from a stream of any
+/// length (Algorithm R): percentiles without keeping millions of numbers.
+#[derive(Default)]
+pub struct Reservoir {
+    seen: u64,
+    items: Vec<u32>,
+    state: u64,
+}
+
+impl Reservoir {
+    const CAP: usize = 200_000;
+
+    pub fn add(&mut self, v: u32) {
+        self.seen += 1;
+        if self.items.len() < Self::CAP {
+            self.items.push(v);
+            return;
+        }
+        self.state = self
+            .state
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        let j = (self.state >> 11) % self.seen;
+        if (j as usize) < Self::CAP {
+            self.items[j as usize] = v;
+        }
+    }
+
+    /// p50 and p99.
+    pub fn percentiles(&self) -> (f32, f32) {
+        let mut v = self.items.clone();
+        v.sort_unstable();
+        (percentile(&v, 0.5), percentile(&v, 0.99))
+    }
 }
 
 impl Tally {
@@ -91,11 +135,30 @@ pub fn percentile(sorted: &[u32], p: f64) -> f32 {
     sorted[i] as f32
 }
 
+/// Lets a sample through: `DRAWN_PER_SECOND` (each for actions and for
+/// arrivals), refilled continuously.
+struct Budget {
+    actions: f64,
+    delivered: f64,
+    at: Instant,
+}
+
+impl Budget {
+    fn refill(&mut self) {
+        let now = Instant::now();
+        let add = now.duration_since(self.at).as_secs_f64() * DRAWN_PER_SECOND;
+        self.actions = (self.actions + add).min(DRAWN_PER_SECOND / 4.0);
+        self.delivered = (self.delivered + add).min(DRAWN_PER_SECOND / 4.0);
+        self.at = now;
+    }
+}
+
 #[derive(Clone)]
 pub struct Bus {
     tx: broadcast::Sender<Arc<String>>,
     pending: Arc<Mutex<Vec<Event>>>,
     sticky: Arc<Mutex<Sticky>>,
+    budget: Arc<Mutex<Budget>>,
     pub tally: Arc<Mutex<Tally>>,
 }
 
@@ -106,6 +169,11 @@ impl Bus {
             tx,
             pending: Arc::default(),
             sticky: Arc::default(),
+            budget: Arc::new(Mutex::new(Budget {
+                actions: 0.0,
+                delivered: 0.0,
+                at: Instant::now(),
+            })),
             tally: Arc::default(),
         };
         bus.send(Event::Hello(hello));
@@ -144,6 +212,8 @@ impl Bus {
             .collect();
         out.extend(online.iter());
         out.extend(s.server.iter());
+        out.extend(s.levels.iter());
+        out.extend(s.level.iter());
         out.extend(s.stats.iter());
         out.extend(s.feed.iter());
         out.extend(s.screens.values());
@@ -178,6 +248,8 @@ impl Bus {
                 s.ciphers.insert(*slot, e.clone());
             }
             Event::Server { .. } => s.server = Some(e.clone()),
+            Event::Level { .. } => s.level = Some(e.clone()),
+            Event::LevelDone(_) => s.levels.push(e.clone()),
             Event::Stats(_) => {
                 s.stats.push_back(e.clone());
                 if s.stats.len() > KEEP_STATS {
@@ -238,6 +310,10 @@ impl Bus {
                 _ => {}
             }
         }
+        // Everything but typing is rare enough to always show.
+        if kind == Action::Type && !self.take(|b| &mut b.actions) {
+            return;
+        }
         self.send(Event::Action {
             id,
             kind,
@@ -255,8 +331,12 @@ impl Bus {
             t.recent_delivered.push_back((Instant::now(), ms));
             t.delivered_total += 1;
             if t.phase == Some(Phase::Busy) {
-                t.steady.push(ms);
+                t.steady.add(ms);
+                t.steady_all.add(ms);
             }
+        }
+        if !self.take(|b| &mut b.delivered) {
+            return;
         }
         self.send(Event::Delivered {
             to,
@@ -266,11 +346,41 @@ impl Bus {
         });
     }
 
+    /// Whether this one is drawn (see [`DRAWN_PER_SECOND`]).
+    fn take(&self, which: impl Fn(&mut Budget) -> &mut f64) -> bool {
+        let mut b = self.budget.lock().unwrap();
+        b.refill();
+        let tokens = which(&mut b);
+        if *tokens >= 1.0 {
+            *tokens -= 1.0;
+            true
+        } else {
+            false
+        }
+    }
+
     pub fn stats(&self, s: Stats) {
         self.send(Event::Stats(s));
     }
 
     pub fn report(&self, r: Report) {
         self.send(Event::Report(r));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_sample_keeps_the_shape_of_a_long_stream() {
+        let mut r = Reservoir::default();
+        for i in 0..1_000_000u32 {
+            r.add(i % 1000);
+        }
+        assert_eq!(r.items.len(), Reservoir::CAP);
+        let (p50, p99) = r.percentiles();
+        assert!((480.0..520.0).contains(&p50), "{p50}");
+        assert!((980.0..=999.0).contains(&p99), "{p99}");
     }
 }

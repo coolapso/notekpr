@@ -2,22 +2,25 @@
 
 A crowd of simulated people works with a real server while you watch: they
 arrive, form teams, share vaults, type together in the same notes, upload
-pictures and share notes. Midway the server is killed and comes back. At
-the end every copy of every note is compared. Inspired by TigerBeetle's
-demos: nothing on screen is made up — every dot that moves is a request
-that happened.
+pictures and share notes. The crowd grows level by level, and in every
+level the server is killed and stays down a little longer. At the end every
+copy of every note is compared. Inspired by TigerBeetle's demos: nothing on
+screen is made up — every dot that moves is a request that happened.
 
 ```sh
-task load                                  # 100 people, 3 minutes, server limited to 1 CPU / 512 MB
-task load USERS=300 DURATION=5m CPUS=2 MEMORY=1g
+task load                                  # 10 levels: 100, 200, … 1000 people; server limited to 1 CPU / 512 MB
+task load LEVELS=1 DURATION=2m             # one crowd of 100, one outage of 6 s
+task load USERS=200 STEP=200 LEVELS=5 CPUS=2 MEMORY=1g SPEED=2
 task load -- --seed 42                     # repeat a run (same people, teams and choices)
+task load -- --downtimes 5s,10s,20s        # choose the outages (the last repeats)
 task load:native                           # without Docker: the server as a local process, no limits
 ```
 
 `task load` builds the server image (`task docker:build`), the dashboard and
-the load runner, opens <http://localhost:8098> and starts. When the run is
-over the report stays on screen (and in `target/load/report-*.json`) until
-you press Ctrl+C; the container is removed either way.
+the load runner, opens <http://localhost:8098> and starts. Ten levels take
+about 20 minutes. When the run is over the report stays on screen (and in
+`target/load/report-*.json`) until you press Ctrl+C; the container is
+removed either way.
 
 ## What you see
 
@@ -31,40 +34,70 @@ you press Ctrl+C; the container is removed either way.
   their people sees it, with the cursors of whoever is typing. Under each,
   *on the server*: the newest change to that note as the server stores it —
   read back from the server, so it is exactly what it has. Ciphertext.
-* **Charts**: server CPU and memory (with their limits), requests per second
-  with the server's p99, edits per second, the time from one person's
-  keystroke to everyone else's copy (p50 and p99), and who is online.
-* **The phases**: arriving → teams sharing vaults → busy → *server crashed*
-  (SIGKILL: no shutdown, no last writes) → recovering → busy → checking →
-  the report.
+* **Charts** over the whole run (a line where each level began): server
+  CPU and memory (with their limits), requests per second with the server's
+  p99, edits per second, the time from one person's keystroke to everyone
+  else's copy (p50 and p99), and who is online.
+* **Levels** (top right): each finished level's people, requests per
+  second, CPU, keystroke latency, outage, and the comeback: *online in*
+  (everyone connected again) and *caught up* (the changes people made
+  during the outage are uploaded: no more waiting on devices than before
+  the crash; "never" if not within two minutes — the server can't keep up
+  at that level). The final report has the full table, also printed in the
+  terminal.
+* **The phases**, in each level: arriving → teams sharing vaults → busy →
+  *server crashed* (SIGKILL: no shutdown, no last writes; a countdown to its
+  restart) → recovering → busy. Then checking and the report.
+* At high rates the dots are a sample (about 1,200 edits and 1,200 arrivals
+  a second); the numbers count everything.
 
 ## What happens
 
-1. **Arriving** (`--arrive`, 15 s): each person signs up in development
-   mode — account keys and a device like any new user — and creates a vault
-   of their own.
-2. **Teams**: people form teams of 3 to 7. Each team's first member creates
+Each level (`--levels`; the first has `--users` people, each next one
+`--step` more):
+
+1. **Arriving** (`--arrive`, 10 s): the level's newcomers sign up in
+   development mode — account keys and a device like any new user — and
+   create a vault of their own.
+2. **Teams**: they form teams of 3 to 7. Each team's first member creates
    the team's vault, shares it with the others (signed into the vault's
    membership log, keys shared with HPKE) and writes the first notes: a
    shared one with a part for each member, and a few that link to each
-   other.
-3. **Busy** (`--duration`): everyone keeps doing what people do in notes:
-   mostly typing — a sentence or two, a few characters at a time, into their
-   part of a team note (often the shared one, so several people type in it
-   at once) — and also starting notes, uploading pictures (real PNGs,
-   20–180 KB), quick notes, renaming notes (links in other notes follow),
-   trashing old quick notes, sharing a note with someone from another team,
-   and saving revisions.
-4. **The crash** (halfway, unless `--no-crash`): `docker kill` (SIGKILL),
-   six seconds of nothing, `docker start` on the same data. People notice,
-   keep writing offline, reconnect with backoff and upload what they wrote.
+   other. People from earlier levels keep working meanwhile.
+3. **Busy** (`--duration` per level): everyone keeps doing what people do
+   in notes: mostly typing — a sentence or two at about 18 characters a
+   second, a few characters per upload, into their part of a team note
+   (mostly the shared one, so several people type in it at once) — and also
+   starting notes, uploading pictures (real PNGs, 15–90 KB), quick notes,
+   renaming notes (links in other notes follow), trashing old quick notes,
+   sharing a note with someone from another team, and saving revisions.
+   When a shared note passes about 16 KB, its team starts a fresh page.
+   `--speed` makes everyone faster or slower.
+4. **The crash** (halfway through the level, unless `--no-crash`): `docker
+   kill` (SIGKILL), the level's outage (`--downtimes`; by default from 2 s
+   in the first level up to 90 s in the tenth), `docker start` on the same
+   data. People notice, keep writing offline, reconnect with backoff (which
+   grows up to a minute, so long outages also mean slower comebacks) and
+   upload what they wrote.
+
+At the end:
+
 5. **Checking**: work stops; once everyone is online with nothing left to
    upload, every person catches up once more, and then:
    * every copy of every note that more than one person has is compared —
      they must all be the same;
    * every sentence anyone finished typing must be in the note.
 
-   The run passes (exit code 0) only if both hold; otherwise it exits 1.
+   The run passes (exit code 0) only if both hold; otherwise it exits 1
+   and says, for each missing sentence, who typed it into which note, what
+   every member's copy holds of that note (in the index, pending, held,
+   waiting for a key), and a replay of the note's changes as the server
+   stores them — when the sentence appeared and whose change removed it.
+   (This is how the load test found that opening a newly shared vault twice
+   at once could lose what was written into the first copy.)
+
+A run that was killed outright (not Ctrl+C) leaves its container and
+people's copies behind; the next run removes them.
 
 ## What is real and what isn't
 
@@ -83,7 +116,10 @@ you press Ctrl+C; the container is removed either way.
 * **Everything runs on one machine**: the clients compete with the server
   for this machine's CPU (the server can't use more than its limit), and the
   network is loopback, so latencies are mostly the server's own work and
-  queueing. Treat the numbers as a picture of the server's behaviour under a
+  queueing. A thousand people need several cores of their own; the runner
+  raises its open-files limit for their connections.
+* **People type fast**: about 18 characters a second while they type, each
+  few characters an upload — busier than most people, on purpose. Treat the numbers as a picture of the server's behaviour under a
   given load, not of a deployment on the internet.
 * **Keystroke → others' copies** is measured exactly: only its writer
   adds to their part of a note, so each keystroke is recorded with the length
@@ -104,9 +140,12 @@ on.
 
 | Flag | Default | |
 |---|---|---|
-| `--users N` | 100 | how many people |
-| `--duration D` | 3m | how long they work (`90s`, `3m`) |
-| `--arrive D` | 15s | over how long they arrive (`0` = all at once) |
+| `--users N` | 100 | how many people (in the first level) |
+| `--levels N`, `--step N` | 1, 100 | levels, and people added in each (`task load`: 10 levels) |
+| `--duration D` | 60s | how long everyone works in each level (`90s`, `3m`) |
+| `--downtimes LIST` | see above | each level's outage, e.g. `5s,10s,30s` (the last repeats) |
+| `--speed X` | 1 | how fast people are (2 = twice as fast) |
+| `--arrive D` | 10s | over how long each level's newcomers arrive (`0` = all at once) |
 | `--cpus N`, `--memory M` | 1, 512m | the container's limits |
 | `--image I` | coolpsonotes:latest | the server image |
 | `--native` | | run `target/release/coolpsonotes-server` as a process instead (Linux; no limits) |
@@ -115,7 +154,8 @@ on.
 | `--dashboard ADDR` | 127.0.0.1:8098 | where the live view is served |
 | `--open` | | open the live view in the browser (`task load` does) |
 | `--exit` | | stop when done instead of keeping the live view up (scripts, CI) |
-| `--out DIR` | target/load | people's copies and the reports |
+| `--out DIR` | target/load | the reports |
+| `--people-dir DIR` | /dev/shm/… | people's local copies (in memory where possible; removed afterwards) |
 
 Failed actions are logged with `LOAD_LOG=coolpsonotes_load=warn`.
 

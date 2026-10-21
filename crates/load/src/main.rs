@@ -2,12 +2,13 @@
 //! keys and end-to-end encryption — against the real server image with CPU
 //! and memory limits, with a live dashboard of everything that happens.
 //!
-//! The run: people arrive (sign up, a vault of their own), form teams
-//! (shared vaults), then work: type together in shared notes, start notes,
-//! upload pictures, jot quick notes, rename, share. Midway the server is
-//! killed (SIGKILL) and started again; people keep writing offline and catch
-//! up. At the end every copy of every shared note is compared, and every
-//! sentence anyone finished must be there.
+//! A run has one or more levels. In each, more people arrive (sign up, a
+//! vault of their own) and form teams (shared vaults), and everyone works:
+//! types together in shared notes, starts notes, uploads pictures, jots
+//! quick notes, renames, shares. Midway through each level the server is
+//! killed (SIGKILL) for a while — longer each level — and started again;
+//! people keep writing offline and catch up. At the end every copy of every
+//! shared note is compared, and every sentence anyone finished must be there.
 
 mod bus;
 mod check;
@@ -19,7 +20,7 @@ mod world;
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -27,12 +28,14 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Result, anyhow};
 use clap::Parser;
-use coolpsonotes_load_events::{Cursor, Event, Hello, Phase, Report, Screen, Stats};
+use coolpsonotes_load_events::{
+    Action, Cursor, Event, Hello, LevelResult, Phase, Report, Screen, Stats,
+};
 use futures::StreamExt;
 use tokio::sync::watch;
 
 use crate::bus::Bus;
-use crate::people::{Person, Team, World};
+use crate::people::{Person, World};
 use crate::server::Server;
 use crate::world::Rng;
 
@@ -41,15 +44,30 @@ use crate::world::Rng;
     about = "Load test with a live dashboard: simulated people against a real, limited server"
 )]
 struct Args {
-    /// How many people.
+    /// How many people (in the first level).
     #[arg(long, default_value_t = 100)]
     users: u32,
-    /// How long they work (after arriving), e.g. 90s, 3m.
-    #[arg(long, default_value = "3m", value_parser = parse_duration)]
+    /// How many levels; each adds --step more people.
+    #[arg(long, default_value_t = 1)]
+    levels: u32,
+    /// People added per level.
+    #[arg(long, default_value_t = 100)]
+    step: u32,
+    /// How long everyone works in each level (besides arriving and the
+    /// outage), e.g. 60s, 2m.
+    #[arg(long, default_value = "60s", value_parser = parse_duration)]
     duration: Duration,
-    /// Over how long people arrive (sign up), e.g. 15s; 0 = all at once.
-    #[arg(long, default_value = "15s", value_parser = parse_duration)]
+    /// Over how long each level's newcomers arrive, e.g. 10s; 0 = at once.
+    #[arg(long, default_value = "10s", value_parser = parse_duration)]
     arrive: Duration,
+    /// How long the server stays down in each level's crash, e.g.
+    /// "2s,5s,10s" (the last repeats). Default: 6 s for one level, from 2 s
+    /// up to 90 s over several.
+    #[arg(long, value_delimiter = ',', value_parser = parse_duration)]
+    downtimes: Vec<Duration>,
+    /// How fast people are: 2 = twice as fast as the defaults.
+    #[arg(long, default_value_t = 1.0)]
+    speed: f64,
     /// The server container's CPU limit (cores).
     #[arg(long, default_value_t = 1.0)]
     cpus: f32,
@@ -77,7 +95,7 @@ struct Args {
     /// Repeat a run: the same people, teams and choices.
     #[arg(long)]
     seed: Option<u64>,
-    /// Don't kill the server midway.
+    /// Don't crash the server.
     #[arg(long)]
     no_crash: bool,
     /// Open the dashboard in the browser.
@@ -86,9 +104,13 @@ struct Args {
     /// Stop when done instead of keeping the dashboard up (for scripts).
     #[arg(long)]
     exit: bool,
-    /// People's local copies and the report go here.
+    /// Reports (and, with --native, the server's data) go here.
     #[arg(long, default_value = "target/load")]
     out: PathBuf,
+    /// People's local copies (removed afterwards). Default: in memory
+    /// (/dev/shm) where there is one — a big run writes a lot.
+    #[arg(long)]
+    people_dir: Option<PathBuf>,
 }
 
 fn parse_duration(s: &str) -> Result<Duration, String> {
@@ -103,8 +125,22 @@ fn parse_duration(s: &str) -> Result<Duration, String> {
     }))
 }
 
-#[tokio::main]
-async fn main() -> ExitCode {
+/// Each level's outage: as given (the last repeating), or by default 6 s
+/// for a single level and from 2 s growing to 90 s over several.
+fn downtimes(given: &[Duration], levels: u32) -> Vec<Duration> {
+    (0..levels as usize)
+        .map(|i| match given.get(i).or(given.last()) {
+            Some(d) => *d,
+            None if levels == 1 => Duration::from_secs(6),
+            None => {
+                let f = i as f64 / (levels - 1) as f64;
+                Duration::from_secs((2.0 * 45f64.powf(f)).round() as u64)
+            }
+        })
+        .collect()
+}
+
+fn main() -> ExitCode {
     let args = Args::parse();
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -115,25 +151,107 @@ async fn main() -> ExitCode {
         .init();
     coolpsonotes_client::ui::set_silent(true);
     coolpsonotes_client::ui::set_non_interactive(true);
-    // Stop cleanly (container removed) on Ctrl+C at any point.
-    tokio::select! {
-        r = run(args) => match r {
-            Ok(true) => ExitCode::SUCCESS,
-            Ok(false) => ExitCode::from(1),
-            Err(e) => {
-                eprintln!("error: {e:#}");
-                ExitCode::from(2)
+    raise_open_files();
+    let root = people_dir(args.people_dir.as_deref(), &args.out);
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .expect("a tokio runtime");
+    // Stop cleanly (container and copies removed) on Ctrl+C at any point.
+    let code = rt.block_on(async {
+        tokio::select! {
+            r = run(args, root.clone()) => match r {
+                Ok(true) => ExitCode::SUCCESS,
+                Ok(false) => ExitCode::from(1),
+                Err(e) => {
+                    eprintln!("error: {e:#}");
+                    ExitCode::from(2)
+                }
+            },
+            _ = tokio::signal::ctrl_c() => {
+                eprintln!("\nstopped");
+                ExitCode::from(130)
             }
-        },
-        _ = tokio::signal::ctrl_c() => {
-            eprintln!("\nstopped");
-            ExitCode::from(130)
+        }
+    });
+    // Stop every client first (their live loops save into `root`), then
+    // remove their copies.
+    rt.shutdown_timeout(std::time::Duration::from_secs(3));
+    let _ = std::fs::remove_dir_all(&root);
+    code
+}
+
+/// Every person holds a WebSocket and HTTP connections: a thousand of them
+/// need more than the usual 1024 open files.
+fn raise_open_files() {
+    let mut l = libc::rlimit {
+        rlim_cur: 0,
+        rlim_max: 0,
+    };
+    // SAFETY: plain calls with a valid pointer to a local struct.
+    unsafe {
+        if libc::getrlimit(libc::RLIMIT_NOFILE, &mut l) == 0 && l.rlim_cur < l.rlim_max {
+            l.rlim_cur = l.rlim_max;
+            libc::setrlimit(libc::RLIMIT_NOFILE, &l);
         }
     }
 }
 
-/// Peaks and averages for the report.
-#[derive(Default)]
+/// What runs that were killed outright left behind: their containers and
+/// people's copies (named after the runner's process id), once that
+/// process is gone. Linux (it looks in /proc).
+fn clean_stale_runs() {
+    let gone = |name: &str| -> bool {
+        name.strip_prefix("coolpsonotes-load-")
+            .and_then(|pid| pid.parse::<u32>().ok())
+            .is_some_and(|pid| !Path::new(&format!("/proc/{pid}")).exists())
+    };
+    if !Path::new("/proc/self").exists() {
+        return;
+    }
+    if let Ok(out) = std::process::Command::new("docker")
+        .args([
+            "ps",
+            "-a",
+            "--filter",
+            "name=coolpsonotes-load-",
+            "--format",
+            "{{.Names}}",
+        ])
+        .output()
+    {
+        for name in String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .filter(|n| gone(n))
+        {
+            let _ = std::process::Command::new("docker")
+                .args(["rm", "-f", "-v", name])
+                .output();
+        }
+    }
+    if let Ok(dir) = std::fs::read_dir("/dev/shm") {
+        for e in dir.flatten() {
+            if gone(&e.file_name().to_string_lossy()) {
+                let _ = std::fs::remove_dir_all(e.path());
+            }
+        }
+    }
+}
+
+fn people_dir(given: Option<&Path>, out: &Path) -> PathBuf {
+    if let Some(p) = given {
+        return p.to_path_buf();
+    }
+    let shm = Path::new("/dev/shm");
+    if shm.is_dir() {
+        shm.join(format!("coolpsonotes-load-{}", std::process::id()))
+    } else {
+        out.join("people")
+    }
+}
+
+/// Peaks and averages (of a level).
+#[derive(Default, Clone)]
 struct Peaks {
     cpu: f32,
     mem: u64,
@@ -141,24 +259,40 @@ struct Peaks {
     rps_n: u32,
     rps_peak: f32,
     http_p99: f32,
+    queued: u32,
 }
 
-async fn run(args: Args) -> Result<bool> {
+impl Peaks {
+    fn avg_rps(&self) -> f32 {
+        if self.rps_n > 0 {
+            (self.rps_sum / self.rps_n as f64) as f32
+        } else {
+            0.0
+        }
+    }
+}
+
+async fn run(args: Args, root: PathBuf) -> Result<bool> {
     let seed = args.seed.unwrap_or_else(|| {
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_nanos() as u64)
             .unwrap_or(1)
     });
+    let levels = args.levels.max(1);
+    let total = args.users + args.step * (levels - 1);
+    let downs = downtimes(&args.downtimes, levels);
     let memory_bytes = if args.native {
         0
     } else {
         server::docker_memory(&args.memory).ok_or_else(|| anyhow!("--memory: use 512m, 1g, …"))?
     };
-    let root = args.out.join("people");
+    clean_stale_runs();
     people::clean(&root);
     std::fs::create_dir_all(&root)?;
+    std::fs::create_dir_all(&args.out)?;
     let mut server = if args.native {
+        let _ = std::fs::remove_dir_all(args.out.join("server-data"));
         Server::native(
             args.server_bin.clone(),
             args.web_dir.clone(),
@@ -168,18 +302,16 @@ async fn run(args: Args) -> Result<bool> {
     } else {
         Server::docker(&args.image, args.cpus, &args.memory, args.server_port)
     };
-    if args.native {
-        let _ = std::fs::remove_dir_all(args.out.join("server-data"));
-    }
     let bus = Bus::new(Hello {
         seed,
-        users: args.users,
+        users: total,
         duration_s: args.duration.as_secs() as u32,
         mode: if args.native { "native" } else { "docker" }.into(),
         cpus: if args.native { 0.0 } else { args.cpus },
         memory: memory_bytes,
         started_ms: now_ms(),
         server_url: server.url.clone(),
+        levels,
     });
     dashboard::serve(args.dashboard, args.dashboard_dir.clone(), bus.clone()).await?;
     let view = format!("http://{}", args.dashboard).replace("127.0.0.1", "localhost");
@@ -188,8 +320,16 @@ async fn run(args: Args) -> Result<bool> {
         let _ = std::process::Command::new("xdg-open").arg(&view).spawn();
     }
     println!(
-        "{} people, {} s, seed {seed}, server: {}",
-        args.users,
+        "{} people{}, {} s each level, seed {seed}, server: {}",
+        total,
+        if levels > 1 {
+            format!(
+                " in {levels} levels ({} first, then {} more each)",
+                args.users, args.step
+            )
+        } else {
+            String::new()
+        },
         args.duration.as_secs(),
         if args.native {
             "local process (no limits)".to_string()
@@ -206,22 +346,42 @@ async fn run(args: Args) -> Result<bool> {
         "the real server image, limited like a small machine",
     );
     server.start().await?;
-    bus.send(Event::Server { up: true });
+    bus.send(Event::Server {
+        up: true,
+        down_for_s: None,
+    });
 
+    // Each level's newcomers form their own teams.
     let mut rng = Rng::new(seed);
-    let teams = world::teams(&mut rng, args.users);
-    let mut team_of = vec![0; args.users as usize];
-    for (t, members) in teams.iter().enumerate() {
-        for &p in members {
-            team_of[p as usize] = t as u32;
+    let mut team_of = vec![0; total as usize];
+    let mut cohorts: Vec<(std::ops::Range<u32>, Vec<Vec<u32>>)> = Vec::new();
+    let mut next_team = 0u32;
+    for level in 0..levels {
+        let start = if level == 0 {
+            0
+        } else {
+            args.users + args.step * (level - 1)
+        };
+        let end = args.users + args.step * level;
+        let teams: Vec<Vec<u32>> = world::teams(&mut rng, end - start)
+            .into_iter()
+            .map(|m| m.into_iter().map(|p| p + start).collect())
+            .collect();
+        for members in &teams {
+            for &p in members {
+                team_of[p as usize] = next_team;
+            }
+            next_team += 1;
         }
+        cohorts.push((start..end, teams));
     }
     let world = Arc::new(World::new(
         bus.clone(),
         server.url.clone(),
         root,
-        args.users,
+        total,
         team_of,
+        args.speed,
     ));
     let up = Arc::new(AtomicBool::new(true));
     let peaks = Arc::new(Mutex::new(Peaks::default()));
@@ -235,149 +395,203 @@ async fn run(args: Args) -> Result<bool> {
         t_start,
     ));
 
-    // People arrive.
-    bus.phase(
-        Phase::Arriving,
-        format!(
-            "{} people sign up: account keys, a device, a vault of their own",
-            args.users
-        ),
-    );
-    for id in 0..args.users {
+    // Everyone's seat from the start: the crowd fills in level by level.
+    for id in 0..total {
         bus.send(Event::Person {
             id,
             name: world.display(id).to_string(),
             team: world.team_of[id as usize],
         });
     }
-    // Spread over the arrival time, a little irregularly, as people come.
-    let spacing = args.arrive.as_secs_f64() / args.users.max(1) as f64;
-    let mut arrival_rng = Rng::new(seed ^ 0xA11);
-    let starts: Vec<Duration> = (0..args.users)
-        .map(|i| {
-            let jitter = (arrival_rng.range(0, 1000) as f64 / 1000.0 - 0.5) * spacing;
-            Duration::from_secs_f64((i as f64 * spacing + jitter).max(0.0))
-        })
-        .collect();
-    let begin = Instant::now();
-    let arrived: Vec<Result<Person>> = futures::stream::iter(0..args.users)
-        .map(|id| {
-            let at = begin + starts[id as usize];
-            let world = world.clone();
-            async move {
-                tokio::time::sleep_until(at.into()).await;
-                Person::arrive(world, id, seed).await
-            }
-        })
-        .buffer_unordered(64)
-        .collect()
-        .await;
-    println!(
-        "{:>6.1} s  everyone arrived",
-        t_start.elapsed().as_secs_f32()
-    );
-    let mut persons: HashMap<u32, Person> = HashMap::new();
-    for p in arrived {
-        let p = p?;
-        persons.insert(p.id, p);
-    }
-
-    // Teams share vaults.
-    bus.phase(
-        Phase::Teaming,
-        format!(
-            "{} teams: each owner creates a vault and shares it",
-            teams.len()
-        ),
-    );
-    let mut founders = Vec::new();
-    for (t, members) in teams.iter().enumerate() {
-        let owner = members[0];
-        let mut p = persons.remove(&owner).expect("arrived");
-        let members = members.clone();
-        let name = world::team_name(t as u32);
-        founders.push(async move {
-            let r = p.found_team(t as u32, &name, &members).await;
-            (p, r)
-        });
-    }
-    for (p, team) in futures::future::join_all(founders).await {
-        let team = team?;
-        bus.send(Event::Team {
-            id: team.id,
-            name: team.name.clone(),
-            owner: team.owner,
-            members: team.members.clone(),
-        });
-        world.teams.lock().unwrap().push(team);
-        persons.insert(p.id, p);
-    }
-    let all_teams = world.teams.lock().unwrap().clone();
-    let joins = persons.values().map(|p| {
-        let t = all_teams.iter().find(|t| t.id == p.team).cloned();
-        async move {
-            if let Some(t) = t {
-                p.join(&t.vault_id, Duration::from_secs(60)).await;
-            }
-        }
-    });
-    futures::future::join_all(joins).await;
-    println!("{:>6.1} s  teams formed", t_start.elapsed().as_secs_f32());
-
-    // Work.
-    bus.phase(
-        Phase::Busy,
-        "typing together, new notes, pictures, quick notes, renames, shares",
-    );
     let (stop_tx, stop_rx) = watch::channel(false);
-    let mut spotlight = all_teams.clone();
-    spotlight.sort_by_key(|t| std::cmp::Reverse(t.members.len()));
-    spotlight.truncate(3);
-    tokio::spawn(screens(world.clone(), spotlight.clone(), stop_rx.clone()));
-    tokio::spawn(ciphers(world.clone(), spotlight, stop_rx.clone()));
-    let workers: Vec<_> = persons
-        .into_values()
-        .map(|p| tokio::spawn(p.work(stop_rx.clone())))
-        .collect();
+    let mut workers = Vec::new();
+    let mut results: Vec<LevelResult> = Vec::new();
+    let mut first_team = 0u32;
+    let mut overall = Peaks::default();
+    for (level, (range, teams)) in cohorts.iter().enumerate() {
+        let n = level as u32 + 1;
+        let down = (!args.no_crash).then(|| downs[level]);
+        let of = |s: &str| {
+            if levels > 1 {
+                format!("level {n}/{levels}: {s}")
+            } else {
+                s.to_string()
+            }
+        };
+        bus.send(Event::Level {
+            level: n,
+            of: levels,
+            users: range.end,
+            downtime_s: down.map(|d| d.as_secs() as u32).unwrap_or(0),
+        });
+        let level_start = Instant::now();
+        let (actions0, edits0, errors0) = {
+            let mut t = world.bus.tally.lock().unwrap();
+            t.steady = bus::Reservoir::default();
+            (t.actions_total, t.edits, t.errors)
+        };
+        *peaks.lock().unwrap() = Peaks::default();
 
-    let busy_start = Instant::now();
-    let mut recovery = None;
-    if !args.no_crash {
-        tokio::time::sleep(args.duration.mul_f32(0.5)).await;
+        // People arrive, spread over the arrival time, a little irregularly.
         bus.phase(
-            Phase::Crash,
-            "kill -9: no warning, no shutdown — people keep writing offline",
+            Phase::Arriving,
+            of(&format!(
+                "{} {}people sign up: account keys, a device, a vault of their own ({} in all)",
+                range.len(),
+                if level == 0 { "" } else { "more " },
+                range.end
+            )),
         );
-        bus.feed(
-            coolpsonotes_load_events::Action::Revision,
-            "💥 the server was killed",
-        );
-        up.store(false, Ordering::Relaxed);
-        bus.send(Event::Server { up: false });
-        server.crash().await?;
-        tokio::time::sleep(Duration::from_secs(6)).await;
-        server.restart().await?;
-        up.store(true, Ordering::Relaxed);
-        bus.send(Event::Server { up: true });
-        let back = Instant::now();
-        bus.phase(
-            Phase::Recovering,
-            "the server is back: everyone reconnects and uploads what they wrote meanwhile",
-        );
-        bus.feed(
-            coolpsonotes_load_events::Action::Revision,
-            "the server is back",
-        );
-        if check::settle(&world, Duration::from_secs(120))
-            .await
-            .is_some()
-        {
-            recovery = Some(back.elapsed().as_secs_f32());
+        let spacing = args.arrive.as_secs_f64() / range.len().max(1) as f64;
+        let mut arrival_rng = Rng::new(seed ^ 0xA11 ^ level as u64);
+        let starts: Vec<Duration> = range
+            .clone()
+            .map(|id| {
+                let i = (id - range.start) as f64;
+                let jitter = (arrival_rng.range(0, 1000) as f64 / 1000.0 - 0.5) * spacing;
+                Duration::from_secs_f64((i * spacing + jitter).max(0.0))
+            })
+            .collect();
+        let begin = Instant::now();
+        let arrived: Vec<Result<Person>> = futures::stream::iter(range.clone())
+            .map(|id| {
+                let at = begin + starts[(id - range.start) as usize];
+                let world = world.clone();
+                async move {
+                    tokio::time::sleep_until(at.into()).await;
+                    Person::arrive(world, id, seed).await
+                }
+            })
+            .buffer_unordered(64)
+            .collect()
+            .await;
+        let mut persons: HashMap<u32, Person> = HashMap::new();
+        for p in arrived {
+            let p = p?;
+            persons.insert(p.id, p);
         }
-        bus.phase(Phase::Busy, "back to normal");
+        println!(
+            "{:>7.1} s  {}",
+            t_start.elapsed().as_secs_f32(),
+            of(&format!("{} people arrived", range.end))
+        );
+
+        // Teams share vaults.
+        bus.phase(
+            Phase::Teaming,
+            of(&format!(
+                "{} teams: each owner creates a vault and shares it",
+                teams.len()
+            )),
+        );
+        let mut founders = Vec::new();
+        for (i, members) in teams.iter().enumerate() {
+            let t = first_team + i as u32;
+            let owner = members[0];
+            let mut p = persons.remove(&owner).expect("arrived");
+            let members = members.clone();
+            let name = world::team_name(t);
+            founders.push(async move {
+                let r = p.found_team(t, &name, &members).await;
+                (p, r)
+            });
+        }
+        for (p, team) in futures::future::join_all(founders).await {
+            let team = team?;
+            bus.send(Event::Team {
+                id: team.id,
+                name: team.name.clone(),
+                owner: team.owner,
+                members: team.members.clone(),
+            });
+            world.teams.lock().unwrap().push(team);
+            persons.insert(p.id, p);
+        }
+        first_team += teams.len() as u32;
+        let all_teams = world.teams.lock().unwrap().clone();
+        let joins = persons.values().map(|p| {
+            let t = all_teams.iter().find(|t| t.id == p.team).cloned();
+            async move {
+                if let Some(t) = t {
+                    p.join(&t.vault_id, Duration::from_secs(60)).await;
+                }
+            }
+        });
+        futures::future::join_all(joins).await;
+        if level == 0 {
+            // The spotlight: the first level's biggest teams.
+            let mut biggest = all_teams.clone();
+            biggest.sort_by_key(|t| std::cmp::Reverse(t.members.len()));
+            let spotlight: Vec<u32> = biggest.iter().take(3).map(|t| t.id).collect();
+            tokio::spawn(screens(world.clone(), spotlight.clone(), stop_rx.clone()));
+            tokio::spawn(ciphers(world.clone(), spotlight, stop_rx.clone()));
+        }
+        workers.extend(
+            persons
+                .into_values()
+                .map(|p| tokio::spawn(p.work(stop_rx.clone()))),
+        );
+
+        // Work, with an outage halfway.
+        bus.phase(
+            Phase::Busy,
+            of(&format!(
+                "{} people typing together, starting notes, uploading pictures, sharing",
+                range.end
+            )),
+        );
+        let (mut online, mut recovery) = (None, None);
+        match down {
+            Some(d) => {
+                tokio::time::sleep(args.duration / 2).await;
+                (online, recovery) = crash(&mut server, &bus, &world, &up, d, &of).await?;
+                bus.phase(
+                    Phase::Busy,
+                    of(if recovery.is_some() {
+                        "back to normal"
+                    } else {
+                        "still catching up after two minutes: the server can't keep up"
+                    }),
+                );
+                tokio::time::sleep(args.duration - args.duration / 2).await;
+            }
+            None => tokio::time::sleep(args.duration).await,
+        }
+
+        let result = {
+            let t = world.bus.tally.lock().unwrap();
+            let pk = peaks.lock().unwrap().clone();
+            let (p50, p99) = t.steady.percentiles();
+            overall.cpu = overall.cpu.max(pk.cpu);
+            overall.mem = overall.mem.max(pk.mem);
+            overall.rps_sum += pk.rps_sum;
+            overall.rps_n += pk.rps_n;
+            overall.rps_peak = overall.rps_peak.max(pk.rps_peak);
+            overall.http_p99 = overall.http_p99.max(pk.http_p99);
+            LevelResult {
+                level: n,
+                users: range.end,
+                duration_s: level_start.elapsed().as_secs_f32(),
+                actions: t.actions_total - actions0,
+                edits: t.edits - edits0,
+                errors: t.errors - errors0,
+                avg_http_rps: pk.avg_rps(),
+                peak_http_rps: pk.rps_peak,
+                peak_cpu_pct: pk.cpu,
+                peak_mem_bytes: pk.mem,
+                http_p99_ms: pk.http_p99,
+                propagation_p50_ms: p50,
+                propagation_p99_ms: p99,
+                downtime_s: down.map(|d| d.as_secs() as u32).unwrap_or(0),
+                online_s: online,
+                recovery_s: recovery,
+                max_queued: pk.queued,
+            }
+        };
+        print_level(&result, t_start);
+        bus.send(Event::LevelDone(result.clone()));
+        results.push(result);
     }
-    let left = args.duration.saturating_sub(busy_start.elapsed());
-    tokio::time::sleep(left).await;
     let _ = stop_tx.send(true);
     let mut persons = Vec::new();
     for w in workers {
@@ -389,44 +603,38 @@ async fn run(args: Args) -> Result<bool> {
         Phase::Checking,
         "waiting for every change to reach everyone, then comparing every copy",
     );
-    println!("{:>6.1} s  checking", t_start.elapsed().as_secs_f32());
-    check::settle(&world, Duration::from_secs(120)).await;
-    println!("{:>6.1} s  settled", t_start.elapsed().as_secs_f32());
+    println!("{:>7.1} s  checking", t_start.elapsed().as_secs_f32());
+    check::settle(&world, Duration::from_secs(300)).await;
     let outcome = check::run(&world).await;
-    println!("{:>6.1} s  compared", t_start.elapsed().as_secs_f32());
     let report = {
         let t = world.bus.tally.lock().unwrap();
-        let pk = peaks.lock().unwrap();
-        let mut steady = t.steady.clone();
-        steady.sort_unstable();
+        let (p50, p99) = t.steady_all.percentiles();
+        let teams = world.teams.lock().unwrap().len() as u32;
         Report {
             duration_s: t_start.elapsed().as_secs_f32(),
-            users: args.users,
-            teams: teams.len() as u32,
+            users: total,
+            teams,
             vaults: t.vaults,
-            notes: t.notes + teams.len() as u32 * 4,
+            notes: t.notes + teams * 4,
             pictures: t.pictures,
             edits: t.edits,
             actions: t.actions_total,
             errors: t.errors,
             errors_while_down: t.errors_while_down,
-            peak_cpu_pct: pk.cpu,
-            peak_mem_bytes: pk.mem,
-            avg_http_rps: if pk.rps_n > 0 {
-                (pk.rps_sum / pk.rps_n as f64) as f32
-            } else {
-                0.0
-            },
-            peak_http_rps: pk.rps_peak,
-            http_p99_ms: pk.http_p99,
-            propagation_p50_ms: bus::percentile(&steady, 0.5),
-            propagation_p99_ms: bus::percentile(&steady, 0.99),
-            recovery_s: recovery,
+            peak_cpu_pct: overall.cpu,
+            peak_mem_bytes: overall.mem,
+            avg_http_rps: overall.avg_rps(),
+            peak_http_rps: overall.rps_peak,
+            http_p99_ms: overall.http_p99,
+            propagation_p50_ms: p50,
+            propagation_p99_ms: p99,
+            recovery_s: results.iter().filter_map(|r| r.recovery_s).reduce(f32::max),
             notes_checked: outcome.notes_checked,
             copies_checked: outcome.copies_checked,
             mismatches: outcome.mismatches,
             sentences: outcome.sentences,
             sentences_missing: outcome.sentences_missing,
+            levels: results,
         }
     };
     bus.report(report.clone());
@@ -447,11 +655,58 @@ async fn run(args: Args) -> Result<bool> {
         println!("The live view stays up at {view} — Ctrl+C to stop.");
         tokio::signal::ctrl_c().await?;
     }
-    for p in persons {
-        p.leave().await;
-    }
+    futures::future::join_all(persons.into_iter().map(|p| p.leave())).await;
     server.remove();
     Ok(report.passed())
+}
+
+/// Kill the server, keep it down for `down`, start it again and follow the
+/// comeback: (everyone connected again, the backlog worked off) after the
+/// restart, in seconds.
+async fn crash(
+    server: &mut Server,
+    bus: &Bus,
+    world: &World,
+    up: &AtomicBool,
+    down: Duration,
+    of: &dyn Fn(&str) -> String,
+) -> Result<(Option<f32>, Option<f32>)> {
+    let secs = down.as_secs() as u32;
+    // What's normally in flight at this load.
+    let baseline = check::queued(world).await;
+    bus.phase(
+        Phase::Crash,
+        of(&format!(
+            "kill -9, down for {secs} s — people keep writing offline"
+        )),
+    );
+    bus.feed(
+        Action::Revision,
+        format!("💥 the server was killed (down for {secs} s)"),
+    );
+    up.store(false, Ordering::Relaxed);
+    bus.send(Event::Server {
+        up: false,
+        down_for_s: Some(secs),
+    });
+    server.crash().await?;
+    tokio::time::sleep(down).await;
+    server.restart().await?;
+    up.store(true, Ordering::Relaxed);
+    bus.send(Event::Server {
+        up: true,
+        down_for_s: None,
+    });
+    bus.phase(
+        Phase::Recovering,
+        of("the server is back: everyone reconnects and uploads what they wrote meanwhile"),
+    );
+    bus.feed(Action::Revision, "the server is back");
+    let (online, caught_up) = check::recover(world, baseline, Duration::from_secs(120)).await;
+    Ok((
+        online.map(|d| d.as_secs_f32()),
+        caught_up.map(|d| d.as_secs_f32()),
+    ))
 }
 
 fn now_ms() -> i64 {
@@ -514,6 +769,7 @@ async fn stats_loop(
             }
             pk.rps_peak = pk.rps_peak.max(m.http_rps);
             pk.http_p99 = pk.http_p99.max(m.http_p99_ms);
+            pk.queued = pk.queued.max(queued);
         }
         world.bus.stats(Stats {
             t_ms: t_start.elapsed().as_millis() as u64,
@@ -540,14 +796,17 @@ async fn stats_loop(
     }
 }
 
-/// The spotlight notes as one of their people sees them, with the cursors
-/// of whoever is typing.
-async fn screens(world: Arc<World>, teams: Vec<Team>, stop: watch::Receiver<bool>) {
+/// The spotlight teams' shared notes (their current page) as one of their
+/// people sees them, with the cursors of whoever is typing.
+async fn screens(world: Arc<World>, teams: Vec<u32>, stop: watch::Receiver<bool>) {
     const LINES: usize = 18;
-    let mut last: HashMap<u8, (Vec<String>, Vec<Cursor>)> = HashMap::new();
+    let mut last: HashMap<u8, (String, Vec<String>, Vec<Cursor>)> = HashMap::new();
     while !*stop.borrow() {
-        for (slot, team) in teams.iter().enumerate() {
+        for (slot, &tid) in teams.iter().enumerate() {
             let slot = slot as u8;
+            let Some(team) = world.team(tid) else {
+                continue;
+            };
             let Some((_, hub)) = world.clients.lock().unwrap()[team.owner as usize].clone() else {
                 continue;
             };
@@ -577,14 +836,15 @@ async fn screens(world: Arc<World>, teams: Vec<Team>, stop: watch::Receiver<bool
                     })
                 })
                 .collect();
-            if last.get(&slot) != Some(&(lines.clone(), cursors.clone())) {
-                last.insert(slot, (lines.clone(), cursors.clone()));
+            let now = (team.hot_title.clone(), lines, cursors);
+            if last.get(&slot) != Some(&now) {
+                last.insert(slot, now.clone());
                 world.bus.send(Event::Screen(Screen {
                     slot,
                     team: team.id,
-                    title: team.hot_title.clone(),
-                    lines,
-                    cursors,
+                    title: now.0,
+                    lines: now.1,
+                    cursors: now.2,
                 }));
             }
         }
@@ -594,11 +854,14 @@ async fn screens(world: Arc<World>, teams: Vec<Team>, stop: watch::Receiver<bool
 
 /// What the server holds for the spotlight notes' newest change: read back
 /// from the server, so it's exactly what it stores.
-async fn ciphers(world: Arc<World>, teams: Vec<Team>, stop: watch::Receiver<bool>) {
+async fn ciphers(world: Arc<World>, teams: Vec<u32>, stop: watch::Receiver<bool>) {
     let mut shown: HashMap<u8, i64> = HashMap::new();
     while !*stop.borrow() {
-        for (slot, team) in teams.iter().enumerate() {
+        for (slot, &tid) in teams.iter().enumerate() {
             let slot = slot as u8;
+            let Some(team) = world.team(tid) else {
+                continue;
+            };
             let Some((session, hub)) = world.clients.lock().unwrap()[team.owner as usize].clone()
             else {
                 continue;
@@ -631,8 +894,34 @@ async fn ciphers(world: Arc<World>, teams: Vec<Team>, stop: watch::Receiver<bool
     }
 }
 
+fn mb(b: u64) -> f64 {
+    b as f64 / (1024.0 * 1024.0)
+}
+
+fn print_level(r: &LevelResult, t_start: Instant) {
+    println!(
+        "{:>7.1} s  level {:>2}: {:>5} people · {:>6.0} req/s avg, {:>6.0} peak · CPU {:>4.0}% · {:>5.0} MB · \
+         keystroke p50 {:.0} ms p99 {:.0} ms · down {} s, online in {}, caught up in {}",
+        t_start.elapsed().as_secs_f32(),
+        r.level,
+        r.users,
+        r.avg_http_rps,
+        r.peak_http_rps,
+        r.peak_cpu_pct,
+        mb(r.peak_mem_bytes),
+        r.propagation_p50_ms,
+        r.propagation_p99_ms,
+        r.downtime_s,
+        r.online_s
+            .map(|s| format!("{s:.1} s"))
+            .unwrap_or_else(|| "—".into()),
+        r.recovery_s
+            .map(|s| format!("{s:.1} s"))
+            .unwrap_or_else(|| "—".into()),
+    );
+}
+
 fn print_report(r: &Report) {
-    let mb = |b: u64| b as f64 / (1024.0 * 1024.0);
     println!();
     println!("━━ Report ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     println!(
@@ -660,10 +949,37 @@ fn print_report(r: &Report) {
         r.http_p99_ms
     );
     println!(
-        "From one person's keystroke to the others' screens: p50 {:.0} ms, p99 {:.0} ms (outside the crash)",
+        "From one person's keystroke to the others' copies: p50 {:.0} ms, p99 {:.0} ms (outside outages)",
         r.propagation_p50_ms, r.propagation_p99_ms
     );
-    if let Some(s) = r.recovery_s {
+    if r.levels.len() > 1 {
+        println!();
+        println!(
+            "level  people   req/s avg   peak   CPU   memory   keystroke p50/p99   down   online in   caught up   most queued"
+        );
+        for l in &r.levels {
+            println!(
+                "{:>5}  {:>6}   {:>9.0} {:>6.0} {:>4.0}%  {:>5.0} MB   {:>7.0} / {:<7.0} ms {:>4} s   {:>9}   {:>9}   {:>11}",
+                l.level,
+                l.users,
+                l.avg_http_rps,
+                l.peak_http_rps,
+                l.peak_cpu_pct,
+                mb(l.peak_mem_bytes),
+                l.propagation_p50_ms,
+                l.propagation_p99_ms,
+                l.downtime_s,
+                l.online_s
+                    .map(|s| format!("{s:.1} s"))
+                    .unwrap_or_else(|| "—".into()),
+                l.recovery_s
+                    .map(|s| format!("{s:.1} s"))
+                    .unwrap_or_else(|| "—".into()),
+                l.max_queued,
+            );
+        }
+        println!();
+    } else if let Some(s) = r.recovery_s {
         println!("After the crash, everyone was back and caught up in {s:.1} s");
     }
     println!(
@@ -678,4 +994,20 @@ fn print_report(r: &Report) {
             "✗ copies differ or something was lost"
         }
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn outages_grow_level_by_level() {
+        let secs = |v: Vec<Duration>| v.iter().map(|d| d.as_secs()).collect::<Vec<_>>();
+        assert_eq!(secs(downtimes(&[], 1)), [6]);
+        let ten = secs(downtimes(&[], 10));
+        assert_eq!((ten[0], ten[9]), (2, 90));
+        assert!(ten.windows(2).all(|w| w[0] < w[1]), "{ten:?}");
+        let given = [Duration::from_secs(3), Duration::from_secs(8)];
+        assert_eq!(secs(downtimes(&given, 4)), [3, 8, 8, 8]);
+    }
 }

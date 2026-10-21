@@ -310,7 +310,7 @@ async fn metrics(State(state): State<AppState>, headers: HeaderMap) -> Response 
             return StatusCode::UNAUTHORIZED.into_response();
         }
     }
-    metrics::gauge!("coolpsonotes_ws_connected_users").set(state.hub.connection_count() as f64);
+    metrics::gauge!("coolpsonotes_ws_connected_users").set(state.hub.connected_users() as f64);
     crate::process::record();
     (
         [(header::CONTENT_TYPE, "text/plain; version=0.0.4")],

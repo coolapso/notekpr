@@ -505,8 +505,9 @@ proxy answers then (§4, "Holding requests during an update").
   (`status` is the class: `2xx`, `4xx`, …),
   `coolpsonotes_http_request_duration_seconds` (a summary with quantiles: no
   histogram buckets are configured), `coolpsonotes_updates_total`,
-  `coolpsonotes_attachment_bytes_total`, `coolpsonotes_ws_connections`,
-  `coolpsonotes_ws_connected_users`, `coolpsonotes_rate_limited_total{scope}`,
+  `coolpsonotes_attachment_bytes_total`, `coolpsonotes_ws_connections` (live
+  connections) and `coolpsonotes_ws_connected_users` (people with at least
+  one), `coolpsonotes_rate_limited_total{scope}`,
   and on Linux the process's own `process_cpu_seconds_total` (a gauge) and
   `process_resident_memory_bytes`. Keep it internal (§4).
 * Logs: one line per request (method, redacted path, status, latency) plus

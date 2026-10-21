@@ -202,6 +202,13 @@ impl EventBus {
             EventBus::Local(b) => b.connection_count(),
         }
     }
+
+    /// People with at least one live connection on this process (metrics).
+    pub fn connected_users(&self) -> usize {
+        match self {
+            EventBus::Local(b) => b.users.len(),
+        }
+    }
 }
 
 /// The receiving half of [`EventBus::subscribe`].
@@ -370,6 +377,7 @@ mod tests {
         assert!(c1 != 0 && c2 != 0 && c3 != 0);
         assert!(c1 != c2 && c2 != c3 && c1 != c3);
         assert_eq!(bus.connection_count(), 3);
+        assert_eq!(bus.connected_users(), 2, "alice twice and bob");
 
         bus.control("alice", Control::RevokeVault("v".into()));
         assert!(matches!(r1.recv().await, Some(Control::RevokeVault(v)) if v == "v"));
@@ -377,6 +385,7 @@ mod tests {
 
         bus.disconnect("alice", c1);
         assert_eq!(bus.connection_count(), 2);
+        assert_eq!(bus.connected_users(), 2, "alice still has one");
         bus.control("alice", Control::SessionRevoked("s".into()));
         assert!(r1.recv().await.is_none());
         assert!(matches!(r2.recv().await, Some(Control::SessionRevoked(s)) if s == "s"));

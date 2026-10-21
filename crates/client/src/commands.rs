@@ -584,12 +584,8 @@ async fn execute(ctx: Ctx, command: Command) -> Result<()> {
             update_links,
         } => {
             let hub = ctx.hub(&[&vault]).await?;
+            // Recipients of a shared note see its new name (ops does it).
             let out = op(ops::move_document(&hub, &vault, &from, &to, update_links).await)?;
-            // Recipients of a shared note see its new name.
-            if let Some(id) = &out.id {
-                let v = hub.resolve(&vault).await?;
-                note_shares::refresh_meta(&hub.session, &v, id).await?;
-            }
             crate::out!("moved to {}", out.to);
             Ok(())
         }

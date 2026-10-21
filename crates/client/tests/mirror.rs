@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use common::*;
 use coolpsonotes_client::mirror::Mirror;
-use coolpsonotes_client::{manage, ops};
+use coolpsonotes_client::{manage, note_shares, ops};
 use coolpsonotes_core::protocol::Role;
 use tokio::sync::watch;
 
@@ -819,4 +819,31 @@ async fn a_file_named_with_separate_accent_marks_is_the_same_note() {
     let r = m.reconcile_all(true).await.unwrap();
     assert!(r.is_empty(), "{r:?}");
     assert_eq!(h.get(&vid).unwrap().lock().await.notes().len(), 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_note_renamed_in_the_folder_is_renamed_for_whom_it_is_shared_with() {
+    let srv = start().await;
+    let alice = login(&srv, "alice").await;
+    let carol = login(&srv, "carol").await;
+    manage::create_vault(&alice, "Home").await.unwrap();
+    let ah = hub(&alice).await;
+    ops::put_document(&ah, "Home", "Soup.md", "leek and potato\n", None)
+        .await
+        .unwrap();
+    let v = ah.resolve("Home").await.unwrap();
+    let vid = v.lock().await.id().to_string();
+    note_shares::share_note(&alice, &v, "Soup", "carol", Role::Viewer, false)
+        .await
+        .unwrap();
+    let mut mirror = Mirror::new(ah.clone(), &srv.path("alice-mirror"))
+        .await
+        .unwrap();
+    mirror.reconcile_all(false).await.unwrap();
+    let dir = mirror.vault_dir(&vid).unwrap().to_path_buf();
+    std::fs::rename(dir.join("Soup.md"), dir.join("Winter soup.md")).unwrap();
+    let r = mirror.reconcile_all(true).await.unwrap();
+    assert_eq!(r.renamed, 1, "{r:?}");
+    let shared = note_shares::shared_with_me(&carol).await.unwrap();
+    assert_eq!(shared[0].title, "Winter soup");
 }

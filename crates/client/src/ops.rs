@@ -339,6 +339,13 @@ pub async fn move_document(
         (g.id().to_string(), id, new_path)
     };
     hub.local_changed(&vault_id, vec![], true).await;
+    // People a moved note is shared with see its new name (the move itself
+    // stands if that can't be sent now).
+    if let Some(id) = &id
+        && let Err(e) = crate::note_shares::refresh_meta(&hub.session, &v, id).await
+    {
+        crate::ui::warn(&format!("{e:#}"));
+    }
     Ok(MoveOutcome {
         vault: vault_id,
         id,

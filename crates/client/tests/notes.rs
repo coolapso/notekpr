@@ -252,9 +252,8 @@ async fn icons_and_new_names_reach_the_people_a_note_is_shared_with() {
     )
     .await
     .unwrap();
-    note_shares::refresh_meta(&alice, &v, out.id.as_deref().unwrap())
-        .await
-        .unwrap();
+    // The move sends it itself (also for the gateway, which moves the same way).
+    assert!(out.id.is_some());
     let shared = note_shares::shared_with_me(&bob).await.unwrap();
     assert_eq!(
         (shared[0].title.as_str(), shared[0].icon.as_deref()),

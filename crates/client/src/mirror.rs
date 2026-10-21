@@ -108,6 +108,9 @@ struct MirrorVault {
     /// What the file system ignores when comparing names.
     fold: Fold,
     warned: BTreeSet<String>,
+    /// Notes renamed on disk in this pass: people they're shared with get
+    /// the new name once the vault is released.
+    renamed: Vec<String>,
 }
 
 /// What one reconciliation pass did.
@@ -1076,6 +1079,7 @@ fn ingest_new_file(
                     r.set_stat(st);
                 }
                 mv.dirty = true;
+                mv.renamed.push(id.clone());
                 touched.insert(id);
                 report.renamed += 1;
                 return Ok(());
@@ -1621,6 +1625,7 @@ impl Mirror {
                 held: false,
                 fold: self.fold,
                 warned: BTreeSet::new(),
+                renamed: Vec::new(),
             },
         );
         Ok(())
@@ -1897,10 +1902,17 @@ impl Mirror {
             v.save()?;
         }
         drop(v);
+        let renamed = std::mem::take(&mut mv.renamed);
         if changed {
             self.hub
                 .local_changed(vault_id, touched.into_iter().collect(), true)
                 .await;
+        }
+        for id in renamed {
+            if let Err(e) = crate::note_shares::refresh_meta(&self.hub.session, &shared, &id).await
+            {
+                ui::warn(&format!("{e:#}"));
+            }
         }
         if report.local_changes() > 0 {
             ui::status(&format!(

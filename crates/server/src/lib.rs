@@ -15,6 +15,7 @@ pub mod error;
 pub mod export;
 pub mod hub;
 pub mod oidc;
+pub mod process;
 pub mod ratelimit;
 pub mod repo;
 pub mod routes;

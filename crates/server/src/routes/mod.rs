@@ -311,6 +311,7 @@ async fn metrics(State(state): State<AppState>, headers: HeaderMap) -> Response 
         }
     }
     metrics::gauge!("coolpsonotes_ws_connected_users").set(state.hub.connection_count() as f64);
+    crate::process::record();
     (
         [(header::CONTENT_TYPE, "text/plain; version=0.0.4")],
         handle.render(),

@@ -1,7 +1,9 @@
 # coolpsonotes on Kubernetes.
 # Single replica by design: the server uses SQLite and an in-process event hub.
 # Apply with:  kubectl apply -f deploy/kubernetes/coolpsonotes.yaml
-# (edit the ConfigMap, Secret and Ingress host first)
+# (edit the ConfigMap and Secret first). It serves plain HTTP inside the
+# cluster: put the ingress you use in front of the Service, with TLS — e.g.
+# deploy/examples/traefik/ingressroute.yaml (docs/operations.md §4).
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -27,7 +29,7 @@ metadata:
 type: Opaque
 stringData:
   COOLPSONOTES_OIDC_CLIENT_SECRET: "change-me"
-  # Optional bearer token protecting /metrics (recommended: the Ingress below
+  # Optional bearer token protecting /metrics (recommended if your ingress
   # routes every path, /metrics included).
   # COOLPSONOTES_METRICS_TOKEN: change-me
 ---
@@ -119,29 +121,3 @@ spec:
     - name: http
       port: 80
       targetPort: http
----
-apiVersion: networking.k8s.io/v1
-kind: Ingress
-metadata:
-  name: coolpsonotes
-  namespace: coolpsonotes
-  annotations:
-    # WebSockets stay open for a long time; raise proxy timeouts (ingress-nginx).
-    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
-    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
-    nginx.ingress.kubernetes.io/proxy-body-size: "64m"
-spec:
-  tls:
-    - hosts: ["notes.example.com"]
-      secretName: coolpsonotes-tls
-  rules:
-    - host: notes.example.com
-      http:
-        paths:
-          - path: /
-            pathType: Prefix
-            backend:
-              service:
-                name: coolpsonotes
-                port:
-                  name: http

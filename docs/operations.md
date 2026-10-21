@@ -8,13 +8,16 @@ instance per database.
 
 | Setup | You need | Files |
 |---|---|---|
-| [Public server with automatic HTTPS](#public-server-with-automatic-https) | a domain with DNS pointing at the machine, ports 80 and 443 reachable from the internet, Docker | `docker-compose.yml`, `deploy/Caddyfile` |
-| [On your home network](#on-your-home-network) | a machine on your LAN, Docker; no public DNS, no open ports | `docker-compose.yml`, `deploy/Caddyfile.lan` |
-| [Behind a reverse proxy you already run](#behind-your-own-reverse-proxy) | nginx, Traefik, an existing Caddy, … with TLS | `docker-compose.yml`, `deploy/compose.local-port.yml` |
+| [Docker Compose](#docker-compose) | a machine with Docker | `docker-compose.yml` |
 | [Kubernetes](#kubernetes) | a cluster with an ingress controller | `deploy/kubernetes/` |
 | [From source](#from-source) | Rust toolchain, a service manager (systemd) | — |
 
-Every setup also needs an **OpenID Connect provider** for sign-in (§3).
+Every setup also needs:
+
+* **a reverse proxy with TLS in front** — the one you already use, or one of
+  the examples in §4 (Caddy, Traefik, nginx). coolpsonotes serves plain HTTP
+  and leaves certificates and HTTPS to it, by design;
+* **an OpenID Connect provider** for sign-in (§3).
 
 There are no published images yet: Compose builds the image on the machine.
 The first build compiles the server and the browser client (several minutes
@@ -73,53 +76,17 @@ once, it warns — raise the hard limit then (`LimitNOFILE=` in a systemd unit,
 connections it has but can't accept new ones (`accept error: Too many open
 files` in its log).
 
-### Public server with automatic HTTPS
+### Docker Compose
 
 ```sh
 git clone https://github.com/coolapso/coolpsonotes && cd coolpsonotes
 cp .env.example .env          # PUBLIC_HOST and your OIDC client (§3)
-docker compose up -d --build  # coolpsonotes + Caddy, which gets certificates itself
+docker compose up -d --build  # coolpsonotes on 127.0.0.1:8080
 ```
 
-Open `https://<PUBLIC_HOST>` and sign in: the first person to sign in becomes
-the administrator (§5).
-
-### On your home network
-
-Caddy can issue certificates from its own certificate authority, so HTTPS
-works without a public name. In `.env`:
-
-```sh
-PUBLIC_HOST=notes.home.arpa     # any name your devices resolve to this machine (router DNS, /etc/hosts)
-CADDYFILE=deploy/Caddyfile.lan
-```
-
-```sh
-docker compose up -d --build
-# Caddy's root certificate, to install once on every device that uses coolpsonotes:
-docker compose cp caddy:/data/caddy/pki/authorities/local/root.crt ./caddy-root.crt
-```
-
-Install `caddy-root.crt` as a trusted root on each computer and phone (and on
-the machine running your identity provider's clients, if it uses the same
-CA). The CLI uses the operating system's trust store, so it works once the
-root is installed there.
-
-Plain `http://` on a LAN is possible but not recommended: browsers restrict
-some features to secure origins (copying the recovery key to the clipboard,
-"Keep this browser usable offline", which needs a service worker),
-the CLI refuses plain HTTP to non-local servers unless `--insecure-http`, and
-sessions travel unencrypted.
-
-### Behind your own reverse proxy
-
-Run only the coolpsonotes service and publish it on `127.0.0.1:8080`:
-
-```sh
-docker compose -f docker-compose.yml -f deploy/compose.local-port.yml up -d --build coolpsonotes
-```
-
-Then point your proxy at `127.0.0.1:8080` with TLS for `PUBLIC_HOST` (§4).
+Point your reverse proxy at `127.0.0.1:8080`, with TLS for `PUBLIC_HOST`
+(§4). Then open `https://<PUBLIC_HOST>` and sign in: the first person to sign
+in becomes the administrator (§5).
 
 ### Kubernetes
 
@@ -128,8 +95,9 @@ Edit and apply [`deploy/kubernetes/coolpsonotes.yaml`](../deploy/kubernetes/cool
 [`backup-cronjob.yaml`](../deploy/kubernetes/backup-cronjob.yaml). The image
 it references isn't published yet: build it (`docker build -t
 registry.example.com/coolpsonotes:0.1.0 .`) and push it to your registry,
-then set that image in both files. Make sure the ingress allows long-lived
-WebSocket connections and request bodies larger than `--max-attachment-mb`.
+then set that image in both files. Put your ingress in front of the
+`coolpsonotes` Service, with TLS (§4; for Traefik:
+[`deploy/examples/traefik/`](../deploy/examples/traefik/ingressroute.yaml)).
 
 ### From source
 
@@ -230,8 +198,8 @@ Requirements and behaviour:
   URL, so that must be reachable from people's devices.
 * **Trusted certificate.** The provider's certificate must be trusted by the
   server's operating system (inside the image: the standard CA bundle), or be
-  signed by a CA you pass with `--oidc-ca-file` (e.g. Caddy's internal root
-  for a LAN install).
+  signed by a CA you pass with `--oidc-ca-file` (e.g. the internal root of
+  the Caddy example on a home network, §4).
 * **Name and e-mail** come from the ID token's `name` / `preferred_username`
   and `email` claims, or from the userinfo endpoint when the ID token doesn't
   carry them. E-mail addresses are used only when `email_verified` is true
@@ -276,20 +244,70 @@ Agents (AI assistants, automation) do not use the identity provider: their
 owners create them in Settings → AI agents, which issues OAuth client
 credentials from coolpsonotes itself (see [agents.md](agents.md)).
 
-## 4. Reverse proxy
+## 4. Reverse proxy and TLS
 
-TLS is required in production. WebSockets live at `/api/v1/ws`; allow long
-idle timeouts (the client pings every 20 s). Allow request bodies a little
-larger than `--max-attachment-mb`. Set `--trust-proxy`: the server then takes
-the client's address from the **last** entry of `X-Forwarded-For` (the one
-your proxy added) for rate limiting. If several proxies are chained, the
-outermost must be the only one that adds an entry, or set the header to the
-client address at the edge.
+coolpsonotes serves plain HTTP. TLS — required in production — comes from a
+reverse proxy in front of it, whichever you use. What the server needs from
+it:
 
-Don't expose `/metrics` publicly (the bundled Caddyfiles answer it with 404;
-scrape the server directly or set `--metrics-token`).
+* **HTTPS** for `PUBLIC_HOST`, forwarding every path to the server (Compose:
+  `127.0.0.1:8080`; Kubernetes: the `coolpsonotes` Service) — except
+  `/metrics` (below).
+* **WebSockets** at `/api/v1/ws`, open for a long time: allow long idle
+  timeouts (the apps ping every 20 s).
+* **Request bodies** a little larger than `--max-attachment-mb`.
+* **The client's address**: set `--trust-proxy` (the Compose file and the
+  Kubernetes manifest do). The server then takes it from the **last** entry
+  of `X-Forwarded-For` (the one your proxy added) for rate limiting. If
+  several proxies are chained, the outermost must be the only one that adds
+  an entry, or set the header to the client address at the edge.
+* **`/metrics` kept inside**: don't route it from the internet; scrape the
+  server directly, or set `--metrics-token`.
 
-Caddy: [`deploy/Caddyfile`](../deploy/Caddyfile). nginx:
+Plain `http://` on a LAN is possible but not recommended: browsers restrict
+some features to secure origins (copying the recovery key to the clipboard,
+"Keep this browser usable offline", which needs a service worker), the CLI
+refuses plain HTTP to non-local servers unless `--insecure-http`, and
+sessions travel unencrypted.
+
+### Examples
+
+All optional: use them as they are, adapt them, or ignore them.
+
+**Caddy, with Docker Compose** ([`deploy/examples/caddy/`](../deploy/examples/caddy/)):
+automatic HTTPS from Let's Encrypt, for a domain with DNS pointing at the
+machine and ports 80 and 443 reachable from the internet:
+
+```sh
+docker compose -f docker-compose.yml -f deploy/examples/caddy/compose.yml up -d --build
+```
+
+On a home network without public DNS, Caddy can issue certificates from its
+own certificate authority instead. In `.env`:
+
+```sh
+PUBLIC_HOST=notes.home.arpa     # any name your devices resolve to this machine (router DNS, /etc/hosts)
+CADDYFILE=deploy/examples/caddy/Caddyfile.lan
+```
+
+```sh
+docker compose -f docker-compose.yml -f deploy/examples/caddy/compose.yml up -d --build
+# Caddy's root certificate, to install once on every device that uses coolpsonotes:
+docker compose -f docker-compose.yml -f deploy/examples/caddy/compose.yml cp caddy:/data/caddy/pki/authorities/local/root.crt ./caddy-root.crt
+```
+
+Install `caddy-root.crt` as a trusted root on each computer and phone (and on
+the machine running your identity provider's clients, if it uses the same
+CA). The CLI uses the operating system's trust store, so it works once the
+root is installed there.
+
+**Traefik on Kubernetes** ([`deploy/examples/traefik/ingressroute.yaml`](../deploy/examples/traefik/ingressroute.yaml)):
+an IngressRoute for the `coolpsonotes` Service with TLS from a cert-manager
+Certificate (or your own) and `/metrics` left out. Its comments say what to
+check on the entry point: that it knows the client's real address, and its
+timeouts for long-lived WebSockets and large uploads.
+
+**nginx** (the web server, e.g. on the same machine as Compose):
 
 ```nginx
 location / {
@@ -304,6 +322,36 @@ location / {
 }
 location /metrics { return 404; }
 ```
+
+(The ingress-nginx controller for Kubernetes was retired in March 2026 — no
+releases or security fixes since — so there's no example for it.)
+
+### Holding requests during an update
+
+An update replaces the server: for a moment — seconds, mostly what Docker or
+Kubernetes need to swap the container — nothing answers. The apps are fine
+with that (§7). A proxy, though, usually answers requests meanwhile with an
+error (502, 503 or 404), which is what someone opening the page or signing
+in right then sees. Some proxies can hold such a request instead and try
+again until the new server answers, so it only takes a moment longer. Only
+requests that couldn't reach the server are tried again: nothing is sent
+twice.
+
+Measured with 120 requests sent while the server's container was swapped
+(outside Kubernetes):
+
+| Proxy | Requests that failed |
+|---|---|
+| Caddy, as it is by default | 33 (502) |
+| Caddy holding requests (`lb_try_duration 15s`, `lb_try_interval 250ms`, as in the example) | 0 |
+| Traefik with the server at a fixed address (file provider) and its `retry` middleware | 0 |
+
+On Kubernetes, with `strategy: Recreate`, there is a moment without a ready
+pod, and an ingress usually has nothing to send requests to. A possibility,
+**not tested yet**: Traefik's `retry` middleware with the route sent to the
+Service's own address (`nativeLB: true`) instead of to its pods — commented
+out in the Traefik example. Whether it holds requests depends on how the
+cluster routes Service traffic, so try it before relying on it.
 
 ## 5. The first administrator
 
@@ -400,6 +448,17 @@ coolpsonotes at all.
 3. Clients are forward compatible within a protocol version (`/api/v1`).
 
 `coolpsonotes-server migrate` applies migrations without starting the server.
+
+**What people notice.** On SIGTERM the server tells every connected app it is
+restarting, finishes the requests under way and exits; the new one is up
+within about a second. Meanwhile people keep working: their apps keep every
+change and send it once the server is back, trying again about every second
+rather than backing off, and the browser shows *Connecting* instead of
+*Offline* (for up to 15 s). In the load test, an update with 1,500 people
+online had no errors, and everyone was connected again about 2 s after the
+new server answered — some 6 s in all, most of it Docker swapping the
+container. Someone opening the page during those seconds gets whatever the
+proxy answers then (§4, "Holding requests during an update").
 
 ## 8. Monitoring
 

@@ -1,0 +1,70 @@
+# Optional example: Traefik (its Kubernetes CRDs) in front of coolpsonotes,
+# next to deploy/kubernetes/coolpsonotes.yaml. See docs/operations.md §4.
+#
+# * TLS: from the Secret coolpsonotes-tls — made here by cert-manager (the
+#   Certificate below; use your issuer), or whatever your Traefik already
+#   does for TLS.
+# * Client addresses: coolpsonotes takes them from X-Forwarded-For
+#   (COOLPSONOTES_TRUST_PROXY=true), for its per-person rate limits. Traefik
+#   sets that header; its entry point must know the real client: trust the
+#   forwarded headers or proxy protocol of whatever sits in front of it
+#   (`forwardedHeaders.trustedIPs` / `proxyProtocol.trustedIPs`).
+# * Long-lived WebSockets and large uploads: check the entry point's
+#   `transport.respondingTimeouts` (readTimeout) against your attachment
+#   size limit (--max-attachment-mb).
+# * /metrics is left out of the route: scrape it inside the cluster.
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: coolpsonotes-tls
+  namespace: coolpsonotes
+spec:
+  dnsNames:
+    - notes.example.com
+  secretName: coolpsonotes-tls
+  issuerRef:
+    name: letsencrypt
+    kind: ClusterIssuer
+---
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: coolpsonotes
+  namespace: coolpsonotes
+spec:
+  entryPoints:
+    - websecure
+  routes:
+    - match: Host(`notes.example.com`) && !PathPrefix(`/metrics`)
+      kind: Rule
+      services:
+        - name: coolpsonotes
+          port: 80
+      # Untested possibility — holding requests while the pod is replaced
+      # (docs/operations.md, "Holding requests during an update"): with
+      # `strategy: Recreate` there is a moment without a ready pod, and
+      # Traefik has no pod to send to. Sent to the Service's own address
+      # instead (nativeLB), a request might fail to connect there and be
+      # retried by the middleware until the new pod is ready. Whether it
+      # does depends on how the cluster routes Service traffic; try it
+      # before relying on it.
+      #
+      # middlewares:
+      #   - name: coolpsonotes-retry
+      # services:
+      #   - name: coolpsonotes
+      #     port: 80
+      #     nativeLB: true
+  tls:
+    secretName: coolpsonotes-tls
+# ---
+# apiVersion: traefik.io/v1alpha1
+# kind: Middleware
+# metadata:
+#   name: coolpsonotes-retry
+#   namespace: coolpsonotes
+# spec:
+#   retry:
+#     attempts: 6
+#     initialInterval: 250ms

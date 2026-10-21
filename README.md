@@ -108,8 +108,11 @@ read anything.
 
 **Running it**
 
-* One Rust server with SQLite; Docker Compose with Caddy and automatic HTTPS,
-  or Kubernetes.
+* One Rust server with SQLite; Docker Compose or Kubernetes, behind the
+  reverse proxy you choose for TLS (optional examples for Caddy, Traefik and
+  nginx).
+* Updates without fuss: the server tells connected apps it's restarting;
+  they keep working and are back about a second after it is.
 * Backups, upgrades, Prometheus metrics and an admin page; size limits for
   changes, snapshots and attachments.
 * A load test you can watch (`task load`): a crowd of simulated people —
@@ -166,11 +169,14 @@ docker compose -f docker-compose.dev.yml up --build
 
 ```sh
 cp .env.example .env         # your domain and OIDC client (Authelia, Keycloak, Authentik, …)
-docker compose up -d --build # coolpsonotes + Caddy with automatic HTTPS
+docker compose up -d --build # coolpsonotes on 127.0.0.1:8080
 ```
 
-On a home network without public DNS, or behind a proxy you already run, see
-the setups in [docs/operations.md](docs/operations.md#1-choose-a-setup).
+Put the reverse proxy you use in front of it for HTTPS: coolpsonotes serves
+plain HTTP and leaves TLS to the proxy, by design. There are optional
+examples for Caddy (automatic HTTPS in one command), Traefik on Kubernetes
+and nginx, and setups for Kubernetes and from source, in
+[docs/operations.md](docs/operations.md#1-choose-a-setup).
 
 ### How big a server?
 
@@ -193,8 +199,8 @@ the server image with Docker's CPU and memory limits, each round with a
   2½ times these numbers or more, and nothing was lost when it was.
 * *Online* means connected right now. Accounts that aren't cost only disk:
   their notes, history and attachments.
-* Add what the machine needs besides: the OS, and Caddy in front (some tens
-  of MB). A 1 vCPU / 1 GB VPS is plenty for 1,000 people online.
+* Add what the machine needs besides: the OS, and your reverse proxy (some
+  tens of MB). A 1 vCPU / 1 GB VPS is plenty for 1,000 people online.
 * Past about 2,500 online at once, more cores help little: every change
   goes through one database writer, about 1,200 changes a second. 3,000
   still worked, with slower delivery (p99 0.7 s). Details and how to measure

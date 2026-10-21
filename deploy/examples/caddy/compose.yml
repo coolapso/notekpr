@@ -1,0 +1,29 @@
+# Optional example: Caddy in front of coolpsonotes, with automatic HTTPS
+# (certificates from Let's Encrypt; on a home network from Caddy's own CA:
+# CADDYFILE=deploy/examples/caddy/Caddyfile.lan in .env). Added to the main
+# Compose file:
+#   docker compose -f docker-compose.yml -f deploy/examples/caddy/compose.yml up -d
+# See docs/operations.md §4.
+services:
+  coolpsonotes:
+    # Reached by Caddy over the project's network; nothing published.
+    ports: !reset []
+  caddy:
+    image: caddy:2.10-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      PUBLIC_HOST: ${PUBLIC_HOST}
+    volumes:
+      - ./${CADDYFILE:-deploy/examples/caddy/Caddyfile}:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - coolpsonotes
+
+volumes:
+  caddy-data:
+  caddy-config:

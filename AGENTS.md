@@ -90,7 +90,8 @@ crates/load     load test (`task load`): simulated people = real clients (the CL
 tests/e2e       browser tests: suite.py, cross_client.py, wd.py (stdlib WebDriver)
 site/           project website: static HTML + CSS, no build step, no third-party
                 requests (fonts, scripts, analytics) — keep it that way
-deploy/         Caddyfiles, Dex (dev OIDC), Kubernetes, compose overrides
+deploy/         Kubernetes manifests, Dex (dev OIDC), examples/ (optional reverse
+                proxies: Caddy, Traefik — never required, TLS is the operator's choice)
 (root)          Dockerfile, docker-compose.yml, docker-compose.dev.yml, Taskfile.yml
 ```
 

@@ -1,4 +1,6 @@
-# Production-style deployment: coolpsonotes behind Caddy (automatic HTTPS).
+# coolpsonotes with Docker Compose. It serves plain HTTP on 127.0.0.1:8080
+# only: put the TLS reverse proxy you use in front of it (examples, all
+# optional: deploy/examples/ and docs/operations.md §4).
 #   cp .env.example .env   # set PUBLIC_HOST and the OIDC client
 #   docker compose up -d
 # The project name keeps this stack apart from docker-compose.dev.yml, so the
@@ -16,29 +18,13 @@ services:
       COOLPSONOTES_OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:-}
       COOLPSONOTES_ADMINS: ${ADMINS:-}
       COOLPSONOTES_METRICS_TOKEN: ${METRICS_TOKEN:-}
+      # Behind a proxy: the client's address comes from X-Forwarded-For.
       COOLPSONOTES_TRUST_PROXY: "true"
     volumes:
       - coolpsonotes-data:/data
-    expose:
-      - "8080"
-
-  caddy:
-    image: caddy:2.10-alpine
-    restart: unless-stopped
     ports:
-      - "80:80"
-      - "443:443"
-      - "443:443/udp"
-    environment:
-      PUBLIC_HOST: ${PUBLIC_HOST}
-    volumes:
-      - ./${CADDYFILE:-deploy/Caddyfile}:/etc/caddy/Caddyfile:ro
-      - caddy-data:/data
-      - caddy-config:/config
-    depends_on:
-      - coolpsonotes
+      # Only reachable from this machine, where your proxy forwards to it.
+      - "127.0.0.1:8080:8080"
 
 volumes:
   coolpsonotes-data:
-  caddy-data:
-  caddy-config:

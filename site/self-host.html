@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Self-host · coolpsonotes</title>
-<meta name="description" content="Run coolpsonotes on your own server: try it in development mode, deploy with Docker Compose and Caddy, sign in with your OpenID Connect provider, back it up.">
+<meta name="description" content="Run coolpsonotes on your own server: try it in development mode, deploy with Docker Compose or Kubernetes behind your own HTTPS proxy, sign in with your OpenID Connect provider, back it up.">
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="style.css">
 </head>
@@ -54,7 +54,8 @@
     <div class="wrap split">
       <div class="stack">
         <h2>Run it for real</h2>
-        <p>You need a machine with Docker, a domain name pointing at it, and an OpenID Connect provider such as Authelia, Keycloak, Authentik or Google. The included Compose file runs coolpsonotes behind Caddy, which gets HTTPS certificates automatically.</p>
+        <p>You need a machine with Docker (or a Kubernetes cluster), a domain name pointing at it, a reverse proxy for HTTPS, and an OpenID Connect provider such as Authelia, Keycloak, Authentik or Google.</p>
+        <p>coolpsonotes serves plain HTTP and leaves certificates and HTTPS to the proxy you already use. If you don't have one, the documentation has examples for Caddy (automatic HTTPS in one command), Traefik and nginx.</p>
         <p>Register coolpsonotes with your provider, with the redirect address <code>https://your.domain/api/v1/auth/oidc/callback</code>, and put the details in <code>.env</code>.</p>
         <p>The first person to sign in becomes the administrator.</p>
       </div>
@@ -65,7 +66,8 @@
 # OIDC_ISSUER=https://auth.example.com
 # OIDC_CLIENT_ID=coolpsonotes
 # OIDC_CLIENT_SECRET=…</span>
-<span class="p">$ </span>docker compose up -d --build</pre>
+<span class="p">$ </span>docker compose up -d --build
+<span class="c"># coolpsonotes on 127.0.0.1:8080: point your proxy at it</span></pre>
     </div>
   </section>
 

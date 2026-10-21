@@ -696,7 +696,7 @@ WORK = [
         **Status:** proposed
 
         Follows from [[ADR-001 Static site]]: any static file host works. We
-        deploy with the [[Deploy script]] to a small VPS behind Caddy.
+        deploy with the [[Deploy script]] to a small VPS behind a reverse proxy.
         """)),
     ("People/Dave.md", None, note("""
         # Dave

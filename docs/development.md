@@ -10,7 +10,7 @@ crates/web      browser client (Leptos → wasm32)       → dist/web
 crates/client   desktop/CLI client, mirror, gateway    → coolpsonotes
 site/           project website: static HTML + CSS, no build step (task site)
 tests/e2e       browser end-to-end tests (Python stdlib + chromedriver)
-deploy/         Caddy, Dex (dev OIDC), Kubernetes
+deploy/         Kubernetes, Dex (dev OIDC), examples/ (optional reverse proxies)
 docs/           architecture, protocol, security, operations, agents, desktop client
 ```
 

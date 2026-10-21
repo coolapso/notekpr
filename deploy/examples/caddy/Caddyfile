@@ -5,5 +5,11 @@
 	# internet: scrape coolpsonotes:8080/metrics directly.
 	@metrics path /metrics /metrics/*
 	respond @metrics 404
-	reverse_proxy coolpsonotes:8080
+	# While the server restarts (an update), hold requests and try again
+	# until it's back instead of answering 502 (only requests that couldn't
+	# reach it are retried, so nothing is sent twice).
+	reverse_proxy coolpsonotes:8080 {
+		lb_try_duration 15s
+		lb_try_interval 250ms
+	}
 }

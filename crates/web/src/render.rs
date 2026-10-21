@@ -84,6 +84,87 @@ pub fn highlight_block(code: &str, lang: &str) -> String {
     out
 }
 
+/// A `==` in text: where its placeholder event is, its block, and whether it
+/// may open (text follows) or close (text precedes) a highlight — the
+/// editor's rule.
+struct Mark {
+    at: usize,
+    block: usize,
+    opens: bool,
+    closes: bool,
+}
+
+fn inline_tag(t: &Tag) -> bool {
+    matches!(
+        t,
+        Tag::Emphasis
+            | Tag::Strong
+            | Tag::Strikethrough
+            | Tag::Superscript
+            | Tag::Subscript
+            | Tag::Link { .. }
+            | Tag::Image { .. }
+    )
+}
+
+fn inline_end(t: &TagEnd) -> bool {
+    matches!(
+        t,
+        TagEnd::Emphasis
+            | TagEnd::Strong
+            | TagEnd::Strikethrough
+            | TagEnd::Superscript
+            | TagEnd::Subscript
+            | TagEnd::Link
+            | TagEnd::Image
+    )
+}
+
+/// Text as HTML, each `==` as a placeholder for [`pair_marks`].
+fn push_text<'a>(t: &str, block: usize, out: &mut Vec<Event<'a>>, marks: &mut Vec<Mark>) {
+    let mut rest = t;
+    while let Some(i) = rest.find("==") {
+        let (before, after) = (&rest[..i], &rest[i + 2..]);
+        if !before.is_empty() {
+            out.push(Event::Html(CowStr::from(text_with_tags(before))));
+        }
+        marks.push(Mark {
+            at: out.len(),
+            block,
+            opens: after.chars().next().is_none_or(|c| !c.is_whitespace()),
+            closes: before
+                .chars()
+                .next_back()
+                .is_none_or(|c| !c.is_whitespace()),
+        });
+        out.push(Event::Html(CowStr::from("==")));
+        rest = after;
+    }
+    if !rest.is_empty() {
+        out.push(Event::Html(CowStr::from(text_with_tags(rest))));
+    }
+}
+
+/// Pair `==` marks within each block into `<mark>…</mark>`; the rest stay
+/// as they were typed.
+fn pair_marks(marks: &[Mark], out: &mut [Event]) {
+    let mut open: Option<&Mark> = None;
+    for m in marks {
+        if open.is_some_and(|o| o.block != m.block) {
+            open = None;
+        }
+        match open {
+            Some(o) if m.closes => {
+                out[o.at] = Event::Html(CowStr::from("<mark>"));
+                out[m.at] = Event::Html(CowStr::from("</mark>"));
+                open = None;
+            }
+            _ if m.opens => open = Some(m),
+            _ => {}
+        }
+    }
+}
+
 pub fn to_html(src: &str, ctx: &Ctx) -> String {
     let mut opts = Options::empty();
     opts.insert(Options::ENABLE_TABLES);
@@ -105,8 +186,21 @@ pub fn to_html(src: &str, ctx: &Ctx) -> String {
     let mut image: Option<(String, String, bool)> = None; // (target, alt, wiki)
     let mut heading_n = 0usize;
     let mut link_stack: Vec<bool> = Vec::new();
+    // `==highlight==`: each `==` in text, paired up per block at the end.
+    let mut marks: Vec<Mark> = Vec::new();
+    let mut block = 0usize;
 
     for (ev, range) in Parser::new_ext(src, opts).into_offset_iter() {
+        if let Event::Start(t) = &ev
+            && !inline_tag(t)
+        {
+            block += 1;
+        }
+        if let Event::End(t) = &ev
+            && !inline_end(t)
+        {
+            block += 1;
+        }
         if let Some((_, alt, _)) = &mut image {
             match ev {
                 Event::End(TagEnd::Image) => {
@@ -227,7 +321,7 @@ pub fn to_html(src: &str, ctx: &Ctx) -> String {
             }
             Event::Text(t) => {
                 if link_stack.is_empty() {
-                    out_events.push(Event::Html(CowStr::from(text_with_tags(&t))));
+                    push_text(&t, block, &mut out_events, &mut marks);
                 } else {
                     out_events.push(Event::Text(t));
                 }
@@ -235,6 +329,7 @@ pub fn to_html(src: &str, ctx: &Ctx) -> String {
             e => out_events.push(e),
         }
     }
+    pair_marks(&marks, &mut out_events);
     let mut out = String::with_capacity(src.len() * 2);
     pulldown_cmark::html::push_html(&mut out, out_events.into_iter());
     out
@@ -299,6 +394,26 @@ mod tests {
         assert!(!h.contains("<img src=x"));
         assert!(!h.contains("javascript:"));
         assert!(h.contains("&lt;script&gt;"));
+    }
+
+    #[test]
+    fn highlights_like_the_editor() {
+        let html = render;
+        assert!(html("a ==b c== d").contains("a <mark>b c</mark> d"));
+        assert!(html("==**bold**==").contains("<mark><strong>bold</strong></mark>"));
+        // Unpaired, or with spaces on the wrong side: as typed.
+        assert!(html("a == b").contains("a == b"));
+        assert!(html("x == y ==z").contains("x == y ==z"));
+        // Not across paragraphs, not in code, not in link targets.
+        let two = html("==one\n\ntwo==");
+        assert!(!two.contains("<mark>"), "{two}");
+        assert!(html("`==x==`").contains("<code>==x==</code>"));
+        let link = html("[t](https://example.org/?a==b) ==hi==");
+        assert!(
+            link.contains("href=\"https://example.org/?a==b\""),
+            "{link}"
+        );
+        assert!(link.contains("<mark>hi</mark>"), "{link}");
     }
 
     #[test]

@@ -148,7 +148,7 @@ impl Hub {
         }
         match self.session.api.vaults().await {
             Ok(list) => {
-                self.online.store(true, Ordering::Relaxed);
+                self.set_online(true);
                 // Learn (and remember) the size limits while online.
                 let _ = self.limits().await;
                 self.preresolve_allow_list(&list);
@@ -491,7 +491,7 @@ impl Hub {
         let _g = lock.lock().await;
         let out = self.session.push(&v).await?;
         if out.offline {
-            self.online.store(false, Ordering::Relaxed);
+            self.set_online(false);
         }
         Ok(out)
     }

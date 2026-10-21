@@ -18,13 +18,18 @@ see it with (AGENTS.md, "The demo shows every feature"). What the CLI can't
 create goes into "Things to try" in the *Start here* note.
 
 Python standard library only. Development mode lets anyone sign in as
-anyone: never expose this server.
+anyone: never expose this server — except as a public demo that starts over
+on its own (the `demo` stage of the Dockerfile, deploy/kubernetes/demo.yaml,
+docs/operations.md §10):
+
+    demo.py --fresh --lifetime 1h --dev-mode-anywhere --public-url https://demo.example.com ...
 """
 
 import argparse
 import json
 import os
 import re
+import shutil
 import signal
 import socket
 import struct
@@ -997,6 +1002,33 @@ class Cli:
         self.run(profile, "-q", "icon", vault, path, icon)
 
 
+# What a demo's data directory holds; --fresh deletes only these.
+DEMO_FILES = ("demo.json", "server", "cli", "server.log", "recovery-keys.txt", "assistant.secret")
+
+
+def duration(text):
+    """Seconds in "90", "45s", "30m" or "1h"."""
+    m = re.fullmatch(r"(\d+)([smh]?)", text.strip())
+    if not m or int(m.group(1)) == 0:
+        raise argparse.ArgumentTypeError(f"not a duration: {text!r} (e.g. 30m, 1h)")
+    return int(m.group(1)) * {"": 1, "s": 1, "m": 60, "h": 3600}[m.group(2)]
+
+
+def wipe(data):
+    """Delete a demo's data; refuse a directory holding anything else."""
+    if not data.exists():
+        return
+    other = sorted(p.name for p in data.iterdir() if p.name not in DEMO_FILES)
+    if other:
+        sys.exit(f"{data} holds more than a demo ({', '.join(other)}): not deleting it")
+    for name in DEMO_FILES:
+        p = data / name
+        if p.is_dir():
+            shutil.rmtree(p)
+        elif p.exists():
+            p.unlink()
+
+
 def wait_for_server(url, server, timeout=60):
     deadline = time.time() + timeout
     while time.time() < deadline:
@@ -1224,25 +1256,41 @@ def main():
     ap.add_argument("--data", default=str(ROOT / "data" / "demo"), help="where the demo lives")
     ap.add_argument("--no-approve", action="store_true", help="don't approve browsers automatically")
     ap.add_argument("--seed-only", action="store_true", help="stop once the data is there")
+    ap.add_argument("--fresh", action="store_true", help="delete the demo's data first and create it again")
+    ap.add_argument("--lifetime", type=duration, metavar="DURATION",
+                    help="stop after this long (e.g. 1h; seeding included) and tell visitors when; "
+                         "with --fresh and something that restarts it, a demo that starts over")
+    ap.add_argument("--public-url", help="the address people open, if not the --listen one (behind a reverse proxy)")
+    ap.add_argument("--dev-mode-anywhere", action="store_true",
+                    help="let others reach it: the server refuses development mode on a public "
+                         "address or an https URL without this. Anyone who reaches it can sign in as anyone")
+    ap.add_argument("--server-log", metavar="PATH", help="where the server logs to ('-': here; default: server.log in --data)")
+    ap.add_argument("--server-bin", type=Path, default=ROOT / "target" / "debug" / "coolpsonotes-server")
+    ap.add_argument("--cli-bin", type=Path, default=ROOT / "target" / "debug" / "coolpsonotes")
+    ap.add_argument("--web-dir", type=Path, default=ROOT / "dist" / "web")
     ap.add_argument("-v", "--verbose", action="store_true", help="print every CLI command")
     args = ap.parse_args()
 
     host, port = args.listen.rsplit(":", 1)
     url = f"http://{'localhost' if host in ('127.0.0.1', '0.0.0.0') else host}:{port}"
+    public_url = (args.public_url or url).rstrip("/")
+    # Seeding included, so visitors can be told when it ends.
+    ends = time.time() + args.lifetime if args.lifetime else None
     data = Path(args.data).resolve()
     marker = data / "demo.json"
-    server_bin = ROOT / "target" / "debug" / "coolpsonotes-server"
-    cli_bin = ROOT / "target" / "debug" / "coolpsonotes"
-    for p in (server_bin, cli_bin, ROOT / "dist" / "web" / "index.html"):
+    server_bin, cli_bin = args.server_bin.resolve(), args.cli_bin.resolve()
+    for p in (server_bin, cli_bin, args.web_dir / "index.html"):
         if not p.exists():
-            sys.exit(f"{p.relative_to(ROOT)} is missing: run `task demo` (it builds everything first)")
+            sys.exit(f"{p} is missing: run `task demo` (it builds everything first)")
     if port_in_use(host, int(port)):
         sys.exit(
             f"something already listens on {args.listen} (another program, or a demo that is running).\n"
             f"Choose another address: task demo DEMO_LISTEN=127.0.0.1:8097  (or --listen)"
         )
+    if args.fresh:
+        wipe(data)
     if data.exists() and not marker.exists() and any(data.iterdir()):
-        sys.exit(f"{data} holds an unfinished demo: run `task demo:reset` and try again")
+        sys.exit(f"{data} holds an unfinished demo: run `task demo:reset` (or --fresh) and try again")
     data.mkdir(parents=True, exist_ok=True)
 
     env = dict(os.environ)
@@ -1252,18 +1300,29 @@ def main():
     env.pop("COOLPSONOTES_RECOVERY_KEY", None)
     cli = Cli(cli_bin, env, args.verbose)
 
-    log = open(data / "server.log", "ab")
-    server = subprocess.Popen(
-        [str(server_bin), "--dev-mode", "--web-dir", str(ROOT / "dist" / "web"),
-         "--data-dir", str(data / "server"), "--listen", args.listen,
-         "--public-url", url, "--log-format", "pretty",
-         # alice sees the administration page.
-         "--admin", "dev:alice",
-         # The script edits faster than anyone types: without this, a note
-         # gets one revision per 30 s however often it changes.
-         "--snapshot-cooldown-secs", "0"],
-        stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
-    )
+    log_path = Path(args.server_log) if args.server_log not in (None, "-") else data / "server.log"
+    log = None if args.server_log == "-" else open(log_path, "ab")
+    extra = (["--dev-mode-anywhere"] if args.dev_mode_anywhere else []) + (
+        ["--demo-resets-at", str(int(ends))] if ends else [])
+
+    def start_server(listen):
+        return subprocess.Popen(
+            [str(server_bin), "--dev-mode", "--web-dir", str(args.web_dir.resolve()),
+             "--data-dir", str(data / "server"), "--listen", listen,
+             "--public-url", public_url, "--log-format", "pretty",
+             # alice sees the administration page.
+             "--admin", "dev:alice",
+             # The script edits faster than anyone types: without this, a note
+             # gets one revision per 30 s however often it changes.
+             "--snapshot-cooldown-secs", "0", *extra],
+            stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+        )
+
+    # Reachable by others: seed while only this machine can connect (the
+    # same port on loopback, so the CLI profiles' address stays right), then
+    # open up — nobody signs in as alice before the script made her.
+    exposed = host not in ("127.0.0.1", "localhost", "[::1]")
+    server = start_server(f"127.0.0.1:{port}" if exposed and not marker.exists() else args.listen)
     # Stopped by a signal too (not only Ctrl+C): stop the server with us.
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
     try:
@@ -1277,6 +1336,10 @@ def main():
             seed(cli, url, data)
             marker.write_text(json.dumps({"users": USERS, "server": url, "created": int(time.time())}))
             step(f"done in {time.time() - started:.0f} s")
+            if exposed:
+                stop(server)
+                server = start_server(args.listen)
+                wait_for_server(url, server)
         if args.seed_only:
             return
         approve = (
@@ -1284,18 +1347,24 @@ def main():
             if args.no_approve
             else "A new browser: choose “Approve from another device” — the demo approves it."
         )
+        warning = ("Reachable by others (--dev-mode-anywhere): anyone who opens it can sign in as anyone."
+                   if args.dev_mode_anywhere else
+                   "Development mode: anyone can sign in as anyone. Never expose it.")
+        until = f"\n  It stops at {time.strftime('%H:%M', time.localtime(ends))} (--lifetime)." if ends else ""
         print(textwrap.dedent(f"""
-            Demo running on {url}  (server log: {data / 'server.log'})
+            Demo running on {public_url}  (server log: {'here' if log is None else log_path})
 
               Sign in as alice (most to see), bob, carol or dave — one user per tab.
               {approve}
               Recovery keys: {data / 'recovery-keys.txt'}
               CLI as a demo user:  task demo:cli -- --profile alice ls Home
 
-            Development mode: anyone can sign in as anyone. Never expose it.
-            Ctrl+C stops the server; `task demo:reset` starts over.
-            """), flush=True)
+            {warning}
+            Ctrl+C stops the server; `task demo:reset` starts over.""") + until + "\n", flush=True)
         while server.poll() is None:
+            if ends and time.time() >= ends:
+                step("lifetime over: stopping")
+                return
             if not args.no_approve:
                 approve_pending(cli)
             time.sleep(2)
@@ -1303,12 +1372,16 @@ def main():
     except KeyboardInterrupt:
         print("\nstopping", flush=True)
     finally:
-        if server.poll() is None:
-            server.send_signal(signal.SIGTERM)
-            try:
-                server.wait(10)
-            except subprocess.TimeoutExpired:
-                server.kill()
+        stop(server)
+
+
+def stop(server):
+    if server.poll() is None:
+        server.send_signal(signal.SIGTERM)
+        try:
+            server.wait(10)
+        except subprocess.TimeoutExpired:
+            server.kill()
 
 
 if __name__ == "__main__":

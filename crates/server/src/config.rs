@@ -196,6 +196,12 @@ pub struct Config {
     )]
     pub dev_mode_anywhere: bool,
 
+    /// Demo only (needs --dev-mode): when everything on this server will be
+    /// deleted, in Unix seconds. The web app tells people (`task demo`'s
+    /// `--lifetime` sets it).
+    #[arg(long, env = "COOLPSONOTES_DEMO_RESETS_AT", global = true)]
+    pub demo_resets_at: Option<i64>,
+
     /// Identities ("issuer|subject", or "dev:<name>" in dev mode) that are administrators.
     #[arg(
         long = "admin",

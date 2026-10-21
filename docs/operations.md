@@ -543,4 +543,49 @@ Safety rails:
   administrator role.
 * The server logs a warning at start and every page shows a "DEV MODE" badge.
 
-Never expose a dev-mode server to a network you don't control.
+Never expose a dev-mode server to a network you don't control — with one
+deliberate exception, a demo that starts over on its own (§10).
+
+## 10. A public demo
+
+To let a few people try coolpsonotes without accounts: the demo of
+`task demo` (users, vaults, shared notes, history — [development.md](development.md#a-demo-with-data))
+on a server that deletes everything and starts over every hour.
+
+```sh
+task docker:build:demo    # coolpsonotes-demo:latest — tag and push it to your registry
+# or for amd64 and arm64 at once, straight to your registry:
+docker buildx build --platform linux/amd64,linux/arm64 --target demo -t registry.example.com/coolpsonotes-demo:0.1.0 --push .
+```
+
+The image (the Dockerfile's `demo` stage) runs `scripts/demo.py` with
+`--fresh --lifetime 1h --dev-mode-anywhere`: it deletes the previous demo
+data, starts a development-mode server that only this machine can reach,
+seeds it through the CLI (about half a minute), then opens the server's
+port, approves visitors' browsers, and exits an hour after it started.
+Whatever runs the container restarts it, and it starts over — no scheduler
+needed. Visitors see the time of the next reset on the sign-in page and in
+the corner of every page (the server's `--demo-resets-at`, which only works
+in development mode).
+
+On Kubernetes: [`deploy/kubernetes/demo.yaml`](../deploy/kubernetes/demo.yaml)
+(its own namespace; the data on an `emptyDir`; ready once the data is seeded,
+so the ingress waits during the reset). Set the image and `--public-url` to
+your host name and route to the `coolpsonotes-demo` Service with TLS as for
+the real server (§4). Elsewhere, any restart policy works the same, e.g.
+`docker run --restart always -p 127.0.0.1:8096:8080 coolpsonotes-demo --public-url https://demo.example.com`
+behind your proxy. `--lifetime 30m` (after the image's own) resets more often.
+
+What to know before sharing the link:
+
+* **Anyone who opens it can sign in as anyone** — alice, bob, … or any new
+  name — read and change everything, and upload files (up to
+  `--max-attachment-mb` each) until the next reset. Put it on its own host
+  name, never next to real data, and don't use it for anything you'd mind
+  others seeing. Share the link with whom you like; gate it at your proxy
+  (e.g. basic auth) if it should be fewer.
+* **Visitors share the demo users**: two people signed in as alice see each
+  other's edits live.
+* **Each reset signs everyone out**: open pages go to the sign-in page
+  once the demo is back, with the new reset time. Nothing answers while it
+  seeds.

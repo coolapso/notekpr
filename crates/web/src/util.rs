@@ -82,6 +82,12 @@ pub fn absolute_time(ms: i64) -> String {
     s
 }
 
+/// The local time of day, "15:04".
+pub fn clock_time(ms: i64) -> String {
+    let d = js_sys::Date::new(&JsValue::from_f64(ms as f64));
+    format!("{:02}:{:02}", d.get_hours(), d.get_minutes())
+}
+
 /// "1 note", "3 notes".
 pub fn count(n: usize, one: &str, many: &str) -> String {
     format!("{n} {}", if n == 1 { one } else { many })

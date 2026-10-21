@@ -1141,6 +1141,22 @@ async fn dev_login_is_disabled_outside_dev_mode() {
 }
 
 #[tokio::test]
+async fn a_demo_says_when_it_resets() {
+    let at = 1_900_000_000;
+    let srv = start_with(|c| c.demo_resets_at = Some(at)).await;
+    let info: ServerInfo = Api::new(&srv.base).get("/info").await;
+    assert_eq!(info.demo_resets_at, Some(at * 1000));
+    // Only demos (development mode) reset.
+    let srv = start_with(|c| {
+        c.dev_mode = false;
+        c.demo_resets_at = Some(at);
+    })
+    .await;
+    let info: ServerInfo = Api::new(&srv.base).get("/info").await;
+    assert_eq!(info.demo_resets_at, None);
+}
+
+#[tokio::test]
 async fn backup_and_restore_roundtrip() {
     let dir = tempfile::tempdir().unwrap();
     let data = dir.path().join("live");

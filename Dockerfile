@@ -57,6 +57,24 @@ RUN --mount=type=cache,id=coolpsonotes-registry-$TARGETARCH,target=/usr/local/ca
  && mkdir -p /out/bin /out/data \
  && cp "target/$target/release/coolpsonotes-server" "target/$target/release/coolpsonotes" /out/bin/
 
+# A public demo that starts over every hour (docs/operations.md §10): the
+# server and CLI, plus Python for scripts/demo.py, which seeds the demo data
+# through the CLI, serves it for an hour and exits so it is restarted fresh.
+# Development mode: anyone who reaches it can sign in as anyone. Built only
+# on request (`task docker:build:demo`, i.e. --target demo); the default
+# target is the server image below.
+FROM python:3.13-slim-trixie AS demo
+COPY --from=build /out/bin/ /usr/local/bin/
+COPY --from=web /out/web /usr/share/coolpsonotes/web
+COPY scripts/demo.py /usr/share/coolpsonotes/demo.py
+COPY --from=build --chown=65532:65532 /out/data /data
+EXPOSE 8080
+USER 65532:65532
+ENTRYPOINT ["python3", "-u", "/usr/share/coolpsonotes/demo.py", \
+    "--server-bin", "/usr/local/bin/coolpsonotes-server", "--cli-bin", "/usr/local/bin/coolpsonotes", \
+    "--web-dir", "/usr/share/coolpsonotes/web", "--data", "/data/demo", "--server-log", "-", \
+    "--listen", "0.0.0.0:8080", "--dev-mode-anywhere", "--fresh", "--lifetime", "1h"]
+
 FROM gcr.io/distroless/cc-debian13:nonroot
 LABEL org.opencontainers.image.title="coolpsonotes" \
       org.opencontainers.image.description="Self-hosted, end-to-end encrypted, collaborative Markdown notes" \

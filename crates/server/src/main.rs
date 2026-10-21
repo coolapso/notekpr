@@ -162,6 +162,9 @@ async fn serve(config: Config) -> anyhow::Result<()> {
              (COOLPSONOTES_OIDC_ISSUER / COOLPSONOTES_OIDC_CLIENT_ID), or --dev-mode for local development"
         );
     }
+    if config.demo_resets_at.is_some() && !config.dev_mode {
+        bail!("--demo-resets-at is for demos: it needs --dev-mode");
+    }
     if config.dev_mode {
         // Anyone who can reach a dev-mode server can sign in as anyone:
         // refuse setups that look like they are meant to be reachable.

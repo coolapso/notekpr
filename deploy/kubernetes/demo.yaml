@@ -1,0 +1,97 @@
+# A public demo of coolpsonotes that starts over every hour
+# (docs/operations.md §10). The demo image (`task docker:build:demo`; push it
+# where your cluster pulls images from) seeds users, vaults and notes through
+# the CLI, serves them for an hour, then exits; Kubernetes restarts the
+# container and it wipes and seeds again. Visitors see when it resets.
+#
+# It runs in development mode: anyone who can open it can sign in as anyone
+# and upload files until the next reset. Give it its own host name and
+# namespace, never next to real data.
+#
+# Route to the Service with the ingress you use, with TLS — e.g.
+# deploy/examples/traefik/ingressroute.yaml with this namespace, host name
+# and Service. Set the same host name in --public-url below.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: coolpsonotes-demo
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: coolpsonotes-demo
+  namespace: coolpsonotes-demo
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: coolpsonotes-demo
+  template:
+    metadata:
+      labels:
+        app: coolpsonotes-demo
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: demo
+          image: registry.example.com/coolpsonotes-demo:latest
+          # Added to the image's: --fresh --lifetime 1h --dev-mode-anywhere …
+          # (a later --lifetime, e.g. 30m, replaces its 1h).
+          args: ["--public-url", "https://demo.example.com"]
+          env:
+            # Client addresses from the ingress's X-Forwarded-For, for the
+            # per-person rate limits (see the Traefik example's notes).
+            - name: COOLPSONOTES_TRUST_PROXY
+              value: "true"
+          ports:
+            - name: http
+              containerPort: 8080
+          # The demo seeds with the server on loopback, then opens the
+          # port: ready once the data is there (about half a minute after
+          # each restart; the ingress waits meanwhile).
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        # Kept across container restarts; the demo deletes its data itself
+        # (--fresh) when it starts again.
+        - name: data
+          emptyDir:
+            sizeLimit: 2Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: coolpsonotes-demo
+  namespace: coolpsonotes-demo
+spec:
+  selector:
+    app: coolpsonotes-demo
+  ports:
+    - name: http
+      port: 80
+      targetPort: http

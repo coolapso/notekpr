@@ -112,7 +112,8 @@ are in `data/demo/recovery-keys.txt`). The server's log goes to
 there; `task demo -- -v` prints every CLI command it runs. The script
 refuses to seed a server that isn't in development mode. To change the
 content, edit the script and `task demo:reset`. Port 8099 taken? `task demo
-DEMO_LISTEN=127.0.0.1:8097`.
+DEMO_LISTEN=127.0.0.1:8097`. To put the demo online for others, resetting
+itself every hour: [operations.md §10](operations.md#10-a-public-demo).
 
 **Keep it complete.** The demo is meant to show every user-facing feature,
 so it doubles as a hands-on end-to-end check: after `task demo:reset && task

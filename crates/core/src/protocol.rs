@@ -100,6 +100,10 @@ pub struct ServerInfo {
     /// `private`); absent on older servers.
     #[serde(default)]
     pub note_keys: bool,
+    /// A demo (development mode only): when everything on it will be
+    /// deleted, in Unix milliseconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub demo_resets_at: Option<i64>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]

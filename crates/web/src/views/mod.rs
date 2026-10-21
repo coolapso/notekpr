@@ -81,8 +81,17 @@ fn Banners() -> impl IntoView {
             <div class="banner warn"><Icon name="alert"/><span>{w}</span>
                 <button class="btn small ghost" on:click=move |_| ui.warning.set(None)>"Dismiss"</button></div>
         })}
-        {move || (ui.server.get().is_some_and(|s| s.dev_mode)).then(|| view! {
-            <div class="devstrip" title="The server runs in development mode: anyone can sign in as anyone.">"DEV MODE"</div>
+        {move || ui.server.get().filter(|s| s.dev_mode).map(|s| match s.demo_resets_at {
+            Some(at) => {
+                let at = util::clock_time(at);
+                view! {
+                    <div class="devstrip" title=format!("A demo: anyone can sign in as anyone, and everything is deleted at {at}, when it starts over.")>
+                        {format!("DEMO · resets at {at}")}</div>
+                }.into_any()
+            }
+            None => view! {
+                <div class="devstrip" title="The server runs in development mode: anyone can sign in as anyone.">"DEV MODE"</div>
+            }.into_any(),
         })}
     }
 }

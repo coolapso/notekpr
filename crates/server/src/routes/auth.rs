@@ -35,6 +35,11 @@ pub async fn info(State(state): State<AppState>) -> Json<ServerInfo> {
         max_update_bytes: state.config.max_update_bytes(),
         note_keys: true,
         max_snapshot_bytes: state.config.max_snapshot_bytes(),
+        demo_resets_at: state
+            .config
+            .demo_resets_at
+            .filter(|_| state.config.dev_mode)
+            .map(|s| s * 1000),
     })
 }
 

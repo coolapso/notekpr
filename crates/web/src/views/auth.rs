@@ -42,6 +42,13 @@ pub fn Login(error: Option<String>) -> impl IntoView {
     let server = ui.server.get_untracked();
     let oidc = server.as_ref().map(|s| s.oidc_enabled).unwrap_or(false);
     let dev = server.as_ref().map(|s| s.dev_mode).unwrap_or(false);
+    // Kept current: a demo that started over has a new time.
+    let resets_at = move || {
+        ui.server
+            .get()
+            .and_then(|s| s.demo_resets_at)
+            .map(util::clock_time)
+    };
     let sso_name = server
         .as_ref()
         .and_then(|s| s.oidc_display_name.clone())
@@ -80,8 +87,17 @@ pub fn Login(error: Option<String>) -> impl IntoView {
             {(!oidc && !dev).then(|| view! { <p class="muted">"No sign-in method is configured on this server."</p> })}
             {dev.then(|| view! {
                 <div class="dev-box">
-                    <div class="dev-title"><Icon name="alert"/>" Development mode"</div>
-                    <p class="small muted">"Sign in as any user without a password. Each browser tab keeps its own session, so open another tab to sign in as a second person."</p>
+                    {move || match resets_at() {
+                        Some(at) => view! {
+                            <div class="dev-title"><Icon name="alert"/>" Demo"</div>
+                            <p class="small muted">"Sign in as alice (most to see), bob, carol or dave — no password; other visitors may be signed in as them too. Each browser tab keeps its own session."</p>
+                            <p class="small muted">{format!("Everything is deleted at {at}, when the demo starts over.")}</p>
+                        }.into_any(),
+                        None => view! {
+                            <div class="dev-title"><Icon name="alert"/>" Development mode"</div>
+                            <p class="small muted">"Sign in as any user without a password. Each browser tab keeps its own session, so open another tab to sign in as a second person."</p>
+                        }.into_any(),
+                    }}
                     <form on:submit=move |ev| { ev.prevent_default(); dev_login(username.get_untracked()); }>
                         <input class="input" placeholder="user name (e.g. alice)" use:focus_on_mount
                             prop:value=move || username.get() on:input=move |ev| username.set(event_target_value(&ev))/>

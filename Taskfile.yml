@@ -283,7 +283,7 @@ tasks:
       - cargo deny check
 
   ci:
-    desc: "Exactly what CI runs (it installs the tooling, then this): format check, lint, every test, the wasm build, the editor's and the browser tests, the supply-chain check and the container image"
+    desc: "Exactly what CI runs (it installs the tooling, then this): format check, lint, every test, the wasm build, the editor's and the browser tests, the supply-chain check and the container images"
     cmds:
       - task: fmt:check
       - task: lint
@@ -293,6 +293,8 @@ tasks:
       - task: test:e2e
       - task: audit
       - task: docker:build
+      # Shares the build stage: only checks the demo's own layer still builds.
+      - task: docker:build:demo
 
   # ------------------------------------------------------------------ website
 
@@ -309,6 +311,11 @@ tasks:
     desc: Build the container image coolpsonotes:latest
     cmds:
       - docker build -t coolpsonotes:latest .
+
+  docker:build:demo:
+    desc: "Build the public demo image (coolpsonotes-demo:latest): seeds the demo, serves it an hour, exits to start over — docs/operations.md §10"
+    cmds:
+      - docker build --target demo -t coolpsonotes-demo:latest .
 
   docker:dev:
     desc: Run the development server in Docker on http://localhost:8080 (no OIDC)

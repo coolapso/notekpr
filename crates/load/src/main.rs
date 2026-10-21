@@ -453,27 +453,31 @@ async fn run(args: Args, root: PathBuf) -> Result<bool> {
             })
             .collect();
         let begin = Instant::now();
-        let arrived: Vec<Result<Person>> = futures::stream::iter(range.clone())
+        let arrived: Vec<Option<Person>> = futures::stream::iter(range.clone())
             .map(|id| {
                 let at = begin + starts[(id - range.start) as usize];
                 let world = world.clone();
                 async move {
                     tokio::time::sleep_until(at.into()).await;
-                    Person::arrive(world, id, seed).await
+                    arrive(world, id, seed).await
                 }
             })
             .buffer_unordered(64)
             .collect()
             .await;
         let mut persons: HashMap<u32, Person> = HashMap::new();
-        for p in arrived {
-            let p = p?;
+        for p in arrived.into_iter().flatten() {
             persons.insert(p.id, p);
         }
+        let in_all = world.clients.lock().unwrap().iter().flatten().count();
         println!(
             "{:>7.1} s  {}",
             t_start.elapsed().as_secs_f32(),
-            of(&format!("{} people arrived", range.end))
+            of(&format!(
+                "{in_all} people here ({} of {} newcomers got in)",
+                persons.len(),
+                range.len()
+            ))
         );
 
         // Teams share vaults.
@@ -487,9 +491,15 @@ async fn run(args: Args, root: PathBuf) -> Result<bool> {
         let mut founders = Vec::new();
         for (i, members) in teams.iter().enumerate() {
             let t = first_team + i as u32;
-            let owner = members[0];
-            let mut p = persons.remove(&owner).expect("arrived");
-            let members = members.clone();
+            // Those who got in; the first of them starts the team.
+            let members: Vec<u32> = members
+                .iter()
+                .copied()
+                .filter(|m| persons.contains_key(m))
+                .collect();
+            let Some(mut p) = members.first().and_then(|o| persons.remove(o)) else {
+                continue;
+            };
             let name = world::team_name(t);
             founders.push(async move {
                 let r = p.found_team(t, &name, &members).await;
@@ -497,14 +507,25 @@ async fn run(args: Args, root: PathBuf) -> Result<bool> {
             });
         }
         for (p, team) in futures::future::join_all(founders).await {
-            let team = team?;
-            bus.send(Event::Team {
-                id: team.id,
-                name: team.name.clone(),
-                owner: team.owner,
-                members: team.members.clone(),
-            });
-            world.teams.lock().unwrap().push(team);
+            match team {
+                Ok(team) => {
+                    bus.send(Event::Team {
+                        id: team.id,
+                        name: team.name.clone(),
+                        owner: team.owner,
+                        members: team.members.clone(),
+                    });
+                    world.teams.lock().unwrap().push(team);
+                }
+                // Too busy a server: this team works without its vault.
+                Err(e) => {
+                    world.bus.tally.lock().unwrap().errors += 1;
+                    bus.feed(
+                        Action::CreateVault,
+                        format!("{} couldn't set up their team: {e:#}", world.display(p.id)),
+                    );
+                }
+            }
             persons.insert(p.id, p);
         }
         first_team += teams.len() as u32;
@@ -658,6 +679,41 @@ async fn run(args: Args, root: PathBuf) -> Result<bool> {
     futures::future::join_all(persons.into_iter().map(|p| p.leave())).await;
     server.remove();
     Ok(report.passed())
+}
+
+/// Sign someone up, trying again while the server is too busy to answer;
+/// `None` if they never got in (the run goes on without them).
+async fn arrive(world: Arc<World>, id: u32, seed: u64) -> Option<Person> {
+    let mut wait = Duration::from_secs(2);
+    for attempt in 1..=5 {
+        match tokio::time::timeout(
+            Duration::from_secs(60),
+            Person::arrive(world.clone(), id, seed),
+        )
+        .await
+        {
+            Ok(Ok(p)) => return Some(p),
+            Ok(Err(e)) => tracing::warn!(
+                "signing up {} (attempt {attempt}): {e:#}",
+                world.display(id)
+            ),
+            Err(_) => tracing::warn!(
+                "signing up {} (attempt {attempt}): timed out",
+                world.display(id)
+            ),
+        }
+        tokio::time::sleep(wait).await;
+        wait *= 2;
+    }
+    world.bus.tally.lock().unwrap().errors += 1;
+    world.bus.feed(
+        Action::SignUp,
+        format!(
+            "{} couldn't sign up: the server is too busy",
+            world.display(id)
+        ),
+    );
+    None
 }
 
 /// Kill the server, keep it down for `down`, start it again and follow the

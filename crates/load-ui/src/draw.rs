@@ -115,6 +115,17 @@ fn thousands(n: u64) -> String {
     out
 }
 
+/// "34 ms", "2.4 s", "150 s".
+fn duration(ms: f32) -> String {
+    if ms < 1000.0 {
+        format!("{ms:.0} ms")
+    } else if ms < 10_000.0 {
+        format!("{:.1} s", ms / 1000.0)
+    } else {
+        format!("{:.0} s", ms / 1000.0)
+    }
+}
+
 fn mb(b: u64) -> f64 {
     b as f64 / (1024.0 * 1024.0)
 }
@@ -297,9 +308,16 @@ fn draw_world(app: &mut App, c: &Ctx, r: &Rect, now: f64) {
     }
     c.stroke();
 
-    // Team names, outside their people.
+    // Team names, outside their people: all of them while they fit, then
+    // only the teams on the screens.
     let members = app.team_members();
+    let on_screens: std::collections::BTreeSet<u32> =
+        app.screens.iter().flatten().map(|s| s.team).collect();
+    let few = members.len() <= 40;
     for (team, ids) in &members {
+        if !few && !on_screens.contains(team) {
+            continue;
+        }
         let (mut sx, mut sy) = (0.0, 0.0);
         for &id in ids {
             let p = &app.people[id as usize].pos;
@@ -653,7 +671,11 @@ fn level_cells(l: &LevelResult) -> Vec<String> {
         format!("{:.0}", l.peak_http_rps),
         format!("{:.0}%", l.peak_cpu_pct),
         format!("{:.0} MB", mb(l.peak_mem_bytes)),
-        format!("{:.0} / {:.0}", l.propagation_p50_ms, l.propagation_p99_ms),
+        format!(
+            "{} / {}",
+            duration(l.propagation_p50_ms),
+            duration(l.propagation_p99_ms)
+        ),
         format!("{} s", l.downtime_s),
         l.online_s
             .map(|s| format!("{s:.1} s"))
@@ -672,7 +694,7 @@ const LEVEL_HEADS: [&str; 11] = [
     "PEAK",
     "CPU",
     "MEMORY",
-    "KEYSTROKE MS",
+    "KEYSTROKE p50/p99",
     "DOWN",
     "ONLINE IN",
     "CAUGHT UP",
@@ -699,11 +721,11 @@ fn level_columns(full: bool) -> Vec<(usize, f64)> {
     } else {
         vec![
             (0, 0.0),
-            (1, 0.22),
-            (2, 0.36),
-            (4, 0.48),
-            (6, 0.72),
-            (7, 0.85),
+            (1, 0.19),
+            (2, 0.32),
+            (4, 0.43),
+            (6, 0.70),
+            (7, 0.80),
             (9, 1.0),
         ]
     }
@@ -827,7 +849,8 @@ fn draw_charts(app: &App, c: &Ctx, r: &Rect) {
         .filter(|l| *l > 0.0);
     let mem_limit = hello.as_ref().map(|h| mb(h.memory)).filter(|m| *m > 0.0);
     let series = |f: &dyn Fn(&Stats) -> f64| -> Vec<f64> { s.iter().map(|x| f(x)).collect() };
-    let users = hello.as_ref().map(|h| h.users).unwrap_or(0);
+    // People who have arrived so far (later levels' seats are still empty).
+    let here = app.people.iter().filter(|p| p.arrived).count();
     let marks: Vec<f64> = match (s.first(), s.last()) {
         (Some(a), Some(b)) if b.t_ms > a.t_ms => app
             .level_starts
@@ -889,13 +912,13 @@ fn draw_charts(app: &App, c: &Ctx, r: &Rect) {
         },
         Card {
             title: "PEOPLE ONLINE",
-            value: format!("{} / {users}", last.online),
+            value: format!("{} / {here}", last.online),
             sub: format!(
                 "{} notes · {} pictures · {} errors",
                 last.notes, last.pictures, last.errors
             ),
             lines: vec![(series(&|x| x.online as f64), GREEN)],
-            limit: Some(users as f64),
+            limit: Some(here.max(1) as f64),
             marks: marks.clone(),
         },
     ];

@@ -294,41 +294,38 @@ impl App {
         m
     }
 
-    /// Place people around the server, team by team, on as many rings as
-    /// it takes to give everyone some room (sizing them to fit).
+    /// Place people around the server, team after team along a ring (a
+    /// small gap between teams), then on the next ring inwards: a big crowd
+    /// fills in from the outside, level by level. People are sized to fit.
     pub fn place(&mut self, cx: f64, cy: f64, rx: f64, ry: f64) {
         let teams = self.team_members();
         let n = self.people.len().max(1) as f64;
         let circumference = std::f64::consts::PI * (rx + ry);
         let rings = ((16.0 * n) / circumference).ceil().clamp(1.0, 10.0) as usize;
-        let per_ring = (n / rings as f64).ceil();
-        // Rings close together, so a team stays one cluster.
         let ring_step = if rings > 1 {
-            (0.45 / (rings - 1) as f64).min(0.08)
+            (0.45 / (rings - 1) as f64).min(0.12)
         } else {
             0.0
         };
-        let along = circumference / per_ring.max(1.0);
+        let gap = 0.8;
+        let total = n + gap * teams.len() as f64;
+        let per_ring = (total / rings as f64).ceil().max(1.0);
+        let inner = 1.0 - ring_step * (rings - 1) as f64;
+        let along = circumference * inner / per_ring;
         let across = if rings > 1 { ry * ring_step } else { f64::MAX };
-        self.dot_radius = (along.min(across) * 0.36).clamp(2.5, 9.0);
-        // Each team gets a slice, with a gap between teams.
-        let gap = 0.6;
-        let slots: f64 = teams
-            .values()
-            .map(|m| (m.len() as f64 / rings as f64).ceil() + gap)
-            .sum();
-        let step = std::f64::consts::TAU / slots.max(per_ring);
-        let mut angle = -std::f64::consts::FRAC_PI_2;
+        self.dot_radius = (along.min(across) * 0.38).clamp(2.5, 9.0);
+        let mut cursor = 0.0;
         for members in teams.values() {
-            for (j, &id) in members.iter().enumerate() {
-                let ring = j % rings;
-                let k = (j / rings) as f64;
-                let a = angle + k * step;
+            for &id in members {
+                let ring = ((cursor / per_ring) as usize).min(rings - 1);
+                let a = -std::f64::consts::FRAC_PI_2
+                    + (cursor % per_ring) * std::f64::consts::TAU / per_ring;
                 let scale = 1.0 - ring as f64 * ring_step;
                 self.people[id as usize].pos =
                     (cx + a.cos() * rx * scale, cy + a.sin() * ry * scale);
+                cursor += 1.0;
             }
-            angle += ((members.len() as f64 / rings as f64).ceil() + gap) * step;
+            cursor += gap;
         }
         self.layout_dirty = false;
     }
@@ -415,6 +412,22 @@ mod tests {
         }
         let ts: Vec<u64> = a.stats.iter().map(|s| s.t_ms).collect();
         assert_eq!(ts, [1000, 2000, 3000]);
+    }
+
+    #[test]
+    fn a_thousand_fit_without_overlapping() {
+        let mut a = App::new();
+        for id in 0..1000 {
+            a.apply(person(id, id / 5), 0.0);
+        }
+        a.place(500.0, 300.0, 400.0, 190.0);
+        let r = a.dot_radius;
+        assert!(r >= 2.5, "{r}");
+        let mut seen = std::collections::BTreeSet::new();
+        for p in &a.people {
+            seen.insert(((p.pos.0 / r) as i64, (p.pos.1 / r) as i64));
+        }
+        assert!(seen.len() > 950, "{} distinct places", seen.len());
     }
 
     #[test]

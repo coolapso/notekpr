@@ -99,6 +99,11 @@ At the end:
 A run that was killed outright (not Ctrl+C) leaves its container and
 people's copies behind; the next run removes them.
 
+When the server is too busy to answer, sign-ups are tried again (five
+times, waiting longer each time); someone who still can't get in is counted
+as an error and the run goes on without them, as does a team whose vault
+couldn't be set up.
+
 ## What is real and what isn't
 
 * **The server is the real image**, limited with Docker's `--cpus` and

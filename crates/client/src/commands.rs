@@ -275,10 +275,24 @@ pub async fn run(cli: Cli) -> Result<()> {
 pub async fn run_in(cli: Cli, dirs: Dirs) -> Result<()> {
     ui::set_quiet(cli.quiet);
     let access = access(&cli.command);
+    // A running daemon owns the profile: it runs changing commands, right
+    // away. Otherwise whoever holds it is another one-shot command, which is
+    // waited for (it usually finishes within moments).
+    let mut free = None;
+    if access == Access::Write {
+        free = ProfileLock::try_acquire(&dirs, &cli.profile)?;
+        if free.is_none() && control::forward(&dirs, cli.clone()).await? {
+            return Ok(());
+        }
+    }
     // Held until the command returns; released by the OS on exit or crash.
-    let (_lock, detached) = match lock_profile(&dirs, &cli.profile, access).await {
+    let got = match free {
+        Some(l) => Ok((Some(l), false)),
+        None => lock_profile(&dirs, &cli.profile, access).await,
+    };
+    let (_lock, detached) = match got {
         Ok(l) => l,
-        // A running daemon owns the profile: it runs changing commands.
+        // A daemon that started meanwhile.
         Err(e) if access == Access::Write => {
             return match control::forward(&dirs, cli).await? {
                 true => Ok(()),

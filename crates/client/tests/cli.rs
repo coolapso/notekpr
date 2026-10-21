@@ -295,9 +295,16 @@ async fn changing_commands_are_handed_to_the_running_daemon() {
     let endpoint = control::serve(&srv.dirs("alice"), "alice", daemon.clone())
         .await
         .unwrap();
+    // Handed over right away, not after waiting for the profile.
+    let t = std::time::Instant::now();
     run(&srv, "alice", &["mkdir", "Home", "Ideas"])
         .await
         .unwrap();
+    assert!(
+        t.elapsed() < std::time::Duration::from_secs(2),
+        "{:?}",
+        t.elapsed()
+    );
     run(
         &srv,
         "alice",

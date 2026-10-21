@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use serde::{Deserialize, Serialize};
 
-#[derive(Parser, Debug, Serialize, Deserialize)]
+#[derive(Parser, Clone, Debug, Serialize, Deserialize)]
 #[command(
     name = "coolpsonotes",
     version,
@@ -34,7 +34,7 @@ pub struct Cli {
     pub command: Command,
 }
 
-#[derive(Subcommand, Debug, Serialize, Deserialize)]
+#[derive(Subcommand, Clone, Debug, Serialize, Deserialize)]
 pub enum Command {
     /// Sign in and set up this device (OIDC device login, or --dev-user in development mode).
     Login(LoginArgs),
@@ -193,7 +193,7 @@ pub enum Command {
     Gateway(GatewayArgs),
 }
 
-#[derive(Args, Debug, Serialize, Deserialize)]
+#[derive(Args, Clone, Debug, Serialize, Deserialize)]
 pub struct QuickArgs {
     /// The note's text (several words are joined with spaces). Read from
     /// stdin when omitted.
@@ -213,7 +213,7 @@ pub struct QuickArgs {
     pub limit: usize,
 }
 
-#[derive(Args, Debug, Serialize, Deserialize)]
+#[derive(Args, Clone, Debug, Serialize, Deserialize)]
 pub struct RecoverArgs {
     /// Encrypted export to decrypt (from `export-encrypted`, `GET /api/v1/me/export`
     /// or `coolpsonotes-server export-user`). Without it, this device downloads
@@ -234,7 +234,7 @@ pub struct RecoverArgs {
     pub local: bool,
 }
 
-#[derive(Args, Debug, Serialize, Deserialize)]
+#[derive(Args, Clone, Debug, Serialize, Deserialize)]
 pub struct LoginArgs {
     /// Server URL, e.g. https://notes.example.com
     #[arg(long)]
@@ -255,7 +255,7 @@ pub struct LoginArgs {
     pub insecure_http: bool,
 }
 
-#[derive(Subcommand, Debug, Serialize, Deserialize)]
+#[derive(Subcommand, Clone, Debug, Serialize, Deserialize)]
 pub enum DevicesCmd {
     /// List devices.
     List,
@@ -273,7 +273,7 @@ pub enum DevicesCmd {
     },
 }
 
-#[derive(Subcommand, Debug, Serialize, Deserialize)]
+#[derive(Subcommand, Clone, Debug, Serialize, Deserialize)]
 pub enum RecoveryCmd {
     /// Replace the recovery key (the old one stops working).
     Rotate {
@@ -282,7 +282,7 @@ pub enum RecoveryCmd {
     },
 }
 
-#[derive(Subcommand, Debug, Serialize, Deserialize)]
+#[derive(Subcommand, Clone, Debug, Serialize, Deserialize)]
 pub enum SharedCmd {
     /// List notes shared with you.
     List,
@@ -303,7 +303,7 @@ pub enum ShareRole {
     Viewer,
 }
 
-#[derive(Subcommand, Debug, Serialize, Deserialize)]
+#[derive(Subcommand, Clone, Debug, Serialize, Deserialize)]
 pub enum VaultCmd {
     /// List vaults.
     List,
@@ -360,7 +360,7 @@ pub enum VaultCmd {
     },
 }
 
-#[derive(Subcommand, Debug, Serialize, Deserialize)]
+#[derive(Subcommand, Clone, Debug, Serialize, Deserialize)]
 pub enum TrashCmd {
     /// List trashed entries.
     List { vault: String },
@@ -374,7 +374,7 @@ pub enum TrashCmd {
     },
 }
 
-#[derive(Args, Debug, Serialize, Deserialize)]
+#[derive(Args, Clone, Debug, Serialize, Deserialize)]
 #[command(args_conflicts_with_subcommands = true)]
 pub struct HistoryArgs {
     #[command(subcommand)]
@@ -383,7 +383,7 @@ pub struct HistoryArgs {
     pub path: Option<String>,
 }
 
-#[derive(Subcommand, Debug, Serialize, Deserialize)]
+#[derive(Subcommand, Clone, Debug, Serialize, Deserialize)]
 pub enum HistoryCmd {
     /// Print one revision.
     Show {
@@ -399,7 +399,7 @@ pub enum HistoryCmd {
     },
 }
 
-#[derive(Args, Debug, Serialize, Deserialize)]
+#[derive(Args, Clone, Debug, Serialize, Deserialize)]
 pub struct SyncArgs {
     /// Mirror decrypted Markdown files into this directory (plaintext mode).
     #[arg(long)]
@@ -426,7 +426,7 @@ pub struct SyncArgs {
     pub restore_missing: bool,
 }
 
-#[derive(Subcommand, Debug, Serialize, Deserialize)]
+#[derive(Subcommand, Clone, Debug, Serialize, Deserialize)]
 pub enum AgentCmd {
     /// Configure this profile as an agent identity and create its key pair.
     Setup {
@@ -470,7 +470,7 @@ pub enum AgentCmd {
     },
 }
 
-#[derive(Args, Debug, Serialize, Deserialize)]
+#[derive(Args, Clone, Debug, Serialize, Deserialize)]
 #[command(args_conflicts_with_subcommands = true)]
 pub struct GatewayArgs {
     #[command(subcommand)]
@@ -489,7 +489,7 @@ pub struct GatewayArgs {
     pub allow_non_loopback: bool,
 }
 
-#[derive(Subcommand, Debug, Serialize, Deserialize)]
+#[derive(Subcommand, Clone, Debug, Serialize, Deserialize)]
 pub enum GatewayCmd {
     /// Print the gateway's bearer token (created on first use).
     Token {

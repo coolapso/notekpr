@@ -115,8 +115,8 @@ and JSON, or need change events. Described next.
 data while they run, so they can't share one profile. While one of them runs,
 read commands (`ls`, `cat`, `search`) show its local copies, and changing
 commands (`write`, `mv`, `rm`, …) are handed to it: it runs them on its own
-copies and passes back what they print, so they work as usual (each one first
-waits up to 3 seconds for the profile). A gateway started with `--read-only`
+copies and passes back what they print, so they work as usual. A gateway
+started with `--read-only`
 refuses every command handed to it. Details:
 [desktop-client.md §3](desktop-client.md#3-everyday-commands).
 

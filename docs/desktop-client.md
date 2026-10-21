@@ -190,8 +190,8 @@ queued or received changes). While `sync` or `gateway` runs, read commands
 list`, `vault list`, `quick --list`, `note-shares`, `recover`) show that
 process's local copies read-only — it keeps them current — and commands that
 change something (`write`, `quick`, `mv`, `rm`, `mkdir`, `import`,
-`vault …`, `share-note`, …) are handed to it once they have waited up to 3
-seconds for the profile: it runs them on its own copies and sends back what
+`vault …`, `share-note`, …) are handed to it right away: it runs them on its
+own copies and sends back what
 they print and whether they failed, so they work as usual (through a loopback
 connection whose port and token are in `control.json` in the profile's data
 folder, readable by you only). It runs them only for vaults it keeps

@@ -194,6 +194,17 @@ async fn serve(config: Config) -> anyhow::Result<()> {
             tracing::warn!("development mode allowed although {r}");
         }
     }
+    match coolpsonotes_server::process::raise_open_files_limit() {
+        // Each connected person needs about three: a WebSocket and HTTP
+        // connections.
+        Some(n) if n < 8192 => tracing::warn!(
+            open_files = n,
+            "the open-files limit allows only about {} people connected at once; raise it (ulimit -n, or the container's nofile ulimit)",
+            n / 3
+        ),
+        Some(n) => tracing::info!(open_files = n, "open-files limit"),
+        None => {}
+    }
     if !config.public_url.starts_with("https://") && !is_local_url(&config.public_url) {
         tracing::warn!(public_url = %config.public_url, "public URL is not HTTPS; terminate TLS at a reverse proxy");
     }

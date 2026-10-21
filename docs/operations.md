@@ -20,6 +20,15 @@ There are no published images yet: Compose builds the image on the machine.
 The first build compiles the server and the browser client (several minutes
 and around 2 GB of RAM); later builds are cached.
 
+**Open files.** Every connected person holds a WebSocket and an HTTP
+connection or two, each an open file. At start the server raises its
+open-files limit to the hard limit the system allows (at most about a
+million) and logs it; if that still allows fewer than about 2,700 people at
+once, it warns — raise the hard limit then (`LimitNOFILE=` in a systemd unit,
+`ulimits: nofile` in Compose). Past the limit the server keeps serving the
+connections it has but can't accept new ones (`accept error: Too many open
+files` in its log).
+
 ### Public server with automatic HTTPS
 
 ```sh

@@ -325,7 +325,9 @@ vault's events in strictly increasing order without gaps.**
 
 JSON text frames, tagged with `"type"`.
 
-Client → server: `auth {token}` (must be first, within 10 s),
+Client → server: `auth {token}` (must be first, within 10 s; a session the
+server doesn't know gets `error {code: "unauthorized"}` and the connection
+closes — the only way a browser learns why, so clients sign out on it),
 `subscribe {vault_id, since?, object_id?}`, `unsubscribe {vault_id, object_id?}`,
 `push {vault_id, updates}`, `awareness {vault_id, object_id, payload}`,
 `ping {nonce}`.

@@ -89,7 +89,9 @@ def severe_logs(*browsers):
     for b in browsers:
         for l in b.logs() or []:
             m = l.get("message", "")
-            if l.get("level") == "SEVERE" and "WebSocket connection" not in m and "ERR_CONNECTION_REFUSED" not in m:
+            # Requests cut off on purpose (set_offline, a stopped server) aren't errors.
+            expected = ("WebSocket connection", "ERR_CONNECTION_REFUSED", "ERR_INTERNET_DISCONNECTED")
+            if l.get("level") == "SEVERE" and not any(e in m for e in expected):
                 out.append(m[:300])
     for m in out:
         print(f"    ! browser: {m}")
@@ -533,6 +535,24 @@ TRACK_SOCKETS = """
   window.__sockets = [];
   window.WebSocket = class extends W {
     constructor(...a) { super(...a); window.__sockets.push(this); }
+  };
+})();
+"""
+
+
+# Like TRACK_SOCKETS, and new WebSockets fail while window.__wsBlocked is set
+# (as while a server restarts), without cutting the page's other requests.
+BLOCKABLE_SOCKETS = """
+(() => {
+  const W = window.WebSocket;
+  window.__sockets = [];
+  window.__wsBlocked = false;
+  window.WebSocket = class extends W {
+    constructor(...a) {
+      if (window.__wsBlocked) throw new DOMException('blocked by the test', 'NetworkError');
+      super(...a);
+      window.__sockets.push(this);
+    }
   };
 })();
 """
@@ -1358,6 +1378,50 @@ def test_tree_order(env):
         b.close()
 
 
+def test_session_ended_while_away(env):
+    b = Browser()
+    try:
+        cdp(b, "Page.addScriptToEvaluateOnNewDocument", {"source": BLOCKABLE_SOCKETS})
+        signup(b, uniq("sam"))
+        # A quiet page: settings saved (1.5 s after a change), nothing else
+        # due — a request answered 401 would sign it out by another way.
+        time.sleep(3)
+        # Away (no WebSocket) while the session ends — say, a demo server
+        # that started over: no event can tell the page.
+        b.js("window.__wsBlocked = true; window.__sockets.forEach(s => s.close())")
+        sessions = api_get(b, "/me/sessions") or []
+        check(len(sessions) == 1 and api_delete(b, f"/me/sessions/{sessions[0]['id']}") == 204,
+              "the session ends while the page has no connection")
+        b.js("window.__wsBlocked = false")
+        b.wait("return !!document.querySelector('.dev-box')", 30, "the sign-in page")
+        check("Your session ended" in b.js("return document.body.innerText"),
+              "back, the server refuses the socket's session and the page signs out (not \"offline\" for ever)")
+        check(not severe_logs(b), "no browser errors")
+    finally:
+        b.close()
+
+
+# Select `text` (its first occurrence) in the open note's editor.
+SELECT_TEXT = """
+const ed = document.querySelector('.ed');
+const w = document.createTreeWalker(ed, NodeFilter.SHOW_TEXT);
+let n;
+while ((n = w.nextNode())) {
+  const i = n.data.indexOf(arguments[0]);
+  if (i >= 0) {
+    const r = document.createRange();
+    r.setStart(n, i);
+    r.setEnd(n, i + arguments[0].length);
+    const s = getSelection();
+    s.removeAllRanges();
+    s.addRange(r);
+    return true;
+  }
+}
+return false;
+"""
+
+
 def test_graph(env):
     b = Browser()
     canvas = ".graph-page canvas"
@@ -1436,7 +1500,7 @@ def test_recovered_copy(env):
         b.close()
 
 
-TESTS = [test_onboarding, test_collab, test_devices_and_recovery, test_features, test_attachments, test_note_sharing, test_tables, test_editor_safety, test_local_copy, test_ui_basics, test_offline_tabs, test_offline_start, test_mobile, test_quick_notes, test_vault_icons, test_entry_icons, test_tree_order, test_graph, test_recovered_copy]
+TESTS = [test_onboarding, test_collab, test_devices_and_recovery, test_features, test_attachments, test_note_sharing, test_tables, test_editor_safety, test_local_copy, test_ui_basics, test_offline_tabs, test_offline_start, test_mobile, test_quick_notes, test_vault_icons, test_entry_icons, test_tree_order, test_session_ended_while_away, test_graph, test_recovered_copy]
 
 
 def main():

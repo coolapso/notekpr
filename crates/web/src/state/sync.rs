@@ -271,7 +271,12 @@ pub(super) fn on_server_message(m: ServerMessage) {
         } => {
             // (Older servers refuse whole pushes; newer ones list single
             // refused updates in the acknowledgement, see `react`.)
-            if code == "stale_key"
+            if code == "unauthorized" {
+                // The socket's sign-in was refused: the session is gone (a
+                // browser can't see why a WebSocket closed, so only this says
+                // so — otherwise we'd retry and show "offline" for ever).
+                api::unauthorized();
+            } else if code == "stale_key"
                 && let Some(v) = vault_id
             {
                 leptos::task::spawn_local(reload_keys_and_resend(v));

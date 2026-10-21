@@ -42,6 +42,12 @@ pub async fn boot() {
             // The stored offline data holds this dead session's token.
             offline::signed_out(&step(|c| c.user_id.clone()));
             sign_out_local(Some("Your session ended. Please sign in again.".into()));
+            // The server may have changed meanwhile (e.g. a demo started over).
+            leptos::task::spawn_local(async {
+                if let Ok(i) = api::get::<ServerInfo>("/info").await {
+                    self::ui().server.set(Some(i));
+                }
+            });
         }
     });
     match api::get::<ServerInfo>("/info").await {

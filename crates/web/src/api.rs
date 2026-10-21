@@ -69,6 +69,18 @@ pub fn on_unauthorized(f: impl Fn() + 'static) {
     ON_UNAUTHORIZED.with(|x| *x.borrow_mut() = Some(Box::new(f)));
 }
 
+/// The server no longer knows our session (a request failed with 401, or
+/// the WebSocket refused it).
+pub fn unauthorized() {
+    if token().is_some() {
+        ON_UNAUTHORIZED.with(|x| {
+            if let Some(f) = &*x.borrow() {
+                f()
+            }
+        });
+    }
+}
+
 async fn send(
     method: &str,
     path: &str,
@@ -113,12 +125,8 @@ async fn send(
         Ok(e) => (e.error, e.message),
         Err(_) => ("http".into(), format!("request failed ({status})")),
     };
-    if status == 401 && token().is_some() {
-        ON_UNAUTHORIZED.with(|x| {
-            if let Some(f) = &*x.borrow() {
-                f()
-            }
-        });
+    if status == 401 {
+        unauthorized();
     }
     Err(Error {
         status,

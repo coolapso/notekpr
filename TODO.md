@@ -92,6 +92,45 @@ Settled; don't reopen them without a new reason.
       check signatures before taking the lock; then see whether pushes to
       different vaults need to wait for each other at all (SQLite has one
       writer, but the transaction itself is short).
+- [ ] **Updates without downtime**. Today an update is a short outage: one
+      server process per database, so Kubernetes runs `replicas: 1` with
+      `strategy: Recreate` (`deploy/kubernetes/coolpsonotes.yaml`); on SIGTERM
+      the server stops cleanly (`with_graceful_shutdown`), but nothing tells
+      the clients it's a restart. They see the connection drop, keep working
+      offline (nothing is lost) and retry with growing delays (CLI 1, 2, 4 …
+      60 s, `client/src/livesync.rs`; web 0.5–1, 1–2 … 30 s,
+      `web/src/ws.rs`), so a restart of a few seconds is a comeback of about
+      8 s, everyone at once; Caddy has no retry, so page loads, sign-ins and
+      uploads get 502 meanwhile.
+  - **First, make it unnoticeable** (small, no architecture change):
+    - Caddy holds requests while the server restarts: `lb_try_duration 30s`
+      and `lb_try_interval 250ms` in the `reverse_proxy` of
+      `deploy/Caddyfile` and `Caddyfile.lan` — requests wait and then succeed,
+      WebSocket upgrades too (document the same for other proxies).
+    - On SIGTERM the server closes every WebSocket with close code 1012
+      ("service restart") before draining; both clients then reconnect on a
+      short jittered schedule (e.g. every 250–750 ms for up to a minute)
+      instead of their backoff, spreading the reconnect rush.
+    - Kubernetes: keep `Recreate`; the ingress answers 503 while no pod is
+      ready, so put Caddy (with the retry) in front as its own deployment,
+      or an ingress that can hold requests. Check start-up time and the
+      readiness probe's period, so the new pod gets traffic as soon as
+      `/readyz` answers.
+    - Measure it with the load test through the Compose stack: `task
+      load:remote SERVER=… -- --kill-command "docker compose up -d
+      --force-recreate coolpsonotes" --start-command true --downtimes 0s`
+      (a real update every level). Expected: a 1–3 s pause in live
+      delivery, no errors.
+  - **Then, if ever needed, old and new running side by side** (weeks): the
+    server as several processes on one database — live events across
+    processes (an `EventBus` backend that polls the log; `hub.rs` states what
+    it must guarantee), role re-checks inside the transactions (above), the
+    global write lock replaced by the database's (see *One writer for all
+    vaults*), migrations both versions can run with (expand, then contract),
+    and both processes on the same host and volume (SQLite locking doesn't
+    work over network storage); then `RollingUpdate` with `maxSurge: 1,
+    maxUnavailable: 0` and the pods on one node. It still isn't high
+    availability: a machine going down needs a replicated database.
 - [ ] **Small web leaks** [W-L5, rest]: `actions::pick_files` forgets its
       change listener (`cb.forget()`), and every socket starts its own
       watchdog `set_interval` (`web/src/ws.rs`).

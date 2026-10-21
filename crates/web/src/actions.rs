@@ -121,6 +121,7 @@ pub async fn update_vault_meta(
         &UpdateVaultRequest {
             encrypted_meta: Some(ct),
             archived: None,
+            ..Default::default()
         },
     )
     .await
@@ -210,6 +211,7 @@ pub async fn set_archived(vault: &str, archived: bool) {
         &UpdateVaultRequest {
             encrypted_meta: None,
             archived: Some(archived),
+            ..Default::default()
         },
     )
     .await

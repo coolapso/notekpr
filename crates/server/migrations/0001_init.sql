@@ -110,6 +110,8 @@ CREATE TABLE vaults (
     key_epoch      INTEGER NOT NULL DEFAULT 1,
     head_seq       INTEGER NOT NULL DEFAULT 0,
     archived       INTEGER NOT NULL DEFAULT 0,
+    -- Viewers (and people notes are shared with read-only) may comment.
+    viewers_comment INTEGER NOT NULL DEFAULT 1,
     created_at     INTEGER NOT NULL,
     updated_at     INTEGER NOT NULL
 );

@@ -4,6 +4,8 @@
 //! Binary fields (keys, ciphertexts) are base64 strings. Timestamps are Unix
 //! milliseconds. See `docs/protocol.md` for semantics.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 use crate::b64;
@@ -14,6 +16,21 @@ pub use crate::memberlog::LogEntry;
 pub const API_PREFIX: &str = "/api/v1";
 /// Object id of each vault's index document (file tree, paths, trash).
 pub const INDEX_OBJECT_ID: &str = "index";
+/// Prefix of the object holding a note's comments: `c_<note id>`
+/// ([`comments_object`]). Note ids never contain `_`, so the two can't meet.
+pub const COMMENTS_PREFIX: &str = "c_";
+
+/// The object holding the comments on note `note_id` (docs/comments.md).
+pub fn comments_object(note_id: &str) -> String {
+    format!("{COMMENTS_PREFIX}{note_id}")
+}
+
+/// The note whose comments object `object_id` holds, if it is one.
+pub fn comments_note(object_id: &str) -> Option<&str> {
+    object_id
+        .strip_prefix(COMMENTS_PREFIX)
+        .filter(|n| !n.is_empty() && *n != INDEX_OBJECT_ID && !n.starts_with(COMMENTS_PREFIX))
+}
 /// Issuer used for identities created by the development login.
 pub const DEV_ISSUER: &str = "urn:coolpsonotes:dev";
 
@@ -383,6 +400,10 @@ pub struct VaultInfo {
     pub member_count: u32,
     pub created_at: i64,
     pub updated_at: i64,
+    /// Viewers may comment on notes (the owner's setting); absent on older
+    /// servers, which have no comments.
+    #[serde(default)]
+    pub viewers_comment: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -402,6 +423,9 @@ pub struct UpdateVaultRequest {
     pub encrypted_meta: Option<Vec<u8>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub archived: Option<bool>,
+    /// Let viewers (and people notes are shared with read-only) comment.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub viewers_comment: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -419,6 +443,10 @@ pub struct VaultKeysResponse {
     /// before per-note keys, where having a document key meant being shared.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shared: Option<Vec<String>>,
+    /// For those notes: the first document key epoch the people they're
+    /// shared with have (content under earlier keys isn't theirs to read).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub share_from: BTreeMap<String, u32>,
 }
 
 /// A note's document key (one epoch) encrypted under a vault key.
@@ -539,6 +567,11 @@ pub struct SharedNote {
     #[serde(default, with = "b64::opt")]
     pub encrypted_meta: Option<Vec<u8>>,
     pub added_at: i64,
+    /// The caller may comment on it (editors always; viewers while the
+    /// vault's owner lets them). Absent on older servers, which have no
+    /// comments.
+    #[serde(default)]
+    pub can_comment: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]

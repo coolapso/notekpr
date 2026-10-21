@@ -104,8 +104,11 @@ pub async fn share_note(
         Err(e) => return Err(anyhow!(e).context("sharing the note")),
     }
     session.reload_member_log(vault).await?;
+    // Our keys as the server has them now: also where sharing started.
+    let keys = session.keys(&id).await?;
     {
         let mut v = vault.lock().await;
+        v.set_keys(keys);
         v.replica.shared.insert(note_id.clone());
         v.mark_state_dirty();
         v.save()?;
@@ -117,6 +120,18 @@ pub async fn share_note(
         key_shared: true,
         updated_role,
     })
+}
+
+/// After sharing the note at `path`: send its comments people it's shared
+/// with can't read yet again, under its own key (docs/comments.md §5).
+/// Returns how many records go out.
+pub async fn carry_comments(vault: &SharedVault, path: &str) -> Result<usize> {
+    let mut v = vault.lock().await;
+    let (_, e) = v.find_note(path)?;
+    let pushes = v.replica.carry_comments(&e.id)?;
+    v.mark_comments_dirty(&e.id);
+    v.save()?;
+    Ok(pushes.len())
 }
 
 /// Make sure a note can be shared: if nobody has it yet, move it to a fresh

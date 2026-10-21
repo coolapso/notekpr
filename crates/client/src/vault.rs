@@ -11,13 +11,13 @@ use anyhow::{Result, anyhow, bail};
 use coolpsonotes_core::b64;
 use coolpsonotes_core::doc::{self, Entry, EntryKind, NoteDoc};
 use coolpsonotes_core::engine::{Applied, Pending, VaultMeta, VaultReplica};
-use coolpsonotes_core::keys::{VaultKey, VaultKeyring};
+use coolpsonotes_core::keys::{AccountSecret, VaultKey, VaultKeyring};
 use coolpsonotes_core::protocol::{
     ChangesResponse, INDEX_OBJECT_ID, PushResult, REJECT_PURGED, RejectedUpdate, Role, Snapshot,
-    Update,
+    Update, comments_note, comments_object,
 };
 use coolpsonotes_core::textdiff::{self, Edit};
-use coolpsonotes_core::{markdown, now_ms, order, paths, random_id, search};
+use coolpsonotes_core::{comments, markdown, now_ms, order, paths, random_id, search};
 use coolpsonotes_sync::members::MemberLog;
 use coolpsonotes_sync::{Limits, Outbox, Plan, Reaction};
 
@@ -55,11 +55,9 @@ pub struct SearchHit {
     pub hit: search::Hit,
 }
 
-/// Merge two `Applied` summaries (the core keeps its merge private).
+/// Merge two `Applied` summaries.
 pub fn merge_applied(into: &mut Applied, o: Applied) {
-    into.objects.extend(o.objects);
-    into.index_changed |= o.index_changed;
-    into.purged.extend(o.purged);
+    into.merge(o);
 }
 
 /// Content hash used for change detection and HTTP `ETag`s.
@@ -71,6 +69,8 @@ pub struct Vault {
     pub replica: VaultReplica,
     pub owner_id: String,
     pub archived: bool,
+    /// Viewers may comment (the owner's setting).
+    pub viewers_comment: bool,
     /// Why the vault became read-only locally (access revoked, deleted).
     pub read_only: Option<String>,
     pub pending_blobs: BTreeSet<String>,
@@ -97,6 +97,15 @@ pub struct Vault {
     rescued: Vec<String>,
 }
 
+/// What to do with a comment ([`Vault::comment_action`]).
+pub enum CommentAct {
+    Reply(String),
+    Edit(String),
+    Delete,
+    Resolve,
+    Reopen,
+}
+
 /// A vault's keys as the server gives them to this principal.
 pub struct Keys {
     pub ring: VaultKeyring,
@@ -104,6 +113,8 @@ pub struct Keys {
     pub docs: std::collections::HashMap<String, VaultKeyring>,
     /// Notes shared with someone individually.
     pub shared: BTreeSet<String>,
+    /// For those: where sharing started (the first key epoch shared).
+    pub share_from: std::collections::HashMap<String, u32>,
     /// The server keeps a key per note (R2).
     pub note_keys: bool,
 }
@@ -120,6 +131,7 @@ impl Vault {
             replica,
             owner_id: owner_id.to_string(),
             archived,
+            viewers_comment: true,
             read_only: None,
             pending_blobs: BTreeSet::new(),
             last_sync: None,
@@ -249,6 +261,7 @@ impl Vault {
             .shared
             .clone()
             .unwrap_or_else(|| r.doc_keys.keys().cloned().collect());
+        r.share_from = s.share_from.clone().into_iter().collect();
         r.seq = s.seq;
         r.max_head_seen = s.max_head_seen;
         r.since_snapshot = s.since_snapshot.into_iter().collect();
@@ -256,6 +269,10 @@ impl Vault {
         for (id, state) in store.load_objects()? {
             if id == INDEX_OBJECT_ID {
                 r.index.apply_update(&state)?;
+            } else if let Some(note) = comments_note(&id) {
+                if !r.purged.contains(note) {
+                    r.restore_comments(note, &state)?;
+                }
             } else if !r.purged.contains(&id) {
                 r.notes.entry(id).or_default().apply_update(&state)?;
             }
@@ -269,14 +286,17 @@ impl Vault {
                 .iter()
                 .any(|q| q.client_update_id == p.client_update_id)
         });
-        for p in r.pending.iter().chain(&quarantined) {
-            let res = if p.object_id == INDEX_OBJECT_ID {
-                r.index.apply_update(&p.update)
+        for p in r.pending.clone().iter().chain(&quarantined) {
+            let res = if comments_note(&p.object_id).is_some() {
+                r.restore_pending_comment(p).map_err(|e| anyhow!(e))
+            } else if p.object_id == INDEX_OBJECT_ID {
+                r.index.apply_update(&p.update).map_err(|e| anyhow!(e))
             } else {
                 r.notes
                     .entry(p.object_id.clone())
                     .or_default()
                     .apply_update(&p.update)
+                    .map_err(|e| anyhow!(e))
             };
             if let Err(e) = res {
                 tracing::warn!("a queued local change could not be re-applied: {e}");
@@ -290,6 +310,7 @@ impl Vault {
             replica: r,
             owner_id: s.owner_id,
             archived: s.archived,
+            viewers_comment: s.viewers_comment,
             read_only: s.read_only,
             pending_blobs: s.pending_blobs,
             last_sync: s.last_sync,
@@ -365,6 +386,11 @@ impl Vault {
             if oid == INDEX_OBJECT_ID {
                 self.store
                     .save_object(&oid, &self.replica.index.encode_state())?;
+            } else if let Some(note) = comments_note(&oid) {
+                match self.replica.comments_state(note) {
+                    Some(state) => self.store.save_object(&oid, &state)?,
+                    None => self.store.delete_object(&oid)?,
+                }
             } else if let Some(n) = self.replica.notes.get(&oid) {
                 self.store.save_object(&oid, &n.encode_state())?;
             } else {
@@ -401,6 +427,12 @@ impl Vault {
             keys,
             doc_keys,
             shared: Some(self.replica.shared.clone()),
+            share_from: self
+                .replica
+                .share_from
+                .iter()
+                .map(|(k, v)| (k.clone(), *v))
+                .collect(),
             new_keys: self.outbox.new_keys.clone(),
             note_keys: self.outbox.note_keys,
             log_seen: self
@@ -420,6 +452,7 @@ impl Vault {
             pending_blobs: self.pending_blobs.clone(),
             read_only: self.read_only.clone(),
             last_sync: self.last_sync,
+            viewers_comment: self.viewers_comment,
         })?;
         self.dirty_state = false;
         self.dirty_pending = false;
@@ -430,11 +463,16 @@ impl Vault {
 
     fn mark_applied(&mut self, a: &Applied) {
         self.dirty_objects.extend(a.objects.iter().cloned());
+        self.dirty_objects
+            .extend(a.comments.iter().map(|n| comments_object(n)));
         if a.index_changed {
             self.dirty_objects.insert(INDEX_OBJECT_ID.to_string());
         }
         if !a.purged.is_empty() {
             self.dirty_objects.extend(a.purged.iter().cloned());
+            // A note's comments go with it.
+            self.dirty_objects
+                .extend(a.purged.iter().map(|o| comments_object(o)));
             self.dirty_pending = true;
         }
         self.dirty_state = true;
@@ -535,6 +573,7 @@ impl Vault {
         self.replica.keyring = keys.ring;
         self.replica.doc_keys = keys.docs;
         self.replica.shared = keys.shared;
+        self.replica.share_from = keys.share_from;
         self.outbox.keys_reloaded(&mut self.replica, keys.note_keys);
         self.dirty_state = true;
         self.retry_deferred();
@@ -604,6 +643,151 @@ impl Vault {
         }
         self.dirty_state = true;
         true
+    }
+
+    // ------------------------------------------------------------ comments
+
+    /// The comment threads of the note at `path`: its display path, its id
+    /// and the threads (docs/comments.md).
+    pub fn comments(&self, path: &str) -> Result<(String, String, Vec<comments::Thread>)> {
+        let (p, e) = self.note_at(path)?;
+        let threads = self
+            .replica
+            .comment_threads(&e.id, |_| None, |u| u == self.owner_id);
+        Ok((p, e.id, threads))
+    }
+
+    fn note_at(&self, path: &str) -> Result<(String, Entry)> {
+        match self.find(path) {
+            Some((p, e)) if e.kind == EntryKind::Note => Ok((p, e)),
+            Some((p, _)) => bail!("'{p}' is not a note"),
+            None => bail!("no note '{path}'"),
+        }
+    }
+
+    /// Whether we may comment here: anyone who can read the vault, viewers
+    /// only while its owner lets them.
+    pub fn require_commenting(&self) -> Result<()> {
+        if let Some(r) = &self.read_only {
+            bail!("vault '{}' is read-only on this device: {r}", self.name());
+        }
+        if !self.replica.can_write() && !self.viewers_comment {
+            bail!(
+                "the owner of vault '{}' doesn't let viewers comment",
+                self.name()
+            );
+        }
+        Ok(())
+    }
+
+    /// Comment on the text `on` in the note at `path` (it must appear there
+    /// exactly once). Returns the note's id and the comment's.
+    pub fn add_comment(
+        &mut self,
+        account: &AccountSecret,
+        user_id: &str,
+        path: &str,
+        on: &str,
+        body: &str,
+    ) -> Result<(String, String)> {
+        self.require_commenting()?;
+        let (p, e) = self.note_at(path)?;
+        let doc = self.replica.note_text(&e.id);
+        let found: Vec<usize> = doc.match_indices(on).map(|(i, _)| i).collect();
+        let start = match found[..] {
+            _ if on.is_empty() => bail!("say which text the comment is about"),
+            [] => bail!("'{on}' isn't in {p}"),
+            [i] => i,
+            _ => bail!(
+                "'{on}' appears {} times in {p}: quote more of it",
+                found.len()
+            ),
+        };
+        let note = self
+            .replica
+            .notes
+            .get(&e.id)
+            .ok_or_else(|| anyhow!("no note '{path}'"))?;
+        let anchor = comments::anchor(note, start, start + on.len())
+            .ok_or_else(|| anyhow!("can't comment on that text"))?;
+        let action = comments::Action::Comment {
+            body: body.to_string(),
+            anchor,
+        };
+        let id = self.send_comment(account, user_id, &e.id, action)?;
+        Ok((e.id, id))
+    }
+
+    /// Reply to, edit, delete, resolve or reopen comment `id` (or a part of
+    /// its id that only it starts with) on the note at `path`. Returns the
+    /// note's id and the new record's.
+    pub fn comment_action(
+        &mut self,
+        account: &AccountSecret,
+        user_id: &str,
+        path: &str,
+        id: &str,
+        act: CommentAct,
+    ) -> Result<(String, String)> {
+        self.require_commenting()?;
+        let (p, note, threads) = self.comments(path)?;
+        // (comment, its thread, its author)
+        let mut hits: Vec<(String, String, String)> = Vec::new();
+        for t in &threads {
+            for c in std::iter::once(&t.root).chain(&t.replies) {
+                if !id.is_empty() && c.id.starts_with(id) {
+                    hits.push((c.id.clone(), t.root.id.clone(), c.author.clone()));
+                }
+            }
+        }
+        let (target, thread, author) = match &hits[..] {
+            [] => bail!("no comment {id} on {p}"),
+            [h] => h.clone(),
+            _ => bail!(
+                "{id} matches {} comments on {p}: give more of the id",
+                hits.len()
+            ),
+        };
+        match act {
+            CommentAct::Edit(_) if author != user_id => {
+                bail!("only its author can change a comment")
+            }
+            CommentAct::Delete if author != user_id && self.owner_id != user_id => {
+                bail!("only its author or the vault's owner can delete a comment")
+            }
+            _ => {}
+        }
+        let action = match act {
+            CommentAct::Reply(body) => comments::Action::Reply { thread, body },
+            CommentAct::Edit(body) => comments::Action::Edit { target, body },
+            CommentAct::Delete => comments::Action::Delete { target },
+            CommentAct::Resolve => comments::Action::Resolve { thread },
+            CommentAct::Reopen => comments::Action::Reopen { thread },
+        };
+        let id = self.send_comment(account, user_id, &note, action)?;
+        Ok((note, id))
+    }
+
+    /// A note's comments changed locally (records queued to send).
+    pub fn mark_comments_dirty(&mut self, note_id: &str) {
+        self.dirty_objects.insert(comments_object(note_id));
+        self.dirty_pending = true;
+    }
+
+    fn send_comment(
+        &mut self,
+        account: &AccountSecret,
+        user_id: &str,
+        note_id: &str,
+        action: comments::Action,
+    ) -> Result<String> {
+        let record = comments::Record::new(user_id, now_ms(), action);
+        let signed = comments::Signed::sign(account, &self.replica.id, note_id, &record)
+            .map_err(|e| anyhow!(e))?;
+        self.replica.local_comment(note_id, &signed)?;
+        self.dirty_objects.insert(comments_object(note_id));
+        self.dirty_pending = true;
+        Ok(record.id)
     }
 
     // ------------------------------------------------------------ local edits

@@ -155,6 +155,9 @@ pub async fn update(
         if let Some(archived) = req.archived {
             repo::vaults::set_archived(&mut *tx, &v, archived, db::now()).await?;
         }
+        if let Some(allowed) = req.viewers_comment {
+            repo::vaults::set_viewers_comment(&mut *tx, &v, allowed, db::now()).await?;
+        }
         tx.commit().await?;
     }
     db::audit(
@@ -164,7 +167,11 @@ pub async fn update(
         Some(&v),
         "vault.update",
         None,
-        serde_json::json!({ "archived": req.archived, "meta": req.encrypted_meta.is_some() }),
+        serde_json::json!({
+            "archived": req.archived,
+            "meta": req.encrypted_meta.is_some(),
+            "viewers_comment": req.viewers_comment,
+        }),
     )
     .await;
     state

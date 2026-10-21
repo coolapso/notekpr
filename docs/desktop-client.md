@@ -161,6 +161,7 @@ vault-relative, `.md` is optional for notes.
 | `vault list` / `vault create <name>` | list (with role and document count) / create |
 | `vault rename <v> <name>` / `vault archive <v> [--undo]` / `vault delete <v>` | owner only; delete asks you to type the name (`--yes` skips that; without a terminal it is required) |
 | `vault icon <v> <emoji>` / `vault icon <v> --remove` | owner only; the vault's icon (replaces a picture set in the browser) |
+| `vault viewers-comment <v> on\|off` | owner only; whether viewers (and people its notes are shared with read-only) may comment (on by default) |
 | `vault members <v>` | members, roles, key fingerprints and pin status |
 | `vault share <v> <user> --role editor\|viewer` | owner only; for an existing member it changes their role; see [§8](#8-sharing-members-and-keys) |
 | `vault unshare <v> <user>` / `vault rotate <v>` / `vault leave <v>` | unshare and rotate: owner only; removal always rotates the key; the owner can't leave (delete instead) |
@@ -170,6 +171,9 @@ vault-relative, `.md` is optional for notes.
 | `quick [text…]` / `quick --list` | capture a quick note (text or stdin) / list the newest; see [Quick notes](#quick-notes) |
 | `mkdir <v> <path>`, `mv <v> <from> <to> [--update-links]`, `rm <v> <path>` | `rm` moves to the trash; `mv` into `dir/` keeps the name; `--update-links` rewrites `[[links]]` |
 | `order <v> <path> --before\|--after <other>` / `order <v> <folder> --reset` | put a note, attachment or folder just before or after another of the same folder (the order the sidebar and `ls` show; folders stay above notes; a folder only made by its notes gets an entry), or a folder's contents (`/` = the top level) back to A–Z; moving something to another folder drops its place |
+| `comments list <v> <note> [--all]` | a note's comment threads: the text each is about, the comments and replies with their authors, ids (first 8 characters) and whether unverified, not sent yet or edited; `--all` adds resolved ones; `--json` for the full ids |
+| `comments add <v> <note> --on <quote> [text…]` | comment on the quoted text (it must appear once in the note); the comment is the words or stdin. Viewers can comment too, unless the vault's owner turned it off |
+| `comments reply\|edit\|delete\|resolve\|reopen <v> <note> <id> [text…]` | `id`: a comment's id or the start of it that only it has. Only its author edits a comment; its author or the vault's owner deletes it (a comment takes its replies with it) |
 | `icon <v> <path> <emoji>` / `icon <v> <path> --remove` | a note's, attachment's or folder's icon; `ls` and `vault list` show icons, and people a note is shared with see its icon and new name |
 | `trash list\|restore\|empty <v>` | restore by path or id; `empty` deletes permanently (asks first; `--yes`) |
 | `search <query> [--vault v] [--limit n]` | terms, `"phrases"`, `tag:x`, `folder:x`, `title:x`, `vault:x`; 20 results unless `--limit` |
@@ -520,7 +524,10 @@ coolpsonotes unshare-note Family "Plans/Trip.md" "Bob"   # also renews the note'
 ```
 
 The first share gives the note its own key; Bob receives only that key and
-can't see the vault's other notes, file names, attachments or members. Key
+can't see the vault's other notes, file names, attachments or members. The
+note goes with its comments: `share-note` sends the comments written so far
+again under the note's key, for everyone the note is shared with
+(`--without-comments`: they see only comments written from then on). Key
 fingerprints are checked and pinned exactly as for vault sharing. Vault members
 keep working on the note as usual (their clients pick up the note's key
 automatically). Rotating the vault key also renews the keys of shared notes.

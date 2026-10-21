@@ -64,7 +64,8 @@ Breaking one of these is a bug, even if everything compiles and tests pass.
 ## Layout
 
 ```
-crates/core     crypto.rs (envelopes, HPKE, signatures) · keys.rs (account/device/
+crates/core     crypto.rs (envelopes, HPKE, signatures) · comments.rs (signed comment
+                records, folding into threads, anchors) · keys.rs (account/device/
                 recovery/vault/document keys) · engine.rs (VaultReplica: apply,
                 encrypt, defer, snapshot; sharing helpers) · doc.rs (yrs CRDT index
                 + notes) · protocol.rs (every API/WS type) · memberlog.rs (owner-signed

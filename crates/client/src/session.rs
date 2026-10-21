@@ -210,6 +210,7 @@ impl Session {
             ring,
             docs,
             shared: engine::shared_objects(&r),
+            share_from: engine::share_from(&r),
             note_keys: r.shared.is_some(),
         })
     }
@@ -250,6 +251,7 @@ impl Session {
         v.replica.role = info.role;
         v.owner_id = info.owner_id.clone();
         v.archived = info.archived;
+        v.viewers_comment = info.viewers_comment;
         v.read_only = None;
         self.load_member_log(v).await?;
         match VaultMeta::decrypt(&v.replica.keyring, &info.encrypted_meta) {
@@ -629,19 +631,21 @@ impl Session {
     /// Network failures leave everything queued (and report `offline`).
     pub async fn push(&self, vault: &SharedVault) -> Result<PushOutcome> {
         let mut out = PushOutcome::default();
-        let (id, blobs, writable) = {
+        let (id, blobs, locked, writable) = {
             let v = vault.lock().await;
             (
                 v.id().to_string(),
                 v.pending_blobs.clone(),
-                v.read_only.is_none() && v.replica.can_write(),
+                v.read_only.is_some(),
+                v.replica.can_write(),
             )
         };
-        if !writable {
+        if locked {
             out.remaining = vault.lock().await.replica.pending.len();
             return Ok(out);
         }
-        for blob in blobs {
+        // Viewers send comments only (the outbox's plan picks them).
+        for blob in blobs.into_iter().filter(|_| writable) {
             let ct = vault.lock().await.store().load_blob(&blob)?;
             let Some(ct) = ct else {
                 tracing::warn!("a queued attachment is missing from the local cache");

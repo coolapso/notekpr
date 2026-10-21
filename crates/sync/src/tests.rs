@@ -252,16 +252,53 @@ fn a_batch_an_older_server_refused_is_retried_one_by_one() {
     assert_eq!(o.held_count(), 1);
 }
 
+/// A comment on `note` by a fresh account, queued.
+fn comment(r: &mut VaultReplica, note: &str, body: &str) {
+    use coolpsonotes_core::comments::{Action, Record, Signed};
+    let me = coolpsonotes_core::keys::AccountSecret::generate();
+    let doc = r.notes.entry(note.to_string()).or_default();
+    if doc.text().is_empty() {
+        doc.set_text("some text");
+    }
+    let rec = Record::new(
+        "me",
+        1,
+        Action::Comment {
+            body: body.into(),
+            anchor: coolpsonotes_core::comments::anchor(doc, 0, doc.text().len()).unwrap(),
+        },
+    );
+    let id = r.id.clone();
+    r.local_comment(note, &Signed::sign(&me, &id, note, &rec).unwrap())
+        .unwrap();
+}
+
 #[test]
-fn read_only_replicas_send_nothing() {
+fn read_only_replicas_send_only_comments() {
     let mut r = replica();
     edit(&mut r, "n1", "x");
     r.role = Role::Viewer;
-    assert!(
-        Outbox::default()
-            .plan(&mut r, &Limits::default())
-            .is_empty()
-    );
+    let mut o = Outbox::default();
+    assert!(o.plan(&mut r, &Limits::default()).is_empty());
+    comment(&mut r, "n1", "Viewers comment");
+    let plan = o.plan(&mut r, &Limits::default());
+    let objects: Vec<&str> = plan
+        .pushes
+        .iter()
+        .flatten()
+        .map(|u| u.object_id.as_str())
+        .collect();
+    assert_eq!(objects, ["c_n1"]);
+}
+
+#[test]
+fn comments_are_never_merged() {
+    let (mut r, mut o) = (replica(), Outbox::default());
+    comment(&mut r, "n1", "One");
+    comment(&mut r, "n1", "Two");
+    let plan = o.plan(&mut r, &Limits::default());
+    assert_eq!(plan.ids().len(), 2);
+    assert_eq!(r.pending.len(), 2);
 }
 
 #[test]
@@ -273,6 +310,32 @@ fn a_rollback_requeues_the_whole_state() {
     assert_eq!(recover_from_rollback(&mut r, 20), 2, "index and the note");
     assert_eq!((r.seq, r.max_head_seen), (20, 20));
     assert_eq!(r.pending.len(), 2);
+}
+
+#[test]
+fn a_rollback_requeues_comments_but_shares_none() {
+    let (mut r, mut o) = (replica(), Outbox::default());
+    comment(&mut r, "n1", "Members only");
+    comment(&mut r, "n2", "Kept");
+    let plan = o.plan(&mut r, &Limits::default());
+    ack_all(&mut o, &mut r, &plan, 1);
+    // n1 is shared since, without its comments: they aren't sent again
+    // under its key.
+    let mut ring = VaultKeyring::new("v1");
+    ring.insert(0x8000_0001, VaultKey::generate());
+    r.doc_keys.insert("n1".into(), ring);
+    r.shared.insert("n1".into());
+    r.share_from.insert("n1".into(), 0x8000_0001);
+    r.max_head_seen = 2;
+    // index, the two notes, and the comment on n2.
+    assert_eq!(recover_from_rollback(&mut r, 1), 4);
+    let comments: Vec<&str> = r
+        .pending
+        .iter()
+        .filter(|p| p.object_id.starts_with("c_"))
+        .map(|p| p.object_id.as_str())
+        .collect();
+    assert_eq!(comments, ["c_n2"]);
 }
 
 #[test]

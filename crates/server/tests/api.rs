@@ -2174,6 +2174,7 @@ async fn role_dependent_writes_follow_role_changes() {
     let archive = UpdateVaultRequest {
         encrypted_meta: None,
         archived: Some(true),
+        ..Default::default()
     };
     assert_eq!(
         bob.api
@@ -3289,4 +3290,235 @@ async fn a_rotation_can_leave_out_people_whose_key_changed_on_purpose() {
             .await,
         409
     );
+}
+
+/// A signed comment on note `note` by `u`, encrypted with `ring` (the vault's
+/// or the note's own key).
+fn comment_update(
+    u: &User,
+    v: &str,
+    note: &str,
+    ring: &keys::VaultKeyring,
+    body: &str,
+) -> PushUpdate {
+    use coolpsonotes_core::comments::{Action, Anchor, Record, Signed};
+    let record = Record::new(
+        &u.id,
+        1,
+        Action::Comment {
+            body: body.into(),
+            anchor: Anchor {
+                start: vec![1],
+                end: vec![2],
+                quote: "text".into(),
+            },
+        },
+    );
+    let signed = Signed::sign(&u.account, v, note, &record).unwrap();
+    let object = comments_object(note);
+    PushUpdate {
+        payload: ring
+            .encrypt(Purpose::Update, &object, &signed.to_payload())
+            .unwrap(),
+        object_id: object,
+        client_update_id: random_id(),
+        signature: None,
+    }
+}
+
+#[tokio::test]
+async fn whoever_can_read_a_note_can_comment_on_it() {
+    use coolpsonotes_core::engine;
+    let srv = start().await;
+    let mut alice = new_user(&srv.base, "alice").await;
+    let mut bob = new_user(&srv.base, "bob").await;
+    let mut carol = new_user(&srv.base, "carol").await;
+    let dave = new_user(&srv.base, "dave").await;
+    let erin = new_user(&srv.base, "erin").await;
+    let v = alice.create_vault("Family").await;
+    let (n, m) = (NoteDoc::new(), NoteDoc::new());
+    let (un, um) = (n.set_text("shopping").unwrap(), m.set_text("trip").unwrap());
+    alice
+        .push(
+            &v,
+            vec![
+                alice.encrypt_update(&v, "n", &un),
+                alice.encrypt_update(&v, "m", &um),
+            ],
+        )
+        .await
+        .unwrap();
+    alice.share(&v, &bob.id, Role::Editor).await.unwrap();
+    alice.share(&v, &carol.id, Role::Viewer).await.unwrap();
+    bob.load_keys(&v).await.unwrap();
+    carol.load_keys(&v).await.unwrap();
+
+    // Carol only views the vault: she comments, but can't change the note.
+    let c = comment_update(&carol, &v, "n", carol.ring(&v), "Milk?");
+    assert!(carol.push(&v, vec![c]).await.is_ok());
+    assert_eq!(
+        carol
+            .push(&v, vec![carol.encrypt_update(&v, "n", &un)])
+            .await
+            .unwrap_err()
+            .0,
+        403
+    );
+    // Not on a note that doesn't exist, and nobody else's vault.
+    let c = comment_update(&carol, &v, "nothing", carol.ring(&v), "?");
+    assert_eq!(carol.push(&v, vec![c]).await.unwrap_err().0, 404);
+    let c = comment_update(&carol, &v, "n", carol.ring(&v), "Hi");
+    assert_eq!(dave.push(&v, vec![c]).await.unwrap_err().0, 404);
+    // No snapshots, no deleting comments apart from their note, and records
+    // stay small.
+    let snap = CreateSnapshotRequest {
+        snapshot_id: random_id(),
+        covers_seq: 1,
+        payload: vec![1; 50],
+        signature: None,
+        carries: false,
+    };
+    assert_eq!(
+        alice
+            .api
+            .status(
+                Method::POST,
+                &format!("/vaults/{v}/objects/c_n/snapshots"),
+                Some(&snap)
+            )
+            .await,
+        400
+    );
+    assert_eq!(
+        alice
+            .api
+            .status::<()>(Method::DELETE, &format!("/vaults/{v}/objects/c_n"), None)
+            .await,
+        400
+    );
+    let mut big = comment_update(&carol, &v, "n", carol.ring(&v), "Long");
+    big.payload = vec![1; 70 * 1024];
+    let r = carol.push(&v, vec![big]).await.unwrap();
+    assert_eq!(r.rejected[0].code, REJECT_TOO_LARGE);
+
+    // The owner can stop viewers from commenting; editors still can.
+    let set = |on: bool| UpdateVaultRequest {
+        viewers_comment: Some(on),
+        ..Default::default()
+    };
+    let info: VaultInfo = alice
+        .api
+        .call(Method::PATCH, &format!("/vaults/{v}"), Some(&set(false)))
+        .await
+        .unwrap();
+    assert!(!info.viewers_comment);
+    assert_eq!(
+        bob.api
+            .status(Method::PATCH, &format!("/vaults/{v}"), Some(&set(true)))
+            .await,
+        403,
+        "only the owner"
+    );
+    let c = comment_update(&carol, &v, "n", carol.ring(&v), "Still?");
+    assert_eq!(carol.push(&v, vec![c]).await.unwrap_err().0, 403);
+    let c = comment_update(&bob, &v, "n", bob.ring(&v), "Yes");
+    assert!(bob.push(&v, vec![c]).await.is_ok());
+    let info: VaultInfo = alice
+        .api
+        .call(Method::PATCH, &format!("/vaults/{v}"), Some(&set(true)))
+        .await
+        .unwrap();
+    assert!(info.viewers_comment);
+
+    // A comment on m before m is shared with Erin (vault key) …
+    let before = comment_update(&alice, &v, "m", alice.ring(&v), "Members only");
+    alice.push(&v, vec![before]).await.unwrap();
+    let (ring, req) = engine::start_sharing(
+        alice.ring(&v),
+        "m",
+        &engine::ObjectMeta::titled("Trip"),
+        &m.encode_state(),
+        2,
+    )
+    .unwrap();
+    let _: () = alice
+        .api
+        .put(&format!("/vaults/{v}/objects/m/key"), &req)
+        .await;
+    let erin_pub: PublicUser = alice.api.get(&format!("/users/{}", erin.id)).await;
+    let env = engine::object_share_envelope(&ring, "m", &erin_pub).unwrap();
+    let _: ObjectShareInfo = alice
+        .api
+        .post(
+            &format!("/vaults/{v}/objects/m/shares"),
+            &AddObjectShareRequest {
+                user_id: erin.id.clone(),
+                role: Role::Viewer,
+                envelope: env,
+                log_entry: None,
+            },
+        )
+        .await;
+    // … and after, under the note's own key (the vault key is refused now).
+    let stale = comment_update(&alice, &v, "m", alice.ring(&v), "Old key");
+    let r = alice.push(&v, vec![stale]).await.unwrap();
+    assert_eq!(r.rejected[0].code, REJECT_STALE_KEY);
+    let after = comment_update(&alice, &v, "m", &ring, "Welcome, Erin");
+    alice.push(&v, vec![after]).await.unwrap();
+    // Erin reads the note's changes: its comments from since it was shared.
+    let ch: ChangesResponse = erin
+        .api
+        .get(&format!("/vaults/{v}/objects/m/changes?since=0"))
+        .await;
+    let comments: Vec<&Update> = ch.updates.iter().filter(|u| u.object_id == "c_m").collect();
+    assert_eq!(comments.len(), 1);
+    assert!(keys::is_doc_epoch(
+        coolpsonotes_core::crypto::sym_epoch(&comments[0].payload).unwrap()
+    ));
+    // She comments (a read-only recipient), but not on other notes.
+    let keys_resp: ObjectKeysResponse = erin.api.get(&format!("/vaults/{v}/objects/m/keys")).await;
+    let ering = engine::object_keyring_for_recipient(&erin.account, &erin.id, &v, &keys_resp, None)
+        .unwrap();
+    let c = comment_update(&erin, &v, "m", &ering, "Thanks");
+    assert!(erin.push(&v, vec![c]).await.is_ok());
+    let c = comment_update(&erin, &v, "n", &ering, "Sneaky");
+    assert_eq!(erin.push(&v, vec![c]).await.unwrap_err().0, 404);
+    assert_eq!(
+        alice
+            .api
+            .status(Method::PATCH, &format!("/vaults/{v}"), Some(&set(false)))
+            .await,
+        200
+    );
+    let c = comment_update(&erin, &v, "m", &ering, "Again");
+    assert_eq!(erin.push(&v, vec![c]).await.unwrap_err().0, 403);
+    // Comments are shared with their note, never on their own.
+    assert_eq!(
+        alice
+            .api
+            .status(
+                Method::PUT,
+                &format!("/vaults/{v}/objects/c_m/key"),
+                Some(&req)
+            )
+            .await,
+        400
+    );
+
+    // Purging the note purges its comments.
+    assert_eq!(
+        alice
+            .api
+            .status::<()>(Method::DELETE, &format!("/vaults/{v}/objects/n"), None)
+            .await,
+        204
+    );
+    let ch: ChangesResponse = bob.api.get(&format!("/vaults/{v}/changes?since=0")).await;
+    assert!(
+        ch.updates
+            .iter()
+            .all(|u| u.object_id != "c_n" && u.object_id != "n")
+    );
+    let c = comment_update(&bob, &v, "n", bob.ring(&v), "Late");
+    assert_eq!(bob.push(&v, vec![c]).await.unwrap_err().0, 404);
 }

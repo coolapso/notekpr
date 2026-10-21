@@ -112,4 +112,10 @@ reload on change pick up remote edits cleanly.
   `mv`, …) are handed to the daemon, which runs them on its copies (of the
   vaults it keeps) and updates the files. Details:
   [desktop-client.md §3](desktop-client.md#3-everyday-commands).
+* **Comments aren't in the files** (they would stop being plain Markdown).
+  They stay on the text they are about while you edit it here — your
+  changes are merged as small edits, not as a new file — and if you delete
+  that text, the comment keeps a quote of it. Read and answer them in the
+  web app, or with `coolpsonotes comments …`
+  ([desktop-client.md §3](desktop-client.md#3-everyday-commands)).
 * **Phones and tablets:** there is no mobile client yet; use the web app.

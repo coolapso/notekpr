@@ -60,6 +60,10 @@ pub fn router(gw: St) -> Router {
         )
         .route("/v1/vaults/{v}/move", post(move_document))
         .route("/v1/vaults/{v}/backlinks/{*path}", get(backlinks))
+        .route(
+            "/v1/vaults/{v}/comments/{*path}",
+            get(list_comments).post(comment),
+        )
         .route("/v1/vaults/{v}/history/{*path}", get(history))
         .route(
             "/v1/vaults/{v}/attachments/{*path}",
@@ -301,6 +305,83 @@ async fn move_document(State(gw): State<St>, Path(v): Path<String>, body: Bytes)
             gw.audit
                 .record("gateway", "move_document", &out.vault, out.id.as_deref(), 0);
             axum::Json(out).into_response()
+        }
+        Err(e) => op_error(e),
+    }
+}
+
+async fn list_comments(State(gw): State<St>, Path((v, path)): Path<(String, String)>) -> Response {
+    match ops::comments(&gw.hub, &v, &path).await {
+        Ok(c) => axum::Json(c).into_response(),
+        Err(e) => op_error(e),
+    }
+}
+
+/// `{"on": QUOTE, "text": …}` comments on that text; `{"id": …, "action":
+/// "reply"|"edit"|"delete"|"resolve"|"reopen", "text": …}` acts on a comment.
+#[derive(Deserialize)]
+struct CommentBody {
+    on: Option<String>,
+    id: Option<String>,
+    action: Option<String>,
+    #[serde(default)]
+    text: String,
+}
+
+async fn comment(
+    State(gw): State<St>,
+    Path((v, path)): Path<(String, String)>,
+    body: Bytes,
+) -> Response {
+    use crate::vault::CommentAct;
+    if let Some(r) = read_only_refusal(&gw) {
+        return r;
+    }
+    let Ok(b) = serde_json::from_slice::<CommentBody>(&body) else {
+        return error(
+            StatusCode::BAD_REQUEST,
+            "bad_request",
+            "expected JSON {\"on\": ..., \"text\": ...} or {\"id\": ..., \"action\": ...}",
+        );
+    };
+    let len = b.text.len();
+    let res = match (b.on, b.id, b.action.as_deref()) {
+        (Some(on), None, None) => ops::add_comment(&gw.hub, &v, &path, &on, &b.text).await,
+        (None, Some(id), Some(action)) => {
+            let act = match action {
+                "reply" => CommentAct::Reply(b.text),
+                "edit" => CommentAct::Edit(b.text),
+                "delete" => CommentAct::Delete,
+                "resolve" => CommentAct::Resolve,
+                "reopen" => CommentAct::Reopen,
+                _ => {
+                    return error(
+                        StatusCode::BAD_REQUEST,
+                        "bad_request",
+                        "action is reply, edit, delete, resolve or reopen",
+                    );
+                }
+            };
+            ops::comment_action(&gw.hub, &v, &path, &id, act).await
+        }
+        _ => {
+            return error(
+                StatusCode::BAD_REQUEST,
+                "bad_request",
+                "give either `on` (a new comment) or `id` and `action`",
+            );
+        }
+    };
+    match res {
+        Ok(sent) => {
+            gw.audit.record(
+                "gateway",
+                "comment",
+                &sent.vault_id,
+                Some(&sent.note_id),
+                len,
+            );
+            axum::Json(sent).into_response()
         }
         Err(e) => op_error(e),
     }

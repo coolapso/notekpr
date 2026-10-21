@@ -5,7 +5,8 @@
 //!   state.sealed        keys, metadata, seq, max_head_seen, counters, flags
 //!   pending.sealed      unacknowledged local updates (retried with the same id)
 //!   quarantine.sealed   local updates too large for the server (kept, not sent)
-//!   objects/<id>.sealed full CRDT state of the index and of every note
+//!   objects/<id>.sealed full CRDT state of the index and of every note, and
+//!                       each note's comments (`c_<note>`: their records)
 //!   blobs/<id>          attachment ciphertext exactly as stored on the server
 //!   mirror.sealed       file-mirror bookkeeping (see `mirror.rs`)
 //! ```
@@ -58,6 +59,9 @@ pub struct StoredState {
     /// before notes had their own keys: then every note with a key is shared.
     #[serde(default)]
     pub shared: Option<BTreeSet<String>>,
+    /// For those: where sharing started (the first key epoch shared).
+    #[serde(default)]
+    pub share_from: BTreeMap<String, u32>,
     /// Keys of new notes not registered with the server yet (wrapped under
     /// the vault key; see `coolpsonotes_sync::Outbox::new_keys`).
     #[serde(default)]
@@ -87,6 +91,13 @@ pub struct StoredState {
     pub read_only: Option<String>,
     #[serde(default)]
     pub last_sync: Option<i64>,
+    /// Viewers may comment (the vault owner's setting).
+    #[serde(default = "yes")]
+    pub viewers_comment: bool,
+}
+
+fn yes() -> bool {
+    true
 }
 
 #[derive(Serialize, Deserialize, Default)]

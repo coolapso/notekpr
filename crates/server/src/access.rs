@@ -20,7 +20,7 @@
 //!   change above holds the same lock); with several processes writing one
 //!   database those checks must move into the transaction too.
 
-use coolpsonotes_core::protocol::Role;
+use coolpsonotes_core::protocol::{INDEX_OBJECT_ID, Role, comments_note};
 use sqlx::SqliteExecutor;
 
 use crate::db::Db;
@@ -68,7 +68,8 @@ pub async fn object_role(
 }
 
 /// Like [`object_role`], also telling whether access comes from vault
-/// membership (`true`) or only from an individual share (`false`).
+/// membership (`true`) or only from an individual share (`false`). A note's
+/// comments (`c_<note>`) are readable by whoever can read the note.
 pub async fn object_access(
     db: &Db,
     vault_id: &str,
@@ -78,12 +79,43 @@ pub async fn object_access(
     if let Some(r) = member_role_opt(db, vault_id, user_id).await? {
         return Ok((r, true));
     }
+    let note = comments_note(object_id).unwrap_or(object_id);
     Ok((
-        share_role(db, vault_id, object_id, user_id)
+        share_role(db, vault_id, note, user_id)
             .await?
             .ok_or(AppError::NotFound)?,
         false,
     ))
+}
+
+/// May `user_id` — a vault member with role `member`, or else someone the
+/// note may be shared with — write comments on note `note_id`? Anyone who
+/// can read it; viewers (of the vault or of the note) only while the
+/// vault's owner lets them.
+pub async fn comment_access(
+    db: &Db,
+    member: Option<Role>,
+    vault_id: &str,
+    note_id: &str,
+    user_id: &str,
+) -> AppResult<()> {
+    let role = match member {
+        Some(r) => r,
+        None => share_role(db, vault_id, note_id, user_id)
+            .await?
+            .ok_or(AppError::NotFound)?,
+    };
+    let live = matches!(
+        repo::shares::object_state(db, vault_id, note_id).await?,
+        Some((None, _))
+    );
+    if note_id == INDEX_OBJECT_ID || comments_note(note_id).is_some() || !live {
+        return Err(AppError::NotFound);
+    }
+    if !role.can_write() && !repo::vaults::viewers_comment(db, vault_id).await? {
+        return Err(forbidden("the vault's owner doesn't let viewers comment"));
+    }
+    Ok(())
 }
 
 pub async fn require_owner(

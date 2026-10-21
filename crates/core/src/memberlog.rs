@@ -363,6 +363,16 @@ pub struct LogState {
     /// and for editors of single notes: who may have authored content.
     writers: BTreeMap<String, Vec<AccountPublic>>,
     note_editors: BTreeMap<(String, String), Vec<AccountPublic>>,
+    /// Every key ever pinned for a member (any role), and for people single
+    /// notes were shared with (either role): who may have commented.
+    readers: BTreeMap<String, Vec<AccountPublic>>,
+    note_readers: BTreeMap<(String, String), Vec<AccountPublic>>,
+}
+
+fn remember(keys: &mut Vec<AccountPublic>, k: AccountPublic) {
+    if !keys.contains(&k) {
+        keys.push(k);
+    }
 }
 
 impl LogState {
@@ -403,6 +413,8 @@ impl LogState {
                     signed_from: None,
                     writers: BTreeMap::new(),
                     note_editors: BTreeMap::new(),
+                    readers: BTreeMap::new(),
+                    note_readers: BTreeMap::new(),
                 }
             }
             LogBody::Checkpoint {
@@ -442,6 +454,8 @@ impl LogState {
                     signed_from: None,
                     writers: BTreeMap::new(),
                     note_editors: BTreeMap::new(),
+                    readers: BTreeMap::new(),
+                    note_readers: BTreeMap::new(),
                 }
             }
             _ => {
@@ -458,16 +472,17 @@ impl LogState {
         Ok(state)
     }
 
-    /// Remember `m`'s key as one that may have authored content.
+    /// Remember `m`'s key as one that may have authored content (if they
+    /// can write) or comments.
     fn note_writer(&mut self, m: &LogMember) {
-        if m.role.can_write()
-            && let Ok(Some(k)) = m.public()
-        {
-            let keys = self.writers.entry(m.user_id.clone()).or_default();
-            if !keys.contains(&k) {
-                keys.push(k);
-            }
+        let Ok(Some(k)) = m.public() else { return };
+        if m.role.can_write() {
+            remember(
+                self.writers.entry(m.user_id.clone()).or_default(),
+                k.clone(),
+            );
         }
+        remember(self.readers.entry(m.user_id.clone()).or_default(), k);
     }
 
     /// Verify and apply entries that continue the log (e.g. fetched since
@@ -574,15 +589,14 @@ impl LogState {
                 if member.role == Role::Owner {
                     return Err(LogError::Invalid(n, "notes are shared as editor or viewer"));
                 }
+                let who = (object_id.clone(), member.user_id.clone());
                 if member.role == Role::Editor {
-                    let keys = self
-                        .note_editors
-                        .entry((object_id.clone(), member.user_id.clone()))
-                        .or_default();
-                    if !keys.contains(&key) {
-                        keys.push(key);
-                    }
+                    remember(
+                        self.note_editors.entry(who.clone()).or_default(),
+                        key.clone(),
+                    );
                 }
+                remember(self.note_readers.entry(who).or_default(), key);
                 self.shares
                     .insert((object_id.clone(), member.user_id.clone()), member.clone());
             }
@@ -618,6 +632,8 @@ impl LogState {
             signed_from: self.signed_from,
             writers: self.writers.clone(),
             note_editors: self.note_editors.clone(),
+            readers: self.readers.clone(),
+            note_readers: self.note_readers.clone(),
         }
     }
 
@@ -810,6 +826,8 @@ pub struct Authors {
     signed_from: Option<i64>,
     writers: BTreeMap<String, Vec<AccountPublic>>,
     note_editors: BTreeMap<(String, String), Vec<AccountPublic>>,
+    readers: BTreeMap<String, Vec<AccountPublic>>,
+    note_readers: BTreeMap<(String, String), Vec<AccountPublic>>,
 }
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -832,6 +850,10 @@ impl AuthorError {
 
 impl Authors {
     fn keys<'a>(&'a self, object_id: &str, author: &str) -> Vec<&'a AccountPublic> {
+        // Anyone who can read a note may comment on it.
+        if let Some(note) = crate::protocol::comments_note(object_id) {
+            return self.comment_keys(note, author);
+        }
         let mut keys: Vec<&AccountPublic> =
             self.writers.get(author).into_iter().flatten().collect();
         keys.extend(
@@ -873,6 +895,19 @@ impl Authors {
         } else {
             Err(AuthorError::BadSignature(author.to_string()))
         }
+    }
+
+    /// Keys `user` may have signed comments on note `note_id` with: those of
+    /// any member, and of people the note was shared with.
+    pub fn comment_keys<'a>(&'a self, note_id: &str, user: &str) -> Vec<&'a AccountPublic> {
+        let mut keys: Vec<&AccountPublic> = self.readers.get(user).into_iter().flatten().collect();
+        keys.extend(
+            self.note_readers
+                .get(&(note_id.to_string(), user.to_string()))
+                .into_iter()
+                .flatten(),
+        );
+        keys
     }
 
     /// Check an update the server says `author` wrote, at log sequence `seq`.
@@ -1415,6 +1450,29 @@ mod tests {
         );
         // Before the requirement nothing unsigned is refused.
         assert_eq!(before.check_update("n1", 11, "bob", &pl, None), Ok(()));
+
+        // Comments: anyone who can read the note, viewers too — on the note
+        // they can read, under keys the log knows.
+        let (cpl, csig) = upd(&vic, "c_n1");
+        assert_eq!(a.check_update("c_n1", 11, "vic", &cpl, Some(&csig)), Ok(()));
+        let (rpl, rcsig) = upd(&rita, "c_n1");
+        assert_eq!(
+            a.check_update("c_n1", 11, "rita", &rpl, Some(&rcsig)),
+            Ok(())
+        );
+        let (rpl2, rcsig2) = upd(&rita, "c_n2");
+        assert!(
+            a.check_update("c_n2", 11, "rita", &rpl2, Some(&rcsig2))
+                .is_err()
+        );
+        let (epl, esig) = upd(&eve, "c_n1");
+        assert!(
+            a.check_update("c_n1", 11, "eve", &epl, Some(&esig))
+                .is_err()
+        );
+        assert_eq!(a.comment_keys("n1", "vic"), [&vic.secret.public()]);
+        assert_eq!(a.comment_keys("n1", "rita"), [&rita.secret.public()]);
+        assert!(a.comment_keys("n2", "rita").is_empty());
     }
 
     #[test]

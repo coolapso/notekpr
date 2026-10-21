@@ -421,6 +421,178 @@ pub async fn sort_folder(hub: &Hub, vref: &str, folder: &str) -> OpResult<usize>
     Ok(n)
 }
 
+/// One comment or reply, as handed out.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct CommentItem {
+    pub id: String,
+    /// The author's user id, and name when the server could be asked.
+    pub author: String,
+    pub author_name: Option<String>,
+    pub body: String,
+    pub created: i64,
+    pub edited: bool,
+    /// Written here, not stored on the server yet.
+    pub pending: bool,
+    /// Signed with a key known for its author.
+    pub verified: bool,
+}
+
+/// A comment with its replies.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct CommentThread {
+    pub id: String,
+    /// The text it is about, as it was.
+    pub quote: String,
+    /// The text is still in the note.
+    pub on_text: bool,
+    pub resolved_by: Option<String>,
+    /// The comment, then its replies.
+    pub comments: Vec<CommentItem>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct NoteComments {
+    pub vault_id: String,
+    pub path: String,
+    pub threads: Vec<CommentThread>,
+}
+
+/// The comments on a note (docs/comments.md). Authors' names are looked up
+/// on the server when it can be reached.
+pub async fn comments(hub: &Hub, vref: &str, path: &str) -> OpResult<NoteComments> {
+    let v = vault(hub, vref).await?;
+    let (vault_id, p, raw) = {
+        let g = v.lock().await;
+        let (p, note, threads) = g
+            .comments(path)
+            .map_err(|e| OpError::NotFound(format!("{e:#}")))?;
+        let doc = g.replica.notes.get(&note);
+        let raw: Vec<(coolpsonotes_core::comments::Thread, bool)> = threads
+            .into_iter()
+            .map(|t| {
+                let on = doc
+                    .is_some_and(|d| coolpsonotes_core::comments::locate(d, &t.anchor).is_some());
+                (t, on)
+            })
+            .collect();
+        (g.id().to_string(), p, raw)
+    };
+    let mut names: std::collections::HashMap<String, Option<String>> = Default::default();
+    for (t, _) in &raw {
+        for c in std::iter::once(&t.root).chain(&t.replies) {
+            if !names.contains_key(&c.author) {
+                let name = hub
+                    .session
+                    .api
+                    .user(&c.author)
+                    .await
+                    .ok()
+                    .map(|u| u.display_name);
+                names.insert(c.author.clone(), name);
+            }
+        }
+    }
+    let item = |c: &coolpsonotes_core::comments::Comment| CommentItem {
+        id: c.id.clone(),
+        author: c.author.clone(),
+        author_name: names.get(&c.author).cloned().flatten(),
+        body: c.body.clone(),
+        created: c.created,
+        edited: c.edited,
+        pending: c.pending,
+        verified: c.trust == coolpsonotes_core::comments::Trust::Verified,
+    };
+    let threads = raw
+        .iter()
+        .map(|(t, on)| CommentThread {
+            id: t.root.id.clone(),
+            quote: t.anchor.quote.clone(),
+            on_text: *on,
+            resolved_by: t.resolved_by.clone(),
+            comments: std::iter::once(&t.root)
+                .chain(&t.replies)
+                .map(item)
+                .collect(),
+        })
+        .collect();
+    Ok(NoteComments {
+        vault_id,
+        path: p,
+        threads,
+    })
+}
+
+/// A comment record sent: its id, and the vault's and note's ids.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct CommentSent {
+    pub id: String,
+    pub vault_id: String,
+    pub note_id: String,
+}
+
+fn check_comment(hub: &Hub, v: &Vault) -> OpResult<()> {
+    if hub.read_only {
+        return Err(OpError::Forbidden("this endpoint is read-only".into()));
+    }
+    v.require_commenting()
+        .map_err(|e| OpError::Forbidden(format!("{e:#}")))
+}
+
+/// Comment on the text `on` of a note (it must appear there once).
+pub async fn add_comment(
+    hub: &Hub,
+    vref: &str,
+    path: &str,
+    on: &str,
+    body: &str,
+) -> OpResult<CommentSent> {
+    let v = vault(hub, vref).await?;
+    let sent = {
+        let mut g = v.lock().await;
+        check_comment(hub, &g)?;
+        let s = &hub.session;
+        let (note_id, id) = g
+            .add_comment(s.account(), &s.user_id, path, on, body)
+            .map_err(bad)?;
+        g.save()?;
+        CommentSent {
+            id,
+            vault_id: g.id().to_string(),
+            note_id,
+        }
+    };
+    hub.local_changed(&sent.vault_id, vec![], true).await;
+    Ok(sent)
+}
+
+/// Reply to, edit, delete, resolve or reopen a comment (`id`, or the start
+/// of it). The new record is what's sent.
+pub async fn comment_action(
+    hub: &Hub,
+    vref: &str,
+    path: &str,
+    id: &str,
+    act: crate::vault::CommentAct,
+) -> OpResult<CommentSent> {
+    let v = vault(hub, vref).await?;
+    let sent = {
+        let mut g = v.lock().await;
+        check_comment(hub, &g)?;
+        let s = &hub.session;
+        let (note_id, id) = g
+            .comment_action(s.account(), &s.user_id, path, id, act)
+            .map_err(bad)?;
+        g.save()?;
+        CommentSent {
+            id,
+            vault_id: g.id().to_string(),
+            note_id,
+        }
+    };
+    hub.local_changed(&sent.vault_id, vec![], true).await;
+    Ok(sent)
+}
+
 /// Move a document (or folder) to the trash. Returns the trashed entry ids.
 pub async fn delete_document(hub: &Hub, vref: &str, path: &str) -> OpResult<(String, Vec<String>)> {
     let v = vault(hub, vref).await?;

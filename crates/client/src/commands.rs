@@ -122,6 +122,7 @@ fn access(c: &Command) -> Access {
             _ => Access::Read,
         },
         Command::Quick(q) if q.list => Access::Read,
+        Command::Comments(CommentsCmd::List { .. }) => Access::Read,
         Command::Sync(a) if a.no_dir => Access::Free,
         Command::Sync(a) if a.once => Access::Write,
         Command::Sync(_) => Access::Daemon,
@@ -426,6 +427,7 @@ async fn execute(ctx: Ctx, command: Command) -> Result<()> {
             user,
             role,
             accept_new_key,
+            without_comments,
         } => {
             let hub = ctx.hub(&[&vault]).await?;
             let v = hub.resolve(&vault).await?;
@@ -435,6 +437,14 @@ async fn execute(ctx: Ctx, command: Command) -> Result<()> {
             };
             let out = note_shares::share_note(&hub.session, &v, &path, &user, role, accept_new_key)
                 .await?;
+            if !without_comments {
+                let n = note_shares::carry_comments(&v, &path).await?;
+                if n > 0 {
+                    let id = v.lock().await.id().to_string();
+                    report_push(hub.local_changed(&id, vec![], false).await);
+                    crate::out!("its {n} comment record(s) go with it");
+                }
+            }
             if out.updated_role {
                 crate::out!(
                     "'{path}' is now shared with {} as {}",
@@ -565,6 +575,7 @@ async fn execute(ctx: Ctx, command: Command) -> Result<()> {
             if_match,
         } => write(&ctx, &vault, &path, attachment, append, if_match.as_deref()).await,
         Command::Quick(a) => quick(&ctx, a).await,
+        Command::Comments(c) => comments(&ctx, c).await,
         Command::Mkdir { vault, path } => {
             let hub = ctx.hub(&[&vault]).await?;
             let v = hub.resolve(&vault).await?;
@@ -1183,6 +1194,17 @@ async fn vault(ctx: &Ctx, c: VaultCmd) -> Result<()> {
             crate::out!("{}", if undo { "unarchived" } else { "archived" });
             Ok(())
         }
+        VaultCmd::ViewersComment { vault, setting } => {
+            let hub = ctx.hub(&[&vault]).await?;
+            let v = hub.resolve(&vault).await?;
+            let on = setting == "on";
+            manage::set_viewers_comment(&hub.session, &v, on).await?;
+            crate::out!(
+                "viewers {} comment",
+                if on { "can" } else { "can no longer" }
+            );
+            Ok(())
+        }
         VaultCmd::Delete { vault, yes } => {
             let hub = ctx.hub(&[&vault]).await?;
             let v = hub.resolve(&vault).await?;
@@ -1451,6 +1473,102 @@ async fn write(
             out.pending_changes
         ));
     }
+    Ok(())
+}
+
+/// Words joined with spaces, else stdin (asking for it on a terminal).
+fn text_arg(words: &[String], what: &str) -> Result<String> {
+    let text = if words.is_empty() {
+        if ui::stdin_is_tty() {
+            eprintln!("Type your {what}, then press Ctrl+D:");
+        }
+        String::from_utf8(ui::read_stdin().context("reading stdin")?)
+            .map_err(|_| anyhow!("stdin is not UTF-8 text"))?
+    } else {
+        words.join(" ")
+    };
+    if text.trim().is_empty() {
+        bail!("nothing to say: pass the text as an argument or on stdin");
+    }
+    Ok(text.trim_end().to_string())
+}
+
+async fn comments(ctx: &Ctx, c: CommentsCmd) -> Result<()> {
+    use crate::vault::CommentAct;
+    let (vault, note) = match &c {
+        CommentsCmd::List { vault, note, .. }
+        | CommentsCmd::Add { vault, note, .. }
+        | CommentsCmd::Reply { vault, note, .. }
+        | CommentsCmd::Edit { vault, note, .. }
+        | CommentsCmd::Delete { vault, note, .. }
+        | CommentsCmd::Resolve { vault, note, .. }
+        | CommentsCmd::Reopen { vault, note, .. } => (vault.clone(), note.clone()),
+    };
+    let hub = ctx.hub(&[&vault]).await?;
+    let (id, act) = match c {
+        CommentsCmd::List { all, .. } => {
+            let mut list = op(ops::comments(&hub, &vault, &note).await)?;
+            if !all {
+                list.threads.retain(|t| t.resolved_by.is_none());
+            }
+            if ctx.json {
+                ctx.print_json(&list);
+                return Ok(());
+            }
+            if list.threads.is_empty() {
+                crate::out!(
+                    "no {}comments on {}",
+                    if all { "" } else { "open " },
+                    list.path
+                );
+            }
+            for t in &list.threads {
+                let state = match (&t.resolved_by, t.on_text) {
+                    (Some(_), _) => " (resolved)",
+                    (None, false) => " (its text was deleted)",
+                    _ => "",
+                };
+                crate::out!("“{}”{state}", t.quote);
+                for (i, c) in t.comments.iter().enumerate() {
+                    let who = c.author_name.clone().unwrap_or_else(|| c.author.clone());
+                    let mark = match (c.verified, c.pending, c.edited) {
+                        (false, _, _) => " (unverified)",
+                        (_, true, _) => " (not sent yet)",
+                        (_, _, true) => " (edited)",
+                        _ => "",
+                    };
+                    let indent = if i == 0 { "  " } else { "    ↳ " };
+                    crate::out!(
+                        "{indent}[{}] {who}, {}{mark}: {}",
+                        &c.id[..c.id.len().min(8)],
+                        ui::fmt_time(c.created),
+                        c.body.replace('\n', "\n      ")
+                    );
+                }
+            }
+            return Ok(());
+        }
+        CommentsCmd::Add { on, text, .. } => {
+            let body = text_arg(&text, "comment")?;
+            let id = op(ops::add_comment(&hub, &vault, &note, &on, &body).await)?.id;
+            crate::out!("commented [{}]", &id[..id.len().min(8)]);
+            return Ok(());
+        }
+        CommentsCmd::Reply { id, text, .. } => (id, CommentAct::Reply(text_arg(&text, "reply")?)),
+        CommentsCmd::Edit { id, text, .. } => (id, CommentAct::Edit(text_arg(&text, "comment")?)),
+        CommentsCmd::Delete { id, .. } => (id, CommentAct::Delete),
+        CommentsCmd::Resolve { id, .. } => (id, CommentAct::Resolve),
+        CommentsCmd::Reopen { id, .. } => (id, CommentAct::Reopen),
+    };
+    let what = match &act {
+        CommentAct::Reply(_) => "replied",
+        CommentAct::Edit(_) => "changed",
+        CommentAct::Delete => "deleted",
+        CommentAct::Resolve => "resolved",
+        CommentAct::Reopen => "reopened",
+    };
+    let rid = op(ops::comment_action(&hub, &vault, &note, &id, act).await)?.id;
+    crate::out!("{what} [{}]", &rid[..rid.len().min(8)]);
     Ok(())
 }
 

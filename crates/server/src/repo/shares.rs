@@ -410,6 +410,27 @@ pub async fn shared_in_vault(
     .await?)
 }
 
+/// Where sharing started ([`share_from`]) for each note of a vault shared
+/// with someone right now.
+pub async fn share_from_in_vault(
+    db: impl SqliteExecutor<'_>,
+    vault_id: &str,
+) -> AppResult<std::collections::BTreeMap<String, u32>> {
+    let rows: Vec<(String, Vec<u8>)> = sqlx::query_as(
+        "SELECT id, share_from FROM objects
+         WHERE vault_id = ? AND share_from IS NOT NULL AND purged_at IS NULL
+           AND id IN (SELECT object_id FROM object_shares WHERE vault_id = ?)",
+    )
+    .bind(vault_id)
+    .bind(vault_id)
+    .fetch_all(db)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .filter_map(|(id, b)| Some((id, u32::from_be_bytes(b.as_slice().try_into().ok()?))))
+        .collect())
+}
+
 /// Notes of a vault with a document key (not purged).
 pub async fn keyed_in_vault(db: impl SqliteExecutor<'_>, vault_id: &str) -> AppResult<Vec<String>> {
     Ok(sqlx::query_scalar(

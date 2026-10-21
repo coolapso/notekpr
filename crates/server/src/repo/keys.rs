@@ -64,6 +64,7 @@ pub async fn vault_keys(db: &Db, vault_id: &str, user_id: &str) -> AppResult<Vau
         .map(|r| ObjectChainLink { object_id: r.get("object_id"), epoch: r.get::<i64, _>("epoch") as u32, link: r.get("link") })
         .collect();
     let shared = super::shares::shared_in_vault(db, vault_id).await?;
+    let share_from = super::shares::share_from_in_vault(db, vault_id).await?;
     Ok(VaultKeysResponse {
         current_epoch: current as u32,
         envelopes,
@@ -71,6 +72,7 @@ pub async fn vault_keys(db: &Db, vault_id: &str, user_id: &str) -> AppResult<Vau
         objects,
         object_chain,
         shared: Some(shared),
+        share_from,
     })
 }
 

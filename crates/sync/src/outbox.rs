@@ -15,7 +15,7 @@ use coolpsonotes_core::doc;
 use coolpsonotes_core::engine::{Pending, VaultReplica};
 use coolpsonotes_core::protocol::{
     ObjectKeyUpdate, PushResult, PushUpdate, REJECT_PURGED, REJECT_STALE_KEY, REJECT_TOO_LARGE,
-    RejectedUpdate,
+    RejectedUpdate, comments_note,
 };
 use coolpsonotes_core::random_id;
 use serde::{Deserialize, Serialize};
@@ -383,7 +383,8 @@ impl Outbox {
         let mut groups: Vec<(String, Vec<usize>, usize)> = Vec::new();
         let mut open: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
         for (i, p) in r.pending.iter().enumerate() {
-            if self.sent.contains(&p.client_update_id) {
+            // Comment records are separate entries, never merged.
+            if self.sent.contains(&p.client_update_id) || comments_note(&p.object_id).is_some() {
                 continue;
             }
             let n = p.update.len();
@@ -434,20 +435,23 @@ impl Outbox {
 
     /// The pushes to send now. Updates in flight on this connection are not
     /// sent twice; call [`Outbox::connection_reset`] to send everything again.
-    /// Read-only replicas send nothing.
+    /// Read-only replicas send only comments.
     pub fn plan(&mut self, r: &mut VaultReplica, limits: &Limits) -> Plan {
         let mut plan = Plan::default();
-        if !r.can_write() {
-            return plan;
+        let writer = r.can_write();
+        if writer {
+            plan.released = self.release_fitting(r, limits);
+            self.merge_unsent(r, limits);
+            plan.register = self.new_keys.clone();
         }
-        plan.released = self.release_fitting(r, limits);
-        self.merge_unsent(r, limits);
-        plan.register = self.new_keys.clone();
         let max = limits.max_update_bytes;
         let mut ready: Vec<PushUpdate> = Vec::new();
         let mut hold_ids = Vec::new();
         for p in &r.pending {
-            if self.in_flight.contains(&p.client_update_id) || self.waits_for_key(&p.object_id) {
+            if self.in_flight.contains(&p.client_update_id)
+                || self.waits_for_key(&p.object_id)
+                || (!writer && comments_note(&p.object_id).is_none())
+            {
                 continue;
             }
             match r.encrypt_object(Purpose::Update, &p.object_id, &p.update) {
@@ -664,13 +668,21 @@ impl Outbox {
 
 /// The server's history went backwards (restored from an older backup, or a
 /// rollback): move the cursor back to its head and queue the complete local
-/// state of every object, so CRDT merging restores whatever it lost.
-/// Returns how many objects were queued (0 for read-only replicas).
+/// state of every object, so CRDT merging restores whatever it lost, and
+/// every comment record (stored once each, whoever sends them again).
+/// Returns how many updates were queued.
 pub fn recover_from_rollback(r: &mut VaultReplica, head: i64) -> usize {
     r.seq = r.seq.min(head);
     r.max_head_seen = head;
+    let records = r.comments_to_resend();
+    let mut n = 0;
+    for (object, payload) in records {
+        if r.local_change(&object, payload).is_ok() {
+            n += 1;
+        }
+    }
     if !r.can_write() || !r.member {
-        return 0;
+        return n;
     }
     let mut items = vec![(
         coolpsonotes_core::protocol::INDEX_OBJECT_ID.to_string(),
@@ -679,7 +691,6 @@ pub fn recover_from_rollback(r: &mut VaultReplica, head: i64) -> usize {
     for (id, n) in &r.notes {
         items.push((id.clone(), n.encode_state()));
     }
-    let mut n = 0;
     for (id, state) in items {
         if r.local_change(&id, state).is_ok() {
             n += 1;

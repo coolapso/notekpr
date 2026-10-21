@@ -364,6 +364,7 @@ mod tests {
                     }],
                     object_chain: vec![],
                     shared: None,
+                    share_from: Default::default(),
                 },
                 changes: ChangesResponse {
                     updates,

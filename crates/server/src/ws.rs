@@ -17,7 +17,7 @@ use axum::extract::ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade};
 use axum::response::Response;
 use coolpsonotes_core::protocol::{
     CLOSE_RESTARTING, ClientMessage, ObjectEventKind, PushResult, ServerMessage, UserEventKind,
-    VaultEventKind,
+    VaultEventKind, comments_note,
 };
 use futures::{SinkExt, StreamExt};
 use tokio::sync::mpsc;
@@ -526,7 +526,8 @@ async fn forward(
                     .await;
                     return;
                 }
-                (_, Some(id)) if id == o => {}
+                // The note and its comments.
+                (_, Some(id)) if id == o || comments_note(id) == Some(o.as_str()) => {}
                 _ => continue,
             }
         }

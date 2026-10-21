@@ -6,6 +6,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use serde::{Deserialize, Serialize};
 
+use crate::comments::{self, CommentError, CommentLog, Signed};
 use crate::crypto::{CryptoError, Purpose};
 use crate::doc::{DocError, IndexDoc, NoteDoc};
 use crate::keys::{
@@ -31,6 +32,8 @@ pub enum EngineError {
     /// used. The owner's app signs it the next time it opens the vault.
     #[error("the note's key isn't confirmed by its owner yet; they need to open the app once")]
     UnconfirmedKey,
+    #[error(transparent)]
+    Comment(#[from] CommentError),
 }
 
 pub type Result<T> = std::result::Result<T, EngineError>;
@@ -468,6 +471,11 @@ pub fn rotate_with_notes(
 
 /// The notes of a vault that are shared with someone individually, from its
 /// keys response (servers before per-note keys: those with a document key).
+/// Where sharing started for each shared note of a vault keys response.
+pub fn share_from(r: &VaultKeysResponse) -> HashMap<String, u32> {
+    r.share_from.iter().map(|(k, v)| (k.clone(), *v)).collect()
+}
+
 pub fn shared_objects(r: &VaultKeysResponse) -> BTreeSet<String> {
     match &r.shared {
         Some(list) => list.iter().cloned().collect(),
@@ -859,17 +867,23 @@ pub struct Applied {
     pub objects: BTreeSet<String>,
     pub index_changed: bool,
     pub purged: BTreeSet<String>,
+    /// Notes whose comments changed.
+    pub comments: BTreeSet<String>,
 }
 
 impl Applied {
     pub fn is_empty(&self) -> bool {
-        self.objects.is_empty() && !self.index_changed && self.purged.is_empty()
+        self.objects.is_empty()
+            && !self.index_changed
+            && self.purged.is_empty()
+            && self.comments.is_empty()
     }
 
     pub fn merge(&mut self, o: Applied) {
         self.objects.extend(o.objects);
         self.index_changed |= o.index_changed;
         self.purged.extend(o.purged);
+        self.comments.extend(o.comments);
     }
 }
 
@@ -919,6 +933,12 @@ pub struct VaultReplica {
     /// Notes shared with someone individually (see [`shared_objects`]).
     /// Every note may have a document key; only these are shared.
     pub shared: BTreeSet<String>,
+    /// For those: the first document key epoch the people they're shared
+    /// with have (see [`share_from`]).
+    pub share_from: HashMap<String, u32>,
+    /// Comments on notes (note id → its records), from the notes' comments
+    /// objects (`c_<note id>`, docs/comments.md).
+    pub comments: HashMap<String, CommentLog>,
     /// Received items waiting for a key we don't have yet.
     pub deferred: Vec<Deferred>,
     /// Updates that could not even be deferred (queue full), by sequence
@@ -952,7 +972,9 @@ impl VaultReplica {
             purged: BTreeSet::new(),
             doc_keys: HashMap::new(),
             shared: BTreeSet::new(),
+            share_from: HashMap::new(),
             member: true,
+            comments: HashMap::new(),
             deferred: Vec::new(),
             dropped: BTreeMap::new(),
             authors: None,
@@ -981,9 +1003,11 @@ impl VaultReplica {
         self.shared.contains(object_id)
     }
 
-    /// Keyring used to encrypt new content of an object.
+    /// Keyring used to encrypt new content of an object. A note's comments
+    /// use the note's key.
     pub fn ring_for(&self, object_id: &str) -> &VaultKeyring {
-        self.doc_keys.get(object_id).unwrap_or(&self.keyring)
+        let keyed = comments_note(object_id).unwrap_or(object_id);
+        self.doc_keys.get(keyed).unwrap_or(&self.keyring)
     }
 
     /// Encrypt content of an object with the right key (document key if shared).
@@ -1008,7 +1032,7 @@ impl VaultReplica {
         let epoch = crate::crypto::sym_epoch(ciphertext)?;
         let ring = if keys::is_doc_epoch(epoch) {
             self.doc_keys
-                .get(object_id)
+                .get(comments_note(object_id).unwrap_or(object_id))
                 .ok_or(CryptoError::MissingEpoch(epoch))?
         } else {
             &self.keyring
@@ -1016,8 +1040,17 @@ impl VaultReplica {
         Ok(ring.decrypt(purpose, object_id, ciphertext)?)
     }
 
-    fn apply_plain(&mut self, object_id: &str, plain: &[u8]) -> Result<Applied> {
+    fn apply_plain(
+        &mut self,
+        object_id: &str,
+        plain: &[u8],
+        seq: i64,
+        epoch: u32,
+    ) -> Result<Applied> {
         let mut a = Applied::default();
+        if let Some(note) = comments_note(object_id) {
+            return self.apply_comment(note, plain, Some(seq), epoch);
+        }
         if object_id == INDEX_OBJECT_ID {
             self.index.apply_update(plain)?;
             a.index_changed = true;
@@ -1091,7 +1124,10 @@ impl VaultReplica {
                 return Err(e);
             }
         };
-        let a = self.apply_plain(&s.object_id, &plain)?;
+        if comments_note(&s.object_id).is_some() {
+            return Err(EngineError::Invalid("comments have no snapshots".into()));
+        }
+        let a = self.apply_plain(&s.object_id, &plain, s.covers_seq, 0)?;
         self.since_snapshot.insert(s.object_id.clone(), 0);
         Ok(a)
     }
@@ -1136,8 +1172,11 @@ impl VaultReplica {
         };
         self.dropped.remove(&u.seq);
         self.advance(u.seq);
-        let a = self.apply_plain(&u.object_id, &plain)?;
-        *self.since_snapshot.entry(u.object_id.clone()).or_default() += 1;
+        let epoch = crate::crypto::sym_epoch(&u.payload).unwrap_or(0);
+        let a = self.apply_plain(&u.object_id, &plain, u.seq, epoch)?;
+        if comments_note(&u.object_id).is_none() {
+            *self.since_snapshot.entry(u.object_id.clone()).or_default() += 1;
+        }
         Ok(a)
     }
 
@@ -1193,6 +1232,9 @@ impl VaultReplica {
     }
 
     pub fn apply_purge(&mut self, object_id: &str, seq: i64) -> Applied {
+        // A note's comments go with it.
+        self.comments
+            .remove(comments_note(object_id).unwrap_or(object_id));
         self.notes.remove(object_id);
         self.since_snapshot.remove(object_id);
         self.pending.retain(|p| p.object_id != object_id);
@@ -1294,7 +1336,14 @@ impl VaultReplica {
                 .position(|p| p.client_update_id == r.client_update_id)
             {
                 let p = self.pending.remove(i);
-                *self.since_snapshot.entry(p.object_id).or_default() += 1;
+                if let Some(note) = comments_note(&p.object_id) {
+                    // Stored (under the key it was just sent with): it
+                    // gets its place in the log.
+                    let epoch = self.ring_for(&p.object_id).current_epoch().unwrap_or(0);
+                    let _ = self.apply_comment(note, &p.update, Some(r.seq), epoch);
+                } else {
+                    *self.since_snapshot.entry(p.object_id).or_default() += 1;
+                }
             }
             if in_order {
                 self.advance(r.seq);
@@ -1325,6 +1374,9 @@ impl VaultReplica {
     /// snapshot would claim to cover changes it doesn't contain, and the
     /// server would then drop them.
     pub fn snapshot_request(&self, object_id: &str) -> Result<CreateSnapshotRequest> {
+        if comments_note(object_id).is_some() {
+            return Err(EngineError::Invalid("comments have no snapshots".into()));
+        }
         if self.object_incomplete(object_id) {
             return Err(EngineError::Invalid(
                 "some changes of this note are still waiting for a key".into(),
@@ -1353,6 +1405,156 @@ impl VaultReplica {
 
     pub fn note(&self, id: &str) -> Option<&NoteDoc> {
         self.notes.get(id)
+    }
+
+    /// Add a received or stored comment record (the plaintext of an update
+    /// of the note's comments object), encrypted with key `epoch`.
+    fn apply_comment(
+        &mut self,
+        note_id: &str,
+        plain: &[u8],
+        seq: Option<i64>,
+        epoch: u32,
+    ) -> Result<Applied> {
+        let mut a = Applied::default();
+        if self.purged.contains(note_id) || self.purged.contains(&comments_object(note_id)) {
+            return Ok(a);
+        }
+        let signed = Signed::from_payload(plain)?;
+        if self
+            .comments
+            .entry(note_id.to_string())
+            .or_default()
+            .insert(signed, seq, epoch)?
+        {
+            a.comments.insert(note_id.to_string());
+        }
+        Ok(a)
+    }
+
+    /// A note's comments as kept in a local copy (`None`: it has none).
+    pub fn comments_state(&self, note_id: &str) -> Option<Vec<u8>> {
+        self.comments
+            .get(note_id)
+            .filter(|l| !l.is_empty())
+            .map(CommentLog::to_bytes)
+    }
+
+    /// Restore a note's comments kept with [`VaultReplica::comments_state`].
+    pub fn restore_comments(&mut self, note_id: &str, state: &[u8]) -> Result<()> {
+        self.comments
+            .insert(note_id.to_string(), CommentLog::from_bytes(state)?);
+        Ok(())
+    }
+
+    /// Show a queued (not acknowledged) comment record of a local copy again.
+    pub fn restore_pending_comment(&mut self, p: &Pending) -> Result<()> {
+        let note = comments_note(&p.object_id)
+            .ok_or_else(|| EngineError::Invalid("not a comment".into()))?
+            .to_string();
+        self.apply_comment(&note, &p.update, None, 0).map(|_| ())
+    }
+
+    /// Send a comment record (signed by its author, [`Signed::sign`]) on
+    /// note `note_id`; it shows at once, marked as not stored yet.
+    pub fn local_comment(&mut self, note_id: &str, signed: &Signed) -> Result<PushUpdate> {
+        let payload = signed.to_payload();
+        self.comments
+            .entry(note_id.to_string())
+            .or_default()
+            .insert(signed.clone(), None, 0)?;
+        self.local_change(&comments_object(note_id), payload)
+    }
+
+    /// Whether people note `note_id` is shared with can read content under
+    /// key `epoch` (the note's own keys from where sharing started).
+    fn readable_by_recipients(&self, note_id: &str, epoch: u32) -> bool {
+        self.share_from
+            .get(note_id)
+            .is_some_and(|from| keys::is_doc_epoch(epoch) && epoch >= *from)
+    }
+
+    /// When a note is shared with its existing comments: send again, under
+    /// the note's own key, the comments people it's shared with can't read
+    /// yet. Their authors' signatures still hold (they cover the content).
+    pub fn carry_comments(&mut self, note_id: &str) -> Result<Vec<PushUpdate>> {
+        if !self.shared.contains(note_id) || !self.share_from.contains_key(note_id) {
+            return Err(EngineError::Invalid(
+                "the note isn't shared (as far as the keys we have say)".into(),
+            ));
+        }
+        let payloads: Vec<Vec<u8>> = self
+            .comments
+            .get(note_id)
+            .map(|log| {
+                log.entries()
+                    .iter()
+                    .filter(|e| e.seq.is_some() && !self.readable_by_recipients(note_id, e.epoch))
+                    .map(|e| e.signed.to_payload())
+                    .collect()
+            })
+            .unwrap_or_default();
+        let object = comments_object(note_id);
+        payloads
+            .into_iter()
+            .map(|p| self.local_change(&object, p))
+            .collect()
+    }
+
+    /// Every stored comment record to send again after the server lost
+    /// some (a rollback), as `(object, plaintext)`. For shared notes only
+    /// what people they're shared with can read already: the rest stays the
+    /// members' (and the server refuses it under older keys).
+    pub fn comments_to_resend(&self) -> Vec<(String, Vec<u8>)> {
+        let mut out = Vec::new();
+        for (note, log) in &self.comments {
+            let shared = self.shared.contains(note);
+            for e in log.entries().iter().filter(|e| e.seq.is_some()) {
+                if !shared || self.readable_by_recipients(note, e.epoch) {
+                    out.push((comments_object(note), e.signed.to_payload()));
+                }
+            }
+        }
+        out
+    }
+
+    /// A note's comment threads (see [`comments::threads`]). `known_key`
+    /// gives authors' keys beyond the vault's membership log (e.g. pinned
+    /// ones, for people a note is shared with); `is_owner` whether a user
+    /// owns the vault.
+    pub fn comment_threads(
+        &self,
+        note_id: &str,
+        known_key: impl Fn(&str) -> Option<AccountPublic>,
+        is_owner: impl Fn(&str) -> bool,
+    ) -> Vec<comments::Thread> {
+        let Some(log) = self.comments.get(note_id) else {
+            return Vec::new();
+        };
+        comments::threads(
+            log,
+            |e| {
+                let author = &e.record.author;
+                let mut keys: Vec<AccountPublic> = self
+                    .authors
+                    .as_ref()
+                    .map(|a| {
+                        a.comment_keys(note_id, author)
+                            .into_iter()
+                            .cloned()
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                keys.extend(known_key(author));
+                if keys.is_empty() {
+                    return Some(comments::Trust::Unknown);
+                }
+                keys.iter()
+                    .any(|k| e.signed.verify(k, &self.id, note_id))
+                    .then_some(comments::Trust::Verified)
+            },
+            is_owner,
+        )
     }
 
     pub fn note_text(&self, id: &str) -> String {
@@ -1595,6 +1797,7 @@ mod tests {
             objects: vec![],
             object_chain: vec![],
             shared: None,
+            share_from: Default::default(),
         };
         let bring = keyring_from_response(&bob, "bob", &req.id, &resp).unwrap();
         let mut b = VaultReplica::new(&req.id, Role::Editor, bring, VaultMeta::default());
@@ -1653,6 +1856,7 @@ mod tests {
             objects: vec![],
             object_chain: vec![],
             shared: None,
+            share_from: Default::default(),
         };
         let bring2 = keyring_from_response(&bob, "bob", &req.id, &resp).unwrap();
         assert_eq!(bring2.epochs().collect::<Vec<_>>(), vec![1, 2]);
@@ -1763,6 +1967,7 @@ mod tests {
             }],
             object_chain: vec![],
             shared: None,
+            share_from: Default::default(),
         };
         let rings = object_keyrings(&vring, &vresp);
         assert!(
@@ -1808,6 +2013,137 @@ mod tests {
         assert_eq!(cring.epochs().count(), 2);
         assert!(cring.decrypt(Purpose::Update, "n", &p.payload).is_ok());
         assert!(cring.decrypt(Purpose::Update, "n", &p2.payload).is_ok());
+    }
+
+    #[test]
+    fn comments_round_trip() {
+        use crate::comments::{Action, Record, Signed, Trust, anchor};
+        let alice = AccountSecret::generate();
+        let carol = AccountSecret::generate();
+        let (vreq, vring) = new_vault(&alice, "alice", &VaultMeta::named("Home"), 1).unwrap();
+        let v = vreq.id.clone();
+        let mut a = VaultReplica::new(&v, Role::Owner, vring.clone(), VaultMeta::named("Home"));
+        a.seq = 4;
+        let note = a.notes.entry("n".into()).or_default();
+        note.set_text("Buy milk and bread").unwrap();
+        let comment = Record::new(
+            "alice",
+            1,
+            Action::Comment {
+                body: "Oat milk?".into(),
+                anchor: anchor(note, 4, 8).unwrap(),
+            },
+        );
+        let key_of = |u: &str| match u {
+            "alice" => Some(alice.public()),
+            "carol" => Some(carol.public()),
+            _ => None,
+        };
+        let update = |p: &PushUpdate, seq: i64, by: &str| Update {
+            object_id: p.object_id.clone(),
+            seq,
+            author_id: by.into(),
+            payload: p.payload.clone(),
+            created_at: 0,
+            signature: None,
+        };
+        let ack = |r: &mut VaultReplica, p: &PushUpdate, seq: i64| {
+            r.ack(
+                &[PushResult {
+                    client_update_id: p.client_update_id.clone(),
+                    seq,
+                }],
+                true,
+            )
+        };
+
+        // Sent: shown at once, stored once acknowledged.
+        let p1 = a
+            .local_comment("n", &Signed::sign(&alice, &v, "n", &comment).unwrap())
+            .unwrap();
+        assert_eq!(p1.object_id, "c_n");
+        let th = a.comment_threads("n", key_of, |u| u == "alice");
+        assert_eq!((th.len(), th[0].root.pending), (1, true));
+        ack(&mut a, &p1, 5);
+        let th = a.comment_threads("n", key_of, |u| u == "alice");
+        assert_eq!(
+            (th[0].root.pending, th[0].root.trust),
+            (false, Trust::Verified)
+        );
+        assert!(a.compaction_candidates().is_empty() && a.snapshot_request("c_n").is_err());
+
+        // Another member reads it.
+        let mut b = VaultReplica::new(&v, Role::Viewer, vring.clone(), VaultMeta::default());
+        let applied = b.apply_update(&update(&p1, 5, "alice")).unwrap();
+        assert!(applied.comments.contains("n") && applied.objects.is_empty());
+        let th = b.comment_threads("n", key_of, |_| false);
+        assert_eq!(th[0].root.body, "Oat milk?");
+        // Without a known key for its author it shows, unconfirmed.
+        assert_eq!(
+            b.comment_threads("n", |_| None, |_| false)[0].root.trust,
+            Trust::Unknown
+        );
+
+        // Shared with Carol, with its comments: they go again under the
+        // note's key, once.
+        let state = a.notes["n"].encode_state();
+        let (ring, req) =
+            start_sharing(&vring, "n", &ObjectMeta::titled("Shop"), &state, a.seq).unwrap();
+        a.doc_keys.insert("n".into(), ring.clone());
+        assert!(a.carry_comments("n").is_err(), "not shared yet");
+        a.shared.insert("n".into());
+        a.share_from.insert("n".into(), req.epoch);
+        let carried = a.carry_comments("n").unwrap();
+        assert_eq!(carried.len(), 1);
+        assert!(keys::is_doc_epoch(
+            crate::crypto::sym_epoch(&carried[0].payload).unwrap()
+        ));
+        ack(&mut a, &carried[0], 6);
+        assert!(a.carry_comments("n").unwrap().is_empty());
+        assert_eq!(a.comment_threads("n", key_of, |_| false).len(), 1);
+
+        let env = object_share_envelope(
+            &ring,
+            "n",
+            &member("carol", &carol, Role::Viewer, true).user,
+        )
+        .unwrap();
+        let resp = ObjectKeysResponse {
+            object_id: "n".into(),
+            role: Role::Viewer,
+            current_epoch: req.epoch,
+            envelopes: vec![env],
+            chain: vec![],
+            encrypted_meta: Some(req.encrypted_meta.clone()),
+            member_envelopes: vec![],
+            shared: None,
+        };
+        let cring = object_keyring_for_recipient(&carol, "carol", &v, &resp, None).unwrap();
+        let mut c = VaultReplica::for_shared_notes(&v);
+        c.doc_keys.insert("n".into(), cring);
+        // The copy under the vault key isn't hers to read; the carried one is.
+        assert!(c.apply_update(&update(&p1, 5, "alice")).is_err());
+        c.apply_update(&update(&carried[0], 6, "alice")).unwrap();
+        assert_eq!(c.comment_threads("n", key_of, |_| false).len(), 1);
+        // She replies (a viewer), under the note's key; Alice reads it.
+        let reply = Record::new(
+            "carol",
+            2,
+            Action::Reply {
+                thread: comment.id.clone(),
+                body: "Yes please".into(),
+            },
+        );
+        let p3 = c
+            .local_comment("n", &Signed::sign(&carol, &v, "n", &reply).unwrap())
+            .unwrap();
+        a.apply_update(&update(&p3, 7, "carol")).unwrap();
+        let th = a.comment_threads("n", key_of, |_| false);
+        assert_eq!(th[0].replies[0].body, "Yes please");
+
+        // Purged with the note.
+        let applied = a.apply_purge("n", 8);
+        assert!(applied.purged.contains("n") && !a.comments.contains_key("n"));
     }
 
     #[test]

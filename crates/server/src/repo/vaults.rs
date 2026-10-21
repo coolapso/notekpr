@@ -17,6 +17,7 @@ fn vault_row(r: &sqlx::sqlite::SqliteRow) -> VaultInfo {
         member_count: r.get::<i64, _>("member_count") as u32,
         created_at: r.get("created_at"),
         updated_at: r.get("updated_at"),
+        viewers_comment: r.get("viewers_comment"),
     }
 }
 
@@ -27,7 +28,7 @@ pub async fn list_for_member(
 ) -> AppResult<Vec<VaultInfo>> {
     let rows = sqlx::query(
         "SELECT v.id, v.owner_id, m.role, v.encrypted_meta, v.key_epoch, v.head_seq, v.archived,
-                v.created_at, v.updated_at,
+                v.created_at, v.updated_at, v.viewers_comment,
                 (SELECT COUNT(*) FROM vault_members m2 WHERE m2.vault_id = v.id) AS member_count
          FROM vaults v JOIN vault_members m ON m.vault_id = v.id AND m.user_id = ?
          ORDER BY v.created_at",
@@ -46,7 +47,7 @@ pub async fn get_for_member(
 ) -> AppResult<Option<VaultInfo>> {
     Ok(sqlx::query(
         "SELECT v.id, v.owner_id, m.role, v.encrypted_meta, v.key_epoch, v.head_seq, v.archived,
-                v.created_at, v.updated_at,
+                v.created_at, v.updated_at, v.viewers_comment,
                 (SELECT COUNT(*) FROM vault_members m2 WHERE m2.vault_id = v.id) AS member_count
          FROM vaults v JOIN vault_members m ON m.vault_id = v.id AND m.user_id = ?
          WHERE v.id = ?",
@@ -105,6 +106,32 @@ pub async fn set_archived(
 ) -> AppResult<()> {
     sqlx::query("UPDATE vaults SET archived = ?, updated_at = ? WHERE id = ?")
         .bind(archived)
+        .bind(now)
+        .bind(vault_id)
+        .execute(db)
+        .await?;
+    Ok(())
+}
+
+/// Whether viewers may comment on the vault's notes.
+pub async fn viewers_comment(db: impl SqliteExecutor<'_>, vault_id: &str) -> AppResult<bool> {
+    Ok(
+        sqlx::query_scalar("SELECT viewers_comment FROM vaults WHERE id = ?")
+            .bind(vault_id)
+            .fetch_optional(db)
+            .await?
+            .unwrap_or(false),
+    )
+}
+
+pub async fn set_viewers_comment(
+    db: impl SqliteExecutor<'_>,
+    vault_id: &str,
+    allowed: bool,
+    now: i64,
+) -> AppResult<()> {
+    sqlx::query("UPDATE vaults SET viewers_comment = ?, updated_at = ? WHERE id = ?")
+        .bind(allowed)
         .bind(now)
         .bind(vault_id)
         .execute(db)

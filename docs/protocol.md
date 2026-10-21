@@ -145,10 +145,10 @@ device's public key, but the code would differ.
 
 | Endpoint | Role |
 |---|---|
-| `GET /vaults` | caller's vaults with role, `encrypted_meta`, `key_epoch`, `head_seq` |
+| `GET /vaults` | caller's vaults with role, `encrypted_meta`, `key_epoch`, `head_seq`, `viewers_comment` (§6.1) |
 | `POST /vaults {id, encrypted_meta, key_envelope, log_entry?}` | human; the client picks the id and wraps epoch 1 to itself; `log_entry` starts the membership log (§5.2) |
-| `GET/PATCH/DELETE /vaults/{v}` | read: member; update (`encrypted_meta`, `archived`): owner; delete: owner |
-| `GET /vaults/{v}/keys` | member: own envelopes for every epoch granted + full key chain; the notes' document keys (`objects`, `object_chain`) and which notes are shared individually (`shared`; absent on servers from before notes had their own keys) |
+| `GET/PATCH/DELETE /vaults/{v}` | read: member; update (`encrypted_meta`, `archived`, `viewers_comment`): owner; delete: owner |
+| `GET /vaults/{v}/keys` | member: own envelopes for every epoch granted + full key chain; the notes' document keys (`objects`, `object_chain`), which notes are shared individually (`shared`; absent on servers from before notes had their own keys) and for those where sharing started (`share_from`: note → first shared epoch) |
 | `GET /vaults/{v}/members` | member: `MemberInfo {user (with account key), role, has_current_key}` |
 | `POST /vaults/{v}/members {user_id, role, key_envelope?, log_entry?}` | owner. Without an envelope the member is "pending keys" until the owner's client grants them. Role `owner` is refused (`400`); an agent can be added only by its owner (`404` otherwise). Membership supersedes single-note shares: adding someone removes their shares of notes in that vault and those notes' keys |
 | `PATCH /vaults/{v}/members/{u} {role, log_entry?}` | owner |
@@ -190,7 +190,7 @@ member list, vault key, or the note's history from before it was shared.
 | `POST /vaults/{v}/objects/{o}/shares {user_id, role, envelope, log_entry?}` | owner; `role` is `editor` or `viewer`; the envelope wraps the current document key to the person (else `412 stale_key`). Vault members are refused (`409`), and so is a note whose sharing has not started (`409`: give it a fresh key first). Someone it is shared with already is refused too (`409`), unless they lack the current key (left out of a rotation, `without`): then they get it, with this role. |
 | `PATCH /vaults/{v}/objects/{o}/shares/{u} {role, log_entry?}`, `DELETE …/shares/{u}` (optional body `{log_entry}`) | owner; recipients may remove themselves. Clients rotate the document key after removing someone. |
 | `GET /shares` | notes shared with the caller: `SharedNote {vault_id, object_id, role, owner, shared_by, key_epoch, encrypted_meta, added_at}` |
-| `GET /vaults/{v}/objects/{o}/changes?since=` | that note's part of the log (same shape as `/changes`) |
+| `GET /vaults/{v}/objects/{o}/changes?since=` | that note's part of the log, with its comments (§6.1) (same shape as `/changes`) |
 
 The kinds of `PUT …/key`:
 
@@ -320,6 +320,45 @@ vault's events in strictly increasing order without gaps.**
 * An update larger than `max_update_bytes` that can't be split goes out as a snapshot of the object with `carries: true` (if the state fits `max_snapshot_bytes`); once stored, the update is done. Updates after it then reach everyone, as their CRDT dependencies arrive with it.
 * Persist unacknowledged updates and retry them with the same `client_update_id` after reconnecting.
 * If the server reports a `head_seq` lower than one seen before, warn the user (possible rollback/restore) and re-push local state; CRDT merging restores anything missing.
+
+### 6.1 Comments
+
+A note's comments (docs/comments.md) are the object **`c_<note id>`** (note
+ids never contain `_`). It is not a CRDT: each update is one **record**,
+appended, never changed or removed; edits, deletions and resolving are new
+records. The plaintext of an update is `{"record": b64, "signature": b64}`:
+
+* `record`: JSON `{id, author, created, kind, …}` with `kind` one of
+  `comment {body, anchor: {start: b64, end: b64, quote}}` (the yrs v1
+  sticky indices of the first and last commented characters, and the text as
+  it was, ≤ 300 characters), `reply {thread, body}`, `edit {target, body}`,
+  `delete {target}`, `resolve {thread}`, `reopen {thread}`; bodies ≤ 10 000
+  characters;
+* `signature`: Ed25519 by the author's account key over
+  `statement("coolpsonotes/v1/sig/comment", [vault_id, note_id, record])` —
+  over the content, so a record still verifies after it is encrypted again
+  under another key.
+
+It is encrypted like the note's content: the note's document key (§5.1), else
+the vault key; the server checks the epoch against the note's key
+(`stale_key` as usual). Clients fold the records in log order: an `edit`
+counts only from the target's author, a `delete` from its author or a vault
+owner, and only records whose signature verifies with a key they know for
+the author (members: the membership log, which lists every member's keys and
+the people notes were shared with; others: pinned keys) change anything.
+
+The server lets **anyone who can read the note** write its comments object —
+vault members of any role and people the note is shared with — except
+viewers while the vault's `viewers_comment` is off (`403`), and only for a
+live note (`404`). It refuses snapshots of it (`400`), records over 64 KiB
+(`too_large`), deleting it on its own (`400`) and sharing it on its own
+(`400`); purging the note purges its comments. Reads follow the note:
+`/objects/{note}/changes` and per-note subscriptions include `c_<note>`, and
+for people the note is shared with only records under a key from
+`share_from` on. So when a note is shared, its earlier comments stay the
+members'; the sharer's client may encrypt them again under the note's new
+key (they keep their authors' signatures), which `share_from` in
+`VaultKeysResponse` lets it tell apart.
 
 ## 7. WebSocket `/api/v1/ws`
 

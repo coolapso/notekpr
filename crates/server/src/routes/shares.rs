@@ -44,6 +44,9 @@ fn check_object(o: &str) -> AppResult<()> {
     if o == INDEX_OBJECT_ID {
         return Err(bad("the vault index cannot be shared"));
     }
+    if coolpsonotes_core::protocol::comments_note(o).is_some() {
+        return Err(bad("comments are shared with their note"));
+    }
     Ok(())
 }
 
@@ -73,7 +76,10 @@ pub async fn shared_with_me(
     let rows = repo::shares::shared_with(&state.db, &who.user_id).await?;
     let mut out = Vec::with_capacity(rows.len());
     for r in rows {
+        let can_comment =
+            r.role.can_write() || repo::vaults::viewers_comment(&state.db, &r.vault_id).await?;
         out.push(SharedNote {
+            can_comment,
             owner: public_user(&state.db, &r.vault_owner_id).await?,
             vault_id: r.vault_id,
             object_id: r.object_id,

@@ -121,6 +121,10 @@ pub enum Command {
         #[arg(long)]
         reset: bool,
     },
+    /// Comments on a note: list them, comment on some of its text, reply,
+    /// edit, delete, resolve or reopen (docs/comments.md).
+    #[command(subcommand)]
+    Comments(CommentsCmd),
     /// Move a document or folder to the trash.
     Rm { vault: String, path: String },
     /// Inspect, restore or empty the trash.
@@ -183,6 +187,11 @@ pub enum Command {
         /// Accept a changed account key after verifying it out of band.
         #[arg(long)]
         accept_new_key: bool,
+        /// Keep the comments written so far to the vault's members: they see
+        /// only those written from now on. (By default the note goes with
+        /// its comments — to everyone it is shared with.)
+        #[arg(long)]
+        without_comments: bool,
     },
     /// Stop sharing a note with someone (rotates the note's key).
     UnshareNote {
@@ -287,6 +296,60 @@ pub enum DevicesCmd {
     },
 }
 
+/// IDs: a comment's id, or the start of it that only it has (`list` shows
+/// the first eight characters). TEXT: words joined with spaces, or stdin.
+#[derive(Subcommand, Clone, Debug, Serialize, Deserialize)]
+pub enum CommentsCmd {
+    /// The note's comment threads (resolved ones too with --all).
+    List {
+        vault: String,
+        note: String,
+        #[arg(long)]
+        all: bool,
+    },
+    /// Comment on the text given with --on (it must appear once in the note).
+    Add {
+        vault: String,
+        note: String,
+        #[arg(long, value_name = "QUOTE")]
+        on: String,
+        text: Vec<String>,
+    },
+    /// Reply to a comment's thread.
+    Reply {
+        vault: String,
+        note: String,
+        id: String,
+        text: Vec<String>,
+    },
+    /// Change one of your own comments.
+    Edit {
+        vault: String,
+        note: String,
+        id: String,
+        text: Vec<String>,
+    },
+    /// Delete one of your comments (a vault owner deletes any; a comment
+    /// takes its replies with it).
+    Delete {
+        vault: String,
+        note: String,
+        id: String,
+    },
+    /// Mark a comment's thread as resolved.
+    Resolve {
+        vault: String,
+        note: String,
+        id: String,
+    },
+    /// Open a resolved thread again.
+    Reopen {
+        vault: String,
+        note: String,
+        id: String,
+    },
+}
+
 #[derive(Subcommand, Clone, Debug, Serialize, Deserialize)]
 pub enum RecoveryCmd {
     /// Replace the recovery key (the old one stops working).
@@ -330,6 +393,13 @@ pub enum VaultCmd {
         vault: String,
         #[arg(long)]
         undo: bool,
+    },
+    /// Let viewers (and people its notes are shared with read-only)
+    /// comment on notes, or not (owner; on by default).
+    ViewersComment {
+        vault: String,
+        #[arg(value_parser = ["on", "off"])]
+        setting: String,
     },
     /// Delete a vault for everyone (owner). Cannot be undone.
     Delete {

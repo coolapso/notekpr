@@ -306,6 +306,38 @@ async fn agent_gateway_is_scoped_audited_and_syncs() {
         .unwrap();
     assert_eq!(hist.status().as_u16(), 200);
 
+    // Comments: on some of a note's text, then a reply.
+    let comment = |body: Value| {
+        http.post(format!("{base}/vaults/Agent%20memory/comments/Index.md"))
+            .bearer_auth("gw-test-token")
+            .json(&body)
+            .send()
+    };
+    let r = comment(serde_json::json!({ "on": "Facts", "text": "Is this up to date?" }))
+        .await
+        .unwrap();
+    assert_eq!(r.status().as_u16(), 200);
+    let sent: Value = r.json().await.unwrap();
+    let id = sent["id"].as_str().unwrap().to_string();
+    let r = comment(serde_json::json!({ "id": &id[..8], "action": "reply", "text": "Yes" }))
+        .await
+        .unwrap();
+    assert_eq!(r.status().as_u16(), 200);
+    let bad = comment(serde_json::json!({ "on": "not in the note", "text": "?" }))
+        .await
+        .unwrap();
+    assert_eq!(bad.status().as_u16(), 400);
+    let list: Value = get("/vaults/Agent%20memory/comments/Index.md")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let t = &list["threads"][0];
+    assert_eq!(t["quote"], "Facts");
+    assert_eq!(t["comments"][1]["body"], "Yes");
+
     // Every write is audited without content.
     let audit = std::fs::read_to_string(agent.data_dir().join("audit.jsonl")).unwrap();
     let lines: Vec<Value> = audit
@@ -318,7 +350,9 @@ async fn agent_gateway_is_scoped_audited_and_syncs() {
     assert!(lines.iter().any(|l| l["op"] == "move_document"));
     assert!(lines.iter().any(|l| l["op"] == "trash_document"));
     assert!(lines.iter().any(|l| l["op"] == "put_attachment"));
+    assert!(lines.iter().any(|l| l["op"] == "comment"));
     assert!(!audit.contains("water is wet") && !audit.contains("Facts"));
+    assert!(!audit.contains("up to date") && !audit.contains("Index"));
 
     // A read-only gateway refuses every write but still reads.
     let ro_hub = Hub::start(

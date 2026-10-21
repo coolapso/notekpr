@@ -66,6 +66,7 @@ pub async fn rename_vault(session: &Session, vault: &SharedVault, name: &str) ->
     let req = UpdateVaultRequest {
         encrypted_meta: Some(ct),
         archived: None,
+        ..Default::default()
     };
     let _: VaultInfo = session.api.patch(&format!("/vaults/{id}"), &req).await?;
     let mut v = vault.lock().await;
@@ -90,6 +91,7 @@ pub async fn set_vault_icon(
     let req = UpdateVaultRequest {
         encrypted_meta: Some(ct),
         archived: None,
+        ..Default::default()
     };
     let _: VaultInfo = session.api.patch(&format!("/vaults/{id}"), &req).await?;
     let mut v = vault.lock().await;
@@ -106,10 +108,30 @@ pub async fn set_archived(session: &Session, vault: &SharedVault, archived: bool
     let req = UpdateVaultRequest {
         encrypted_meta: None,
         archived: Some(archived),
+        ..Default::default()
     };
     let _: VaultInfo = session.api.patch(&format!("/vaults/{id}"), &req).await?;
     let mut v = vault.lock().await;
     v.archived = archived;
+    v.mark_state_dirty();
+    v.save()
+}
+
+/// Let viewers (and people its notes are shared with read-only) comment,
+/// or not (owner).
+pub async fn set_viewers_comment(session: &Session, vault: &SharedVault, on: bool) -> Result<()> {
+    let id = {
+        let v = vault.lock().await;
+        require_owner(&v)?;
+        v.id().to_string()
+    };
+    let req = UpdateVaultRequest {
+        viewers_comment: Some(on),
+        ..Default::default()
+    };
+    let _: VaultInfo = session.api.patch(&format!("/vaults/{id}"), &req).await?;
+    let mut v = vault.lock().await;
+    v.viewers_comment = on;
     v.mark_state_dirty();
     v.save()
 }

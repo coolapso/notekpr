@@ -11,7 +11,8 @@ use coolpsonotes_core::memberlog;
 use coolpsonotes_core::protocol::{
     ChangesResponse, CreateSnapshotRequest, INDEX_OBJECT_ID, ObjectState, PurgedObject, PushResult,
     PushUpdate, REJECT_BAD_SIGNATURE, REJECT_PURGED, REJECT_STALE_KEY, REJECT_TOO_LARGE,
-    REJECT_UNSIGNED, RejectedUpdate, Snapshot, SnapshotInfo, Update,
+    REJECT_UNSIGNED, RejectedUpdate, Snapshot, SnapshotInfo, Update, comments_note,
+    comments_object,
 };
 use sqlx::Row;
 
@@ -25,6 +26,8 @@ use crate::repo;
 use crate::state::AppState;
 
 pub const MAX_BATCH: usize = 500;
+/// Largest comment record (an update of a note's comments object).
+pub const MAX_COMMENT_BYTES: usize = 64 * 1024;
 pub const DEFAULT_PAGE: i64 = 1000;
 pub const MAX_PAGE: i64 = 5000;
 /// Upper bound for the update payloads in one page of changes.
@@ -108,15 +111,26 @@ pub async fn changes_since(
             snapshots.push(s);
         }
     }
+    // One note's changes include its comments, which count as shared from
+    // when the note is (`doc_only`).
+    let comments = object
+        .filter(|o| comments_note(o).is_none())
+        .map(comments_object);
+    let keyed = object.map(|o| comments_note(o).unwrap_or(o));
     let rows = sqlx::query(
         "SELECT object_id, seq, author_id, payload, created_at, signature FROM updates
-         WHERE vault_id = ? AND seq > ? AND (? IS NULL OR object_id = ?) AND (? = 0 OR substr(payload, 2, 4) >= (SELECT ob.share_from FROM objects ob WHERE ob.vault_id = updates.vault_id AND ob.id = updates.object_id)) ORDER BY seq LIMIT ?",
+         WHERE vault_id = ? AND seq > ? AND (? IS NULL OR object_id = ? OR object_id = ?)
+           AND (? = 0 OR substr(payload, 2, 4) >= (SELECT ob.share_from FROM objects ob
+                WHERE ob.vault_id = updates.vault_id AND ob.id = COALESCE(?, updates.object_id)))
+         ORDER BY seq LIMIT ?",
     )
     .bind(vault_id)
     .bind(since)
     .bind(object)
     .bind(object)
+    .bind(&comments)
     .bind(doc_only)
+    .bind(keyed)
     .bind(limit + 1)
     .fetch_all(db)
     .await?;
@@ -295,7 +309,8 @@ async fn vault_key_epoch(db: impl sqlx::SqliteExecutor<'_>, vault_id: &str) -> A
 }
 
 /// May `who` write to `object_id`? Vault editors/owners, or people the note
-/// is shared with as editor.
+/// is shared with as editor; for a note's comments, see
+/// [`access::comment_access`].
 async fn write_access(
     db: &Db,
     member: Option<coolpsonotes_core::protocol::Role>,
@@ -303,6 +318,9 @@ async fn write_access(
     object_id: &str,
     user_id: &str,
 ) -> AppResult<()> {
+    if let Some(note) = comments_note(object_id) {
+        return access::comment_access(db, member, vault_id, note, user_id).await;
+    }
     match member {
         Some(r) if r.can_write() => Ok(()),
         Some(_) => Err(forbidden("viewers cannot modify this vault")),
@@ -393,7 +411,12 @@ pub async fn push(
     let updates: Vec<PushUpdate> = updates
         .into_iter()
         .filter(|u| {
-            let ok = u.payload.len() <= max;
+            let limit = if comments_note(&u.object_id).is_some() {
+                MAX_COMMENT_BYTES.min(max)
+            } else {
+                max
+            };
+            let ok = u.payload.len() <= limit;
             if !ok {
                 refused.push(rejected(
                     u,
@@ -450,6 +473,18 @@ pub async fn push(
         .bind(&u.object_id)
         .fetch_optional(&mut *tx)
         .await?;
+        // A note's comments use the note's key.
+        let key_epoch = match comments_note(&u.object_id) {
+            Some(note) => sqlx::query_scalar::<_, Option<i64>>(
+                "SELECT key_epoch FROM objects WHERE vault_id = ? AND id = ?",
+            )
+            .bind(vault_id)
+            .bind(note)
+            .fetch_optional(&mut *tx)
+            .await?
+            .flatten(),
+            None => obj.and_then(|o| o.1),
+        };
         if let Some((code, message)) = signature_problem(
             signed_from,
             signer.as_ref(),
@@ -459,7 +494,7 @@ pub async fn push(
             refused.push(rejected(&u, code, message));
             continue;
         }
-        match check_payload_key(vault_epoch, obj.and_then(|o| o.1), &u.payload) {
+        match check_payload_key(vault_epoch, key_epoch, &u.payload) {
             Ok(()) => {}
             Err(AppError::StaleKey(m)) => {
                 refused.push(rejected(&u, REJECT_STALE_KEY, &m));
@@ -577,6 +612,10 @@ pub async fn create_snapshot(
     } = req;
     let snapshot_id = snapshot_id.as_str();
     validate_object_id(object_id)?;
+    if comments_note(object_id).is_some() {
+        // Each comment keeps its author's signature: never compacted.
+        return Err(bad("comments have no snapshots"));
+    }
     if !db::valid_id(snapshot_id) {
         return Err(bad("invalid snapshot id"));
     }
@@ -831,6 +870,9 @@ pub async fn purge(
     if object_id == INDEX_OBJECT_ID {
         return Err(bad("the vault index cannot be deleted"));
     }
+    if comments_note(object_id).is_some() {
+        return Err(bad("comments go with their note"));
+    }
     let role = access::member_role(&state.db, vault_id, &who.user_id).await?;
     if !role.can_write() {
         return Err(forbidden("viewers cannot modify this vault"));
@@ -876,13 +918,24 @@ pub async fn purge(
             .execute(&mut *tx)
             .await?;
     }
-    sqlx::query("UPDATE objects SET purged_at = ?, purged_seq = ? WHERE vault_id = ? AND id = ?")
+    // Its comments go with it (clients drop them with the note).
+    let comments = comments_object(object_id);
+    sqlx::query("DELETE FROM updates WHERE vault_id = ? AND object_id = ?")
+        .bind(vault_id)
+        .bind(&comments)
+        .execute(&mut *tx)
+        .await?;
+    for o in [object_id, comments.as_str()] {
+        sqlx::query(
+            "UPDATE objects SET purged_at = ?, purged_seq = ? WHERE vault_id = ? AND id = ?",
+        )
         .bind(now)
         .bind(seq)
         .bind(vault_id)
-        .bind(object_id)
+        .bind(o)
         .execute(&mut *tx)
         .await?;
+    }
     tx.commit().await?;
     state.hub.publish(
         vault_id,

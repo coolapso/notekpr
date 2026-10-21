@@ -19,6 +19,7 @@
 | Attachments (bytes, names, types) | same | size, uploader and upload time |
 | Vault names, descriptions, icons and pictures | same (`encrypted_meta`) | no; the size of `encrypted_meta` roughly shows whether a vault has a picture |
 | Revision history | encrypted snapshots | count, size, time, author |
+| Comments (text, quotes, what they are about, replies) | encrypted with the note's key; each signed by its author | that a note has comments, and the number, sizes, times and authors of the records; each vault's *viewers can comment* setting |
 | Presence (which note, cursor) | encrypted awareness messages | that a user is connected to a vault; on individually shared notes also which of them someone has open, and when (clients announce themselves on the note too, under its id) |
 | Favorites, recent notes, key pins | account-key encryption | no |
 | Vault keys | HPKE to each member's account key | no |
@@ -137,12 +138,20 @@ primitives. Formats:
 
 ### Malicious collaborators
 
-* **Viewers** cannot write: the server rejects their pushes, snapshots,
-  attachment uploads and purges. They do hold the vault key, but every update
-  and snapshot is signed by its author and clients accept only authors the
-  log lists as writers, so a viewer can't forge content even with the
-  server's help (for what remains, see
+* **Viewers** cannot write notes: the server rejects their pushes (but for
+  comments), snapshots, attachment uploads and purges. They do hold the vault
+  key, but every update and snapshot is signed by its author and clients
+  accept only authors the log lists as writers, so a viewer can't forge
+  content even with the server's help (for what remains, see
   [residual risks](#residual-risks-and-planned-hardening), 2).
+* **Comments** (by anyone who can read a note, unless the owner turns it off
+  for viewers) are records that are only ever added. Each is signed by its
+  author over its content, and clients count an edit only from the comment's
+  author and a deletion from its author or a vault owner, so nobody can
+  change or remove someone else's comment, or comment in someone else's name
+  — not even with the server's help. A comment by someone whose key a reader
+  doesn't know (yet) is shown marked as unverified and can't change anything.
+  The server could leave out records it was sent, as it could any update.
 * **Editors** can change or trash content but not manage members or keys.
   Their writes are attributed (author and device are recorded per update) and
   history allows restoring earlier versions. Permanent deletes are recorded in
@@ -163,7 +172,9 @@ primitives. Formats:
   also hands out only content from that epoch on (`share_from`). Nor do they
   get the vault index (paths, other titles), other notes, attachments, the
   member list or the vault key. They learn the owner's identity and see the presence of people
-  working on that note. They cannot share it further or change its key. When
+  working on that note. Of its comments they get those written since it was
+  shared, and earlier ones only if the sharer chose to include them (then
+  everyone the note is shared with gets them). They cannot share it further or change its key. When
   one is removed, the owner's client rotates the document key; as with vault
   members, what they already downloaded stays with them. Images embedded from
   vault attachments are not shown to them (the attachments aren't shared).

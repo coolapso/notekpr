@@ -5,6 +5,13 @@ all-features = false
 [advisories]
 version = 2
 yanked = "deny"
+# Only advisories without a fixed version, each with why it doesn't reach us.
+# Look again whenever the dependency that pulls one in is upgraded.
+ignore = [
+    { id = "RUSTSEC-2023-0071", reason = "rsa (Marvin attack) via openidconnect: the timing leak is about private-key operations. The server only verifies ID token signatures with the provider's public keys and sends a client secret, never an RSA-signed assertion; RSA private keys appear only in tests (the mock provider). No rsa release is fixed yet." },
+    { id = "RUSTSEC-2024-0436", reason = "paste is unmaintained (archived), no known vulnerability: a compile-time macro used inside Leptos 0.8, nothing of it runs in the client. Goes away when Leptos drops it." },
+    { id = "RUSTSEC-2026-0215", reason = "smallstr is unmaintained, no known vulnerability: yrs (vendor/yrs, 0.28.0 is the latest release) stores short strings with it. Goes away when yrs drops it, or with a patch in vendor/yrs." },
+]
 
 [licenses]
 version = 2

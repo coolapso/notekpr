@@ -813,14 +813,16 @@ async fn run(args: Args, root: PathBuf, bus: Bus) -> Result<Report> {
                 .map(|p| tokio::spawn(p.work(stop_rx.clone()))),
         );
 
-        // Work, with an outage halfway.
-        bus.phase(
-            Phase::Busy,
-            of(&format!(
-                "{} people typing together, starting notes, uploading pictures, sharing",
-                range.end
-            )),
-        );
+        // Work, with an outage halfway (unless the level is lost already).
+        if lost.is_none() {
+            bus.phase(
+                Phase::Busy,
+                of(&format!(
+                    "{} people typing together, starting notes, uploading pictures, sharing",
+                    range.end
+                )),
+            );
+        }
         let (mut online, mut recovery) = (None, None);
         let first_half = if down.is_some() {
             args.duration / 2

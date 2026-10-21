@@ -91,6 +91,10 @@ pub struct Hub {
     /// revisions (see [`Hub::snapshot_idle`]).
     edited: std::sync::Mutex<BTreeMap<(String, String), std::time::Instant>>,
     waiting_for_keys: RwLock<BTreeSet<String>>,
+    /// One `open_listed` at a time: two at once (the live connection and a
+    /// command, say) would both open a new vault, and the second copy would
+    /// replace the first along with what was written into it meanwhile.
+    opening: Mutex<()>,
 }
 
 fn lower(s: &str) -> String {
@@ -112,6 +116,7 @@ impl Hub {
             push_now: AtomicBool::new(true),
             waiting_for_keys: Default::default(),
             edited: Default::default(),
+            opening: Mutex::new(()),
         });
         hub.load(&opts).await?;
         if opts.catch_up && hub.is_online() {
@@ -185,6 +190,7 @@ impl Hub {
     /// Open every listed vault not open yet; vaults that disappeared from the
     /// list become read-only local copies. Returns newly opened ids.
     pub async fn open_listed(&self, list: &[VaultInfo]) -> Result<Vec<String>> {
+        let _one_at_a_time = self.opening.lock().await;
         let mut added = Vec::new();
         let listed: BTreeSet<&str> = list.iter().map(|i| i.id.as_str()).collect();
         for info in list {
@@ -201,11 +207,14 @@ impl Hub {
             match self.session.open_vault(info).await {
                 Ok(v) => {
                     self.waiting_for_keys.write().unwrap().remove(&info.id);
-                    self.vaults
-                        .write()
-                        .unwrap()
-                        .insert(info.id.clone(), Arc::new(Mutex::new(v)));
-                    added.push(info.id.clone());
+                    // Never over a copy that is open already (and maybe
+                    // written to).
+                    if let std::collections::btree_map::Entry::Vacant(e) =
+                        self.vaults.write().unwrap().entry(info.id.clone())
+                    {
+                        e.insert(Arc::new(Mutex::new(v)));
+                        added.push(info.id.clone());
+                    }
                 }
                 Err(e) => {
                     let msg = format!("{e:#}");

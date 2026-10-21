@@ -542,3 +542,34 @@ async fn an_owner_shares_a_new_vault_with_several_people_in_a_row() {
     }
     live.stop().await;
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn opening_a_new_vault_twice_at_once_keeps_one_copy() {
+    let srv = start().await;
+    let alice = login(&srv, "alice").await;
+    let bob = login(&srv, "bob").await;
+    let bh = hub(&bob).await;
+    for round in 0..5 {
+        let name = format!("Team {round}");
+        let v = manage::create_vault(&alice, &name).await.unwrap();
+        let ah = hub(&alice).await;
+        let shared = ah.get(v.id()).unwrap();
+        manage::share(&alice, &shared, "bob", Role::Editor, false)
+            .await
+            .unwrap();
+        // Two tasks of Bob's (say his live connection and a command) see
+        // the new vault at the same moment.
+        let list = bob.api.vaults().await.unwrap();
+        let (a, b) = tokio::join!(bh.open_listed(&list), bh.open_listed(&list));
+        let opened = a.unwrap().len() + b.unwrap().len();
+        assert_eq!(opened, 1, "{name} was opened {opened} times");
+        // What Bob writes into the open copy stays in it.
+        let before = bh.get(v.id()).unwrap();
+        ops::put_document(&bh, &name, "Bob.md", "mine\n", None)
+            .await
+            .unwrap();
+        let (c, d) = tokio::join!(bh.open_listed(&list), bh.open_listed(&list));
+        assert_eq!(c.unwrap().len() + d.unwrap().len(), 0);
+        assert!(std::sync::Arc::ptr_eq(&before, &bh.get(v.id()).unwrap()));
+    }
+}

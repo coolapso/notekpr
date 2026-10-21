@@ -33,6 +33,9 @@ ENV COOLPSONOTES_LISTEN=0.0.0.0:8080 \
 VOLUME ["/data"]
 EXPOSE 8080
 USER 65532:65532
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s CMD ["coolpsonotes-server", "healthcheck"]
+# Checked every second while starting, so a new container counts as healthy
+# (and proxies that wait for that, like Traefik's Docker provider, route to
+# it) within a second of an update, not after the first 30 s interval.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --start-interval=1s CMD ["coolpsonotes-server", "healthcheck"]
 ENTRYPOINT ["coolpsonotes-server"]
 CMD ["serve"]

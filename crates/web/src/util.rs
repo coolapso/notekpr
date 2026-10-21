@@ -236,32 +236,6 @@ pub fn warn(msg: &str) {
     web_sys::console::warn_1(&JsValue::from_str(msg));
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn only_raster_images_and_pdfs_open_inline() {
-        for ok in [
-            "a.png",
-            "b.JPG",
-            "c.jpeg",
-            "d.gif",
-            "e.webp",
-            "f.avif",
-            "g.pdf",
-            "dir/h.PDF",
-        ] {
-            assert!(opens_inline(ok), "{ok}");
-        }
-        for bad in [
-            "a.svg", "b.SVG", "c.html", "d.htm", "e.xhtml", "f.xml", "g.md", "h", "i.js", "j.mp4",
-        ] {
-            assert!(!opens_inline(bad), "{bad}");
-        }
-    }
-}
-
 /// An image file, decoded (for [`encode_square`]); `None` if the browser
 /// can't read it as an image.
 pub async fn load_image(file: &web_sys::Blob) -> Option<web_sys::HtmlImageElement> {
@@ -315,4 +289,30 @@ pub fn encode_square(
         .ok()?;
     let (ty, data) = url.strip_prefix("data:")?.split_once(";base64,")?;
     Some((ty.to_string(), coolpsonotes_core::b64::decode(data).ok()?))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_raster_images_and_pdfs_open_inline() {
+        for ok in [
+            "a.png",
+            "b.JPG",
+            "c.jpeg",
+            "d.gif",
+            "e.webp",
+            "f.avif",
+            "g.pdf",
+            "dir/h.PDF",
+        ] {
+            assert!(opens_inline(ok), "{ok}");
+        }
+        for bad in [
+            "a.svg", "b.SVG", "c.html", "d.htm", "e.xhtml", "f.xml", "g.md", "h", "i.js", "j.mp4",
+        ] {
+            assert!(!opens_inline(bad), "{bad}");
+        }
+    }
 }

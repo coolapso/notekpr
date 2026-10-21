@@ -31,8 +31,8 @@ proptest! {
 
     #[test]
     fn rendering_never_panics(t in text(300)) {
-        let note = |s: &str| (s.len() % 3 == 0).then(|| "n1".to_string());
-        let attachment = |s: &str| (s.len() % 2 == 0).then(|| "a1".to_string());
+        let note = |s: &str| s.len().is_multiple_of(3).then(|| "n1".to_string());
+        let attachment = |s: &str| s.len().is_multiple_of(2).then(|| "a1".to_string());
         let html = render::to_html(&t, &render::Ctx { note: &note, attachment: &attachment });
         prop_assert!(!html.contains("<script"));
     }

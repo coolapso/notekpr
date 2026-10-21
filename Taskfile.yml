@@ -365,7 +365,7 @@ tasks:
       - ./target/release/coolpsonotes-load --server {{.SERVER}} --open --users {{.USERS}} --step {{.STEP}} --levels {{.LEVELS}} --from-level {{.FROM}} --duration {{.DURATION}} --speed {{.SPEED}} {{if .REALISTIC}}--realistic{{end}} {{.CLI_ARGS}}
 
   load:native:
-    desc: "Like load, without Docker: the server as a local process, no limits; realistic people with -- --realistic (USERS=100 STEP=100 LEVELS=10 FROM=1 DURATION=45s SPEED=1)"
+    desc: "Like load, without Docker: the server as a local process, no limits (USERS=100 STEP=100 LEVELS=10 FROM=1 DURATION=45s SPEED=1 REALISTIC=)"
     deps: [build:load-ui, build:web]
     vars:
       USERS: '{{.USERS | default "100"}}'
@@ -374,9 +374,10 @@ tasks:
       FROM: '{{.FROM | default "1"}}'
       DURATION: '{{.DURATION | default "45s"}}'
       SPEED: '{{.SPEED | default "1"}}'
+      REALISTIC: '{{.REALISTIC | default ""}}'
     cmds:
       - cargo build --release -p coolpsonotes-server -p coolpsonotes-load
-      - ./target/release/coolpsonotes-load --native --open --users {{.USERS}} --step {{.STEP}} --levels {{.LEVELS}} --from-level {{.FROM}} --duration {{.DURATION}} --speed {{.SPEED}} {{.CLI_ARGS}}
+      - ./target/release/coolpsonotes-load --native --open --users {{.USERS}} --step {{.STEP}} --levels {{.LEVELS}} --from-level {{.FROM}} --duration {{.DURATION}} --speed {{.SPEED}} {{if .REALISTIC}}--realistic{{end}} {{.CLI_ARGS}}
 
   # ------------------------------------------------------------------ housekeeping
 

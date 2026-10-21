@@ -153,8 +153,8 @@ couldn't be set up.
 By default the crowd is busier than anyone, on purpose: everyone types
 nonstop, about 4–5 requests a second each. That finds the server's limits
 with a few hundred people, but says little about how many *real* people a
-server can take. With `--realistic` (`REALISTIC=1`; `task load:native --
---realistic`; or CROWD on the start screen) people behave like someone with
+server can take. With `--realistic` (`REALISTIC=1`, or CROWD on the start
+screen) people behave like someone with
 the app open:
 
 * most of the time they read, think or are elsewhere: between two things,
@@ -251,8 +251,8 @@ requests away.
 `coolpsonotes-load --help` lists them all; `task load -- --flag` passes them
 on. The `task load` variables and their defaults: `USERS=100 STEP=100
 LEVELS=10 FROM=1 DURATION=45s CPUS=1 MEMORY=512m SPEED=1 REALISTIC=`;
-`task load:native` takes them without `CPUS`, `MEMORY` and `REALISTIC`,
-`task load:remote` without `CPUS` and `MEMORY`, and needs `SERVER`.
+`task load:native` and `task load:remote` take them without `CPUS` and
+`MEMORY` (`load:remote` also needs `SERVER`).
 
 | Flag | Default | |
 |---|---|---|

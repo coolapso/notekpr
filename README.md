@@ -172,6 +172,34 @@ docker compose up -d --build # coolpsonotes + Caddy with automatic HTTPS
 On a home network without public DNS, or behind a proxy you already run, see
 the setups in [docs/operations.md](docs/operations.md#1-choose-a-setup).
 
+### How big a server?
+
+Measured with the [load test](docs/load-test.md)'s realistic crowd (people
+with the app open: mostly reading, now and then writing a sentence) against
+the server image with Docker's CPU and memory limits, each round with a
+10-second restart that everyone reconnects from at once:
+
+| People online at once | Server | It used, with that many | Keystroke → everyone else (p99) |
+|---|---|---|---|
+| up to 100 | ¼ core · 128 MB | 6 % of a core · 33 MB | 83 ms |
+| up to 500 | ½ core · 256 MB | 21 % · 123 MB | 78 ms |
+| up to 1,000 | 1 core · 512 MB | 36 % · 230 MB | 185 ms |
+| up to 2,000 | 2 cores · 1 GB | 75 % · 436 MB | 267 ms |
+
+* Each size leaves more than half its CPU and memory for bursts: everyone
+  coming back after a restart takes the whole CPU for a few seconds (all were
+  back within 8 s every time). Memory runs out first — about 10 MB plus a
+  quarter of a megabyte per person online; the server was killed for it at
+  2½ times these numbers or more, and nothing was lost when it was.
+* *Online* means connected right now. Accounts that aren't cost only disk:
+  their notes, history and attachments.
+* Add what the machine needs besides: the OS, and Caddy in front (some tens
+  of MB). A 1 vCPU / 1 GB VPS is plenty for 1,000 people online.
+* Past about 2,500 online at once, more cores help little: every change
+  goes through one database writer, about 1,200 changes a second. 3,000
+  still worked, with slower delivery (p99 0.7 s). Details and how to measure
+  your own server (`task load:remote`): [operations](docs/operations.md#how-big-a-machine).
+
 See [docs/operations.md](docs/operations.md) for configuration, identity
 provider setup, reverse proxies, Kubernetes, backups, upgrades and monitoring.
 

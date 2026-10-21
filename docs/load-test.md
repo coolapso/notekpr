@@ -155,9 +155,10 @@ screen) people behave like someone with the app open:
   key sent on its own (as the browser does at that pace);
 * they don't start in step: each one first reads for up to 90 s.
 
-That's about one upload every 3 s per person (some 0.35 requests a second),
-a twelfth of a busy one, so levels need more people: `task load
-REALISTIC=1 USERS=500 STEP=500`. Every connected person still holds a
+That's about one upload every 3 s per person — with syncing, about half a
+request a second, a tenth of a busy one — so levels need more people: `task
+load REALISTIC=1 USERS=500 STEP=500`. What servers of which size took this
+way: [operations](operations.md#how-big-a-machine). Every connected person still holds a
 WebSocket, and still reconnects and catches up after an outage, so
 connections and comebacks weigh relatively more than with busy people.
 

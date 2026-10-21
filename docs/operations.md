@@ -20,6 +20,50 @@ There are no published images yet: Compose builds the image on the machine.
 The first build compiles the server and the browser client (several minutes
 and around 2 GB of RAM); later builds are cached.
 
+### How big a machine
+
+Measured with the load test (`task load REALISTIC=1`, [load-test.md](load-test.md#realistic-people)):
+people with the app open, mostly reading, now and then writing a sentence at
+40 words a minute — about half a request a second each — against the server
+image with Docker's limits, with a 10-second restart in every round:
+
+| Server | People online | CPU while working | Memory | Keystroke → others, p50 / p99 | Back after the restart |
+|---|---|---|---|---|---|
+| ¼ core · 128 MB | 100 | 6 % | 33 MB | 1 / 83 ms | 7.5 s |
+| | 300 | 13 % | 83 MB | 1 / 119 ms | 7.5 s |
+| | 500 | 19 % | 125 MB | 2 / 134 ms | 7.8 s |
+| | 600 | — | out of memory | | |
+| ½ core · 256 MB | 500 | 21 % | 123 MB | 1 / 78 ms | 7.8 s |
+| | 1,000 | 35 % | 232 MB | 2 / 146 ms | 8.0 s |
+| | 1,250 | — | out of memory | | |
+| 1 core · 512 MB | 1,000 | 36 % | 230 MB | 1 / 185 ms | 8.0 s |
+| | 2,000 | 68 % | 437 MB | 8 / 357 ms | 7.8 s |
+| | 2,500 | — | out of memory | | |
+| 2 cores · 1 GB | 2,000 | 75 % | 436 MB | 12 / 267 ms | 7.8 s |
+| | 3,000 | 98 % | 644 MB | 113 / 681 ms | 7.8 s |
+| | 4,000 | 101 % | 862 MB | 726 ms / 16 s | 7.5 s |
+
+(CPU: 100 % is one core; *while working* leaves out arrivals and restarts,
+which take all the CPU there is for a few seconds.) What it comes to:
+
+* **Memory** grows by about a quarter of a megabyte per person online, on
+  about 10 MB: a WebSocket each, their subscriptions, and recent live events
+  kept per vault. It runs out first. When it did, Docker killed the server;
+  people kept writing offline, and once it could take their uploads again
+  nothing was missing.
+* **CPU** while people work is about 0.035–0.04 % of a core per person
+  online.
+* **One database writer**: every change goes through one write lock and an
+  SQLite transaction, about 1,200 changes a second whatever the cores — at
+  4,000 people on 2 cores it used one, and delivery fell behind. Above some
+  2,500 people online, a bigger machine helps little (see TODO.md).
+* People typing nonstop (the load test's default crowd, 4–5 requests a
+  second each) reach that limit at about 300 people on one core.
+* The numbers are the server's own: the load test ran on the same machine,
+  over loopback. With TLS at a proxy and a real network, measure your own
+  setup: [`task load:remote`](load-test.md#against-a-server-elsewhere) runs
+  the crowd against a server elsewhere.
+
 **Open files.** Every connected person holds a WebSocket and an HTTP
 connection or two, each an open file. At start the server raises its
 open-files limit to the hard limit the system allows (at most about a

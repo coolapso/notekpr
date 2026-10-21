@@ -13,13 +13,25 @@ mod web {
     use std::cell::RefCell;
     use std::rc::Rc;
 
-    use coolpsonotes_load_events::Event;
+    use coolpsonotes_load_events::{Command, Event};
     use wasm_bindgen::JsCast;
     use wasm_bindgen::prelude::*;
-    use web_sys::{CanvasRenderingContext2d, HtmlCanvasElement, MessageEvent, WebSocket};
+    use web_sys::{
+        CanvasRenderingContext2d, HtmlCanvasElement, KeyboardEvent, MessageEvent, MouseEvent,
+        WebSocket,
+    };
 
     use crate::draw;
-    use crate::state::App;
+    use crate::state::{App, Input};
+
+    /// The connection to the load test, for sending it commands.
+    type Socket = Rc<RefCell<Option<WebSocket>>>;
+
+    fn send(socket: &Socket, c: &Command) {
+        if let (Some(ws), Ok(json)) = (socket.borrow().as_ref(), serde_json::to_string(c)) {
+            let _ = ws.send_with_str(&json);
+        }
+    }
 
     /// The function drawing each frame (it asks for the next one itself).
     type FrameCallback = Closure<dyn FnMut(f64)>;
@@ -45,7 +57,38 @@ mod web {
             .ok_or("no 2d context")?
             .dyn_into()?;
         let app = Rc::new(RefCell::new(App::new()));
-        connect(app.clone());
+        let socket: Socket = Rc::default();
+        connect(app.clone(), socket.clone());
+
+        // Keys (the start screen, insert coin) and clicks.
+        let (a, s) = (app.clone(), socket.clone());
+        let on_key = Closure::<dyn FnMut(KeyboardEvent)>::new(move |e: KeyboardEvent| {
+            let input = match e.key().as_str() {
+                "ArrowUp" => Input::Up,
+                "ArrowDown" => Input::Down,
+                "ArrowLeft" => Input::Left,
+                "ArrowRight" => Input::Right,
+                "Enter" | " " => Input::Enter,
+                _ => return,
+            };
+            e.prevent_default();
+            let cmd = a.borrow_mut().input(input);
+            if let Some(c) = cmd {
+                send(&s, &c);
+            }
+        });
+        window.add_event_listener_with_callback("keydown", on_key.as_ref().unchecked_ref())?;
+        on_key.forget();
+        let (a, s) = (app.clone(), socket.clone());
+        let on_click = Closure::<dyn FnMut(MouseEvent)>::new(move |e: MouseEvent| {
+            let input = Input::Click(e.offset_x() as f64, e.offset_y() as f64);
+            let cmd = a.borrow_mut().input(input);
+            if let Some(c) = cmd {
+                send(&s, &c);
+            }
+        });
+        canvas.add_event_listener_with_callback("click", on_click.as_ref().unchecked_ref())?;
+        on_click.forget();
 
         // Draw every frame, at the screen's resolution.
         let frame: Rc<RefCell<Option<FrameCallback>>> = Rc::new(RefCell::new(None));
@@ -74,7 +117,7 @@ mod web {
     }
 
     /// Follow the run; after a lost connection, try again every second.
-    fn connect(app: Rc<RefCell<App>>) {
+    fn connect(app: Rc<RefCell<App>>, socket: Socket) {
         let Some(window) = web_sys::window() else {
             return;
         };
@@ -86,9 +129,10 @@ mod web {
         };
         let url = format!("{scheme}://{}/events", loc.host().unwrap_or_default());
         let Ok(ws) = WebSocket::new(&url) else {
-            retry(app);
+            retry(app, socket);
             return;
         };
+        *socket.borrow_mut() = Some(ws.clone());
         let a = app.clone();
         let on_message = Closure::<dyn FnMut(MessageEvent)>::new(move |e: MessageEvent| {
             let Some(text) = e.data().as_string() else {
@@ -114,17 +158,17 @@ mod web {
         let a = app;
         let on_close = Closure::<dyn FnMut()>::new(move || {
             a.borrow_mut().connected = false;
-            retry(a.clone());
+            retry(a.clone(), socket.clone());
         });
         ws.set_onclose(Some(on_close.as_ref().unchecked_ref()));
         on_close.forget();
     }
 
-    fn retry(app: Rc<RefCell<App>>) {
+    fn retry(app: Rc<RefCell<App>>, socket: Socket) {
         let Some(window) = web_sys::window() else {
             return;
         };
-        let cb = Closure::once_into_js(move || connect(app));
+        let cb = Closure::once_into_js(move || connect(app, socket));
         let _ =
             window.set_timeout_with_callback_and_timeout_and_arguments_0(cb.unchecked_ref(), 1000);
     }

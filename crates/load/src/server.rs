@@ -253,6 +253,36 @@ impl Server {
         }
     }
 
+    /// Whether it stopped by itself (not crashed by us), and why.
+    pub async fn died(&mut self) -> Option<String> {
+        match &mut self.kind {
+            Kind::Docker { name, .. } => {
+                let out = Command::new("docker")
+                    .args([
+                        "inspect",
+                        "-f",
+                        "{{.State.Running}} {{.State.OOMKilled}} {{.State.ExitCode}}",
+                        name.as_str(),
+                    ])
+                    .output()
+                    .await
+                    .ok()?;
+                let state = String::from_utf8_lossy(&out.stdout);
+                let mut f = state.split_whitespace();
+                let (running, oom, code) = (f.next()?, f.next()?, f.next().unwrap_or("?"));
+                match (running, oom) {
+                    ("true", _) => None,
+                    (_, "true") => Some("Docker killed it: it ran out of memory".into()),
+                    _ => Some(format!("it stopped by itself (exit code {code})")),
+                }
+            }
+            Kind::Native { child, .. } => match child.as_mut()?.try_wait() {
+                Ok(Some(status)) => Some(format!("it stopped by itself ({status})")),
+                _ => None,
+            },
+        }
+    }
+
     pub async fn is_healthy(&self) -> bool {
         let url = format!("{}/healthz", self.url);
         matches!(

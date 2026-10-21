@@ -29,17 +29,18 @@ use std::time::{Duration, Instant};
 use anyhow::{Result, anyhow};
 use clap::Parser;
 use coolpsonotes_load_events::{
-    Action, Cursor, Event, Hello, LevelResult, Phase, Report, Screen, Stats,
+    Action, Command, Cursor, Event, GameOver, Hello, LevelResult, Menu, Phase, Report, Screen,
+    Settings, Stats, outage_s,
 };
 use futures::StreamExt;
-use tokio::sync::watch;
+use tokio::sync::{mpsc, watch};
 
 use crate::bus::Bus;
 use crate::people::{Person, World};
 use crate::server::Server;
 use crate::world::Rng;
 
-#[derive(Parser, Debug)]
+#[derive(Parser, Debug, Clone)]
 #[command(
     about = "Load test with a live dashboard: simulated people against a real, limited server"
 )]
@@ -53,6 +54,10 @@ struct Args {
     /// People added per level.
     #[arg(long, default_value_t = 100)]
     step: u32,
+    /// Start right at this level: everyone up to it arrives at once (a
+    /// warm-up), then that level's outage, and on from there.
+    #[arg(long, default_value_t = 1)]
+    from_level: u32,
     /// How long everyone works in each level (besides arriving and the
     /// outage), e.g. 60s, 2m.
     #[arg(long, default_value = "60s", value_parser = parse_duration)]
@@ -101,9 +106,17 @@ struct Args {
     /// Open the dashboard in the browser.
     #[arg(long)]
     open: bool,
-    /// Stop when done instead of keeping the dashboard up (for scripts).
+    /// Stop when done instead of keeping the dashboard up (for scripts;
+    /// implies --now).
     #[arg(long)]
     exit: bool,
+    /// Start right away with these settings, no start screen.
+    #[arg(long)]
+    now: bool,
+    /// Go on with the next levels even after the server couldn't take one
+    /// (otherwise: game over).
+    #[arg(long)]
+    keep_going: bool,
     /// Reports (and, with --native, the server's data) go here.
     #[arg(long, default_value = "target/load")]
     out: PathBuf,
@@ -128,16 +141,44 @@ fn parse_duration(s: &str) -> Result<Duration, String> {
 /// Each level's outage: as given (the last repeating), or by default 6 s
 /// for a single level and from 2 s growing to 90 s over several.
 fn downtimes(given: &[Duration], levels: u32) -> Vec<Duration> {
+    let given: Vec<u32> = given.iter().map(|d| d.as_secs() as u32).collect();
     (0..levels as usize)
-        .map(|i| match given.get(i).or(given.last()) {
-            Some(d) => *d,
-            None if levels == 1 => Duration::from_secs(6),
-            None => {
-                let f = i as f64 / (levels - 1) as f64;
-                Duration::from_secs((2.0 * 45f64.powf(f)).round() as u64)
-            }
-        })
+        .map(|i| Duration::from_secs(outage_s(i, levels, &given) as u64))
         .collect()
+}
+
+/// The settings a run started with these flags would use.
+fn settings(a: &Args) -> Settings {
+    Settings {
+        users: a.users,
+        step: a.step,
+        levels: a.levels.max(1),
+        from_level: a.from_level,
+        duration_s: a.duration.as_secs() as u32,
+        cpus: a.cpus,
+        memory: a.memory.clone(),
+        speed: a.speed,
+        outages: !a.no_crash,
+    }
+}
+
+impl Args {
+    /// These flags with what was chosen on the start screen (kept sane).
+    fn with(&self, s: &Settings) -> Args {
+        let mut a = self.clone();
+        a.users = s.users.clamp(1, 100_000);
+        a.step = s.step.min(100_000);
+        a.levels = s.levels.clamp(1, 100);
+        a.from_level = s.from_level.clamp(1, a.levels);
+        a.duration = Duration::from_secs(s.duration_s.clamp(5, 3600) as u64);
+        a.cpus = s.cpus.clamp(0.1, 256.0);
+        if server::docker_memory(&s.memory).is_some() {
+            a.memory = s.memory.clone();
+        }
+        a.speed = s.speed.clamp(0.05, 20.0);
+        a.no_crash = !s.outages;
+        a
+    }
 }
 
 fn main() -> ExitCode {
@@ -152,33 +193,146 @@ fn main() -> ExitCode {
     coolpsonotes_client::ui::set_silent(true);
     coolpsonotes_client::ui::set_non_interactive(true);
     raise_open_files();
-    let root = people_dir(args.people_dir.as_deref(), &args.out);
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .expect("a tokio runtime");
-    // Stop cleanly (container and copies removed) on Ctrl+C at any point.
-    let code = rt.block_on(async {
-        tokio::select! {
-            r = run(args, root.clone()) => match r {
-                Ok(true) => ExitCode::SUCCESS,
-                Ok(false) => ExitCode::from(1),
-                Err(e) => {
-                    eprintln!("error: {e:#}");
-                    ExitCode::from(2)
+    let code = rt.block_on(session(args));
+    rt.shutdown_timeout(Duration::from_secs(3));
+    code
+}
+
+/// The dashboard, the start screen and the runs chosen on it, one after
+/// the other (or one run right away with --now).
+async fn session(args: Args) -> ExitCode {
+    let bus = Bus::new();
+    let (commands, mut asked) = mpsc::unbounded_channel();
+    if let Err(e) = dashboard::serve(
+        args.dashboard,
+        args.dashboard_dir.clone(),
+        bus.clone(),
+        commands,
+    )
+    .await
+    {
+        eprintln!("error: {e:#}");
+        return ExitCode::from(2);
+    }
+    let view = format!("http://{}", args.dashboard).replace("127.0.0.1", "localhost");
+    println!("Live view: {view}");
+    if args.open {
+        let _ = std::process::Command::new("xdg-open").arg(&view).spawn();
+    }
+    clean_stale_runs();
+    let right_away = args.now || args.exit;
+    let mut chosen = settings(&args);
+    let mut error = None;
+    loop {
+        if !right_away {
+            bus.menu(Menu {
+                settings: chosen.clone(),
+                docker: !args.native,
+                downtimes: args.downtimes.iter().map(|d| d.as_secs() as u32).collect(),
+                error: error.take(),
+            });
+            println!("Choose the run on the start screen ({view}); Ctrl+C to stop.");
+            loop {
+                tokio::select! {
+                    c = asked.recv() => match c {
+                        Some(Command::Start(s)) => {
+                            chosen = s;
+                            break;
+                        }
+                        Some(Command::Menu) => {}
+                        None => return ExitCode::from(2),
+                    },
+                    _ = tokio::signal::ctrl_c() => return ExitCode::from(130),
                 }
-            },
-            _ = tokio::signal::ctrl_c() => {
-                eprintln!("\nstopped");
-                ExitCode::from(130)
             }
         }
+        // The run, in a runtime of its own: when it ends, everything it
+        // started (a thousand clients' tasks) ends with it.
+        let (stop, stopped) = watch::channel(false);
+        let mut game = std::pin::pin!(game(args.with(&chosen), bus.clone(), stopped));
+        let outcome = tokio::select! {
+            r = &mut game => r,
+            _ = tokio::signal::ctrl_c() => {
+                eprintln!("\nstopping…");
+                let _ = stop.send(true);
+                let _ = game.await;
+                return ExitCode::from(130);
+            }
+        };
+        let code = match &outcome {
+            Ok(r) if r.passed() => ExitCode::SUCCESS,
+            Ok(_) => ExitCode::from(1),
+            Err(e) => {
+                eprintln!("error: {e:#}");
+                ExitCode::from(2)
+            }
+        };
+        if args.exit {
+            return code;
+        }
+        match outcome {
+            Ok(report) => {
+                // Next time: try again where it gave up.
+                if let Some(g) = &report.game_over {
+                    chosen.from_level = g.level;
+                }
+                if right_away {
+                    println!("The live view stays up at {view} — Ctrl+C to stop.");
+                    let _ = tokio::signal::ctrl_c().await;
+                    return code;
+                }
+                println!("Insert coin on the live view for another run; Ctrl+C to stop.");
+                loop {
+                    tokio::select! {
+                        c = asked.recv() => match c {
+                            Some(Command::Menu) => break,
+                            Some(Command::Start(_)) => {}
+                            None => return code,
+                        },
+                        _ = tokio::signal::ctrl_c() => return code,
+                    }
+                }
+            }
+            Err(e) if !right_away => error = Some(format!("{e:#}")),
+            Err(_) => return code,
+        }
+    }
+}
+
+/// One run in a runtime of its own, removing people's copies afterwards.
+async fn game(args: Args, bus: Bus, mut stop: watch::Receiver<bool>) -> Result<Report> {
+    let (done, result) = tokio::sync::oneshot::channel();
+    std::thread::spawn(move || {
+        let root = people_dir(args.people_dir.as_deref(), &args.out);
+        let rt = match tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+        {
+            Ok(rt) => rt,
+            Err(e) => {
+                let _ = done.send(Err(anyhow!(e)));
+                return;
+            }
+        };
+        let r = rt.block_on(async {
+            tokio::select! {
+                r = run(args, root.clone(), bus) => r,
+                _ = stop.wait_for(|s| *s) => Err(anyhow!("stopped")),
+            }
+        });
+        // Stop every client first (their live loops save into `root`), then
+        // remove their copies.
+        rt.shutdown_timeout(Duration::from_secs(3));
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = done.send(r);
     });
-    // Stop every client first (their live loops save into `root`), then
-    // remove their copies.
-    rt.shutdown_timeout(std::time::Duration::from_secs(3));
-    let _ = std::fs::remove_dir_all(&root);
-    code
+    result
+        .await
+        .map_err(|_| anyhow!("the run ended unexpectedly"))?
 }
 
 /// Every person holds a WebSocket and HTTP connections: a thousand of them
@@ -272,7 +426,7 @@ impl Peaks {
     }
 }
 
-async fn run(args: Args, root: PathBuf) -> Result<bool> {
+async fn run(args: Args, root: PathBuf, bus: Bus) -> Result<Report> {
     let seed = args.seed.unwrap_or_else(|| {
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -287,7 +441,6 @@ async fn run(args: Args, root: PathBuf) -> Result<bool> {
     } else {
         server::docker_memory(&args.memory).ok_or_else(|| anyhow!("--memory: use 512m, 1g, …"))?
     };
-    clean_stale_runs();
     people::clean(&root);
     std::fs::create_dir_all(&root)?;
     std::fs::create_dir_all(&args.out)?;
@@ -302,7 +455,7 @@ async fn run(args: Args, root: PathBuf) -> Result<bool> {
     } else {
         Server::docker(&args.image, args.cpus, &args.memory, args.server_port)
     };
-    let bus = Bus::new(Hello {
+    bus.start_run(Hello {
         seed,
         users: total,
         duration_s: args.duration.as_secs() as u32,
@@ -312,13 +465,8 @@ async fn run(args: Args, root: PathBuf) -> Result<bool> {
         started_ms: now_ms(),
         server_url: server.url.clone(),
         levels,
+        replay: !(args.now || args.exit),
     });
-    dashboard::serve(args.dashboard, args.dashboard_dir.clone(), bus.clone()).await?;
-    let view = format!("http://{}", args.dashboard).replace("127.0.0.1", "localhost");
-    println!("Live view: {view}");
-    if args.open {
-        let _ = std::process::Command::new("xdg-open").arg(&view).spawn();
-    }
     println!(
         "{} people{}, {} s each level, seed {seed}, server: {}",
         total,
@@ -408,7 +556,22 @@ async fn run(args: Args, root: PathBuf) -> Result<bool> {
     let mut results: Vec<LevelResult> = Vec::new();
     let mut first_team = 0u32;
     let mut overall = Peaks::default();
-    for (level, (range, teams)) in cohorts.iter().enumerate() {
+    let mut game_over: Option<GameOver> = None;
+    // Starting at a later level: its people and all before it come at once.
+    let first = (args.from_level.clamp(1, levels) - 1) as usize;
+    if first > 0 {
+        let skipped: Vec<_> = cohorts.drain(..first).collect();
+        let (last, _) = &cohorts[0];
+        let range = 0..last.end;
+        let teams = skipped
+            .into_iter()
+            .chain(std::iter::once(cohorts.remove(0)))
+            .flat_map(|(_, t)| t)
+            .collect();
+        cohorts.insert(0, (range, teams));
+    }
+    for (i, (range, teams)) in cohorts.iter().enumerate() {
+        let level = first + i;
         let n = level as u32 + 1;
         let down = (!args.no_crash).then(|| downs[level]);
         let of = |s: &str| {
@@ -438,11 +601,13 @@ async fn run(args: Args, root: PathBuf) -> Result<bool> {
             of(&format!(
                 "{} {}people sign up: account keys, a device, a vault of their own ({} in all)",
                 range.len(),
-                if level == 0 { "" } else { "more " },
+                if i == 0 { "" } else { "more " },
                 range.end
             )),
         );
-        let spacing = args.arrive.as_secs_f64() / range.len().max(1) as f64;
+        // A warm-up of several levels' people takes as many times longer.
+        let arrival = args.arrive * (range.len() as u32).div_ceil(args.step.max(1)).max(1);
+        let spacing = arrival.as_secs_f64() / range.len().max(1) as f64;
         let mut arrival_rng = Rng::new(seed ^ 0xA11 ^ level as u64);
         let starts: Vec<Duration> = range
             .clone()
@@ -468,6 +633,15 @@ async fn run(args: Args, root: PathBuf) -> Result<bool> {
         let mut persons: HashMap<u32, Person> = HashMap::new();
         for p in arrived.into_iter().flatten() {
             persons.insert(p.id, p);
+        }
+        // Why the server couldn't take this level, if it couldn't.
+        let mut lost: Option<String> = None;
+        if persons.len() * 2 < range.len() {
+            lost = Some(format!(
+                "only {} of {} newcomers could even sign up",
+                persons.len(),
+                range.len()
+            ));
         }
         let in_all = world.clients.lock().unwrap().iter().flatten().count();
         println!(
@@ -539,8 +713,8 @@ async fn run(args: Args, root: PathBuf) -> Result<bool> {
             }
         });
         futures::future::join_all(joins).await;
-        if level == 0 {
-            // The spotlight: the first level's biggest teams.
+        if i == 0 {
+            // The spotlight: the biggest teams there are at the start.
             let mut biggest = all_teams.clone();
             biggest.sort_by_key(|t| std::cmp::Reverse(t.members.len()));
             let spotlight: Vec<u32> = biggest.iter().take(3).map(|t| t.id).collect();
@@ -562,21 +736,44 @@ async fn run(args: Args, root: PathBuf) -> Result<bool> {
             )),
         );
         let (mut online, mut recovery) = (None, None);
-        match down {
-            Some(d) => {
-                tokio::time::sleep(args.duration / 2).await;
-                (online, recovery) = crash(&mut server, &bus, &world, &up, d, &of).await?;
+        let first_half = if down.is_some() {
+            args.duration / 2
+        } else {
+            args.duration
+        };
+        if lost.is_none() {
+            lost = work_for(&mut server, first_half).await;
+        }
+        if let (Some(d), None) = (down, &lost) {
+            let secs = d.as_secs();
+            match crash(&mut server, &bus, &world, &up, d, &of).await {
+                Ok((o, r)) => {
+                    (online, recovery) = (o, r);
+                    if o.is_none() {
+                        lost = Some(format!(
+                            "after {secs} s down, not everyone could reconnect within two minutes"
+                        ));
+                    } else if r.is_none() {
+                        lost = Some(format!(
+                            "after {secs} s down, it couldn't work off the backlog within two minutes"
+                        ));
+                    }
+                }
+                Err(e) => lost = Some(format!("it didn't come back after the outage: {e:#}")),
+            }
+            if lost.is_none() || args.keep_going {
                 bus.phase(
                     Phase::Busy,
-                    of(if recovery.is_some() {
+                    of(if lost.is_none() {
                         "back to normal"
                     } else {
-                        "still catching up after two minutes: the server can't keep up"
+                        "still catching up: the server can't keep up"
                     }),
                 );
-                tokio::time::sleep(args.duration - args.duration / 2).await;
+                if let Some(why) = work_for(&mut server, args.duration - first_half).await {
+                    lost.get_or_insert(why);
+                }
             }
-            None => tokio::time::sleep(args.duration).await,
         }
 
         let result = {
@@ -612,6 +809,34 @@ async fn run(args: Args, root: PathBuf) -> Result<bool> {
         print_level(&result, t_start);
         bus.send(Event::LevelDone(result.clone()));
         results.push(result);
+        if let Some(reason) = lost {
+            println!(
+                "{:>7.1} s  GAME OVER at level {n}: {reason}",
+                t_start.elapsed().as_secs_f32()
+            );
+            bus.feed(Action::Revision, format!("GAME OVER: {reason}"));
+            game_over.get_or_insert(GameOver {
+                level: n,
+                users: range.end,
+                reason: reason.clone(),
+            });
+            bus.phase(Phase::GameOver, of(&reason));
+            // The server may be gone: it has to be there for the check (and
+            // for the next level, when going on regardless).
+            if server.died().await.is_some() || !server.is_healthy().await {
+                if let Err(e) = server.restart().await {
+                    eprintln!("error: the server won't start again: {e:#}");
+                }
+                up.store(true, Ordering::Relaxed);
+                bus.send(Event::Server {
+                    up: true,
+                    down_for_s: None,
+                });
+            }
+            if !args.keep_going {
+                break;
+            }
+        }
     }
     let _ = stop_tx.send(true);
     let mut persons = Vec::new();
@@ -656,29 +881,59 @@ async fn run(args: Args, root: PathBuf) -> Result<bool> {
             sentences: outcome.sentences,
             sentences_missing: outcome.sentences_missing,
             levels: results,
+            game_over: game_over.clone(),
         }
     };
     bus.report(report.clone());
-    bus.phase(
-        Phase::Done,
-        if report.passed() {
-            "every copy of every note is the same, nothing was lost"
-        } else {
-            "some copies differ — see the report"
-        },
-    );
+    let verdict = if report.passed() {
+        "every copy of every note is the same, nothing was lost"
+    } else {
+        "some copies differ — see the report"
+    };
+    match &game_over {
+        Some(g) => bus.phase(
+            Phase::GameOver,
+            format!(
+                "level {} ({} people): {} — and yet {verdict}",
+                g.level, g.users, g.reason
+            ),
+        ),
+        None => bus.phase(Phase::Done, verdict),
+    }
     print_report(&report);
     let file = args.out.join(format!("report-{}.json", now_ms() / 1000));
     std::fs::write(&file, serde_json::to_vec_pretty(&report)?)?;
     println!("Report: {}", file.display());
-
-    if !args.exit {
-        println!("The live view stays up at {view} — Ctrl+C to stop.");
-        tokio::signal::ctrl_c().await?;
-    }
     futures::future::join_all(persons.into_iter().map(|p| p.leave())).await;
     server.remove();
-    Ok(report.passed())
+    Ok(report)
+}
+
+/// Let everyone work for `d`, checking every few seconds that the server is
+/// still alive; why not, if it died or stopped answering.
+async fn work_for(server: &mut Server, d: Duration) -> Option<String> {
+    const UNANSWERED: Duration = Duration::from_secs(20);
+    let end = Instant::now() + d;
+    let mut unanswered = Duration::ZERO;
+    while Instant::now() < end {
+        let step = Duration::from_secs(2).min(end - Instant::now());
+        tokio::time::sleep(step).await;
+        if let Some(why) = server.died().await {
+            return Some(why);
+        }
+        if server.is_healthy().await {
+            unanswered = Duration::ZERO;
+        } else {
+            unanswered += step;
+            if unanswered >= UNANSWERED {
+                return Some(format!(
+                    "it stopped answering (nothing for {} s)",
+                    UNANSWERED.as_secs()
+                ));
+            }
+        }
+    }
+    None
 }
 
 /// Sign someone up, trying again while the server is too busy to answer;
@@ -1037,6 +1292,12 @@ fn print_report(r: &Report) {
         println!();
     } else if let Some(s) = r.recovery_s {
         println!("After the crash, everyone was back and caught up in {s:.1} s");
+    }
+    if let Some(g) = &r.game_over {
+        println!(
+            "GAME OVER at level {} with {} people: {}",
+            g.level, g.users, g.reason
+        );
     }
     println!(
         "Checked {} notes ({} copies): {} differ; {} of {} finished sentences missing",

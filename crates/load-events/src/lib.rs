@@ -76,6 +76,63 @@ pub enum Event {
     Feed { text: String, kind: Action },
     /// The end of the run.
     Report(Report),
+    /// Nothing running: the start screen, with what a run would use.
+    Menu(Menu),
+}
+
+/// What the start screen offers.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct Menu {
+    pub settings: Settings,
+    /// Whether the server runs in Docker (CPU and memory limits apply).
+    pub docker: bool,
+    /// The outages given on the command line, in seconds (the last
+    /// repeats); empty: the default ([`outage_s`]).
+    pub downtimes: Vec<u32>,
+    /// Why the last run couldn't start, if it couldn't.
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
+/// Level `index`'s outage (0-based) in seconds: as given (the last
+/// repeating), or 6 s for a single level and from 2 s growing to 90 s over
+/// several.
+pub fn outage_s(index: usize, levels: u32, given: &[u32]) -> u32 {
+    match given.get(index).or(given.last()) {
+        Some(&s) => s,
+        None if levels <= 1 => 6,
+        None => {
+            let f = index as f64 / (levels - 1) as f64;
+            (2.0 * 45f64.powf(f)).round() as u32
+        }
+    }
+}
+
+/// How a run goes, as chosen on the start screen (or on the command line).
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct Settings {
+    /// People in the first level, and added by each next one.
+    pub users: u32,
+    pub step: u32,
+    pub levels: u32,
+    pub from_level: u32,
+    /// How long everyone works in each level.
+    pub duration_s: u32,
+    pub cpus: f32,
+    /// Docker syntax: 512m, 1g.
+    pub memory: String,
+    pub speed: f64,
+    pub outages: bool,
+}
+
+/// What the dashboard asks the runner (sent over the same WebSocket).
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(tag = "t", rename_all = "snake_case")]
+pub enum Command {
+    /// Start a run with these settings.
+    Start(Settings),
+    /// Back to the start screen (after a run).
+    Menu,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -96,6 +153,9 @@ pub struct Hello {
     /// How many levels (1 = a single crowd).
     #[serde(default)]
     pub levels: u32,
+    /// Whether there is a start screen to go back to afterwards.
+    #[serde(default)]
+    pub replay: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
@@ -109,6 +169,9 @@ pub enum Phase {
     Recovering,
     Checking,
     Done,
+    /// The server couldn't take the next level: no more levels (the copies
+    /// are still checked).
+    GameOver,
 }
 
 impl Phase {
@@ -122,6 +185,7 @@ impl Phase {
             Phase::Recovering => "Recovering",
             Phase::Checking => "Checking every copy",
             Phase::Done => "Done",
+            Phase::GameOver => "Game over",
         }
     }
 }
@@ -257,6 +321,17 @@ pub struct Report {
     pub sentences_missing: u32,
     #[serde(default)]
     pub levels: Vec<LevelResult>,
+    /// Where the server gave up, if it did.
+    #[serde(default)]
+    pub game_over: Option<GameOver>,
+}
+
+/// The level the server couldn't take, and why.
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+pub struct GameOver {
+    pub level: u32,
+    pub users: u32,
+    pub reason: String,
 }
 
 /// One level of the run: how the server did with this many people, and

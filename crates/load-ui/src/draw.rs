@@ -1,9 +1,9 @@
 //! Drawing one frame on the canvas.
 
-use coolpsonotes_load_events::{Action, LevelResult, Phase, Report, Stats};
+use coolpsonotes_load_events::{Action, GameOver, LevelResult, Phase, Report, Stats};
 use web_sys::CanvasRenderingContext2d as Ctx;
 
-use crate::state::{App, SLOTS};
+use crate::state::{self, App, Hit, SLOTS};
 use crate::wrap;
 
 const SANS: &str = "Inter, system-ui, -apple-system, 'Segoe UI', sans-serif";
@@ -29,7 +29,7 @@ pub fn person_color(id: u32, light: u8) -> String {
 fn phase_color(p: Option<Phase>) -> &'static str {
     match p {
         Some(Phase::Busy) | Some(Phase::Done) => GREEN,
-        Some(Phase::Crash) => RED,
+        Some(Phase::Crash) | Some(Phase::GameOver) => RED,
         Some(Phase::Recovering) => AMBER,
         Some(Phase::Checking) => CYAN,
         Some(Phase::Teaming) => PURPLE,
@@ -132,9 +132,14 @@ fn mb(b: u64) -> f64 {
 
 pub fn frame(app: &mut App, c: &Ctx, w: f64, h: f64, now: f64) {
     app.tick(now);
+    app.hits.clear();
     c.set_fill_style_str(BG);
     c.fill_rect(0.0, 0.0, w, h);
     c.set_text_baseline("alphabetic");
+    if app.menu.is_some() {
+        draw_menu(app, c, w, h, now);
+        return;
+    }
 
     let pad = 16.0;
     let head = 58.0;
@@ -164,7 +169,11 @@ pub fn frame(app: &mut App, c: &Ctx, w: f64, h: f64, now: f64) {
     draw_charts(app, c, &charts);
     draw_screens(app, c, &screens, now);
     if let Some(r) = app.report.clone() {
+        let replay = app.hello.as_ref().is_some_and(|h| h.replay);
         report(c, &world, &r, now - app.report_at);
+        if replay {
+            insert_coin(app, c, &world, &r, now - app.report_at);
+        }
     }
     if !app.connected {
         let msg = "connecting to the load test…";
@@ -901,8 +910,8 @@ fn draw_charts(app: &App, c: &Ctx, r: &Rect) {
         },
         Card {
             title: "KEYSTROKE → OTHERS' SCREENS",
-            value: format!("{:.0} ms", last.propagation_p50_ms),
-            sub: format!("p99 {:.0} ms", last.propagation_p99_ms),
+            value: duration(last.propagation_p50_ms),
+            sub: format!("p99 {}", duration(last.propagation_p99_ms)),
             lines: vec![
                 (series(&|x| x.propagation_p99_ms as f64), "#f472b6"),
                 (series(&|x| x.propagation_p50_ms as f64), AMBER),
@@ -1333,6 +1342,9 @@ fn report(c: &Ctx, world: &Rect, r: &Report, age: f64) {
     rrect(c, world.x, world.y, world.w, world.h, 12.0);
     c.fill();
     c.set_global_alpha(a);
+    if let Some(g) = &r.game_over {
+        return report_game_over(c, world, r, g, age);
+    }
     if r.levels.len() > 1 {
         return report_levels(c, world, r);
     }
@@ -1478,4 +1490,292 @@ fn report_levels(c: &Ctx, world: &Rect, r: &Report) {
         "center",
     );
     level_table(c, x + 24.0, y + 92.0, w - 48.0, &r.levels, None, 21.0, true);
+}
+
+/// The end of a run where the server couldn't take a level: arcade style.
+fn report_game_over(c: &Ctx, world: &Rect, r: &Report, g: &GameOver, age: f64) {
+    let (w, h) = ((world.w - 30.0).min(920.0), world.h - 20.0);
+    let (x, y) = (world.x + (world.w - w) / 2.0, world.y + 10.0);
+    rrect(c, x, y, w, h, 16.0);
+    c.set_fill_style_str("#0d0710");
+    c.fill();
+    c.set_stroke_style_str(RED);
+    c.set_line_width(2.0);
+    c.stroke();
+    let cx = x + w / 2.0;
+    // GAME OVER, chunky, with a hard shadow and a slow flicker.
+    let title = "GAME OVER";
+    let tf = format!("900 58px {MONO}");
+    let flicker = 0.85 + 0.15 * ((age / 90.0).sin() * (age / 230.0).cos()).abs();
+    c.set_global_alpha(flicker);
+    text(c, title, cx + 5.0, y + 76.0, &tf, "#5a0f1f", "center");
+    text(c, title, cx, y + 71.0, &tf, RED, "center");
+    c.set_global_alpha(1.0);
+    text(
+        c,
+        &format!("LEVEL {} · {} PEOPLE", g.level, thousands(g.users as u64)),
+        cx,
+        y + 108.0,
+        &format!("800 18px {MONO}"),
+        AMBER,
+        "center",
+    );
+    text(
+        c,
+        &format!("The server gave up: {}", g.reason),
+        cx,
+        y + 134.0,
+        &format!("500 13px {SANS}"),
+        TEXT,
+        "center",
+    );
+    // The best it managed.
+    let best = r
+        .levels
+        .iter()
+        .filter(|l| l.level < g.level)
+        .max_by_key(|l| l.level);
+    let high = match best {
+        Some(l) => format!(
+            "HIGH SCORE  level {} · {} people · {:.0} req/s · back {} after {} s down",
+            l.level,
+            thousands(l.users as u64),
+            l.avg_http_rps,
+            l.recovery_s
+                .map(|s| format!("in {s:.0} s"))
+                .unwrap_or_else(|| "—".into()),
+            l.downtime_s
+        ),
+        None => "HIGH SCORE  none this run: it couldn't take the first level played".into(),
+    };
+    text(
+        c,
+        &high,
+        cx,
+        y + 160.0,
+        &format!("700 12px {MONO}"),
+        "#60a5fa",
+        "center",
+    );
+    // How each level went, the one that broke it last.
+    let table_y = y + 194.0;
+    let row_h = ((h - 300.0) / r.levels.len().max(1) as f64).clamp(14.0, 20.0);
+    let used = level_table(c, x + 24.0, table_y, w - 48.0, &r.levels, None, row_h, true);
+    // And yet: did anything get lost?
+    let ok = r.passed();
+    let verdict = if ok {
+        format!(
+            "✓  AND NOTHING WAS LOST: {} copies of {} notes identical, all {} sentences there",
+            thousands(r.copies_checked as u64),
+            thousands(r.notes_checked as u64),
+            thousands(r.sentences as u64)
+        )
+    } else {
+        format!(
+            "✗  {} copies differ, {} of {} sentences missing",
+            r.mismatches, r.sentences_missing, r.sentences
+        )
+    };
+    let vy = (table_y + used + 26.0).min(y + h - 52.0);
+    text(
+        c,
+        &verdict,
+        cx,
+        vy,
+        &format!("700 13px {SANS}"),
+        if ok { GREEN } else { RED },
+        "center",
+    );
+}
+
+/// After a run: the way back to the start screen (click, or Enter).
+fn insert_coin(app: &mut App, c: &Ctx, world: &Rect, r: &Report, age: f64) {
+    let label = if r.game_over.is_some() {
+        "INSERT COIN  ›  try again (more CPU? memory?)"
+    } else {
+        "INSERT COIN  ›  another run"
+    };
+    let font = format!("800 14px {MONO}");
+    let lw = width(c, label, &font) + 32.0;
+    let (cx, y) = (world.x + world.w / 2.0, world.y + world.h - 46.0);
+    let (x, bw, bh) = (cx - lw / 2.0, lw, 30.0);
+    rrect(c, x, y, bw, bh, 15.0);
+    c.set_fill_style_str("rgba(255,181,71,0.12)");
+    c.fill();
+    // Pulses, never quite gone.
+    c.set_global_alpha(if (age / 650.0) as i64 % 2 == 0 {
+        1.0
+    } else {
+        0.45
+    });
+    text(c, label, cx, y + 20.0, &font, AMBER, "center");
+    c.set_global_alpha(1.0);
+    app.hits.push((x, y, bw, bh, Hit::Coin));
+}
+
+/// The start screen: choose the run, then PRESS START.
+fn draw_menu(app: &mut App, c: &Ctx, w: f64, h: f64, now: f64) {
+    let Some(m) = app.menu.clone() else {
+        return;
+    };
+    let docker = m.menu.docker;
+    let cx = w / 2.0;
+    let mut y = (h * 0.12).clamp(40.0, 110.0);
+    let tf = format!("900 50px {MONO}");
+    text(
+        c,
+        "COOLPSONOTES",
+        cx + 4.0,
+        y + 4.0,
+        &tf,
+        "#0b3a4a",
+        "center",
+    );
+    text(c, "COOLPSONOTES", cx, y, &tf, CYAN, "center");
+    y += 44.0;
+    let sf = format!("900 30px {MONO}");
+    text(c, "UNDER LOAD", cx + 3.0, y + 3.0, &sf, "#4a3410", "center");
+    text(c, "UNDER LOAD", cx, y, &sf, AMBER, "center");
+    y += 32.0;
+    text(
+        c,
+        "A crowd of real, end-to-end encrypted clients against the server, level after level. How far does it go?",
+        cx,
+        y,
+        &format!("400 13px {SANS}"),
+        DIM,
+        "center",
+    );
+    y += 26.0;
+    // The options.
+    let pw = (w - 40.0).min(620.0);
+    let px = cx - pw / 2.0;
+    let row_h = 38.0;
+    rrect(c, px, y, pw, row_h * state::OPTIONS as f64 + 16.0, 14.0);
+    c.set_fill_style_str(PANEL);
+    c.fill();
+    c.set_stroke_style_str(LINE);
+    c.set_line_width(1.0);
+    c.stroke();
+    let lf = format!("700 14px {MONO}");
+    let vf = format!("800 15px {MONO}");
+    for i in 0..state::OPTIONS {
+        let ry = y + 8.0 + i as f64 * row_h;
+        let selected = m.selected == i;
+        let disabled = !docker && (i == 3 || i == 4);
+        if selected {
+            rrect(c, px + 6.0, ry + 2.0, pw - 12.0, row_h - 4.0, 8.0);
+            c.set_fill_style_str("rgba(76,201,240,0.10)");
+            c.fill();
+            text(c, "▸", px + 18.0, ry + 25.0, &lf, CYAN, "left");
+        }
+        let color = if disabled {
+            FAINT
+        } else if selected {
+            TEXT
+        } else {
+            DIM
+        };
+        text(
+            c,
+            state::option_label(i),
+            px + 36.0,
+            ry + 25.0,
+            &lf,
+            color,
+            "left",
+        );
+        let value = state::option_value(&m.settings, i, docker);
+        let vx = px + pw - 70.0;
+        text(
+            c,
+            &value,
+            vx,
+            ry + 25.0,
+            &vf,
+            if disabled { FAINT } else { AMBER },
+            "right",
+        );
+        if !disabled {
+            let arrow = if selected { CYAN } else { FAINT };
+            text(c, "◀", vx - 150.0, ry + 25.0, &vf, arrow, "center");
+            text(c, "▶", px + pw - 36.0, ry + 25.0, &vf, arrow, "center");
+            app.hits.push((vx - 166.0, ry, 32.0, row_h, Hit::Dec(i)));
+            app.hits
+                .push((px + pw - 52.0, ry, 32.0, row_h, Hit::Inc(i)));
+        }
+        app.hits.push((px, ry, pw, row_h, Hit::Row(i)));
+    }
+    y += row_h * state::OPTIONS as f64 + 16.0 + 28.0;
+    text(
+        c,
+        &state::start_preview(&m),
+        cx,
+        y,
+        &format!("600 13px {MONO}"),
+        TEXT,
+        "center",
+    );
+    y += 20.0;
+    let server = if docker {
+        "server: the coolpsonotes image in Docker, with these limits"
+    } else {
+        "server: a local process, without limits"
+    };
+    text(c, server, cx, y, &format!("400 12px {SANS}"), DIM, "center");
+    if let Some(e) = &m.menu.error {
+        y += 22.0;
+        text(
+            c,
+            &format!("The last run couldn't start: {e}"),
+            cx,
+            y,
+            &format!("600 12px {SANS}"),
+            RED,
+            "center",
+        );
+    }
+    // PRESS START.
+    y += 22.0;
+    let (bw, bh) = (260.0, 46.0);
+    let bx = cx - bw / 2.0;
+    let on_start = m.selected == state::OPTIONS;
+    rrect(c, bx, y, bw, bh, 23.0);
+    c.set_fill_style_str(if on_start { GREEN } else { PANEL_2 });
+    c.fill();
+    c.set_stroke_style_str(GREEN);
+    c.set_line_width(2.0);
+    c.stroke();
+    if !on_start || (now / 500.0) as i64 % 2 == 0 {
+        text(
+            c,
+            "PRESS START",
+            cx,
+            y + 30.0,
+            &format!("900 18px {MONO}"),
+            if on_start { BG } else { GREEN },
+            "center",
+        );
+    }
+    app.hits.push((bx, y, bw, bh, Hit::Start));
+    text(
+        c,
+        "↑ ↓ choose · ← → change · Enter: start · or click",
+        cx,
+        y + bh + 26.0,
+        &format!("400 12px {SANS}"),
+        FAINT,
+        "center",
+    );
+    if !app.connected {
+        text(
+            c,
+            "connecting to the load test…",
+            cx,
+            h - 24.0,
+            &format!("600 13px {SANS}"),
+            AMBER,
+            "center",
+        );
+    }
 }

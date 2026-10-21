@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use coolpsonotes_load_events::{Action, Event, Hello, Phase, Report, Stats};
+use coolpsonotes_load_events::{Action, Event, Hello, Menu, Phase, Report, Stats};
 use tokio::sync::broadcast;
 
 /// How many of the latest events of a kind a late dashboard gets (stats:
@@ -33,6 +33,7 @@ struct Sticky {
     stats: VecDeque<Event>,
     feed: VecDeque<Event>,
     report: Option<Event>,
+    menu: Option<Event>,
 }
 
 /// Running totals and recent samples.
@@ -163,7 +164,8 @@ pub struct Bus {
 }
 
 impl Bus {
-    pub fn new(hello: Hello) -> Bus {
+    /// Lives as long as the dashboard; runs come and go ([`Bus::start_run`]).
+    pub fn new() -> Bus {
         let (tx, _) = broadcast::channel(4096);
         let bus = Bus {
             tx,
@@ -176,7 +178,6 @@ impl Bus {
             })),
             tally: Arc::default(),
         };
-        bus.send(Event::Hello(hello));
         // Ship what happened every 50 ms, as one message.
         let b = bus.clone();
         tokio::spawn(async move {
@@ -194,6 +195,25 @@ impl Bus {
         bus
     }
 
+    /// Forget the last run (what dashboards are told and what was counted).
+    fn reset(&self) {
+        self.pending.lock().unwrap().clear();
+        *self.sticky.lock().unwrap() = Sticky::default();
+        *self.tally.lock().unwrap() = Tally::default();
+    }
+
+    /// A run begins: dashboards start over with its settings.
+    pub fn start_run(&self, hello: Hello) {
+        self.reset();
+        self.send(Event::Hello(hello));
+    }
+
+    /// Nothing runs: dashboards show the start screen.
+    pub fn menu(&self, m: Menu) {
+        self.reset();
+        self.send(Event::Menu(m));
+    }
+
     pub fn subscribe(&self) -> broadcast::Receiver<Arc<String>> {
         self.tx.subscribe()
     }
@@ -202,6 +222,7 @@ impl Bus {
     pub fn snapshot(&self) -> String {
         let s = self.sticky.lock().unwrap();
         let mut out: Vec<&Event> = Vec::new();
+        out.extend(s.menu.iter());
         out.extend(s.hello.iter());
         out.extend(s.people.iter());
         out.extend(s.teams.iter());
@@ -263,6 +284,7 @@ impl Bus {
                 }
             }
             Event::Report(_) => s.report = Some(e.clone()),
+            Event::Menu(_) => s.menu = Some(e.clone()),
             Event::Action { .. } | Event::Delivered { .. } => {}
         }
     }

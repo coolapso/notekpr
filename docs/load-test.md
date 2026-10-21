@@ -13,14 +13,22 @@ task load LEVELS=1 DURATION=2m             # one crowd of 100, one outage of 6 s
 task load USERS=200 STEP=200 LEVELS=5 CPUS=2 MEMORY=1g SPEED=2
 task load -- --seed 42                     # repeat a run (same people, teams and choices)
 task load -- --downtimes 5s,10s,20s        # choose the outages (the last repeats)
+task load FROM=6 CPUS=2 MEMORY=1g          # start right at level 6 (600 people), e.g. after a game over there
 task load:native                           # without Docker: the server as a local process, no limits
 ```
 
 `task load` builds the server image (`task docker:build`), the dashboard and
-the load runner, opens <http://localhost:8098> and starts. Ten levels take
-about 20 minutes. When the run is over the report stays on screen (and in
-`target/load/report-*.json`) until you press Ctrl+C; the container is
-removed either way.
+the load runner and opens <http://localhost:8098> on the **start screen**:
+choose the level to start at, how many levels, people per level, the
+server's CPU and memory, typing speed, how long each level lasts and
+whether there are outages (arrow keys or clicks; the `task load` variables
+are the starting choices), then PRESS START. After the report — or a GAME
+OVER — *insert coin* takes you back to the start screen, starting at the
+level that ended it, to try again with more CPU or memory. `task load --
+--now` skips the start screen (and `--exit` stops after one run, for
+scripts). Ten levels take about 20 minutes; reports are also written to
+`target/load/report-*.json`. Ctrl+C stops everything and removes the
+container and the people's copies.
 
 ## What you see
 
@@ -80,6 +88,19 @@ Each level (`--levels`; the first has `--users` people, each next one
    grows up to a minute, so long outages also mean slower comebacks) and
    upload what they wrote.
 
+**Game over**: when the server can't take a level — after the outage not
+everyone is connected again within two minutes, or the changes made during
+it aren't worked off within two minutes, or it dies by itself (stops
+answering for 20 s, or Docker kills it for running out of memory), or most
+of a level's newcomers can't even sign up — there are no more levels: the
+live view says GAME OVER, with the level, the reason and the best level it
+survived (`--keep-going` goes on regardless). The copies are still checked;
+"game over, but nothing was lost" is the interesting part. To try that
+level again with more CPU or memory without replaying the ones before it,
+start there: `task load FROM=6 CPUS=2` — everyone up to level 6 arrives at
+once (spread over a warm-up as long as their levels' arrivals together),
+forms their teams, and level 6 begins with its own outage.
+
 At the end:
 
 5. **Checking**: work stops; once everyone is online with nothing left to
@@ -88,7 +109,8 @@ At the end:
      they must all be the same;
    * every sentence anyone finished typing must be in the note.
 
-   The run passes (exit code 0) only if both hold; otherwise it exits 1
+   The run passes (exit code 0) only if both hold — a game over is a
+   capacity limit, not a failure; otherwise it exits 1
    and says, for each missing sentence, who typed it into which note, what
    every member's copy holds of that note (in the index, pending, held,
    waiting for a key), and a replay of the note's changes as the server
@@ -147,6 +169,7 @@ on.
 |---|---|---|
 | `--users N` | 100 | how many people (in the first level) |
 | `--levels N`, `--step N` | 1, 100 | levels, and people added in each (`task load`: 10 levels) |
+| `--from-level N` | 1 | start at level N (its people and everyone before arrive at once) |
 | `--duration D` | 60s | how long everyone works in each level (`90s`, `3m`) |
 | `--downtimes LIST` | see above | each level's outage, e.g. `5s,10s,30s` (the last repeats) |
 | `--speed X` | 1 | how fast people are (2 = twice as fast) |
@@ -158,7 +181,9 @@ on.
 | `--no-crash` | | don't kill the server midway |
 | `--dashboard ADDR` | 127.0.0.1:8098 | where the live view is served |
 | `--open` | | open the live view in the browser (`task load` does) |
-| `--exit` | | stop when done instead of keeping the live view up (scripts, CI) |
+| `--now` | | start right away with these settings, no start screen |
+| `--exit` | | stop when done instead of keeping the live view up (scripts, CI; implies `--now`) |
+| `--keep-going` | | go on with the next levels after the server couldn't take one |
 | `--out DIR` | target/load | the reports |
 | `--people-dir DIR` | /dev/shm/… | people's local copies (in memory where possible; removed afterwards) |
 

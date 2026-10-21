@@ -762,7 +762,7 @@ impl Session {
                             );
                         }
                         if !reaction.purged.is_empty() {
-                            tracing::warn!(vault = %id, "dropped changes to {} document(s) permanently deleted elsewhere", reaction.purged.len());
+                            tracing::warn!(vault = %id, "{} document(s) were permanently deleted elsewhere (unsent edits are kept as recovered notes)", reaction.purged.len());
                         }
                         if reaction.reload_keys {
                             not_sent(&mut v, pushes);

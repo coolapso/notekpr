@@ -395,6 +395,14 @@ fn spawn_maintenance(hub: Arc<Hub>) {
     });
 }
 
+/// Notes kept from unsent edits of notes deleted elsewhere (the vault's
+/// rescue): shown (the mirror writes them) and uploaded like any local change.
+async fn upload_rescued(hub: &Arc<Hub>, vault_id: &str, rescued: Vec<String>) {
+    if !rescued.is_empty() {
+        hub.local_changed(vault_id, rescued, true).await;
+    }
+}
+
 fn spawn_push(hub: &Arc<Hub>, vault_id: &str) {
     let hub = hub.clone();
     let id = vault_id.to_string();
@@ -492,8 +500,10 @@ async fn handle(
             let mut g = v.lock().await;
             g.check_rollback(changes.head_seq);
             let a = g.apply_changes(&changes);
+            let rescued = g.take_rescued();
             drop(g);
             hub.emit_applied(&vault_id, &a, false);
+            upload_rescued(hub, &vault_id, rescued).await;
             reload_log_if_needed(hub, &v);
         }
         ServerMessage::Synced {
@@ -592,8 +602,12 @@ async fn handle(
             seq,
         } => {
             if let Some(v) = hub.get(&vault_id) {
-                let a = v.lock().await.apply_purge(&object_id, seq);
+                let (a, rescued) = {
+                    let mut g = v.lock().await;
+                    (g.apply_purge(&object_id, seq), g.take_rescued())
+                };
                 hub.emit_applied(&vault_id, &a, false);
+                upload_rescued(hub, &vault_id, rescued).await;
             }
         }
         ServerMessage::Ack {
@@ -602,7 +616,11 @@ async fn handle(
             rejected,
         } => {
             if let Some(v) = hub.get(&vault_id) {
-                let reaction = v.lock().await.ack(&results, &rejected, true);
+                let (reaction, rescued) = {
+                    let mut g = v.lock().await;
+                    (g.ack(&results, &rejected, true), g.take_rescued())
+                };
+                upload_rescued(hub, &vault_id, rescued).await;
                 if reaction.reload_keys
                     && let Err(e) = session.refresh_keys(&v).await
                 {

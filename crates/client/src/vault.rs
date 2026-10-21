@@ -13,7 +13,8 @@ use coolpsonotes_core::doc::{self, Entry, EntryKind, NoteDoc};
 use coolpsonotes_core::engine::{Applied, Pending, VaultMeta, VaultReplica};
 use coolpsonotes_core::keys::{VaultKey, VaultKeyring};
 use coolpsonotes_core::protocol::{
-    ChangesResponse, INDEX_OBJECT_ID, PushResult, RejectedUpdate, Role, Snapshot, Update,
+    ChangesResponse, INDEX_OBJECT_ID, PushResult, REJECT_PURGED, RejectedUpdate, Role, Snapshot,
+    Update,
 };
 use coolpsonotes_core::textdiff::{self, Edit};
 use coolpsonotes_core::{markdown, now_ms, paths, random_id, search};
@@ -91,6 +92,9 @@ pub struct Vault {
     dirty_pending: bool,
     dirty_quarantine: bool,
     detached: bool,
+    /// Notes made from unsent edits of notes deleted for good elsewhere
+    /// ([`Vault::rescue`]), still to be uploaded.
+    rescued: Vec<String>,
 }
 
 /// A vault's keys as the server gives them to this principal.
@@ -129,6 +133,7 @@ impl Vault {
             dirty_pending: true,
             dirty_quarantine: false,
             detached: false,
+            rescued: Vec::new(),
         }
     }
 
@@ -198,6 +203,7 @@ impl Vault {
         results: &[PushResult],
         rejected: &[RejectedUpdate],
     ) -> Reaction {
+        self.rescue_refused(rejected);
         self.dirty_state = true;
         self.with_outbox(|o, r, l| {
             o.on_ack(r, results, false);
@@ -299,6 +305,7 @@ impl Vault {
             dirty_pending: false,
             dirty_quarantine: false,
             detached: false,
+            rescued: Vec::new(),
         }))
     }
 
@@ -434,6 +441,9 @@ impl Vault {
     }
 
     pub fn apply_changes(&mut self, ch: &ChangesResponse) -> Applied {
+        for p in &ch.purged {
+            self.rescue(&p.object_id);
+        }
         let (a, errors) = self.replica.apply_changes(ch);
         for e in errors {
             tracing::warn!(vault = %self.replica.id, "skipped a change that could not be decrypted: {e}");
@@ -485,6 +495,7 @@ impl Vault {
     }
 
     pub fn apply_purge(&mut self, object_id: &str, seq: i64) -> Applied {
+        self.rescue(object_id);
         let before = self.outbox.held.len();
         self.outbox.drop_object(&mut self.replica, object_id);
         self.dirty_quarantine |= self.outbox.held.len() != before;
@@ -505,6 +516,7 @@ impl Vault {
         rejected: &[RejectedUpdate],
         in_order: bool,
     ) -> Reaction {
+        self.rescue_refused(rejected);
         self.dirty_state = true;
         self.with_outbox(|o, r, l| {
             o.on_ack(r, results, in_order);
@@ -833,6 +845,62 @@ impl Vault {
             .collect();
         v.sort_by(|a, b| b.trashed.cmp(&a.trashed).then(a.path.cmp(&b.path)));
         v
+    }
+
+    /// A note we have unsent edits of was deleted for good elsewhere: keep
+    /// this copy's text as a new note, "<title> (recovered)" at the top of
+    /// the vault (as the browser does), before the purge drops it. Nothing
+    /// for notes without unsent edits.
+    fn rescue(&mut self, object_id: &str) {
+        let unsent = self
+            .replica
+            .pending
+            .iter()
+            .any(|p| p.object_id == object_id)
+            || self.outbox.held.iter().any(|p| p.object_id == object_id);
+        if !unsent || self.replica.purged.contains(object_id) || self.require_writable().is_err() {
+            return;
+        }
+        let text = self.note_text(object_id);
+        if text.is_empty() {
+            return;
+        }
+        let title = self
+            .replica
+            .index
+            .get(object_id)
+            .map(|e| e.title().to_string())
+            .unwrap_or_else(|| "Untitled".into());
+        for n in 1..100 {
+            let name = match n {
+                1 => format!("{title} (recovered)"),
+                n => format!("{title} (recovered {n})"),
+            };
+            if let Ok(w) = self.create_note(&format!("{name}.md"), &text) {
+                crate::ui::warn(&format!(
+                    "“{title}” was deleted by someone else; your unsent changes were saved as “{name}”"
+                ));
+                self.rescued.push(w.id);
+                return;
+            }
+        }
+    }
+
+    /// Pushes refused because their note is gone for good.
+    fn rescue_refused(&mut self, rejected: &[RejectedUpdate]) {
+        let gone: BTreeSet<String> = rejected
+            .iter()
+            .filter(|r| r.code == REJECT_PURGED)
+            .map(|r| r.object_id.clone())
+            .collect();
+        for o in gone {
+            self.rescue(&o);
+        }
+    }
+
+    /// Notes [rescued](Vault::rescue) since the last call, to upload.
+    pub fn take_rescued(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.rescued)
     }
 
     // ------------------------------------------------------------ mutations

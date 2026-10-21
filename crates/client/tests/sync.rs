@@ -737,3 +737,68 @@ async fn typing_into_a_note_whose_key_has_not_arrived_keeps_the_text() {
     );
     assert_eq!(bv.lock().await.replica.pending.len(), 0);
 }
+
+/// Bob writes in Home's Soup without uploading (offline, say); Alice
+/// deletes it for good meanwhile. Returns their hubs and the vault id.
+async fn deleted_while_unsent(
+    srv: &TestServer,
+) -> (
+    std::sync::Arc<coolpsonotes_client::hub::Hub>,
+    std::sync::Arc<coolpsonotes_client::hub::Hub>,
+    String,
+) {
+    let alice = login(srv, "alice").await;
+    let bob = login(srv, "bob").await;
+    manage::create_vault(&alice, "Home").await.unwrap();
+    let ah = hub(&alice).await;
+    ops::put_document(&ah, "Home", "Soup.md", "leeks\n", None)
+        .await
+        .unwrap();
+    let av = ah.resolve("Home").await.unwrap();
+    let vid = av.lock().await.id().to_string();
+    manage::share(&alice, &av, "bob", Role::Editor, false)
+        .await
+        .unwrap();
+    let bh = hub(&bob).await;
+    let bv = bh.resolve(&vid).await.unwrap();
+    {
+        let mut g = bv.lock().await;
+        let id = g.find("Soup.md").unwrap().1.id;
+        g.set_note_text(&id, "leeks\nand a pinch of salt\n")
+            .unwrap();
+        g.save().unwrap();
+    }
+    ops::delete_document(&ah, "Home", "Soup.md").await.unwrap();
+    ops::empty_trash(&ah, "Home").await.unwrap();
+    (ah, bh, vid)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn unsent_edits_of_a_note_deleted_elsewhere_are_kept() {
+    // Back online: the catch-up brings the deletion first.
+    let srv = start().await;
+    let (ah, bh, vid) = deleted_while_unsent(&srv).await;
+    bh.sync_vault(&vid).await.unwrap();
+    ah.sync_vault(&vid).await.unwrap();
+    assert_eq!(
+        note(&ah, &vid, "Soup (recovered).md").await.as_deref(),
+        Some("leeks\nand a pinch of salt\n")
+    );
+    assert!(note(&ah, &vid, "Soup.md").await.is_none());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn unsent_edits_refused_because_their_note_is_gone_are_kept() {
+    // Back online: the upload comes first and is refused.
+    let srv = start().await;
+    let (ah, bh, vid) = deleted_while_unsent(&srv).await;
+    bh.push(&vid).await.unwrap();
+    bh.sync_vault(&vid).await.unwrap();
+    ah.sync_vault(&vid).await.unwrap();
+    assert_eq!(
+        note(&ah, &vid, "Soup (recovered).md").await.as_deref(),
+        Some("leeks\nand a pinch of salt\n")
+    );
+    // Once: the deletion arriving afterwards finds nothing left to keep.
+    assert!(note(&bh, &vid, "Soup (recovered 2).md").await.is_none());
+}

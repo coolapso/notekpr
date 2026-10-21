@@ -468,6 +468,10 @@ the remote edit.
 * **Remote moves and trashes** move or remove the local file — unless you
   changed it locally in the meantime: then your edit is merged into the note
   and your file is kept.
+* **A note deleted for good elsewhere** (its trash emptied) while you have
+  changes to it not uploaded yet (you were offline, say): your version is
+  kept as a new note, `<title> (recovered)` at the top of the vault, with a
+  warning — as in the web app.
 * **An unexpected local file** where a not-yet-mirrored note will be written
   (for example after re-pointing the mirror at an old directory) is never
   overwritten: it is renamed to `Name (conflict 2026-10-19 101500).md` and

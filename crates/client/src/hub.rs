@@ -503,7 +503,20 @@ impl Hub {
         };
         let applied = self.session.catch_up(&v).await?;
         self.emit_applied(vault_id, &applied, false);
+        let mut rescued = v.lock().await.take_rescued();
         let out = self.push(vault_id).await?;
+        // Notes kept from unsent edits of notes deleted elsewhere (also
+        // refused pushes): uploaded by the push, shown like local edits.
+        rescued.extend(v.lock().await.take_rescued());
+        if !rescued.is_empty() {
+            self.emit(HubEvent::Changed {
+                vault_id: vault_id.to_string(),
+                objects: rescued,
+                index_changed: true,
+                purged: vec![],
+                local: true,
+            });
+        }
         if !out.offline {
             if let Err(e) = self.session.compact(&v, None).await {
                 tracing::warn!("compaction failed: {e:#}");

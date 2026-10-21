@@ -684,3 +684,56 @@ async fn opening_a_new_vault_twice_at_once_keeps_one_copy() {
         assert!(std::sync::Arc::ptr_eq(&before, &bh.get(v.id()).unwrap()));
     }
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn typing_into_a_note_whose_key_has_not_arrived_keeps_the_text() {
+    let srv = start().await;
+    let alice = login(&srv, "alice").await;
+    let bob = login(&srv, "bob").await;
+    manage::create_vault(&alice, "Team").await.unwrap();
+    let ah = hub(&alice).await;
+    let v = ah.resolve("Team").await.unwrap();
+    manage::share(&alice, &v, "bob", Role::Editor, false)
+        .await
+        .unwrap();
+    let bh = hub(&bob).await;
+    let vid = v.lock().await.id().to_string();
+    let page = ops::put_document(
+        &ah,
+        "Team",
+        "Goals 3.md",
+        "# Goals 3\n\n## Alice\n\n## Bob\n",
+        None,
+    )
+    .await
+    .unwrap();
+    // Bob's copy gets the changes, but not the new note's key yet.
+    let bv = bh.get(&vid).unwrap();
+    let since = bv.lock().await.replica.seq;
+    let ch = bob.api.changes(&vid, since, 100, false).await.unwrap();
+    {
+        let mut g = bv.lock().await;
+        g.apply_changes(&ch);
+        // Listed, but its text waits for its key.
+        assert!(g.entry(&page.id).is_some());
+        assert_eq!(g.note_text(&page.id), "");
+        assert!(!g.replica.doc_keys.contains_key(&page.id));
+        assert!(g.set_note_text(&page.id, "Moved the deadline.").unwrap());
+        g.save().unwrap();
+    }
+    bh.local_changed(&vid, vec![page.id.clone()], false).await;
+    for _ in 0..3 {
+        let _ = bh.sync_vault(&vid).await;
+        let _ = ah.sync_vault(&vid).await;
+    }
+    // Both keep both texts (Bob's at the start: he typed into what looked
+    // empty to him).
+    let a = v.lock().await.note_text(&page.id);
+    let b = bv.lock().await.note_text(&page.id);
+    assert_eq!(a, b);
+    assert!(
+        a.contains("Moved the deadline.") && a.contains("# Goals 3"),
+        "{a:?}"
+    );
+    assert_eq!(bv.lock().await.replica.pending.len(), 0);
+}

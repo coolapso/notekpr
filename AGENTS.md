@@ -55,8 +55,11 @@ Breaking one of these is a bug, even if everything compiles and tests pass.
    one session per browser tab, CLI `--profile` + `--dev-user`). It is how
    multi-user features get tested. It must stay impossible to enable by
    accident in production.
-8. **Never edit an applied migration.** Add a new numbered file in
-   `crates/server/migrations/`.
+8. **Migrations: nothing is deployed yet.** Until the first real
+   deployment, schema changes go into the existing files in
+   `crates/server/migrations/`, and development databases are wiped
+   (`task dev:reset`, `task demo:reset`). After it: never edit an applied
+   migration — add a new numbered file.
 
 ## Layout
 

@@ -448,7 +448,7 @@ fn QuickNotesPrefs() -> impl IntoView {
                 }}
             </select>
         </label>
-        <p class="muted small">{format!("Quick notes are regular notes in the “{}” folder of that vault. New one: {}+Alt+Q.", crate::quick::FOLDER, util::mod_key())}</p>
+        <p class="muted small">{format!("Quick notes are regular notes in the “{}” folder of that vault. New one: Alt+Q.", crate::quick::FOLDER)}</p>
     }
 }
 

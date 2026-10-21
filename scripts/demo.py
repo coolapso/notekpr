@@ -144,7 +144,7 @@ HOME = [
         - [ ] Jump anywhere with the quick switcher: `Ctrl+P`
         - [ ] Search everything with `Ctrl+Shift+F`: try `tag:recipe` or `"tomato sauce"`
         - [ ] Switch to the reading view with `Ctrl+E`; `Ctrl+/` lists every shortcut
-        - [ ] Capture a quick note with `Ctrl+Alt+Q`
+        - [ ] Capture a quick note with `Alt+Q`
         - [ ] Open [[Garden plan]] and its history (the clock button at the top) to compare versions
         - [ ] Sign in as **bob** in another tab and edit *Shopping list* in the *Family* vault together
         - [ ] Click a link to a note that doesn't exist yet: [[Greenhouse]]

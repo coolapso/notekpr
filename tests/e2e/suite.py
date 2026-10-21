@@ -1035,10 +1035,10 @@ def test_quick_notes(env):
         signup(b, uniq("quinn"))
         # The shortcut, even from inside the editor: a new quick note, ready to type.
         b.js("const ed=document.querySelector('.ed'); ed.focus(); const s=getSelection(); s.selectAllChildren(ed); s.collapseToEnd();")
-        b.chord(KEYS["ctrl"], KEYS["alt"], "q")
+        b.chord(KEYS["alt"], "q")
         b.wait("return /^\\d{4}-\\d\\d-\\d\\d \\d\\d\\.\\d\\d$/.test((document.querySelector('.note-title') || {}).value || '')", 10, "a quick note opens")
         b.wait("return !!document.activeElement.closest('.ed')", 5, "the caret in its editor")
-        check(True, "Ctrl+Alt+Q creates a quick note named by the time and puts the caret in its editor")
+        check(True, "Alt+Q creates a quick note named by the time and puts the caret in its editor")
         check(b.js("return document.querySelector('.crumbs').textContent").endswith("Quick notes"), "it is an ordinary note in the Quick notes folder")
         b.keys("Call the dentist")
         time.sleep(0.8)
@@ -1116,7 +1116,7 @@ def test_quick_notes(env):
         # Shortcut help and the settings toggle.
         b.chord(KEYS["ctrl"], "/")
         b.find(".modal table.keys", 5)
-        check("Ctrl+Alt+Q" in b.js("return document.querySelector('.modal table.keys').textContent"), "the shortcut help lists Ctrl+Alt+Q")
+        check("Alt+Q" in b.js("return document.querySelector('.modal table.keys').textContent"), "the shortcut help lists Alt+Q")
         b.chord(KEYS["escape"])
         b.click(".user-btn")
         b.click_el(b.find_text(".menu.up button", "Settings"))
@@ -1258,7 +1258,7 @@ def test_entry_icons(env):
         a.click(".modal .icon-actions button[type=submit]")
         a.wait("return !document.querySelector('.modal')", 5, "the dialog closes")
         check(row_icon(a, "Travel") == "🧳", "a folder gets an icon, any emoji can be typed")
-        a.chord(KEYS["ctrl"], KEYS["alt"], "q")
+        a.chord(KEYS["alt"], "q")
         a.wait("return " + row + ".length === 1", 10, "the Quick notes folder", "Quick notes")
         set_icon(a, "Quick notes", "💡")
         check(row_icon(a, "Quick notes") == "💡" and a.js("return " + row + ".length", "Quick notes") == 1,

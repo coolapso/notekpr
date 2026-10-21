@@ -47,7 +47,7 @@ pub fn QuickSection() -> impl IntoView {
                     title="All quick notes" on:click=move |_| state::navigate(Route::Quick)>
                     <Icon name="zap"/><span class="grow ellipsis">"Quick notes"</span></button>
                 <Show when=move || has_vault.get()>
-                    <button class="icon-btn tiny qn-add" title=format!("New quick note ({}+Alt+Q)", util::mod_key()) aria-label="New quick note"
+                    <button class="icon-btn tiny qn-add" title="New quick note (Alt+Q)" aria-label="New quick note"
                         on:click=move |_| quick::new_and_open()><Icon name="plus"/></button>
                 </Show>
             </div>

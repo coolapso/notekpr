@@ -1076,7 +1076,7 @@ fn Help() -> impl IntoView {
         ),
         (format!("{m}+Shift+F"), "Search all notes"),
         (format!("{m}+Alt+N"), "New note"),
-        (format!("{m}+Alt+Q"), "New quick note"),
+        ("Alt+Q".into(), "New quick note"),
         (format!("{m}+E"), "Toggle reading view"),
         (format!("{m}+\\"), "Toggle side panel"),
         (format!("{m}+G"), "Graph of the vault"),

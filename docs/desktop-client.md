@@ -221,7 +221,7 @@ Quick notes are for thoughts that don't have a home yet. They are ordinary
 notes in the `Quick notes/` folder of one vault, so they sync, mirror to
 Markdown files and open in any editor like every other note. The web app
 lists them on its *Quick notes* page (the sidebar's *Quick notes* entry;
-`Ctrl+Alt+Q` makes one), where they can be promoted to a regular note or
+`Alt+Q` makes one), where they can be promoted to a regular note or
 archived (moved to `Quick notes/Archive/`).
 
 ```sh

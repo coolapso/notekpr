@@ -61,7 +61,7 @@ read anything.
 * A graph of how your notes link, like Obsidian's (`Ctrl+G`): the whole vault
   with a filter, or the open note and its neighbours beside it. Drag, zoom,
   click a note to open it.
-* Quick notes: capture a thought in a second (`Ctrl+Alt+Q`, a capture page
+* Quick notes: capture a thought in a second (`Alt+Q`, a capture page
   that works on phones, or `coolpsonotes quick …`), then promote it to a
   regular note or archive it.
 * A trash with restore, and the version history of every note with preview

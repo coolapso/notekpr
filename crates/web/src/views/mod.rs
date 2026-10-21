@@ -176,10 +176,10 @@ pub fn close_on_outside(open: RwSignal<bool>) {
     });
 }
 
-/// Ctrl+Alt+`letter` (⌘+Alt on macs), e.g. Q for a quick note. On macs Alt
-/// changes the key ("œ" for Q, a dead key for N), so the physical key counts
-/// there; elsewhere the key must be the letter itself, so AltGr+Q (which
-/// types "@" on some layouts) never triggers it.
+/// Ctrl+Alt+`letter` (⌘+Alt on macs), e.g. N for a new note. On macs Alt
+/// changes the key (a dead key for N), so the physical key counts there;
+/// elsewhere the key must be the letter itself, so AltGr+N (which types "ń"
+/// on some layouts) never triggers it.
 fn is_ctrl_alt_letter(e: &web_sys::KeyboardEvent, letter: char) -> bool {
     if !e.alt_key() || e.shift_key() {
         return false;
@@ -189,6 +189,23 @@ fn is_ctrl_alt_letter(e: &web_sys::KeyboardEvent, letter: char) -> bool {
         return typed || e.code() == format!("Key{}", letter.to_ascii_uppercase());
     }
     e.ctrl_key() && !e.meta_key() && typed && !e.get_modifier_state("AltGraph")
+}
+
+/// Alt+`letter` alone (Option on macs), e.g. Q for a quick note — not
+/// Ctrl+Alt+Q: ⌘+Option+Q quits the browser on macs. As above, the physical
+/// key counts on macs (Option+Q types "œ"), and AltGr (Ctrl+Alt on Windows)
+/// never triggers it.
+fn is_alt_letter(e: &web_sys::KeyboardEvent, letter: char) -> bool {
+    if !e.alt_key()
+        || e.ctrl_key()
+        || e.meta_key()
+        || e.shift_key()
+        || e.get_modifier_state("AltGraph")
+    {
+        return false;
+    }
+    e.key().eq_ignore_ascii_case(&letter.to_string())
+        || (util::is_mac() && e.code() == format!("Key{}", letter.to_ascii_uppercase()))
 }
 
 fn install_shortcuts() {
@@ -201,7 +218,7 @@ fn install_shortcuts() {
         let m = e.ctrl_key() || e.meta_key();
         let key = e.key();
         let route = ui.route.get_untracked();
-        if is_ctrl_alt_letter(&e, 'q') {
+        if is_alt_letter(&e, 'q') {
             e.prevent_default();
             crate::quick::new_and_open();
             return;

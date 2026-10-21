@@ -255,7 +255,7 @@ async fn a_read_only_gateway_runs_no_changing_commands() {
     )
     .await
     .unwrap();
-    let _endpoint = control::serve(&srv.dirs("alice"), "alice", gateway.clone())
+    let _endpoint = control::serve(&srv.dirs("alice"), "alice", gateway.clone(), None)
         .await
         .unwrap();
     // Not only the ones that check on their own (write, rm): every change.
@@ -278,6 +278,77 @@ async fn a_read_only_gateway_runs_no_changing_commands() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_gateway_logs_the_commands_handed_to_it() {
+    use coolpsonotes_client::audit::AuditLog;
+    use coolpsonotes_client::control;
+    use coolpsonotes_client::profile::ProfileLock;
+    let srv = start().await;
+    login(&srv, "alice").await;
+    run(&srv, "alice", &["vault", "create", "Home"])
+        .await
+        .unwrap();
+    let lock = ProfileLock::try_acquire(&srv.dirs("alice"), "alice")
+        .unwrap()
+        .expect("free");
+    let session = reopen(&srv, "alice", "alice").await;
+    let log = tempfile::tempdir().unwrap();
+    let audit = std::sync::Arc::new(AuditLog::open(log.path()));
+    let gateway = hub(&session).await;
+    let _endpoint = control::serve(
+        &srv.dirs("alice"),
+        "alice",
+        gateway.clone(),
+        Some(audit.clone()),
+    )
+    .await
+    .unwrap();
+    run(&srv, "alice", &["mkdir", "Home", "Secret plans"])
+        .await
+        .unwrap();
+    run(&srv, "alice", &["vault", "rename", "Home", "House"])
+        .await
+        .unwrap();
+    // A failed command changed nothing: not logged.
+    run(&srv, "alice", &["rm", "House", "Nope.md"])
+        .await
+        .unwrap_err();
+    let id = gateway
+        .resolve("House")
+        .await
+        .unwrap()
+        .lock()
+        .await
+        .id()
+        .to_string();
+    let lines: Vec<serde_json::Value> = std::fs::read_to_string(audit.path())
+        .unwrap()
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    let ops: Vec<(&str, &str, &str)> = lines
+        .iter()
+        .map(|l| {
+            (
+                l["via"].as_str().unwrap(),
+                l["op"].as_str().unwrap(),
+                l["vault"].as_str().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        ops,
+        [
+            ("cli", "mkdir", id.as_str()),
+            ("cli", "vault rename", id.as_str())
+        ]
+    );
+    // Names and paths stay out of it.
+    let raw = std::fs::read_to_string(audit.path()).unwrap();
+    assert!(!raw.contains("Secret") && !raw.contains("Home") && !raw.contains("House"));
+    drop(lock);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn changing_commands_are_handed_to_the_running_daemon() {
     use coolpsonotes_client::control;
     use coolpsonotes_client::profile::ProfileLock;
@@ -292,7 +363,7 @@ async fn changing_commands_are_handed_to_the_running_daemon() {
         .unwrap()
         .expect("free");
     let daemon = hub(&reopen(&srv, "alice", "alice").await).await;
-    let endpoint = control::serve(&srv.dirs("alice"), "alice", daemon.clone())
+    let endpoint = control::serve(&srv.dirs("alice"), "alice", daemon.clone(), None)
         .await
         .unwrap();
     // Handed over right away, not after waiting for the profile.

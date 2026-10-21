@@ -6,7 +6,8 @@
 //! and random token are in `control.json` (readable by the user only), like
 //! the gateway's. The daemon runs the command on its own copies and sends
 //! back what it printed; the command's process prints that, as if it had run
-//! the command itself.
+//! the command itself. A gateway records what it ran in its audit log
+//! (channel `cli`).
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -18,6 +19,7 @@ use subtle::ConstantTimeEq;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
+use crate::audit::AuditLog;
 use crate::cli::{Cli, Command, QuickArgs};
 use crate::fsutil;
 use crate::hub::Hub;
@@ -74,8 +76,60 @@ impl Drop for Control {
     }
 }
 
-/// Run changing commands for others on `hub`, the daemon's own copies.
-pub async fn serve(dirs: &Dirs, profile: &str, hub: Arc<Hub>) -> Result<Control> {
+/// The command's name as typed (`mkdir`, `vault rename`), and the vault it
+/// names, if one: what the audit log records, never paths or content.
+fn audit_entry(c: &Command) -> (String, Option<String>) {
+    fn kebab(variant: &str) -> String {
+        let mut out = String::new();
+        for (i, ch) in variant.chars().enumerate() {
+            if ch.is_ascii_uppercase() && i > 0 {
+                out.push('-');
+            }
+            out.push(ch.to_ascii_lowercase());
+        }
+        out
+    }
+    // Serialized, a command is {"Variant": {fields}} or {"Variant":
+    // {"SubVariant": …}}; variants are CamelCase, fields snake_case.
+    let mut words = Vec::new();
+    let mut vault = None;
+    let mut v = serde_json::to_value(c).unwrap_or_default();
+    loop {
+        match v {
+            serde_json::Value::String(s) if s.starts_with(|c: char| c.is_ascii_uppercase()) => {
+                words.push(kebab(&s));
+                break;
+            }
+            serde_json::Value::Object(mut m) => {
+                let variant = (m.len() == 1)
+                    .then(|| m.keys().next().cloned())
+                    .flatten()
+                    .filter(|k| k.starts_with(|c: char| c.is_ascii_uppercase()));
+                match variant {
+                    Some(k) => {
+                        words.push(kebab(&k));
+                        v = m.remove(&k).unwrap_or_default();
+                    }
+                    None => {
+                        vault = m.get("vault").and_then(|x| x.as_str()).map(str::to_string);
+                        break;
+                    }
+                }
+            }
+            _ => break,
+        }
+    }
+    (words.join(" "), vault)
+}
+
+/// Run changing commands for others on `hub`, the daemon's own copies; a
+/// gateway passes its audit log.
+pub async fn serve(
+    dirs: &Dirs,
+    profile: &str,
+    hub: Arc<Hub>,
+    audit: Option<Arc<AuditLog>>,
+) -> Result<Control> {
     let listener = TcpListener::bind(("127.0.0.1", 0))
         .await
         .context("opening the local control endpoint")?;
@@ -91,10 +145,15 @@ pub async fn serve(dirs: &Dirs, profile: &str, hub: Arc<Hub>) -> Result<Control>
     let (dirs, profile) = (dirs.clone(), profile.to_string());
     let task = tokio::spawn(async move {
         while let Ok((conn, _)) = listener.accept().await {
-            let (dirs, profile, hub, token) =
-                (dirs.clone(), profile.clone(), hub.clone(), token.clone());
+            let (dirs, profile, hub, token, audit) = (
+                dirs.clone(),
+                profile.clone(),
+                hub.clone(),
+                token.clone(),
+                audit.clone(),
+            );
             tokio::spawn(async move {
-                if let Err(e) = answer(conn, &dirs, &profile, hub, &token).await {
+                if let Err(e) = answer(conn, &dirs, &profile, hub, &token, audit.as_deref()).await {
                     tracing::debug!("control: {e:#}");
                 }
             });
@@ -109,6 +168,7 @@ async fn answer(
     profile: &str,
     hub: Arc<Hub>,
     token: &str,
+    audit: Option<&AuditLog>,
 ) -> Result<()> {
     let mut raw = Vec::new();
     (&mut conn).take(MAX_REQUEST).read_to_end(&mut raw).await?;
@@ -128,8 +188,20 @@ async fn answer(
             ..Default::default()
         }
     } else {
+        // Looked up first: the command may rename or remove the vault.
+        let (op, vault) = audit_entry(&req.cli.command);
+        let vault_id = match (&audit, vault) {
+            (Some(_), Some(name)) => match hub.resolve(&name).await {
+                Ok(v) => v.lock().await.id().to_string(),
+                Err(_) => String::new(),
+            },
+            _ => String::new(),
+        };
         let (result, out) =
             crate::commands::run_for_other(req.cli, dirs.clone(), hub, req.stdin).await;
+        if let (Some(audit), true) = (audit, result.is_ok()) {
+            audit.record("cli", &op, &vault_id, None, 0);
+        }
         Reply {
             stdout: out.stdout,
             stderr: out.stderr,

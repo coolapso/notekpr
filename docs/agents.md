@@ -256,9 +256,12 @@ Operations are named after the call: `put_document` and `put_attachment`
 (only when the content changed), `trash_document` (one line per trashed
 entry) and `move_document`. Entries contain time, channel, vault id, document
 id (left out when there is none, e.g. a folder without an entry of its own)
-and size — never content, titles or paths. (CLI commands, also those handed to
-a running gateway, and the Markdown folder are not audited separately; their
-writes are attributed to the agent on the server like any other.) On the
+and size — never content, titles or paths. CLI commands handed to a running
+gateway (§3) are logged too, once they succeeded: `"via":"cli"`, the command
+as `op` (`mkdir`, `vault rename`, …) and the id of the vault it names, if one.
+(CLI commands run without a gateway and the Markdown folder are not audited
+separately; their writes are attributed to the agent on the server like any
+other.) On the
 server side, each update is attributed to the agent's identity, and owners
 see membership and key events in the vault audit
 (`GET /api/v1/vaults/{v}/audit`).

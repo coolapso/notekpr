@@ -715,9 +715,13 @@ async fn execute(ctx: Ctx, command: Command) -> Result<()> {
 }
 
 /// Let changing commands be handed to this daemon ([`control`]); without it
-/// they are refused while it runs, as before.
-async fn serve_control(ctx: &Ctx, hub: &Arc<Hub>) -> Option<control::Control> {
-    match control::serve(&ctx.dirs, &ctx.profile, hub.clone()).await {
+/// they are refused while it runs, as before. A gateway logs them.
+async fn serve_control(
+    ctx: &Ctx,
+    hub: &Arc<Hub>,
+    audit: Option<Arc<AuditLog>>,
+) -> Option<control::Control> {
+    match control::serve(&ctx.dirs, &ctx.profile, hub.clone(), audit).await {
         Ok(c) => Some(c),
         Err(e) => {
             ui::warn(&format!(
@@ -1834,7 +1838,7 @@ async fn sync(ctx: &Ctx, a: SyncArgs) -> Result<()> {
 
     // While running, changing commands are handed to us (they can't open
     // the local copies we own).
-    let _control = serve_control(ctx, &hub).await;
+    let _control = serve_control(ctx, &hub, None).await;
     let (stop_tx, stop_rx) = watch::channel(false);
     let live = tokio::spawn(livesync::run(hub.clone(), stop_rx.clone()));
     let mirror_task = match &dir {
@@ -2109,7 +2113,7 @@ async fn gateway_cmd(ctx: &Ctx, a: GatewayArgs) -> Result<()> {
         },
     )
     .await?;
-    let _control = serve_control(ctx, &hub).await;
+    let _control = serve_control(ctx, &hub, Some(audit.clone())).await;
     let (stop_tx, stop_rx) = watch::channel(false);
     // If live sync ends on its own (session revoked), the gateway stops too
     // instead of silently serving data that is no longer kept up to date.

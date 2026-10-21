@@ -447,6 +447,10 @@ struct Peaks {
     rps_peak: f32,
     http_p99: f32,
     queued: u32,
+    /// Sums while everyone works (no arrivals, outage or comeback).
+    working_rps_sum: f64,
+    working_cpu_sum: f64,
+    working_n: u32,
 }
 
 impl Peaks {
@@ -456,6 +460,17 @@ impl Peaks {
         } else {
             0.0
         }
+    }
+
+    fn working(&self) -> (f32, f32) {
+        if self.working_n == 0 {
+            return (0.0, 0.0);
+        }
+        let n = self.working_n as f64;
+        (
+            (self.working_rps_sum / n) as f32,
+            (self.working_cpu_sum / n) as f32,
+        )
     }
 }
 
@@ -832,6 +847,7 @@ async fn run(args: Args, root: PathBuf, bus: Bus) -> Result<Report> {
             let t = world.bus.tally.lock().unwrap();
             let pk = peaks.lock().unwrap().clone();
             let (p50, p99) = t.steady.percentiles();
+            let (working_rps, working_cpu_pct) = pk.working();
             overall.cpu = overall.cpu.max(pk.cpu);
             overall.mem = overall.mem.max(pk.mem);
             overall.rps_sum += pk.rps_sum;
@@ -856,6 +872,8 @@ async fn run(args: Args, root: PathBuf, bus: Bus) -> Result<Report> {
                 online_s: online,
                 recovery_s: recovery,
                 max_queued: pk.queued,
+                working_rps,
+                working_cpu_pct,
             }
         };
         print_level(&result, t_start);
@@ -1134,11 +1152,12 @@ async fn stats_loop(
             online += u32::from(h.is_online());
             queued += Person::queued(h).await as u32;
         }
-        let (actions_ps, delivered_ps, p50, p99, edits, notes, pictures, vaults, errors) = {
+        let (actions_ps, delivered_ps, p50, p99, edits, notes, pictures, vaults, errors, working) = {
             let mut t = world.bus.tally.lock().unwrap();
             let (a, d, p50, p99) = t.window();
+            let working = t.phase == Some(Phase::Busy);
             (
-                a, d, p50, p99, t.edits, t.notes, t.pictures, t.vaults, t.errors,
+                a, d, p50, p99, t.edits, t.notes, t.pictures, t.vaults, t.errors, working,
             )
         };
         let m = m.unwrap_or_default();
@@ -1153,6 +1172,11 @@ async fn stats_loop(
             pk.rps_peak = pk.rps_peak.max(m.http_rps);
             pk.http_p99 = pk.http_p99.max(m.http_p99_ms);
             pk.queued = pk.queued.max(queued);
+            if working && server_up && m.http_rps > 0.0 {
+                pk.working_rps_sum += m.http_rps as f64;
+                pk.working_cpu_sum += u.cpu_pct as f64;
+                pk.working_n += 1;
+            }
         }
         world.bus.stats(Stats {
             t_ms: t_start.elapsed().as_millis() as u64,
@@ -1283,13 +1307,14 @@ fn mb(b: u64) -> f64 {
 
 fn print_level(r: &LevelResult, t_start: Instant) {
     println!(
-        "{:>7.1} s  level {:>2}: {:>5} people · {:>6.0} req/s avg, {:>6.0} peak · CPU {:>4.0}% · {:>5.0} MB · \
+        "{:>7.1} s  level {:>2}: {:>5} people · {:>6.0} req/s working, {:>6.0} peak · CPU {:>4.0}% working, {:>4.0}% peak · {:>5.0} MB · \
          keystroke p50 {:.0} ms p99 {:.0} ms · down {} s, online in {}, caught up in {}",
         t_start.elapsed().as_secs_f32(),
         r.level,
         r.users,
-        r.avg_http_rps,
+        r.rps(),
         r.peak_http_rps,
+        r.working_cpu_pct,
         r.peak_cpu_pct,
         mb(r.peak_mem_bytes),
         r.propagation_p50_ms,
@@ -1338,15 +1363,16 @@ fn print_report(r: &Report) {
     if r.levels.len() > 1 {
         println!();
         println!(
-            "level  people   req/s avg   peak   CPU   memory   keystroke p50/p99   down   online in   caught up   most queued"
+            "level  people   req/s working   peak   CPU working / peak   memory   keystroke p50/p99   down   online in   caught up   most queued"
         );
         for l in &r.levels {
             println!(
-                "{:>5}  {:>6}   {:>9.0} {:>6.0} {:>4.0}%  {:>5.0} MB   {:>7.0} / {:<7.0} ms {:>4} s   {:>9}   {:>9}   {:>11}",
+                "{:>5}  {:>6}   {:>13.0} {:>6.0}   {:>10.0}% / {:>3.0}%  {:>5.0} MB   {:>7.0} / {:<7.0} ms {:>4} s   {:>9}   {:>9}   {:>11}",
                 l.level,
                 l.users,
-                l.avg_http_rps,
+                l.rps(),
                 l.peak_http_rps,
+                l.working_cpu_pct,
                 l.peak_cpu_pct,
                 mb(l.peak_mem_bytes),
                 l.propagation_p50_ms,

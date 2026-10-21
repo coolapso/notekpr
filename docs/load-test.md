@@ -51,7 +51,9 @@ container and the people's copies.
   p99, edits per second, the time from one person's keystroke to everyone
   else's copy (p50 and p99), and who is online.
 * **Levels** (top right): each finished level's people, requests per
-  second, CPU, keystroke latency, outage, and the comeback: *online in*
+  second and CPU while everyone works (not counting arrivals, the outage and
+  the comeback; then CPU's peak, usually the comeback or the arrivals),
+  keystroke latency, outage, and the comeback: *online in*
   (everyone connected again) and *caught up* (the changes people made
   during the outage are uploaded: no more waiting on devices than before
   the crash; "never" if not within two minutes — the server can't keep up

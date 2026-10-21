@@ -682,9 +682,9 @@ fn level_cells(l: &LevelResult) -> Vec<String> {
     vec![
         l.level.to_string(),
         l.users.to_string(),
-        format!("{:.0}", l.avg_http_rps),
+        format!("{:.0}", l.rps()),
         format!("{:.0}", l.peak_http_rps),
-        format!("{:.0}%", l.peak_cpu_pct),
+        format!("{:.0} / {:.0}%", l.working_cpu_pct, l.peak_cpu_pct),
         format!("{:.0} MB", mb(l.peak_mem_bytes)),
         format!(
             "{} / {}",
@@ -707,7 +707,7 @@ const LEVEL_HEADS: [&str; 11] = [
     "PEOPLE",
     "REQ/S",
     "PEAK",
-    "CPU",
+    "CPU / PEAK",
     "MEMORY",
     "KEYSTROKE p50/p99",
     "DOWN",
@@ -736,11 +736,11 @@ fn level_columns(full: bool) -> Vec<(usize, f64)> {
     } else {
         vec![
             (0, 0.0),
-            (1, 0.19),
-            (2, 0.32),
-            (4, 0.43),
-            (6, 0.70),
-            (7, 0.80),
+            (1, 0.17),
+            (2, 0.29),
+            (4, 0.47),
+            (6, 0.72),
+            (7, 0.81),
             (9, 1.0),
         ]
     }

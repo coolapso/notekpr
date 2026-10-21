@@ -381,6 +381,24 @@ pub struct LevelResult {
     pub recovery_s: Option<f32>,
     /// The most changes waiting on people's devices at once.
     pub max_queued: u32,
+    /// While everyone works (no arrivals, outage or comeback): the
+    /// average requests a second and CPU.
+    #[serde(default)]
+    pub working_rps: f32,
+    #[serde(default)]
+    pub working_cpu_pct: f32,
+}
+
+impl LevelResult {
+    /// Requests a second while everyone works (or over the whole level, if
+    /// there was no such time).
+    pub fn rps(&self) -> f32 {
+        if self.working_rps > 0.0 {
+            self.working_rps
+        } else {
+            self.avg_http_rps
+        }
+    }
 }
 
 impl Report {

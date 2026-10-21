@@ -442,7 +442,7 @@ pub struct MenuState {
 }
 
 /// How many settings there are (START comes after them).
-pub const OPTIONS: usize = 8;
+pub const OPTIONS: usize = 9;
 
 pub fn option_label(i: usize) -> &'static str {
     [
@@ -454,6 +454,7 @@ pub fn option_label(i: usize) -> &'static str {
         "TYPING SPEED",
         "WORK PER LEVEL",
         "OUTAGES",
+        "ON GAME OVER",
     ][i]
 }
 
@@ -472,7 +473,8 @@ pub fn option_value(s: &Settings, i: usize, docker: bool) -> String {
         4 => memory_label(&s.memory),
         5 => format!("{}×", trim(s.speed)),
         6 => format!("{} s", s.duration_s),
-        _ => if s.outages { "ON" } else { "OFF" }.into(),
+        7 => if s.outages { "ON" } else { "OFF" }.into(),
+        _ => if s.keep_going { "KEEP GOING" } else { "STOP" }.into(),
     }
 }
 
@@ -534,6 +536,7 @@ pub fn change(s: &mut Settings, i: usize, dir: i32, docker: bool) {
         5 => s.speed = step(&[0.5, 1.0, 2.0, 4.0], s.speed, dir),
         6 => s.duration_s = step(&[20, 30, 45, 60, 90, 120], s.duration_s, dir),
         7 => s.outages = !s.outages,
+        8 => s.keep_going = !s.keep_going,
         _ => {}
     }
 }
@@ -640,6 +643,7 @@ mod tests {
             memory: "512m".into(),
             speed: 1.0,
             outages: true,
+            keep_going: false,
         }
     }
 
@@ -687,10 +691,18 @@ mod tests {
         a.input(Input::Left);
         a.input(Input::Left);
         assert_eq!(a.menu.as_ref().unwrap().settings.memory, "256m");
+        // Play on after a game over: the last option.
+        a.menu.as_mut().unwrap().selected = OPTIONS - 1;
+        a.input(Input::Right);
+        let s = &a.menu.as_ref().unwrap().settings;
+        assert!(s.keep_going);
+        assert_eq!(option_value(s, OPTIONS - 1, true), "KEEP GOING");
         // START sends the settings.
         a.menu.as_mut().unwrap().selected = OPTIONS;
         match a.input(Input::Enter) {
-            Some(Command::Start(s)) => assert_eq!((s.from_level, s.cpus), (6, 2.0)),
+            Some(Command::Start(s)) => {
+                assert_eq!((s.from_level, s.cpus, s.keep_going), (6, 2.0, true))
+            }
             other => panic!("{other:?}"),
         }
     }

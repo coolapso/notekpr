@@ -159,6 +159,7 @@ fn settings(a: &Args) -> Settings {
         memory: a.memory.clone(),
         speed: a.speed,
         outages: !a.no_crash,
+        keep_going: a.keep_going,
     }
 }
 
@@ -177,6 +178,7 @@ impl Args {
         }
         a.speed = s.speed.clamp(0.05, 20.0);
         a.no_crash = !s.outages;
+        a.keep_going = s.keep_going;
         a
     }
 }

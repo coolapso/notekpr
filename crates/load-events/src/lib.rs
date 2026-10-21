@@ -123,6 +123,9 @@ pub struct Settings {
     pub memory: String,
     pub speed: f64,
     pub outages: bool,
+    /// Play every level even after the server couldn't take one.
+    #[serde(default)]
+    pub keep_going: bool,
 }
 
 /// What the dashboard asks the runner (sent over the same WebSocket).

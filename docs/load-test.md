@@ -20,9 +20,10 @@ task load:native                           # without Docker: the server as a loc
 `task load` builds the server image (`task docker:build`), the dashboard and
 the load runner and opens <http://localhost:8098> on the **start screen**:
 choose the level to start at, how many levels, people per level, the
-server's CPU and memory, typing speed, how long each level lasts and
-whether there are outages (arrow keys or clicks; the `task load` variables
-are the starting choices), then PRESS START. After the report — or a GAME
+server's CPU and memory, typing speed, how long each level lasts, whether
+there are outages and whether a game over ends the run or it keeps going
+(arrow keys or clicks; the `task load` variables are the starting choices),
+then PRESS START. After the report — or a GAME
 OVER — *insert coin* takes you back to the start screen, starting at the
 level that ended it, to try again with more CPU or memory. `task load --
 --now` skips the start screen (and `--exit` stops after one run, for

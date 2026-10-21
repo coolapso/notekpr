@@ -78,6 +78,12 @@ Settled; don't reopen them without a new reason.
       cached now (`web/src/knowledge.rs`); measure on a big vault
       (`tests/e2e/perf.py` covers typing only) before changing more. Notes
       shared with you still load one by one at startup.
+- [ ] **Server memory per connected person**: about 0.22 MB each in the load
+      test (`task load REALISTIC=1`), the first limit when sizing a server —
+      CPU while people work is about 0.035 % of a core each. Find out what it
+      is (WebSocket buffers and tasks per connection, the per-vault event
+      channels — already cut from 2048 to 256 slots —, glibc's per-thread
+      malloc arenas) before changing more.
 - [ ] **Small web leaks** [W-L5, rest]: `actions::pick_files` forgets its
       change listener (`cb.forget()`), and every socket starts its own
       watchdog `set_interval` (`web/src/ws.rs`).

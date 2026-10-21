@@ -232,6 +232,52 @@ async fn leaving_uploads_first_and_can_remove_the_mirror() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_read_only_gateway_runs_no_changing_commands() {
+    use coolpsonotes_client::control;
+    use coolpsonotes_client::hub::{Hub, HubOptions};
+    use coolpsonotes_client::profile::ProfileLock;
+    let srv = start().await;
+    login(&srv, "alice").await;
+    run(&srv, "alice", &["vault", "create", "Home"])
+        .await
+        .unwrap();
+    let lock = ProfileLock::try_acquire(&srv.dirs("alice"), "alice")
+        .unwrap()
+        .expect("free");
+    let gateway = Hub::start(
+        reopen(&srv, "alice", "alice").await,
+        HubOptions {
+            read_only: true,
+            catch_up: true,
+            offline_ok: true,
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let _endpoint = control::serve(&srv.dirs("alice"), "alice", gateway.clone())
+        .await
+        .unwrap();
+    // Not only the ones that check on their own (write, rm): every change.
+    for args in [
+        &["mkdir", "Home", "Ideas"][..],
+        &["vault", "rename", "Home", "House"],
+        &["quick", "--vault", "Home", "a", "thought"],
+    ] {
+        let err = run(&srv, "alice", args).await.unwrap_err();
+        assert!(
+            format!("{err:#}").contains("read-only"),
+            "{args:?}: {err:#}"
+        );
+    }
+    let home = gateway.resolve("Home").await.unwrap();
+    assert!(!home.lock().await.is_folder("Ideas"));
+    // Reading still works.
+    run(&srv, "alice", &["ls", "Home"]).await.unwrap();
+    drop(lock);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn changing_commands_are_handed_to_the_running_daemon() {
     use coolpsonotes_client::control;
     use coolpsonotes_client::profile::ProfileLock;

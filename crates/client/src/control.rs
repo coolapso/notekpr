@@ -121,6 +121,12 @@ async fn answer(
             error: Some("this process doesn't run that command".into()),
             ..Default::default()
         }
+    } else if hub.read_only {
+        // Everything handed over changes something.
+        Reply {
+            error: Some("the running gateway is read-only: it makes no changes".into()),
+            ..Default::default()
+        }
     } else {
         let (result, out) =
             crate::commands::run_for_other(req.cli, dirs.clone(), hub, req.stdin).await;

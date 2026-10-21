@@ -288,6 +288,10 @@ pub struct Ui {
     pub warning: RwSignal<Option<String>>,
     /// Bumped by a click outside any menu (or Escape): open menus close.
     pub close_menus: RwSignal<u64>,
+    /// Bumped when comments changed (received, sent, stored).
+    pub comments_rev: RwSignal<u64>,
+    /// The comment button, composer or thread open on the note.
+    pub comment_ui: RwSignal<CommentUi>,
 }
 
 thread_local! {
@@ -331,6 +335,8 @@ pub fn init_ui() -> Ui {
         panel_overlay: RwSignal::new(false),
         warning: RwSignal::new(None),
         close_menus: RwSignal::new(0),
+        comments_rev: RwSignal::new(0),
+        comment_ui: RwSignal::new(CommentUi::Closed),
     };
     UI.with(|u| u.set(Some(ui)));
     ui
@@ -483,6 +489,9 @@ pub struct Core {
     /// person and note every `SNAPSHOT_COOLDOWN_MS`).
     pub last_snapshot: HashMap<(String, String), i64>,
     pub users: HashMap<String, PublicUser>,
+    /// Commenters' account keys beyond the membership logs (people a note
+    /// is shared with see members' comments), checked against our pins.
+    pub comment_keys: HashMap<String, coolpsonotes_core::keys::AccountPublic>,
     /// Notes shared with us individually, by (vault, note). Their content
     /// lives in a members-less replica of the vault (`VaultReplica::member == false`).
     pub shares: BTreeMap<(String, String), ShareState>,
@@ -535,6 +544,7 @@ impl Core {
     }
 }
 
+mod comments;
 mod members;
 mod nav;
 mod offline;
@@ -545,6 +555,7 @@ mod shares;
 mod sync;
 mod vaults;
 
+pub use comments::*;
 pub use members::{log_entry, member_log, pin_member_key, reload_log, sign_vault, vouched};
 pub use nav::*;
 pub use offline::{

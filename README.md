@@ -77,6 +77,12 @@ read anything.
 * Edit the same note at the same time with live cursors, and see who else is
   on the note you're on. Edits merge without conflicts (CRDTs), also after
   working offline.
+* Comments on the text, like in Notion: select some text and comment
+  (`Alt+M`); the text gets a highlight, and clicking it opens the thread to
+  reply, resolve, edit or delete. Viewers can comment too (the vault's owner
+  can turn that off), comments follow the text through edits — also edits
+  from your own editor — and a note can be shared with its comments. Also
+  from the command line (`coolpsonotes comments`) and for AI agents.
 * You're told when a note is shared with you; owners have an activity log
   per vault.
 

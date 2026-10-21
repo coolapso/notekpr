@@ -32,10 +32,11 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
+use coolpsonotes_core::comments::CommentLog;
 use coolpsonotes_core::crypto::Purpose;
 use coolpsonotes_core::doc::{IndexDoc, NoteDoc};
 use coolpsonotes_core::engine::{Applied, Deferred, VaultReplica};
-use coolpsonotes_core::protocol::INDEX_OBJECT_ID;
+use coolpsonotes_core::protocol::{INDEX_OBJECT_ID, comments_note, comments_object};
 use js_sys::{Array, Function, Promise, Uint8Array};
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::JsCast;
@@ -50,7 +51,7 @@ const DB_NAME: &str = "coolpsonotes";
 const DB_VERSION: u32 = 1;
 const STORE: &str = "cache";
 /// Bump to discard copies written in an older layout.
-const FORMAT: u32 = 1;
+const FORMAT: u32 = 2;
 /// Object id the meta record is encrypted under (not a valid note id).
 const META_OBJECT: &str = "~cache";
 const SEP: char = '\u{1}';
@@ -67,6 +68,13 @@ struct ShareCopy {
     seq: i64,
     #[serde(with = "coolpsonotes_core::b64")]
     state: Vec<u8>,
+    /// Its comments ([`VaultReplica::comments_state`]).
+    #[serde(
+        default,
+        with = "coolpsonotes_core::b64::opt",
+        skip_serializing_if = "Option::is_none"
+    )]
+    comments: Option<Vec<u8>>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -144,12 +152,21 @@ fn prepare(
 ) -> Option<Job> {
     let mut puts = Vec::new();
     let mut kept = BTreeSet::new();
+    let mut removed = removed;
     for o in std::mem::take(dirty) {
         if removed.contains(&o) {
             continue;
         }
         let state = if o == INDEX_OBJECT_ID {
             r.index.encode_state()
+        } else if let Some(note) = comments_note(&o) {
+            match r.comments_state(note) {
+                Some(s) => s,
+                None => {
+                    removed.insert(o);
+                    continue;
+                }
+            }
         } else {
             match r.notes.get(&o) {
                 Some(n) => n.encode_state(),
@@ -211,12 +228,16 @@ fn restore(r: &mut VaultReplica, stored: Stored) -> Result<i64, String> {
     }
     let index = IndexDoc::new();
     let mut notes = HashMap::new();
+    let mut comments = HashMap::new();
     for (o, data) in stored.objects {
         let state = r
             .decrypt_object(Purpose::LocalCache, &o, &data)
             .map_err(|e| e.to_string())?;
         if o == INDEX_OBJECT_ID {
             index.apply_update(&state).map_err(|e| e.to_string())?;
+        } else if let Some(note) = comments_note(&o) {
+            let log = CommentLog::from_bytes(&state).map_err(|e| e.to_string())?;
+            comments.insert(note.to_string(), log);
         } else {
             let n = NoteDoc::new();
             n.apply_update(&state).map_err(|e| e.to_string())?;
@@ -225,6 +246,7 @@ fn restore(r: &mut VaultReplica, stored: Stored) -> Result<i64, String> {
     }
     r.index = index;
     r.notes = notes;
+    r.comments = comments;
     r.seq = meta.seq;
     r.since_snapshot = meta.since_snapshot;
     Ok(meta.seq)
@@ -283,17 +305,26 @@ impl Tracker {
 
 /// Remember changed content of a vault for the next write.
 pub fn note_applied(c: &mut Core, vault: &str, applied: &Applied) {
+    // A shared note's copy holds its comments; a vault's copy keeps them
+    // apart (`c_<note>`).
+    let member = c.replicas.get(vault).is_some_and(|r| r.member);
     let t = &mut c.cache;
     let dirty = t.dirty.entry(vault.to_string()).or_default();
     dirty.extend(applied.objects.iter().cloned());
+    dirty.extend(applied.comments.iter().map(|n| {
+        if member {
+            comments_object(n)
+        } else {
+            n.clone()
+        }
+    }));
     if applied.index_changed {
         dirty.insert(INDEX_OBJECT_ID.to_string());
     }
     if !applied.purged.is_empty() {
-        t.removed
-            .entry(vault.to_string())
-            .or_default()
-            .extend(applied.purged.iter().cloned());
+        let removed = t.removed.entry(vault.to_string()).or_default();
+        removed.extend(applied.purged.iter().cloned());
+        removed.extend(applied.purged.iter().map(|o| comments_object(o)));
     }
     schedule(c);
 }
@@ -368,6 +399,7 @@ async fn save_now() {
                                 format: FORMAT,
                                 seq: s.seq,
                                 state: n.encode_state(),
+                                comments: r.comments_state(&o),
                             };
                             let plain = serde_json::to_vec(&copy).ok()?;
                             r.encrypt_object(Purpose::LocalCache, &o, &plain).ok()
@@ -760,6 +792,9 @@ pub async fn restore_share(user: &str, vault: &str, note: &str) -> Option<i64> {
             .or_default()
             .apply_update(&copy.state)
             .ok()?;
+        if let Some(cm) = &copy.comments {
+            r.restore_comments(note, cm).ok()?;
+        }
         Some(copy.seq)
     });
     if restored.is_none() {

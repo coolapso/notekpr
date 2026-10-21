@@ -509,6 +509,8 @@ fn ShareNote(vault: String, note: String) -> impl IntoView {
     let role = RwSignal::new(Role::Editor);
     let err = RwSignal::new(None::<String>);
     let busy = RwSignal::new(false);
+    let with_comments = RwSignal::new(true);
+    let has_comments = step(|c| !state::comment_threads(c, &vault, &note).is_empty());
     let timer = StoredValue::new(None::<i32>);
     let (v, n) = (vault.clone(), note.clone());
     Effect::new(move |_| {
@@ -550,6 +552,14 @@ fn ShareNote(vault: String, note: String) -> impl IntoView {
                     <option value="viewer">"Can view"</option>
                 </select>
             </div>
+            {has_comments.then(|| view! {
+                <label class="check share-comments">
+                    <input type="checkbox" prop:checked=move || with_comments.get()
+                        on:change=move |ev| with_comments.set(event_target_checked(&ev))/>
+                    <span>"Include the comments written so far"
+                        <span class="muted small">" — for everyone this note is shared with. Otherwise they see only comments written from now on."</span></span>
+                </label>
+            })}
             <div class="found">
                 {move || {
                     let taken = |u: &PublicUser| shares.get().iter().any(|s| s.user.id == u.id) || members.get().iter().any(|m| m.user.id == u.id);
@@ -576,8 +586,9 @@ fn ShareNote(vault: String, note: String) -> impl IntoView {
                                     busy.set(true);
                                     err.set(None);
                                     let (v, n, u, r) = (v.clone(), n.clone(), u2.clone(), role.get_untracked());
+                                    let cm = with_comments.get_untracked();
                                     leptos::task::spawn_local(async move {
-                                        match actions::share_note(&v, &n, &u, r).await {
+                                        match actions::share_note(&v, &n, &u, r, cm).await {
                                             Ok(()) => { q.set(String::new()); found.set(vec![]); }
                                             Err(e) => err.set(Some(e)),
                                         }
@@ -605,7 +616,7 @@ fn ShareNote(vault: String, note: String) -> impl IntoView {
                             actions::trust_key(&u);
                             let (v, n, u) = (v.clone(), n.clone(), u.clone());
                             leptos::task::spawn_local(async move {
-                                if let Err(e) = actions::share_note(&v, &n, &u, r).await {
+                                if let Err(e) = actions::share_note(&v, &n, &u, r, false).await {
                                     err.set(Some(e));
                                 }
                                 ui.shares_rev.update(|x| *x += 1);
@@ -832,6 +843,7 @@ fn VaultSettings(vault: String) -> impl IntoView {
         vault.clone(),
         vault.clone(),
     );
+    let v9 = vault.clone();
     view! {
         <Dialog title="Vault settings" wide=true>
             <Show when=move || owner fallback=|| view! { <p class="muted">"Only the owner can change this vault's settings."</p> }>
@@ -848,6 +860,24 @@ fn VaultSettings(vault: String) -> impl IntoView {
                             <button class="btn" type="submit">"Rename"</button>
                         </form>
                         <VaultIconPicker vault=vi/>
+                    }
+                }
+                {
+                    let v = v9.clone();
+                    let on = move || {
+                        ui.vaults.track();
+                        step(|c| c.vault_infos.get(&v).is_some_and(|i| i.viewers_comment))
+                    };
+                    let v = v9.clone();
+                    view! {
+                        <label class="check viewers-comment">
+                            <input type="checkbox" prop:checked=on
+                                on:change=move |ev| {
+                                    let (v, on) = (v.clone(), event_target_checked(&ev));
+                                    leptos::task::spawn_local(async move { actions::set_viewers_comment(&v, on).await });
+                                }/>
+                            <span>"Viewers can comment"<span class="muted small">" — on notes they can read (also people a note is shared with to view)"</span></span>
+                        </label>
                     }
                 }
             </Show>
@@ -1077,6 +1107,7 @@ fn Help() -> impl IntoView {
         (format!("{m}+Shift+F"), "Search all notes"),
         (format!("{m}+Alt+N"), "New note"),
         ("Alt+Q".into(), "New quick note"),
+        ("Alt+M".into(), "Comment on the selected text"),
         (format!("{m}+E"), "Toggle reading view"),
         (format!("{m}+\\"), "Toggle side panel"),
         (format!("{m}+G"), "Graph of the vault"),

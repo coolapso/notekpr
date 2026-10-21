@@ -224,6 +224,26 @@ pub async fn set_archived(vault: &str, archived: bool) {
     }
 }
 
+/// Let viewers (and people the vault's notes are shared with read-only)
+/// comment, or not (owner).
+pub async fn set_viewers_comment(vault: &str, on: bool) {
+    match api::patch::<_, VaultInfo>(
+        &format!("/vaults/{vault}"),
+        &UpdateVaultRequest {
+            viewers_comment: Some(on),
+            ..Default::default()
+        },
+    )
+    .await
+    {
+        Ok(i) => step(|c| {
+            c.vault_infos.insert(vault.to_string(), i);
+            state::publish_vaults(c);
+        }),
+        Err(e) => error(e.message),
+    }
+}
+
 pub async fn delete_vault(vault: &str) {
     match api::delete(&format!("/vaults/{vault}")).await {
         Ok(()) => {
@@ -640,7 +660,7 @@ pub async fn grant_missing_keys(vault: &str) {
             if !s.has_current_key
                 && s.user.account_key.is_some()
                 && check_trust(&s.user).is_ok()
-                && let Err(e) = share_note(vault, &note, &s.user, s.role).await
+                && let Err(e) = share_note(vault, &note, &s.user, s.role, false).await
             {
                 util::warn(&format!("could not give a note's key again: {e}"));
             }
@@ -652,11 +672,14 @@ pub async fn grant_missing_keys(vault: &str) {
 
 /// Share one note (not the vault) with someone. The note first gets its own
 /// key; the person receives only that key.
+/// Share a note with someone. `with_comments`: its comments written so far
+/// go with it — to everyone it is shared with (docs/comments.md §5).
 pub async fn share_note(
     vault: &str,
     note: &str,
     user: &PublicUser,
     role: Role,
+    with_comments: bool,
 ) -> Result<(), String> {
     if user.account_key.is_none() {
         return Err(format!(
@@ -723,6 +746,21 @@ pub async fn share_note(
         }
     });
     state::reload_log(vault).await;
+    if with_comments {
+        // Where sharing started comes with the vault's keys.
+        state::reload_vault_keys(vault.to_string()).await;
+        step(|c| {
+            let sent = c
+                .replicas
+                .get_mut(vault)
+                .and_then(|r| r.carry_comments(note).ok())
+                .is_some_and(|p| !p.is_empty());
+            if sent {
+                crate::cache::note_local(c, vault, &comments_object(note));
+                state::schedule_flush(c);
+            }
+        });
+    }
     let title = step(|c| {
         state::send_presence(c);
         c.note_title(vault, note).unwrap_or_default()
@@ -1966,6 +2004,7 @@ impl Host for NoteHost {
     fn selection_changed(&self, anchor: usize, head: usize) {
         step(|c| c.cursor = Some((anchor, head)));
         step(|c| state::send_presence(c));
+        crate::views::comments::selection_changed(&self.vault, &self.note, anchor, head);
     }
 
     fn insert_files(&self, files: Vec<web_sys::File>, at: usize) {

@@ -142,6 +142,7 @@ pub(super) async fn load_vault_with(info: VaultInfo, force: bool, keys: Option<V
                     .unwrap_or_else(|_| VaultMeta::named("(unreadable)"));
                 let docs = engine::object_keyrings(&ring, &keys);
                 let shared = engine::shared_objects(&keys);
+                let share_from = engine::share_from(&keys);
                 let note_keys = keys.shared.is_some();
                 let (is_new, applied, docs_changed, restored, unsigned, offline_start) =
                     step(|c| {
@@ -180,6 +181,7 @@ pub(super) async fn load_vault_with(info: VaultInfo, force: bool, keys: Option<V
                                 r.role = info.role;
                                 r.doc_keys = docs;
                                 r.shared = shared;
+                                r.share_from = share_from;
                                 // New notes' keys the server doesn't have yet stay.
                                 c.outboxes
                                     .entry(id.clone())
@@ -193,6 +195,7 @@ pub(super) async fn load_vault_with(info: VaultInfo, force: bool, keys: Option<V
                                 let mut r = VaultReplica::new(&id, info.role, ring, meta);
                                 r.doc_keys = docs;
                                 r.shared = shared;
+                                r.share_from = share_from;
                                 r.max_head_seen = storage::head_seen(&uid, &id);
                                 // Keys of new notes not registered yet, before the
                                 // local copy and unsent changes that need them.

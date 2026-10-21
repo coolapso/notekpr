@@ -183,6 +183,8 @@ pub(super) fn on_server_message(m: ServerMessage) {
                 crate::cache::schedule(c);
                 react(c, &vault_id, reaction);
             });
+            // Comments sent from here are now stored.
+            ui().comments_rev.update(|n| *n += 1);
         }
         ServerMessage::SnapshotCreated {
             vault_id,
@@ -503,7 +505,17 @@ pub(super) fn restore_stored_pending(c: &mut Core, vault_id: &str) -> engine::Ap
                 match r.decrypt_object(Purpose::Update, &p.object_id, &p.payload) {
                     Ok(plain) => {
                         adopted += 1;
-                        if p.object_id == INDEX_OBJECT_ID {
+                        if let Some(note) = coolpsonotes_core::protocol::comments_note(&p.object_id)
+                        {
+                            // Shown again, marked as not stored yet.
+                            let pending = engine::Pending {
+                                client_update_id: p.client_update_id.clone(),
+                                object_id: p.object_id.clone(),
+                                update: plain.clone(),
+                            };
+                            let _ = r.restore_pending_comment(&pending);
+                            applied.comments.insert(note.to_string());
+                        } else if p.object_id == INDEX_OBJECT_ID {
                             let _ = r.index.apply_update(&plain);
                             applied.index_changed = true;
                         } else {
@@ -907,8 +919,11 @@ pub fn after_apply(vault_id: &str, applied: engine::Applied) {
         if applied.index_changed || !applied.purged.is_empty() {
             ui.tree_rev.update(|v| *v += 1);
         }
-        content.run(250, move || ui.content_rev.update(|v| *v += 1));
+        if !applied.objects.is_empty() || applied.index_changed || !applied.purged.is_empty() {
+            content.run(250, move || ui.content_rev.update(|v| *v += 1));
+        }
     }
+    let comments_changed = !applied.comments.is_empty();
     // Push remote content into the open editor.
     if let Some((n, ed, text, member)) = open {
         if let Some(t) = text {
@@ -926,6 +941,9 @@ pub fn after_apply(vault_id: &str, applied: engine::Applied) {
             // Link targets may have appeared or disappeared.
             ed.refresh();
         }
+    }
+    if comments_changed {
+        ui.comments_rev.update(|n| *n += 1);
     }
 }
 

@@ -86,7 +86,7 @@ crates/editor   the live-preview Markdown editor. Pure model (native tests): tex
                 (incremental block classification) · syntax.rs · commands.rs · vim.rs.
                 DOM view: view/ (contenteditable, line patches, IME, native edits)
 crates/web      Leptos CSR → wasm32. state/ (Core + Ui in mod.rs; session, vaults,
-                members, shares, sync, presence, prefs, nav, offline) · cache.rs
+                members, shares, sync, presence, prefs, nav, offline, comments) · cache.rs
                 (IndexedDB copy) · static/sw.js (service worker, only with offline
                 use on) · actions.rs (user operations; NoteHost = the editor's Host) ·
                 editor.rs (re-exports crates/editor) · views/ · render.rs (reading view)

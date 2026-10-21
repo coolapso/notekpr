@@ -341,7 +341,7 @@ def test_features(env):
         new_note(a, "Ideas", "Plant a #garden" + KEYS["enter"] + "See [[Plans]]")
         new_note(a, "Plans", "Weekend plans")
         time.sleep(0.6)
-        check(a.js("return document.querySelector('.panel section .count').textContent") == "1", "backlink is detected")
+        check(a.js("return Array.from(document.querySelectorAll('.panel section h3')).find(h => h.textContent.includes('Backlinks')).querySelector('.count').textContent") == "1", "backlink is detected")
         a.js("const t=document.querySelector('.note-title'); t.focus(); t.select();")
         a.keys("Roadmap" + KEYS["enter"])
         time.sleep(1)
@@ -1422,6 +1422,90 @@ return false;
 """
 
 
+def test_comments(env):
+    a, b = Browser(), Browser()
+    def comment_on(br, text, body):
+        check(br.js(SELECT_TEXT, text), f"“{text}” is in the note")
+        br.click(".cm-offer", 5)
+        br.wait("return !!document.activeElement && document.activeElement.matches('.cm-compose textarea')", 5, "the comment form")
+        br.keys(body)
+        br.chord(KEYS["ctrl"], KEYS["enter"])
+        br.wait("return !document.querySelector('.cm-compose')", 5, "the comment is sent")
+    def open_highlight(br, nth=0):
+        """Click the middle of a comment's highlight."""
+        r = br.js("const h = document.querySelectorAll('.ed-marks .hl.cm')[arguments[0]]; if (!h) return null; const b = h.getBoundingClientRect(); return [b.left + b.width / 2, b.top + b.height / 2];", nth)
+        check(r is not None, "a highlight is there")
+        br.js("const [x, y] = arguments; const el = document.elementFromPoint(x, y);"
+              "const p = document.caretPositionFromPoint ? document.caretPositionFromPoint(x, y) : null;"
+              "if (p) { const s = getSelection(); s.collapse(p.offsetNode, p.offset); }"
+              "el.dispatchEvent(new MouseEvent('click', {bubbles: true, clientX: x, clientY: y}));", r[0], r[1])
+        br.find(".cm-thread", 5)
+    texts_expr = "Array.from(document.querySelectorAll('.cm-thread .cm-text')).map(e => e.textContent)"
+    texts = "return " + texts_expr
+    try:
+        an, bn = uniq("cora"), uniq("cid")
+        signup(a, an)
+        signup(b, bn)
+        new_note(a, "Groceries", "Buy milk and bread today")
+        url = a.js("return location.pathname")
+        share(a, ".sb-bottom button:nth-child(2)", bn, role="viewer")
+
+        # The owner comments on some of the text: highlighted, thread open.
+        comment_on(a, "milk", "Oat milk?")
+        a.wait("return document.querySelectorAll('.ed-marks .hl.cm').length === 1", 5, "the highlight")
+        a.find(".cm-thread", 5)
+        check(a.js(texts) == ["Oat milk?"], "the text gets a highlight and the thread opens by it")
+        check(a.js("return document.querySelector('.ed').textContent.includes('Buy milk and bread today')"),
+              "the note's text is untouched")
+        a.chord(KEYS["escape"])
+
+        # A viewer sees it, opens it from the text and replies.
+        b.go(env.url.rstrip("/") + url)
+        b.wait("return document.querySelectorAll('.ed-marks .hl.cm').length === 1", 20, "the viewer's highlight")
+        open_highlight(b)
+        check(b.js(texts) == ["Oat milk?"] and not b.js("return !!document.querySelector('.cm-thread .cm-unverified')"),
+              "a viewer opens the thread from its text (author verified)")
+        b.js("document.querySelector('.cm-reply textarea').focus()")
+        b.keys("Yes please")
+        b.click(".cm-reply .btn.primary")
+        b.wait("return document.querySelectorAll('.cm-thread .cm-item').length === 2", 5, "the reply")
+        a.wait("return document.querySelector('.cm-count .badge') && document.querySelector('.cm-count .badge').textContent === '1'", 15, "the owner's count")
+        open_highlight(a)
+        a.wait("return " + texts_expr + ".length === 2", 15, "the reply reaches the owner")
+        check(a.js(texts) == ["Oat milk?", "Yes please"], "the viewer's reply reaches the owner live")
+        a.chord(KEYS["escape"])
+
+        # The viewer comments too; the side panel lists both.
+        comment_on(b, "bread", "Whole grain")
+        a.wait("return document.querySelectorAll('.ed-marks .hl.cm').length === 2", 15, "the viewer's comment")
+        a.click(".cm-count")
+        a.wait("return document.querySelectorAll('.cm-section .cm-entry').length === 2", 5, "the list")
+        check(True, "viewers comment too; the side panel lists the threads")
+
+        # Resolved: the highlight goes, for everyone.
+        open_highlight(a)
+        a.click(".cm-thread .cm-head button[title='Resolve']")
+        a.wait("return document.querySelectorAll('.ed-marks .hl.cm').length === 1", 5, "resolved")
+        b.wait("return document.querySelectorAll('.ed-marks .hl.cm').length === 1", 15, "resolved for the viewer")
+        check(True, "a resolved thread loses its highlight, for everyone")
+
+        # The owner turns comments by viewers off.
+        a.click(".sb-label button[title='Vault settings']")
+        a.find(".modal .viewers-comment input", 5)
+        a.js("document.querySelector('.modal .viewers-comment input').click()")
+        time.sleep(0.8)
+        a.chord(KEYS["escape"])
+        b.go(env.url.rstrip("/") + url)
+        b.wait("return document.querySelectorAll('.ed-marks .hl.cm').length === 1", 20, "reloaded")
+        b.js(SELECT_TEXT, "today")
+        time.sleep(0.6)
+        check(not b.js("return !!document.querySelector('.cm-offer')"), "once the owner turns it off, viewers can't comment")
+        check(not severe_logs(a, b), "no browser errors")
+    finally:
+        a.close()
+        b.close()
+
+
 def test_graph(env):
     b = Browser()
     canvas = ".graph-page canvas"
@@ -1500,7 +1584,7 @@ def test_recovered_copy(env):
         b.close()
 
 
-TESTS = [test_onboarding, test_collab, test_devices_and_recovery, test_features, test_attachments, test_note_sharing, test_tables, test_editor_safety, test_local_copy, test_ui_basics, test_offline_tabs, test_offline_start, test_mobile, test_quick_notes, test_vault_icons, test_entry_icons, test_tree_order, test_session_ended_while_away, test_graph, test_recovered_copy]
+TESTS = [test_onboarding, test_collab, test_devices_and_recovery, test_features, test_attachments, test_note_sharing, test_tables, test_editor_safety, test_local_copy, test_ui_basics, test_offline_tabs, test_offline_start, test_mobile, test_quick_notes, test_vault_icons, test_entry_icons, test_tree_order, test_session_ended_while_away, test_comments, test_graph, test_recovered_copy]
 
 
 def main():

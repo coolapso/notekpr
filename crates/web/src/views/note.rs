@@ -11,6 +11,7 @@ use wasm_bindgen::JsCast;
 use crate::actions::{self, NoteHost};
 use crate::editor::{Command, Editor, Mode};
 use crate::state::{self, Modal, Route, ViewMode, step, ui};
+use crate::views::comments::{self, CommentLayer, CommentsList};
 use crate::views::icons::Icon;
 use crate::views::panels::RightPanel;
 use crate::views::{SyncStatus, avatar};
@@ -125,6 +126,42 @@ fn mode_effects() {
             ed.set_vim(vim);
         }
     });
+}
+
+/// Keep the open note's comment highlights current, and learn who wrote
+/// its comments.
+fn comment_effects(vault: String, note: String) {
+    let ui = ui();
+    Effect::new(move |_| {
+        ui.comments_rev.track();
+        ui.comment_ui.track();
+        state::refresh_comment_marks();
+    });
+    Effect::new(move |_| {
+        ui.comments_rev.track();
+        leptos::task::spawn_local(state::learn_commenters(vault.clone(), note.clone()));
+    });
+}
+
+/// The button with the number of the note's open comment threads.
+fn comments_button(
+    vault: String,
+    note: String,
+    on_click: impl Fn() + Send + Sync + 'static,
+) -> impl IntoView {
+    let ui = ui();
+    let count = Memo::new(move |_| {
+        ui.comments_rev.track();
+        ui.content_rev.track();
+        comments::open_count(&vault, &note)
+    });
+    view! {
+        <button class="icon-btn cm-count" class:has={move || count.get() > 0}
+            title=move || { match count.get() { 0 => "Comments".to_string(), n => util::count(n, "open comment", "open comments") } }
+            aria-label="Comments" on:click=move |_| on_click()>
+            <Icon name="comment"/>{move || (count.get() > 0).then(|| view! { <span class="badge">{count.get()}</span> })}
+        </button>
+    }
 }
 
 /// Mount an editor for a note into `container` (unless it is already there).
@@ -254,6 +291,7 @@ pub fn NoteView(vault: String, note: String) -> impl IntoView {
         let Some(ed) = mount_editor(&container, NoteHost::new(&v, &nn), ro) else {
             return;
         };
+        state::refresh_comment_marks();
         let focus_title = FOCUS_TITLE.with(|f| f.replace(false));
         if focus_title {
             if let Some(t) = title_ref.get() {
@@ -269,6 +307,7 @@ pub fn NoteView(vault: String, note: String) -> impl IntoView {
     });
 
     mode_effects();
+    comment_effects(vault.clone(), note.clone());
     let v = vault.clone();
     Effect::new(move |_| {
         ui.vaults.get();
@@ -448,6 +487,8 @@ pub fn NoteView(vault: String, note: String) -> impl IntoView {
     let vback = vault.clone();
     let (vrp, nrp) = (vault.clone(), note.clone());
     let (vrestore, nrestore) = (vault.clone(), note.clone());
+    let (vcm, ncm) = (vault.clone(), note.clone());
+    let (vcb, ncb) = (vault.clone(), note.clone());
 
     view! {
         <div class="note-page">
@@ -476,6 +517,10 @@ pub fn NoteView(vault: String, note: String) -> impl IntoView {
                             on:click=move |_| ui.modal.set(Some(Modal::ShareNote(v.clone(), n.clone())))><Icon name="share"/></button> }
                     }
                 </Show>
+                {comments_button(vcb.clone(), ncb.clone(), move || {
+                    let narrow = util::window().inner_width().ok().and_then(|w| w.as_f64()).unwrap_or(1200.0) <= 1100.0;
+                    if narrow { ui.panel_overlay.set(true) } else { state::set_ui_prefs(|p| p.right_panel = true) }
+                })}
                 <button class="icon-btn" title="Version history" aria-label="Version history" on:click=move |_| ui.modal.set(Some(Modal::History(vh.clone(), nh.clone())))><Icon name="history"/></button>
                 <button class="icon-btn" class:on=move || ui.ui_prefs.get().right_panel || ui.panel_overlay.get() title=format!("Side panel ({}+\\)", util::mod_key()) aria-label="Side panel"
                     on:click=move |_| {
@@ -584,7 +629,10 @@ pub fn NoteView(vault: String, note: String) -> impl IntoView {
                                 <div class="readonly-note"><Icon name="eye"/>" You can view this note. Ask the vault owner for edit access."</div>
                             })}
                             {move || (writable.get() && ui.mode.get() != ViewMode::Reading).then(|| view! { <Toolbar vault=Some(vtool.clone())/> })}
-                            <div class="editor-host" node_ref=host_ref class:hidden=move || ui.mode.get() == ViewMode::Reading></div>
+                            <div class="editor-area" class:hidden=move || ui.mode.get() == ViewMode::Reading on:click=comments::on_area_click>
+                                <div class="editor-host" node_ref=host_ref></div>
+                                <CommentLayer vault=vcm.clone() note=ncm.clone()/>
+                            </div>
                             <article class="reading" node_ref=reading_ref class:hidden=move || ui.mode.get() != ViewMode::Reading
                                 inner_html=move || reading_html.get() on:click=on_reading_click></article>
                         }.into_any()
@@ -627,12 +675,14 @@ pub fn SharedNoteView(vault: String, note: String) -> impl IntoView {
         let Some(ed) = mount_editor(&container, NoteHost::for_shared(&v, &n), ro) else {
             return;
         };
+        state::refresh_comment_marks();
         step(|c| state::send_presence(c));
         if !ro && ui.mode.get_untracked() != ViewMode::Reading && !util::is_touch() {
             ed.focus();
         }
     });
     mode_effects();
+    comment_effects(vault.clone(), note.clone());
     Effect::new(move |_| {
         let w = writable.get();
         if let Some(ed) = editor() {
@@ -715,6 +765,11 @@ pub fn SharedNoteView(vault: String, note: String) -> impl IntoView {
     let (vl, nl) = (vault.clone(), note.clone());
     let title = move || info.get().map(|s| s.title).unwrap_or_default();
     let icon = move || info.get().and_then(|s| s.icon);
+    let (vcm, ncm) = (vault.clone(), note.clone());
+    let (vcl, ncl) = (vault.clone(), note.clone());
+    let (vcb, ncb) = (vault.clone(), note.clone());
+    let comments_open = RwSignal::new(false);
+    super::close_on_outside(comments_open);
 
     view! {
         <div class="note-page shared-note">
@@ -729,6 +784,14 @@ pub fn SharedNoteView(vault: String, note: String) -> impl IntoView {
                     <button class:on=move || ui.mode.get() == ViewMode::Live title="Live preview" aria-label="Live preview" aria-pressed=move || (ui.mode.get() == ViewMode::Live).to_string() on:click=move |_| ui.mode.set(ViewMode::Live)><Icon name="edit"/></button>
                     <button class:on=move || ui.mode.get() == ViewMode::Source title="Markdown source" aria-label="Markdown source" aria-pressed=move || (ui.mode.get() == ViewMode::Source).to_string() on:click=move |_| ui.mode.set(ViewMode::Source)><Icon name="code"/></button>
                     <button class:on=move || ui.mode.get() == ViewMode::Reading title=format!("Reading view ({}+E)", util::mod_key()) aria-label="Reading view" aria-pressed=move || (ui.mode.get() == ViewMode::Reading).to_string() on:click=move |_| ui.mode.set(ViewMode::Reading)><Icon name="book"/></button>
+                </div>
+                <div class="tb-drop">
+                    {comments_button(vcb.clone(), ncb.clone(), move || comments_open.update(|o| *o = !*o))}
+                    <Show when=move || comments_open.get()>
+                        <div class="menu right cm-menu">
+                            <CommentsList vault=vcl.clone() note=ncl.clone()/>
+                        </div>
+                    </Show>
                 </div>
                 <button class="icon-btn" title="Version history" aria-label="Version history" on:click=move |_| ui.modal.set(Some(Modal::History(vh.clone(), nh.clone())))><Icon name="history"/></button>
                 <div class="tb-drop">
@@ -782,7 +845,10 @@ pub fn SharedNoteView(vault: String, note: String) -> impl IntoView {
                                 <div class="readonly-note"><Icon name="eye"/>" You can view this note. Ask the person who shared it for edit access."</div>
                             })}
                             {move || (writable.get() && ui.mode.get() != ViewMode::Reading).then(|| view! { <Toolbar vault=None/> })}
-                            <div class="editor-host" node_ref=host_ref class:hidden=move || ui.mode.get() == ViewMode::Reading></div>
+                            <div class="editor-area" class:hidden=move || ui.mode.get() == ViewMode::Reading on:click=comments::on_area_click>
+                                <div class="editor-host" node_ref=host_ref></div>
+                                <CommentLayer vault=vcm.clone() note=ncm.clone()/>
+                            </div>
                             <article class="reading" class:hidden=move || ui.mode.get() != ViewMode::Reading
                                 inner_html=move || reading_html.get() on:click=on_reading_click></article>
                         }.into_any()

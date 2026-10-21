@@ -1,4 +1,5 @@
 pub mod auth;
+pub mod comments;
 pub mod dialogs;
 pub mod graph;
 pub mod home;
@@ -149,7 +150,8 @@ fn in_text_input(e: &web_sys::KeyboardEvent) -> bool {
 
 /// Elements a press may land on without closing the open menus: the menus
 /// themselves and the buttons that open them.
-const MENU_PARTS: &str = ".menu, .tb-drop, .vault-switch, .user-btn, .tree-more";
+const MENU_PARTS: &str =
+    ".menu, .tb-drop, .vault-switch, .user-btn, .tree-more, .cm-pop, .cm-offer";
 
 fn install_menu_closer() {
     let cb = wasm_bindgen::closure::Closure::wrap(Box::new(move |e: web_sys::Event| {
@@ -230,6 +232,11 @@ fn install_shortcuts() {
         if is_alt_letter(&e, 'q') {
             e.prevent_default();
             crate::quick::new_and_open();
+            return;
+        }
+        if is_alt_letter(&e, 'm') && route.any_note().is_some() {
+            e.prevent_default();
+            crate::views::comments::compose_from_selection();
             return;
         }
         if is_ctrl_alt_letter(&e, 'n') {

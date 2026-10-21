@@ -159,6 +159,7 @@ HOME = [
 
         - [ ] Star a note (☆ at the top): it shows under *Favorites* in the sidebar
         - [ ] Rename a note, or drag it to another folder in the sidebar: links to it follow
+        - [ ] Comment on a note: select some text and click *Comment* (or press `Alt+M`); click highlighted text to read and answer its thread. *Holiday plans* in *Family* has comments — even Carol's, who only views that vault
         - [ ] Drag a note between two others in the sidebar: a line shows where it goes, and it stays there for everyone (this note and the *Recipes* overview were put first that way, from the command line); *Sort A–Z* in a folder's ⋯ menu undoes it
         - [ ] Drop or paste a picture into a note
         - [ ] Give a note or folder an icon: *Set icon…* in its ⋯ menu in the sidebar
@@ -995,6 +996,11 @@ class Cli:
     def write(self, profile, vault, path, text):
         self.run(profile, "-q", "write", vault, path, stdin=text.encode())
 
+    def comment(self, profile, vault, note, on, text):
+        """Comment on the text `on` of a note; returns the comment's id."""
+        out, _ = self.run(profile, "comments", "add", vault, note, "--on", on, text)
+        return re.search(r"\[([0-9a-f]+)\]", out).group(1)
+
     def attach(self, profile, vault, path, data):
         self.run(profile, "-q", "write", "--attachment", vault, path, stdin=data)
 
@@ -1155,6 +1161,16 @@ def seed(cli, url, data):
     for who, text in HOLIDAY_VERSIONS:
         cli.write(who, "Family", "Holiday plans.md", text)
     cli.icon(b, "Family", "Holiday plans.md", "🎄")
+
+    step("carol, bob and alice: comments on the holiday plans (carol only views the vault)")
+    tent = cli.comment(c, "Family", "Holiday plans", "Camping in August?",
+                       "Count me in — I have a spare tent!")
+    cli.run(b, "-q", "comments", "reply", "Family", "Holiday plans", tent, "Great, then we have two.")
+    train = cli.comment(b, "Family", "Holiday plans", "Grandma arrives on the 23rd",
+                        "Her train gets in at 14:05.")
+    cli.run(a, "-q", "comments", "resolve", "Family", "Holiday plans", train)
+    cli.comment(a, "Family", "Holiday plans", "Roast, then apple pie",
+                "I'll bake the pie — it's the recipe I shared with Carol.")
     log = dict((p, t) for p, _, t in FAMILY)["House/Maintenance log.md"]
     cli.write(b, "Family", "House/Maintenance log.md",
               log + "| 2026-10-18 | cleaned the gutters | Bob |\n")
@@ -1202,6 +1218,8 @@ def seed(cli, url, data):
     cli.run(c, "-q", "share-note", "Design", "Logo ideas", a, "--role", "viewer")
 
     step("alice: single notes shared with carol (the apple pie, the design brief)")
+    # Shared with its comments (the default).
+    cli.comment(a, "Home", "Recipes/Apple pie", "a pinch of nutmeg", "Carol, is this right? I can't read the card here.")
     cli.run(a, "-q", "share-note", "Home", "Recipes/Apple pie", c, "--role", "editor")
     cli.run(a, "-q", "share-note", "Work", "Projects/Design brief", c, "--role", "editor")
     cli.run(c, "-q", "shared", "write", "--append", "Apple pie",

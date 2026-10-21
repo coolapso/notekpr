@@ -4,6 +4,7 @@ use leptos::prelude::*;
 
 use crate::knowledge;
 use crate::state::{self, Modal, Route, step, ui};
+use crate::views::comments::{CommentsList, open_count};
 use crate::views::icons::Icon;
 
 #[component]
@@ -54,8 +55,19 @@ pub fn RightPanel(vault: String, note: String) -> impl IntoView {
     let vbr = vault.clone();
     let pbr = path.clone();
 
+    let (vcm, ncm) = (vault.clone(), note.clone());
+    let (vcc, ncc) = (vault.clone(), note.clone());
+    let comment_count = Memo::new(move |_| {
+        ui.comments_rev.track();
+        open_count(&vcc, &ncc)
+    });
+
     view! {
         <aside class="panel" aria-label="Note details">
+            <section class="cm-section">
+                <h3><Icon name="comment"/>" Comments " <span class="count">{move || comment_count.get()}</span></h3>
+                <CommentsList vault=vcm note=ncm/>
+            </section>
             <section>
                 <h3><Icon name="link"/>" Backlinks " <span class="count">{move || backlinks.get().len()}</span></h3>
                 {move || {

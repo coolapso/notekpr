@@ -58,7 +58,8 @@ container and the people's copies.
   during the outage are uploaded: no more waiting on devices than before
   the crash; "never" if not within two minutes — the server can't keep up
   at that level). The final report has the full table, also printed in the
-  terminal.
+  terminal, and per level *away*: from taking the server down until
+  everyone was connected again — how long people were without it.
 * **The phases**, in each level: arriving → teams sharing vaults → busy →
   *server crashed* (SIGKILL: no shutdown, no last writes; a countdown to its
   restart) → recovering → busy. Then checking and the report.
@@ -193,7 +194,7 @@ requests away.
   (`process_cpu_seconds_total`, `process_resident_memory_bytes`; Linux
   servers): 100 % is one core, there are no limit lines. If `/metrics` needs
   a token, pass `--metrics-token` (or `COOLPSONOTES_METRICS_TOKEN`); if the
-  proxy hides `/metrics` (the bundled Caddyfiles do), the CPU, memory and
+  proxy hides `/metrics` (as it should, from the internet), the CPU, memory and
   request charts stay empty, and the rest works.
 * **Accounts stay** on that server: each run's people sign in with names of
   their own (`anika-…`), so runs don't collide.

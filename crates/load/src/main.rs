@@ -823,7 +823,7 @@ async fn run(args: Args, root: PathBuf, bus: Bus) -> Result<Report> {
                 )),
             );
         }
-        let (mut online, mut recovery) = (None, None);
+        let (mut online, mut recovery, mut away) = (None, None, None);
         let first_half = if down.is_some() {
             args.duration / 2
         } else {
@@ -835,13 +835,13 @@ async fn run(args: Args, root: PathBuf, bus: Bus) -> Result<Report> {
         if let (Some(d), None) = (down, &lost) {
             let secs = d.as_secs();
             match crash(&mut server, &bus, &world, &up, d, &of).await {
-                Ok((o, r)) => {
-                    (online, recovery) = (o, r);
-                    if o.is_none() {
+                Ok(c) => {
+                    (online, recovery, away) = (c.online, c.caught_up, c.away);
+                    if online.is_none() {
                         lost = Some(format!(
                             "after {secs} s down, not everyone could reconnect within two minutes"
                         ));
-                    } else if r.is_none() {
+                    } else if recovery.is_none() {
                         lost = Some(format!(
                             "after {secs} s down, it couldn't work off the backlog within two minutes"
                         ));
@@ -895,6 +895,7 @@ async fn run(args: Args, root: PathBuf, bus: Bus) -> Result<Report> {
                 max_queued: pk.queued,
                 working_rps,
                 working_cpu_pct,
+                away_s: away,
             }
         };
         print_level(&result, t_start);
@@ -1139,9 +1140,17 @@ async fn arrive(world: Arc<World>, id: u32, seed: u64) -> Option<Person> {
     None
 }
 
+/// How the comeback after an outage went, in seconds: everyone connected
+/// again and the backlog worked off (after the restart), and how long people
+/// were away in all (from taking the server down).
+struct Comeback {
+    online: Option<f32>,
+    caught_up: Option<f32>,
+    away: Option<f32>,
+}
+
 /// Kill the server, keep it down for `down`, start it again and follow the
-/// comeback: (everyone connected again, the backlog worked off) after the
-/// restart, in seconds.
+/// comeback.
 async fn crash(
     server: &mut Server,
     bus: &Bus,
@@ -1149,7 +1158,7 @@ async fn crash(
     up: &AtomicBool,
     down: Duration,
     of: &dyn Fn(&str) -> String,
-) -> Result<(Option<f32>, Option<f32>)> {
+) -> Result<Comeback> {
     let secs = down.as_secs() as u32;
     // What's normally in flight at this load.
     let baseline = check::queued(world).await;
@@ -1168,9 +1177,11 @@ async fn crash(
         up: false,
         down_for_s: Some(secs),
     });
+    let taken_down = Instant::now();
     server.crash().await?;
     tokio::time::sleep(down).await;
     server.restart().await?;
+    let restarted = taken_down.elapsed();
     up.store(true, Ordering::Relaxed);
     bus.send(Event::Server {
         up: true,
@@ -1182,10 +1193,11 @@ async fn crash(
     );
     bus.feed(Action::Revision, "the server is back");
     let (online, caught_up) = check::recover(world, baseline, Duration::from_secs(120)).await;
-    Ok((
-        online.map(|d| d.as_secs_f32()),
-        caught_up.map(|d| d.as_secs_f32()),
-    ))
+    Ok(Comeback {
+        online: online.map(|d| d.as_secs_f32()),
+        caught_up: caught_up.map(|d| d.as_secs_f32()),
+        away: online.map(|d| (restarted + d).as_secs_f32()),
+    })
 }
 
 fn now_ms() -> i64 {
@@ -1405,7 +1417,7 @@ fn mb(b: u64) -> f64 {
 fn print_level(r: &LevelResult, t_start: Instant) {
     println!(
         "{:>7.1} s  level {:>2}: {:>5} people · {:>6.0} req/s working, {:>6.0} peak · CPU {:>4.0}% working, {:>4.0}% peak · {:>5.0} MB · \
-         keystroke p50 {:.0} ms p99 {:.0} ms · down {} s, online in {}, caught up in {}",
+         keystroke p50 {:.0} ms p99 {:.0} ms · down {} s, online in {}, caught up in {}, away {}",
         t_start.elapsed().as_secs_f32(),
         r.level,
         r.users,
@@ -1421,6 +1433,9 @@ fn print_level(r: &LevelResult, t_start: Instant) {
             .map(|s| format!("{s:.1} s"))
             .unwrap_or_else(|| "—".into()),
         r.recovery_s
+            .map(|s| format!("{s:.1} s"))
+            .unwrap_or_else(|| "—".into()),
+        r.away_s
             .map(|s| format!("{s:.1} s"))
             .unwrap_or_else(|| "—".into()),
     );

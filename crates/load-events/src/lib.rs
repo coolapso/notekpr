@@ -394,6 +394,11 @@ pub struct LevelResult {
     pub recovery_s: Option<f32>,
     /// The most changes waiting on people's devices at once.
     pub max_queued: u32,
+    /// From taking the server down until everyone was connected again:
+    /// how long people were away (the outage, stopping and starting it, and
+    /// their reconnecting).
+    #[serde(default)]
+    pub away_s: Option<f32>,
     /// While everyone works (no arrivals, outage or comeback): the
     /// average requests a second and CPU.
     #[serde(default)]

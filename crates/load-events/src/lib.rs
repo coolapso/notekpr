@@ -403,6 +403,12 @@ pub struct LevelResult {
 }
 
 impl LevelResult {
+    /// Whether there are numbers of everyone working in this level (not if
+    /// the server gave up first, or its CPU isn't known).
+    pub fn worked(&self) -> bool {
+        self.working_cpu_pct > 0.0
+    }
+
     /// Requests a second while everyone works (or over the whole level, if
     /// there was no such time).
     pub fn rps(&self) -> f32 {

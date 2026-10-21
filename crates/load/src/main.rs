@@ -1464,16 +1464,26 @@ fn print_report(r: &Report) {
         );
         for l in &r.levels {
             println!(
-                "{:>5}  {:>6}   {:>13.0} {:>6.0}   {:>10.0}% / {:>3.0}%  {:>5.0} MB   {:>7.0} / {:<7.0} ms {:>4} s   {:>9}   {:>9}   {:>11}",
+                "{:>5}  {:>6}   {:>13.0} {:>6.0}   {:>11} / {:>3.0}%  {:>5.0} MB   {:>18} {:>4} s   {:>9}   {:>9}   {:>11}",
                 l.level,
                 l.users,
                 l.rps(),
                 l.peak_http_rps,
-                l.working_cpu_pct,
+                if l.worked() {
+                    format!("{:.0}%", l.working_cpu_pct)
+                } else {
+                    "—".into()
+                },
                 l.peak_cpu_pct,
                 mb(l.peak_mem_bytes),
-                l.propagation_p50_ms,
-                l.propagation_p99_ms,
+                if l.propagation_p99_ms > 0.0 {
+                    format!(
+                        "{:.0} / {:.0} ms",
+                        l.propagation_p50_ms, l.propagation_p99_ms
+                    )
+                } else {
+                    "—".into()
+                },
                 l.downtime_s,
                 l.online_s
                     .map(|s| format!("{s:.1} s"))

@@ -684,13 +684,21 @@ fn level_cells(l: &LevelResult) -> Vec<String> {
         l.users.to_string(),
         format!("{:.0}", l.rps()),
         format!("{:.0}", l.peak_http_rps),
-        format!("{:.0} / {:.0}%", l.working_cpu_pct, l.peak_cpu_pct),
+        if l.worked() {
+            format!("{:.0} / {:.0}%", l.working_cpu_pct, l.peak_cpu_pct)
+        } else {
+            format!("— / {:.0}%", l.peak_cpu_pct)
+        },
         format!("{:.0} MB", mb(l.peak_mem_bytes)),
-        format!(
-            "{} / {}",
-            duration(l.propagation_p50_ms),
-            duration(l.propagation_p99_ms)
-        ),
+        if l.propagation_p99_ms > 0.0 {
+            format!(
+                "{} / {}",
+                duration(l.propagation_p50_ms),
+                duration(l.propagation_p99_ms)
+            )
+        } else {
+            "—".into()
+        },
         format!("{} s", l.downtime_s),
         l.online_s
             .map(|s| format!("{s:.1} s"))

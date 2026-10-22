@@ -415,3 +415,50 @@ async fn changing_commands_are_handed_to_the_running_daemon() {
     );
     drop(lock);
 }
+
+/// `ls` lines names up when only some entries have an icon.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn ls_lines_names_up_with_and_without_icons() {
+    use notekpr_client::ui;
+    let srv = start().await;
+    login(&srv, "alice").await;
+    run(&srv, "alice", &["vault", "create", "Home"])
+        .await
+        .unwrap();
+    for folder in ["Garden", "Quick notes"] {
+        run(&srv, "alice", &["mkdir", "Home", folder])
+            .await
+            .unwrap();
+    }
+    for note in ["Start here.md", "Plain.md"] {
+        let (r, _) = ui::capture(
+            Some(b"# A note\n".to_vec()),
+            true,
+            run(&srv, "alice", &["write", "Home", note]),
+        )
+        .await;
+        r.unwrap();
+    }
+    run(&srv, "alice", &["icon", "Home", "Garden", "🌱"])
+        .await
+        .unwrap();
+    run(&srv, "alice", &["icon", "Home", "Start here.md", "✈️"])
+        .await
+        .unwrap();
+    let (r, out) = ui::capture(None, true, run(&srv, "alice", &["ls", "Home"])).await;
+    r.unwrap();
+    // The column each name starts at.
+    let col = |name: &str| {
+        let line = out.stdout.lines().find(|l| l.contains(name)).unwrap();
+        ui::display_width(&line[..line.find(name).unwrap()])
+    };
+    let cols: Vec<usize> = ["Garden/", "Quick notes/", "Start here.md", "Plain.md"]
+        .iter()
+        .map(|n| col(n))
+        .collect();
+    assert!(
+        cols.iter().all(|c| *c == cols[0]),
+        "{cols:?}\n{}",
+        out.stdout
+    );
+}

@@ -211,6 +211,40 @@ pub fn fmt_time(ms: i64) -> String {
         .unwrap_or_else(|| ms.to_string())
 }
 
+/// How many columns a terminal gives `s`: emoji and wide (East Asian)
+/// characters two, variation selectors, joiners and combining marks none —
+/// an emoji sequence joined with U+200D counts once. Enough for icons and
+/// names; not a full implementation of Unicode widths.
+pub fn display_width(s: &str) -> usize {
+    let wide = |c: char| {
+        matches!(c as u32,
+            0x1100..=0x115F | 0x2E80..=0x303E | 0x3041..=0x33FF | 0x3400..=0x4DBF
+            | 0x4E00..=0x9FFF | 0xA000..=0xA4CF | 0xAC00..=0xD7A3 | 0xF900..=0xFAFF
+            | 0xFE30..=0xFE4F | 0xFF00..=0xFF60 | 0xFFE0..=0xFFE6 | 0x1F000..=0x1FAFF
+            | 0x20000..=0x3FFFD)
+    };
+    let zero = |c: char| {
+        matches!(c as u32, 0x0300..=0x036F | 0x200B..=0x200F | 0x20D0..=0x20FF
+            | 0xFE00..=0xFE0F | 0x1F3FB..=0x1F3FF | 0xE0020..=0xE007F)
+    };
+    let mut w = 0;
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\u{200D}' {
+            // Joined to the one before: skip what it joins.
+            chars.next();
+            continue;
+        }
+        if zero(c) {
+            continue;
+        }
+        // A symbol shown as an emoji (U+FE0F after it) is wide too.
+        let emoji = chars.peek() == Some(&'\u{FE0F}');
+        w += if wide(c) || emoji { 2 } else { 1 };
+    }
+    w
+}
+
 pub fn fmt_size(bytes: u64) -> String {
     const UNITS: [&str; 4] = ["B", "KiB", "MiB", "GiB"];
     let mut v = bytes as f64;
@@ -272,6 +306,19 @@ mod tests {
             libc::close(master);
             libc::close(slave);
         }
+    }
+
+    #[test]
+    fn display_widths() {
+        use super::display_width as w;
+        assert_eq!(w("Garden"), 6);
+        assert_eq!(w("🌱"), 2);
+        assert_eq!(w("✈️"), 2, "a symbol with the emoji selector");
+        assert_eq!(w("✈"), 1);
+        assert_eq!(w("👨‍👩‍👧"), 2, "a family: one emoji");
+        assert_eq!(w("👋🏽"), 2, "with a skin tone");
+        assert_eq!(w("日本"), 4);
+        assert_eq!(w("e\u{301}"), 1, "a combining accent");
     }
 
     #[test]

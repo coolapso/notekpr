@@ -1380,10 +1380,17 @@ async fn ls(ctx: &Ctx, vault: &str, folder: Option<&str>, recursive: bool) -> Re
         ctx.print_json(&j);
         return Ok(());
     }
-    let icon = |e: Option<&Entry>| {
-        e.and_then(|e| e.icon.as_ref())
-            .map(|i| format!("{i} "))
-            .unwrap_or_default()
+    // Names line up: when some entries have an icon, the others get as much
+    // room.
+    let icon_width = list
+        .iter()
+        .filter_map(|l| l.entry.as_ref()?.icon.as_deref())
+        .map(ui::display_width)
+        .max();
+    let icon = |e: Option<&Entry>| match (icon_width, e.and_then(|e| e.icon.as_deref())) {
+        (None, _) => String::new(),
+        (Some(w), Some(i)) => format!("{i}{} ", " ".repeat(w - ui::display_width(i))),
+        (Some(w), None) => " ".repeat(w + 1),
     };
     for l in list {
         match (l.kind, &l.entry) {

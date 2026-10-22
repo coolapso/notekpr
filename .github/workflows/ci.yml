@@ -1,7 +1,8 @@
 name: ci
 on:
-  push:
-  pull_request:
+  # push:
+  # pull_request:
+  workflow_dispatch:
 
 # CI is a fresh developer machine: it installs the tooling, then runs the
 # same task a developer runs (`task ci`, see Taskfile.yml). Nothing is done

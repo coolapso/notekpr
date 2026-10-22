@@ -466,6 +466,10 @@ async fn wait_for_approval(
     // A plain thread (not a blocking task) so an unanswered prompt never keeps
     // the runtime from shutting down.
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+    // The prompt below turns echo off until it returns, which it doesn't
+    // when another device approves first: put the terminal back on the way
+    // out, however this ends.
+    let _terminal = ui::TerminalSettings::of_stdin();
     if interactive && ui::stdin_is_tty() {
         ui::status(
             "Waiting for approval… (or type your recovery key and press Enter to unlock this device yourself)",

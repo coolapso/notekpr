@@ -140,6 +140,47 @@ pub fn prompt_line(prompt: &str) -> Result<String> {
     Ok(s.trim().to_string())
 }
 
+/// The settings of a terminal, put back when this is dropped. A prompt that
+/// hides what is typed (`rpassword`) turns echo off until it returns; one
+/// still waiting on another thread when the program moves on (or exits)
+/// would leave the terminal without echo. (Unix; elsewhere this does
+/// nothing.)
+pub struct TerminalSettings {
+    #[cfg(unix)]
+    saved: Option<(i32, libc::termios)>,
+}
+
+impl TerminalSettings {
+    /// Those of stdin, if it is a terminal.
+    pub fn of_stdin() -> TerminalSettings {
+        #[cfg(unix)]
+        return TerminalSettings::of_fd(libc::STDIN_FILENO);
+        #[cfg(not(unix))]
+        TerminalSettings {}
+    }
+
+    #[cfg(unix)]
+    fn of_fd(fd: i32) -> TerminalSettings {
+        let mut t = std::mem::MaybeUninit::<libc::termios>::uninit();
+        // SAFETY: tcgetattr only writes to `t`; it is read only if that worked.
+        let ok = unsafe { libc::tcgetattr(fd, t.as_mut_ptr()) } == 0;
+        TerminalSettings {
+            // SAFETY: initialised by the successful tcgetattr above.
+            saved: ok.then(|| (fd, unsafe { t.assume_init() })),
+        }
+    }
+}
+
+impl Drop for TerminalSettings {
+    fn drop(&mut self) {
+        #[cfg(unix)]
+        if let Some((fd, t)) = &self.saved {
+            // SAFETY: `t` came from tcgetattr on the same descriptor.
+            unsafe { libc::tcsetattr(*fd, libc::TCSANOW, t) };
+        }
+    }
+}
+
 /// Read a secret without echoing it (falls back to a plain line if stdin is
 /// not a terminal).
 pub fn prompt_secret(prompt: &str) -> Result<String> {
@@ -187,6 +228,52 @@ pub fn fmt_size(bytes: u64) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    use super::TerminalSettings;
+
+    /// A terminal whose echo a hidden prompt turned off gets it back.
+    #[cfg(unix)]
+    #[test]
+    fn terminal_settings_are_put_back() {
+        let (mut master, mut slave) = (0, 0);
+        // SAFETY: openpty writes two descriptors; no name, settings or size.
+        let rc = unsafe {
+            libc::openpty(
+                &mut master,
+                &mut slave,
+                std::ptr::null_mut(),
+                std::ptr::null(),
+                std::ptr::null(),
+            )
+        };
+        assert_eq!(rc, 0, "openpty");
+        let get = |fd: i32| {
+            let mut t = std::mem::MaybeUninit::<libc::termios>::uninit();
+            // SAFETY: as in TerminalSettings::of_fd.
+            assert_eq!(unsafe { libc::tcgetattr(fd, t.as_mut_ptr()) }, 0);
+            unsafe { t.assume_init() }
+        };
+        let echo = |fd: i32| get(fd).c_lflag & libc::ECHO != 0;
+        assert!(echo(slave), "a new terminal echoes");
+        {
+            let _restore = TerminalSettings::of_fd(slave);
+            // What a hidden prompt does.
+            let mut t = get(slave);
+            t.c_lflag &= !libc::ECHO;
+            // SAFETY: settings read from the same descriptor.
+            unsafe { libc::tcsetattr(slave, libc::TCSANOW, &t) };
+            assert!(!echo(slave));
+        }
+        assert!(echo(slave), "echo is back");
+        // Not a terminal: nothing to save or put back.
+        drop(TerminalSettings::of_fd(-1));
+        // SAFETY: both descriptors are ours.
+        unsafe {
+            libc::close(master);
+            libc::close(slave);
+        }
+    }
+
     #[test]
     fn formatting() {
         assert_eq!(super::fmt_time(0), "1970-01-01T00:00:00Z");

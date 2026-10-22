@@ -494,6 +494,9 @@ def test_attachments(env):
             return b.js("return window.__img") == "ok"
         check(blob_loads(), "the decrypted image is a readable blob while signed in")
         b.js("history.pushState(null, '', '/settings/account'); dispatchEvent(new PopStateEvent('popstate'));")
+        b.click_el(b.find_text(".settings-body button", "Export My notes", 10))
+        b.wait("return window.__downloads.includes('My notes.zip')", 15, "vault export downloaded")
+        check(True, "account settings export a vault as a .zip")
         b.click_el(b.find_text(".settings-body button", "Sign out", 10))
         b.find(".dev-box input", 15)
         check(not blob_loads(), "signing out revokes decrypted attachment URLs")

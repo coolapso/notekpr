@@ -7,7 +7,7 @@ use notekpr_core::protocol::*;
 use crate::state::{self, Modal, Route, step, ui};
 use crate::util;
 use crate::views::icons::Icon;
-use crate::{api, views::avatar};
+use crate::{actions, api, views::avatar};
 
 #[component]
 pub fn Settings(tab: String) -> impl IntoView {
@@ -78,11 +78,25 @@ fn Account() -> impl IntoView {
         <p class="fp big">{fp}</p>
         <p class="muted small">"When someone shares a vault with you, they can compare this fingerprint with what their screen shows to make sure nobody is in the middle."</p>
         <h3>"Data"</h3>
-        <p class="muted small">"Export any vault as plain Markdown from its settings. Your data is never locked into a proprietary format."</p>
-        <button class="btn" on:click=move |_| leptos::task::spawn_local(state::sign_out())><Icon name="logout"/>" Sign out"</button>
+        <p class="muted small">"Export a vault as plain Markdown files in a .zip, with its folders and attachments. Your data is never locked into a proprietary format."</p>
+        <div class="settings-grid">
+            {move || ui.vaults.get().into_iter().map(|v| {
+                let id = v.id.clone();
+                view! {
+                    <button class="btn" disabled=!v.loaded title=v.error.clone() on:click=move |_| {
+                        let id = id.clone();
+                        leptos::task::spawn_local(async move { actions::export_vault(&id).await });
+                    }><Icon name="download"/><span class="ellipsis">{format!("Export {}", v.name)}</span></button>
+                }
+            }).collect_view()}
+        </div>
         <h3>"This browser"</h3>
-        <p class="muted small">"On a shared or borrowed computer, make this browser forget your account: it signs out, removes this device and deletes its key and unsent changes. Signing in here again then needs approval from another device or your recovery key."</p>
-        <button class="btn danger" on:click=move |_| leptos::task::spawn_local(state::forget_browser())>"Forget this browser"</button>
+        <p class="muted small">"Signing out keeps this browser as one of your devices: it keeps its key and your unsent changes, so next time you only sign in and your notes open right away."</p>
+        <p class="muted small">"On a shared or borrowed computer, forget this browser instead: it signs out, removes this device from your account and deletes its key, unsent changes and local copy of your notes. Signing in here again then needs approval from another device or your recovery key."</p>
+        <div class="row">
+            <button class="btn" on:click=move |_| leptos::task::spawn_local(state::sign_out())><Icon name="logout"/>" Sign out"</button>
+            <button class="btn danger" on:click=move |_| leptos::task::spawn_local(state::forget_browser())>"Forget this browser"</button>
+        </div>
     }
 }
 

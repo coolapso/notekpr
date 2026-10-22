@@ -42,7 +42,7 @@ import zlib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-USERS = ["alice", "bob", "carol", "dave"]
+USERS = ["alice", "bob", "carol", "dave", "eve"]
 AGENT_PROFILE = "assistant"
 
 
@@ -190,6 +190,7 @@ HOME = [
         | Work | Alice | Dave (editor) |
         | Family | Alice | Bob (editor), Carol (viewer) |
         | Book club | Bob | Alice and Carol (editors) |
+        | Garden club | Eve | Alice (editor) |
         | Assistant | Alice | the *Home assistant* agent |
         | Old projects | Alice | archived |
 
@@ -939,6 +940,47 @@ BOOK_CLUB = [
         """)),
 ]
 
+GARDEN_CLUB = [
+    ("Garden club.md", "🌻", note("""
+        # Garden club
+
+        Eve's vault for the allotment garden club; Alice is an editor. We
+        meet on the first Saturday of the month at the shed.
+
+        - [[Seed swap]]: what we have, what we want
+        - [[Tool library]]: who has which tool
+        - Next meetup: [[2026-11-07]]
+        """)),
+    ("Seed swap.md", "🌱", note("""
+        # Seed swap
+
+        | Seeds | From | For |
+        |---|---|---|
+        | Runner beans | Eve | anyone |
+        | Sunflowers (giant) | Eve | Alice |
+        | Rocket | Eve | anyone |
+
+        - [x] Eve: dry the bean pods
+        - [ ] Eve: label the envelopes
+        """)),
+    ("Tool library.md", "🧰", note("""
+        # Tool library
+
+        - [ ] Hedge trimmer — Eve, lent to the Parkers
+        - [x] Wheelbarrow — back in the shed
+        - [ ] Long-handled loppers — Eve
+        """)),
+    ("Meetups/2026-11-07.md", None, note("""
+        # Meetup 7 November
+
+        Host: Eve. Back to the [[Garden club]].
+
+        1. Seed swap ([[Seed swap]])
+        2. Leaf mould: who wants a bag?
+        3. Spring plan for the shared beds
+        """)),
+]
+
 RUNNING = [
     ("Training plan.md", "🏃", note("""
         # Training plan — half marathon
@@ -1108,7 +1150,7 @@ def step(text):
 
 def seed(cli, url, data):
     keys = {}
-    step("signing in alice, bob, carol and dave (each gets account keys)")
+    step("signing in alice, bob, carol, dave and eve (each gets account keys)")
     for user in USERS:
         _, err = cli.run(
             user, "login", "--server", url, "--dev-user", user,
@@ -1125,7 +1167,7 @@ def seed(cli, url, data):
     )
     keyfile.chmod(0o600)
 
-    a, b, c, d = USERS
+    a, b, c, d, e = USERS
     step("alice: vault Home, ~35 linked notes, pictures, icons")
     cli.run(a, "-q", "vault", "create", "Home")
     cli.run(a, "-q", "vault", "icon", "Home", "🏡")
@@ -1244,6 +1286,20 @@ def seed(cli, url, data):
             stdin="- Carol: I think it's a paradise *because* he doesn't remember.\n".encode())
     cli.run(c, "-q", "write", "--append", "Book club", "Members' picks.md",
             stdin="- Carol: *Station Eleven*\n".encode())
+
+    step("eve: vault Garden club, shared with alice (editor)")
+    cli.run(e, "-q", "vault", "create", "Garden club")
+    cli.run(e, "-q", "vault", "icon", "Garden club", "🌻")
+    for path, icon, text in GARDEN_CLUB:
+        cli.write(e, "Garden club", path, text)
+        if icon:
+            cli.icon(e, "Garden club", path, icon)
+    cli.icon(e, "Garden club", "Meetups", "📅")
+    cli.run(e, "-q", "vault", "share", "Garden club", a, "--role", "editor")
+    cli.run(a, "-q", "write", "--append", "Garden club", "Seed swap.md",
+            stdin="- [ ] Alice: bring tomato seeds (Sungold) and basil\n".encode())
+    cli.run(a, "-q", "write", "--append", "Garden club", "Meetups/2026-11-07.md",
+            stdin="4. Alice: compost bins, can we share a shredder?\n".encode())
 
     step("bob: vault Running; his training plan shared with alice on its own")
     cli.run(b, "-q", "vault", "create", "Running")
@@ -1418,7 +1474,7 @@ def main():
         print(textwrap.dedent(f"""
             Demo running on {public_url}  (server log: {'here' if log is None else log_path})
 
-              Sign in as alice (most to see), bob, carol or dave — one user per tab.
+              Sign in as alice (most to see), bob, carol, dave or eve — one user per tab.
               {approve}
               Recovery keys: {data / 'recovery-keys.txt'}
               CLI as a demo user:  task demo:cli -- --profile alice ls Home

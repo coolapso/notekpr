@@ -184,7 +184,7 @@ sign in as `bob` — every tab keeps its own session, so you can test sharing an
 live collaboration between several users in one browser.
 
 To look around with data already there, `task demo` starts a separate demo
-server on <http://localhost:8099>: four users with their own and shared
+server on <http://localhost:8099>: five users with their own and shared
 vaults, notes shared on their own, and a vault of linked notes to see the
 graph ([details](docs/development.md#a-demo-with-data)).
 

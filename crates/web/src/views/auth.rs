@@ -90,7 +90,7 @@ pub fn Login(error: Option<String>) -> impl IntoView {
                     {move || match resets_at() {
                         Some(at) => view! {
                             <div class="dev-title"><Icon name="alert"/>" Demo"</div>
-                            <p class="small muted">"Sign in as alice (most to see), bob, carol or dave — no password; other visitors may be signed in as them too. Each browser tab keeps its own session."</p>
+                            <p class="small muted">"Sign in as alice (most to see), bob, carol, dave or eve — no password; other visitors may be signed in as them too. Each browser tab keeps its own session."</p>
                             <p class="small muted">{format!("Everything is deleted at {at}, when the demo starts over.")}</p>
                         }.into_any(),
                         None => view! {

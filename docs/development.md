@@ -94,10 +94,11 @@ like any other data:
 
 | User | Owns | Shared with them |
 |---|---|---|
-| alice | *Home* (~35 linked notes for the graph, pictures, quick notes, history, a note in the trash), *Work*, *Family*, *Assistant* (with an agent), *Old projects* (archived) | *Book club*; Bob's *Training plan* and Carol's *Logo ideas* as single notes |
+| alice | *Home* (~35 linked notes for the graph, pictures, quick notes, history, a note in the trash), *Work*, *Family*, *Assistant* (with an agent), *Old projects* (archived) | *Book club*, *Garden club*; Bob's *Training plan* and Carol's *Logo ideas* as single notes |
 | bob | *Book club*, *Running* | *Family* (editor) |
 | carol | *Design* | *Family* (viewer), *Book club*; Alice's *Apple pie* and *Design brief* as single notes |
 | dave | — | *Work* (editor) |
+| eve | *Garden club* | — |
 
 Icons, tables, tasks, code, footnotes, heading links, a link to a missing
 note and edits by several people are all in there; alice is also the

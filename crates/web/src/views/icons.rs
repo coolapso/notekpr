@@ -49,6 +49,9 @@ fn paths(name: &str) -> &'static str {
         }
         "edit" => r#"<path d="M12 20h9M16.5 3.5a2.1 2.1 0 1 1 3 3L7 19l-4 1 1-4z"/>"#,
         "code" => r#"<path d="m16 18 6-6-6-6M8 6l-6 6 6 6"/>"#,
+        "code-block" => {
+            r#"<rect x="3" y="4" width="18" height="16" rx="2"/><path d="m10 10-2 2 2 2M14 10l2 2-2 2"/>"#
+        }
         "book" => {
             r#"<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20V3H6.5A2.5 2.5 0 0 0 4 5.5z"/><path d="M4 19.5A2.5 2.5 0 0 0 6.5 22H20v-5"/>"#
         }

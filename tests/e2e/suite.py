@@ -756,6 +756,148 @@ def test_tables(env):
         b.close()
 
 
+def test_code_blocks(env):
+    b = Browser()
+    try:
+        signup(b, uniq("cba"))
+        new_note(b, "Scripts", "")
+        # The toolbar inserts a block with the caret on the fence, for the language and options.
+        b.click_el(b.find(".tb[title^='Code block']", 10))
+        b.keys("bash title=deploy.sh hl=2")
+        b.chord(KEYS["down"])
+        b.keys('echo "hi"' + KEYS["enter"] + "curl -s $URL" + KEYS["enter"] + "  sleep 1")
+        time.sleep(0.6)
+        check(editor_text(b).startswith('```bash title=deploy.sh hl=2\necho "hi"\ncurl -s $URL\n  sleep 1\n```'), "the toolbar inserts a code block")
+        check(b.text(".ed .ln.fo .code-title") == "deploy.sh", "the header shows the file name")
+        check(b.text(".ed .ln.fo .code-lang") == "bash", "the header shows the language")
+        check(b.js("return document.querySelectorAll('.ed .ln.code.chl').length") == 1
+              and "echo" not in b.js("return document.querySelector('.ed .ln.code.chl').textContent"), "hl=2 highlights the second line")
+        check(b.js("return getComputedStyle(document.querySelector('.ed .ln.code'), '::before').content") != "none", "code lines are numbered")
+        check(b.js("return Array.from(document.querySelectorAll('.ed .ln.code .fn')).map(e => e.textContent).join(' ')") == "echo curl sleep", "commands are highlighted")
+        check(b.js("return Array.from(document.querySelectorAll('.ed .igs')).map(e => e.className).join()") == "w igs ig1 iu2", "the indented line has a guide")
+        check(b.js("return getComputedStyle(document.querySelector('.ed .igs')).position") == "absolute", "the guide is drawn beside the text")
+        check(b.js("return document.querySelector('.ed .ln.code .va').textContent") == "$URL", "variables are highlighted")
+        check(b.js("return document.querySelector('.ed .ln.fo').classList.contains('active') && document.querySelector('.ed .ln.fc').classList.contains('active')"),
+              "with the caret in the block both fences show")
+        b.shot("code-blocks-editing")
+        # Away from the block only the header shows.
+        b.chord(KEYS["ctrl"], KEYS["end"])
+        b.keys(KEYS["enter"] + "after")
+        time.sleep(0.4)
+        check(not b.js("return document.querySelector('.ed .ln.fo').classList.contains('active')"), "away from the block its fences hide")
+        check(b.js("return getComputedStyle(document.querySelector('.ed .ln.fo .mk')).fontSize") == "0px", "the fence's source is hidden")
+        b.shot("code-blocks")
+        # Copy buttons copy the code only, in the editor and the reading view.
+        b.js("window.__copied = []; navigator.clipboard.writeText = t => { window.__copied.push(t); return Promise.resolve(); };")
+        before = editor_text(b)
+        b.click_el(b.find(".ed .code-copy", 5))
+        b.wait("return window.__copied.length == 1", 5, "editor copy")
+        check(b.js("return window.__copied[0]") == 'echo "hi"\ncurl -s $URL\n  sleep 1', "the editor's copy button copies the code")
+        check(b.js("return document.querySelector('.ed .code-copy').classList.contains('copied')"), "the button shows it copied")
+        check(editor_text(b) == before, "copying leaves the text alone")
+        b.click(".seg button[title^='Reading']")
+        b.find(".reading .codeblock", 10)
+        check(b.text(".reading .code-title") == "deploy.sh", "the reading view shows the file name")
+        check(b.js("return document.querySelectorAll('.reading .cl').length") == 3
+              and b.js("return document.querySelectorAll('.reading .cl.chl').length") == 1, "the reading view numbers and highlights lines")
+        check(b.js("return document.querySelectorAll('.reading .cl .igs').length") == 1, "the reading view draws indentation guides")
+        b.click_el(b.find(".reading .code-copy", 5))
+        b.wait("return window.__copied.length == 2", 5, "reading copy")
+        check(b.js("return window.__copied[1]") == 'echo "hi"\ncurl -s $URL\n  sleep 1', "the reading view's copy button copies the code")
+        b.shot("code-blocks-reading")
+        # Line numbers can be turned off.
+        b.js("history.pushState(null, '', '/settings/editor'); dispatchEvent(new PopStateEvent('popstate'));")
+        b.click_el(b.find(".code-numbers-toggle", 10))
+        b.wait("return document.documentElement.classList.contains('no-code-numbers')", 5, "numbers off")
+        check(True, "the setting turns line numbers off")
+        b.click_el(b.find(".code-numbers-toggle", 10))
+        b.click_el(b.find(".code-guides-toggle", 10))
+        b.wait("return document.documentElement.classList.contains('no-code-guides')", 5, "guides off")
+        b.js("history.back()")
+        b.find(".reading .cl .igs", 10)
+        check(b.js("return getComputedStyle(document.querySelector('.reading .cl .igs')).display") == "none", "the setting turns indentation guides off")
+        b.js("history.forward()")
+        b.click_el(b.find(".code-guides-toggle", 10))
+        check(not severe_logs(b), "no browser errors")
+    finally:
+        b.close()
+
+
+def test_code_wrapping(env):
+    b = Browser(1100, 900)
+    try:
+        signup(b, uniq("cwr"))
+        new_note(b, "Long lines", "")
+        long = "y = " + " + ".join(f"value{i}" for i in range(36))
+        # Enter after the opening fence closes the block.
+        b.keys("```py" + KEYS["enter"])
+        time.sleep(0.3)
+        check(editor_text(b) == "```py\n\n```", "Enter after an opening fence closes the block")
+        b.keys("if x:" + KEYS["enter"] + "    " + long)
+        b.chord(KEYS["ctrl"], KEYS["end"])
+        b.keys(KEYS["enter"] + "after")
+        time.sleep(0.6)
+        check(editor_text(b) == f"```py\nif x:\n    {long}\n```\nafter", "typed a block with a long line")
+        rows = """
+            const lc = document.querySelectorAll('.ed .ln.code')[1].querySelector('.lc');
+            const r = document.createRange(); r.selectNodeContents(lc);
+            // The leftmost piece of each row.
+            const rows = new Map();
+            for (const x of r.getClientRects()) {
+                const t = Math.round(x.top);
+                rows.set(t, Math.min(rows.get(t) ?? Infinity, Math.round(x.left)));
+            }
+            const lefts = [...new Set(rows.values())];
+            const tops = rows;
+            const guide = lc.parentElement.querySelector('.igs').getBoundingClientRect();
+            return [tops.size, lefts, Math.round(guide.right), getComputedStyle(lc).whiteSpace];
+        """
+        n, lefts, guide_right, ws = b.js(rows)
+        check(n > 1, f"a long line wraps by default ({n} rows)")
+        check(len(lefts) == 1, f"wrapped rows start under the text, not under the indentation ({lefts})")
+        check(guide_right <= lefts[0], "the indentation guide stays clear of the text")
+        b.shot("code-wrapping")
+        # wrap=false: the block scrolls sideways, its lines together.
+        # Ctrl+Home reaches the fence even while it is hidden behind the header.
+        b.chord(KEYS["ctrl"], KEYS["home"])
+        b.chord(KEYS["end"])
+        b.keys(" wrap=false")
+        b.chord(KEYS["ctrl"], KEYS["end"])
+        time.sleep(0.6)
+        check(editor_text(b).startswith("```py wrap=false\n"), "Ctrl+Home goes to the fence: wrap=false after the language")
+        n, lefts, guide_right, ws = b.js(rows)
+        check(n == 1, f"wrap=false: the long line doesn't wrap ({n} rows)")
+        lx = "Array.from(document.querySelectorAll('.ed .ln.code > .lx'))"
+        widths = b.js(f"return {lx}.map(x => [x.scrollWidth, x.clientWidth])")
+        check(widths[1][0] > widths[1][1], "the long line overflows")
+        check(widths[0][0] == widths[1][0], f"every line of the block is as wide as its longest ({widths})")
+        check(b.js(f"return {lx}.map(x => getComputedStyle(x).scrollbarWidth).join()") == "none,thin", "only the block's last line shows a scrollbar")
+        b.js(f"{lx}[1].scrollLeft = 120")
+        b.wait(f"return {lx}[0].scrollLeft == 120", 5, "the other line scrolls along")
+        check(True, "scrolling one line scrolls the block")
+        # Typing at the end of the long line: the block follows the caret.
+        b.click_el(b.find(".ed > .ln:nth-child(3) .lc", 5))
+        b.chord(KEYS["end"])
+        b.keys(" + end")
+        time.sleep(0.6)
+        check(editor_text(b).splitlines()[2].endswith("value35 + end"), "typed at the end of the long line")
+        offsets = b.js(f"return {lx}.map(x => x.scrollLeft)")
+        check(offsets[1] > 120 and len(set(offsets)) == 1, f"the block scrolls to the caret, its lines together ({offsets})")
+        b.shot("code-nowrap-editing")
+        b.click(".seg button[title^='Reading']")
+        b.find(".reading .codeblock.nowrap", 10)
+        check(b.js("const p = document.querySelector('.reading pre.code'); return p.scrollWidth > p.clientWidth"), "the reading view scrolls an unwrapped block sideways")
+        # The setting: blocks without wrap= follow it.
+        b.js("history.pushState(null, '', '/settings/editor'); dispatchEvent(new PopStateEvent('popstate'));")
+        b.click_el(b.find(".code-wrap-toggle", 10))
+        b.wait("return document.documentElement.classList.contains('no-code-wrap')", 5, "wrapping off")
+        check(True, "the setting turns wrapping off")
+        b.click_el(b.find(".code-wrap-toggle", 10))
+        check(not severe_logs(b), "no browser errors")
+    finally:
+        b.close()
+
+
 def test_editor_safety(env):
     b = Browser()
     try:
@@ -1587,7 +1729,7 @@ def test_recovered_copy(env):
         b.close()
 
 
-TESTS = [test_onboarding, test_collab, test_devices_and_recovery, test_features, test_attachments, test_note_sharing, test_tables, test_editor_safety, test_local_copy, test_ui_basics, test_offline_tabs, test_offline_start, test_mobile, test_quick_notes, test_vault_icons, test_entry_icons, test_tree_order, test_session_ended_while_away, test_comments, test_graph, test_recovered_copy]
+TESTS = [test_onboarding, test_collab, test_devices_and_recovery, test_features, test_attachments, test_note_sharing, test_tables, test_code_blocks, test_code_wrapping, test_editor_safety, test_local_copy, test_ui_basics, test_offline_tabs, test_offline_start, test_mobile, test_quick_notes, test_vault_icons, test_entry_icons, test_tree_order, test_session_ended_while_away, test_comments, test_graph, test_recovered_copy]
 
 
 def main():

@@ -401,6 +401,18 @@ fn EditorPrefs() -> impl IntoView {
             " Full-width notes"
         </label>
         <label class="check">
+            <input type="checkbox" class="code-numbers-toggle" prop:checked=move || ui.ui_prefs.get().code_numbers on:change=move |ev| { let on = event_target_checked(&ev); state::set_ui_prefs(|p| p.code_numbers = on); }/>
+            " Line numbers in code blocks"<span class="muted small">" — ln=false after a block's language hides them for that block"</span>
+        </label>
+        <label class="check">
+            <input type="checkbox" class="code-guides-toggle" prop:checked=move || ui.ui_prefs.get().code_guides on:change=move |ev| { let on = event_target_checked(&ev); state::set_ui_prefs(|p| p.code_guides = on); }/>
+            " Indentation guides in code blocks"<span class="muted small">" — vl=false after a block's language hides them for that block"</span>
+        </label>
+        <label class="check">
+            <input type="checkbox" class="code-wrap-toggle" prop:checked=move || ui.ui_prefs.get().code_wrap on:change=move |ev| { let on = event_target_checked(&ev); state::set_ui_prefs(|p| p.code_wrap = on); }/>
+            " Wrap long lines in code blocks"<span class="muted small">" — wrap=false or wrap=true after a block's language decides for that block"</span>
+        </label>
+        <label class="check">
             <input type="checkbox" prop:checked=move || ui.ui_prefs.get().right_panel on:change=move |ev| { let on = event_target_checked(&ev); state::set_ui_prefs(|p| p.right_panel = on); }/>
             " Show backlinks & outline panel"
         </label>

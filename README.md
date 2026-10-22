@@ -36,8 +36,14 @@ read anything.
   instead of `Ctrl` on a Mac), optional Vim keys, light, dark or system
   theme, and full-width notes if you like.
 * Tables you build with Enter and Tab, with aligned columns; task lists you
-  can tick in the editor and the reading view; code blocks with syntax
-  highlighting.
+  can tick in the editor and the reading view.
+* Code blocks with syntax highlighting for some 35 languages, line numbers,
+  indentation guides and a copy button. Options after the language: a file
+  name (`` ```bash title=deploy.sh ``), highlighted lines (`hl=2,4-6`), no
+  line numbers (`ln=false`) or indentation guides (`vl=false`), long lines
+  that don't wrap but scroll sideways (`wrap=false`) — they stay plain
+  Markdown. A new block from the toolbar or `` Ctrl+Shift+` ``; Enter (or
+  pasting) after an opening `` ``` `` closes the block.
 * Images and other files: paste or drop them into a note — they are encrypted,
   uploaded and shown inline.
 * Wiki links (`[[Note]]`, `[[Note#Heading]]`, `[[Note|alias]]`) that create

@@ -161,6 +161,7 @@ HOME = [
         - [ ] Rename a note, or drag it to another folder in the sidebar: links to it follow
         - [ ] Comment on a note: select some text and click *Comment* (or press `Alt+M`); click highlighted text to read and answer its thread. *Holiday plans* in *Family* has comments — even Carol's, who only views that vault
         - [ ] Drag a note between two others in the sidebar: a line shows where it goes, and it stays there for everyone (this note and the *Recipes* overview were put first that way, from the command line); *Sort A–Z* in a folder's ⋯ menu undoes it
+        - [ ] Code blocks in *Snippets*: a file name and highlighted lines (`title=… hl=…` after the language), line numbers, indentation guides, a copy button, `wrap=false` for long lines; Settings → Editor turns the numbers, guides and wrapping off
         - [ ] Drop or paste a picture into a note
         - [ ] Give a note or folder an icon: *Set icon…* in its ⋯ menu in the sidebar
         - [ ] *Quick notes* in the sidebar: promote one to a regular note
@@ -720,11 +721,18 @@ WORK = [
     ("Snippets/Deploy script.md", None, note("""
         # Deploy script
 
-        ```bash
+        ```bash title=deploy.sh hl=6
         #!/usr/bin/env bash
         set -euo pipefail
         hugo --minify
-        rsync -az --delete public/ deploy@web:/srv/site/
+
+        for host in web1 web2; do
+            if ping -c 1 "$host" > /dev/null; then
+                rsync -az --delete public/ "deploy@$host:/srv/site/"
+            else
+                echo "skipped $host (down)"
+            fi
+        done
         echo "deployed $(git rev-parse --short HEAD)"
         ```
 
@@ -733,7 +741,7 @@ WORK = [
     ("Snippets/Error handling in Rust.md", None, note("""
         # Error handling in Rust
 
-        ```rust
+        ```rust title=src/config.rs
         use anyhow::{Context, Result};
 
         fn read_config(path: &str) -> Result<String> {
@@ -742,6 +750,44 @@ WORK = [
         ```
 
         `?` passes errors up; `context` says what we were doing. #snippet #rust
+        """)),
+    ("Snippets/Server checks.md", None, note("""
+        # Server checks
+
+        Is the mail server up? From a Windows laptop:
+
+        ```powershell title=check-mail.ps1 hl=4-5
+        <# Warns when the server
+           doesn't answer. #>
+        $server = "mail.example.com"
+        $ok = Test-NetConnection -ComputerName $server -Port 993
+        if (-not $ok.TcpTestSucceeded) { Write-Warning "$server is down" }
+        ```
+
+        The web server, pinned to a version:
+
+        ```yaml title=compose.yaml ln=false vl=false
+        services:
+          web:
+            image: nginx:1.27  # pinned
+            ports: ["8080:80"]
+        ```
+
+        What the mail server logged (long lines, not wrapped):
+
+        ```text title=mail.log wrap=false
+        2026-10-22 06:14:02 imapd[812]: Login: user=alice, method=PLAIN, rip=192.168.1.20, lip=192.168.1.5, mpid=4411, TLS, session=<Kq3bJz5A>
+        2026-10-22 06:14:09 imapd[812]: Disconnected: Logged out in=412 out=10233 deleted=0 expunged=0 trashed=0 hdr_count=12 body_count=1
+        ```
+
+        What changed for TLS:
+
+        ```diff
+        - listen 80;
+        + listen 443 ssl;
+        ```
+
+        Each block's header has a copy button. #snippet
         """)),
 ]
 

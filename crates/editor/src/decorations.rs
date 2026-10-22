@@ -171,6 +171,18 @@ mod tests {
     }
 
     #[test]
+    fn a_block_comment_rehighlights_the_code_below_it() {
+        let t = "```c\na\nb\nc\n```\nafter";
+        // "a" becomes "/* a": the rest of the block is comment, not "after".
+        assert_eq!(check(t, 5, 5, "/* "), vec![1..4]);
+        // Typing where nothing is open touches one line.
+        assert_eq!(check(t, 7, 7, "x"), vec![2..3]);
+        // Highlighted lines move with the lines above them.
+        let dirty = check("```c hl=2\na\nb\nc\n```", 10, 10, "z\n");
+        assert!(dirty.iter().any(|r| r.contains(&3)), "{dirty:?}");
+    }
+
+    #[test]
     fn a_delimiter_row_makes_the_line_above_a_header() {
         let t = "| a | b |\nx\ny";
         let dirty = check(t, 10, 11, "| - | - |");

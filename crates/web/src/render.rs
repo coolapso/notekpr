@@ -8,6 +8,7 @@
 
 use pulldown_cmark::{CodeBlockKind, CowStr, Event, LinkType, Options, Parser, Tag, TagEnd};
 
+use crate::editor::code::{self, Carry, FenceInfo, Indent};
 use crate::editor::syntax;
 
 pub struct Ctx<'a> {
@@ -65,22 +66,60 @@ fn text_with_tags(s: &str) -> String {
     out
 }
 
-pub fn highlight_block(code: &str, lang: &str) -> String {
-    let mut out = String::with_capacity(code.len() * 2);
-    let block = syntax::Block::Code {
-        lang: lang.to_string(),
-    };
-    for (i, line) in code.split('\n').enumerate() {
-        if i > 0 {
-            out.push('\n');
-        }
-        let st = syntax::style_line(line, &block, &|_| true);
-        if line.is_empty() {
-            continue;
-        }
-        let html = syntax::line_html(line, &st);
-        out.push_str(&html);
+/// A code block: its header (title, language, copy button) and its lines,
+/// one `span.cl` each (`chl` when highlighted, with its indentation guides
+/// as an empty `span.igs`, its indentation and text in `span.ind` and
+/// `span.lc`), numbered with CSS. The text of the `code` element is exactly
+/// the code.
+pub fn code_block(code: &str, info: &FenceInfo) -> String {
+    let mut out = String::with_capacity(code.len() * 2 + 512);
+    out.push_str("<div class=\"codeblock");
+    if !info.numbers {
+        out.push_str(" nonum");
     }
+    if !info.has_head() {
+        out.push_str(" bare");
+    }
+    match info.wrap {
+        Some(true) => out.push_str(" wrap"),
+        Some(false) => out.push_str(" nowrap"),
+        None => {}
+    }
+    out.push_str("\"><div class=\"code-head\">");
+    out.push_str(&code::head_html(info, true));
+    out.push_str("</div><pre class=\"code\"><code>");
+    let lines: Vec<&str> = code.split('\n').collect();
+    let mut carry = Carry::None;
+    let mut indent = Indent::default();
+    for (i, line) in lines.iter().enumerate() {
+        out.push_str(if info.highlighted(i as u32 + 1) {
+            "<span class=\"cl chl\">"
+        } else {
+            "<span class=\"cl\">"
+        });
+        let (guides, next) = indent.line(line, lines.get(i + 1).copied());
+        indent = next;
+        if info.guides {
+            out.push_str(&code::guides_html(guides, false));
+        }
+        let mut flags = vec![0; line.len()];
+        carry = code::highlight(line, &info.lang, carry, &mut flags);
+        if !line.is_empty() {
+            let st = syntax::Styled {
+                flags,
+                cells: syntax::code_cells(line),
+                ..Default::default()
+            };
+            out.push_str(&syntax::line_html(line, &st));
+        }
+        // Lines are laid out as blocks; the line break is there for the text
+        // (copying) only.
+        if i + 1 < lines.len() {
+            out.push_str("<span class=\"nl\">\n</span>");
+        }
+        out.push_str("</span>");
+    }
+    out.push_str("</code></pre></div>");
     out
 }
 
@@ -182,7 +221,7 @@ pub fn to_html(src: &str, ctx: &Ctx) -> String {
 
     let mut out_events: Vec<Event> = Vec::new();
     let mut in_meta = false;
-    let mut code: Option<(String, String)> = None;
+    let mut code: Option<(FenceInfo, String)> = None;
     let mut image: Option<(String, String, bool)> = None; // (target, alt, wiki)
     let mut heading_n = 0usize;
     let mut link_stack: Vec<bool> = Vec::new();
@@ -218,16 +257,9 @@ pub fn to_html(src: &str, ctx: &Ctx) -> String {
             match ev {
                 Event::Text(t) => buf.push_str(&t),
                 Event::End(TagEnd::CodeBlock) => {
-                    let (lang, buf) = code.take().unwrap();
-                    let body = highlight_block(buf.trim_end_matches('\n'), &lang);
-                    let label = if lang.is_empty() {
-                        String::new()
-                    } else {
-                        format!(" data-lang=\"{}\"", esc(&lang))
-                    };
-                    out_events.push(Event::Html(CowStr::from(format!(
-                        "<pre class=\"code\"{label}><code>{body}</code></pre>"
-                    ))));
+                    let (info, buf) = code.take().unwrap();
+                    let html = code_block(buf.trim_end_matches('\n'), &info);
+                    out_events.push(Event::Html(CowStr::from(html)));
                 }
                 _ => {}
             }
@@ -239,13 +271,11 @@ pub fn to_html(src: &str, ctx: &Ctx) -> String {
             _ if in_meta => {}
             Event::Html(h) | Event::InlineHtml(h) => out_events.push(Event::Text(h)),
             Event::Start(Tag::CodeBlock(kind)) => {
-                let lang = match kind {
-                    CodeBlockKind::Fenced(l) => {
-                        l.split_whitespace().next().unwrap_or("").to_string()
-                    }
-                    CodeBlockKind::Indented => String::new(),
+                let info = match kind {
+                    CodeBlockKind::Fenced(l) => FenceInfo::parse(&l),
+                    CodeBlockKind::Indented => FenceInfo::default(),
                 };
-                code = Some((lang, String::new()));
+                code = Some((info, String::new()));
             }
             Event::Start(Tag::Image {
                 link_type,
@@ -471,5 +501,83 @@ mod tests {
         assert!(h.contains("data-create=\"Missing\""));
         assert!(h.contains("data-att=\"a1\""));
         assert!(h.contains("class=\"kw\""));
+    }
+
+    /// The text of a block's `code` element (tags removed, entities decoded).
+    fn code_text(h: &str) -> String {
+        let a = h.find("<code>").unwrap() + 6;
+        let b = h[a..].find("</code>").unwrap() + a;
+        let mut t = String::new();
+        let mut tag = false;
+        for c in h[a..b].chars() {
+            match c {
+                '<' => tag = true,
+                '>' => tag = false,
+                c if !tag => t.push(c),
+                _ => {}
+            }
+        }
+        t.replace("&lt;", "<")
+            .replace("&gt;", ">")
+            .replace("&quot;", "\"")
+            .replace("&#39;", "'")
+            .replace("&amp;", "&")
+    }
+
+    #[test]
+    fn code_blocks_with_options() {
+        let src = "```bash title=search_keys.sh hl=2\n#!/bin/bash\nfor u in a b; do\n\n  echo \"$u\"\ndone\n```\n";
+        let h = render(src);
+        assert!(
+            h.contains("<span class=\"code-title\">search_keys.sh</span>"),
+            "{h}"
+        );
+        assert!(h.contains("<span class=\"code-lang\">bash</span>"));
+        assert!(h.contains("class=\"code-copy\""));
+        assert_eq!(h.matches("class=\"cl chl\"").count(), 1);
+        assert_eq!(h.matches("<span class=\"cl").count(), 5);
+        assert!(!h.contains("nonum"));
+        // Copying takes the text of the code element: exactly the code.
+        assert_eq!(
+            code_text(&h),
+            "#!/bin/bash\nfor u in a b; do\n\n  echo \"$u\"\ndone"
+        );
+
+        let h = render("```python ln=false\nx = 1\n```\n");
+        assert!(h.contains("codeblock nonum"));
+        assert!(!h.contains("code-title"));
+        let h = render("```\nplain <b>\n```\n\n    indented\n");
+        assert_eq!(h.matches("codeblock bare").count(), 2);
+        assert!(h.contains("plain &lt;b&gt;"));
+        // The title is text, never markup.
+        let h = render("```html title=\"<img src=x onerror=alert(1)>\"\n<p>\n```\n");
+        assert!(!h.contains("<img"), "{h}");
+        assert!(h.contains("&lt;img src=x onerror=alert(1)&gt;"));
+    }
+
+    #[test]
+    fn indentation_guides_in_the_reading_view() {
+        let h = render("```yaml\na:\n  b:\n\n    c: 1\nd: 2\n```\n");
+        assert_eq!(h.matches("class=\"igs ig1 iu2\"").count(), 2, "{h}");
+        assert_eq!(h.matches("class=\"igs ig2 iu2\"").count(), 1, "{h}");
+        assert!(!h.contains("data-w"));
+        assert_eq!(code_text(&h), "a:\n  b:\n\n    c: 1\nd: 2");
+        let h = render("```yaml vl=false\na:\n  b: 1\n```\n");
+        assert!(!h.contains("igs"), "{h}");
+        // Indentation and text in their own parts (wrapped rows start under the text).
+        assert!(
+            h.contains("<span class=\"ind\">  </span><span class=\"lc\">"),
+            "{h}"
+        );
+        assert!(!h.contains("nowrap"));
+        assert!(render("```yaml wrap=false\na\n```\n").contains("codeblock nowrap"));
+        assert!(render("```yaml wrap\na\n```\n").contains("codeblock wrap"));
+    }
+
+    #[test]
+    fn comments_span_lines_in_the_reading_view() {
+        let h = render("```c\n/* one\ntwo */ int x;\n```\n");
+        assert!(h.contains("<span class=\"cm\">two */</span>"), "{h}");
+        assert!(h.contains("<span class=\"ty\">int</span>"), "{h}");
     }
 }

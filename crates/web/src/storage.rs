@@ -385,6 +385,15 @@ pub struct UiPrefs {
     /// The "Quick notes" section of the sidebar.
     #[serde(default = "yes")]
     pub quick_notes: bool,
+    /// Line numbers in code blocks (a block's `ln=false` turns them off too).
+    #[serde(default = "yes")]
+    pub code_numbers: bool,
+    /// Indentation guides in code blocks.
+    #[serde(default = "yes")]
+    pub code_guides: bool,
+    /// Long lines in code blocks wrap (a block's `wrap=` decides for itself).
+    #[serde(default = "yes")]
+    pub code_wrap: bool,
 }
 
 fn default_mode() -> String {
@@ -404,6 +413,9 @@ impl Default for UiPrefs {
             right_panel: true,
             wide: false,
             quick_notes: true,
+            code_numbers: true,
+            code_guides: true,
+            code_wrap: true,
         }
     }
 }

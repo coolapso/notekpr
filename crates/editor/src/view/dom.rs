@@ -2,11 +2,13 @@
 //! from the DOM, and mapping between DOM positions and offsets in a line.
 //! Nothing here touches the editor's state.
 
+use std::borrow::Cow;
 use std::hash::{Hash, Hasher};
 
 use wasm_bindgen::JsCast;
 use web_sys::{Document, Element, HtmlElement, Node};
 
+use crate::code;
 use crate::syntax::{self, Block};
 use crate::text::{byte_to_utf16, utf16_to_byte};
 
@@ -26,7 +28,7 @@ pub struct LineJob {
 
 pub struct Rendered {
     pub idx: usize,
-    pub class: &'static str,
+    pub class: Cow<'static, str>,
     pub html: String,
     pub hash: u64,
     /// The rendering depends on the host (link targets, image URLs), so
@@ -34,8 +36,10 @@ pub struct Rendered {
     pub dynamic: bool,
 }
 
-/// The HTML of one line: its source text with syntax spans, plus an image
-/// preview widget (`contenteditable=false`, `data-w`) for an embed line.
+/// The HTML of one line: its source text with syntax spans, plus a widget
+/// (`contenteditable=false`, `data-w`, after the text): an image preview for
+/// an embed line, the header (title, language, copy button) of a code block
+/// on its opening fence, the indentation guides of a line of code (no text).
 pub fn render_line(
     job: LineJob,
     link_exists: &dyn Fn(&str) -> bool,
@@ -49,6 +53,20 @@ pub fn render_line(
         html.push_str("<span class=\"w\" contenteditable=\"false\" data-w=\"1\"><img src=\"");
         syntax::escape(&url, &mut html);
         html.push_str("\" alt=\"\" draggable=\"false\"></span>");
+    }
+    if let Block::Code { guides, .. } = &job.block {
+        // Inside the part that scrolls, so the guides move with the text.
+        let guides = code::guides_html(*guides, true);
+        if styled.outer.is_some() && html.ends_with("</span>") {
+            html.insert_str(html.len() - "</span>".len(), &guides);
+        } else {
+            html.push_str(&guides);
+        }
+    }
+    if let Block::Fence { info, open: true } = &job.block {
+        html.push_str("<span class=\"w code-head\" contenteditable=\"false\" data-w=\"1\">");
+        html.push_str(&code::head_html(info, false));
+        html.push_str("</span>");
     }
     let class = job.block.class();
     let mut h = std::collections::hash_map::DefaultHasher::new();

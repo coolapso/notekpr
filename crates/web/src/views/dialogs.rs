@@ -1114,6 +1114,7 @@ fn Help() -> impl IntoView {
         (format!("{m}+B / {m}+I"), "Bold / italic"),
         (format!("{m}+K (in editor)"), "Insert link"),
         (format!("{m}+`"), "Inline code"),
+        (format!("{m}+Shift+`"), "Code block"),
         (format!("{m}+Shift+X / H"), "Strikethrough / highlight"),
         (
             format!("{m}+Shift+8 / 7 / 9 / ."),

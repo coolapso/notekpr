@@ -68,9 +68,52 @@ pub fn type_text(st: &EditorState, a: usize, b: usize, data: &str) -> Option<Tra
     replace(st, a, b, data, None).map(|t| t.with_boundary(word_end, false))
 }
 
-/// Pasted (or dropped) text over `[a, b)`: its own undo group.
+/// Pasted (or dropped) text over `[a, b)`: its own undo group. Pasted
+/// right after an opening fence that nothing closes, the text goes below the
+/// fence and the block is closed after it.
 pub fn paste(st: &EditorState, a: usize, b: usize, text: &str) -> Option<Transaction> {
-    replace(st, a, b, &text.replace("\r\n", "\n"), None).map(|t| t.with_boundary(true, true))
+    let text = text.replace("\r\n", "\n");
+    let doc = st.doc();
+    let li = doc.line_of(a);
+    let body = text.trim_start_matches('\n').trim_end_matches('\n');
+    if a == b
+        && a == doc.line_end(li)
+        && !body.trim().is_empty()
+        && let Some(close) = closing_fence(st, li)
+    {
+        let caret = a + 1 + body.len();
+        return replace(
+            st,
+            a,
+            b,
+            &format!("\n{body}\n{close}"),
+            Some((caret, caret)),
+        )
+        .map(|t| t.with_boundary(true, true));
+    }
+    replace(st, a, b, &text, None).map(|t| t.with_boundary(true, true))
+}
+
+/// The fence that closes the opening fence on line `li` (its indentation,
+/// backticks or tildes), if nothing closes it: the note ends inside a code
+/// block. (A fence typed above another block pairs with that block's
+/// opening fence, which leaves the note ending inside a block too.)
+fn closing_fence(st: &EditorState, li: usize) -> Option<String> {
+    if !matches!(st.block(li), Block::Fence { open: true, .. }) {
+        return None;
+    }
+    let last = st.doc().line_count().checked_sub(1)?;
+    if !matches!(
+        st.block(last),
+        Block::Code { .. } | Block::Fence { open: true, .. }
+    ) {
+        return None;
+    }
+    let line = st.doc().line(li);
+    let t = line.trim_start();
+    let c = t.chars().next()?;
+    let run = t.len() - t.trim_start_matches(c).len();
+    Some(format!("{}{}", &line[..line.len() - t.len()], &t[..run]))
 }
 
 fn table_key(st: &EditorState, k: TableKey) -> Option<Transaction> {
@@ -96,6 +139,15 @@ pub fn newline(st: &EditorState) -> Option<Transaction> {
     let (ls, le) = (doc.line_start(li), doc.line_end(li));
     let line = doc.line(li);
     let group = |t: Option<Transaction>| t.map(|t| t.with_boundary(true, false));
+    // At the end of an opening fence that nothing closes: close the block,
+    // the caret on the empty line in between.
+    if a == b
+        && a == le
+        && let Some(close) = closing_fence(st, li)
+    {
+        let caret = Some((a + 1, a + 1));
+        return group(replace(st, a, a, &format!("\n\n{close}"), caret));
+    }
     if matches!(st.block(li), Block::Code { .. }) {
         let indent: String = line
             .chars()
@@ -523,6 +575,45 @@ mod tests {
             st.apply(t);
         }
         (st.text().to_string(), st.selection().pair())
+    }
+
+    #[test]
+    fn enter_closes_a_code_block_nothing_closes() {
+        // A new block: closed, the caret inside.
+        assert_eq!(
+            run("```py", (5, 5), newline),
+            ("```py\n\n```".into(), (6, 6))
+        );
+        // Text below it was never meant to be code.
+        assert_eq!(
+            run("```py\nhello", (5, 5), newline),
+            ("```py\n\n```\nhello".into(), (6, 6))
+        );
+        // The same fence (and indentation) closes it.
+        assert_eq!(run("  ~~~~", (6, 6), newline).0, "  ~~~~\n\n  ~~~~");
+        // Typed above another block, a fence pairs with that block's: closed.
+        assert_eq!(
+            run("```\n```\nx\n```", (3, 3), newline).0,
+            "```\n\n```\n```\nx\n```"
+        );
+        // A closed block: Enter is Enter.
+        assert_eq!(run("```py\nx\n```", (5, 5), newline).0, "```py\n\nx\n```");
+        // Not at the end of the fence: Enter is Enter.
+        assert_eq!(run("```py", (3, 3), newline).0, "```\npy");
+    }
+
+    #[test]
+    fn pasting_after_an_open_fence_closes_the_block() {
+        let paste_at = |text: &str, at: usize, t: &'static str| {
+            run(text, (at, at), move |st| paste(st, at, at, t))
+        };
+        assert_eq!(
+            paste_at("```sh", 5, "ls -la\r\npwd\n"),
+            ("```sh\nls -la\npwd\n```".into(), (16, 16))
+        );
+        // A closed block, or elsewhere: pasted as it is.
+        assert_eq!(paste_at("```sh\n```", 5, "ls").0, "```shls\n```");
+        assert_eq!(paste_at("text", 4, "\nls").0, "text\nls");
     }
 
     #[test]

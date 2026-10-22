@@ -456,12 +456,14 @@ async fn no_full_rebuild_at_the_end_of_a_composition() {
 /// Every offset maps to a DOM position and back: typing there inserts there.
 #[wasm_bindgen_test]
 fn selection_maps_between_the_dom_and_offsets() {
-    let text = "# Wel**come** 👋\n\n- [ ] task [[Exists]] and [[Nope|alias]]\n![[pic.png]]\n| a | b |\n| - | - |\n| 日 | x |\n```rust\nlet x = \"é\";\n```\nend `c` ==hl==";
+    let text = "# Wel**come** 👋\n\n- [ ] task [[Exists]] and [[Nope|alias]]\n![[pic.png]]\n| a | b |\n| - | - |\n| 日 | x |\n```rust title=\"a b.rs\" hl=1\nlet x = \"é\";\n    let y = 1;\n\n\tz\n```\nend `c` ==hl==";
     let f = setup(text);
     assert!(
         root(&f).query_selector(".w img").unwrap().is_some(),
         "image widget"
     );
+    // Indentation guides, also on the blank line between indented ones.
+    assert_eq!(root(&f).query_selector_all(".igs").unwrap().length(), 3);
     let offsets: Vec<usize> = text
         .char_indices()
         .map(|(i, _)| i)
@@ -590,6 +592,18 @@ fn commands_and_shortcuts() {
     f.ed.set_mode(Mode::Source);
     assert!(root(&f).class_list().contains("source"));
     assert!(lines(&f)[0].is_same_node(Some(&before[0])));
+    // Ctrl+Shift+`: a code block, the caret on its fence for the language.
+    let f = setup("x");
+    caret_at(&f, 1);
+    key(&f, "~", true, true);
+    assert_text(&f, "x\n```\n\n```\n");
+    assert_eq!(f.ed.selection(), (5, 5));
+    // Enter after a fence nothing closes closes it.
+    let f = setup("```py");
+    caret_at(&f, 5);
+    enter(&f);
+    assert_text(&f, "```py\n\n```");
+    assert_eq!(f.ed.selection(), (6, 6));
 }
 
 /// A keydown with the key it types and the physical key it is.
@@ -676,6 +690,60 @@ fn task_boxes_and_links() {
     let ev = web_sys::MouseEvent::new_with_mouse_event_init_dict("mousedown", &init).unwrap();
     link.dispatch_event(&ev).unwrap();
     assert_eq!(*f.host.opened.borrow(), vec![Target::Wiki("Exists".into())]);
+}
+
+/// A code block's header is a widget: the text stays the source, its copy
+/// button copies without editing, and the caret in the block shows both fences.
+#[wasm_bindgen_test]
+fn code_block_headers() {
+    let text = "intro\n```sh title=deploy.sh hl=2\nls\npwd\n```\nafter";
+    let f = setup(text);
+    let ls = lines(&f);
+    let head = ls[1].query_selector(".code-head[data-w]").unwrap().unwrap();
+    assert_eq!(
+        head.get_attribute("contenteditable").as_deref(),
+        Some("false")
+    );
+    let title = head.query_selector(".code-title").unwrap().unwrap();
+    assert_eq!(title.text_content().as_deref(), Some("deploy.sh"));
+    assert!(ls[1].class_list().contains("head"));
+    assert!(ls[3].class_list().contains("chl"), "hl=2");
+    assert!(!ls[2].class_list().contains("chl"));
+    assert!(
+        ls[2].query_selector(".igs").unwrap().is_none(),
+        "no indentation"
+    );
+    let g = setup("```py vl=false\nif x:\n    y()\n```");
+    assert!(
+        root(&g).query_selector(".igs").unwrap().is_none(),
+        "vl=false"
+    );
+    assert_text(&f, text);
+
+    // The caret in the code shows both fences; elsewhere neither.
+    caret_at(&f, "intro\n```sh title=deploy.sh hl=2\nl".len());
+    let ls = lines(&f);
+    assert!(ls[1].class_list().contains("active") && ls[4].class_list().contains("active"));
+    caret_at(&f, text.len());
+    let ls = lines(&f);
+    assert!(!ls[1].class_list().contains("active") && !ls[4].class_list().contains("active"));
+
+    let copy = ls[1].query_selector(".code-copy").unwrap().unwrap();
+    let init = web_sys::MouseEventInit::new();
+    init.set_bubbles(true);
+    init.set_cancelable(true);
+    let ev = web_sys::MouseEvent::new_with_mouse_event_init_dict("mousedown", &init).unwrap();
+    copy.dispatch_event(&ev).unwrap();
+    assert!(ev.default_prevented(), "the caret stays where it was");
+    assert!(copy.class_list().contains("copied"));
+    assert_text(&f, text);
+    assert_eq!(f.ed.selection(), (text.len(), text.len()));
+
+    // Editing the options updates the header.
+    caret_at(&f, "intro\n```sh title=deploy".len());
+    type_str(&f, "2");
+    let title = lines(&f)[1].query_selector(".code-title").unwrap().unwrap();
+    assert_eq!(title.text_content().as_deref(), Some("deploy2.sh"));
 }
 
 fn point_of(f: &Fixture, line: usize, utf16: u32) -> (i32, i32) {

@@ -8,7 +8,8 @@
 //!   [`state::EditorState`] + [`state::Transaction`] (every edit is a
 //!   transaction: changes, selection, origin, undo grouping),
 //!   [`decorations`] (Markdown blocks per line, updated incrementally),
-//!   [`syntax`] (inline styling and HTML per line), [`commands`] (lists,
+//!   [`syntax`] (inline styling and HTML per line), [`code`] (code block
+//!   options and syntax highlighting), [`commands`] (lists,
 //!   tables, tasks, formatting) and [`vim`].
 //! * **The DOM view** — [`view::Editor`], a `contenteditable` element whose
 //!   text is always exactly the Markdown source, one `div.ln` per line. A
@@ -21,6 +22,7 @@
 //! call) is queued instead.
 
 pub mod change;
+pub mod code;
 pub mod commands;
 pub mod decorations;
 pub mod state;

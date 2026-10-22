@@ -24,10 +24,15 @@ pub fn App() -> impl IntoView {
     let ui = ui();
     install_shortcuts();
     install_menu_closer();
+    install_code_copy();
     Effect::new(move |_| {
-        let theme = ui.ui_prefs.get().theme;
+        let prefs = ui.ui_prefs.get();
         if let Some(root) = util::document().document_element() {
-            let _ = root.set_attribute("data-theme", &theme);
+            let _ = root.set_attribute("data-theme", &prefs.theme);
+            let classes = root.class_list();
+            let _ = classes.toggle_with_force("no-code-numbers", !prefs.code_numbers);
+            let _ = classes.toggle_with_force("no-code-guides", !prefs.code_guides);
+            let _ = classes.toggle_with_force("no-code-wrap", !prefs.code_wrap);
         }
     });
     view! { {move || auth::phase_view(ui.phase.get())} }
@@ -165,6 +170,31 @@ fn install_menu_closer() {
     }) as Box<dyn FnMut(_)>);
     let _ = util::document()
         .add_event_listener_with_callback("pointerdown", cb.as_ref().unchecked_ref());
+    cb.forget();
+}
+
+/// The copy buttons of code blocks in reading views (the editor handles its
+/// own): copy the block's code.
+fn install_code_copy() {
+    let cb = wasm_bindgen::closure::Closure::wrap(Box::new(move |e: web_sys::Event| {
+        let Some(button) = e
+            .target()
+            .and_then(|t| t.dyn_into::<web_sys::Element>().ok())
+            .and_then(|el| el.closest(".reading .code-copy").ok().flatten())
+        else {
+            return;
+        };
+        let code = button
+            .closest(".codeblock")
+            .ok()
+            .flatten()
+            .and_then(|b| b.query_selector("code").ok().flatten());
+        if let Some(code) = code {
+            util::copy_to_clipboard(&code.text_content().unwrap_or_default());
+            crate::editor::view::flash_copied(&button);
+        }
+    }) as Box<dyn FnMut(_)>);
+    let _ = util::document().add_event_listener_with_callback("click", cb.as_ref().unchecked_ref());
     cb.forget();
 }
 

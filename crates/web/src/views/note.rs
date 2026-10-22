@@ -78,6 +78,7 @@ fn Toolbar(vault: Option<String>) -> impl IntoView {
             <span class="tb-sep"></span>
             <ToolButton icon="quote" title="Quote".to_string() c=Command::Quote/>
             <ToolButton icon="code" title=format!("Code ({m}+`)") c=Command::Code/>
+            <ToolButton icon="code-block" title=format!("Code block ({m}+Shift+`)") c=Command::CodeBlock/>
             <ToolButton icon="link" title=format!("Link ({m}+K)") c=Command::Link/>
             <ToolButton icon="table" title="Table".to_string() c=Command::Table/>
             <ToolButton icon="minus" title="Divider".to_string() c=Command::Rule/>
@@ -125,6 +126,19 @@ fn mode_effects() {
         if let Some(ed) = editor() {
             ed.set_vim(vim);
         }
+    });
+    // Long lines in code blocks wrap or scroll: the page's class for it
+    // changes in the same update, so this waits a moment.
+    Effect::new(move |prev: Option<bool>| {
+        let wrap = ui.ui_prefs.get().code_wrap;
+        if prev.is_some_and(|p| p != wrap) {
+            util::set_timeout(0, || {
+                if let Some(ed) = editor() {
+                    ed.code_styles_changed();
+                }
+            });
+        }
+        wrap
     });
 }
 

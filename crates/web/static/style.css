@@ -30,6 +30,16 @@
   --st: #0a7f3f;
   --cm: #8e8e88;
   --nu: #b35900;
+  --fn: #8a5a00;
+  --ty: #0969da;
+  --co: #b35900;
+  --va: #0a7b83;
+  --pr: #4f46e5;
+  --op: #c0365f;
+  --me: #8a6d3b;
+  --code-hl: rgba(91, 91, 214, 0.1);
+  --code-head: 34px;
+  --guide: rgba(20, 20, 30, 0.13);
   color-scheme: light;
 }
 
@@ -41,6 +51,8 @@
     --danger: #ff6b6b; --danger-bg: #3a2020; --ok: #4cc27a; --warn: #f0b44c; --warn-bg: #3a3020;
     --code-bg: #26262b; --hl-bg: #5a4f14; --shadow: 0 8px 28px rgba(0, 0, 0, 0.5), 0 1px 3px rgba(0, 0, 0, 0.4);
     --kw: #c39cff; --st: #7ad59b; --cm: #7d7d86; --nu: #ffb068;
+    --fn: #f0d27a; --ty: #6cc6f5; --co: #ffb068; --va: #6fe0d0; --pr: #a5b4fc; --op: #ff7b9c; --me: #c9a26b;
+    --code-hl: rgba(139, 140, 244, 0.16); --guide: rgba(255, 255, 255, 0.12);
     color-scheme: dark;
   }
 }
@@ -51,6 +63,8 @@
   --danger: #ff6b6b; --danger-bg: #3a2020; --ok: #4cc27a; --warn: #f0b44c; --warn-bg: #3a3020;
   --code-bg: #26262b; --hl-bg: #5a4f14; --shadow: 0 8px 28px rgba(0, 0, 0, 0.5), 0 1px 3px rgba(0, 0, 0, 0.4);
   --kw: #c39cff; --st: #7ad59b; --cm: #7d7d86; --nu: #ffb068;
+  --fn: #f0d27a; --ty: #6cc6f5; --co: #ffb068; --va: #6fe0d0; --pr: #a5b4fc; --op: #ff7b9c; --me: #c9a26b;
+  --code-hl: rgba(139, 140, 244, 0.16); --guide: rgba(255, 255, 255, 0.12);
   color-scheme: dark;
 }
 
@@ -371,7 +385,47 @@ button.list-row:hover:not(:disabled) { background: var(--bg-2); }
 .ed .ln.quote { border-left: 3px solid var(--border-strong); padding-left: 14px; color: var(--fg-2); }
 .ed .ln.code, .ed .ln.fence { font-family: var(--mono); font-size: 14px; line-height: 1.6; background: var(--code-bg); padding: 0 14px; }
 .ed .ln.fence { color: var(--muted); }
-.ed .ln.fence .lg { color: var(--muted); font-size: 12px; }
+.ed .ln.fence .lg { color: var(--fg-2); }
+/* Live preview: the opening fence is the block's header (a widget with the
+   title, language and copy button); the fences' source shows while the caret
+   is in the block. Lines are numbered with a CSS counter, so the numbers are
+   never part of the text. */
+.ed.live .ln.fence.fo { position: relative; border-radius: 8px 8px 0 0; margin-top: 4px; counter-reset: code-line; }
+.ed.live .ln.fence.fc { border-radius: 0 0 8px 8px; margin-bottom: 4px; }
+.ed.live .ln.fence.fc:not(.active) { min-height: 10px; }
+/* A hidden fence's source shrinks to nothing rather than going away, so the
+   caret can still land on the line (Ctrl+Home, arrow keys) and show it. */
+.ed.live .ln.fence:not(.active) { line-height: 0; }
+.ed.live .ln.fence:not(.active) .mk { display: inline; font-size: 0; }
+.ed.live .ln.fence.fo.head { padding-top: var(--code-head); }
+.ed.live .ln.fence.fo.head:not(.active) { padding-top: 0; min-height: var(--code-head); }
+.ed.live .code-head { display: flex; position: absolute; top: 0; left: 0; right: 0; height: var(--code-head); padding: 0 6px 0 14px; }
+.ed.live .ln.fence.fo.head .code-head { border-bottom: 1px solid var(--border); }
+.ed.live .ln.fence.fo:not(.head) .code-head { left: auto; bottom: 0; height: auto; }
+.ed.live .ln.code { --code-pad: calc(3ch + 26px); display: flex; position: relative; counter-increment: code-line; padding-left: var(--code-pad); }
+/* A line of code (.lx) is its indentation and its text: wrapped rows start
+   under the text, clear of the indentation guides. */
+.ed.live .ln.code > .lx { display: flex; flex: 1 1 auto; min-width: 0; position: relative; }
+.ed.live .ln.code > .lx > .ind { flex: none; white-space: pre; }
+.ed.live .ln.code > .lx > .lc { flex: 1 1 auto; min-width: 0; }
+/* Not wrapping: the lines of a block scroll sideways, together (the editor
+   keeps them in step). Each is as wide as the block's longest line
+   (--code-w, measured by the editor), so all scroll as far; the last one
+   (also of a block nothing closes) shows the scrollbar. */
+.ed.live .ln.code.nowrap > .lx, .no-code-wrap .ed.live .ln.code:not(.wrap) > .lx { overflow-x: auto; overflow-y: hidden; scrollbar-width: none; }
+.ed.live .ln.code.nowrap > .lx::-webkit-scrollbar, .no-code-wrap .ed.live .ln.code:not(.wrap) > .lx::-webkit-scrollbar { display: none; }
+.ed.live .ln.code.nowrap > .lx > .lc, .no-code-wrap .ed.live .ln.code:not(.wrap) > .lx > .lc { flex: none; white-space: pre; }
+.ed.live .ln.code.nowrap > .lx::after, .no-code-wrap .ed.live .ln.code:not(.wrap) > .lx::after {
+  content: ""; position: absolute; top: 0; left: 0; width: calc(var(--code-w, 0px) + 14px); height: 1px; pointer-events: none;
+}
+.ed.live .ln.code.nowrap:is(:has(+ .ln.fence.fc), :last-child) > .lx,
+.no-code-wrap .ed.live .ln.code:not(.wrap):is(:has(+ .ln.fence.fc), :last-child) > .lx { scrollbar-width: thin; }
+.ed.live .ln.code.nowrap:is(:has(+ .ln.fence.fc), :last-child) > .lx::-webkit-scrollbar,
+.no-code-wrap .ed.live .ln.code:not(.wrap):is(:has(+ .ln.fence.fc), :last-child) > .lx::-webkit-scrollbar { display: block; height: 8px; }
+.ed.live .ln.code::before { content: counter(code-line); position: absolute; left: 8px; width: 3ch; text-align: right; color: var(--muted); opacity: 0.75; pointer-events: none; }
+.ed.live .ln.code.nonum, .no-code-numbers .ed.live .ln.code { --code-pad: 14px; }
+.ed.live .ln.code.nonum::before, .no-code-numbers .ed.live .ln.code::before { content: none; }
+.ed.live .ln.code.chl { background: linear-gradient(var(--code-hl), var(--code-hl)), var(--code-bg); box-shadow: inset 3px 0 var(--accent); }
 .ed .ln.table, .ed .ln.pipes { font-family: var(--mono); font-size: 14px; }
 /* Live preview: table rows are laid out as a real table (consecutive rows share
    an anonymous table box, so columns line up); pipes show on the caret's row,
@@ -385,10 +439,30 @@ button.list-row:hover:not(:disabled) { background: var(--bg-2); }
 .ed.live .ln.table.tdl:not(.active) { display: none; }
 .ed.live .ln.table.tdl > .td { color: var(--muted); }
 .ed .ln.fm { font-family: var(--mono); font-size: 13px; color: var(--muted); background: var(--bg-2); padding: 0 12px; }
-.ed .kw { color: var(--kw); }
-.ed .st { color: var(--st); }
-.ed .cm { color: var(--cm); font-style: italic; }
-.ed .nu { color: var(--nu); }
+.ed .kw, .reading .kw { color: var(--kw); }
+.ed .st, .reading .st { color: var(--st); }
+.ed .cm, .reading .cm { color: var(--cm); font-style: italic; }
+.ed .nu, .reading .nu { color: var(--nu); }
+.ed .fn, .reading .fn { color: var(--fn); }
+.ed .ty, .reading .ty { color: var(--ty); }
+.ed .co, .reading .co { color: var(--co); }
+.ed .va, .reading .va { color: var(--va); }
+.ed .pr, .reading .pr { color: var(--pr); }
+.ed .op, .reading .op { color: var(--op); }
+.ed .me, .reading .me { color: var(--me); }
+.ed .ins, .reading .ins { color: var(--st); }
+.ed .del, .reading .del { color: var(--danger); }
+/* A code block's header: title, language, copy button (editor and reading view). */
+.code-head { display: flex; align-items: center; gap: 10px; font-family: var(--sans); font-size: 12px; line-height: 1; color: var(--muted); white-space: nowrap; }
+.code-head .code-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; font-family: var(--mono); font-size: 13px; font-style: italic; color: var(--fg-2); }
+.code-head .code-lang, .code-head .code-copy { margin-left: auto; }
+.code-head .code-lang + .code-copy { margin-left: 0; }
+.code-copy { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; padding: 0; border: none; border-radius: 6px; background: transparent; color: var(--muted); cursor: pointer; }
+.code-copy:hover { background: var(--bg-3); color: var(--fg); }
+.code-copy .ic { width: 15px; height: 15px; }
+.code-copy .i-ok, .code-copy.copied .i-copy { display: none; }
+.code-copy.copied { color: var(--ok); }
+.code-copy.copied .i-ok { display: inline; }
 /* live preview widgets drawn with CSS only; the source text stays in the DOM */
 .ed.live .ln:not(.active) .bl { font-size: 0; }
 .ed.live .ln:not(.active) .bl::before { content: "•"; font-size: 16px; color: var(--muted); display: inline-block; width: 1.3em; text-align: center; }
@@ -428,10 +502,37 @@ button.list-row:hover:not(:disabled) { background: var(--bg-2); }
 .reading input.task { width: 16px; height: 16px; vertical-align: -2px; margin-right: 6px; accent-color: var(--accent); cursor: pointer; }
 .reading blockquote { margin: 0.6em 0; padding: 0.1em 1em; border-left: 3px solid var(--border-strong); color: var(--fg-2); }
 .reading code { font-size: 0.88em; background: var(--code-bg); border-radius: 4px; padding: 0.1em 0.3em; }
-.reading pre.code { background: var(--code-bg); border-radius: 8px; padding: 12px 14px; overflow: auto; font-size: 14px; line-height: 1.55; position: relative; }
-.reading pre.code[data-lang]::after { content: attr(data-lang); position: absolute; top: 6px; right: 10px; font-size: 11px; color: var(--muted); }
-.reading pre.code code { background: none; padding: 0; font-size: inherit; }
-.reading .kw { color: var(--kw); } .reading .st { color: var(--st); } .reading .cm { color: var(--cm); font-style: italic; } .reading .nu { color: var(--nu); }
+.reading .codeblock { position: relative; margin: 0.8em 0; background: var(--code-bg); border-radius: 8px; overflow: hidden; }
+.reading .code-head { height: var(--code-head); padding: 0 6px 0 14px; border-bottom: 1px solid var(--border); }
+.reading .codeblock.bare .code-head { position: absolute; top: 4px; right: 4px; z-index: 1; height: auto; padding: 0; border: none; opacity: 0; transition: opacity 0.12s; }
+.reading .codeblock.bare:hover .code-head, .reading .codeblock.bare .code-head:focus-within { opacity: 1; }
+.reading pre.code { margin: 0; padding: 10px 0; overflow: auto; font-size: 14px; line-height: 1.55; tab-size: 4; }
+.reading pre.code code { display: block; counter-reset: code-line; background: none; padding: 0; font-size: inherit; }
+.reading .cl { --code-pad: calc(3ch + 26px); display: flex; position: relative; min-height: 1.55em; padding: 0 14px 0 var(--code-pad); counter-increment: code-line; }
+.reading .cl > .ind { flex: none; white-space: pre; }
+.reading .cl > .lc { flex: 1 1 auto; min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.reading .cl > .nl { display: none; }
+/* Not wrapping: the block scrolls sideways. */
+.reading .codeblock.nowrap code, .no-code-wrap .reading .codeblock:not(.wrap) code { min-width: max-content; }
+.reading .codeblock.nowrap .lc, .no-code-wrap .reading .codeblock:not(.wrap) .lc { flex: none; white-space: pre; overflow-wrap: normal; }
+.reading .cl::before { content: counter(code-line); position: absolute; left: 8px; width: 3ch; text-align: right; color: var(--muted); opacity: 0.75; }
+.reading .codeblock.nonum .cl, .no-code-numbers .reading .cl { --code-pad: 14px; }
+.reading .codeblock.nonum .cl::before, .no-code-numbers .reading .cl::before { content: none; }
+.reading .cl.chl { background: var(--code-hl); box-shadow: inset 3px 0 var(--accent); }
+/* Indentation guides: an empty element per line of code (no text), a line
+   at the start of each indentation level (--ig levels, --iu columns each). */
+.ed.live .ln.code > .igs, .ed.live .ln.code > .lx > .igs, .reading .cl > .igs {
+  display: block; position: absolute; top: 0; bottom: 0; left: calc(var(--code-pad) + 0.5ch); width: calc(var(--ig) * var(--iu));
+  background: repeating-linear-gradient(to right, var(--guide) 0 1px, transparent 1px var(--iu)); pointer-events: none;
+}
+.ed.live .ln.code > .lx > .igs { left: 0.5ch; }
+.igs.ig1 { --ig: 1; } .igs.ig2 { --ig: 2; } .igs.ig3 { --ig: 3; } .igs.ig4 { --ig: 4; }
+.igs.ig5 { --ig: 5; } .igs.ig6 { --ig: 6; } .igs.ig7 { --ig: 7; } .igs.ig8 { --ig: 8; }
+.igs.ig9 { --ig: 9; } .igs.ig10 { --ig: 10; } .igs.ig11 { --ig: 11; } .igs.ig12 { --ig: 12; }
+.igs.ig13 { --ig: 13; } .igs.ig14 { --ig: 14; } .igs.ig15 { --ig: 15; } .igs.ig16 { --ig: 16; }
+.igs.iu2 { --iu: 2ch; } .igs.iu3 { --iu: 3ch; } .igs.iu4 { --iu: 4ch; } .igs.iu5 { --iu: 5ch; }
+.igs.iu6 { --iu: 6ch; } .igs.iu7 { --iu: 7ch; } .igs.iu8 { --iu: 8ch; }
+.no-code-guides .ed .igs, .no-code-guides .reading .igs { display: none; }
 .reading .mk { color: var(--muted); }
 .reading table { border-collapse: collapse; margin: 0.8em 0; display: block; overflow: auto; }
 .reading th, .reading td { border: 1px solid var(--border); padding: 6px 10px; text-align: left; }

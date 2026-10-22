@@ -15,6 +15,11 @@
 //! That is what lets [`crate::decorations`] re-classify only the lines around
 //! an edit.
 
+use std::borrow::Cow;
+use std::rc::Rc;
+
+use crate::code::{self, Carry, FenceInfo, Indent};
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Block {
     Blank,
@@ -25,11 +30,20 @@ pub enum Block {
         ordered: bool,
         task: Option<bool>,
     },
+    /// A code fence: the opening one (with the block's options) or the
+    /// closing one.
     Fence {
-        lang: String,
+        info: Rc<FenceInfo>,
+        open: bool,
     },
+    /// A line of code: what the line above left open for highlighting,
+    /// whether the fence's `hl` option highlights it, and its indentation
+    /// guides (how many, the step in columns).
     Code {
-        lang: String,
+        info: Rc<FenceInfo>,
+        carry: Carry,
+        hl: bool,
+        guides: (u8, u8),
     },
     Hr,
     /// A row of a GFM table (header, delimiter row, body); `align` holds the
@@ -70,8 +84,23 @@ impl Align {
 }
 
 impl Block {
-    pub fn class(&self) -> &'static str {
-        match self {
+    pub fn class(&self) -> Cow<'static, str> {
+        if let Block::Code { info, hl, .. } = self {
+            let mut c = String::from("ln code");
+            if *hl {
+                c.push_str(" chl");
+            }
+            if !info.numbers {
+                c.push_str(" nonum");
+            }
+            match info.wrap {
+                Some(true) => c.push_str(" wrap"),
+                Some(false) => c.push_str(" nowrap"),
+                None => {}
+            }
+            return Cow::Owned(c);
+        }
+        Cow::Borrowed(match self {
             Block::Blank => "ln blank",
             Block::Paragraph => "ln",
             Block::Heading(1) => "ln h1",
@@ -89,7 +118,9 @@ impl Block {
             } => "ln li task",
             Block::List { ordered: true, .. } => "ln li ol",
             Block::List { .. } => "ln li",
-            Block::Fence { .. } => "ln fence",
+            Block::Fence { open: false, .. } => "ln fence fc",
+            Block::Fence { info, .. } if info.has_head() => "ln fence fo head",
+            Block::Fence { .. } => "ln fence fo",
             Block::Code { .. } => "ln code",
             Block::Hr => "ln hr",
             Block::Table {
@@ -103,7 +134,7 @@ impl Block {
             Block::PipeText => "ln pipes",
             Block::FrontmatterFence => "ln fm fmf",
             Block::Frontmatter => "ln fm",
-        }
+        })
     }
 }
 
@@ -296,9 +327,16 @@ pub enum LineState {
     Start,
     Normal,
     Frontmatter,
+    /// Inside a code block: its fence and options, how many lines of it are
+    /// above (counted only when lines are highlighted, so that typing in a
+    /// block re-classifies no further than usual), what the line above left
+    /// open and the state of the indentation guides.
     Fence {
         fence: &'static str,
-        lang: String,
+        info: Rc<FenceInfo>,
+        n: u32,
+        carry: Carry,
+        indent: Indent,
     },
     /// The line after a table header: its delimiter row.
     TableDelimiter {
@@ -324,14 +362,36 @@ pub fn step(state: &LineState, line: &str, next: Option<&str>) -> (Block, LineSt
                 (Block::Frontmatter, LineState::Frontmatter)
             }
         }
-        LineState::Fence { fence, lang } => {
+        LineState::Fence {
+            fence,
+            info,
+            n,
+            carry,
+            indent,
+        } => {
             if let Some((g, rest)) = fence_of(line)
                 && g == *fence
                 && rest.is_empty()
             {
-                (Block::Fence { lang: lang.clone() }, LineState::Normal)
+                let info = info.clone();
+                (Block::Fence { info, open: false }, LineState::Normal)
             } else {
-                (Block::Code { lang: lang.clone() }, state.clone())
+                let hl = !info.hl.is_empty();
+                let (guides, indent) = indent.line(line, next);
+                let block = Block::Code {
+                    info: info.clone(),
+                    carry: *carry,
+                    hl: hl && info.highlighted(n + 1),
+                    guides: if info.guides { guides } else { (0, 0) },
+                };
+                let next = LineState::Fence {
+                    fence,
+                    info: info.clone(),
+                    n: if hl { n + 1 } else { 0 },
+                    carry: code::carry_after(line, &info.lang, *carry),
+                    indent,
+                };
+                (block, next)
             }
         }
         LineState::TableDelimiter { align } => (
@@ -357,14 +417,19 @@ pub fn step(state: &LineState, line: &str, next: Option<&str>) -> (Block, LineSt
 
 fn normal_line(line: &str, next: Option<&str>) -> (Block, LineState) {
     let normal = |b| (b, LineState::Normal);
-    if let Some((fence, lang)) = fence_of(line) {
+    if let Some((fence, info)) = fence_of(line) {
+        let info = Rc::new(FenceInfo::parse(info));
         return (
             Block::Fence {
-                lang: lang.to_string(),
+                info: info.clone(),
+                open: true,
             },
             LineState::Fence {
                 fence,
-                lang: lang.to_string(),
+                info,
+                n: 0,
+                carry: Carry::None,
+                indent: Indent::default(),
             },
         );
     }
@@ -624,6 +689,16 @@ pub const NUM: u32 = 1 << 17;
 pub const OLNUM: u32 = 1 << 18;
 pub const HIDE_ALL: u32 = 1 << 19; // marker hidden even as part of a task item
 pub const LANG: u32 = 1 << 20;
+// Code tokens beyond keywords, strings, comments and numbers.
+pub const FUNC: u32 = 1 << 21;
+pub const TYPE: u32 = 1 << 22;
+pub const CONST: u32 = 1 << 23;
+pub const VAR: u32 = 1 << 24;
+pub const PROP: u32 = 1 << 25;
+pub const OP: u32 = 1 << 26;
+pub const META: u32 = 1 << 27;
+pub const INS: u32 = 1 << 28;
+pub const DEL: u32 = 1 << 29;
 const PROTECT: u32 = 1 << 31;
 
 pub fn classes(flags: u32) -> String {
@@ -650,6 +725,15 @@ pub fn classes(flags: u32) -> String {
         (OLNUM, "on"),
         (HIDE_ALL, "hx"),
         (LANG, "lg"),
+        (FUNC, "fn"),
+        (TYPE, "ty"),
+        (CONST, "co"),
+        (VAR, "va"),
+        (PROP, "pr"),
+        (OP, "op"),
+        (META, "me"),
+        (INS, "ins"),
+        (DEL, "del"),
     ] {
         if flags & bit != 0 {
             c.push(name);
@@ -674,6 +758,9 @@ pub struct Styled {
     pub image: Option<String>,
     /// Table cells: byte range and CSS class (with the column's alignment).
     pub cells: Vec<(usize, usize, &'static str)>,
+    /// A span of this class around the whole line (a line of code: the part
+    /// that scrolls sideways when long lines don't wrap).
+    pub outer: Option<&'static str>,
 }
 
 fn set(flags: &mut [u32], a: usize, b: usize, f: u32) {
@@ -689,6 +776,21 @@ fn free(flags: &[u32], a: usize, b: usize) -> bool {
         .all(|f| f & (PROTECT | MK) == 0)
 }
 
+/// A line of code in two parts, its indentation (`ind`) and the rest
+/// (`lc`), so that CSS can start wrapped rows under the text rather than
+/// under the indentation (where the indentation guides are).
+pub fn code_cells(line: &str) -> Vec<(usize, usize, &'static str)> {
+    let ind = line.len() - line.trim_start_matches([' ', '\t']).len();
+    let mut cells = Vec::with_capacity(2);
+    if ind > 0 {
+        cells.push((0, ind, "ind"));
+    }
+    if ind < line.len() {
+        cells.push((ind, line.len(), "lc"));
+    }
+    cells
+}
+
 /// Style one line. `resolves(target)` reports whether a wiki link exists.
 pub fn style_line(line: &str, block: &Block, resolves: &dyn Fn(&str) -> bool) -> Styled {
     let n = line.len();
@@ -697,17 +799,18 @@ pub fn style_line(line: &str, block: &Block, resolves: &dyn Fn(&str) -> bool) ->
         ..Default::default()
     };
     match block {
-        Block::Code { lang } => {
-            highlight_code(line, lang, &mut s.flags);
+        Block::Code { info, carry, .. } => {
+            code::highlight(line, &info.lang, *carry, &mut s.flags);
+            s.cells = code_cells(line);
+            s.outer = Some("lx");
             return s;
         }
-        Block::Fence { lang } => {
-            let lang_at = line.find(lang.as_str()).filter(|_| !lang.is_empty());
+        Block::Fence { info, .. } => {
+            // Hidden away from the caret: the header shows the options.
             set(&mut s.flags, 0, n, MK);
-            if let Some(i) = lang_at {
-                for f in &mut s.flags[i..i + lang.len()] {
-                    *f = LANG;
-                }
+            let lang = &info.lang;
+            if let Some(i) = line.find(lang.as_str()).filter(|_| !lang.is_empty()) {
+                set(&mut s.flags, i, i + lang.len(), LANG);
             }
             return s;
         }
@@ -1016,266 +1119,6 @@ fn inline(line: &str, from: usize, s: &mut Styled, resolves: &dyn Fn(&str) -> bo
     }
 }
 
-fn keywords(lang: &str) -> &'static [&'static str] {
-    match lang.to_ascii_lowercase().as_str() {
-        "rust" | "rs" => &[
-            "as", "async", "await", "break", "const", "continue", "crate", "dyn", "else", "enum",
-            "extern", "false", "fn", "for", "if", "impl", "in", "let", "loop", "match", "mod",
-            "move", "mut", "pub", "ref", "return", "self", "Self", "static", "struct", "super",
-            "trait", "true", "type", "unsafe", "use", "where", "while",
-        ],
-        "js" | "javascript" | "ts" | "typescript" | "jsx" | "tsx" => &[
-            "async",
-            "await",
-            "break",
-            "case",
-            "catch",
-            "class",
-            "const",
-            "continue",
-            "default",
-            "delete",
-            "do",
-            "else",
-            "export",
-            "extends",
-            "false",
-            "finally",
-            "for",
-            "from",
-            "function",
-            "if",
-            "import",
-            "in",
-            "instanceof",
-            "interface",
-            "let",
-            "new",
-            "null",
-            "of",
-            "return",
-            "static",
-            "super",
-            "switch",
-            "this",
-            "throw",
-            "true",
-            "try",
-            "type",
-            "typeof",
-            "undefined",
-            "var",
-            "void",
-            "while",
-            "yield",
-        ],
-        "py" | "python" => &[
-            "and", "as", "assert", "async", "await", "break", "class", "continue", "def", "del",
-            "elif", "else", "except", "False", "finally", "for", "from", "global", "if", "import",
-            "in", "is", "lambda", "None", "nonlocal", "not", "or", "pass", "raise", "return",
-            "True", "try", "while", "with", "yield",
-        ],
-        "go" | "golang" => &[
-            "break",
-            "case",
-            "chan",
-            "const",
-            "continue",
-            "default",
-            "defer",
-            "else",
-            "fallthrough",
-            "false",
-            "for",
-            "func",
-            "go",
-            "goto",
-            "if",
-            "import",
-            "interface",
-            "map",
-            "nil",
-            "package",
-            "range",
-            "return",
-            "select",
-            "struct",
-            "switch",
-            "true",
-            "type",
-            "var",
-        ],
-        "sh" | "bash" | "shell" | "zsh" | "console" => &[
-            "case", "do", "done", "elif", "else", "esac", "export", "fi", "for", "function", "if",
-            "in", "local", "return", "then", "until", "while", "echo", "cd", "sudo",
-        ],
-        "sql" => &[
-            "select",
-            "from",
-            "where",
-            "insert",
-            "into",
-            "values",
-            "update",
-            "set",
-            "delete",
-            "create",
-            "table",
-            "index",
-            "join",
-            "left",
-            "right",
-            "inner",
-            "outer",
-            "on",
-            "and",
-            "or",
-            "not",
-            "null",
-            "group",
-            "by",
-            "order",
-            "limit",
-            "as",
-            "primary",
-            "key",
-            "references",
-            "SELECT",
-            "FROM",
-            "WHERE",
-            "INSERT",
-            "INTO",
-            "VALUES",
-            "UPDATE",
-            "SET",
-            "DELETE",
-            "CREATE",
-            "TABLE",
-            "JOIN",
-            "ON",
-            "AND",
-            "OR",
-            "NOT",
-            "NULL",
-            "GROUP",
-            "BY",
-            "ORDER",
-            "LIMIT",
-            "AS",
-        ],
-        "c" | "cpp" | "c++" | "h" | "java" | "kotlin" | "cs" | "csharp" | "swift" => &[
-            "auto",
-            "bool",
-            "break",
-            "case",
-            "char",
-            "class",
-            "const",
-            "continue",
-            "default",
-            "do",
-            "double",
-            "else",
-            "enum",
-            "extern",
-            "false",
-            "final",
-            "float",
-            "for",
-            "if",
-            "import",
-            "int",
-            "long",
-            "namespace",
-            "new",
-            "null",
-            "nullptr",
-            "private",
-            "protected",
-            "public",
-            "return",
-            "short",
-            "static",
-            "struct",
-            "switch",
-            "this",
-            "true",
-            "typedef",
-            "using",
-            "var",
-            "void",
-            "while",
-            "fun",
-            "val",
-            "let",
-            "func",
-        ],
-        "yaml" | "yml" | "toml" | "json" | "ini" => &["true", "false", "null", "yes", "no"],
-        _ => &[],
-    }
-}
-
-fn comment_prefixes(lang: &str) -> &'static [&'static str] {
-    match lang.to_ascii_lowercase().as_str() {
-        "py" | "python" | "sh" | "bash" | "shell" | "zsh" | "yaml" | "yml" | "toml" | "ruby"
-        | "rb" | "ini" | "dockerfile" | "make" | "makefile" | "r" | "console" => &["#"],
-        "sql" | "lua" | "haskell" | "hs" => &["--"],
-        "" | "text" | "txt" | "md" | "markdown" => &[],
-        _ => &["//"],
-    }
-}
-
-fn highlight_code(line: &str, lang: &str, flags: &mut [u32]) {
-    let kws = keywords(lang);
-    let comments = comment_prefixes(lang);
-    let b = line.as_bytes();
-    let n = b.len();
-    let mut i = 0;
-    while i < n {
-        if comments.iter().any(|c| line[i..].starts_with(c)) {
-            set(flags, i, n, COMMENT);
-            return;
-        }
-        let c = b[i];
-        if c == b'"' || c == b'\'' || c == b'`' {
-            let mut j = i + 1;
-            while j < n && b[j] != c {
-                if b[j] == b'\\' {
-                    j += 1;
-                }
-                j += 1;
-            }
-            let end = (j + 1).min(n);
-            set(flags, i, end, STR);
-            i = end;
-            continue;
-        }
-        if c.is_ascii_digit() && (i == 0 || !(b[i - 1].is_ascii_alphanumeric() || b[i - 1] == b'_'))
-        {
-            let mut j = i;
-            while j < n && (b[j].is_ascii_alphanumeric() || b[j] == b'.' || b[j] == b'_') {
-                j += 1;
-            }
-            set(flags, i, j, NUM);
-            i = j;
-            continue;
-        }
-        if c.is_ascii_alphabetic() || c == b'_' {
-            let mut j = i;
-            while j < n && (b[j].is_ascii_alphanumeric() || b[j] == b'_') {
-                j += 1;
-            }
-            if kws.contains(&&line[i..j]) {
-                set(flags, i, j, KW);
-            }
-            i = j;
-            continue;
-        }
-        // Skip multi-byte characters whole.
-        i += line[i..].chars().next().map(char::len_utf8).unwrap_or(1);
-    }
-}
-
 /// Escape text for insertion as HTML.
 pub fn escape(s: &str, out: &mut String) {
     for c in s.chars() {
@@ -1296,6 +1139,11 @@ pub fn line_html(line: &str, st: &Styled) -> String {
         return "<br>".to_string();
     }
     let mut out = String::with_capacity(line.len() * 2);
+    if let Some(class) = st.outer {
+        out.push_str("<span class=\"");
+        out.push_str(class);
+        out.push_str("\">");
+    }
     let link_at = |i: usize| st.links.iter().position(|(a, b, _)| i >= *a && i < *b);
     let cell_at = |i: usize| st.cells.iter().find(|c| c.0 == i);
     let mut i = 0;
@@ -1334,6 +1182,9 @@ pub fn line_html(line: &str, st: &Styled) -> String {
         i = j;
     }
     if !st.cells.is_empty() {
+        out.push_str("</span>");
+    }
+    if st.outer.is_some() {
         out.push_str("</span>");
     }
     out

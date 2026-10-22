@@ -268,6 +268,43 @@ impl EditorState {
         self.deco.block(line)
     }
 
+    /// The code block `line` belongs to (a fence or a line of code): the
+    /// lines of its opening fence and of its closing one (`None` while it
+    /// isn't closed).
+    pub fn code_block(&self, line: usize) -> Option<(usize, Option<usize>)> {
+        let opening = |i| matches!(self.block(i), Block::Fence { open: true, .. });
+        let open = match self.block(line) {
+            Block::Fence { open: true, .. } => line,
+            Block::Fence { .. } | Block::Code { .. } => {
+                let mut i = line.checked_sub(1)?;
+                while matches!(self.block(i), Block::Code { .. }) {
+                    i = i.checked_sub(1)?;
+                }
+                opening(i).then_some(i)?
+            }
+            _ => return None,
+        };
+        let n = self.doc.line_count();
+        let mut j = open + 1;
+        while j < n && matches!(self.block(j), Block::Code { .. }) {
+            j += 1;
+        }
+        let close = j < n && matches!(self.block(j), Block::Fence { open: false, .. });
+        Some((open, close.then_some(j)))
+    }
+
+    /// The code of the block whose opening fence is on `line`.
+    pub fn code_text(&self, line: usize) -> String {
+        let Some((open, close)) = self.code_block(line) else {
+            return String::new();
+        };
+        let end = close.unwrap_or(self.doc.line_count());
+        (open + 1..end)
+            .map(|i| self.doc.line(i))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
     /// The document as the Markdown helpers take it.
     pub fn syntax_doc(&self) -> syntax::Doc<'_> {
         syntax::Doc {
@@ -432,6 +469,22 @@ pub fn merge_native(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn finds_code_blocks_and_their_code() {
+        let st = EditorState::new("a\n```sh title=x.sh\nls\npwd\n```\nb\n```\nopen".into());
+        assert_eq!(st.code_block(0), None);
+        for line in 1..=4 {
+            assert_eq!(st.code_block(line), Some((1, Some(4))), "line {line}");
+        }
+        assert_eq!(st.code_block(5), None);
+        assert_eq!(st.code_block(7), Some((6, None)));
+        assert_eq!(st.code_text(1), "ls\npwd");
+        assert_eq!(st.code_text(6), "open");
+        let empty = EditorState::new("```\n```".into());
+        assert_eq!(empty.code_block(1), Some((0, Some(1))));
+        assert_eq!(empty.code_text(0), "");
+    }
 
     #[test]
     fn transactions_update_selection_cursors_and_anchors() {

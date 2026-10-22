@@ -6,12 +6,14 @@
 
 use notekpr_core::textdiff;
 use notekpr_editor::change::{Assoc, ChangeSet};
+use notekpr_editor::code::{self, Carry, FenceInfo, Indent};
 use notekpr_editor::decorations::Decorations;
 use notekpr_editor::state::{EditorState, Selection, merge_native};
 use notekpr_editor::syntax::{self, Block, TableKey};
 use notekpr_editor::text::Text;
 use notekpr_editor::{commands, edits_fit, rebase};
 use proptest::prelude::*;
+use std::rc::Rc;
 
 const ALPHABET: &[char] = &[
     'a', 'b', 'Z', '1', ' ', ' ', '\n', '\n', '\t', '#', '#', '*', '_', '`', '`', '~', '=', '[',
@@ -23,6 +25,15 @@ const ALPHABET: &[char] = &[
 const LINES: &[&str] = &[
     "```",
     "```rust",
+    "```c title=a.c hl=2,4-5",
+    "```python ln=false hl:1",
+    "```yaml vl=false",
+    "/* open",
+    "close */",
+    "    indented",
+    "\tx",
+    "  ",
+    "\"\"\"",
     "~~~",
     "---",
     "...",
@@ -160,7 +171,8 @@ fn reference_classify(lines: &[&str]) -> Vec<Block> {
         delimiter_row(next).filter(|a| a.len() == table_cell_texts(line).len())
     };
     let mut out = Vec::with_capacity(lines.len());
-    let mut fence: Option<(String, String)> = None;
+    // The open fence: its characters, options, lines so far, carry and guides.
+    let mut fence: Option<(String, Rc<FenceInfo>, u32, Carry, Indent)> = None;
     let mut in_fm = lines.first().is_some_and(|l| l.trim_end() == "---");
     let mut queued: std::collections::VecDeque<Block> = Default::default();
     for (i, line) in lines.iter().enumerate() {
@@ -181,23 +193,40 @@ fn reference_classify(lines: &[&str]) -> Vec<Block> {
             }
             continue;
         }
-        if let Some((f, lang)) = &fence {
+        if let Some((f, info, n, carry, indent)) = &mut fence {
             if let Some((g, rest)) = fence_of(line)
                 && g == f
                 && rest.is_empty()
             {
-                out.push(Block::Fence { lang: lang.clone() });
+                out.push(Block::Fence {
+                    info: info.clone(),
+                    open: false,
+                });
                 fence = None;
                 continue;
             }
-            out.push(Block::Code { lang: lang.clone() });
+            *n += 1;
+            let (guides, next) = indent.line(line, lines.get(i + 1).copied());
+            *indent = next;
+            out.push(Block::Code {
+                info: info.clone(),
+                carry: *carry,
+                hl: info.highlighted(*n),
+                guides: if info.guides { guides } else { (0, 0) },
+            });
+            *carry = code::carry_after(line, &info.lang, *carry);
             continue;
         }
-        if let Some((f, lang)) = fence_of(line) {
-            fence = Some((f.to_string(), lang.to_string()));
-            out.push(Block::Fence {
-                lang: lang.to_string(),
-            });
+        if let Some((f, info)) = fence_of(line) {
+            let info = Rc::new(FenceInfo::parse(info));
+            fence = Some((
+                f.to_string(),
+                info.clone(),
+                0,
+                Carry::None,
+                Indent::default(),
+            ));
+            out.push(Block::Fence { info, open: true });
             continue;
         }
         if line.trim().is_empty() {

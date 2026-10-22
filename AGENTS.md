@@ -83,7 +83,8 @@ crates/server   axum + SQLite. routes/ (REST) · ws.rs (WebSocket, subscriptions
 crates/editor   the live-preview Markdown editor. Pure model (native tests): text.rs
                 (source + line index) · change.rs (ChangeSet: compose, transform,
                 map) · state.rs (EditorState, Transaction) · decorations.rs
-                (incremental block classification) · syntax.rs · commands.rs · vim.rs.
+                (incremental block classification) · syntax.rs · code.rs (code
+                block options, syntax highlighting) · commands.rs · vim.rs.
                 DOM view: view/ (contenteditable, line patches, IME, native edits)
 crates/web      Leptos CSR → wasm32. state/ (Core + Ui in mod.rs; session, vaults,
                 members, shares, sync, presence, prefs, nav, offline, comments) · cache.rs

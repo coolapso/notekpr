@@ -92,15 +92,20 @@ struct LineView {
     /// Hash of what was rendered into `el` (0: must be rendered).
     hash: u64,
     dynamic: bool,
+    /// A line of code: the `--code-w` it was given (its block's widest
+    /// line). An opening fence: how far its block is scrolled sideways.
+    code_w: u32,
+    sx: i32,
 }
 
 #[derive(Default)]
 struct View {
     lines: Vec<LineView>,
     /// Elements that have the `active` class (the lines of the selection
-    /// while focused: their syntax markers show).
+    /// while focused, and the fences of a code block it is in: their syntax
+    /// markers show).
     active: Vec<HtmlElement>,
-    active_range: Range<usize>,
+    active_lines: Vec<Range<usize>>,
     /// Range of an internal drag (text dragged within the editor).
     drag: Option<(usize, usize)>,
 }
@@ -129,9 +134,11 @@ struct Ime {
 const DEFER_SELECTION: u8 = 1;
 const DEFER_ACTIVE: u8 = 2;
 
+/// Target, event, capture phase, callback.
 type Listener = (
     EventTarget,
     &'static str,
+    bool,
     Closure<dyn FnMut(web_sys::Event)>,
 );
 type Queued = Box<dyn FnOnce(&Editor)>;
@@ -446,6 +453,15 @@ impl Editor {
     }
 
     /// Replace the selection with `s` (e.g. links to uploaded files).
+    /// The page's styles for code blocks changed (long lines wrap or not):
+    /// lay the blocks out again.
+    pub fn code_styles_changed(&self) {
+        self.op(|ed| {
+            let n = ed.view.borrow().lines.len();
+            ed.code_layout((0..n).collect());
+        });
+    }
+
     pub fn insert_text(&self, s: &str) {
         let s = s.to_string();
         self.op(move |ed| {
@@ -586,7 +602,7 @@ impl Editor {
         let mut html = String::new();
         for r in &rendered {
             html.push_str("<div class=\"");
-            html.push_str(r.class);
+            html.push_str(&r.class);
             html.push_str("\">");
             html.push_str(&r.html);
             html.push_str("</div>");
@@ -602,18 +618,28 @@ impl Editor {
                     el: kids.item(i as u32)?.unchecked_into(),
                     hash: r.hash,
                     dynamic: r.dynamic,
+                    code_w: 0,
+                    sx: 0,
                 })
             })
             .collect();
         view.active.clear();
-        view.active_range = 0..0;
+        view.active_lines.clear();
+        let n = view.lines.len();
         drop(view);
         self.take_own_records();
+        self.code_layout((0..n).collect());
     }
 
     /// Bring the DOM in line with an applied transaction: replace the
     /// spliced line elements and render the given lines (sorted by index).
-    fn patch(&self, splices: &[LineSplice], rendered: Vec<Rendered>, active: &Range<usize>) {
+    fn patch(&self, splices: &[LineSplice], rendered: Vec<Rendered>, active: &[Range<usize>]) {
+        let active = |i: usize| active.iter().any(|r| r.contains(&i));
+        let touched: Vec<usize> = rendered
+            .iter()
+            .map(|r| r.idx)
+            .chain(splices.iter().flat_map(|sp| sp.new_range()))
+            .collect();
         let doc = document();
         let mut view = self.view.borrow_mut();
         let find = |idx: usize| rendered.binary_search_by_key(&idx, |r| r.idx).ok();
@@ -633,8 +659,8 @@ impl Editor {
                     let r = find(idx).map(|k| &rendered[k]);
                     html.push_str("<div class=\"");
                     html.push_str(&dom::class_with(
-                        r.map(|r| r.class).unwrap_or("ln"),
-                        active.contains(&idx),
+                        r.map(|r| r.class.as_ref()).unwrap_or("ln"),
+                        active(idx),
                     ));
                     html.push_str("\">");
                     html.push_str(r.map(|r| r.html.as_str()).unwrap_or("<br>"));
@@ -652,6 +678,8 @@ impl Editor {
                             el: el.unchecked_into(),
                             hash: r.map(|r| r.hash).unwrap_or(0),
                             dynamic: r.is_some_and(|r| r.dynamic),
+                            code_w: 0,
+                            sx: 0,
                         });
                     }
                 }
@@ -669,7 +697,7 @@ impl Editor {
             };
             if lv.hash != r.hash {
                 lv.el
-                    .set_class_name(&dom::class_with(r.class, active.contains(&r.idx)));
+                    .set_class_name(&dom::class_with(&r.class, active(r.idx)));
                 lv.el.set_inner_html(&r.html);
                 lv.hash = r.hash;
             }
@@ -677,6 +705,108 @@ impl Editor {
         }
         drop(view);
         self.take_own_records();
+        self.code_layout(touched);
+    }
+
+    /// Long lines of code that don't wrap scroll sideways, the lines of a
+    /// block together. Give the lines of the blocks the `touched` lines are
+    /// in the width of their block's longest line (`--code-w`, measured: so
+    /// that all of them can scroll as far) and the block's scroll position
+    /// (new lines start at the left). Blocks that wrap are left alone.
+    fn code_layout(&self, mut touched: Vec<usize>) {
+        touched.sort_unstable();
+        touched.dedup();
+        let blocks = self.model(move |st| {
+            let n = st.doc().line_count();
+            let mut out = Vec::new();
+            let mut done = 0;
+            for i in touched {
+                if i < done {
+                    continue;
+                }
+                let Some((open, close)) = st.code_block(i) else {
+                    continue;
+                };
+                let end = close.unwrap_or(n);
+                out.push((open, end));
+                done = end + 1;
+            }
+            out
+        });
+        let win = web_sys::window();
+        let mut view = self.view.borrow_mut();
+        for (open, end) in blocks {
+            let lines = view.lines.get(open + 1..end).unwrap_or_default();
+            let parts: Vec<Option<Element>> = lines.iter().map(|lv| code_part(&lv.el)).collect();
+            // Whether the block scrolls (doesn't wrap) is up to CSS.
+            let scrolls = parts.iter().flatten().next().is_some_and(|lx| {
+                win.as_ref()
+                    .and_then(|w| w.get_computed_style(lx).ok().flatten())
+                    .and_then(|s| s.get_property_value("overflow-x").ok())
+                    .is_some_and(|o| o != "visible")
+            });
+            if !scrolls {
+                continue;
+            }
+            // The text's own width: indentation and text don't stretch.
+            let width = parts
+                .iter()
+                .flatten()
+                .map(|lx| {
+                    let kids = lx.children();
+                    (0..kids.length())
+                        .filter_map(|k| kids.item(k))
+                        .filter(|k| !k.has_attribute("data-w"))
+                        .map(|k| k.unchecked_into::<HtmlElement>().offset_width())
+                        .sum::<i32>()
+                })
+                .max()
+                .unwrap_or(0)
+                .max(0) as u32;
+            let sx = view.lines.get(open).map_or(0, |l| l.sx);
+            for lv in view.lines.get_mut(open + 1..end).into_iter().flatten() {
+                if lv.code_w != width {
+                    let _ = lv
+                        .el
+                        .style()
+                        .set_property("--code-w", &format!("{width}px"));
+                    lv.code_w = width;
+                }
+                set_code_scroll(&lv.el, sx);
+            }
+        }
+    }
+
+    /// A line of code scrolled sideways: scroll the rest of its block with it.
+    fn on_code_scroll(&self, ev: &web_sys::Event) {
+        let Some(lx) = ev
+            .target()
+            .and_then(|t| t.dyn_into::<Element>().ok())
+            .filter(|e| e.class_list().contains("lx"))
+        else {
+            return;
+        };
+        let root: &Node = self.root.unchecked_ref();
+        let Some(idx) = dom::root_child(root, lx.unchecked_ref()).and_then(|l| self.line_index(&l))
+        else {
+            return;
+        };
+        let Some((open, end)) = self.model(move |st| {
+            let n = st.doc().line_count();
+            st.code_block(idx).map(|(o, c)| (o, c.unwrap_or(n)))
+        }) else {
+            return;
+        };
+        let x = lx.scroll_left();
+        let mut view = self.view.borrow_mut();
+        if let Some(lv) = view.lines.get_mut(open) {
+            lv.sx = x;
+        }
+        for (i, lv) in view.lines.iter().enumerate().take(end).skip(open + 1) {
+            if i != idx {
+                set_code_scroll(&lv.el, x);
+            }
+        }
     }
 
     /// Put every line element back as the editor's only children, in order
@@ -725,7 +855,7 @@ impl Editor {
                 sel_lines.contains(&r.idx)
                     && self.view.borrow().lines.get(r.idx).map(|l| l.hash) != Some(r.hash)
             });
-        let active = self.view.borrow().active_range.clone();
+        let active = self.view.borrow().active_lines.clone();
         self.patch(&[], rendered, &active);
         if touches_caret {
             // Not the user's doing (an image loaded, links changed): don't scroll.
@@ -750,7 +880,7 @@ impl Editor {
             base: Option<String>,
             applied: Applied,
             jobs: Vec<LineJob>,
-            sel_lines: Range<usize>,
+            active: Vec<Range<usize>>,
             caret_redrawn: bool,
         }
         // What the browser changed must be rendered again even where the text
@@ -802,7 +932,7 @@ impl Editor {
                 base,
                 applied,
                 jobs,
-                sel_lines,
+                active: active_lines(st),
                 caret_redrawn,
             })
         });
@@ -810,7 +940,7 @@ impl Editor {
             base,
             applied,
             jobs,
-            sel_lines,
+            active,
             caret_redrawn,
         }) = out
         else {
@@ -835,7 +965,7 @@ impl Editor {
         };
         // The DOM.
         let focused = self.has_focus();
-        let active = if focused { sel_lines } else { 0..0 };
+        let active = if focused { active } else { vec![] };
         let rendered = self.render_jobs(jobs);
         self.patch(&applied.splices, rendered, &active);
         if structural {
@@ -1255,22 +1385,23 @@ impl Editor {
     }
 
     /// Mark the lines of the selection `active` (their syntax shows) while
-    /// the editor has the focus.
+    /// the editor has the focus, and the fences of a code block it is in.
     fn sync_active(&self) {
         // Markers shown or hidden on these lines move the highlights.
         if !self.model(|st| st.marks().is_empty()) {
             self.request_frame(false, true);
         }
-        let lines = self.model(|st| {
-            let s = st.selection();
-            st.doc().line_of(s.from())..st.doc().line_of(s.to()) + 1
-        });
-        let want = if self.has_focus() { lines } else { 0..0 };
+        let lines = self.model(|st| active_lines(st));
+        let want = if self.has_focus() { lines } else { vec![] };
         let mut view = self.view.borrow_mut();
-        let want = want.start.min(view.lines.len())..want.end.min(view.lines.len());
-        let new: Vec<HtmlElement> = view.lines[want.clone()]
+        let n = view.lines.len();
+        let want: Vec<Range<usize>> = want
+            .into_iter()
+            .map(|r| r.start.min(n)..r.end.min(n))
+            .collect();
+        let new: Vec<HtmlElement> = want
             .iter()
-            .map(|l| l.el.clone())
+            .flat_map(|r| view.lines[r.clone()].iter().map(|l| l.el.clone()))
             .collect();
         let small = view.active.len() * new.len() <= 4096;
         for el in &view.active {
@@ -1282,7 +1413,7 @@ impl Editor {
             let _ = el.class_list().add_1("active");
         }
         view.active = new;
-        view.active_range = want;
+        view.active_lines = want;
     }
 
     fn selection_from_dom(&self) {
@@ -1300,6 +1431,7 @@ impl Editor {
         });
         self.sync_active();
         if changed {
+            self.follow_caret_in_code();
             self.host.selection_changed(a, h);
         }
     }
@@ -1350,6 +1482,51 @@ impl Editor {
             opts.set_block(web_sys::ScrollLogicalPosition::Nearest);
             el.scroll_into_view_with_scroll_into_view_options(&opts);
         }
+        self.follow_caret_in_code();
+    }
+
+    /// The caret in a long line of code that doesn't wrap: scroll the line
+    /// sideways (its block follows, [`Editor::on_code_scroll`]) so that the
+    /// caret shows. The browser only does that for caret moves of its own.
+    fn follow_caret_in_code(&self) {
+        let Some(sel) = document().get_selection().ok().flatten() else {
+            return;
+        };
+        let Some(node) = sel.focus_node() else {
+            return;
+        };
+        let el = match node.dyn_ref::<Element>() {
+            Some(e) => Some(e.clone()),
+            None => node.parent_element(),
+        };
+        let Some(lx) = el.and_then(|e| e.closest(".lx").ok().flatten()) else {
+            return;
+        };
+        if !self.root.contains(Some(&lx)) || lx.scroll_width() <= lx.client_width() {
+            return;
+        }
+        let Ok(range) = document().create_range() else {
+            return;
+        };
+        if range.set_start(&node, sel.focus_offset()).is_err() {
+            return;
+        }
+        range.collapse_with_to_start(true);
+        let caret = range.get_bounding_client_rect();
+        if caret.height() == 0.0 {
+            return;
+        }
+        let r = lx.get_bounding_client_rect();
+        let margin = 32.0;
+        let x = lx.scroll_left() as f64;
+        let to = if caret.right() > r.right() - margin {
+            x + caret.right() - (r.right() - margin)
+        } else if caret.left() < r.left() + margin {
+            (x - (r.left() + margin - caret.left())).max(0.0)
+        } else {
+            return;
+        };
+        lx.set_scroll_left(to.round() as i32);
     }
 
     /// The client rectangles of the text from `start` to `end` (byte
@@ -1486,14 +1663,32 @@ impl Editor {
         name: &'static str,
         f: impl Fn(&Editor, web_sys::Event) + 'static,
     ) {
+        Editor::listen_with(this, target, name, false, f);
+    }
+
+    /// [`Editor::listen`], in the capture phase if `capture` (for events
+    /// that don't bubble, like `scroll`).
+    fn listen_with(
+        this: &Rc<Editor>,
+        target: &EventTarget,
+        name: &'static str,
+        capture: bool,
+        f: impl Fn(&Editor, web_sys::Event) + 'static,
+    ) {
         let weak: Weak<Editor> = Rc::downgrade(this);
         let cb = Closure::wrap(Box::new(move |e: web_sys::Event| {
             if let Some(ed) = weak.upgrade() {
                 f(&ed, e);
             }
         }) as Box<dyn FnMut(web_sys::Event)>);
-        let _ = target.add_event_listener_with_callback(name, cb.as_ref().unchecked_ref());
-        this.listeners.borrow_mut().push((target.clone(), name, cb));
+        let _ = target.add_event_listener_with_callback_and_bool(
+            name,
+            cb.as_ref().unchecked_ref(),
+            capture,
+        );
+        this.listeners
+            .borrow_mut()
+            .push((target.clone(), name, capture, cb));
     }
 
     fn attach(this: &Rc<Editor>) {
@@ -1542,6 +1737,9 @@ impl Editor {
             ed.run_now(|ed| ed.on_drop(e.unchecked_ref()));
         });
         Editor::listen(this, &root, "dragover", |_ed, e| e.prevent_default());
+        Editor::listen_with(this, &root, "scroll", true, |ed, e| {
+            ed.run_now(|ed| ed.on_code_scroll(&e));
+        });
         Editor::listen(this, &root, "mousedown", |ed, e| {
             ed.run_now(|ed| ed.on_mousedown(e.unchecked_ref()));
         });
@@ -1775,6 +1973,7 @@ impl Editor {
             (true, false, "i") => Some(Command::Italic),
             (true, false, "k") => Some(Command::Link),
             (true, false, "`") => Some(Command::Code),
+            (true, true, _) if key == "~" || ev.code() == "Backquote" => Some(Command::CodeBlock),
             (true, true, "X") | (true, true, "x") => Some(Command::Strike),
             (true, true, "H") | (true, true, "h") => Some(Command::Highlight),
             (true, true, "*") | (true, true, "8") => Some(Command::Bullet),
@@ -1982,6 +2181,16 @@ impl Editor {
             .and_then(|l| l.dyn_ref::<Element>())
             .is_some_and(|l| l.class_list().contains("active"));
         let readonly = self.model(|st| st.readonly);
+        if let Some(button) = target.closest(".code-copy").ok().flatten() {
+            ev.prevent_default();
+            self.settle();
+            let text = self.model(move |st| st.code_text(idx));
+            if let Some(w) = web_sys::window() {
+                let _ = w.navigator().clipboard().write_text(&text);
+            }
+            flash_copied(&button);
+            return;
+        }
         if target.class_list().contains("tk") {
             ev.prevent_default();
             if !readonly {
@@ -2022,8 +2231,12 @@ impl Editor {
         if self.destroyed.replace(true) {
             return;
         }
-        for (t, name, cb) in self.listeners.borrow_mut().drain(..) {
-            let _ = t.remove_event_listener_with_callback(name, cb.as_ref().unchecked_ref());
+        for (t, name, capture, cb) in self.listeners.borrow_mut().drain(..) {
+            let _ = t.remove_event_listener_with_callback_and_bool(
+                name,
+                cb.as_ref().unchecked_ref(),
+                capture,
+            );
         }
         if let Some((o, _cb)) = self.observer.borrow_mut().take() {
             o.disconnect();
@@ -2047,6 +2260,70 @@ impl Editor {
     /// Whether the editor was destroyed (for tests).
     pub fn is_destroyed(&self) -> bool {
         self.destroyed.get()
+    }
+}
+
+/// The lines whose syntax shows while the editor has the focus: the
+/// selection's, and the fences of the code blocks it starts or ends in (so
+/// that the options of a block can be seen and edited from inside it).
+fn active_lines(st: &EditorState) -> Vec<Range<usize>> {
+    let doc = st.doc();
+    let s = st.selection();
+    let (a, b) = (doc.line_of(s.from()), doc.line_of(s.to()));
+    let mut out = Vec::with_capacity(3);
+    out.push(a..b + 1);
+    for line in [a, b] {
+        if let Some((open, close)) = st.code_block(line) {
+            out.push(open..open + 1);
+            out.extend(close.map(|c| c..c + 1));
+        }
+    }
+    crate::decorations::merge_ranges(out)
+}
+
+/// The part of a line of code that scrolls sideways (`.lx`; blank lines
+/// have none).
+fn code_part(line: &HtmlElement) -> Option<Element> {
+    line.first_element_child()
+        .filter(|e| e.class_list().contains("lx"))
+}
+
+/// Scroll a line of code sideways to `x`: its scrolling part, or the guides
+/// of a blank line (which has none).
+fn set_code_scroll(line: &HtmlElement, x: i32) {
+    match code_part(line) {
+        Some(lx) => {
+            if lx.scroll_left() != x {
+                lx.set_scroll_left(x);
+            }
+        }
+        _ => {
+            let guides = line
+                .query_selector(":scope > .igs")
+                .ok()
+                .flatten()
+                .and_then(|g| g.dyn_into::<HtmlElement>().ok());
+            if let Some(g) = guides {
+                let s = g.style();
+                let _ = if x == 0 {
+                    s.remove_property("transform").map(|_| ())
+                } else {
+                    s.set_property("transform", &format!("translateX({}px)", -x))
+                };
+            }
+        }
+    }
+}
+
+/// Show on a copy button that it copied (its icon turns into a check).
+pub fn flash_copied(button: &Element) {
+    let _ = button.class_list().add_1("copied");
+    let b = button.clone();
+    let done = Closure::once_into_js(move || {
+        let _ = b.class_list().remove_1("copied");
+    });
+    if let Some(w) = web_sys::window() {
+        let _ = w.set_timeout_with_callback_and_timeout_and_arguments_0(done.unchecked_ref(), 1500);
     }
 }
 

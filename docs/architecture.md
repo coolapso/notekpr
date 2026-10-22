@@ -270,6 +270,21 @@ has unsent edits to it, that person's client saves their version as a new
   diverge from what is synced. During an IME composition the DOM is left to
   the browser: remote text waits and is merged (operational transform) with
   the composed text when it ends.
+* Code blocks (`crates/editor/src/code.rs`) are highlighted by a small
+  hand-written lexer per language, a line at a time: what a line leaves open
+  (a block comment, a multi-line string) is part of the next line's state, so
+  the incremental re-classification above also re-highlights exactly the
+  lines it affects. The fence's options (`title=`, `hl=`, `ln=false`,
+  `vl=false`, `wrap=`) are part of the block too. The header (file name,
+  language, copy button) is a `contenteditable=false` widget after the
+  opening fence's text, line numbers are a CSS counter and indentation guides
+  an empty widget per line (the block's indentation step travels with the
+  line state too): none of them is part of the text. A line of code is a
+  span (`.lx`) holding its indentation and the rest, so wrapped rows start
+  under the text. When long lines don't wrap, each `.lx` scrolls sideways;
+  the view keeps a block's lines at the same scroll position and as wide as
+  its longest line, and scrolls them to the caret. The reading view uses
+  the same parser and highlighter.
 * The editor's text buffer is a `String` with a line index rather than a rope:
   the host (`edit(base, edits)`), the CRDT and remote updates all work on
   whole texts, so a rope would be flattened on every keystroke anyway; an

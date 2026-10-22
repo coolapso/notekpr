@@ -752,8 +752,66 @@ def test_tables(env):
         check(editor_text(b).endswith("| Milk | 2 |\n\nTotal: 5"), "Enter on an empty row ends the table")
         b.shot("tables")
         check(not severe_logs(b), "no browser errors")
+        tables_on_a_phone()
     finally:
         b.close()
+
+
+def tables_on_a_phone():
+    """A table wider than a phone keeps readable columns and scrolls
+    sideways; the text around it still wraps at the screen's width."""
+    m = Browser(390, 844)
+    try:
+        signup(m, uniq("tip"))
+        m.click(".note-head .mobile-only")
+        time.sleep(0.4)
+        new_note(m, "Trip", "Who does what on the trip, and how to reach them before we leave." + KEYS["enter"])
+        m.keys("| Name | Role | Email | Notes |" + KEYS["enter"] + "| --- | --- | --- | --- |" + KEYS["enter"])
+        for i, cell in enumerate(["Alice Johnson", "Owner", "alice@example.com", "Plans the trip and books the hotels in advance",
+                                  "Bob", "Editor", "bob@example.org", "Drives"]):
+            if i:
+                m.chord(KEYS["tab"])
+            m.keys(cell)
+        time.sleep(0.6)
+        wrap = "document.querySelector('.ed-wrap')"
+        caret_shows = f"""const c = getSelection().getRangeAt(0).getBoundingClientRect(), w = {wrap}.getBoundingClientRect();
+            return c.height > 0 && c.left >= w.left && c.right <= w.right;"""
+        check(m.js(f"return {wrap}.scrollLeft > 0") and m.js(caret_shows), "the text scrolls sideways to the caret in the table's last column")
+        m.chord(KEYS["enter"])
+        m.chord(KEYS["enter"])
+        m.keys("See you there.")
+        time.sleep(0.6)
+        check(editor_text(m).endswith("| Bob | Editor | bob@example.org | Drives |\n\nSee you there."), "typed a wide table on a phone")
+        check(m.js(caret_shows), "and back to the caret after the table")
+        m.js(f"{wrap}.scrollLeft = 0")
+        sizes = m.js(f"""const w = {wrap}, ln = [...document.querySelectorAll('.ed > .ln')];
+            const rows = el => {{ const r = document.createRange(); r.selectNodeContents(el);
+                return new Set([...r.getClientRects()].filter(x => x.width > 0).map(x => Math.round(x.top))).size; }};
+            const tc = [...document.querySelectorAll('.ed .ln.table:not(.tdl) .tc')];
+            const text = el => el.textContent.replace(/\\|/g, '').trim();
+            return {{ scroll: w.scrollWidth, width: w.clientWidth, page: document.querySelector('.main').scrollWidth <= innerWidth,
+                      para: ln[0].getBoundingClientRect().right <= w.getBoundingClientRect().right && rows(ln[0]) > 1,
+                      words: tc.filter(c => !text(c).includes(' ')).map(c => rows(c)),
+                      long: tc.filter(c => text(c).startsWith('Plans')).map(c => [rows(c), Math.round(c.getBoundingClientRect().width)])[0] }};""")
+        check(sizes["scroll"] > sizes["width"], f"a table wider than the screen makes the text scroll sideways ({sizes['scroll']} > {sizes['width']})")
+        check(sizes["page"], "the page itself doesn't scroll sideways")
+        check(sizes["para"], "the line before the table still wraps at the screen's width")
+        check(set(sizes["words"]) == {1}, f"no word in a cell is broken ({sizes['words']})")
+        rows, width = sizes["long"]
+        check(rows > 1 and width <= 12 * 17, f"a long cell wraps at a readable width ({rows} rows, {width}px)")
+        m.shot("tables-phone")
+        m.click(".seg button[title^='Reading']")
+        m.find(".reading table", 10)
+        reading = m.js("""const t = document.querySelector('.reading table');
+            const rows = el => { const r = document.createRange(); r.selectNodeContents(el);
+                return new Set([...r.getClientRects()].filter(x => x.width > 0).map(x => Math.round(x.top))).size; };
+            return [t.scrollWidth > t.clientWidth, [...t.querySelectorAll('.tc')].filter(c => !c.textContent.includes(' ')).map(rows),
+                    document.querySelector('.main').scrollWidth <= innerWidth];""")
+        check(reading[0] and set(reading[1]) == {1} and reading[2], f"the reading view's table scrolls on its own, words whole ({reading})")
+        m.shot("tables-phone-reading")
+        check(not severe_logs(m), "no browser errors on the phone")
+    finally:
+        m.close()
 
 
 def test_code_blocks(env):

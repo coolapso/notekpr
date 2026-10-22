@@ -134,6 +134,10 @@ struct Ime {
 const DEFER_SELECTION: u8 = 1;
 const DEFER_ACTIVE: u8 = 2;
 
+/// The height of a remote cursor's name (`.rc span`: 11px text, line
+/// height 1.5).
+const NAME_HEIGHT: f64 = 17.0;
+
 /// Target, event, capture phase, callback.
 type Listener = (
     EventTarget,
@@ -1455,7 +1459,7 @@ impl Editor {
         });
         self.sync_active();
         if changed {
-            self.follow_caret_in_code();
+            self.follow_caret_sideways();
             self.host.selection_changed(a, h);
         }
     }
@@ -1502,31 +1506,30 @@ impl Editor {
             .and_then(|v| v.as_f64())
             .unwrap_or(800.0);
         if r.bottom() > vh - 24.0 || r.top() < 56.0 {
+            // Up or down only: a table's row is as wide as the table, and
+            // bringing all of it into view would undo the text's sideways
+            // scroll, which follows the caret below.
+            let x = self.wrap.scroll_left();
             let opts = web_sys::ScrollIntoViewOptions::new();
             opts.set_block(web_sys::ScrollLogicalPosition::Nearest);
             el.scroll_into_view_with_scroll_into_view_options(&opts);
+            self.wrap.set_scroll_left(x);
         }
-        self.follow_caret_in_code();
+        self.follow_caret_sideways();
     }
 
-    /// The caret in a long line of code that doesn't wrap: scroll the line
-    /// sideways (its block follows, [`Editor::on_code_scroll`]) so that the
-    /// caret shows. The browser only does that for caret moves of its own.
-    fn follow_caret_in_code(&self) {
+    /// Scroll sideways so that the caret shows: a long line of code that
+    /// doesn't wrap (its block follows, [`Editor::on_code_scroll`]), and the
+    /// editor's text when a table makes it wider than the editor. The
+    /// browser only does that for caret moves of its own.
+    fn follow_caret_sideways(&self) {
         let Some(sel) = document().get_selection().ok().flatten() else {
             return;
         };
         let Some(node) = sel.focus_node() else {
             return;
         };
-        let el = match node.dyn_ref::<Element>() {
-            Some(e) => Some(e.clone()),
-            None => node.parent_element(),
-        };
-        let Some(lx) = el.and_then(|e| e.closest(".lx").ok().flatten()) else {
-            return;
-        };
-        if !self.root.contains(Some(&lx)) || lx.scroll_width() <= lx.client_width() {
+        if !self.root.contains(Some(&node)) {
             return;
         }
         let Ok(range) = document().create_range() else {
@@ -1536,21 +1539,32 @@ impl Editor {
             return;
         }
         range.collapse_with_to_start(true);
-        let caret = range.get_bounding_client_rect();
-        if caret.height() == 0.0 {
-            return;
-        }
-        let r = lx.get_bounding_client_rect();
-        let margin = 32.0;
-        let x = lx.scroll_left() as f64;
-        let to = if caret.right() > r.right() - margin {
-            x + caret.right() - (r.right() - margin)
-        } else if caret.left() < r.left() + margin {
-            (x - (r.left() + margin - caret.left())).max(0.0)
-        } else {
-            return;
+        let el = match node.dyn_ref::<Element>() {
+            Some(e) => Some(e.clone()),
+            None => node.parent_element(),
         };
-        lx.set_scroll_left(to.round() as i32);
+        let lx = el.and_then(|e| e.closest(".lx").ok().flatten());
+        // The line first: scrolling the text then measures where it put the caret.
+        for scroller in lx.iter().chain([self.wrap.unchecked_ref::<Element>()]) {
+            if scroller.scroll_width() <= scroller.client_width() {
+                continue;
+            }
+            let caret = range.get_bounding_client_rect();
+            if caret.height() == 0.0 {
+                return;
+            }
+            let r = scroller.get_bounding_client_rect();
+            let margin = 32.0;
+            let x = scroller.scroll_left() as f64;
+            let to = if caret.right() > r.right() - margin {
+                x + caret.right() - (r.right() - margin)
+            } else if caret.left() < r.left() + margin {
+                (x - (r.left() + margin - caret.left())).max(0.0)
+            } else {
+                continue;
+            };
+            scroller.set_scroll_left(to.round() as i32);
+        }
     }
 
     /// The client rectangles of the text from `start` to `end` (byte
@@ -1644,6 +1658,7 @@ impl Editor {
         }
         let base = self.overlay.get_bounding_client_rect();
         let doc = document();
+        let mut drawn = Vec::with_capacity(cursors.len());
         for (name, color, line, text, off) in cursors {
             let Some(lv) = self.view.borrow().lines.get(line).map(|l| l.el.clone()) else {
                 continue;
@@ -1666,16 +1681,34 @@ impl Editor {
                 };
             }
             let el: HtmlElement = doc.create_element("div").unwrap().unchecked_into();
-            el.set_class_name("rc");
+            let top = rect.top() - base.top();
+            // The name goes above the cursor, or under it where there is no
+            // room above (the text's box clips: it scrolls sideways).
+            el.set_class_name(if top < NAME_HEIGHT { "rc below" } else { "rc" });
+            let left = rect.left() - base.left();
             let style = el.style();
-            let _ = style.set_property("left", &format!("{}px", rect.left() - base.left()));
-            let _ = style.set_property("top", &format!("{}px", rect.top() - base.top()));
+            let _ = style.set_property("left", &format!("{left}px"));
+            let _ = style.set_property("top", &format!("{top}px"));
             let _ = style.set_property("height", &format!("{}px", rect.height().max(16.0)));
             let _ = style.set_property("--c", &color);
             let label: HtmlElement = doc.create_element("span").unwrap().unchecked_into();
             label.set_text_content(Some(&name));
             let _ = el.append_child(&label);
             let _ = self.overlay.append_child(&el);
+            drawn.push((el, label, left));
+        }
+        // A name that would stick out past the text goes left of its cursor
+        // (sticking out, it would make the text scroll sideways). All are
+        // measured first, so that's one layout.
+        let end = self.root.scroll_width() as f64;
+        let past: Vec<bool> = drawn
+            .iter()
+            .map(|(_, label, left)| left + label.offset_width() as f64 > end)
+            .collect();
+        for ((el, ..), past) in drawn.iter().zip(past) {
+            if past {
+                let _ = el.class_list().add_1("end");
+            }
         }
     }
 

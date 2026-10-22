@@ -356,7 +356,10 @@ button.list-row:hover:not(:disabled) { background: var(--bg-2); }
 .panel-item.outline { font-size: 13.5px; color: var(--fg-2); }
 
 /* ---------------------------------------------------------- editor */
-.ed-wrap { position: relative; }
+/* A table wider than the editor scrolls sideways, with the rest of the text
+   (the other lines still wrap at the editor's width): the text and what is
+   drawn over it (cursors, comment highlights) scroll together. */
+.ed-wrap { position: relative; overflow-x: auto; scrollbar-width: thin; }
 .ed {
   outline: none; white-space: pre-wrap; overflow-wrap: anywhere; word-break: normal;
   font-size: 16px; line-height: 1.7; min-height: 50vh; caret-color: var(--accent); tab-size: 4;
@@ -441,6 +444,13 @@ button.list-row:hover:not(:disabled) { background: var(--bg-2); }
 .ed.live .ln.table > .td.ar { text-align: right; }
 .ed.live .ln.table.tdl:not(.active) { display: none; }
 .ed.live .ln.table.tdl > .td { color: var(--muted); }
+/* A cell's text (.tc) is a block that never breaks inside a word: a table
+   that doesn't fit scrolls sideways instead (.ed-wrap). */
+.ed.live .ln.table > .td { overflow-wrap: normal; }
+.ed.live .ln.table > .td > .tc { display: block; }
+/* A scroll container (.ed-wrap) keeps the first line's top margin inside
+   rather than letting it merge with the toolbar's: the toolbar's is the gap. */
+.ed-wrap > .ed > .ln:first-child { margin-top: 0; }
 .ed .ln.fm { font-family: var(--mono); font-size: 13px; color: var(--muted); background: var(--bg-2); padding: 0 12px; }
 .ed .kw, .reading .kw { color: var(--kw); }
 .ed .st, .reading .st { color: var(--st); }
@@ -492,6 +502,11 @@ button.list-row:hover:not(:disabled) { background: var(--bg-2); }
 .ed-cursors { position: absolute; inset: 0; pointer-events: none; }
 .rc { position: absolute; width: 2px; background: var(--c); border-radius: 1px; }
 .rc span { position: absolute; bottom: 100%; left: -1px; background: var(--c); color: #fff; font-size: 11px; line-height: 1.5; padding: 0 5px; border-radius: 4px 4px 4px 0; white-space: nowrap; font-family: var(--sans); }
+/* The name goes under the cursor on the first line, and left of it at the
+   end of the text: the editor's text box clips (it scrolls sideways). */
+.rc.below span { bottom: auto; top: 100%; border-radius: 0 4px 4px 4px; }
+.rc.end span { left: auto; right: -1px; border-radius: 4px 4px 0 4px; }
+.rc.below.end span { border-radius: 4px 0 4px 4px; }
 
 /* ---------------------------------------------------------- reading view */
 .reading { font-size: 16px; line-height: 1.7; overflow-wrap: anywhere; }
@@ -538,7 +553,7 @@ button.list-row:hover:not(:disabled) { background: var(--bg-2); }
 .no-code-guides .ed .igs, .no-code-guides .reading .igs { display: none; }
 .reading .mk { color: var(--muted); }
 .reading table { border-collapse: collapse; margin: 0.8em 0; display: block; overflow: auto; }
-.reading th, .reading td { border: 1px solid var(--border); padding: 6px 10px; text-align: left; }
+.reading th, .reading td { border: 1px solid var(--border); padding: 6px 10px; text-align: left; overflow-wrap: normal; }
 .reading th { background: var(--bg-2); }
 .reading hr { border: none; border-top: 1px solid var(--border-strong); margin: 1.6em 0; }
 .reading img.att { max-width: 100%; border-radius: 8px; }
@@ -640,6 +655,11 @@ table.keys td:first-child { white-space: nowrap; width: 1%; padding-right: 16px;
   .note-body.overlay .panel { width: 86vw; }
   .tree-more { opacity: 1; }
   .ed { font-size: 17px; }
+  /* A table column is as wide as its text up to 12em, where longer text
+     wraps, instead of being squeezed to fit the screen: the table scrolls. */
+  .ed.live .ln.table > .td > .tc, .reading .tc { width: max-content; max-width: 12em; min-width: min-content; }
+  .ed.live .ln.table > .td.ac > .tc, .reading .tc.ac { margin-inline: auto; }
+  .ed.live .ln.table > .td.ar > .tc, .reading .tc.ar { margin-left: auto; }
   .qn-cards { grid-template-columns: 1fr; }
   .qc-bar .btn { flex: 1; padding: 10px 14px; }
   .qn-foot .btn.tiny { padding: 6px 9px; font-size: 13px; }

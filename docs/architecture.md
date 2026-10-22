@@ -290,6 +290,14 @@ has unsent edits to it, that person's client saves their version as a new
   the view keeps a block's lines at the same scroll position and as wide as
   its longest line, and scrolls them to the caret. The reading view uses
   the same parser and highlighter.
+* A table's rows are lines laid out by CSS as table rows (consecutive rows
+  share an anonymous table box, so columns line up); each cell is a span
+  (`.td`) holding its text in another (`.tc`), which CSS sizes. Words in a
+  cell never break, and on a phone a cell's text keeps its width up to
+  12em before it wraps. A table that doesn't fit makes the editor's text
+  (`.ed-wrap`, with the cursors and comment highlights drawn over it) scroll
+  sideways, while the other lines still wrap at the editor's width; the view
+  scrolls it to the caret. In the reading view each table scrolls on its own.
 * The editor's text buffer is a `String` with a line index rather than a rope:
   the host (`edit(base, edits)`), the CRDT and remote updates all work on
   whole texts, so a rope would be flattened on every keystroke anyway; an

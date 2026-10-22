@@ -800,6 +800,9 @@ pub struct Styled {
     pub image: Option<String>,
     /// Table cells: byte range and CSS class (with the column's alignment).
     pub cells: Vec<(usize, usize, &'static str)>,
+    /// A span of this class inside each cell, around its text (a table
+    /// cell's text: CSS sizes it, so a column keeps a readable width).
+    pub inner: Option<&'static str>,
     /// A span of this class around the whole line (a line of code: the part
     /// that scrolls sideways when long lines don't wrap).
     pub outer: Option<&'static str>,
@@ -916,6 +919,7 @@ pub fn style_line(line: &str, block: &Block, resolves: &dyn Fn(&str) -> bool) ->
                 .enumerate()
                 .map(|(k, (a, b))| (a, b, align.get(k).copied().unwrap_or(Align::None).class()))
                 .collect();
+            s.inner = Some("tc");
         }
         Block::PipeText => {
             for (i, c) in line.char_indices() {
@@ -1188,16 +1192,26 @@ pub fn line_html(line: &str, st: &Styled) -> String {
     }
     let link_at = |i: usize| st.links.iter().position(|(a, b, _)| i >= *a && i < *b);
     let cell_at = |i: usize| st.cells.iter().find(|c| c.0 == i);
+    let close_cell = if st.inner.is_some() {
+        "</span></span>"
+    } else {
+        "</span>"
+    };
     let mut i = 0;
     while i < line.len() {
         // Table cells wrap the runs inside them.
         if let Some((_, _, class)) = cell_at(i) {
             if i > 0 {
-                out.push_str("</span>");
+                out.push_str(close_cell);
             }
             out.push_str("<span class=\"");
             out.push_str(class);
             out.push_str("\">");
+            if let Some(inner) = st.inner {
+                out.push_str("<span class=\"");
+                out.push_str(inner);
+                out.push_str("\">");
+            }
         }
         let f = st.flags[i];
         let l = link_at(i);
@@ -1224,7 +1238,7 @@ pub fn line_html(line: &str, st: &Styled) -> String {
         i = j;
     }
     if !st.cells.is_empty() {
-        out.push_str("</span>");
+        out.push_str(close_cell);
     }
     if st.outer.is_some() {
         out.push_str("</span>");
@@ -1401,6 +1415,10 @@ mod tests {
         let html = line_html(lines[0], &s);
         assert_eq!(html.matches("<span class=\"td").count(), 3);
         assert!(html.contains("<span class=\"td ar\">") && html.contains("<span class=\"td ac\">"));
+        // Each cell's text is in a `tc` span of its own (CSS sizes it).
+        assert_eq!(html.matches("<span class=\"tc\">").count(), 3);
+        assert!(html.starts_with("<span class=\"td\"><span class=\"tc\">"));
+        assert!(html.ends_with("</span></span>"));
         let text: String = {
             let mut t = String::new();
             let mut in_tag = false;

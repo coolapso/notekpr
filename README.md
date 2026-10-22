@@ -35,8 +35,9 @@ read anything.
 * A formatting toolbar and keyboard shortcuts (`Ctrl+/` lists them; `⌘`
   instead of `Ctrl` on a Mac), optional Vim keys, light, dark or system
   theme, and full-width notes if you like.
-* Tables you build with Enter and Tab, with aligned columns; task lists you
-  can tick in the editor and the reading view.
+* Tables you build with Enter and Tab, with aligned columns; one wider than
+  the screen scrolls sideways instead of squeezing its columns. Task lists
+  you can tick in the editor and the reading view.
 * Code blocks with syntax highlighting for some 35 languages, line numbers,
   indentation guides and a copy button. Options after the language: a file
   name (`` ```bash title=deploy.sh ``), highlighted lines (`hl=2,4-6`), no

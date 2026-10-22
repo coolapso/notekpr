@@ -126,6 +126,17 @@ fn setup(text: &str) -> Fixture {
     setup_with(text, false)
 }
 
+/// The app's layout of the remote cursors over the text (style.css), for
+/// tests that look at where their names go.
+fn cursor_style(f: &Fixture) {
+    let style = document().create_element("style").unwrap();
+    style.set_text_content(Some(
+        ".ed-wrap { position: relative } .ed-cursors { position: absolute; inset: 0 } \
+         .rc, .rc span { position: absolute } .rc span { bottom: 100%; white-space: nowrap }",
+    ));
+    f.container.append_child(&style).unwrap();
+}
+
 fn setup_with(text: &str, readonly: bool) -> Fixture {
     let container = document().create_element("div").unwrap();
     let _ = container.set_attribute("style", "width: 700px; font: 16px/1.5 sans-serif");
@@ -821,6 +832,7 @@ fn drops_land_where_they_are_dropped() {
 #[wasm_bindgen_test]
 async fn remote_cursors_are_drawn() {
     let f = setup("one\ntwo");
+    cursor_style(&f);
     f.ed.set_remote_cursors(vec![RemoteCursor {
         name: "Bob".into(),
         color: "#c00".into(),
@@ -831,12 +843,64 @@ async fn remote_cursors_are_drawn() {
     frame().await;
     let rc = f.container.query_selector_all(".rc").unwrap();
     assert_eq!(rc.length(), 1);
+    let below = |f: &Fixture| {
+        let rc = f.container.query_selector(".rc").unwrap().unwrap();
+        rc.class_list().contains("below")
+    };
+    assert!(!below(&f), "the name is above the cursor");
+    // On the first line the name goes under it: the text's box clips what
+    // is above it.
+    f.ed.set_remote_cursors(vec![RemoteCursor {
+        name: "Bob".into(),
+        color: "#c00".into(),
+        anchor: 1,
+        head: 1,
+    }]);
+    frame().await;
+    frame().await;
+    assert!(below(&f), "the name is under a cursor on the first line");
+    f.ed.set_remote_cursors(vec![RemoteCursor {
+        name: "Bob".into(),
+        color: "#c00".into(),
+        anchor: 5,
+        head: 5,
+    }]);
     // They move with remote text inserted before them.
     *f.host.text.borrow_mut() = "zero\none\ntwo".into();
     f.ed.set_text("zero\none\ntwo".into(), false);
     frame().await;
     frame().await;
     assert_eq!(f.container.query_selector_all(".rc").unwrap().length(), 1);
+}
+
+#[wasm_bindgen_test]
+async fn a_remote_cursors_name_stays_within_the_text() {
+    let long = "w".repeat(300);
+    let f = setup(&format!("one\n{long}"));
+    cursor_style(&f);
+    let at = |head: usize| RemoteCursor {
+        name: "Bob".into(),
+        color: "#c00".into(),
+        anchor: head,
+        head,
+    };
+    let end = |f: &Fixture| {
+        let rc = f.container.query_selector(".rc").unwrap().unwrap();
+        rc.class_list().contains("end")
+    };
+    // At the end of the widest line the name goes left of the cursor:
+    // sticking out, it would make the text scroll sideways.
+    f.ed.set_remote_cursors(vec![at(4 + long.len())]);
+    frame().await;
+    frame().await;
+    assert!(
+        end(&f),
+        "the name is left of a cursor at the end of the text"
+    );
+    f.ed.set_remote_cursors(vec![at(4)]);
+    frame().await;
+    frame().await;
+    assert!(!end(&f), "and right of it elsewhere");
 }
 
 #[wasm_bindgen_test]

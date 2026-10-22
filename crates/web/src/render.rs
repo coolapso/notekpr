@@ -6,7 +6,9 @@
 //!   blocks them anyway) and are shown as links instead.
 //! * Every attribute we emit is escaped.
 
-use pulldown_cmark::{CodeBlockKind, CowStr, Event, LinkType, Options, Parser, Tag, TagEnd};
+use pulldown_cmark::{
+    Alignment, CodeBlockKind, CowStr, Event, LinkType, Options, Parser, Tag, TagEnd,
+};
 
 use crate::editor::code::{self, Carry, FenceInfo, Indent};
 use crate::editor::syntax;
@@ -228,6 +230,9 @@ pub fn to_html(src: &str, ctx: &Ctx) -> String {
     // `==highlight==`: each `==` in text, paired up per block at the end.
     let mut marks: Vec<Mark> = Vec::new();
     let mut block = 0usize;
+    // The current table's column alignments, and the next cell's column.
+    let mut table_align: Vec<Alignment> = Vec::new();
+    let mut column = 0usize;
 
     for (ev, range) in Parser::new_ext(src, opts).into_offset_iter() {
         if let Event::Start(t) = &ev
@@ -331,6 +336,31 @@ pub fn to_html(src: &str, ctx: &Ctx) -> String {
                 if link_stack.pop().is_some() {
                     out_events.push(Event::Html(CowStr::from("</a>")));
                 }
+            }
+            Event::Start(Tag::Table(align)) => {
+                table_align = align.clone();
+                out_events.push(Event::Start(Tag::Table(align)));
+            }
+            e @ (Event::Start(Tag::TableHead) | Event::Start(Tag::TableRow)) => {
+                column = 0;
+                out_events.push(e);
+            }
+            // A cell's content is in a block of its own, which CSS sizes (so
+            // that a column keeps a readable width on a phone) and places by
+            // the column's alignment, like the editor's cells.
+            Event::Start(Tag::TableCell) => {
+                let tc = match table_align.get(column) {
+                    Some(Alignment::Center) => "<div class=\"tc ac\">",
+                    Some(Alignment::Right) => "<div class=\"tc ar\">",
+                    _ => "<div class=\"tc\">",
+                };
+                column += 1;
+                out_events.push(Event::Start(Tag::TableCell));
+                out_events.push(Event::Html(CowStr::from(tc)));
+            }
+            Event::End(TagEnd::TableCell) => {
+                out_events.push(Event::Html(CowStr::from("</div>")));
+                out_events.push(Event::End(TagEnd::TableCell));
             }
             Event::Start(Tag::Heading { level, .. }) => {
                 let lvl = level as usize;
@@ -461,6 +491,23 @@ mod tests {
             h.contains("data-note=\"n1\" data-heading=\"Next steps\""),
             "{h}"
         );
+    }
+
+    #[test]
+    fn table_cells_hold_their_text_in_a_block_with_the_columns_alignment() {
+        let h = render("| a | b | c |\n| --- | :-: | --: |\n| x **y** | 2 | 3 |\n| z |\n");
+        assert!(h.contains("<th><div class=\"tc\">a</div></th>"), "{h}");
+        assert!(h.contains("<div class=\"tc ac\">b</div>"), "{h}");
+        assert!(h.contains("<div class=\"tc ar\">c</div>"), "{h}");
+        assert!(
+            h.contains("<td><div class=\"tc\">x <strong>y</strong></div></td>"),
+            "{h}"
+        );
+        // Every row starts at the first column again.
+        assert!(h.contains("<div class=\"tc ac\">2</div>"), "{h}");
+        assert!(h.contains("<td><div class=\"tc\">z</div></td>"), "{h}");
+        // (A short row is filled up with empty cells.)
+        assert_eq!(h.matches("<div class=\"tc").count(), 9, "{h}");
     }
 
     #[test]

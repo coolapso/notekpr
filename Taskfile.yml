@@ -409,6 +409,8 @@ tasks:
   # Commits since the last tag, tags it and creates the GitHub Release; then
   # both images are pushed with that version. `--env-file ""`: semrel reads
   # a .env file by default, settings come from the environment instead.
+  # The version is chosen with VERSION=, not `-- …`: CLI_ARGS reach every
+  # task, also the tests in ci:check.
 
   tools:release:
     desc: "Install the pinned semrel release tool (needs Go): go install …/semrel@{{.SEMREL_VERSION}}"
@@ -421,7 +423,7 @@ tasks:
       - semrel plugin restore --env-file ""
 
   release:check:
-    desc: "Run CI's checks and preview the next release without changing GitHub or git (`task release:check -- --next-version 0.1.0` to choose it)"
+    desc: "Run CI's checks and preview the next release without changing GitHub or git (VERSION=x.y.z to choose the version)"
     preconditions:
       - sh: command -v semrel
         msg: "semrel is missing: task tools:release"
@@ -455,7 +457,7 @@ tasks:
         fi
         metadata=$(mktemp "${TMPDIR:-/tmp}/notekpr-release.XXXXXX.json")
         trap 'rm -f "$metadata"' EXIT
-        semrel release --env-file "" {{.FLAGS}} {{.CLI_ARGS}} --output-file "$metadata"
+        semrel release --env-file "" {{.FLAGS}} {{if .VERSION}}--next-version {{.VERSION}}{{end}} --output-file "$metadata"
         if jq -e '.released == true and .dry_run == false' "$metadata" >/dev/null; then
           version=$(jq -er '.version' "$metadata")
           task docker:push VERSION="$version"
@@ -465,7 +467,7 @@ tasks:
         fi
 
   release:
-    desc: "Release from dev: CI's checks, then tag the next version, create the GitHub Release and push both images with it (the first one: `task release -- --next-version 0.1.0`)"
+    desc: "Release from dev: CI's checks, then tag the next version, create the GitHub Release and push both images with it (VERSION=x.y.z to choose the version; the first one: task release VERSION=0.1.0)"
     deps: [release:check, release:prepare]
     cmds:
       - task: release:run

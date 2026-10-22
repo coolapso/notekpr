@@ -295,9 +295,10 @@ after it, with `-dev` appended when there are uncommitted changes.
 `VERSION=x.y.z` sets it instead. The image's
 `org.opencontainers.image.version` label carries it too.
 
-The first release is `task release -- --next-version 0.1.0`: the history
-before it predates Conventional Commits, so `task release:check` lints
-commit messages only once a release tag exists.
+`VERSION=x.y.z` chooses the version instead (semrel's `--next-version`).
+The first release is `task release VERSION=0.1.0`: the history before it
+predates Conventional Commits, so `task release:check` lints commit
+messages only once a release tag exists.
 
 ## Conventions
 

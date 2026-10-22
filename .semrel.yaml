@@ -1,0 +1,43 @@
+# yaml-language-server: $schema=https://registry.semrel.io/schemas/core/v1.json
+# Releases: `task release` (docs/development.md, "Releases"). semrel reads the
+# Conventional Commits since the last tag, tags the next version and creates
+# the GitHub Release; the task then pushes the images with that version.
+schemaVersion: 1
+tagPrefix: v
+
+branches:
+  - name: dev
+
+rules:
+  - type: feat
+    bump: minor
+  - type: fix
+    bump: patch
+  - type: perf
+    bump: patch
+  - type: refactor
+    bump: patch
+  - type: build
+    bump: patch
+
+# Below 1.0.0 for now: a breaking change bumps the minor version
+# (0.1.0 → 0.2.0) instead of releasing 1.0.0. Remove these two lines to
+# release 1.0.0.
+version_ceiling: "1.0.0"
+ceiling_strategy: clamp
+
+# Git tags and GitHub Releases are the release record: no commits, version
+# files or changelog in the repository.
+commit_changelog: false
+
+plugins:
+  # Pushes the tag first, so the GitHub Release uses it. Otherwise GitHub
+  # creates its own tag at the default branch's head, which may be another
+  # commit and doesn't match the local (annotated) tag.
+  - uses: "@semrel/provider-git"
+    phase: release
+  - uses: "@semrel/provider-github"
+    phase: release
+    args:
+      owner: coolapso
+      repo: notekpr

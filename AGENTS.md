@@ -130,6 +130,7 @@ task test                        # all Rust tests
 task test:e2e -- -k sharing      # browser tests (chromium + chromedriver + python3)
 task test:editor                 # the editor's DOM view in headless Chromium (wasm-bindgen-test)
 task ci                          # exactly what CI runs: ci:check (incl. audit) + ci:image
+task release                     # from dev: CI's checks, tag the next version (semrel), push the images
 ```
 
 Without go-task, see the plain commands in the [Taskfile](Taskfile.yml) or
@@ -255,9 +256,14 @@ Without go-task, see the plain commands in the [Taskfile](Taskfile.yml) or
 
 ## Git
 
-- Default branch is `dev`. Keep commits small and focused, with imperative
-  messages ("Add …", "Fix …").
-- Formatting-only or other mechanical changes go in their own commit.
+- Default branch is `dev`; releases are made from it (`task release`).
+- Commit messages follow [Conventional Commits](https://www.conventionalcommits.org),
+  in the imperative: `feat: add …`, `fix: …`, `docs: …`, `refactor: …`,
+  `test: …`, `build: …`, `ci: …`, `chore: …`; `!` after the type for a
+  breaking change. The next version is computed from them
+  ([docs/development.md](docs/development.md#releases)). Keep commits small
+  and focused.
+- Formatting-only or other mechanical changes go in their own commit (`style: …`).
 - Never commit `target*/`, `dist/`, `data/`, `.env` or databases
   (`.gitignore` covers them). `Cargo.lock` is committed; release builds use
   `--locked`.

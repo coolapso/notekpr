@@ -21,6 +21,10 @@ vars:
     sh: sed -nE 's/^wasm-bindgen = "=([0-9.]+)".*/\1/p' crates/web/Cargo.toml
   RUST_VERSION:
     sh: sed -nE 's/^rust-version = "([0-9.]+)".*/\1/p' Cargo.toml
+  # The release tool (`task release`); its plugins are pinned in .semrel.lock.
+  # At least v0.27.0: older ones ignore .semrel.yaml's rules for build and
+  # refactor commits (they release only for feat, fix, perf and revert).
+  SEMREL_VERSION: v0.28.2
 
 tasks:
   default:
@@ -67,6 +71,7 @@ tasks:
           fi
           command -v cargo-deny >/dev/null && echo "✓ cargo-deny (task audit)" || echo "· for task audit and task ci: cargo-deny (Arch: cargo-deny; or cargo install cargo-deny --locked)"
           command -v docker >/dev/null && echo "✓ docker (container image, Docker dev stack)" || echo "· for the docker:* tasks, task load and task ci: docker + compose (Arch: docker docker-compose docker-buildx)"
+          command -v semrel >/dev/null && command -v jq >/dev/null && echo "✓ semrel + jq (task release)" || echo "· for task release: semrel (task tools:release, needs Go) and jq (Arch: jq)"
           [ "$ok" = 1 ]
 
   rust:
@@ -113,7 +118,7 @@ tasks:
       - echo "web client (dev) built into dist/web"
     silent: true
 
-  release:
+  build:release:
     desc: Release build of the server and CLI (target/release) plus the optimized web client
     deps: [rust]
     cmds:
@@ -344,19 +349,45 @@ tasks:
     cmds:
       - docker build --target demo -t notekpr-demo:latest .
 
-  docker:push:demo:
-    desc: "Build the public demo image for amd64 and arm64 and push it to ghcr.io/coolapso/notekpr-demo, tagged with the short commit hash and latest"
+  docker:push:
+    desc: "Build the image for amd64 and arm64 and push it to ghcr.io/coolapso/notekpr, tagged with the version and latest (the version: the latest release tag, -dev with uncommitted changes; or VERSION=x.y.z)"
     deps: [docker:login]
-    vars:
-      IMAGE: ghcr.io/coolapso/notekpr-demo
-      PLATFORMS: linux/amd64,linux/arm64
-      # The short commit hash, with -dev if there are uncommitted changes.
-      TAG:
-        sh: git describe --always --dirty=-dev --exclude='*'
     cmds:
-      - >-
-        docker buildx build --push --platform {{.PLATFORMS}} --target demo
-        -t {{.IMAGE}}:{{.TAG}} -t {{.IMAGE}}:latest .
+      - task: docker:push:image
+        vars:
+          IMAGE: ghcr.io/coolapso/notekpr
+          VERSION: "{{.VERSION}}"
+
+  docker:push:demo:
+    desc: "Like docker:push, for the public demo image: ghcr.io/coolapso/notekpr-demo"
+    deps: [docker:login]
+    cmds:
+      - task: docker:push:image
+        vars:
+          IMAGE: ghcr.io/coolapso/notekpr-demo
+          TARGET: demo
+          VERSION: "{{.VERSION}}"
+
+  docker:push:image:
+    internal: true
+    vars:
+      PLATFORMS: linux/amd64,linux/arm64
+    cmds:
+      - |
+        set -eu
+        version='{{.VERSION}}'
+        if [ -z "$version" ]; then
+          # The latest release tag: 0.2.0 on it, 0.2.0-3-gabc1234 three
+          # commits after it (just the commit hash before the first release),
+          # with -dev if there are uncommitted changes.
+          git fetch --tags --quiet origin
+          version=$(git describe --tags --always --dirty=-dev)
+          version=${version#v}
+        fi
+        echo "pushing {{.IMAGE}}:$version"
+        docker buildx build --push --platform {{.PLATFORMS}} {{if .TARGET}}--target {{.TARGET}}{{end}} \
+          --build-arg VERSION="$version" \
+          -t "{{.IMAGE}}:$version" -t {{.IMAGE}}:latest .
 
   docker:dev:
     desc: Run the development server in Docker on http://localhost:8080 (no OIDC)
@@ -372,6 +403,80 @@ tasks:
     desc: Stop the Docker development stack (data volumes are kept)
     cmds:
       - docker compose -f docker-compose.dev.yml --profile oidc down
+
+  # ------------------------------------------------------------------ release
+  # semrel (.semrel.yaml) picks the next version from the Conventional
+  # Commits since the last tag, tags it and creates the GitHub Release; then
+  # both images are pushed with that version. `--env-file ""`: semrel reads
+  # a .env file by default, settings come from the environment instead.
+
+  tools:release:
+    desc: "Install the pinned semrel release tool (needs Go): go install …/semrel@{{.SEMREL_VERSION}}"
+    cmds:
+      - go install github.com/SemRels/semrel/cmd/semrel@{{.SEMREL_VERSION}}
+
+  release:plugins:
+    desc: Download the semrel plugins pinned in .semrel.lock into .semrel/
+    cmds:
+      - semrel plugin restore --env-file ""
+
+  release:check:
+    desc: "Run CI's checks and preview the next release without changing GitHub or git (`task release:check -- --next-version 0.1.0` to choose it)"
+    preconditions:
+      - sh: command -v semrel
+        msg: "semrel is missing: task tools:release"
+      - sh: command -v jq
+        msg: "jq is needed to read semrel's release metadata (Arch: sudo pacman -S jq)"
+      - sh: test -x .semrel/plugins/semrel-plugin-git && test -x .semrel/plugins/semrel-plugin-github
+        msg: "The release plugins are missing: task release:plugins"
+      - sh: 'test -n "${SEMREL_PLUGIN_TOKEN:-${GITHUB_TOKEN:-}}" || gh auth status >/dev/null 2>&1'
+        msg: Set SEMREL_PLUGIN_TOKEN or GITHUB_TOKEN, or sign in with gh auth login before releasing.
+    deps: [ci:check]
+    cmds:
+      - semrel config validate --env-file ""
+      # Only commits since the last release: the history before the first
+      # one predates Conventional Commits.
+      - |
+        if git describe --tags --abbrev=0 --match 'v[0-9]*' >/dev/null 2>&1; then
+          semrel lint --env-file ""
+        fi
+      - task: release:run
+        vars:
+          FLAGS: --dry-run
+
+  release:run:
+    internal: true
+    cmds:
+      - |
+        set -eu
+        if [ -z "${SEMREL_PLUGIN_TOKEN:-}" ]; then
+          SEMREL_PLUGIN_TOKEN="${GITHUB_TOKEN:-$(gh auth token)}"
+          export SEMREL_PLUGIN_TOKEN
+        fi
+        metadata=$(mktemp "${TMPDIR:-/tmp}/notekpr-release.XXXXXX.json")
+        trap 'rm -f "$metadata"' EXIT
+        semrel release --env-file "" {{.FLAGS}} {{.CLI_ARGS}} --output-file "$metadata"
+        if jq -e '.released == true and .dry_run == false' "$metadata" >/dev/null; then
+          version=$(jq -er '.version' "$metadata")
+          task docker:push VERSION="$version"
+          task docker:push:demo VERSION="$version"
+        else
+          echo 'No release published; skipping image publishing.'
+        fi
+
+  release:
+    desc: "Release from dev: CI's checks, then tag the next version, create the GitHub Release and push both images with it (the first one: `task release -- --next-version 0.1.0`)"
+    deps: [release:check, release:prepare]
+    cmds:
+      - task: release:run
+        vars:
+          FLAGS: ""
+
+  release:prepare:
+    internal: true
+    cmds:
+      - 'git config user.name >/dev/null || git config user.name "${GIT_RELEASE_NAME:-github-actions[bot]}"'
+      - 'git config user.email >/dev/null || git config user.email "${GIT_RELEASE_EMAIL:-41898282+github-actions[bot]@users.noreply.github.com}"'
 
   # ------------------------------------------------------------------ load test
 

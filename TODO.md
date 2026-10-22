@@ -134,8 +134,10 @@ Settled; don't reopen them without a new reason.
       users, storage, error rates) from metadata the server already has;
       client error reports opt-in, scrubbed of content and titles,
       first-party only; a written policy.
-- [ ] **Release engineering**: versioned images on GHCR [D-H4]; prebuilt
-      binaries; signed releases and an SBOM; Kubernetes manifest fixes
+- [ ] **Release engineering**: the release version in the binaries (the
+      server and the CLI report Cargo's `0.1.0`; the image build gets it as
+      the `VERSION` argument already); prebuilt binaries; signed releases
+      and an SBOM; Kubernetes manifest fixes
       [D-L3] — a `/tmp` volume, `ingressClassName`, the TLS secret, and the
       ingress body limit vs the attachment size.
 - [ ] **External security and cryptography audit** before selling on

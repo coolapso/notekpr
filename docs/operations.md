@@ -558,9 +558,10 @@ task docker:build:demo    # notekpr-demo:latest — tag and push it to your regi
 docker buildx build --platform linux/amd64,linux/arm64 --target demo -t registry.example.com/notekpr-demo:0.1.0 --push .
 ```
 
-The project's own demo is published with `task docker:push:demo`: amd64
-and arm64 to `ghcr.io/coolapso/notekpr-demo`, tagged with the short commit
-hash (`-dev` added when there are uncommitted changes) and `latest`.
+The project's own demo is published with every release (`task release`):
+amd64 and arm64 to `ghcr.io/coolapso/notekpr-demo`, tagged with the
+version and `latest`; `task docker:push:demo` pushes one in between
+([development.md](development.md#releases)).
 
 The image (the Dockerfile's `demo` stage) runs `scripts/demo.py` with
 `--fresh --lifetime 1h --dev-mode-anywhere`: it deletes the previous demo

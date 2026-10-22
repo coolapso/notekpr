@@ -71,7 +71,7 @@ task lint                     # clippy, warnings are errors
 task ci                       # exactly what CI runs: checks, every test, audit, the images
 task audit                    # supply-chain checks (cargo deny check)
 task dev:reset                # wipe the dev database
-task build                    # debug build of server, CLI and web client;  task release  for release builds
+task build                    # debug build of server, CLI and web client;  task build:release  for release builds
 task check:wasm               # build the core for wasm32 (catches wasm-only issues)
 task backup                   # a timestamped backup of ./data into backups/ (keeps the newest 10)
 task docker:dev               # the dev server in Docker (docker:dev:oidc adds Dex, docker:dev:down stops it)
@@ -262,6 +262,42 @@ here; a check that should run in CI goes into a task first. CI runs `task ci`'s
 two halves, `task ci:check` and `task ci:image`, as separate jobs (the image
 job starts once the checks pass): one GitHub runner's disk (14 GB guaranteed)
 doesn't hold the test builds and the image build together.
+
+## Releases
+
+Releases are made from this machine, from `dev`, with
+[semrel](https://www.semrel.io) (`.semrel.yaml`). It computes the next
+version from the commit messages since the last release, so they follow
+[Conventional Commits](https://www.conventionalcommits.org): `feat:` bumps
+the minor version; `fix:`, `perf:`, `refactor:` and `build:` the patch
+version; other types (`docs:`, `test:`, `ci:`, `chore:`, `style:`) don't
+make a release on their own. Below 1.0.0 a breaking change (`feat!:`, or
+`BREAKING CHANGE:` in the body) bumps the minor version too: 0.1.0 → 0.2.0
+(`version_ceiling` in `.semrel.yaml`).
+
+```sh
+task tools:release      # once: semrel (needs Go); also needs jq, and gh signed in (or GITHUB_TOKEN)
+task release:plugins    # once: semrel's plugins, pinned in .semrel.lock, into .semrel/
+task release:check      # CI's checks, then a preview of the next version and its notes
+task release            # the same, then the release
+```
+
+`task release` tags the next version (`v0.2.0`), pushes the tag, creates
+the GitHub Release with the notes, then pushes both images for amd64 and
+arm64, `ghcr.io/coolapso/notekpr` and `ghcr.io/coolapso/notekpr-demo`,
+tagged `0.2.0` and `latest`. Without commits that make a release it does
+nothing. It doesn't push `dev`: push it as usual.
+
+Between releases, `task docker:push` and `task docker:push:demo` push an
+image tagged `latest` and with the version `git describe` gives after
+fetching the tags: `0.2.0` on a release, `0.2.0-3-gabc1234` three commits
+after it, with `-dev` appended when there are uncommitted changes.
+`VERSION=x.y.z` sets it instead. The image's
+`org.opencontainers.image.version` label carries it too.
+
+The first release is `task release -- --next-version 0.1.0`: the history
+before it predates Conventional Commits, so `task release:check` lints
+commit messages only once a release tag exists.
 
 ## Conventions
 

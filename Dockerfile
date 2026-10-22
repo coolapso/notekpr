@@ -68,6 +68,9 @@ COPY --from=build /out/bin/ /usr/local/bin/
 COPY --from=web /out/web /usr/share/notekpr/web
 COPY scripts/demo.py /usr/share/notekpr/demo.py
 COPY --from=build --chown=65532:65532 /out/data /data
+# The release version (`task docker:push:demo`); `dev` for local builds.
+ARG VERSION=dev
+LABEL org.opencontainers.image.version="${VERSION}"
 EXPOSE 8080
 USER 65532:65532
 ENTRYPOINT ["python3", "-u", "/usr/share/notekpr/demo.py", \
@@ -76,9 +79,12 @@ ENTRYPOINT ["python3", "-u", "/usr/share/notekpr/demo.py", \
     "--listen", "0.0.0.0:8080", "--dev-mode-anywhere", "--fresh", "--lifetime", "1h"]
 
 FROM gcr.io/distroless/cc-debian13:nonroot
+# The release version (`task docker:push`); `dev` for local builds.
+ARG VERSION=dev
 LABEL org.opencontainers.image.title="notekpr" \
       org.opencontainers.image.description="Self-hosted, end-to-end encrypted, collaborative Markdown notes" \
-      org.opencontainers.image.licenses="AGPL-3.0-or-later"
+      org.opencontainers.image.licenses="AGPL-3.0-or-later" \
+      org.opencontainers.image.version="${VERSION}"
 COPY --from=build /out/bin/ /usr/local/bin/
 COPY --from=web /out/web /usr/share/notekpr/web
 COPY --from=build --chown=65532:65532 /out/data /data

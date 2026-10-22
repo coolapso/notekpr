@@ -10,3 +10,6 @@ __pycache__/
 .task/
 .claude/*.lock
 .claude/worktrees/
+# semrel: downloaded plugins (pinned in .semrel.lock) and its local stats
+/.semrel/*/
+/.semrel-analytics.jsonl

@@ -182,7 +182,7 @@ def test_collab(env):
         a.keys("- milk" + KEYS["enter"] + "eggs" + KEYS["enter"] + KEYS["enter"] + "Thanks!")
         time.sleep(0.8)
         check(a.js("return document.querySelector('.note-title').value") == "Groceries", "new note is titled from the title field")
-        check(editor_text(a) == "- milk\n- eggs\nThanks!", "list continuation and list exit work")
+        check(editor_text(a) == "- milk\n- eggs\n\nThanks!", "list continuation and list exit work")
         url = a.js("return location.pathname")
         share(a, ".sb-bottom button:nth-child(2)", bn)
         b.click(".vault-btn")

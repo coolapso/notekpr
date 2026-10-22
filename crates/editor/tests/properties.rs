@@ -47,7 +47,10 @@ const LINES: &[&str] = &[
     "text",
     "# h",
     "> q",
+    ">",
     "- item",
+    "- ",
+    "  indented",
     "1. one",
     "    ```",
 ];
@@ -174,6 +177,18 @@ fn reference_classify(lines: &[&str]) -> Vec<Block> {
     // The open fence: its characters, options, lines so far, carry and guides.
     let mut fence: Option<(String, Rc<FenceInfo>, u32, Carry, Indent)> = None;
     let mut in_fm = lines.first().is_some_and(|l| l.trim_end() == "---");
+    // After a list item (false) or quote (true) with text: lines that start
+    // no block continue it.
+    let mut lazy: Option<bool> = None;
+    let continues = |line: &str| {
+        let t = line.trim_start();
+        !t.is_empty()
+            && fence_of(line).is_none()
+            && notekpr_core::markdown::heading(line).is_none()
+            && !(is_hr(line) && !t.starts_with("- "))
+            && !t.starts_with('>')
+            && list_marker(line).is_none()
+    };
     let mut queued: std::collections::VecDeque<Block> = Default::default();
     for (i, line) in lines.iter().enumerate() {
         if let Some(b) = queued.pop_front() {
@@ -217,6 +232,13 @@ fn reference_classify(lines: &[&str]) -> Vec<Block> {
             *carry = code::carry_after(line, &info.lang, *carry);
             continue;
         }
+        if let Some(quote) = lazy {
+            if continues(line) {
+                out.push(Block::Lazy { quote });
+                continue;
+            }
+            lazy = None;
+        }
         if let Some((f, info)) = fence_of(line) {
             let info = Rc::new(FenceInfo::parse(info));
             fence = Some((
@@ -237,11 +259,17 @@ fn reference_classify(lines: &[&str]) -> Vec<Block> {
             out.push(Block::Hr);
         } else if line.trim_start().starts_with('>') {
             out.push(Block::Quote);
+            if !line.trim_start_matches(['>', ' ', '\t']).trim().is_empty() {
+                lazy = Some(true);
+            }
         } else if let Some((indent, len, ordered)) = list_marker(line) {
             out.push(Block::List {
                 ordered,
                 task: task_box(&line[indent + len..]),
             });
+            if !line[indent + len..].trim().is_empty() {
+                lazy = Some(false);
+            }
         } else if let Some(align) = table_start(i) {
             let end = (i + 2..lines.len())
                 .find(|&j| !continues_table(lines[j]))

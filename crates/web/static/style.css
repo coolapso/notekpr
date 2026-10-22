@@ -383,6 +383,9 @@ button.list-row:hover:not(:disabled) { background: var(--bg-2); }
 .ed .on { color: var(--muted); }
 .ed .tp { color: var(--muted); }
 .ed .ln.quote { border-left: 3px solid var(--border-strong); padding-left: 14px; color: var(--fg-2); }
+/* A line that continues the list item above it (Markdown's lazy
+   continuation): under the item's text. Quotes continue as quotes. */
+.ed.live .ln.lazy:not(.quote) { padding-left: 1.3em; }
 .ed .ln.code, .ed .ln.fence { font-family: var(--mono); font-size: 14px; line-height: 1.6; background: var(--code-bg); padding: 0 14px; }
 .ed .ln.fence { color: var(--muted); }
 .ed .ln.fence .lg { color: var(--fg-2); }

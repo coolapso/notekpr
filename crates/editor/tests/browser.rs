@@ -307,8 +307,10 @@ fn enter_continues_and_ends_lists() {
     enter(&f);
     enter(&f);
     type_str(&f, "Thanks!");
-    assert_text(&f, "- milk\n- eggs\nThanks!");
+    // A blank line ends the list: text right under it would continue the item.
+    assert_text(&f, "- milk\n- eggs\n\nThanks!");
     assert!(lines(&f)[0].class_list().contains("li"));
+    assert!(!lines(&f)[3].class_list().contains("lazy"));
     // Ordered lists and tasks continue too; backspace after a marker removes it.
     let f = setup("1. one");
     caret_at(&f, 6);

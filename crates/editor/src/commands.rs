@@ -130,6 +130,20 @@ fn table_key(st: &EditorState, k: TableKey) -> Option<Transaction> {
     }
 }
 
+/// Enter on the empty item or quote line `li`: the list or quote ends there.
+/// Below other text, the line stays as a blank line and the caret goes to a
+/// new one after it: text typed right under a list item or quote would
+/// continue it (Markdown's lazy continuation lines).
+fn end_block(st: &EditorState, li: usize) -> Option<Transaction> {
+    let doc = st.doc();
+    let (ls, le) = (doc.line_start(li), doc.line_end(li));
+    if li > 0 && !doc.line(li - 1).trim().is_empty() {
+        replace(st, ls, le, "\n", Some((ls + 1, ls + 1)))
+    } else {
+        replace(st, ls, le, "", Some((ls, ls)))
+    }
+}
+
 /// Enter: continue lists, quotes, code indentation and tables.
 pub fn newline(st: &EditorState) -> Option<Transaction> {
     let sel = st.selection();
@@ -173,7 +187,7 @@ pub fn newline(st: &EditorState) -> Option<Transaction> {
                 let cut = indent.min(2);
                 return group(replace(st, ls, ls + cut, "", Some((a - cut, a - cut))));
             }
-            return group(replace(st, ls, le, "", Some((ls, ls))));
+            return group(end_block(st, li));
         }
         if a < ls + content_start {
             return group(replace(st, a, b, "\n", None));
@@ -204,7 +218,7 @@ pub fn newline(st: &EditorState) -> Option<Transaction> {
             .take_while(|c| *c == '>' || *c == ' ')
             .collect();
         if line[prefix.len()..].trim().is_empty() {
-            return group(replace(st, ls, le, "", Some((ls, ls))));
+            return group(end_block(st, li));
         }
         return group(replace(st, a, b, &format!("\n{prefix}"), None));
     }
@@ -622,9 +636,16 @@ mod tests {
             run("- milk", (6, 6), newline),
             ("- milk\n- ".into(), (9, 9))
         );
+        // Ending the list leaves a blank line: text right under an item
+        // would continue it.
         assert_eq!(
             run("- milk\n- ", (9, 9), newline),
-            ("- milk\n".into(), (7, 7))
+            ("- milk\n\n".into(), (8, 8))
+        );
+        assert_eq!(run("- ", (2, 2), newline), ("".into(), (0, 0)));
+        assert_eq!(
+            run("> said\n> ", (9, 9), newline),
+            ("> said\n\n".into(), (8, 8))
         );
         assert_eq!(
             run("1. one", (6, 6), newline),

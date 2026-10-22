@@ -46,6 +46,13 @@ pub enum Block {
         guides: (u8, u8),
     },
     Hr,
+    /// A line that continues the list item or quote (`quote`) above it
+    /// without starting a block of its own: Markdown folds such "lazy
+    /// continuation lines" into the item or quote — even when they look
+    /// like a table.
+    Lazy {
+        quote: bool,
+    },
     /// A row of a GFM table (header, delimiter row, body); `align` holds the
     /// alignment of every column, from the delimiter row.
     Table {
@@ -123,6 +130,8 @@ impl Block {
             Block::Fence { .. } => "ln fence fo",
             Block::Code { .. } => "ln code",
             Block::Hr => "ln hr",
+            Block::Lazy { quote: false } => "ln lazy",
+            Block::Lazy { quote: true } => "ln quote lazy",
             Block::Table {
                 row: Row::Header, ..
             } => "ln table th",
@@ -346,6 +355,10 @@ pub enum LineState {
         align: Vec<Align>,
     },
     PipeText,
+    /// After a list item or a quote with text: lines that start no block of
+    /// their own continue it ([`Block::Lazy`]).
+    ListPara,
+    QuotePara,
 }
 
 /// Classify `line` given the state the lines above left and the line after
@@ -411,8 +424,25 @@ pub fn step(state: &LineState, line: &str, next: Option<&str>) -> (Block, LineSt
             state.clone(),
         ),
         LineState::PipeText if is_table_line(line) => (Block::PipeText, LineState::PipeText),
+        LineState::ListPara | LineState::QuotePara if continues_lazily(line) => {
+            let quote = *state == LineState::QuotePara;
+            (Block::Lazy { quote }, state.clone())
+        }
         _ => normal_line(line, next),
     }
+}
+
+/// Whether `line`, after a list item or quote with text, continues it: it is
+/// not blank and starts no block that ends a paragraph (a heading, fence,
+/// rule, quote or list item). A table can't start there.
+fn continues_lazily(line: &str) -> bool {
+    let t = line.trim_start();
+    !t.is_empty()
+        && fence_of(line).is_none()
+        && notekpr_core::markdown::heading(line).is_none()
+        && !(is_hr(line) && !t.starts_with("- "))
+        && !t.starts_with('>')
+        && list_marker(line).is_none()
 }
 
 fn normal_line(line: &str, next: Option<&str>) -> (Block, LineState) {
@@ -440,12 +470,24 @@ fn normal_line(line: &str, next: Option<&str>) -> (Block, LineState) {
     } else if is_hr(line) && !line.trim_start().starts_with("- ") {
         normal(Block::Hr)
     } else if line.trim_start().starts_with('>') {
-        normal(Block::Quote)
+        let text = line.trim_start_matches(['>', ' ', '\t']);
+        let state = if text.trim().is_empty() {
+            LineState::Normal
+        } else {
+            LineState::QuotePara
+        };
+        (Block::Quote, state)
     } else if let Some((indent, len, ordered)) = list_marker(line) {
-        normal(Block::List {
+        let block = Block::List {
             ordered,
             task: task_box(&line[indent + len..]),
-        })
+        };
+        let state = if line[indent + len..].trim().is_empty() {
+            LineState::Normal
+        } else {
+            LineState::ListPara
+        };
+        (block, state)
     } else if let Some(align) = table_start(line, next) {
         // A table: this header, its delimiter row, and the rows that follow.
         (
@@ -1219,6 +1261,43 @@ mod tests {
     fn flags_of(line: &str) -> Styled {
         let b = classify(&[line]);
         style_line(line, &b[0], &|t| t == "Exists")
+    }
+
+    #[test]
+    fn lazy_continuation_lines() {
+        let lazy = Block::Lazy { quote: false };
+        let k = classify(&[
+            "- [ ] Sow",
+            "| Bed | Plant |",
+            "| --- | --- |",
+            "more",
+            "",
+            "| a | b |",
+            "| - | - |",
+        ]);
+        assert_eq!(
+            &k[1..4],
+            &[lazy.clone(), lazy.clone(), lazy.clone()],
+            "a table under an item is part of it"
+        );
+        assert_eq!(k[4], Block::Blank);
+        assert!(
+            matches!(k[5], Block::Table { .. }),
+            "after a blank line, a table"
+        );
+        let k = classify(&["> said", "text", "", "text"]);
+        assert_eq!(k[1], Block::Lazy { quote: true });
+        assert_eq!(k[3], Block::Paragraph);
+        // Blocks that end a paragraph end the continuation.
+        let k = classify(&["- a", "# H", "- b", "> q", "```", "x", "```", "- c", "---"]);
+        assert_eq!(k[1], Block::Heading(1));
+        assert!(matches!(k[2], Block::List { .. }));
+        assert_eq!(k[3], Block::Quote);
+        assert!(matches!(k[4], Block::Fence { .. }));
+        assert_eq!(k[8], Block::Hr);
+        // An empty item or quote has nothing to continue.
+        assert_eq!(classify(&["- ", "text"])[1], Block::Paragraph);
+        assert_eq!(classify(&["> ", "text"])[1], Block::Paragraph);
     }
 
     #[test]

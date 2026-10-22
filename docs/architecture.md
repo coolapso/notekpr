@@ -270,6 +270,11 @@ has unsent edits to it, that person's client saves their version as a new
   diverge from what is synced. During an IME composition the DOM is left to
   the browser: remote text waits and is merged (operational transform) with
   the composed text when it ends.
+* Lines right under a list item or quote that start no block of their own
+  are shown as part of it — Markdown's lazy continuation lines, which every
+  renderer folds into the item or quote, even when they look like a table —
+  so the editor and the reading view agree. Ending a list or quote with Enter
+  leaves a blank line for the same reason.
 * Code blocks (`crates/editor/src/code.rs`) are highlighted by a small
   hand-written lexer per language, a line at a time: what a line leaves open
   (a block comment, a multi-line string) is part of the next line's state, so

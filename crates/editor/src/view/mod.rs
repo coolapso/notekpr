@@ -181,6 +181,11 @@ pub struct Editor {
     ime_timer: Cell<Option<i32>>,
     ime_cb: RefCell<Option<Closure<dyn FnMut()>>>,
     destroyed: Cell<bool>,
+    /// The primary mouse button is down in the editor: which lines show
+    /// their Markdown waits until it is released. Showing a line's markers
+    /// moves its text, which would leave a drag that started there
+    /// selecting nothing.
+    mouse_down: Cell<bool>,
 }
 
 fn is_composition_input(t: &str) -> bool {
@@ -293,6 +298,7 @@ impl Editor {
             ime_timer: Cell::new(None),
             ime_cb: RefCell::new(None),
             destroyed: Cell::new(false),
+            mouse_down: Cell::new(false),
         });
         ed.op(|ed| {
             ed.apply_mode_classes();
@@ -965,7 +971,13 @@ impl Editor {
         };
         // The DOM.
         let focused = self.has_focus();
-        let active = if focused { active } else { vec![] };
+        let active = if !focused {
+            vec![]
+        } else if self.mouse_down.get() {
+            self.view.borrow().active_lines.clone()
+        } else {
+            active
+        };
         let rendered = self.render_jobs(jobs);
         self.patch(&applied.splices, rendered, &active);
         if structural {
@@ -1386,7 +1398,11 @@ impl Editor {
 
     /// Mark the lines of the selection `active` (their syntax shows) while
     /// the editor has the focus, and the fences of a code block it is in.
+    /// Not while the mouse button is down ([`Editor::mouse_released`]).
     fn sync_active(&self) {
+        if self.mouse_down.get() {
+            return;
+        }
         // Markers shown or hidden on these lines move the highlights.
         if !self.model(|st| st.marks().is_empty()) {
             self.request_frame(false, true);
@@ -1414,6 +1430,14 @@ impl Editor {
         }
         view.active = new;
         view.active_lines = want;
+    }
+
+    /// The mouse button is up again: the lines of the selection show their
+    /// Markdown now.
+    fn mouse_released(&self) {
+        if self.mouse_down.replace(false) && !self.run_now(|ed| ed.sync_active()) {
+            self.defer(DEFER_ACTIVE);
+        }
     }
 
     fn selection_from_dom(&self) {
@@ -1751,6 +1775,9 @@ impl Editor {
             });
         }
         let doc: EventTarget = document().unchecked_into();
+        for name in ["pointerup", "pointercancel"] {
+            Editor::listen(this, &doc, name, |ed, _| ed.mouse_released());
+        }
         Editor::listen(this, &doc, "selectionchange", |ed, _| {
             if ed.ime.borrow().phase != Phase::Idle {
                 return;
@@ -1764,6 +1791,8 @@ impl Editor {
             Editor::listen(this, &win, "resize", |ed, _| {
                 ed.op(|ed| ed.request_frame(false, true))
             });
+            // A button released outside the window: no pointerup here.
+            Editor::listen(this, &win, "blur", |ed, _| ed.mouse_released());
         }
         // Native DOM changes.
         let weak = Rc::downgrade(this);
@@ -2181,6 +2210,9 @@ impl Editor {
             .and_then(|l| l.dyn_ref::<Element>())
             .is_some_and(|l| l.class_list().contains("active"));
         let readonly = self.model(|st| st.readonly);
+        if ev.button() == 0 {
+            self.mouse_down.set(true);
+        }
         if let Some(button) = target.closest(".code-copy").ok().flatten() {
             ev.prevent_default();
             self.settle();

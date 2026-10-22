@@ -748,6 +748,30 @@ fn code_block_headers() {
     assert_eq!(title.text_content().as_deref(), Some("deploy2.sh"));
 }
 
+/// While the mouse button is down, lines don't start showing their
+/// Markdown (that moves their text under a drag); on release they do.
+#[wasm_bindgen_test]
+fn markers_show_when_the_mouse_is_released() {
+    let f = setup("- one\n- two\nthree");
+    caret_at(&f, "- one\n- two\nthr".len());
+    let init = web_sys::MouseEventInit::new();
+    init.set_bubbles(true);
+    init.set_button(0);
+    let ev = web_sys::MouseEvent::new_with_mouse_event_init_dict("mousedown", &init).unwrap();
+    lines(&f)[1].dispatch_event(&ev).unwrap();
+    // Where the press puts the caret.
+    caret_at(&f, "- one\n- t".len());
+    assert!(
+        !lines(&f)[1].class_list().contains("active"),
+        "not while pressed"
+    );
+    assert!(lines(&f)[2].class_list().contains("active"));
+    let up = web_sys::Event::new("pointerup").unwrap();
+    document().dispatch_event(&up).unwrap();
+    assert!(lines(&f)[1].class_list().contains("active"), "on release");
+    assert!(!lines(&f)[2].class_list().contains("active"));
+}
+
 fn point_of(f: &Fixture, line: usize, utf16: u32) -> (i32, i32) {
     let t = text_node(f, line);
     let r = document().create_range().unwrap();

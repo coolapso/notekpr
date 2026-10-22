@@ -898,6 +898,47 @@ def test_code_wrapping(env):
         b.close()
 
 
+# Viewport coordinates of the start and end of `text` in the editor.
+TEXT_ENDS = """
+const w = document.createTreeWalker(document.querySelector('.ed'), NodeFilter.SHOW_TEXT);
+let n;
+while ((n = w.nextNode())) {
+  const i = n.data.indexOf(arguments[0]);
+  if (i >= 0) {
+    const r = document.createRange();
+    r.setStart(n, i); r.setEnd(n, i + arguments[0].length);
+    const rs = r.getClientRects(), a = rs[0], b = rs[rs.length - 1];
+    return [a.left + 1, a.top + a.height / 2, b.right - 1, b.top + b.height / 2];
+  }
+}
+return null;
+"""
+
+
+def test_editor_mouse(env):
+    b = Browser()
+    try:
+        signup(b, uniq("ems"))
+        new_note(b, "Mouse", "- first item" + KEYS["enter"] + "second item" + KEYS["enter"] + KEYS["enter"] + "plain text")
+        time.sleep(0.5)
+        check(editor_text(b) == "- first item\n- second item\n\nplain text", "typed a list and a paragraph")
+        # The caret is in the paragraph; the list's markers are hidden. A drag
+        # over an item selects it, although pressing the mouse there would
+        # show the item's marker and move its text.
+        x1, y1, x2, y2 = b.js(TEXT_ENDS, "second item")
+        wd.req("POST", b.p("/actions"), {"actions": [{"type": "pointer", "id": "mouse", "parameters": {"pointerType": "mouse"},
+            "actions": [{"type": "pointerMove", "origin": "viewport", "x": int(x1), "y": int(y1)},
+                        {"type": "pointerDown", "button": 0}, {"type": "pause", "duration": 100},
+                        {"type": "pointerMove", "origin": "viewport", "x": int(x2), "y": int(y2), "duration": 400},
+                        {"type": "pointerUp", "button": 0}]}]})
+        time.sleep(0.5)
+        check(b.js("return getSelection().toString()") == "second item", f"a drag selects the text it goes over ({b.js('return getSelection().toString()')!r})")
+        check(b.js("return document.querySelectorAll('.ed .ln')[1].classList.contains('active')"), "after the drag the line shows its markers")
+        check(not severe_logs(b), "no browser errors")
+    finally:
+        b.close()
+
+
 def test_editor_safety(env):
     b = Browser()
     try:
@@ -1729,7 +1770,7 @@ def test_recovered_copy(env):
         b.close()
 
 
-TESTS = [test_onboarding, test_collab, test_devices_and_recovery, test_features, test_attachments, test_note_sharing, test_tables, test_code_blocks, test_code_wrapping, test_editor_safety, test_local_copy, test_ui_basics, test_offline_tabs, test_offline_start, test_mobile, test_quick_notes, test_vault_icons, test_entry_icons, test_tree_order, test_session_ended_while_away, test_comments, test_graph, test_recovered_copy]
+TESTS = [test_onboarding, test_collab, test_devices_and_recovery, test_features, test_attachments, test_note_sharing, test_tables, test_code_blocks, test_code_wrapping, test_editor_mouse, test_editor_safety, test_local_copy, test_ui_basics, test_offline_tabs, test_offline_start, test_mobile, test_quick_notes, test_vault_icons, test_entry_icons, test_tree_order, test_session_ended_while_away, test_comments, test_graph, test_recovered_copy]
 
 
 def main():

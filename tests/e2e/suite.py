@@ -1185,12 +1185,14 @@ def test_ui_basics(env):
         check(not b.js("return !!document.querySelector('.menu.up')"), "Escape closes an open menu")
         # Help from inside the editor, a modal dialog that keeps the focus.
         b.js("const ed=document.querySelector('.ed'); ed.focus(); const s=getSelection(); s.selectAllChildren(ed); s.collapseToEnd();")
+        before = editor_text(b)
         b.chord(KEYS["ctrl"], "/")
+        # Keys typed right away go to the dialog, not to the note behind it.
+        b.keys(KEYS["tab"] * 12)
         b.find(".modal[aria-modal=true]", 5)
         check(True, "Ctrl+/ opens the shortcut help from the editor")
-        for _ in range(12):
-            b.keys(KEYS["tab"])
         check(b.js("return document.querySelector('.modal').contains(document.activeElement)"), "Tab stays inside the dialog")
+        check(editor_text(b) == before, "keys typed as it opens don't reach the note")
         b.chord(KEYS["escape"])
         time.sleep(0.3)
         check(b.js("return !!document.activeElement.closest('.ed')"), "closing the dialog gives the focus back")

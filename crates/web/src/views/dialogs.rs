@@ -24,17 +24,18 @@ pub(crate) fn Dialog(
     let ui = ui();
     let label = title.clone();
     let root = NodeRef::<html::Div>::new();
-    // Focus moves into the dialog (unless an input inside takes it).
+    // Focus moves into the dialog at once, before the next key: a key typed
+    // right after opening it (Ctrl+/, then Tab) would otherwise go to the
+    // note behind it. An input inside takes the focus next.
     Effect::new(move |_| {
         if let Some(el) = root.get() {
-            util::set_timeout(10, move || {
-                let inside = util::document()
-                    .active_element()
-                    .is_some_and(|a| el.contains(Some(&a)));
-                if !inside {
-                    let _ = el.focus();
-                }
-            });
+            let inside = util::document()
+                .active_element()
+                .is_some_and(|a| el.contains(Some(&a)));
+            if !inside {
+                remember_focus();
+                let _ = el.focus();
+            }
         }
     });
     view! {
@@ -94,18 +95,29 @@ thread_local! {
     static RETURN_FOCUS: std::cell::RefCell<Option<web_sys::HtmlElement>> = const { std::cell::RefCell::new(None) };
 }
 
+/// Remember what has the focus, for when the dialogs close: what had it
+/// before the first one opened (the dialog and [`ModalHost`] may come to it
+/// in either order, so never something in a dialog).
+fn remember_focus() {
+    use wasm_bindgen::JsCast;
+    RETURN_FOCUS.with(|r| {
+        let mut r = r.borrow_mut();
+        if r.is_none() {
+            *r = util::document()
+                .active_element()
+                .filter(|a| a.closest(".modal").ok().flatten().is_none())
+                .and_then(|a| a.dyn_into().ok());
+        }
+    });
+}
+
 #[component]
 pub fn ModalHost() -> impl IntoView {
     let ui = ui();
     Effect::new(move |was_open: Option<bool>| {
-        use wasm_bindgen::JsCast;
         let open = ui.modal.with(|m| m.is_some());
         match (was_open.unwrap_or(false), open) {
-            (false, true) => RETURN_FOCUS.with(|r| {
-                *r.borrow_mut() = util::document()
-                    .active_element()
-                    .and_then(|a| a.dyn_into().ok());
-            }),
+            (false, true) => remember_focus(),
             (true, false) => {
                 if let Some(el) = RETURN_FOCUS.with(|r| r.borrow_mut().take()) {
                     let _ = el.focus();

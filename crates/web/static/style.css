@@ -20,6 +20,7 @@
   --ok: #2f9e5a;
   --warn: #c27c0e;
   --warn-bg: #fff6e0;
+  --star: #c28a00;
   --code-bg: #f3f2ef;
   --hl-bg: #fff1a8;
   --shadow: 0 8px 28px rgba(20, 20, 30, 0.14), 0 1px 3px rgba(20, 20, 30, 0.08);
@@ -48,7 +49,7 @@
     --bg: #1c1c1f; --bg-2: #232327; --bg-3: #2c2c31; --sb-bg: #19191c;
     --fg: #e6e6e3; --fg-2: #c8c8c3; --muted: #8b8b92; --border: #2f2f35; --border-strong: #3d3d45;
     --accent: #8b8cf4; --accent-fg: #15151a; --accent-bg: #2c2c4a; --link: #8fa8ff; --broken: #ff9a5c;
-    --danger: #ff6b6b; --danger-bg: #3a2020; --ok: #4cc27a; --warn: #f0b44c; --warn-bg: #3a3020;
+    --danger: #ff6b6b; --danger-bg: #3a2020; --ok: #4cc27a; --warn: #f0b44c; --warn-bg: #3a3020; --star: #f5b83d;
     --code-bg: #26262b; --hl-bg: #5a4f14; --shadow: 0 8px 28px rgba(0, 0, 0, 0.5), 0 1px 3px rgba(0, 0, 0, 0.4);
     --kw: #c39cff; --st: #7ad59b; --cm: #7d7d86; --nu: #ffb068;
     --fn: #f0d27a; --ty: #6cc6f5; --co: #ffb068; --va: #6fe0d0; --pr: #a5b4fc; --op: #ff7b9c; --me: #c9a26b;
@@ -60,7 +61,7 @@
   --bg: #1c1c1f; --bg-2: #232327; --bg-3: #2c2c31; --sb-bg: #19191c;
   --fg: #e6e6e3; --fg-2: #c8c8c3; --muted: #8b8b92; --border: #2f2f35; --border-strong: #3d3d45;
   --accent: #8b8cf4; --accent-fg: #15151a; --accent-bg: #2c2c4a; --link: #8fa8ff; --broken: #ff9a5c;
-  --danger: #ff6b6b; --danger-bg: #3a2020; --ok: #4cc27a; --warn: #f0b44c; --warn-bg: #3a3020;
+  --danger: #ff6b6b; --danger-bg: #3a2020; --ok: #4cc27a; --warn: #f0b44c; --warn-bg: #3a3020; --star: #f5b83d;
   --code-bg: #26262b; --hl-bg: #5a4f14; --shadow: 0 8px 28px rgba(0, 0, 0, 0.5), 0 1px 3px rgba(0, 0, 0, 0.4);
   --kw: #c39cff; --st: #7ad59b; --cm: #7d7d86; --nu: #ffb068;
   --fn: #f0d27a; --ty: #6cc6f5; --co: #ffb068; --va: #6fe0d0; --pr: #a5b4fc; --op: #ff7b9c; --me: #c9a26b;
@@ -122,6 +123,9 @@ kbd { font-size: 11px; padding: 1px 5px; border: 1px solid var(--border-strong);
 .icon-btn { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; border-radius: 6px; border: none; background: transparent; color: var(--fg-2); cursor: pointer; flex: none; }
 .icon-btn:hover { background: var(--bg-3); }
 .icon-btn.on { color: var(--accent); }
+/* A favorite's star is filled and gold, so it reads as on at a glance. */
+.icon-btn.fav.on { color: var(--star); }
+.icon-btn.fav.on .ic { fill: currentColor; }
 .icon-btn.tiny { width: 22px; height: 22px; }
 .icon-btn.tiny .ic { width: 14px; height: 14px; }
 .input {

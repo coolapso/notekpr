@@ -1203,6 +1203,19 @@ def test_ui_basics(env):
                "return h && h.getBoundingClientRect().top >= 0 && h.getBoundingClientRect().top < innerHeight", 10, "the heading in view")
         check(True, "a link to a heading opens the note at that heading")
         b.chord(KEYS["ctrl"], "e")
+        # A favorite's star reads as on at a glance: filled, with a tooltip to undo it.
+        star = "return (x => [x.getAttribute('aria-pressed'), x.title, getComputedStyle(x.querySelector('svg')).fill])" \
+               "(document.querySelector(\".note-head button[aria-label='Favorite']\"))"
+        pressed, title, fill = b.js(star)
+        check(pressed == "false" and title == "Add to favorites" and fill == "none", "a note that isn't a favorite has an outlined star")
+        b.click(".note-head button[aria-label='Favorite']")
+        b.wait("return document.querySelector(\".note-head button[aria-label='Favorite']\").getAttribute('aria-pressed') === 'true'", 5, "the star on")
+        pressed, title, fill = b.js(star)
+        check(title == "Remove from favorites" and fill != "none", "a favorite's star is filled")
+        b.wait("return Array.from(document.querySelectorAll('.sb-section')).some(x => x.querySelector('.sb-label')?.textContent === 'Favorites' && x.textContent.includes('Plan'))",
+               5, "Plan under Favorites")
+        b.click(".note-head button[aria-label='Favorite']")
+        b.wait("return document.querySelector(\".note-head button[aria-label='Favorite']\").getAttribute('aria-pressed') === 'false'", 5, "the star off")
         unlabelled = b.js("return Array.from(document.querySelectorAll('button')).filter(x => !x.textContent.trim() && !x.getAttribute('aria-label')).length")
         check(unlabelled == 0, f"icon buttons have accessible names ({unlabelled} without)")
         check(not severe_logs(b), "no browser errors")

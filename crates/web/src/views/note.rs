@@ -492,6 +492,7 @@ pub fn NoteView(vault: String, note: String) -> impl IntoView {
         ui.prefs_rev.get();
         actions::is_favorite(&vf, &nf)
     };
+    let fav2 = fav.clone();
     let more = RwSignal::new(false);
     super::close_on_outside(more);
     let (vm, nm) = (vault.clone(), note.clone());
@@ -518,7 +519,7 @@ pub fn NoteView(vault: String, note: String) -> impl IntoView {
                     <button class:on=move || ui.mode.get() == ViewMode::Source title="Markdown source" aria-label="Markdown source" aria-pressed=move || (ui.mode.get() == ViewMode::Source).to_string() on:click=move |_| ui.mode.set(ViewMode::Source)><Icon name="code"/></button>
                     <button class:on=move || ui.mode.get() == ViewMode::Reading title=format!("Reading view ({}+E)", util::mod_key()) aria-label="Reading view" aria-pressed=move || (ui.mode.get() == ViewMode::Reading).to_string() on:click=move |_| ui.mode.set(ViewMode::Reading)><Icon name="book"/></button>
                 </div>
-                <button class="icon-btn" class:on=fav.clone() title="Favorite" aria-label="Favorite" aria-pressed=move || fav().to_string() on:click=move |_| actions::toggle_favorite(&vfa, &nfa)><Icon name="star"/></button>
+                <button class="icon-btn fav" class:on=fav.clone() title=move || if fav2() { "Remove from favorites" } else { "Add to favorites" } aria-label="Favorite" aria-pressed=move || fav().to_string() on:click=move |_| actions::toggle_favorite(&vfa, &nfa)><Icon name="star"/></button>
                 <Show when=move || state::step(|c| c.is_owner(&vs))>
                     {
                         let (v, n) = (vault.clone(), note.clone());

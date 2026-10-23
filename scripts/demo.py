@@ -157,7 +157,7 @@ HOME = [
 
         ## More to try
 
-        - [ ] Star a note (☆ at the top): it shows under *Favorites* in the sidebar
+        - [ ] Star a note (☆ at the top, it turns gold): it shows under *Favorites* in the sidebar
         - [ ] Rename a note, or drag it to another folder in the sidebar: links to it follow
         - [ ] Comment on a note: select some text and click *Comment* (or press `Alt+M`); click highlighted text to read and answer its thread. *Holiday plans* in *Family* has comments — even Carol's, who only views that vault
         - [ ] Drag a note between two others in the sidebar: a line shows where it goes, and it stays there for everyone (this note and the *Recipes* overview were put first that way, from the command line); *Sort A–Z* in a folder's ⋯ menu undoes it

@@ -4,6 +4,7 @@ pub mod dialogs;
 pub mod graph;
 pub mod home;
 pub mod icons;
+pub mod mentions;
 pub mod note;
 pub mod panels;
 pub mod quick;
@@ -26,6 +27,7 @@ pub fn App() -> impl IntoView {
     install_shortcuts();
     install_menu_closer();
     install_code_copy();
+    comments::install_reading_selection();
     Effect::new(move |_| {
         let prefs = ui.ui_prefs.get();
         if let Some(root) = util::document().document_element() {

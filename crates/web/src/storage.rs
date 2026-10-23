@@ -398,6 +398,10 @@ pub struct UiPrefs {
     /// Long lines in code blocks wrap (a block's `wrap=` decides for itself).
     #[serde(default = "yes")]
     pub code_wrap: bool,
+    /// Show a system notification when someone mentions us while the app
+    /// isn't in front (this browser only: the permission is the browser's).
+    #[serde(default)]
+    pub mention_notifications: bool,
 }
 
 fn default_mode() -> String {
@@ -420,6 +424,7 @@ impl Default for UiPrefs {
             code_numbers: true,
             code_guides: true,
             code_wrap: true,
+            mention_notifications: false,
         }
     }
 }

@@ -13,6 +13,12 @@
 //! Callouts (`> [!tip] Title`, [`crate::editor::callout`]) are block quotes
 //! rendered as a box with an icon and the title, a `details` element when
 //! they fold.
+//!
+//! Comment threads (docs/comments.md) highlight the text they are about
+//! (`span.cmt[data-thread]`), and text can say where it is in the source
+//! (`data-o`, a byte offset) so a selection in the reading view can be
+//! commented on: every piece of text that is the source character for
+//! character sits directly in an element with its offset.
 
 use pulldown_cmark::{
     Alignment, CodeBlockKind, CowStr, Event, LinkType, Options, Parser, Tag, TagEnd,
@@ -26,12 +32,137 @@ pub struct Ctx<'a> {
     pub note: &'a dyn Fn(&str) -> Option<String>,
     /// Resolve an embed target to an attachment id.
     pub attachment: &'a dyn Fn(&str) -> Option<String>,
+    /// Comment threads to highlight.
+    pub comments: &'a [Highlight],
+    /// Say where text is in the source (`data-o`).
+    pub offsets: bool,
+}
+
+impl<'a> Ctx<'a> {
+    /// Links resolved with `note` and `attachment`; no highlights, no offsets.
+    pub fn new(
+        note: &'a dyn Fn(&str) -> Option<String>,
+        attachment: &'a dyn Fn(&str) -> Option<String>,
+    ) -> Self {
+        Ctx {
+            note,
+            attachment,
+            comments: &[],
+            offsets: false,
+        }
+    }
+
+    fn marks_text(&self) -> bool {
+        self.offsets || !self.comments.is_empty()
+    }
+}
+
+/// A comment thread's highlight: the bytes of the source its text is, and
+/// its id; `open` while its thread is shown.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Highlight {
+    pub start: usize,
+    pub end: usize,
+    pub id: String,
+    pub open: bool,
 }
 
 fn esc(s: &str) -> String {
     let mut o = String::with_capacity(s.len());
     syntax::escape(s, &mut o);
     o
+}
+
+/// Where a piece of rendered text is in the source.
+#[derive(Clone, Copy, Debug)]
+enum Place {
+    /// From this byte offset on, character for character.
+    At(usize),
+    /// Somewhere in these bytes, not character for character (escapes,
+    /// entities).
+    Within(usize, usize),
+}
+
+impl Place {
+    /// A text event's text, from the source bytes `range`: they are the same,
+    /// or the text is their end (a callout title without its type).
+    fn text(src: &str, range: &std::ops::Range<usize>, text: &str) -> Place {
+        match src.get(range.clone()) {
+            Some(s) if s.ends_with(text) => Place::At(range.end - text.len()),
+            _ => Place::Within(range.start, range.end),
+        }
+    }
+
+    /// Inline code's text, inside its backticks in `range`.
+    fn code(src: &str, range: &std::ops::Range<usize>, text: &str) -> Place {
+        match src.get(range.clone()).and_then(|s| s.find(text)) {
+            Some(i) if !text.is_empty() => Place::At(range.start + i),
+            _ => Place::Within(range.start, range.end),
+        }
+    }
+
+    /// The place `by` bytes further into the text.
+    fn after(self, by: usize) -> Place {
+        match self {
+            Place::At(a) => Place::At(a + by),
+            w => w,
+        }
+    }
+}
+
+fn highlighted(h: &Highlight, at: Option<usize>, inner: &str) -> String {
+    format!(
+        "<span class=\"cmt{}\" data-thread=\"{}\"{}>{inner}</span>",
+        if h.open { " cmt-open" } else { "" },
+        esc(&h.id),
+        at.map(|a| format!(" data-o=\"{a}\"")).unwrap_or_default()
+    )
+}
+
+/// `s` (at `place` in the source) as HTML: escaped, in the highlights of the
+/// threads it is part of (the innermost, where they overlap), and with its
+/// place in the source when asked for.
+fn esc_at(s: &str, place: Place, ctx: &Ctx) -> String {
+    if s.is_empty() || !ctx.marks_text() {
+        return esc(s);
+    }
+    let at = match place {
+        Place::At(at) => at,
+        Place::Within(a, b) => {
+            return match ctx.comments.iter().rfind(|h| h.start < b && a < h.end) {
+                Some(h) => highlighted(h, None, &esc(s)),
+                None => esc(s),
+            };
+        }
+    };
+    let end = at + s.len();
+    let mut cuts = vec![at, end];
+    for h in ctx.comments {
+        for p in [h.start, h.end] {
+            if p > at && p < end && s.is_char_boundary(p - at) {
+                cuts.push(p);
+            }
+        }
+    }
+    cuts.sort_unstable();
+    cuts.dedup();
+    let mut out = String::with_capacity(s.len() + 32);
+    for w in cuts.windows(2) {
+        let (a, b) = (w[0], w[1]);
+        let piece = esc(&s[a - at..b - at]);
+        let offset = ctx.offsets.then_some(a);
+        match ctx
+            .comments
+            .iter()
+            .filter(|h| h.start <= a && b <= h.end)
+            .max_by_key(|h| h.start)
+        {
+            Some(h) => out.push_str(&highlighted(h, offset, &piece)),
+            None if ctx.offsets => out.push_str(&format!("<span data-o=\"{a}\">{piece}</span>")),
+            None => out.push_str(&piece),
+        }
+    }
+    out
 }
 
 /// Whether a link may be opened outside the app: only web and e-mail links,
@@ -41,7 +172,7 @@ pub fn safe_external(url: &str) -> bool {
     l.starts_with("http://") || l.starts_with("https://") || l.starts_with("mailto:")
 }
 
-fn text_with_tags(s: &str) -> String {
+fn text_with_tags(s: &str, place: Place, ctx: &Ctx) -> String {
     let mut out = String::with_capacity(s.len() + 16);
     let chars: Vec<(usize, char)> = s.char_indices().collect();
     let mut last = 0;
@@ -56,12 +187,12 @@ fn text_with_tags(s: &str) -> String {
                 .map(char::len_utf8)
                 .sum();
             if len > 0 && !s[i + 1..i + 1 + len].chars().all(|c| c.is_ascii_digit()) {
-                out.push_str(&esc(&s[last..i]));
+                out.push_str(&esc_at(&s[last..i], place.after(last), ctx));
                 let tag = &s[i + 1..i + 1 + len];
                 out.push_str(&format!(
-                    "<a class=\"tg\" data-tag=\"{}\">#{}</a>",
+                    "<a class=\"tg\" data-tag=\"{}\">{}</a>",
                     esc(tag),
-                    esc(tag)
+                    esc_at(&s[i..i + 1 + len], place.after(i), ctx)
                 ));
                 last = i + 1 + len;
                 while k < chars.len() && chars[k].0 < last {
@@ -72,7 +203,7 @@ fn text_with_tags(s: &str) -> String {
         }
         k += 1;
     }
-    out.push_str(&esc(&s[last..]));
+    out.push_str(&esc_at(&s[last..], place.after(last), ctx));
     out
 }
 
@@ -169,13 +300,26 @@ fn inline_end(t: &TagEnd) -> bool {
     )
 }
 
-/// Text as HTML, each `==` as a placeholder for [`pair_marks`].
-fn push_text<'a>(t: &str, block: usize, out: &mut Vec<Event<'a>>, marks: &mut Vec<Mark>) {
+/// Text (at `place` in the source) as HTML, each `==` as a placeholder for
+/// [`pair_marks`].
+fn push_text<'a>(
+    t: &str,
+    place: Place,
+    ctx: &Ctx,
+    block: usize,
+    out: &mut Vec<Event<'a>>,
+    marks: &mut Vec<Mark>,
+) {
     let mut rest = t;
+    let mut done = 0;
     while let Some(i) = rest.find("==") {
         let (before, after) = (&rest[..i], &rest[i + 2..]);
         if !before.is_empty() {
-            out.push(Event::Html(CowStr::from(text_with_tags(before))));
+            out.push(Event::Html(CowStr::from(text_with_tags(
+                before,
+                place.after(done),
+                ctx,
+            ))));
         }
         marks.push(Mark {
             at: out.len(),
@@ -188,9 +332,14 @@ fn push_text<'a>(t: &str, block: usize, out: &mut Vec<Event<'a>>, marks: &mut Ve
         });
         out.push(Event::Html(CowStr::from("==")));
         rest = after;
+        done += i + 2;
     }
     if !rest.is_empty() {
-        out.push(Event::Html(CowStr::from(text_with_tags(rest))));
+        out.push(Event::Html(CowStr::from(text_with_tags(
+            rest,
+            place.after(done),
+            ctx,
+        ))));
     }
 }
 
@@ -536,11 +685,21 @@ pub fn to_html(src: &str, ctx: &Ctx) -> String {
                 ))));
             }
             Event::Text(t) => {
+                let place = Place::text(src, &range, &t);
                 if link_stack.is_empty() {
-                    push_text(&t, block, &mut out_events, &mut marks);
+                    push_text(&t, place, ctx, block, &mut out_events, &mut marks);
+                } else if ctx.marks_text() {
+                    out_events.push(Event::Html(CowStr::from(esc_at(&t, place, ctx))));
                 } else {
                     out_events.push(Event::Text(t));
                 }
+            }
+            Event::Code(t) if ctx.marks_text() => {
+                let place = Place::code(src, &range, &t);
+                out_events.push(Event::Html(CowStr::from(format!(
+                    "<code>{}</code>",
+                    esc_at(&t, place, ctx)
+                ))));
             }
             e => out_events.push(e),
         }
@@ -628,13 +787,7 @@ mod tests {
     fn render(s: &str) -> String {
         let note = |t: &str| (t == "Known").then(|| "id1".to_string());
         let att = |t: &str| (t == "pic.png").then(|| "a1".to_string());
-        to_html(
-            s,
-            &Ctx {
-                note: &note,
-                attachment: &att,
-            },
-        )
+        to_html(s, &Ctx::new(&note, &att))
     }
 
     #[test]
@@ -725,13 +878,7 @@ mod tests {
     fn links_to_a_heading_keep_it() {
         let note = |s: &str| (s == "Plan").then(|| "n1".to_string());
         let attachment = |_: &str| None;
-        let h = to_html(
-            "see [[Plan#Next steps]]",
-            &Ctx {
-                note: &note,
-                attachment: &attachment,
-            },
-        );
+        let h = to_html("see [[Plan#Next steps]]", &Ctx::new(&note, &attachment));
         assert!(
             h.contains("data-note=\"n1\" data-heading=\"Next steps\""),
             "{h}"
@@ -939,6 +1086,105 @@ mod tests {
         // The title is text: a type can't inject markup.
         let h = render("> [!x\"onclick=1]\n> [!<b>] t\n");
         assert!(!h.contains("callout") && !h.contains("onclick=1\""), "{h}");
+    }
+
+    fn render_with(s: &str, comments: &[Highlight], offsets: bool) -> String {
+        let note = |t: &str| (t == "Known").then(|| "id1".to_string());
+        let att = |_: &str| None;
+        to_html(
+            s,
+            &Ctx {
+                comments,
+                offsets,
+                ..Ctx::new(&note, &att)
+            },
+        )
+    }
+
+    fn hl(start: usize, end: usize, id: &str) -> Highlight {
+        Highlight {
+            start,
+            end,
+            id: id.into(),
+            open: false,
+        }
+    }
+
+    /// The text of every `data-o` element with its offset, as a browser
+    /// would read it (entities decoded).
+    fn offsets(h: &str) -> Vec<(usize, String)> {
+        let mut out = Vec::new();
+        for part in h.split("data-o=\"").skip(1) {
+            let (n, rest) = part.split_once('"').unwrap();
+            let text = rest[1..].split('<').next().unwrap();
+            let text = text
+                .replace("&lt;", "<")
+                .replace("&gt;", ">")
+                .replace("&quot;", "\"")
+                .replace("&#39;", "'")
+                .replace("&amp;", "&");
+            out.push((n.parse().unwrap(), text));
+        }
+        out
+    }
+
+    #[test]
+    fn comment_threads_are_highlighted_in_the_reading_view() {
+        let src = "Buy **milk** and bread, #home `x`\n\n# Title";
+        // "milk** and bread" (6..22, across the bold) and "Title" (37..42).
+        let h = render_with(src, &[hl(6, 22, "t1"), hl(37, 42, "t2")], false);
+        assert!(
+            h.contains("<strong><span class=\"cmt\" data-thread=\"t1\">milk</span></strong><span class=\"cmt\" data-thread=\"t1\"> and bread</span>, "),
+            "{h}"
+        );
+        assert!(
+            h.contains("<h1 data-h=\"0\"><span class=\"cmt\" data-thread=\"t2\">Title</span></h1>"),
+            "{h}"
+        );
+        // Open, nested and across a tag.
+        let h = render_with(
+            "ab #tag cd",
+            &[
+                Highlight {
+                    open: true,
+                    ..hl(0, 9, "o")
+                },
+                hl(1, 2, "i"),
+            ],
+            false,
+        );
+        assert!(h.contains("<span class=\"cmt cmt-open\" data-thread=\"o\">a</span><span class=\"cmt\" data-thread=\"i\">b</span>"), "{h}");
+        assert!(
+            h.contains(
+                "data-tag=\"tag\"><span class=\"cmt cmt-open\" data-thread=\"o\">#tag</span></a>"
+            ),
+            "{h}"
+        );
+        // Without highlights and offsets, nothing changes.
+        assert_eq!(render_with(src, &[], false), render(src));
+        // Ids are escaped.
+        let h = render_with("abc", &[hl(0, 1, "\"><b>")], false);
+        assert!(!h.contains("<b>"), "{h}");
+    }
+
+    #[test]
+    fn text_says_where_it_is_in_the_source() {
+        let src = "A *b* [c](https://e.org) `d` ==e== \\* &amp; [[Known]]\n\n> [!note] T\n> u";
+        let h = render_with(src, &[], true);
+        for (at, text) in offsets(&h) {
+            assert_eq!(&src[at..at + text.len()], text, "{h}");
+        }
+        let found: Vec<String> = offsets(&h).into_iter().map(|(_, t)| t).collect();
+        for t in ["A ", "b", "c", "d", "e", "T", "u"] {
+            assert!(found.iter().any(|f| f == t), "{t}: {found:?}");
+        }
+        // The escaped star, the character after its backslash.
+        assert!(found.iter().any(|f| f.starts_with('*')), "{found:?}");
+        // An entity isn't the source character for character: no offset.
+        assert!(!found.iter().any(|f| f.contains('&')), "{found:?}");
+        // Highlighted text has one too.
+        let h = render_with("one two", &[hl(4, 7, "t")], true);
+        assert!(h.contains("<span data-o=\"0\">one </span><span class=\"cmt\" data-thread=\"t\" data-o=\"4\">two</span>"), "{h}");
     }
 
     #[test]

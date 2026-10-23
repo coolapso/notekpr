@@ -199,6 +199,8 @@ pub(super) fn merge_prefs(theirs: &mut Prefs, mine: Prefs, unsaved: &Unsaved) {
     for (u, fp) in mine.pins {
         theirs.pins.entry(u).or_insert(fp);
     }
+    // Read here or there: read.
+    theirs.mentions.merge(&mine.mentions);
     theirs.counter = theirs.counter.max(mine.counter);
     let mut recent = mine.recent;
     for r in theirs.recent.drain(..) {

@@ -4,17 +4,27 @@
 //! Sharing starts with a fresh document key that has no link to the note's
 //! earlier keys (`engine::start_sharing_keyed`), so recipients get the note
 //! from then on only. They never receive the vault key or the vault index.
+//!
+//! Recipients comment too (docs/comments.md): they know no membership log,
+//! so commenters' keys are the owner's and those pinned on first use, and
+//! they may mention only the people who commented on the note and its owner.
+
+use std::collections::HashMap;
 
 use anyhow::{Context, Result, anyhow, bail};
+use notekpr_core::comments::{self, Person};
 use notekpr_core::engine::{self, ObjectMeta, PinStatus, VaultReplica};
+use notekpr_core::keys::AccountPublic;
 use notekpr_core::memberlog::LogBody;
 use notekpr_core::protocol::*;
 use notekpr_sync::members;
 
 use crate::api::ApiError;
 use crate::manage::{self, ShareOutcome};
+use crate::ops::{CommentSent, NoteComments};
 use crate::session::{Session, SharedVault};
 use crate::ui;
+use crate::vault::{self, CommentAct};
 
 /// Give a note its own key (first time) and share it with one person.
 pub async fn share_note(
@@ -498,6 +508,21 @@ pub async fn read_shared(session: &Session, reference: &str) -> Result<(SharedNo
     Ok((s, text))
 }
 
+/// Push one change of a shared note. `Ok(false)`: refused for an outdated
+/// key (the note's key was rotated meanwhile: reload and redo it).
+async fn push_shared(session: &Session, vault_id: &str, mut push: PushUpdate) -> Result<bool> {
+    members::sign_push(session.account(), vault_id, &mut push);
+    match session.api.push(vault_id, vec![push]).await {
+        Ok(r) => match r.rejected.first() {
+            None => Ok(true),
+            Some(x) if x.code == REJECT_STALE_KEY => Ok(false),
+            Some(x) => bail!("the server refused the change: {}", x.message),
+        },
+        Err(ApiError::Status { status: 412, .. }) => Ok(false),
+        Err(e) => Err(anyhow!(e).context("uploading the change")),
+    }
+}
+
 /// Replace (or append to) a shared note's text. Changes are merged as text
 /// diffs, so concurrent edits by others are preserved.
 pub async fn write_shared(
@@ -510,7 +535,7 @@ pub async fn write_shared(
     if !s.info.role.can_write() {
         bail!("this note is shared with you read-only");
     }
-    for attempt in 0..2 {
+    for _ in 0..2 {
         let mut r = load(session, &s).await?;
         let oid = s.info.object_id.clone();
         let note = r.notes.entry(oid.clone()).or_default();
@@ -528,13 +553,201 @@ pub async fn write_shared(
         let Some(update) = note.set_text(&new) else {
             return Ok(s);
         };
-        let mut push = r.local_change(&oid, update)?;
-        members::sign_push(session.account(), &s.info.vault_id, &mut push);
-        match session.api.push(&s.info.vault_id, vec![push]).await {
-            Ok(_) => return Ok(s),
-            // The note's key was rotated meanwhile: reload keys and redo the edit.
-            Err(ApiError::Status { status: 412, .. }) if attempt == 0 => continue,
-            Err(e) => return Err(anyhow!(e).context("uploading the change")),
+        let push = r.local_change(&oid, update)?;
+        // Refused for a rotated key: reload keys and redo the edit.
+        if push_shared(session, &s.info.vault_id, push).await? {
+            return Ok(s);
+        }
+    }
+    bail!("the note's key keeps changing; try again")
+}
+
+/// The keys of the people who commented on a shared note, as far as we
+/// can trust them: the owner's (as pinned when the note's keys were
+/// checked), ours, and others' pinned on first use. A key that changed
+/// since it was pinned isn't used: their comments show as unverified.
+async fn commenter_keys(
+    session: &Session,
+    s: &SharedNoteView,
+    r: &VaultReplica,
+) -> HashMap<String, AccountPublic> {
+    let mut keys = HashMap::new();
+    keys.insert(session.user_id.clone(), session.account().public());
+    let authors: Vec<String> = r
+        .comments
+        .get(&s.info.object_id)
+        .map(|log| {
+            log.entries()
+                .iter()
+                .map(|e| e.record.author.clone())
+                .collect()
+        })
+        .unwrap_or_default();
+    for id in authors {
+        if keys.contains_key(&id) {
+            continue;
+        }
+        let user = if id == s.info.owner.id {
+            s.info.owner.clone()
+        } else {
+            match session.api.user(&id).await {
+                Ok(u) => u,
+                Err(_) => continue,
+            }
+        };
+        let trusted =
+            matches!(session.verify_user(&user), Ok(Some(v)) if v.pin != PinStatus::Changed);
+        if let (true, Some(k)) = (trusted, &user.account_key)
+            && let Ok(key) = k.verify()
+        {
+            keys.insert(id, key);
+        }
+    }
+    keys
+}
+
+fn shared_threads(
+    s: &SharedNoteView,
+    r: &VaultReplica,
+    keys: &HashMap<String, AccountPublic>,
+) -> Vec<comments::Thread> {
+    r.comment_threads(
+        &s.info.object_id,
+        |u| keys.get(u).cloned(),
+        |u| u == s.info.owner.id,
+    )
+}
+
+/// The comment threads of a note shared with us (by title or id).
+pub async fn shared_comments(session: &Session, reference: &str) -> Result<NoteComments> {
+    let s = find_shared(session, reference).await?;
+    let r = load(session, &s).await?;
+    let keys = commenter_keys(session, &s, &r).await;
+    let doc = r.note(&s.info.object_id);
+    let raw = shared_threads(&s, &r, &keys)
+        .into_iter()
+        .map(|t| {
+            let on = doc.is_some_and(|d| comments::locate(d, &t.anchor).is_some());
+            (t, on)
+        })
+        .collect();
+    Ok(NoteComments {
+        vault_id: s.info.vault_id.clone(),
+        path: s.title.clone(),
+        threads: crate::ops::thread_items(session, raw).await,
+    })
+}
+
+/// A new comment on a shared note, or something done to one of its comments.
+pub enum SharedCommentAct {
+    /// Comment on the text `on` (it must be in the note once).
+    Add { on: String, text: String },
+    /// Reply to, edit, delete, resolve or reopen comment `id` (or the start
+    /// of it).
+    On { id: String, act: CommentAct },
+}
+
+/// The people someone a note is shared with may mention: those who
+/// commented on it, and its owner (docs/comments.md §1).
+async fn shared_people(session: &Session, s: &SharedNoteView, r: &VaultReplica) -> Vec<Person> {
+    let mut ids: Vec<String> = r
+        .comments
+        .get(&s.info.object_id)
+        .map(|log| {
+            log.entries()
+                .iter()
+                .map(|e| e.record.author.clone())
+                .collect()
+        })
+        .unwrap_or_default();
+    ids.retain(|u| *u != session.user_id && *u != s.info.owner.id);
+    ids.sort();
+    ids.dedup();
+    let names = crate::ops::user_names(session, ids.clone()).await;
+    let mut people = vec![(s.info.owner.id.clone(), s.info.owner.display_name.clone())];
+    people.extend(
+        ids.into_iter()
+            .filter_map(|u| names.get(&u).map(|n| (u.clone(), n.clone()))),
+    );
+    people
+}
+
+/// Comment on a note shared with us (by title or id), or act on one of its
+/// comments. Sent at once (recipients keep no local copy).
+pub async fn shared_comment(
+    session: &Session,
+    reference: &str,
+    act: SharedCommentAct,
+) -> Result<CommentSent> {
+    let s = find_shared(session, reference).await?;
+    if !s.info.can_comment {
+        bail!(
+            "you can't comment on '{}': its owner doesn't let viewers comment",
+            s.title
+        );
+    }
+    let note = s.info.object_id.clone();
+    for _ in 0..2 {
+        let mut r = load(session, &s).await?;
+        let text = match &act {
+            SharedCommentAct::Add { text, .. } => Some(text.as_str()),
+            SharedCommentAct::On { act, .. } => act.text(),
+        };
+        let mentioned = match text {
+            Some(t) if t.contains('@') => {
+                let people = shared_people(session, &s, &r).await;
+                crate::mentions::resolve(t, Some(&people))
+            }
+            _ => Default::default(),
+        };
+        let action = match &act {
+            SharedCommentAct::Add { on, text } => {
+                let doc = r
+                    .note(&note)
+                    .ok_or_else(|| anyhow!("the note's text isn't available"))?;
+                comments::Action::Comment {
+                    body: text.clone(),
+                    anchor: vault::anchor_on(doc, on, &s.title)?,
+                }
+            }
+            SharedCommentAct::On { id, act: a } => {
+                let keys = commenter_keys(session, &s, &r).await;
+                let threads = shared_threads(&s, &r, &keys);
+                let (target, thread) = vault::find_comment(
+                    &threads,
+                    id,
+                    &s.title,
+                    a,
+                    &session.user_id,
+                    &s.info.owner.id,
+                )?;
+                match a {
+                    CommentAct::Reply(body) => comments::Action::Reply {
+                        thread,
+                        body: body.clone(),
+                    },
+                    CommentAct::Edit(body) => comments::Action::Edit {
+                        target,
+                        body: body.clone(),
+                    },
+                    CommentAct::Delete => comments::Action::Delete { target },
+                    CommentAct::Resolve => comments::Action::Resolve { thread },
+                    CommentAct::Reopen => comments::Action::Reopen { thread },
+                }
+            }
+        };
+        let record = comments::Record::new(&session.user_id, notekpr_core::now_ms(), action)
+            .mentioning(mentioned.mentions.clone());
+        let signed = comments::Signed::sign(session.account(), &s.info.vault_id, &note, &record)
+            .map_err(|e| anyhow!(e))?;
+        let push = r.local_comment(&note, &signed)?;
+        if push_shared(session, &s.info.vault_id, push).await? {
+            return Ok(CommentSent {
+                id: record.id,
+                vault_id: s.info.vault_id.clone(),
+                note_id: note,
+                mentioned,
+            });
         }
     }
     bail!("the note's key keeps changing; try again")

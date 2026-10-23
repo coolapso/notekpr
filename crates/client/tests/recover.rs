@@ -23,6 +23,9 @@ async fn an_encrypted_export_decrypts_into_plain_files() {
     )
     .await
     .unwrap();
+    ops::add_comment(&h, "Family", "Plans/Trip", "sunscreen", "SPF 50?")
+        .await
+        .unwrap();
     for id in h.vault_ids() {
         h.push(&id).await.unwrap();
     }
@@ -43,6 +46,12 @@ async fn an_encrypted_export_decrypts_into_plain_files() {
     assert_eq!(
         std::fs::read(out.join("Family/assets/photo.png")).unwrap(),
         vec![0x89, b'P', b'N', b'G']
+    );
+    // The comments, with their author's name.
+    let md = std::fs::read_to_string(out.join("Family/_comments/Plans/Trip.md")).unwrap();
+    assert!(
+        md.contains("## On “sunscreen”") && md.contains("**Alice** · ") && md.contains("> SPF 50?"),
+        "{md}"
     );
     // Never into a folder that already has content.
     assert!(recover::recover_with_device(&alice, &export, &out).is_err());

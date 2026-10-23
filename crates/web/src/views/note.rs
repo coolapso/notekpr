@@ -421,21 +421,26 @@ pub fn NoteView(vault: String, note: String) -> impl IntoView {
         step(|c| state::note_closed(c, &v, &n));
     });
 
-    // Reading view HTML.
+    // Reading view HTML, with the comment threads' highlights.
     let (v, n5) = (vault.clone(), note.clone());
+    let open = comments::open_thread_id();
     let reading_html = Memo::new(move |_| {
         if ui.mode.get() != ViewMode::Reading {
             return String::new();
         }
         ui.content_rev.get();
         ui.tree_rev.get();
-        let (text, from) = step(|c| {
+        ui.comments_rev.get();
+        let open = open.get();
+        let (text, from, highlights, offsets) = step(|c| {
             (
                 c.replicas
                     .get(&v)
                     .map(|r| r.note_text(&n5))
                     .unwrap_or_default(),
                 c.entry(&v, &n5).map(|e| e.path).unwrap_or_default(),
+                state::comment_highlights(c, &v, &n5, open.as_deref()),
+                state::can_comment(c, &v, &n5),
             )
         });
         let vv = v.clone();
@@ -445,8 +450,9 @@ pub fn NoteView(vault: String, note: String) -> impl IntoView {
         render::to_html(
             &text,
             &render::Ctx {
-                note: &note,
-                attachment: &att,
+                comments: &highlights,
+                offsets,
+                ..render::Ctx::new(&note, &att)
             },
         )
     });
@@ -520,6 +526,8 @@ pub fn NoteView(vault: String, note: String) -> impl IntoView {
                 return;
             };
             toggle_task(&vr, &nr, line);
+        } else {
+            comments::reading_clicked(&ev);
         }
     };
 
@@ -720,12 +728,14 @@ pub fn NoteView(vault: String, note: String) -> impl IntoView {
                                 <div class="readonly-note"><Icon name="eye"/>" You can view this note. Ask the vault owner for edit access."</div>
                             })}
                             {move || (writable.get() && ui.mode.get() != ViewMode::Reading).then(|| view! { <Toolbar vault=Some(vtool.clone())/> })}
-                            <div class="editor-area" class:hidden=move || ui.mode.get() == ViewMode::Reading on:click=comments::on_area_click>
-                                <div class="editor-host" node_ref=host_ref></div>
+                            <div class="note-content">
+                                <div class="editor-area" class:hidden=move || ui.mode.get() == ViewMode::Reading on:click=comments::on_area_click>
+                                    <div class="editor-host" node_ref=host_ref></div>
+                                </div>
+                                <article class="reading" node_ref=reading_ref class:hidden=move || ui.mode.get() != ViewMode::Reading
+                                    inner_html=move || reading_html.get() on:click=on_reading_click></article>
                                 <CommentLayer vault=vcm.clone() note=ncm.clone()/>
                             </div>
-                            <article class="reading" node_ref=reading_ref class:hidden=move || ui.mode.get() != ViewMode::Reading
-                                inner_html=move || reading_html.get() on:click=on_reading_click></article>
                         }.into_any()
                     }}
                 </div>
@@ -799,18 +809,31 @@ pub fn SharedNoteView(vault: String, note: String) -> impl IntoView {
     });
 
     let (v, n) = (vault.clone(), note.clone());
+    let open = comments::open_thread_id();
     let reading_html = Memo::new(move |_| {
         if ui.mode.get() != ViewMode::Reading {
             return String::new();
         }
         ui.content_rev.get();
-        let text = step(|c| c.replicas.get(&v).map(|r| r.note_text(&n))).unwrap_or_default();
+        ui.comments_rev.get();
+        let open = open.get();
+        let (text, highlights, offsets) = step(|c| {
+            (
+                c.replicas
+                    .get(&v)
+                    .map(|r| r.note_text(&n))
+                    .unwrap_or_default(),
+                state::comment_highlights(c, &v, &n, open.as_deref()),
+                state::can_comment(c, &v, &n),
+            )
+        });
         let none = |_: &str| None;
         render::to_html(
             &text,
             &render::Ctx {
-                note: &none,
-                attachment: &none,
+                comments: &highlights,
+                offsets,
+                ..render::Ctx::new(&none, &none)
             },
         )
     });
@@ -838,6 +861,8 @@ pub fn SharedNoteView(vault: String, note: String) -> impl IntoView {
             {
                 toggle_task(&vr, &nr, line);
             }
+        } else {
+            comments::reading_clicked(&ev);
         }
     };
 
@@ -939,12 +964,14 @@ pub fn SharedNoteView(vault: String, note: String) -> impl IntoView {
                                 <div class="readonly-note"><Icon name="eye"/>" You can view this note. Ask the person who shared it for edit access."</div>
                             })}
                             {move || (writable.get() && ui.mode.get() != ViewMode::Reading).then(|| view! { <Toolbar vault=None/> })}
-                            <div class="editor-area" class:hidden=move || ui.mode.get() == ViewMode::Reading on:click=comments::on_area_click>
-                                <div class="editor-host" node_ref=host_ref></div>
+                            <div class="note-content">
+                                <div class="editor-area" class:hidden=move || ui.mode.get() == ViewMode::Reading on:click=comments::on_area_click>
+                                    <div class="editor-host" node_ref=host_ref></div>
+                                </div>
+                                <article class="reading" class:hidden=move || ui.mode.get() != ViewMode::Reading
+                                    inner_html=move || reading_html.get() on:click=on_reading_click></article>
                                 <CommentLayer vault=vcm.clone() note=ncm.clone()/>
                             </div>
-                            <article class="reading" class:hidden=move || ui.mode.get() != ViewMode::Reading
-                                inner_html=move || reading_html.get() on:click=on_reading_click></article>
                         }.into_any()
                     }}
                 </div>

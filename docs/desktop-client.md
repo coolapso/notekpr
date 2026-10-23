@@ -174,6 +174,8 @@ vault-relative, `.md` is optional for notes.
 | `comments list <v> <note> [--all]` | a note's comment threads: the text each is about, the comments and replies with their authors, ids (first 8 characters) and whether unverified, not sent yet or edited; `--all` adds resolved ones; `--json` for the full ids |
 | `comments add <v> <note> --on <quote> [text…]` | comment on the quoted text (it must appear once in the note); the comment is the words or stdin. Viewers can comment too, unless the vault's owner turned it off |
 | `comments reply\|edit\|delete\|resolve\|reopen <v> <note> <id> [text…]` | `id`: a comment's id or the start of it that only it has. Only its author edits a comment; its author or the vault's owner deletes it (a comment takes its replies with it) |
+| `@Name` in a comment's text | mentions that member of the vault (any case; longer names win: `@Ann Lee` over `@Ann`). Only the vault's members can be mentioned: other `@words` stay text, with a warning. The output says whom it mentioned |
+| `mentions [--vault v] [--unread] [--mark-read] [--limit n]` | comments that mention you, newest first (`*`: not read on any device yet), with the note, who and when; `--mark-read` marks them read everywhere (the web app's inbox too), with everything before them |
 | `icon <v> <path> <emoji>` / `icon <v> <path> --remove` | a note's, attachment's or folder's icon; `ls` and `vault list` show icons, and people a note is shared with see its icon and new name |
 | `trash list\|restore\|empty <v>` | restore by path or id; `empty` deletes permanently (asks first; `--yes`) |
 | `search <query> [--vault v] [--limit n]` | terms, `"phrases"`, `tag:x`, `folder:x`, `title:x`, `vault:x`; 20 results unless `--limit` |
@@ -553,6 +555,22 @@ echo "- sunscreen" | notekpr shared write "Trip" --append
 concurrent edits by others are kept. Shared notes are not part of `sync`'s
 Markdown mirror.
 
+Their comments work like `comments …`, with the note's title (or id) in
+place of vault and path:
+
+```sh
+notekpr shared comments list "Trip"
+notekpr shared comments add "Trip" --on "sunscreen" "SPF 50? @Alice"
+notekpr shared comments reply "Trip" 3f9a2c1d "Done"
+```
+
+You see the comments written since the note was shared with you (and older
+ones if its owner included them); their authors are checked against the
+owner's key and keys pinned on first use. `@Name` mentions the note's owner
+or someone who commented on it — you don't see the vault's members, and
+nobody can mention you on a note shared with you. Viewers can comment unless
+the vault's owner turned it off.
+
 ## 9. Export and import
 
 ```sh
@@ -564,7 +582,8 @@ notekpr import Family ~/backup/family.zip
 
 Exports are a plain tree of `.md` files, attachments and (empty) folders — no
 proprietary metadata — readable by any Markdown tool. Trashed documents are not
-exported. A directory export leaves out (and lists) paths the mirror wouldn't
+exported. Comments are: each commented note's threads as a Markdown file at
+`_comments/<the note's path>` (who wrote what, when, on which text). A directory export leaves out (and lists) paths the mirror wouldn't
 write either — hidden segments such as `.obsidian/…`, names Windows can't
 store when run there; a zip keeps hidden ones. Without the server, `export`
 uses the local copy: attachments this device never downloaded are left out
@@ -578,7 +597,8 @@ them, and existing attachments, alone — "the same path" ignoring case,
 exactly as `write` matches notes), other files become attachments, empty
 directories become folders. Hidden files and editor leftovers are skipped, as
 are empty attachment files and files over the server's attachment limit
-(reported). `--dry-run` reports what an import would create, update or leave
+(reported), and an export's `_comments/` folder (comments can't be brought
+back: they are signed by their authors). `--dry-run` reports what an import would create, update or leave
 unchanged without changing anything.
 
 ### Encrypted export and offline recovery
@@ -597,7 +617,8 @@ without a server, unlocking it with the recovery key (asked for; or
 `--recovery-key-file`, or `NOTEKPR_RECOVERY_KEY`). Without
 `--from`, a signed-in device downloads the export, or, when the server can't be
 reached (or with `--local`), recovers from its local copies: what it synced and
-downloaded, without notes shared with you one by one. `--out` must be a new or
+downloaded, without notes shared with you one by one. Comments come along
+under `_comments/`, as with `export`. `--out` must be a new or
 empty folder; `--json` prints `{vaults, files, problems, source}` (`source`:
 `export` or `device`). See [recovery.md](recovery.md).
 

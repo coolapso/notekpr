@@ -8,6 +8,7 @@ use crate::actions;
 use crate::state::{self, Modal, Route, ui};
 use crate::util;
 use crate::views::icons::Icon;
+use crate::views::mentions::MentionsButton;
 use crate::views::quick::QuickSection;
 use crate::views::tree::Tree;
 use crate::views::{SyncStatus, avatar, entry_icon, vault_icon};
@@ -121,9 +122,12 @@ pub fn Sidebar() -> impl IntoView {
         <aside class="sidebar" aria-label="Navigation">
             <div class="sb-top">
                 <VaultSwitcher vault=shown/>
-                <button class="sb-search" on:click=move |_| ui.modal.set(Some(Modal::QuickSwitch))>
-                    <Icon name="search"/><span>"Search"</span><kbd>{format!("{}+P", util::mod_key())}</kbd>
-                </button>
+                <div class="sb-search-row">
+                    <button class="sb-search" on:click=move |_| ui.modal.set(Some(Modal::QuickSwitch))>
+                        <Icon name="search"/><span>"Search"</span><kbd>{format!("{}+P", util::mod_key())}</kbd>
+                    </button>
+                    <MentionsButton/>
+                </div>
                 <Show when=writable>
                     <div class="sb-actions">
                         <button class="btn primary small grow" on:click=move |_| if let Some(v) = vault() { actions::new_note(&v, &current_folder()); }>

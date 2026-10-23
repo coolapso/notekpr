@@ -6,9 +6,13 @@
 //! Paths come from decrypted vault indexes, which collaborators control:
 //! they are normalized here, and the code that writes them to disk must still
 //! check that every component stays inside the output directory.
+//!
+//! A note's comments become a Markdown file of their own under
+//! [`comments::EXPORT_DIR`] (`_comments/<the note's path>`).
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
+use crate::comments::{self, Trust};
 use crate::doc::EntryKind;
 use crate::engine::{self, ObjectMeta, VaultMeta, VaultReplica};
 use crate::keys::{AccountSecret, RecoveryKey};
@@ -38,6 +42,50 @@ pub struct RecoveredVault {
     pub problems: Vec<String>,
 }
 
+/// Who is who in a recovered vault: people's names by user id (shown with
+/// their comments; ids where unknown) and the vault's owner, whose
+/// deletions of other people's comments count.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct People<'a> {
+    pub names: Option<&'a BTreeMap<String, String>>,
+    pub owner: Option<&'a str>,
+}
+
+impl People<'_> {
+    fn name(&self, id: &str) -> String {
+        self.names
+            .and_then(|n| n.get(id))
+            .cloned()
+            .unwrap_or_else(|| id.to_string())
+    }
+}
+
+/// A note's comment threads in a recovery: checked against the vault's
+/// membership log when the copy has one. An export has none, so its
+/// records are taken as they are, like its notes.
+fn note_threads(replica: &VaultReplica, note: &str, owner: Option<&str>) -> Vec<comments::Thread> {
+    let is_owner = |u: &str| owner == Some(u);
+    if replica.authors.is_some() {
+        return replica.comment_threads(note, |_| None, is_owner);
+    }
+    replica
+        .comments
+        .get(note)
+        .map(|log| comments::threads(log, |_| Some(Trust::Verified), is_owner))
+        .unwrap_or_default()
+}
+
+/// The Markdown file of a note's comments (`None`: it has none).
+fn comments_file(
+    replica: &VaultReplica,
+    note: &str,
+    title: &str,
+    people: People,
+) -> Option<String> {
+    let threads = note_threads(replica, note, people.owner);
+    comments::to_markdown(title, replica.note(note), &threads, |u| people.name(u))
+}
+
 /// Unlock the account in an export with the recovery key.
 pub fn unlock_with_recovery_key(
     export: &EncryptedExport,
@@ -53,10 +101,21 @@ pub fn unlock_with_recovery_key(
 /// Decrypt everything in the export. Vaults that can't be opened at all are
 /// returned with a problem and no files, so one bad vault never hides the rest.
 pub fn decrypt_export(account: &AccountSecret, export: &EncryptedExport) -> Vec<RecoveredVault> {
+    let names: BTreeMap<String, String> = export
+        .users
+        .iter()
+        .map(|u| (u.id.clone(), u.display_name.clone()))
+        .collect();
     let mut out: Vec<RecoveredVault> = export
         .vaults
         .iter()
-        .map(|v| decrypt_vault(account, &export.user_id, v))
+        .map(|v| {
+            let people = People {
+                names: Some(&names),
+                owner: v.owner_id.as_deref(),
+            };
+            decrypt_vault(account, &export.user_id, v, people)
+        })
         .collect();
     if !export.shared_notes.is_empty() {
         let mut shared = RecoveredVault {
@@ -66,11 +125,24 @@ pub fn decrypt_export(account: &AccountSecret, export: &EncryptedExport) -> Vec<
         };
         let mut taken = BTreeSet::new();
         for n in &export.shared_notes {
-            match decrypt_shared_note(account, &export.user_id, n) {
-                Ok((title, text)) => {
+            let people = People {
+                names: Some(&names),
+                owner: n.owner_id.as_deref(),
+            };
+            match decrypt_shared_note(account, &export.user_id, n, people) {
+                Ok((title, text, comments)) => {
                     let safe = safe_name(&title);
                     let path = paths::unique(&format!("{safe}.md"), |p| taken.contains(p));
                     taken.insert(path.clone());
+                    if let Some(md) = comments {
+                        let at =
+                            paths::unique(&comments::export_path(&path), |p| taken.contains(p));
+                        taken.insert(at.clone());
+                        shared.files.push(RecoveredFile {
+                            path: at,
+                            data: md.into_bytes(),
+                        });
+                    }
                     shared.files.push(RecoveredFile {
                         path,
                         data: text.into_bytes(),
@@ -86,7 +158,12 @@ pub fn decrypt_export(account: &AccountSecret, export: &EncryptedExport) -> Vec<
     out
 }
 
-fn decrypt_vault(account: &AccountSecret, user_id: &str, v: &ExportedVault) -> RecoveredVault {
+fn decrypt_vault(
+    account: &AccountSecret,
+    user_id: &str,
+    v: &ExportedVault,
+    people: People,
+) -> RecoveredVault {
     let mut rv = RecoveredVault {
         vault_id: v.vault_id.clone(),
         name: v.vault_id.clone(),
@@ -112,7 +189,7 @@ fn decrypt_vault(account: &AccountSecret, user_id: &str, v: &ExportedVault) -> R
             errors.len()
         ));
     }
-    let files = vault_files(&replica, &rv.name, |id| {
+    let files = vault_files(&replica, &rv.name, people, |id| {
         v.attachments
             .iter()
             .find(|a| a.id == id)
@@ -128,12 +205,14 @@ fn decrypt_vault(account: &AccountSecret, user_id: &str, v: &ExportedVault) -> R
 }
 
 /// One vault's files, as recovered: its notes and attachments at their
-/// paths (trashed ones under [`TRASH_DIR`]) and its explicit folders.
-/// `attachment` gives an attachment's ciphertext, or why it isn't there.
-/// Used for exports and for a device's local copy alike.
+/// paths (trashed ones under [`TRASH_DIR`]), its notes' comments (under
+/// [`comments::EXPORT_DIR`]) and its explicit folders. `attachment` gives
+/// an attachment's ciphertext, or why it isn't there. Used for exports and
+/// for a device's local copy alike.
 pub fn vault_files(
     replica: &VaultReplica,
     name: &str,
+    people: People,
     attachment: impl Fn(&str) -> Result<Vec<u8>, String>,
 ) -> RecoveredVault {
     let mut rv = RecoveredVault {
@@ -153,6 +232,9 @@ pub fn vault_files(
         taken.insert(p.to_lowercase());
         Some(p)
     };
+    // Notes with comments (path, title, id): their files come last, so a
+    // note's own path is never taken by another's comments.
+    let mut commented = Vec::new();
     for e in replica.index.entries() {
         let trashed = !e.is_live();
         match e.kind {
@@ -169,6 +251,9 @@ pub fn vault_files(
                     ));
                     continue;
                 };
+                if replica.comments.contains_key(&e.id) {
+                    commented.push((p.clone(), e.title().to_string(), e.id.clone()));
+                }
                 rv.files.push(RecoveredFile {
                     path: p,
                     data: replica.note_text(&e.id).into_bytes(),
@@ -197,15 +282,29 @@ pub fn vault_files(
             }
         }
     }
+    for (path, title, id) in commented {
+        let Some(md) = comments_file(replica, &id, &title, people) else {
+            continue;
+        };
+        if let Some(p) = place(&comments::export_path(&path), false, &mut taken) {
+            rv.files.push(RecoveredFile {
+                path: p,
+                data: md.into_bytes(),
+            });
+        }
+    }
     rv.files.sort_by(|a, b| a.path.cmp(&b.path));
     rv
 }
 
+/// A note shared with the person: its title, its text and its comments
+/// (as a Markdown file, if it has any).
 fn decrypt_shared_note(
     account: &AccountSecret,
     user_id: &str,
     n: &ExportedSharedNote,
-) -> crate::engine::Result<(String, String)> {
+    people: People,
+) -> crate::engine::Result<(String, String, Option<String>)> {
     let ring = engine::object_keyring_for_recipient(account, user_id, &n.vault_id, &n.keys, None)?;
     let oid = &n.keys.object_id;
     let title = n
@@ -220,7 +319,8 @@ fn decrypt_shared_note(
     replica.role = Role::Viewer;
     replica.doc_keys.insert(oid.clone(), ring);
     replica.apply_changes(&n.changes);
-    Ok((title, replica.note_text(oid)))
+    let comments = comments_file(&replica, oid, &title, people);
+    Ok((title, replica.note_text(oid), comments))
 }
 
 /// A title usable as one file name: no separators or characters that are
@@ -248,6 +348,7 @@ fn safe_name(title: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::comments::{Action, Record, Signed};
     use crate::crypto::Purpose;
     use crate::doc::IndexDoc;
     use crate::engine::{new_vault, start_sharing};
@@ -317,9 +418,53 @@ mod tests {
             push(&mut r, "index", i4, &mut updates);
         }
         let attachment = ring.encrypt(Purpose::Attachment, "a1", b"JPG").unwrap();
+        // Comments on n1: Alice's, Bob's reply, and Carol's, which Alice
+        // (the owner) deletes.
+        let carol = AccountSecret::generate();
+        let bob = AccountSecret::generate();
+        let on = crate::comments::anchor(&r.notes["n1"], 5, 14).unwrap();
+        let signed = |who: &AccountSecret, author: &str, action: Action| {
+            Signed::sign(who, &vid, "n1", &Record::new(author, 0, action)).unwrap()
+        };
+        let first = signed(
+            &alice,
+            "alice",
+            Action::Comment {
+                body: "Which one?".into(),
+                anchor: on,
+            },
+        );
+        let thread = first.decode().unwrap().id;
+        let answer = signed(
+            &bob,
+            "bob",
+            Action::Reply {
+                thread: thread.clone(),
+                body: "SPF 50".into(),
+            },
+        );
+        let spam = signed(
+            &carol,
+            "carol",
+            Action::Reply {
+                thread,
+                body: "Buy my sunscreen".into(),
+            },
+        );
+        let delete = signed(
+            &alice,
+            "alice",
+            Action::Delete {
+                target: spam.decode().unwrap().id,
+            },
+        );
+        for s in [&first, &answer, &spam, &delete] {
+            seq += 1;
+            let p = r.local_comment("n1", s).unwrap();
+            updates.push(up(seq, "c_n1", p.payload));
+        }
 
         // n1 gets its own key and is shared with Bob.
-        let bob = AccountSecret::generate();
         let (doc, req) = start_sharing(
             &ring,
             "n1",
@@ -378,8 +523,13 @@ mod tests {
                     id: "a1".into(),
                     data: attachment,
                 }],
+                owner_id: Some("alice".into()),
             }],
             shared_notes: vec![],
+            users: vec![ExportedUser {
+                id: "alice".into(),
+                display_name: "Alice".into(),
+            }],
         };
 
         let account = unlock_with_recovery_key(&export, &rk.to_display()).unwrap();
@@ -394,6 +544,22 @@ mod tests {
         );
         assert_eq!(file("_trash/Old.md").as_deref(), Some(&b"old stuff"[..]));
         assert_eq!(file("assets/photo.jpg").as_deref(), Some(&b"JPG"[..]));
+        // The note's comments, with names where known; what the owner
+        // deleted stays deleted.
+        let md = String::from_utf8(file("_comments/Plans/Trip.md").unwrap()).unwrap();
+        assert!(
+            md.starts_with("# Comments on Trip\n\n## On “sunscreen”"),
+            "{md}"
+        );
+        assert!(
+            md.contains("**Alice** · ") && md.contains("> Which one?"),
+            "{md}"
+        );
+        assert!(
+            md.contains("**bob** · reply") && md.contains("> SPF 50"),
+            "{md}"
+        );
+        assert!(!md.contains("Buy my"), "{md}");
         assert!(
             v.files
                 .iter()
@@ -401,7 +567,22 @@ mod tests {
         );
         assert!(unlock_with_recovery_key(&export, &RecoveryKey::generate().to_display()).is_err());
 
-        // Bob's export of the note shared with him.
+        // Bob's export of the note shared with him, with a comment from
+        // after it was shared.
+        r.doc_keys.insert("n1".into(), doc.clone());
+        let later = signed(
+            &alice,
+            "alice",
+            Action::Comment {
+                body: "Bring two".into(),
+                anchor: crate::comments::anchor(&r.notes["n1"], 0, 4).unwrap(),
+            },
+        );
+        let carried = up(
+            seq + 1,
+            "c_n1",
+            r.local_comment("n1", &later).unwrap().payload,
+        );
         let bob_export = EncryptedExport {
             format: EXPORT_FORMAT,
             user_id: "bob".into(),
@@ -421,7 +602,7 @@ mod tests {
                     shared: None,
                 },
                 changes: ChangesResponse {
-                    updates: vec![],
+                    updates: vec![carried],
                     snapshots: vec![Snapshot {
                         id: share_snapshot.snapshot_id.clone(),
                         object_id: "n1".into(),
@@ -432,20 +613,23 @@ mod tests {
                         signature: None,
                     }],
                     purged: vec![],
-                    head_seq: seq,
+                    head_seq: seq + 1,
                     has_more: false,
-                    next_since: seq,
+                    next_since: seq + 1,
                 },
+                owner_id: Some("alice".into()),
             }],
+            users: vec![],
         };
         let got = decrypt_export(&bob, &bob_export);
         assert_eq!(got[0].name, SHARED_DIR);
-        assert_eq!(
-            got[0].files,
-            vec![RecoveredFile {
-                path: "Trip.md".into(),
-                data: b"Pack sunscreen".to_vec()
-            }]
+        let paths: Vec<&str> = got[0].files.iter().map(|f| f.path.as_str()).collect();
+        assert_eq!(paths, ["_comments/Trip.md", "Trip.md"]);
+        assert_eq!(got[0].files[1].data, b"Pack sunscreen");
+        let md = String::from_utf8(got[0].files[0].data.clone()).unwrap();
+        assert!(
+            md.contains("## On “Pack”") && md.contains("**alice**") && !md.contains("Which one"),
+            "only what was written after sharing: {md}"
         );
     }
 }

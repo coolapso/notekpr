@@ -78,13 +78,23 @@ pub fn recover_local(session: &Session, out: &Path) -> Result<RecoverReport> {
     let mut problems = Vec::new();
     for id in session.local_vault_ids() {
         match session.load_local(&id) {
-            Ok(Some(v)) => vaults.push(recover::vault_files(&v.replica, v.name(), |a| {
-                match v.store().load_blob(a) {
-                    Ok(Some(ct)) => Ok(ct),
-                    Ok(None) => Err("never downloaded on this device".into()),
-                    Err(e) => Err(format!("{e:#}")),
-                }
-            })),
+            Ok(Some(v)) => {
+                // No server to ask for names: comments show user ids.
+                let people = recover::People {
+                    names: None,
+                    owner: Some(&v.owner_id),
+                };
+                vaults.push(recover::vault_files(
+                    &v.replica,
+                    v.name(),
+                    people,
+                    |a| match v.store().load_blob(a) {
+                        Ok(Some(ct)) => Ok(ct),
+                        Ok(None) => Err("never downloaded on this device".into()),
+                        Err(e) => Err(format!("{e:#}")),
+                    },
+                ))
+            }
             Ok(None) => {}
             Err(e) => problems.push(format!("{e:#}")),
         }

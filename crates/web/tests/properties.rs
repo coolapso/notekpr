@@ -19,6 +19,16 @@ fn text(max: usize) -> impl Strategy<Value = String> {
         .prop_map(|v| v.into_iter().collect())
 }
 
+/// Text as a browser reads it from the HTML.
+fn unescape(s: &str) -> String {
+    s.replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&#13;", "\r")
+        .replace("&amp;", "&")
+}
+
 fn cases() -> u32 {
     std::env::var("PROPTEST_CASES")
         .ok()
@@ -33,8 +43,39 @@ proptest! {
     fn rendering_never_panics(t in text(300)) {
         let note = |s: &str| s.len().is_multiple_of(3).then(|| "n1".to_string());
         let attachment = |s: &str| s.len().is_multiple_of(2).then(|| "a1".to_string());
-        let html = render::to_html(&t, &render::Ctx { note: &note, attachment: &attachment });
+        let html = render::to_html(&t, &render::Ctx::new(&note, &attachment));
         prop_assert!(!html.contains("<script"));
+    }
+
+    /// With comment highlights anywhere, the text of every element that says
+    /// where it is in the source (`data-o`) is the source there, character
+    /// for character: what a selection in the reading view is mapped with.
+    #[test]
+    fn offsets_point_at_the_text_they_hold(
+        t in text(200),
+        picks in prop::collection::vec((any::<prop::sample::Index>(), any::<prop::sample::Index>()), 0..4),
+    ) {
+        let bounds: Vec<usize> = t.char_indices().map(|(i, _)| i).chain([t.len()]).collect();
+        let comments: Vec<render::Highlight> = picks
+            .iter()
+            .enumerate()
+            .map(|(k, (a, b))| {
+                let (x, y) = (bounds[a.index(bounds.len())], bounds[b.index(bounds.len())]);
+                render::Highlight { start: x.min(y), end: x.max(y), id: format!("t{k}"), open: k == 0 }
+            })
+            .collect();
+        let none = |_: &str| None;
+        let html = render::to_html(
+            &t,
+            &render::Ctx { comments: &comments, offsets: true, ..render::Ctx::new(&none, &none) },
+        );
+        for part in html.split("data-o=\"").skip(1) {
+            let (n, rest) = part.split_once('"').unwrap();
+            let at: usize = n.parse().unwrap();
+            let inner = rest.split_once('>').unwrap().1;
+            let shown = unescape(inner.split('<').next().unwrap());
+            prop_assert_eq!(t.get(at..at + shown.len()), Some(shown.as_str()), "{}", html);
+        }
     }
 
     #[test]

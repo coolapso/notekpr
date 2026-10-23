@@ -338,6 +338,55 @@ async fn agent_gateway_is_scoped_audited_and_syncs() {
     assert_eq!(t["quote"], "Facts");
     assert_eq!(t["comments"][1]["body"], "Yes");
 
+    // Mentions: the agent mentions Alice; her answer mentions the agent,
+    // which finds it among its mentions and marks it read.
+    let r = comment(
+        serde_json::json!({ "id": &id[..8], "action": "reply", "text": "@Alice, please check" }),
+    )
+    .await
+    .unwrap();
+    let sent: Value = r.json().await.unwrap();
+    assert_eq!(sent["mentions"][0], alice.user_id.as_str());
+    let ah = hub(&alice).await;
+    ops::comment_action(
+        &ah,
+        "Agent memory",
+        "Index.md",
+        &id[..8],
+        notekpr_client::vault::CommentAct::Reply("Done, @Assistant".into()),
+    )
+    .await
+    .unwrap();
+    eventually(10, "the mention reaches the agent", || async {
+        let l: Vec<Value> = get("/mentions?unread=true")
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        l.len() == 1 && l[0]["body"] == "Done, @Assistant" && l[0]["path"] == "Index.md"
+    })
+    .await;
+    let r: Value = http
+        .post(format!("{base}/mentions/read"))
+        .bearer_auth("gw-test-token")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(r["marked"], 1);
+    let l: Vec<Value> = get("/mentions?unread=true")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(l.is_empty());
+
     // Every write is audited without content.
     let audit = std::fs::read_to_string(agent.data_dir().join("audit.jsonl")).unwrap();
     let lines: Vec<Value> = audit

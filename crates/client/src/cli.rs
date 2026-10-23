@@ -125,6 +125,8 @@ pub enum Command {
     /// edit, delete, resolve or reopen (docs/comments.md).
     #[command(subcommand)]
     Comments(CommentsCmd),
+    /// Comments that mention you (@Name), newest first, in all your vaults.
+    Mentions(MentionsArgs),
     /// Move a document or folder to the trash.
     Rm { vault: String, path: String },
     /// Inspect, restore or empty the trash.
@@ -237,6 +239,22 @@ pub struct QuickArgs {
 }
 
 #[derive(Args, Clone, Debug, Serialize, Deserialize)]
+pub struct MentionsArgs {
+    /// Only this vault (id or name).
+    #[arg(long)]
+    pub vault: Option<String>,
+    /// Only those not read yet (on any of your devices).
+    #[arg(long)]
+    pub unread: bool,
+    /// Mark them read, everywhere (with everything before them).
+    #[arg(long)]
+    pub mark_read: bool,
+    /// How many to show.
+    #[arg(long, default_value_t = 20)]
+    pub limit: usize,
+}
+
+#[derive(Args, Clone, Debug, Serialize, Deserialize)]
 pub struct RecoverArgs {
     /// Encrypted export to decrypt (from `export-encrypted`, `GET /api/v1/me/export`
     /// or `notekpr-server export-user`). Without it, this device downloads
@@ -297,7 +315,8 @@ pub enum DevicesCmd {
 }
 
 /// IDs: a comment's id, or the start of it that only it has (`list` shows
-/// the first eight characters). TEXT: words joined with spaces, or stdin.
+/// the first eight characters). TEXT: words joined with spaces, or stdin;
+/// `@Name` in it mentions a member of the vault.
 #[derive(Subcommand, Clone, Debug, Serialize, Deserialize)]
 pub enum CommentsCmd {
     /// The note's comment threads (resolved ones too with --all).
@@ -372,6 +391,47 @@ pub enum SharedCmd {
         #[arg(long)]
         append: bool,
     },
+    /// Comments on a shared note: list, add, reply, edit, delete, resolve, reopen.
+    #[command(subcommand)]
+    Comments(SharedCommentsCmd),
+}
+
+/// NOTE: a shared note's title or id (`shared list`). IDs and TEXT as for
+/// `notekpr comments`; `@Name` mentions the note's owner or someone who
+/// commented on it.
+#[derive(Subcommand, Clone, Debug, Serialize, Deserialize)]
+pub enum SharedCommentsCmd {
+    /// The note's comment threads (resolved ones too with --all).
+    List {
+        note: String,
+        #[arg(long)]
+        all: bool,
+    },
+    /// Comment on the text given with --on (it must appear once in the note).
+    Add {
+        note: String,
+        #[arg(long, value_name = "QUOTE")]
+        on: String,
+        text: Vec<String>,
+    },
+    /// Reply to a comment's thread.
+    Reply {
+        note: String,
+        id: String,
+        text: Vec<String>,
+    },
+    /// Change one of your own comments.
+    Edit {
+        note: String,
+        id: String,
+        text: Vec<String>,
+    },
+    /// Delete one of your comments.
+    Delete { note: String, id: String },
+    /// Mark a comment's thread as resolved.
+    Resolve { note: String, id: String },
+    /// Open a resolved thread again.
+    Reopen { note: String, id: String },
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum, Serialize, Deserialize)]

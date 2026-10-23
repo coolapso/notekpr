@@ -1,11 +1,14 @@
 //! Portable export and bulk import: a plain tree of Markdown files and
 //! attachments (as a directory or a `.zip`), with no proprietary metadata, so
-//! a vault stays usable without notekpr.
+//! a vault stays usable without notekpr. The notes' comments are exported
+//! as readable Markdown files under `_comments/`, which imports leave out
+//! (comments can't be brought back: they are signed by their authors).
 
 use std::io::{Read, Write};
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
+use notekpr_core::comments;
 use notekpr_core::doc::EntryKind;
 use notekpr_core::paths;
 
@@ -19,15 +22,30 @@ pub struct TransferReport {
     pub notes: usize,
     pub attachments: usize,
     pub folders: usize,
+    /// Notes whose comments were exported (one file each).
+    pub comments: usize,
     pub unchanged: usize,
     /// Paths that were skipped, with the reason.
     pub skipped: Vec<(String, String)>,
 }
 
 enum Item {
-    Note { path: String, text: String },
-    Attachment { path: String, id: String },
-    Folder { path: String },
+    Note {
+        path: String,
+        text: String,
+    },
+    /// A note's comments, as a Markdown file.
+    Comments {
+        path: String,
+        text: String,
+    },
+    Attachment {
+        path: String,
+        id: String,
+    },
+    Folder {
+        path: String,
+    },
 }
 
 fn is_zip(p: &Path) -> bool {
@@ -45,32 +63,67 @@ pub async fn export(
 ) -> Result<TransferReport> {
     let mut report = TransferReport::default();
     let zip = is_zip(out);
+    // The names of the people who commented (asked first: no lock held).
+    let commenters: Vec<String> = {
+        let v = vault.lock().await;
+        v.replica
+            .comments
+            .values()
+            .flat_map(|log| log.entries().iter().map(|e| e.record.author.clone()))
+            .collect()
+    };
+    let names = crate::ops::user_names(&hub.session, commenters).await;
     let items: Vec<Item> = {
         let v = vault.lock().await;
-        v.paths()
-            .into_iter()
-            .filter_map(|(p, e)| {
-                let ok = if zip {
-                    paths::normalize(&p).is_ok_and(|n| n == paths::nfc(&p))
-                } else {
-                    is_safe_vault_path(&p)
-                };
-                if !ok {
-                    report
-                        .skipped
-                        .push((p, "hidden or unsupported path".into()));
-                    return None;
-                }
-                Some(match e.kind {
-                    EntryKind::Note => Item::Note {
+        let mut items = Vec::new();
+        // Notes (path, id), and the paths files take.
+        let mut notes = Vec::new();
+        let mut taken = std::collections::BTreeSet::new();
+        for (p, e) in v.paths() {
+            let ok = if zip {
+                paths::normalize(&p).is_ok_and(|n| n == paths::nfc(&p))
+            } else {
+                is_safe_vault_path(&p)
+            };
+            if !ok {
+                report
+                    .skipped
+                    .push((p, "hidden or unsupported path".into()));
+                continue;
+            }
+            if e.kind != EntryKind::Folder {
+                taken.insert(p.to_lowercase());
+            }
+            items.push(match e.kind {
+                EntryKind::Note => {
+                    notes.push((p.clone(), e.id.clone()));
+                    Item::Note {
                         text: v.note_text(&e.id),
                         path: p,
-                    },
-                    EntryKind::Attachment => Item::Attachment { path: p, id: e.id },
-                    EntryKind::Folder => Item::Folder { path: p },
-                })
-            })
-            .collect()
+                    }
+                }
+                EntryKind::Attachment => Item::Attachment { path: p, id: e.id },
+                EntryKind::Folder => Item::Folder { path: p },
+            });
+        }
+        // Comments after: the vault's own files keep their paths.
+        for (path, id) in notes {
+            let threads = v
+                .replica
+                .comment_threads(&id, |_| None, |u| u == v.owner_id);
+            let name = |u: &str| names.get(u).cloned().unwrap_or_else(|| u.to_string());
+            let Some(text) =
+                comments::to_markdown(paths::title(&path), v.replica.note(&id), &threads, name)
+            else {
+                continue;
+            };
+            let at = paths::unique(&comments::export_path(&path), |c| {
+                taken.contains(&c.to_lowercase())
+            });
+            taken.insert(at.to_lowercase());
+            items.push(Item::Comments { path: at, text });
+        }
+        items
     };
     let mut files: Vec<(String, Vec<u8>)> = Vec::new();
     let mut folders: Vec<String> = Vec::new();
@@ -79,6 +132,10 @@ pub async fn export(
             Item::Note { path, text } => {
                 files.push((path, text.into_bytes()));
                 report.notes += 1;
+            }
+            Item::Comments { path, text } => {
+                files.push((path, text.into_bytes()));
+                report.comments += 1;
             }
             Item::Attachment { path, id } => match hub.session.attachment(vault, &id).await {
                 Ok(data) => {
@@ -174,6 +231,25 @@ fn create_private(path: &Path) -> std::io::Result<std::fs::File> {
 /// Files to import as (vault-relative path, bytes), plus empty folders.
 type Collected = (Vec<(String, Vec<u8>)>, Vec<String>);
 
+/// Whether a path to import is in the comments folder of an export: those
+/// files aren't notes, and comments can't be brought back.
+fn is_exported_comments(rel: &str) -> bool {
+    rel.split('/').next() == Some(comments::EXPORT_DIR)
+}
+
+/// Leave out an export's comments, saying so once.
+fn drop_comments(c: &mut Collected, report: &mut TransferReport) {
+    let before = c.0.len() + c.1.len();
+    c.0.retain(|(p, _)| !is_exported_comments(p));
+    c.1.retain(|p| !is_exported_comments(p));
+    if c.0.len() + c.1.len() < before {
+        report.skipped.push((
+            format!("{}/", comments::EXPORT_DIR),
+            "an export's comments are not imported".into(),
+        ));
+    }
+}
+
 fn collect_dir(src: &Path, report: &mut TransferReport) -> Result<Collected> {
     let mut files = Vec::new();
     let mut dirs = Vec::new();
@@ -260,13 +336,15 @@ pub async fn import(
     dry_run: bool,
 ) -> Result<TransferReport> {
     let mut report = TransferReport::default();
-    let (files, dirs) = if is_zip(src) {
+    let mut collected = if is_zip(src) {
         collect_zip(src, &mut report)?
     } else if src.is_dir() {
         collect_dir(src, &mut report)?
     } else {
         bail!("{} is neither a directory nor a .zip file", src.display());
     };
+    drop_comments(&mut collected, &mut report);
+    let (files, dirs) = collected;
     let prefix = match into {
         Some(f) if !f.trim_matches('/').is_empty() => paths::normalize(f)?,
         _ => String::new(),

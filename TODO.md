@@ -146,11 +146,6 @@ Settled; don't reopen them without a new reason.
 
 ## Ideas for later
 
-- **Comments, what's left** ([docs/comments.md](docs/comments.md)): highlights
-  in the reading view (its list switches to the editor today); comments on
-  notes shared with you from the CLI (`notekpr shared …`); @mentions with
-  notifications; comments in exports (`export`, the encrypted export's
-  recovery).
 - **Excalidraw** (parked 2026-10-20, to discuss): Excalidraw itself is a
   JavaScript/React app — ruled out (no npm or JavaScript packages, and
   third-party code would see decrypted notes and keys). Today `.excalidraw`

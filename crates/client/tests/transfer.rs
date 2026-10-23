@@ -229,3 +229,62 @@ async fn exports_are_private_and_never_left_half_written() {
     assert!(transfer::export(&h, &v, &blocked, true).await.is_err());
     assert!(!srv.path("blocked.zip.partial").exists());
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn exports_carry_comments_that_imports_leave_out() {
+    let srv = start().await;
+    let alice = login(&srv, "alice").await;
+    manage::create_vault(&alice, "Source").await.unwrap();
+    manage::create_vault(&alice, "Copy").await.unwrap();
+    let h = hub(&alice).await;
+    ops::put_document(&h, "Source", "Projects/Plan.md", "Ship in May\n", None)
+        .await
+        .unwrap();
+    ops::put_document(&h, "Source", "Quiet.md", "no comments\n", None)
+        .await
+        .unwrap();
+    let sent = ops::add_comment(&h, "Source", "Projects/Plan", "May", "Or June?")
+        .await
+        .unwrap();
+    ops::comment_action(
+        &h,
+        "Source",
+        "Projects/Plan",
+        &sent.id,
+        notekpr_client::vault::CommentAct::Reply("June".into()),
+    )
+    .await
+    .unwrap();
+    let src = h.resolve("Source").await.unwrap();
+    let dir = srv.path("export");
+    let r = transfer::export(&h, &src, &dir, false).await.unwrap();
+    assert_eq!((r.notes, r.comments), (2, 1));
+    let md = std::fs::read_to_string(dir.join("_comments/Projects/Plan.md")).unwrap();
+    assert!(
+        md.starts_with("# Comments on Plan\n\n## On “May”\n\n**Alice** · "),
+        "{md}"
+    );
+    assert!(
+        md.contains("> Or June?") && md.contains("**Alice** · reply") && md.contains("> June"),
+        "{md}"
+    );
+    assert!(!dir.join("_comments/Quiet.md").exists());
+    let zip = srv.path("export.zip");
+    let r = transfer::export(&h, &src, &zip, false).await.unwrap();
+    assert_eq!(r.comments, 1);
+
+    // Importing an export brings the notes back, not the comments as notes.
+    let copy = h.resolve("Copy").await.unwrap();
+    for from in [&dir, &zip] {
+        let r = transfer::import(&h, &copy, from, None, false, false)
+            .await
+            .unwrap();
+        assert!(
+            r.skipped.iter().any(|(p, _)| p == "_comments/"),
+            "{:?}",
+            r.skipped
+        );
+    }
+    let paths: Vec<String> = copy.lock().await.paths().into_keys().collect();
+    assert_eq!(paths, ["Projects/Plan.md", "Quiet.md"]);
+}

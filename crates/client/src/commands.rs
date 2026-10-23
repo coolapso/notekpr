@@ -122,7 +122,7 @@ fn access(c: &Command) -> Access {
             _ => Access::Read,
         },
         Command::Quick(q) if q.list => Access::Read,
-        Command::Comments(CommentsCmd::List { .. }) => Access::Read,
+        Command::Comments(CommentsCmd::List { .. }) | Command::Mentions(_) => Access::Read,
         Command::Sync(a) if a.no_dir => Access::Free,
         Command::Sync(a) if a.once => Access::Write,
         Command::Sync(_) => Access::Daemon,
@@ -564,6 +564,7 @@ async fn execute(ctx: Ctx, command: Command) -> Result<()> {
                     let n = note_shares::write_shared(&s, &note, &data, append).await?;
                     crate::ui::status(&format!("updated '{}'", n.title));
                 }
+                SharedCmd::Comments(c) => shared_comments(&ctx, &s, c).await?,
             }
             Ok(())
         }
@@ -576,6 +577,7 @@ async fn execute(ctx: Ctx, command: Command) -> Result<()> {
         } => write(&ctx, &vault, &path, attachment, append, if_match.as_deref()).await,
         Command::Quick(a) => quick(&ctx, a).await,
         Command::Comments(c) => comments(&ctx, c).await,
+        Command::Mentions(a) => mentions(&ctx, a).await,
         Command::Mkdir { vault, path } => {
             let hub = ctx.hub(&[&vault]).await?;
             let v = hub.resolve(&vault).await?;
@@ -866,10 +868,15 @@ fn report_push(o: crate::session::PushOutcome) {
 
 fn print_transfer(verb: &str, r: &transfer::TransferReport) {
     crate::out!(
-        "{verb} {} note(s), {} attachment(s), {} folder(s){}",
+        "{verb} {} note(s), {} attachment(s), {} folder(s){}{}",
         r.notes,
         r.attachments,
         r.folders,
+        if r.comments > 0 {
+            format!(", comments on {} note(s)", r.comments)
+        } else {
+            String::new()
+        },
         if r.unchanged > 0 {
             format!(", {} unchanged", r.unchanged)
         } else {
@@ -1514,51 +1521,14 @@ async fn comments(ctx: &Ctx, c: CommentsCmd) -> Result<()> {
     let hub = ctx.hub(&[&vault]).await?;
     let (id, act) = match c {
         CommentsCmd::List { all, .. } => {
-            let mut list = op(ops::comments(&hub, &vault, &note).await)?;
-            if !all {
-                list.threads.retain(|t| t.resolved_by.is_none());
-            }
-            if ctx.json {
-                ctx.print_json(&list);
-                return Ok(());
-            }
-            if list.threads.is_empty() {
-                crate::out!(
-                    "no {}comments on {}",
-                    if all { "" } else { "open " },
-                    list.path
-                );
-            }
-            for t in &list.threads {
-                let state = match (&t.resolved_by, t.on_text) {
-                    (Some(_), _) => " (resolved)",
-                    (None, false) => " (its text was deleted)",
-                    _ => "",
-                };
-                crate::out!("“{}”{state}", t.quote);
-                for (i, c) in t.comments.iter().enumerate() {
-                    let who = c.author_name.clone().unwrap_or_else(|| c.author.clone());
-                    let mark = match (c.verified, c.pending, c.edited) {
-                        (false, _, _) => " (unverified)",
-                        (_, true, _) => " (not sent yet)",
-                        (_, _, true) => " (edited)",
-                        _ => "",
-                    };
-                    let indent = if i == 0 { "  " } else { "    ↳ " };
-                    crate::out!(
-                        "{indent}[{}] {who}, {}{mark}: {}",
-                        &c.id[..c.id.len().min(8)],
-                        ui::fmt_time(c.created),
-                        c.body.replace('\n', "\n      ")
-                    );
-                }
-            }
+            let list = op(ops::comments(&hub, &vault, &note).await)?;
+            print_threads(ctx, list, all);
             return Ok(());
         }
         CommentsCmd::Add { on, text, .. } => {
             let body = text_arg(&text, "comment")?;
-            let id = op(ops::add_comment(&hub, &vault, &note, &on, &body).await)?.id;
-            crate::out!("commented [{}]", &id[..id.len().min(8)]);
+            let sent = op(ops::add_comment(&hub, &vault, &note, &on, &body).await)?;
+            print_sent(ctx, &hub.session, "commented", &sent).await;
             return Ok(());
         }
         CommentsCmd::Reply { id, text, .. } => (id, CommentAct::Reply(text_arg(&text, "reply")?)),
@@ -1574,8 +1544,191 @@ async fn comments(ctx: &Ctx, c: CommentsCmd) -> Result<()> {
         CommentAct::Resolve => "resolved",
         CommentAct::Reopen => "reopened",
     };
-    let rid = op(ops::comment_action(&hub, &vault, &note, &id, act).await)?.id;
-    crate::out!("{what} [{}]", &rid[..rid.len().min(8)]);
+    let sent = op(ops::comment_action(&hub, &vault, &note, &id, act).await)?;
+    print_sent(ctx, &hub.session, what, &sent).await;
+    Ok(())
+}
+
+fn print_threads(ctx: &Ctx, mut list: ops::NoteComments, all: bool) {
+    if !all {
+        list.threads.retain(|t| t.resolved_by.is_none());
+    }
+    if ctx.json {
+        ctx.print_json(&list);
+        return;
+    }
+    if list.threads.is_empty() {
+        crate::out!(
+            "no {}comments on {}",
+            if all { "" } else { "open " },
+            list.path
+        );
+    }
+    for t in &list.threads {
+        let state = match (&t.resolved_by, t.on_text) {
+            (Some(_), _) => " (resolved)",
+            (None, false) => " (its text was deleted)",
+            _ => "",
+        };
+        crate::out!("“{}”{state}", t.quote);
+        for (i, c) in t.comments.iter().enumerate() {
+            let who = c.author_name.clone().unwrap_or_else(|| c.author.clone());
+            let mark = match (c.verified, c.pending, c.edited) {
+                (false, _, _) => " (unverified)",
+                (_, true, _) => " (not sent yet)",
+                (_, _, true) => " (edited)",
+                _ => "",
+            };
+            let indent = if i == 0 { "  " } else { "    ↳ " };
+            crate::out!(
+                "{indent}[{}] {who}, {}{mark}: {}",
+                &c.id[..c.id.len().min(8)],
+                ui::fmt_time(c.created),
+                c.body.replace('\n', "\n      ")
+            );
+        }
+    }
+}
+
+/// Say what was sent, whom it mentions, and which `@…` mention nobody.
+async fn print_sent(ctx: &Ctx, session: &Session, what: &str, sent: &ops::CommentSent) {
+    if ctx.json {
+        ctx.print_json(sent);
+        return;
+    }
+    let m = &sent.mentioned;
+    let mut line = format!("{what} [{}]", &sent.id[..sent.id.len().min(8)]);
+    if !m.mentions.is_empty() {
+        let names = ops::user_names(session, m.mentions.clone()).await;
+        let who: Vec<String> = m
+            .mentions
+            .iter()
+            .map(|u| names.get(u).cloned().unwrap_or_else(|| u.clone()))
+            .collect();
+        line.push_str(&format!(", mentioning {}", who.join(", ")));
+    }
+    crate::out!("{line}");
+    if m.people_unknown {
+        ui::warn("couldn't look up who may be mentioned (offline?): nobody was mentioned");
+    } else {
+        for w in &m.not_mentioned {
+            ui::warn(&format!(
+                "@{w}: nobody here by that name, not mentioned (only the vault's members can be)"
+            ));
+        }
+    }
+}
+
+async fn shared_comments(ctx: &Ctx, s: &Session, c: SharedCommentsCmd) -> Result<()> {
+    use crate::vault::CommentAct;
+    use note_shares::SharedCommentAct as Act;
+    let (note, act, what) = match c {
+        SharedCommentsCmd::List { note, all } => {
+            let list = note_shares::shared_comments(s, &note).await?;
+            print_threads(ctx, list, all);
+            return Ok(());
+        }
+        SharedCommentsCmd::Add { note, on, text } => (
+            note,
+            Act::Add {
+                on,
+                text: text_arg(&text, "comment")?,
+            },
+            "commented",
+        ),
+        SharedCommentsCmd::Reply { note, id, text } => (
+            note,
+            Act::On {
+                id,
+                act: CommentAct::Reply(text_arg(&text, "reply")?),
+            },
+            "replied",
+        ),
+        SharedCommentsCmd::Edit { note, id, text } => (
+            note,
+            Act::On {
+                id,
+                act: CommentAct::Edit(text_arg(&text, "comment")?),
+            },
+            "changed",
+        ),
+        SharedCommentsCmd::Delete { note, id } => (
+            note,
+            Act::On {
+                id,
+                act: CommentAct::Delete,
+            },
+            "deleted",
+        ),
+        SharedCommentsCmd::Resolve { note, id } => (
+            note,
+            Act::On {
+                id,
+                act: CommentAct::Resolve,
+            },
+            "resolved",
+        ),
+        SharedCommentsCmd::Reopen { note, id } => (
+            note,
+            Act::On {
+                id,
+                act: CommentAct::Reopen,
+            },
+            "reopened",
+        ),
+    };
+    let sent = note_shares::shared_comment(s, &note, act).await?;
+    print_sent(ctx, s, what, &sent).await;
+    Ok(())
+}
+
+/// `mentions`: comments that mention you, newest first.
+async fn mentions(ctx: &Ctx, a: MentionsArgs) -> Result<()> {
+    let refs: Vec<&str> = a.vault.as_deref().into_iter().collect();
+    let hub = ctx.hub(&refs).await?;
+    let (mut list, known) = op(crate::mentions::list(&hub, a.vault.as_deref()).await)?;
+    if !known {
+        ui::warn("couldn't read which mentions you have read (offline?): all are shown as new");
+    }
+    if a.unread {
+        list.retain(|m| m.unread);
+    }
+    let marked = if a.mark_read {
+        crate::mentions::mark_read(&hub.session, &list).await?;
+        list.len()
+    } else {
+        0
+    };
+    list.truncate(a.limit);
+    if ctx.json {
+        ctx.print_json(&list);
+    } else if list.is_empty() {
+        crate::out!(
+            "{}",
+            if a.unread {
+                "no new mentions"
+            } else {
+                "nobody has mentioned you"
+            }
+        );
+    } else {
+        for m in &list {
+            let who = m.author_name.clone().unwrap_or_else(|| m.author.clone());
+            crate::out!(
+                "{}{}:{}  [{}] {who}, {}{}",
+                if m.unread { "* " } else { "  " },
+                m.vault,
+                m.path,
+                &m.comment[..m.comment.len().min(8)],
+                ui::fmt_time(m.created),
+                if m.resolved { " (resolved)" } else { "" }
+            );
+            crate::out!("    on “{}”: {}", m.quote, m.body.replace('\n', "\n    "));
+        }
+    }
+    if marked > 0 {
+        ui::status(&format!("marked {marked} mention(s) read"));
+    }
     Ok(())
 }
 

@@ -42,6 +42,7 @@ features = [
   "IdbFactory", "IdbDatabase", "IdbObjectStore", "IdbRequest", "IdbOpenDbRequest", "IdbTransaction",
   "IdbTransactionMode", "IdbKeyRange", "DomStringList", "DomException",
   "ServiceWorkerContainer", "ServiceWorkerRegistration", "CacheStorage",
+  "Notification", "NotificationOptions", "NotificationPermission",
 ]
 
 [dev-dependencies]

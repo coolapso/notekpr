@@ -19,9 +19,9 @@
 | Attachments (bytes, names, types) | same | size, uploader and upload time |
 | Vault names, descriptions, icons and pictures | same (`encrypted_meta`) | no; the size of `encrypted_meta` roughly shows whether a vault has a picture |
 | Revision history | encrypted snapshots | count, size, time, author |
-| Comments (text, quotes, what they are about, replies) | encrypted with the note's key; each signed by its author | that a note has comments, and the number, sizes, times and authors of the records; each vault's *viewers can comment* setting |
+| Comments (text, quotes, what they are about, replies, whom they @mention) | encrypted with the note's key; each signed by its author | that a note has comments, and the number, sizes, times and authors of the records; each vault's *viewers can comment* setting. Not who is mentioned: people's own devices find their mentions |
 | Presence (which note, cursor) | encrypted awareness messages | that a user is connected to a vault; on individually shared notes also which of them someone has open, and when (clients announce themselves on the note too, under its id) |
-| Favorites, recent notes, key pins, synced settings (the vault for quick notes, note widths) | account-key encryption | no |
+| Favorites, recent notes, key pins, synced settings (the vault for quick notes, note widths, which mentions were read) | account-key encryption | no |
 | Vault keys | HPKE to each member's account key | no |
 | Document keys (every note has its own) | wrapped under the vault key for members, HPKE to each person a note is shared with | no; it learns which notes are shared, with whom, and when sharing started |
 | Account secrets | HPKE to each device, and to the recovery key | no |
@@ -188,6 +188,10 @@ primitives. Formats:
   — not even with the server's help. A comment by someone whose key a reader
   doesn't know (yet) is shown marked as unverified and can't change anything.
   The server could leave out records it was sent, as it could any update.
+  A comment can mention only people the writer's client offers (the vault's
+  members; on a note shared with someone, its owner and its commenters);
+  a crafted one naming anyone else notifies nobody who can't already read
+  it, and mentions are never looked for in notes shared with someone.
 * **Editors** can change or trash content but not manage members or keys.
   Their writes are attributed (author and device are recorded per update) and
   history allows restoring earlier versions. Permanent deletes are recorded in
@@ -245,7 +249,9 @@ reported, never applied partially. Duplicate deliveries are no-ops.
   design there is no server-side master key. Export your vaults regularly.
 * **No lock-in**: with the recovery key (or a device) and an encrypted export
   (`notekpr export-encrypted`, `GET /me/export`, or
-  `notekpr-server export-user` from any server backup), everything a
+  `notekpr-server export-user` from any server backup; it also lists the
+  names of the people in it, which the server knows anyway, so recovered
+  comments say who wrote them), everything a
   person could read decrypts offline into Markdown files with
   `notekpr recover`, without the server ([recovery.md](recovery.md)).
 

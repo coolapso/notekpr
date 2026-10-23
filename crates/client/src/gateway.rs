@@ -71,6 +71,8 @@ pub fn router(gw: St) -> Router {
                 .put(put_attachment)
                 .layer(DefaultBodyLimit::max(128 << 20)),
         )
+        .route("/v1/mentions", get(list_mentions))
+        .route("/v1/mentions/read", post(read_mentions))
         .route("/v1/search", get(search))
         .route("/v1/events", get(events))
         .fallback(|| async { error(StatusCode::NOT_FOUND, "not_found", "no such endpoint") })
@@ -477,6 +479,77 @@ async fn put_attachment(
             (status, axum::Json(out)).into_response()
         }
         Err(e) => op_error(e),
+    }
+}
+
+#[derive(Deserialize)]
+struct MentionsQuery {
+    vault: Option<String>,
+    #[serde(default)]
+    unread: bool,
+    limit: Option<usize>,
+}
+
+/// Comments that mention the agent (or person), newest first.
+async fn list_mentions(State(gw): State<St>, Query(q): Query<MentionsQuery>) -> Response {
+    match crate::mentions::list(&gw.hub, q.vault.as_deref()).await {
+        Ok((mut list, _)) => {
+            if q.unread {
+                list.retain(|m| m.unread);
+            }
+            list.truncate(q.limit.unwrap_or(50));
+            axum::Json(list).into_response()
+        }
+        Err(e) => op_error(e),
+    }
+}
+
+/// `{"vault": …}` (optional): mark the mentions (of that vault) read.
+#[derive(Deserialize, Default)]
+struct ReadBody {
+    vault: Option<String>,
+}
+
+async fn read_mentions(State(gw): State<St>, body: Bytes) -> Response {
+    if let Some(r) = read_only_refusal(&gw) {
+        return r;
+    }
+    let b = if body.is_empty() {
+        ReadBody::default()
+    } else {
+        match serde_json::from_slice::<ReadBody>(&body) {
+            Ok(b) => b,
+            Err(_) => {
+                return error(
+                    StatusCode::BAD_REQUEST,
+                    "bad_request",
+                    "expected JSON {\"vault\": ...} or nothing",
+                );
+            }
+        }
+    };
+    let list = match crate::mentions::list(&gw.hub, b.vault.as_deref()).await {
+        Ok((list, _)) => list,
+        Err(e) => return op_error(e),
+    };
+    let unread: Vec<_> = list.into_iter().filter(|m| m.unread).collect();
+    match crate::mentions::mark_read(&gw.hub.session, &unread).await {
+        Ok(()) => {
+            // Logged by id, never by name.
+            let vault = match (&b.vault, unread.first()) {
+                (Some(_), Some(m)) => m.vault_id.as_str(),
+                _ => "*",
+            };
+            if !unread.is_empty() {
+                gw.audit.record("gateway", "mentions_read", vault, None, 0);
+            }
+            axum::Json(json!({ "marked": unread.len() })).into_response()
+        }
+        Err(e) => error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "unavailable",
+            &format!("{e:#}"),
+        ),
     }
 }
 

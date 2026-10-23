@@ -75,9 +75,17 @@ isn't changed (the tool works on a copy).
     Plans/Trip.md
     assets/photo.jpg
     _trash/Old note.md      what was in the trash
+    _comments/Plans/Trip.md the comments on Plans/Trip.md
   Shared with me/           notes shared with you individually
     Weekend trip.md
+    _comments/Weekend trip.md
 ```
+
+A note's comments are a Markdown file of their own under `_comments/`:
+each thread with the text it is about, its comment and replies, who wrote
+them and when. An encrypted export names the people in it; recovering
+from a device's own copies (`--local`) can't ask the server for names, so
+there they are user ids.
 
 `--out` must be a new or empty folder. Each note is written with its current
 text (older revisions aren't recovered). Folders are private to you (mode

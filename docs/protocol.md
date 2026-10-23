@@ -123,7 +123,7 @@ unless noted), not the `{error, message}` shape above; an unknown
 | `GET /me/recovery` | the recovery envelope (encrypted under the recovery key) |
 | `PUT /me/recovery {recovery_envelope, signature, version?}` | rotate the recovery key; signature by the account key. With a `version` (clients use the time in ms) the signature covers it and the server accepts only a higher one than the last (`409` otherwise); once one is stored, unversioned updates are refused too, so older updates can't be replayed |
 | `GET/PUT /me/prefs` | encrypted per-user data with `expected_version` optimistic concurrency. Inside the encryption the web client keeps a `counter` that goes up with every save, and its own sealed copy: an older copy from the server is not used |
-| `GET /me/export` | `EncryptedExport`: everything the caller can read, as stored — vaults (keys, the whole log, attachments) and individually shared notes, plus the recovery envelope. For offline decryption with `notekpr recover`; nothing in it is readable without the caller's keys. `notekpr-server export-user` writes the same from a database or backup file. |
+| `GET /me/export` | `EncryptedExport`: everything the caller can read, as stored — vaults (keys, the whole log, attachments, `owner_id`) and individually shared notes (with their vault's `owner_id`), plus the recovery envelope and `users` (`{id, display_name}` of the members of the caller's vaults and of the authors of what it holds; for notes shared with the caller only their owner and authors, never their vault's other members), so a recovery can name comments' authors. For offline decryption with `notekpr recover`; nothing else in it is readable without the caller's keys. `notekpr-server export-user` writes the same from a database or backup file. |
 | `GET /me/audit` | the newest 200 audit entries about the caller (devices, keys, agents, sessions) |
 | `PUT /me/session/device {device_id}` | label the current session with its device |
 | `GET /devices` | own non-revoked devices |
@@ -328,12 +328,15 @@ ids never contain `_`). It is not a CRDT: each update is one **record**,
 appended, never changed or removed; edits, deletions and resolving are new
 records. The plaintext of an update is `{"record": b64, "signature": b64}`:
 
-* `record`: JSON `{id, author, created, kind, …}` with `kind` one of
-  `comment {body, anchor: {start: b64, end: b64, quote}}` (the yrs v1
+* `record`: JSON `{id, author, created, kind, …, mentions?}` with `kind`
+  one of `comment {body, anchor: {start: b64, end: b64, quote}}` (the yrs v1
   sticky indices of the first and last commented characters, and the text as
   it was, ≤ 300 characters), `reply {thread, body}`, `edit {target, body}`,
   `delete {target}`, `resolve {thread}`, `reopen {thread}`; bodies ≤ 10 000
-  characters;
+  characters. `mentions` (comment, reply and edit only; absent when empty):
+  the user ids of the people the body mentions (`@Name`), at most 50, each
+  once — an edit's replace the comment's. Clients notice mentions of their
+  own user in the records they sync; the server can't see them;
 * `signature`: Ed25519 by the author's account key over
   `statement("notekpr/v1/sig/comment", [vault_id, note_id, record])` —
   over the content, so a record still verifies after it is encrypted again

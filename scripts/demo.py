@@ -161,7 +161,8 @@ HOME = [
 
         - [ ] Star a note (☆ at the top, it turns gold): it shows under *Favorites* in the sidebar
         - [ ] Rename a note, or drag it to another folder in the sidebar: links to it follow
-        - [ ] Comment on a note: select some text and click *Comment* (or press `Alt+M`); click highlighted text to read and answer its thread. *Holiday plans* in *Family* has comments — even Carol's, who only views that vault
+        - [ ] Comment on a note: select some text and click *Comment* (or press `Alt+M`), in the editor or the reading view; click highlighted text to read and answer its thread. *Holiday plans* in *Family* has comments — even Carol's, who only views that vault
+        - [ ] Mentions: the **@** next to *Search* shows the comments that mention you — Bob and Carol mentioned you; open one to jump to its thread. Type `@` in a comment to mention someone in the vault. Settings → Editor → *Mentions* turns on notifications from the browser
         - [ ] Drag a note between two others in the sidebar: a line shows where it goes, and it stays there for everyone (this note and the *Recipes* overview were put first that way, from the command line); *Sort A–Z* in a folder's ⋯ menu undoes it
         - [ ] HTML in notes: the fold-out section at the end of [[Sourdough bread]] (`<details>`), the centered photo with a caption in [[Lisbon 2026]], a table with merged cells in [[Weekly meal plan]], keys like <kbd>Ctrl</kbd>+<kbd>E</kbd>; click one in the editor to see its HTML. Scripts, styles, frames and forms are removed
         - [ ] Callouts, written as GitHub and Obsidian write them (`> [!tip]`, `> [!warning] A title`): a tip and a warning in [[Sourdough bread]], one that folds in [[Japan ideas]] (`[!faq]-`), GitHub's `[!CAUTION]` in *Deploy script* in *Work*, one inside another in *Emergency contacts* in *Family*. The toolbar's callout button starts one, or gives the one the caret is in another type
@@ -1310,7 +1311,8 @@ def seed(cli, url, data):
     step("carol, bob and alice: comments on the holiday plans (carol only views the vault)")
     tent = cli.comment(c, "Family", "Holiday plans", "Camping in August?",
                        "Count me in — I have a spare tent!")
-    cli.run(b, "-q", "comments", "reply", "Family", "Holiday plans", tent, "Great, then we have two.")
+    cli.run(b, "-q", "comments", "reply", "Family", "Holiday plans", tent,
+            "Great, then we have two. @Alice, can you book the campsite?")
     train = cli.comment(b, "Family", "Holiday plans", "Grandma arrives on the 23rd",
                         "Her train gets in at 14:05.")
     cli.run(a, "-q", "comments", "resolve", "Family", "Holiday plans", train)
@@ -1377,9 +1379,12 @@ def seed(cli, url, data):
     cli.run(c, "-q", "share-note", "Design", "Logo ideas", a, "--role", "viewer")
 
     step("alice: single notes shared with carol (the apple pie, the design brief)")
-    # Shared with its comments (the default).
-    cli.comment(a, "Home", "Recipes/Apple pie", "a pinch of nutmeg", "Carol, is this right? I can't read the card here.")
+    # Shared with its comments (the default); Carol answers from the
+    # command line, mentioning Alice.
+    pie = cli.comment(a, "Home", "Recipes/Apple pie", "a pinch of nutmeg", "Carol, is this right? I can't read the card here.")
     cli.run(a, "-q", "share-note", "Home", "Recipes/Apple pie", c, "--role", "editor")
+    cli.run(c, "-q", "shared", "comments", "reply", "Apple pie", pie,
+            "Yes, a pinch — and @Alice, Grandma wrote “a little cinnamon” next to it.")
     cli.run(a, "-q", "share-note", "Work", "Projects/Design brief", c, "--role", "editor")
     cli.run(c, "-q", "shared", "write", "--append", "Apple pie",
             stdin="\n> Carol: Grandma always added a spoon of lemon juice. 🍋\n".encode())

@@ -1675,11 +1675,22 @@ pub async fn export_vault(vault: &str) {
     let name = state::step(|c| c.vault_name(vault));
     info("Preparing export…");
     let mut entries = Vec::new();
+    // Each note's comments go to `_comments/` (after the vault's own files,
+    // which keep their paths); their authors by name.
+    let mut commented = Vec::new();
     for e in state::step(|c| c.live_entries(vault)) {
         match e.kind {
             EntryKind::Note => {
-                let text =
-                    step(|c| c.replicas.get(vault).map(|r| r.note_text(&e.id))).unwrap_or_default();
+                let (text, has_comments) = step(|c| {
+                    let r = c.replicas.get(vault);
+                    (
+                        r.map(|r| r.note_text(&e.id)).unwrap_or_default(),
+                        r.is_some_and(|r| r.comments.contains_key(&e.id)),
+                    )
+                });
+                if has_comments {
+                    commented.push((e.id.clone(), e.path.clone()));
+                }
                 entries.push(zipfile::Entry {
                     name: e.path.clone(),
                     data: text.into_bytes(),
@@ -1697,6 +1708,23 @@ pub async fn export_vault(vault: &str) {
                 data: vec![],
             }),
         }
+    }
+    let mut taken: std::collections::BTreeSet<String> =
+        entries.iter().map(|e| e.name.to_lowercase()).collect();
+    for (id, path) in commented {
+        state::learn_commenters(vault.to_string(), id.clone()).await;
+        let Some(md) = step(|c| state::comments_markdown(c, vault, &id, paths::title(&path)))
+        else {
+            continue;
+        };
+        let at = paths::unique(&notekpr_core::comments::export_path(&path), |p| {
+            taken.contains(&p.to_lowercase())
+        });
+        taken.insert(at.to_lowercase());
+        entries.push(zipfile::Entry {
+            name: at,
+            data: md.into_bytes(),
+        });
     }
     let zip = match zipfile::write(&entries) {
         Ok(z) => z,
@@ -1733,6 +1761,13 @@ pub async fn import(vault: &str, mut files: Vec<(String, Vec<u8>)>) {
         for (p, _) in &mut files {
             *p = p[t.len() + 1..].to_string();
         }
+    }
+    // An export's comments aren't notes, and can't be brought back (they
+    // are signed by their authors).
+    let before = files.len();
+    files.retain(|(p, _)| p.split('/').next() != Some(notekpr_core::comments::EXPORT_DIR));
+    if files.len() < before {
+        info("The export's comments (its _comments folder) are not imported.");
     }
     let total = files.len();
     let mut notes = 0;

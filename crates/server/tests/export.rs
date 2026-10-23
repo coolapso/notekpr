@@ -4,6 +4,7 @@
 mod common;
 
 use common::*;
+use notekpr_core::comments::{self, Action, Record, Signed};
 use notekpr_core::crypto::Purpose;
 use notekpr_core::doc::{EntryKind, IndexDoc, NoteDoc};
 use notekpr_core::engine;
@@ -68,6 +69,24 @@ async fn people_can_recover_their_notes_offline() {
         .status();
     assert!(st.is_success());
 
+    // Alice comments on the trip note.
+    let record = Record::new(
+        &alice.id,
+        1,
+        Action::Comment {
+            body: "Which one?".into(),
+            anchor: comments::anchor(&trip, 5, 14).unwrap(),
+        },
+    );
+    let signed = Signed::sign(&alice.account, &v, "n1", &record).unwrap();
+    alice
+        .push(
+            &v,
+            vec![alice.encrypt_update(&v, &comments_object("n1"), &signed.to_payload())],
+        )
+        .await
+        .unwrap();
+
     // Bob joins, the key is rotated, and a note is written with the new key.
     alice.share(&v, &bob.id, Role::Editor).await.unwrap();
     bob.load_keys(&v).await.unwrap();
@@ -128,6 +147,24 @@ async fn people_can_recover_their_notes_offline() {
         Some(&b"written after the rotation"[..])
     );
     assert_eq!(file(fam, "assets/photo.png"), Some(&b"PNG"[..]));
+    // Its comments, by name.
+    let md = String::from_utf8(file(fam, "_comments/Plans/Trip.md").unwrap().to_vec()).unwrap();
+    assert!(
+        md.contains("## On “sunscreen”") && md.contains("> Which one?"),
+        "{md}"
+    );
+    let alice_name = &export
+        .users
+        .iter()
+        .find(|u| u.id == alice.id)
+        .unwrap()
+        .display_name;
+    assert!(md.contains(&format!("**{alice_name}** · ")), "{md}");
+    assert_eq!(
+        export.vaults[0].owner_id.as_deref(),
+        Some(alice.id.as_str())
+    );
+    assert!(export.users.iter().any(|u| u.id == bob.id));
 
     // Bob, a member, reads the vault including content after the rotation.
     let export: EncryptedExport = bob.api.get("/me/export").await;
@@ -140,6 +177,17 @@ async fn people_can_recover_their_notes_offline() {
     // Carol gets only her shared note: no vault, no other notes or files.
     let export: EncryptedExport = carol.api.get("/me/export").await;
     assert!(export.vaults.is_empty());
+    // Names of the vault's owner and of who wrote what she gets — not of
+    // its other members.
+    let named: Vec<&str> = export.users.iter().map(|u| u.id.as_str()).collect();
+    assert!(
+        named.contains(&alice.id.as_str()) && !named.contains(&bob.id.as_str()),
+        "{named:?}"
+    );
+    assert_eq!(
+        export.shared_notes[0].owner_id.as_deref(),
+        Some(alice.id.as_str())
+    );
     let got = recover::decrypt_export(&carol.account, &export);
     assert_eq!(got.len(), 1);
     assert_eq!(got[0].name, recover::SHARED_DIR);

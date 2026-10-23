@@ -15,6 +15,7 @@ pub mod gateway;
 pub mod hub;
 pub mod livesync;
 pub mod manage;
+pub mod mentions;
 pub mod mirror;
 pub mod note_shares;
 pub mod ops;

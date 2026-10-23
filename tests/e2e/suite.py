@@ -1677,9 +1677,10 @@ def test_session_ended_while_away(env):
         b.close()
 
 
-# Select `text` (its first occurrence) in the open note's editor.
+# Select `text` (its first occurrence) in the open note's editor, or in
+# the element given second (e.g. the reading view).
 SELECT_TEXT = """
-const ed = document.querySelector('.ed');
+const ed = document.querySelector(arguments[1] || '.ed');
 const w = document.createTreeWalker(ed, NodeFilter.SHOW_TEXT);
 let n;
 while ((n = w.nextNode())) {
@@ -1765,6 +1766,36 @@ def test_comments(env):
         b.wait("return document.querySelectorAll('.ed-marks .hl.cm').length === 1", 15, "resolved for the viewer")
         check(True, "a resolved thread loses its highlight, for everyone")
 
+        # The reading view: highlights there too; a click opens a thread, the
+        # list opens one in place, and selected text is commented on.
+        a.click(".seg button[aria-label='Reading view']")
+        a.wait("return document.querySelectorAll('.reading .cmt').length === 1", 5, "the reading view's highlight")
+        a.js("document.querySelector('.reading .cmt').click()")
+        a.find(".cm-thread", 5)
+        check(a.js(texts) == ["Whole grain"] and a.js("return !!document.querySelector('.reading .cmt.cmt-open')"),
+              "the reading view highlights threads; a click opens one")
+        a.chord(KEYS["escape"])
+        check(a.js(SELECT_TEXT, "today", ".reading"), "“today” is in the reading view")
+        a.click(".cm-offer", 5)
+        a.wait("return !!document.activeElement && document.activeElement.matches('.cm-compose textarea')", 5, "the comment form")
+        a.keys("Or tomorrow?")
+        a.chord(KEYS["ctrl"], KEYS["enter"])
+        a.wait("return document.querySelectorAll('.reading .cmt').length === 2", 5, "the new highlight")
+        a.find(".cm-thread", 5)
+        marked = a.js("return Array.from(document.querySelectorAll('.reading .cmt')).map(e => e.textContent)")
+        check("today" in marked and a.js(texts) == ["Or tomorrow?"],
+              "text selected in the reading view is commented on, and its thread opens there")
+        b.wait("return document.querySelectorAll('.ed-marks .hl.cm').length === 2", 15, "the comment from the reading view reaches the viewer")
+        a.chord(KEYS["escape"])
+        a.click(".cm-count")
+        a.wait("return document.querySelectorAll('.cm-section .cm-entry').length === 2", 5, "the list")
+        a.js("document.querySelectorAll('.cm-section .cm-entry')[0].click()")
+        a.find(".cm-thread", 5)
+        check(a.js("return !document.querySelector('.reading').classList.contains('hidden')"),
+              "the list opens a thread in the reading view (without switching to the editor)")
+        a.chord(KEYS["escape"])
+        a.click(".seg button[aria-label='Live preview']")
+
         # The owner turns comments by viewers off.
         a.click(".sb-label button[title='Vault settings']")
         a.find(".modal .viewers-comment input", 5)
@@ -1772,10 +1803,82 @@ def test_comments(env):
         time.sleep(0.8)
         a.chord(KEYS["escape"])
         b.go(env.url.rstrip("/") + url)
-        b.wait("return document.querySelectorAll('.ed-marks .hl.cm').length === 1", 20, "reloaded")
+        b.wait("return document.querySelectorAll('.ed-marks .hl.cm').length === 2", 20, "reloaded")
         b.js(SELECT_TEXT, "today")
         time.sleep(0.6)
         check(not b.js("return !!document.querySelector('.cm-offer')"), "once the owner turns it off, viewers can't comment")
+        check(not severe_logs(a, b), "no browser errors")
+    finally:
+        a.close()
+        b.close()
+
+
+def test_mentions(env):
+    a, b = Browser(), Browser()
+    texts = "return Array.from(document.querySelectorAll('.cm-thread .cm-text')).map(e => e.textContent)"
+    badge = "return (document.querySelector('.sb-mentions .badge') || {}).textContent || ''"
+    try:
+        an, bn = uniq("mia"), uniq("max")
+        signup(a, an)
+        signup(b, bn)
+        new_note(a, "Fence", "Paint the fence green")
+        url = a.js("return location.pathname")
+        share(a, ".sb-bottom button:nth-child(2)", bn)
+
+        # Typing @ offers the vault's members; picking one mentions them.
+        check(a.js(SELECT_TEXT, "fence"), "“fence” is in the note")
+        a.click(".cm-offer", 5)
+        a.wait("return !!document.activeElement && document.activeElement.matches('.cm-compose textarea')", 5, "the comment form")
+        a.keys("Ask @" + bn[:3])
+        a.find(".mention-menu button", 5)
+        offered = a.js("return Array.from(document.querySelectorAll('.mention-menu button > span:not(.avatar)')).map(e => e.textContent)")
+        check(offered == [bn.capitalize()], f"@ offers the vault's members, not oneself: {offered}")
+        a.keys(KEYS["enter"])
+        a.keys("about the color")
+        a.chord(KEYS["ctrl"], KEYS["enter"])
+        a.wait("return !document.querySelector('.cm-compose')", 5, "the comment is sent")
+        a.find(".cm-thread", 5)
+        check(a.js(texts) == [f"Ask @{bn.capitalize()} about the color"]
+              and a.js("return document.querySelector('.cm-thread .mention').textContent") == "@" + bn.capitalize(),
+              "the mention is marked in the comment")
+        a.chord(KEYS["escape"])
+
+        # The member sees it in the sidebar's mentions, and opens its thread.
+        b.wait(badge + " === '1'", 20, "the member's unread mention")
+        b.click(".sb-mentions button.icon-btn")
+        b.find(".mentions-menu .mention-item.unread", 5)
+        item = b.js("return document.querySelector('.mentions-menu .mention-item').textContent")
+        check(an.capitalize() in item and "Fence" in item, f"the inbox says who mentioned them, where: {item}")
+        b.click(".mentions-menu .mention-item")
+        b.wait("return location.pathname === arguments[0]", 10, "the note opens", url)
+        b.find(".cm-thread", 10)
+        check(b.js(texts) == [f"Ask @{bn.capitalize()} about the color"]
+              and b.js("return document.querySelector('.cm-thread .mention.me') !== null"),
+              "a mention opens its thread, the mention marked as theirs")
+        b.wait(badge + " === ''", 10, "read")
+        check(True, "an opened mention is read")
+
+        # Mentioned again while elsewhere: announced as it arrives.
+        b.go(env.url)
+        b.find(".sb-mentions", 20)
+        time.sleep(1.5)
+        a.js("document.querySelector('.cm-count').click()")
+        a.wait("return document.querySelectorAll('.cm-section .cm-entry').length === 1", 5, "the list")
+        a.js("document.querySelector('.cm-section .cm-entry').click()")
+        a.find(".cm-thread .cm-reply textarea", 5)
+        a.js("document.querySelector('.cm-reply textarea').focus()")
+        a.keys("Thanks @" + bn[:2])
+        a.find(".mention-menu button", 5)
+        a.keys(KEYS["tab"])
+        a.click(".cm-reply .btn.primary")
+        a.wait("return document.querySelectorAll('.cm-thread .cm-item').length === 2", 5, "the reply")
+        b.wait(badge + " === '1'", 20, "the new mention")
+        b.wait("return Array.from(document.querySelectorAll('.toast')).some(t => t.textContent.includes('mentioned you'))", 10, "the toast")
+        check(True, "a new mention is announced live")
+        b.click(".sb-mentions button.icon-btn")
+        b.click_el(b.find_text(".mentions-head button", "Mark all as read", 5))
+        b.wait(badge + " === ''", 5, "all read")
+        check(True, "all mentions can be marked read at once")
         check(not severe_logs(a, b), "no browser errors")
     finally:
         a.close()
@@ -1973,7 +2076,11 @@ def test_callouts(env):
         # The reading view.
         b.click(".seg button[title^='Reading']")
         b.find(".reading .callout", 10)
-        check(b.js("return document.querySelector('.reading .callout-warning .co-name').innerHTML") == "Mind <strong>the</strong> gap", "the reading view shows the title")
+        # (Its text also says where it is in the note, for comments: compare
+        # what is shown.)
+        title = b.js("const t = document.querySelector('.reading .callout-warning .co-name');"
+                     "return [t.textContent, Array.from(t.querySelectorAll('strong')).map(s => s.textContent)]")
+        check(title == ["Mind the gap", ["the"]], "the reading view shows the title")
         check(b.js("return document.querySelector('.reading .callout-warning .co-body').textContent.trim()") == "Text in it,\nand a lazy line.", "and the text")
         check(b.js("return document.querySelector('.reading .callout-tip .co-name').textContent") == "Tip", "or the type as the title")
         check(b.js("const i = document.querySelector('.reading .callout-tip .co-icon').getBoundingClientRect(); return i.width > 8 && i.height > 8"), "with an icon")
@@ -2134,7 +2241,7 @@ def test_note_width(env):
         b.close()
 
 
-TESTS = [test_onboarding, test_collab, test_devices_and_recovery, test_features, test_attachments, test_note_sharing, test_tables, test_code_blocks, test_html, test_callouts, test_colors, test_code_wrapping, test_editor_mouse, test_editor_safety, test_local_copy, test_ui_basics, test_offline_tabs, test_offline_start, test_mobile, test_quick_notes, test_vault_icons, test_entry_icons, test_tree_order, test_session_ended_while_away, test_comments, test_graph, test_recovered_copy, test_note_width]
+TESTS = [test_onboarding, test_collab, test_devices_and_recovery, test_features, test_attachments, test_note_sharing, test_tables, test_code_blocks, test_html, test_callouts, test_colors, test_code_wrapping, test_editor_mouse, test_editor_safety, test_local_copy, test_ui_basics, test_offline_tabs, test_offline_start, test_mobile, test_quick_notes, test_vault_icons, test_entry_icons, test_tree_order, test_session_ended_while_away, test_comments, test_mentions, test_graph, test_recovered_copy, test_note_width]
 
 
 def main():

@@ -421,6 +421,31 @@ fn EditorPrefs() -> impl IntoView {
         </div>
         <NoteWidthPrefs/>
         <QuickNotesPrefs/>
+        <MentionPrefs/>
+    }
+}
+
+/// System notifications when someone mentions us (this browser).
+#[component]
+fn MentionPrefs() -> impl IntoView {
+    let ui = ui();
+    let supported = state::notifications_supported();
+    view! {
+        <h3>"Mentions"</h3>
+        <label class="check">
+            <input type="checkbox" class="mention-notify-toggle" disabled=!supported
+                prop:checked=move || ui.ui_prefs.get().mention_notifications
+                on:change=move |ev| {
+                    let on = event_target_checked(&ev);
+                    leptos::task::spawn_local(state::set_mention_notifications(on));
+                }/>
+            " Notify me when someone mentions me"
+            <span class="muted small">{if supported {
+                " — a system notification from this browser while notekpr is open but not in front (the sidebar's @ lists mentions either way)"
+            } else {
+                " — this browser can't show notifications"
+            }}</span>
+        </label>
     }
 }
 

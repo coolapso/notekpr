@@ -1124,6 +1124,10 @@ pub struct EncryptedExport {
     /// Notes shared with this person individually.
     #[serde(default)]
     pub shared_notes: Vec<ExportedSharedNote>,
+    /// The names of the people in it (the vaults' members and whoever wrote
+    /// something in it), to say who wrote each comment.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub users: Vec<ExportedUser>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -1136,6 +1140,9 @@ pub struct ExportedVault {
     /// The whole log: latest snapshot of every object plus later updates.
     pub changes: ChangesResponse,
     pub attachments: Vec<ExportedAttachment>,
+    /// The vault's owner (who may delete anyone's comments).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_id: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -1143,6 +1150,15 @@ pub struct ExportedSharedNote {
     pub vault_id: String,
     pub keys: ObjectKeysResponse,
     pub changes: ChangesResponse,
+    /// The owner of the note's vault.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_id: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct ExportedUser {
+    pub id: String,
+    pub display_name: String,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]

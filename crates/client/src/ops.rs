@@ -429,12 +429,22 @@ pub struct CommentItem {
     pub author: String,
     pub author_name: Option<String>,
     pub body: String,
+    /// The people it mentions.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub mentions: Vec<Mentioned>,
     pub created: i64,
     pub edited: bool,
     /// Written here, not stored on the server yet.
     pub pending: bool,
     /// Signed with a key known for its author.
     pub verified: bool,
+}
+
+/// Someone a comment mentions.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct Mentioned {
+    pub id: String,
+    pub name: Option<String>,
 }
 
 /// A comment with its replies.
@@ -477,33 +487,47 @@ pub async fn comments(hub: &Hub, vref: &str, path: &str) -> OpResult<NoteComment
             .collect();
         (g.id().to_string(), p, raw)
     };
-    let mut names: std::collections::HashMap<String, Option<String>> = Default::default();
-    for (t, _) in &raw {
-        for c in std::iter::once(&t.root).chain(&t.replies) {
-            if !names.contains_key(&c.author) {
-                let name = hub
-                    .session
-                    .api
-                    .user(&c.author)
-                    .await
-                    .ok()
-                    .map(|u| u.display_name);
-                names.insert(c.author.clone(), name);
-            }
-        }
-    }
+    Ok(NoteComments {
+        vault_id,
+        path: p,
+        threads: thread_items(&hub.session, raw).await,
+    })
+}
+
+/// Threads as handed out, with their authors' names (and who they
+/// mention) as far as the server tells them. `raw`: each thread and
+/// whether its text is still in the note.
+pub(crate) async fn thread_items(
+    session: &Session,
+    raw: Vec<(notekpr_core::comments::Thread, bool)>,
+) -> Vec<CommentThread> {
+    let all = || {
+        raw.iter()
+            .flat_map(|(t, _)| std::iter::once(&t.root).chain(&t.replies))
+    };
+    let people: Vec<String> = all()
+        .flat_map(|c| std::iter::once(&c.author).chain(&c.mentions).cloned())
+        .collect();
+    let names = user_names(session, people).await;
     let item = |c: &notekpr_core::comments::Comment| CommentItem {
         id: c.id.clone(),
         author: c.author.clone(),
-        author_name: names.get(&c.author).cloned().flatten(),
+        author_name: names.get(&c.author).cloned(),
         body: c.body.clone(),
+        mentions: c
+            .mentions
+            .iter()
+            .map(|u| Mentioned {
+                id: u.clone(),
+                name: names.get(u).cloned(),
+            })
+            .collect(),
         created: c.created,
         edited: c.edited,
         pending: c.pending,
         verified: c.trust == notekpr_core::comments::Trust::Verified,
     };
-    let threads = raw
-        .iter()
+    raw.iter()
         .map(|(t, on)| CommentThread {
             id: t.root.id.clone(),
             quote: t.anchor.quote.clone(),
@@ -514,20 +538,52 @@ pub async fn comments(hub: &Hub, vref: &str, path: &str) -> OpResult<NoteComment
                 .map(item)
                 .collect(),
         })
-        .collect();
-    Ok(NoteComments {
-        vault_id,
-        path: p,
-        threads,
-    })
+        .collect()
 }
 
-/// A comment record sent: its id, and the vault's and note's ids.
+/// Names of users by id, as far as the server tells them (best effort:
+/// nothing for those it doesn't, or while offline).
+pub async fn user_names(
+    session: &Session,
+    ids: Vec<String>,
+) -> std::collections::HashMap<String, String> {
+    let mut out = std::collections::HashMap::new();
+    let mut asked = std::collections::HashSet::new();
+    for id in ids {
+        if !asked.insert(id.clone()) {
+            continue;
+        }
+        match session.api.user(&id).await {
+            Ok(u) => {
+                out.insert(id, u.display_name);
+            }
+            Err(e) if e.is_offline() => break,
+            Err(_) => {}
+        }
+    }
+    out
+}
+
+/// A comment record sent: its id, the vault's and note's ids, and whom it
+/// mentions.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct CommentSent {
     pub id: String,
     pub vault_id: String,
     pub note_id: String,
+    #[serde(flatten)]
+    pub mentioned: crate::mentions::Resolved,
+}
+
+/// Whom `text` mentions: the vault's members only (docs/comments.md §1).
+async fn mentions_in(hub: &Hub, v: &SharedVault, text: Option<&str>) -> crate::mentions::Resolved {
+    match text {
+        Some(t) if t.contains('@') => {
+            let people = crate::mentions::people(&hub.session, v).await;
+            crate::mentions::resolve(t, people.as_deref())
+        }
+        _ => Default::default(),
+    }
 }
 
 fn check_comment(hub: &Hub, v: &Vault) -> OpResult<()> {
@@ -547,18 +603,28 @@ pub async fn add_comment(
     body: &str,
 ) -> OpResult<CommentSent> {
     let v = vault(hub, vref).await?;
+    check_comment(hub, &*v.lock().await)?;
+    let mentioned = mentions_in(hub, &v, Some(body)).await;
     let sent = {
         let mut g = v.lock().await;
         check_comment(hub, &g)?;
         let s = &hub.session;
         let (note_id, id) = g
-            .add_comment(s.account(), &s.user_id, path, on, body)
+            .add_comment(
+                s.account(),
+                &s.user_id,
+                path,
+                on,
+                body,
+                mentioned.mentions.clone(),
+            )
             .map_err(bad)?;
         g.save()?;
         CommentSent {
             id,
             vault_id: g.id().to_string(),
             note_id,
+            mentioned,
         }
     };
     hub.local_changed(&sent.vault_id, vec![], true).await;
@@ -575,18 +641,28 @@ pub async fn comment_action(
     act: crate::vault::CommentAct,
 ) -> OpResult<CommentSent> {
     let v = vault(hub, vref).await?;
+    check_comment(hub, &*v.lock().await)?;
+    let mentioned = mentions_in(hub, &v, act.text()).await;
     let sent = {
         let mut g = v.lock().await;
         check_comment(hub, &g)?;
         let s = &hub.session;
         let (note_id, id) = g
-            .comment_action(s.account(), &s.user_id, path, id, act)
+            .comment_action(
+                s.account(),
+                &s.user_id,
+                path,
+                id,
+                act,
+                mentioned.mentions.clone(),
+            )
             .map_err(bad)?;
         g.save()?;
         CommentSent {
             id,
             vault_id: g.id().to_string(),
             note_id,
+            mentioned,
         }
     };
     hub.local_changed(&sent.vault_id, vec![], true).await;

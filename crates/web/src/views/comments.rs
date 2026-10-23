@@ -1,11 +1,15 @@
 //! Comments on notes (docs/comments.md): the button by selected text,
-//! writing a comment, a thread next to its text, and the list of threads.
+//! writing a comment, a thread next to its text, and the list of threads —
+//! in the editor and in the reading view alike. `@` in a comment's text
+//! offers the people who may be mentioned.
 //!
-//! The popups sit in the note's `.editor-area`, at positions taken from the
-//! page (the selection, a highlight, a click) when they open.
+//! The popups sit in the note's `.note-content` (the editor and the reading
+//! view), at positions taken from the page (the selection, a highlight, a
+//! click) when they open.
 
+use leptos::html;
 use leptos::prelude::*;
-use notekpr_core::comments::Action;
+use notekpr_core::comments::{Action, Person};
 use wasm_bindgen::JsCast;
 
 use super::icons::Icon;
@@ -16,10 +20,191 @@ use crate::util;
 /// The area comment popups are placed in, and its rectangle.
 fn area() -> Option<web_sys::DomRect> {
     util::document()
-        .query_selector(".editor-area")
+        .query_selector(".note-content")
         .ok()
         .flatten()
         .map(|e| e.get_bounding_client_rect())
+}
+
+/// The id of the thread open on the note, if one is.
+pub fn open_thread_id() -> Memo<Option<String>> {
+    let ui = ui();
+    Memo::new(move |_| match ui.comment_ui.get() {
+        CommentUi::Thread { id, .. } => Some(id),
+        _ => None,
+    })
+}
+
+/// The reading view's element for thread `id`'s text (its first part).
+fn reading_mark(id: &str) -> Option<web_sys::Element> {
+    util::document()
+        .query_selector(&format!(".reading [data-thread=\"{id}\"]"))
+        .ok()
+        .flatten()
+}
+
+/// The note on screen (vault, note), whether in its vault or shared with us.
+fn shown_note() -> Option<(String, String)> {
+    state::current_route()
+        .any_note()
+        .map(|(v, n)| (v.to_string(), n.to_string()))
+}
+
+/// The byte length of the first `units` UTF-16 code units of `s` (the DOM
+/// counts text in those).
+fn utf16_to_bytes(s: &str, units: usize) -> usize {
+    let mut u = 0;
+    for (i, c) in s.char_indices() {
+        if u >= units {
+            return i;
+        }
+        u += c.len_utf16();
+    }
+    s.len()
+}
+
+/// Where a point of the page's selection is in the note's source, in the
+/// reading view: the text node's element says where its text starts
+/// (`data-o`, see `render`). A point outside such text moves to the next
+/// one (a `start`) or back to the previous one.
+fn source_point(
+    article: &web_sys::Element,
+    node: &web_sys::Node,
+    offset: u32,
+    start: bool,
+) -> Option<usize> {
+    let base = |t: &web_sys::Node| -> Option<usize> {
+        t.parent_element()?.get_attribute("data-o")?.parse().ok()
+    };
+    if node.node_type() == web_sys::Node::TEXT_NODE
+        && let Some(b) = base(node)
+    {
+        let text = node.text_content().unwrap_or_default();
+        return Some(b + utf16_to_bytes(&text, offset as usize));
+    }
+    let here = util::document().create_range().ok()?;
+    here.set_start(node, offset).ok()?;
+    let walker = util::document()
+        .create_tree_walker_with_what_to_show(article, 4 /* text */)
+        .ok()?;
+    let mut found = None;
+    while let Ok(Some(t)) = walker.next_node() {
+        let Some(b) = base(&t) else { continue };
+        let text = t.text_content().unwrap_or_default();
+        let len = text.encode_utf16().count() as u32;
+        if start {
+            if here.compare_point(&t, 0).ok()? >= 0 {
+                return Some(b);
+            }
+        } else if here.compare_point(&t, len).ok()? <= 0 {
+            found = Some(b + text.len());
+        } else {
+            break;
+        }
+    }
+    found
+}
+
+/// The reading view's selection as bytes of the note's source.
+fn reading_selection() -> Option<(usize, usize)> {
+    let article = util::document()
+        .query_selector(".note-content .reading")
+        .ok()??;
+    let sel = util::window().get_selection().ok()??;
+    if sel.is_collapsed() || sel.range_count() == 0 {
+        return None;
+    }
+    let r = sel.get_range_at(0).ok()?;
+    if !article.contains(Some(&r.common_ancestor_container().ok()?)) {
+        return None;
+    }
+    let start = source_point(
+        &article,
+        &r.start_container().ok()?,
+        r.start_offset().ok()?,
+        true,
+    )?;
+    let end = source_point(
+        &article,
+        &r.end_container().ok()?,
+        r.end_offset().ok()?,
+        false,
+    )?;
+    (start < end).then_some((start, end))
+}
+
+/// The page's selection changed (a document listener): in the reading
+/// view, offer to comment on selected text, or stop offering.
+fn reading_selection_changed() {
+    let ui = ui();
+    if ui.mode.get_untracked() != ViewMode::Reading {
+        return;
+    }
+    let cur = ui.comment_ui.get_untracked();
+    if matches!(cur, CommentUi::Compose { .. }) {
+        return;
+    }
+    let Some((vault, note)) = shown_note() else {
+        return;
+    };
+    let Some((start, end)) = reading_selection() else {
+        if matches!(cur, CommentUi::Offer { .. }) {
+            ui.comment_ui.set(CommentUi::Closed);
+        }
+        return;
+    };
+    if !step(|c| state::can_comment(c, &vault, &note)) {
+        return;
+    }
+    let (Some(r), Some(a)) = (selection_rect(), area()) else {
+        return;
+    };
+    ui.comment_ui.set(CommentUi::Offer {
+        start,
+        end,
+        x: (r.left() + r.right()) / 2.0 - a.left(),
+        y: r.top() - a.top(),
+    });
+}
+
+/// Offer comments on text selected in the reading view (installed once).
+pub fn install_reading_selection() {
+    let cb = wasm_bindgen::closure::Closure::wrap(Box::new(move |_: web_sys::Event| {
+        // After the click that may come with it.
+        util::set_timeout(0, reading_selection_changed);
+    }) as Box<dyn FnMut(_)>);
+    let _ = util::document()
+        .add_event_listener_with_callback("selectionchange", cb.as_ref().unchecked_ref());
+    cb.forget();
+}
+
+/// A click in the reading view that no link took: on highlighted text,
+/// open its thread below it.
+pub fn reading_clicked(ev: &web_sys::MouseEvent) {
+    let selected = util::window()
+        .get_selection()
+        .ok()
+        .flatten()
+        .is_some_and(|s| !s.is_collapsed());
+    let Some(mark) = ev
+        .target()
+        .and_then(|t| t.dyn_into::<web_sys::Element>().ok())
+        .and_then(|el| el.closest("[data-thread]").ok().flatten())
+    else {
+        return;
+    };
+    let (Some(id), Some(a)) = (mark.get_attribute("data-thread"), area()) else {
+        return;
+    };
+    if selected {
+        return;
+    }
+    let r = mark.get_bounding_client_rect();
+    ui().comment_ui.set(CommentUi::Thread {
+        id,
+        x: r.left() - a.left(),
+        y: r.bottom() - a.top() + 6.0,
+    });
 }
 
 /// The rectangle of the page's selection.
@@ -67,22 +252,24 @@ pub fn compose_from_selection() {
         compose(start, end);
         return;
     }
-    let Some(ed) = open_editor() else { return };
-    let (a, h) = ed.selection();
-    if a == h {
+    let selected = if ui.mode.get_untracked() == ViewMode::Reading {
+        reading_selection()
+    } else {
+        open_editor()
+            .map(|ed| ed.selection())
+            .filter(|(a, h)| a != h)
+            .map(|(a, h)| (a.min(h), a.max(h)))
+    };
+    let Some((start, end)) = selected else {
         state::info("Select the text you want to comment on first.");
         return;
-    }
-    let allowed = step(|c| {
-        c.editor
-            .as_ref()
-            .is_some_and(|(v, n, _)| state::can_comment(c, v, n))
-    });
+    };
+    let allowed = shown_note().is_some_and(|(v, n)| step(|c| state::can_comment(c, &v, &n)));
     if !allowed {
         state::info("You can't comment on this note.");
         return;
     }
-    compose(a.min(h), a.max(h));
+    compose(start, end);
 }
 
 fn compose(start: usize, end: usize) {
@@ -124,20 +311,29 @@ fn editor_clicked(x: f64, y: f64) {
     });
 }
 
-/// Open a thread next to its highlighted text (from the list).
+/// Open a thread next to its highlighted text (from the list), in the
+/// editor or the reading view, whichever is shown.
 pub fn open_thread(id: &str) {
+    open_thread_after(id.to_string(), 60, 0);
+}
+
+/// [`open_thread`] once its highlight is drawn: tried `tries` more times,
+/// every `ms` (a note that is still opening), then by the top of the note.
+fn open_thread_after(id: String, ms: i32, tries: u32) {
     let ui = ui();
-    if ui.mode.get_untracked() == ViewMode::Reading {
-        // Highlights live in the editor.
-        ui.mode.set(ViewMode::Live);
-    }
-    let id = id.to_string();
-    // After the editor is shown and its highlights are drawn.
-    util::set_timeout(60, move || {
-        let mark = util::document()
-            .query_selector(&format!(".ed-marks [data-mark=\"{id}\"]"))
-            .ok()
-            .flatten();
+    util::set_timeout(ms, move || {
+        let mark = if ui.mode.get_untracked() == ViewMode::Reading {
+            reading_mark(&id)
+        } else {
+            util::document()
+                .query_selector(&format!(".ed-marks [data-mark=\"{id}\"]"))
+                .ok()
+                .flatten()
+        };
+        if mark.is_none() && tries > 0 {
+            open_thread_after(id, 150, tries - 1);
+            return;
+        }
         if let Some(m) = &mark {
             let opts = web_sys::ScrollIntoViewOptions::new();
             opts.set_block(web_sys::ScrollLogicalPosition::Center);
@@ -175,6 +371,17 @@ pub fn CommentLayer(vault: String, note: String) -> impl IntoView {
         }
     });
     on_cleanup(move || ui.comment_ui.set(CommentUi::Closed));
+    // A thread to open here (from a mention).
+    let here = (vault.clone(), note.clone());
+    Effect::new(move |_| {
+        let Some((v, n, thread)) = ui.thread_to_open.get() else {
+            return;
+        };
+        if (&v, &n) == (&here.0, &here.1) {
+            ui.thread_to_open.set(None);
+            open_thread_after(thread, 60, 20);
+        }
+    });
     move || match ui.comment_ui.get() {
         CommentUi::Closed => ().into_any(),
         CommentUi::Offer { start, end, x, y } => view! {
@@ -206,10 +413,23 @@ fn submit_keys(ev: &web_sys::KeyboardEvent, submit: impl Fn(), cancel: impl Fn()
     }
 }
 
+/// Who may be mentioned in the note's comments, kept current (asked for
+/// when a comment box opens, unless known from the last minute).
+fn people_of(vault: String, note: String) -> Signal<Vec<Person>> {
+    let ui = ui();
+    leptos::task::spawn_local(state::load_mention_people(vault.clone()));
+    Memo::new(move |_| {
+        ui.comments_rev.track();
+        step(|c| state::mention_people(c, &vault, &note))
+    })
+    .into()
+}
+
 #[component]
 fn Compose(vault: String, note: String, start: usize, end: usize, x: f64, y: f64) -> impl IntoView {
     let ui = ui();
     let text = RwSignal::new(String::new());
+    let people = people_of(vault.clone(), note.clone());
     let submit = StoredValue::new(move || {
         let body = text.get_untracked();
         if body.trim().is_empty() {
@@ -224,13 +444,11 @@ fn Compose(vault: String, note: String, start: usize, end: usize, x: f64, y: f64
         }
     });
     let cancel = move || ui.comment_ui.set(CommentUi::Closed);
-    let hint = format!("{}+Enter to comment", util::mod_key());
+    let hint = format!("{}+Enter to comment · @ to mention", util::mod_key());
     view! {
         <div class="cm-pop cm-compose" style=place(x, y)>
-            <textarea class="input" rows="3" placeholder="Add a comment…" aria-label="Comment"
-                use:focus_on_mount prop:value=move || text.get()
-                on:input=move |ev| text.set(event_target_value(&ev))
-                on:keydown=move |ev: web_sys::KeyboardEvent| submit_keys(&ev, || submit.with_value(|f| f()), cancel)></textarea>
+            <MentionBox text=text people=people placeholder="Add a comment…" label="Comment" rows=3 focus=true
+                on_submit=Callback::new(move |_| submit.with_value(|f| f())) on_cancel=Callback::new(move |_| cancel())/>
             <div class="cm-actions">
                 <span class="muted small grow">{hint}</span>
                 <button class="btn small ghost" on:click=move |_| cancel()>"Cancel"</button>
@@ -239,6 +457,164 @@ fn Compose(vault: String, note: String, start: usize, end: usize, x: f64, y: f64
             </div>
         </div>
     }
+}
+
+/// Whether `name` is a match for what was typed after `@`.
+fn name_matches(name: &str, typed: &str) -> bool {
+    let (name, typed) = (name.to_lowercase(), typed.to_lowercase());
+    name.starts_with(&typed) || name.split_whitespace().any(|w| w.starts_with(&typed))
+}
+
+/// A comment's text box. Typing `@` offers the people who may be
+/// mentioned (arrows and Enter or Tab, or a click, pick one); Ctrl+Enter
+/// sends, Escape cancels.
+#[component]
+fn MentionBox(
+    text: RwSignal<String>,
+    people: Signal<Vec<Person>>,
+    #[prop(into)] placeholder: String,
+    #[prop(into)] label: String,
+    rows: u32,
+    #[prop(optional)] focus: bool,
+    on_submit: Callback<()>,
+    on_cancel: Callback<()>,
+) -> impl IntoView {
+    let area = NodeRef::<html::Textarea>::new();
+    // The `@…` being typed: where its `@` is (bytes) and what follows.
+    let typing = RwSignal::new(None::<(usize, String)>);
+    let chosen = RwSignal::new(0usize);
+    let offered = Memo::new(move |_| {
+        let Some((_, typed)) = typing.get() else {
+            return Vec::new();
+        };
+        people
+            .get()
+            .into_iter()
+            .filter(|(_, n)| name_matches(n, &typed))
+            .take(6)
+            .collect::<Vec<_>>()
+    });
+    let follow = move || {
+        let Some(el) = area.get_untracked() else {
+            return;
+        };
+        let value = el.value();
+        let caret = el.selection_start().ok().flatten().unwrap_or(0) as usize;
+        let before = &value[..utf16_to_bytes(&value, caret)];
+        let now = before.rfind('@').and_then(|at| {
+            let typed = &before[at + 1..];
+            let starts = before[..at]
+                .chars()
+                .next_back()
+                .is_none_or(|c| !c.is_alphanumeric() && !matches!(c, '.' | '-' | '+' | '@'));
+            (starts && !typed.contains('\n') && typed.chars().count() <= 40)
+                .then(|| (at, typed.to_string()))
+        });
+        if now != typing.get_untracked() {
+            chosen.set(0);
+        }
+        typing.set(now);
+    };
+    let pick = move |name: String| {
+        let (Some((at, typed)), Some(el)) = (typing.get_untracked(), area.get_untracked()) else {
+            return;
+        };
+        let value = el.value();
+        let end = (at + 1 + typed.len()).min(value.len());
+        let new = format!("{}@{name} {}", &value[..at], &value[end..]);
+        let caret = (value[..at].encode_utf16().count() + name.encode_utf16().count() + 2) as u32;
+        el.set_value(&new);
+        text.set(new);
+        let _ = el.set_selection_range(caret, caret);
+        let _ = el.focus();
+        typing.set(None);
+    };
+    let keydown = move |ev: web_sys::KeyboardEvent| {
+        let n = offered.with_untracked(Vec::len);
+        let plain = !ev.ctrl_key() && !ev.meta_key() && !ev.alt_key();
+        if n > 0 && plain {
+            match ev.key().as_str() {
+                "ArrowDown" => {
+                    ev.prevent_default();
+                    chosen.update(|c| *c = (*c + 1) % n);
+                    return;
+                }
+                "ArrowUp" => {
+                    ev.prevent_default();
+                    chosen.update(|c| *c = (*c + n - 1) % n);
+                    return;
+                }
+                "Enter" | "Tab" => {
+                    ev.prevent_default();
+                    let i = chosen.get_untracked().min(n - 1);
+                    if let Some((_, name)) = offered.with_untracked(|o| o.get(i).cloned()) {
+                        pick(name);
+                    }
+                    return;
+                }
+                "Escape" => {
+                    ev.prevent_default();
+                    ev.stop_propagation();
+                    typing.set(None);
+                    return;
+                }
+                _ => {}
+            }
+        }
+        submit_keys(&ev, || on_submit.run(()), || on_cancel.run(()));
+    };
+    let mounted = move |el: web_sys::Element| {
+        if focus {
+            focus_on_mount(el);
+        }
+    };
+    view! {
+        <div class="mention-box">
+            <textarea class="input" node_ref=area rows=rows placeholder=placeholder aria-label=label
+                use:mounted prop:value=move || text.get()
+                on:input=move |ev| { text.set(event_target_value(&ev)); follow(); }
+                on:keyup=move |ev: web_sys::KeyboardEvent| if matches!(ev.key().as_str(), "ArrowLeft" | "ArrowRight" | "Home" | "End") { follow() }
+                on:click=move |_| follow()
+                on:blur=move |_| typing.set(None)
+                on:keydown=keydown></textarea>
+            {move || {
+                let list = offered.get();
+                (!list.is_empty()).then(|| view! {
+                    <div class="mention-menu" role="listbox" aria-label="People to mention">
+                        {list.into_iter().enumerate().map(|(i, (id, name))| {
+                            let n2 = name.clone();
+                            view! {
+                                <button role="option" class:on=move || chosen.get() == i aria-selected=move || (chosen.get() == i).to_string()
+                                    on:mousedown=move |ev| { ev.prevent_default(); pick(n2.clone()); }>
+                                    {avatar(&name, &id)}<span>{name.clone()}</span>
+                                </button>
+                            }
+                        }).collect_view()}
+                    </div>
+                })
+            }}
+        </div>
+    }
+}
+
+/// A comment's text, its mentions marked (ours more so).
+fn body_view(body: &str, mentions: &[Person], me: &str) -> AnyView {
+    let pieces: Vec<(String, Option<String>)> =
+        notekpr_core::comments::split_mentions(body, mentions)
+            .into_iter()
+            .map(|(t, who)| (t.to_string(), who.map(str::to_string)))
+            .collect();
+    pieces
+        .into_iter()
+        .map(|(t, who)| match who {
+            Some(u) => {
+                let mine = u == me;
+                view! { <span class="mention" class:me=mine>{t}</span> }.into_any()
+            }
+            None => t.into_any(),
+        })
+        .collect_view()
+        .into_any()
 }
 
 /// One thread, by its text.
@@ -267,6 +643,14 @@ fn ThreadCard(vault: String, note: String, id: String, x: f64, y: f64) -> impl I
             ui.comment_ui.set(CommentUi::Closed);
         }
     });
+    // Seen: its mentions of us are read (also those arriving while open).
+    let (v, n, t) = (vault.clone(), note.clone(), id.clone());
+    Effect::new(move |_| {
+        ui.comments_rev.track();
+        step(|c| state::mark_thread_read(c, &v, &n, &t));
+    });
+    let people = people_of(vault.clone(), note.clone());
+    let me = step(|c| c.user_id.clone());
     let ctx = StoredValue::new((vault, note, id));
     let act = move |a: Action| {
         ctx.with_value(|(v, n, _)| {
@@ -324,13 +708,12 @@ fn ThreadCard(vault: String, note: String, id: String, x: f64, y: f64) -> impl I
                 {gone.then(|| view! { <div class="muted small cm-gone">"The text this was about has been deleted."</div> })}
                 {t.resolved_by.clone().map(|who| view! { <div class="muted small">{format!("Resolved by {who}")}</div> })}
                 <div class="cm-list">
-                    {t.comments.iter().cloned().map(|cm| comment_row(cm, editing, confirm, act)).collect_view()}
+                    {t.comments.iter().cloned().map(|cm| comment_row(cm, editing, confirm, act, people, me.clone())).collect_view()}
                 </div>
                 {can.get().then(|| view! {
                     <div class="cm-reply">
-                        <textarea class="input" rows="1" placeholder="Reply…" aria-label="Reply"
-                            prop:value=move || reply.get() on:input=move |ev| reply.set(event_target_value(&ev))
-                            on:keydown=move |ev: web_sys::KeyboardEvent| submit_keys(&ev, send_reply, close)></textarea>
+                        <MentionBox text=reply people=people placeholder="Reply…" label="Reply" rows=1
+                            on_submit=Callback::new(move |_| send_reply()) on_cancel=Callback::new(move |_| close())/>
                         <button class="btn small primary" disabled=move || reply.get().trim().is_empty()
                             on:click=move |_| send_reply()>"Reply"</button>
                     </div>
@@ -346,13 +729,18 @@ fn comment_row(
     editing: RwSignal<Option<(String, String)>>,
     confirm: RwSignal<Option<String>>,
     act: impl Fn(Action) + Copy + Send + Sync + 'static,
+    people: Signal<Vec<Person>>,
+    me: String,
 ) -> impl IntoView {
     let id = cm.id.clone();
     let (id_e, id_d, id_c) = (id.clone(), id.clone(), id.clone());
     let body = cm.body.clone();
+    let mentions = cm.mentions.clone();
+    // A memo: typing in the box changes `editing`, not whether it is shown.
     let is_editing = {
         let id = id.clone();
-        move || editing.with(|e| e.as_ref().is_some_and(|(i, _)| *i == id))
+        let m = Memo::new(move |_| editing.with(|e| e.as_ref().is_some_and(|(i, _)| *i == id)));
+        move || m.get()
     };
     let is_confirming = {
         let id = id.clone();
@@ -408,18 +796,22 @@ fn comment_row(
                 {move || if is_editing() {
                     let save = save.clone();
                     let save2 = save2.clone();
+                    // The box's text, kept in `editing`.
+                    let draft = RwSignal::new(editing.get_untracked().map(|(_, t)| t).unwrap_or_default());
+                    Effect::new(move |_| {
+                        let t = draft.get();
+                        editing.update(|e| if let Some((_, d)) = e { *d = t });
+                    });
                     view! {
-                        <textarea class="input" rows="2" aria-label="Edit comment" use:focus_on_mount
-                            prop:value=move || editing.get().map(|(_, t)| t).unwrap_or_default()
-                            on:input=move |ev| editing.update(|e| if let Some((_, t)) = e { *t = event_target_value(&ev) })
-                            on:keydown=move |ev: web_sys::KeyboardEvent| submit_keys(&ev, save.clone(), move || editing.set(None))></textarea>
+                        <MentionBox text=draft people=people label="Edit comment" placeholder="" rows=2 focus=true
+                            on_submit=Callback::new(move |_| save()) on_cancel=Callback::new(move |_| editing.set(None))/>
                         <div class="cm-actions">
                             <button class="btn small ghost" on:click=move |_| editing.set(None)>"Cancel"</button>
                             <button class="btn small primary" on:click=move |_| save2()>"Save"</button>
                         </div>
                     }.into_any()
                 } else {
-                    view! { <div class="cm-text">{body.clone()}</div> }.into_any()
+                    view! { <div class="cm-text">{body_view(&body, &mentions, &me)}</div> }.into_any()
                 }}
                 {move || is_confirming().then(|| {
                     let id = id_c.clone();

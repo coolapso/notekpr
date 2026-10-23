@@ -424,6 +424,9 @@ pub(super) fn on_synced(vault_id: &str, head: i64) {
     let (rolled_back, applied) = step(|c| {
         c.loaded.insert(vault_id.to_string());
         let first = c.synced.insert(vault_id.to_string());
+        if first {
+            super::mentions::mentions_seen_at_start(c, vault_id);
+        }
         let rolled_back = c
             .replicas
             .get_mut(vault_id)
@@ -855,6 +858,10 @@ pub(super) fn on_vault_event(vault_id: String, event: VaultEventKind) {
         | VaultEventKind::MetaChanged
         | VaultEventKind::RoleChanged
         | VaultEventKind::MembersChanged => {
+            if event == VaultEventKind::MembersChanged {
+                // Who may be mentioned there: asked again when needed.
+                step(|c| c.mention_people.remove(&vault_id));
+            }
             leptos::task::spawn_local(async move {
                 // From the list rather than `/vaults/{id}`: someone just removed
                 // may get this before their `AccessRevoked`, and is handled by that.
@@ -943,6 +950,7 @@ pub fn after_apply(vault_id: &str, applied: engine::Applied) {
     }
     if comments_changed {
         ui.comments_rev.update(|n| *n += 1);
+        super::announce_mentions();
     }
 }
 

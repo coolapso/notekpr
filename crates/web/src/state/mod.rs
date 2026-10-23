@@ -293,6 +293,10 @@ pub struct Ui {
     pub comments_rev: RwSignal<u64>,
     /// The comment button, composer or thread open on the note.
     pub comment_ui: RwSignal<CommentUi>,
+    /// Bumped when our mentions (or which are read) may have changed.
+    pub mentions_rev: RwSignal<u64>,
+    /// A thread to open once its note is shown: (vault, note, thread).
+    pub thread_to_open: RwSignal<Option<(String, String, String)>>,
 }
 
 thread_local! {
@@ -338,6 +342,8 @@ pub fn init_ui() -> Ui {
         close_menus: RwSignal::new(0),
         comments_rev: RwSignal::new(0),
         comment_ui: RwSignal::new(CommentUi::Closed),
+        mentions_rev: RwSignal::new(0),
+        thread_to_open: RwSignal::new(None),
     };
     UI.with(|u| u.set(Some(ui)));
     ui
@@ -444,6 +450,10 @@ pub struct Prefs {
     /// Notes given a width of their own, by id, the latest first.
     #[serde(default, deserialize_with = "crate::width::lenient_list")]
     pub note_widths: Vec<(String, NoteWidth)>,
+    /// Which mentions of us were read (`mentions_seen`, `mentions_read`;
+    /// the CLI marks them read too).
+    #[serde(flatten)]
+    pub mentions: notekpr_core::comments::MentionsRead,
     /// Goes up with every save. Inside the encryption, so the server can't
     /// change it: an older copy it hands out (e.g. one without a pin) is
     /// noticed and not used [W-M10].
@@ -500,6 +510,12 @@ pub struct Core {
     /// Commenters' account keys beyond the membership logs (people a note
     /// is shared with see members' comments), checked against our pins.
     pub comment_keys: HashMap<String, notekpr_core::keys::AccountPublic>,
+    /// The people who may be mentioned in a vault's comments (its members,
+    /// as its log vouches for them), and when they were asked for.
+    pub mention_people: HashMap<String, (i64, Vec<notekpr_core::comments::Person>)>,
+    /// Mentions of us already announced (or there before a vault's first
+    /// catch-up): comment ids.
+    pub mentions_announced: HashSet<String>,
     /// Notes shared with us individually, by (vault, note). Their content
     /// lives in a members-less replica of the vault (`VaultReplica::member == false`).
     pub shares: BTreeMap<(String, String), ShareState>,
@@ -554,6 +570,7 @@ impl Core {
 
 mod comments;
 mod members;
+mod mentions;
 mod nav;
 mod offline;
 mod prefs;
@@ -565,6 +582,7 @@ mod vaults;
 
 pub use comments::*;
 pub use members::{log_entry, member_log, pin_member_key, reload_log, sign_vault, vouched};
+pub use mentions::*;
 pub use nav::*;
 pub use offline::{
     disable as disable_offline, enable as enable_offline, enabled as offline_enabled,

@@ -176,8 +176,10 @@ G=http://127.0.0.1:7878/v1
 | `DELETE /v1/vaults/{v}/documents/{path}` | move a document or folder to the trash → `{vault, trashed: [ids]}` |
 | `GET /v1/search?q=…[&vault=v&limit=n]` | `[{vault, vault_name, path, id, title, score, snippet}]`; `limit` 50 by default, at most 500 |
 | `GET /v1/vaults/{v}/backlinks/{path}` | documents linking to it |
-| `GET /v1/vaults/{v}/comments/{path}` | the note's comments: `{vault_id, path, threads: [{id, quote, on_text, resolved_by, comments: [{id, author, author_name, body, created, edited, pending, verified}]}]}` (the comment first, then its replies) |
-| `POST /v1/vaults/{v}/comments/{path}` | `{"on": quote, "text": …}` comments on that text (it must appear once in the note); `{"id": …, "action": "reply"\|"edit"\|"delete"\|"resolve"\|"reopen", "text": …}` acts on a comment (`id` or the start of it) → `{id, vault_id, note_id}` |
+| `GET /v1/vaults/{v}/comments/{path}` | the note's comments: `{vault_id, path, threads: [{id, quote, on_text, resolved_by, comments: [{id, author, author_name, body, mentions?, created, edited, pending, verified}]}]}` (the comment first, then its replies; `mentions`: `[{id, name}]`) |
+| `POST /v1/vaults/{v}/comments/{path}` | `{"on": quote, "text": …}` comments on that text (it must appear once in the note); `{"id": …, "action": "reply"\|"edit"\|"delete"\|"resolve"\|"reopen", "text": …}` acts on a comment (`id` or the start of it) → `{id, vault_id, note_id, mentions, not_mentioned, people_unknown}`. `@Name` in the text mentions that member of the vault (`mentions`: their ids; `not_mentioned`: `@words` naming nobody there; `people_unknown`: the members couldn't be looked up) |
+| `GET /v1/mentions[?vault=v&unread=true&limit=n]` | comments that mention the agent, newest first: `[{vault_id, vault, note_id, path, thread, comment, author, author_name, body, created, quote, resolved, unread}]`; `limit` 50 by default |
+| `POST /v1/mentions/read` | (optional `{"vault": …}`) mark the (vault's) unread mentions read → `{marked}` |
 | `GET /v1/vaults/{v}/history/{path}[?revision=ID]` | revisions `[{id, created_at, covers_seq, author_id, size}]`, or one revision's Markdown |
 | `GET /v1/vaults/{v}/attachments/{path}` | raw bytes (`Content-Disposition: attachment`, `nosniff`) |
 | `PUT /v1/vaults/{v}/attachments/{path}` | upload (`Content-Type` is stored as the MIME type); answers like a document `PUT`, without `ETag` |

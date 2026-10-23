@@ -937,7 +937,7 @@ label.btn.disabled { opacity: .6; pointer-events: none; }
 .cm-unverified { color: var(--warn); }
 .cm-confirm { display: flex; align-items: center; gap: 6px; margin-top: 4px; }
 .cm-reply { display: flex; gap: 6px; align-items: flex-end; }
-.cm-reply textarea { flex: 1; }
+.cm-reply .mention-box { flex: 1; }
 .cm-gone { font-style: italic; }
 .linkish { border: none; background: none; padding: 0; color: var(--link); cursor: pointer; font: inherit; }
 .linkish.danger { color: var(--danger); }
@@ -953,4 +953,42 @@ label.btn.disabled { opacity: .6; pointer-events: none; }
 .cm-entry.resolved { opacity: .65; }
 .cm-entry .cm-quote, .cm-entry .pi-snip { max-width: 100%; }
 .share-comments, .viewers-comment { display: flex; gap: 8px; align-items: flex-start; margin: 10px 0; }
+/* The editor and the reading view: comment popups are placed in it. */
+.note-content { position: relative; }
+.reading .cmt {
+  background: color-mix(in srgb, var(--warn) 22%, transparent);
+  box-shadow: inset 0 -2px 0 color-mix(in srgb, var(--warn) 70%, transparent);
+  border-radius: 2px; cursor: pointer;
+}
+.reading .cmt.cmt-open { background: color-mix(in srgb, var(--warn) 45%, transparent); }
+/* Mentions: in comments, the box that offers people, the inbox. */
+.mention { color: var(--link); font-weight: 600; }
+.mention.me { background: var(--accent-bg); border-radius: 3px; padding: 0 2px; }
+.mention-box { position: relative; flex: 1; min-width: 0; }
+.mention-box textarea { width: 100%; }
+.mention-menu {
+  position: absolute; left: 0; top: calc(100% + 2px); z-index: 40; min-width: 200px; max-width: 100%;
+  display: flex; flex-direction: column; padding: 4px; border-radius: 8px;
+  background: var(--bg); border: 1px solid var(--border); box-shadow: var(--shadow);
+}
+.mention-menu button {
+  display: flex; align-items: center; gap: 8px; padding: 5px 8px; border: none; border-radius: 6px;
+  background: none; color: var(--fg); text-align: left; cursor: pointer; font-size: 14px;
+}
+.mention-menu button.on, .mention-menu button:hover { background: var(--bg-3); }
+.mention-menu .avatar { flex: none; }
+.sb-search-row { position: relative; display: flex; gap: 6px; align-items: center; }
+.sb-search-row .sb-search { flex: 1; min-width: 0; }
+/* The inbox opens below the row, as wide as the sidebar. */
+.sb-search-row .tb-drop { position: static; }
+.sb-search-row .tb-drop .menu.mentions-menu { left: 0; right: 0; top: calc(100% + 4px); max-height: 70vh; overflow-y: auto; padding: 8px; }
+.mentions-head { display: flex; align-items: center; gap: 8px; padding: 2px 6px 8px; }
+.menu .mention-item { align-items: flex-start; width: 100%; }
+.mention-item.unread { background: var(--accent-bg); }
+.mention-item .avatar { flex: none; }
+.mention-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.mention-title, .mention-snip { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mention-snip { font-size: 13px; }
+.mention-item .dot { flex: none; width: 8px; height: 8px; margin-top: 6px; border-radius: 50%; background: var(--accent); }
+.mentions-none { padding: 4px 6px; margin: 0; }
 @media (pointer: coarse) { .cm-tools { opacity: 1; } }

@@ -106,6 +106,89 @@ pub enum CommentAct {
     Reopen,
 }
 
+impl CommentAct {
+    /// The record's action, on comment `target` of `thread`.
+    pub fn action(self, target: String, thread: String) -> comments::Action {
+        match self {
+            CommentAct::Reply(body) => comments::Action::Reply { thread, body },
+            CommentAct::Edit(body) => comments::Action::Edit { target, body },
+            CommentAct::Delete => comments::Action::Delete { target },
+            CommentAct::Resolve => comments::Action::Resolve { thread },
+            CommentAct::Reopen => comments::Action::Reopen { thread },
+        }
+    }
+
+    /// Its text (a reply's or an edit's), which may mention people.
+    pub fn text(&self) -> Option<&str> {
+        match self {
+            CommentAct::Reply(t) | CommentAct::Edit(t) => Some(t),
+            _ => None,
+        }
+    }
+
+    pub fn has_text(&self) -> bool {
+        self.text().is_some()
+    }
+}
+
+/// Where the text `on` is in a note's text (it must be there exactly once),
+/// as a comment's anchor; `p` names the note in errors.
+pub fn anchor_on(note: &NoteDoc, on: &str, p: &str) -> Result<comments::Anchor> {
+    let text = note.text();
+    let found: Vec<usize> = text.match_indices(on).map(|(i, _)| i).collect();
+    let start = match found[..] {
+        _ if on.is_empty() => bail!("say which text the comment is about"),
+        [] => bail!("'{on}' isn't in {p}"),
+        [i] => i,
+        _ => bail!(
+            "'{on}' appears {} times in {p}: quote more of it",
+            found.len()
+        ),
+    };
+    comments::anchor(note, start, start + on.len())
+        .ok_or_else(|| anyhow!("can't comment on that text"))
+}
+
+/// The comment `id` (or the start of an id only it has) among `threads`
+/// of note `p`, if `user` may do `act` to it (`owner`: the vault's owner,
+/// who may delete any): its id and its thread's.
+pub fn find_comment(
+    threads: &[comments::Thread],
+    id: &str,
+    p: &str,
+    act: &CommentAct,
+    user: &str,
+    owner: &str,
+) -> Result<(String, String)> {
+    // (comment, its thread, its author)
+    let mut hits: Vec<(String, String, String)> = Vec::new();
+    for t in threads {
+        for c in std::iter::once(&t.root).chain(&t.replies) {
+            if !id.is_empty() && c.id.starts_with(id) {
+                hits.push((c.id.clone(), t.root.id.clone(), c.author.clone()));
+            }
+        }
+    }
+    let (target, thread, author) = match &hits[..] {
+        [] => bail!("no comment {id} on {p}"),
+        [h] => h.clone(),
+        _ => bail!(
+            "{id} matches {} comments on {p}: give more of the id",
+            hits.len()
+        ),
+    };
+    match act {
+        CommentAct::Edit(_) if author != user => {
+            bail!("only its author can change a comment")
+        }
+        CommentAct::Delete if author != user && owner != user => {
+            bail!("only its author or the vault's owner can delete a comment")
+        }
+        _ => {}
+    }
+    Ok((target, thread))
+}
+
 /// A vault's keys as the server gives them to this principal.
 pub struct Keys {
     pub ring: VaultKeyring,
@@ -678,7 +761,8 @@ impl Vault {
     }
 
     /// Comment on the text `on` in the note at `path` (it must appear there
-    /// exactly once). Returns the note's id and the comment's.
+    /// exactly once), mentioning `mentions` (user ids). Returns the note's
+    /// id and the comment's.
     pub fn add_comment(
         &mut self,
         account: &AccountSecret,
@@ -686,38 +770,28 @@ impl Vault {
         path: &str,
         on: &str,
         body: &str,
+        mentions: Vec<String>,
     ) -> Result<(String, String)> {
         self.require_commenting()?;
         let (p, e) = self.note_at(path)?;
-        let doc = self.replica.note_text(&e.id);
-        let found: Vec<usize> = doc.match_indices(on).map(|(i, _)| i).collect();
-        let start = match found[..] {
-            _ if on.is_empty() => bail!("say which text the comment is about"),
-            [] => bail!("'{on}' isn't in {p}"),
-            [i] => i,
-            _ => bail!(
-                "'{on}' appears {} times in {p}: quote more of it",
-                found.len()
-            ),
-        };
         let note = self
             .replica
             .notes
             .get(&e.id)
             .ok_or_else(|| anyhow!("no note '{path}'"))?;
-        let anchor = comments::anchor(note, start, start + on.len())
-            .ok_or_else(|| anyhow!("can't comment on that text"))?;
+        let anchor = anchor_on(note, on, &p)?;
         let action = comments::Action::Comment {
             body: body.to_string(),
             anchor,
         };
-        let id = self.send_comment(account, user_id, &e.id, action)?;
+        let id = self.send_comment(account, user_id, &e.id, action, mentions)?;
         Ok((e.id, id))
     }
 
     /// Reply to, edit, delete, resolve or reopen comment `id` (or a part of
-    /// its id that only it starts with) on the note at `path`. Returns the
-    /// note's id and the new record's.
+    /// its id that only it starts with) on the note at `path`; a reply or an
+    /// edit mentions `mentions` (user ids). Returns the note's id and the
+    /// new record's.
     pub fn comment_action(
         &mut self,
         account: &AccountSecret,
@@ -725,43 +799,14 @@ impl Vault {
         path: &str,
         id: &str,
         act: CommentAct,
+        mentions: Vec<String>,
     ) -> Result<(String, String)> {
         self.require_commenting()?;
         let (p, note, threads) = self.comments(path)?;
-        // (comment, its thread, its author)
-        let mut hits: Vec<(String, String, String)> = Vec::new();
-        for t in &threads {
-            for c in std::iter::once(&t.root).chain(&t.replies) {
-                if !id.is_empty() && c.id.starts_with(id) {
-                    hits.push((c.id.clone(), t.root.id.clone(), c.author.clone()));
-                }
-            }
-        }
-        let (target, thread, author) = match &hits[..] {
-            [] => bail!("no comment {id} on {p}"),
-            [h] => h.clone(),
-            _ => bail!(
-                "{id} matches {} comments on {p}: give more of the id",
-                hits.len()
-            ),
-        };
-        match act {
-            CommentAct::Edit(_) if author != user_id => {
-                bail!("only its author can change a comment")
-            }
-            CommentAct::Delete if author != user_id && self.owner_id != user_id => {
-                bail!("only its author or the vault's owner can delete a comment")
-            }
-            _ => {}
-        }
-        let action = match act {
-            CommentAct::Reply(body) => comments::Action::Reply { thread, body },
-            CommentAct::Edit(body) => comments::Action::Edit { target, body },
-            CommentAct::Delete => comments::Action::Delete { target },
-            CommentAct::Resolve => comments::Action::Resolve { thread },
-            CommentAct::Reopen => comments::Action::Reopen { thread },
-        };
-        let id = self.send_comment(account, user_id, &note, action)?;
+        let (target, thread) = find_comment(&threads, id, &p, &act, user_id, &self.owner_id)?;
+        let mentions = if act.has_text() { mentions } else { vec![] };
+        let action = act.action(target, thread);
+        let id = self.send_comment(account, user_id, &note, action, mentions)?;
         Ok((note, id))
     }
 
@@ -777,8 +822,9 @@ impl Vault {
         user_id: &str,
         note_id: &str,
         action: comments::Action,
+        mentions: Vec<String>,
     ) -> Result<String> {
-        let record = comments::Record::new(user_id, now_ms(), action);
+        let record = comments::Record::new(user_id, now_ms(), action).mentioning(mentions);
         let signed = comments::Signed::sign(account, &self.replica.id, note_id, &record)
             .map_err(|e| anyhow!(e))?;
         self.replica.local_comment(note_id, &signed)?;

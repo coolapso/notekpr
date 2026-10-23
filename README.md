@@ -106,11 +106,18 @@ read anything.
   on the note you're on. Edits merge without conflicts (CRDTs), also after
   working offline.
 * Comments on the text, like in Notion: select some text and comment
-  (`Alt+M`); the text gets a highlight, and clicking it opens the thread to
-  reply, resolve, edit or delete. Viewers can comment too (the vault's owner
-  can turn that off), comments follow the text through edits — also edits
-  from your own editor — and a note can be shared with its comments. Also
-  from the command line (`notekpr comments`) and for AI agents.
+  (`Alt+M`), in the editor or the reading view; the text gets a highlight,
+  and clicking it opens the thread to reply, resolve, edit or delete.
+  Viewers can comment too (the vault's owner can turn that off), comments
+  follow the text through edits — also edits from your own editor — and a
+  note can be shared with its comments. Also from the command line
+  (`notekpr comments`, `notekpr shared comments`) and for AI agents, and in
+  exports (`_comments/`).
+* @mentions: type `@` in a comment to mention a member of the vault. Their
+  devices find it — the server never learns who is mentioned — and show it
+  in the sidebar's mentions inbox, with a message when it arrives and, if
+  they like, a system notification. Read on one device, read on all;
+  `notekpr mentions` lists them.
 * You're told when a note is shared with you; owners have an activity log
   per vault.
 

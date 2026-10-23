@@ -338,7 +338,10 @@ button.list-row:hover:not(:disabled) { background: var(--bg-2); }
 .note-title::placeholder { color: var(--muted); }
 .note-title.static { margin: 0; overflow-wrap: anywhere; }
 .readonly-note { display: flex; gap: 8px; align-items: center; padding: 6px 10px; border-radius: 8px; background: var(--bg-2); color: var(--fg-2); font-size: 13px; margin-bottom: 8px; }
-.toolbar { position: sticky; top: 52px; z-index: 5; display: flex; flex-wrap: wrap; align-items: center; gap: 1px; padding: 4px; margin: 0 -4px 12px; border-radius: 10px; background: color-mix(in srgb, var(--bg) 94%, transparent); backdrop-filter: blur(6px); border: 1px solid var(--border); }
+.toolbar-wrap { position: sticky; top: 52px; z-index: 5; margin: 0 -4px 12px; border-radius: 10px; background: color-mix(in srgb, var(--bg) 94%, transparent); backdrop-filter: blur(6px); border: 1px solid var(--border); }
+/* An open menu goes over the comment button and popups (z-index 30, 35). */
+.toolbar-wrap:has(.menu) { z-index: 36; }
+.toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 1px; padding: 4px; }
 .tb { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 30px; border: none; border-radius: 6px; background: transparent; cursor: pointer; color: var(--fg-2); }
 .tb:hover { background: var(--bg-3); color: var(--fg); }
 .tb .ic { width: 17px; height: 17px; }
@@ -680,8 +683,13 @@ table.keys td:first-child { white-space: nowrap; width: 1%; padding-right: 16px;
   .settings-nav { flex-direction: row; overflow: auto; }
   .note-head { padding: 6px 8px; gap: 2px; }
   .crumbs { display: none; }
-  .toolbar { top: 48px; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
+  .toolbar-wrap { top: 48px; }
+  .toolbar { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; border-radius: inherit; }
   .toolbar::-webkit-scrollbar { display: none; }
+  /* The toolbar scrolls sideways, which would cut its menus off: they open
+     below the whole toolbar instead (positioned by .toolbar-wrap). */
+  .toolbar .tb-drop { position: static; }
+  .toolbar .tb-drop .menu { top: calc(100% + 4px); left: 4px; }
   .history { grid-template-columns: 1fr; }
   .h-list { border-right: none; max-height: 30vh; }
   .modal-back { padding-top: 5vh; }

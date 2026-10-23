@@ -53,7 +53,9 @@ fn Toolbar(vault: Option<String>) -> impl IntoView {
     let heading_open = RwSignal::new(false);
     super::close_on_outside(heading_open);
     view! {
-        <div class="toolbar" role="toolbar" aria-label="Formatting">
+        // The frame is a wrapper: on phones the buttons scroll sideways, and
+        // their menus must not be cut off with them.
+        <div class="toolbar-wrap"><div class="toolbar" role="toolbar" aria-label="Formatting">
             <ToolButton icon="undo" title=format!("Undo ({m}+Z)") c=Command::Undo/>
             <ToolButton icon="redo" title=format!("Redo ({m}+Shift+Z)") c=Command::Redo/>
             <span class="tb-sep"></span>
@@ -96,7 +98,7 @@ fn Toolbar(vault: Option<String>) -> impl IntoView {
                     });
                 }><Icon name="paperclip"/></button>
             })}
-        </div>
+        </div></div>
     }
 }
 

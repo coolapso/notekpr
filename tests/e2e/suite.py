@@ -433,6 +433,13 @@ def test_mobile(env):
         time.sleep(0.6)
         check(not m.js("return getComputedStyle(document.querySelector('.panel') || document.body).position == 'fixed' && !!document.querySelector('.note-body.overlay')"), "side panel does not cover the note on phones")
         m.shot("mobile")
+        # The toolbar scrolls sideways; its menus still show whole.
+        m.click(".tb[title='Heading']")
+        hit = m.js("const b = [...document.querySelectorAll('.tb-drop .menu button')].find(x => x.textContent.includes('Heading 1'));"
+                   "if (!b) return false; const r = b.getBoundingClientRect();"
+                   "const e = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2); return !!e && b.contains(e);")
+        check(hit, "the toolbar's menus show whole on a phone")
+        m.chord(KEYS["escape"])
         m.click(".note-head .mobile-only")
         time.sleep(0.4)
         check(m.js("return document.querySelector('.app').classList.contains('drawer')"), "sidebar opens as a drawer")

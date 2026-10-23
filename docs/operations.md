@@ -378,7 +378,8 @@ The first person to sign in through your identity provider becomes the
 administrator (accounts created in development mode don't count). Sign in
 yourself right after installing. Administrators manage accounts in Settings →
 Administration, including giving other people the administrator role; they
-never see content.
+never see content. Nor do they see who is in which vault or when anyone
+works: that metadata is only in the database file (§6).
 
 To name administrators up front instead, set `NOTEKPR_ADMINS` to
 `issuer|subject` pairs: the issuer URL and your account's `sub` claim at the
@@ -394,7 +395,11 @@ empty one.
 
 Everything — accounts, memberships, encrypted notes, history, attachments and
 key envelopes — is in `notekpr.db`. Note content in it is end-to-end
-encrypted, but the file still contains metadata; store backups securely.
+encrypted, but the file still contains metadata — accounts, who is in which
+vault and who shares notes with whom, and who changed something when —
+readable by anyone with the file or a backup; store backups securely.
+[security.md](security.md#where-the-metadata-is-and-who-can-see-it) lists
+what each table holds.
 
 ```sh
 # consistent online backup (safe while the server runs)
@@ -515,9 +520,10 @@ proxy answers then (§4, "Holding requests during an update").
   and on Linux the process's own `process_cpu_seconds_total` (a gauge) and
   `process_resident_memory_bytes`. Keep it internal (§4).
 * Logs: one line per request (method, redacted path, status, latency) plus
-  lifecycle events; `--log-format json` for log shippers.
+  lifecycle events; `--log-format json` for log shippers. No user ids, IP
+  addresses or names.
 * Administrators see accounts and storage statistics in Settings →
-  Administration (never content).
+  Administration (never content or vault membership).
 
 ## 9. Development mode
 

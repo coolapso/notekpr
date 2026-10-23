@@ -30,9 +30,45 @@
 **Metadata the server necessarily learns:** user accounts (display name,
 e-mail from the IdP, OIDC issuer and subject), which users share which vault and
 with what role, how many objects a vault contains, sizes and timestamps of
-ciphertexts, which user and device wrote each update, connection times and IP
-addresses. This is the minimum needed to authenticate, authorize, route and
-store data; it is documented here so operators and users can judge it.
+ciphertexts, which user and device wrote each update, and when people use it.
+This is the minimum needed to authenticate, authorize, route and store data;
+it is documented here so operators and users can judge it. It also sees each
+connection's IP address, as any server does, but neither stores nor logs it
+(below).
+
+### Where the metadata is, and who can see it
+
+"The server sees" means: whoever can read the server's database file
+(`notekpr.db`) or a backup of it — the operator, a hosting provider, anyone
+with the disk. It is an ordinary SQLite file, readable with any SQLite tool.
+Nothing in the app or the logs shows it:
+
+* **Administrators** (Settings → Administration) see each account's name,
+  e-mail, kind (person or agent), role, whether it is disabled, when it was
+  created and last signed in, and how many vaults and devices it has; plus
+  totals for the instance (accounts, vaults, objects, updates, storage). Not
+  who is in which vault, not who shares with whom, not activity — and never
+  content.
+* **Logs** have one line per request — method, path with ids replaced by
+  `:id`, status, duration — plus start-up and shut-down events. No user or
+  vault ids, IP addresses, tokens, query strings, bodies or names.
+
+What the database holds, besides ciphertext and public keys:
+
+| Table | What it tells |
+|---|---|
+| `users`, `identities` | accounts: display name, e-mail, OIDC issuer and subject, administrator, disabled, created and last sign-in; an agent's owner |
+| `devices`, `sessions`, `agent_credentials` | each account's devices and their names (the browser and system, or `notekpr CLI on <host name>`), sessions, and when each was created, last used (to the minute; only the latest time is kept), revoked |
+| `vaults`, `vault_members`, `member_log` | who owns each vault, who is in it with which role, who added them and when; the membership log's entries (user ids, roles, public keys, key commitments, times) |
+| `objects`, `updates`, `snapshots` | how many notes and other objects a vault has, when each was created and changed, and for every change (notes, the file tree, comments): who wrote it, from which device, when, and its size. Comment threads are objects named after their note (`c_<note id>`), so it also tells which notes have comments |
+| `attachments` | each attachment's size, who uploaded it, when |
+| `object_shares`, `object_keys` | which notes are shared individually, with whom, with which role, by whom and since when |
+| `user_prefs` | when someone's encrypted preferences last changed, and their size |
+| `audit_log` | account, device, membership, sharing and key events: who did what to whom, when (ids, roles and device names; never names of notes or vaults) |
+
+Kept only in memory, never written: IP addresses (used for rate limits), who
+is connected right now, and presence (which vault — and, for individually
+shared notes, which note — someone has open).
 
 ## Cryptography
 
@@ -267,7 +303,7 @@ reported, never applied partially. Duplicate deliveries are no-ops.
   WebSocket pushes and subscriptions; request size limits per route; catch-up
   pages capped in rows and bytes; a per-person cooldown on snapshots.
 * Logs contain method, a redacted path and status — never tokens, query strings,
-  bodies or names. No telemetry.
+  bodies, names, user ids or IP addresses. No telemetry.
 * Development mode (`--dev-mode`) allows password-less login and is announced in
   logs and on every page. The server refuses to start in dev mode on a
   non-loopback address, with an https public URL or with OIDC configured unless

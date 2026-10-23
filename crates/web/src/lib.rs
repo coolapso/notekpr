@@ -17,6 +17,7 @@ pub mod state;
 pub mod storage;
 pub mod util;
 pub mod views;
+pub mod width;
 pub mod ws;
 pub mod zipfile;
 

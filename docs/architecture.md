@@ -96,7 +96,7 @@ which is what makes each vault's live stream gapless and ordered.
 * **Attachments**: encrypted blobs addressed by a random id; their name and
   type are in the index.
 * **Per-user private data** (favorites, recent notes, key pins, the vault
-  for quick notes, and a counter that goes up with every save so an older
+  for quick notes, note widths, and a counter that goes up with every save so an older
   copy handed out by the server is noticed): one blob encrypted with the
   user's account key.
 

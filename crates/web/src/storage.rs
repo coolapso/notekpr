@@ -17,6 +17,8 @@ use notekpr_sync::NewKey;
 use serde::{Deserialize, Serialize};
 use web_sys::Storage;
 
+use crate::width::NoteWidth;
+
 fn local() -> Option<Storage> {
     web_sys::window()?.local_storage().ok()?
 }
@@ -380,8 +382,10 @@ pub struct UiPrefs {
     pub vim: bool,
     #[serde(default)]
     pub right_panel: bool,
+    /// How wide notes are, unless one has its own width or the default is
+    /// the same on all devices ([`crate::width`]).
     #[serde(default)]
-    pub wide: bool,
+    pub note_width: NoteWidth,
     /// The "Quick notes" section of the sidebar.
     #[serde(default = "yes")]
     pub quick_notes: bool,
@@ -411,7 +415,7 @@ impl Default for UiPrefs {
             editor_mode: "live".into(),
             vim: false,
             right_panel: true,
-            wide: false,
+            note_width: NoteWidth::NARROW,
             quick_notes: true,
             code_numbers: true,
             code_guides: true,

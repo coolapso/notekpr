@@ -7,6 +7,7 @@ use notekpr_core::protocol::*;
 use crate::state::{self, Modal, Route, step, ui};
 use crate::util;
 use crate::views::icons::Icon;
+use crate::views::width::WidthSlider;
 use crate::{actions, api, views::avatar};
 
 #[component]
@@ -397,10 +398,6 @@ fn EditorPrefs() -> impl IntoView {
             " Vim keybindings (Esc for normal mode, i to insert)"
         </label>
         <label class="check">
-            <input type="checkbox" prop:checked=move || ui.ui_prefs.get().wide on:change=move |ev| { let on = event_target_checked(&ev); state::set_ui_prefs(|p| p.wide = on); }/>
-            " Full-width notes"
-        </label>
-        <label class="check">
             <input type="checkbox" class="code-numbers-toggle" prop:checked=move || ui.ui_prefs.get().code_numbers on:change=move |ev| { let on = event_target_checked(&ev); state::set_ui_prefs(|p| p.code_numbers = on); }/>
             " Line numbers in code blocks"<span class="muted small">" — ln=false after a block's language hides them for that block"</span>
         </label>
@@ -422,7 +419,34 @@ fn EditorPrefs() -> impl IntoView {
                 <button class:on=move || ui.ui_prefs.get().theme == t on:click=move |_| state::set_ui_prefs(|p| p.theme = t.into())>{t}</button>
             }).collect_view()}
         </div>
+        <NoteWidthPrefs/>
         <QuickNotesPrefs/>
+    }
+}
+
+/// How wide notes are by default: in this browser, or on all devices (synced).
+#[component]
+fn NoteWidthPrefs() -> impl IntoView {
+    let ui = ui();
+    let shared = Memo::new(move |_| {
+        ui.prefs_rev.get();
+        step(|c| c.prefs.note_width.is_some())
+    });
+    let value = Memo::new(move |_| {
+        ui.prefs_rev.get();
+        let local = ui.ui_prefs.with(|p| p.note_width);
+        step(|c| state::default_width(c, local))
+    });
+    view! {
+        <h3>"Note width"</h3>
+        <div class="width-prefs">
+            <WidthSlider value=value.into() on_change=Callback::new(|w| step(|c| state::set_default_width(c, w)))/>
+        </div>
+        <label class="check">
+            <input type="checkbox" class="width-shared" prop:checked=move || shared.get()
+                on:change=move |ev| { let on = event_target_checked(&ev); step(|c| state::share_default_width(c, on)); }/>
+            " The same on all my devices"<span class="muted small">" — otherwise just this browser. A note's ⋯ menu gives it its own width, only for you."</span>
+        </label>
     }
 }
 

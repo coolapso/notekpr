@@ -10,6 +10,7 @@ pub mod quick;
 pub mod settings;
 pub mod sidebar;
 pub mod tree;
+pub mod width;
 
 use leptos::prelude::*;
 use wasm_bindgen::JsCast;

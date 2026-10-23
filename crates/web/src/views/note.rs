@@ -16,7 +16,9 @@ use crate::state::{self, Modal, Route, ViewMode, step, ui};
 use crate::views::comments::{self, CommentLayer, CommentsList};
 use crate::views::icons::Icon;
 use crate::views::panels::RightPanel;
+use crate::views::width::{self, NoteWidthMenu};
 use crate::views::{SyncStatus, avatar};
+use crate::width::NoteWidth;
 use crate::{knowledge, render, util};
 
 thread_local! {
@@ -575,6 +577,8 @@ pub fn NoteView(vault: String, note: String) -> impl IntoView {
     let (vrestore, nrestore) = (vault.clone(), note.clone());
     let (vcm, ncm) = (vault.clone(), note.clone());
     let (vcb, ncb) = (vault.clone(), note.clone());
+    let nwm = note.clone();
+    let shown_width = width::note_width(note.clone());
 
     view! {
         <div class="note-page">
@@ -652,6 +656,7 @@ pub fn NoteView(vault: String, note: String) -> impl IntoView {
                                             }
                                         }
                                     </Show>
+                                    <NoteWidthMenu note=nwm.clone()/>
                                 </div>
                             }
                         }
@@ -659,7 +664,7 @@ pub fn NoteView(vault: String, note: String) -> impl IntoView {
                 </div>
             </header>
             <div class="note-body" class:with-panel=move || ui.ui_prefs.get().right_panel class:overlay=move || ui.panel_overlay.get()>
-                <div class="note-main" class:wide=move || ui.ui_prefs.get().wide>
+                <div class="note-main" class:wider=move || shown_width.get() != NoteWidth::NARROW style=move || shown_width.get().style()>
                     {move || {
                         if !loaded.get() {
                             return view! { <div class="center-fill"><div class="spinner"></div></div> }.into_any();
@@ -856,6 +861,8 @@ pub fn SharedNoteView(vault: String, note: String) -> impl IntoView {
     let (vcb, ncb) = (vault.clone(), note.clone());
     let comments_open = RwSignal::new(false);
     super::close_on_outside(comments_open);
+    let nwm = note.clone();
+    let shown_width = width::note_width(note.clone());
 
     view! {
         <div class="note-page shared-note">
@@ -898,6 +905,7 @@ pub fn SharedNoteView(vault: String, note: String) -> impl IntoView {
                                         let (v, n) = (v2.clone(), n2.clone());
                                         leptos::task::spawn_local(async move { actions::leave_shared_note(&v, &n).await });
                                     }><Icon name="logout"/>" Remove from my list"</button>
+                                    <NoteWidthMenu note=nwm.clone()/>
                                 </div>
                             }
                         }
@@ -905,7 +913,7 @@ pub fn SharedNoteView(vault: String, note: String) -> impl IntoView {
                 </div>
             </header>
             <div class="note-body">
-                <div class="note-main" class:wide=move || ui.ui_prefs.get().wide>
+                <div class="note-main" class:wider=move || shown_width.get() != NoteWidth::NARROW style=move || shown_width.get().style()>
                     {move || {
                         let Some(s) = info.get() else {
                             return view! {

@@ -173,7 +173,7 @@ HOME = [
         - [ ] *Vault settings* (⚙ next to a vault): its icon or a picture, *Export as Markdown (.zip)*, *Import notes*, the *Activity log*
         - [ ] *Share vault* at the bottom of the sidebar: members, roles and key fingerprints
         - [ ] Share a single note with **dave** (the share button at the top of a note)
-        - [ ] Settings → Editor: the theme and Vim keybindings
+        - [ ] Settings → Editor: the theme, Vim keybindings, and how wide notes are (a slider from narrow to wide). A note's ⋯ menu gives it a width of its own, only for you: try *Wide* on *Server checks* in *Work*, whose log lines don't wrap
         - [ ] Settings → Devices: the CLI and this browser; *Keep this browser usable offline*
         - [ ] Settings → Administration: you run this server in the demo
         - [ ] Settings → AI agents: the *Home assistant* agent, which writes in *Assistant*

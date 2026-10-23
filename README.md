@@ -34,7 +34,10 @@ read anything.
   view (`Ctrl+E`).
 * A formatting toolbar and keyboard shortcuts (`Ctrl+/` lists them; `⌘`
   instead of `Ctrl` on a Mac), optional Vim keys, light, dark or system
-  theme, and full-width notes if you like.
+  theme.
+* Notes as narrow or wide as you like: a slider in Settings sets the
+  default (for this browser, or the same on all your devices), and a note's
+  ⋯ menu gives it a width of its own, only for you.
 * Tables you build with Enter and Tab, with aligned columns; one wider than
   the screen scrolls sideways instead of squeezing its columns. Task lists
   you can tick in the editor and the reading view.

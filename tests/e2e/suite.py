@@ -2053,7 +2053,88 @@ def test_colors(env):
         m.close()
 
 
-TESTS = [test_onboarding, test_collab, test_devices_and_recovery, test_features, test_attachments, test_note_sharing, test_tables, test_code_blocks, test_html, test_callouts, test_colors, test_code_wrapping, test_editor_mouse, test_editor_safety, test_local_copy, test_ui_basics, test_offline_tabs, test_offline_start, test_mobile, test_quick_notes, test_vault_icons, test_entry_icons, test_tree_order, test_session_ended_while_away, test_comments, test_graph, test_recovered_copy]
+def test_note_width(env):
+    """Notes from narrow to wide: a default (this browser's, or the same on
+    all devices) and a note's own width, only for whoever chose it."""
+    b = Browser(1900, 900)
+    width = "return Math.round(document.querySelector('.note-main').getBoundingClientRect().width)"
+    # All the room there is: beside the sidebar and the side panel.
+    room = "return Math.round(document.querySelector('.note-body').getBoundingClientRect().width" \
+           " - (document.querySelector('.note-body > .panel')?.getBoundingClientRect().width || 0))"
+    slide = "const i = document.querySelector(arguments[0]); i.value = arguments[1]; i.dispatchEvent(new Event('input', {bubbles: true}));"
+
+    def settings():
+        b.js("history.pushState(null, '', '/settings/editor'); dispatchEvent(new PopStateEvent('popstate'));")
+        b.find(".width-prefs input[type=range]", 10)
+
+    def note_is(px, what):
+        b.wait(f"return Math.abs(({width[7:]}) - {px}) <= 1", 5, what)
+        check(True, what)
+
+    try:
+        signup(b, uniq("wendy"))
+        new_note(b, "Wide table", "lots of columns")
+        note = b.js("return location.pathname")
+        full = b.js(room)
+        check(b.js(width) == 820 and full > 1200, f"notes are narrow by default (of {full}px)")
+        half = 820 + (full - 820) / 2
+        settings()
+        b.js(slide, ".width-prefs input", "50")
+        check(b.text(".width-prefs .width-value") == "50%", "Settings has a slider from narrow to wide")
+        b.js("history.back()")
+        note_is(half, "notes are halfway between narrow and wide")
+        # A note's own width, from its ⋯ menu.
+        b.click(".note-head button[aria-label='More']")
+        b.find(".menu-width input", 5)
+        b.js(slide, ".menu-width input", "100")
+        note_is(full, "the ⋯ menu makes this note wide")
+        check(b.js("return !!document.querySelector('.menu-width')"), "and stays open to see it change")
+        check(b.text(".menu-width .width-default") == "Use the default (50%)", "it offers the default back")
+        check(b.js("return [document.querySelector('.menu-width .width-end.on')?.textContent, document.querySelector('.menu-width .width-value').textContent]") == ["Wide", ""],
+              "at an end of the slider, its word lights up")
+        b.shot("note-width-menu")
+        b.chord(KEYS["escape"])
+        b.chord(KEYS["ctrl"], "\\")
+        b.wait("return !document.querySelector('.note-body > .panel')", 5, "the side panel closes")
+        note_is(b.js(room), "wide takes the side panel's room when it closes")
+        b.chord(KEYS["ctrl"], "\\")
+        b.find(".note-body > .panel", 5)
+        new_note(b, "Short", "a few words")
+        note_is(half, "other notes keep the default")
+        b.click(".note-head button[aria-label='More']")
+        b.find(".menu-width input", 5)
+        check(b.js("return !document.querySelector('.menu-width .width-default')"), "a note without its own width has nothing to undo")
+        b.chord(KEYS["escape"])
+        # The same default on all devices: synced, so a browser without its
+        # own settings (here: this one, forgotten) uses it too.
+        settings()
+        b.click(".width-shared")
+        time.sleep(3)  # the settings are saved after a moment
+        b.js("localStorage.removeItem('notekpr.ui'); location.reload()")
+        b.find(".width-prefs input[type=range]", 20)
+        b.wait("return document.querySelector('.width-shared').checked", 10, "the setting synced")
+        check(b.text(".width-prefs .width-value") == "50%", "a default shared by all devices reaches a new browser")
+        b.go(env.url + note[1:])
+        b.find(".note-main .ed .ln", 20)
+        note_is(b.js(room), "a note's own width is synced too")
+        b.click(".note-head button[aria-label='More']")
+        b.click(".menu-width .width-default")
+        note_is(half, "Use the default undoes it")
+        check(b.js("return !!document.querySelector('.menu-width') && !document.querySelector('.menu-width .width-default')"), "the menu stays open, with nothing left to undo")
+        b.chord(KEYS["escape"])
+        # Back to this browser's own: it keeps the width it had.
+        settings()
+        b.click(".width-shared")
+        b.wait("return !document.querySelector('.width-shared').checked", 5, "not shared")
+        check(b.text(".width-prefs .width-value") == "50%" and '"note_width":50' in b.js("return localStorage.getItem('notekpr.ui')"),
+              "a browser keeps the shared width as its own when it stops sharing it")
+        b.shot("note-width-settings")
+        check(not severe_logs(b), "no browser errors")
+    finally:
+        b.close()
+
+
+TESTS = [test_onboarding, test_collab, test_devices_and_recovery, test_features, test_attachments, test_note_sharing, test_tables, test_code_blocks, test_html, test_callouts, test_colors, test_code_wrapping, test_editor_mouse, test_editor_safety, test_local_copy, test_ui_basics, test_offline_tabs, test_offline_start, test_mobile, test_quick_notes, test_vault_icons, test_entry_icons, test_tree_order, test_session_ended_while_away, test_comments, test_graph, test_recovered_copy, test_note_width]
 
 
 def main():

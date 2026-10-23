@@ -37,6 +37,7 @@ use crate::api;
 use crate::editor::{Editor, RemoteCursor};
 use crate::storage::{self, DeviceRecord, UiPrefs};
 use crate::util::{self, now_ms};
+use crate::width::NoteWidth;
 use crate::ws::{ConnState, Socket};
 
 #[derive(Clone, Debug, PartialEq)]
@@ -436,6 +437,13 @@ pub struct Prefs {
     /// The vault quick notes go to (`None`: the default, see `crate::quick`).
     #[serde(default)]
     pub quick_vault: Option<String>,
+    /// The default note width on all devices (`None`: each browser's own,
+    /// `UiPrefs::note_width`).
+    #[serde(default, deserialize_with = "crate::width::lenient")]
+    pub note_width: Option<NoteWidth>,
+    /// Notes given a width of their own, by id, the latest first.
+    #[serde(default, deserialize_with = "crate::width::lenient_list")]
+    pub note_widths: Vec<(String, NoteWidth)>,
     /// Goes up with every save. Inside the encryption, so the server can't
     /// change it: an older copy it hands out (e.g. one without a pin) is
     /// noticed and not used [W-M10].

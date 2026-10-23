@@ -21,7 +21,7 @@
 | Revision history | encrypted snapshots | count, size, time, author |
 | Comments (text, quotes, what they are about, replies) | encrypted with the note's key; each signed by its author | that a note has comments, and the number, sizes, times and authors of the records; each vault's *viewers can comment* setting |
 | Presence (which note, cursor) | encrypted awareness messages | that a user is connected to a vault; on individually shared notes also which of them someone has open, and when (clients announce themselves on the note too, under its id) |
-| Favorites, recent notes, key pins | account-key encryption | no |
+| Favorites, recent notes, key pins, synced settings (the vault for quick notes, note widths) | account-key encryption | no |
 | Vault keys | HPKE to each member's account key | no |
 | Document keys (every note has its own) | wrapped under the vault key for members, HPKE to each person a note is shared with | no; it learns which notes are shared, with whom, and when sharing started |
 | Account secrets | HPKE to each device, and to the recovery key | no |

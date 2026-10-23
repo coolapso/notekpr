@@ -25,6 +25,7 @@ pub mod change;
 pub mod code;
 pub mod commands;
 pub mod decorations;
+pub mod html;
 pub mod state;
 pub mod syntax;
 pub mod text;

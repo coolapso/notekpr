@@ -15,6 +15,7 @@ notekpr-core = { path = "../crates/core" }
 notekpr-web = { path = "../crates/web" }
 notekpr-editor = { path = "../crates/editor" }
 serde_json = "1"
+html5ever = "0.40"
 
 [workspace]
 
@@ -72,5 +73,11 @@ yrs = { path = "../vendor/yrs" }
 [[bin]]
 name = "editor"
 path = "fuzz_targets/editor.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "html"
+path = "fuzz_targets/html.rs"
 test = false
 doc = false

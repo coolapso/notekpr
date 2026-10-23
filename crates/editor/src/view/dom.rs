@@ -9,6 +9,7 @@ use wasm_bindgen::JsCast;
 use web_sys::{Document, Element, HtmlElement, Node};
 
 use crate::code;
+use crate::html;
 use crate::syntax::{self, Block};
 use crate::text::{byte_to_utf16, utf16_to_byte};
 
@@ -24,6 +25,9 @@ pub struct LineJob {
     pub idx: usize,
     pub text: String,
     pub block: Block,
+    /// On the last line of an HTML block: the block's source, for its
+    /// preview ([`crate::state::EditorState::html_source`]).
+    pub html: Option<String>,
 }
 
 pub struct Rendered {
@@ -34,12 +38,16 @@ pub struct Rendered {
     /// The rendering depends on the host (link targets, image URLs), so
     /// `refresh` must look at it again.
     pub dynamic: bool,
+    /// The content of the line's HTML preview widget ([`fill_widget`]).
+    pub widget: Option<String>,
 }
 
 /// The HTML of one line: its source text with syntax spans, plus a widget
 /// (`contenteditable=false`, `data-w`, after the text): an image preview for
 /// an embed line, the header (title, language, copy button) of a code block
-/// on its opening fence, the indentation guides of a line of code (no text).
+/// on its opening fence, the indentation guides of a line of code (no text),
+/// the rendered preview of an HTML block on its last line (an empty element
+/// here, filled by [`fill_widget`]).
 pub fn render_line(
     job: LineJob,
     link_exists: &dyn Fn(&str) -> bool,
@@ -68,16 +76,88 @@ pub fn render_line(
         html.push_str(&code::head_html(info, false));
         html.push_str("</span>");
     }
+    let widget = job
+        .html
+        .as_deref()
+        .map(|src| html_preview(src, image_url))
+        .filter(|w| !w.trim().is_empty());
+    if widget.is_some() {
+        html.push_str("<span class=\"w hw\" contenteditable=\"false\" data-w=\"1\"></span>");
+    }
     let class = job.block.class();
     let mut h = std::collections::hash_map::DefaultHasher::new();
     class.hash(&mut h);
     html.hash(&mut h);
+    widget.hash(&mut h);
     Rendered {
         idx: job.idx,
         class,
-        dynamic: !styled.links.is_empty() || styled.image.is_some(),
+        dynamic: !styled.links.is_empty() || styled.image.is_some() || widget.is_some(),
         hash: h.finish() | 1,
         html,
+        widget,
+    }
+}
+
+/// The preview of an HTML block: what [`html::sanitize`] keeps of it, with
+/// links that open through the host when clicked (`data-href`), images
+/// from the vault's attachments, and external images not loaded.
+fn html_preview(src: &str, image_url: &dyn Fn(&str) -> Option<String>) -> String {
+    let link = |href: &str, attrs: &str| {
+        let mut o = String::from("<a class=\"a\" data-href=\"");
+        syntax::escape(href, &mut o);
+        o.push('"');
+        o.push_str(attrs);
+        o.push('>');
+        o
+    };
+    let image = |src: &str, alt: &str, attrs: &str| {
+        let mut o = String::new();
+        if !notekpr_core::markdown::is_internal_target(src) {
+            o.push_str("<a class=\"extimg\" data-href=\"");
+            syntax::escape(src, &mut o);
+            o.push_str("\" title=\"External images are not loaded automatically\">🖼 ");
+            syntax::escape(
+                if alt.is_empty() {
+                    "external image"
+                } else {
+                    alt
+                },
+                &mut o,
+            );
+            o.push_str("</a>");
+            return o;
+        }
+        o.push_str("<img");
+        if let Some(url) = image_url(&notekpr_core::markdown::percent_decode(src)) {
+            o.push_str(" src=\"");
+            syntax::escape(&url, &mut o);
+            o.push('"');
+        }
+        o.push_str(" alt=\"");
+        syntax::escape(alt, &mut o);
+        o.push('"');
+        o.push_str(attrs);
+        o.push_str(" draggable=\"false\">");
+        o
+    };
+    html::sanitize(
+        src,
+        &html::Urls {
+            link: &link,
+            image: &image,
+        },
+    )
+}
+
+/// Put a line's HTML preview into its widget. The preview is parsed on its
+/// own, with the widget as its context, so no tag in it (a stray `</span>`,
+/// say) can reach the line or the lines after it.
+pub fn fill_widget(line: &Element, r: &Rendered) {
+    if let Some(w) = &r.widget
+        && let Ok(Some(el)) = line.query_selector(":scope > .hw")
+    {
+        el.set_inner_html(w);
     }
 }
 

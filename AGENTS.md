@@ -84,7 +84,8 @@ crates/editor   the live-preview Markdown editor. Pure model (native tests): tex
                 (source + line index) · change.rs (ChangeSet: compose, transform,
                 map) · state.rs (EditorState, Transaction) · decorations.rs
                 (incremental block classification) · syntax.rs · code.rs (code
-                block options, syntax highlighting) · commands.rs · vim.rs.
+                block options, syntax highlighting) · html.rs (HTML in notes:
+                the allow list, HTML blocks) · commands.rs · vim.rs.
                 DOM view: view/ (contenteditable, line patches, IME, native edits)
 crates/web      Leptos CSR → wasm32. state/ (Core + Ui in mod.rs; session, vaults,
                 members, shares, sync, presence, prefs, nav, offline, comments) · cache.rs

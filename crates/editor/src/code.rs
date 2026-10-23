@@ -20,7 +20,7 @@
 //! PowerShell, HTML, CSS, diffs, Makefiles).
 
 use crate::syntax::{
-    COMMENT, CONST, DEL, FUNC, INS, KW, META, NUM, OP, PROP, STR, TYPE, VAR, escape,
+    COMMENT, CONST, DEL, FUNC, Flags, INS, KW, META, NUM, OP, PROP, STR, TYPE, VAR, escape,
 };
 
 /// The options of an opening fence.
@@ -1704,7 +1704,7 @@ fn lang(name: &str) -> &'static Lang {
 /// Highlight `line` (a line of code in `lang`) into `flags` (one per byte),
 /// continuing from what the line above left open; returns what this line
 /// leaves open.
-pub fn highlight(line: &str, lang_name: &str, carry: Carry, flags: &mut [u32]) -> Carry {
+pub fn highlight(line: &str, lang_name: &str, carry: Carry, flags: &mut [Flags]) -> Carry {
     Scan::new(line, lang(lang_name), Some(flags)).run(carry)
 }
 
@@ -1816,7 +1816,7 @@ struct Scan<'a> {
     n: usize,
     i: usize,
     l: &'static Lang,
-    out: Option<&'a mut [u32]>,
+    out: Option<&'a mut [Flags]>,
 }
 
 /// What a step of the scanner did.
@@ -1828,7 +1828,7 @@ enum Step {
 }
 
 impl<'a> Scan<'a> {
-    fn new(line: &'a str, l: &'static Lang, out: Option<&'a mut [u32]>) -> Scan<'a> {
+    fn new(line: &'a str, l: &'static Lang, out: Option<&'a mut [Flags]>) -> Scan<'a> {
         Scan {
             line,
             b: line.as_bytes(),
@@ -1839,7 +1839,7 @@ impl<'a> Scan<'a> {
         }
     }
 
-    fn mark(&mut self, a: usize, b: usize, f: u32) {
+    fn mark(&mut self, a: usize, b: usize, f: Flags) {
         if let Some(o) = self.out.as_deref_mut() {
             let n = o.len();
             for x in &mut o[a.min(n)..b.min(n)] {

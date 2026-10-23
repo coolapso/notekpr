@@ -201,10 +201,10 @@ contains NAME; the browser ↔ CLI test is `cross_client`.
 
 Property tests (`proptest`) run with `cargo test`; `PROPTEST_CASES=20000`
 searches harder. Fuzz targets for everything that parses untrusted input
-(Markdown, diffs, envelopes, protocol JSON, zip import, CRDT updates) and
-for the editor's model live in `fuzz/` (a separate workspace) and run on the
-stable toolchain — libFuzzer with coverage instrumentation through
-`RUSTFLAGS`, no nightly needed:
+(Markdown, HTML in notes, diffs, envelopes, protocol JSON, zip import, CRDT
+updates) and for the editor's model live in `fuzz/` (a separate workspace)
+and run on the stable toolchain — libFuzzer with coverage instrumentation
+through `RUSTFLAGS`, no nightly needed:
 
 ```sh
 task fuzz                 # every target, 60 s each

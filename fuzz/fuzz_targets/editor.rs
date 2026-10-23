@@ -14,6 +14,7 @@ use libfuzzer_sys::fuzz_target;
 const SNIPPETS: &[&str] = &[
     "", "\n", "x", "# ", "```", "~~~\n", "- [ ] ", "1. ", "> ", "|", "| a | b |\n|---|---|\n",
     "**", "[[", "]]", "$$", "<!--", "-->", "\t", "é", "\n\n", "---\n", "    ",
+    "<div>", "</div>\n", "<pre>", "</pre>", "<span>", "<img src=a.png>\n",
 ];
 
 fuzz_target!(|data: &[u8]| {

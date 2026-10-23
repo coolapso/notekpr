@@ -293,6 +293,38 @@ impl EditorState {
         Some((open, close.then_some(j)))
     }
 
+    /// The lines of the HTML block `line` is in.
+    pub fn html_block(&self, line: usize) -> Option<Range<usize>> {
+        let inner = |i| matches!(self.block(i), Block::Html { last: false, .. });
+        if !matches!(self.block(line), Block::Html { .. }) {
+            return None;
+        }
+        let mut a = line;
+        while a > 0 && inner(a - 1) {
+            a -= 1;
+        }
+        let mut b = line;
+        while inner(b) && b + 1 < self.doc.line_count() {
+            b += 1;
+        }
+        Some(a..b + 1)
+    }
+
+    /// The source of the HTML block whose last line is `line`: what its
+    /// preview shows.
+    pub fn html_source(&self, line: usize) -> Option<String> {
+        if !matches!(self.block(line), Block::Html { last: true, .. }) {
+            return None;
+        }
+        let lines = self.html_block(line)?;
+        Some(
+            lines
+                .map(|i| self.doc.line(i))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        )
+    }
+
     /// The code of the block whose opening fence is on `line`.
     pub fn code_text(&self, line: usize) -> String {
         let Some((open, close)) = self.code_block(line) else {
@@ -401,7 +433,27 @@ impl EditorState {
         }
         let sel = selection.unwrap_or_else(|| self.sel.map(&changes, Assoc::After));
         let splices = self.doc.apply(&changes);
-        let redraw = self.deco.update(&self.doc, &splices);
+        let mut redraw = self.deco.update(&self.doc, &splices);
+        // The last line of an HTML block shows the whole block's preview:
+        // redraw it when a line of the block changed, or a line above it
+        // (which may have left the block).
+        let mut lasts: Vec<Range<usize>> = vec![];
+        for r in &redraw {
+            let mut i = r.start;
+            while i <= r.end && i < self.doc.line_count() {
+                match self.html_block(i) {
+                    Some(b) => {
+                        lasts.push(b.end - 1..b.end);
+                        i = b.end;
+                    }
+                    None => i += 1,
+                }
+            }
+        }
+        if !lasts.is_empty() {
+            redraw.extend(lasts);
+            redraw = crate::decorations::merge_ranges(redraw);
+        }
         if !changes.is_empty() {
             for c in &mut self.cursors {
                 c.anchor = changes.map_pos(c.anchor, Assoc::Before);
@@ -469,6 +521,42 @@ pub fn merge_native(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn html_blocks_and_their_previews() {
+        let mut st = EditorState::new("<!-- a\nb\n<!-- x -->\n\n<div>\n<b>y</b>\n</div>".into());
+        assert_eq!(st.html_block(1), Some(0..3));
+        assert_eq!(st.html_source(1), None);
+        assert_eq!(st.html_source(2).as_deref(), Some("<!-- a\nb\n<!-- x -->"));
+        assert_eq!(st.html_block(3), None);
+        assert_eq!(
+            st.html_source(6).as_deref(),
+            Some("<div>\n<b>y</b>\n</div>")
+        );
+        // An edit in a block redraws its last line, which shows the preview.
+        let at = st.text().find("y<").unwrap();
+        let applied = st.apply(Transaction::new(
+            ChangeSet::replace(st.doc.len(), at, at, "z"),
+            Origin::Input,
+        ));
+        assert!(
+            applied.redraw.iter().any(|r| r.contains(&6)),
+            "{:?}",
+            applied.redraw
+        );
+        // So does one that takes lines out of a block above an unchanged
+        // last line (found by the property tests).
+        let applied = st.apply(Transaction::new(
+            ChangeSet::replace(st.doc.len(), 0, 5, ""),
+            Origin::Input,
+        ));
+        assert_eq!(st.html_source(2).as_deref(), Some("<!-- x -->"));
+        assert!(
+            applied.redraw.iter().any(|r| r.contains(&2)),
+            "{:?}",
+            applied.redraw
+        );
+    }
 
     #[test]
     fn finds_code_blocks_and_their_code() {

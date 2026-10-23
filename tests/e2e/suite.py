@@ -1828,7 +1828,66 @@ def test_recovered_copy(env):
         b.close()
 
 
-TESTS = [test_onboarding, test_collab, test_devices_and_recovery, test_features, test_attachments, test_note_sharing, test_tables, test_code_blocks, test_code_wrapping, test_editor_mouse, test_editor_safety, test_local_copy, test_ui_basics, test_offline_tabs, test_offline_start, test_mobile, test_quick_notes, test_vault_icons, test_entry_icons, test_tree_order, test_session_ended_while_away, test_comments, test_graph, test_recovered_copy]
+def test_html(env):
+    b = Browser()
+    try:
+        signup(b, uniq("hta"))
+        new_note(b, "Html", "")
+        body = ("<details>\n<summary>More</summary>\n\nHidden **bold**\n\n</details>\n\n"
+                "Press <kbd>Ctrl</kbd>+<kbd>K</kbd>\n\n"
+                "<div align=\"center\" style=\"position:fixed;inset:0;background:red\" class=\"modal-back\" onclick=\"window.__pwned=1\">\n"
+                "<b>centered</b> <a href=\"javascript:window.__pwned=2\">bad</a> <a href=\"https://example.org/\">ok</a>\n</div>\n\n"
+                "<script>window.__pwned = 3</script>\n\n<img src=x onerror=\"window.__pwned = 4\">\n\n"
+                "<iframe src=\"https://example.org\"></iframe><form><input name=pw></form>\n\nend")
+        b.js("const dt = new DataTransfer(); dt.setData('text/plain', arguments[0]); document.querySelector('.ed').dispatchEvent(new ClipboardEvent('paste', {clipboardData: dt, bubbles: true, cancelable: true}));", body)
+        time.sleep(0.6)
+        check(editor_text(b) == body, "the editor keeps HTML as its source")
+        # Live preview: away from the caret an HTML block shows only its preview.
+        b.chord(KEYS["ctrl"], KEYS["end"])
+        time.sleep(0.4)
+        check(b.js("return !!document.querySelector('.ed .ln.html .hw div[align] b')"), "an HTML block shows its preview in the editor")
+        check(b.js("return getComputedStyle(document.querySelector('.ed .hw')).display") != "none", "the preview shows away from the caret")
+        source_folded = """return Array.from(document.querySelectorAll('.ed .ln.html')).every(l =>
+            Array.from(l.childNodes).filter(n => !(n.dataset && 'w' in n.dataset)).every(n => {
+                const r = document.createRange(); r.selectNodeContents(n); return r.getBoundingClientRect().height === 0; }))"""
+        check(b.js(source_folded), "its source folds away")
+        check(b.js("return Array.from(document.querySelectorAll('.ed .kbd')).map(k => k.textContent).join('+')") == "Ctrl+K", "inline HTML shows its look in the editor")
+        check(b.js("return Array.from(document.querySelectorAll('.ed .mk.ht')).every(t => getComputedStyle(t).display === 'none')"), "and its tags hide away from the caret")
+        check(not b.js("return !!document.querySelector('.ed .hw [style], .ed .hw [onclick], .ed .hw [class=modal-back], .ed .hw script, .ed .hw iframe, .ed .hw input')"),
+              "the preview drops what isn't allowed")
+        b.shot("html-editing")
+        # A click on the preview shows the source; leaving the block shows the preview again.
+        b.click(".ed .hw div[align] b")
+        time.sleep(0.4)
+        check(b.js("const l = document.querySelector('.ed .ln.html.active'); return !!l && l.textContent.startsWith('<div align')"), "a click on the preview shows the source")
+        check(b.js("return getComputedStyle(document.querySelector('.ed .ln.active .hw')).display") == "none", "without the preview")
+        check(not b.js(source_folded), "the source shows")
+        b.shot("html-source")
+        b.chord(KEYS["ctrl"], KEYS["end"])
+        time.sleep(0.4)
+        check(b.js(source_folded), "away from it, the preview again")
+        check(editor_text(b) == body, "clicking changed nothing")
+        # The reading view.
+        b.click(".seg button[title^='Reading']")
+        b.find(".reading details", 10)
+        check(b.js("return document.querySelector('.reading details summary').textContent") == "More", "details and summary render")
+        check(b.js("return document.querySelector('.reading details strong').textContent") == "bold", "Markdown inside HTML renders")
+        check(b.js("return Array.from(document.querySelectorAll('.reading kbd')).map(k => k.textContent).join('+')") == "Ctrl+K", "inline HTML renders")
+        check(b.js("return getComputedStyle(document.querySelector('.reading div[align]')).textAlign").endswith("center"), "align is kept")
+        check(not b.js("return !!document.querySelector('.reading [style], .reading [onclick], .reading .modal-back, .reading script, .reading iframe, .reading form, .reading input:not(.task), .reading img[src]')"),
+              "scripts, frames, forms, styles and event handlers are dropped")
+        check(not b.js("return !!document.querySelector('.reading a[href^=\"javascript\"]')"), "javascript: links are dropped")
+        check(b.js("return document.querySelector('.reading a[href=\"https://example.org/\"]').rel").startswith("noopener"), "web links open on their own")
+        b.js("document.querySelector('.reading div[align] b').click()")
+        time.sleep(0.3)
+        check(not b.js("return !!window.__pwned"), "nothing in the note ran")
+        b.shot("html-reading")
+        check(not severe_logs(b), "no browser errors")
+    finally:
+        b.close()
+
+
+TESTS = [test_onboarding, test_collab, test_devices_and_recovery, test_features, test_attachments, test_note_sharing, test_tables, test_code_blocks, test_html, test_code_wrapping, test_editor_mouse, test_editor_safety, test_local_copy, test_ui_basics, test_offline_tabs, test_offline_start, test_mobile, test_quick_notes, test_vault_icons, test_entry_icons, test_tree_order, test_session_ended_while_away, test_comments, test_graph, test_recovered_copy]
 
 
 def main():

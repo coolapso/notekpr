@@ -605,6 +605,7 @@ impl Editor {
                     idx: i,
                     text: st.doc().line(i).to_string(),
                     block: st.block(i).clone(),
+                    html: st.html_source(i),
                 })
                 .collect::<Vec<_>>()
         });
@@ -624,8 +625,10 @@ impl Editor {
             .iter()
             .enumerate()
             .filter_map(|(i, r)| {
+                let el = kids.item(i as u32)?;
+                dom::fill_widget(&el, r);
                 Some(LineView {
-                    el: kids.item(i as u32)?.unchecked_into(),
+                    el: el.unchecked_into(),
                     hash: r.hash,
                     dynamic: r.dynamic,
                     code_w: 0,
@@ -684,6 +687,9 @@ impl Editor {
                 for (k, idx) in range.enumerate() {
                     if let Some(el) = kids.item(k as u32) {
                         let r = find(idx).map(|k| &rendered[k]);
+                        if let Some(r) = r {
+                            dom::fill_widget(&el, r);
+                        }
                         new_views.push(LineView {
                             el: el.unchecked_into(),
                             hash: r.map(|r| r.hash).unwrap_or(0),
@@ -709,6 +715,7 @@ impl Editor {
                 lv.el
                     .set_class_name(&dom::class_with(&r.class, active(r.idx)));
                 lv.el.set_inner_html(&r.html);
+                dom::fill_widget(&lv.el, &r);
                 lv.hash = r.hash;
             }
             lv.dynamic = r.dynamic;
@@ -849,6 +856,7 @@ impl Editor {
                     idx: i,
                     text: st.doc().line(i).to_string(),
                     block: st.block(i).clone(),
+                    html: st.html_source(i),
                 })
                 .collect::<Vec<_>>();
             let s = st.selection();
@@ -936,6 +944,7 @@ impl Editor {
                     idx: i,
                     text: doc.line(i).to_string(),
                     block: st.block(i).clone(),
+                    html: st.html_source(i),
                 })
                 .collect();
             Some(Out {
@@ -1800,6 +1809,19 @@ impl Editor {
         Editor::listen(this, &root, "mousedown", |ed, e| {
             ed.run_now(|ed| ed.on_mousedown(e.unchecked_ref()));
         });
+        // A click in an HTML block's preview was handled on mousedown; its
+        // own default (a `summary` opening its `details`) would only change
+        // a preview that is about to hide.
+        Editor::listen(this, &root, "click", |_ed, e| {
+            let in_preview = e
+                .target()
+                .and_then(|t| t.dyn_into::<Element>().ok())
+                .and_then(|t| t.closest(".hw").ok().flatten())
+                .is_some();
+            if in_preview {
+                e.prevent_default();
+            }
+        });
         for name in ["focus", "blur"] {
             Editor::listen(this, &root, name, |ed, _| {
                 if !ed.run_now(|ed| ed.sync_active()) {
@@ -2243,6 +2265,37 @@ impl Editor {
             .and_then(|l| l.dyn_ref::<Element>())
             .is_some_and(|l| l.class_list().contains("active"));
         let readonly = self.model(|st| st.readonly);
+        // The preview of an HTML block (which stands in for its source away
+        // from the caret): a link opens, anywhere else puts the caret at the
+        // start of the block, which shows its source.
+        if let Some(preview) = target.closest(".hw").ok().flatten() {
+            ev.prevent_default();
+            if ev.button() != 0 {
+                return;
+            }
+            let href = target
+                .closest("[data-href]")
+                .ok()
+                .flatten()
+                .filter(|a| preview.contains(Some(a)))
+                .and_then(|a| a.get_attribute("data-href"));
+            if let Some(href) = href {
+                let href = href.trim();
+                let target = if notekpr_core::markdown::is_internal_target(href) {
+                    Target::Wiki(notekpr_core::markdown::percent_decode(href))
+                } else {
+                    Target::Url(href.to_string())
+                };
+                self.host.open_link(&target, ev.ctrl_key() || ev.meta_key());
+            } else if let Some(tr) = self.model(move |st| {
+                let at = st.doc().line_start(st.html_block(idx)?.start);
+                Some(Transaction::select(st.doc().len(), Selection::new(at, at)))
+            }) {
+                let _ = self.root.focus();
+                self.dispatch(tr);
+            }
+            return;
+        }
         if ev.button() == 0 {
             self.mouse_down.set(true);
         }
@@ -2342,6 +2395,9 @@ fn active_lines(st: &EditorState) -> Vec<Range<usize>> {
             out.push(open..open + 1);
             out.extend(close.map(|c| c..c + 1));
         }
+        // An HTML block shows its source, without the preview, while the
+        // selection is in it.
+        out.extend(st.html_block(line));
     }
     crate::decorations::merge_ranges(out)
 }

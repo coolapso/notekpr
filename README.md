@@ -47,6 +47,12 @@ read anything.
   pasting) after an opening `` ``` `` closes the block.
 * Images and other files: paste or drop them into a note — they are encrypted,
   uploaded and shown inline.
+* HTML inside notes for what Markdown can't do: fold-out sections
+  (`<details>`), keys (`<kbd>`), sub- and superscript, centered text,
+  sized images, tables with merged cells. Only formatting is kept — no
+  scripts, styles, frames, forms or embeds; external images aren't loaded.
+  The editor shows HTML rendered, like Markdown: a block until you click
+  into it, inline tags (`<kbd>`, `<i>`, …) until the caret is on their line.
 * Wiki links (`[[Note]]`, `[[Note#Heading]]`, `[[Note|alias]]`) that create
   the note if it's missing; renaming a note updates every link to it.
 * Each note's menu downloads it as Markdown or copies a `[[link]]` to it.

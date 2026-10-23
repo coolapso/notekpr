@@ -1,7 +1,10 @@
 //! Reading view: Markdown → HTML that is safe by construction.
 //!
-//! * Raw HTML in notes is rendered as text, never as markup.
-//! * Link targets are limited to http(s), mailto and in-vault references.
+//! * Raw HTML in notes keeps only what [`html::sanitize`] allows: formatting
+//!   elements with a few checked attributes; no scripts, styles, frames,
+//!   forms, event handlers, `style`, `class` or `id`.
+//! * Link targets are limited to http(s), mailto and in-vault references,
+//!   in Markdown and HTML alike.
 //! * External images are not loaded (privacy: no tracking pixels; the CSP
 //!   blocks them anyway) and are shown as links instead.
 //! * Every attribute we emit is escaped.
@@ -11,7 +14,7 @@ use pulldown_cmark::{
 };
 
 use crate::editor::code::{self, Carry, FenceInfo, Indent};
-use crate::editor::syntax;
+use crate::editor::{html, syntax};
 
 pub struct Ctx<'a> {
     /// Resolve a link target (wiki or relative Markdown) to a note id.
@@ -233,6 +236,14 @@ pub fn to_html(src: &str, ctx: &Ctx) -> String {
     // The current table's column alignments, and the next cell's column.
     let mut table_align: Vec<Alignment> = Vec::new();
     let mut column = 0usize;
+    // The HTML block being read.
+    let mut html_block: Option<String> = None;
+    let html_link = |dest: &str, attrs: &str| link_open(dest, false, attrs, ctx);
+    let html_image = |src: &str, alt: &str, attrs: &str| image_html(src, alt, false, attrs, ctx);
+    let urls = html::Urls {
+        link: &html_link,
+        image: &html_image,
+    };
 
     for (ev, range) in Parser::new_ext(src, opts).into_offset_iter() {
         if let Event::Start(t) = &ev
@@ -245,12 +256,23 @@ pub fn to_html(src: &str, ctx: &Ctx) -> String {
         {
             block += 1;
         }
+        if let Some(buf) = &mut html_block {
+            match ev {
+                Event::Html(h) => buf.push_str(&h),
+                Event::End(TagEnd::HtmlBlock) => {
+                    let src = html_block.take().unwrap();
+                    out_events.push(Event::Html(CowStr::from(html::sanitize(&src, &urls))));
+                }
+                _ => {}
+            }
+            continue;
+        }
         if let Some((_, alt, _)) = &mut image {
             match ev {
                 Event::End(TagEnd::Image) => {
                     let (target, alt, wiki) = image.take().unwrap();
                     out_events.push(Event::Html(CowStr::from(image_html(
-                        &target, &alt, wiki, ctx,
+                        &target, &alt, wiki, "", ctx,
                     ))));
                 }
                 Event::Text(t) | Event::Code(t) => alt.push_str(&t),
@@ -274,7 +296,10 @@ pub fn to_html(src: &str, ctx: &Ctx) -> String {
             Event::Start(Tag::MetadataBlock(_)) => in_meta = true,
             Event::End(TagEnd::MetadataBlock(_)) => in_meta = false,
             _ if in_meta => {}
-            Event::Html(h) | Event::InlineHtml(h) => out_events.push(Event::Text(h)),
+            Event::Start(Tag::HtmlBlock) => html_block = Some(String::new()),
+            Event::Html(h) | Event::InlineHtml(h) => {
+                out_events.push(Event::InlineHtml(CowStr::from(html::sanitize(&h, &urls))))
+            }
             Event::Start(Tag::CodeBlock(kind)) => {
                 let info = match kind {
                     CodeBlockKind::Fenced(l) => FenceInfo::parse(&l),
@@ -300,37 +325,9 @@ pub fn to_html(src: &str, ctx: &Ctx) -> String {
                 if link_type == LinkType::Email && !dest.starts_with("mailto:") {
                     dest = format!("mailto:{dest}");
                 }
-                let html = if matches!(link_type, LinkType::WikiLink { .. })
-                    || notekpr_core::markdown::is_internal_target(&dest)
-                {
-                    let target = notekpr_core::markdown::percent_decode(&dest);
-                    let name = target.split('#').next().unwrap_or(&target).to_string();
-                    let heading = target
-                        .split_once('#')
-                        .map(|(_, h)| h.trim())
-                        .filter(|h| !h.is_empty())
-                        .map(|h| format!(" data-heading=\"{}\"", esc(h)))
-                        .unwrap_or_default();
-                    match (ctx.note)(&name) {
-                        Some(id) => format!(
-                            "<a class=\"wl\" href=\"#\" data-note=\"{}\"{heading}>",
-                            esc(&id)
-                        ),
-                        None => format!(
-                            "<a class=\"wl wlb\" href=\"#\" data-create=\"{}\" title=\"Create this note\">",
-                            esc(&name)
-                        ),
-                    }
-                } else if safe_external(&dest) {
-                    format!(
-                        "<a href=\"{}\" target=\"_blank\" rel=\"noopener noreferrer nofollow\">",
-                        esc(dest.trim())
-                    )
-                } else {
-                    "<a>".to_string()
-                };
+                let wiki = matches!(link_type, LinkType::WikiLink { .. });
                 link_stack.push(true);
-                out_events.push(Event::Html(CowStr::from(html)));
+                out_events.push(Event::Html(CowStr::from(link_open(&dest, wiki, "", ctx))));
             }
             Event::End(TagEnd::Link) => {
                 if link_stack.pop().is_some() {
@@ -395,7 +392,43 @@ pub fn to_html(src: &str, ctx: &Ctx) -> String {
     out
 }
 
-fn image_html(target: &str, alt: &str, wiki: bool, ctx: &Ctx) -> String {
+/// The opening tag of a link to `dest` (a wiki link's target if `wiki`):
+/// a note, a note to create, a web or e-mail link, or no link at all.
+/// `attrs`: more attributes (escaped, each after a space).
+fn link_open(dest: &str, wiki: bool, attrs: &str, ctx: &Ctx) -> String {
+    if wiki || notekpr_core::markdown::is_internal_target(dest) {
+        let target = notekpr_core::markdown::percent_decode(dest);
+        let name = target.split('#').next().unwrap_or(&target).to_string();
+        let heading = target
+            .split_once('#')
+            .map(|(_, h)| h.trim())
+            .filter(|h| !h.is_empty())
+            .map(|h| format!(" data-heading=\"{}\"", esc(h)))
+            .unwrap_or_default();
+        match (ctx.note)(&name) {
+            Some(id) => format!(
+                "<a class=\"wl\" href=\"#\" data-note=\"{}\"{heading}{attrs}>",
+                esc(&id)
+            ),
+            None => format!(
+                "<a class=\"wl wlb\" href=\"#\" data-create=\"{}\" title=\"Create this note\">",
+                esc(&name)
+            ),
+        }
+    } else if safe_external(dest) {
+        format!(
+            "<a href=\"{}\" target=\"_blank\" rel=\"noopener noreferrer nofollow\"{attrs}>",
+            esc(dest.trim())
+        )
+    } else {
+        format!("<a{attrs}>")
+    }
+}
+
+/// An embedded image: an attachment, a note (as a link), an external image
+/// (as a link: not loaded) or a missing one. `attrs`: more attributes of an
+/// attachment's `img` (escaped, each after a space).
+fn image_html(target: &str, alt: &str, wiki: bool, attrs: &str, ctx: &Ctx) -> String {
     let target = notekpr_core::markdown::percent_decode(target);
     if !wiki && safe_external(&target) {
         let label = if alt.is_empty() {
@@ -411,7 +444,7 @@ fn image_html(target: &str, alt: &str, wiki: bool, ctx: &Ctx) -> String {
     }
     if let Some(id) = (ctx.attachment)(&target) {
         return format!(
-            "<img class=\"att\" data-att=\"{}\" alt=\"{}\">",
+            "<img class=\"att\" data-att=\"{}\" alt=\"{}\"{attrs}>",
             esc(&id),
             esc(alt)
         );
@@ -448,12 +481,65 @@ mod tests {
     #[test]
     fn neutralises_html_and_bad_links() {
         let h = render(
-            "<script>alert(1)</script>\n\n[x](javascript:alert(1)) <img src=x onerror=alert(1)>",
+            "<script>alert(1)</script>\n\n[x](javascript:alert(1)) <img src=x onerror=alert(1)>\n\n<iframe src=\"https://example.org\"></iframe>",
         );
-        assert!(!h.contains("<script"));
-        assert!(!h.contains("<img src=x"));
-        assert!(!h.contains("javascript:"));
-        assert!(h.contains("&lt;script&gt;"));
+        assert!(!h.contains("<script") && !h.contains("alert"), "{h}");
+        assert!(!h.contains("onerror") && !h.contains("<img src"), "{h}");
+        assert!(!h.contains("javascript:"), "{h}");
+        assert!(!h.contains("iframe"), "{h}");
+        let h = render("<div style=\"position:fixed\" class=\"wl\" data-note=\"id1\" id=x>a</div>");
+        assert!(h.contains("<div>a</div>"), "{h}");
+    }
+
+    #[test]
+    fn renders_allowed_html() {
+        let h = render("Press <kbd>Ctrl</kbd>+<kbd>K</kbd>, H<sub>2</sub>O <!-- secret -->");
+        assert!(
+            h.contains("Press <kbd>Ctrl</kbd>+<kbd>K</kbd>, H<sub>2</sub>O"),
+            "{h}"
+        );
+        assert!(!h.contains("secret"), "{h}");
+        // HTML around Markdown, the way GitHub reads it.
+        let h = render("<details>\n<summary>More</summary>\n\nSome **bold** text\n\n</details>");
+        assert!(h.contains("<details>\n<summary>More</summary>"), "{h}");
+        assert!(h.contains("<p>Some <strong>bold</strong> text</p>"), "{h}");
+        assert!(h.contains("</details>"), "{h}");
+        let h =
+            render("<table>\n<tr><td colspan=\"2\" align=\"right\">a &amp; b</td></tr>\n</table>");
+        assert!(
+            h.contains("<td colspan=\"2\" align=\"right\">a &amp; b</td>"),
+            "{h}"
+        );
+        // Code is code.
+        assert!(render("`<b>x</b>`").contains("<code>&lt;b&gt;x&lt;/b&gt;</code>"));
+    }
+
+    #[test]
+    fn html_links_and_images_follow_the_markdown_rules() {
+        let h = render(
+            "<a href=\"Known\">k</a> <a href=\"https://e.org\" title=\"t\">e</a> <a href=\"&#106;avascript:x\">j</a>",
+        );
+        assert!(
+            h.contains("<a class=\"wl\" href=\"#\" data-note=\"id1\">k</a>"),
+            "{h}"
+        );
+        assert!(
+            h.contains("<a href=\"https://e.org\" target=\"_blank\" rel=\"noopener noreferrer nofollow\" title=\"t\">e</a>"),
+            "{h}"
+        );
+        assert!(h.contains("<a>j</a>"), "{h}");
+        let h = render(
+            "<img src=\"pic.png\" width=\"200\" alt=\"p\"> <img src=\"https://e.org/x.png\">",
+        );
+        assert!(
+            h.contains("<img class=\"att\" data-att=\"a1\" alt=\"p\" width=\"200\">"),
+            "{h}"
+        );
+        assert!(
+            h.contains("class=\"extimg\" href=\"https://e.org/x.png\""),
+            "{h}"
+        );
+        assert!(!h.contains("<img src"), "{h}");
     }
 
     #[test]

@@ -1025,3 +1025,80 @@ fn typing_on_a_large_note() {
     assert_eq!(dom_text(&f).len(), text.len() + 40 + 10);
     assert!(t < 250.0 && e < 250.0, "typing took {t} ms, Enter {e} ms");
 }
+
+/// An HTML block shows a preview on its last line: a widget, so the text
+/// stays the source. Nothing in it reaches outside it, it follows edits, the
+/// whole block is active while the caret is in it (CSS shows the source
+/// then, the preview otherwise), its links open through the host, and a
+/// click anywhere else in it puts the caret in the block.
+#[wasm_bindgen_test]
+fn html_block_previews() {
+    let text = "intro\n<div align=\"center\">\n<b>bold</b> <a href=\"Exists\">x</a> <img src=\"pic.png\" width=\"20\" onerror=\"x()\">\n</div>\n\nafter <kbd>K</kbd>";
+    let f = setup(text);
+    let ls = lines(&f);
+    assert_eq!(ls.len(), 6);
+    assert!(ls[1].query_selector(".hw").unwrap().is_none());
+    assert!(ls[2].query_selector(".hw").unwrap().is_none());
+    let w = ls[3].query_selector(".hw[data-w]").unwrap().unwrap();
+    assert_eq!(w.get_attribute("contenteditable").as_deref(), Some("false"));
+    assert!(w.query_selector("div[align=center] > b").unwrap().is_some());
+    let img = w.query_selector("img").unwrap().unwrap();
+    assert!(
+        img.get_attribute("src")
+            .unwrap()
+            .starts_with("data:image/gif")
+    );
+    assert_eq!(img.get_attribute("width").as_deref(), Some("20"));
+    assert!(!img.has_attribute("onerror"));
+    assert!(
+        ls[5].query_selector(".ht").unwrap().is_some(),
+        "inline tags"
+    );
+    assert_text(&f, text);
+
+    // A link in the preview opens; a click elsewhere in it goes into the block.
+    caret_at(&f, text.len());
+    let init = web_sys::MouseEventInit::new();
+    init.set_bubbles(true);
+    init.set_cancelable(true);
+    let a = w.query_selector("[data-href]").unwrap().unwrap();
+    let ev = web_sys::MouseEvent::new_with_mouse_event_init_dict("mousedown", &init).unwrap();
+    a.dispatch_event(&ev).unwrap();
+    assert!(ev.default_prevented());
+    assert_eq!(*f.host.opened.borrow(), vec![Target::Wiki("Exists".into())]);
+    assert_eq!(f.ed.selection(), (text.len(), text.len()));
+    let ev = web_sys::MouseEvent::new_with_mouse_event_init_dict("mousedown", &init).unwrap();
+    img.dispatch_event(&ev).unwrap();
+    assert!(ev.default_prevented());
+    assert_eq!(f.ed.selection(), (6, 6), "the start of the block");
+    let ev = web_sys::MouseEvent::new_with_mouse_event_init_dict("click", &init).unwrap();
+    img.dispatch_event(&ev).unwrap();
+    assert!(ev.default_prevented(), "no default action in the preview");
+
+    // The caret anywhere in the block makes all of it active.
+    caret_at(&f, "intro\n<div".len());
+    let ls = lines(&f);
+    assert!((1..4).all(|i| ls[i].class_list().contains("active")));
+    assert!(!ls[0].class_list().contains("active") && !ls[4].class_list().contains("active"));
+    // Typing in it updates the preview.
+    caret_at(&f, "intro\n<div align=\"center\">\n<b>bold".len());
+    type_str(&f, "er");
+    let w = lines(&f)[3].query_selector(".hw").unwrap().unwrap();
+    assert_eq!(
+        w.query_selector("b")
+            .unwrap()
+            .unwrap()
+            .text_content()
+            .as_deref(),
+        Some("bolder")
+    );
+
+    // Whatever the HTML closes or opens, it stays in its widget.
+    let hostile = "<div>\n</span></div></div><div class=\"ln\">x</div><p>y</td></table><table><tr><td>z\n</div>\n\nend";
+    let g = setup(hostile);
+    assert_eq!(lines(&g).len(), 5);
+    let w = lines(&g)[2].query_selector(".hw").unwrap().unwrap();
+    assert!(w.text_content().unwrap().contains('z'));
+    assert!(w.query_selector(".ln").unwrap().is_none());
+    assert_text(&g, hostile);
+}

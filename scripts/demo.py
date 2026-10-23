@@ -68,7 +68,7 @@ def continues(prev, line):
         return True
     if prev.startswith("> ") and line.startswith("> "):
         return True
-    starts_block = re.compile(r"([-*+] |\d+\. |\||#|>|```|---|\[\^)")
+    starts_block = re.compile(r"([-*+] |\d+\. |\||#|>|```|---|\[\^|<)")
     return not starts_block.match(prev) and not starts_block.match(line)
 
 
@@ -161,6 +161,7 @@ HOME = [
         - [ ] Rename a note, or drag it to another folder in the sidebar: links to it follow
         - [ ] Comment on a note: select some text and click *Comment* (or press `Alt+M`); click highlighted text to read and answer its thread. *Holiday plans* in *Family* has comments — even Carol's, who only views that vault
         - [ ] Drag a note between two others in the sidebar: a line shows where it goes, and it stays there for everyone (this note and the *Recipes* overview were put first that way, from the command line); *Sort A–Z* in a folder's ⋯ menu undoes it
+        - [ ] HTML in notes: the fold-out section at the end of [[Sourdough bread]] (`<details>`), the centered photo with a caption in [[Lisbon 2026]], a table with merged cells in [[Weekly meal plan]], keys like <kbd>Ctrl</kbd>+<kbd>E</kbd>; click one in the editor to see its HTML. Scripts, styles, frames and forms are removed
         - [ ] Code blocks in *Snippets*: a file name and highlighted lines (`title=… hl=…` after the language), line numbers, indentation guides, a copy button, `wrap=false` for long lines; Settings → Editor turns the numbers, guides and wrapping off
         - [ ] Drop or paste a picture into a note
         - [ ] Give a note or folder an icon: *Set icon…* in its ⋯ menu in the sidebar
@@ -333,6 +334,15 @@ HOME = [
         | 13:30–16:00 | four sets of stretch and folds |
         | 16:00 | shape, into the fridge overnight |
         | next day 08:00 | bake at 250 °C, 20 min lid on, 20 min off |
+
+        <details>
+        <summary>Flat loaf? What went wrong</summary>
+
+        - The starter wasn't active enough: feed it twice the day before
+        - Over-proofed: shorten the bulk rise when the kitchen is warm
+        - Shape tighter, and score <i>deeper</i> than feels right
+
+        </details>
         """)),
     ("Recipes/Sourdough starter.md", None, note("""
         # Sourdough starter
@@ -365,6 +375,20 @@ HOME = [
         | Friday | pizza night |
         | Sunday | roast, then [[Apple pie]] |
 
+        ## Who cooks
+
+        <table>
+        <tr><th rowspan="2">Day</th><th colspan="2" align="center">Meals</th></tr>
+        <tr><th>Lunch</th><th>Dinner</th></tr>
+        <tr><td>Monday</td><td rowspan="5" align="center"><i>at work and school</i></td><td>Alice</td></tr>
+        <tr><td>Tuesday</td><td>Bob</td></tr>
+        <tr><td>Wednesday</td><td>Alice</td></tr>
+        <tr><td>Thursday</td><td><i>leftovers</i></td></tr>
+        <tr><td>Friday</td><td>Bob — pizza night 🍕</td></tr>
+        <tr><td>Saturday</td><td colspan="2" align="center">out with Carol</td></tr>
+        <tr><td>Sunday</td><td>Bob</td><td>Alice and Bob</td></tr>
+        </table>
+
         - [ ] Buy pine nuts
         - [x] Make a double batch of sauce
 
@@ -375,7 +399,12 @@ HOME = [
 
         Five days in May. #travel
 
-        ![[lisbon-sunset.png]]
+        <div align="center">
+        <figure>
+        <img src="lisbon-sunset.png" width="360" alt="Sunset over the river">
+        <figcaption>The view from the <b>Miradouro</b> we want to find again</figcaption>
+        </figure>
+        </div>
 
         ## Plan
 

@@ -378,6 +378,12 @@ button.list-row:hover:not(:disabled) { background: var(--bg-2); }
 .ed .s { text-decoration: line-through; }
 .ed .hl { background: var(--hl-bg); border-radius: 2px; }
 .ed .c { font-family: var(--mono); font-size: 0.88em; background: var(--code-bg); border-radius: 4px; padding: 0.1em 0.25em; }
+/* The looks of inline HTML (<u>, <kbd>, <sub>, <sup>; the others share Markdown's). */
+.ed .un { text-decoration: underline; text-underline-offset: 2px; }
+.ed .kbd { font-family: var(--mono); font-size: 0.82em; padding: 1px 5px; border: 1px solid var(--border-strong); border-bottom-width: 2px; border-radius: 4px; background: var(--bg); }
+.ed .sub, .ed .sup { font-size: 0.75em; }
+.ed .sub { vertical-align: sub; }
+.ed .sup { vertical-align: super; }
 .ed .a, .ed .u { color: var(--link); text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
 .ed .wl { color: var(--link); cursor: pointer; }
 .ed .wl:hover { text-decoration: underline; }
@@ -498,6 +504,18 @@ button.list-row:hover:not(:disabled) { background: var(--bg-2); }
 .ed.source .ln.h1, .ed.source .ln.h2, .ed.source .ln.h3 { font-size: 1em; margin-top: 0; }
 .ed.source .ln.code, .ed.source .ln.fence, .ed.source .ln.fm, .ed.source .ln.table, .ed.source .ln.pipes { font-size: 1em; }
 .ed.source .w { display: none; }
+/* Raw HTML in the editor: tags, and the lines of an HTML block. In live
+   preview a block away from the selection shows only its preview (on its
+   last line; its source lines fold away, as code fences do), and with the
+   selection in it only its source. */
+.ed .ht { font-family: var(--mono); font-size: 0.88em; color: var(--muted); }
+.ed .ln.html { font-family: var(--mono); font-size: 14px; color: var(--fg-2); }
+.ed .ln.html .ht { font-size: inherit; }
+.ed .hw { font-family: var(--sans); font-size: 16px; line-height: 1.7; color: var(--fg); white-space: normal; overflow-wrap: anywhere; padding: 2px 0 6px; }
+.ed .hw img { display: inline; max-height: none; border-radius: 8px; margin: 0; max-width: 100%; }
+.ed .hw a { color: var(--link); text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
+.ed.live .ln.html:not(.active) { font-size: 0; line-height: 0; }
+.ed.live .ln.active .hw { display: none; }
 .ed.vim-normal { caret-color: var(--warn); }
 .ed-cursors { position: absolute; inset: 0; pointer-events: none; }
 .rc { position: absolute; width: 2px; background: var(--c); border-radius: 1px; }
@@ -510,16 +528,16 @@ button.list-row:hover:not(:disabled) { background: var(--bg-2); }
 
 /* ---------------------------------------------------------- reading view */
 .reading { font-size: 16px; line-height: 1.7; overflow-wrap: anywhere; }
-.reading h1, .reading h2, .reading h3, .reading h4 { line-height: 1.3; margin: 1.2em 0 0.4em; }
-.reading h1 { font-size: 1.85em; }
-.reading h2 { font-size: 1.45em; }
-.reading h3 { font-size: 1.2em; }
-.reading p { margin: 0.5em 0; }
-.reading ul, .reading ol { padding-left: 1.6em; margin: 0.4em 0; }
+:is(.reading, .ed .hw) :is(h1, h2, h3, h4) { line-height: 1.3; margin: 1.2em 0 0.4em; }
+:is(.reading, .ed .hw) h1 { font-size: 1.85em; }
+:is(.reading, .ed .hw) h2 { font-size: 1.45em; }
+:is(.reading, .ed .hw) h3 { font-size: 1.2em; }
+:is(.reading, .ed .hw) p { margin: 0.5em 0; }
+:is(.reading, .ed .hw) :is(ul, ol) { padding-left: 1.6em; margin: 0.4em 0; }
 .reading li:has(> input.task) { list-style: none; margin-left: -1.4em; }
 .reading input.task { width: 16px; height: 16px; vertical-align: -2px; margin-right: 6px; accent-color: var(--accent); cursor: pointer; }
-.reading blockquote { margin: 0.6em 0; padding: 0.1em 1em; border-left: 3px solid var(--border-strong); color: var(--fg-2); }
-.reading code { font-size: 0.88em; background: var(--code-bg); border-radius: 4px; padding: 0.1em 0.3em; }
+:is(.reading, .ed .hw) blockquote { margin: 0.6em 0; padding: 0.1em 1em; border-left: 3px solid var(--border-strong); color: var(--fg-2); }
+:is(.reading, .ed .hw) code { font-size: 0.88em; background: var(--code-bg); border-radius: 4px; padding: 0.1em 0.3em; }
 .reading .codeblock { position: relative; margin: 0.8em 0; background: var(--code-bg); border-radius: 8px; overflow: hidden; }
 .reading .code-head { height: var(--code-head); padding: 0 6px 0 14px; border-bottom: 1px solid var(--border); }
 .reading .codeblock.bare .code-head { position: absolute; top: 4px; right: 4px; z-index: 1; height: auto; padding: 0; border: none; opacity: 0; transition: opacity 0.12s; }
@@ -552,18 +570,29 @@ button.list-row:hover:not(:disabled) { background: var(--bg-2); }
 .igs.iu6 { --iu: 6ch; } .igs.iu7 { --iu: 7ch; } .igs.iu8 { --iu: 8ch; }
 .no-code-guides .ed .igs, .no-code-guides .reading .igs { display: none; }
 .reading .mk { color: var(--muted); }
-.reading table { border-collapse: collapse; margin: 0.8em 0; display: block; overflow: auto; }
-.reading th, .reading td { border: 1px solid var(--border); padding: 6px 10px; text-align: left; overflow-wrap: normal; }
-.reading th { background: var(--bg-2); }
-.reading hr { border: none; border-top: 1px solid var(--border-strong); margin: 1.6em 0; }
+:is(.reading, .ed .hw) table { border-collapse: collapse; margin: 0.8em 0; display: block; overflow: auto; }
+:is(.reading, .ed .hw) :is(th, td) { border: 1px solid var(--border); padding: 6px 10px; text-align: left; overflow-wrap: normal; }
+:is(.reading, .ed .hw) th { background: var(--bg-2); }
+:is(.reading, .ed .hw) hr { border: none; border-top: 1px solid var(--border-strong); margin: 1.6em 0; }
 .reading img.att { max-width: 100%; border-radius: 8px; }
 .reading a.wl { color: var(--link); text-decoration: none; }
 .reading a.wl:hover { text-decoration: underline; }
 .reading a.wlb { color: var(--broken); text-decoration: underline dashed; }
 .reading a.tg { color: var(--accent); background: var(--accent-bg); border-radius: 4px; padding: 0 3px; text-decoration: none; cursor: pointer; }
 .reading .missing { color: var(--broken); font-size: 13px; }
-.reading .extimg { font-size: 14px; }
-.reading mark { background: var(--hl-bg); color: inherit; }
+:is(.reading, .ed .hw) .extimg { font-size: 14px; }
+:is(.reading, .ed .hw) mark { background: var(--hl-bg); color: inherit; }
+/* HTML in notes: what crates/editor/src/html.rs keeps of it. */
+:is(.reading, .ed .hw) :is(td, th)[align="center" i] { text-align: center; }
+:is(.reading, .ed .hw) :is(td, th)[align="right" i] { text-align: right; }
+:is(.reading, .ed .hw) :is(td, th)[align="justify" i] { text-align: justify; }
+:is(.reading, .ed .hw) img[width] { height: auto; }
+:is(.reading, .ed .hw) details { margin: 0.5em 0; }
+:is(.reading, .ed .hw) summary { cursor: pointer; }
+:is(.reading, .ed .hw) dt { font-weight: 600; }
+:is(.reading, .ed .hw) dd { margin: 0 0 0.4em 1.4em; }
+:is(.reading, .ed .hw) figure { margin: 0.8em 0; }
+:is(.reading, .ed .hw) figcaption { color: var(--muted); font-size: 14px; }
 
 /* ---------------------------------------------------------- modals */
 .modal-back { position: fixed; inset: 0; z-index: 90; background: rgba(15, 15, 20, 0.35); display: flex; align-items: flex-start; justify-content: center; padding: 10vh 16px 16px; animation: fade 0.12s; }

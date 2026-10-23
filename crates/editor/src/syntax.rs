@@ -19,6 +19,7 @@ use std::borrow::Cow;
 use std::rc::Rc;
 
 use crate::code::{self, Carry, FenceInfo, Indent};
+use crate::html;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Block {
@@ -63,6 +64,12 @@ pub enum Block {
     PipeText,
     FrontmatterFence,
     Frontmatter,
+    /// A line of a raw HTML block; `last` on its last line, which shows
+    /// the block's rendered preview.
+    Html {
+        kind: html::BlockKind,
+        last: bool,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -143,6 +150,7 @@ impl Block {
             Block::PipeText => "ln pipes",
             Block::FrontmatterFence => "ln fm fmf",
             Block::Frontmatter => "ln fm",
+            Block::Html { .. } => "ln html",
         })
     }
 }
@@ -359,6 +367,10 @@ pub enum LineState {
     /// their own continue it ([`Block::Lazy`]).
     ListPara,
     QuotePara,
+    /// After a line of a paragraph, which some blocks can't interrupt.
+    Para,
+    /// Inside an HTML block.
+    Html(html::BlockKind),
 }
 
 /// Classify `line` given the state the lines above left and the line after
@@ -428,8 +440,25 @@ pub fn step(state: &LineState, line: &str, next: Option<&str>) -> (Block, LineSt
             let quote = *state == LineState::QuotePara;
             (Block::Lazy { quote }, state.clone())
         }
-        _ => normal_line(line, next),
+        LineState::Html(kind) => html_line(*kind, line, next),
+        LineState::Para | LineState::PipeText => normal_line(line, next, true),
+        _ => normal_line(line, next, false),
     }
+}
+
+/// A line of an HTML block of `kind` (its first or a later one).
+fn html_line(kind: html::BlockKind, line: &str, next: Option<&str>) -> (Block, LineState) {
+    let last = match next {
+        None => true,
+        Some(next) if kind.ends_at_blank() => next.trim().is_empty(),
+        Some(_) => kind.ends_on(line),
+    };
+    let state = if last {
+        LineState::Normal
+    } else {
+        LineState::Html(kind)
+    };
+    (Block::Html { kind, last }, state)
 }
 
 /// Whether `line`, after a list item or quote with text, continues it: it is
@@ -443,9 +472,12 @@ fn continues_lazily(line: &str) -> bool {
         && !(is_hr(line) && !t.starts_with("- "))
         && !t.starts_with('>')
         && list_marker(line).is_none()
+        && !html::BlockKind::start(line).is_some_and(html::BlockKind::interrupts_paragraph)
 }
 
-fn normal_line(line: &str, next: Option<&str>) -> (Block, LineState) {
+/// A line that no open block claims; `para`: it comes right after a line
+/// of a paragraph.
+fn normal_line(line: &str, next: Option<&str>, para: bool) -> (Block, LineState) {
     let normal = |b| (b, LineState::Normal);
     if let Some((fence, info)) = fence_of(line) {
         let info = Rc::new(FenceInfo::parse(info));
@@ -488,6 +520,10 @@ fn normal_line(line: &str, next: Option<&str>) -> (Block, LineState) {
             LineState::ListPara
         };
         (block, state)
+    } else if let Some(kind) =
+        html::BlockKind::start(line).filter(|k| !para || k.interrupts_paragraph())
+    {
+        html_line(kind, line, next)
     } else if let Some(align) = table_start(line, next) {
         // A table: this header, its delimiter row, and the rows that follow.
         (
@@ -501,7 +537,7 @@ fn normal_line(line: &str, next: Option<&str>) -> (Block, LineState) {
         // `|` lines that are not a table.
         (Block::PipeText, LineState::PipeText)
     } else {
-        normal(Block::Paragraph)
+        (Block::Paragraph, LineState::Para)
     }
 }
 
@@ -710,40 +746,48 @@ pub fn classify(lines: &[&str]) -> Vec<Block> {
 }
 
 // Per-byte style flags.
-pub const MK: u32 = 1; // hideable syntax
-pub const STRONG: u32 = 1 << 1;
-pub const EM: u32 = 1 << 2;
-pub const STRIKE: u32 = 1 << 3;
-pub const HL: u32 = 1 << 4;
-pub const CODE: u32 = 1 << 5;
-pub const LINK: u32 = 1 << 6;
-pub const URL: u32 = 1 << 7;
-pub const WIKI: u32 = 1 << 8;
-pub const BROKEN: u32 = 1 << 9;
-pub const TAG: u32 = 1 << 10;
-pub const TASK: u32 = 1 << 11;
-pub const BULLET: u32 = 1 << 12;
-pub const PIPE: u32 = 1 << 13;
-pub const KW: u32 = 1 << 14;
-pub const STR: u32 = 1 << 15;
-pub const COMMENT: u32 = 1 << 16;
-pub const NUM: u32 = 1 << 17;
-pub const OLNUM: u32 = 1 << 18;
-pub const HIDE_ALL: u32 = 1 << 19; // marker hidden even as part of a task item
-pub const LANG: u32 = 1 << 20;
-// Code tokens beyond keywords, strings, comments and numbers.
-pub const FUNC: u32 = 1 << 21;
-pub const TYPE: u32 = 1 << 22;
-pub const CONST: u32 = 1 << 23;
-pub const VAR: u32 = 1 << 24;
-pub const PROP: u32 = 1 << 25;
-pub const OP: u32 = 1 << 26;
-pub const META: u32 = 1 << 27;
-pub const INS: u32 = 1 << 28;
-pub const DEL: u32 = 1 << 29;
-const PROTECT: u32 = 1 << 31;
+/// Style flags of a byte of a line.
+pub type Flags = u64;
 
-pub fn classes(flags: u32) -> String {
+pub const MK: Flags = 1; // hideable syntax
+pub const STRONG: Flags = 1 << 1;
+pub const EM: Flags = 1 << 2;
+pub const STRIKE: Flags = 1 << 3;
+pub const HL: Flags = 1 << 4;
+pub const CODE: Flags = 1 << 5;
+pub const LINK: Flags = 1 << 6;
+pub const URL: Flags = 1 << 7;
+pub const WIKI: Flags = 1 << 8;
+pub const BROKEN: Flags = 1 << 9;
+pub const TAG: Flags = 1 << 10;
+pub const TASK: Flags = 1 << 11;
+pub const BULLET: Flags = 1 << 12;
+pub const PIPE: Flags = 1 << 13;
+pub const KW: Flags = 1 << 14;
+pub const STR: Flags = 1 << 15;
+pub const COMMENT: Flags = 1 << 16;
+pub const NUM: Flags = 1 << 17;
+pub const OLNUM: Flags = 1 << 18;
+pub const HIDE_ALL: Flags = 1 << 19; // marker hidden even as part of a task item
+pub const LANG: Flags = 1 << 20;
+// Code tokens beyond keywords, strings, comments and numbers.
+pub const FUNC: Flags = 1 << 21;
+pub const TYPE: Flags = 1 << 22;
+pub const CONST: Flags = 1 << 23;
+pub const VAR: Flags = 1 << 24;
+pub const PROP: Flags = 1 << 25;
+pub const OP: Flags = 1 << 26;
+pub const META: Flags = 1 << 27;
+pub const INS: Flags = 1 << 28;
+pub const DEL: Flags = 1 << 29;
+pub const HTML: Flags = 1 << 30; // a raw HTML tag
+const PROTECT: Flags = 1 << 31;
+pub const UNDERLINE: Flags = 1 << 32;
+pub const KBD: Flags = 1 << 33;
+pub const SUB: Flags = 1 << 34;
+pub const SUP: Flags = 1 << 35;
+
+pub fn classes(flags: Flags) -> String {
     let mut c = Vec::new();
     for (bit, name) in [
         (MK, "mk"),
@@ -776,6 +820,11 @@ pub fn classes(flags: u32) -> String {
         (META, "me"),
         (INS, "ins"),
         (DEL, "del"),
+        (HTML, "ht"),
+        (UNDERLINE, "un"),
+        (KBD, "kbd"),
+        (SUB, "sub"),
+        (SUP, "sup"),
     ] {
         if flags & bit != 0 {
             c.push(name);
@@ -793,7 +842,7 @@ pub enum Target {
 #[derive(Clone, Debug, Default)]
 pub struct Styled {
     /// One entry per byte of the line.
-    pub flags: Vec<u32>,
+    pub flags: Vec<Flags>,
     /// Clickable ranges (byte offsets in the line).
     pub links: Vec<(usize, usize, Target)>,
     /// An image embed that fills the whole line (rendered as a preview widget).
@@ -808,14 +857,14 @@ pub struct Styled {
     pub outer: Option<&'static str>,
 }
 
-fn set(flags: &mut [u32], a: usize, b: usize, f: u32) {
+fn set(flags: &mut [Flags], a: usize, b: usize, f: Flags) {
     let n = flags.len();
     for x in &mut flags[a.min(n)..b.min(n).max(a.min(n))] {
         *x |= f;
     }
 }
 
-fn free(flags: &[u32], a: usize, b: usize) -> bool {
+fn free(flags: &[Flags], a: usize, b: usize) -> bool {
     flags[a..b.min(flags.len())]
         .iter()
         .all(|f| f & (PROTECT | MK) == 0)
@@ -860,6 +909,18 @@ pub fn style_line(line: &str, block: &Block, resolves: &dyn Fn(&str) -> bool) ->
             return s;
         }
         Block::FrontmatterFence | Block::Frontmatter => return s,
+        // Markdown isn't Markdown inside an HTML block.
+        Block::Html { kind, .. } => {
+            if *kind == html::BlockKind::Comment {
+                set(&mut s.flags, 0, n, COMMENT);
+            } else {
+                html_tags(line, 0, &mut s.flags);
+                for f in &mut s.flags {
+                    *f &= !PROTECT;
+                }
+            }
+            return s;
+        }
         Block::Hr => {
             set(&mut s.flags, 0, n, MK);
             return s;
@@ -996,6 +1057,8 @@ fn inline(line: &str, from: usize, s: &mut Styled, resolves: &dyn Fn(&str) -> bo
         }
         i += 1;
     }
+    let tags = html_tags(line, from, &mut s.flags);
+    html_inline(line, &tags, s);
     // Wiki links and embeds.
     let mut i = from;
     while i + 1 < n {
@@ -1165,7 +1228,87 @@ fn inline(line: &str, from: usize, s: &mut Styled, resolves: &dyn Fn(&str) -> bo
     }
 }
 
-/// Escape text for insertion as HTML.
+/// Mark the raw HTML in `line` from `from` on: tags, and comments (which
+/// the reading view hides). Returns where the tags are.
+fn html_tags(line: &str, from: usize, flags: &mut [Flags]) -> Vec<(usize, usize)> {
+    let b = line.as_bytes();
+    let mut tags = vec![];
+    let mut i = from;
+    while i < b.len() {
+        if b[i] == b'<'
+            && let Some(len) = html::tag_len(&b[i..])
+            && free(flags, i, i + len)
+        {
+            let comment = b[i..].starts_with(b"<!--");
+            set(
+                flags,
+                i,
+                i + len,
+                if comment { COMMENT } else { HTML } | PROTECT,
+            );
+            if !comment {
+                tags.push((i, i + len));
+            }
+            i += len;
+        } else {
+            i += 1;
+        }
+    }
+    tags
+}
+
+/// How the text inside an inline HTML element looks (`Some(0)`: plain),
+/// for the elements whose look the editor shows.
+fn html_look(tag: &html::InlineTag) -> Option<Flags> {
+    Some(match tag.name.as_str() {
+        "b" | "strong" => STRONG,
+        "i" | "em" | "cite" | "var" | "dfn" => EM,
+        "u" | "ins" => UNDERLINE,
+        "s" | "strike" | "del" => STRIKE,
+        "mark" => HL,
+        "code" | "samp" => CODE,
+        "kbd" => KBD,
+        "sub" => SUB,
+        "sup" => SUP,
+        "a" if tag.href.is_some() => LINK,
+        "a" | "span" | "abbr" => 0,
+        _ => return None,
+    })
+}
+
+/// Inline HTML elements opened and closed on the line: their tags are
+/// syntax (hidden away from the caret, like Markdown's), and the text
+/// between them looks as in the reading view; a link opens on click.
+fn html_inline(line: &str, tags: &[(usize, usize)], s: &mut Styled) {
+    let mut open: Vec<(usize, usize, html::InlineTag)> = vec![];
+    for &(a, b) in tags {
+        let Some(tag) = html::inline_tag(&line[a..b]).filter(|t| html_look(t).is_some()) else {
+            continue;
+        };
+        if !tag.closing {
+            open.push((a, b, tag));
+            continue;
+        }
+        let Some(k) = open.iter().rposition(|(_, _, o)| o.name == tag.name) else {
+            continue;
+        };
+        let (oa, ob, o) = open.remove(k);
+        set(&mut s.flags, oa, ob, MK);
+        set(&mut s.flags, a, b, MK);
+        set(&mut s.flags, ob, a, html_look(&o).unwrap_or(0));
+        if let Some(href) = o.href {
+            let target = if notekpr_core::markdown::is_internal_target(&href) {
+                Target::Wiki(notekpr_core::markdown::percent_decode(&href))
+            } else {
+                Target::Url(href)
+            };
+            s.links.push((ob, a, target));
+        }
+    }
+}
+
+/// Escape text for insertion as HTML. A carriage return is written as a
+/// reference: a browser reads a raw one as a line feed.
 pub fn escape(s: &str, out: &mut String) {
     for c in s.chars() {
         match c {
@@ -1174,6 +1317,7 @@ pub fn escape(s: &str, out: &mut String) {
             '>' => out.push_str("&gt;"),
             '"' => out.push_str("&quot;"),
             '\'' => out.push_str("&#39;"),
+            '\r' => out.push_str("&#13;"),
             c => out.push(c),
         }
     }
@@ -1249,6 +1393,96 @@ pub fn line_html(line: &str, st: &Styled) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn inline_html() {
+        let st = |line: &str| style_line(line, &Block::Paragraph, &|_| true);
+        // Tags that open and close on the line are syntax; the text between
+        // them takes the look, Markdown in it still counts.
+        let line = "a <kbd>K</kbd> <i>**b**</i> c";
+        let s = st(line);
+        let at = |t: &str| line.find(t).unwrap();
+        assert_eq!(s.flags[at("<kbd>")], MK | HTML);
+        assert_eq!(s.flags[at("K<")], KBD);
+        assert_eq!(s.flags[at("</kbd>")], MK | HTML);
+        assert_eq!(s.flags[at("b*")], EM | STRONG);
+        assert_eq!(classes(s.flags[at("<i>")]), "mk ht");
+        // Unpaired, or not one whose look the editor shows: plain tags.
+        let s = st("<b>x <script>y</script>");
+        assert_eq!(s.flags[0], HTML);
+        assert_eq!(s.flags[3], 0);
+        assert_eq!(s.flags[5], HTML);
+        // Nested and misnested.
+        let line = "<b><u>x</u></b> <sub>1<sup>2</sub>3</sup>";
+        let s = st(line);
+        let at = |t: &str| line.find(t).unwrap();
+        assert_eq!(s.flags[at("x")], STRONG | UNDERLINE);
+        assert_eq!(s.flags[at("1")], SUB);
+        assert_eq!(s.flags[at("2")], SUB | SUP);
+        assert_eq!(s.flags[at("3")], SUP);
+        // Links open like Markdown's.
+        let line = "<a href=\"Some%20note\">x</a> <a href='https://e.org'>y</a> <a>z</a>";
+        let s = st(line);
+        let at = |t: &str| line.find(t).unwrap();
+        assert_eq!(s.flags[at("x")], LINK);
+        assert_eq!(s.flags[at("z")], 0);
+        assert_eq!(s.flags[at("<a>")], MK | HTML);
+        let targets: Vec<_> = s.links.iter().map(|l| l.2.clone()).collect();
+        assert_eq!(
+            targets,
+            [
+                Target::Wiki("Some note".into()),
+                Target::Url("https://e.org".into())
+            ]
+        );
+    }
+
+    #[test]
+    fn html_blocks() {
+        use html::BlockKind as K;
+        let h = |kind, last| Block::Html { kind, last };
+        // A block-level tag runs to the blank line; Markdown inside it isn't.
+        let k = classify(&[
+            "<div>",
+            "**x**",
+            "",
+            "<details>",
+            "<summary>S</summary>",
+            "",
+            "text",
+            "</details>",
+        ]);
+        assert_eq!(
+            k[..3],
+            [h(K::Block, false), h(K::Block, true), Block::Blank]
+        );
+        assert_eq!(
+            k[3..6],
+            [h(K::Block, false), h(K::Block, true), Block::Blank]
+        );
+        assert_eq!(k[6..], [Block::Paragraph, h(K::Block, true)]);
+        // A comment runs to its end, blank lines and all.
+        let k = classify(&["<!-- a", "", "b -->", "c"]);
+        assert_eq!(
+            k,
+            [
+                h(K::Comment, false),
+                h(K::Comment, false),
+                h(K::Comment, true),
+                Block::Paragraph
+            ]
+        );
+        // A lone tag starts a block, except right after a paragraph's line.
+        let k = classify(&["<img src=\"a.png\">", "", "text", "<span>", "- item", "<b>"]);
+        assert_eq!(k[0], h(K::Tag, true));
+        assert_eq!(k[3], Block::Paragraph);
+        assert_eq!(k[5], Block::Lazy { quote: false });
+        assert_eq!(classify(&["- item", "<div>"])[1], h(K::Block, true));
+        // Markdown inside an HTML block isn't styled.
+        let s = style_line("<b>**x**</b>", &h(K::Block, true), &|_| true);
+        assert!(s.flags[3..8].iter().all(|f| *f == 0));
+        assert!(s.flags.iter().all(|f| f & PROTECT == 0));
+    }
 
     #[test]
     fn toggles_the_task_box_after_the_marker() {

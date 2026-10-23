@@ -8,7 +8,8 @@ use notekpr_core::textdiff;
 use notekpr_editor::change::{Assoc, ChangeSet};
 use notekpr_editor::code::{self, Carry, FenceInfo, Indent};
 use notekpr_editor::decorations::Decorations;
-use notekpr_editor::state::{EditorState, Selection, merge_native};
+use notekpr_editor::html::{self, BlockKind};
+use notekpr_editor::state::{EditorState, Origin, Selection, Transaction, merge_native};
 use notekpr_editor::syntax::{self, Block, TableKey};
 use notekpr_editor::text::Text;
 use notekpr_editor::{commands, edits_fit, rebase};
@@ -53,6 +54,20 @@ const LINES: &[&str] = &[
     "  indented",
     "1. one",
     "    ```",
+    "<div>",
+    "</div>",
+    "<details open>",
+    "<!-- c",
+    "-->",
+    "<!-- x -->",
+    "<pre>",
+    "</pre>",
+    "<img src=\"a.png\" width=300>",
+    "<span>",
+    "<b>x</b>",
+    "<?php",
+    "<!X",
+    ">",
 ];
 
 fn text(max: usize) -> impl Strategy<Value = String> {
@@ -107,6 +122,132 @@ fn text_of(html: &str) -> String {
         .replace("&quot;", "\"")
         .replace("&#39;", "'")
         .replace("&amp;", "&")
+}
+
+/// Pieces of HTML, many of them hostile, for the sanitizer.
+const HTML_PIECES: &[&str] = &[
+    "<script>",
+    "</script>",
+    "<style>",
+    "</style>",
+    "<b>",
+    "</b>",
+    "<i>",
+    "</div>",
+    "<div>",
+    "<a href=\"javascript:alert(1)\">",
+    "<a href=x title='t\"'>",
+    "</a>",
+    "<img src=x onerror=alert(1)>",
+    "<img src=\"a.png\" width=30 alt=\"&lt;\">",
+    "<div style=\"position:fixed\" class=\"wl\" id=app data-note=1>",
+    "<!--",
+    "-->",
+    "<![CDATA[",
+    "]]>",
+    "<svg>",
+    "</svg>",
+    "<math>",
+    "<textarea>",
+    "</textarea>",
+    "<title>",
+    "</title>",
+    "<plaintext>",
+    "<noscript>",
+    "</noscript>",
+    "<iframe srcdoc=x>",
+    "</iframe>",
+    "<details open>",
+    "<summary>",
+    "&lt;",
+    "&#60;",
+    "&#x3C;script",
+    "&amp;",
+    "&",
+    "\"",
+    "'",
+    "=",
+    "\r",
+    "&#13;",
+    "<",
+    ">",
+    "/",
+    " ",
+    "\n",
+    "<td colspan=3 rowspan=x>",
+    "<table>",
+    "<tr>",
+    "<p align=center onclick=x>",
+    "\0",
+    "<xmp>",
+    "</xmp>",
+    "<template>",
+    "</",
+    "<!DOCTYPE html>",
+    "<?xml?>",
+    "<br/>",
+    "<ol start=-2 reversed type=I>",
+    "<span lang=en dir=rtl>",
+    "<b <i>",
+    "<a\nhref=x>",
+    "<form action=/x>",
+    "<input name=pw>",
+    "<object data=x>",
+    "<embed src=x>",
+];
+
+fn html_soup() -> impl Strategy<Value = String> {
+    prop::collection::vec(
+        prop_oneof![
+            4 => prop::sample::select(HTML_PIECES).prop_map(str::to_string),
+            1 => text(6),
+        ],
+        0..40,
+    )
+    .prop_map(|v| v.concat())
+}
+
+/// `html` sanitized, links and images written out with their targets.
+fn sanitize(src: &str) -> String {
+    let link = |href: &str, attrs: &str| {
+        let mut o = String::from("<a href=\"");
+        syntax::escape(href, &mut o);
+        format!("{o}\"{attrs}>")
+    };
+    let image = |src: &str, alt: &str, attrs: &str| {
+        let (mut s, mut a) = (String::new(), String::new());
+        syntax::escape(src, &mut s);
+        syntax::escape(alt, &mut a);
+        format!("<img src=\"{s}\" alt=\"{a}\"{attrs}>")
+    };
+    html::sanitize(
+        src,
+        &html::Urls {
+            link: &link,
+            image: &image,
+        },
+    )
+}
+
+/// The tokens a browser reads from `html` (outside raw text, which the
+/// sanitizer's output never opens).
+fn tokens(html: &str) -> Vec<html5ever::tokenizer::Token> {
+    use html5ever::tendril::StrTendril;
+    use html5ever::tokenizer::*;
+    struct Collect(std::cell::RefCell<Vec<Token>>);
+    impl TokenSink for Collect {
+        type Handle = ();
+        fn process_token(&self, token: Token, _: u64) -> TokenSinkResult<()> {
+            self.0.borrow_mut().push(token);
+            TokenSinkResult::Continue
+        }
+    }
+    let tok = Tokenizer::new(Collect(Default::default()), TokenizerOpts::default());
+    let input = BufferQueue::default();
+    input.push_back(StrTendril::from_slice(html));
+    let _ = tok.feed(&input);
+    tok.end();
+    tok.sink.0.into_inner()
 }
 
 /// The one-pass classifier the editor used before blocks were computed
@@ -188,6 +329,14 @@ fn reference_classify(lines: &[&str]) -> Vec<Block> {
             && !(is_hr(line) && !t.starts_with("- "))
             && !t.starts_with('>')
             && list_marker(line).is_none()
+            && !BlockKind::start(line).is_some_and(BlockKind::interrupts_paragraph)
+    };
+    // The open HTML block, and where it ends.
+    let mut html: Option<BlockKind> = None;
+    let html_last = |kind: BlockKind, i: usize| match lines.get(i + 1) {
+        None => true,
+        Some(next) if kind.ends_at_blank() => next.trim().is_empty(),
+        Some(_) => kind.ends_on(lines[i]),
     };
     let mut queued: std::collections::VecDeque<Block> = Default::default();
     for (i, line) in lines.iter().enumerate() {
@@ -232,6 +381,14 @@ fn reference_classify(lines: &[&str]) -> Vec<Block> {
             *carry = code::carry_after(line, &info.lang, *carry);
             continue;
         }
+        if let Some(kind) = html {
+            let last = html_last(kind, i);
+            out.push(Block::Html { kind, last });
+            if last {
+                html = None;
+            }
+            continue;
+        }
         if let Some(quote) = lazy {
             if continues(line) {
                 out.push(Block::Lazy { quote });
@@ -269,6 +426,15 @@ fn reference_classify(lines: &[&str]) -> Vec<Block> {
             });
             if !line[indent + len..].trim().is_empty() {
                 lazy = Some(false);
+            }
+        } else if let Some(kind) = BlockKind::start(line).filter(|k| {
+            k.interrupts_paragraph()
+                || !matches!(out.last(), Some(Block::Paragraph | Block::PipeText))
+        }) {
+            let last = html_last(kind, i);
+            out.push(Block::Html { kind, last });
+            if !last {
+                html = Some(kind);
             }
         } else if let Some(align) = table_start(i) {
             let end = (i + 2..lines.len())
@@ -476,6 +642,65 @@ proptest! {
             prop_assert!(st.text().is_char_boundary(applied.selection.head));
             let lines: Vec<&str> = st.text().split('\n').collect();
             prop_assert_eq!(st.blocks().to_vec(), syntax::classify(&lines));
+        }
+    }
+
+    /// Whatever goes in, a browser reads only allowed tags with allowed
+    /// attributes, and text, from what comes out (no comments, doctypes or
+    /// anything that switches it into raw text), and sanitizing that again
+    /// changes nothing.
+    #[test]
+    fn sanitized_html_has_only_allowed_markup(src in html_soup()) {
+        use html5ever::tokenizer::Token::*;
+        let out = sanitize(&src);
+        for t in tokens(&out) {
+            match t {
+                TagToken(tag) => {
+                    prop_assert!(html::is_allowed(&tag.name, None), "{} in {:?}", &*tag.name, out);
+                    for a in &tag.attrs {
+                        let key: &str = &a.name.local;
+                        prop_assert!(html::is_allowed(&tag.name, Some(key)), "{} in {:?}", key, out);
+                    }
+                }
+                CommentToken(_) | DoctypeToken(_) | NullCharacterToken => {
+                    prop_assert!(false, "{:?}", out)
+                }
+                CharacterTokens(_) | EOFToken | ParseError(_) => {}
+            }
+        }
+        prop_assert_eq!(sanitize(&out), out);
+    }
+
+    /// A line the view doesn't redraw after an edit renders as before: same
+    /// text, block and HTML preview (an HTML block's preview, on its last
+    /// line, shows lines above it).
+    #[test]
+    fn lines_not_redrawn_render_as_before(
+        t in lines_text(24),
+        edits in prop::collection::vec((any::<prop::sample::Index>(), any::<prop::sample::Index>(), prop_oneof![lines_text(3), text(6)]), 1..6),
+    ) {
+        let mut st = EditorState::new(t);
+        let render = |st: &EditorState, i: usize| {
+            (st.doc().line(i).to_string(), st.block(i).clone(), st.html_source(i))
+        };
+        for (a, b, ins) in edits {
+            let before: Vec<_> = (0..st.doc().line_count()).map(|i| render(&st, i)).collect();
+            let (from, to) = edit_on(st.text(), a, b);
+            let change = ChangeSet::replace(st.doc().len(), from, to, &ins);
+            let applied = st.apply(Transaction::new(change, Origin::Input));
+            let mut shift = 0isize;
+            let mut splices = applied.splices.iter().peekable();
+            for i in 0..st.doc().line_count() {
+                while let Some(sp) = splices.next_if(|sp| sp.new_start + sp.new <= i && !sp.new_range().contains(&i)) {
+                    shift += sp.new as isize - sp.old as isize;
+                }
+                let spliced = applied.splices.iter().any(|sp| sp.new_range().contains(&i));
+                let redrawn = applied.redraw.iter().any(|r| r.contains(&i));
+                if !spliced && !redrawn {
+                    let old = (i as isize - shift) as usize;
+                    prop_assert_eq!(&render(&st, i), &before[old], "line {}", i);
+                }
+            }
         }
     }
 }

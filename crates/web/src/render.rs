@@ -24,6 +24,8 @@ use pulldown_cmark::{
     Alignment, CodeBlockKind, CowStr, Event, LinkType, Options, Parser, Tag, TagEnd,
 };
 
+use notekpr_core::dates::{self, Date};
+
 use crate::editor::code::{self, Carry, FenceInfo, Indent};
 use crate::editor::{callout, html, syntax};
 
@@ -36,6 +38,13 @@ pub struct Ctx<'a> {
     pub comments: &'a [Highlight],
     /// Say where text is in the source (`data-o`).
     pub offsets: bool,
+    /// How a date (`@2026-10-23`) reads: Today, Tomorrow, … or the date.
+    pub date_label: &'a dyn Fn(Date) -> String,
+}
+
+/// A date as written (the default [`Ctx::date_label`]).
+fn iso_label(day: Date) -> String {
+    day.to_string()
 }
 
 impl<'a> Ctx<'a> {
@@ -49,6 +58,7 @@ impl<'a> Ctx<'a> {
             attachment,
             comments: &[],
             offsets: false,
+            date_label: &iso_label,
         }
     }
 
@@ -180,6 +190,26 @@ fn text_with_tags(s: &str, place: Place, ctx: &Ctx) -> String {
     while k < chars.len() {
         let (i, c) = chars[k];
         let prev_ok = k == 0 || chars[k - 1].1.is_whitespace() || chars[k - 1].1 == '(';
+        // A date: its label, which isn't the source (no offset).
+        if c == '@'
+            && dates::starts_date((k > 0).then(|| chars[k - 1].1))
+            && let Some((len, day)) = dates::date_after_at(&s[i + 1..])
+        {
+            out.push_str(&esc_at(&s[last..i], place.after(last), ctx));
+            let within = match place.after(i) {
+                Place::At(a) => Place::Within(a, a + 1 + len),
+                w => w,
+            };
+            out.push_str(&format!(
+                "<time class=\"date\" datetime=\"{day}\" title=\"{day}\">{}</time>",
+                esc_at(&(ctx.date_label)(day), within, ctx)
+            ));
+            last = i + 1 + len;
+            while k < chars.len() && chars[k].0 < last {
+                k += 1;
+            }
+            continue;
+        }
         if c == '#' && prev_ok {
             let len: usize = s[i + 1..]
                 .chars()
@@ -1126,6 +1156,35 @@ mod tests {
             out.push((n.parse().unwrap(), text));
         }
         out
+    }
+
+    #[test]
+    fn dates_read_as_their_label() {
+        let label = |d: Date| format!("day {}", d.day);
+        let note = |_: &str| None;
+        let h = to_html(
+            "Due @2026-10-23, `@2026-10-24` me@2026-10-25 **@2026-10-26**",
+            &Ctx {
+                date_label: &label,
+                ..Ctx::new(&note, &note)
+            },
+        );
+        assert!(
+            h.contains("Due <time class=\"date\" datetime=\"2026-10-23\" title=\"2026-10-23\">day 23</time>, "),
+            "{h}"
+        );
+        assert!(
+            h.contains("<code>@2026-10-24</code>") && h.contains("me@2026-10-25"),
+            "{h}"
+        );
+        assert!(
+            h.contains("<strong><time class=\"date\" datetime=\"2026-10-26\""),
+            "{h}"
+        );
+        // A comment on it highlights the label; no offset (it isn't the source).
+        let src = "On @2026-10-23 ok";
+        let h = render_with(src, &[hl(3, 14, "t")], true);
+        assert!(h.contains("<time class=\"date\" datetime=\"2026-10-23\" title=\"2026-10-23\"><span class=\"cmt\" data-thread=\"t\">2026-10-23</span></time>"), "{h}");
     }
 
     #[test]

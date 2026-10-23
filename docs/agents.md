@@ -171,7 +171,7 @@ G=http://127.0.0.1:7878/v1
 | `GET /v1/vaults` | `[{id, name, role, archived, documents, pending_changes, seq, last_sync}]`, plus `icon`, `read_only` (why) and `too_large_changes` when set |
 | `GET /v1/vaults/{v}/documents[?folder=F&all=true]` | everything below `F` (recursively): `[{vault, path, id, title, kind, tags, created, modified, size}]`, plus `mime` and `icon` when set (`all` adds attachments) |
 | `GET /v1/vaults/{v}/documents/{path}` | Markdown body, `ETag: "<content hash>"`; `?format=json` → `{…info, hash, links, content}` |
-| `PUT /v1/vaults/{v}/documents/{path}` | create (`201`) or update (`200`) with the request body → `{vault, path, id, created, changed, hash, bytes, pending_changes}` and the new `ETag`; `If-Match: "<hash>"` → `412` if it changed meanwhile (`If-Match: *`: it must exist); `If-None-Match: *` → create only |
+| `PUT /v1/vaults/{v}/documents/{path}` | create (`201`) or update (`200`) with the request body (`@today`, `@tomorrow` and `@yesterday` in it become those days' dates, `@2026-10-23`) → `{vault, path, id, created, changed, hash, bytes, pending_changes}` and the new `ETag`; `If-Match: "<hash>"` → `412` if it changed meanwhile (`If-Match: *`: it must exist); `If-None-Match: *` → create only |
 | `POST /v1/vaults/{v}/move` | `{"from": …, "to": …, "update_links": false}` → `{vault, id, from, to}`; a `to` ending in `/` keeps the name |
 | `DELETE /v1/vaults/{v}/documents/{path}` | move a document or folder to the trash → `{vault, trashed: [ids]}` |
 | `GET /v1/search?q=…[&vault=v&limit=n]` | `[{vault, vault_name, path, id, title, score, snippet}]`; `limit` 50 by default, at most 500 |

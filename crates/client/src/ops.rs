@@ -203,6 +203,23 @@ pub async fn read_document(hub: &Hub, vref: &str, path: &str) -> OpResult<Docume
 
 /// Create or diff-update a note. `if_match` is a content hash (`*` = must
 /// exist); a mismatch means someone changed the note since it was read.
+/// The day it is here (in the local time zone).
+pub fn local_today() -> notekpr_core::dates::Date {
+    let (y, mo, d, _, _) = local_time(notekpr_core::now_ms());
+    notekpr_core::dates::Date::new(y, mo as u8, d as u8)
+        .unwrap_or(notekpr_core::dates::Date::from_days(0))
+}
+
+/// `text` with `@today`, `@tomorrow` and `@yesterday` turned into those
+/// days' dates (`@2026-10-23`): what a note means by them when it's written.
+/// The Markdown folder's files are left as they are.
+pub fn with_dates(text: &str) -> std::borrow::Cow<'_, str> {
+    match notekpr_core::dates::expand_keywords(text, local_today()) {
+        Some(t) => t.into(),
+        None => text.into(),
+    }
+}
+
 pub async fn put_document(
     hub: &Hub,
     vref: &str,
@@ -210,6 +227,7 @@ pub async fn put_document(
     content: &str,
     if_match: Option<&str>,
 ) -> OpResult<PutOutcome> {
+    let content = &*with_dates(content);
     let v = vault(hub, vref).await?;
     let (vault_id, res) = {
         let mut g = v.lock().await;
@@ -249,6 +267,7 @@ pub async fn create_document(
     path: &str,
     content: &str,
 ) -> OpResult<PutOutcome> {
+    let content = &*with_dates(content);
     let v = vault(hub, vref).await?;
     let (vault_id, res) = {
         let mut g = v.lock().await;
@@ -271,6 +290,7 @@ pub async fn append_document(
     path: &str,
     text: &str,
 ) -> OpResult<PutOutcome> {
+    let text = &*with_dates(text);
     let v = vault(hub, vref).await?;
     let (vault_id, res, full) = {
         let mut g = v.lock().await;

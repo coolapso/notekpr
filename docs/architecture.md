@@ -285,6 +285,16 @@ has unsent edits to it, that person's client saves their version as a new
   callouts in the parser's events (a quote whose first paragraph starts on
   its first line with the type) and renders a box, or a `details` element
   for one that folds (`+`, `-`).
+* Dates (`crates/core/src/dates.rs`) are `@2026-10-23` in the text: typing
+  `@today`, `@tomorrow` or `@yesterday` puts that day's date there (the
+  editor when the word ends, or from the `@` menu it shows by the caret;
+  the CLI and the gateway as they write; never the Markdown folder, whose
+  files belong to their editor). The day is fixed in the note, so it never
+  drifts, and every other tool sees an ISO date. Like other syntax, a
+  date's source hides away from the caret beside a widget saying Today,
+  Tomorrow, Yesterday or the date in the reader's language; lines with
+  dates count as dynamic, and the app refreshes them (and the reading
+  view) when the day changes.
 * Code blocks (`crates/editor/src/code.rs`) are highlighted by a small
   hand-written lexer per language, a line at a time: what a line leaves open
   (a block comment, a multi-line string) is part of the next line's state, so

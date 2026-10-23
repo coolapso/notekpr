@@ -68,6 +68,11 @@ read anything.
   scripts, styles, frames, forms or embeds; external images aren't loaded.
   The editor shows HTML rendered, like Markdown: a block until you click
   into it, inline tags (`<kbd>`, `<i>`, …) until the caret is on their line.
+* Dates: type `@today`, `@tomorrow` or `@yesterday` (or pick from the menu
+  `@` opens) and the note gets that day's date, `@2026-10-23` — plain text
+  any editor reads. It shows as Today, Tomorrow or Yesterday while it is
+  one, and as the date after that. The CLI and agents get the same
+  (`notekpr write`, the gateway).
 * Wiki links (`[[Note]]`, `[[Note#Heading]]`, `[[Note|alias]]`) that create
   the note if it's missing; renaming a note updates every link to it.
 * Each note's menu downloads it as Markdown or copies a `[[link]]` to it.

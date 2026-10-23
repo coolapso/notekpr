@@ -452,6 +452,7 @@ pub fn NoteView(vault: String, note: String) -> impl IntoView {
             &render::Ctx {
                 comments: &highlights,
                 offsets,
+                date_label: &crate::editor::date_label,
                 ..render::Ctx::new(&note, &att)
             },
         )
@@ -833,6 +834,7 @@ pub fn SharedNoteView(vault: String, note: String) -> impl IntoView {
             &render::Ctx {
                 comments: &highlights,
                 offsets,
+                date_label: &crate::editor::date_label,
                 ..render::Ctx::new(&none, &none)
             },
         )

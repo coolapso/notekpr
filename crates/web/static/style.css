@@ -437,6 +437,29 @@ button.list-row:hover:not(:disabled) { background: var(--bg-2); }
 .ed .wl:hover { text-decoration: underline; }
 .ed .wlb { color: var(--broken); text-decoration: underline dashed; text-underline-offset: 3px; }
 .ed .tg { color: var(--accent); background: var(--accent-bg); border-radius: 4px; padding: 0 2px; }
+/* Dates (@2026-10-23): away from the caret the source hides behind its
+   label (Today, Tomorrow, … or the date). */
+.ed .dt { color: var(--accent); }
+.ed .w.dw { display: none; }
+.ed.live .ln:not(.active) .dt { display: none; }
+.ed.live .ln:not(.active) .w.dw { display: inline; }
+.ed .dw, .reading time.date {
+  color: var(--accent); background: var(--accent-bg); border-radius: 4px; padding: 0 4px;
+  white-space: nowrap; font-weight: 500;
+}
+.ed-menu {
+  position: absolute; z-index: 40; min-width: 230px; display: flex; flex-direction: column;
+  padding: 4px; border-radius: 8px; background: var(--bg); border: 1px solid var(--border);
+  box-shadow: var(--shadow);
+}
+.ed-menu[hidden] { display: none; }
+.ed-menu button {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 16px; padding: 5px 8px;
+  border: none; border-radius: 6px; background: none; color: var(--fg); text-align: left;
+  cursor: pointer; font: inherit; font-size: 14px;
+}
+.ed-menu button.sel, .ed-menu button:hover { background: var(--bg-3); }
+.ed-menu .dm-date { color: var(--muted); font-size: 12.5px; }
 .ed .on { color: var(--muted); }
 .ed .tp { color: var(--muted); }
 .ed .ln.quote { border-left: 3px solid var(--border-strong); padding-left: 14px; color: var(--fg-2); }

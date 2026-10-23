@@ -28,6 +28,7 @@ pub fn App() -> impl IntoView {
     install_menu_closer();
     install_code_copy();
     comments::install_reading_selection();
+    install_day_change();
     Effect::new(move |_| {
         let prefs = ui.ui_prefs.get();
         if let Some(root) = util::document().document_element() {
@@ -199,6 +200,22 @@ fn install_code_copy() {
     }) as Box<dyn FnMut(_)>);
     let _ = util::document().add_event_listener_with_callback("click", cb.as_ref().unchecked_ref());
     cb.forget();
+}
+
+/// At midnight a date that said Today says Yesterday: show the open note's
+/// dates again (looked at every minute).
+fn install_day_change() {
+    let day = std::cell::Cell::new(crate::editor::today());
+    util::set_interval(60_000, move || {
+        let now = crate::editor::today();
+        if now == day.replace(now) {
+            return;
+        }
+        ui().content_rev.update(|n| *n += 1);
+        if let Some(ed) = state::step(|c| c.editor.as_ref().map(|(_, _, e)| e.clone())) {
+            ed.refresh();
+        }
+    });
 }
 
 /// `use:focus_on_mount` — focus an input inserted after the page loaded (the

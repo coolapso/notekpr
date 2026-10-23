@@ -1885,6 +1885,39 @@ def test_mentions(env):
         b.close()
 
 
+def test_dates(env):
+    b = Browser()
+    day = """const d = new Date(); d.setDate(d.getDate() + arguments[0]);
+             return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0')"""
+    try:
+        signup(b, uniq("dora"))
+        new_note(b, "Plans", "Dentist ")
+        # @ offers days; Enter puts the date.
+        b.keys("@to")
+        b.find(".ed-menu button", 5)
+        offered = b.js("return Array.from(document.querySelectorAll('.ed-menu button')).map(e => e.firstChild.textContent)")
+        check(offered == ["Today", "Tomorrow"], f"@to offers today and tomorrow: {offered}")
+        b.keys(KEYS["enter"])
+        # A finished word becomes the date too.
+        b.keys("and gym @yesterday.")
+        today, yesterday = b.js(day, 0), b.js(day, -1)
+        text = editor_text(b)
+        check(f"Dentist @{today} and gym @{yesterday}." in text, f"the note holds the dates: {text!r}")
+        # Away from the caret, they read as days.
+        b.keys(KEYS["enter"] + "next")
+        time.sleep(0.4)
+        shown = b.js("return Array.from(document.querySelectorAll('.ed .dw')).filter(w => getComputedStyle(w).display !== 'none').map(w => w.textContent)")
+        check(shown == ["Today", "Yesterday"], f"the editor shows Today and Yesterday: {shown}")
+        b.click(".seg button[aria-label='Reading view']")
+        b.find(".reading time.date", 5)
+        read = b.js("return Array.from(document.querySelectorAll('.reading time.date')).map(t => [t.textContent, t.getAttribute('datetime')])")
+        check(read == [["Today", today], ["Yesterday", yesterday]], f"so does the reading view: {read}")
+        b.click(".seg button[aria-label='Live preview']")
+        check(not severe_logs(b), "no browser errors")
+    finally:
+        b.close()
+
+
 def test_graph(env):
     b = Browser()
     canvas = ".graph-page canvas"
@@ -2241,7 +2274,7 @@ def test_note_width(env):
         b.close()
 
 
-TESTS = [test_onboarding, test_collab, test_devices_and_recovery, test_features, test_attachments, test_note_sharing, test_tables, test_code_blocks, test_html, test_callouts, test_colors, test_code_wrapping, test_editor_mouse, test_editor_safety, test_local_copy, test_ui_basics, test_offline_tabs, test_offline_start, test_mobile, test_quick_notes, test_vault_icons, test_entry_icons, test_tree_order, test_session_ended_while_away, test_comments, test_mentions, test_graph, test_recovered_copy, test_note_width]
+TESTS = [test_onboarding, test_collab, test_devices_and_recovery, test_features, test_attachments, test_note_sharing, test_tables, test_code_blocks, test_html, test_callouts, test_colors, test_code_wrapping, test_editor_mouse, test_editor_safety, test_local_copy, test_ui_basics, test_offline_tabs, test_offline_start, test_mobile, test_quick_notes, test_vault_icons, test_entry_icons, test_tree_order, test_session_ended_while_away, test_comments, test_mentions, test_dates, test_graph, test_recovered_copy, test_note_width]
 
 
 def main():

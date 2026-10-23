@@ -51,11 +51,14 @@ async fn mirror_syncs_both_ways_and_merges_external_edits() {
     let (stop, rx) = watch::channel(false);
     let task = tokio::spawn(mirror.run(rx));
 
-    // A file written by an editor shows up for Alice.
-    write(&dir.join("Ideas/new.md"), "from bob's editor\n");
+    // A file written by an editor shows up for Alice, as it was written
+    // (`@today` stays: only the app, the CLI and the gateway turn it into a
+    // date, never a file under someone's editor).
+    write(&dir.join("Ideas/new.md"), "from bob's editor @today\n");
     eventually(15, "alice sees the file bob created", || async {
         alice_hub.sync_vault(&vid).await.unwrap();
-        note(&alice_hub, &vid, "Ideas/new.md").await.as_deref() == Some("from bob's editor\n")
+        note(&alice_hub, &vid, "Ideas/new.md").await.as_deref()
+            == Some("from bob's editor @today\n")
     })
     .await;
 
@@ -160,7 +163,7 @@ async fn mirror_syncs_both_ways_and_merges_external_edits() {
     mirror.reconcile_all(true).await.unwrap();
     assert_eq!(
         read(&dir.join("Ideas/new.md")),
-        "from bob's editor\n",
+        "from bob's editor @today\n",
         "restored note is written back"
     );
 

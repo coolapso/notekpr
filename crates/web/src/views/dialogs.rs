@@ -1037,7 +1037,7 @@ fn History(vault: String, note: String) -> impl IntoView {
                             let vv = vv.clone();
                             let note = move |t: &str| knowledge::resolve_target(&vv, t, "");
                             let none = |_: &str| None;
-                            let html = render::to_html(&text, &render::Ctx::new(&note, &none));
+                            let html = render::to_html(&text, &render::Ctx { date_label: &crate::editor::date_label, ..render::Ctx::new(&note, &none) });
                             let (v, n, t) = (vr.clone(), nr.clone(), text.clone());
                             view! {
                                 <div class="h-actions">
@@ -1124,6 +1124,10 @@ fn Help() -> impl IntoView {
             "Comment on the selected text (also in the reading view)",
         ),
         ("@ (in a comment)".into(), "Mention someone in the vault"),
+        (
+            "@today, @tomorrow, @yesterday (in a note)".into(),
+            "That day's date (or pick one from the @ menu)",
+        ),
         (format!("{m}+E"), "Toggle reading view"),
         (format!("{m}+\\"), "Toggle side panel"),
         (format!("{m}+G"), "Graph of the vault"),

@@ -535,6 +535,7 @@ pub async fn write_shared(
     if !s.info.role.can_write() {
         bail!("this note is shared with you read-only");
     }
+    let text = &*crate::ops::with_dates(text);
     for _ in 0..2 {
         let mut r = load(session, &s).await?;
         let oid = s.info.object_id.clone();

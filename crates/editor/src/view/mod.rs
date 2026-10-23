@@ -37,6 +37,8 @@
 
 mod dom;
 
+pub use dom::{date_label, date_text, today};
+
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeSet, VecDeque};
 use std::ops::Range;
@@ -155,6 +157,11 @@ pub struct Editor {
     overlay: HtmlElement,
     /// Behind the text: the highlights of [`Mark`]s.
     marks: HtmlElement,
+    /// The days `@…` typed before the caret may become, to pick from.
+    menu_el: HtmlElement,
+    menu: RefCell<Option<DateMenu>>,
+    /// The `@` whose menu Escape closed: not offered again until another.
+    menu_closed_at: Cell<Option<usize>>,
     host: Rc<dyn Host>,
     /// The document model. Borrowed only inside [`Editor::model`].
     state: RefCell<EditorState>,
@@ -190,6 +197,14 @@ pub struct Editor {
     /// moves its text, which would leave a drag that started there
     /// selecting nothing.
     mouse_down: Cell<bool>,
+}
+
+/// The date menu, open: where its `@` is, the days offered (word, day),
+/// and the one chosen.
+struct DateMenu {
+    at: usize,
+    days: Vec<(&'static str, notekpr_core::dates::Date)>,
+    chosen: usize,
 }
 
 fn is_composition_input(t: &str) -> bool {
@@ -264,6 +279,10 @@ impl Editor {
         let (wrap, root, overlay) = (el("ed-wrap"), el("ed"), el("ed-cursors"));
         let marks = el("ed-marks");
         let _ = marks.set_attribute("aria-hidden", "true");
+        let menu_el = el("ed-menu");
+        menu_el.set_hidden(true);
+        let _ = menu_el.set_attribute("role", "listbox");
+        let _ = menu_el.set_attribute("aria-label", "Dates");
         let _ = root.set_attribute("spellcheck", "true");
         let _ = root.set_attribute("autocapitalize", "sentences");
         let _ = root.set_attribute("role", "textbox");
@@ -273,6 +292,7 @@ impl Editor {
         let _ = wrap.append_child(&marks);
         let _ = wrap.append_child(&root);
         let _ = wrap.append_child(&overlay);
+        let _ = wrap.append_child(&menu_el);
         let _ = container.append_child(&wrap);
         let mut st = EditorState::new(text);
         st.mode = mode;
@@ -283,6 +303,9 @@ impl Editor {
             root,
             overlay,
             marks,
+            menu_el,
+            menu: RefCell::new(None),
+            menu_closed_at: Cell::new(None),
             host,
             state: RefCell::new(st),
             view: RefCell::new(View::default()),
@@ -1014,6 +1037,14 @@ impl Editor {
         {
             self.request_frame(false, true);
         }
+        if remote {
+            // Its `@` may have moved.
+            if self.menu.borrow().is_some() {
+                self.update_menu();
+            }
+        } else {
+            self.update_menu();
+        }
         if !remote && applied.origin != Origin::History {
             let (a, h) = applied.selection.pair();
             self.host.selection_changed(a, h);
@@ -1469,7 +1500,142 @@ impl Editor {
         self.sync_active();
         if changed {
             self.follow_caret_sideways();
+            self.update_menu();
             self.host.selection_changed(a, h);
+        }
+    }
+
+    // ------------------------------------------------------------ date menu
+
+    /// Offer the days the `@…` before the caret may become, or stop.
+    fn update_menu(&self) {
+        let query = if self.has_focus() {
+            self.model(|st| commands::date_query(st))
+        } else {
+            None
+        };
+        if query.is_none() {
+            self.menu_closed_at.set(None);
+        }
+        let Some(q) = query.filter(|q| self.menu_closed_at.get() != Some(q.at)) else {
+            self.hide_menu();
+            return;
+        };
+        let today = today();
+        let days: Vec<_> = q
+            .days
+            .iter()
+            .map(|&(w, n)| (w, today.add_days(n)))
+            .collect();
+        let chosen = self
+            .menu
+            .borrow()
+            .as_ref()
+            .filter(|m| m.at == q.at)
+            .map_or(0, |m| m.chosen)
+            .min(days.len() - 1);
+        *self.menu.borrow_mut() = Some(DateMenu {
+            at: q.at,
+            days,
+            chosen,
+        });
+        self.draw_menu();
+        self.menu_el.set_hidden(false);
+        // Below the `@`, or above it near the end of the note.
+        if let Some(r) = self.text_rects(q.at, q.at + 1).first() {
+            let base = self.wrap.get_bounding_client_rect();
+            let h = f64::from(self.menu_el.offset_height());
+            let below = r.bottom() - base.top() + 4.0;
+            let top = if below + h > base.height() && r.top() - base.top() > h + 4.0 {
+                r.top() - base.top() - h - 4.0
+            } else {
+                below
+            };
+            let style = self.menu_el.style();
+            let _ = style.set_property("left", &format!("{}px", r.left() - base.left()));
+            let _ = style.set_property("top", &format!("{top}px"));
+        }
+    }
+
+    fn draw_menu(&self) {
+        let menu = self.menu.borrow();
+        let Some(m) = menu.as_ref() else { return };
+        let mut html = String::new();
+        for (i, (word, day)) in m.days.iter().enumerate() {
+            let on = i == m.chosen;
+            html.push_str(&format!(
+                "<button type=\"button\" role=\"option\" data-i=\"{i}\" aria-selected=\"{on}\"{}>",
+                if on { " class=\"sel\"" } else { "" }
+            ));
+            let mut w = word.to_string();
+            w[..1].make_ascii_uppercase();
+            syntax::escape(&w, &mut html);
+            html.push_str("<span class=\"dm-date\">");
+            syntax::escape(&date_text(*day), &mut html);
+            html.push_str("</span></button>");
+        }
+        self.menu_el.set_inner_html(&html);
+    }
+
+    fn hide_menu(&self) {
+        if self.menu.borrow_mut().take().is_some() {
+            self.menu_el.set_hidden(true);
+            self.menu_el.set_inner_html("");
+        }
+    }
+
+    /// A key while the menu is open: choose, pick or close. Whether it was
+    /// the menu's.
+    fn menu_key(&self, ev: &KeyboardEvent) -> bool {
+        if self.menu.borrow().is_none()
+            || ev.ctrl_key()
+            || ev.meta_key()
+            || ev.alt_key()
+            || ev.shift_key()
+        {
+            return false;
+        }
+        match ev.key().as_str() {
+            k @ ("ArrowDown" | "ArrowUp") => {
+                if let Some(m) = self.menu.borrow_mut().as_mut() {
+                    let n = m.days.len();
+                    m.chosen = if k == "ArrowDown" {
+                        (m.chosen + 1) % n
+                    } else {
+                        (m.chosen + n - 1) % n
+                    };
+                }
+                self.draw_menu();
+                true
+            }
+            "Enter" | "Tab" => {
+                let chosen = self.menu.borrow().as_ref().map_or(0, |m| m.chosen);
+                self.pick_date(chosen);
+                true
+            }
+            "Escape" => {
+                let at = self.menu.borrow().as_ref().map(|m| m.at);
+                self.menu_closed_at.set(at);
+                self.hide_menu();
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Put the `i`th day of the menu in place of the `@…` typed.
+    fn pick_date(&self, i: usize) {
+        let Some((at, day)) = self
+            .menu
+            .borrow()
+            .as_ref()
+            .and_then(|m| m.days.get(i).map(|d| (m.at, d.1)))
+        else {
+            return;
+        };
+        self.hide_menu();
+        if let Some(tr) = self.model(move |st| commands::insert_date(st, at, day)) {
+            self.dispatch(tr);
         }
     }
 
@@ -1829,6 +1995,23 @@ impl Editor {
                 }
             });
         }
+        Editor::listen(this, &root, "blur", |ed, _| {
+            ed.op(|ed| ed.hide_menu());
+        });
+        // A day picked with the mouse; the editor keeps the focus.
+        let menu: EventTarget = this.menu_el.clone().unchecked_into();
+        Editor::listen(this, &menu, "mousedown", |ed, e| {
+            e.prevent_default();
+            let i = e
+                .target()
+                .and_then(|t| t.dyn_into::<Element>().ok())
+                .and_then(|t| t.closest("[data-i]").ok().flatten())
+                .and_then(|b| b.get_attribute("data-i"))
+                .and_then(|i| i.parse::<usize>().ok());
+            if let Some(i) = i {
+                ed.run_now(|ed| ed.pick_date(i));
+            }
+        });
         let doc: EventTarget = document().unchecked_into();
         for name in ["pointerup", "pointercancel"] {
             Editor::listen(this, &doc, name, |ed, _| ed.mouse_released());
@@ -1954,7 +2137,11 @@ impl Editor {
         let tr = match it {
             "insertText" => {
                 ev.prevent_default();
-                self.model(move |st| commands::type_text(st, a, b, &data))
+                let today = today();
+                self.model(move |st| {
+                    st.today = Some(today);
+                    commands::type_text(st, a, b, &data)
+                })
             }
             "insertReplacementText" => {
                 ev.prevent_default();
@@ -2040,6 +2227,11 @@ impl Editor {
 
     fn on_keydown(&self, ev: &KeyboardEvent) {
         self.settle();
+        if self.menu_key(ev) {
+            ev.prevent_default();
+            ev.stop_propagation();
+            return;
+        }
         if self.model(|st| st.vim.is_some()) && self.vim_key(ev) {
             ev.prevent_default();
             return;

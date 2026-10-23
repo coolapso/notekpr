@@ -1102,3 +1102,92 @@ fn html_block_previews() {
     assert!(w.query_selector(".ln").unwrap().is_none());
     assert_text(&g, hostile);
 }
+
+/// The date menu: shown, and the words it offers.
+fn menu(f: &Fixture) -> Option<Vec<String>> {
+    let m = f.container.query_selector(".ed-menu").unwrap().unwrap();
+    let m: &HtmlElement = m.unchecked_ref();
+    if m.hidden() {
+        return None;
+    }
+    let items = m.query_selector_all("button").unwrap();
+    Some(
+        (0..items.length())
+            .map(|i| {
+                let b: Element = items.item(i).unwrap().unchecked_into();
+                let date = b.query_selector(".dm-date").unwrap().unwrap();
+                let all = b.text_content().unwrap();
+                let word = all
+                    .strip_suffix(&date.text_content().unwrap())
+                    .unwrap()
+                    .to_string();
+                if b.class_list().contains("sel") {
+                    format!("[{word}]")
+                } else {
+                    word
+                }
+            })
+            .collect(),
+    )
+}
+
+#[wasm_bindgen_test]
+fn at_offers_days_and_puts_the_date() {
+    let today = notekpr_editor::today();
+    let f = setup("Due ");
+    caret_at(&f, 4);
+    type_str(&f, "@");
+    assert_eq!(
+        menu(&f),
+        Some(vec![
+            "[Today]".into(),
+            "Tomorrow".into(),
+            "Yesterday".into()
+        ])
+    );
+    type_str(&f, "to");
+    assert_eq!(menu(&f), Some(vec!["[Today]".into(), "Tomorrow".into()]));
+    key(&f, "ArrowDown", false, false);
+    assert_eq!(menu(&f), Some(vec!["Today".into(), "[Tomorrow]".into()]));
+    key(&f, "Enter", false, false);
+    assert_eq!(menu(&f), None);
+    assert_text(&f, &format!("Due @{} ", today.add_days(1)));
+    // Escape closes it for that `@`, typing on doesn't bring it back.
+    type_str(&f, "and @y");
+    assert!(menu(&f).is_some());
+    key(&f, "Escape", false, false);
+    type_str(&f, "es");
+    assert_eq!(menu(&f), None);
+    // Nothing that may still become a day: no menu.
+    type_str(&f, " @x");
+    assert_eq!(menu(&f), None);
+}
+
+#[wasm_bindgen_test]
+fn a_finished_day_word_becomes_the_date() {
+    let today = notekpr_editor::today();
+    let f = setup("");
+    type_str(&f, "Call @Yesterday.");
+    assert_text(&f, &format!("Call @{}.", today.add_days(-1)));
+    // Undo gives the word back.
+    key(&f, "z", true, false);
+    assert_text(&f, "Call @Yesterday");
+}
+
+#[wasm_bindgen_test]
+fn dates_show_their_label_beside_their_source() {
+    let today = notekpr_editor::today();
+    let text = format!("Due @{today}\nOld @2001-02-03");
+    let f = setup(&text);
+    let widgets: Vec<(String, String)> = (0..2)
+        .map(|i| {
+            let w = lines(&f)[i].query_selector(".dt + .dw").unwrap().unwrap();
+            (w.get_attribute("title").unwrap(), w.text_content().unwrap())
+        })
+        .collect();
+    assert_eq!(widgets[0], (today.to_string(), "Today".to_string()));
+    assert_eq!(widgets[1].0, "2001-02-03");
+    assert!(widgets[1].1.contains("2001"), "{:?}", widgets[1]);
+    // The widgets aren't text: the source is.
+    assert_text(&f, &text);
+}

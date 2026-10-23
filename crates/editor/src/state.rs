@@ -228,6 +228,9 @@ pub struct EditorState {
     pub readonly: bool,
     pub mode: Mode,
     pub vim: Option<Vim>,
+    /// The day it is where the editor runs (set by the view): what `@today`
+    /// becomes.
+    pub today: Option<notekpr_core::dates::Date>,
     cursors: Vec<RemoteCursor>,
     marks: Vec<Mark>,
     anchors: Vec<Weak<Cell<usize>>>,
@@ -245,6 +248,7 @@ impl EditorState {
             readonly: false,
             mode: Mode::Live,
             vim: None,
+            today: None,
             cursors: vec![],
             marks: vec![],
             anchors: vec![],

@@ -38,4 +38,4 @@ pub mod vim;
 pub use change::{ChangeSet, edits_fit, rebase};
 pub use commands::Command;
 pub use state::{Anchor, Mark, Mode, RemoteCursor};
-pub use view::{Editor, Host};
+pub use view::{Editor, Host, date_label, date_text, today};

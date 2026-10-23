@@ -898,6 +898,9 @@ pub const FG: Flags = 0xf << FG_SHIFT;
 pub const BG: Flags = 0xf << BG_SHIFT;
 const FG_SHIFT: u32 = 36;
 const BG_SHIFT: u32 = 40;
+/// A date (`@2026-10-23`): its source is hidden away from the caret, next to
+/// a widget saying Today, Tomorrow, … or the date.
+pub const DATE: Flags = 1 << 44;
 
 /// The colors in `flags`.
 pub fn colors(flags: Flags) -> Colors {
@@ -962,6 +965,7 @@ pub fn classes(flags: Flags) -> String {
         (KBD, "kbd"),
         (SUB, "sub"),
         (SUP, "sup"),
+        (DATE, "dt"),
     ] {
         if flags & bit != 0 {
             c.push(name);
@@ -1014,9 +1018,12 @@ pub struct Styled {
     /// they close.
     pub elements: Vec<Element>,
     /// What a tag can't be put inside of without changing it: code spans,
-    /// links, URLs, tags, escapes and the character after a backslash, runs
-    /// of delimiters (`**`, `` ` ``), character references and HTML comments.
+    /// links, URLs, tags, dates, escapes and the character after a
+    /// backslash, runs of delimiters (`**`, `` ` ``), character references
+    /// and HTML comments.
     pub atoms: Vec<(usize, usize)>,
+    /// Dates (`@2026-10-23`): their bytes in the line and the day.
+    pub dates: Vec<(usize, usize, notekpr_core::dates::Date)>,
 }
 
 fn set(flags: &mut [Flags], a: usize, b: usize, f: Flags) {
@@ -1426,6 +1433,23 @@ fn inline(line: &str, from: usize, s: &mut Styled, resolves: &dyn Fn(&str) -> bo
             s.atoms.push((i, i + 1 + len));
         }
     }
+    // Dates.
+    for (k, &(i, c)) in chars.iter().enumerate() {
+        if c != '@' || s.flags[i] & (PROTECT | MK | TAG) != 0 {
+            continue;
+        }
+        let prev = (i > from && k > 0).then(|| chars[k - 1].1);
+        if !notekpr_core::dates::starts_date(prev) && !(i > 0 && s.flags[i - 1] & HTML != 0) {
+            continue;
+        }
+        if let Some((len, day)) = notekpr_core::dates::date_after_at(&line[i + 1..])
+            && free(&s.flags, i, i + 1 + len)
+        {
+            set(&mut s.flags, i, i + 1 + len, DATE);
+            s.atoms.push((i, i + 1 + len));
+            s.dates.push((i, i + 1 + len, day));
+        }
+    }
 }
 
 /// The length of the character reference (`&amp;`, `&#38;`, `&#x26;`) at
@@ -1561,6 +1585,15 @@ pub fn escape(s: &str, out: &mut String) {
 
 /// Render a styled line to inner HTML. The text content of the result equals `line`.
 pub fn line_html(line: &str, st: &Styled) -> String {
+    line_html_with(line, st, &|d| d.to_string())
+}
+
+/// [`line_html`], each date followed by its widget saying `label(day)`.
+pub fn line_html_with(
+    line: &str,
+    st: &Styled,
+    label: &dyn Fn(notekpr_core::dates::Date) -> String,
+) -> String {
     if line.is_empty() {
         return "<br>".to_string();
     }
@@ -1613,6 +1646,13 @@ pub fn line_html(line: &str, st: &Styled) -> String {
             }
             out.push('>');
             escape(text, &mut out);
+            out.push_str("</span>");
+        }
+        if let Some((_, _, day)) = st.dates.iter().find(|d| d.1 == j) {
+            out.push_str("<span class=\"w dw\" contenteditable=\"false\" data-w=\"1\" title=\"");
+            out.push_str(&day.to_string());
+            out.push_str("\">");
+            escape(&label(*day), &mut out);
             out.push_str("</span>");
         }
         i = j;
@@ -2170,6 +2210,33 @@ mod tests {
         // Outside tables nothing happens.
         assert_eq!(table_tab(t, 1, false), None);
         assert_eq!(table_enter(t, t.len()), None);
+    }
+
+    #[test]
+    fn dates_show_as_widgets_after_their_source() {
+        let line = "Due @2026-10-23, (@2026-10-24) `@2026-10-25` me@2026-10-26 @2026-02-30 **@2026-10-27**";
+        let s = flags_of(line);
+        let at = |sub: &str| line.find(sub).unwrap();
+        let days: Vec<String> = s.dates.iter().map(|(_, _, d)| d.to_string()).collect();
+        assert_eq!(
+            days,
+            ["2026-10-23", "2026-10-24", "2026-10-27"],
+            "not in code, a word or an invalid day"
+        );
+        assert_eq!((s.dates[0].0, s.dates[0].1), (at("@2026-10-23"), at(", (")));
+        assert!(
+            s.flags[at("@2026-10-23")] & DATE != 0 && s.flags[at("@2026-10-25") + 1] & DATE == 0
+        );
+        assert!(s.flags[at("@2026-10-27")] & (DATE | STRONG) == DATE | STRONG);
+        assert!(s.atoms.contains(&(at("@2026-10-23"), at(", ("))));
+        let html = line_html_with("On @2026-10-23.", &flags_of("On @2026-10-23."), &|d| {
+            format!("<{d}>")
+        });
+        assert_eq!(
+            html,
+            "On <span class=\"dt\">@2026-10-23</span><span class=\"w dw\" contenteditable=\"false\" \
+             data-w=\"1\" title=\"2026-10-23\">&lt;2026-10-23&gt;</span>."
+        );
     }
 
     #[test]

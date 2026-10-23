@@ -5,6 +5,8 @@
 use std::borrow::Cow;
 use std::hash::{Hash, Hasher};
 
+use notekpr_core::dates::Date;
+
 use wasm_bindgen::JsCast;
 use web_sys::{Document, Element, HtmlElement, Node};
 
@@ -18,6 +20,44 @@ pub fn document() -> Document {
     web_sys::window()
         .and_then(|w| w.document())
         .expect("no document")
+}
+
+/// The day it is here (in the browser's time zone).
+pub fn today() -> Date {
+    let now = js_sys::Date::new_0();
+    Date::new(
+        now.get_full_year() as i32,
+        now.get_month() as u8 + 1,
+        now.get_date() as u8,
+    )
+    .unwrap_or(Date::from_days(0))
+}
+
+/// `day` as a date in the reader's language, e.g. `Fri, Oct 23, 2026`.
+pub fn date_text(day: Date) -> String {
+    let d =
+        js_sys::Date::new_with_year_month_day(2000, i32::from(day.month) - 1, i32::from(day.day));
+    d.set_full_year(day.year as u32);
+    let opts = js_sys::Object::new();
+    for (k, v) in [
+        ("weekday", "short"),
+        ("year", "numeric"),
+        ("month", "short"),
+        ("day", "numeric"),
+    ] {
+        let _ = js_sys::Reflect::set(&opts, &k.into(), &v.into());
+    }
+    let lang = web_sys::window()
+        .and_then(|w| w.navigator().language())
+        .unwrap_or_else(|| "en-US".into());
+    d.to_locale_date_string(&lang, &opts).into()
+}
+
+/// How a date shows: Today, Tomorrow or Yesterday, else the date.
+pub fn date_label(day: Date) -> String {
+    notekpr_core::dates::relative(day, today())
+        .map(str::to_string)
+        .unwrap_or_else(|| date_text(day))
 }
 
 /// A line to render: copied out of the state so rendering (which asks the
@@ -48,6 +88,8 @@ pub struct Rendered {
 /// an embed line, the header (title, language, copy button) of a code block
 /// on its opening fence, the type of a callout without a title on its first
 /// line (as its title), the indentation guides of a line of code (no text),
+/// each date's label (after the date, inline: Today, Tomorrow, … or the
+/// date),
 /// the rendered preview of an HTML block on its last line (an empty element
 /// here, filled by [`fill_widget`]).
 pub fn render_line(
@@ -56,7 +98,7 @@ pub fn render_line(
     image_url: &dyn Fn(&str) -> Option<String>,
 ) -> Rendered {
     let styled = syntax::style_line(&job.text, &job.block, link_exists);
-    let mut html = syntax::line_html(&job.text, &styled);
+    let mut html = syntax::line_html_with(&job.text, &styled, &date_label);
     if let Some(t) = &styled.image
         && let Some(url) = image_url(t)
     {
@@ -104,7 +146,11 @@ pub fn render_line(
     Rendered {
         idx: job.idx,
         class,
-        dynamic: !styled.links.is_empty() || styled.image.is_some() || widget.is_some(),
+        // (Dates say Today until midnight.)
+        dynamic: !styled.links.is_empty()
+            || styled.image.is_some()
+            || widget.is_some()
+            || !styled.dates.is_empty(),
         hash: h.finish() | 1,
         html,
         widget,

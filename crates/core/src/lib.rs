@@ -6,6 +6,7 @@
 pub mod b64;
 pub mod comments;
 pub mod crypto;
+pub mod dates;
 pub mod doc;
 pub mod engine;
 pub mod keys;

@@ -71,10 +71,109 @@ pub fn insert_text(st: &EditorState, text: &str) -> Option<Transaction> {
     replace(st, s.from(), s.to(), text, None)
 }
 
-/// Typing `data` over `[a, b)`. A space or punctuation starts a new undo group.
+/// Typing `data` over `[a, b)`. A space or punctuation starts a new undo
+/// group, and right after `@today`, `@tomorrow` or `@yesterday` it puts the
+/// day's date in the word's place (undo gives the word back).
 pub fn type_text(st: &EditorState, a: usize, b: usize, data: &str) -> Option<Transaction> {
     let word_end = data == " " || data.chars().any(|c| ".,;:!?".contains(c));
+    let ends_word = data
+        .chars()
+        .next()
+        .is_some_and(|c| !(c.is_alphanumeric() || c == '-' || c == '_'));
+    if a == b
+        && ends_word
+        && let Some(today) = st.today
+        && let Some((at, days)) = finished_keyword(st, a)
+    {
+        let date = format!("@{}{data}", today.add_days(days));
+        return replace(st, at, b, &date, None).map(|t| t.with_boundary(true, false));
+    }
     replace(st, a, b, data, None).map(|t| t.with_boundary(word_end, false))
+}
+
+/// Whether byte `p` of line `li` (`line`) is in prose, where a date may be
+/// written: not in code, a link, a URL, a tag, raw HTML or syntax.
+fn prose_at(st: &EditorState, li: usize, line: &str, p: usize) -> bool {
+    let block = st.block(li);
+    if matches!(
+        block,
+        Block::Code { .. } | Block::Fence { .. } | Block::Html { .. }
+    ) {
+        return false;
+    }
+    let styled = syntax::style_line(line, block, &|_| true);
+    use syntax::{CODE, HTML, LINK, MK, TAG, URL, WIKI};
+    styled.inline_from.is_some_and(|f| p >= f)
+        && styled
+            .flags
+            .get(p)
+            .is_some_and(|f| f & (CODE | LINK | URL | WIKI | TAG | HTML | MK) == 0)
+}
+
+/// The `@…` typed right before `at` on its line, if it may become a date:
+/// where its `@` is (in the document), and what follows it.
+fn at_word(st: &EditorState, at: usize) -> Option<(usize, String)> {
+    let doc = st.doc();
+    let li = doc.line_of(at);
+    let start = doc.line_start(li);
+    let line = doc.line(li);
+    let before = line.get(..at - start)?;
+    let p = before.rfind('@')?;
+    let typed = &before[p + 1..];
+    (notekpr_core::dates::starts_date(before[..p].chars().next_back())
+        && typed.len() <= 9
+        && typed.bytes().all(|b| b.is_ascii_alphabetic())
+        && prose_at(st, li, line, p))
+    .then(|| (start + p, typed.to_string()))
+}
+
+/// `@today`, `@tomorrow` or `@yesterday` ending at `at`: where its `@` is,
+/// and how many days from today.
+fn finished_keyword(st: &EditorState, at: usize) -> Option<(usize, i64)> {
+    let (p, typed) = at_word(st, at)?;
+    notekpr_core::dates::KEYWORDS
+        .iter()
+        .find(|(w, _)| w.eq_ignore_ascii_case(&typed))
+        .map(|&(_, days)| (p, days))
+}
+
+/// What is typed after an `@` right before the caret that may still become
+/// a date (`@`, `@to`, `@tomorrow`): the view offers those days.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DateQuery {
+    /// Where the `@` is.
+    pub at: usize,
+    /// The days it may become: the word, and how many days from today.
+    pub days: Vec<(&'static str, i64)>,
+}
+
+pub fn date_query(st: &EditorState) -> Option<DateQuery> {
+    let s = st.selection();
+    if !s.is_empty() || st.readonly {
+        return None;
+    }
+    let (at, typed) = at_word(st, s.head)?;
+    let days = notekpr_core::dates::keywords_starting(&typed);
+    (!days.is_empty()).then_some(DateQuery { at, days })
+}
+
+/// Put `day` in place of the `@…` typed from `at` to the caret, with a
+/// space after it unless one follows.
+pub fn insert_date(
+    st: &EditorState,
+    at: usize,
+    day: notekpr_core::dates::Date,
+) -> Option<Transaction> {
+    let caret = st.selection().head;
+    if caret < at || !st.text()[at..].starts_with('@') {
+        return None;
+    }
+    let space = if st.text()[caret..].starts_with([' ', '\n', '\t']) {
+        ""
+    } else {
+        " "
+    };
+    replace(st, at, caret, &format!("@{day}{space}"), None).map(|t| t.with_boundary(true, true))
 }
 
 /// Pasted (or dropped) text over `[a, b)`: its own undo group. Pasted
@@ -1022,6 +1121,72 @@ mod tests {
             st.apply(t);
         }
         (st.text().to_string(), st.selection().pair())
+    }
+
+    #[test]
+    fn typed_day_words_become_dates() {
+        let today = notekpr_core::dates::Date::parse("2026-10-23").unwrap();
+        let typing = |text: &str, data: &'static str| {
+            let at = text.len();
+            let mut st = EditorState::new(text.to_string());
+            st.today = Some(today);
+            st.set_selection(Selection::cursor(at));
+            if let Some(t) = type_text(&st, at, at, data) {
+                st.apply(t);
+            }
+            st.text().to_string()
+        };
+        assert_eq!(typing("Call @today", " "), "Call @2026-10-23 ");
+        assert_eq!(typing("(@Tomorrow", ")"), "(@2026-10-24)");
+        assert_eq!(
+            typing("- [ ] since @yesterday", "."),
+            "- [ ] since @2026-10-22."
+        );
+        // Still a word, inside a word, in code, a URL or a heading's syntax.
+        for (text, data) in [
+            ("@today", "s"),
+            ("me@today", " "),
+            ("`@today", " "),
+            ("```\n@today", " "),
+            ("https://x.org/@today", " "),
+            ("@todays", " "),
+        ] {
+            assert_eq!(typing(text, data), format!("{text}{data}"), "{text}");
+        }
+        // Without a day (no view yet): text.
+        let mut st = EditorState::new("@today".into());
+        st.set_selection(Selection::cursor(6));
+        let t = type_text(&st, 6, 6, " ").unwrap();
+        st.apply(t);
+        assert_eq!(st.text(), "@today ");
+    }
+
+    #[test]
+    fn the_days_an_at_may_become() {
+        let query = |text: &str| {
+            let mut st = EditorState::new(text.to_string());
+            st.set_selection(Selection::cursor(text.len()));
+            date_query(&st).map(|q| (q.at, q.days.iter().map(|(w, _)| *w).collect::<Vec<_>>()))
+        };
+        assert_eq!(
+            query("Due @"),
+            Some((4, vec!["today", "tomorrow", "yesterday"]))
+        );
+        assert_eq!(query("Due @To"), Some((4, vec!["today", "tomorrow"])));
+        assert_eq!(query("@y"), Some((0, vec!["yesterday"])));
+        for none in ["Due @x", "a@to", "`@to", "@to day", "@2026-10-23 "] {
+            assert_eq!(query(none), None, "{none}");
+        }
+        // Picked: the date, a space after it unless one follows.
+        let day = notekpr_core::dates::Date::parse("2026-10-24").unwrap();
+        assert_eq!(
+            run("Due @tom", (8, 8), |st| insert_date(st, 4, day)),
+            ("Due @2026-10-24 ".into(), (16, 16))
+        );
+        assert_eq!(
+            run("Due @tom then", (8, 8), |st| insert_date(st, 4, day)),
+            ("Due @2026-10-24 then".into(), (15, 15))
+        );
     }
 
     #[test]

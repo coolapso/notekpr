@@ -40,7 +40,7 @@ pub struct NoteInfo {
     pub frontmatter: Option<String>,
 }
 
-fn is_fence(line: &str) -> Option<&str> {
+pub(crate) fn is_fence(line: &str) -> Option<&str> {
     let t = line.trim_start();
     if t.starts_with("```") {
         Some("```")
@@ -169,7 +169,7 @@ pub fn heading(line: &str) -> Option<(u8, &str)> {
 
 /// Replace inline code spans with spaces so links/tags inside them are ignored,
 /// keeping byte offsets intact.
-fn mask_inline_code(line: &str) -> String {
+pub(crate) fn mask_inline_code(line: &str) -> String {
     let b = line.as_bytes();
     let mut out = line.as_bytes().to_vec();
     let mut i = 0;
@@ -322,7 +322,7 @@ fn html_ranges(line: &str) -> Vec<(usize, usize)> {
 
 /// Replace raw HTML with spaces, keeping byte offsets: a `#` in
 /// `style="color: #e44045"` isn't a tag, nor `[[x]]` in an attribute a link.
-fn mask_html(line: &str) -> String {
+pub(crate) fn mask_html(line: &str) -> String {
     let mut out = line.as_bytes().to_vec();
     for (a, b) in html_ranges(line) {
         out[a..b].fill(b' ');

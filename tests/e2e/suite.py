@@ -1210,6 +1210,13 @@ def test_ui_basics(env):
                "return h && h.getBoundingClientRect().top >= 0 && h.getBoundingClientRect().top < innerHeight", 10, "the heading in view")
         check(True, "a link to a heading opens the note at that heading")
         b.chord(KEYS["ctrl"], "e")
+        # However far down a long note, its header and toolbar stay at the top.
+        b.js("const m = document.querySelector('.main'); m.scrollTop = m.scrollHeight;")
+        time.sleep(0.3)
+        check(b.js("return document.querySelector('.main').scrollTop > innerHeight"
+                   " && document.querySelector('.note-head').getBoundingClientRect().top === 0"
+                   " && document.querySelector('.toolbar-wrap').getBoundingClientRect().top > 0"),
+              "the header and toolbar stay at the end of a long note")
         # A favorite's star reads as on at a glance: filled, with a tooltip to undo it.
         star = "return (x => [x.getAttribute('aria-pressed'), x.title, getComputedStyle(x.querySelector('svg')).fill])" \
                "(document.querySelector(\".note-head button[aria-label='Favorite']\"))"

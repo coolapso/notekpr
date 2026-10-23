@@ -284,7 +284,7 @@ textarea.input { resize: vertical; }
 @keyframes toast-in { from { transform: translateY(8px); opacity: 0; } }
 
 /* pages */
-.page { display: flex; flex-direction: column; min-height: 100%; }
+.page { display: flex; flex-direction: column; min-height: 100%; flex: none; }
 .page-head, .note-head { position: sticky; top: 0; z-index: 10; display: flex; align-items: center; gap: 8px; padding: 8px 16px; min-height: 52px; background: color-mix(in srgb, var(--bg) 92%, transparent); backdrop-filter: blur(8px); border-bottom: 1px solid transparent; }
 .page-head h1 { font-size: 18px; margin: 0; }
 .page-body { padding: 8px 32px 64px; max-width: 1080px; width: 100%; }
@@ -344,7 +344,10 @@ button.list-row:hover:not(:disabled) { background: var(--bg-2); }
 .qn-foot .pill { margin: 0 4px 0 0; }
 
 /* note page */
-.note-page { display: flex; flex-direction: column; min-height: 100%; }
+/* Pages are as tall as what's on them, not squeezed to the window by
+   .main's flex column: a sticky header or toolbar sticks only within its
+   page, so it would leave once the page scrolls past one window. */
+.note-page { display: flex; flex-direction: column; min-height: 100%; flex: none; }
 .crumbs { flex: 1; font-size: 13.5px; color: var(--muted); }
 .presence { display: flex; gap: 2px; }
 .presence .avatar { width: 24px; height: 24px; border: 2px solid var(--bg); box-shadow: 0 0 0 1.5px var(--c); }

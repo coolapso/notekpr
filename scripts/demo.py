@@ -162,6 +162,7 @@ HOME = [
         - [ ] Comment on a note: select some text and click *Comment* (or press `Alt+M`); click highlighted text to read and answer its thread. *Holiday plans* in *Family* has comments — even Carol's, who only views that vault
         - [ ] Drag a note between two others in the sidebar: a line shows where it goes, and it stays there for everyone (this note and the *Recipes* overview were put first that way, from the command line); *Sort A–Z* in a folder's ⋯ menu undoes it
         - [ ] HTML in notes: the fold-out section at the end of [[Sourdough bread]] (`<details>`), the centered photo with a caption in [[Lisbon 2026]], a table with merged cells in [[Weekly meal plan]], keys like <kbd>Ctrl</kbd>+<kbd>E</kbd>; click one in the editor to see its HTML. Scripts, styles, frames and forms are removed
+        - [ ] Colors: select some text and pick a text or background color with the toolbar's **A** button. They are saved as HTML that Obsidian, Typora and VS Code show too ([[Tomatoes]]), and colors written there show here ([[Packing list]] has a highlight from Obsidian's Highlightr and a `<font color>`)
         - [ ] Code blocks in *Snippets*: a file name and highlighted lines (`title=… hl=…` after the language), line numbers, indentation guides, a copy button, `wrap=false` for long lines; Settings → Editor turns the numbers, guides and wrapping off
         - [ ] Drop or paste a picture into a note
         - [ ] Give a note or folder an icon: *Set icon…* in its ⋯ menu in the sidebar
@@ -207,11 +208,11 @@ HOME = [
         |---|:---:|---:|---|
         | San Marzano | paste | 80 | the one for [[Tomato sauce]] |
         | Sungold | cherry | 60 | eaten before they reach the kitchen |
-        | Brandywine | beefsteak | 90 | needs tall stakes |
+        | Brandywine | beefsteak | 90 | <span style="color: #e44045">needs tall stakes</span> |
 
         - Water deeply, not often: see [[Watering schedule]]
         - Basil next to them keeps whiteflies away ([[Basil]], [[Pests]])
-        - Save seeds from the Sungolds for the [[Seed swap 2026]]
+        - <span style="background-color: #ffd0004d">Save seeds from the Sungolds</span> for the [[Seed swap 2026]]
         """)),
     ("Garden/Basil.md", "🌿", note("""
         # Basil
@@ -429,11 +430,11 @@ HOME = [
     ("Travel/Packing list.md", None, note("""
         # Packing list
 
-        - [ ] Passports
+        - [ ] <mark style="background: #FFB86CA6;">Passports</mark>
         - [ ] Chargers and adapter
         - [ ] Comfortable shoes (Lisbon is all hills)
         - [ ] A book from the [[Reading list]]
-        - [x] Sunscreen
+        - [x] <font color="#2f9e5a">Sunscreen</font>
 
         Used for [[Lisbon 2026]]; reuse for [[Japan ideas]]. #travel
         """)),

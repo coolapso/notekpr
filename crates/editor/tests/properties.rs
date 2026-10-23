@@ -7,6 +7,7 @@
 use notekpr_core::textdiff;
 use notekpr_editor::change::{Assoc, ChangeSet};
 use notekpr_editor::code::{self, Carry, FenceInfo, Indent};
+use notekpr_editor::color::{Color, Kind};
 use notekpr_editor::decorations::Decorations;
 use notekpr_editor::html::{self, BlockKind};
 use notekpr_editor::state::{EditorState, Origin, Selection, Transaction, merge_native};
@@ -194,7 +195,72 @@ const HTML_PIECES: &[&str] = &[
     "<input name=pw>",
     "<object data=x>",
     "<embed src=x>",
+    "<span style=\"color: red; background: url(x) #00f\">",
+    "<font color=\"0f0\" face=x>",
+    "</font>",
+    "<mark style='background: hsl(50 100% 50% / .5)'>",
+    "</mark>",
+    "<span class=\"fg-red bg-pink wl\">",
+    "</span>",
 ];
+
+/// Lines of text with colors from the toolbar and from other editors,
+/// other HTML and Markdown, for the color commands.
+fn colored_text() -> impl Strategy<Value = String> {
+    const PIECES: &[&str] = &[
+        "word",
+        "a b",
+        " ",
+        " ",
+        "é",
+        "😀",
+        "<span style=\"color: #e44045\">",
+        "<span style=\"background-color: #ffd0004d\">",
+        "<span style=\"color: red; background: yellow\">",
+        "</span>",
+        "</span>",
+        "<font color=blue>",
+        "</font>",
+        "<mark style=\"background: gold\">",
+        "</mark>",
+        "<b>",
+        "</b>",
+        "**",
+        "`",
+        "[[n]]",
+        "[l](u)",
+        "|",
+        "\\*",
+        "<!-- c -->",
+        "https://x.y",
+        "#tag",
+    ];
+    const STARTS: &[&str] = &["", "", "", "# ", "- ", "- [ ] ", "> ", "| ", "    "];
+    let line = (
+        prop::sample::select(STARTS),
+        prop::collection::vec(prop::sample::select(PIECES), 0..12),
+    )
+        .prop_map(|(start, pieces)| format!("{start}{}", pieces.concat()));
+    prop::collection::vec(
+        prop_oneof![8 => line, 1 => prop::sample::select(LINES).prop_map(str::to_string)],
+        1..5,
+    )
+    .prop_map(|v| v.join("\n"))
+}
+
+/// A line without the tags of its elements: what it shows.
+fn shown(line: &str, block: &Block) -> String {
+    let s = syntax::style_line(line, block, &|_| true);
+    let mut tag = vec![false; line.len()];
+    for e in &s.elements {
+        tag[e.open.0..e.open.1].fill(true);
+        tag[e.close.0..e.close.1].fill(true);
+    }
+    line.char_indices()
+        .filter(|(i, _)| !tag[*i])
+        .map(|(_, c)| c)
+        .collect()
+}
 
 fn html_soup() -> impl Strategy<Value = String> {
     prop::collection::vec(
@@ -620,21 +686,25 @@ proptest! {
     /// Commands on any text and selection keep the text and the selection on
     /// character boundaries.
     #[test]
-    fn commands_never_split_characters(t in prop_oneof![text(80), lines_text(10)], a in any::<prop::sample::Index>(), b in any::<prop::sample::Index>(), which in 0usize..24) {
+    fn commands_never_split_characters(t in prop_oneof![text(80), lines_text(10), colored_text()], a in any::<prop::sample::Index>(), b in any::<prop::sample::Index>(), which in 0usize..28) {
         use commands::Command::*;
         let (x, y) = edit_on(&t, a, b);
         let mut st = EditorState::new(t);
         st.set_selection(Selection::new(x, y));
-        let cmds = [Bold, Italic, Strike, Highlight, Code, CodeBlock, Link, Heading(1), Heading(0), Bullet, Numbered, Task, Quote, Rule, Table, Indent, Outdent];
-        let tr = match which {
-            n if n < cmds.len() => commands::command(&st, cmds[n]),
-            17 => commands::newline(&st),
-            18 => commands::delete_backward(&st, None),
-            19 => commands::delete_forward(&st, None),
-            20 => commands::tab(&st, false),
-            21 => commands::tab(&st, true),
-            22 => commands::toggle_task(&st, st.doc().line_of(x)),
-            _ => commands::type_text(&st, x, y, "é"),
+        let cmds = [
+            Bold, Italic, Strike, Highlight, Code, CodeBlock, Link, Heading(1), Heading(0), Bullet,
+            Numbered, Task, Quote, Rule, Table, Indent, Outdent, TextColor(Some(Color::Red)),
+            TextColor(None), Background(Some(Color::Blue)), Background(None),
+        ];
+        let tr = match which.checked_sub(cmds.len()) {
+            None => commands::command(&st, cmds[which]),
+            Some(0) => commands::newline(&st),
+            Some(1) => commands::delete_backward(&st, None),
+            Some(2) => commands::delete_forward(&st, None),
+            Some(3) => commands::tab(&st, false),
+            Some(4) => commands::tab(&st, true),
+            Some(5) => commands::toggle_task(&st, st.doc().line_of(x)),
+            Some(_) => commands::type_text(&st, x, y, "é"),
         };
         if let Some(tr) = tr {
             let applied = st.apply(tr);
@@ -642,6 +712,75 @@ proptest! {
             prop_assert!(st.text().is_char_boundary(applied.selection.head));
             let lines: Vec<&str> = st.text().split('\n').collect();
             prop_assert_eq!(st.blocks().to_vec(), syntax::classify(&lines));
+        }
+    }
+
+    /// A color changes only tags, never what a line shows or how its lines
+    /// are read, and gives the selected text that can have colors the color
+    /// asked for (or none).
+    #[test]
+    fn colors_change_only_tags_and_color_the_selection(
+        t in colored_text(),
+        a in any::<prop::sample::Index>(),
+        b in any::<prop::sample::Index>(),
+        kind in prop::sample::select(&[Kind::Text, Kind::Background][..]),
+        color in prop::option::of(prop::sample::select(&Color::ALL[..])),
+    ) {
+        use commands::Command::*;
+        let (x, y) = edit_on(&t, a, b);
+        let mut st = EditorState::new(t);
+        st.set_selection(Selection::new(x, y));
+        let cmd = match kind {
+            Kind::Text => TextColor(color),
+            Kind::Background => Background(color),
+        };
+        let before: Vec<(String, Block)> = (0..st.doc().line_count())
+            .map(|i| (st.doc().line(i).to_string(), st.block(i).clone()))
+            .collect();
+        let Some(tr) = commands::command(&st, cmd) else {
+            return Ok(());
+        };
+        let changes = tr.changes.clone();
+        // A caret on a blank line gets an empty pair to type into: text, as
+        // if typed.
+        let typed_in = (x == y && before[st.doc().line_of(x)].1 == Block::Blank).then(|| st.doc().line_of(x));
+        st.apply(tr);
+        prop_assert_eq!(st.doc().line_count(), before.len());
+        for (i, (line, block)) in before.iter().enumerate() {
+            if typed_in.is_some() {
+                prop_assert!(i == typed_in.unwrap() || st.block(i) == block || i > typed_in.unwrap());
+            } else {
+                prop_assert_eq!(st.block(i), block, "{:?} → {:?}", line, st.doc().line(i));
+            }
+            prop_assert_eq!(shown(st.doc().line(i), st.block(i)), shown(line, block), "{:?} → {:?}", line, st.doc().line(i));
+        }
+        let old = Text::new(before.iter().map(|(l, _)| l.as_str()).collect::<Vec<_>>().join("\n"));
+        for (i, (line, block)) in before.iter().enumerate() {
+            let s = syntax::style_line(line, block, &|_| true);
+            let Some(from) = s.inline_from else { continue };
+            let ls = old.line_start(i);
+            let mut tag = vec![false; line.len()];
+            for e in &s.elements {
+                tag[e.open.0..e.open.1].fill(true);
+                tag[e.close.0..e.close.1].fill(true);
+            }
+            // (A caret colors the text or word around it.)
+            // (Lines where tags would join what they kept apart stay as
+            // they were.)
+            let unchanged = st.doc().line(i) == line.as_str();
+            for (p, ch) in line.char_indices().filter(|_| x < y && !unchanged) {
+                let at = ls + p;
+                // Not colored: pipes, unpaired tags and a line break (`\` at the end).
+                let skip = s.flags[p] & (syntax::PIPE | syntax::HTML) != 0 || &line[p..] == "\\";
+                if at < x || at >= y || p < from || tag[p] || ch.is_whitespace() || skip {
+                    continue;
+                }
+                let to = changes.map_pos(at, Assoc::After);
+                let li = st.doc().line_of(to);
+                let now = syntax::style_line(st.doc().line(li), st.block(li), &|_| true);
+                let got = syntax::colors(now.flags[to - st.doc().line_start(li)]).get(kind);
+                prop_assert_eq!(got, color, "{:?} at {} in {:?}", ch, p, st.doc().line(li));
+            }
         }
     }
 

@@ -41,6 +41,11 @@
   --code-hl: rgba(91, 91, 214, 0.1);
   --code-head: 34px;
   --guide: rgba(20, 20, 30, 0.13);
+  /* Colors in notes (crates/editor/src/color.rs). */
+  --fg-gray: #6b6b66; --fg-red: #c93135; --fg-orange: #b85c0a; --fg-yellow: #8f6c00;
+  --fg-green: #1f7a4c; --fg-blue: #2459b8; --fg-purple: #7344b5; --fg-pink: #b02a7f;
+  --bg-gray: #ececea; --bg-red: #fde4e4; --bg-orange: #fdebd8; --bg-yellow: #fdf3c4;
+  --bg-green: #e1f4e8; --bg-blue: #e1ecfc; --bg-purple: #efe6fb; --bg-pink: #fbe3f1;
   color-scheme: light;
 }
 
@@ -54,6 +59,10 @@
     --kw: #c39cff; --st: #7ad59b; --cm: #7d7d86; --nu: #ffb068;
     --fn: #f0d27a; --ty: #6cc6f5; --co: #ffb068; --va: #6fe0d0; --pr: #a5b4fc; --op: #ff7b9c; --me: #c9a26b;
     --code-hl: rgba(139, 140, 244, 0.16); --guide: rgba(255, 255, 255, 0.12);
+    --fg-gray: #a3a3a0; --fg-red: #ff7b78; --fg-orange: #f9a25a; --fg-yellow: #e8c34a;
+    --fg-green: #5fcf8f; --fg-blue: #7aaaf7; --fg-purple: #c3a0f5; --fg-pink: #f27cc4;
+    --bg-gray: #36363a; --bg-red: #4a2526; --bg-orange: #4a3220; --bg-yellow: #4a4018;
+    --bg-green: #1f3d2b; --bg-blue: #1e3150; --bg-purple: #352a4d; --bg-pink: #48233b;
     color-scheme: dark;
   }
 }
@@ -66,6 +75,10 @@
   --kw: #c39cff; --st: #7ad59b; --cm: #7d7d86; --nu: #ffb068;
   --fn: #f0d27a; --ty: #6cc6f5; --co: #ffb068; --va: #6fe0d0; --pr: #a5b4fc; --op: #ff7b9c; --me: #c9a26b;
   --code-hl: rgba(139, 140, 244, 0.16); --guide: rgba(255, 255, 255, 0.12);
+  --fg-gray: #a3a3a0; --fg-red: #ff7b78; --fg-orange: #f9a25a; --fg-yellow: #e8c34a;
+  --fg-green: #5fcf8f; --fg-blue: #7aaaf7; --fg-purple: #c3a0f5; --fg-pink: #f27cc4;
+  --bg-gray: #36363a; --bg-red: #4a2526; --bg-orange: #4a3220; --bg-yellow: #4a4018;
+  --bg-green: #1f3d2b; --bg-blue: #1e3150; --bg-purple: #352a4d; --bg-pink: #48233b;
   color-scheme: dark;
 }
 
@@ -170,6 +183,10 @@ textarea.input { resize: vertical; }
 .tb-drop { position: relative; display: inline-flex; }
 .tb-drop .menu { top: 34px; left: 0; }
 .tb-drop .menu.right { left: auto; right: 0; }
+.menu.colors { min-width: 0; }
+.swatches { display: grid; grid-template-columns: repeat(5, 30px); gap: 4px; padding: 2px 6px 6px; }
+.menu .swatches button { width: 30px; height: 30px; padding: 0; justify-content: center; border: 1px solid var(--border); }
+.swatches .sw { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; border-radius: 4px; font-weight: 600; }
 
 /* ---------------------------------------------------------- auth */
 .auth { height: 100%; overflow: auto; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 24px 16px; background: radial-gradient(1200px 600px at 50% -10%, var(--accent-bg), transparent), var(--bg); }
@@ -588,7 +605,26 @@ button.list-row:hover:not(:disabled) { background: var(--bg-2); }
 .reading a.tg { color: var(--accent); background: var(--accent-bg); border-radius: 4px; padding: 0 3px; text-decoration: none; cursor: pointer; }
 .reading .missing { color: var(--broken); font-size: 13px; }
 :is(.reading, .ed .hw) .extimg { font-size: 14px; }
-:is(.reading, .ed .hw) mark { background: var(--hl-bg); color: inherit; }
+:where(.reading, .ed .hw) mark { background: var(--hl-bg); color: inherit; }
+/* Colors in notes (crates/editor/src/color.rs): classes the editor and the
+   sanitizer write, never a note's own CSS. Syntax near the caret stays
+   gray; links, tags and code spans keep their look. */
+:is(.ed, .reading, .swatches) .fg-gray:not(.mk, .a, .u, .wl, .wlb, .tg) { color: var(--fg-gray); }
+:is(.ed, .reading, .swatches) .fg-red:not(.mk, .a, .u, .wl, .wlb, .tg) { color: var(--fg-red); }
+:is(.ed, .reading, .swatches) .fg-orange:not(.mk, .a, .u, .wl, .wlb, .tg) { color: var(--fg-orange); }
+:is(.ed, .reading, .swatches) .fg-yellow:not(.mk, .a, .u, .wl, .wlb, .tg) { color: var(--fg-yellow); }
+:is(.ed, .reading, .swatches) .fg-green:not(.mk, .a, .u, .wl, .wlb, .tg) { color: var(--fg-green); }
+:is(.ed, .reading, .swatches) .fg-blue:not(.mk, .a, .u, .wl, .wlb, .tg) { color: var(--fg-blue); }
+:is(.ed, .reading, .swatches) .fg-purple:not(.mk, .a, .u, .wl, .wlb, .tg) { color: var(--fg-purple); }
+:is(.ed, .reading, .swatches) .fg-pink:not(.mk, .a, .u, .wl, .wlb, .tg) { color: var(--fg-pink); }
+:is(.ed, .reading, .swatches) .bg-gray:not(.c, .tg) { background: var(--bg-gray); }
+:is(.ed, .reading, .swatches) .bg-red:not(.c, .tg) { background: var(--bg-red); }
+:is(.ed, .reading, .swatches) .bg-orange:not(.c, .tg) { background: var(--bg-orange); }
+:is(.ed, .reading, .swatches) .bg-yellow:not(.c, .tg) { background: var(--bg-yellow); }
+:is(.ed, .reading, .swatches) .bg-green:not(.c, .tg) { background: var(--bg-green); }
+:is(.ed, .reading, .swatches) .bg-blue:not(.c, .tg) { background: var(--bg-blue); }
+:is(.ed, .reading, .swatches) .bg-purple:not(.c, .tg) { background: var(--bg-purple); }
+:is(.ed, .reading, .swatches) .bg-pink:not(.c, .tg) { background: var(--bg-pink); }
 /* HTML in notes: what crates/editor/src/html.rs keeps of it. */
 :is(.reading, .ed .hw) :is(td, th)[align="center" i] { text-align: center; }
 :is(.reading, .ed .hw) :is(td, th)[align="right" i] { text-align: right; }

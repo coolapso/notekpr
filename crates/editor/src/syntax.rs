@@ -19,6 +19,7 @@ use std::borrow::Cow;
 use std::rc::Rc;
 
 use crate::code::{self, Carry, FenceInfo, Indent};
+use crate::color::{Color, Colors};
 use crate::html;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -786,6 +787,37 @@ pub const UNDERLINE: Flags = 1 << 32;
 pub const KBD: Flags = 1 << 33;
 pub const SUB: Flags = 1 << 34;
 pub const SUP: Flags = 1 << 35;
+/// The text color, as a [`Color::code`] (0: none).
+pub const FG: Flags = 0xf << FG_SHIFT;
+/// The background color, likewise.
+pub const BG: Flags = 0xf << BG_SHIFT;
+const FG_SHIFT: u32 = 36;
+const BG_SHIFT: u32 = 40;
+
+/// The colors in `flags`.
+pub fn colors(flags: Flags) -> Colors {
+    Colors {
+        text: Color::from_code(((flags & FG) >> FG_SHIFT) as u8),
+        background: Color::from_code(((flags & BG) >> BG_SHIFT) as u8),
+    }
+}
+
+/// Color the bytes of `flags` that aren't colored yet (inner elements close
+/// first, so they keep their own colors).
+fn set_colors(flags: &mut [Flags], c: Colors) {
+    for f in flags {
+        if let Some(x) = c.text
+            && *f & FG == 0
+        {
+            *f |= Flags::from(x.code()) << FG_SHIFT;
+        }
+        if let Some(x) = c.background
+            && *f & BG == 0
+        {
+            *f |= Flags::from(x.code()) << BG_SHIFT;
+        }
+    }
+}
 
 pub fn classes(flags: Flags) -> String {
     let mut c = Vec::new();
@@ -830,6 +862,10 @@ pub fn classes(flags: Flags) -> String {
             c.push(name);
         }
     }
+    let colors = colors(flags).classes();
+    if !colors.is_empty() {
+        c.push(&colors);
+    }
     c.join(" ")
 }
 
@@ -837,6 +873,16 @@ pub fn classes(flags: Flags) -> String {
 pub enum Target {
     Wiki(String),
     Url(String),
+}
+
+/// An inline HTML element opened and closed on a line (`<b>…</b>`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Element {
+    /// Its opening and its closing tag (byte ranges in the line).
+    pub open: (usize, usize),
+    pub close: (usize, usize),
+    /// The colors it gives its text.
+    pub colors: Colors,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -855,6 +901,17 @@ pub struct Styled {
     /// A span of this class around the whole line (a line of code: the part
     /// that scrolls sideways when long lines don't wrap).
     pub outer: Option<&'static str>,
+    /// Where the line's inline Markdown starts (after a list marker, a
+    /// heading's `#`s, …); `None` on lines without any (code, HTML blocks, a
+    /// table's delimiter row).
+    pub inline_from: Option<usize>,
+    /// The inline HTML elements opened and closed on the line, in the order
+    /// they close.
+    pub elements: Vec<Element>,
+    /// What a tag can't be put inside of without changing it: code spans,
+    /// links, URLs, tags, escapes and the character after a backslash, runs
+    /// of delimiters (`**`, `` ` ``), character references and HTML comments.
+    pub atoms: Vec<(usize, usize)>,
 }
 
 fn set(flags: &mut [Flags], a: usize, b: usize, f: Flags) {
@@ -914,7 +971,7 @@ pub fn style_line(line: &str, block: &Block, resolves: &dyn Fn(&str) -> bool) ->
             if *kind == html::BlockKind::Comment {
                 set(&mut s.flags, 0, n, COMMENT);
             } else {
-                html_tags(line, 0, &mut s.flags);
+                html_tags(line, 0, &mut s.flags, &mut vec![]);
                 for f in &mut s.flags {
                     *f &= !PROTECT;
                 }
@@ -928,6 +985,7 @@ pub fn style_line(line: &str, block: &Block, resolves: &dyn Fn(&str) -> bool) ->
         _ => {}
     }
     let mut start = 0;
+    let mut inline_ok = true;
     // Block prefixes.
     match block {
         Block::Heading(_) => {
@@ -974,6 +1032,7 @@ pub fn style_line(line: &str, block: &Block, resolves: &dyn Fn(&str) -> bool) ->
             }
             if *row == Row::Delimiter {
                 set(&mut s.flags, 0, n, MK | PROTECT);
+                inline_ok = false;
             }
             s.cells = table_cells(line)
                 .into_iter()
@@ -991,6 +1050,7 @@ pub fn style_line(line: &str, block: &Block, resolves: &dyn Fn(&str) -> bool) ->
         }
         _ => {}
     }
+    s.inline_from = inline_ok.then_some(start);
     inline(line, start, &mut s, resolves);
     // A line that is only an image embed gets a preview widget.
     let body = line[start..].trim();
@@ -1021,10 +1081,32 @@ fn inline(line: &str, from: usize, s: &mut Styled, resolves: &dyn Fn(&str) -> bo
         if b[i] == b'\\' && b[i + 1].is_ascii_punctuation() {
             s.flags[i] |= MK | PROTECT;
             s.flags[i + 1] |= PROTECT;
+            s.atoms.push((i, i + 2));
             i += 2;
         } else {
+            if b[i] == b'\\' {
+                // A tag right after it would be escaped.
+                let next = line[i + 1..].chars().next().map_or(0, char::len_utf8);
+                s.atoms.push((i, i + 1 + next));
+            }
             i += 1;
         }
+    }
+    // Runs of delimiters (a tag between two would change what they mean)
+    // and character references.
+    let mut i = from;
+    while i < n {
+        let run = match b[i] {
+            c @ (b'`' | b'*' | b'_' | b'~' | b'=') => {
+                b[i..].iter().take_while(|x| **x == c).count()
+            }
+            b'&' => entity_len(&b[i..]),
+            _ => 1,
+        };
+        if run > 1 {
+            s.atoms.push((i, i + run));
+        }
+        i += run.max(1);
     }
     // Code spans.
     let mut i = from;
@@ -1049,6 +1131,7 @@ fn inline(line: &str, from: usize, s: &mut Styled, resolves: &dyn Fn(&str) -> bo
                 set(&mut s.flags, i, i + run, MK | PROTECT);
                 set(&mut s.flags, i + run, c, CODE | PROTECT);
                 set(&mut s.flags, c, c + run, MK | PROTECT);
+                s.atoms.push((i, c + run));
                 i = c + run;
                 continue;
             }
@@ -1057,7 +1140,7 @@ fn inline(line: &str, from: usize, s: &mut Styled, resolves: &dyn Fn(&str) -> bo
         }
         i += 1;
     }
-    let tags = html_tags(line, from, &mut s.flags);
+    let tags = html_tags(line, from, &mut s.flags, &mut s.atoms);
     html_inline(line, &tags, s);
     // Wiki links and embeds.
     let mut i = from;
@@ -1098,6 +1181,7 @@ fn inline(line: &str, from: usize, s: &mut Styled, resolves: &dyn Fn(&str) -> bo
                 set(&mut s.flags, close, close + 2, MK | PROTECT);
                 s.links
                     .push((vis_start, close, Target::Wiki(target.trim().to_string())));
+                s.atoms.push((open, close + 2));
                 i = close + 2;
                 continue;
             }
@@ -1130,6 +1214,7 @@ fn inline(line: &str, from: usize, s: &mut Styled, resolves: &dyn Fn(&str) -> bo
                         Target::Url(url)
                     };
                     s.links.push((i + 1, text_end, target));
+                    s.atoms.push((open, url_end + 1));
                     i = url_end + 1;
                     continue;
                 }
@@ -1154,6 +1239,7 @@ fn inline(line: &str, from: usize, s: &mut Styled, resolves: &dyn Fn(&str) -> bo
             set(&mut s.flags, i, end, URL | PROTECT);
             s.links
                 .push((i, end, Target::Url(line[i..end].to_string())));
+            s.atoms.push((i, end));
             i = end;
             continue;
         }
@@ -1212,8 +1298,12 @@ fn inline(line: &str, from: usize, s: &mut Styled, resolves: &dyn Fn(&str) -> bo
         if c != '#' || s.flags[i] & (PROTECT | MK) != 0 {
             continue;
         }
-        let prev_ok =
-            i == from || k == 0 || chars[k - 1].1.is_whitespace() || chars[k - 1].1 == '(';
+        // As in the reading view, where text after inline HTML starts anew.
+        let prev_ok = i == from
+            || k == 0
+            || chars[k - 1].1.is_whitespace()
+            || chars[k - 1].1 == '('
+            || s.flags[i - 1] & HTML != 0;
         if !prev_ok {
             continue;
         }
@@ -1224,13 +1314,36 @@ fn inline(line: &str, from: usize, s: &mut Styled, resolves: &dyn Fn(&str) -> bo
             .sum();
         if len > 0 && !line[i + 1..i + 1 + len].chars().all(|c| c.is_ascii_digit()) {
             set(&mut s.flags, i, i + 1 + len, TAG);
+            s.atoms.push((i, i + 1 + len));
         }
     }
 }
 
+/// The length of the character reference (`&amp;`, `&#38;`, `&#x26;`) at
+/// the start of `s`, or 0.
+fn entity_len(s: &[u8]) -> usize {
+    let body = |from: usize, ok: fn(&u8) -> bool, max: usize| {
+        let len = s[from.min(s.len())..].iter().take_while(|b| ok(b)).count();
+        let end = from + len;
+        (len > 0 && len <= max && s.get(end) == Some(&b';')).then_some(end + 1)
+    };
+    let len = match s.get(1) {
+        Some(b'#') if matches!(s.get(2), Some(b'x' | b'X')) => body(3, u8::is_ascii_hexdigit, 6),
+        Some(b'#') => body(2, u8::is_ascii_digit, 7),
+        Some(c) if c.is_ascii_alphabetic() => body(1, u8::is_ascii_alphanumeric, 32),
+        _ => None,
+    };
+    len.unwrap_or(0)
+}
+
 /// Mark the raw HTML in `line` from `from` on: tags, and comments (which
-/// the reading view hides). Returns where the tags are.
-fn html_tags(line: &str, from: usize, flags: &mut [Flags]) -> Vec<(usize, usize)> {
+/// the reading view hides; added to `comments`). Returns where the tags are.
+fn html_tags(
+    line: &str,
+    from: usize,
+    flags: &mut [Flags],
+    comments: &mut Vec<(usize, usize)>,
+) -> Vec<(usize, usize)> {
     let b = line.as_bytes();
     let mut tags = vec![];
     let mut i = from;
@@ -1246,7 +1359,9 @@ fn html_tags(line: &str, from: usize, flags: &mut [Flags]) -> Vec<(usize, usize)
                 i + len,
                 if comment { COMMENT } else { HTML } | PROTECT,
             );
-            if !comment {
+            if comment {
+                comments.push((i, i + len));
+            } else {
                 tags.push((i, i + len));
             }
             i += len;
@@ -1271,14 +1386,15 @@ fn html_look(tag: &html::InlineTag) -> Option<Flags> {
         "sub" => SUB,
         "sup" => SUP,
         "a" if tag.href.is_some() => LINK,
-        "a" | "span" | "abbr" => 0,
+        "a" | "span" | "font" | "abbr" => 0,
         _ => return None,
     })
 }
 
 /// Inline HTML elements opened and closed on the line: their tags are
 /// syntax (hidden away from the caret, like Markdown's), and the text
-/// between them looks as in the reading view; a link opens on click.
+/// between them looks as in the reading view, colors included; a link opens
+/// on click.
 fn html_inline(line: &str, tags: &[(usize, usize)], s: &mut Styled) {
     let mut open: Vec<(usize, usize, html::InlineTag)> = vec![];
     for &(a, b) in tags {
@@ -1295,7 +1411,18 @@ fn html_inline(line: &str, tags: &[(usize, usize)], s: &mut Styled) {
         let (oa, ob, o) = open.remove(k);
         set(&mut s.flags, oa, ob, MK);
         set(&mut s.flags, a, b, MK);
-        set(&mut s.flags, ob, a, html_look(&o).unwrap_or(0));
+        let mut look = html_look(&o).unwrap_or(0);
+        if o.colors.background.is_some() {
+            // A highlight in a color of its own.
+            look &= !HL;
+        }
+        set(&mut s.flags, ob, a, look);
+        set_colors(&mut s.flags[ob..a], o.colors);
+        s.elements.push(Element {
+            open: (oa, ob),
+            close: (a, b),
+            colors: o.colors,
+        });
         if let Some(href) = o.href {
             let target = if notekpr_core::markdown::is_internal_target(&href) {
                 Target::Wiki(notekpr_core::markdown::percent_decode(&href))
@@ -1435,6 +1562,89 @@ mod tests {
                 Target::Url("https://e.org".into())
             ]
         );
+    }
+
+    #[test]
+    fn inline_colors() {
+        let st = |line: &str| style_line(line, &Block::Paragraph, &|_| true);
+        let line = "<span style=\"color: #e44045\">R <font color=blue>B</font></span> \
+                    <mark style=\"background: gold\">Y</mark> <mark>H</mark> \
+                    <span class=\"fg-green bg-pink\">G</span>";
+        let s = st(line);
+        let at = |t: &str| s.flags[line.find(t).unwrap()];
+        // The innermost element's color wins; tags are syntax.
+        assert_eq!(classes(at("R ")), "fg-red");
+        assert_eq!(classes(at("B<")), "fg-blue");
+        assert_eq!(classes(at("<font")), "mk ht fg-red");
+        // A hashtag right after a tag is one, as in the reading view.
+        let h = st("<b>#tag</b> x#no");
+        assert_eq!(h.flags[3], TAG | STRONG);
+        assert_eq!(h.flags[13], 0);
+        assert_eq!(classes(at("Y<")), "bg-yellow");
+        assert_eq!(classes(at("H<")), "hl");
+        assert_eq!(
+            colors(at("G<")),
+            Colors {
+                text: Some(Color::Green),
+                background: Some(Color::Pink),
+            }
+        );
+        // Elements, in the order they close.
+        let tags: Vec<_> = s
+            .elements
+            .iter()
+            .map(|e| {
+                (
+                    &line[e.open.0..e.open.1],
+                    &line[e.close.0..e.close.1],
+                    e.colors.text,
+                )
+            })
+            .collect();
+        assert_eq!(tags[0], ("<font color=blue>", "</font>", Some(Color::Blue)));
+        assert_eq!(tags[1].2, Some(Color::Red));
+        assert_eq!(tags.len(), 5);
+    }
+
+    #[test]
+    fn where_tags_can_go() {
+        let task = Block::List {
+            ordered: false,
+            task: Some(false),
+        };
+        let atoms = |s: Styled| {
+            let mut a = s.atoms;
+            a.sort();
+            a
+        };
+        let s = style_line("- [ ] a `<b>x</b>` [[n]] **b**", &task, &|_| true);
+        assert_eq!(s.inline_from, Some(6));
+        // Tags in a code span are text.
+        assert!(s.elements.is_empty());
+        assert_eq!(atoms(s), vec![(8, 18), (19, 24), (25, 27), (28, 30)]);
+        let s = style_line(
+            "x <!-- c --> \\* https://a.b #t",
+            &Block::Paragraph,
+            &|_| true,
+        );
+        assert_eq!(atoms(s), vec![(2, 12), (13, 15), (16, 27), (28, 30)]);
+        let s = style_line("``a \\é &amp; &#x26; &x; ~~~", &Block::Paragraph, &|_| {
+            true
+        });
+        assert_eq!(
+            atoms(s),
+            vec![(0, 2), (4, 7), (8, 13), (14, 20), (21, 24), (25, 28)]
+        );
+        let blocks = classify(&["| a |", "| --- |", "```", "x"]);
+        assert_eq!(
+            style_line("| a |", &blocks[0], &|_| true).inline_from,
+            Some(0)
+        );
+        assert_eq!(
+            style_line("| --- |", &blocks[1], &|_| true).inline_from,
+            None
+        );
+        assert_eq!(style_line("x", &blocks[3], &|_| true).inline_from, None);
     }
 
     #[test]

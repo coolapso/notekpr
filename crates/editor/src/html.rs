@@ -9,8 +9,11 @@
 //! Everything else goes: scripts and styles with their content, frames,
 //! forms, SVG and MathML, comments, event handlers, and the `style`, `class`
 //! and `id` attributes (nothing drawn over the app, no DOM clobbering,
-//! nothing posing as the app's own markup). Links and images follow the
-//! rules for Markdown ones, which the caller applies ([`Urls`]).
+//! nothing posing as the app's own markup). The one thing read from `style`
+//! is the text or background color of a `span`, `font` or `mark`, which is
+//! written as the app's class for the palette color nearest to it
+//! ([`color`]). Links and images follow the rules for Markdown ones, which
+//! the caller applies ([`Urls`]).
 //!
 //! The input is tokenized by html5ever as the HTML standard says (so
 //! character references and odd quoting decode the way a browser decodes
@@ -34,6 +37,7 @@ use html5ever::tokenizer::{
     TokenSinkResult, Tokenizer, TokenizerOpts,
 };
 
+use crate::color::{self, Colors};
 use crate::syntax::escape;
 
 /// How links and images are written: the caller resolves their targets
@@ -83,10 +87,12 @@ fn element(name: &str) -> Option<&'static [&'static str]> {
         "ol" => &["start", "reversed", "type"],
         "li" => &["value"],
         "details" => &["open"],
+        // Only the class the sanitizer writes for their colors.
+        "span" | "font" | "mark" => &["class"],
         "abbr" | "b" | "blockquote" | "br" | "cite" | "code" | "dd" | "del" | "dfn" | "dl"
-        | "dt" | "em" | "figcaption" | "figure" | "hr" | "i" | "ins" | "kbd" | "mark" | "pre"
-        | "q" | "rp" | "rt" | "ruby" | "s" | "samp" | "small" | "span" | "strike" | "strong"
-        | "sub" | "summary" | "sup" | "u" | "ul" | "var" | "wbr" => &[],
+        | "dt" | "em" | "figcaption" | "figure" | "hr" | "i" | "ins" | "kbd" | "pre" | "q"
+        | "rp" | "rt" | "ruby" | "s" | "samp" | "small" | "strike" | "strong" | "sub"
+        | "summary" | "sup" | "u" | "ul" | "var" | "wbr" => &[],
         _ => return None,
     })
 }
@@ -221,6 +227,12 @@ impl Sink<'_> {
                     }
                 }
             }
+        }
+        let colors = color::of_element(name, tag.attrs.iter().map(|a| (&*a.name.local, &*a.value)));
+        if !colors.is_empty() {
+            attrs.push_str(" class=\"");
+            attrs.push_str(&colors.classes());
+            attrs.push('"');
         }
         match name {
             "a" => match href {
@@ -448,6 +460,8 @@ pub struct InlineTag {
     pub closing: bool,
     /// An `a`'s link target, decoded.
     pub href: Option<String>,
+    /// The colors it sets.
+    pub colors: Colors,
 }
 
 /// Read the tag `tag` (one that [`tag_len`] found).
@@ -476,6 +490,12 @@ pub fn inline_tag(tag: &str) -> Option<InlineTag> {
             .iter()
             .find(|a| &*a.name.local == "href")
             .map(|a| a.value.to_string()),
+        colors: match t.kind {
+            EndTag => Colors::default(),
+            StartTag => {
+                color::of_element(&t.name, t.attrs.iter().map(|a| (&*a.name.local, &*a.value)))
+            }
+        },
     })
 }
 
@@ -602,6 +622,40 @@ mod tests {
     }
 
     #[test]
+    fn keeps_colors_as_palette_classes() {
+        assert_eq!(
+            plain("<span style=\"color: #e44045\">red</span>"),
+            "<span class=\"fg-red\">red</span>"
+        );
+        assert_eq!(
+            plain(
+                "<mark style=\"background: #FFB86CA6;\">x</mark> <font color=\"blue\" face=x>y</font>"
+            ),
+            "<mark class=\"bg-orange\">x</mark> <font class=\"fg-blue\">y</font>"
+        );
+        // Nothing else of the style or the class: only palette classes come out.
+        assert_eq!(
+            plain(
+                "<span class=\"wl fg-green\" style=\"position:fixed;color:navy;background:url(x)\" title=t>"
+            ),
+            "<span title=\"t\" class=\"fg-blue\">"
+        );
+        assert_eq!(
+            plain("<span style=\"color: black\" class=x>x</span>"),
+            "<span>x</span>"
+        );
+        assert_eq!(
+            plain("<span style=\"color: &quot;red&quot;\">x</span>"),
+            "<span>x</span>"
+        );
+        assert_eq!(plain("<div style=\"color: red\">x</div>"), "<div>x</div>");
+        // What comes out reads back the same.
+        let out = plain("<span style=\"color: red; background-color: hsl(120 50% 50%)\">x</span>");
+        assert_eq!(out, "<span class=\"fg-red bg-green\">x</span>");
+        assert_eq!(plain(&out), out);
+    }
+
+    #[test]
     fn links_and_images_go_to_the_caller_decoded() {
         // Character references are decoded the way a browser decodes them,
         // so the caller checks the real target.
@@ -677,9 +731,19 @@ mod tests {
             InlineTag {
                 name: "a".into(),
                 closing: false,
-                href: Some("Note%20x".into())
+                href: Some("Note%20x".into()),
+                colors: Colors::default(),
             }
         );
+        assert_eq!(
+            t("<font color=red style='background: #ffd00080'>").colors,
+            Colors {
+                text: Some(color::Color::Red),
+                background: Some(color::Color::Yellow)
+            }
+        );
+        // An end tag's attributes don't count.
+        assert!(t("</span style='color: red'>").colors.is_empty());
         assert_eq!(t("<a href=\"&#106;s:x\">").href.as_deref(), Some("js:x"));
         assert!(t("</Kbd >").closing && t("</Kbd >").name == "kbd");
         assert!(inline_tag("<!-- c -->").is_none());

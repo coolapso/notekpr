@@ -86,6 +86,7 @@ fn paths(name: &str) -> &'static str {
         "italic" => r#"<path d="M19 4h-9M14 20H5M15 4 9 20"/>"#,
         "strike" => r#"<path d="M16 4H9a3 3 0 0 0-2.8 4M14 12a4 4 0 0 1 0 8H6M4 12h16"/>"#,
         "heading" => r#"<path d="M6 4v16M18 4v16M6 12h12"/>"#,
+        "text-color" => r#"<path d="m7 15 5-11 5 11M8.8 11h6.4M4 20h16"/>"#,
         "list" => r#"<path d="M9 6h11M9 12h11M9 18h11M4.5 6h.01M4.5 12h.01M4.5 18h.01"/>"#,
         "list-ordered" => {
             r#"<path d="M10 6h11M10 12h11M10 18h11M4 6h1v4M4 10h2M6 18H4c0-1 2-2 2-3s-1-1.5-2-1"/>"#

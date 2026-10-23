@@ -251,26 +251,29 @@ reported, never applied partially. Duplicate deliveries are no-ops.
 
 ### Web application threats
 
-* **XSS**: a note is content from other people (vault members, whoever
-  shared it), shown in the page that holds the decrypted keys. The reading
-  view renders Markdown with only `http(s)`/`mailto`/in-vault link targets
-  and escaped attributes; the editor inserts only escaped text. Raw HTML in
-  notes goes through an allow list (`crates/editor/src/html.rs`): it is
-  tokenized as a browser tokenizes it (html5ever) and written out again from
-  the tokens, keeping formatting elements (`details`, `kbd`, `sub`, tables,
-  …) and a few attributes with checked values (`align`, `colspan`, `width`,
-  …). Scripts and styles with their content, frames, objects, forms, SVG,
-  MathML, comments, event handlers and the `style`, `class` and `id`
-  attributes are dropped — nothing a note can draw over the app (a fake
-  "re-enter your recovery key"), no DOM clobbering, nothing posing as the
-  app's own markup. Links and images in HTML follow the Markdown rules. The
-  editor's preview of an HTML block is parsed into its own element, so no
-  stray tag reaches the editor's lines. A strict Content-Security-Policy
-  (`script-src 'self' 'wasm-unsafe-eval'`, no inline scripts or event
-  handlers, `frame-src 'none'`, `frame-ancestors 'none'`, `object-src
-  'none'`) is a second layer. External images are not loaded (also prevents
-  tracking pixels), and there are no embeds (`iframe`, video) for the same
-  reason: whoever writes a note would choose what your browser loads.
+* **XSS**: a note is content from other people (vault members, whoever shared
+  it), shown in the page that holds the decrypted keys. The reading view
+  renders Markdown with only `http(s)`/`mailto`/in-vault link targets and
+  escaped attributes; the editor inserts only escaped text. Raw HTML in notes
+  goes through an allow list (`crates/editor/src/html.rs`): it is tokenized as
+  a browser tokenizes it (html5ever) and written out again from the tokens,
+  keeping formatting elements (`details`, `kbd`, `sub`, tables, …) and a few
+  attributes with checked values (`align`, `colspan`, `width`, …). Scripts and
+  styles with their content, frames, objects, forms, SVG, MathML, comments,
+  event handlers and the `style`, `class` and `id` attributes are dropped —
+  nothing a note can draw over the app (a fake "re-enter your recovery key"),
+  no DOM clobbering, nothing posing as the app's own markup. The one thing
+  read from them is a text or background color on a `span`, `font` or `mark`:
+  it becomes the app's class for the nearest color of a fixed palette
+  (`crates/editor/src/color.rs`), so no CSS from a note reaches the page.
+  Links and images in HTML follow the Markdown rules. The editor's preview of
+  an HTML block is parsed into its own element, so no stray tag reaches the
+  editor's lines. A strict Content-Security-Policy (`script-src 'self'
+  'wasm-unsafe-eval'`, no inline scripts or event handlers, `frame-src
+  'none'`, `frame-ancestors 'none'`, `object-src 'none'`) is a second layer.
+  External images are not loaded (also prevents tracking pixels), and there
+  are no embeds (`iframe`, video) for the same reason: whoever writes a note
+  would choose what your browser loads.
 * **CSRF**: the API uses bearer tokens, not cookies. The OIDC login itself is
   bound to the browser that started it (an HttpOnly, SameSite cookie checked at
   the callback), so a login link prepared by someone else can't sign a victim

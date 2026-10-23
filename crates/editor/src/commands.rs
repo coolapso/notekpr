@@ -2,7 +2,8 @@
 //! transaction that does it. The view dispatches them; tests call them
 //! directly.
 
-use crate::change::ChangeSet;
+use crate::change::{Assoc, ChangeSet};
+use crate::color::{Color, Colors, Kind};
 use crate::state::{EditorState, Origin, Selection, Transaction};
 use crate::syntax::{self, Block, TableKey};
 use crate::text::floor_char;
@@ -13,6 +14,10 @@ pub enum Command {
     Italic,
     Strike,
     Highlight,
+    /// A text color, or the default one.
+    TextColor(Option<Color>),
+    /// A background color, or none.
+    Background(Option<Color>),
     Code,
     CodeBlock,
     Link,
@@ -344,19 +349,7 @@ pub fn wrap_toggle(
     }
     if a == b {
         // Wrap the word under the caret, or insert an empty pair.
-        let is_word = |c: char| c.is_alphanumeric() || c == '_' || c == '-';
-        let ws = text[..a]
-            .char_indices()
-            .rev()
-            .take_while(|(_, c)| is_word(*c))
-            .last()
-            .map(|(i, _)| i)
-            .unwrap_or(a);
-        let we = a + text[a..]
-            .chars()
-            .take_while(|c| is_word(*c))
-            .map(char::len_utf8)
-            .sum::<usize>();
+        let (ws, we) = word_at(text, a);
         let c = if ws < we {
             ChangeSet::replace(len, ws, ws, open).compose(&ChangeSet::replace(
                 len + ol,
@@ -376,6 +369,351 @@ pub fn wrap_toggle(
         close,
     ));
     (c, (a + ol, b + ol))
+}
+
+/// The word around `a` (letters, digits, `_` and `-`; empty if none).
+fn word_at(text: &str, a: usize) -> (usize, usize) {
+    let is_word = |c: char| c.is_alphanumeric() || c == '_' || c == '-';
+    let ws = text[..a]
+        .char_indices()
+        .rev()
+        .take_while(|(_, c)| is_word(*c))
+        .last()
+        .map(|(i, _)| i)
+        .unwrap_or(a);
+    let we = a + text[a..]
+        .chars()
+        .take_while(|c| is_word(*c))
+        .map(char::len_utf8)
+        .sum::<usize>();
+    (ws, we)
+}
+
+/// Give the selection a text or background color, or with `None` take the
+/// color away (see [`crate::color`] for how it's written). Without a
+/// selection: the colored text at the caret, or else the word; with
+/// neither, an empty pair of tags to type into. Elements that colored the
+/// text are cut back or removed, so tags never pile up.
+fn set_color(st: &EditorState, kind: Kind, color: Option<Color>) -> Option<Transaction> {
+    let doc = st.doc();
+    let sel = st.selection();
+    let (mut a, mut b) = (sel.from(), sel.to());
+    let style = |li: usize| syntax::style_line(doc.line(li), st.block(li), &|_| true);
+    let caret = sel.is_empty().then_some(a);
+    if sel.is_empty() {
+        let li = doc.line_of(a);
+        let ls = doc.line_start(li);
+        let styled = style(li);
+        let p = a - ls;
+        styled.inline_from.filter(|f| p >= *f)?;
+        let colored = styled
+            .elements
+            .iter()
+            .filter(|e| e.colors.get(kind).is_some() && e.open.1 <= p && p <= e.close.0)
+            .max_by_key(|e| e.open.0);
+        if let Some(e) = colored {
+            if e.open.1 == e.close.0 {
+                // An empty one (typed into next): its tags change.
+                let colors = e.colors.with(kind, color);
+                let (open, close) = match colors.is_empty() {
+                    true => (String::new(), String::new()),
+                    false => (colors.span(), "</span>".to_string()),
+                };
+                let at = ls + e.open.0 + open.len();
+                let reps = [
+                    (ls + e.open.0, ls + e.open.1, open),
+                    (ls + e.close.0, ls + e.close.1, close),
+                ];
+                let c = only_colors(st, &reps).ok()?;
+                return Some(
+                    Transaction::new(c, Origin::Command)
+                        .with_selection(Selection::cursor(at))
+                        .scrolling(),
+                );
+            }
+            (a, b) = (ls + e.open.1, ls + e.close.0);
+        } else {
+            (a, b) = word_at(doc.as_str(), a);
+            if a == b {
+                // Not inside a tag or an atom, nor after a backslash.
+                let html = |i: usize| styled.flags.get(i).is_some_and(|f| f & syntax::HTML != 0);
+                let in_tag = p > 0 && html(p - 1) && html(p);
+                let in_atom = styled.atoms.iter().any(|&(u, v)| u < p && p < v);
+                if in_tag || in_atom || doc.line(li)[..p].ends_with('\\') {
+                    return None;
+                }
+                let open = Colors::default().with(kind, Some(color?)).span();
+                let at = a + open.len();
+                // On a blank line it's like typing; elsewhere lines are read
+                // as before (not before a table's first pipe).
+                let pair = [(a, a, format!("{open}</span>"))];
+                if *st.block(li) != Block::Blank {
+                    only_colors(st, &pair).ok()?;
+                }
+                return replace(st, a, a, &pair[0].2, Some((at, at)));
+            }
+        }
+    }
+    let mut lines = vec![];
+    let mut colored: Option<(usize, usize)> = None;
+    for li in doc.line_of(a)..=doc.line_of(b) {
+        let (ls, line) = (doc.line_start(li), doc.line(li));
+        let (x, y) = (a.max(ls) - ls, b.min(ls + line.len()).max(ls) - ls);
+        if x >= y {
+            continue;
+        }
+        let Some((edits, (c0, c1))) = color_line(line, &style(li), x, y, kind, color) else {
+            continue;
+        };
+        let edits: Vec<_> = edits
+            .into_iter()
+            .map(|(f, t, s)| (ls + f, ls + t, s))
+            .collect();
+        lines.push((li, edits));
+        colored = Some((colored.map_or(ls + c0, |c| c.0), ls + c1));
+    }
+    let (c0, c1) = colored?;
+    // Colors change nothing else. Tags taken away could join what they kept
+    // apart (two backticks, `\` and `*`), or make the start of a line a list
+    // item or a code fence: such a line stays as it is.
+    let c = loop {
+        let reps: Vec<_> = lines.iter().flat_map(|(_, e)| e.iter().cloned()).collect();
+        if reps.is_empty() {
+            return None;
+        }
+        match only_colors(st, &reps) {
+            Ok(c) => break c,
+            Err(first) => {
+                let k = lines.iter().rposition(|(li, _)| *li <= first).unwrap_or(0);
+                lines.remove(k);
+            }
+        }
+    };
+    let sel = match caret {
+        Some(at) => Selection::cursor(c.map_pos(at, Assoc::After)),
+        None => Selection::new(c.map_pos(c0, Assoc::After), c.map_pos(c1, Assoc::Before)),
+    };
+    Some(
+        Transaction::new(c, Origin::Command)
+            .with_selection(sel)
+            .scrolling(),
+    )
+}
+
+/// The change made of replacements `reps` (in order) if it changes only
+/// colors: every line is read as before and shows the same text, each
+/// character looking as before but for its colors. Otherwise the first line
+/// it changes more.
+fn only_colors(st: &EditorState, reps: &[(usize, usize, String)]) -> Result<ChangeSet, usize> {
+    let c = ChangeSet::from_replacements(st.doc().len(), reps);
+    let text = c.apply(st.text()).ok_or(0usize)?;
+    let lines: Vec<&str> = text.split('\n').collect();
+    let blocks = syntax::classify(&lines);
+    let n = blocks.len().max(st.blocks().len());
+    let changed = |i: usize| match (blocks.get(i), st.blocks().get(i)) {
+        (Some(b), Some(old)) if b == old => {
+            let was = st.doc().line(i);
+            lines[i] != was && look(lines[i], b) != look(was, old)
+        }
+        _ => true,
+    };
+    match (0..n).find(|&i| changed(i)) {
+        None => Ok(c),
+        Some(first) => Err(first),
+    }
+}
+
+/// What `line` shows: its characters outside the tags of its elements, each
+/// with its look (but its colors) and its link.
+fn look(line: &str, block: &Block) -> Vec<(char, syntax::Flags, Option<syntax::Target>)> {
+    let s = syntax::style_line(line, block, &|_| true);
+    let mut in_tag = vec![false; line.len()];
+    for e in &s.elements {
+        in_tag[e.open.0..e.open.1].fill(true);
+        in_tag[e.close.0..e.close.1].fill(true);
+    }
+    line.char_indices()
+        .filter(|(i, _)| !in_tag[*i])
+        .map(|(i, ch)| {
+            let link = s.links.iter().find(|l| l.0 <= i && i < l.1);
+            (
+                ch,
+                s.flags[i] & !(syntax::FG | syntax::BG),
+                link.map(|l| l.2.clone()),
+            )
+        })
+        .collect()
+}
+
+/// A replacement `(from, to, insert)` in a line.
+type LineEdit = (usize, usize, String);
+
+/// The edits that color `[x, y)` of `line` (see [`set_color`]), and where
+/// the colored text starts and ends; `None` if none of it can be colored.
+///
+/// The text is a sequence of characters with the tags of the line's
+/// elements between them. Each character has the elements around it; the
+/// colored ones get the wanted elements instead: those around them that
+/// don't set this kind of color, the new color's element (outside the ones
+/// that don't enclose all of the colored run), and what elements setting
+/// both kinds of color keep of theirs. The tags between characters are
+/// rewritten — closing what ends, opening what starts — only next to
+/// colored text, so the rest of the line stays as it was and every element
+/// stays properly nested.
+fn color_line(
+    line: &str,
+    st: &syntax::Styled,
+    x: usize,
+    y: usize,
+    kind: Kind,
+    color: Option<Color>,
+) -> Option<(Vec<LineEdit>, (usize, usize))> {
+    let from = st.inline_from?;
+    let els = &st.elements;
+    let mut in_tag = vec![false; line.len()];
+    for e in els {
+        in_tag[e.open.0..e.open.1].fill(true);
+        in_tag[e.close.0..e.close.1].fill(true);
+    }
+    let chars: Vec<usize> = line
+        .char_indices()
+        .map(|(i, _)| i)
+        .filter(|&i| !in_tag[i])
+        .collect();
+    let end_of = |i: usize| i + line[i..].chars().next().map_or(1, char::len_utf8);
+    // Not a table's pipes, nor tags that aren't paired (text to the editor,
+    // but a browser reads them: tags put around them could pair with them).
+    let colorable = |i: usize| i >= from && st.flags[i] & (syntax::PIPE | syntax::HTML) == 0;
+    // Runs of selected text, split where text can't be colored, without
+    // white space at their ends, and with whole atoms.
+    let mut runs: Vec<Vec<usize>> = vec![vec![]];
+    for &i in chars.iter().filter(|&&i| x <= i && i < y) {
+        if colorable(i) {
+            runs.last_mut().unwrap().push(i);
+        } else if !runs.last().unwrap().is_empty() {
+            runs.push(vec![]);
+        }
+    }
+    let blank = |i: &&usize| line[**i..].starts_with(char::is_whitespace);
+    // A line break: a tag after it would be escaped (elsewhere a backslash
+    // is an atom with what follows it).
+    let backslash = |i: &&usize| &line[**i..] == "\\";
+    let mut runs: Vec<(usize, usize)> = runs
+        .iter()
+        .filter_map(|r| {
+            let mut r0 = *r.iter().find(|i| !blank(i))?;
+            let mut r1 = end_of(*r.iter().rfind(|i| !blank(i) && !backslash(i))?);
+            // Atoms may overlap (`\***`).
+            while let Some(&(u, v)) = st
+                .atoms
+                .iter()
+                .find(|&&(u, v)| (u < r0 && r0 < v) || (u < r1 && r1 < v))
+            {
+                (r0, r1) = (r0.min(u), r1.max(v));
+            }
+            Some((r0, r1))
+        })
+        .collect();
+    // Atoms may join runs.
+    runs.dedup_by(|later, run| {
+        let overlap = later.0 <= run.1;
+        if overlap {
+            run.1 = run.1.max(later.1);
+        }
+        overlap
+    });
+    let (first, last) = (runs.first()?.0, runs.last()?.1);
+    let run_of = |i: usize| runs.iter().position(|r| r.0 <= i && i < r.1);
+    // The elements around a character, outermost first.
+    let around = |i: usize| {
+        let mut v: Vec<usize> = (0..els.len())
+            .filter(|&k| els[k].open.1 <= i && i < els[k].close.0)
+            .collect();
+        v.sort_by_key(|&k| els[k].open.0);
+        v
+    };
+    let sets = |k: usize| els[k].colors.get(kind).is_some();
+    // Per run: the elements that stay around all of it.
+    let outer: Vec<Vec<usize>> = runs
+        .iter()
+        .map(|&(r0, r1)| {
+            around(r0)
+                .into_iter()
+                .filter(|&k| !sets(k) && els[k].open.1 <= r0 && r1 <= els[k].close.0)
+                .collect()
+        })
+        .collect();
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum Item {
+        /// An element as it is.
+        Same(usize),
+        /// An element that sets both kinds of color, keeping the other one.
+        Other(usize),
+        New,
+    }
+    let wanted = |i: usize| -> Vec<Item> {
+        let els_around = around(i);
+        let Some(r) = run_of(i) else {
+            return els_around.into_iter().map(Item::Same).collect();
+        };
+        let (keep, inner): (Vec<usize>, Vec<usize>) =
+            els_around.into_iter().partition(|k| outer[r].contains(k));
+        let mut v: Vec<Item> = keep.into_iter().map(Item::Same).collect();
+        if color.is_some() {
+            v.push(Item::New);
+        }
+        for k in inner {
+            if !sets(k) {
+                v.push(Item::Same(k));
+            } else if !els[k].colors.with(kind, None).is_empty() {
+                v.push(Item::Other(k));
+            }
+        }
+        v
+    };
+    let open = |it: Item| match it {
+        Item::Same(k) => line[els[k].open.0..els[k].open.1].to_string(),
+        Item::Other(k) => els[k].colors.with(kind, None).span(),
+        Item::New => Colors::default().with(kind, color).span(),
+    };
+    let close = |it: Item| match it {
+        Item::Same(k) => line[els[k].close.0..els[k].close.1].to_string(),
+        Item::Other(_) | Item::New => "</span>".to_string(),
+    };
+    let mut edits = vec![];
+    let mut prev: Option<usize> = None;
+    for k in 0..=chars.len() {
+        let next = chars.get(k).copied();
+        if prev.and_then(run_of).is_some() || next.and_then(run_of).is_some() {
+            let was = prev.map_or(vec![], wanted);
+            let will = next.map_or(vec![], wanted);
+            let same = was.iter().zip(&will).take_while(|(p, q)| p == q).count();
+            let (g0, g1) = (prev.map_or(0, end_of), next.unwrap_or(line.len()));
+            let mut tags: String = was[same..].iter().rev().map(|&it| close(it)).collect();
+            // Elements without text stay, between what closes and what opens
+            // (unless they hold a tag of another one: misnested).
+            let whole = |e: &&syntax::Element| {
+                let inside = |r: (usize, usize)| e.open.0 <= r.0 && r.1 <= e.close.1;
+                els.iter().all(|f| inside(f.open) == inside(f.close))
+            };
+            let mut i = g0;
+            while let Some(e) = els
+                .iter()
+                .filter(|e| e.open.0 >= i && e.close.1 <= g1)
+                .filter(whole)
+                .min_by_key(|e| (e.open.0, std::cmp::Reverse(e.close.1)))
+            {
+                tags.push_str(&line[e.open.0..e.close.1]);
+                i = e.close.1;
+            }
+            tags.extend(will[same..].iter().map(|&it| open(it)));
+            if tags != line[g0..g1] {
+                edits.push((g0, g1, tags));
+            }
+        }
+        prev = next;
+    }
+    Some((edits, (first, last)))
 }
 
 fn toggle_wrap(st: &EditorState, open: &str, close: &str) -> Option<Transaction> {
@@ -441,6 +779,8 @@ pub fn command(st: &EditorState, cmd: Command) -> Option<Transaction> {
         Command::Italic => toggle_wrap(st, "*", "*"),
         Command::Strike => toggle_wrap(st, "~~", "~~"),
         Command::Highlight => toggle_wrap(st, "==", "=="),
+        Command::TextColor(c) => set_color(st, Kind::Text, c),
+        Command::Background(c) => set_color(st, Kind::Background, c),
         Command::Code => toggle_wrap(st, "`", "`"),
         Command::Link => {
             let sel = st.doc().slice(a, b).to_string();
@@ -757,6 +1097,239 @@ mod tests {
                         let out = c.apply(t).unwrap();
                         assert!(out.is_char_boundary(x.min(out.len())), "{t:?} {a} {b}");
                         assert!(out.is_char_boundary(y.min(out.len())), "{t:?} {a} {b}");
+                    }
+                }
+            }
+        }
+    }
+
+    const R: &str = "<span style=\"color: #e44045\">";
+    const B: &str = "<span style=\"color: #3a7bdf\">";
+    const Y: &str = "<span style=\"background-color: #ffd0004d\">";
+
+    fn text_color(c: Option<Color>) -> impl Fn(&EditorState) -> Option<Transaction> {
+        move |st| command(st, Command::TextColor(c))
+    }
+
+    fn background(c: Option<Color>) -> impl Fn(&EditorState) -> Option<Transaction> {
+        move |st| command(st, Command::Background(c))
+    }
+
+    #[test]
+    fn colors_the_selection_and_changes_or_removes_it() {
+        let (red, blue, plain) = (
+            text_color(Some(Color::Red)),
+            text_color(Some(Color::Blue)),
+            text_color(None),
+        );
+        let t = "a big word";
+        let (out, sel) = run(t, (2, 5), &red);
+        assert_eq!(out, format!("a {R}big</span> word"));
+        assert_eq!(&out[sel.0..sel.1], "big");
+        // The same color again changes nothing; another one changes the tag.
+        assert_eq!(run(&out, sel, &red).0, out);
+        let (blued, sel) = run(&out, sel, &blue);
+        assert_eq!(blued, format!("a {B}big</span> word"));
+        assert_eq!(run(&blued, sel, &plain).0, t);
+        // With its tags selected too; white space at the ends stays out.
+        assert_eq!(run(&out, (0, out.len()), &plain).0, t);
+        assert_eq!(run(t, (1, 6), &red).0, format!("a {R}big</span> word"));
+        // Text and background colors are separate.
+        let (both, _) = run(&out, sel, background(Some(Color::Yellow)));
+        assert_eq!(both, format!("a {R}{Y}big</span></span> word"));
+        assert_eq!(
+            run(&both, (0, both.len()), &plain).0,
+            format!("a {Y}big</span> word")
+        );
+    }
+
+    #[test]
+    fn colors_part_of_colored_text() {
+        let (blue, plain) = (text_color(Some(Color::Blue)), text_color(None));
+        let t = format!("{R}abcde</span>");
+        let o = R.len();
+        assert_eq!(
+            run(&t, (o + 2, o + 3), &blue).0,
+            format!("{R}ab</span>{B}c</span>{R}de</span>")
+        );
+        assert_eq!(
+            run(&t, (o + 2, o + 3), &plain).0,
+            format!("{R}ab</span>c{R}de</span>")
+        );
+        assert_eq!(run(&t, (o, o + 2), &plain).0, format!("ab{R}cde</span>"));
+        assert_eq!(
+            run(&t, (o + 3, o + 5), &plain).0,
+            format!("{R}abc</span>de")
+        );
+        // Over the end of it.
+        let t = format!("{R}abc</span>def");
+        let d = t.find('d').unwrap();
+        assert_eq!(
+            run(&t, (o + 2, d + 1), &blue).0,
+            format!("{R}ab</span>{B}cd</span>ef")
+        );
+        // Over several: one element.
+        let t = format!("{R}a</span> b {B}c</span>");
+        assert_eq!(run(&t, (0, t.len()), &blue).0, format!("{B}a b c</span>"));
+        // An element that sets both colors keeps the other one.
+        let both = "<span style=\"color: red; background: yellow\">";
+        let t = format!("{both}abc</span>");
+        let o = both.len();
+        assert_eq!(
+            run(&t, (o + 1, o + 2), &plain).0,
+            format!("{both}a</span>{Y}b</span>{both}c</span>")
+        );
+        assert_eq!(run(&t, (o, o + 3), &plain).0, format!("{Y}abc</span>"));
+    }
+
+    #[test]
+    fn other_elements_stay_nested() {
+        let red = text_color(Some(Color::Red));
+        assert_eq!(
+            run("<b>abc</b>def", (5, 11), &red).0,
+            format!("<b>ab</b>{R}<b>c</b>d</span>ef")
+        );
+        assert_eq!(
+            run("<b>abc</b>", (4, 5), &red).0,
+            format!("<b>a{R}b</span>c</b>")
+        );
+        assert_eq!(
+            run(
+                &format!("{R}<b>abc</b></span>"),
+                (R.len() + 4, R.len() + 5),
+                text_color(None)
+            )
+            .0,
+            format!("{R}<b>a</b></span><b>b</b>{R}<b>c</b></span>")
+        );
+    }
+
+    #[test]
+    fn the_caret_colors_its_colored_text_or_word() {
+        let (red, blue) = (text_color(Some(Color::Red)), text_color(Some(Color::Blue)));
+        // Other editors' tags count.
+        let t = "<font color=\"red\">xy</font> z";
+        let (out, sel) = run(t, (19, 19), &blue);
+        assert_eq!(out, format!("{B}xy</span> z"));
+        assert_eq!(sel, (B.len() + 1, B.len() + 1));
+        let t = "<mark style=\"background: #FFB86CA6;\">x</mark>";
+        assert_eq!(
+            run(t, (37, 37), background(Some(Color::Green))).0,
+            "<span style=\"background-color: #30a46c4d\">x</span>"
+        );
+        let (out, sel) = run("one two", (5, 5), &red);
+        assert_eq!(out, format!("one {R}two</span>"));
+        assert_eq!(sel, (5 + R.len(), 5 + R.len()));
+        // No word: a pair to type into, which takes another color or goes.
+        let (out, sel) = run("a  b", (2, 2), &red);
+        assert_eq!(out, format!("a {R}</span> b"));
+        assert_eq!(sel, (2 + R.len(), 2 + R.len()));
+        let (out, sel) = run(&out, sel, &blue);
+        assert_eq!(out, format!("a {B}</span> b"));
+        assert_eq!(run(&out, sel, text_color(None)).0, "a  b");
+        assert_eq!(run("a  b", (2, 2), text_color(None)).0, "a  b");
+    }
+
+    #[test]
+    fn colors_keep_markdown_working() {
+        let red = text_color(Some(Color::Red));
+        let t = "# Title\n- item\n\n| a | b |\n| --- | --- |\n| c | d |\n```\ncode\n```";
+        assert_eq!(
+            run(t, (0, t.len()), &red).0,
+            format!(
+                "# {R}Title</span>\n- {R}item</span>\n\n| {R}a</span> | {R}b</span> |\n\
+                 | --- | --- |\n| {R}c</span> | {R}d</span> |\n```\ncode\n```"
+            )
+        );
+        // Code spans, links and the like are colored whole.
+        assert_eq!(
+            run("a `code` [[Note]] b", (4, 12), &red).0,
+            format!("a {R}`code` [[Note]]</span> b")
+        );
+        assert_eq!(
+            run("**bold**", (3, 5), &red).0,
+            format!("**b{R}ol</span>d**")
+        );
+        // Whole lines of everyday Markdown take the color.
+        for (line, want) in [
+            (
+                "Visit https://example.org today",
+                format!("{R}Visit https://example.org today</span>"),
+            ),
+            (
+                "See [[Note]], `code` and #tag",
+                format!("{R}See [[Note]], `code` and #tag</span>"),
+            ),
+            (
+                "**bold** and *it* \\*",
+                format!("{R}**bold** and *it* \\*</span>"),
+            ),
+            ("- [ ] #tag first", format!("- [ ] {R}#tag first</span>")),
+            ("> [a](b) &amp; c", format!("> {R}[a](b) &amp; c</span>")),
+        ] {
+            assert_eq!(run(line, (0, line.len()), &red).0, want, "{line}");
+        }
+    }
+
+    /// Lines the property tests once found to break this: colors change
+    /// only tags, never what a line shows or how lines are read.
+    #[test]
+    fn colors_leave_odd_lines_alone() {
+        let shown = |st: &EditorState| -> Vec<String> {
+            (0..st.doc().line_count())
+                .map(|i| {
+                    let line = st.doc().line(i);
+                    let s = syntax::style_line(line, st.block(i), &|_| true);
+                    let mut tag = vec![false; line.len()];
+                    for e in &s.elements {
+                        tag[e.open.0..e.open.1].fill(true);
+                        tag[e.close.0..e.close.1].fill(true);
+                    }
+                    line.char_indices()
+                        .filter(|(i, _)| !tag[*i])
+                        .map(|(_, c)| c)
+                        .collect()
+                })
+                .collect()
+        };
+        for t in [
+            // An unpaired tag is text to the editor.
+            "# <span style=\"color: #e44045\">",
+            // An empty element holds a line's start.
+            "<span style=\"color: #e44045\"></span><!-- c -->",
+            // Misnested.
+            "<mark style=\"background: gold\">**<b></mark></b>",
+            // Two backticks would become a code span around a tag.
+            "\tx\n**\n    ``<mark style=\"background: gold\"></span>word||",
+            // A tag after a backslash would be escaped.
+            "</span>**</span>\\*",
+            "# \\***word</span></span>word",
+            "a\\",
+            // Not before a table's first pipe.
+            "| ",
+            // Taking tags away would make two backticks one run.
+            "<span style=\"color: #e44045\">`<span style=\"color: #e44045\">\
+             <span style=\"color: #e44045\">`<span style=\"color: #e44045\">`</span>",
+        ] {
+            let before = EditorState::new(t.to_string());
+            let bounds: Vec<usize> = t.char_indices().map(|(i, _)| i).chain([t.len()]).collect();
+            // Every selection of short lines; of long ones, those at an end.
+            let some = |x: usize, y: usize| t.len() < 60 || x == 0 || y == t.len() || x == y;
+            for (k, &x) in bounds.iter().enumerate() {
+                for &y in bounds[k..].iter().filter(|&&y| some(x, y)) {
+                    for cmd in [
+                        Command::TextColor(Some(Color::Gray)),
+                        Command::TextColor(None),
+                        Command::Background(Some(Color::Red)),
+                    ] {
+                        let mut st = EditorState::new(t.to_string());
+                        st.set_selection(Selection::new(x, y));
+                        if let Some(tr) = command(&st, cmd) {
+                            st.apply(tr);
+                        }
+                        let what = format!("{t:?} {x}..{y} {cmd:?} → {:?}", st.text());
+                        assert_eq!(st.blocks(), before.blocks(), "{what}");
+                        assert_eq!(shown(&st), shown(&before), "{what}");
                     }
                 }
             }

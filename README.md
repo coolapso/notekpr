@@ -47,6 +47,11 @@ read anything.
   pasting) after an opening `` ``` `` closes the block.
 * Images and other files: paste or drop them into a note — they are encrypted,
   uploaded and shown inline.
+* Text and background colors from the toolbar, in a palette that reads well
+  in the light and the dark theme. They are saved as plain HTML
+  (`<span style="color: …">`), so Obsidian, Typora, VS Code and other
+  Markdown editors show them too — and colors written there (`<font color>`,
+  colored highlights, any CSS color) show here in the nearest palette color.
 * HTML inside notes for what Markdown can't do: fold-out sections
   (`<details>`), keys (`<kbd>`), sub- and superscript, centered text,
   sized images, tables with merged cells. Only formatting is kept — no

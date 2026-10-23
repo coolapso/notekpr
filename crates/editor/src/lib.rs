@@ -9,8 +9,8 @@
 //!   transaction: changes, selection, origin, undo grouping),
 //!   [`decorations`] (Markdown blocks per line, updated incrementally),
 //!   [`syntax`] (inline styling and HTML per line), [`code`] (code block
-//!   options and syntax highlighting), [`commands`] (lists,
-//!   tables, tasks, formatting) and [`vim`].
+//!   options and syntax highlighting), [`color`] (text and background
+//!   colors), [`commands`] (lists, tables, tasks, formatting) and [`vim`].
 //! * **The DOM view** — [`view::Editor`], a `contenteditable` element whose
 //!   text is always exactly the Markdown source, one `div.ln` per line. A
 //!   transaction re-renders only the lines it touched.
@@ -23,6 +23,7 @@
 
 pub mod change;
 pub mod code;
+pub mod color;
 pub mod commands;
 pub mod decorations;
 pub mod html;

@@ -2,7 +2,8 @@
 //!
 //! * Raw HTML in notes keeps only what [`html::sanitize`] allows: formatting
 //!   elements with a few checked attributes; no scripts, styles, frames,
-//!   forms, event handlers, `style`, `class` or `id`.
+//!   forms, event handlers, `style`, `class` or `id` (a text or background
+//!   color becomes the app's class for a palette color).
 //! * Link targets are limited to http(s), mailto and in-vault references,
 //!   in Markdown and HTML alike.
 //! * External images are not loaded (privacy: no tracking pixels; the CSP

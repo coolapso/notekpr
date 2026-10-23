@@ -1910,7 +1910,64 @@ def test_html(env):
         b.close()
 
 
-TESTS = [test_onboarding, test_collab, test_devices_and_recovery, test_features, test_attachments, test_note_sharing, test_tables, test_code_blocks, test_html, test_code_wrapping, test_editor_mouse, test_editor_safety, test_local_copy, test_ui_basics, test_offline_tabs, test_offline_start, test_mobile, test_quick_notes, test_vault_icons, test_entry_icons, test_tree_order, test_session_ended_while_away, test_comments, test_graph, test_recovered_copy]
+def test_colors(env):
+    b, m = Browser(), Browser(390, 844)
+    red, yellow = '<span style="color: #e44045">', '<span style="background-color: #ffd0004d">'
+    def pick(br, title):
+        br.click(".tb[title='Text and background color']")
+        br.click(f".menu.colors button[title='{title}']")
+        time.sleep(0.4)
+    try:
+        signup(b, uniq("co"))
+        # Below the first lines: the comment button over a selection would cover the toolbar.
+        new_note(b, "Colors", "Colors\n\n\nMake this word red and that one blue.")
+        check(b.js(SELECT_TEXT, "word"), "the word is in the note")
+        pick(b, "Red text")
+        check(f"this {red}word</span> red" in editor_text(b), "the toolbar writes a color other editors show too")
+        check(b.js("return Array.from(document.querySelectorAll('.ed .fg-red:not(.mk)')).map(e => e.textContent).join('')") == "word", "the editor shows it")
+        check(b.js("const e = document.querySelector('.ed .fg-red:not(.mk)'); return getComputedStyle(e).color != getComputedStyle(e.closest('.ln')).color"), "in color")
+        b.shot("colors-menu-closed")
+        # The selection stays on the colored text: a background for it, then none.
+        pick(b, "Yellow background")
+        check(f"this {red}{yellow}word</span></span> red" in editor_text(b), "text and background colors are separate")
+        pick(b, "No background")
+        pick(b, "Default text color")
+        check("Make this word red and that one blue." in editor_text(b), "and both come off again, leaving no tags")
+        check(b.js(SELECT_TEXT, "blue"), "the other word is in the note")
+        pick(b, "Blue text")
+        # Colors other editors write.
+        foreign = '\n\n<font color="#ff0000">legacy</font> and <mark style="background: #BBFABBA6;">marked</mark>'
+        b.chord(KEYS["ctrl"], KEYS["end"])
+        b.js("const dt = new DataTransfer(); dt.setData('text/plain', arguments[0]); document.querySelector('.ed').dispatchEvent(new ClipboardEvent('paste', {clipboardData: dt, bubbles: true, cancelable: true}));", foreign)
+        time.sleep(0.6)
+        check(b.js("return document.querySelector('.ed .bg-green:not(.mk)')?.textContent") == "marked", "a highlight colored in another editor shows its color")
+        b.click(".seg button[title^='Reading']")
+        b.find(".reading p", 10)
+        check(b.js("return document.querySelector('.reading .fg-blue')?.textContent") == "blue", "the reading view shows colors")
+        check(b.js("return document.querySelector('.reading font.fg-red')?.textContent") == "legacy", "<font color> too")
+        check(b.js("const e = document.querySelector('.reading mark.bg-green'); return !!e && getComputedStyle(e).backgroundColor != getComputedStyle(document.querySelector('.reading')).backgroundColor"), "and colored highlights")
+        check(not b.js("return !!document.querySelector('.reading [style]')"), "never with the note's own CSS")
+        b.shot("colors-reading")
+        check(not severe_logs(b), "no browser errors")
+        # On a phone the menu isn't cut off by the scrolling toolbar.
+        signup(m, uniq("cm"))
+        m.click(".note-head .mobile-only")
+        time.sleep(0.4)
+        new_note(m, "Phone", "Colors\n\n\ntap here")
+        check(m.js(SELECT_TEXT, "here"), "the word is in the note")
+        m.click(".tb[title='Text and background color']")
+        hit = m.js("const b = document.querySelector(\".menu.colors button[title='Pink background']\"); if (!b) return false; const r = b.getBoundingClientRect(); const e = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2); return !!e && b.contains(e);")
+        m.shot("colors-phone")
+        check(hit, "the color menu shows whole on a phone")
+        m.click(".menu.colors button[title='Pink background']")
+        time.sleep(0.4)
+        check('<span style="background-color: #d6409f4d">here</span>' in editor_text(m), "and works there")
+    finally:
+        b.close()
+        m.close()
+
+
+TESTS = [test_onboarding, test_collab, test_devices_and_recovery, test_features, test_attachments, test_note_sharing, test_tables, test_code_blocks, test_html, test_colors, test_code_wrapping, test_editor_mouse, test_editor_safety, test_local_copy, test_ui_basics, test_offline_tabs, test_offline_start, test_mobile, test_quick_notes, test_vault_icons, test_entry_icons, test_tree_order, test_session_ended_while_away, test_comments, test_graph, test_recovered_copy]
 
 
 def main():

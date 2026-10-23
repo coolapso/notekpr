@@ -9,6 +9,7 @@ use notekpr_core::paths;
 use wasm_bindgen::JsCast;
 
 use crate::actions::{self, NoteHost};
+use crate::editor::color::Color;
 use crate::editor::{Command, Editor, Mode};
 use crate::state::{self, Modal, Route, ViewMode, step, ui};
 use crate::views::comments::{self, CommentLayer, CommentsList};
@@ -45,6 +46,42 @@ fn ToolButton(icon: &'static str, title: String, c: Command) -> impl IntoView {
     }
 }
 
+/// One row of the color menu: the default and the palette, each a
+/// colored "A".
+fn color_swatches(
+    default: &'static str,
+    title: fn(&str) -> String,
+    class: fn(&str) -> String,
+    command: fn(Option<Color>) -> Command,
+) -> impl IntoView {
+    let pick = move |c: Option<Color>| {
+        move |ev: web_sys::MouseEvent| {
+            ev.prevent_default();
+            cmd(command(c));
+        }
+    };
+    view! {
+        <div class="swatches">
+            <button title=default aria-label=default on:mousedown=pick(None)><span class="sw">"A"</span></button>
+            {Color::ALL.into_iter().map(|c| {
+                let label = title(&capitalized(c.name()));
+                view! {
+                    <button title=label.clone() aria-label=label on:mousedown=pick(Some(c))>
+                        <span class=format!("sw {}", class(c.name()))>"A"</span>
+                    </button>
+                }
+            }).collect_view()}
+        </div>
+    }
+}
+
+fn capitalized(s: &str) -> String {
+    let mut c = s.chars();
+    c.next()
+        .map(|f| f.to_uppercase().chain(c).collect())
+        .unwrap_or_default()
+}
+
 /// Formatting toolbar. Without a vault (a note shared with us) there is no
 /// file attachment button.
 #[component]
@@ -52,6 +89,8 @@ fn Toolbar(vault: Option<String>) -> impl IntoView {
     let m = util::mod_key();
     let heading_open = RwSignal::new(false);
     super::close_on_outside(heading_open);
+    let colors_open = RwSignal::new(false);
+    super::close_on_outside(colors_open);
     view! {
         // The frame is a wrapper: on phones the buttons scroll sideways, and
         // their menus must not be cut off with them.
@@ -73,6 +112,17 @@ fn Toolbar(vault: Option<String>) -> impl IntoView {
             <ToolButton icon="bold" title=format!("Bold ({m}+B)") c=Command::Bold/>
             <ToolButton icon="italic" title=format!("Italic ({m}+I)") c=Command::Italic/>
             <ToolButton icon="strike" title=format!("Strikethrough ({m}+Shift+X)") c=Command::Strike/>
+            <div class="tb-drop">
+                <button class="tb" title="Text and background color" aria-label="Text and background color" on:mousedown=move |ev| { ev.prevent_default(); colors_open.update(|o| *o = !*o); }><Icon name="text-color"/></button>
+                <Show when=move || colors_open.get()>
+                    <div class="menu colors" on:mousedown=move |ev| { ev.prevent_default(); colors_open.set(false); }>
+                        <div class="menu-label">"Text"</div>
+                        {color_swatches("Default text color", |c| format!("{c} text"), |c| format!("fg-{c}"), Command::TextColor)}
+                        <div class="menu-label">"Background"</div>
+                        {color_swatches("No background", |c| format!("{c} background"), |c| format!("bg-{c}"), Command::Background)}
+                    </div>
+                </Show>
+            </div>
             <span class="tb-sep"></span>
             <ToolButton icon="list" title="Bulleted list".to_string() c=Command::Bullet/>
             <ToolButton icon="list-ordered" title="Numbered list".to_string() c=Command::Numbered/>

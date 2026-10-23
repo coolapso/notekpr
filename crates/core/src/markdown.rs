@@ -105,17 +105,49 @@ pub fn analyze(text: &str) -> NoteInfo {
         if let Some(h) = heading(line) {
             info.headings.push(Heading {
                 level: h.0,
-                text: h.1.to_string(),
+                text: without_html(h.1).trim().to_string(),
                 offset: line_off,
             });
         }
-        let masked = mask_inline_code(line);
+        let masked = mask_html(&mask_inline_code(line));
         scan_links(&masked, line, line_off, &mut info.links);
         scan_tags(&masked, line, &mut info.tags);
     }
     let mut seen = std::collections::HashSet::new();
     info.tags.retain(|t| seen.insert(t.to_lowercase()));
     info
+}
+
+/// `text` as a reader sees it, for search: without raw HTML tags (a colored
+/// word is `<span style="color: …">word</span>`), except in code, where they
+/// are text.
+pub fn shown_text(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut fence: Option<&str> = None;
+    for raw in text.split_inclusive('\n') {
+        let line = raw.trim_end_matches(['\n', '\r']);
+        if let Some(f) = fence {
+            if line.trim_start().starts_with(f) {
+                fence = None;
+            }
+            out.push_str(raw);
+            continue;
+        }
+        if let Some(f) = is_fence(line) {
+            fence = Some(f);
+        }
+        if fence.is_some() || line.starts_with("    ") || line.starts_with('\t') {
+            out.push_str(raw);
+            continue;
+        }
+        let mut last = 0;
+        for (a, b) in html_ranges(&mask_inline_code(line)) {
+            out.push_str(&raw[last..a]);
+            last = b;
+        }
+        out.push_str(&raw[last..]);
+    }
+    out
 }
 
 /// `(level, text)` for ATX headings.
@@ -172,6 +204,142 @@ fn mask_inline_code(line: &str) -> String {
         i += 1;
     }
     String::from_utf8(out).unwrap_or_else(|_| line.to_string())
+}
+
+/// The length of the raw HTML at the start of `s` as CommonMark sees it in
+/// a line (§6.6): an open tag, a closing tag or a comment (`<!-- … -->`).
+pub fn html_tag_len(s: &[u8]) -> Option<usize> {
+    if s.first() != Some(&b'<') {
+        return None;
+    }
+    if s.starts_with(b"<!--") {
+        // `<!-->` and `<!--->` are comments too.
+        return find(&s[2..], b"-->").map(|i| 2 + i + 3);
+    }
+    if s.get(1) == Some(&b'/') {
+        let n = tag_name(&s[2..]);
+        if n == 0 {
+            return None;
+        }
+        let i = 2 + n;
+        let i = i + spaces(&s[i..]);
+        return (s.get(i) == Some(&b'>')).then_some(i + 1);
+    }
+    let n = tag_name(&s[1..]);
+    if n == 0 {
+        return None;
+    }
+    let mut i = 1 + n;
+    // Attributes: whitespace, a name, maybe `=` and a value.
+    loop {
+        let ws = spaces(&s[i..]);
+        let a = i + ws;
+        let name_start = s
+            .get(a)
+            .is_some_and(|b| b.is_ascii_alphabetic() || matches!(b, b'_' | b':'));
+        if ws == 0 || !name_start {
+            break;
+        }
+        let mut j = a
+            + 1
+            + s[a + 1..]
+                .iter()
+                .take_while(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.' | b':' | b'-'))
+                .count();
+        let k = j + spaces(&s[j..]);
+        if s.get(k) == Some(&b'=') {
+            let v = k + 1 + spaces(&s[k + 1..]);
+            match s.get(v) {
+                Some(q @ (b'"' | b'\'')) => {
+                    let close = s[v + 1..].iter().position(|b| b == q)?;
+                    j = v + 1 + close + 1;
+                }
+                Some(_) => {
+                    let len = s[v..]
+                        .iter()
+                        .take_while(|b| {
+                            !matches!(
+                                b,
+                                b' ' | b'\t' | b'\n' | b'"' | b'\'' | b'=' | b'<' | b'>' | b'`'
+                            )
+                        })
+                        .count();
+                    if len == 0 {
+                        return None;
+                    }
+                    j = v + len;
+                }
+                None => return None,
+            }
+        }
+        i = j;
+    }
+    i += spaces(&s[i..]);
+    if s.get(i) == Some(&b'/') {
+        i += 1;
+    }
+    (s.get(i) == Some(&b'>')).then_some(i + 1)
+}
+
+/// The ASCII tag name at the start of `s` (a letter, then letters, digits
+/// and `-`), as its length.
+fn tag_name(s: &[u8]) -> usize {
+    if !s.first().is_some_and(u8::is_ascii_alphabetic) {
+        return 0;
+    }
+    1 + s[1..]
+        .iter()
+        .take_while(|b| b.is_ascii_alphanumeric() || **b == b'-')
+        .count()
+}
+
+fn spaces(s: &[u8]) -> usize {
+    s.iter().take_while(|b| matches!(b, b' ' | b'\t')).count()
+}
+
+fn find(hay: &[u8], needle: &[u8]) -> Option<usize> {
+    hay.windows(needle.len()).position(|w| w == needle)
+}
+
+/// Where the raw HTML (tags and comments) in `line` is.
+fn html_ranges(line: &str) -> Vec<(usize, usize)> {
+    let b = line.as_bytes();
+    let mut out = vec![];
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'<'
+            && (i == 0 || b[i - 1] != b'\\')
+            && let Some(len) = html_tag_len(&b[i..])
+        {
+            out.push((i, i + len));
+            i += len;
+        } else {
+            i += 1;
+        }
+    }
+    out
+}
+
+/// Replace raw HTML with spaces, keeping byte offsets: a `#` in
+/// `style="color: #e44045"` isn't a tag, nor `[[x]]` in an attribute a link.
+fn mask_html(line: &str) -> String {
+    let mut out = line.as_bytes().to_vec();
+    for (a, b) in html_ranges(line) {
+        out[a..b].fill(b' ');
+    }
+    String::from_utf8(out).unwrap_or_else(|_| line.to_string())
+}
+
+/// `s` without raw HTML (a heading's text without its `<span …>`).
+fn without_html(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut last = 0;
+    for (a, b) in html_ranges(s) {
+        out.push_str(&s[last..a]);
+        last = b;
+    }
+    out.push_str(&s[last..]);
+    out
 }
 
 fn scan_links(masked: &str, orig: &str, line_off: usize, out: &mut Vec<Link>) {
@@ -528,6 +696,45 @@ mod tests {
             &src[info.links[0].start..info.links[0].end],
             "[[Other Note|alias]]"
         );
+    }
+
+    #[test]
+    fn tag_lengths() {
+        let t = |s: &str| html_tag_len(s.as_bytes());
+        assert_eq!(t("<b>x"), Some(3));
+        assert_eq!(t("</b >x"), Some(5));
+        assert_eq!(t("<a href=\"x y\" title='z' data-x=1 disabled>"), Some(42));
+        assert_eq!(t("<br/>"), Some(5));
+        assert_eq!(t("<!-- c -->x"), Some(10));
+        assert_eq!(t("<!-->x"), Some(5));
+        assert_eq!(t("<a href=\"x>"), None);
+        assert_eq!(t("<a href=>"), None);
+        assert_eq!(t("<1>"), None);
+        assert_eq!(t("< b>"), None);
+        assert_eq!(t("<a@b>"), None);
+        assert_eq!(t("<b"), None);
+    }
+
+    #[test]
+    fn shown_text_has_no_html_outside_code() {
+        assert_eq!(
+            shown_text(
+                "A <span style=\"color: red\">word</span>.\n`<b>` <b>x</b>\n```\n<i>\n```\n    <u>\n"
+            ),
+            "A word.\n`<b>` x\n```\n<i>\n```\n    <u>\n"
+        );
+    }
+
+    #[test]
+    fn html_is_not_tags_or_links() {
+        let info = analyze(
+            "# <span style=\"color: #e44045\">Red</span> title\n\
+             A <span style=\"background-color: #ffd0004d\">#real</span> tag, \
+             <a title=\"[[no]] #no\">x</a> <!-- #no [[no]] --> \\<b #yes>\n",
+        );
+        assert_eq!(info.tags, vec!["real", "yes"]);
+        assert!(info.links.is_empty());
+        assert_eq!(info.headings[0].text, "Red title");
     }
 
     #[test]

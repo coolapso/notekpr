@@ -114,8 +114,10 @@ fn count(hay: &[char], needle: &[char], cap: usize) -> usize {
     n
 }
 
-/// Score one note against a query. `tags` are the note's tags.
+/// Score one note against a query. `tags` are the note's tags. What
+/// matches, and the snippet, is the text as a reader sees it (no HTML tags).
 pub fn score(q: &Query, path: &str, text: &str, tags: &[String]) -> Option<Hit> {
+    let text = &crate::markdown::shown_text(text);
     let path_f = fold_str(path);
     if let Some(folder) = &q.folder
         && !(path_f.starts_with(&format!("{folder}/")) || path_f.starts_with(folder.as_str()))
@@ -228,6 +230,15 @@ mod tests {
         let q = parse_query("tag:work");
         assert!(score(&q, "x.md", "", &["Work/Meetings".into()]).is_some());
         assert!(score(&q, "x.md", "", &["home".into()]).is_none());
+        // HTML tags aren't text.
+        let colored = "a <span style=\"color: #e44045\">red</span> word";
+        assert!(score(&parse_query("span"), "x.md", colored, &[]).is_none());
+        assert_eq!(
+            score(&parse_query("red"), "x.md", colored, &[])
+                .unwrap()
+                .snippet,
+            "a red word"
+        );
         let q = parse_query("folder:projects engine");
         assert!(score(&q, "Projects/a.md", "the engine", &[]).is_some());
         assert!(score(&q, "Notes/a.md", "the engine", &[]).is_none());

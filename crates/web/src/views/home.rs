@@ -152,6 +152,8 @@ pub fn VaultHome(vault: String) -> impl IntoView {
                                         let (v2, id) = (v.clone(), e.id.clone());
                                         let folder = notekpr_core::paths::parent(&e.path).to_string();
                                         let text = step(|c| c.replicas.get(&v).map(|r| r.note_text(&e.id))).unwrap_or_default();
+                                        // As shown: without HTML tags (colors).
+                                        let text = notekpr_core::markdown::shown_text(&text);
                                         let snippet: String = text.lines().filter(|l| !l.trim().is_empty() && !l.starts_with('#') && !l.starts_with("---")).take(2).collect::<Vec<_>>().join(" ").chars().take(140).collect();
                                         view! {
                                             <button class="note-card" on:click=move |_| state::navigate(Route::Note(v2.clone(), id.clone()))>

@@ -922,6 +922,8 @@ fn plain_line(line: &str) -> &str {
 /// What lists show for a quick note: its first non-empty line (without
 /// front matter and Markdown markers), or `title` if it has no text yet.
 pub fn quick_preview(text: &str, title: &str) -> String {
+    // As shown: without HTML tags (colors).
+    let text = &notekpr_core::markdown::shown_text(text);
     let mut lines = text.lines().peekable();
     // Only a closed block at the start is front matter.
     if lines.peek().is_some_and(|l| l.trim_end() == "---")
@@ -1146,6 +1148,10 @@ mod quick_tests {
         );
         assert_eq!(quick_preview("", "2026-10-19 14.32"), "2026-10-19 14.32");
         assert_eq!(quick_preview("- [ ] milk", "t"), "milk");
+        assert_eq!(
+            quick_preview("- [ ] <span style=\"color: #e44045\">milk</span>", "t"),
+            "milk"
+        );
         assert_eq!(quick_preview("---\na: b\n---\nText", "t"), "Text");
         assert_eq!(quick_preview("---\nText", "t"), "Text");
         assert!(is_quick_note("Quick notes/a.md") && !is_quick_note("Quick notes/a.png"));

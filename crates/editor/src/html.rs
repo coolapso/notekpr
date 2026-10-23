@@ -355,10 +355,6 @@ fn tag_name(s: &[u8]) -> usize {
         .count()
 }
 
-fn spaces(s: &[u8]) -> usize {
-    s.iter().take_while(|b| matches!(b, b' ' | b'\t')).count()
-}
-
 impl BlockKind {
     /// The kind of HTML block `line` starts, if it starts one.
     pub fn start(line: &str) -> Option<BlockKind> {
@@ -442,78 +438,7 @@ impl BlockKind {
 
 /// The length of the raw HTML at the start of `s` as CommonMark sees it in
 /// a line (§6.6): an open tag, a closing tag or a comment (`<!-- … -->`).
-pub fn tag_len(s: &[u8]) -> Option<usize> {
-    if s.first() != Some(&b'<') {
-        return None;
-    }
-    if s.starts_with(b"<!--") {
-        // `<!-->` and `<!--->` are comments too.
-        return find(&s[2..], b"-->").map(|i| 2 + i + 3);
-    }
-    if s.get(1) == Some(&b'/') {
-        let n = tag_name(&s[2..]);
-        if n == 0 {
-            return None;
-        }
-        let i = 2 + n;
-        let i = i + spaces(&s[i..]);
-        return (s.get(i) == Some(&b'>')).then_some(i + 1);
-    }
-    let n = tag_name(&s[1..]);
-    if n == 0 {
-        return None;
-    }
-    let mut i = 1 + n;
-    // Attributes: whitespace, a name, maybe `=` and a value.
-    loop {
-        let ws = spaces(&s[i..]);
-        let a = i + ws;
-        let name_start = s
-            .get(a)
-            .is_some_and(|b| b.is_ascii_alphabetic() || matches!(b, b'_' | b':'));
-        if ws == 0 || !name_start {
-            break;
-        }
-        let mut j = a
-            + 1
-            + s[a + 1..]
-                .iter()
-                .take_while(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.' | b':' | b'-'))
-                .count();
-        let k = j + spaces(&s[j..]);
-        if s.get(k) == Some(&b'=') {
-            let v = k + 1 + spaces(&s[k + 1..]);
-            match s.get(v) {
-                Some(q @ (b'"' | b'\'')) => {
-                    let close = s[v + 1..].iter().position(|b| b == q)?;
-                    j = v + 1 + close + 1;
-                }
-                Some(_) => {
-                    let len = s[v..]
-                        .iter()
-                        .take_while(|b| {
-                            !matches!(
-                                b,
-                                b' ' | b'\t' | b'\n' | b'"' | b'\'' | b'=' | b'<' | b'>' | b'`'
-                            )
-                        })
-                        .count();
-                    if len == 0 {
-                        return None;
-                    }
-                    j = v + len;
-                }
-                None => return None,
-            }
-        }
-        i = j;
-    }
-    i += spaces(&s[i..]);
-    if s.get(i) == Some(&b'/') {
-        i += 1;
-    }
-    (s.get(i) == Some(&b'>')).then_some(i + 1)
-}
+pub use notekpr_core::markdown::html_tag_len as tag_len;
 
 /// One tag in a line of Markdown, as a browser reads it.
 #[derive(Debug, PartialEq, Eq)]
@@ -552,10 +477,6 @@ pub fn inline_tag(tag: &str) -> Option<InlineTag> {
             .find(|a| &*a.name.local == "href")
             .map(|a| a.value.to_string()),
     })
-}
-
-fn find(hay: &[u8], needle: &[u8]) -> Option<usize> {
-    hay.windows(needle.len()).position(|w| w == needle)
 }
 
 #[cfg(test)]
@@ -762,22 +683,5 @@ mod tests {
         assert_eq!(t("<a href=\"&#106;s:x\">").href.as_deref(), Some("js:x"));
         assert!(t("</Kbd >").closing && t("</Kbd >").name == "kbd");
         assert!(inline_tag("<!-- c -->").is_none());
-    }
-
-    #[test]
-    fn tag_lengths() {
-        let t = |s: &str| tag_len(s.as_bytes());
-        assert_eq!(t("<b>x"), Some(3));
-        assert_eq!(t("</b >x"), Some(5));
-        assert_eq!(t("<a href=\"x y\" title='z' data-x=1 disabled>"), Some(42));
-        assert_eq!(t("<br/>"), Some(5));
-        assert_eq!(t("<!-- c -->x"), Some(10));
-        assert_eq!(t("<!-->x"), Some(5));
-        assert_eq!(t("<a href=\"x>"), None);
-        assert_eq!(t("<a href=>"), None);
-        assert_eq!(t("<1>"), None);
-        assert_eq!(t("< b>"), None);
-        assert_eq!(t("<a@b>"), None);
-        assert_eq!(t("<b"), None);
     }
 }

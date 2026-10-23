@@ -11,8 +11,8 @@
 //! and default-vault rule.
 
 use notekpr_core::doc::EntryKind;
-use notekpr_core::paths;
 use notekpr_core::protocol::Role;
+use notekpr_core::{markdown, paths};
 
 use leptos::prelude::*;
 
@@ -112,7 +112,7 @@ fn clip(s: &str, max: usize) -> String {
 /// What lists and cards show for a quick note: its first non-empty line,
 /// or the title if there is no text yet.
 pub fn preview(text: &str, title: &str) -> String {
-    content_lines(text)
+    content_lines(&markdown::shown_text(text))
         .next()
         .map(|l| clip(l, 160))
         .unwrap_or_else(|| title.to_string())
@@ -121,7 +121,10 @@ pub fn preview(text: &str, title: &str) -> String {
 /// The text after the preview line, joined into one line (card snippets).
 pub fn rest(text: &str) -> String {
     clip(
-        &content_lines(text).skip(1).collect::<Vec<_>>().join(" "),
+        &content_lines(&markdown::shown_text(text))
+            .skip(1)
+            .collect::<Vec<_>>()
+            .join(" "),
         280,
     )
 }
@@ -129,7 +132,8 @@ pub fn rest(text: &str) -> String {
 /// A suggested note name for promoting a quick note: its first line,
 /// without characters that break file names or `[[links]]`.
 pub fn promote_title(text: &str) -> String {
-    let first = content_lines(text).next().unwrap_or("");
+    let shown = markdown::shown_text(text);
+    let first = content_lines(&shown).next().unwrap_or("");
     let cleaned: String = first
         .chars()
         .filter_map(|c| match c {
@@ -413,6 +417,10 @@ mod tests {
         assert_eq!(preview("1. first step", "t"), "first step");
         assert_eq!(preview("#tag at the start", "t"), "#tag at the start");
         assert_eq!(
+            preview("<span style=\"color: #e44045\">Call</span> mom", "t"),
+            "Call mom"
+        );
+        assert_eq!(
             preview("---\ntags: [a]\n---\n\nReal text", "t"),
             "Real text"
         );
@@ -431,6 +439,10 @@ mod tests {
         assert_eq!(promote_title("Garden plan\nmore"), "Garden plan");
         assert_eq!(promote_title("## Idea: a/b test?"), "Idea- a-b test");
         assert_eq!(promote_title("See [[Other]] #tag"), "See Other tag");
+        assert_eq!(
+            promote_title("<span style=\"background-color: #ffd0004d\">Garden</span> plan"),
+            "Garden plan"
+        );
         assert_eq!(promote_title(""), "");
         assert_eq!(promote_title("..."), "");
         let long = format!("{} end", "abcdefghij ".repeat(10));

@@ -218,7 +218,11 @@ pub fn backlinks(vault: &str, note: &str) -> Vec<Backlink> {
                     .find('\n')
                     .map(|i| l.end + i)
                     .unwrap_or(text.len());
-                let snippet: String = text[line_start..line_end].chars().take(160).collect();
+                // As shown: without HTML tags (colors).
+                let snippet: String = markdown::shown_text(&text[line_start..line_end])
+                    .chars()
+                    .take(160)
+                    .collect();
                 out.push(Backlink {
                     id: id.clone(),
                     path: path.clone(),

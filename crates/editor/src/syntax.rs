@@ -18,6 +18,7 @@
 use std::borrow::Cow;
 use std::rc::Rc;
 
+use crate::callout::{self, Kind};
 use crate::code::{self, Carry, FenceInfo, Indent};
 use crate::color::{Color, Colors};
 use crate::html;
@@ -55,6 +56,8 @@ pub enum Block {
     Lazy {
         quote: bool,
     },
+    /// A line of a callout ([`crate::callout`]).
+    Callout(CalloutLine),
     /// A row of a GFM table (header, delimiter row, body); `align` holds the
     /// alignment of every column, from the delimiter row.
     Table {
@@ -71,6 +74,22 @@ pub enum Block {
         kind: html::BlockKind,
         last: bool,
     },
+}
+
+/// Where a line is in a callout: a block quote whose first line is
+/// `> [!type] Title`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CalloutLine {
+    pub kind: Kind,
+    /// The callout this one is nested in, if any.
+    pub outer: Option<Kind>,
+    /// Its first line, with the type and the title.
+    pub title: bool,
+    /// A line without quote markers that continues the text above it
+    /// (Markdown's lazy continuation).
+    pub lazy: bool,
+    /// Its last line.
+    pub last: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -115,6 +134,20 @@ impl Block {
             }
             return Cow::Owned(c);
         }
+        if let Block::Callout(c) = self {
+            let mut s = String::from("ln quote callout ");
+            s.push_str(c.kind.class());
+            for (on, class) in [(c.title, " cot"), (c.lazy, " lazy"), (c.last, " cob")] {
+                if on {
+                    s.push_str(class);
+                }
+            }
+            if let Some(o) = c.outer {
+                s.push_str(" nest ");
+                s.push_str(o.outer_class());
+            }
+            return Cow::Owned(s);
+        }
         Cow::Borrowed(match self {
             Block::Blank => "ln blank",
             Block::Paragraph => "ln",
@@ -152,6 +185,7 @@ impl Block {
             Block::FrontmatterFence => "ln fm fmf",
             Block::Frontmatter => "ln fm",
             Block::Html { .. } => "ln html",
+            Block::Callout(_) => "ln quote callout",
         })
     }
 }
@@ -364,14 +398,87 @@ pub enum LineState {
         align: Vec<Align>,
     },
     PipeText,
-    /// After a list item or a quote with text: lines that start no block of
-    /// their own continue it ([`Block::Lazy`]).
+    /// After a list item with text: lines that start no block of their own
+    /// continue it ([`Block::Lazy`]).
     ListPara,
-    QuotePara,
+    /// After a line of a block quote.
+    Quote(Quotes),
     /// After a line of a paragraph, which some blocks can't interrupt.
     Para,
     /// Inside an HTML block.
     Html(html::BlockKind),
+}
+
+/// The block quotes open after a line of one: how deeply they nest, the
+/// callouts among them, and whether the line ended in text that a line
+/// without quote markers continues (Markdown's lazy continuation).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Quotes {
+    depth: usize,
+    /// The open callouts, outermost first: the depth of each one's quote,
+    /// and its look.
+    callouts: Vec<(usize, Kind)>,
+    para: bool,
+}
+
+/// The block quote markers at the start of `line` (`> `, `> > `, `>>`, after
+/// any indentation): how many, and where the text after them starts.
+pub fn quote_prefix(line: &str) -> (usize, usize) {
+    let rest = line.trim_start().trim_start_matches(['>', ' ', '\t']);
+    let end = line.len() - rest.len();
+    (line[..end].matches('>').count(), end)
+}
+
+/// `line` after the block quotes `q` (none: the default): its block and the
+/// quotes open after it, or `None` if it ends them. A line with fewer
+/// markers than the quotes are deep continues the deeper ones only lazily;
+/// a line with more starts new ones, and the innermost new one is a
+/// callout if its first line names a type. `last` isn't known here.
+fn quote_line(q: &Quotes, line: &str) -> Option<(Block, Quotes)> {
+    let callout = |q: &Quotes, title: bool, lazy: bool| match q.callouts.split_last() {
+        Some((&(_, kind), outer)) => Block::Callout(CalloutLine {
+            kind,
+            outer: outer.last().map(|o| o.1),
+            title,
+            lazy,
+            last: false,
+        }),
+        None if lazy => Block::Lazy { quote: true },
+        None => Block::Quote,
+    };
+    if !line.trim_start().starts_with('>') {
+        return (q.para && continues_lazily(line)).then(|| (callout(q, false, true), q.clone()));
+    }
+    let (k, at) = quote_prefix(line);
+    let text = &line[at..];
+    let mut after = q.clone();
+    if k < q.depth && !(q.para && continues_lazily(text)) {
+        after.depth = k;
+        after.callouts.retain(|&(d, _)| d <= k);
+    }
+    let mut title = false;
+    if k > after.depth {
+        after.depth = k;
+        if let Some(h) = callout::header(text) {
+            after.callouts.push((k, h.kind));
+            title = true;
+        }
+    }
+    after.para = !text.trim().is_empty();
+    Some((callout(&after, title, false), after))
+}
+
+/// [`quote_line`] with the state for the next line, and whether a callout
+/// line is its callout's last (the next line isn't in it).
+fn quote_step(q: &Quotes, line: &str, next: Option<&str>) -> Option<(Block, LineState)> {
+    let (mut block, after) = quote_line(q, line)?;
+    if let Block::Callout(c) = &mut block {
+        let n = after.callouts.len();
+        c.last = next
+            .and_then(|l| quote_line(&after, l))
+            .is_none_or(|(_, q)| q.callouts.len() < n);
+    }
+    Some((block, LineState::Quote(after)))
 }
 
 /// Classify `line` given the state the lines above left and the line after
@@ -437,9 +544,11 @@ pub fn step(state: &LineState, line: &str, next: Option<&str>) -> (Block, LineSt
             state.clone(),
         ),
         LineState::PipeText if is_table_line(line) => (Block::PipeText, LineState::PipeText),
-        LineState::ListPara | LineState::QuotePara if continues_lazily(line) => {
-            let quote = *state == LineState::QuotePara;
-            (Block::Lazy { quote }, state.clone())
+        LineState::ListPara if continues_lazily(line) => {
+            (Block::Lazy { quote: false }, state.clone())
+        }
+        LineState::Quote(q) => {
+            quote_step(q, line, next).unwrap_or_else(|| normal_line(line, next, false))
         }
         LineState::Html(kind) => html_line(*kind, line, next),
         LineState::Para | LineState::PipeText => normal_line(line, next, true),
@@ -502,14 +611,10 @@ fn normal_line(line: &str, next: Option<&str>, para: bool) -> (Block, LineState)
         normal(Block::Heading(lvl))
     } else if is_hr(line) && !line.trim_start().starts_with("- ") {
         normal(Block::Hr)
-    } else if line.trim_start().starts_with('>') {
-        let text = line.trim_start_matches(['>', ' ', '\t']);
-        let state = if text.trim().is_empty() {
-            LineState::Normal
-        } else {
-            LineState::QuotePara
-        };
-        (Block::Quote, state)
+    } else if line.trim_start().starts_with('>')
+        && let Some(quote) = quote_step(&Quotes::default(), line, next)
+    {
+        quote
     } else if let Some((indent, len, ordered)) = list_marker(line) {
         let block = Block::List {
             ordered,
@@ -999,14 +1104,18 @@ pub fn style_line(line: &str, block: &Block, resolves: &dyn Fn(&str) -> bool) ->
             set(&mut s.flags, 0, end, MK | PROTECT);
             start = end;
         }
-        Block::Quote => {
-            let mut i = 0;
-            let b = line.as_bytes();
-            while i < n && (b[i] == b'>' || b[i] == b' ') {
-                i += 1;
+        // Quote markers, and on a callout's first line its type: the title
+        // is text.
+        Block::Quote | Block::Callout(CalloutLine { lazy: false, .. }) => {
+            let (_, mut end) = quote_prefix(line);
+            if let Block::Callout(c) = block
+                && c.title
+                && let Some(h) = callout::header(&line[end..])
+            {
+                end += h.title_at;
             }
-            set(&mut s.flags, 0, i, MK | PROTECT);
-            start = i;
+            set(&mut s.flags, 0, end, MK | PROTECT);
+            start = end;
         }
         Block::List { ordered, task } => {
             if let Some((indent, len, _)) = list_marker(line) {
@@ -1756,6 +1865,90 @@ mod tests {
         // An empty item or quote has nothing to continue.
         assert_eq!(classify(&["- ", "text"])[1], Block::Paragraph);
         assert_eq!(classify(&["> ", "text"])[1], Block::Paragraph);
+    }
+
+    #[test]
+    fn callouts() {
+        let line = |kind, outer, title, lazy, last| {
+            Block::Callout(CalloutLine {
+                kind,
+                outer,
+                title,
+                lazy,
+                last,
+            })
+        };
+        let k = classify(&[
+            "> [!WARNING]- Mind **the** gap",
+            "> text",
+            "lazy text",
+            ">",
+            "> more",
+            "",
+            "> [!x]",
+        ]);
+        assert_eq!(k[0], line(Kind::Warning, None, true, false, false));
+        assert_eq!(k[1], line(Kind::Warning, None, false, false, false));
+        assert_eq!(k[2], line(Kind::Warning, None, false, true, false));
+        assert_eq!(k[3], line(Kind::Warning, None, false, false, false));
+        assert_eq!(k[4], line(Kind::Warning, None, false, false, true));
+        assert_eq!(k[5], Block::Blank);
+        assert_eq!(k[6], line(Kind::Note, None, true, false, true));
+        // Only the first line of a quote can name a type.
+        let k = classify(&["> said", "> [!note]", ">", "> [!note]", "text"]);
+        assert!(k.iter().all(|b| !matches!(b, Block::Callout(_))), "{k:?}");
+        assert_eq!(k[4], Block::Lazy { quote: true });
+        // Nested: in a callout, and after it the outer one again.
+        let k = classify(&[
+            "> [!note]",
+            "> > [!tip] In",
+            "> > x",
+            ">",
+            "> back",
+            "after",
+        ]);
+        assert_eq!(k[0], line(Kind::Note, None, true, false, false));
+        assert_eq!(k[1], line(Kind::Tip, Some(Kind::Note), true, false, false));
+        assert_eq!(k[2], line(Kind::Tip, Some(Kind::Note), false, false, true));
+        assert_eq!(k[3], line(Kind::Note, None, false, false, false));
+        assert_eq!(k[4], line(Kind::Note, None, false, false, false));
+        assert_eq!(k[5], line(Kind::Note, None, false, true, true));
+        // Fewer markers continue a deeper callout's text lazily.
+        let k = classify(&["> > [!tip]", "> lazy", "> >", "> plain"]);
+        assert_eq!(k[1], line(Kind::Tip, None, false, false, false));
+        assert_eq!(k[2], line(Kind::Tip, None, false, false, true));
+        assert_eq!(k[3], Block::Quote);
+        // Markers after indentation count (an empty quote has no text to
+        // continue).
+        assert_eq!(
+            classify(&["\u{a0}>", "a"]),
+            [Block::Quote, Block::Paragraph]
+        );
+        // A plain quote nested in a callout is part of it.
+        let k = classify(&["> [!info]", "> > quoted"]);
+        assert_eq!(k[1], line(Kind::Info, None, false, false, true));
+        // Classes, and the first line's type is syntax: the title is text.
+        assert_eq!(
+            classify(&["> [!tip]", "> > [!bug]"])[1].class(),
+            "ln quote callout callout-bug cot cob nest in-tip"
+        );
+        let t = "> [!WARNING]- Mind **the** gap";
+        let s = style_line(t, &classify(&[t])[0], &|_| true);
+        assert_eq!(s.inline_from, Some(t.find("Mind").unwrap()));
+        assert!(
+            s.flags[..t.find("Mind").unwrap()]
+                .iter()
+                .all(|f| f & MK != 0)
+        );
+        assert_eq!(s.flags[t.find("Mind").unwrap()], 0);
+        assert_eq!(s.flags[t.find("the").unwrap()], STRONG);
+        let t = "> [!tip]";
+        assert!(
+            style_line(t, &classify(&[t])[0], &|_| true)
+                .flags
+                .iter()
+                .all(|f| f & MK != 0)
+        );
     }
 
     #[test]

@@ -1919,6 +1919,83 @@ def test_html(env):
         b.close()
 
 
+def test_callouts(env):
+    b = Browser()
+    paste = "const dt = new DataTransfer(); dt.setData('text/plain', arguments[0]); document.querySelector('.ed').dispatchEvent(new ClipboardEvent('paste', {clipboardData: dt, bubbles: true, cancelable: true}));"
+    def pick(title):
+        b.click(".tb[title='Callout']")
+        b.click(f".menu.callouts button[title='{title} callout']")
+        time.sleep(0.4)
+    # A box's height, and where a text in it starts: its lines in the editor, its element in the reading view.
+    measure = """const [lines, text] = arguments;
+        const ls = Array.from(document.querySelectorAll(lines)), box = ls[0].getBoundingClientRect();
+        const w = document.createTreeWalker(ls[0].closest('.ed, .reading'), NodeFilter.SHOW_TEXT);
+        let n; while ((n = w.nextNode()) && !(n.data.includes(text) && ls.some(l => l.contains(n))));
+        const r = document.createRange(); r.setStart(n, n.data.indexOf(text)); r.setEnd(n, n.data.indexOf(text) + 1);
+        const t = r.getBoundingClientRect();
+        return [ls[ls.length - 1].getBoundingClientRect().bottom - box.top, t.left - box.left, t.top - box.top];"""
+    def same_box(editor, reading, height=True):
+        return all(abs(x - y) <= 1.5 for x, y in list(zip(editor, reading))[0 if height else 1:])
+    try:
+        signup(b, uniq("cal"))
+        new_note(b, "Callouts", "")
+        body = ("Intro\n\n> [!WARNING] Mind **the** gap\n> Text in it,\nand a lazy line.\n\n"
+                "> [!tip]\n> No title of its own.\n\n> [!faq]- Folded?\n> Hidden at first.\n\n"
+                "> [!note]\n> > [!bug] Nested\n> > inside\n>\n> outer again\n\n> plain quote\n\nend")
+        b.js(paste, body)
+        time.sleep(0.6)
+        check(editor_text(b) == body, "the editor keeps callouts as their Markdown")
+        b.chord(KEYS["ctrl"], KEYS["end"])
+        time.sleep(0.4)
+        # Live preview: every line of one is a line of its box.
+        check(b.js("return document.querySelectorAll('.ed .ln.callout-warning').length") == 3, "a callout's lines, the lazy one too, are its box")
+        check(b.js("const l = document.querySelector('.ed .ln.callout-warning.cot'); return Array.from(l.querySelectorAll('.mk')).every(m => getComputedStyle(m).display === 'none')"), "its type hides away from the caret")
+        check(b.js("return document.querySelector('.ed .ln.callout-warning.cot .b').textContent") == "the", "its title is Markdown")
+        check(b.js("return document.querySelector('.ed .ln.callout-tip.cot .cot-d').textContent") == "Tip", "without a title, the type is its title")
+        check(b.js("const l = document.querySelector('.ed .ln.callout-warning'); return getComputedStyle(l).backgroundColor != getComputedStyle(document.querySelector('.ed')).backgroundColor"), "in a box of its color")
+        check(b.js("return getComputedStyle(document.querySelector('.ed .ln.callout-warning.cot'), '::before').maskImage.includes('svg')"), "with its icon")
+        check(b.js("return document.querySelectorAll('.ed .ln.callout-bug.nest.in-note').length") == 2, "a callout in a callout")
+        check(b.js("return !!document.querySelector('.ed .ln.callout-note.cob') && document.querySelector('.ed .ln.callout-note.cob').textContent == '> outer again'"), "the outer one goes on after it")
+        check(b.js("return document.querySelectorAll('.ed .ln.quote:not(.callout)').length") == 1, "a plain quote stays a quote")
+        editor_box = b.js(measure, ".ed .ln.callout-tip", "No title")
+        editor_nested = b.js(measure, ".ed .ln.callout-note, .ed .ln.in-note", "inside")
+        b.shot("callouts-editing")
+        # The toolbar: a new one on an empty line, then another type for it.
+        b.keys(KEYS["enter"] + KEYS["enter"])
+        pick("Success")
+        b.keys("Done")
+        check(editor_text(b).endswith("end\n\n> [!success]\n> Done"), "the toolbar starts a callout, the caret in its text")
+        check(b.js("return document.querySelector('.ed .ln.callout-success.cot .cot-d').textContent") == "Success", "shown with its type as its title")
+        pick("Danger")
+        check(editor_text(b).endswith("end\n\n> [!danger]\n> Done"), "and changes the type of the one the caret is in")
+        b.keys(KEYS["enter"] + "more")
+        check(editor_text(b).endswith("> [!danger]\n> Done\n> more"), "Enter continues it")
+        # The reading view.
+        b.click(".seg button[title^='Reading']")
+        b.find(".reading .callout", 10)
+        check(b.js("return document.querySelector('.reading .callout-warning .co-name').innerHTML") == "Mind <strong>the</strong> gap", "the reading view shows the title")
+        check(b.js("return document.querySelector('.reading .callout-warning .co-body').textContent.trim()") == "Text in it,\nand a lazy line.", "and the text")
+        check(b.js("return document.querySelector('.reading .callout-tip .co-name').textContent") == "Tip", "or the type as the title")
+        check(b.js("const i = document.querySelector('.reading .callout-tip .co-icon').getBoundingClientRect(); return i.width > 8 && i.height > 8"), "with an icon")
+        reading_box = b.js(measure, ".reading .callout-tip", "No title")
+        check(same_box(editor_box, reading_box), f"a callout's box looks the same in the editor and the reading view ({editor_box} / {reading_box})")
+        # In the outer one (its height differs: a `>` line in the editor is a line).
+        reading_nested = b.js(measure, ".reading .callout-note", "inside")
+        check(same_box(editor_nested, reading_nested, height=False), f"a nested one sits where it does in the reading view ({editor_nested} / {reading_nested})")
+        check(not b.js("return document.querySelector('.reading details.callout-question').open"), "a callout with - starts folded")
+        check(not b.js("return document.querySelector('.reading .callout-question .co-body').checkVisibility()"), "its text hidden")
+        b.click(".reading .callout-question summary")
+        time.sleep(0.3)
+        check(b.js("return document.querySelector('.reading details.callout-question').open"), "and opens with a click")
+        check(b.js("return !!document.querySelector('.reading .callout-note .co-body > .callout-bug')"), "nested callouts nest")
+        check(b.js("return document.querySelectorAll('.reading blockquote').length") == 1, "a plain quote stays a quote")
+        check(not b.js("return document.querySelector('.reading').textContent.includes('[!')"), "no type markers show")
+        b.shot("callouts-reading")
+        check(not severe_logs(b), "no browser errors")
+    finally:
+        b.close()
+
+
 def test_colors(env):
     b, m = Browser(), Browser(390, 844)
     red, yellow = '<span style="color: #e44045">', '<span style="background-color: #ffd0004d">'
@@ -1976,7 +2053,7 @@ def test_colors(env):
         m.close()
 
 
-TESTS = [test_onboarding, test_collab, test_devices_and_recovery, test_features, test_attachments, test_note_sharing, test_tables, test_code_blocks, test_html, test_colors, test_code_wrapping, test_editor_mouse, test_editor_safety, test_local_copy, test_ui_basics, test_offline_tabs, test_offline_start, test_mobile, test_quick_notes, test_vault_icons, test_entry_icons, test_tree_order, test_session_ended_while_away, test_comments, test_graph, test_recovered_copy]
+TESTS = [test_onboarding, test_collab, test_devices_and_recovery, test_features, test_attachments, test_note_sharing, test_tables, test_code_blocks, test_html, test_callouts, test_colors, test_code_wrapping, test_editor_mouse, test_editor_safety, test_local_copy, test_ui_basics, test_offline_tabs, test_offline_start, test_mobile, test_quick_notes, test_vault_icons, test_entry_icons, test_tree_order, test_session_ended_while_away, test_comments, test_graph, test_recovered_copy]
 
 
 def main():

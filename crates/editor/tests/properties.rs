@@ -5,13 +5,14 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use notekpr_core::textdiff;
+use notekpr_editor::callout;
 use notekpr_editor::change::{Assoc, ChangeSet};
 use notekpr_editor::code::{self, Carry, FenceInfo, Indent};
 use notekpr_editor::color::{Color, Kind};
 use notekpr_editor::decorations::Decorations;
 use notekpr_editor::html::{self, BlockKind};
 use notekpr_editor::state::{EditorState, Origin, Selection, Transaction, merge_native};
-use notekpr_editor::syntax::{self, Block, TableKey};
+use notekpr_editor::syntax::{self, Block, CalloutLine, TableKey};
 use notekpr_editor::text::Text;
 use notekpr_editor::{commands, edits_fit, rebase};
 use proptest::prelude::*;
@@ -50,6 +51,12 @@ const LINES: &[&str] = &[
     "# h",
     "> q",
     ">",
+    "> [!note] Title",
+    "> [!TIP]-",
+    "> > [!bug] x",
+    ">> [!faq]+ Why?",
+    "> > x",
+    "> [!x](y)",
     "- item",
     "- ",
     "  indented",
@@ -384,9 +391,30 @@ fn reference_classify(lines: &[&str]) -> Vec<Block> {
     // The open fence: its characters, options, lines so far, carry and guides.
     let mut fence: Option<(String, Rc<FenceInfo>, u32, Carry, Indent)> = None;
     let mut in_fm = lines.first().is_some_and(|l| l.trim_end() == "---");
-    // After a list item (false) or quote (true) with text: lines that start
-    // no block continue it.
+    // After a list item with text: lines that start no block continue it.
     let mut lazy: Option<bool> = None;
+    // The open block quotes, outermost first: a callout's look and number,
+    // or nothing for a plain quote; whether the last line of them ended in
+    // text that a line without markers continues.
+    let mut quotes: Vec<Option<(callout::Kind, usize)>> = vec![];
+    let mut quote_text = false;
+    let mut callouts = 0;
+    // The numbers of the callouts each line is in (for their last lines).
+    let mut in_callouts: Vec<Vec<usize>> = vec![vec![]; lines.len()];
+    let callout_line = |quotes: &[Option<(callout::Kind, usize)>], title, lazy| {
+        let mut open = quotes.iter().flatten().rev();
+        match open.next() {
+            Some(&(kind, _)) => Block::Callout(CalloutLine {
+                kind,
+                outer: open.next().map(|o| o.0),
+                title,
+                lazy,
+                last: false,
+            }),
+            None if lazy => Block::Lazy { quote: true },
+            None => Block::Quote,
+        }
+    };
     let continues = |line: &str| {
         let t = line.trim_start();
         !t.is_empty()
@@ -462,6 +490,14 @@ fn reference_classify(lines: &[&str]) -> Vec<Block> {
             }
             lazy = None;
         }
+        if !quotes.is_empty() && !line.trim_start().starts_with('>') {
+            if quote_text && continues(line) {
+                in_callouts[i] = quotes.iter().flatten().map(|c| c.1).collect();
+                out.push(callout_line(&quotes, false, true));
+                continue;
+            }
+            quotes.clear();
+        }
         if let Some((f, info)) = fence_of(line) {
             let info = Rc::new(FenceInfo::parse(info));
             fence = Some((
@@ -481,10 +517,26 @@ fn reference_classify(lines: &[&str]) -> Vec<Block> {
         } else if is_hr(line) && !line.trim_start().starts_with("- ") {
             out.push(Block::Hr);
         } else if line.trim_start().starts_with('>') {
-            out.push(Block::Quote);
-            if !line.trim_start_matches(['>', ' ', '\t']).trim().is_empty() {
-                lazy = Some(true);
+            let at = line.len() - line.trim_start().trim_start_matches(['>', ' ', '\t']).len();
+            let (k, text) = (line[..at].matches('>').count(), &line[at..]);
+            if k < quotes.len() && !(quote_text && continues(text)) {
+                quotes.truncate(k);
             }
+            let mut title = false;
+            while quotes.len() < k {
+                let c = (quotes.len() + 1 == k)
+                    .then(|| callout::header(text))
+                    .flatten()
+                    .map(|h| {
+                        callouts += 1;
+                        (h.kind, callouts)
+                    });
+                title = c.is_some();
+                quotes.push(c);
+            }
+            quote_text = !text.trim().is_empty();
+            in_callouts[i] = quotes.iter().flatten().map(|c| c.1).collect();
+            out.push(callout_line(&quotes, title, false));
         } else if let Some((indent, len, ordered)) = list_marker(line) {
             out.push(Block::List {
                 ordered,
@@ -528,6 +580,15 @@ fn reference_classify(lines: &[&str]) -> Vec<Block> {
             queued.extend((i + 1..end).map(|_| Block::PipeText));
         } else {
             out.push(Block::Paragraph);
+        }
+    }
+    // A callout's last line: the next one isn't in it.
+    for (i, b) in out.iter_mut().enumerate() {
+        if let Block::Callout(c) = b {
+            let me = in_callouts[i].last();
+            c.last = !in_callouts
+                .get(i + 1)
+                .is_some_and(|next| me.is_some_and(|m| next.contains(m)));
         }
     }
     out
@@ -686,7 +747,7 @@ proptest! {
     /// Commands on any text and selection keep the text and the selection on
     /// character boundaries.
     #[test]
-    fn commands_never_split_characters(t in prop_oneof![text(80), lines_text(10), colored_text()], a in any::<prop::sample::Index>(), b in any::<prop::sample::Index>(), which in 0usize..28) {
+    fn commands_never_split_characters(t in prop_oneof![text(80), lines_text(10), colored_text()], a in any::<prop::sample::Index>(), b in any::<prop::sample::Index>(), which in 0usize..30) {
         use commands::Command::*;
         let (x, y) = edit_on(&t, a, b);
         let mut st = EditorState::new(t);
@@ -695,6 +756,7 @@ proptest! {
             Bold, Italic, Strike, Highlight, Code, CodeBlock, Link, Heading(1), Heading(0), Bullet,
             Numbered, Task, Quote, Rule, Table, Indent, Outdent, TextColor(Some(Color::Red)),
             TextColor(None), Background(Some(Color::Blue)), Background(None),
+            Callout(callout::Kind::Tip), Callout(callout::Kind::Note),
         ];
         let tr = match which.checked_sub(cmds.len()) {
             None => commands::command(&st, cmds[which]),

@@ -10,7 +10,8 @@
 //!   [`decorations`] (Markdown blocks per line, updated incrementally),
 //!   [`syntax`] (inline styling and HTML per line), [`code`] (code block
 //!   options and syntax highlighting), [`color`] (text and background
-//!   colors), [`commands`] (lists, tables, tasks, formatting) and [`vim`].
+//!   colors), [`callout`] (callout types and first lines), [`commands`]
+//!   (lists, tables, tasks, formatting) and [`vim`].
 //! * **The DOM view** — [`view::Editor`], a `contenteditable` element whose
 //!   text is always exactly the Markdown source, one `div.ln` per line. A
 //!   transaction re-renders only the lines it touched.
@@ -21,6 +22,7 @@
 //! progress (a re-entrant API call, an event fired synchronously by a DOM
 //! call) is queued instead.
 
+pub mod callout;
 pub mod change;
 pub mod code;
 pub mod color;

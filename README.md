@@ -47,6 +47,13 @@ read anything.
   pasting) after an opening `` ``` `` closes the block.
 * Images and other files: paste or drop them into a note — they are encrypted,
   uploaded and shown inline.
+* Callouts as GitHub and Obsidian write them: `> [!tip]`, `> [!warning] A
+  title`, `> [!faq]-` for one that folds (`+` open). Types are
+  case-insensitive — note, abstract, info, todo, tip, important, success,
+  question, warning, caution, failure, danger, bug, example, quote and
+  Obsidian's aliases; others look like a note. Each has its color and icon,
+  in the editor and the reading view; callouts can nest. The toolbar starts
+  one, or gives the one the caret is in another type.
 * Text and background colors from the toolbar, in a palette that reads well
   in the light and the dark theme. They are saved as plain HTML
   (`<span style="color: …">`), so Obsidian, Typora, VS Code and other

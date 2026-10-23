@@ -2,6 +2,7 @@
 //! transaction that does it. The view dispatches them; tests call them
 //! directly.
 
+use crate::callout;
 use crate::change::{Assoc, ChangeSet};
 use crate::color::{Color, Colors, Kind};
 use crate::state::{EditorState, Origin, Selection, Transaction};
@@ -26,6 +27,9 @@ pub enum Command {
     Numbered,
     Task,
     Quote,
+    /// Make the selected lines a callout of this kind, or give the callout
+    /// the caret is in this kind.
+    Callout(callout::Kind),
     Rule,
     Table,
     Indent,
@@ -217,7 +221,10 @@ pub fn newline(st: &EditorState) -> Option<Transaction> {
             None,
         ));
     }
-    if syntax::classify(&[line])[0] == Block::Quote {
+    if matches!(
+        syntax::classify(&[line])[0],
+        Block::Quote | Block::Callout(_)
+    ) {
         let prefix: String = line
             .chars()
             .take_while(|c| *c == '>' || *c == ' ')
@@ -726,6 +733,91 @@ fn toggle_wrap(st: &EditorState, open: &str, close: &str) -> Option<Transaction>
     )
 }
 
+/// The first line of the callout line `li` is in (the innermost one), if
+/// it is in one.
+fn callout_start(st: &EditorState, li: usize) -> Option<usize> {
+    let Block::Callout(c) = st.block(li) else {
+        return None;
+    };
+    let key = (c.kind, c.outer);
+    (0..=li)
+        .rev()
+        .take_while(|&i| matches!(st.block(i), Block::Callout(_)))
+        .find(|&i| matches!(st.block(i), Block::Callout(d) if d.title && (d.kind, d.outer) == key))
+}
+
+/// [`Command::Callout`]. In a callout, its type changes (in the case it was
+/// written in: GitHub writes `[!NOTE]`), its title and folding stay.
+/// Elsewhere the lines of the selection get quote markers below a first
+/// line with the type, which shows as its title; a quote whose first line
+/// is selected only gets that line. On an empty line the caret goes on the
+/// callout's next line, ready for its text.
+fn make_callout(st: &EditorState, kind: callout::Kind) -> Option<Transaction> {
+    let doc = st.doc();
+    let sel = st.selection();
+    let (l0, l1) = (doc.line_of(sel.from()), doc.line_of(sel.to()));
+    if let Some(t) = callout_start(st, l0) {
+        let line = doc.line(t);
+        let (_, at) = syntax::quote_prefix(line);
+        let h = callout::header(&line[at..])?;
+        if h.kind == kind {
+            return None;
+        }
+        let caps =
+            h.name.chars().any(char::is_uppercase) && !h.name.chars().any(char::is_lowercase);
+        let name = if caps {
+            kind.name().to_uppercase()
+        } else {
+            kind.name().to_string()
+        };
+        let from = doc.line_start(t) + at + 2;
+        let changes = ChangeSet::replace(doc.len(), from, from + h.name.len(), &name);
+        let sel = sel.map(&changes, Assoc::After);
+        return Some(
+            Transaction::new(changes, Origin::Command)
+                .with_selection(sel)
+                .with_boundary(true, false),
+        );
+    }
+    let head = format!("> [!{}]", kind.name());
+    let (s0, e1) = (doc.line_start(l0), doc.line_end(l1));
+    if l0 == l1 && doc.slice(s0, e1).trim().is_empty() {
+        let new = format!("{head}\n> ");
+        let caret = s0 + new.len();
+        return replace(st, s0, e1, &new, Some((caret, caret)))
+            .map(|t| t.with_boundary(true, false));
+    }
+    let quoted = |i: usize| doc.line(i).trim_start().starts_with('>');
+    let wrap = !((l0..=l1).all(quoted) && (l0 == 0 || !quoted(l0 - 1)));
+    let reps: Vec<(usize, usize, String)> = (l0..=l1)
+        .filter_map(|i| {
+            let marker = if !wrap {
+                ""
+            } else if doc.line(i).trim().is_empty() {
+                ">"
+            } else {
+                "> "
+            };
+            let ins = if i == l0 {
+                format!("{head}\n{marker}")
+            } else {
+                marker.to_string()
+            };
+            let ls = doc.line_start(i);
+            (!ins.is_empty()).then_some((ls, ls, ins))
+        })
+        .collect();
+    let changes = ChangeSet::from_replacements(doc.len(), &reps);
+    // The selected text stays selected.
+    let sel = sel.map(&changes, Assoc::After);
+    Some(
+        Transaction::new(changes, Origin::Command)
+            .with_selection(sel)
+            .scrolling()
+            .with_boundary(true, false),
+    )
+}
+
 /// Apply `f` to every line touched by the selection.
 fn map_lines(st: &EditorState, f: impl Fn(&str, usize) -> String) -> Option<Transaction> {
     let s = st.selection();
@@ -853,6 +945,7 @@ pub fn command(st: &EditorState, cmd: Command) -> Option<Transaction> {
                 format!("> {l}")
             }
         }),
+        Command::Callout(kind) => make_callout(st, kind),
         Command::Indent => map_lines(st, |l, _| format!("  {l}")),
         Command::Outdent => map_lines(st, |l, _| {
             l.strip_prefix("  ")
@@ -1008,6 +1101,65 @@ mod tests {
             ("```\n  code\n  \n```".into(), (13, 13))
         );
         assert_eq!(run("plain", (2, 2), newline), ("pl\nain".into(), (3, 3)));
+        // A callout continues from its first line and ends like a quote.
+        assert_eq!(
+            run("> [!tip] Title", (14, 14), newline),
+            ("> [!tip] Title\n> ".into(), (17, 17))
+        );
+        assert_eq!(
+            run("> [!tip]\n> a\n> ", (15, 15), newline),
+            ("> [!tip]\n> a\n\n".into(), (14, 14))
+        );
+    }
+
+    #[test]
+    fn callouts_from_the_toolbar() {
+        use callout::Kind;
+        let make = |kind| move |st: &EditorState| command(st, Command::Callout(kind));
+        // On an empty line: the callout, the caret on its next line.
+        assert_eq!(
+            run("a\n\nb", (2, 2), make(Kind::Tip)),
+            ("a\n> [!tip]\n> \nb".into(), (13, 13))
+        );
+        // Selected lines become its text, still selected; blank lines stay in it.
+        assert_eq!(
+            run("x\none\n\ntwo\ny", (3, 9), make(Kind::Warning)),
+            ("x\n> [!warning]\n> one\n>\n> two\ny".into(), (18, 27))
+        );
+        // A caret in a line: that line.
+        assert_eq!(
+            run("text", (2, 2), make(Kind::Note)),
+            ("> [!note]\n> text".into(), (14, 14))
+        );
+        // A quote's first line gets the type, the quote isn't nested.
+        assert_eq!(
+            run("> said\n> more", (3, 3), make(Kind::Quote)).0,
+            "> [!quote]\n> said\n> more"
+        );
+        // In a callout: another type, the title, folding and case kept.
+        assert_eq!(
+            run("> [!NOTE]- Title\n> text", (20, 20), make(Kind::Caution)),
+            ("> [!CAUTION]- Title\n> text".into(), (23, 23))
+        );
+        assert_eq!(
+            run("> [!faq]\n> why", (12, 12), make(Kind::Bug)).0,
+            "> [!bug]\n> why"
+        );
+        // The same type: nothing to do.
+        assert_eq!(
+            run("> [!info]\n> x", (11, 11), make(Kind::Info)).0,
+            "> [!info]\n> x"
+        );
+        // In a nested one: that one.
+        assert_eq!(
+            run(
+                "> [!note]\n> > [!tip]\n> > x\n> y",
+                (23, 23),
+                make(Kind::Danger)
+            )
+            .0,
+            "> [!note]\n> > [!danger]\n> > x\n> y"
+        );
     }
 
     #[test]

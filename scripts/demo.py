@@ -66,6 +66,8 @@ def continues(prev, line):
         return False
     if line.startswith("  "):  # an indented continuation
         return True
+    if re.match(r"(> ?)+\[!", prev):  # a callout's first line: its title
+        return False
     if prev.startswith("> ") and line.startswith("> "):
         return True
     starts_block = re.compile(r"([-*+] |\d+\. |\||#|>|```|---|\[\^|<)")
@@ -162,6 +164,7 @@ HOME = [
         - [ ] Comment on a note: select some text and click *Comment* (or press `Alt+M`); click highlighted text to read and answer its thread. *Holiday plans* in *Family* has comments — even Carol's, who only views that vault
         - [ ] Drag a note between two others in the sidebar: a line shows where it goes, and it stays there for everyone (this note and the *Recipes* overview were put first that way, from the command line); *Sort A–Z* in a folder's ⋯ menu undoes it
         - [ ] HTML in notes: the fold-out section at the end of [[Sourdough bread]] (`<details>`), the centered photo with a caption in [[Lisbon 2026]], a table with merged cells in [[Weekly meal plan]], keys like <kbd>Ctrl</kbd>+<kbd>E</kbd>; click one in the editor to see its HTML. Scripts, styles, frames and forms are removed
+        - [ ] Callouts, written as GitHub and Obsidian write them (`> [!tip]`, `> [!warning] A title`): a tip and a warning in [[Sourdough bread]], one that folds in [[Japan ideas]] (`[!faq]-`), GitHub's `[!CAUTION]` in *Deploy script* in *Work*, one inside another in *Emergency contacts* in *Family*. The toolbar's callout button starts one, or gives the one the caret is in another type
         - [ ] Colors: select some text and pick a text or background color with the toolbar's **A** button. They are saved as HTML that Obsidian, Typora and VS Code show too ([[Tomatoes]]), and colors written there show here ([[Packing list]] has a highlight from Obsidian's Highlightr and a `<font color>`)
         - [ ] Code blocks in *Snippets*: a file name and highlighted lines (`title=… hl=…` after the language), line numbers, indentation guides, a copy button, `wrap=false` for long lines; Settings → Editor turns the numbers, guides and wrapping off
         - [ ] Drop or paste a picture into a note
@@ -336,6 +339,13 @@ HOME = [
         | 16:00 | shape, into the fridge overnight |
         | next day 08:00 | bake at 250 °C, 20 min lid on, 20 min off |
 
+        > [!tip] Wet hands, not more flour
+        > The dough is sticky at 70 % water: wet your hands for the stretch and
+        > folds instead of flouring the dough.
+
+        > [!warning]
+        > The pot is at **250 °C**: thick oven gloves for the lid.
+
         <details>
         <summary>Flat loaf? What went wrong</summary>
 
@@ -447,6 +457,10 @@ HOME = [
         - [[Tokyo]] for everything else
         - A rail pass — check the [[Travel budget]]
         - Read something Japanese first (see [[Reading list]])
+
+        > [!faq]- Why autumn?
+        > The maples in [[Kyoto]] turn red in November, and it's cooler than
+        > the summer.
         """)),
     ("Travel/Kyoto.md", None, note("""
         # Kyoto
@@ -680,6 +694,9 @@ WORK = [
         - [ ] Deploy with the [[Deploy script]]
         - [ ] Tell everyone
 
+        > [!IMPORTANT]
+        > Not on a Friday.
+
         For the [[Website relaunch]]. #project #todo
         """)),
     ("Projects/Design brief.md", "🎨", note("""
@@ -766,6 +783,10 @@ WORK = [
         done
         echo "deployed $(git rev-parse --short HEAD)"
         ```
+
+        > [!CAUTION]
+        > `rsync --delete` removes anything on the servers that isn't in
+        > `public/`.
 
         Used by the [[Launch checklist]]. #snippet
         """)),
@@ -890,6 +911,12 @@ FAMILY = [
         | Plumber | 555-0142 |
         | Doctor | 555-0199 |
         | Neighbours (watering the garden) | 555-0123 |
+
+        > [!info] If the power goes out
+        > The fuse box is behind the coats in the hall.
+        >
+        > > [!danger]
+        > > Never touch it with wet hands.
 
         Back to [[Family]].
         """)),

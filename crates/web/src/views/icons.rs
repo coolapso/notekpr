@@ -95,6 +95,9 @@ fn paths(name: &str) -> &'static str {
             r#"<rect x="3" y="3" width="18" height="18" rx="3"/><path d="m8 12 3 3 5-6"/>"#
         }
         "quote" => r#"<path d="M6 17h3l2-4V7H5v6h3zM15 17h3l2-4V7h-6v6h3z"/>"#,
+        "callout" => {
+            r#"<rect x="3" y="4" width="18" height="16" rx="3"/><path d="M12 11v5M12 8v.01"/>"#
+        }
         "table" => {
             r#"<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 10h18M3 15h18M9 4v16M15 4v16"/>"#
         }

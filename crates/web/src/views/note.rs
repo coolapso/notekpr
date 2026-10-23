@@ -9,6 +9,7 @@ use notekpr_core::paths;
 use wasm_bindgen::JsCast;
 
 use crate::actions::{self, NoteHost};
+use crate::editor::callout;
 use crate::editor::color::Color;
 use crate::editor::{Command, Editor, Mode};
 use crate::state::{self, Modal, Route, ViewMode, step, ui};
@@ -91,6 +92,8 @@ fn Toolbar(vault: Option<String>) -> impl IntoView {
     super::close_on_outside(heading_open);
     let colors_open = RwSignal::new(false);
     super::close_on_outside(colors_open);
+    let callouts_open = RwSignal::new(false);
+    super::close_on_outside(callouts_open);
     view! {
         // The frame is a wrapper: on phones the buttons scroll sideways, and
         // their menus must not be cut off with them.
@@ -129,6 +132,22 @@ fn Toolbar(vault: Option<String>) -> impl IntoView {
             <ToolButton icon="checkbox" title=format!("Checklist ({m}+Enter toggles)") c=Command::Task/>
             <span class="tb-sep"></span>
             <ToolButton icon="quote" title="Quote".to_string() c=Command::Quote/>
+            <div class="tb-drop">
+                <button class="tb" title="Callout" aria-label="Callout" on:mousedown=move |ev| { ev.prevent_default(); callouts_open.update(|o| *o = !*o); }><Icon name="callout"/></button>
+                <Show when=move || callouts_open.get()>
+                    <div class="menu callouts" on:mousedown=move |ev| { ev.prevent_default(); callouts_open.set(false); }>
+                        {callout::Kind::ALL.into_iter().map(|k| {
+                            let label = callout::default_title(k.name());
+                            let title = format!("{label} callout");
+                            view! {
+                                <button title=title on:mousedown=move |_| cmd(Command::Callout(k))>
+                                    <span class=format!("co-icon {}", k.class())></span>{label}
+                                </button>
+                            }
+                        }).collect_view()}
+                    </div>
+                </Show>
+            </div>
             <ToolButton icon="code" title=format!("Code ({m}+`)") c=Command::Code/>
             <ToolButton icon="code-block" title=format!("Code block ({m}+Shift+`)") c=Command::CodeBlock/>
             <ToolButton icon="link" title=format!("Link ({m}+K)") c=Command::Link/>

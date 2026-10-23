@@ -275,6 +275,16 @@ has unsent edits to it, that person's client saves their version as a new
   renderer folds into the item or quote, even when they look like a table —
   so the editor and the reading view agree. Ending a list or quote with Enter
   leaves a blank line for the same reason.
+* Callouts (`> [!tip] Title`, `crates/editor/src/callout.rs`) are block
+  quotes whose first line names a type. The line state after a quote line
+  carries how deeply quotes nest, the callouts among them and whether a lazy
+  line may follow, so every line of a callout (nested ones too) knows it is
+  one and which; a line also looks at the next to know it is its callout's
+  last. The first line's `> [!type]` is syntax like any marker; a callout
+  without a title shows its type as one, in a widget. The reading view finds
+  callouts in the parser's events (a quote whose first paragraph starts on
+  its first line with the type) and renders a box, or a `details` element
+  for one that folds (`+`, `-`).
 * Code blocks (`crates/editor/src/code.rs`) are highlighted by a small
   hand-written lexer per language, a line at a time: what a line leaves open
   (a block comment, a multi-line string) is part of the next line's state, so

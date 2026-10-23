@@ -8,6 +8,7 @@ use std::hash::{Hash, Hasher};
 use wasm_bindgen::JsCast;
 use web_sys::{Document, Element, HtmlElement, Node};
 
+use crate::callout;
 use crate::code;
 use crate::html;
 use crate::syntax::{self, Block};
@@ -45,7 +46,8 @@ pub struct Rendered {
 /// The HTML of one line: its source text with syntax spans, plus a widget
 /// (`contenteditable=false`, `data-w`, after the text): an image preview for
 /// an embed line, the header (title, language, copy button) of a code block
-/// on its opening fence, the indentation guides of a line of code (no text),
+/// on its opening fence, the type of a callout without a title on its first
+/// line (as its title), the indentation guides of a line of code (no text),
 /// the rendered preview of an HTML block on its last line (an empty element
 /// here, filled by [`fill_widget`]).
 pub fn render_line(
@@ -70,6 +72,16 @@ pub fn render_line(
         } else {
             html.push_str(&guides);
         }
+    }
+    if let Block::Callout(c) = &job.block
+        && c.title
+        && let (_, at) = syntax::quote_prefix(&job.text)
+        && let Some(h) = callout::header(&job.text[at..])
+        && h.title.is_empty()
+    {
+        html.push_str("<span class=\"w cot-d\" contenteditable=\"false\" data-w=\"1\">");
+        syntax::escape(&callout::default_title(h.name), &mut html);
+        html.push_str("</span>");
     }
     if let Block::Fence { info, open: true } = &job.block {
         html.push_str("<span class=\"w code-head\" contenteditable=\"false\" data-w=\"1\">");

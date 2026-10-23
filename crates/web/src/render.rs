@@ -9,13 +9,17 @@
 //! * External images are not loaded (privacy: no tracking pixels; the CSP
 //!   blocks them anyway) and are shown as links instead.
 //! * Every attribute we emit is escaped.
+//!
+//! Callouts (`> [!tip] Title`, [`crate::editor::callout`]) are block quotes
+//! rendered as a box with an icon and the title, a `details` element when
+//! they fold.
 
 use pulldown_cmark::{
     Alignment, CodeBlockKind, CowStr, Event, LinkType, Options, Parser, Tag, TagEnd,
 };
 
 use crate::editor::code::{self, Carry, FenceInfo, Indent};
-use crate::editor::{html, syntax};
+use crate::editor::{callout, html, syntax};
 
 pub struct Ctx<'a> {
     /// Resolve a link target (wiki or relative Markdown) to a note id.
@@ -210,6 +214,52 @@ fn pair_marks(marks: &[Mark], out: &mut [Event]) {
     }
 }
 
+/// An inline element opened in a callout's title and still open where the
+/// title's line ends (`**bold` there, `text**` on the next line): it is
+/// closed there and opened again in the callout's text, so tags nest.
+enum Reopen<'a> {
+    Tag(Tag<'a>),
+    /// A link, with its opening tag.
+    Link(String),
+}
+
+/// The title of the callout being read: the start of its paragraph's first
+/// line, up to that line's end. Its text starts at `from`; before is the
+/// callout's type.
+struct Title<'a> {
+    from: usize,
+    end: usize,
+    /// What ends the title and starts the callout's text.
+    close: &'static str,
+    open: Vec<Reopen<'a>>,
+}
+
+/// The tags of a callout of `kind`, folding (open or not) or not: what
+/// starts it and its title, what ends the title, what ends the callout.
+fn callout_tags(kind: callout::Kind, fold: Option<bool>) -> (String, &'static str, &'static str) {
+    let class = kind.class();
+    let (open, close_title, close) = match fold {
+        None => (
+            format!("<div class=\"callout {class}\"><div class=\"co-title\">"),
+            "</span></div><div class=\"co-body\">",
+            "</div></div>",
+        ),
+        Some(open) => (
+            format!(
+                "<details class=\"callout {class}\"{}><summary class=\"co-title\">",
+                if open { " open" } else { "" }
+            ),
+            "</span></summary><div class=\"co-body\">",
+            "</div></details>",
+        ),
+    };
+    (
+        open + "<span class=\"co-icon\"></span><span class=\"co-name\">",
+        close_title,
+        close,
+    )
+}
+
 pub fn to_html(src: &str, ctx: &Ctx) -> String {
     let mut opts = Options::empty();
     opts.insert(Options::ENABLE_TABLES);
@@ -239,6 +289,9 @@ pub fn to_html(src: &str, ctx: &Ctx) -> String {
     let mut column = 0usize;
     // The HTML block being read.
     let mut html_block: Option<String> = None;
+    // The open block quotes: a callout's closing tags, or none.
+    let mut quotes: Vec<Option<&'static str>> = Vec::new();
+    let mut title: Option<Title> = None;
     let html_link = |dest: &str, attrs: &str| link_open(dest, false, attrs, ctx);
     let html_image = |src: &str, alt: &str, attrs: &str| image_html(src, alt, false, attrs, ctx);
     let urls = html::Urls {
@@ -246,7 +299,8 @@ pub fn to_html(src: &str, ctx: &Ctx) -> String {
         image: &html_image,
     };
 
-    for (ev, range) in Parser::new_ext(src, opts).into_offset_iter() {
+    let mut events = Parser::new_ext(src, opts).into_offset_iter().peekable();
+    while let Some((ev, range)) = events.next() {
         if let Event::Start(t) = &ev
             && !inline_tag(t)
         {
@@ -293,7 +347,104 @@ pub fn to_html(src: &str, ctx: &Ctx) -> String {
             }
             continue;
         }
+        // A callout's title ends with its line: what is still open in it is
+        // closed, and opened again in the text after it.
+        if let Some(t) = &title
+            && (matches!(
+                ev,
+                Event::SoftBreak | Event::HardBreak | Event::End(TagEnd::Paragraph)
+            ) || range.start >= t.end)
+        {
+            let t = title.take().unwrap();
+            for r in t.open.iter().rev() {
+                out_events.push(match r {
+                    Reopen::Tag(tag) => Event::End(tag.to_end()),
+                    Reopen::Link(_) => Event::Html(CowStr::from("</a>")),
+                });
+            }
+            out_events.push(Event::Html(CowStr::from(t.close)));
+            // `==` pairs only within the title, or the text.
+            block += 1;
+            if matches!(ev, Event::End(TagEnd::Paragraph)) {
+                continue;
+            }
+            out_events.push(Event::Start(Tag::Paragraph));
+            out_events.extend(t.open.into_iter().map(|r| match r {
+                Reopen::Tag(tag) => Event::Start(tag),
+                Reopen::Link(open) => Event::Html(CowStr::from(open)),
+            }));
+            if matches!(ev, Event::SoftBreak | Event::HardBreak) {
+                continue;
+            }
+        }
+        let ev = match (&mut title, ev) {
+            // The type before the title.
+            (Some(t), Event::Text(text)) if range.start < t.from => {
+                if range.end <= t.from {
+                    continue;
+                }
+                let cut = text.len().saturating_sub(range.end - t.from);
+                Event::Text(CowStr::from(text.get(cut..).unwrap_or("").to_string()))
+            }
+            (Some(t), ev) => {
+                match &ev {
+                    // Links are followed below; images are read whole.
+                    Event::Start(tag)
+                        if inline_tag(tag)
+                            && !matches!(tag, Tag::Link { .. } | Tag::Image { .. }) =>
+                    {
+                        t.open.push(Reopen::Tag(tag.clone()))
+                    }
+                    Event::End(end) if inline_end(end) && *end != TagEnd::Link => {
+                        t.open.pop();
+                    }
+                    _ => {}
+                }
+                ev
+            }
+            (None, ev) => ev,
+        };
         match ev {
+            // A quote whose first line is `[!type]` is a callout.
+            Event::Start(Tag::BlockQuote(kind)) => {
+                let header = match events.peek() {
+                    Some((Event::Start(Tag::Paragraph), p))
+                        if !src[range.start..p.start].contains('\n') =>
+                    {
+                        let end = src[p.start..]
+                            .find('\n')
+                            .map_or(src.len(), |i| p.start + i)
+                            .min(p.end);
+                        callout::header(&src[p.start..end]).map(|h| (h, p.start, end))
+                    }
+                    _ => None,
+                };
+                let Some((h, start, end)) = header else {
+                    quotes.push(None);
+                    out_events.push(Event::Start(Tag::BlockQuote(kind)));
+                    continue;
+                };
+                // Its first paragraph: the title, then the callout's text.
+                events.next();
+                block += 1;
+                let (open, close_title, close) = callout_tags(h.kind, h.fold);
+                out_events.push(Event::Html(CowStr::from(open)));
+                if h.title.is_empty() {
+                    let name = callout::default_title(h.name);
+                    out_events.push(Event::Html(CowStr::from(esc(&name))));
+                }
+                quotes.push(Some(close));
+                title = Some(Title {
+                    from: start + h.title_at,
+                    end,
+                    close: close_title,
+                    open: Vec::new(),
+                });
+            }
+            Event::End(TagEnd::BlockQuote(kind)) => match quotes.pop().flatten() {
+                Some(close) => out_events.push(Event::Html(CowStr::from(close))),
+                None => out_events.push(Event::End(TagEnd::BlockQuote(kind))),
+            },
             Event::Start(Tag::MetadataBlock(_)) => in_meta = true,
             Event::End(TagEnd::MetadataBlock(_)) => in_meta = false,
             _ if in_meta => {}
@@ -328,9 +479,16 @@ pub fn to_html(src: &str, ctx: &Ctx) -> String {
                 }
                 let wiki = matches!(link_type, LinkType::WikiLink { .. });
                 link_stack.push(true);
-                out_events.push(Event::Html(CowStr::from(link_open(&dest, wiki, "", ctx))));
+                let open = link_open(&dest, wiki, "", ctx);
+                if let Some(t) = &mut title {
+                    t.open.push(Reopen::Link(open.clone()));
+                }
+                out_events.push(Event::Html(CowStr::from(open)));
             }
             Event::End(TagEnd::Link) => {
+                if let Some(t) = &mut title {
+                    t.open.pop();
+                }
                 if link_stack.pop().is_some() {
                     out_events.push(Event::Html(CowStr::from("</a>")));
                 }
@@ -706,6 +864,81 @@ mod tests {
         assert!(!h.contains("nowrap"));
         assert!(render("```yaml wrap=false\na\n```\n").contains("codeblock nowrap"));
         assert!(render("```yaml wrap\na\n```\n").contains("codeblock wrap"));
+    }
+
+    #[test]
+    fn callouts() {
+        // GitHub's alerts: the type's name is the title.
+        let h = render("> [!NOTE]\n> Useful *information*.\n");
+        assert_eq!(
+            h,
+            "<div class=\"callout callout-note\"><div class=\"co-title\"><span class=\"co-icon\"></span>\
+             <span class=\"co-name\">Note</span></div><div class=\"co-body\">\n<p>Useful <em>information</em>.</p>\n\
+             </div></div>"
+        );
+        // Obsidian's: any case, a title with Markdown, text without markers.
+        let h = render("> [!Warning] Mind **the** [[Known|gap]]\nlazy text\n>\n> - [ ] item\n");
+        assert!(
+            h.starts_with("<div class=\"callout callout-warning\">"),
+            "{h}"
+        );
+        assert!(
+            h.contains("<span class=\"co-name\">Mind <strong>the</strong> <a class=\"wl\" href=\"#\" data-note=\"id1\">gap</a></span></div>"),
+            "{h}"
+        );
+        assert!(
+            h.contains("<div class=\"co-body\">\n<p>lazy text</p>"),
+            "{h}"
+        );
+        assert!(h.contains("data-task=\"3\""), "{h}");
+        assert!(!h.contains("[!") && !h.contains("blockquote"), "{h}");
+        // Folding: open or closed at first; aliases and unknown types.
+        let h = render("> [!faq]- Why?\n> Because.\n\n> [!tldr]+\n\n> [!recipe] Soup\n");
+        assert!(
+            h.contains("<details class=\"callout callout-question\"><summary class=\"co-title\"><span class=\"co-icon\"></span><span class=\"co-name\">Why?</span></summary>"),
+            "{h}"
+        );
+        assert!(
+            h.contains("<details class=\"callout callout-abstract\" open>"),
+            "{h}"
+        );
+        assert!(h.contains("<span class=\"co-name\">Tldr</span></summary><div class=\"co-body\"></div></details>"), "{h}");
+        assert!(h.contains("callout callout-note\"><div class=\"co-title\"><span class=\"co-icon\"></span><span class=\"co-name\">Soup</span>"), "{h}");
+        // Nested.
+        let h = render("> [!info]\n> > [!bug] Inner\n> > x\n>\n> after\n");
+        assert!(
+            h.contains("<div class=\"co-body\"><div class=\"callout callout-bug\">"),
+            "{h}"
+        );
+        assert!(
+            h.contains(
+                "Inner</span></div><div class=\"co-body\">\n<p>x</p>\n</div></div>\n<p>after</p>"
+            ),
+            "{h}"
+        );
+        // Elements across the title's line end are closed and opened again.
+        let h = render("> [!tip] **a ==b\n> c== d** [x\n> y](https://e.org)\n");
+        assert!(h.contains("<strong>a ==b</strong></span></div><div class=\"co-body\">\n<p><strong>c== d</strong>"), "{h}");
+        let h = render("> [!tip] [x\n> y](https://e.org)\n");
+        assert_eq!(h.matches("<a ").count(), 2, "{h}");
+        assert_eq!(h.matches("</a>").count(), 2, "{h}");
+        // Not callouts: not on the quote's first line, not a type, a link.
+        for not in [
+            "> a\n> [!note]",
+            ">\n> [!note]",
+            "> [!no te]",
+            "> [!note](https://e.org)",
+            "> \\[!note]",
+        ] {
+            let h = render(not);
+            assert!(
+                h.contains("<blockquote>") && !h.contains("callout"),
+                "{not:?}: {h}"
+            );
+        }
+        // The title is text: a type can't inject markup.
+        let h = render("> [!x\"onclick=1]\n> [!<b>] t\n");
+        assert!(!h.contains("callout") && !h.contains("onclick=1\""), "{h}");
     }
 
     #[test]

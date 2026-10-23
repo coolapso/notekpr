@@ -1214,6 +1214,9 @@ def test_ui_basics(env):
         check(title == "Remove from favorites" and fill != "none", "a favorite's star is filled")
         b.wait("return Array.from(document.querySelectorAll('.sb-section')).some(x => x.querySelector('.sb-label')?.textContent === 'Favorites' && x.textContent.includes('Plan'))",
                5, "Plan under Favorites")
+        order = b.js("return Array.from(document.querySelectorAll('.sb-scroll > .sb-section'))"
+                     ".map(x => x.classList.contains('sb-quick') ? 'quick' : x.querySelector('.sb-label')?.textContent).slice(0, 2)")
+        check(order == ["quick", "Favorites"], f"Favorites come below the Quick notes entry ({order})")
         b.click(".note-head button[aria-label='Favorite']")
         b.wait("return document.querySelector(\".note-head button[aria-label='Favorite']\").getAttribute('aria-pressed') === 'false'", 5, "the star off")
         unlabelled = b.js("return Array.from(document.querySelectorAll('button')).filter(x => !x.textContent.trim() && !x.getAttribute('aria-label')).length")

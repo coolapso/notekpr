@@ -1,4 +1,4 @@
-//! Left sidebar: vault switcher, quick actions, favorites, quick notes,
+//! Left sidebar: vault switcher, quick actions, quick notes, favorites,
 //! recent, file tree.
 
 use leptos::prelude::*;
@@ -143,8 +143,8 @@ pub fn Sidebar() -> impl IntoView {
                 </Show>
             </div>
             <nav class="sb-scroll">
-                <Favorites/>
                 <QuickSection/>
+                <Favorites/>
                 <Recent vault=shown/>
                 <SharedWithMe/>
                 {move || match vault() {

@@ -8,14 +8,6 @@ use crate::error::AppResult;
 pub async fn admin_stats(db: &Db) -> AppResult<AdminStats> {
     let count =
         |q: &'static str| async move { sqlx::query_scalar::<_, i64>(q).fetch_one(db).await };
-    let page_count: i64 = sqlx::query_scalar("PRAGMA page_count")
-        .fetch_one(db)
-        .await
-        .unwrap_or(0);
-    let page_size: i64 = sqlx::query_scalar("PRAGMA page_size")
-        .fetch_one(db)
-        .await
-        .unwrap_or(0);
     Ok(AdminStats {
         users: count("SELECT COUNT(*) FROM users WHERE kind = 'human'").await?,
         agents: count("SELECT COUNT(*) FROM users WHERE kind = 'agent'").await?,
@@ -24,6 +16,6 @@ pub async fn admin_stats(db: &Db) -> AppResult<AdminStats> {
         updates: count("SELECT COUNT(*) FROM updates").await?,
         snapshots: count("SELECT COUNT(*) FROM snapshots").await?,
         attachments: count("SELECT COUNT(*) FROM attachments").await?,
-        storage_bytes: page_count * page_size,
+        storage_bytes: super::settings::used_bytes(db).await? as i64,
     })
 }

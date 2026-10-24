@@ -11,7 +11,7 @@ use std::sync::{Arc, RwLock};
 
 use anyhow::{Result, anyhow, bail};
 use notekpr_core::engine::Applied;
-use notekpr_core::protocol::{INDEX_OBJECT_ID, Role, VaultInfo};
+use notekpr_core::protocol::{INDEX_OBJECT_ID, ReadOnly, Role, VaultInfo};
 use serde::Serialize;
 use tokio::sync::{Mutex, broadcast};
 
@@ -37,6 +37,9 @@ pub enum HubEvent {
     VaultClosed { vault_id: String, reason: String },
     /// Live connection state changed.
     Connection { online: bool },
+    /// The server started or stopped refusing changes (local ones are kept
+    /// and sent when it accepts them again).
+    ServerMode { read_only: Option<ReadOnly> },
 }
 
 #[derive(Clone, Debug, Default)]
@@ -85,6 +88,8 @@ pub struct Hub {
     events: broadcast::Sender<HubEvent>,
     push_locks: std::sync::Mutex<BTreeMap<String, Arc<Mutex<()>>>>,
     online: AtomicBool,
+    /// Whether the server refuses changes, as the live connection last said.
+    server_read_only: std::sync::Mutex<Option<ReadOnly>>,
     /// When true, local edits are pushed immediately (no live loop, or connected).
     push_now: AtomicBool,
     /// Notes edited on this machine and when, for "editing session ended"
@@ -113,6 +118,7 @@ impl Hub {
             events,
             push_locks: Default::default(),
             online: AtomicBool::new(false),
+            server_read_only: std::sync::Mutex::new(None),
             push_now: AtomicBool::new(true),
             waiting_for_keys: Default::default(),
             edited: Default::default(),
@@ -383,6 +389,22 @@ impl Hub {
         }
     }
 
+    /// Whether the server refuses changes right now (as the live connection
+    /// last said; one-off commands find out when a push is refused).
+    pub fn server_read_only(&self) -> Option<ReadOnly> {
+        *self.server_read_only.lock().unwrap()
+    }
+
+    /// What the live connection says. Returns whether it changed.
+    pub fn set_server_read_only(&self, read_only: Option<ReadOnly>) -> bool {
+        let changed =
+            std::mem::replace(&mut *self.server_read_only.lock().unwrap(), read_only) != read_only;
+        if changed {
+            self.emit(HubEvent::ServerMode { read_only });
+        }
+        changed
+    }
+
     /// Whether local edits should be uploaded right away (false while the
     /// live loop is disconnected; it pushes after reconnecting).
     pub fn set_push_now(&self, v: bool) {
@@ -489,6 +511,15 @@ impl Hub {
         };
         let lock = self.push_lock(vault_id);
         let _g = lock.lock().await;
+        // The live connection says when the server accepts changes again
+        // (and the live loop pushes then).
+        if self.server_read_only().is_some() {
+            return Ok(PushOutcome {
+                remaining: v.lock().await.replica.pending.len(),
+                read_only: true,
+                ..Default::default()
+            });
+        }
         let out = self.session.push(&v).await?;
         if out.offline {
             self.set_online(false);
@@ -517,7 +548,7 @@ impl Hub {
                 local: true,
             });
         }
-        if !out.offline {
+        if !out.offline && !out.read_only {
             if let Err(e) = self.session.compact(&v, None).await {
                 tracing::warn!("compaction failed: {e:#}");
             }

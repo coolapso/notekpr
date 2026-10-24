@@ -430,6 +430,9 @@ pub async fn push(
     // Access is checked under the write lock, so a push can't land after
     // the writer was removed (membership changes take the same lock).
     let _w = state.write_lock.lock().await;
+    // Checked here for WebSocket pushes (REST ones are refused before):
+    // under the lock, so nothing lands after read-only mode began.
+    state.instance.require_writable()?;
     let member = access::member_role_opt(&state.db, vault_id, &who.user_id).await?;
     if member.is_none() && head_seq(&state.db, vault_id).await.is_err() {
         return Err(AppError::NotFound);

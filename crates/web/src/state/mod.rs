@@ -275,6 +275,8 @@ pub struct Ui {
     pub tree_rev: RwSignal<u64>,
     pub content_rev: RwSignal<u64>,
     pub conn: RwSignal<ConnState>,
+    /// Set while the server refuses changes (`Core::read_only`).
+    pub read_only: RwSignal<Option<ReadOnly>>,
     pub pending: RwSignal<usize>,
     pub presence: RwSignal<Vec<PresenceView>>,
     pub toasts: RwSignal<Vec<Toast>>,
@@ -328,6 +330,7 @@ pub fn init_ui() -> Ui {
         tree_rev: RwSignal::new(0),
         content_rev: RwSignal::new(0),
         conn: RwSignal::new(ConnState::Connecting),
+        read_only: RwSignal::new(None),
         pending: RwSignal::new(0),
         presence: RwSignal::new(vec![]),
         toasts: RwSignal::new(vec![]),
@@ -486,6 +489,9 @@ pub struct Core {
     pub cache: crate::cache::Tracker,
     pub socket: Option<Rc<Socket>>,
     pub conn_id: u64,
+    /// The server refuses changes for now, as the socket last said
+    /// (`ServerMessage::Mode`): edits stay queued until it accepts them.
+    pub read_only: Option<ReadOnly>,
     /// Upload bookkeeping per replica (`notekpr_sync::Outbox`).
     pub outboxes: BTreeMap<String, notekpr_sync::Outbox>,
     /// New notes' keys being registered, by (vault, note).

@@ -124,8 +124,9 @@ Settled; don't reopen them without a new reason.
       provisioning API; lifecycle hooks (suspend, delete, export); a support
       policy that is honest about end-to-end encryption — a forgotten password
       never means recovered data without the user's recovery key.
-- [ ] **Shared tier** (one instance, many users): storage, attachment and
-      vault quotas [S-M7]; exact-e-mail user directory only [S-L9]; per-user
+- [ ] **Shared tier** (one instance, many users): storage and attachment
+      quotas [S-M7] (vault and agent limits exist); exact-e-mail user
+      directory only [S-L9]; per-user
       rate limits and abuse handling; account deletion and export (GDPR: the
       encrypted export bundle exists); document the metadata the server sees.
 - [ ] **Dedicated instances** (one per customer): provisioning automation
@@ -176,13 +177,6 @@ Settled; don't reopen them without a new reason.
 * Road Map / Kanban / Task list
 * Cards view with notes and voting
 * Quick View / home: A static place where users can create something like a vault home page
-- **admin**: Special admin settings to allow some admin settings to be configured on the fly without having to restart the server.
-    - All the existing admin settings available, people, agents vaults documents files database
-    - Instance admin / settings that are only available to vault owners via via env variable
-    - Instance admin api with special credentials, not access to the vaults and only has access to the servers settings
-    - Server settings are: Number of users, amount of storage allowed, amount of vaults allowed, read only mode
-- **Admin Less instance**: Instance without Admin and only the api admin can acess the instnace settings
-    - Use case: A single shared instance for free users in the hosted cloud
 
 
 ### After live
@@ -225,20 +219,23 @@ Settled; don't reopen them without a new reason.
 The way to go live: free users share one instance, anyone can move to a
 dedicated instance easily, and updates happen without downtime. Still SQLite
 and one writer per instance (see Decisions). Items elsewhere in this file
-belong to it: **admin** and **Admin Less instance** (Ideas, before live),
-**Shared tier**, **Dedicated instances** and **Scaling by instances**
+belong to it: **Shared tier**, **Dedicated instances** and **Scaling by instances**
 (Product track), **Holding requests during an update on Kubernetes**
 (Engineering) and **Sharing between instances** (Ideas, after live).
 
-- [ ] **Instance settings without a restart**: the limits (users, vaults and
-      storage per user, attachment size), read-only mode and the other admin
-      settings live in the database and take effect at once. Flags and the
-      environment keep what is needed to start (data directory, public URL,
-      OIDC) and may pin a setting so it can't be changed at runtime. An
-      instance admin API with its own credentials sees settings and usage,
-      never vaults. Fewer settings that need a restart means fewer restarts.
-- [ ] **One shared instance for free users**: the per-user limits above,
-      checked by the server on the metadata it already has; Shared tier has
+- [ ] **More instance settings without a restart**: limits on accounts,
+      agents and vaults (also per person), read-only mode and the storage
+      limit are runtime settings now (`instance.rs`), managed by admin
+      clients too (`admin_clients.rs`).
+      Still flags: storage per person, the attachment, update and snapshot
+      sizes, rate limits, the user directory and the other admin settings —
+      move them too. Flags and the environment keep what is needed to start
+      (data directory, public URL, OIDC) and may pin a setting so it can't be
+      changed at runtime. Fewer settings that need a restart means fewer
+      restarts.
+- [ ] **One shared instance for free users**: a storage limit per person
+      (vault and agent allowances exist), checked by the server on the
+      metadata it already has; Shared tier has
       the rest (rate limits, abuse, deletion and export). Accounts that never
       come back cost only disk: memory and CPU go with people online (about
       0.22 MB each, see Engineering).
@@ -265,7 +262,9 @@ belong to it: **admin** and **Admin Less instance** (Ideas, before live),
         holder writes and publishes live events, so the in-process write lock
         and event bus keep every vault's stream gapless and ordered as they
         do today. The old server gives the lease up on SIGTERM, after telling
-        apps it's restarting; the new one takes it at once.
+        apps it's restarting; the new one takes it at once, and reloads the
+        instance settings then (they are read at start, and an administrator
+        may change them on the old server meanwhile).
       - The new server is ready before it holds the lease: it serves the web
         app and reads, and holds writes and WebSockets until it has the lease
         (answering "retry" if that takes too long). This replaces **Holding

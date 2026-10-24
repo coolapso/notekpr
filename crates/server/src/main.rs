@@ -3,7 +3,7 @@ use std::path::Path;
 
 use anyhow::{Context, bail};
 use clap::Parser;
-use notekpr_server::config::{Cli, Command, Config, LogFormat};
+use notekpr_server::config::{AdminClientCommand, Cli, Command, Config, LogFormat};
 use notekpr_server::db;
 use tracing_subscriber::EnvFilter;
 
@@ -79,7 +79,85 @@ async fn main() -> anyhow::Result<()> {
             export_user(&cli.config, &user, backup.as_deref(), &out).await
         }
         Command::Healthcheck => healthcheck(cli.config.listen),
+        Command::AdminClient { command } => admin_client(&cli.config, command).await,
     }
+}
+
+/// `notekpr-server admin-client …`: works on the database directly (the
+/// server may be running), so it also sets up an instance without
+/// administrators.
+async fn admin_client(config: &Config, command: AdminClientCommand) -> anyhow::Result<()> {
+    use notekpr_server::admin_clients;
+    let path = config.db_path();
+    let pool = db::connect(&path).await?;
+    db::migrate(&pool, &path).await?;
+    match command {
+        AdminClientCommand::Create { name, scopes } => {
+            let scopes = admin_clients::parse_scopes(&scopes)?;
+            let made = admin_clients::create(&pool, &name, &scopes, None).await?;
+            eprintln!(
+                "admin client {name} created with {}; its token (shown only now):",
+                scope_list(&made.client.scopes)
+            );
+            println!("{}", made.token);
+        }
+        AdminClientCommand::Ensure {
+            name,
+            scopes,
+            tokens_file,
+        } => {
+            let scopes = admin_clients::parse_scopes(&scopes)?;
+            let text = if tokens_file.as_os_str() == "-" {
+                std::io::read_to_string(std::io::stdin())?
+            } else {
+                std::fs::read_to_string(&tokens_file)
+                    .with_context(|| format!("reading {}", tokens_file.display()))?
+            };
+            let tokens: Vec<String> = text
+                .lines()
+                .map(str::trim)
+                .filter(|l| !l.is_empty() && !l.starts_with('#'))
+                .map(str::to_string)
+                .collect();
+            let r = admin_clients::ensure(&pool, &name, &scopes, &tokens).await?;
+            println!(
+                "admin client {name} {} with {}: {} token(s) added, {} removed",
+                if r.created { "created" } else { "is there" },
+                scope_list(&scopes),
+                r.added,
+                r.removed
+            );
+        }
+        AdminClientCommand::List => {
+            for c in notekpr_server::repo::admin_clients::list(&pool).await? {
+                let tokens: Vec<&str> = c.tokens.iter().map(|t| t.hint.as_str()).collect();
+                println!(
+                    "{}\t{}\t{}{}",
+                    c.name,
+                    scope_list(&c.scopes),
+                    tokens.join(" "),
+                    if c.managed { "\t(managed)" } else { "" }
+                );
+            }
+        }
+        AdminClientCommand::Delete { name } => {
+            let Some((id, ..)) = notekpr_server::repo::admin_clients::by_name(&pool, &name).await?
+            else {
+                bail!("there is no admin client called {name}");
+            };
+            notekpr_server::repo::admin_clients::delete(&pool, &id).await?;
+            println!("admin client {name} deleted");
+        }
+    }
+    Ok(())
+}
+
+fn scope_list(scopes: &[notekpr_core::protocol::AdminScope]) -> String {
+    scopes
+        .iter()
+        .map(|s| s.as_str())
+        .collect::<Vec<_>>()
+        .join(",")
 }
 
 /// Export one person's encrypted data from the live database or a backup.
@@ -164,6 +242,14 @@ async fn serve(config: Config) -> anyhow::Result<()> {
     }
     if config.demo_resets_at.is_some() && !config.dev_mode {
         bail!("--demo-resets-at is for demos: it needs --dev-mode");
+    }
+    if config.adminless {
+        tracing::info!(
+            "admin-less: nobody signing in administers this instance; admin clients do (notekpr-server admin-client)"
+        );
+        if !config.admins.is_empty() {
+            tracing::warn!("NOTEKPR_ADMINS is ignored on an admin-less instance");
+        }
     }
     if config.dev_mode {
         // Anyone who can reach a dev-mode server can sign in as anyone:

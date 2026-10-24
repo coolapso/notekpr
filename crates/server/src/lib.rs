@@ -7,6 +7,7 @@
 //! vault content.
 
 pub mod access;
+pub mod admin_clients;
 pub mod auth;
 pub mod blobs;
 pub mod config;
@@ -14,6 +15,7 @@ pub mod db;
 pub mod error;
 pub mod export;
 pub mod hub;
+pub mod instance;
 pub mod oidc;
 pub mod process;
 pub mod ratelimit;
@@ -38,11 +40,12 @@ pub async fn build(
     let path = config.db_path();
     let db = db::connect(&path).await?;
     db::migrate(&db, &path).await?;
-    let state = AppState::new(db, config, metrics)?;
+    let state = AppState::new(db, config, metrics).await?;
     if !state.config.dev_mode {
         end_dev_sessions(&state).await?;
     }
     spawn_maintenance(state.clone());
+    spawn_storage_check(state.clone());
     Ok((routes::router(state.clone()), state))
 }
 
@@ -59,6 +62,20 @@ async fn end_dev_sessions(state: &AppState) -> anyhow::Result<()> {
         );
     }
     Ok(())
+}
+
+/// Measure the database every few seconds, so a full one turns the server
+/// read-only soon after it reaches its limit (and writable again after).
+fn spawn_storage_check(state: AppState) {
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(Duration::from_secs(10));
+        loop {
+            tick.tick().await;
+            if let Err(e) = state.instance.refresh_storage(&state.db).await {
+                tracing::warn!(error = %e, "could not measure the database");
+            }
+        }
+    });
 }
 
 /// Periodic cleanup of expired short-lived records and rate-limiter state.

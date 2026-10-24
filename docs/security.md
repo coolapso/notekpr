@@ -43,12 +43,13 @@ connection's IP address, as any server does, but neither stores nor logs it
 with the disk. It is an ordinary SQLite file, readable with any SQLite tool.
 Nothing in the app or the logs shows it:
 
-* **Administrators** (Settings → Administration) see each account's name,
-  e-mail, kind (person or agent), role, whether it is disabled, when it was
-  created and last signed in, and how many vaults and devices it has; plus
-  totals for the instance (accounts, vaults, objects, updates, storage). Not
-  who is in which vault, not who shares with whom, not activity — and never
-  content.
+* **Administrators** (Settings → Administration, and admin clients over
+  `/admin/*`) see each account's name, e-mail, kind (person or agent),
+  role, whether it is disabled, when it was created and last signed in, how
+  many vaults it is in and owns, how many devices and agents it has, and its
+  own limits; plus totals for the instance (accounts, vaults, objects,
+  updates, storage) and the instance settings. Not who is in which vault,
+  not who shares with whom, not activity — and never content.
 * **Logs** have one line per request — method, path with ids replaced by
   `:id`, status, duration — plus start-up and shut-down events. No user or
   vault ids, IP addresses, tokens, query strings, bodies or names.
@@ -64,6 +65,7 @@ What the database holds, besides ciphertext and public keys:
 | `attachments` | each attachment's size, who uploaded it, when |
 | `object_shares`, `object_keys` | which notes are shared individually, with whom, with which role, by whom and since when |
 | `user_prefs` | when someone's encrypted preferences last changed, and their size |
+| `instance_settings` | the instance's limits and read-only switch, and when they last changed |
 | `audit_log` | account, device, membership, sharing and key events: who did what to whom, when (ids, roles and device names; never names of notes or vaults) |
 
 Kept only in memory, never written: IP addresses (used for rate limits), who
@@ -171,6 +173,17 @@ primitives. Formats:
   both, the attacker can enroll a device. Users can rotate the recovery key.
 * **Stolen agent secret**: revoke it in Settings → AI agents; tokens live one
   hour; the agent only ever had the vaults explicitly shared with it.
+* **Stolen admin client token** (`notekpr_a_…`): gives what that client's
+  scopes allow — reading accounts and their metadata above, and with more
+  scopes changing limits and read-only mode, disabling accounts, the admin
+  role, admin clients — and nothing in any vault. An admin client is no
+  account: no route but `/admin/*` accepts its tokens, it has no keys or
+  memberships, and it can't sign in to the web app or the WebSocket. Revoke
+  the token (Settings → Administration → Admin clients, the API, or
+  `notekpr-server admin-client`) without a restart; give each consumer its
+  own client with only the scopes it needs, so one leak is one revocation.
+  Tokens are stored as hashes; a client with the `clients` scope can only
+  hand out scopes it has.
 
 ### Malicious collaborators
 
@@ -301,6 +314,18 @@ reported, never applied partially. Duplicate deliveries are no-ops.
   `--oidc-allow-unverified-email`.
 * Identities are keyed by `iss`+`sub`, never e-mail. Authentication grants no
   vault access.
+* Administration grants no vault access either. Admin clients are kept out
+  of everything else by construction: the routes that serve vaults, notes,
+  keys, people or the WebSocket only accept a session (`Principal`), which
+  they never have; only the administration routes know their tokens. An
+  admin-less server (`--adminless`) has no administrators among its people
+  at all — people see only their own account and vaults — and is
+  administered only by admin clients set up from the server's command line.
+* Read-only mode (switched on, or the database at `max_storage_mb`) is
+  checked under the write lock for pushes, and before anything else for
+  every other change, with a short list of what stays writable (signing in
+  and out, devices, revoking access, administration); a new route is
+  refused until it is added there.
 * Authorization is checked on every request and every WebSocket push (under the
   write lock, so a push can't race a removal); non-members get `404` so vault
   ids cannot be probed.

@@ -31,7 +31,7 @@ pub async fn export(
 }
 
 pub async fn me(State(state): State<AppState>, who: Principal) -> AppResult<Json<MeResponse>> {
-    let user = auth::user_info(&state.db, &who.user_id).await?;
+    let user = auth::user_info(&state, &who.user_id).await?;
     let key = account_key(&state.db, &who.user_id).await?;
     let has_recovery = repo::users::has_recovery(&state.db, &who.user_id).await?;
     let expires_at = repo::sessions::expires_at(&state.db, &who.session_id).await?;

@@ -499,6 +499,8 @@ pub struct Ws {
     pub stream: tokio_tungstenite::WebSocketStream<
         tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
     >,
+    /// The server's mode when it connected (the `mode` after `ready`).
+    pub read_only: Option<ReadOnly>,
 }
 
 impl Ws {
@@ -509,10 +511,17 @@ impl Ws {
         })
         .unwrap();
         stream.send(Message::Text(auth.into())).await.unwrap();
-        let mut ws = Ws { stream };
+        let mut ws = Ws {
+            stream,
+            read_only: None,
+        };
         match ws.recv().await {
             ServerMessage::Ready { .. } => {}
             m => panic!("expected ready, got {m:?}"),
+        }
+        match ws.recv().await {
+            ServerMessage::Mode { read_only } => ws.read_only = read_only,
+            m => panic!("expected mode, got {m:?}"),
         }
         ws
     }

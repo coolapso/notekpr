@@ -1015,3 +1015,14 @@ label.btn.disabled { opacity: .6; pointer-events: none; }
 .mention-item .dot { flex: none; width: 8px; height: 8px; margin-top: 6px; border-radius: 50%; background: var(--accent); }
 .mentions-none { padding: 4px 6px; margin: 0; }
 @media (pointer: coarse) { .cm-tools { opacity: 1; } }
+
+.instance-settings .limits { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 8px 16px; margin: 10px 0; }
+.limit-field { display: flex; align-items: center; gap: 8px; }
+.limit-field .limit-label { flex: 1; min-width: 0; }
+.limit-field .num { width: 90px; }
+.admin-users .list-row.col > .row { display: flex; align-items: center; gap: 10px; }
+.allowances { display: flex; flex-direction: column; gap: 8px; padding: 10px 0 2px 42px; }
+.allowances .limit-field { max-width: 460px; }
+.nowrap { white-space: nowrap; flex: none; }
+.admin-client-new .scopes { display: flex; flex-direction: column; margin: 4px 0 10px; }
+.admin-client-new .scopes .check { margin: 3px 0; }

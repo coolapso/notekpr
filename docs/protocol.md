@@ -19,8 +19,13 @@ and retries up to 30 s),
 `device_revoked` (404 from `GET /devices/{id}/envelope` and
 `PUT /me/session/device`: the device was removed from the account or never
 belonged to it — the only 404 after which a client may forget a device's
-keys), `unavailable`, `internal`. Vaults the caller is not a member of
-always return `404` so their existence cannot be probed.
+keys), `read_only` (503: the server refuses changes for now, §9 — clients
+keep note edits and send them once it says it accepts changes again, §7;
+other changes, such as creating a vault, fail and are tried again by the
+person), `limit_reached` (403: an instance limit on accounts, vaults or
+agents, §9; the message says which), `unavailable`, `internal`. Vaults the
+caller is not a member of always return `404` so their existence cannot be
+probed.
 
 ## 1. Data model the server sees
 
@@ -81,7 +86,7 @@ Defined in `crates/core/src/crypto.rs` and `keys.rs`.
 
 | Endpoint | Purpose |
 |---|---|
-| `GET /info` | server name, version, `dev_mode`, `oidc_enabled`, `oidc_display_name` (the login button's label; null without OIDC), size limits (`max_attachment_bytes`, `max_update_bytes`, `max_snapshot_bytes`; older servers omit the last: it is `max(16 × max_update_bytes, 32 MiB)`), `note_keys` (notes can have their own keys, §5.1) (no auth) |
+| `GET /info` | server name, version, `dev_mode`, `oidc_enabled`, `oidc_display_name` (the login button's label; null without OIDC), size limits (`max_attachment_bytes`, `max_update_bytes`, `max_snapshot_bytes`; older servers omit the last: it is `max(16 × max_update_bytes, 32 MiB)`), `note_keys` (notes can have their own keys, §5.1), `read_only` (`manual` or `storage_full` while the server refuses changes, §9; absent otherwise) (no auth) |
 | `GET /auth/oidc/start?return_to=/path` | 303 to the identity provider (authorization code + PKCE + nonce); sets an HttpOnly, SameSite=Lax `notekpr_login` cookie that binds the login to this browser |
 | `GET /auth/oidc/callback` | provider redirect target; requires the `notekpr_login` cookie of the browser that started the login (otherwise `#error=login_failed`, which closes login CSRF); redirects to `/auth/complete#code=…&return_to=…` |
 | `POST /auth/exchange {code}` | one-time code (120 s) → `SessionResponse {token, expires_at, user}` |
@@ -91,6 +96,10 @@ Defined in `crates/core/src/crypto.rs` and `keys.rs`.
 
 Identities are keyed by `(iss, sub)`; the e-mail claim is never used for
 identity. Successful login creates the user but grants access to nothing.
+A first login is refused while the server is read-only or at its accounts
+limit (§9): `dev-login` answers `read_only` / `limit_reached`, the OIDC
+callback redirects with `#error=no_new_accounts`. People who have an account
+still sign in.
 
 **Native clients** use the RFC 8628 device authorization grant:
 
@@ -375,6 +384,7 @@ closes — the only way a browser learns why, so clients sign out on it),
 `ping {nonce}`.
 
 Server → client: `ready {user_id, session_id, conn_id}`,
+`mode {read_only?}` (right after `ready`, and whenever it changes: `manual` or `storage_full` while the server refuses changes, absent when it accepts them),
 `changes {vault_id, changes}` (catch-up pages after `subscribe` with `since`, and after falling behind: below),
 `synced {vault_id, head_seq, object_id?}`, `update {vault_id, update}`,
 `ack {vault_id, results, rejected?}` (your own pushes, delivered in log order; `rejected` as for the REST push),
@@ -393,6 +403,14 @@ subscriber, the author's own connection included. A subscriber that falls too
 far behind live events gets the gap replayed from the log as `changes`, then
 `synced` again; awareness, `snapshot_created`, `vault_event` and
 `object_event` messages missed in the gap are not replayed.
+
+While the server is read-only (`mode` with `read_only`), pushes get `error
+{code: "read_only", vault_id}`; clients don't push then, keep their edits
+(stored as unsent changes), and send everything as soon as a `mode` without
+`read_only` arrives — no polling or backoff. A push refused just as read-only
+began may arrive before that `mode`: clients send it again with the next
+`mode` without `read_only`, or after a while if none comes. Reading,
+subscribing and presence keep working.
 
 When the server shuts down to be started again (an update), it closes every
 connection with code **1012** ("service restart", `CLOSE_RESTARTING`) before
@@ -434,7 +452,7 @@ announced itself on.
 
 | Endpoint | Notes |
 |---|---|
-| `GET /agents`, `POST /agents {name}` | owner's agents; creation returns a client id + secret **once**; at most 50 agents per owner (`400` beyond) |
+| `GET /agents`, `POST /agents {name}` | owner's agents; creation returns a client id + secret **once**; at most `agents_per_user` per owner (default 50) and `max_agents` on the server (§9; `403 limit_reached` beyond) |
 | `DELETE /agents/{id}` | deletes the agent, its memberships and sessions |
 | `POST /agents/{id}/credentials`, `DELETE /agents/{id}/credentials/{client_id}` | rotate / revoke secrets (revocation ends sessions) |
 
@@ -444,11 +462,69 @@ Agents cannot create vaults, manage members, devices or agents.
 
 ## 9. Administration
 
+Administrators are people with the admin role (`--admin`, the first person
+to sign in, or made one by another administrator), with their session, and
+**admin clients**: scripts and services such as a billing system, each with
+a name, scopes and one or more bearer tokens (`Authorization: Bearer
+notekpr_a_…`). An admin client isn't an account: it has no session, keys or
+memberships, and only the routes below accept its tokens — every other route
+(vaults, notes, keys, people, the WebSocket) answers `401`. Neither kind of
+administrator can read anything in a vault.
+
+Scopes (`AdminScope`): `read` (every admin client has it), `settings`,
+`accounts` (disable and enable accounts, their allowances), `admins` (the
+admin role), `clients` (admin clients). A missing scope gets `403`. People
+with the admin role have every scope. On an admin-less instance
+(`--adminless`) nobody signing in is an administrator (`is_admin` is
+`false` everywhere, every route below answers people `403`, and the admin
+role can't be given: `400`): only admin clients administer it.
+
 | Endpoint | Notes |
 |---|---|
-| `GET /admin/users` | administrators: accounts with kind, e-mail, owner (agents), admin and disabled flags, last sign-in, vault and device counts — no content |
-| `PATCH /admin/users/{id} {disabled?, is_admin?}` | disable (ends the person's sessions and their agents') or (un)make administrator |
-| `GET /admin/stats` | counts of users, agents, vaults, objects, updates, snapshots and attachments, and total storage |
+| `GET /admin/users?email=&identity=` | `read`: accounts with kind, e-mail, owner (agents), admin and disabled flags, last sign-in, vault (member of) and device counts, `owned_vault_count`, `agent_count`, `vault_allowance`, `agent_allowance` — no content. `email` (any case) or `identity` (`issuer\|subject`, or `dev:<name>` in development mode) finds one person |
+| `PATCH /admin/users/{id} {disabled?, is_admin?, vault_allowance?, agent_allowance?}` | `accounts` (`admins` for `is_admin`): disable (ends the person's sessions and their agents') or enable (counts against `max_users`), (un)make administrator, set a person's own limits: `"default"` (the instance's), `"unlimited"` or a number. Agents have no allowance (`400`) |
+| `GET /admin/stats` | `read`: counts of users, agents, vaults, objects, updates, snapshots and attachments, and the database's size (`storage_bytes`: pages in use) |
+| `GET /admin/settings` | `read`: `{settings, read_only?, storage_bytes}`: the instance settings below, whether (and why) the server refuses changes now, and the database's size |
+| `PATCH /admin/settings {…}` | `settings`: change any of the settings; the rest stay. Answers like `GET`. Takes effect at once (no restart) and is kept in the database |
+| `GET /admin/clients` | the admin clients: `id`, `name`, `scopes`, `created_at`, `managed`, `tokens` (`id`, `hint` — the last characters —, `created_at`, `last_used_at`; never the tokens) |
+| `POST /admin/clients {name, scopes}` | `clients`: a new client (name: 1–64 of `a-z 0-9 . _ -`, unique, else `409`) and its first token: `CreatedAdminToken {client, token}`, the only time the token is shown |
+| `PATCH /admin/clients/{id} {scopes?}` | `clients`: change its scopes |
+| `DELETE /admin/clients/{id}` | `clients`: delete it and its tokens |
+| `POST /admin/clients/{id}/tokens` | `clients`: another token (`CreatedAdminToken`) — rotate by adding one, then revoking the old |
+| `DELETE /admin/clients/{id}/tokens/{token_id}` | `clients`: revoke a token |
+
+Managing an admin client also takes every
+scope it has, and no one gives scopes they don't have themselves, so
+delegating never grants more. Admin clients are also made from the server's
+command line (`notekpr-server admin-client create` / `ensure`,
+[operations.md](operations.md#admin-clients-scripts-and-services));
+`managed` ones are kept by `ensure`, which puts back their scopes and tokens
+whenever it runs.
+
+**Instance settings** (`InstanceSettings`). A limit is a number or
+`"unlimited"` (the default), and `0` means none at all:
+
+| Setting | Meaning |
+|---|---|
+| `max_users` | accounts of people that aren't disabled; a new person's first sign-in (or enabling an account) beyond it is refused |
+| `max_agents` | agents on the server |
+| `max_vaults` | vaults on the server |
+| `vaults_per_user` | vaults a person may own unless they have their own `vault_allowance`; vaults shared with them don't count |
+| `agents_per_user` | agents a person may have unless they have their own `agent_allowance` (default 50) |
+| `read_only` | `true`: the server refuses changes (below) |
+| `max_storage_mb` | at this database size (MiB, pages in use) the server turns read-only by itself (`storage_full`), until it is below it again — e.g. the limit was raised. Measured every 10 s and after every settings change |
+
+Limits are checked when something new would be created, in the transaction
+that creates it; lowering one takes nothing away.
+
+**Read-only**: everything that changes something is refused with `503
+read_only` — pushes (REST and WebSocket), snapshots, attachments, keys,
+vaults, members, shares, agents. What keeps working: reading and syncing
+down, signing in and out (but no new accounts), devices (register, approve,
+rename, remove), revoking sessions and agents, account key and recovery
+setup, preferences, and administration (which switches it off). Manual
+read-only (`read_only: true`) and `storage_full` are separate: lifting one
+doesn't lift the other; `GET /info` and `mode` report `manual` first.
 
 ## 10. Operations endpoints
 

@@ -59,7 +59,8 @@ commands below; `task` lists them all.
 
 ```sh
 task setup                    # check the toolchain and say what's missing
-task dev                      # dev server on http://localhost:8080 (no OIDC), data in ./data
+task dev                      # dev server on http://localhost:8080 (no OIDC), data in ./data, with an admin client
+task dev:adminless            # the same, admin-less: no administrators among the people, only admin clients
 task demo                     # a demo with users, vaults and shared notes on http://localhost:8099
 task load                     # load test with a live view on http://localhost:8098 (needs Docker)
 task web:watch                # in a 2nd terminal: rebuild the web client on change, then reload the browser
@@ -163,6 +164,18 @@ Open <http://localhost:8080> and sign in as `alice`. Open a **second tab**
 each user gets their own device keys in the browser. Share a vault from alice
 to bob (vault menu → Share vault, search "bob") and edit the same note in both
 tabs to see live collaboration, presence and cursors.
+
+`task dev` also sets up an admin client called `dev`, with every scope and
+a fixed token (the Taskfile's `DEV_ADMIN_TOKEN`, through `notekpr-server
+admin-client ensure`; the task prints a `curl` line to start from), to try
+the admin API as a billing system would
+([operations.md](operations.md#admin-clients-scripts-and-services)):
+
+```sh
+curl -H "Authorization: Bearer notekpr_a_dev-admin-token-for-this-machine-only" \
+     -X PATCH http://localhost:8080/api/v1/admin/settings \
+     -H 'Content-Type: application/json' -d '{"read_only": true}'
+```
 
 The CLI supports multiple users via profiles:
 

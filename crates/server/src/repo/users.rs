@@ -1,7 +1,9 @@
 //! Principals (people and agents), their OIDC identities, public account
 //! keys, private preferences, and the people directory.
 
-use notekpr_core::protocol::{AdminUser, PrincipalKind, PublicAccountKey, PublicUser, UserInfo};
+use notekpr_core::protocol::{
+    AdminUser, Allowance, PrincipalKind, PublicAccountKey, PublicUser, UserInfo,
+};
 use sqlx::{Row, SqliteExecutor};
 
 use crate::db::Db;
@@ -430,13 +432,30 @@ pub async fn share_a_note(db: impl SqliteExecutor<'_>, a: &str, b: &str) -> AppR
 
 // --- Administration ---
 
-pub async fn admin_list(db: impl SqliteExecutor<'_>) -> AppResult<Vec<AdminUser>> {
+/// Every account, or only those with this e-mail address (any case) or
+/// OIDC identity (`issuer`, `subject`).
+pub async fn admin_list(
+    db: impl SqliteExecutor<'_>,
+    email: Option<&str>,
+    identity: Option<(&str, &str)>,
+) -> AppResult<Vec<AdminUser>> {
+    let (issuer, subject) = identity.unzip();
     let rows = sqlx::query(
         "SELECT u.id, u.display_name, u.email, u.kind, u.owner_id, u.is_admin, u.disabled, u.created_at, u.last_login_at,
+                u.vault_allowance, u.agent_allowance,
                 (SELECT COUNT(*) FROM vault_members m WHERE m.user_id = u.id) AS vault_count,
-                (SELECT COUNT(*) FROM devices d WHERE d.user_id = u.id AND d.status = 'active') AS device_count
-         FROM users u ORDER BY u.kind, u.created_at",
+                (SELECT COUNT(*) FROM devices d WHERE d.user_id = u.id AND d.status = 'active') AS device_count,
+                (SELECT COUNT(*) FROM vaults v WHERE v.owner_id = u.id) AS owned_vault_count,
+                (SELECT COUNT(*) FROM users a WHERE a.owner_id = u.id AND a.kind = 'agent') AS agent_count
+         FROM users u
+         WHERE (?1 IS NULL OR lower(u.email) = lower(?1))
+           AND (?2 IS NULL OR EXISTS (SELECT 1 FROM identities i
+                                      WHERE i.user_id = u.id AND i.issuer = ?2 AND i.subject = ?3))
+         ORDER BY u.kind, u.created_at",
     )
+    .bind(email)
+    .bind(issuer)
+    .bind(subject)
     .fetch_all(db)
     .await?;
     Ok(rows
@@ -453,8 +472,93 @@ pub async fn admin_list(db: impl SqliteExecutor<'_>) -> AppResult<Vec<AdminUser>
             last_login_at: r.get("last_login_at"),
             vault_count: r.get("vault_count"),
             device_count: r.get("device_count"),
+            owned_vault_count: r.get("owned_vault_count"),
+            agent_count: r.get("agent_count"),
+            vault_allowance: allowance(r.get("vault_allowance")),
+            agent_allowance: allowance(r.get("agent_allowance")),
         })
         .collect())
+}
+
+/// Stored as NULL (the instance's default), -1 (unlimited) or the number.
+fn allowance(v: Option<i64>) -> Allowance {
+    match v {
+        None => Allowance::Default,
+        Some(n) if n < 0 => Allowance::Unlimited,
+        Some(n) => Allowance::Max(n as u64),
+    }
+}
+
+fn allowance_column(a: Allowance) -> Option<i64> {
+    match a {
+        Allowance::Default => None,
+        Allowance::Unlimited => Some(-1),
+        Allowance::Max(n) => Some(n.min(i64::MAX as u64) as i64),
+    }
+}
+
+/// `(vault allowance, agent allowance)` of a person.
+pub async fn allowances(
+    db: impl SqliteExecutor<'_>,
+    id: &str,
+) -> AppResult<(Allowance, Allowance)> {
+    let row: Option<(Option<i64>, Option<i64>)> =
+        sqlx::query_as("SELECT vault_allowance, agent_allowance FROM users WHERE id = ?")
+            .bind(id)
+            .fetch_optional(db)
+            .await?;
+    let (v, a) = row.unwrap_or_default();
+    Ok((allowance(v), allowance(a)))
+}
+
+/// Only people have allowances (agents belong to one).
+pub async fn set_vault_allowance(
+    db: impl SqliteExecutor<'_>,
+    id: &str,
+    a: Allowance,
+) -> AppResult<()> {
+    sqlx::query("UPDATE users SET vault_allowance = ? WHERE id = ? AND kind = 'human'")
+        .bind(allowance_column(a))
+        .bind(id)
+        .execute(db)
+        .await?;
+    Ok(())
+}
+
+pub async fn set_agent_allowance(
+    db: impl SqliteExecutor<'_>,
+    id: &str,
+    a: Allowance,
+) -> AppResult<()> {
+    sqlx::query("UPDATE users SET agent_allowance = ? WHERE id = ? AND kind = 'human'")
+        .bind(allowance_column(a))
+        .bind(id)
+        .execute(db)
+        .await?;
+    Ok(())
+}
+
+/// Vaults this person owns.
+pub async fn owned_vaults(db: impl SqliteExecutor<'_>, id: &str) -> AppResult<i64> {
+    Ok(
+        sqlx::query_scalar("SELECT COUNT(*) FROM vaults WHERE owner_id = ?")
+            .bind(id)
+            .fetch_one(db)
+            .await?,
+    )
+}
+
+/// `(kind, disabled)` of an account.
+pub async fn kind_and_disabled(
+    db: impl SqliteExecutor<'_>,
+    id: &str,
+) -> AppResult<Option<(String, bool)>> {
+    Ok(
+        sqlx::query_as("SELECT kind, disabled FROM users WHERE id = ?")
+            .bind(id)
+            .fetch_optional(db)
+            .await?,
+    )
 }
 
 pub async fn set_disabled(db: impl SqliteExecutor<'_>, id: &str, disabled: bool) -> AppResult<()> {

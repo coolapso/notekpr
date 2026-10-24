@@ -35,6 +35,7 @@ pub async fn info(State(state): State<AppState>) -> Json<ServerInfo> {
         max_update_bytes: state.config.max_update_bytes(),
         note_keys: true,
         max_snapshot_bytes: state.config.max_snapshot_bytes(),
+        read_only: state.instance.read_only(),
         demo_resets_at: state
             .config
             .demo_resets_at
@@ -190,6 +191,9 @@ async fn oidc_callback_inner(
     {
         Ok(u) => u,
         Err(AppError::Forbidden(_)) => return Ok(complete_redirect("error=account_disabled")),
+        Err(AppError::LimitReached(_) | AppError::ReadOnly(_)) => {
+            return Ok(complete_redirect("error=no_new_accounts"));
+        }
         Err(e) => return Err(e),
     };
     let (code, hash) = db::new_secret("notekpr_l_");
@@ -218,7 +222,7 @@ async fn session_response(
     Ok(SessionResponse {
         token: s.token,
         expires_at: s.expires_at,
-        user: auth::user_info(&state.db, user_id).await?,
+        user: auth::user_info(state, user_id).await?,
     })
 }
 

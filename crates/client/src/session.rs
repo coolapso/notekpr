@@ -47,6 +47,9 @@ pub struct PushOutcome {
     /// Updates still waiting (offline, or not allowed to write).
     pub remaining: usize,
     pub offline: bool,
+    /// The server is read-only: everything stays queued until it accepts
+    /// changes again.
+    pub read_only: bool,
     /// Updates set aside in this push because the server can't accept them.
     pub quarantined: usize,
     /// Notes whose set-aside updates went out in a snapshot carrying them.
@@ -662,8 +665,9 @@ impl Session {
                     v.save()?;
                     out.blobs += 1;
                 }
-                Err(e) if e.is_offline() => {
-                    out.offline = true;
+                Err(e) if e.is_read_only() || e.is_offline() => {
+                    out.read_only = e.is_read_only();
+                    out.offline = !out.read_only;
                     out.remaining = vault.lock().await.replica.pending.len();
                     return Ok(out);
                 }
@@ -700,6 +704,10 @@ impl Session {
                         let mut v = vault.lock().await;
                         v.key_registered(&k.object_id);
                         v.save()?;
+                    }
+                    Err(e) if e.is_read_only() => {
+                        out.read_only = true;
+                        break 'rounds;
                     }
                     Err(e) if e.is_offline() => {
                         out.offline = true;
@@ -781,6 +789,11 @@ impl Session {
                             continue 'rounds;
                         }
                     }
+                    Err(e) if e.is_read_only() => {
+                        not_sent(&mut *vault.lock().await, pushes);
+                        out.read_only = true;
+                        break 'rounds;
+                    }
                     Err(e) if e.is_offline() => {
                         not_sent(&mut *vault.lock().await, pushes);
                         out.offline = true;
@@ -835,7 +848,7 @@ impl Session {
                 }
             }
         }
-        if !out.offline {
+        if !out.offline && !out.read_only {
             out.carried = self.carry(vault).await?;
         }
         out.remaining = vault.lock().await.replica.pending.len();
@@ -968,7 +981,7 @@ impl Session {
     pub async fn sync_vault(&self, vault: &SharedVault) -> Result<PushOutcome> {
         self.catch_up(vault).await?;
         let out = self.push(vault).await?;
-        if !out.offline {
+        if !out.offline && !out.read_only {
             self.compact(vault, None).await?;
         }
         Ok(out)

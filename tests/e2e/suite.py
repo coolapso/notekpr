@@ -23,6 +23,9 @@ def free_port():
     return p
 
 
+ADMIN = "ada"
+
+
 class Env:
     def __init__(self, server, web):
         self.server_bin, self.web = os.path.abspath(server), os.path.abspath(web)
@@ -39,8 +42,10 @@ class Env:
 
     def start_server(self):
         log = open(os.path.join(self.data, "server.log"), "a")
+        # ADMIN is an administrator whichever test signs in first.
         self.server = subprocess.Popen([self.server_bin, "--dev-mode", "--web-dir", self.web, "--data-dir", self.data,
-                                        "--listen", f"127.0.0.1:{self.port}", "--public-url", self.url[:-1]],
+                                        "--listen", f"127.0.0.1:{self.port}", "--public-url", self.url[:-1],
+                                        "--admin", f"dev:{ADMIN}"],
                                        stdout=log, stderr=log)
         for _ in range(100):
             try:
@@ -523,6 +528,21 @@ window.__api = undefined;
 fetch('/api/v1' + arguments[0], {method: 'DELETE', headers: {Authorization: 'Bearer ' + sessionStorage.getItem('notekpr.token')}})
   .then(r => { window.__api = r.status; }, () => { window.__api = 0; });
 """
+
+
+API_PATCH = """
+window.__api = undefined;
+fetch('/api/v1' + arguments[0], {method: 'PATCH', body: JSON.stringify(arguments[1]),
+  headers: {'Content-Type': 'application/json', Authorization: 'Bearer ' + sessionStorage.getItem('notekpr.token')}})
+  .then(r => { window.__api = r.status; }, () => { window.__api = 0; });
+"""
+
+
+def api_patch(b, path, body):
+    """PATCH an API path with the browser's session; the status (0 on error)."""
+    b.js(API_PATCH, path, body)
+    b.wait("return window.__api !== undefined", 10, "API answer")
+    return b.js("return window.__api")
 
 
 def api_delete(b, path):
@@ -2274,7 +2294,106 @@ def test_note_width(env):
         b.close()
 
 
-TESTS = [test_onboarding, test_collab, test_devices_and_recovery, test_features, test_attachments, test_note_sharing, test_tables, test_code_blocks, test_html, test_callouts, test_colors, test_code_wrapping, test_editor_mouse, test_editor_safety, test_local_copy, test_ui_basics, test_offline_tabs, test_offline_start, test_mobile, test_quick_notes, test_vault_icons, test_entry_icons, test_tree_order, test_session_ended_while_away, test_comments, test_mentions, test_dates, test_graph, test_recovered_copy, test_note_width]
+def test_admin(env):
+    """Instance limits and read-only mode from the Administration settings."""
+    a, b = Browser(), Browser()
+    pending = "return Object.keys(localStorage).filter(k => k.startsWith('notekpr.pending.') && localStorage.getItem(k) !== '[]').length"
+    choose = "const s = document.querySelector(arguments[0]); s.value = arguments[1]; s.dispatchEvent(new Event('change', {bubbles: true}));"
+    number = "const i = document.querySelector(arguments[0]); i.value = arguments[1]; i.dispatchEvent(new Event('input', {bubbles: true}));"
+    try:
+        signup(a, ADMIN)
+        rob = uniq("rob")
+        signup(b, rob)  # owns the vault made at sign-up
+        a.go(env.url + "settings/admin")
+        a.find(".instance-settings .save-limits", 15)
+        check(a.js("return document.querySelector('.instance-status').textContent.startsWith('Accepting changes')"), "the instance settings say the server accepts changes")
+        a.js(choose, ".vaults-per-user .limit-kind", "max")
+        a.find(".vaults-per-user .limit-num", 5)
+        a.js(number, ".vaults-per-user .limit-num", "1")
+        a.click(".save-limits")
+        a.find_text(".toast", "Instance settings saved", 10)
+        check(True, "administrators set a limit of vaults per person")
+        b.click(".vault-btn")
+        b.click_el(b.find_text(".vault-menu button", "New vault"))
+        b.type(".modal input", "Second")
+        b.click(".modal button[type=submit]")
+        b.find_text(".toast", "you can own 1 vault on this server", 10)
+        check(True, "a second vault is refused, saying why")
+        b.chord(KEYS["escape"])
+        # Rob's own allowance.
+        row = f"[data-user='{rob.capitalize()}']"
+        a.find(row, 10)
+        check("owns 1 of 1 vault" in a.text(f"{row} .allowance-usage"), "the accounts list shows what someone owns of what they may")
+        a.click(f"{row} .limits-btn")
+        a.js(choose, f"{row} .vault-allowance .limit-kind", "max")
+        a.find(f"{row} .vault-allowance .limit-num", 5)
+        a.js(number, f"{row} .vault-allowance .limit-num", "2")
+        a.click(f"{row} .save-allowances")
+        a.wait(f"return (document.querySelector(\"{row} .allowance-usage\")?.textContent || '').includes('1 of 2 vaults')", 10, "rob may own 2 vaults")
+        a.shot("admin-limits")
+        b.click(".vault-btn")
+        b.click_el(b.find_text(".vault-menu button", "New vault"))
+        b.type(".modal input", "Second")
+        b.click(".modal button[type=submit]")
+        b.find_text(".page-head h1", "Second", 15)
+        check(True, "a person's own allowance lets them create more")
+
+        # An admin client for a billing system: its own token and scopes.
+        token_call = """window.__api = undefined;
+            fetch('/api/v1' + arguments[1], {method: arguments[2], body: arguments[3] ? JSON.stringify(arguments[3]) : undefined,
+              headers: {'Content-Type': 'application/json', Authorization: 'Bearer ' + arguments[0]}})
+              .then(r => { window.__api = r.status; }, () => { window.__api = 0; });"""
+
+        def with_token(token, path, method="GET", body=None):
+            a.js(token_call, token, path, method, body)
+            a.wait("return window.__api !== undefined", 10, "API answer")
+            return a.js("return window.__api")
+
+        a.type(".admin-client-new .client-name", "billing")
+        a.js("document.querySelector('.admin-client-new .create-client').click()")
+        a.find(".new-admin-token pre", 10)
+        token = a.text(".new-admin-token pre").strip()
+        check(token.startswith("notekpr_a_"), "a new admin client's token is shown once")
+        check(with_token(token, "/admin/users") == 200 and with_token(token, "/admin/settings", "PATCH", {"read_only": True}) == 403,
+              "its token reads and does what its scopes allow, nothing else")
+        check(with_token(token, "/vaults") == 401, "and opens no vault")
+        a.find("[data-client='billing'] .revoke-token", 10)
+        a.js("document.querySelector('.new-admin-token').scrollIntoView()")
+        a.shot("admin-clients")
+        a.js("document.querySelector(\"[data-client='billing'] .revoke-token\").click()")
+        a.wait("return !document.querySelector(\"[data-client='billing'] .revoke-token\")", 10, "the token is revoked")
+        check(with_token(token, "/admin/users") == 401, "a revoked token stops working at once")
+
+        # Read-only: people keep writing, their edits wait in the browser.
+        new_note(b, "While read-only", "first words")
+        b.wait(pending + " === 0", 20, "the note is synced")
+        a.js("document.querySelector('.read-only-toggle').click()")
+        b.find(".read-only-banner", 10)
+        check("read-only" in b.text(".read-only-banner"), "everyone is told at once that the server is read-only")
+        b.keys(" and more")
+        time.sleep(1.5)
+        check(b.js(pending) > 0 and "Read-only" in b.text(".sync"), "edits are kept in the browser, not sent")
+        b.shot("read-only-banner")
+        a.js("document.querySelector('.read-only-toggle').click()")
+        b.wait("return !document.querySelector('.read-only-banner')", 10, "the banner goes")
+        b.wait(pending + " === 0", 20, "the kept edits are sent")
+        check(True, "writable again: kept edits are sent right away")
+        b.js("location.reload()")
+        b.wait("return document.querySelector('.ed') && document.querySelector('.ed').textContent.includes('first words and more')", 20, "the edit is on the server")
+        # Refused on purpose: the second vault, and the admin client's calls.
+        refused = ["/api/v1/vaults - Failed to load resource: the server responded with a status of 403",
+                   "/api/v1/vaults - Failed to load resource: the server responded with a status of 401",
+                   "/api/v1/admin/settings - Failed to load resource: the server responded with a status of 403",
+                   "/api/v1/admin/users - Failed to load resource: the server responded with a status of 401"]
+        check(all(any(r in m for r in refused) for m in severe_logs(a, b)), "no browser errors but what was refused on purpose")
+    finally:
+        # Other tests share this server.
+        api_patch(a, "/admin/settings", {"read_only": False, "vaults_per_user": "unlimited"})
+        a.close()
+        b.close()
+
+
+TESTS = [test_onboarding, test_collab, test_devices_and_recovery, test_features, test_attachments, test_note_sharing, test_tables, test_code_blocks, test_html, test_callouts, test_colors, test_code_wrapping, test_editor_mouse, test_editor_safety, test_local_copy, test_ui_basics, test_offline_tabs, test_offline_start, test_mobile, test_quick_notes, test_vault_icons, test_entry_icons, test_tree_order, test_session_ended_while_away, test_comments, test_mentions, test_dates, test_graph, test_recovered_copy, test_note_width, test_admin]
 
 
 def main():

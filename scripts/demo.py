@@ -177,7 +177,7 @@ HOME = [
         - [ ] Share a single note with **dave** (the share button at the top of a note)
         - [ ] Settings → Editor: the theme, Vim keybindings, and how wide notes are (a slider from narrow to wide). A note's ⋯ menu gives it a width of its own, only for you: try *Wide* on *Server checks* in *Work*, whose log lines don't wrap
         - [ ] Settings → Devices: the CLI and this browser; *Keep this browser usable offline*
-        - [ ] Settings → Administration: you run this server in the demo
+        - [ ] Settings → Administration: you run this server in the demo. *Instance* sets limits (accounts, vaults, agents, and per person; *Limits* next to someone gives them their own) and read-only mode: switch it on with **bob** signed in in another tab, edit there, and his edits wait in his browser until you switch it off
         - [ ] Settings → AI agents: the *Home assistant* agent, which writes in *Assistant*
         - [ ] Your notes as plain Markdown files, synced both ways: `task demo:cli -- --profile alice sync --dir /tmp/alice-notes`
 

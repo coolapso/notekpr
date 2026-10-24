@@ -157,6 +157,7 @@ struct Setup {
     base: String,
     http: reqwest::Client,
     _dir: tempfile::TempDir,
+    state: notekpr_server::state::AppState,
 }
 
 async fn setup(
@@ -197,7 +198,7 @@ async fn setup(
     cfg.oidc_issuer = Some(issuer);
     cfg.oidc_client_id = Some(CLIENT_ID.into());
     cfg.oidc_client_secret = Some(CLIENT_SECRET.into());
-    let (app, _state) = notekpr_server::build(cfg, None).await.unwrap();
+    let (app, state) = notekpr_server::build(cfg, None).await.unwrap();
     tokio::spawn(async move {
         axum::serve(
             listener,
@@ -214,6 +215,7 @@ async fn setup(
             .build()
             .unwrap(),
         _dir: dir,
+        state,
     }
 }
 
@@ -375,4 +377,43 @@ async fn dev_accounts_never_take_the_first_admin_role() {
     };
     assert_eq!(me(dev.token).await, 401);
     assert_eq!(me(session.token).await, 200);
+}
+
+#[tokio::test]
+async fn a_full_server_takes_no_new_accounts_but_lets_people_back_in() {
+    use notekpr_core::protocol::{InstanceSettingsUpdate, Limit};
+    let s = setup(vec!["client_secret_basic"], true, true).await;
+    let set = |change: InstanceSettingsUpdate| {
+        let state = s.state.clone();
+        async move { state.instance.update(&state.db, &change).await.unwrap() }
+    };
+    set(InstanceSettingsUpdate {
+        max_users: Some(Limit::Max(0)),
+        ..Default::default()
+    })
+    .await;
+    let done = s.login(true).await;
+    assert!(done.ends_with("#error=no_new_accounts"), "{done}");
+    set(InstanceSettingsUpdate {
+        max_users: Some(Limit::Unlimited),
+        read_only: Some(true),
+        ..Default::default()
+    })
+    .await;
+    let done = s.login(true).await;
+    assert!(done.ends_with("#error=no_new_accounts"), "{done}");
+    set(InstanceSettingsUpdate {
+        read_only: Some(false),
+        ..Default::default()
+    })
+    .await;
+    s.exchange(&s.login(true).await).await;
+    // Someone who has an account signs in while it's full or read-only.
+    set(InstanceSettingsUpdate {
+        max_users: Some(Limit::Max(1)),
+        read_only: Some(true),
+        ..Default::default()
+    })
+    .await;
+    s.exchange(&s.login(true).await).await;
 }

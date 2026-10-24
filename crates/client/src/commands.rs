@@ -858,7 +858,12 @@ fn show_recovery_key(rk: &str) {
 }
 
 fn report_push(o: crate::session::PushOutcome) {
-    if o.offline || o.remaining > 0 {
+    if o.read_only {
+        ui::status(&format!(
+            "saved locally; the server is read-only right now: {} change(s) will be uploaded when it accepts changes again",
+            o.remaining
+        ));
+    } else if o.offline || o.remaining > 0 {
         ui::status(&format!(
             "saved locally; {} change(s) will be uploaded when the server is reachable",
             o.remaining
@@ -2106,11 +2111,20 @@ async fn sync(ctx: &Ctx, a: SyncArgs) -> Result<()> {
             }
         }
         let mut pending = 0;
+        let mut read_only = false;
         for id in hub.vault_ids() {
             match hub.sync_vault(&id).await {
-                Ok(o) => pending += o.remaining,
+                Ok(o) => {
+                    pending += o.remaining;
+                    read_only |= o.read_only;
+                }
                 Err(e) => ui::warn(&format!("vault {id}: {e:#}")),
             }
+        }
+        if read_only {
+            ui::warn(&format!(
+                "the server is read-only right now: {pending} change(s) stay queued and are uploaded when it accepts changes again"
+            ));
         }
         hub.snapshot_idle(Duration::ZERO, livesync::SESSION_MIN_UPDATES)
             .await;

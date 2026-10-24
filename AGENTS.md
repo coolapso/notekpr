@@ -79,7 +79,10 @@ crates/sync     the client sync engine both clients use (sans-IO): outbox (merge
 crates/server   axum + SQLite. routes/ (REST) · ws.rs (WebSocket, subscriptions) ·
                 sync.rs (encrypted log, snapshots, key checks) · access.rs (who may
                 do what) · repo/ (all other SQL) · hub.rs (EventBus: live events) ·
-                blobs.rs (attachment store) · auth.rs, oidc.rs · migrations/
+                blobs.rs (attachment store) · instance.rs (runtime settings: limits,
+                read-only mode) · admin_clients.rs (scripts administering the
+                instance: scopes, tokens) · auth.rs (sessions; Admin: admins and
+                admin clients), oidc.rs · migrations/
 crates/editor   the live-preview Markdown editor. Pure model (native tests): text.rs
                 (source + line index) · change.rs (ChangeSet: compose, transform,
                 map) · state.rs (EditorState, Transaction) · decorations.rs
@@ -206,6 +209,16 @@ Without go-task, see the plain commands in the [Taskfile](Taskfile.yml) or
 - Live events go through `hub.rs`'s `EventBus` only; publish log events after
   the commit, while still holding `write_lock` (its docs list what
   subscribers rely on).
+- While the server is read-only, every changing route is refused except
+  those in `WRITABLE_WHEN_READ_ONLY` (`routes/mod.rs`): a new route is
+  refused until added there, and only sign-in, revocation and administration
+  belong there. Creating something a limit counts (accounts, vaults, agents)
+  checks it inside the creating transaction (`instance.rs`).
+- Only `routes/admin.rs` takes the `Admin` extractor (people with the admin
+  role, or admin clients, which have no account) and checks a scope in each
+  handler (`admin.require(AdminScope::…)`). Never accept it anywhere else:
+  everything else takes a `Principal`, which keeps admin clients out of
+  vaults.
 
 **Web client**
 - The app state (`state::Core`) is taken only at *edges* — event handlers,

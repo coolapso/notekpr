@@ -20,6 +20,7 @@ use crate::state::{self, Modal, Route, ToastKind, ViewMode, ui};
 use crate::util;
 use crate::ws::ConnState;
 use icons::Icon;
+use notekpr_core::protocol::ReadOnly;
 
 #[component]
 pub fn App() -> impl IntoView {
@@ -87,6 +88,13 @@ fn Banners() -> impl IntoView {
                 }
             })
         }}
+        {move || ui.read_only.get().map(|why| view! {
+            <div class="banner warn read-only-banner"><Icon name="cloud-off"/>
+                <span>{match why {
+                    ReadOnly::Manual => "The server is read-only for now.",
+                    ReadOnly::StorageFull => "The server's storage is full.",
+                }}" Your edits are kept in this browser and sent as soon as it accepts changes again."</span></div>
+        })}
         {move || ui.warning.get().map(|w| view! {
             <div class="banner warn"><Icon name="alert"/><span>{w}</span>
                 <button class="btn small ghost" on:click=move |_| ui.warning.set(None)>"Dismiss"</button></div>
@@ -126,6 +134,7 @@ pub fn SyncStatus() -> impl IntoView {
     let ui = ui();
     view! {
         <span class="sync" title=move || match (ui.conn.get(), ui.pending.get()) {
+            (ConnState::Open, n) if ui.read_only.get().is_some() => format!("The server is read-only: changes to {n} document(s) are kept and will sync when it accepts changes again"),
             (ConnState::Open, 0) => "All changes synced (end-to-end encrypted)".to_string(),
             (ConnState::Open, n) => format!("Syncing changes to {n} document(s)…"),
             (ConnState::Connecting, _) => "Connecting…".to_string(),
@@ -133,6 +142,7 @@ pub fn SyncStatus() -> impl IntoView {
             (ConnState::Offline, n) => format!("Offline — changes to {n} document(s) are kept and will sync when you reconnect"),
         }>
             {move || match (ui.conn.get(), ui.pending.get()) {
+                (ConnState::Open, n) if ui.read_only.get().is_some() => view! { <Icon name="cloud-off" class="warn"/><span class="lbl">{if n > 0 { format!("Read-only · {n}") } else { "Read-only".into() }}</span> }.into_any(),
                 (ConnState::Open, 0) => view! { <Icon name="cloud" class="ok"/><span class="lbl">"Synced"</span> }.into_any(),
                 (ConnState::Open, _) => view! { <Icon name="refresh" class="spin"/><span class="lbl">"Saving"</span> }.into_any(),
                 (ConnState::Connecting, _) => view! { <Icon name="refresh" class="spin"/><span class="lbl">"Connecting"</span> }.into_any(),

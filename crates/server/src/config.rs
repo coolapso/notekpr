@@ -54,10 +54,49 @@ pub enum Command {
         #[arg(long)]
         out: PathBuf,
     },
+    /// Admin clients: scripts and services that administer the instance over
+    /// the admin API and never reach a vault. Safe while the server runs.
+    AdminClient {
+        #[command(subcommand)]
+        command: AdminClientCommand,
+    },
     /// Apply pending database migrations and exit.
     Migrate,
     /// Probe /readyz on the configured listen address (for container health checks).
     Healthcheck,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum AdminClientCommand {
+    /// Create an admin client and print its first token (shown only once).
+    Create {
+        #[arg(long)]
+        name: String,
+        /// Comma-separated: read, settings, accounts, admins, clients, or all
+        /// (read is always included).
+        #[arg(long, value_delimiter = ',')]
+        scopes: Vec<String>,
+    },
+    /// Make sure an admin client exists with these scopes and exactly the
+    /// tokens in a file, one per line (`-`: standard input): for declarative
+    /// setups, such as an init container. Running it again changes nothing.
+    Ensure {
+        #[arg(long)]
+        name: String,
+        #[arg(long, value_delimiter = ',')]
+        scopes: Vec<String>,
+        /// Tokens made with e.g. `echo "notekpr_a_$(openssl rand -hex 32)"`;
+        /// blank lines and lines starting with `#` are skipped.
+        #[arg(long)]
+        tokens_file: PathBuf,
+    },
+    /// List the admin clients, their scopes and tokens (never the tokens themselves).
+    List,
+    /// Delete an admin client and its tokens.
+    Delete {
+        #[arg(long)]
+        name: String,
+    },
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
@@ -209,6 +248,13 @@ pub struct Config {
     /// Make the first user that signs in an administrator.
     #[arg(long, env = "NOTEKPR_FIRST_USER_ADMIN", default_value_t = true, action = clap::ArgAction::Set, global = true)]
     pub first_user_admin: bool,
+
+    /// An instance without administrators among its people: nobody signing
+    /// in administers anything (the admin role, `--admin` and
+    /// `--first-user-admin` do nothing, the web app has no Administration),
+    /// and only admin clients (`notekpr-server admin-client`) administer it.
+    #[arg(long, env = "NOTEKPR_ADMINLESS", default_value_t = false, action = clap::ArgAction::Set, global = true)]
+    pub adminless: bool,
 
     #[arg(
         long,
@@ -363,18 +409,19 @@ impl Config {
     }
 
     pub fn is_admin_identity(&self, issuer: &str, subject: &str) -> bool {
-        self.admins.iter().any(|a| {
-            let a = a.trim();
-            if let Some(name) = a.strip_prefix("dev:") {
-                return issuer == notekpr_core::protocol::DEV_ISSUER && subject == name;
-            }
-            match a.split_once('|') {
-                Some((i, s)) => {
-                    i.trim_end_matches('/') == issuer.trim_end_matches('/') && s == subject
+        !self.adminless
+            && self.admins.iter().any(|a| {
+                let a = a.trim();
+                if let Some(name) = a.strip_prefix("dev:") {
+                    return issuer == notekpr_core::protocol::DEV_ISSUER && subject == name;
                 }
-                None => false,
-            }
-        })
+                match a.split_once('|') {
+                    Some((i, s)) => {
+                        i.trim_end_matches('/') == issuer.trim_end_matches('/') && s == subject
+                    }
+                    None => false,
+                }
+            })
     }
 
     /// Configuration for tests.

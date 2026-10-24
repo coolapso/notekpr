@@ -10,6 +10,10 @@ vars:
   LISTEN: 127.0.0.1:8080
   PUBLIC_URL: http://localhost:8080
   DATA_DIR: data
+  # `task dev`'s admin client "dev" (every scope): a fixed token, fine for a
+  # development server on this machine only; another one with
+  # `task dev DEV_ADMIN_TOKEN=notekpr_a_…`.
+  DEV_ADMIN_TOKEN: notekpr_a_dev-admin-token-for-this-machine-only
   # `task demo`: its own server, database and CLI profiles, next to `task dev`.
   DEMO_LISTEN: 127.0.0.1:8099
   DEMO_DIR: data/demo
@@ -130,8 +134,20 @@ tasks:
   dev:
     desc: "Run the server in development mode on {{.PUBLIC_URL}}: no OIDC, sign in as any user (one per browser tab)"
     deps: [build:server, build:web:dev]
+    vars:
+      ADMINLESS: '{{.ADMINLESS | default "false"}}'
     cmds:
-      - ./target/debug/notekpr-server --dev-mode --web-dir dist/web --data-dir {{.DATA_DIR}} --listen {{.LISTEN}} --public-url {{.PUBLIC_URL}} --log-format pretty {{.CLI_ARGS}}
+      - cmd: echo "{{.DEV_ADMIN_TOKEN}}" | ./target/debug/notekpr-server --data-dir {{.DATA_DIR}} admin-client ensure --name dev --scopes all --tokens-file -
+        silent: true
+      - cmd: 'echo "admin client: curl -H \"Authorization: Bearer {{.DEV_ADMIN_TOKEN}}\" {{.PUBLIC_URL}}/api/v1/admin/settings"'
+        silent: true
+      - ./target/debug/notekpr-server --dev-mode --adminless {{.ADMINLESS}} --web-dir dist/web --data-dir {{.DATA_DIR}} --listen {{.LISTEN}} --public-url {{.PUBLIC_URL}} --log-format pretty {{.CLI_ARGS}}
+
+  dev:adminless:
+    desc: "`task dev` as an admin-less instance: nobody signing in administers anything, only admin clients (the dev one: its curl line) do. Same data as `task dev`"
+    cmds:
+      - task: dev
+        vars: { ADMINLESS: "true" }
 
   web:watch:
     desc: Rebuild the web client whenever its code changes (run next to `task dev`, then reload the browser)

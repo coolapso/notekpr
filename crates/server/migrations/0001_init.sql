@@ -11,9 +11,46 @@ CREATE TABLE users (
     is_admin      INTEGER NOT NULL DEFAULT 0,
     disabled      INTEGER NOT NULL DEFAULT 0,
     created_at    INTEGER NOT NULL,
-    last_login_at INTEGER
+    last_login_at INTEGER,
+    -- What this person may own, set by an administrator: NULL = the
+    -- instance's default, -1 = unlimited, otherwise at most that many.
+    vault_allowance INTEGER,
+    agent_allowance INTEGER
 );
 CREATE INDEX users_owner ON users(owner_id);
+
+-- Settings administrators change at runtime (limits, read-only mode): one
+-- row, JSON (`InstanceSettings`; missing fields take their defaults).
+CREATE TABLE instance_settings (
+    id         INTEGER PRIMARY KEY CHECK (id = 1),
+    settings   TEXT NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+-- Scripts and services administering the instance (a billing system, say).
+-- Not accounts: no keys, sessions or memberships, only the admin API.
+CREATE TABLE admin_clients (
+    id         TEXT PRIMARY KEY,
+    name       TEXT NOT NULL UNIQUE,
+    -- Comma-separated `AdminScope`s.
+    scopes     TEXT NOT NULL,
+    -- Kept by `notekpr-server admin-client ensure` (the server's configuration).
+    managed    INTEGER NOT NULL DEFAULT 0,
+    -- The account or admin client that made it; NULL from the command line.
+    created_by TEXT,
+    created_at INTEGER NOT NULL
+);
+
+-- Their bearer tokens: only hashes, and the last characters to tell them apart.
+CREATE TABLE admin_tokens (
+    id           TEXT PRIMARY KEY,
+    client_id    TEXT NOT NULL REFERENCES admin_clients(id) ON DELETE CASCADE,
+    token_hash   BLOB NOT NULL UNIQUE,
+    hint         TEXT NOT NULL,
+    created_at   INTEGER NOT NULL,
+    last_used_at INTEGER
+);
+CREATE INDEX admin_tokens_client ON admin_tokens(client_id);
 
 -- OIDC identities, keyed by issuer + subject (never by email).
 CREATE TABLE identities (
@@ -115,6 +152,7 @@ CREATE TABLE vaults (
     created_at     INTEGER NOT NULL,
     updated_at     INTEGER NOT NULL
 );
+CREATE INDEX vaults_owner ON vaults(owner_id);
 
 CREATE TABLE vault_members (
     vault_id TEXT NOT NULL REFERENCES vaults(id) ON DELETE CASCADE,

@@ -156,8 +156,26 @@ pub fn router(state: AppState) -> Router {
         .route("/admin/users", get(admin::users))
         .route("/admin/users/{id}", patch(admin::update_user))
         .route("/admin/stats", get(admin::stats))
+        .route(
+            "/admin/settings",
+            get(admin::settings).patch(admin::update_settings),
+        )
+        .route(
+            "/admin/clients",
+            get(admin::clients).post(admin::create_client),
+        )
+        .route(
+            "/admin/clients/{id}",
+            patch(admin::update_client).delete(admin::delete_client),
+        )
+        .route("/admin/clients/{id}/tokens", post(admin::create_token))
+        .route(
+            "/admin/clients/{id}/tokens/{token_id}",
+            delete(admin::delete_token),
+        )
         .route("/ws", get(ws::handler))
         .merge(login)
+        .route_layer(from_fn_with_state(state.clone(), read_only_guard))
         .fallback(api_not_found)
         .layer(from_fn_with_state(state.clone(), ratelimit::api_limit))
         .layer(DefaultBodyLimit::max(1024 * 1024))
@@ -225,6 +243,58 @@ pub fn router(state: AppState) -> Router {
     app.layer(CompressionLayer::new())
         .layer(from_fn(observe))
         .with_state(state)
+}
+
+/// What still works while the server is read-only, besides reading:
+/// signing in and out, devices, revoking access (sessions, devices,
+/// agents), and administration (which turns read-only off). Everything else
+/// that changes something is refused, new routes included until they are
+/// added here. Sync pushes over the WebSocket are refused in `sync::push`.
+const WRITABLE_WHEN_READ_ONLY: &[(&str, &str)] = &[
+    ("POST", "/auth/exchange"),
+    ("POST", "/auth/dev-login"),
+    ("POST", "/auth/logout"),
+    ("POST", "/oauth/device_authorization"),
+    ("POST", "/oauth/token"),
+    ("POST", "/oauth/device/decision"),
+    ("PUT", "/me/account-key"),
+    ("PUT", "/me/recovery"),
+    ("PUT", "/me/prefs"),
+    ("PUT", "/me/session/device"),
+    ("DELETE", "/me/sessions/{id}"),
+    ("POST", "/devices"),
+    ("PATCH", "/devices/{id}"),
+    ("DELETE", "/devices/{id}"),
+    ("POST", "/devices/{id}/activate"),
+    ("DELETE", "/agents/{id}"),
+    ("DELETE", "/agents/{id}/credentials/{client_id}"),
+    ("PATCH", "/admin/users/{id}"),
+    ("PATCH", "/admin/settings"),
+    ("POST", "/admin/clients"),
+    ("PATCH", "/admin/clients/{id}"),
+    ("DELETE", "/admin/clients/{id}"),
+    ("POST", "/admin/clients/{id}/tokens"),
+    ("DELETE", "/admin/clients/{id}/tokens/{token_id}"),
+];
+
+/// Refuse changes while the server is read-only (`instance.rs`).
+async fn read_only_guard(
+    State(state): State<AppState>,
+    matched: Option<axum::extract::MatchedPath>,
+    req: Request,
+    next: Next,
+) -> Response {
+    if let Some(why) = state.instance.read_only()
+        && !req.method().is_safe()
+    {
+        let path = matched.as_ref().map(|m| m.as_str()).unwrap_or_default();
+        let path = path.strip_prefix("/api/v1").unwrap_or(path);
+        let method = req.method().as_str();
+        if !WRITABLE_WHEN_READ_ONLY.contains(&(method, path)) {
+            return AppError::ReadOnly(why).into_response();
+        }
+    }
+    next.run(req).await
 }
 
 /// Request logging and metrics. Only method, path and status are recorded:

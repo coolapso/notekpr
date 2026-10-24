@@ -104,6 +104,7 @@ pub(super) async fn complete_oidc() {
             "account_disabled" => "This account has been disabled by an administrator.".to_string(),
             "access_denied" => "Sign-in was cancelled.".to_string(),
             "login_expired" => "The sign-in took too long. Please try again.".to_string(),
+            "no_new_accounts" => "This server isn't accepting new accounts right now.".to_string(),
             _ => "Sign-in failed. Please try again.".to_string(),
         };
         ui.phase.set(Phase::SignedOut { error: Some(msg) });

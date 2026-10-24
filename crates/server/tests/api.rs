@@ -1897,7 +1897,7 @@ async fn agents_stop_when_their_owner_is_disabled() {
             &format!("/admin/users/{}", bob.id),
             Some(&AdminUpdateUser {
                 disabled: Some(true),
-                is_admin: None,
+                ..Default::default()
             }),
         )
         .await;

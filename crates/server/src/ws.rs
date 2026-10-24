@@ -1,7 +1,9 @@
 //! Live sync over WebSocket.
 //!
 //! Protocol (JSON text frames, see `notekpr_core::protocol`):
-//! 1. client sends `auth` (browsers cannot set headers on WebSockets);
+//! 1. client sends `auth` (browsers cannot set headers on WebSockets); the
+//!    server answers `ready`, then `mode` (whether it accepts changes, sent
+//!    again whenever that changes: `instance.rs`);
 //! 2. client `subscribe`s to vaults, optionally with `since` to catch up;
 //! 3. server streams `changes` pages, then `synced`, then live events in
 //!    sequence order; the client's own pushes come back as `ack` in that order.
@@ -120,6 +122,11 @@ async fn connection(socket: WebSocket, state: AppState) {
             conn_id,
         }))
         .await;
+    let mut mode = state.instance.subscribe();
+    let read_only = *mode.borrow_and_update();
+    let _ = out_tx
+        .send(Out::Msg(ServerMessage::Mode { read_only }))
+        .await;
 
     let mut conn = Conn {
         state: state.clone(),
@@ -143,6 +150,10 @@ async fn connection(socket: WebSocket, state: AppState) {
     while !restarting {
         tokio::select! {
             _ = shutting_down.changed() => restarting = *shutting_down.borrow(),
+            Ok(()) = mode.changed() => {
+                let read_only = *mode.borrow_and_update();
+                conn.send(ServerMessage::Mode { read_only }).await;
+            }
             msg = stream.next() => match msg {
                 Some(Ok(Message::Text(t))) => {
                     if !conn.handle_text(&t).await {

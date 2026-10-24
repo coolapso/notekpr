@@ -6,6 +6,7 @@ use metrics_exporter_prometheus::PrometheusHandle;
 use crate::config::Config;
 use crate::db::Db;
 use crate::hub::EventBus;
+use crate::instance::Instance;
 use crate::oidc::Oidc;
 use crate::ratelimit::Limiters;
 
@@ -25,16 +26,23 @@ pub struct Inner {
     pub blobs: crate::blobs::Blobs,
     pub limiters: Limiters,
     pub metrics: Option<PrometheusHandle>,
+    /// Runtime settings (limits) and whether the server accepts changes.
+    pub instance: Instance,
     /// Becomes true when the server shuts down: live connections close with
     /// [`CLOSE_RESTARTING`](notekpr_core::protocol::CLOSE_RESTARTING).
     pub shutting_down: tokio::sync::watch::Sender<bool>,
 }
 
 impl AppState {
-    pub fn new(db: Db, config: Config, metrics: Option<PrometheusHandle>) -> anyhow::Result<Self> {
+    pub async fn new(
+        db: Db,
+        config: Config,
+        metrics: Option<PrometheusHandle>,
+    ) -> anyhow::Result<Self> {
         let oidc = Oidc::from_config(&config)?;
         let limiters = Limiters::new(&config);
         let blobs = crate::blobs::Blobs::Sqlite(db.clone());
+        let instance = Instance::load(&db).await?;
         Ok(AppState(Arc::new(Inner {
             db,
             config,
@@ -44,6 +52,7 @@ impl AppState {
             oidc,
             limiters,
             metrics,
+            instance,
             shutting_down: tokio::sync::watch::Sender::new(false),
         })))
     }

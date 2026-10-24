@@ -387,6 +387,14 @@ matches what the client last saw.
 a reverse proxy's `502` while the server restarts): changes stay queued and
 reads use the local copies.
 
+A server can also be **read-only** for a while (its administrators switched
+it, or its storage is full): it serves everything but refuses changes.
+Changes made meanwhile stay queued like offline ones and commands say so
+("the server is read-only right now: N change(s) will be uploaded when it
+accepts changes again"). A running `notekpr sync` hears it over the live
+connection, uploads nothing while it lasts, and uploads the queue the moment
+the server accepts changes again.
+
 Everything works offline against the encrypted replica: `ls`, `cat`, `search`,
 `backlinks`, `write`, `mv`, `rm`, imports and mirror edits. Changes are queued
 as CRDT updates with a random `client_update_id` and persisted before the

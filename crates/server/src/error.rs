@@ -1,7 +1,7 @@
 use axum::Json;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use notekpr_core::protocol::ApiError;
+use notekpr_core::protocol::{ApiError, ERROR_LIMIT_REACHED, ERROR_READ_ONLY, ReadOnly};
 
 #[derive(Debug, thiserror::Error)]
 pub enum AppError {
@@ -28,6 +28,13 @@ pub enum AppError {
     DeviceRevoked,
     #[error("too many requests")]
     RateLimited,
+    /// The server refuses changes for now (see `instance.rs`); clients keep
+    /// them and send them when it's writable again.
+    #[error("{}", read_only_message(*.0))]
+    ReadOnly(ReadOnly),
+    /// An instance limit (accounts, vaults, agents) is reached.
+    #[error("{0}")]
+    LimitReached(String),
     #[error("{0}")]
     Unavailable(String),
     #[error(transparent)]
@@ -54,6 +61,8 @@ impl AppError {
             AppError::TooLarge => "too_large",
             AppError::DeviceRevoked => "device_revoked",
             AppError::RateLimited => "rate_limited",
+            AppError::ReadOnly(_) => ERROR_READ_ONLY,
+            AppError::LimitReached(_) => ERROR_LIMIT_REACHED,
             AppError::Unavailable(_) => "unavailable",
             AppError::Internal(_) => "internal",
         }
@@ -70,6 +79,8 @@ impl AppError {
             AppError::TooLarge => StatusCode::PAYLOAD_TOO_LARGE,
             AppError::DeviceRevoked => StatusCode::NOT_FOUND,
             AppError::RateLimited => StatusCode::TOO_MANY_REQUESTS,
+            AppError::ReadOnly(_) => StatusCode::SERVICE_UNAVAILABLE,
+            AppError::LimitReached(_) => StatusCode::FORBIDDEN,
             AppError::Unavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
             AppError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
@@ -94,6 +105,15 @@ impl IntoResponse for AppError {
             tracing::error!(error = %e, "internal error");
         }
         (self.status(), Json(self.body())).into_response()
+    }
+}
+
+/// Said of whatever was refused (note edits are kept by the clients; other
+/// changes, such as a new vault, are tried again by the person).
+fn read_only_message(why: ReadOnly) -> &'static str {
+    match why {
+        ReadOnly::Manual => "the server is read-only for now; try again later",
+        ReadOnly::StorageFull => "the server's storage is full; try again later",
     }
 }
 

@@ -6,7 +6,7 @@
 
 use axum::extract::FromRequestParts;
 use axum::http::request::Parts;
-use notekpr_core::protocol::{PrincipalKind, UserInfo};
+use notekpr_core::protocol::{ADMIN_TOKEN_PREFIX, AdminScope, PrincipalKind, UserInfo};
 
 use crate::db::{self, Db};
 use crate::error::{AppError, AppResult, forbidden};
@@ -47,6 +47,93 @@ impl Principal {
         } else {
             Err(forbidden("administrator access required"))
         }
+    }
+}
+
+/// Who is administering: a person with the admin role, or an admin client
+/// (`admin_clients.rs`) with its token. Admin clients are no accounts — no
+/// user row, keys, sessions or memberships — and only this extractor knows
+/// them: every other route takes a [`Principal`], which they can never be,
+/// so they can't reach a vault, note or key by any route.
+pub enum Admin {
+    Person {
+        who: Principal,
+        scopes: Vec<AdminScope>,
+    },
+    Client {
+        id: String,
+        name: String,
+        scopes: Vec<AdminScope>,
+    },
+}
+
+impl Admin {
+    pub fn scopes(&self) -> &[AdminScope] {
+        match self {
+            Admin::Person { scopes, .. } | Admin::Client { scopes, .. } => scopes,
+        }
+    }
+
+    pub fn require(&self, scope: AdminScope) -> AppResult<()> {
+        if self.scopes().contains(&scope) {
+            Ok(())
+        } else {
+            Err(forbidden(format!(
+                "this needs the {} scope",
+                scope.as_str()
+            )))
+        }
+    }
+
+    /// Whether it may hand out (or manage a client holding) these scopes:
+    /// only those it has itself.
+    pub fn covers(&self, scopes: &[AdminScope]) -> bool {
+        scopes.iter().all(|s| self.scopes().contains(s))
+    }
+
+    /// Who acted, for the audit log: an account or an admin client id.
+    pub fn actor_id(&self) -> &str {
+        match self {
+            Admin::Person { who, .. } => &who.user_id,
+            Admin::Client { id, .. } => id,
+        }
+    }
+
+    /// The admin client's name, for the audit log's details.
+    pub fn client_name(&self) -> Option<&str> {
+        match self {
+            Admin::Person { .. } => None,
+            Admin::Client { name, .. } => Some(name),
+        }
+    }
+}
+
+impl FromRequestParts<AppState> for Admin {
+    type Rejection = AppError;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
+        let token = bearer(parts).ok_or(AppError::Unauthorized)?;
+        if token.starts_with(ADMIN_TOKEN_PREFIX) {
+            let c = crate::admin_clients::authenticate(&state.db, token)
+                .await?
+                .ok_or(AppError::Unauthorized)?;
+            return Ok(Admin::Client {
+                id: c.id,
+                name: c.name,
+                scopes: c.scopes,
+            });
+        }
+        // People with the admin role may do everything (on an admin-less
+        // instance nobody has it: `authenticate`).
+        let who = authenticate(state, token).await?;
+        who.require_admin()?;
+        Ok(Admin::Person {
+            who,
+            scopes: AdminScope::ALL.to_vec(),
+        })
     }
 }
 
@@ -92,7 +179,8 @@ pub async fn authenticate(state: &AppState, token: &str) -> AppResult<Principal>
         session_kind: row.kind,
         kind: PrincipalKind::parse(&row.user_kind).unwrap_or(PrincipalKind::Human),
         display_name: row.display_name,
-        is_admin: row.is_admin,
+        // An admin-less instance has no administrators among its people.
+        is_admin: row.is_admin && !state.config.adminless,
         owner_id: row.owner_id,
     };
     if row.last_used_at.is_none_or(|t| now - t > 60_000) {
@@ -156,9 +244,14 @@ pub async fn provision_user(
         let dev = issuer == notekpr_core::protocol::DEV_ISSUER;
         let humans =
             repo::users::count_humans(&state.db, notekpr_core::protocol::DEV_ISSUER, dev).await?;
-        let is_admin = configured_admin || (state.config.first_user_admin && humans == 0);
+        let first = state.config.first_user_admin && !state.config.adminless && humans == 0;
+        let is_admin = configured_admin || first;
         let id = db::new_id();
+        // No new accounts while read-only or at the accounts limit; those
+        // who have one still sign in.
+        state.instance.require_writable()?;
         let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
+        state.instance.check_new_person(&mut tx).await?;
         repo::users::insert_human(&mut *tx, &id, display_name, email, is_admin, now).await?;
         repo::users::insert_identity(&mut *tx, issuer, subject, &id, now).await?;
         tx.commit().await?;
@@ -178,8 +271,12 @@ pub async fn provision_user(
     Ok(user_id)
 }
 
-pub async fn user_info(db: &Db, user_id: &str) -> AppResult<UserInfo> {
-    repo::users::info(db, user_id)
+/// Someone's account as they see it (on an admin-less instance nobody is an
+/// administrator, whatever the stored role says).
+pub async fn user_info(state: &AppState, user_id: &str) -> AppResult<UserInfo> {
+    let mut u = repo::users::info(&state.db, user_id)
         .await?
-        .ok_or(AppError::NotFound)
+        .ok_or(AppError::NotFound)?;
+    u.is_admin &= !state.config.adminless;
+    Ok(u)
 }

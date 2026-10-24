@@ -81,6 +81,10 @@ pub async fn create(
         let _w = state.write_lock.lock().await;
         let now = db::now();
         let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
+        state
+            .instance
+            .check_new_vault(&mut tx, &who.user_id)
+            .await?;
         if !repo::vaults::insert(&mut *tx, &req.id, &who.user_id, &req.encrypted_meta, now).await? {
             return Err(conflict("vault id already exists"));
         }

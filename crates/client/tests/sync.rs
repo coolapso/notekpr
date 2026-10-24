@@ -802,3 +802,55 @@ async fn unsent_edits_refused_because_their_note_is_gone_are_kept() {
     // Once: the deletion arriving afterwards finds nothing left to keep.
     assert!(note(&bh, &vid, "Soup (recovered 2).md").await.is_none());
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_read_only_server_keeps_edits_until_it_accepts_them_again() {
+    use notekpr_core::protocol::{InstanceSettingsUpdate, ReadOnly};
+    let srv = start().await;
+    let alice = login(&srv, "alice").await;
+    manage::create_vault(&alice, "Notes").await.unwrap();
+    let live = live(hub(&alice).await).await;
+    let v = live.hub.resolve("Notes").await.unwrap();
+    let set_read_only = |on: bool| {
+        let state = srv.state.clone();
+        async move {
+            let change = InstanceSettingsUpdate {
+                read_only: Some(on),
+                ..Default::default()
+            };
+            state.instance.update(&state.db, &change).await.unwrap();
+        }
+    };
+
+    set_read_only(true).await;
+    eventually(
+        10,
+        "the live connection hears the server is read-only",
+        || async { live.hub.server_read_only() == Some(ReadOnly::Manual) },
+    )
+    .await;
+    let out = ops::put_document(&live.hub, "Notes", "Kept.md", "written meanwhile\n", None)
+        .await
+        .unwrap();
+    assert!(out.pending_changes > 0, "kept for later, not an error");
+    // An upload that tries anyway (a one-off command) is refused and keeps
+    // everything queued.
+    let o = live.hub.session.push(&v).await.unwrap();
+    assert!(o.read_only && !o.offline && o.remaining > 0, "{o:?}");
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    assert!(!v.lock().await.replica.pending.is_empty());
+
+    // Writable again: uploaded at once, without waiting for a retry.
+    set_read_only(false).await;
+    eventually(5, "the kept edit is uploaded", || async {
+        v.lock().await.replica.pending.is_empty()
+    })
+    .await;
+    assert_eq!(live.hub.server_read_only(), None);
+    live.stop().await;
+    let fresh = hub(&reopen(&srv, "alice", "alice").await).await;
+    assert_eq!(
+        note(&fresh, "Notes", "Kept.md").await.as_deref(),
+        Some("written meanwhile\n")
+    );
+}

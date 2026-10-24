@@ -609,6 +609,9 @@ pub async fn event_json(hub: &Hub, ev: HubEvent) -> Vec<serde_json::Value> {
             vec![json!({ "type": "vault_closed", "vault": vault_id, "reason": reason })]
         }
         HubEvent::Connection { online } => vec![json!({ "type": "connection", "online": online })],
+        HubEvent::ServerMode { read_only } => {
+            vec![json!({ "type": "server_mode", "read_only": read_only })]
+        }
     }
 }
 

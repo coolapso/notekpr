@@ -384,7 +384,17 @@ async fn announce(hub: &Hub, conn: &mut Conn) {
 pub const SESSION_IDLE: Duration = Duration::from_secs(120);
 pub const SESSION_MIN_UPDATES: u32 = 5;
 
+pub fn read_only_reason(why: ReadOnly) -> &'static str {
+    match why {
+        ReadOnly::Manual => "the server is read-only for now",
+        ReadOnly::StorageFull => "the server's storage is full",
+    }
+}
+
 fn spawn_maintenance(hub: Arc<Hub>) {
+    if hub.server_read_only().is_some() {
+        return;
+    }
     tokio::spawn(async move {
         hub.snapshot_idle(SESSION_IDLE, SESSION_MIN_UPDATES).await;
         for v in hub.vaults() {
@@ -753,6 +763,25 @@ async fn handle(
                 }
                 Some(v) => tracing::warn!(vault = %v, code, "server error: {message}"),
                 None => tracing::warn!(code, "server error: {message}"),
+            }
+        }
+        ServerMessage::Mode { read_only } => {
+            let was = hub.server_read_only();
+            if hub.set_server_read_only(read_only) {
+                match read_only {
+                    Some(why) => ui::status(&format!(
+                        "{}: local changes are kept and uploaded when it accepts changes again",
+                        read_only_reason(why)
+                    )),
+                    None if was.is_some() => {
+                        ui::status("the server accepts changes again: uploading local changes");
+                        // Vaults still catching up push when they're synced.
+                        for id in &conn.synced {
+                            spawn_push(hub, id);
+                        }
+                    }
+                    None => {}
+                }
             }
         }
         ServerMessage::Ready { .. }

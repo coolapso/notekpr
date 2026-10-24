@@ -178,6 +178,7 @@ env file) counts as not set.
 | `--dev-mode-anywhere` / `NOTEKPR_DEV_MODE_ANYWHERE` | `false` | allow dev mode on a non-loopback address, with an https URL or with OIDC (§9) |
 | `--admin` / `NOTEKPR_ADMINS` | empty | comma-separated `issuer\|subject` (or `dev:<name>`) administrators |
 | `--first-user-admin <true\|false>` / `NOTEKPR_FIRST_USER_ADMIN` | `true` | first person to sign in becomes administrator |
+| `--adminless <true\|false>` / `NOTEKPR_ADMINLESS` | `false` | no administrators among the people: nobody signing in administers anything (the admin role, `--admin` and `--first-user-admin` do nothing; the web app has no Administration); only admin clients do (§5) |
 | `--user-directory` / `NOTEKPR_USER_DIRECTORY` | `search` | `search` (name prefix or exact e-mail) or `exact-email` |
 | `--session-ttl-days` / `NOTEKPR_SESSION_TTL_DAYS` | `30` | browser session lifetime |
 | `--device-session-ttl-days` / `NOTEKPR_DEVICE_SESSION_TTL_DAYS` | `180` | CLI/desktop session lifetime |
@@ -391,6 +392,117 @@ Administration.
 Don't reuse a development-mode data directory for real use: start with an
 empty one.
 
+### Instance settings: limits and read-only mode
+
+Some settings change while the server runs, without a restart: Settings →
+Administration → Instance in the web app, or the admin API (`GET`/`PATCH
+/api/v1/admin/settings`, [protocol.md §9](protocol.md#9-administration)).
+They are kept in the database, so they survive restarts and backups.
+
+* **Limits**: accounts (people who aren't disabled), agents and vaults on
+  the server; vaults and agents per person, by default and for one person
+  (their own allowance, under Accounts → Limits). Each is a number or no
+  limit; `0` means none at all. A limit only stops new ones: lowering it
+  takes nothing away, and nothing stops working.
+* **Read-only**: the server keeps everything and serves it, but accepts no
+  changes. The apps keep people's edits (in the browser, in the CLI's local
+  copies) and send them the moment you switch it off; signing in and out,
+  removing devices and revoking access keep working, but nobody new can
+  sign up.
+* **Database size**: at this size the server turns read-only by itself
+  (checked every 10 seconds), until it is below it again — raise the limit,
+  or make room. It counts the pages in use, which is less than the file
+  once data was deleted.
+
+### Admin clients: scripts and services
+
+Scripts and services that administer the server — a billing system setting
+limits and allowances, an orchestrator switching read-only mode for
+maintenance, a dashboard — each get an **admin client**: a name, scopes and
+one or more bearer tokens. Give every consumer its own, with only what it
+needs; one leak is then one revocation, and the audit log says who did
+what. An admin client is no account and never reaches a vault, a note or a
+key.
+
+| Scope | Allows |
+|---|---|
+| `read` | accounts, statistics, the instance settings, admin clients (every client has it) |
+| `settings` | change limits and read-only mode |
+| `accounts` | disable and enable accounts, set their allowances |
+| `admins` | give and take the admin role |
+| `clients` | create, change and delete admin clients and their tokens — never with a scope it doesn't have itself |
+
+Administrators make them in Settings → Administration → Admin clients, or
+over the API (`/admin/clients`, a client with the `clients` scope). A token
+is shown once; rotate by adding a token, switching to it, and revoking the
+old one — no restart. Calls send it as a bearer token:
+
+```sh
+t=notekpr_a_…            # the client's token
+url=https://notes.example.com/api/v1
+curl -H "Authorization: Bearer $t" $url/admin/settings
+curl -H "Authorization: Bearer $t" -X PATCH $url/admin/settings -H 'Content-Type: application/json' \
+     -d '{"vaults_per_user": 1, "max_storage_mb": 20480}'
+# one person, by e-mail or by their sign-in identity (issuer|subject)
+curl -H "Authorization: Bearer $t" "$url/admin/users?email=ana@example.com"
+curl -H "Authorization: Bearer $t" -X PATCH $url/admin/users/<id> -H 'Content-Type: application/json' \
+     -d '{"vault_allowance": 3}'          # or "unlimited", or "default"
+```
+
+**From the server's command line** — for the first client on an instance
+without administrators, or to keep clients in your deployment's
+configuration. `notekpr-server admin-client` writes to the database
+directly, so it works while the server runs (with the same `--data-dir`),
+and a new client works at once:
+
+```sh
+# once, by hand: prints the token (only now)
+kubectl -n notekpr exec deploy/notekpr -- \
+  notekpr-server admin-client create --name billing --scopes settings,accounts,clients
+docker compose run --rm notekpr admin-client create --name billing --scopes settings,accounts,clients
+notekpr-server admin-client list      # names, scopes, token hints
+notekpr-server admin-client delete --name billing
+```
+
+The image runs `notekpr-server`, so in a container the subcommand is just
+its arguments (like the backup CronJob's `backup`), and needs no shell.
+
+**Declarative (GitOps)**: make the token yourself and keep it in your secret
+store, mounted for both notekpr and the service that uses it. An init
+container (same image, same volume) runs `ensure` before every start: it
+creates the client if it's missing, sets its scopes and makes its tokens
+exactly the ones in the file (one per line); running it again changes
+nothing.
+
+```sh
+echo "notekpr_a_$(openssl rand -hex 32)"      # a token: the prefix and ≥ 32 characters
+```
+
+```yaml
+initContainers:
+  - name: admin-clients
+    image: ghcr.io/coolapso/notekpr:<version>
+    args: ["admin-client", "ensure", "--name", "billing",
+           "--scopes", "settings,accounts", "--tokens-file", "/secrets/billing/tokens"]
+    volumeMounts:
+      - { name: data, mountPath: /data }
+      - { name: billing-token, mountPath: /secrets/billing, readOnly: true }
+```
+
+The file wins: a token revoked through the API comes back at the next start
+if it is still listed (such clients show as *managed*). Rotate by listing
+the new token next to the old one, rolling out the service with it, then
+removing the old line; it is revoked when notekpr next starts (or run
+`ensure` by hand). A Secret change alone doesn't restart the pod.
+
+**An admin-less instance** (e.g. one shared by many customers):
+`NOTEKPR_ADMINLESS=true`, and admin clients made from the command line
+(`create` once, or `ensure` in your deployment). Nobody signing in
+administers anything — people only see their own account and vaults, the
+web app shows no Administration, and the admin role can't be given — while
+your billing system or orchestrator manages limits, read-only mode and
+accounts through its admin clients.
+
 ## 6. Backup and restore
 
 Everything — accounts, memberships, encrypted notes, history, attachments and
@@ -516,14 +628,17 @@ proxy answers then (§4, "Holding requests during an update").
   histogram buckets are configured), `notekpr_updates_total`,
   `notekpr_attachment_bytes_total`, `notekpr_ws_connections` (live
   connections) and `notekpr_ws_connected_users` (people with at least
-  one), `notekpr_rate_limited_total{scope}`,
+  one), `notekpr_rate_limited_total{scope}`, `notekpr_read_only` (1 while
+  the server refuses changes) and `notekpr_storage_used_bytes` (what
+  `max_storage_mb` is compared with),
   and on Linux the process's own `process_cpu_seconds_total` (a gauge) and
   `process_resident_memory_bytes`. Keep it internal (§4).
 * Logs: one line per request (method, redacted path, status, latency) plus
   lifecycle events; `--log-format json` for log shippers. No user ids, IP
   addresses or names.
 * Administrators see accounts and storage statistics in Settings →
-  Administration (never content or vault membership).
+  Administration (never content or vault membership). The server logs when
+  the storage limit turns it read-only and when it is below it again.
 
 ## 9. Development mode
 

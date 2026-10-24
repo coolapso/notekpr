@@ -121,6 +121,9 @@ pub struct ServerInfo {
     /// deleted, in Unix milliseconds.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub demo_resets_at: Option<i64>,
+    /// Set while the server refuses changes (see [`ServerMessage::Mode`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub read_only: Option<ReadOnly>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -918,8 +921,19 @@ pub struct AdminUser {
     pub disabled: bool,
     pub created_at: i64,
     pub last_login_at: Option<i64>,
+    /// Vaults this account is a member of.
     pub vault_count: i64,
     pub device_count: i64,
+    /// Vaults this person owns (what their vault allowance counts).
+    #[serde(default)]
+    pub owned_vault_count: i64,
+    /// Agents this person has.
+    #[serde(default)]
+    pub agent_count: i64,
+    #[serde(default)]
+    pub vault_allowance: Allowance,
+    #[serde(default)]
+    pub agent_allowance: Allowance,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
@@ -928,6 +942,12 @@ pub struct AdminUpdateUser {
     pub disabled: Option<bool>,
     #[serde(default)]
     pub is_admin: Option<bool>,
+    /// How many vaults this person may own (absent: unchanged).
+    #[serde(default)]
+    pub vault_allowance: Option<Allowance>,
+    /// How many agents this person may have (absent: unchanged).
+    #[serde(default)]
+    pub agent_allowance: Option<Allowance>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -939,7 +959,329 @@ pub struct AdminStats {
     pub updates: i64,
     pub snapshots: i64,
     pub attachments: i64,
+    /// Bytes the database uses (freed pages not counted): what
+    /// [`InstanceSettings::max_storage_mb`] is compared with.
     pub storage_bytes: i64,
+}
+
+/// A limit on how many of something there may be: a number, or none. In
+/// JSON a number or `"unlimited"`.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[serde(into = "LimitRepr", try_from = "LimitRepr")]
+pub enum Limit {
+    #[default]
+    Unlimited,
+    Max(u64),
+}
+
+impl Limit {
+    /// Whether one more fits when there are `count` already.
+    pub fn allows_one_more(self, count: u64) -> bool {
+        match self {
+            Limit::Unlimited => true,
+            Limit::Max(n) => count < n,
+        }
+    }
+
+    pub fn max(self) -> Option<u64> {
+        match self {
+            Limit::Unlimited => None,
+            Limit::Max(n) => Some(n),
+        }
+    }
+}
+
+/// A person's own limit (vaults, agents): the instance's default for
+/// everyone, or theirs. In JSON `"default"`, `"unlimited"` or a number.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[serde(into = "LimitRepr", from = "LimitRepr")]
+pub enum Allowance {
+    #[default]
+    Default,
+    Unlimited,
+    Max(u64),
+}
+
+impl Allowance {
+    /// The limit that applies, given the instance's default.
+    pub fn resolve(self, default: Limit) -> Limit {
+        match self {
+            Allowance::Default => default,
+            Allowance::Unlimited => Limit::Unlimited,
+            Allowance::Max(n) => Limit::Max(n),
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy)]
+#[serde(untagged)]
+enum LimitRepr {
+    Max(u64),
+    Word(LimitWord),
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy)]
+#[serde(rename_all = "snake_case")]
+enum LimitWord {
+    Unlimited,
+    Default,
+}
+
+impl From<Limit> for LimitRepr {
+    fn from(l: Limit) -> Self {
+        match l {
+            Limit::Unlimited => LimitRepr::Word(LimitWord::Unlimited),
+            Limit::Max(n) => LimitRepr::Max(n),
+        }
+    }
+}
+
+impl TryFrom<LimitRepr> for Limit {
+    type Error = &'static str;
+
+    fn try_from(r: LimitRepr) -> Result<Self, Self::Error> {
+        match r {
+            LimitRepr::Max(n) => Ok(Limit::Max(n)),
+            LimitRepr::Word(LimitWord::Unlimited) => Ok(Limit::Unlimited),
+            LimitRepr::Word(LimitWord::Default) => Err("expected a number or \"unlimited\""),
+        }
+    }
+}
+
+impl From<Allowance> for LimitRepr {
+    fn from(a: Allowance) -> Self {
+        match a {
+            Allowance::Default => LimitRepr::Word(LimitWord::Default),
+            Allowance::Unlimited => LimitRepr::Word(LimitWord::Unlimited),
+            Allowance::Max(n) => LimitRepr::Max(n),
+        }
+    }
+}
+
+impl From<LimitRepr> for Allowance {
+    fn from(r: LimitRepr) -> Self {
+        match r {
+            LimitRepr::Max(n) => Allowance::Max(n),
+            LimitRepr::Word(LimitWord::Unlimited) => Allowance::Unlimited,
+            LimitRepr::Word(LimitWord::Default) => Allowance::Default,
+        }
+    }
+}
+
+/// Agents a person may have unless an administrator says otherwise.
+pub const DEFAULT_AGENTS_PER_USER: u64 = 50;
+
+fn default_agents_per_user() -> Limit {
+    Limit::Max(DEFAULT_AGENTS_PER_USER)
+}
+
+/// Settings an instance's administrators change while it runs
+/// (`GET`/`PATCH /admin/settings`). Limits never take anything away: below
+/// them nothing changes, at them nothing more can be created.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct InstanceSettings {
+    /// Accounts of people that aren't disabled (agents don't count).
+    #[serde(default)]
+    pub max_users: Limit,
+    /// Agents on the whole server.
+    #[serde(default)]
+    pub max_agents: Limit,
+    /// Vaults on the whole server.
+    #[serde(default)]
+    pub max_vaults: Limit,
+    /// Vaults a person may own, unless they have their own allowance.
+    /// Vaults shared with them don't count.
+    #[serde(default)]
+    pub vaults_per_user: Limit,
+    /// Agents a person may have, unless they have their own allowance.
+    #[serde(default = "default_agents_per_user")]
+    pub agents_per_user: Limit,
+    /// The server refuses every change; clients keep theirs and send them
+    /// when it's writable again.
+    #[serde(default)]
+    pub read_only: bool,
+    /// The database size (MiB) at which the server turns read-only by
+    /// itself, until it is below it again (e.g. the limit was raised).
+    #[serde(default)]
+    pub max_storage_mb: Limit,
+}
+
+impl Default for InstanceSettings {
+    fn default() -> Self {
+        InstanceSettings {
+            max_users: Limit::Unlimited,
+            max_agents: Limit::Unlimited,
+            max_vaults: Limit::Unlimited,
+            vaults_per_user: Limit::Unlimited,
+            agents_per_user: default_agents_per_user(),
+            read_only: false,
+            max_storage_mb: Limit::Unlimited,
+        }
+    }
+}
+
+/// `PATCH /admin/settings`: only the fields given change.
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct InstanceSettingsUpdate {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_users: Option<Limit>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_agents: Option<Limit>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_vaults: Option<Limit>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vaults_per_user: Option<Limit>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agents_per_user: Option<Limit>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub read_only: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_storage_mb: Option<Limit>,
+}
+
+impl InstanceSettings {
+    pub fn apply(&mut self, u: &InstanceSettingsUpdate) {
+        let InstanceSettingsUpdate {
+            max_users,
+            max_agents,
+            max_vaults,
+            vaults_per_user,
+            agents_per_user,
+            read_only,
+            max_storage_mb,
+        } = u.clone();
+        self.max_users = max_users.unwrap_or(self.max_users);
+        self.max_agents = max_agents.unwrap_or(self.max_agents);
+        self.max_vaults = max_vaults.unwrap_or(self.max_vaults);
+        self.vaults_per_user = vaults_per_user.unwrap_or(self.vaults_per_user);
+        self.agents_per_user = agents_per_user.unwrap_or(self.agents_per_user);
+        self.read_only = read_only.unwrap_or(self.read_only);
+        self.max_storage_mb = max_storage_mb.unwrap_or(self.max_storage_mb);
+    }
+}
+
+/// Why the server refuses changes right now.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ReadOnly {
+    /// An administrator switched read-only mode on.
+    Manual,
+    /// The database reached the size limit (`max_storage_mb`).
+    StorageFull,
+}
+
+/// `GET`/`PATCH /admin/settings`.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct AdminSettings {
+    pub settings: InstanceSettings,
+    /// Whether, and why, the server refuses changes now.
+    #[serde(default)]
+    pub read_only: Option<ReadOnly>,
+    /// Bytes the database uses now.
+    #[serde(default)]
+    pub storage_bytes: u64,
+}
+
+/// The error code of everything refused while the server is read-only
+/// (HTTP 503; the WebSocket's `error`). Clients keep the change and send it
+/// once the server says it's writable again ([`ServerMessage::Mode`]).
+pub const ERROR_READ_ONLY: &str = "read_only";
+/// The error code of a creation refused by an instance limit (HTTP 403).
+pub const ERROR_LIMIT_REACHED: &str = "limit_reached";
+
+/// What an admin client (or a person with the admin role) may do on the
+/// administration API. Every admin client can `read`.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum AdminScope {
+    /// Accounts, usage statistics, the instance settings, admin clients.
+    Read,
+    /// Change the instance settings (limits, read-only mode).
+    Settings,
+    /// Disable and enable accounts, set their allowances.
+    Accounts,
+    /// Give and take the admin role.
+    Admins,
+    /// Create, change and delete admin clients and their tokens — never
+    /// with a scope the one doing it doesn't have.
+    Clients,
+}
+
+impl AdminScope {
+    pub const ALL: [AdminScope; 5] = [
+        AdminScope::Read,
+        AdminScope::Settings,
+        AdminScope::Accounts,
+        AdminScope::Admins,
+        AdminScope::Clients,
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            AdminScope::Read => "read",
+            AdminScope::Settings => "settings",
+            AdminScope::Accounts => "accounts",
+            AdminScope::Admins => "admins",
+            AdminScope::Clients => "clients",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        AdminScope::ALL.into_iter().find(|a| a.as_str() == s)
+    }
+}
+
+/// Admin client tokens start with this, so the server tells them from
+/// session tokens (which no administration-only route accepts, and the
+/// other way round).
+pub const ADMIN_TOKEN_PREFIX: &str = "notekpr_a_";
+
+/// A script or service administering the instance (`/admin/clients`). It is
+/// no account: it has no keys, sessions or memberships and can't reach any
+/// vault.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct AdminClientInfo {
+    pub id: String,
+    pub name: String,
+    pub scopes: Vec<AdminScope>,
+    pub created_at: i64,
+    /// Its scopes and tokens come from the server's configuration
+    /// (`notekpr-server admin-client ensure`), which puts them back each
+    /// time it runs.
+    #[serde(default)]
+    pub managed: bool,
+    pub tokens: Vec<AdminTokenInfo>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct AdminTokenInfo {
+    pub id: String,
+    /// The token's last characters, to tell tokens apart.
+    pub hint: String,
+    pub created_at: i64,
+    #[serde(default)]
+    pub last_used_at: Option<i64>,
+}
+
+/// `POST /admin/clients`.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct CreateAdminClient {
+    pub name: String,
+    pub scopes: Vec<AdminScope>,
+}
+
+/// `PATCH /admin/clients/{id}`.
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct UpdateAdminClient {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scopes: Option<Vec<AdminScope>>,
+}
+
+/// A new token, shown only in this answer (the server keeps its hash).
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct CreatedAdminToken {
+    pub client: AdminClientInfo,
+    pub token: String,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -1100,6 +1442,14 @@ pub enum ServerMessage {
     Pong {
         nonce: u64,
     },
+    /// Whether the server accepts changes: sent after `ready` and whenever
+    /// it changes. While `read_only` is set, clients keep their changes
+    /// (pushes are refused with [`ERROR_READ_ONLY`]) and send them as soon
+    /// as a `mode` without it arrives.
+    Mode {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        read_only: Option<ReadOnly>,
+    },
 }
 
 // ---------------------------------------------------------------- encrypted export
@@ -1188,5 +1538,61 @@ mod tests {
         assert!(s.contains(r#""payload":"AQID""#));
         let back: ClientMessage = serde_json::from_str(&s).unwrap();
         assert!(matches!(back, ClientMessage::Push { .. }));
+    }
+
+    #[test]
+    fn limits_are_numbers_or_words() {
+        let json = |v: &str| serde_json::from_str::<serde_json::Value>(v).unwrap();
+        assert_eq!(serde_json::to_value(Limit::Max(3)).unwrap(), json("3"));
+        assert_eq!(
+            serde_json::to_value(Limit::Unlimited).unwrap(),
+            json(r#""unlimited""#)
+        );
+        assert_eq!(serde_json::from_str::<Limit>("0").unwrap(), Limit::Max(0));
+        assert_eq!(
+            serde_json::from_str::<Limit>(r#""unlimited""#).unwrap(),
+            Limit::Unlimited
+        );
+        // A setting has no default to fall back on; negative numbers aren't limits.
+        assert!(serde_json::from_str::<Limit>(r#""default""#).is_err());
+        assert!(serde_json::from_str::<Limit>("-1").is_err());
+        assert!(serde_json::from_str::<Limit>("null").is_err());
+
+        for (a, s) in [
+            (Allowance::Default, r#""default""#),
+            (Allowance::Unlimited, r#""unlimited""#),
+            (Allowance::Max(2), "2"),
+        ] {
+            assert_eq!(serde_json::to_value(a).unwrap(), json(s));
+            assert_eq!(serde_json::from_str::<Allowance>(s).unwrap(), a);
+        }
+        assert_eq!(Allowance::Default.resolve(Limit::Max(1)), Limit::Max(1));
+        assert_eq!(Allowance::Max(5).resolve(Limit::Max(1)), Limit::Max(5));
+        assert_eq!(
+            Allowance::Unlimited.resolve(Limit::Max(1)),
+            Limit::Unlimited
+        );
+        assert!(Limit::Max(1).allows_one_more(0));
+        assert!(!Limit::Max(1).allows_one_more(1));
+        assert!(!Limit::Max(0).allows_one_more(0));
+        assert!(Limit::Unlimited.allows_one_more(u64::MAX));
+    }
+
+    #[test]
+    fn settings_fill_in_what_is_missing() {
+        let s: InstanceSettings = serde_json::from_str(r#"{"max_vaults": 10}"#).unwrap();
+        assert_eq!(
+            s,
+            InstanceSettings {
+                max_vaults: Limit::Max(10),
+                ..Default::default()
+            }
+        );
+        assert_eq!(s.agents_per_user, Limit::Max(DEFAULT_AGENTS_PER_USER));
+        let mut s = InstanceSettings::default();
+        s.apply(&serde_json::from_str(r#"{"read_only": true, "vaults_per_user": 1}"#).unwrap());
+        assert!(s.read_only);
+        assert_eq!(s.vaults_per_user, Limit::Max(1));
+        assert_eq!(s.max_users, Limit::Unlimited);
     }
 }

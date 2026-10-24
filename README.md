@@ -180,6 +180,15 @@ read anything.
 * Backups, upgrades, Prometheus metrics, and an admin page for accounts
   (make admins, disable accounts) and server statistics — never content;
   size limits for changes, snapshots and attachments.
+* Instance settings that change without a restart: limits on accounts,
+  agents and vaults, vaults and agents per person (with each person's own
+  allowance), a read-only mode the apps ride out — edits are kept and sent
+  when it ends — that also starts by itself at a database size you choose.
+  From the admin page, or from scripts (a billing system, say) as admin
+  clients: each with its own scopes and tokens, rotated and revoked without
+  a restart, and never reaching a vault. An instance can leave everything to
+  them and have no administrators among its people
+  ([operations](docs/operations.md#admin-clients-scripts-and-services)).
 * A load test you can watch (`task load`): a crowd of simulated people —
   real clients with real encryption — growing level by level to a thousand,
   against the server image with CPU and memory limits, an outage in every

@@ -273,7 +273,19 @@ pub(super) fn on_server_message(m: ServerMessage) {
         } => {
             // (Older servers refuse whole pushes; newer ones list single
             // refused updates in the acknowledgement, see `react`.)
-            if code == "unauthorized" {
+            if code == ERROR_READ_ONLY {
+                // The server turned read-only while this push was on its
+                // way: it goes out again once a `mode` says it may (or with
+                // the next flush, if that `mode` crossed this refusal).
+                step(|c| {
+                    if let Some(o) = vault_id.as_ref().and_then(|v| c.outboxes.get_mut(v)) {
+                        o.connection_reset();
+                    }
+                    if c.read_only.is_none() {
+                        c.flush.run(READ_ONLY_RETRY_MS, || step(flush_now));
+                    }
+                });
+            } else if code == "unauthorized" {
                 // The socket's sign-in was refused: the session is gone (a
                 // browser can't see why a WebSocket closed, so only this says
                 // so — otherwise we'd retry and show "offline" for ever).
@@ -309,6 +321,23 @@ pub(super) fn on_server_message(m: ServerMessage) {
             }
         }
         ServerMessage::Pong { .. } => {}
+        ServerMessage::Mode { read_only } => step(|c| set_read_only(c, read_only)),
+    }
+}
+
+/// After a push refused as read-only without a `mode` saying so: try again.
+const READ_ONLY_RETRY_MS: i32 = 15_000;
+
+/// The server says whether it accepts changes. While it doesn't, edits stay
+/// queued (and stored in this browser); once it does, they all go out.
+fn set_read_only(c: &mut Core, read_only: Option<ReadOnly>) {
+    let was = std::mem::replace(&mut c.read_only, read_only);
+    ui().read_only.set(read_only);
+    if was.is_some() && read_only.is_none() {
+        let vaults: Vec<String> = c.replicas.keys().cloned().collect();
+        for v in vaults {
+            resend_pending(c, &v);
+        }
     }
 }
 
@@ -571,6 +600,11 @@ pub(super) fn resend_pending(c: &mut Core, vault_id: &str) {
 /// socket (it is closed) is planned again later — and merged with later
 /// edits meanwhile.
 pub(super) fn send_planned(c: &mut Core, vault_id: &str) {
+    // The server would refuse it: wait until it says it accepts changes.
+    if c.read_only.is_some() {
+        update_pending_count(c);
+        return;
+    }
     let limits = limits();
     let mut plan = {
         let Some(r) = c.replicas.get_mut(vault_id) else {
@@ -1088,6 +1122,9 @@ const SNAPSHOT_COOLDOWN_MS: i64 = 30_000;
 
 /// Store a snapshot of a note (in the background).
 pub fn snapshot(c: &mut Core, vault_id: &str, object_id: &str) {
+    if c.read_only.is_some() {
+        return;
+    }
     let key = (vault_id.to_string(), object_id.to_string());
     let Some(action) = snapshot_action(c, vault_id, object_id) else {
         return;

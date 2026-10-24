@@ -1,6 +1,7 @@
 //! Settings: account, devices, sessions, recovery, agents, editor, admin.
 //! Also the page used to approve a desktop/CLI sign-in code.
 
+use leptos::prelude::Update;
 use leptos::prelude::*;
 use notekpr_core::protocol::*;
 
@@ -531,6 +532,9 @@ fn QuickNotesPrefs() -> impl IntoView {
 fn Admin() -> impl IntoView {
     let users = RwSignal::new(Vec::<AdminUser>::new());
     let stats = RwSignal::new(None::<AdminStats>);
+    // The instance's defaults, once the settings arrived.
+    let defaults = RwSignal::new(None::<InstanceSettings>);
+    let editing = RwSignal::new(None::<String>);
     let reload = move || {
         leptos::task::spawn_local(async move {
             if let Ok(u) = api::get("/admin/users").await {
@@ -543,6 +547,16 @@ fn Admin() -> impl IntoView {
     };
     reload();
     let me = step(|c| c.user_id.clone());
+    let patch_user = move |id: String, change: AdminUpdateUser| {
+        leptos::task::spawn_local(async move {
+            if let Err(e) =
+                api::patch::<_, serde_json::Value>(&format!("/admin/users/{id}"), &change).await
+            {
+                state::error(e.message);
+            }
+            reload();
+        });
+    };
     view! {
         <p class="muted">"Administrators manage accounts. They cannot read anyone's notes or vault names."</p>
         {move || stats.get().map(|s| view! {
@@ -555,44 +569,398 @@ fn Admin() -> impl IntoView {
                 <div><b>{util::human_bytes(s.storage_bytes as u64)}</b><span>"database"</span></div>
             </div>
         })}
-        <div class="list">
+        <InstanceSettingsPanel defaults=defaults on_saved=Callback::new(move |()| reload())/>
+        <h3>"Accounts"</h3>
+        <div class="list admin-users">
             {move || users.get().into_iter().map(|u| {
                 let id = u.id.clone();
                 let id2 = u.id.clone();
+                let id3 = u.id.clone();
                 let is_me = u.id == me;
                 let disabled = u.disabled;
                 let admin = u.is_admin;
+                let person = u.kind == PrincipalKind::Human;
+                let open = {
+                    let id = u.id.clone();
+                    move || editing.get().as_deref() == Some(id.as_str())
+                };
+                let (owned, agent_count, va, aa) = (u.owned_vault_count, u.agent_count, u.vault_allowance, u.agent_allowance);
+                let usage = move || person.then(|| {
+                    let d = defaults.get();
+                    format!(
+                        "owns {} · {}",
+                        allowance_usage(owned, va, d.as_ref().map(|d| d.vaults_per_user), "vault"),
+                        allowance_usage(agent_count, aa, d.as_ref().map(|d| d.agents_per_user), "agent"),
+                    )
+                });
+                let (vaults, agents) = (RwSignal::new(u.vault_allowance), RwSignal::new(u.agent_allowance));
                 view! {
-                    <div class="list-row" class:dim=disabled>
-                        {avatar(&u.display_name, &u.id)}
-                        <div class="grow">
-                            <div>{u.display_name.clone()}{admin.then(|| view! { <span class="pill">"admin"</span> })}
-                                {(u.kind == PrincipalKind::Agent).then(|| view! { <span class="tag-agent">"agent"</span> })}
-                                {disabled.then(|| view! { <span class="pill warn">"disabled"</span> })}</div>
-                            <div class="muted small">{format!("{} · {} vaults · {} devices · last login {}", u.email.clone().unwrap_or_default(), u.vault_count, u.device_count, u.last_login_at.map(util::relative_time).unwrap_or_else(|| "never".into()))}</div>
+                    <div class="list-row col" class:dim=disabled data-user=u.display_name.clone()>
+                        <div class="row">
+                            {avatar(&u.display_name, &u.id)}
+                            <div class="grow">
+                                <div>{u.display_name.clone()}{admin.then(|| view! { <span class="pill">"admin"</span> })}
+                                    {(u.kind == PrincipalKind::Agent).then(|| view! { <span class="tag-agent">"agent"</span> })}
+                                    {disabled.then(|| view! { <span class="pill warn">"disabled"</span> })}</div>
+                                <div class="muted small">{format!("{} · {} vaults · {} devices · last login {}", u.email.clone().unwrap_or_default(), u.vault_count, u.device_count, u.last_login_at.map(util::relative_time).unwrap_or_else(|| "never".into()))}</div>
+                                {person.then(|| view! { <div class="muted small allowance-usage">{usage}</div> })}
+                            </div>
+                            {person.then(|| {
+                                let id = id3.clone();
+                                view! {
+                                    <button class="btn small limits-btn" on:click=move |_| editing.update(|e| {
+                                        *e = if e.as_deref() == Some(id.as_str()) { None } else { Some(id.clone()) };
+                                    })>"Limits"</button>
+                                }
+                            })}
+                            {(!is_me && person).then(|| view! {
+                                <button class="btn small" on:click=move |_| patch_user(id.clone(), AdminUpdateUser { is_admin: Some(!admin), ..Default::default() })>
+                                    {if admin { "Remove admin" } else { "Make admin" }}</button>
+                            })}
+                            {(!is_me).then(|| view! {
+                                <button class="btn small danger" on:click=move |_| patch_user(id2.clone(), AdminUpdateUser { disabled: Some(!disabled), ..Default::default() })>
+                                    {if disabled { "Enable" } else { "Disable" }}</button>
+                            })}
                         </div>
-                        {(!is_me && u.kind == PrincipalKind::Human).then(|| view! {
-                            <button class="btn small" on:click=move |_| {
-                                let id = id.clone();
-                                leptos::task::spawn_local(async move {
-                                    let _ = api::patch::<_, serde_json::Value>(&format!("/admin/users/{id}"), &AdminUpdateUser { is_admin: Some(!admin), disabled: None }).await;
-                                    reload();
-                                });
-                            }>{if admin { "Remove admin" } else { "Make admin" }}</button>
-                        })}
-                        {(!is_me).then(|| view! {
-                            <button class="btn small danger" on:click=move |_| {
-                                let id = id2.clone();
-                                leptos::task::spawn_local(async move {
-                                    let _ = api::patch::<_, serde_json::Value>(&format!("/admin/users/{id}"), &AdminUpdateUser { disabled: Some(!disabled), is_admin: None }).await;
-                                    reload();
-                                });
-                            }>{if disabled { "Enable" } else { "Disable" }}</button>
+                        {move || open().then(|| {
+                            let id = u.id.clone();
+                            let d = defaults.get_untracked();
+                            view! {
+                                <div class="allowances">
+                                    <AllowanceField label="Vaults they may own" value=vaults default=d.as_ref().map(|d| d.vaults_per_user) class="vault-allowance"/>
+                                    <AllowanceField label="Agents they may have" value=agents default=d.as_ref().map(|d| d.agents_per_user) class="agent-allowance"/>
+                                    <div class="row">
+                                        <button class="btn small primary save-allowances" on:click=move |_| {
+                                            editing.set(None);
+                                            patch_user(id.clone(), AdminUpdateUser {
+                                                vault_allowance: Some(vaults.get_untracked()),
+                                                agent_allowance: Some(agents.get_untracked()),
+                                                ..Default::default()
+                                            });
+                                        }>"Save"</button>
+                                        <span class="muted small">"Shared vaults don't count. Nothing they have is removed when you lower a limit."</span>
+                                    </div>
+                                </div>
+                            }
                         })}
                     </div>
                 }
             }).collect_view()}
         </div>
+        <AdminClients/>
+    }
+}
+
+/// Admin clients: scripts and services (a billing system, say) that use the
+/// admin API with tokens of their own, limited to their scopes.
+#[component]
+fn AdminClients() -> impl IntoView {
+    let list = RwSignal::new(Vec::<AdminClientInfo>::new());
+    let created = RwSignal::new(None::<CreatedAdminToken>);
+    let name = RwSignal::new(String::new());
+    let chosen = RwSignal::new(vec![AdminScope::Accounts]);
+    let reload = move || {
+        leptos::task::spawn_local(async move {
+            if let Ok(c) = api::get::<Vec<AdminClientInfo>>("/admin/clients").await {
+                list.set(c);
+            }
+        });
+    };
+    reload();
+    let shown = move |r: api::Result<CreatedAdminToken>| match r {
+        Ok(t) => {
+            created.set(Some(t));
+            reload();
+        }
+        Err(e) => state::error(e.message),
+    };
+    let scope_text = |s: AdminScope| match s {
+        AdminScope::Read => "read: accounts, statistics, settings, admin clients",
+        AdminScope::Settings => "settings: limits and read-only mode",
+        AdminScope::Accounts => "accounts: disable, enable, limits per person",
+        AdminScope::Admins => "admins: give and take the admin role",
+        AdminScope::Clients => {
+            "clients: manage admin clients (never with more than its own scopes)"
+        }
+    };
+    view! {
+        <h3>"Admin clients"</h3>
+        <p class="muted small">"Scripts and services that administer this server through the admin API — a billing system setting limits, say. Each has its own name, scopes and tokens (rotate them by adding a new one, then revoking the old); none can read anything in a vault."</p>
+        <form class="admin-client-new" on:submit=move |ev| {
+            ev.prevent_default();
+            let req = CreateAdminClient { name: name.get_untracked().trim().to_string(), scopes: chosen.get_untracked() };
+            if req.name.is_empty() { return; }
+            leptos::task::spawn_local(async move {
+                let r = api::post::<_, CreatedAdminToken>("/admin/clients", &req).await;
+                if r.is_ok() { name.set(String::new()); }
+                shown(r);
+            });
+        }>
+            <div class="row">
+                <input class="input grow client-name" placeholder="Name (e.g. billing)" prop:value=move || name.get() on:input=move |ev| name.set(event_target_value(&ev))/>
+                <button class="btn primary create-client" type="submit"><Icon name="plus"/>" Create admin client"</button>
+            </div>
+            <div class="scopes">
+                {AdminScope::ALL.into_iter().map(|s| {
+                    let fixed = s == AdminScope::Read;
+                    view! {
+                        <label class="check">
+                            <input type="checkbox" class=format!("scope-{}", s.as_str())
+                                disabled=fixed
+                                prop:checked=move || fixed || chosen.with(|c| c.contains(&s))
+                                on:change=move |ev| {
+                                    let on = event_target_checked(&ev);
+                                    chosen.update(|c| { c.retain(|x| *x != s); if on { c.push(s); } });
+                                }/>
+                            <span class="small">{scope_text(s)}</span>
+                        </label>
+                    }
+                }).collect_view()}
+            </div>
+        </form>
+        {move || created.get().map(|t| {
+            let token = t.token.clone();
+            view! {
+                <div class="alert new-admin-token">
+                    <b>{format!("The token of “{}” — copy it now, it is shown only once.", t.client.name)}</b>
+                    <pre class="mono small">{t.token.clone()}</pre>
+                    <div class="row">
+                        <button class="btn small" on:click=move |_| { util::copy_to_clipboard(&token); state::success("Copied."); }><Icon name="copy"/>" Copy"</button>
+                        <button class="btn small ghost" on:click=move |_| created.set(None)>"Done"</button>
+                    </div>
+                    <p class="small muted">"Send it as Authorization: Bearer <token> to /api/v1/admin/…"</p>
+                </div>
+            }
+        })}
+        <div class="list admin-clients">
+            {move || list.get().into_iter().map(|c| {
+                let (id, id2) = (c.id.clone(), c.id.clone());
+                let name = c.name.clone();
+                let scopes = c.scopes.iter().filter(|s| **s != AdminScope::Read).map(|s| s.as_str()).collect::<Vec<_>>();
+                view! {
+                    <div class="list-row col" data-client=c.name.clone()>
+                        <div class="row">
+                            <Icon name="key"/>
+                            <div class="grow">
+                                <div>{c.name.clone()}{c.managed.then(|| view! { <span class="pill" title="Its scopes and tokens come from the server's configuration (notekpr-server admin-client ensure), which puts them back whenever it runs">"managed"</span> })}</div>
+                                <div class="muted small">{if scopes.is_empty() { "read only".to_string() } else { format!("read, {}", scopes.join(", ")) }}{format!(" · created {}", util::relative_time(c.created_at))}</div>
+                            </div>
+                            <button class="btn small new-token" on:click=move |_| {
+                                let id = id.clone();
+                                leptos::task::spawn_local(async move { shown(api::post_empty::<CreatedAdminToken>(&format!("/admin/clients/{id}/tokens")).await) });
+                            }>"New token"</button>
+                            <button class="btn small danger delete-client" on:click=move |_| {
+                                if util::confirm(&format!("Delete the admin client “{name}”? Its tokens stop working immediately.")) {
+                                    let id = id2.clone();
+                                    leptos::task::spawn_local(async move {
+                                        if let Err(e) = api::delete(&format!("/admin/clients/{id}")).await { state::error(e.message); }
+                                        reload();
+                                    });
+                                }
+                            }>"Delete"</button>
+                        </div>
+                        {c.tokens.iter().map(|t| {
+                            let (cid, tid) = (c.id.clone(), t.id.clone());
+                            view! {
+                                <div class="cred small">
+                                    <code>{t.hint.clone()}</code>
+                                    <span class="muted">{format!("created {} · used {}", util::relative_time(t.created_at), t.last_used_at.map(util::relative_time).unwrap_or_else(|| "never".into()))}</span>
+                                    <button class="btn tiny revoke-token" on:click=move |_| {
+                                        let (cid, tid) = (cid.clone(), tid.clone());
+                                        leptos::task::spawn_local(async move {
+                                            if let Err(e) = api::delete(&format!("/admin/clients/{cid}/tokens/{tid}")).await { state::error(e.message); }
+                                            reload();
+                                        });
+                                    }>"Revoke"</button>
+                                </div>
+                            }
+                        }).collect_view()}
+                    </div>
+                }
+            }).collect_view()}
+        </div>
+    }
+}
+
+/// "2 of 3 vaults", "1 agent (no limit)".
+fn allowance_usage(n: i64, a: Allowance, default: Option<Limit>, what: &str) -> String {
+    let things = if n == 1 {
+        what.to_string()
+    } else {
+        format!("{what}s")
+    };
+    let limit = match a {
+        Allowance::Default => default,
+        a => Some(a.resolve(Limit::Unlimited)),
+    };
+    match limit {
+        Some(Limit::Max(m)) => format!("{n} of {m} {what}s"),
+        Some(Limit::Unlimited) => format!("{n} {things} (no limit)"),
+        None => format!("{n} {things}"),
+    }
+}
+
+/// The instance settings (limits, read-only mode).
+#[component]
+fn InstanceSettingsPanel(
+    defaults: RwSignal<Option<InstanceSettings>>,
+    on_saved: Callback<()>,
+) -> impl IntoView {
+    let status = RwSignal::new(None::<AdminSettings>);
+    let s = InstanceSettings::default();
+    let fields = (
+        RwSignal::new(s.max_users),
+        RwSignal::new(s.max_agents),
+        RwSignal::new(s.max_vaults),
+        RwSignal::new(s.vaults_per_user),
+        RwSignal::new(s.agents_per_user),
+        RwSignal::new(s.max_storage_mb),
+    );
+    let (users, agents, vaults, vaults_per_user, agents_per_user, storage) = fields;
+    let show = move |a: AdminSettings| {
+        let s = &a.settings;
+        users.set(s.max_users);
+        agents.set(s.max_agents);
+        vaults.set(s.max_vaults);
+        vaults_per_user.set(s.vaults_per_user);
+        agents_per_user.set(s.agents_per_user);
+        storage.set(s.max_storage_mb);
+        defaults.set(Some(a.settings.clone()));
+        status.set(Some(a));
+    };
+    leptos::task::spawn_local(async move {
+        if let Ok(a) = api::get::<AdminSettings>("/admin/settings").await {
+            show(a);
+        }
+    });
+    let save = move |change: InstanceSettingsUpdate| {
+        leptos::task::spawn_local(async move {
+            match api::patch::<_, AdminSettings>("/admin/settings", &change).await {
+                Ok(a) => {
+                    show(a);
+                    state::success("Instance settings saved.");
+                    on_saved.run(());
+                }
+                Err(e) => state::error(e.message),
+            }
+        });
+    };
+    // The fields are made once the settings arrived (they start from them).
+    let loaded = Memo::new(move |_| status.with(|s| s.is_some()));
+    view! {
+        {move || loaded.get().then(|| view! {
+            <h3>"Instance"</h3>
+            <div class="instance-settings">
+                <label class="check">
+                    <input type="checkbox" class="read-only-toggle"
+                        prop:checked=move || status.get().is_some_and(|s| s.settings.read_only)
+                        on:change=move |ev| save(InstanceSettingsUpdate { read_only: Some(event_target_checked(&ev)), ..Default::default() })/>
+                    <span class="nowrap">"Read-only"</span>
+                    <span class="muted small">" — the server keeps everything but accepts no changes; the apps keep people's edits and send them when you switch it off"</span>
+                </label>
+                <p class="instance-status small">{move || status.get().map(|s| {
+                    let used = util::human_bytes(s.storage_bytes);
+                    let of = s.settings.max_storage_mb.max().map(|mb| format!(" of {}", util::human_bytes(mb.saturating_mul(1024 * 1024)))).unwrap_or_default();
+                    match s.read_only {
+                        None => format!("Accepting changes. Database: {used}{of}."),
+                        Some(ReadOnly::Manual) => format!("Read-only, switched on by an administrator. Database: {used}{of}."),
+                        Some(ReadOnly::StorageFull) => format!("Read-only: the database reached its size limit ({used}{of}). Raise the limit to accept changes again."),
+                    }
+                })}</p>
+                <div class="limits">
+                    <LimitField label="Accounts" value=users class="max-users"/>
+                    <LimitField label="Agents" value=agents class="max-agents"/>
+                    <LimitField label="Vaults" value=vaults class="max-vaults"/>
+                    <LimitField label="Vaults per person" value=vaults_per_user class="vaults-per-user"/>
+                    <LimitField label="Agents per person" value=agents_per_user class="agents-per-user"/>
+                    <LimitField label="Database size (MiB)" value=storage class="max-storage"/>
+                </div>
+                <div class="row">
+                    <button class="btn primary save-limits" on:click=move |_| save(InstanceSettingsUpdate {
+                        max_users: Some(users.get_untracked()),
+                        max_agents: Some(agents.get_untracked()),
+                        max_vaults: Some(vaults.get_untracked()),
+                        vaults_per_user: Some(vaults_per_user.get_untracked()),
+                        agents_per_user: Some(agents_per_user.get_untracked()),
+                        max_storage_mb: Some(storage.get_untracked()),
+                        ..Default::default()
+                    })>"Save limits"</button>
+                </div>
+                <p class="muted small">"Limits apply to what is created from now on: nothing is removed when you lower one. Accounts count people who aren't disabled; a person's own limits are under Accounts. At the database size limit the server turns read-only by itself, until it is below the limit again."</p>
+            </div>
+        })}
+    }
+}
+
+/// A limit: no limit, or at most a number.
+#[component]
+fn LimitField(label: &'static str, value: RwSignal<Limit>, class: &'static str) -> impl IntoView {
+    let limited = Memo::new(move |_| value.get() != Limit::Unlimited);
+    view! {
+        <label class=format!("limit-field {class}")>
+            <span class="limit-label">{label}</span>
+            <select class="input small limit-kind" on:change=move |ev| {
+                value.set(match event_target_value(&ev).as_str() {
+                    "max" => Limit::Max(0),
+                    _ => Limit::Unlimited,
+                });
+            }>
+                <option value="unlimited" selected=move || !limited.get()>"No limit"</option>
+                <option value="max" selected=move || limited.get()>"At most"</option>
+            </select>
+            {move || limited.get().then(|| view! { <NumberInput value=Signal::derive(move || value.get_untracked().max().unwrap_or(0)) set=Callback::new(move |n| value.set(Limit::Max(n)))/> })}
+        </label>
+    }
+}
+
+/// A person's own limit: the instance's default, no limit, or a number.
+#[component]
+fn AllowanceField(
+    label: &'static str,
+    value: RwSignal<Allowance>,
+    default: Option<Limit>,
+    class: &'static str,
+) -> impl IntoView {
+    let kind = Memo::new(move |_| match value.get() {
+        Allowance::Default => "default",
+        Allowance::Unlimited => "unlimited",
+        Allowance::Max(_) => "max",
+    });
+    let default_label = match default {
+        Some(Limit::Max(n)) => format!("Default ({n})"),
+        Some(Limit::Unlimited) => "Default (no limit)".to_string(),
+        None => "Default".to_string(),
+    };
+    view! {
+        <label class=format!("limit-field {class}")>
+            <span class="limit-label">{label}</span>
+            <select class="input small limit-kind" on:change=move |ev| {
+                value.set(match event_target_value(&ev).as_str() {
+                    "max" => Allowance::Max(0),
+                    "unlimited" => Allowance::Unlimited,
+                    _ => Allowance::Default,
+                });
+            }>
+                <option value="default" selected=move || kind.get() == "default">{default_label}</option>
+                <option value="unlimited" selected=move || kind.get() == "unlimited">"No limit"</option>
+                <option value="max" selected=move || kind.get() == "max">"At most"</option>
+            </select>
+            {move || (kind.get() == "max").then(|| view! { <NumberInput value=Signal::derive(move || match value.get_untracked() { Allowance::Max(n) => n, _ => 0 }) set=Callback::new(move |n| value.set(Allowance::Max(n)))/> })}
+        </label>
+    }
+}
+
+/// A whole number; made once, so typing isn't interrupted by re-renders.
+#[component]
+fn NumberInput(value: Signal<u64>, set: Callback<u64>) -> impl IntoView {
+    view! {
+        <input class="input small num limit-num" type="number" min="0" step="1"
+            prop:value=value.get_untracked().to_string()
+            on:input=move |ev| {
+                if let Ok(n) = event_target_value(&ev).trim().parse::<u64>() {
+                    set.run(n);
+                }
+            }/>
     }
 }
 

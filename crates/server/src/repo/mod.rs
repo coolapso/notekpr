@@ -23,6 +23,7 @@
 //! * Updates and deletes return the number of rows affected where callers
 //!   need to tell "nothing matched" apart.
 
+pub mod admin_clients;
 pub mod agents;
 pub mod attachments;
 pub mod audit;
@@ -30,6 +31,7 @@ pub mod devices;
 pub mod keys;
 pub mod member_log;
 pub mod sessions;
+pub mod settings;
 pub mod shares;
 pub mod stats;
 pub mod users;

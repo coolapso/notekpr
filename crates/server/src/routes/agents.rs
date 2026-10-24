@@ -21,8 +21,6 @@ use crate::routes::me::notify_user;
 use crate::routes::users::account_key;
 use crate::state::AppState;
 
-const MAX_AGENTS: i64 = 50;
-
 async fn load(state: &AppState, owner: &str, agent_id: &str) -> AppResult<AgentInfo> {
     let (id, display_name, created_at) = repo::agents::get(&state.db, owner, agent_id)
         .await?
@@ -76,11 +74,17 @@ pub async fn create(
     if name.is_empty() {
         return Err(bad("agent name must not be empty"));
     }
-    if repo::agents::count(&state.db, &who.user_id).await? >= MAX_AGENTS {
-        return Err(bad("too many agents"));
-    }
     let id = db::new_id();
-    repo::agents::insert(&state.db, &id, &name, &who.user_id, db::now()).await?;
+    {
+        let _w = state.write_lock.lock().await;
+        let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
+        state
+            .instance
+            .check_new_agent(&mut tx, &who.user_id)
+            .await?;
+        repo::agents::insert(&mut *tx, &id, &name, &who.user_id, db::now()).await?;
+        tx.commit().await?;
+    }
     let credential = new_credential(&state, &id).await?;
     db::audit(
         &state.db,

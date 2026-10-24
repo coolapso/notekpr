@@ -49,6 +49,12 @@ impl ApiError {
         self.is_network() || self.status().is_some_and(|s| (500..600).contains(&s))
     }
 
+    /// The server refuses changes for now (read-only mode, or its storage
+    /// is full): keep them and send them when it accepts changes again.
+    pub fn is_read_only(&self) -> bool {
+        matches!(self, ApiError::Status { status: 503, code, .. } if code == notekpr_core::protocol::ERROR_READ_ONLY)
+    }
+
     pub fn is_unauthorized(&self) -> bool {
         self.status() == Some(401)
     }

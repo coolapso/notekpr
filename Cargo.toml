@@ -39,6 +39,8 @@ strip = true
 [profile.dev.package.yrs]
 debug-assertions = false
 
-# yrs with fixes for panics on crafted updates (see vendor/yrs/NOTEKPR.md).
+# yrs with fixes for panics on crafted updates (see vendor/yrs/NOTEKPR.md);
+# openidconnect on newer curve crates (see vendor/openidconnect/NOTEKPR.md).
 [patch.crates-io]
 yrs = { path = "vendor/yrs" }
+openidconnect = { path = "vendor/openidconnect" }

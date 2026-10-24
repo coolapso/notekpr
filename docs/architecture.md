@@ -70,7 +70,7 @@ which is what makes each vault's live stream gapless and ordered.
 | Symmetric crypto | XChaCha20-Poly1305 (RustCrypto, audited) | AES-256-GCM | 192-bit random nonces are safe without counters across many devices; fast in software/WASM. |
 | Public-key crypto | HPKE RFC 9180 (X25519, HKDF-SHA256, ChaCha20-Poly1305) via `hpke`; Ed25519 (`ed25519-dalek`, strict) | libsodium sealed boxes, age | Standardized construction with domain-separated info/AAD. Suite id in every envelope allows migrating to X-Wing (ML-KEM hybrid, already in the `hpke` crate) later. |
 | KDF / hashing | HKDF-SHA256 for subkeys, BLAKE3 derive-key for fingerprints | — | Standard, fast. |
-| Auth (people) | OIDC authorization code + PKCE (`openidconnect` crate) | Built-in passwords (forbidden by spec), SAML | Spec requirement; works with any compliant IdP. |
+| Auth (people) | OIDC authorization code + PKCE (`openidconnect` crate, vendored as 4.0.1 on `p256`/`p384` 0.14 for a `crypto-bigint` advisory: `vendor/openidconnect`) | Built-in passwords (forbidden by spec), SAML | Spec requirement; works with any compliant IdP. |
 | Auth (CLI) | RFC 8628 device authorization grant served by our server | Loopback redirect (RFC 8252) | Works over SSH and headless machines; approval happens in the already signed-in web app. |
 | Auth (agents) | OAuth 2.0 client credentials (RFC 6749 §4.4), per-agent revocable secrets | Long-lived API keys | Standard, short-lived tokens (1 h), rotation without downtime. |
 | Web UI framework | Leptos 0.8 (CSR) | Yew, Dioxus | Fine-grained reactivity, small output, active project. |

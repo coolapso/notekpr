@@ -61,6 +61,12 @@ Settled; don't reopen them without a new reason.
 
 ## Engineering
 
+- [ ] **Vendored crates: check upstream now and then** (agent task; nothing
+      here is to be sent upstream by us). `vendor/openidconnect` is 4.0.1
+      moved to `p256`/`p384` 0.14 for RUSTSEC-2026-0387 (`crypto-bigint`):
+      drop it once an openidconnect release uses them. `vendor/yrs` is 0.28.0
+      with fuzzing fixes: drop it once yrs releases equivalent fixes. Each
+      `NOTEKPR.md` says what changed; `task audit` shows new advisories.
 - [ ] **Role re-checks before running several server processes** [S-L1, rest]:
       push and snapshot check access under the write lock just before their
       `BEGIN IMMEDIATE` transaction rather than inside it (every other write

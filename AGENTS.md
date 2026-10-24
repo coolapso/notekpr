@@ -104,6 +104,8 @@ scripts/        build-web.sh, build-load-ui.sh (wasm builds) · demo.py (task de
 fuzz/           fuzz targets, a separate workspace (fuzz/run.sh, task fuzz)
 vendor/yrs      yrs 0.28 with fixes for panics found by fuzzing, via [patch.crates-io];
                 the changes are in vendor/yrs/NOTEKPR.md — re-apply on upgrade
+vendor/openidconnect  openidconnect 4.0.1 on p256/p384 0.14 (a crypto-bigint advisory),
+                via [patch.crates-io]; drop it once upstream moves (its NOTEKPR.md)
 site/           project website: static HTML + CSS, no build step, no third-party
                 requests (fonts, scripts, analytics) — keep it that way
 deploy/         Kubernetes manifests, Dex (dev OIDC), examples/ (optional reverse

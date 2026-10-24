@@ -645,7 +645,7 @@ empty folder; `--json` prints `{vaults, files, problems, source}` (`source`:
 Honest limits: `local.key` lives in the same profile directory as the sealed
 data, so **a copy of that directory (a backup, a synced folder) can be
 decrypted** — keep it out of cloud-sync and unencrypted backups. Moving the
-local key into the OS keyring is planned ([TODO.md](../TODO.md)). The key does
+local key into the OS keyring is planned. The key does
 not protect against malware or anyone able to run programs as your OS user
 either — they can read `local.key` too.
 Use full-disk encryption (LUKS, FileVault, BitLocker) and a screen lock for the

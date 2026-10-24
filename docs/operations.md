@@ -59,7 +59,7 @@ which take all the CPU there is for a few seconds.) What it comes to:
 * **One database writer**: every change goes through one write lock and an
   SQLite transaction, about 1,200 changes a second whatever the cores — at
   4,000 people on 2 cores it used one, and delivery fell behind. Above some
-  2,500 people online, a bigger machine helps little (see TODO.md).
+  2,500 people online, a bigger machine helps little.
 * People typing nonstop (the load test's default crowd, 4–5 requests a
   second each) reach that limit at about 300 people on one core.
 * The numbers are the server's own: the load test ran on the same machine,

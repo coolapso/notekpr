@@ -25,8 +25,12 @@ The original requirements are in [spec.md](spec.md).
 | [docs/desktop-client.md](docs/desktop-client.md), [docs/operations.md](docs/operations.md) | change the CLI or deployment/ops behaviour |
 | [docs/load-test.md](docs/load-test.md) | run or change the load test and its live view |
 
-Known work, review findings and decisions are tracked in [TODO.md](TODO.md) —
-check it before starting something, and keep it current.
+Known work, review findings and decisions are tracked in a TODO kept outside
+the repository, in the maintainer's own notes. Its path is in
+`AGENTS.local.md` (git-ignored, one per machine) as `TODO: <path>`. If that
+file or the line is missing, ask the person you work for where the TODO is
+and write it there. Check the TODO before starting something, and keep it
+current.
 
 ## Hard rules
 
@@ -59,7 +63,7 @@ Breaking one of these is a bug, even if everything compiles and tests pass.
    changes go into the existing files in `crates/server/migrations/`, and
    databases are wiped (`task dev:reset`, `task demo:reset`; a running
    instance when a release changes a migration). From the data-freeze
-   release on (TODO.md, Stage 1): never edit an applied migration — add a
+   release on (the TODO, Stage 1): never edit an applied migration — add a
    new numbered file that upgrades the database in place. From 1.0.0 on,
    every migration also works with the previous release (add, start using,
    drop a release later).
@@ -180,7 +184,7 @@ Without go-task, see the plain commands in the [Taskfile](Taskfile.yml) or
   the command when it fits the CLI (the way icons were added), otherwise add a
   line to the "Things to try" list in alice's *Start here* note (e.g.
   browser-only settings). Then run the demo and click through what changed.
-- Finished work leaves `TODO.md` (it holds only what is still to be done).
+- Finished work leaves the TODO (it holds only what is still to be done).
 
 ## Things that are easy to get wrong
 

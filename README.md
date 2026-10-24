@@ -303,14 +303,14 @@ provider setup, reverse proxies, Kubernetes, backups, upgrades and monitoring.
 * [Sync protocol and HTTP API](docs/protocol.md)
 * [Operations](docs/operations.md) · [Development](docs/development.md)
 * [Acceptance criteria and how they are tested](docs/acceptance.md) · [Load test with a live view](docs/load-test.md)
-* [Working on the code (rules for humans and AI agents)](AGENTS.md) · [TODO and roadmap](TODO.md)
+* [Working on the code (rules for humans and AI agents)](AGENTS.md)
 
 ## Status
 
 First release (0.1): everything listed under [Features](#features) is
 implemented and covered by tests (unit, server API, CLI and browser
 end-to-end). Planned: a native desktop app (around the web UI) and mobile
-apps; what's still open is in [TODO.md](TODO.md).
+apps.
 
 ## License
 

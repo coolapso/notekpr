@@ -278,7 +278,7 @@ see membership and key events in the vault audit
   full-disk encryption, an OS account of its own, no untrusted code running as
   that user. The local replica is encrypted, but its key file currently sits in
   the same profile directory, so a copy of that directory can be decrypted
-  (moving it to the OS keyring is planned — see [TODO.md](../TODO.md)).
+  (moving it to the OS keyring is planned).
 * **Anyone with the gateway token** (or able to run programs as the gateway's
   user) can read and, unless `--read-only`, change the exposed vaults. Keep the
   default loopback address; restrict with `--vault` and `--read-only`.
@@ -342,5 +342,3 @@ that speaks MCP over HTTP (Streamable HTTP transport) to remote AI clients:
   specification describes), read-only by default, rate limits, audit, and
   which tools to offer (the gateway's operations in `crates/client/src/ops.rs`
   are a ready starting point).
-
-Tracked in [TODO.md](../TODO.md).

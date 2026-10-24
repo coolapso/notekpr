@@ -347,13 +347,12 @@ has unsent edits to it, that person's client saves their version as a new
   protocol.md §5.1.
 * **Sharing folders**: not planned (decided 2026-10-20) — sharing a vault
   covers it. It would have needed a folder key and a second, folder-only index.
-* **Sharing between instances** (much later): independent instances sharing
+* **Sharing between instances** (planned): independent instances sharing
   vaults or notes with each other's users. To keep it possible, ids stay
   random and globally unique, people are identified by their account keys
   (instance-qualified user ids later), one instance owns each vault's ordered
   log, and membership is verifiable without trusting a server (the signed
-  membership log). Details and guardrails in
-  [TODO.md](../TODO.md#ideas-for-later).
+  membership log).
 * **Signed updates** (implemented): every update and snapshot carries its
   author's signature, so clients verify authorship even against a colluding
   server (security.md, residual risks).
@@ -371,6 +370,6 @@ has unsent edits to it, that person's client saves their version as a new
 | M5 Agents | agent identities, CLI and Markdown-folder access, gateway | done (`crates/client`); local MCP server removed, remote MCP connector considered for later |
 | M6 Packaging | Docker image, compose, Kubernetes, backup/restore docs | done |
 | M7 Note sharing | share single notes outside a vault: document keys, per-note subscriptions, web + CLI | done (S `individual_note_sharing`, D `single_note_sharing_end_to_end`, E `test_note_sharing`) |
-| Next | native desktop GUI shell (Tauri around the web UI), mobile apps — see [TODO.md](../TODO.md) | planned |
+| Next | native desktop GUI shell (Tauri around the web UI), mobile apps | planned |
 
 Acceptance criteria and how each is verified: [acceptance.md](acceptance.md).

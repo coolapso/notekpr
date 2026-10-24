@@ -6,6 +6,8 @@
 *.db-wal
 *.db-shm
 .env
+# Per-machine notes for agents (where the TODO is), see AGENTS.md
+/AGENTS.local.md
 __pycache__/
 .task/
 .claude/*.lock

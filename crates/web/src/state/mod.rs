@@ -247,10 +247,11 @@ pub enum Modal {
         id: String,
     },
     Import(String),
-    /// Move a note to another vault (a quick note to a vault).
+    /// Move a note, or a folder with everything in it, to another vault (a
+    /// quick note to a vault).
     MoveToVault {
         vault: String,
-        id: String,
+        what: notekpr_core::moving::What,
     },
     /// Set the icon of a note or folder (`id` is `None` for a folder that
     /// only exists as the parent of others).

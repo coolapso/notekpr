@@ -172,7 +172,7 @@ HOME = [
         - [ ] Drop or paste a picture into a note
         - [ ] Give a note or folder an icon: *Set icon…* in its ⋯ menu in the sidebar
         - [ ] *Quick notes* in the sidebar: yours alone, in no vault — the same whichever vault you're in. Move one to a vault (*Move to vault…*: it takes its first line as the name) or delete it for good; there's room for 20
-        - [ ] Move a note to another vault: *Move to vault…* in its menu in the file tree, or in its ⋯ menu at the top; the original goes to the trash
+        - [ ] Move a note, or a folder with everything in it, to another vault: *Move to vault…* in its menu in the file tree (a note's also in its ⋯ menu at the top); the originals go to the trash
         - [ ] *Vault settings* (⚙ next to a vault): its icon or a picture, *Export as Markdown (.zip)*, *Import notes*, the *Activity log*
         - [ ] *Share vault* at the bottom of the sidebar: members, roles (*Admin*, *Can edit*, *Can view*) and key fingerprints
         - [ ] You're an admin of Bob's *Book club*: its *Trash* has a draft Carol threw away — as an editor she can restore it but not delete it for good; you can (*Empty trash*), and you see the vault's *Activity log* in *Vault settings*. Sign in as **carol** to see her side

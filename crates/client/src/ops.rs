@@ -7,6 +7,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use notekpr_core::doc::{Entry, EntryKind};
+use notekpr_core::moving::{self, Unmovable, What};
 use notekpr_core::protocol::{INDEX_OBJECT_ID, Limit, Snapshot, SnapshotInfo};
 use notekpr_core::{markdown, paths, quick, search};
 use serde::Serialize;
@@ -1186,27 +1187,34 @@ pub async fn drop_unlinked_quick_files(hub: &Hub, now: i64) -> OpResult<usize> {
 }
 
 #[derive(Serialize, Clone, Debug)]
-pub struct MovedNote {
+pub struct Moved {
     pub from_vault: String,
     pub from_path: String,
     pub vault: String,
     pub path: String,
-    pub id: String,
-    /// Attachments the note links to, copied along.
+    /// A note or a folder.
+    pub kind: EntryKind,
+    /// The note's or folder's id there (`None`: a folder that only exists
+    /// as the parent of what is in it).
+    pub id: Option<String>,
+    /// How many notes moved (with a folder, all in it).
+    pub notes: usize,
+    /// Files copied along: those in the folder and those its notes link to.
     pub attachments: usize,
-    /// The original is gone: deleted for good from the quick notes, to the
-    /// trash of another vault. `false` if the target vault doesn't have the
-    /// copy yet (the server couldn't be reached): both are kept.
+    /// The originals are gone: deleted for good from the quick notes, to
+    /// the trash of another vault (except files a note staying behind links
+    /// to). `false` if the target vault doesn't have the copies yet (the
+    /// server couldn't be reached): both are kept.
     pub removed: bool,
 }
 
-/// Move a note to another vault: a new note there with its text and the
-/// attachments it links to, then — once the server has the copy — the
-/// original goes, with the attachments no other note uses: deleted for good
-/// from the quick notes, to the trash of a vault. Its history, comments and
-/// shares stay behind. `from` `None`: the quick notes. The new note is
-/// `folder/name` (`name` `None`: the note's own title, or for a quick note a
-/// title from its first line).
+/// Move a note, or a folder with everything in it, to another vault
+/// ([`moving`]): the copies there, then — once the server has them — the
+/// originals go: deleted for good from the quick notes, to the trash of a
+/// vault. History, comments and shares stay with the originals. `from`
+/// `None`: the quick notes. The copy is `folder/name` (`name` `None`: the
+/// note's title or the folder's name, for a quick note a title from its
+/// first line).
 pub async fn move_to_vault(
     hub: &Hub,
     from: Option<&str>,
@@ -1214,7 +1222,7 @@ pub async fn move_to_vault(
     to: &str,
     folder: &str,
     name: Option<&str>,
-) -> OpResult<MovedNote> {
+) -> OpResult<Moved> {
     let src = match from {
         Some(r) => vault(hub, r).await?,
         None => hub
@@ -1230,43 +1238,60 @@ pub async fn move_to_vault(
     }
     if !hub.is_online() {
         return Err(OpError::Unavailable(
-            "moving a note to another vault needs the server".into(),
+            "moving to another vault needs the server".into(),
         ));
     }
-    // What to copy.
-    let (from_vault, from_path, note_id, text, attachments, title) = {
+    // What goes.
+    let (from_vault, plan, name) = {
         let g = src.lock().await;
         check_write(hub, &g)?;
-        let (path, e) = g
-            .find_note(reference)
-            .map_err(|e| OpError::NotFound(format!("{e:#}")))?;
-        let text = g.note_text(&e.id);
-        let title = match name.map(str::trim).filter(|n| !n.is_empty()) {
-            Some(n) => n.to_string(),
-            None if g.is_quick_notes() => Some(quick::suggested_title(&text))
-                .filter(|t| !t.is_empty())
-                .unwrap_or_else(|| paths::title(&path).to_string()),
-            None => paths::title(&path).to_string(),
+        let what = match g.find(reference) {
+            Some((_, e)) if e.kind == EntryKind::Note => What::Note(e.id),
+            Some((p, e)) if e.kind == EntryKind::Folder => What::Folder(p),
+            Some((p, _)) => {
+                return Err(OpError::BadRequest(format!(
+                    "'{p}' is a file: files move with the notes that link to them"
+                )));
+            }
+            None if g.is_folder(reference) => What::Folder(reference.to_string()),
+            None => {
+                return Err(OpError::NotFound(format!(
+                    "no note or folder '{reference}' in vault '{}'",
+                    g.name()
+                )));
+            }
         };
-        let attachments = linked_attachments(&g, &e.id);
-        (g.id().to_string(), path, e.id, text, attachments, title)
+        let plan = moving::plan(&g.replica, &what).map_err(|e| match e {
+            Unmovable::Gone => OpError::NotFound(format!("'{reference}' is gone")),
+            Unmovable::Loading => OpError::Unavailable(
+                "some of it hasn't arrived from the server yet: try again once synced".into(),
+            ),
+        })?;
+        let name = match (name.map(str::trim).filter(|n| !n.is_empty()), &what) {
+            (Some(n), _) => n.to_string(),
+            (None, What::Note(id)) if g.is_quick_notes() => {
+                Some(quick::suggested_title(&g.note_text(id)))
+                    .filter(|t| !t.is_empty())
+                    .unwrap_or_else(|| plan.name().to_string())
+            }
+            (None, _) => plan.name().to_string(),
+        };
+        (g.id().to_string(), plan, name)
     };
-    if title.contains(['/', '\\']) {
-        return Err(OpError::BadRequest(
-            "give the note a name without '/'".into(),
-        ));
+    if name.contains(['/', '\\']) {
+        return Err(OpError::BadRequest("give it a name without '/'".into()));
     }
-    let mut files = Vec::new();
-    for (id, path, only_here) in &attachments {
+    let mut files = BTreeMap::new();
+    for id in plan.files() {
         let data = hub
             .session
-            .attachment(&src, id)
+            .attachment(&src, &id)
             .await
             .map_err(|e| OpError::Unavailable(format!("{e:#}")))?;
-        files.push((id.clone(), path.clone(), *only_here, data));
+        files.insert(id, data);
     }
-    // The copy.
-    let copied = {
+    // The copies.
+    let (vault_id, placed, ids) = {
         let mut g = dst.lock().await;
         check_write(hub, &g)?;
         if g.is_quick_notes() {
@@ -1274,70 +1299,67 @@ pub async fn move_to_vault(
                 "notes move from the quick notes to a vault, not into them".into(),
             ));
         }
-        let folder = match folder.trim().trim_matches('/') {
-            "" => String::new(),
-            f => paths::normalize(f).map_err(|e| OpError::BadRequest(e.to_string()))?,
-        };
-        let mut text = text.clone();
-        let mut copies = Vec::new();
-        for (id, path, _, data) in &files {
-            let taken: BTreeSet<String> = g.paths().keys().map(|p| p.to_lowercase()).collect();
-            let target = paths::unique(&paths::join(&folder, paths::file_name(path)), |p| {
-                taken.contains(&p.to_lowercase())
-            });
-            copies.push(g.add_attachment(&target, data, None).map_err(bad)?.id);
-            // A file of that name was there already: link the copy instead.
-            if paths::file_name(&target) != paths::file_name(path) {
-                let cands = vec![(id.clone(), path.clone())];
-                if let Some(t) = markdown::rewrite_links(&text, paths::file_name(&target), |l| {
-                    markdown::resolve(l, &from_path, &cands) == Some(id.as_str())
-                }) {
-                    text = t;
-                }
-            }
-        }
-        let taken: BTreeSet<String> = g.paths().keys().map(|p| p.to_lowercase()).collect();
-        let path = paths::normalize_note(&paths::join(&folder, &title))
+        let placed = plan
+            .place(&g.replica, folder, &name)
             .map_err(|e| OpError::BadRequest(e.to_string()))?;
-        let path = paths::unique(&path, |p| taken.contains(&p.to_lowercase()));
-        let res = g.create_note(&path, &text).map_err(bad)?;
+        let mut ids = BTreeMap::new();
+        for c in &placed.copies {
+            let id = match c.kind {
+                EntryKind::Folder => g.create_folder(&c.path).map_err(bad)?,
+                EntryKind::Attachment => {
+                    let data = files.get(&c.from).map(Vec::as_slice).unwrap_or_default();
+                    g.add_attachment(&c.path, data, None).map_err(bad)?.id
+                }
+                EntryKind::Note => g.create_note(&c.path, &c.text).map_err(bad)?.id,
+            };
+            g.copy_looks(&id, c.icon.as_deref(), c.order.as_deref())
+                .map_err(bad)?;
+            ids.insert(c.from.clone(), (c.kind, id));
+        }
         g.save()?;
-        (g.id().to_string(), res, copies)
+        (g.id().to_string(), placed, ids)
     };
-    let (vault_id, res, copies) = copied;
-    let pushed = hub
-        .local_changed(&vault_id, vec![res.id.clone()], true)
-        .await;
+    let notes: Vec<String> = ids
+        .values()
+        .filter(|(k, _)| *k == EntryKind::Note)
+        .map(|(_, id)| id.clone())
+        .collect();
+    let pushed = hub.local_changed(&vault_id, notes.clone(), true).await;
     let stored = !pushed.offline && !pushed.read_only && {
         let g = dst.lock().await;
-        copies.iter().all(|a| !g.pending_blobs.contains(a))
-            && !g.outbox.unconfirmed(&g.replica, &res.id)
+        ids.values().all(|(_, id)| !g.pending_blobs.contains(id))
+            && notes.iter().all(|n| !g.outbox.unconfirmed(&g.replica, n))
             && !g.outbox.unconfirmed(&g.replica, INDEX_OBJECT_ID)
     };
-    // The original, once the vault has the copy.
+    // The originals, once the vault has the copies.
     if stored {
-        {
+        let quick_notes = {
             let mut g = src.lock().await;
-            g.trash_id(&note_id).map_err(bad)?;
-            for (id, _, only_here, _) in &files {
-                if *only_here {
-                    g.trash_id(id).map_err(bad)?;
-                }
-            }
+            g.trash_ids(&plan.trash).map_err(bad)?;
             g.save()?;
-        }
+            g.is_quick_notes()
+        };
         hub.local_changed(&from_vault, vec![], true).await;
-        if from.is_none() || src.lock().await.is_quick_notes() {
+        if quick_notes {
             purge_deleted_quick_notes(hub).await?;
         }
     }
-    Ok(MovedNote {
+    let root = placed.copies.iter().find(|c| c.path == placed.path);
+    Ok(Moved {
         from_vault,
-        from_path,
+        from_path: plan.from_path().to_string(),
         vault: vault_id,
-        path: res.path,
-        id: res.id,
-        attachments: files.len(),
+        path: placed.path.clone(),
+        kind: if plan.is_folder() {
+            EntryKind::Folder
+        } else {
+            EntryKind::Note
+        },
+        id: root
+            .and_then(|c| ids.get(&c.from))
+            .map(|(_, id)| id.clone()),
+        notes: plan.notes(),
+        attachments: plan.files().len(),
         removed: stored,
     })
 }

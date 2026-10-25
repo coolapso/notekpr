@@ -90,8 +90,9 @@ pub enum Command {
     Quick(QuickArgs),
     /// Create a folder.
     Mkdir { vault: String, path: String },
-    /// Move or rename a document or folder; with --to-vault, move a note to
-    /// another vault (TO is its folder there, ending in `/`, or its new path).
+    /// Move or rename a document or folder; with --to-vault, move a note or
+    /// folder to another vault (TO is its folder there, ending in `/`, or its
+    /// new path).
     Mv {
         vault: String,
         from: String,
@@ -99,9 +100,10 @@ pub enum Command {
         /// Rewrite [[wiki links]] in other notes that pointed at the moved note.
         #[arg(long, conflicts_with = "to_vault")]
         update_links: bool,
-        /// Move the note to this vault (id or name), with the attachments it
-        /// links to; the original goes to the trash once the server has the
-        /// copy (its history, comments and shares stay with it).
+        /// Move the note or folder to this vault (id or name), with the
+        /// attachments in it and those its notes link to; the originals go to
+        /// the trash once the server has the copies (their history, comments
+        /// and shares stay with them).
         #[arg(long, value_name = "VAULT")]
         to_vault: Option<String>,
     },

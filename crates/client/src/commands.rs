@@ -627,8 +627,21 @@ async fn execute(ctx: Ctx, command: Command) -> Result<()> {
                 name.as_deref(),
             )
             .await)?;
+            if ctx.json {
+                ctx.print_json(&m);
+                return Ok(());
+            }
             let tname = hub.resolve(&m.vault).await?.lock().await.name().to_string();
-            crate::out!("moved to '{tname}': {}", m.path);
+            if m.kind == notekpr_core::doc::EntryKind::Folder {
+                crate::out!(
+                    "moved to '{tname}': {}/ ({} notes, {} files)",
+                    m.path,
+                    m.notes,
+                    m.attachments
+                );
+            } else {
+                crate::out!("moved to '{tname}': {}", m.path);
+            }
             if !m.removed {
                 ui::warn(&format!(
                     "the copy in '{tname}' isn't on the server yet, so the original stays in '{vault}'"

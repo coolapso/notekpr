@@ -1602,6 +1602,31 @@ impl Vault {
         self.record_index(u)
     }
 
+    /// Move several entries to the trash in one change.
+    pub fn trash_ids(&mut self, ids: &[String]) -> Result<()> {
+        self.require_writable()?;
+        let u = self
+            .replica
+            .index
+            .trash_all(ids.iter().map(String::as_str), now_ms());
+        self.record_index(u)
+    }
+
+    /// Give an entry an icon and a place among its siblings (`None`s leave
+    /// them): a copy from another vault takes the original's.
+    pub fn copy_looks(&mut self, id: &str, icon: Option<&str>, order: Option<&str>) -> Result<()> {
+        self.require_writable()?;
+        if let Some(icon) = icon {
+            let u = self.replica.index.set_icon(id, Some(icon));
+            self.record_index(u)?;
+        }
+        if let Some(key) = order {
+            let u = self.replica.index.set_order([(id, Some(key))]);
+            self.record_index(u)?;
+        }
+        Ok(())
+    }
+
     /// Restore a trashed entry by id or by its (former) path.
     pub fn restore(&mut self, reference: &str) -> Result<Entry> {
         self.require_writable()?;

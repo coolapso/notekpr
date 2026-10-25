@@ -10,6 +10,7 @@ use leptos::prelude::*;
 use notekpr_core::doc::{EntryKind, IndexDoc, NoteDoc};
 use notekpr_core::engine::{self, ObjectMeta, PinStatus, VaultMeta, VaultPicture, VaultReplica};
 use notekpr_core::memberlog::{LogBody, LogEntry};
+use notekpr_core::moving::{self, Unmovable, What};
 use notekpr_core::protocol::*;
 use notekpr_core::textdiff::Edit;
 use notekpr_core::{markdown, order, paths};
@@ -1070,20 +1071,24 @@ pub async fn create_note_with(
             return None;
         }
     };
-    let id = state::new_id();
-    step(|c| {
-        let path = unique_path(c, vault, &path);
-        // Its own key, registered before any of its content is sent.
-        state::new_note_key(c, vault, &id, paths::title(&path));
-        change_index(c, vault, |ix| ix.create(&id, &path, EntryKind::Note, now()));
-        c.ensure_note_loaded(vault, &id);
-        if !text.is_empty() {
-            // Large texts become several updates, each within the server's limit.
-            state::set_note_text(c, vault, &id, text);
-        }
-    });
+    let id = step(|c| new_note_at(c, vault, &path, text));
     state::ui().tree_rev.update(|v| *v += 1);
     Some(id)
+}
+
+/// A new note at `path` (or a free name beside it) with `text`: its id.
+fn new_note_at(c: &mut Core, vault: &str, path: &str, text: &str) -> String {
+    let id = state::new_id();
+    let path = unique_path(c, vault, path);
+    // Its own key, registered before any of its content is sent.
+    state::new_note_key(c, vault, &id, paths::title(&path));
+    change_index(c, vault, |ix| ix.create(&id, &path, EntryKind::Note, now()));
+    c.ensure_note_loaded(vault, &id);
+    if !text.is_empty() {
+        // Large texts become several updates, each within the server's limit.
+        state::set_note_text(c, vault, &id, text);
+    }
+    id
 }
 
 pub fn new_note(vault: &str, folder: &str) {
@@ -1143,14 +1148,18 @@ pub fn create_folder(vault: &str, path: &str) {
         error("Invalid folder name");
         return;
     };
+    step(|c| new_folder_at(c, vault, &p));
+    state::ui().tree_rev.update(|v| *v += 1);
+}
+
+/// A new folder at `path` (or a free name beside it): its id.
+fn new_folder_at(c: &mut Core, vault: &str, path: &str) -> String {
     let id = state::new_id();
-    let made = step(|c| {
-        let p = unique_path(c, vault, &p);
-        change_index(c, vault, |ix| ix.create(&id, &p, EntryKind::Folder, now()))
+    let path = unique_path(c, vault, path);
+    change_index(c, vault, |ix| {
+        ix.create(&id, &path, EntryKind::Folder, now())
     });
-    if made {
-        state::ui().tree_rev.update(|v| *v += 1);
-    }
+    id
 }
 
 /// Rename a note, attachment or explicit folder. Wiki links pointing to a
@@ -1465,21 +1474,21 @@ pub fn linked_attachments(c: &Core, vault: &str, id: &str) -> Vec<(String, Strin
         .collect()
 }
 
-/// Move a note to another vault: a new note `folder/title` there with its
-/// text and the attachments it links to, then — once the server has the
-/// copy — the original goes, with the attachments no other note uses:
-/// deleted for good from the quick notes, to the trash of a vault. Its
-/// history, comments and shares stay behind. Returns the new note's id.
+/// Move a note, or a folder with everything in it, to another vault
+/// ([`moving`]): the copies there first, then — once the server has them —
+/// the originals go: deleted for good from the quick notes, to the trash of
+/// a vault. History, comments and shares stay with the originals. Returns
+/// the copies' ids by the originals'.
 pub async fn move_to_vault(
     from: &str,
-    id: &str,
+    what: &What,
     to: &str,
     folder: &str,
-    title: &str,
-) -> Result<String, String> {
-    let title = title.trim();
-    if title.is_empty() || title.contains(['/', '\\']) {
-        return Err("Give the note a name without '/'.".into());
+    name: &str,
+) -> Result<HashMap<String, String>, String> {
+    let name = name.trim();
+    if name.is_empty() || name.contains(['/', '\\']) {
+        return Err("Give it a name without '/'.".into());
     }
     if from == to {
         return Err("Pick another vault.".into());
@@ -1495,51 +1504,76 @@ pub async fn move_to_vault(
         return Err("You can't move notes there.".into());
     }
     if !online {
-        return Err(
-            "Moving a note to another vault needs the server: try again once online.".into(),
-        );
+        return Err("Moving to another vault needs the server: try again once online.".into());
     }
-    let folder = match folder.trim().trim_matches('/') {
-        "" => String::new(),
-        f => paths::normalize(f).map_err(|e| e.to_string())?,
-    };
-    let (text, from_path, files) = step(|c| {
-        let text = c.replicas.get(from).map(|r| r.note_text(id));
-        let path = c.entry(from, id).map(|e| e.path);
-        (text, path, linked_attachments(c, from, id))
-    });
-    let (Some(mut text), Some(from_path)) = (text, from_path) else {
-        return Err("That note is gone.".into());
-    };
-    // The attachments first, each under a free name (links follow a rename).
-    for (aid, apath, _) in &files {
-        let bytes = attachment_bytes(from, aid)
-            .await
-            .ok_or("An attachment of the note could not be read.")?;
-        let target = paths::join(&folder, paths::file_name(apath));
-        let placed = upload_bytes(to, &target, &bytes)
-            .await
-            .ok_or("An attachment of the note could not be copied.")?;
-        if paths::file_name(&placed) != paths::file_name(apath) {
-            let cands = vec![(aid.clone(), apath.clone())];
-            if let Some(t) = markdown::rewrite_links(&text, paths::file_name(&placed), |l| {
-                markdown::resolve(l, &from_path, &cands) == Some(aid.as_str())
-            }) {
-                text = t;
-            }
+    let plan = step(|c| match c.replicas.get(from) {
+        Some(r) => moving::plan(r, what),
+        None => Err(Unmovable::Gone),
+    })
+    .map_err(|e| match (e, what) {
+        (Unmovable::Gone, What::Note(_)) => "That note is gone.".to_string(),
+        (Unmovable::Gone, What::Folder(_)) => "That folder is gone.".to_string(),
+        (Unmovable::Loading, _) => {
+            "Some of it hasn't arrived from the server yet: try again in a moment.".to_string()
         }
+    })?;
+    let placed = step(|c| match c.replicas.get(to) {
+        Some(r) => plan.place(r, folder, name).map_err(|e| e.to_string()),
+        None => Err("That vault hasn't loaded yet.".to_string()),
+    })?;
+    // The copies: folders, files (downloaded and uploaded again), notes.
+    let mut ids = HashMap::new();
+    let mut made = Vec::new();
+    for copy in &placed.copies {
+        let id = match copy.kind {
+            EntryKind::Folder => step(|c| new_folder_at(c, to, &copy.path)),
+            EntryKind::Attachment => {
+                let uploaded = match attachment_bytes(from, &copy.from).await {
+                    Some(bytes) => upload_file(to, &copy.path, &bytes).await,
+                    None => None,
+                };
+                let Some((id, _)) = uploaded else {
+                    // Nothing half moved: what was made there goes again.
+                    step(|c| {
+                        change_index(c, to, |ix| {
+                            ix.trash_all(made.iter().map(String::as_str), now())
+                        })
+                    });
+                    state::ui().tree_rev.update(|v| *v += 1);
+                    return Err("A file could not be copied, so nothing moved.".into());
+                };
+                id
+            }
+            EntryKind::Note => step(|c| new_note_at(c, to, &copy.path, &copy.text)),
+        };
+        step(|c| {
+            if let Some(icon) = &copy.icon {
+                change_index(c, to, |ix| ix.set_icon(&id, Some(icon)));
+            }
+            if let Some(key) = &copy.order {
+                change_index(c, to, |ix| {
+                    ix.set_order([(id.as_str(), Some(key.as_str()))])
+                });
+            }
+        });
+        made.push(id.clone());
+        ids.insert(copy.from.clone(), id);
     }
-    let new_id = create_note_with(to, &folder, title, &text)
-        .await
-        .ok_or("The note could not be created there.")?;
-    // The original goes once the server has the copy.
+    state::ui().tree_rev.update(|v| *v += 1);
+    // The originals go once the server has the copies.
+    let notes: Vec<&String> = placed
+        .copies
+        .iter()
+        .filter(|c| c.kind == EntryKind::Note)
+        .filter_map(|c| ids.get(&c.from))
+        .collect();
     let mut stored = false;
-    for _ in 0..150 {
+    for _ in 0..150 + 10 * notes.len() {
         stored = step(|c| {
             let (Some(r), Some(o)) = (c.replicas.get(to), c.outboxes.get(to)) else {
                 return false;
             };
-            !o.unconfirmed(r, &new_id) && !o.unconfirmed(r, INDEX_OBJECT_ID)
+            notes.iter().all(|n| !o.unconfirmed(r, n)) && !o.unconfirmed(r, INDEX_OBJECT_ID)
         });
         if stored {
             break;
@@ -1548,21 +1582,21 @@ pub async fn move_to_vault(
     }
     if !stored {
         return Err(
-            "The copy isn't on the server yet, so the original stays: delete it once the copy is synced."
+            "The copy isn't on the server yet, so the original stays: remove it once the copy is synced."
                 .into(),
         );
     }
     let quick = step(|c| c.is_quick_notes(from));
-    trash_quietly(from, id);
-    for (aid, _, only_here) in &files {
-        if *only_here {
-            trash_quietly(from, aid);
-        }
-    }
+    step(|c| {
+        change_index(c, from, |ix| {
+            ix.trash_all(plan.trash.iter().map(String::as_str), now())
+        })
+    });
+    state::ui().tree_rev.update(|v| *v += 1);
     if quick {
         crate::quick::purge_deleted().await;
     }
-    Ok(new_id)
+    Ok(ids)
 }
 
 /// Permanently delete a trashed entry (server data and index entry): the
@@ -1845,6 +1879,11 @@ pub async fn upload_files(vault: &str, files: Vec<web_sys::File>, folder: &str) 
 }
 
 pub async fn upload_bytes(vault: &str, path: &str, bytes: &[u8]) -> Option<String> {
+    upload_file(vault, path, bytes).await.map(|(_, path)| path)
+}
+
+/// Upload a file to `path` (or a free name beside it): its id and path.
+async fn upload_file(vault: &str, path: &str, bytes: &[u8]) -> Option<(String, String)> {
     // Quick notes are flat.
     let path = if step(|c| c.is_quick_notes(vault)) {
         paths::file_name(path)
@@ -1868,7 +1907,7 @@ pub async fn upload_bytes(vault: &str, path: &str, bytes: &[u8]) -> Option<Strin
         path
     });
     state::ui().tree_rev.update(|v| *v += 1);
-    Some(path)
+    Some((id, path))
 }
 
 // ------------------------------------------------------------------ export / import

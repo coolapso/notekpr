@@ -5,6 +5,7 @@ use std::cell::Cell;
 use leptos::html;
 use leptos::prelude::*;
 use notekpr_core::doc::EntryKind;
+use notekpr_core::moving::What;
 use notekpr_core::paths;
 use wasm_bindgen::JsCast;
 
@@ -671,7 +672,7 @@ pub fn NoteView(vault: String, note: String) -> impl IntoView {
                                                 {(!quick).then(|| view! {
                                                     <button on:click=move |_| ui.modal.set(Some(Modal::Move { vault: v3.clone(), id: n3.clone() }))><Icon name="move"/>" Move to…"</button>
                                                 })}
-                                                <button class="move-to-vault" on:click=move |_| ui.modal.set(Some(Modal::MoveToVault { vault: v5.clone(), id: n5.clone() }))><Icon name="file-plus"/>" Move to vault…"</button>
+                                                <button class="move-to-vault" on:click=move |_| ui.modal.set(Some(Modal::MoveToVault { vault: v5.clone(), what: What::Note(n5.clone()) }))><Icon name="file-plus"/>" Move to vault…"</button>
                                                 {if quick {
                                                     view! { <button class="danger" on:click=move |_| {
                                                         if util::confirm("Delete this quick note for good? Quick notes have no trash.") {

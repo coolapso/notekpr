@@ -1,9 +1,12 @@
 //! Quick notes: the sidebar section, the overview page (`/quick`) with its
-//! capture box, and the "move to a vault" dialog (for any note). The logic
+//! capture box, and the "move to a vault" dialog (for any note or folder).
+//! The logic
 //! is in `crate::quick`.
 
 use leptos::html;
 use leptos::prelude::*;
+use notekpr_core::moving::What;
+use notekpr_core::paths;
 
 use crate::quick::{self, QuickNote};
 use crate::state::{self, Modal, Route, step, ui};
@@ -172,7 +175,7 @@ fn QuickCard(q: QuickNote) -> impl IntoView {
             {note_card(q.vault, q.entry, &q.text, badge)}
             <div class="qn-actions">
                 <button class="icon-btn tiny qn-move" title="Move to a vault…" aria-label="Move to a vault"
-                    on:click=move |_| ui.modal.set(Some(Modal::MoveToVault { vault: v.clone(), id: id.clone() }))>
+                    on:click=move |_| ui.modal.set(Some(Modal::MoveToVault { vault: v.clone(), what: What::Note(id.clone()) }))>
                     <Icon name="file-plus"/></button>
                 <button class="icon-btn tiny qn-delete" title="Delete for good" aria-label="Delete for good"
                     on:click=move |_| {
@@ -191,34 +194,35 @@ fn QuickCard(q: QuickNote) -> impl IntoView {
     }
 }
 
-/// Move a note to another vault: which vault, which folder there, and its
-/// name (a quick note: its first line). The original goes once the server
-/// has the copy.
+/// Move a note, or a folder with everything in it, to another vault: which
+/// vault, which folder there, and its name (a quick note: its first line).
+/// The originals go once the server has the copies.
 #[component]
-pub fn MoveToVaultDialog(vault: String, id: String) -> impl IntoView {
+pub fn MoveToVaultDialog(vault: String, what: What) -> impl IntoView {
     let ui = ui();
-    let (text, title, quick_note) = step(|c| {
-        (
-            c.replicas
-                .get(&vault)
-                .map(|r| r.note_text(&id))
-                .unwrap_or_default(),
-            c.entry(&vault, &id)
+    let (suggested, quick_note) = step(|c| {
+        let suggested = match &what {
+            What::Note(id) if c.is_quick_notes(&vault) => {
+                let text = c
+                    .replicas
+                    .get(&vault)
+                    .map(|r| r.note_text(id))
+                    .unwrap_or_default();
+                Some(quick::suggested_title(&text)).filter(|t| !t.is_empty())
+            }
+            _ => None,
+        };
+        let own = match &what {
+            What::Note(id) => c
+                .entry(&vault, id)
                 .map(|e| e.title().to_string())
                 .unwrap_or_default(),
-            c.is_quick_notes(&vault),
-        )
+            What::Folder(path) => paths::file_name(path).to_string(),
+        };
+        (suggested.unwrap_or(own), c.is_quick_notes(&vault))
     });
-    let suggested = if quick_note {
-        quick::suggested_title(&text)
-    } else {
-        String::new()
-    };
-    let name = RwSignal::new(if suggested.is_empty() {
-        title
-    } else {
-        suggested
-    });
+    let folder_moves = matches!(what, What::Folder(_));
+    let name = RwSignal::new(suggested);
     // Vaults one can write to, the one shown in the sidebar before first.
     let targets: Vec<(String, String)> = ui
         .vaults
@@ -245,27 +249,30 @@ pub fn MoveToVaultDialog(vault: String, id: String) -> impl IntoView {
     });
     let busy = RwSignal::new(false);
     let no_target = targets.is_empty();
-    let (from, note) = (StoredValue::new(vault), StoredValue::new(id));
+    let (from, what) = (StoredValue::new(vault), StoredValue::new(what));
     let submit = move || {
         if busy.get_untracked() {
             return;
         }
         busy.set(true);
-        let (from, note) = (from.get_value(), note.get_value());
+        let (from, what) = (from.get_value(), what.get_value());
         let (to, f, n) = (
             target.get_untracked(),
             folder.get_untracked(),
             name.get_untracked(),
         );
         leptos::task::spawn_local(async move {
-            match crate::actions::move_to_vault(&from, &note, &to, &f, &n).await {
-                Ok(new_id) => {
+            match crate::actions::move_to_vault(&from, &what, &to, &f, &n).await {
+                Ok(ids) => {
                     ui.modal.set(None);
                     let where_to = step(|c| c.vault_name(&to));
                     state::success(format!("Moved to {where_to}."));
-                    // From the note itself: follow it.
-                    if ui.route.get_untracked() == Route::Note(from, note) {
-                        state::navigate(Route::Note(to, new_id));
+                    // From a note that moved: follow it.
+                    if let Route::Note(v, note) = ui.route.get_untracked()
+                        && v == from
+                        && let Some(new_id) = ids.get(&note)
+                    {
+                        state::navigate(Route::Note(to, new_id.clone()));
                     }
                 }
                 Err(e) => state::error(e),
@@ -301,10 +308,13 @@ pub fn MoveToVaultDialog(vault: String, id: String) -> impl IntoView {
                 </label>
                 <p class="muted small">{if quick_note {
                     "It leaves your quick notes once the vault has it."
+                } else if folder_moves {
+                    "Everything in it moves, with the files elsewhere its notes link to. The originals go to this vault's trash once the other vault has the copies; their history, comments and shares stay with them."
                 } else {
                     "The original goes to this vault's trash once the other vault has the copy; its history, comments and shares stay with it."
                 }}</p>
-                <button class="btn primary" type="submit" disabled=move || busy.get() || no_target>"Move"</button>
+                <button class="btn primary" type="submit" disabled=move || busy.get() || no_target>
+                    {move || if busy.get() { "Moving…" } else { "Move" }}</button>
             </form>
         </Dialog>
     }

@@ -5,6 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use leptos::prelude::*;
 use notekpr_core::doc::EntryKind;
+use notekpr_core::moving::What;
 use notekpr_core::{order, paths};
 use wasm_bindgen::JsCast;
 
@@ -438,19 +439,23 @@ fn RowMenu(
                 let id_move = id3.clone();
                 let id_del = id4.clone();
                 let p_del = p3.clone();
+                // Notes and folders; files go with the notes linking to them.
+                let to_vault = match kind {
+                    EntryKind::Note => id3.clone().map(What::Note),
+                    EntryKind::Folder => Some(What::Folder(path.clone())),
+                    EntryKind::Attachment => None,
+                };
+                let vault3 = v5.clone();
                 view! {
                     <button on:click=move |_| { close(); rename_text.set(name.clone()); renaming.set(Some(key.clone())); }>
                         <Icon name="edit"/>" Rename"</button>
-                    {id_move.map(|id| {
-                        let (v, n) = (vault.clone(), id.clone());
-                        view! {
-                            <button on:click=move |_| { close(); ui.modal.set(Some(Modal::Move { vault: vault.clone(), id: id.clone() })); }>
-                                <Icon name="move"/>" Move to…"</button>
-                            {(kind == EntryKind::Note).then(|| view! {
-                                <button class="move-to-vault" on:click=move |_| { close(); ui.modal.set(Some(Modal::MoveToVault { vault: v.clone(), id: n.clone() })); }>
-                                    <Icon name="file-plus"/>" Move to vault…"</button>
-                            })}
-                        }
+                    {id_move.map(|id| view! {
+                        <button on:click=move |_| { close(); ui.modal.set(Some(Modal::Move { vault: vault.clone(), id: id.clone() })); }>
+                            <Icon name="move"/>" Move to…"</button>
+                    })}
+                    {to_vault.map(|what| view! {
+                        <button class="move-to-vault" on:click=move |_| { close(); ui.modal.set(Some(Modal::MoveToVault { vault: vault3.clone(), what: what.clone() })); }>
+                            <Icon name="file-plus"/>" Move to vault…"</button>
                     })}
                     <button class="danger" on:click=move |_| {
                         close();

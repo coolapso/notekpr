@@ -102,9 +102,9 @@ read anything.
   same from every vault and device: a short list (20 unless the
   administrator says otherwise) to sort out by moving each to a vault, or
   deleting it for good.
-* Move a note to another vault, with the attachments it links to
-  (`Move to vault…` in its menu in the file tree or the note's ⋯ menu,
-  `notekpr mv … --to-vault`).
+* Move a note, or a folder with everything in it, to another vault, with
+  the attachments its notes link to (`Move to vault…` in the file tree's
+  menu or the note's ⋯ menu, `notekpr mv … --to-vault`).
 * A trash with restore, and the version history of every note with preview
   and restore.
 

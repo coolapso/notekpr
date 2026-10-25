@@ -12,6 +12,7 @@ pub mod engine;
 pub mod keys;
 pub mod markdown;
 pub mod memberlog;
+pub mod moving;
 pub mod order;
 pub mod paths;
 pub mod protocol;

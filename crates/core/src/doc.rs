@@ -655,8 +655,17 @@ impl IndexDoc {
             .filter(|e| e.is_live() && (e.path == folder || paths::is_within(&e.path, folder)))
             .map(|e| e.id)
             .collect();
+        self.trash_all(ids.iter().map(String::as_str), now)
+    }
+
+    /// Trash several entries in one change.
+    pub fn trash_all<'a>(
+        &self,
+        ids: impl IntoIterator<Item = &'a str>,
+        now: i64,
+    ) -> Option<Vec<u8>> {
         self.mutate(|txn| {
-            for id in &ids {
+            for id in ids {
                 if let Some(m) = self.entry_map(txn, id) {
                     m.try_update(txn, "trashed", now as f64);
                 }

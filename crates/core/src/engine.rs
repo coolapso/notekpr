@@ -1087,6 +1087,16 @@ impl VaultReplica {
         }
     }
 
+    /// Whether everything of this object that arrived is applied: none of
+    /// it waits for a key or for the membership log.
+    pub fn is_complete(&self, object_id: &str) -> bool {
+        !self.object_incomplete(object_id)
+            && !self.unverified.iter().any(|d| match d {
+                Deferred::Update(u) => u.object_id == object_id,
+                Deferred::Snapshot(s) => s.object_id == object_id,
+            })
+    }
+
     /// Whether some content of this object is still waiting for a key; its
     /// local state then lacks changes that `seq` already counts.
     fn object_incomplete(&self, object_id: &str) -> bool {

@@ -623,14 +623,25 @@ pub fn rewrite_links(
     new_target: &str,
     mut resolves_to_renamed: impl FnMut(&Link) -> bool,
 ) -> Option<String> {
+    rewrite_links_with(text, |l| {
+        resolves_to_renamed(l).then(|| new_target.to_string())
+    })
+}
+
+/// Rewrite wiki links to point at what `new_target` gives for them (links
+/// it gives nothing for stay). Returns `None` if nothing changed.
+pub fn rewrite_links_with(
+    text: &str,
+    mut new_target: impl FnMut(&Link) -> Option<String>,
+) -> Option<String> {
     let info = analyze(text);
     let mut out = String::with_capacity(text.len());
     let mut last = 0;
     let mut changed = false;
     for l in info.links.iter() {
-        if !resolves_to_renamed(l) {
+        let Some(target) = new_target(l) else {
             continue;
-        }
+        };
         let replacement = match l.kind {
             LinkKind::Wiki => {
                 let mut s = String::new();
@@ -638,7 +649,7 @@ pub fn rewrite_links(
                     s.push('!');
                 }
                 s.push_str("[[");
-                s.push_str(new_target);
+                s.push_str(&target);
                 if let Some(h) = &l.heading {
                     s.push('#');
                     s.push_str(h);

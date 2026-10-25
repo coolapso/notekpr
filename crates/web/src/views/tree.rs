@@ -441,9 +441,16 @@ fn RowMenu(
                 view! {
                     <button on:click=move |_| { close(); rename_text.set(name.clone()); renaming.set(Some(key.clone())); }>
                         <Icon name="edit"/>" Rename"</button>
-                    {id_move.map(|id| view! {
-                        <button on:click=move |_| { close(); ui.modal.set(Some(Modal::Move { vault: vault.clone(), id: id.clone() })); }>
-                            <Icon name="move"/>" Move to…"</button>
+                    {id_move.map(|id| {
+                        let (v, n) = (vault.clone(), id.clone());
+                        view! {
+                            <button on:click=move |_| { close(); ui.modal.set(Some(Modal::Move { vault: vault.clone(), id: id.clone() })); }>
+                                <Icon name="move"/>" Move to…"</button>
+                            {(kind == EntryKind::Note).then(|| view! {
+                                <button class="move-to-vault" on:click=move |_| { close(); ui.modal.set(Some(Modal::MoveToVault { vault: v.clone(), id: n.clone() })); }>
+                                    <Icon name="file-plus"/>" Move to vault…"</button>
+                            })}
+                        }
                     })}
                     <button class="danger" on:click=move |_| {
                         close();

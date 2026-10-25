@@ -516,6 +516,64 @@ def test_attachments(env):
         b.close()
 
 
+def test_move_to_vault(env):
+    b = Browser()
+    try:
+        signup(b, uniq("mia"))
+        new_note(b, "Trip photos", "Beach:" + KEYS["enter"])
+        b.js("""
+            const png = Uint8Array.from(atob('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg=='), c => c.charCodeAt(0));
+            const dt = new DataTransfer();
+            dt.items.add(new File([png], 'dot.png', {type: 'image/png'}));
+            document.querySelector('.ed').dispatchEvent(new ClipboardEvent('paste', {clipboardData: dt, bubbles: true, cancelable: true}));
+        """)
+        b.wait("return document.querySelector('.ed').textContent.includes('![[dot.png]]')", 15, "embed inserted")
+        time.sleep(0.6)
+        b.click(".vault-btn")
+        b.click_el(b.find_text(".vault-menu button", "New vault"))
+        b.type(".modal input", "Archive")
+        b.click(".modal button[type=submit]")
+        b.find_text(".page-head h1", "Archive", 15)
+        b.click(".vault-btn")
+        b.click_el(b.find_text(".vault-menu button", "My notes", 10))
+        b.find_text(".page-head h1", "My notes", 15)
+        # Any note, from its menu in the tree: not only quick notes.
+        row = "Array.from(document.querySelectorAll('.tree-row')).find(r => r.textContent.trim() === arguments[0])"
+        b.js(row + ".querySelector('.tree-more').click()", "Trip photos")
+        b.click_el(b.find_text(".tree-row .menu button", "Move to vault", 5))
+        b.find(".modal .mtv-name", 5)
+        time.sleep(0.3)
+        check(b.js("return document.querySelector('.mtv-name').value") == "Trip photos"
+              and b.js("return Array.from(document.querySelectorAll('.mtv-vault option')).map(o => o.textContent)") == ["Archive"],
+              "a vault's note is offered the other vaults, keeping its name")
+        b.click(".mtv-folder")
+        b.keys("2026")
+        b.click(".modal button[type=submit]")
+        b.wait("return !document.querySelector('.modal') && !Array.from(document.querySelectorAll('.tree-item .name')).some(e => e.textContent === 'Trip photos')",
+               15, "the note leaves the vault")
+        check(True, "a vault's note moves to another vault from the tree")
+        b.click_el(b.find_text(".sb-link", "Trash"))
+        b.find_text(".list-row", "Trip photos", 10)
+        check(b.find_text(".list-row", "dot.png", 5) is not None, "the original and the picture only it used go to the trash")
+        b.click(".vault-btn")
+        b.click_el(b.find_text(".vault-menu button", "Archive", 10))
+        b.click_el(b.find_text(".tree-item", "2026", 10))
+        b.click_el(b.find_text(".tree-item", "Trip photos", 10))
+        b.wait("return document.querySelector('.note-title') && document.querySelector('.note-title').value === 'Trip photos'", 10, "the moved note")
+        check(b.js("return document.querySelector('.crumbs').textContent") == "Archive / 2026" and editor_text(b) == "Beach:\n![[dot.png]]",
+              "it is in the folder picked, with its text")
+        b.wait("return !!document.querySelector('.ed .w img[src^=\"blob:\"]')", 15, "image preview")
+        check("dot.png" in b.js("return Array.from(document.querySelectorAll('.tree-item .name')).map(e=>e.textContent).join(' ')"),
+              "the picture it links to comes along and opens")
+        # Attachments stay in their vault: only notes are offered the move.
+        b.js(row + ".querySelector('.tree-more').click()", "dot.png")
+        b.find(".tree-row .menu button", 5)
+        check("Move to vault" not in b.js("return document.querySelector('.tree-row .menu').textContent"), "an attachment isn't offered to move to a vault")
+        b.chord(KEYS["escape"])
+        check(not severe_logs(b), "no browser errors")
+    finally:
+        b.close()
+
 API_GET = """
 window.__api = undefined;
 fetch('/api/v1' + arguments[0], {headers: {Authorization: 'Bearer ' + sessionStorage.getItem('notekpr.token')}})
@@ -2474,7 +2532,7 @@ def test_vault_admins(env):
         b.close()
 
 
-TESTS = [test_onboarding, test_collab, test_devices_and_recovery, test_features, test_attachments, test_note_sharing, test_tables, test_code_blocks, test_html, test_callouts, test_colors, test_code_wrapping, test_editor_mouse, test_editor_safety, test_local_copy, test_ui_basics, test_offline_tabs, test_offline_start, test_mobile, test_quick_notes, test_vault_icons, test_entry_icons, test_tree_order, test_session_ended_while_away, test_comments, test_mentions, test_dates, test_graph, test_recovered_copy, test_note_width, test_admin, test_vault_admins]
+TESTS = [test_onboarding, test_collab, test_devices_and_recovery, test_features, test_attachments, test_move_to_vault, test_note_sharing, test_tables, test_code_blocks, test_html, test_callouts, test_colors, test_code_wrapping, test_editor_mouse, test_editor_safety, test_local_copy, test_ui_basics, test_offline_tabs, test_offline_start, test_mobile, test_quick_notes, test_vault_icons, test_entry_icons, test_tree_order, test_session_ended_while_away, test_comments, test_mentions, test_dates, test_graph, test_recovered_copy, test_note_width, test_admin, test_vault_admins]
 
 
 def main():

@@ -103,7 +103,8 @@ read anything.
   administrator says otherwise) to sort out by moving each to a vault, or
   deleting it for good.
 * Move a note to another vault, with the attachments it links to
-  (`Move to vault…`, `notekpr mv … --to-vault`).
+  (`Move to vault…` in its menu in the file tree or the note's ⋯ menu,
+  `notekpr mv … --to-vault`).
 * A trash with restore, and the version history of every note with preview
   and restore.
 

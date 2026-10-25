@@ -282,7 +282,7 @@ pub async fn share(
     accept_new_key: bool,
 ) -> Result<ShareOutcome> {
     if role == Role::Owner {
-        bail!("a vault has exactly one owner; share as editor or viewer");
+        bail!("a vault has exactly one owner; share as admin, editor or viewer");
     }
     let (id, ring) = {
         let v = vault.lock().await;
@@ -292,6 +292,9 @@ pub async fn share(
     let user = find_user(session, user_ref).await?;
     if user.id == session.user_id {
         bail!("you already own this vault");
+    }
+    if role == Role::Admin && user.kind == PrincipalKind::Agent {
+        bail!("agents can't be vault admins; share as editor or viewer");
     }
     let verified = session.verify_user(&user)?;
     if let Some(vu) = &verified

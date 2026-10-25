@@ -152,6 +152,13 @@ device's public key, but the code would differ.
 
 ## 5. Vaults, members, keys
 
+Roles: `owner` (one per vault: members, keys, settings, deleting the vault),
+`admin` (an editor who also runs the vault's tasks: emptying the trash —
+deleting notes and attachments for good — and the activity log; people
+only, never agents), `editor` (writes, moves things to the trash) and
+`viewer` (reads; comments unless the owner turns it off, §6.1). Single notes
+are shared as `editor` or `viewer`. "editor/owner" below includes admins.
+
 | Endpoint | Role |
 |---|---|
 | `GET /vaults` | caller's vaults with role, `encrypted_meta`, `key_epoch`, `head_seq`, `viewers_comment` (§6.1) |
@@ -159,14 +166,14 @@ device's public key, but the code would differ.
 | `GET/PATCH/DELETE /vaults/{v}` | read: member; update (`encrypted_meta`, `archived`, `viewers_comment`): owner; delete: owner |
 | `GET /vaults/{v}/keys` | member: own envelopes for every epoch granted + full key chain; the notes' document keys (`objects`, `object_chain`), which notes are shared individually (`shared`; absent on servers from before notes had their own keys) and for those where sharing started (`share_from`: note → first shared epoch) |
 | `GET /vaults/{v}/members` | member: `MemberInfo {user (with account key), role, has_current_key}` |
-| `POST /vaults/{v}/members {user_id, role, key_envelope?, log_entry?}` | owner. Without an envelope the member is "pending keys" until the owner's client grants them. Role `owner` is refused (`400`); an agent can be added only by its owner (`404` otherwise). Membership supersedes single-note shares: adding someone removes their shares of notes in that vault and those notes' keys |
-| `PATCH /vaults/{v}/members/{u} {role, log_entry?}` | owner |
+| `POST /vaults/{v}/members {user_id, role, key_envelope?, log_entry?}` | owner. Without an envelope the member is "pending keys" until the owner's client grants them. Role `owner` is refused (`400`), and `admin` for an agent (`400`); an agent can be added only by its owner (`404` otherwise). Membership supersedes single-note shares: adding someone removes their shares of notes in that vault and those notes' keys |
+| `PATCH /vaults/{v}/members/{u} {role, log_entry?}` | owner; never to `owner`, nor `admin` for an agent (`400`) |
 | `DELETE /vaults/{v}/members/{u}` (optional body `{log_entry}`) | owner removes; any non-owner can remove themselves |
 | `GET /vaults/{v}/log?since=` | member: the membership log, `MemberLogResponse {entries}` (§5.2) |
 | `POST /vaults/{v}/log {entry}` | owner: a `checkpoint` (vaults without a log), a `rekey`, a `share` of a note already shared, `require_signed`, or a `remove` of someone who already left (§5.2) |
 | `POST /vaults/{v}/keys/grant {envelopes}` | owner fills missing envelopes for the current epoch |
 | `POST /vaults/{v}/keys/rotate {new_epoch, chain_link, encrypted_meta, envelopes, objects, log_entry?, without?}` | owner; `new_epoch = current + 1`; envelopes must cover exactly the members that have account keys, except those listed in `without` — left out on purpose because their account key changed and the owner hasn't verified it (they stay members without the current key and get it later through `keys/grant`); `objects` (`ObjectKeyChange {object_id, update}`) moves **every** note with a document key to its next epoch in the same transaction (each a rotation as in §5.1, wrapped under the new vault key), else `409` |
-| `GET /vaults/{v}/audit` | owner: the newest 500 membership, key and deletion events (no content) |
+| `GET /vaults/{v}/audit` | owner and admins: the newest 500 membership, key and deletion events (no content) |
 | `GET /users/search?q=` | humans matching a display-name prefix or exact e-mail (with `--user-directory exact-email`: exact e-mail only), plus the caller's own agents; at least 2 characters (shorter: no results), at most 10 results |
 | `GET /users/{id}` | public profile + account key of a user the caller may interact with; without the e-mail for people connected only through an individually shared note |
 
@@ -258,7 +265,8 @@ hand out vault keys the owner didn't make.
 | `unshare` | `object_id`, `user_id` | a note is no longer shared with them |
 | `require_signed` | `from_seq` | content after log sequence `from_seq` (snapshots covering more) must be signed by its author |
 
-A member is `{user_id, role, enc_public, sign_public}`. The signature is
+A member is `{user_id, role, enc_public, sign_public}` (`role` as in §5;
+in `share`, `editor` or `viewer`). The signature is
 Ed25519 over `statement("notekpr/v1/sig/member-log", [vault_id,
 seq:u64be, prev, signer, signed_at:i64be, body])`, where `body` is a
 length-prefixed encoding of the fields (never JSON). An entry's hash is
@@ -311,8 +319,8 @@ vault's events in strictly increasing order without gaps.**
 | `GET /vaults/{v}/objects/{o}` | `ObjectState`: latest snapshot + updates after it |
 | `POST /vaults/{v}/objects/{o}/snapshots {snapshot_id, covers_seq, payload, signature?, carries?}` | editor/owner (`409` unsigned where signatures are required, `400` for a bad signature). `404` if the object doesn't exist yet or was purged (a snapshot never creates an object), `409` for a `snapshot_id` already used, `413` over `max_snapshot_bytes`. Store a compaction (`payload` = encrypted full state). Updates covered by the *previous* snapshot are pruned — one generation is always kept so a bad snapshot is recoverable. One snapshot per person and note per `--snapshot-cooldown-secs` (default 30 s; `429` otherwise). `carries: true`: the state holds changes the log doesn't have — an update too large to push (`too_large`), which a client sends this way instead; the server sends the snapshot to everyone subscribed (`snapshot`) and with catch-ups (above), and its retention keeps the newest such snapshot of each note. |
 | `GET /vaults/{v}/objects/{o}/snapshots[/{id}]` | revision history (newest first); default retention 100 per object, never fewer than 2 |
-| `DELETE /vaults/{v}/objects/{o}` | editor/owner: permanently delete (emptying the trash). Not allowed for `index`. |
-| `PUT/GET/DELETE /vaults/{v}/attachments/{id}` | raw encrypted bytes (`application/octet-stream`). Upload: editor/owner; immutable: `201` when stored, `200` for a retry (same id and size), `409` for the same id with another size. Download: vault members only, never people a single note is shared with. Delete: editor/owner. |
+| `DELETE /vaults/{v}/objects/{o}` | owner and admins (editors get `403`: they move things to the trash, in the index): permanently delete (emptying the trash). Not allowed for `index`. |
+| `PUT/GET/DELETE /vaults/{v}/attachments/{id}` | raw encrypted bytes (`application/octet-stream`). Upload: editor/owner; immutable: `201` when stored, `200` for a retry (same id and size), `409` for the same id with another size. Download: vault members only, never people a single note is shared with. Delete (for good, emptying the trash): owner and admins. |
 
 **Client rules**
 

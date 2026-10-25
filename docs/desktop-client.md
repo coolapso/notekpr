@@ -163,7 +163,7 @@ vault-relative, `.md` is optional for notes.
 | `vault icon <v> <emoji>` / `vault icon <v> --remove` | owner only; the vault's icon (replaces a picture set in the browser) |
 | `vault viewers-comment <v> on\|off` | owner only; whether viewers (and people its notes are shared with read-only) may comment (on by default) |
 | `vault members <v>` | members, roles, key fingerprints and pin status |
-| `vault share <v> <user> --role editor\|viewer` | owner only; for an existing member it changes their role; see [§8](#8-sharing-members-and-keys) |
+| `vault share <v> <user> --role admin\|editor\|viewer` | owner only; for an existing member it changes their role; admins (people only) also empty the trash; see [§8](#8-sharing-members-and-keys) |
 | `vault unshare <v> <user>` / `vault rotate <v>` / `vault leave <v>` | unshare and rotate: owner only; removal always rotates the key; the owner can't leave (delete instead) |
 | `ls <v> [folder] [-r]` | folders, notes and attachments, in the sidebar's order (`-r`: each folder followed by what's in it) |
 | `cat <v> <path>` | note text (or attachment bytes) |
@@ -177,7 +177,7 @@ vault-relative, `.md` is optional for notes.
 | `@Name` in a comment's text | mentions that member of the vault (any case; longer names win: `@Ann Lee` over `@Ann`). Only the vault's members can be mentioned: other `@words` stay text, with a warning. The output says whom it mentioned |
 | `mentions [--vault v] [--unread] [--mark-read] [--limit n]` | comments that mention you, newest first (`*`: not read on any device yet), with the note, who and when; `--mark-read` marks them read everywhere (the web app's inbox too), with everything before them |
 | `icon <v> <path> <emoji>` / `icon <v> <path> --remove` | a note's, attachment's or folder's icon; `ls` and `vault list` show icons, and people a note is shared with see its icon and new name |
-| `trash list\|restore\|empty <v>` | restore by path or id; `empty` deletes permanently (asks first; `--yes`) |
+| `trash list\|restore\|empty <v>` | restore by path or id; `empty` deletes permanently (the vault's owner and admins; asks first; `--yes`) |
 | `search <query> [--vault v] [--limit n]` | terms, `"phrases"`, `tag:x`, `folder:x`, `title:x`, `vault:x`; 20 results unless `--limit` |
 | `backlinks <v> <path>` | notes linking to a note |
 | `history <v> <path>`, `history show\|restore <v> <path> <rev>` | encrypted revisions stored on the server |
@@ -515,6 +515,10 @@ once you share with them again with `--accept-new-key`.
 * Only the owner can share, unshare and rotate. Running `vault share` again
   for someone who is already a member changes their role to the given
   `--role`.
+* Roles: `editor` writes and moves things to the trash; `admin` also empties
+  the trash (deleting for good, which editors can't) and sees the vault's
+  activity log — people only, never agents; `viewer` reads (and comments,
+  unless the owner turns it off).
 * People who have not set up encryption yet are added without a key; your
   client wraps the vault key for them automatically once they have (during
   `sync`, `vault members`, or any sync of that vault).

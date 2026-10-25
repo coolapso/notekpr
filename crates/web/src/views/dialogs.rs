@@ -376,8 +376,9 @@ fn Share(vault: String) -> impl IntoView {
             {move || err.get().map(|e| view! { <div class="alert error">{e}</div> })}
             <div class="share-add">
                 <input class="input grow" placeholder="Add people by name or e-mail…" prop:value=move || q.get() on:input=move |ev| do_search(event_target_value(&ev))/>
-                <select class="input" on:change=move |ev| role.set(if event_target_value(&ev) == "viewer" { Role::Viewer } else { Role::Editor })>
-                    <option value="editor">"Can edit"</option>
+                <select class="input share-role" on:change=move |ev| role.set(member_role(&event_target_value(&ev)))>
+                    <option value="admin" title=ADMIN_HINT>"Admin"</option>
+                    <option value="editor" selected=true>"Can edit"</option>
                     <option value="viewer">"Can view"</option>
                 </select>
             </div>
@@ -385,6 +386,7 @@ fn Share(vault: String) -> impl IntoView {
                 {move || found.get().into_iter().filter(|u| !members.get().iter().any(|m| m.user.id == u.id)).map(|u| {
                     let v = vs.clone();
                     let u2 = u.clone();
+                    let agent = u.kind == PrincipalKind::Agent;
                     let fp = actions::fingerprint(&u);
                     let reload = reload2.clone();
                     let pin = actions::pin_status(&u);
@@ -401,7 +403,12 @@ fn Share(vault: String) -> impl IntoView {
                             {(pin == Some(PinStatus::Changed)).then(|| { let u3 = u.clone(); view! {
                                 <button class="btn small" on:click=move |_| { actions::trust_key(&u3); state::success("New key trusted."); }>"I verified it"</button>
                             }})}
-                            <button class="btn small primary" disabled=move || busy.get() on:click=move |_| {
+                            {agent.then(|| view! {
+                                <Show when=move || role.get() == Role::Admin>
+                                    <span class="muted small">"Agents can't be admins"</span>
+                                </Show>
+                            })}
+                            <button class="btn small primary" disabled=move || busy.get() || (agent && role.get() == Role::Admin) on:click=move |_| {
                                 busy.set(true);
                                 let (v, u, r) = (v.clone(), u2.clone(), role.get_untracked());
                                 let reload = reload.clone();
@@ -456,12 +463,15 @@ fn Share(vault: String) -> impl IntoView {
                                 view! { <span class="muted small">"Owner"</span> }.into_any()
                             } else {
                                 view! {
-                                    <select class="input small" on:change=move |ev| {
-                                        let r = if event_target_value(&ev) == "viewer" { Role::Viewer } else { Role::Editor };
+                                    <select class="input small member-role" on:change=move |ev| {
+                                        let r = member_role(&event_target_value(&ev));
                                         let (v, u) = (v.clone(), uid.clone());
                                         let reload = reload.clone();
                                         leptos::task::spawn_local(async move { actions::set_role(&v, &u, r).await; reload(); });
                                     }>
+                                        {(m.user.kind != PrincipalKind::Agent).then(|| view! {
+                                            <option value="admin" title=ADMIN_HINT selected=m.role == Role::Admin>"Admin"</option>
+                                        })}
                                         <option value="editor" selected=m.role == Role::Editor>"Can edit"</option>
                                         <option value="viewer" selected=m.role == Role::Viewer>"Can view"</option>
                                     </select>
@@ -477,9 +487,21 @@ fn Share(vault: String) -> impl IntoView {
                     }
                 }).collect_view()}
             </div>
+            <p class="muted small">"Admins can also edit, empty the trash and see the activity log. Only the owner manages people and the vault's settings."</p>
             <p class="muted small"><Icon name="shield"/>" Sharing sends the vault key encrypted to each person's own key. The server can't read it, and every change to who has access is signed by the vault's owner. Removing someone rotates the key."</p>
             {let _ = ui;}
         </Dialog>
+    }
+}
+
+const ADMIN_HINT: &str = "Can edit, empty the trash and see the activity log";
+
+/// A vault member's role as chosen in a role `<select>`.
+fn member_role(value: &str) -> Role {
+    match value {
+        "admin" => Role::Admin,
+        "viewer" => Role::Viewer,
+        _ => Role::Editor,
     }
 }
 
@@ -831,10 +853,11 @@ fn EntryIconDialog(vault: String, id: Option<String>, path: String, folder: bool
 #[component]
 fn VaultSettings(vault: String) -> impl IntoView {
     let ui = ui();
-    let (name, owner, archived, epoch) = step(|c| {
+    let (name, owner, admin, archived, epoch) = step(|c| {
         (
             c.vault_name(&vault),
             c.is_owner(&vault),
+            c.can_administer(&vault),
             c.vault_infos.get(&vault).is_some_and(|i| i.archived),
             c.replicas
                 .get(&vault)
@@ -855,7 +878,7 @@ fn VaultSettings(vault: String) -> impl IntoView {
         vault.clone(),
         vault.clone(),
     );
-    let v9 = vault.clone();
+    let (v9, va) = (vault.clone(), vault.clone());
     view! {
         <Dialog title="Vault settings" wide=true>
             <Show when=move || owner fallback=|| view! { <p class="muted">"Only the owner can change this vault's settings."</p> }>
@@ -913,8 +936,15 @@ fn VaultSettings(vault: String) -> impl IntoView {
                             }><Icon name="key"/>" Rotate encryption key"</button>
                             <button class="btn" on:click={ let v7 = v7.clone(); move |_| { let v = v7.clone(); leptos::task::spawn_local(async move { actions::set_archived(&v, !archived).await; }); ui.modal.set(None); } }>
                                 <Icon name="archive"/>{if archived { " Unarchive" } else { " Archive" }}</button>
-                            <button class="btn" on:click={
-                                let v = v7.clone();
+                        }
+                    }
+                </Show>
+                <Show when=move || admin>
+                    {
+                        let va = va.clone();
+                        view! {
+                            <button class="btn activity-log" on:click={
+                                let v = va.clone();
                                 move |_| {
                                     show_audit.set(true);
                                     let v = v.clone();

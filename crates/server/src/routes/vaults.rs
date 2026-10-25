@@ -28,6 +28,8 @@ use crate::state::AppState;
 
 const MAX_META_BYTES: usize = 16 * 1024;
 const MAX_ENVELOPE_BYTES: usize = 1024;
+/// Vault admins delete things for good: people only, never an agent.
+const AGENT_NOT_ADMIN: &str = "agents can't be vault admins";
 
 pub async fn list(
     State(state): State<AppState>,
@@ -285,6 +287,9 @@ pub async fn add_member(
     if target.is_agent() && target.owner_id.as_deref() != Some(who.user_id.as_str()) {
         return Err(AppError::NotFound);
     }
+    if target.is_agent() && req.role == Role::Admin {
+        return Err(bad(AGENT_NOT_ADMIN));
+    }
     let check_envelope = |epoch: u32| match &req.key_envelope {
         Some(env)
             if env.user_id != req.user_id
@@ -384,6 +389,15 @@ pub async fn update_member(
         access::require_owner(&mut *tx, &v, &who.user_id).await?;
         if repo::vaults::set_member_role(&mut *tx, &v, &u, req.role).await? == 0 {
             return Err(AppError::NotFound);
+        }
+        // Only for members (anyone else is 404 above), so whether an id is
+        // an agent's doesn't show.
+        if req.role == Role::Admin
+            && repo::users::principal(&mut *tx, &u)
+                .await?
+                .is_some_and(|p| p.is_agent())
+        {
+            return Err(bad(AGENT_NOT_ADMIN));
         }
         member_log::check_and_append(
             &mut tx,
@@ -667,6 +681,6 @@ pub async fn audit(
     who: Principal,
     Path(v): Path<String>,
 ) -> AppResult<Json<Vec<AuditEntry>>> {
-    access::require_owner(&state.db, &v, &who.user_id).await?;
+    access::require_admin(&state.db, &v, &who.user_id).await?;
     Ok(Json(repo::audit::for_vault(&state.db, &v).await?))
 }

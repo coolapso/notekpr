@@ -876,12 +876,18 @@ pub async fn put_attachment(
     Ok(finish(hub, &vault_id, res, data).await)
 }
 
-/// Permanently delete everything in a vault's trash (server and index).
+/// Permanently delete everything in a vault's trash (server and index): the
+/// vault's owner and admins only.
 pub async fn empty_trash(hub: &Hub, vref: &str) -> OpResult<usize> {
     let v = vault(hub, vref).await?;
     let (vid, entries) = {
         let g = v.lock().await;
         check_write(hub, &g)?;
+        if !g.role().can_administer() {
+            return Err(OpError::Forbidden(
+                "only the vault's owner and its admins can empty the trash".into(),
+            ));
+        }
         (g.id().to_string(), g.trashed())
     };
     let api = &hub.session.api;

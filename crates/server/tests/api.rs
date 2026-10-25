@@ -2127,12 +2127,13 @@ async fn role_dependent_writes_follow_role_changes() {
         log_entry: None,
     };
 
-    // As an editor, bob writes; only the owner manages shares and the vault.
+    // As an editor, bob writes; only the owner manages shares and the vault,
+    // and deletes for good.
     assert_eq!(put_attachment(&bob, &v, "a1").await, 201);
     assert_eq!(put_attachment(&bob, &v, "a2").await, 201);
     let a1 = format!("/vaults/{v}/attachments/a1");
     let a2 = format!("/vaults/{v}/attachments/a2");
-    assert_eq!(bob.api.status::<()>(Method::DELETE, &a1, None).await, 204);
+    assert_eq!(bob.api.status::<()>(Method::DELETE, &a1, None).await, 403);
     assert_eq!(
         bob.api
             .status(Method::PUT, &meta_path, Some(&title("Plan B")))
@@ -2260,6 +2261,222 @@ async fn role_dependent_writes_follow_role_changes() {
     );
     // The owner still can.
     assert_eq!(alice.api.status::<()>(Method::DELETE, &a2, None).await, 204);
+}
+
+/// Editors move things to the trash; only the vault's owner and its admins
+/// delete them for good (notes and attachments) and read the activity log.
+/// Admins are people, never agents, and single notes aren't shared as admin.
+#[tokio::test]
+async fn only_the_owner_and_admins_delete_for_good() {
+    let srv = start().await;
+    let mut alice = new_user(&srv.base, "alice").await;
+    let mut bob = new_user(&srv.base, "bob").await;
+    let mut carol = new_user(&srv.base, "carol").await;
+    let v = alice.create_vault("Team").await;
+    alice.share(&v, &bob.id, Role::Editor).await.unwrap();
+    alice.share(&v, &carol.id, Role::Editor).await.unwrap();
+    bob.load_keys(&v).await.unwrap();
+    carol.load_keys(&v).await.unwrap();
+    for n in ["n1", "n2"] {
+        let u = NoteDoc::new().set_text("carol's work").unwrap();
+        carol
+            .push(&v, vec![carol.encrypt_update(&v, n, &u)])
+            .await
+            .unwrap();
+    }
+    assert_eq!(put_attachment(&carol, &v, "a1").await, 201);
+    assert_eq!(put_attachment(&carol, &v, "a2").await, 201);
+    let object = |o: &str| format!("/vaults/{v}/objects/{o}");
+    let attachment = |a: &str| format!("/vaults/{v}/attachments/{a}");
+    let audit = format!("/vaults/{v}/audit");
+    let bob_member = format!("/vaults/{v}/members/{}", bob.id);
+    let role = |role: Role| UpdateMemberRequest {
+        role,
+        log_entry: None,
+    };
+
+    // Editors can't destroy what others wrote, nor read the activity log.
+    for (who, what) in [(&bob, object("n1")), (&carol, object("n1"))] {
+        assert_eq!(who.api.status::<()>(Method::DELETE, &what, None).await, 403);
+    }
+    for who in [&bob, &carol] {
+        assert_eq!(
+            who.api
+                .status::<()>(Method::DELETE, &attachment("a1"), None)
+                .await,
+            403
+        );
+        assert_eq!(who.api.status::<()>(Method::GET, &audit, None).await, 403);
+    }
+
+    // Made an admin, bob still writes, and empties the trash.
+    assert_eq!(
+        alice
+            .api
+            .status(Method::PATCH, &bob_member, Some(&role(Role::Admin)))
+            .await,
+        204
+    );
+    let info: VaultInfo = bob.api.get(&format!("/vaults/{v}")).await;
+    assert_eq!(info.role, Role::Admin);
+    let members: Vec<MemberInfo> = carol.api.get(&format!("/vaults/{v}/members")).await;
+    assert!(
+        members
+            .iter()
+            .any(|m| m.user.id == bob.id && m.role == Role::Admin)
+    );
+    let u = NoteDoc::new().set_text("bob's").unwrap();
+    bob.push(&v, vec![bob.encrypt_update(&v, "n3", &u)])
+        .await
+        .unwrap();
+    assert_eq!(
+        bob.api
+            .status::<()>(Method::DELETE, &object("n1"), None)
+            .await,
+        204
+    );
+    assert_eq!(
+        bob.api
+            .status::<()>(Method::DELETE, &attachment("a1"), None)
+            .await,
+        204
+    );
+    let ch: ChangesResponse = carol.api.get(&format!("/vaults/{v}/changes?since=0")).await;
+    assert!(ch.purged.iter().any(|p| p.object_id == "n1"));
+    let log: Vec<AuditEntry> = bob.api.get(&audit).await;
+    assert!(log.iter().any(|a| a.action == "object.purge"));
+
+    // Members, roles and the vault's settings stay the owner's.
+    assert_eq!(
+        bob.api
+            .status(
+                Method::PATCH,
+                &format!("/vaults/{v}/members/{}", carol.id),
+                Some(&role(Role::Viewer))
+            )
+            .await,
+        403
+    );
+    let archive = UpdateVaultRequest {
+        archived: Some(true),
+        ..Default::default()
+    };
+    assert_eq!(
+        bob.api
+            .status(Method::PATCH, &format!("/vaults/{v}"), Some(&archive))
+            .await,
+        403
+    );
+
+    // Back to editor, bob can't any more; the owner always can.
+    assert_eq!(
+        alice
+            .api
+            .status(Method::PATCH, &bob_member, Some(&role(Role::Editor)))
+            .await,
+        204
+    );
+    assert_eq!(
+        bob.api
+            .status::<()>(Method::DELETE, &object("n2"), None)
+            .await,
+        403
+    );
+    assert_eq!(bob.api.status::<()>(Method::GET, &audit, None).await, 403);
+    assert_eq!(
+        alice
+            .api
+            .status::<()>(Method::DELETE, &object("n2"), None)
+            .await,
+        204
+    );
+    assert_eq!(
+        alice
+            .api
+            .status::<()>(Method::DELETE, &attachment("a2"), None)
+            .await,
+        204
+    );
+
+    // Agents are never admins: not when added, not later.
+    let agent: CreateAgentResponse = alice
+        .api
+        .post(
+            "/agents",
+            &CreateAgentRequest {
+                name: "Assistant".into(),
+            },
+        )
+        .await;
+    let aid = agent.agent.id.clone();
+    let add = |role: Role| AddMemberRequest {
+        user_id: aid.clone(),
+        role,
+        key_envelope: None,
+        log_entry: None,
+    };
+    let members_path = format!("/vaults/{v}/members");
+    let agent_member = format!("/vaults/{v}/members/{aid}");
+    // Not a member yet: 404, as for anyone (it doesn't tell agents apart).
+    assert_eq!(
+        alice
+            .api
+            .status(Method::PATCH, &agent_member, Some(&role(Role::Admin)))
+            .await,
+        404
+    );
+    assert_eq!(
+        alice
+            .api
+            .status(Method::POST, &members_path, Some(&add(Role::Admin)))
+            .await,
+        400
+    );
+    assert_eq!(
+        alice
+            .api
+            .status(Method::POST, &members_path, Some(&add(Role::Viewer)))
+            .await,
+        201
+    );
+    assert_eq!(
+        alice
+            .api
+            .status(Method::PATCH, &agent_member, Some(&role(Role::Admin)))
+            .await,
+        400
+    );
+    let members: Vec<MemberInfo> = alice.api.get(&members_path).await;
+    assert!(
+        members
+            .iter()
+            .any(|m| m.user.id == aid && m.role == Role::Viewer)
+    );
+
+    // A single note is shared as editor or viewer only.
+    let dave = new_user(&srv.base, "dave").await;
+    let share = AddObjectShareRequest {
+        user_id: dave.id.clone(),
+        role: Role::Admin,
+        envelope: KeyEnvelope {
+            user_id: dave.id.clone(),
+            epoch: 1,
+            envelope: vec![1; 60],
+            signature: None,
+        },
+        log_entry: None,
+    };
+    assert_eq!(
+        alice
+            .api
+            .status(
+                Method::POST,
+                &format!("/vaults/{v}/objects/n3/shares"),
+                Some(&share)
+            )
+            .await,
+        400
+    );
 }
 
 async fn put_key(u: &User, v: &str, o: &str, req: &ObjectKeyUpdate) -> Result<(), u16> {

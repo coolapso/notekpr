@@ -440,6 +440,15 @@ pub enum ShareRole {
     Viewer,
 }
 
+/// A vault member's role.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum, Serialize, Deserialize)]
+pub enum MemberRole {
+    /// Can edit, empty the trash and see the activity log (people only).
+    Admin,
+    Editor,
+    Viewer,
+}
+
 #[derive(Subcommand, Clone, Debug, Serialize, Deserialize)]
 pub enum VaultCmd {
     /// List vaults.
@@ -469,13 +478,14 @@ pub enum VaultCmd {
     },
     /// List members with their key fingerprints.
     Members { vault: String },
-    /// Share with a person or one of your agents (verifies and pins their key).
+    /// Share with a person or one of your agents (verifies and pins their key),
+    /// or change a member's role.
     Share {
         vault: String,
         /// User id, exact e-mail or display name.
         user: String,
-        #[arg(long, value_enum, default_value_t = ShareRole::Editor)]
-        role: ShareRole,
+        #[arg(long, value_enum, default_value_t = MemberRole::Editor)]
+        role: MemberRole,
         /// Accept a changed account key after verifying it out of band.
         #[arg(long)]
         accept_new_key: bool,
@@ -510,7 +520,7 @@ pub enum TrashCmd {
     List { vault: String },
     /// Restore an entry by path or id.
     Restore { vault: String, entry: String },
-    /// Permanently delete everything in the trash.
+    /// Permanently delete everything in the trash (owner and admins).
     Empty {
         vault: String,
         #[arg(long)]

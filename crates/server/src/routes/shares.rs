@@ -459,7 +459,7 @@ pub async fn add(
     who.require_human()?;
     check_object(&o)?;
     access::require_owner(&state.db, &v, &who.user_id).await?;
-    if req.role == Role::Owner {
+    if !matches!(req.role, Role::Editor | Role::Viewer) {
         return Err(bad("notes can be shared as editor or viewer"));
     }
     let target = repo::users::principal(&state.db, &req.user_id)
@@ -578,7 +578,7 @@ pub async fn update(
 ) -> AppResult<StatusCode> {
     who.require_human()?;
     access::require_owner(&state.db, &v, &who.user_id).await?;
-    if req.role == Role::Owner {
+    if !matches!(req.role, Role::Editor | Role::Viewer) {
         return Err(bad("notes can be shared as editor or viewer"));
     }
     {

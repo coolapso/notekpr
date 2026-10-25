@@ -803,6 +803,62 @@ async fn unsent_edits_refused_because_their_note_is_gone_are_kept() {
     assert!(note(&bh, &vid, "Soup (recovered 2).md").await.is_none());
 }
 
+/// Editors move notes to the trash; emptying it is the owner's and the
+/// vault's admins'. The owner makes someone an admin in the signed log.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn only_the_owner_and_admins_empty_the_trash() {
+    let srv = start().await;
+    let alice = login(&srv, "alice").await;
+    let bob = login(&srv, "bob").await;
+    manage::create_vault(&alice, "Home").await.unwrap();
+    let ah = hub(&alice).await;
+    for name in ["Soup.md", "Stew.md"] {
+        ops::put_document(&ah, "Home", name, "leeks\n", None)
+            .await
+            .unwrap();
+    }
+    let av = ah.resolve("Home").await.unwrap();
+    let vid = av.lock().await.id().to_string();
+    manage::share(&alice, &av, "bob", Role::Editor, false)
+        .await
+        .unwrap();
+    let bh = hub(&bob).await;
+    let bv = bh.resolve(&vid).await.unwrap();
+
+    // As an editor, bob trashes and restores, but can't delete for good.
+    ops::delete_document(&bh, &vid, "Soup.md").await.unwrap();
+    let err = ops::empty_trash(&bh, &vid).await.unwrap_err();
+    assert!(matches!(err, ops::OpError::Forbidden(_)), "{err:?}");
+    assert_eq!(bv.lock().await.trashed().len(), 1);
+
+    // Made an admin, he can.
+    let out = manage::share(&alice, &av, "bob", Role::Admin, false)
+        .await
+        .unwrap();
+    assert!(out.updated_role);
+    bob.refresh_vault(&bv).await.unwrap();
+    assert_eq!(bv.lock().await.role(), Role::Admin);
+    assert_eq!(ops::empty_trash(&bh, &vid).await.unwrap(), 1);
+    ah.sync_vault(&vid).await.unwrap();
+    assert!(av.lock().await.trashed().is_empty());
+    assert!(note(&ah, &vid, "Soup.md").await.is_none());
+
+    // So does the owner, whatever an admin trashed.
+    ops::delete_document(&bh, &vid, "Stew.md").await.unwrap();
+    ah.sync_vault(&vid).await.unwrap();
+    assert_eq!(ops::empty_trash(&ah, &vid).await.unwrap(), 1);
+
+    // Agents are never admins.
+    let agent = manage::create_agent(&alice, "Helper").await.unwrap();
+    let Err(err) = manage::share(&alice, &av, &agent.agent.id, Role::Admin, false).await else {
+        panic!("an agent was made an admin");
+    };
+    assert!(
+        err.to_string().contains("agents can't be vault admins"),
+        "{err:#}"
+    );
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_read_only_server_keeps_edits_until_it_accepts_them_again() {
     use notekpr_core::protocol::{InstanceSettingsUpdate, ReadOnly};

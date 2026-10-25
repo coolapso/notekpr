@@ -1376,8 +1376,9 @@ pub fn restore(vault: &str, id: &str) {
     }
 }
 
-/// Permanently delete a trashed entry (server data and index entry).
-pub async fn purge(vault: &str, id: &str) {
+/// Permanently delete a trashed entry (server data and index entry): the
+/// vault's owner and admins only. Returns whether it is gone.
+pub async fn purge(vault: &str, id: &str) -> bool {
     let kind = state::step(|c| c.entry(vault, id)).map(|e| e.kind);
     let r = match kind {
         Some(EntryKind::Attachment) => {
@@ -1390,8 +1391,12 @@ pub async fn purge(vault: &str, id: &str) {
         Ok(()) | Err(api::Error { status: 404, .. }) => {
             step(|c| change_index(c, vault, |ix| ix.remove(id)));
             state::ui().tree_rev.update(|v| *v += 1);
+            true
         }
-        Err(e) => error(e.message),
+        Err(e) => {
+            error(e.message);
+            false
+        }
     }
 }
 
@@ -1408,7 +1413,9 @@ pub async fn empty_trash(vault: &str) {
     })
     .unwrap_or_default();
     for id in ids {
-        purge(vault, &id).await;
+        if !purge(vault, &id).await {
+            return;
+        }
     }
     success("Trash emptied.");
 }

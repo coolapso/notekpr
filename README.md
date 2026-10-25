@@ -104,9 +104,10 @@ read anything.
 
 **Working together**
 
-* Share a vault as editor or viewer, or a single note with someone outside
-  the vault. Leave a vault shared with you, or remove a shared note from your
-  list.
+* Share a vault as admin, editor or viewer, or a single note with someone
+  outside the vault. Editors move notes to the trash; only the owner and the
+  vault's admins delete for good, and see the vault's activity log. Leave a
+  vault shared with you, or remove a shared note from your list.
 * Edit the same note at the same time with live cursors, and see who else is
   on the note you're on. Edits merge without conflicts (CRDTs), also after
   working offline.

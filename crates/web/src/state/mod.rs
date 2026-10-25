@@ -635,6 +635,12 @@ impl Core {
         self.role(vault) == Some(Role::Owner)
     }
 
+    /// The vault's tasks (emptying the trash, the activity log): its owner
+    /// and admins.
+    pub fn can_administer(&self, vault: &str) -> bool {
+        self.role(vault).is_some_and(|r| r.can_administer())
+    }
+
     pub fn ensure_note_loaded(&mut self, vault: &str, note: &str) {
         if let Some(r) = self.replicas.get_mut(vault) {
             r.notes.entry(note.to_string()).or_insert_with(NoteDoc::new);

@@ -157,7 +157,7 @@ CREATE INDEX vaults_owner ON vaults(owner_id);
 CREATE TABLE vault_members (
     vault_id TEXT NOT NULL REFERENCES vaults(id) ON DELETE CASCADE,
     user_id  TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    role     TEXT NOT NULL CHECK (role IN ('owner', 'editor', 'viewer')),
+    role     TEXT NOT NULL CHECK (role IN ('owner', 'admin', 'editor', 'viewer')),
     added_by TEXT,
     added_at INTEGER NOT NULL,
     PRIMARY KEY (vault_id, user_id)

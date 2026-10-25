@@ -35,7 +35,7 @@ pub async fn share_note(
     role: Role,
     accept_new_key: bool,
 ) -> Result<ShareOutcome> {
-    if role == Role::Owner {
+    if !matches!(role, Role::Editor | Role::Viewer) {
         bail!("notes can be shared as editor or viewer");
     }
     let (id, note_id) = {

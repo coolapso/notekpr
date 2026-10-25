@@ -38,22 +38,35 @@ pub const DEV_ISSUER: &str = "urn:notekpr:dev";
 #[serde(rename_all = "lowercase")]
 pub enum Role {
     Owner,
+    /// An editor the owner trusts with the vault's tasks
+    /// ([`Role::can_administer`]). Only people, not agents; never for
+    /// single notes.
+    Admin,
     Editor,
     Viewer,
 }
 
 impl Role {
     pub fn can_write(self) -> bool {
-        matches!(self, Role::Owner | Role::Editor)
+        matches!(self, Role::Owner | Role::Admin | Role::Editor)
     }
 
+    /// Members, keys and the vault's settings: the owner's alone (the
+    /// owner signs the membership log).
     pub fn can_manage(self) -> bool {
         matches!(self, Role::Owner)
+    }
+
+    /// The vault's tasks: emptying the trash, deleting notes and
+    /// attachments for good, reading the activity log.
+    pub fn can_administer(self) -> bool {
+        matches!(self, Role::Owner | Role::Admin)
     }
 
     pub fn as_str(self) -> &'static str {
         match self {
             Role::Owner => "owner",
+            Role::Admin => "admin",
             Role::Editor => "editor",
             Role::Viewer => "viewer",
         }
@@ -62,6 +75,7 @@ impl Role {
     pub fn parse(s: &str) -> Option<Role> {
         match s {
             "owner" => Some(Role::Owner),
+            "admin" => Some(Role::Admin),
             "editor" => Some(Role::Editor),
             "viewer" => Some(Role::Viewer),
             _ => None,
@@ -1538,6 +1552,21 @@ mod tests {
         assert!(s.contains(r#""payload":"AQID""#));
         let back: ClientMessage = serde_json::from_str(&s).unwrap();
         assert!(matches!(back, ClientMessage::Push { .. }));
+    }
+
+    #[test]
+    fn roles_read_as_they_are_written() {
+        for r in [Role::Owner, Role::Admin, Role::Editor, Role::Viewer] {
+            let json = serde_json::to_string(&r).unwrap();
+            assert_eq!(json, format!("\"{}\"", r.as_str()));
+            assert_eq!(serde_json::from_str::<Role>(&json).unwrap(), r);
+            assert_eq!(Role::parse(r.as_str()), Some(r));
+        }
+        // Admins write and run the vault's tasks; only the owner manages it.
+        assert!(Role::Admin.can_write() && Role::Admin.can_administer());
+        assert!(!Role::Admin.can_manage());
+        assert!(Role::Editor.can_write() && !Role::Editor.can_administer());
+        assert!(Role::Owner.can_administer() && Role::Owner.can_manage());
     }
 
     #[test]

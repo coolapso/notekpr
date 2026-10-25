@@ -40,6 +40,7 @@ pub fn Home() -> impl IntoView {
                         let (label, icon) = match (v.role, v.shared) {
                             (Role::Owner, false) => ("Private", "lock"),
                             (Role::Owner, true) => ("Shared by you", "users"),
+                            (Role::Admin, _) => ("Shared with you · admin", "users"),
                             (Role::Editor, _) => ("Shared with you", "users"),
                             (Role::Viewer, _) => ("Shared with you · read only", "eye"),
                         };
@@ -205,16 +206,22 @@ pub fn Trash(vault: String) -> impl IntoView {
         ui.vaults.get();
         state::step(|c| c.can_write(&v))
     };
+    // Deleting for good is the owner's and admins' (editors only restore).
+    let v = vault.clone();
+    let admin = move || {
+        ui.vaults.get();
+        state::step(|c| c.can_administer(&v))
+    };
     let items2 = items.clone();
     let ve = vault.clone();
     let vi = vault.clone();
-    let w2 = writable.clone();
+    let (w2, a2, a3) = (writable.clone(), admin.clone(), admin.clone());
     view! {
         <div class="page">
             <header class="page-head">
                 <button class="icon-btn mobile-only" title="Menu" aria-label="Menu" on:click=move |_| ui.sidebar.set(true)><Icon name="menu"/></button>
                 <h1 class="grow">"Trash"</h1>
-                <Show when=move || writable() && !items2().is_empty()>
+                <Show when=move || admin() && !items2().is_empty()>
                     {
                         let ve = ve.clone();
                         view! {
@@ -230,12 +237,16 @@ pub fn Trash(vault: String) -> impl IntoView {
             </header>
             <div class="page-body">
                 <p class="muted small">"Deleted notes stay here until the trash is emptied. Older versions of notes are also kept in each note's history."</p>
+                {move || (w2() && !a2()).then(|| view! {
+                    <p class="muted small trash-admins">"Only the vault's owner and its admins can delete things for good."</p>
+                })}
                 {move || {
                     let list = items();
                     if list.is_empty() {
                         return view! { <p class="muted">"The trash is empty."</p> }.into_any();
                     }
-                    let writable = w2();
+                    let writable = writable();
+                    let admin = a3();
                     view! {
                         <div class="list">
                             {list.into_iter().map(|e| {
@@ -250,10 +261,12 @@ pub fn Trash(vault: String) -> impl IntoView {
                                         </div>
                                         {writable.then(|| view! {
                                             <button class="btn small" on:click=move |_| actions::restore(&v1, &id1)>"Restore"</button>
+                                        })}
+                                        {admin.then(|| view! {
                                             <button class="btn small danger" on:click=move |_| {
                                                 if util::confirm("Delete this permanently? This cannot be undone.") {
                                                     let (v, id) = (v2.clone(), id2.clone());
-                                                    leptos::task::spawn_local(async move { actions::purge(&v, &id).await });
+                                                    leptos::task::spawn_local(async move { actions::purge(&v, &id).await; });
                                                 }
                                             }>"Delete forever"</button>
                                         })}

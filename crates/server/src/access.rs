@@ -130,6 +130,20 @@ pub async fn require_owner(
     }
 }
 
+/// The vault's tasks (emptying the trash, deleting for good, the activity
+/// log): its owner and admins.
+pub async fn require_admin(
+    db: impl SqliteExecutor<'_>,
+    vault_id: &str,
+    user_id: &str,
+) -> AppResult<()> {
+    if member_role(db, vault_id, user_id).await?.can_administer() {
+        Ok(())
+    } else {
+        Err(forbidden("only the vault's owner and admins can do this"))
+    }
+}
+
 pub async fn require_writer(
     db: impl SqliteExecutor<'_>,
     vault_id: &str,

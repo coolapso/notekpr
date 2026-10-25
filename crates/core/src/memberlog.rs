@@ -586,7 +586,7 @@ impl LogState {
                         "members don't need single notes shared",
                     ));
                 }
-                if member.role == Role::Owner {
+                if !matches!(member.role, Role::Editor | Role::Viewer) {
                     return Err(LogError::Invalid(n, "notes are shared as editor or viewer"));
                 }
                 let who = (object_id.clone(), member.user_id.clone());
@@ -964,6 +964,7 @@ fn key32(b: &[u8]) -> Result<Key32, LogError> {
 fn role_tag(r: Role) -> &'static [u8] {
     match r {
         Role::Owner => b"owner",
+        Role::Admin => b"admin",
         Role::Editor => b"editor",
         Role::Viewer => b"viewer",
     }
@@ -1069,6 +1070,78 @@ mod tests {
         assert_eq!(s.check_key(2, &k1), Err(KeyCheckError::Mismatch(2)));
         assert_eq!(s.check_key(3, &k2), Err(KeyCheckError::Unannounced(3)));
         assert_eq!(s.head_seq, 6);
+    }
+
+    #[test]
+    fn admins_are_signed_members_who_write_but_never_get_single_notes() {
+        let (alice, bob, carol, dave) = (
+            person("alice"),
+            person("bob"),
+            person("carol"),
+            person("dave"),
+        );
+        let anchor = alice.secret.public();
+        let (mut log, _) = created(&alice);
+        append(
+            &mut log,
+            &alice,
+            LogBody::Add {
+                member: member(&bob, Role::Admin),
+            },
+        );
+        append(
+            &mut log,
+            &alice,
+            LogBody::Add {
+                member: member(&carol, Role::Viewer),
+            },
+        );
+        append(
+            &mut log,
+            &alice,
+            LogBody::Role {
+                user_id: "carol".into(),
+                role: Role::Admin,
+            },
+        );
+        append(&mut log, &alice, LogBody::RequireSigned { from_seq: 0 });
+        let s = LogState::verify(V, &anchor, &log).unwrap();
+        assert!(s.vouches_for("bob", Role::Admin, &bob.secret.public()));
+        assert!(!s.vouches_for("bob", Role::Editor, &bob.secret.public()));
+        assert_eq!(s.member("carol").unwrap().role, Role::Admin);
+
+        // Admins write: what they sign is theirs.
+        let sig = sign_update(&carol.secret, V, "n1", b"ciphertext");
+        assert_eq!(
+            s.authors()
+                .check_update("n1", 5, "carol", b"ciphertext", Some(&sig)),
+            Ok(())
+        );
+
+        // The role is signed: a server can't make an editor of an admin, or
+        // the other way round.
+        let mut forged = log.clone();
+        if let LogBody::Add { member } = &mut forged[1].body {
+            member.role = Role::Editor;
+        }
+        assert_eq!(
+            LogState::verify(V, &anchor, &forged),
+            Err(LogError::BadSignature(1))
+        );
+
+        // A single note is shared as editor or viewer, never as admin.
+        append(
+            &mut log,
+            &alice,
+            LogBody::Share {
+                object_id: "n1".into(),
+                member: member(&dave, Role::Admin),
+            },
+        );
+        assert_eq!(
+            LogState::verify(V, &anchor, &log),
+            Err(LogError::Invalid(5, "notes are shared as editor or viewer"))
+        );
     }
 
     #[test]

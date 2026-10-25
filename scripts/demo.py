@@ -173,7 +173,8 @@ HOME = [
         - [ ] Give a note or folder an icon: *Set icon…* in its ⋯ menu in the sidebar
         - [ ] *Quick notes* in the sidebar: promote one to a regular note
         - [ ] *Vault settings* (⚙ next to a vault): its icon or a picture, *Export as Markdown (.zip)*, *Import notes*, the *Activity log*
-        - [ ] *Share vault* at the bottom of the sidebar: members, roles and key fingerprints
+        - [ ] *Share vault* at the bottom of the sidebar: members, roles (*Admin*, *Can edit*, *Can view*) and key fingerprints
+        - [ ] You're an admin of Bob's *Book club*: its *Trash* has a draft Carol threw away — as an editor she can restore it but not delete it for good; you can (*Empty trash*), and you see the vault's *Activity log* in *Vault settings*. Sign in as **carol** to see her side
         - [ ] Share a single note with **dave** (the share button at the top of a note)
         - [ ] Settings → Editor: the theme, Vim keybindings, and how wide notes are (a slider from narrow to wide). A note's ⋯ menu gives it a width of its own, only for you: try *Wide* on *Server checks* in *Work*, whose log lines don't wrap
         - [ ] Settings → Devices: the CLI and this browser; *Keep this browser usable offline*
@@ -196,7 +197,7 @@ HOME = [
         |---|---|---|
         | Work | Alice | Dave (editor) |
         | Family | Alice | Bob (editor), Carol (viewer) |
-        | Book club | Bob | Alice and Carol (editors) |
+        | Book club | Bob | Alice (admin), Carol (editor) |
         | Garden club | Eve | Alice (editor) |
         | Assistant | Alice | the *Home assistant* agent |
         | Old projects | Alice | archived |
@@ -954,8 +955,8 @@ BOOK_CLUB = [
     ("Book club.md", "📖", note("""
         # Book club
 
-        Bob's vault; Alice and Carol are editors. We meet on the last Thursday
-        of the month.
+        Bob's vault; Alice is its admin (she tidies up the trash), Carol an
+        editor. We meet on the last Thursday of the month.
 
         - [[Schedule]]
         - Now reading: [[Piranesi]]
@@ -1332,7 +1333,7 @@ def seed(cli, url, data):
         cli.write(a, "Old projects", path, text)
     cli.run(a, "-q", "vault", "archive", "Old projects")
 
-    step("bob: vault Book club, shared with alice and carol (editors)")
+    step("bob: vault Book club, shared with alice (admin) and carol (editor)")
     cli.run(b, "-q", "vault", "create", "Book club")
     cli.run(b, "-q", "vault", "icon", "Book club", "📖")
     for path, icon, text in BOOK_CLUB:
@@ -1340,7 +1341,7 @@ def seed(cli, url, data):
         if icon:
             cli.icon(b, "Book club", path, icon)
     cli.icon(b, "Book club", "Books", "📚")
-    cli.run(b, "-q", "vault", "share", "Book club", a, "--role", "editor")
+    cli.run(b, "-q", "vault", "share", "Book club", a, "--role", "admin")
     cli.run(b, "-q", "vault", "share", "Book club", c, "--role", "editor")
     cli.run(a, "-q", "write", "--append", "Book club", "Books/Piranesi.md",
             stdin="\n- Alice: the statues! Every chapter made me want to draw them.\n".encode())
@@ -1348,6 +1349,9 @@ def seed(cli, url, data):
             stdin="- Carol: I think it's a paradise *because* he doesn't remember.\n".encode())
     cli.run(c, "-q", "write", "--append", "Book club", "Members' picks.md",
             stdin="- Carol: *Station Eleven*\n".encode())
+    # Something in the trash only the owner and Alice (admin) can delete for good.
+    cli.write(c, "Book club", "Draft questions.md", "# Draft questions\n\n- Who is the Other?\n")
+    cli.run(c, "-q", "rm", "Book club", "Draft questions.md")
 
     step("eve: vault Garden club, shared with alice (editor)")
     cli.run(e, "-q", "vault", "create", "Garden club")

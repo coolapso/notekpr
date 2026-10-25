@@ -67,14 +67,16 @@ pub async fn get(
     Ok(resp)
 }
 
+/// Deleting an attachment for good (emptying the trash): the vault's owner
+/// and admins only, as for notes (`sync::purge`).
 pub async fn delete(
     State(state): State<AppState>,
     who: Principal,
     Path((v, id)): Path<(String, String)>,
 ) -> AppResult<StatusCode> {
-    access::require_writer(&state.db, &v, &who.user_id).await?;
+    access::require_admin(&state.db, &v, &who.user_id).await?;
     let _w = state.write_lock.lock().await;
-    access::require_writer(&state.db, &v, &who.user_id).await?;
+    access::require_admin(&state.db, &v, &who.user_id).await?;
     state.blobs.delete(&v, &id).await?;
     Ok(StatusCode::NO_CONTENT)
 }

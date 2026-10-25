@@ -117,8 +117,8 @@ def share(owner, vault_btn_css, user, role="editor"):
     owner.click(vault_btn_css)
     owner.type(".share-add input", user)
     owner.find(".found .person", 10)
-    if role == "viewer":
-        owner.js("const s=document.querySelector('.share-add select'); s.value='viewer'; s.dispatchEvent(new Event('change'))")
+    if role != "editor":
+        owner.js("const s=document.querySelector('.share-add select'); s.value=arguments[0]; s.dispatchEvent(new Event('change'))", role)
     owner.click(".found .person .btn.primary")
     owner.find_text(".people .person", user.capitalize(), 10)
     owner.chord(KEYS["escape"])
@@ -2393,7 +2393,65 @@ def test_admin(env):
         b.close()
 
 
-TESTS = [test_onboarding, test_collab, test_devices_and_recovery, test_features, test_attachments, test_note_sharing, test_tables, test_code_blocks, test_html, test_callouts, test_colors, test_code_wrapping, test_editor_mouse, test_editor_safety, test_local_copy, test_ui_basics, test_offline_tabs, test_offline_start, test_mobile, test_quick_notes, test_vault_icons, test_entry_icons, test_tree_order, test_session_ended_while_away, test_comments, test_mentions, test_dates, test_graph, test_recovered_copy, test_note_width, test_admin]
+def test_vault_admins(env):
+    """Editors move notes to the trash; the owner and admins delete for good."""
+    a, b = Browser(), Browser()
+    buttons = "return Array.from(document.querySelectorAll(arguments[0])).map(e => e.textContent.trim())"
+    try:
+        an, bn = uniq("rita"), uniq("sam")
+        signup(a, an)
+        signup(b, bn)
+        new_note(a, "Old plan", "outdated")
+        path = a.js("return location.pathname")
+        vid = path.split("/")[2]
+        share(a, ".sb-bottom button:nth-child(2)", bn)
+        b.go(env.url.rstrip("/") + path)
+        b.wait("return document.querySelector('.ed') && document.querySelector('.ed').textContent.includes('outdated')", 20, "sam sees the note")
+        # Sam, an editor, trashes it: he can restore it, not delete it for good.
+        b.click(".note-head .tb-drop .icon-btn")
+        b.click_el(b.find_text(".menu button", "Move to trash"))
+        time.sleep(0.6)
+        b.click_el(b.find_text(".sb-link", "Trash"))
+        b.find_text(".list-row .btn", "Restore", 10)
+        check("Delete forever" not in b.js(buttons, ".list-row .btn") and "Empty trash" not in b.js(buttons, ".page-head .btn"),
+              "an editor isn't offered to delete for good")
+        check("owner and its admins" in b.text(".trash-admins"), "the trash says who can")
+        b.click(".sb-label button[title='Vault settings']")
+        b.find(".modal .settings-grid", 5)
+        check(not b.js("return !!document.querySelector('.activity-log')"), "nor the activity log")
+        b.chord(KEYS["escape"])
+        # Rita makes him an admin; agents and single notes aren't offered it.
+        a.click(".sb-bottom button:nth-child(2)")
+        a.find_text(".people .person", bn.capitalize(), 10)
+        check("Admin" in a.js(buttons, ".share-add select option"), "people can be added as admins")
+        a.js("const s=document.querySelector('.people .member-role'); s.value='admin'; s.dispatchEvent(new Event('change'))")
+        time.sleep(1)
+        a.chord(KEYS["escape"])
+        b.wait("return Array.from(document.querySelectorAll('.list-row .btn')).some(e => e.textContent === 'Delete forever')", 15,
+               "sam is offered to delete for good")
+        check(not b.js("return !!document.querySelector('.trash-admins')"), "made an admin, sam can delete for good, without reloading")
+        log = api_get(b, f"/vaults/{vid}/log")
+        last = log["entries"][-1]["body"]
+        check(last["kind"] == "role" and last["role"] == "admin", "the owner signed sam's new role")
+        b.js("window.confirm = () => true")
+        b.click_el(b.find_text(".list-row .btn", "Delete forever"))
+        b.wait("return document.querySelector('.page-body').textContent.includes('The trash is empty.')", 10, "sam's trash is empty")
+        a.click_el(a.find_text(".sb-link", "Trash"))
+        a.wait("return document.querySelector('.page-body').textContent.includes('The trash is empty.')", 10, "rita's trash is empty")
+        check(True, "the note is gone for everyone")
+        b.click(".sb-label button[title='Vault settings']")
+        b.click(".modal .activity-log")
+        b.wait("return Array.from(document.querySelectorAll('.audit-row code')).some(e => e.textContent === 'object.purge')", 10, "the purge in the activity log")
+        check(not b.js("return Array.from(document.querySelectorAll('.modal .settings-grid .btn')).some(e => e.textContent.includes('People'))"),
+              "an admin sees the activity log, but people and settings stay the owner's")
+        b.shot("vault-admin-settings")
+        check(not severe_logs(a, b), "no browser errors")
+    finally:
+        a.close()
+        b.close()
+
+
+TESTS = [test_onboarding, test_collab, test_devices_and_recovery, test_features, test_attachments, test_note_sharing, test_tables, test_code_blocks, test_html, test_callouts, test_colors, test_code_wrapping, test_editor_mouse, test_editor_safety, test_local_copy, test_ui_basics, test_offline_tabs, test_offline_start, test_mobile, test_quick_notes, test_vault_icons, test_entry_icons, test_tree_order, test_session_ended_while_away, test_comments, test_mentions, test_dates, test_graph, test_recovered_copy, test_note_width, test_admin, test_vault_admins]
 
 
 def main():

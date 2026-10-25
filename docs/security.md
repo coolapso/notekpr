@@ -5,7 +5,9 @@
 1. Only members of a vault can read its content — not the server operator,
    not the identity provider, not other users of the same server. People a
    single note is shared with can read that note and nothing else.
-2. Only editors and owners can change a vault; changes are attributable.
+2. Only the people who may write a vault (owner, admins, editors) can change
+   it, and only its owner and admins delete anything for good; changes are
+   attributable.
 3. Losing a device must not mean losing notes; losing *all* devices is
    recoverable with the recovery key, and only with it.
 4. No edit is silently lost because of concurrency, offline work or a
@@ -188,7 +190,7 @@ primitives. Formats:
 ### Malicious collaborators
 
 * **Viewers** cannot write notes: the server rejects their pushes (but for
-  comments), snapshots, attachment uploads and purges. They do hold the vault
+  comments), snapshots, attachment uploads and deletes. They do hold the vault
   key, but every update and snapshot is signed by its author and clients
   accept only authors the log lists as writers, so a viewer can't forge
   content even with the server's help (for what remains, see
@@ -205,14 +207,23 @@ primitives. Formats:
   members; on a note shared with someone, its owner and its commenters);
   a crafted one naming anyone else notifies nobody who can't already read
   it, and mentions are never looked for in notes shared with someone.
-* **Editors** can change or trash content but not manage members or keys.
-  Their writes are attributed (author and device are recorded per update) and
-  history allows restoring earlier versions. Permanent deletes are recorded in
-  the vault audit log. Because the server can't check what a snapshot
-  contains, a malicious editor can still damage the *server's* copy of history
-  (e.g. snapshots that drop content; a per-person cooldown keeps this slow).
+* **Editors** can change content and move it to the trash, but not delete
+  anything for good — the server refuses them emptying the trash, purging a
+  note and deleting an attachment — nor manage members or keys. Their writes
+  are attributed (author and device are recorded per update) and history
+  allows restoring earlier versions. Because the server can't check what a
+  snapshot contains, a malicious editor can still damage the *server's* copy
+  of history (e.g. snapshots that drop content; a per-person cooldown keeps
+  this slow).
   Members' local replicas, Markdown exports and server backups are the
   recovery path; owner-recoverable deletes are planned.
+* **Admins** are editors the owner trusts with the vault's tasks: emptying
+  the trash (permanent deletes, recorded in the vault's activity log) and
+  reading that log. They don't manage members, keys or the vault's settings.
+  Their role is in the owner-signed membership log like every other, so a
+  server can't present someone as an admin the owner didn't make — though,
+  holding the data, it could delete it without anyone's help. Agents can't
+  be admins.
 * **Removed members** lose server access immediately and the vault key is
   rotated, so content written afterwards is unreadable to them even if they
   obtain ciphertext. Data they downloaded before removal cannot be revoked —

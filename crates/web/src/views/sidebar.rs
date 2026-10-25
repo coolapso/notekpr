@@ -17,6 +17,7 @@ fn role_badge(role: Role, shared: bool) -> AnyView {
     match (role, shared) {
         (Role::Owner, false) => view! { <span class="badge" title="Private: only you"><Icon name="lock"/></span> }.into_any(),
         (Role::Owner, true) => view! { <span class="badge" title="Shared by you"><Icon name="users"/></span> }.into_any(),
+        (Role::Admin, _) => view! { <span class="badge" title="Shared with you — you can edit and empty the trash"><Icon name="users"/></span> }.into_any(),
         (Role::Editor, _) => view! { <span class="badge" title="Shared with you — you can edit"><Icon name="users"/></span> }.into_any(),
         (Role::Viewer, _) => view! { <span class="badge" title="Shared with you — read only"><Icon name="eye"/></span> }.into_any(),
     }

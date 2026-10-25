@@ -1288,8 +1288,9 @@ async fn vault(ctx: &Ctx, c: VaultCmd) -> Result<()> {
             let hub = ctx.hub(&[&vault]).await?;
             let v = hub.resolve(&vault).await?;
             let role = match role {
-                ShareRole::Editor => Role::Editor,
-                ShareRole::Viewer => Role::Viewer,
+                MemberRole::Admin => Role::Admin,
+                MemberRole::Editor => Role::Editor,
+                MemberRole::Viewer => Role::Viewer,
             };
             let out = manage::share(&hub.session, &v, &user, role, accept_new_key).await?;
             let who = format!("{} ({})", out.user.display_name, out.user.kind.as_str());

@@ -862,7 +862,9 @@ pub async fn get_snapshot(
     .ok_or(AppError::NotFound)
 }
 
-/// Permanently delete an object's data (e.g. emptying the trash).
+/// Permanently delete an object's data (e.g. emptying the trash): the
+/// vault's owner and admins only, so an editor can't destroy what others
+/// wrote (they move things to the trash).
 pub async fn purge(
     state: &AppState,
     who: &Principal,
@@ -876,15 +878,12 @@ pub async fn purge(
     if comments_note(object_id).is_some() {
         return Err(bad("comments go with their note"));
     }
-    let role = access::member_role(&state.db, vault_id, &who.user_id).await?;
-    if !role.can_write() {
-        return Err(forbidden("viewers cannot modify this vault"));
-    }
+    access::require_admin(&state.db, vault_id, &who.user_id).await?;
     let _w = state.write_lock.lock().await;
     let now = db::now();
     let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
     // Re-checked in the transaction: the role may have changed meanwhile.
-    access::require_writer(&mut *tx, vault_id, &who.user_id).await?;
+    access::require_admin(&mut *tx, vault_id, &who.user_id).await?;
     let exists: Option<Option<i64>> =
         sqlx::query_scalar("SELECT purged_at FROM objects WHERE vault_id = ? AND id = ?")
             .bind(vault_id)

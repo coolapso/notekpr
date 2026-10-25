@@ -18,9 +18,10 @@ or a local HTTP API (the gateway).
   secret key never leaves that machine; there is no recovery key — a lost agent
   is simply deleted and re-created.
 * It sees **nothing until its owner shares specific vaults** with it, as
-  **viewer** (read-only) or **editor**. Sharing wraps the vault key to the
-  agent's public key, exactly like sharing with a person; removing it rotates
-  the vault key. Agents are visible only to their owner.
+  **viewer** (read-only) or **editor** (never admin: it can't delete anything
+  for good). Sharing wraps the vault key to the agent's public key, exactly
+  like sharing with a person; removing it rotates the vault key. Agents are
+  visible only to their owner.
 * Every write is an ordinary encrypted CRDT update attributed to the agent, so
   people editing the same note concurrently never lose their changes, and the
   vault's history shows who changed what.

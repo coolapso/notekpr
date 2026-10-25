@@ -262,7 +262,7 @@ async fn a_read_only_gateway_runs_no_changing_commands() {
     for args in [
         &["mkdir", "Home", "Ideas"][..],
         &["vault", "rename", "Home", "House"],
-        &["quick", "--vault", "Home", "a", "thought"],
+        &["quick", "a", "thought"],
     ] {
         let err = run(&srv, "alice", args).await.unwrap_err();
         assert!(
@@ -376,22 +376,18 @@ async fn changing_commands_are_handed_to_the_running_daemon() {
         "{:?}",
         t.elapsed()
     );
-    run(
-        &srv,
-        "alice",
-        &["quick", "--vault", "Home", "call", "the", "dentist"],
-    )
-    .await
-    .unwrap();
+    run(&srv, "alice", &["quick", "call", "the", "dentist"])
+        .await
+        .unwrap();
     // Done on the daemon's own copies.
     let home = daemon.resolve("Home").await.unwrap();
+    assert!(home.lock().await.is_folder("Ideas"));
     {
-        let v = home.lock().await;
-        assert!(v.is_folder("Ideas"));
+        let q = daemon.quick_notes().await.unwrap();
+        let v = q.lock().await;
         let quick: Vec<String> = v
-            .paths()
+            .notes()
             .into_iter()
-            .filter(|(p, _)| p.starts_with("Quick notes/"))
             .map(|(_, e)| v.note_text(&e.id))
             .collect();
         assert_eq!(quick, ["call the dentist"]);

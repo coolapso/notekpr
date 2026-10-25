@@ -97,8 +97,13 @@ read anything.
   with a filter, or the open note and its neighbours beside it. Drag, zoom,
   click a note to open it.
 * Quick notes: capture a thought in a second (`Alt+Q`, a capture page
-  that works on phones, or `notekpr quick …`), then promote it to a
-  regular note or archive it.
+  that works on phones, `notekpr quick …`, or a file dropped into the
+  Markdown folder's `Quick notes/`). They are yours alone, in no vault, the
+  same from every vault and device: a short list (20 unless the
+  administrator says otherwise) to sort out by moving each to a vault, or
+  deleting it for good.
+* Move a note to another vault, with the attachments it links to
+  (`Move to vault…`, `notekpr mv … --to-vault`).
 * A trash with restore, and the version history of every note with preview
   and restore.
 

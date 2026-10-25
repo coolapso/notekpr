@@ -22,8 +22,8 @@ belonged to it — the only 404 after which a client may forget a device's
 keys), `read_only` (503: the server refuses changes for now, §9 — clients
 keep note edits and send them once it says it accepts changes again, §7;
 other changes, such as creating a vault, fail and are tried again by the
-person), `limit_reached` (403: an instance limit on accounts, vaults or
-agents, §9; the message says which), `unavailable`, `internal`. Vaults the
+person), `limit_reached` (403: an instance limit on accounts, vaults,
+agents or quick notes, §9, §5.3; the message says which), `unavailable`, `internal`. Vaults the
 caller is not a member of always return `404` so their existence cannot be
 probed.
 
@@ -161,12 +161,12 @@ are shared as `editor` or `viewer`. "editor/owner" below includes admins.
 
 | Endpoint | Role |
 |---|---|
-| `GET /vaults` | caller's vaults with role, `encrypted_meta`, `key_epoch`, `head_seq`, `viewers_comment` (§6.1) |
-| `POST /vaults {id, encrypted_meta, key_envelope, log_entry?}` | human; the client picks the id and wraps epoch 1 to itself; `log_entry` starts the membership log (§5.2) |
-| `GET/PATCH/DELETE /vaults/{v}` | read: member; update (`encrypted_meta`, `archived`, `viewers_comment`): owner; delete: owner |
+| `GET /vaults` | caller's vaults with role, `encrypted_meta`, `key_epoch`, `head_seq`, `viewers_comment` (§6.1), `kind` (`regular`, or `quick_notes`, §5.3; absent on older servers) and `note_limit` (quick notes: how many notes they may hold; `"unlimited"` for every other vault) |
+| `POST /vaults {id, encrypted_meta, key_envelope, log_entry?, kind?}` | human; the client picks the id and wraps epoch 1 to itself; `log_entry` starts the membership log (§5.2); `kind: "quick_notes"` makes the caller's quick notes (§5.3; `409` if they have them) |
+| `GET/PATCH/DELETE /vaults/{v}` | read: member; update (`encrypted_meta`, `archived`, `viewers_comment`): owner (never quick notes: `400`); delete: owner |
 | `GET /vaults/{v}/keys` | member: own envelopes for every epoch granted + full key chain; the notes' document keys (`objects`, `object_chain`), which notes are shared individually (`shared`; absent on servers from before notes had their own keys) and for those where sharing started (`share_from`: note → first shared epoch) |
 | `GET /vaults/{v}/members` | member: `MemberInfo {user (with account key), role, has_current_key}` |
-| `POST /vaults/{v}/members {user_id, role, key_envelope?, log_entry?}` | owner. Without an envelope the member is "pending keys" until the owner's client grants them. Role `owner` is refused (`400`), and `admin` for an agent (`400`); an agent can be added only by its owner (`404` otherwise). Membership supersedes single-note shares: adding someone removes their shares of notes in that vault and those notes' keys |
+| `POST /vaults/{v}/members {user_id, role, key_envelope?, log_entry?}` | owner; never in quick notes (`400`, §5.3). Without an envelope the member is "pending keys" until the owner's client grants them. Role `owner` is refused (`400`), and `admin` for an agent (`400`); an agent can be added only by its owner (`404` otherwise). Membership supersedes single-note shares: adding someone removes their shares of notes in that vault and those notes' keys |
 | `PATCH /vaults/{v}/members/{u} {role, log_entry?}` | owner; never to `owner`, nor `admin` for an agent (`400`) |
 | `DELETE /vaults/{v}/members/{u}` (optional body `{log_entry}`) | owner removes; any non-owner can remove themselves |
 | `GET /vaults/{v}/log?since=` | member: the membership log, `MemberLogResponse {entries}` (§5.2) |
@@ -203,7 +203,7 @@ member list, vault key, or the note's history from before it was shared.
 | `PUT /vaults/{v}/objects/{o}/keys/signatures {grants: [{user_id, epoch, signature}]}` | owner: grant signatures for keys given before grants were signed |
 | `PUT /vaults/{v}/objects/{o}/meta {encrypted_meta}` | writer: the title recipients see, under the current document key (else `412 stale_key`) |
 | `GET /vaults/{v}/objects/{o}/shares` | member: `ObjectShareInfo {user, role, added_at, added_by, has_current_key, key_signed}` |
-| `POST /vaults/{v}/objects/{o}/shares {user_id, role, envelope, log_entry?}` | owner; `role` is `editor` or `viewer`; the envelope wraps the current document key to the person (else `412 stale_key`). Vault members are refused (`409`), and so is a note whose sharing has not started (`409`: give it a fresh key first). Someone it is shared with already is refused too (`409`), unless they lack the current key (left out of a rotation, `without`): then they get it, with this role. |
+| `POST /vaults/{v}/objects/{o}/shares {user_id, role, envelope, log_entry?}` | owner; never in quick notes (`400`, §5.3); `role` is `editor` or `viewer`; the envelope wraps the current document key to the person (else `412 stale_key`). Vault members are refused (`409`), and so is a note whose sharing has not started (`409`: give it a fresh key first). Someone it is shared with already is refused too (`409`), unless they lack the current key (left out of a rotation, `without`): then they get it, with this role. |
 | `PATCH /vaults/{v}/objects/{o}/shares/{u} {role, log_entry?}`, `DELETE …/shares/{u}` (optional body `{log_entry}`) | owner; recipients may remove themselves. Clients rotate the document key after removing someone. |
 | `GET /shares` | notes shared with the caller: `SharedNote {vault_id, object_id, role, owner, shared_by, key_epoch, encrypted_meta, added_at}` |
 | `GET /vaults/{v}/objects/{o}/changes?since=` | that note's part of the log, with its comments (§6.1) (same shape as `/changes`) |
@@ -305,6 +305,33 @@ shares (`POST`/`PATCH`/`DELETE …/objects/{o}/shares…`) carry their `share`
 or `unshare` entry (a recipient removing a note from their own list doesn't
 need one).
 
+### 5.3 Quick notes
+
+Each person may have one vault of the kind `quick_notes`: their quick notes,
+which apps show as such, never as a vault (they are flat and keep no trash —
+both up to the apps, as the server sees no paths). The server makes sure
+they stay the person's own and few:
+
+* Nobody else is ever added: members (people or agents) and single-note
+  shares are refused (`400`), and so is starting to share a note's key
+  (`PUT …/objects/{o}/key` other than `private`). No comments (`403`); their
+  name and settings stay as made (`PATCH /vaults/{v}`: `400`).
+* They hold at most `note_limit` notes — the owner's `quick_note_allowance`,
+  else the instance's `quick_notes_per_user` (default 20, §9). Notes are the
+  objects other than the index and comments that aren't deleted for good;
+  the first write of a new one (its own key, `PUT …/objects/{o}/key`, or a
+  pushed update) beyond the limit is refused: `403 limit_reached` for the key,
+  `quick_notes_full` for an update in a push. Clients keep the note and try
+  again once there's room (a note purged, a larger limit, a new connection).
+  Lowering the limit takes nothing away.
+* They count against no vault limit (`max_vaults`, `vaults_per_user`), and
+  the admin API's counts leave them out.
+
+A note leaves by moving to a vault — a client-side copy: the new note (and
+the attachments it links to) is encrypted for that vault, and the original
+is deleted for good (`DELETE …/objects/{o}`) only after the server
+acknowledged the copy — or by being deleted for good.
+
 ## 6. The encrypted log
 
 Each vault has one monotonically increasing sequence counter. Every accepted
@@ -314,7 +341,7 @@ vault's events in strictly increasing order without gaps.**
 
 | Endpoint | Notes |
 |---|---|
-| `POST /vaults/{v}/updates {updates: [{object_id, client_update_id, payload, signature?}]}` → `{results, head_seq, rejected?}` | editor/owner. Idempotent per `client_update_id`: a retry returns the original `seq`. Objects are created on first write. An update that can't be stored on its own merits is refused alone and listed in `rejected: [{client_update_id, object_id, code, message}]` with `code` `too_large` (over `max_update_bytes`), `purged` (the object was permanently deleted), `stale_key` (encrypted with an outdated key: reload keys, re-encrypt, send again), `unsigned` (the vault requires signed content, §5.2) or `bad_signature` (not signed with the author's account key); the rest of the batch is stored. Malformed requests, a batch over 500 updates and missing write access still fail the whole push. (Servers before this answered `413` / `409` / `412` for the whole batch; clients handle both.) |
+| `POST /vaults/{v}/updates {updates: [{object_id, client_update_id, payload, signature?}]}` → `{results, head_seq, rejected?}` | editor/owner. Idempotent per `client_update_id`: a retry returns the original `seq`. Objects are created on first write. An update that can't be stored on its own merits is refused alone and listed in `rejected: [{client_update_id, object_id, code, message}]` with `code` `too_large` (over `max_update_bytes`), `purged` (the object was permanently deleted), `stale_key` (encrypted with an outdated key: reload keys, re-encrypt, send again), `unsigned` (the vault requires signed content, §5.2), `bad_signature` (not signed with the author's account key) or `quick_notes_full` (a new note in quick notes holding as many as they may, §5.3: kept by the client and sent again once there's room); the rest of the batch is stored. Malformed requests, a batch over 500 updates and missing write access still fail the whole push. (Servers before this answered `413` / `409` / `412` for the whole batch; clients handle both.) |
 | `GET /vaults/{v}/changes?since=S&limit=N&snapshots=true` | `ChangesResponse {updates, snapshots, purged, head_seq, has_more, next_since}`. For any object whose latest snapshot covers part of `(S, head]`, the snapshot is returned **instead of** the updates it covers. Request further pages with `since=next_since&snapshots=false`. Every page also holds the snapshots *carrying* changes (below) stored while the head was within it, so each catch-up passes them once. |
 | `GET /vaults/{v}/objects/{o}` | `ObjectState`: latest snapshot + updates after it |
 | `POST /vaults/{v}/objects/{o}/snapshots {snapshot_id, covers_seq, payload, signature?, carries?}` | editor/owner (`409` unsigned where signatures are required, `400` for a bad signature). `404` if the object doesn't exist yet or was purged (a snapshot never creates an object), `409` for a `snapshot_id` already used, `413` over `max_snapshot_bytes`. Store a compaction (`payload` = encrypted full state). Updates covered by the *previous* snapshot are pruned — one generation is always kept so a bad snapshot is recoverable. One snapshot per person and note per `--snapshot-cooldown-secs` (default 30 s; `429` otherwise). `carries: true`: the state holds changes the log doesn't have — an update too large to push (`too_large`), which a client sends this way instead; the server sends the snapshot to everyone subscribed (`snapshot`) and with catch-ups (above), and its retention keeps the newest such snapshot of each note. |
@@ -489,8 +516,8 @@ role can't be given: `400`): only admin clients administer it.
 
 | Endpoint | Notes |
 |---|---|
-| `GET /admin/users?email=&identity=` | `read`: accounts with kind, e-mail, owner (agents), admin and disabled flags, last sign-in, vault (member of) and device counts, `owned_vault_count`, `agent_count`, `vault_allowance`, `agent_allowance` — no content. `email` (any case) or `identity` (`issuer\|subject`, or `dev:<name>` in development mode) finds one person |
-| `PATCH /admin/users/{id} {disabled?, is_admin?, vault_allowance?, agent_allowance?}` | `accounts` (`admins` for `is_admin`): disable (ends the person's sessions and their agents') or enable (counts against `max_users`), (un)make administrator, set a person's own limits: `"default"` (the instance's), `"unlimited"` or a number. Agents have no allowance (`400`) |
+| `GET /admin/users?email=&identity=` | `read`: accounts with kind, e-mail, owner (agents), admin and disabled flags, last sign-in, vault (member of; quick notes not counted) and device counts, `owned_vault_count`, `agent_count`, `quick_note_count`, `vault_allowance`, `agent_allowance`, `quick_note_allowance` — no content. `email` (any case) or `identity` (`issuer\|subject`, or `dev:<name>` in development mode) finds one person |
+| `PATCH /admin/users/{id} {disabled?, is_admin?, vault_allowance?, agent_allowance?, quick_note_allowance?}` | `accounts` (`admins` for `is_admin`): disable (ends the person's sessions and their agents') or enable (counts against `max_users`), (un)make administrator, set a person's own limits: `"default"` (the instance's), `"unlimited"` or a number. Agents have no allowance (`400`). A new quick-note allowance is announced to the person's apps (`vaults_changed`) |
 | `GET /admin/stats` | `read`: counts of users, agents, vaults, objects, updates, snapshots and attachments, and the database's size (`storage_bytes`: pages in use) |
 | `GET /admin/settings` | `read`: `{settings, read_only?, storage_bytes}`: the instance settings below, whether (and why) the server refuses changes now, and the database's size |
 | `PATCH /admin/settings {…}` | `settings`: change any of the settings; the rest stay. Answers like `GET`. Takes effect at once (no restart) and is kept in the database |
@@ -516,9 +543,10 @@ whenever it runs.
 |---|---|
 | `max_users` | accounts of people that aren't disabled; a new person's first sign-in (or enabling an account) beyond it is refused |
 | `max_agents` | agents on the server |
-| `max_vaults` | vaults on the server |
-| `vaults_per_user` | vaults a person may own unless they have their own `vault_allowance`; vaults shared with them don't count |
+| `max_vaults` | vaults on the server (quick notes don't count) |
+| `vaults_per_user` | vaults a person may own unless they have their own `vault_allowance`; vaults shared with them and their quick notes don't count |
 | `agents_per_user` | agents a person may have unless they have their own `agent_allowance` (default 50) |
+| `quick_notes_per_user` | quick notes a person may keep unless they have their own `quick_note_allowance` (default 20, §5.3); a change is announced to everyone's apps (`vaults_changed`) |
 | `read_only` | `true`: the server refuses changes (below) |
 | `max_storage_mb` | at this database size (MiB, pages in use) the server turns read-only by itself (`storage_full`), until it is below it again — e.g. the limit was raised. Measured every 10 s and after every settings change |
 

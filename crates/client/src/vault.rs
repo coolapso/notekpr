@@ -13,11 +13,11 @@ use notekpr_core::doc::{self, Entry, EntryKind, NoteDoc};
 use notekpr_core::engine::{Applied, Pending, VaultMeta, VaultReplica};
 use notekpr_core::keys::{AccountSecret, VaultKey, VaultKeyring};
 use notekpr_core::protocol::{
-    ChangesResponse, INDEX_OBJECT_ID, PushResult, REJECT_PURGED, RejectedUpdate, Role, Snapshot,
-    Update, comments_note, comments_object,
+    ChangesResponse, INDEX_OBJECT_ID, Limit, PushResult, REJECT_PURGED, RejectedUpdate, Role,
+    Snapshot, Update, VaultKind, comments_note, comments_object,
 };
 use notekpr_core::textdiff::{self, Edit};
-use notekpr_core::{comments, markdown, now_ms, order, paths, random_id, search};
+use notekpr_core::{comments, markdown, now_ms, order, paths, quick, random_id, search};
 use notekpr_sync::members::MemberLog;
 use notekpr_sync::{Limits, Outbox, Plan, Reaction};
 
@@ -71,6 +71,10 @@ pub struct Vault {
     pub archived: bool,
     /// Viewers may comment (the owner's setting).
     pub viewers_comment: bool,
+    /// What the vault is for: the person's quick notes are flat, never
+    /// shared and hold at most `note_limit` notes.
+    pub kind: VaultKind,
+    pub note_limit: Limit,
     /// Why the vault became read-only locally (access revoked, deleted).
     pub read_only: Option<String>,
     pub pending_blobs: BTreeSet<String>,
@@ -215,6 +219,8 @@ impl Vault {
             owner_id: owner_id.to_string(),
             archived,
             viewers_comment: true,
+            kind: VaultKind::Regular,
+            note_limit: Limit::Unlimited,
             read_only: None,
             pending_blobs: BTreeSet::new(),
             last_sync: None,
@@ -394,6 +400,8 @@ impl Vault {
             owner_id: s.owner_id,
             archived: s.archived,
             viewers_comment: s.viewers_comment,
+            kind: s.kind,
+            note_limit: s.note_limit,
             read_only: s.read_only,
             pending_blobs: s.pending_blobs,
             last_sync: s.last_sync,
@@ -536,6 +544,8 @@ impl Vault {
             read_only: self.read_only.clone(),
             last_sync: self.last_sync,
             viewers_comment: self.viewers_comment,
+            kind: self.kind,
+            note_limit: self.note_limit,
         })?;
         self.dirty_state = false;
         self.dirty_pending = false;
@@ -616,10 +626,70 @@ impl Vault {
         self.rescue(object_id);
         let before = self.outbox.held.len();
         self.outbox.drop_object(&mut self.replica, object_id);
+        // A note deleted for good makes room in the quick notes.
+        if self.is_quick_notes() {
+            self.room_freed();
+        }
         self.dirty_quarantine |= self.outbox.held.len() != before;
         let a = self.replica.apply_purge(object_id, seq);
         self.mark_applied(&a);
         a
+    }
+
+    /// New quick notes that waited for room are sent again.
+    pub fn room_freed(&mut self) {
+        if self.outbox.room_freed(&mut self.replica) > 0 {
+            self.dirty_quarantine = true;
+            self.dirty_pending = true;
+        }
+    }
+
+    // ------------------------------------------------------------ quick notes
+
+    /// Whether this is the person's quick notes: flat, never shared, at
+    /// most `note_limit` notes, deleted for good rather than trashed.
+    pub fn is_quick_notes(&self) -> bool {
+        self.kind == VaultKind::QuickNotes
+    }
+
+    /// Quick notes the person has (live ones: those deleted are on their way
+    /// to being deleted for good).
+    pub fn note_count(&self) -> usize {
+        self.notes().len()
+    }
+
+    /// One more note fits (always, outside the quick notes).
+    pub fn require_room(&self) -> Result<()> {
+        if self.is_quick_notes() && !quick::has_room(self.note_count(), self.note_limit) {
+            bail!("{}", quick::full_message(self.note_limit));
+        }
+        Ok(())
+    }
+
+    /// Quick notes keep everything at their top level.
+    fn require_top_level(&self, path: &str) -> Result<()> {
+        if self.is_quick_notes() && !quick::is_top_level(path) {
+            bail!("quick notes have no folders ('{path}')");
+        }
+        Ok(())
+    }
+
+    /// Quick notes keep a file only for a quick note that links to it.
+    pub fn require_linked(&self, path: &str) -> Result<()> {
+        if !self.is_quick_notes() {
+            return Ok(());
+        }
+        let notes: Vec<(String, String)> = self
+            .notes()
+            .into_iter()
+            .map(|(p, e)| (p, self.note_text(&e.id)))
+            .collect();
+        if !quick::is_linked(path, &notes) {
+            bail!(
+                "quick notes keep files only for their notes: link to '{path}' from a quick note first"
+            );
+        }
+        Ok(())
     }
 
     pub fn synced(&mut self, head: i64) {
@@ -750,6 +820,9 @@ impl Vault {
     pub fn require_commenting(&self) -> Result<()> {
         if let Some(r) = &self.read_only {
             bail!("vault '{}' is read-only on this device: {r}", self.name());
+        }
+        if self.is_quick_notes() {
+            bail!("quick notes have no comments: move the note to a vault first");
         }
         if !self.replica.can_write() && !self.viewers_comment {
             bail!(
@@ -1232,6 +1305,8 @@ impl Vault {
         if self.paths().contains_key(&p) {
             bail!("'{p}' already exists");
         }
+        self.require_top_level(&p)?;
+        self.require_room()?;
         let id = random_id();
         let budget = self.update_budget();
         let note = self.replica.notes.entry(id.clone()).or_default();
@@ -1354,6 +1429,9 @@ impl Vault {
 
     pub fn create_folder(&mut self, path: &str) -> Result<String> {
         self.require_writable()?;
+        if self.is_quick_notes() {
+            bail!("quick notes have no folders");
+        }
         let p = paths::normalize(path)?;
         if let Some(e) = self.paths().get(&p) {
             if e.kind == EntryKind::Folder {
@@ -1394,6 +1472,11 @@ impl Vault {
     /// wiki links in other notes that pointed at a moved note.
     pub fn move_path(&mut self, from: &str, to: &str, update_links: bool) -> Result<String> {
         self.require_writable()?;
+        // In the quick notes, renaming only: the target names a note at the
+        // top level (`dir/` would move it into a folder).
+        if self.is_quick_notes() && to.trim_start_matches('/').contains('/') {
+            bail!("quick notes have no folders ('{to}')");
+        }
         let into_folder = to.ends_with('/') || self.is_folder(to);
         if self.find(from).is_none() && self.is_folder(from) {
             let old = paths::normalize(from)?;
@@ -1561,6 +1644,8 @@ impl Vault {
     ) -> Result<WriteResult> {
         self.require_writable()?;
         let p = paths::normalize(path)?;
+        self.require_top_level(&p)?;
+        self.require_linked(&p)?;
         let mut created = true;
         if let Some((existing, e)) = self.find(&p).filter(|(dp, _)| *dp == p) {
             if e.kind != EntryKind::Attachment {

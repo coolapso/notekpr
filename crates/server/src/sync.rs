@@ -10,9 +10,9 @@ use notekpr_core::keys::AccountPublic;
 use notekpr_core::memberlog;
 use notekpr_core::protocol::{
     ChangesResponse, CreateSnapshotRequest, INDEX_OBJECT_ID, ObjectState, PurgedObject, PushResult,
-    PushUpdate, REJECT_BAD_SIGNATURE, REJECT_PURGED, REJECT_STALE_KEY, REJECT_TOO_LARGE,
-    REJECT_UNSIGNED, RejectedUpdate, Snapshot, SnapshotInfo, Update, comments_note,
-    comments_object,
+    PushUpdate, REJECT_BAD_SIGNATURE, REJECT_PURGED, REJECT_QUICK_NOTES_FULL, REJECT_STALE_KEY,
+    REJECT_TOO_LARGE, REJECT_UNSIGNED, RejectedUpdate, Snapshot, SnapshotInfo, Update,
+    comments_note, comments_object,
 };
 use sqlx::Row;
 
@@ -376,8 +376,8 @@ fn rejected(u: &PushUpdate, code: &str, message: &str) -> RejectedUpdate {
 /// Append encrypted updates. Duplicate `client_update_id`s return the original
 /// sequence number without appending again, so clients can retry safely.
 /// An update that can't be stored on its own merits (too large, for a purged
-/// object, under an outdated key) is refused alone and listed in
-/// `rejected`; the others are stored. Malformed requests and missing access
+/// object, under an outdated key, a new note in full quick notes) is refused
+/// alone and listed in `rejected`; the others are stored. Malformed requests and missing access
 /// still fail the whole push.
 pub async fn push(
     state: &AppState,
@@ -449,6 +449,8 @@ pub async fn push(
     let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
     let vault_epoch = vault_key_epoch(&mut *tx, vault_id).await?;
     let signed_from = repo::vaults::signed_from(&mut *tx, vault_id).await?;
+    // Someone's quick notes hold a limited number of notes.
+    let mut quick_room = state.instance.quick_note_room(&mut tx, vault_id).await?;
     let mut results = Vec::with_capacity(updates.len());
     let mut duplicates = Vec::new();
     let mut fresh: Vec<(Update, String)> = Vec::new();
@@ -523,6 +525,17 @@ pub async fn push(
                     .await?;
             }
             None => {
+                if let Some((limit, count)) = &mut quick_room
+                    && u.object_id != INDEX_OBJECT_ID
+                    && comments_note(&u.object_id).is_none()
+                {
+                    if !limit.allows_one_more(*count) {
+                        let message = notekpr_core::quick::full_message(*limit);
+                        refused.push(rejected(&u, REJECT_QUICK_NOTES_FULL, &message));
+                        continue;
+                    }
+                    *count += 1;
+                }
                 sqlx::query(
                     "INSERT INTO objects (vault_id, id, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
                 )

@@ -17,14 +17,17 @@
 //! their changes and send them the moment the server is writable again.
 //!
 //! Limits never take anything away: they are checked when something new
-//! would be created (an account, a vault, an agent), inside the transaction
-//! that creates it, so two requests at once can't both slip past them.
+//! would be created (an account, a vault, an agent, a quick note), inside
+//! the transaction that creates it, so two requests at once can't both slip
+//! past them.
 
 use std::sync::RwLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use notekpr_core::protocol::{InstanceSettings, InstanceSettingsUpdate, Limit, ReadOnly};
-use sqlx::SqliteConnection;
+use notekpr_core::protocol::{
+    InstanceSettings, InstanceSettingsUpdate, Limit, ReadOnly, VaultKind,
+};
+use sqlx::{SqliteConnection, SqliteExecutor};
 use tokio::sync::watch;
 
 use crate::db::{self, Db};
@@ -150,7 +153,7 @@ impl Instance {
                 s.max_vaults.max().unwrap_or_default()
             )));
         }
-        let (allowance, _) = repo::users::allowances(&mut *tx, owner).await?;
+        let allowance = repo::users::allowances(&mut *tx, owner).await?.vaults;
         let mine = allowance.resolve(s.vaults_per_user);
         let owned = repo::users::owned_vaults(&mut *tx, owner).await?;
         if !mine.allows_one_more(owned as u64) {
@@ -176,7 +179,7 @@ impl Instance {
                 s.max_agents.max().unwrap_or_default()
             )));
         }
-        let (_, allowance) = repo::users::allowances(&mut *tx, owner).await?;
+        let allowance = repo::users::allowances(&mut *tx, owner).await?.agents;
         let mine = allowance.resolve(s.agents_per_user);
         let owned = repo::agents::count(&mut *tx, owner).await?;
         if !mine.allows_one_more(owned as u64) {
@@ -189,5 +192,56 @@ impl Instance {
             ));
         }
         Ok(())
+    }
+
+    /// The quick notes `owner` may keep: their own allowance, else the
+    /// instance's default.
+    pub async fn quick_notes_limit(
+        &self,
+        db: impl SqliteExecutor<'_>,
+        owner: &str,
+    ) -> AppResult<Limit> {
+        let allowance = repo::users::allowances(db, owner).await?.quick_notes;
+        Ok(allowance.resolve(self.settings().quick_notes_per_user))
+    }
+
+    /// For someone's quick notes: how many notes they may hold and how many
+    /// they hold now. `None` for every other vault (no limit on notes).
+    /// Runs inside the transaction that would add a note.
+    pub async fn quick_note_room(
+        &self,
+        tx: &mut SqliteConnection,
+        vault_id: &str,
+    ) -> AppResult<Option<(Limit, u64)>> {
+        let Some((VaultKind::QuickNotes, owner)) =
+            repo::vaults::kind_and_owner(&mut *tx, vault_id).await?
+        else {
+            return Ok(None);
+        };
+        let limit = self.quick_notes_limit(&mut *tx, &owner).await?;
+        let count = repo::vaults::note_count(&mut *tx, vault_id).await?;
+        Ok(Some((limit, count)))
+    }
+
+    /// Refuse a new note (`object_id` not stored yet) in quick notes that
+    /// hold as many as they may. Runs inside the creating transaction.
+    pub async fn check_new_note(
+        &self,
+        tx: &mut SqliteConnection,
+        vault_id: &str,
+        object_id: &str,
+    ) -> AppResult<()> {
+        if repo::shares::object_state(&mut *tx, vault_id, object_id)
+            .await?
+            .is_some()
+        {
+            return Ok(());
+        }
+        match self.quick_note_room(tx, vault_id).await? {
+            Some((limit, count)) if !limit.allows_one_more(count) => Err(AppError::LimitReached(
+                notekpr_core::quick::full_message(limit),
+            )),
+            _ => Ok(()),
+        }
     }
 }

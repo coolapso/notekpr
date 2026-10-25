@@ -85,18 +85,25 @@ pub enum Command {
         #[arg(long)]
         if_match: Option<String>,
     },
-    /// Capture a quick note (TEXT, or stdin) in your quick-notes vault; --list shows the newest.
+    /// Capture a quick note (TEXT, or stdin); --list shows them, --move takes
+    /// one to a vault, --delete deletes one for good.
     Quick(QuickArgs),
     /// Create a folder.
     Mkdir { vault: String, path: String },
-    /// Move or rename a document or folder.
+    /// Move or rename a document or folder; with --to-vault, move a note to
+    /// another vault (TO is its folder there, ending in `/`, or its new path).
     Mv {
         vault: String,
         from: String,
         to: String,
         /// Rewrite [[wiki links]] in other notes that pointed at the moved note.
-        #[arg(long)]
+        #[arg(long, conflicts_with = "to_vault")]
         update_links: bool,
+        /// Move the note to this vault (id or name), with the attachments it
+        /// links to; the original goes to the trash once the server has the
+        /// copy (its history, comments and shares stay with it).
+        #[arg(long, value_name = "VAULT")]
+        to_vault: Option<String>,
     },
     /// Give a note or folder an icon (an emoji), or take it away with --remove.
     Icon {
@@ -223,19 +230,33 @@ pub struct QuickArgs {
     /// The note's text (several words are joined with spaces). Read from
     /// stdin when omitted.
     pub text: Vec<String>,
-    /// This vault (id or name) instead of the quick-notes vault from your
-    /// settings (Settings → Editor in the web app; default: your own first vault).
-    #[arg(long)]
-    pub vault: Option<String>,
-    /// List the newest quick notes (name and first line) instead of adding one.
-    #[arg(long, conflicts_with = "text")]
+    /// List the quick notes, newest first (name and first line), instead of
+    /// adding one.
+    #[arg(long, conflicts_with_all = ["text", "delete", "move_note"])]
     pub list: bool,
-    /// With --list: include archived ones (Quick notes/Archive).
-    #[arg(long, requires = "list")]
-    pub archived: bool,
     /// With --list: how many to show.
     #[arg(long, default_value_t = 20, requires = "list")]
     pub limit: usize,
+    /// Delete this quick note (its name, e.g. "2026-10-25 09.15") for good.
+    #[arg(long, value_name = "NOTE", conflicts_with_all = ["text", "move_note"])]
+    pub delete: Option<String>,
+    /// Move this quick note (its name) to the vault given with --to.
+    #[arg(
+        long = "move",
+        value_name = "NOTE",
+        requires = "to",
+        conflicts_with = "text"
+    )]
+    pub move_note: Option<String>,
+    /// With --move: the vault (id or name).
+    #[arg(long, value_name = "VAULT", requires = "move_note")]
+    pub to: Option<String>,
+    /// With --move: the folder in that vault (default: its top level).
+    #[arg(long, requires = "move_note")]
+    pub folder: Option<String>,
+    /// With --move: the note's name there (default: its first line).
+    #[arg(long, requires = "move_note")]
+    pub name: Option<String>,
 }
 
 #[derive(Args, Clone, Debug, Serialize, Deserialize)]

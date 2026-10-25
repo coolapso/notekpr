@@ -1352,7 +1352,6 @@ def test_offline_start(env):
 def test_quick_notes(env):
     b, m = Browser(), None
     cards = "return Array.from(document.querySelectorAll('.qn-card .qn-text')).map(e => e.textContent)"
-    marked = "return Array.from(document.querySelectorAll('.sidebar .active, .sidebar .holds-open')).map(e => e.textContent.trim())"
     try:
         signup(b, uniq("quinn"))
         # The shortcut, even from inside the editor: a new quick note, ready to type.
@@ -1361,33 +1360,34 @@ def test_quick_notes(env):
         b.wait("return /^\\d{4}-\\d\\d-\\d\\d \\d\\d\\.\\d\\d$/.test((document.querySelector('.note-title') || {}).value || '')", 10, "a quick note opens")
         b.wait("return !!document.activeElement.closest('.ed')", 5, "the caret in its editor")
         check(True, "Alt+Q creates a quick note named by the time and puts the caret in its editor")
-        check(b.js("return document.querySelector('.crumbs').textContent").endswith("Quick notes"), "it is an ordinary note in the Quick notes folder")
+        check(b.js("return document.querySelector('.crumbs').textContent") == "Quick notes", "it is in the quick notes, not in a vault")
         b.keys("Call the dentist")
         time.sleep(0.8)
         check(editor_text(b) == "Call the dentist", "typing goes into the quick note")
-        # The sidebar marks where the note is once, and nothing moves by itself:
-        # the tree keeps the Quick notes folder closed and marks it; the
-        # shortcut lists (Recent, the Quick notes entry) mark nothing.
-        title = b.js("return document.querySelector('.note-title').value")
-        b.wait("return Array.from(document.querySelectorAll('.sidebar .sb-link')).some(e => e.textContent.includes('" + title + "'))", 10, "the note in Recent")
-        check(b.js(marked) == ["Quick notes"],
-              "the tree marks the closed Quick notes folder instead of opening it, and nothing else is marked")
-        folder = "document.querySelector('.tree-row.folder[aria-level=\"1\"]').getAttribute('aria-expanded')"
-        check(b.js("return " + folder) == "false", "the folder tells assistive tech it is closed")
-        b.click(".tree-row.holds-open .tree-item")
-        b.wait("return !!document.querySelector('.tree-row.active')", 5, "the folder opens")
-        check(b.js(marked) == [title], "opened, the folder shows the note itself as the one marked place")
-        check(b.js("return " + folder) == "true" and b.js("return document.querySelector('.tree-row.active').getAttribute('aria-level')") == "2",
-              "and that it is open, the note its level")
+        # Never in a vault: the sidebar keeps the vault's tree, without them.
+        check(b.js("return document.querySelector('.vault-btn .vname').textContent") == "My notes"
+              and not b.js("return Array.from(document.querySelectorAll('.tree-row')).some(r => r.textContent.includes('Quick notes'))"),
+              "the sidebar keeps the vault and its tree, with no Quick notes folder")
+        b.click(".vault-btn")
+        check("Quick notes" not in b.js("return document.querySelector('.vault-menu, .menu').textContent"),
+              "the vault switcher doesn't list them")
+        b.click_el(b.find_text(".vault-menu button", "New vault"))
+        b.type(".modal input", "quick notes")
+        b.click(".modal button[type=submit]")
+        b.find_text(".toast", "is the name of your quick notes", 10)
+        check(b.js("return !!document.querySelector('.modal input')"), "no vault may be named like them")
+        b.chord(KEYS["escape"])
+        # Not shared, no comments; they leave by moving to a vault or being deleted.
+        check(not b.js("return !!document.querySelector('.note-head button[aria-label=\"Share this note\"]')")
+              and not b.js("return !!document.querySelector('.note-head button[aria-label=\"Comments\"]')"),
+              "a quick note can't be shared and has no comments")
         check(b.js("return document.querySelectorAll('.sb-quick .sb-link').length") == 1,
               "the Quick notes entry in the sidebar doesn't list the notes")
         # The overview page: capture several thoughts without leaving it.
         b.click(".sb-quick .sb-link")
         b.find(".quick-capture textarea", 10)
         check(b.js("return location.pathname") == "/quick", "the Quick notes entry opens /quick")
-        check(b.js("return !!document.querySelector('.sb-actions .btn.primary') && !!document.querySelector('.sidebar .tree')"
-                   " && document.querySelector('.vault-btn .vname').textContent === 'My notes'"),
-              "the sidebar stays as it was: same vault, its tree and the New note buttons")
+        check(b.js("return document.querySelector('.qn-head .qn-count').textContent") == "1 of 20", "the list's heading counts them against the limit")
         b.click(".quick-capture textarea")
         b.keys("Garden plan" + KEYS["enter"] + "tomatoes and beans")
         b.chord(KEYS["ctrl"], KEYS["enter"])
@@ -1400,41 +1400,50 @@ def test_quick_notes(env):
         b.wait(cards + ".join('|') === 'Old thought|Garden plan|Call the dentist'", 10, "three cards")
         b.wait("return document.activeElement === document.querySelector('.quick-capture textarea')", 5, "focus back in the box")
         check(True, "the Save button saves too and leaves the focus in the box")
-        # Promote: a name (default: the first line) and a folder.
+        clash = b.js("""return Array.from(document.querySelectorAll('.qn-card')).filter(c => {
+            const time = c.querySelector('.qn-time'), t = time.getBoundingClientRect();
+            const a = c.querySelector('.qn-actions').getBoundingClientRect();
+            const overlap = t.right > a.left && t.left < a.right && t.bottom > a.top && t.top < a.bottom;
+            return overlap || time.getClientRects().length != 1;
+        }).length""")
+        b.shot("quick-notes-cards")
+        check(clash == 0, "on narrow cards the time stays on one line, clear of the buttons")
+        # A card opens its note.
         b.click_el(b.find_text(".qn-open", "Garden plan"))
         b.wait("return !!document.querySelector('.note-title') && document.querySelector('.note-title').value !== ''", 10, "the card opens its note")
         check(editor_text(b) == "Garden plan\ntomatoes and beans", "a card opens its note")
         b.js("history.back()")
         b.find(".quick-capture", 10)
-        b.js("Array.from(document.querySelectorAll('.qn-card')).find(c => c.textContent.includes('Garden plan')).querySelector('.qn-promote').click()")
-        b.find(".modal .promote-name", 5)
+        # Move to a vault: a name (default: the first line), the vault and a folder.
+        b.js("Array.from(document.querySelectorAll('.qn-card')).find(c => c.textContent.includes('Garden plan')).querySelector('.qn-move').click()")
+        b.find(".modal .mtv-name", 5)
         time.sleep(0.3)
-        check(b.js("return document.querySelector('.promote-name').value") == "Garden plan", "promoting suggests the first line as the name")
-        b.js("const i=document.querySelector('.promote-name'); i.focus(); i.select();")
+        check(b.js("return document.querySelector('.mtv-name').value") == "Garden plan", "moving suggests the first line as the name")
+        check(b.js("return Array.from(document.querySelectorAll('.mtv-vault option')).map(o => o.textContent)") == ["My notes"],
+              "the vaults one can write to are offered")
+        b.js("const i=document.querySelector('.mtv-name'); i.focus(); i.select();")
         b.keys("Vegetable garden")
-        b.click(".promote-folder")
+        b.click(".mtv-folder")
         b.keys("Projects")
         b.click(".modal button[type=submit]")
-        b.wait(cards + ".join('|') === 'Old thought|Call the dentist'", 10, "the promoted note leaves the quick notes")
-        check(not b.js("return !!document.querySelector('.modal')"), "promoting closes the dialog")
+        b.wait(cards + ".join('|') === 'Old thought|Call the dentist'", 15, "the moved note leaves the quick notes")
+        check(not b.js("return !!document.querySelector('.modal')"), "moving closes the dialog")
+        check(b.js("return document.querySelector('.qn-count').textContent") == "2 of 20", "and makes room")
         b.click_el(b.find_text(".tree-item", "Projects", 10))
         b.click_el(b.find_text(".tree-item", "Vegetable garden", 10))
-        b.wait("return document.querySelector('.note-title') && document.querySelector('.note-title').value === 'Vegetable garden'", 10, "the promoted note")
+        b.wait("return document.querySelector('.note-title') && document.querySelector('.note-title').value === 'Vegetable garden'", 10, "the moved note")
         check(b.js("return Array.from(document.querySelectorAll('.tree-row.folder')).find(r => r.textContent.trim() === 'Projects').getAttribute('aria-expanded')") == "true"
               and b.js("return document.querySelector('.tree-row.active').textContent.trim()") == "Vegetable garden",
               "a folder stays open when a note in it is opened")
-        check(b.js("return document.querySelector('.crumbs').textContent").endswith("Projects") and editor_text(b) == "Garden plan\ntomatoes and beans",
-              "promoting moves and renames it out of Quick notes, keeping its text")
-        # Archive: hidden from the list, unless asked for.
+        check(b.js("return document.querySelector('.crumbs').textContent") == "My notes / Projects" and editor_text(b) == "Garden plan\ntomatoes and beans",
+              "moving makes it a note of the vault, keeping its text")
+        # Deleted for good: no trash.
         b.click(".sb-quick .sb-link")
         b.find(".qn-card", 10)
-        b.js("Array.from(document.querySelectorAll('.qn-card')).find(c => c.textContent.includes('Call the dentist')).querySelector('.qn-archive').click()")
-        b.wait(cards + ".join('|') === 'Old thought'", 10, "archived note hidden")
-        check(True, "archiving hides a quick note from the list")
-        b.click(".qn-archived-toggle")
-        b.wait(cards + ".join('|') === 'Old thought|Call the dentist'", 10, "archived shown")
-        check(b.js("return Array.from(document.querySelectorAll('.qn-card.archived')).map(c => c.querySelector('.qn-text').textContent)") == ["Call the dentist"],
-              "“Show archived” lists archived ones, marked as such")
+        b.js("window.confirm = () => true")
+        b.js("Array.from(document.querySelectorAll('.qn-card')).find(c => c.textContent.includes('Call the dentist')).querySelector('.qn-delete').click()")
+        b.wait(cards + ".join('|') === 'Old thought'", 10, "deleted")
+        check(True, "deleting a quick note takes it away for good")
         # Shortcut help and the settings toggle.
         b.chord(KEYS["ctrl"], "/")
         b.find(".modal table.keys", 5)
@@ -1460,7 +1469,8 @@ def test_quick_notes(env):
         m.wait(cards + ".join('|') === 'Idea on the go'", 10, "the card on a phone")
         fits = m.js("""const w = innerWidth, r = e => e.getBoundingClientRect();
             const els = [document.querySelector('.quick-capture'), document.querySelector('.quick-capture .btn'),
-                         document.querySelector('.qn-card'), document.querySelector('.qn-card .qn-archive')];
+                         document.querySelector('.qn-card'), document.querySelector('.qn-card .qn-move'),
+                         document.querySelector('.qn-card .qn-delete')];
             return document.querySelector('.main').scrollWidth <= w && els.every(e => e && r(e).left >= 0 && r(e).right <= w);""")
         check(fits, "at 390px the capture box, its Save button and the cards fit the screen")
         m.shot("quick-mobile")
@@ -1469,7 +1479,6 @@ def test_quick_notes(env):
         b.close()
         if m:
             m.close()
-
 
 def png_file(path, w, h):
     """Write a w×h RGB gradient PNG (stdlib only)."""
@@ -1580,10 +1589,16 @@ def test_entry_icons(env):
         a.click(".modal .icon-actions button[type=submit]")
         a.wait("return !document.querySelector('.modal')", 5, "the dialog closes")
         check(row_icon(a, "Travel") == "🧳", "a folder gets an icon, any emoji can be typed")
-        a.chord(KEYS["alt"], "q")
-        a.wait("return " + row + ".length === 1", 10, "the Quick notes folder", "Quick notes")
-        set_icon(a, "Quick notes", "💡")
-        check(row_icon(a, "Quick notes") == "💡" and a.js("return " + row + ".length", "Quick notes") == 1,
+        # A note made by following a link to one that doesn't exist yet: its
+        # folder is only there because the note is in it.
+        new_note(a, "Links", "[[Ideas/Spark]]")
+        a.chord(KEYS["ctrl"], "e")
+        a.click("article.reading a.wl[data-create]")
+        a.wait("return document.querySelector('.note-title') && document.querySelector('.note-title').value === 'Spark'", 10, "the new note")
+        a.chord(KEYS["ctrl"], "e")
+        a.wait("return " + row + ".length === 1", 10, "the Ideas folder", "Ideas")
+        set_icon(a, "Ideas", "💡")
+        check(row_icon(a, "Ideas") == "💡" and a.js("return " + row + ".length", "Ideas") == 1,
               "so does a folder that only held notes, without showing twice")
         # Clicking the icon by the title changes it; Remove takes it away.
         a.go(env.url.rstrip("/") + url)

@@ -87,13 +87,16 @@ pub fn Sidebar() -> impl IntoView {
     let ui = ui();
     let user_menu = RwSignal::new(false);
     super::close_on_outside(user_menu);
-    // The vault shown: the page's; on a page of no vault (quick notes,
-    // settings, a note shared with us) the one shown before, else the quick
-    // notes vault, so the sidebar doesn't change under you. A memo, so the
-    // tree is only rebuilt (losing which folders are open) for another vault.
+    // The vault shown: the page's; on a page of no vault (quick notes and
+    // quick notes themselves, settings, a note shared with us) the one shown
+    // before, else the first, so the sidebar doesn't change under you. A
+    // memo, so the tree is only rebuilt (losing which folders are open) for
+    // another vault.
     let shown = Memo::new(move |before: Option<&Option<String>>| {
         let route = ui.route.get();
-        if let Some(v) = route.vault() {
+        if let Some(v) = route.vault()
+            && !state::step(|c| c.is_quick_notes(v))
+        {
             return Some(v.to_string());
         }
         if route == Route::Home {
@@ -103,7 +106,7 @@ pub fn Sidebar() -> impl IntoView {
         before
             .cloned()
             .flatten()
-            .or_else(crate::quick::vault)
+            .or_else(|| vaults.first().map(|v| v.id.clone()))
             .filter(|v| vaults.iter().any(|x| &x.id == v))
     });
     let vault = move || shown.get();

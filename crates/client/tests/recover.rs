@@ -38,7 +38,8 @@ async fn an_encrypted_export_decrypts_into_plain_files() {
     let out = srv.path("recovered");
     let report = recover::recover_with_device(&alice, &export, &out).unwrap();
     assert!(report.problems.is_empty(), "{:?}", report.problems);
-    assert_eq!(report.vaults, 1);
+    // The quick notes come back too (made when the app first started).
+    assert_eq!(report.vaults, 2);
     assert_eq!(
         std::fs::read_to_string(out.join("Family/Plans/Trip.md")).unwrap(),
         "Pack sunscreen ☀\n"

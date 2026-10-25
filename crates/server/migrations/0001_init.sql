@@ -15,7 +15,8 @@ CREATE TABLE users (
     -- What this person may own, set by an administrator: NULL = the
     -- instance's default, -1 = unlimited, otherwise at most that many.
     vault_allowance INTEGER,
-    agent_allowance INTEGER
+    agent_allowance INTEGER,
+    quick_note_allowance INTEGER
 );
 CREATE INDEX users_owner ON users(owner_id);
 
@@ -149,10 +150,14 @@ CREATE TABLE vaults (
     archived       INTEGER NOT NULL DEFAULT 0,
     -- Viewers (and people notes are shared with read-only) may comment.
     viewers_comment INTEGER NOT NULL DEFAULT 1,
+    -- What the vault is for: 'quick_notes' is its owner's quick notes
+    -- (never shared, a limited number of notes), at most one per person.
+    kind           TEXT NOT NULL DEFAULT 'regular' CHECK (kind IN ('regular', 'quick_notes')),
     created_at     INTEGER NOT NULL,
     updated_at     INTEGER NOT NULL
 );
 CREATE INDEX vaults_owner ON vaults(owner_id);
+CREATE UNIQUE INDEX vaults_quick_notes ON vaults(owner_id) WHERE kind = 'quick_notes';
 
 CREATE TABLE vault_members (
     vault_id TEXT NOT NULL REFERENCES vaults(id) ON DELETE CASCADE,

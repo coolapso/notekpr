@@ -87,6 +87,7 @@ async fn try_create_vault(u: &User) -> u16 {
             signature: None,
         },
         log_entry: None,
+        kind: Default::default(),
     };
     u.api.status(Method::POST, "/vaults", Some(&req)).await
 }
@@ -690,6 +691,7 @@ async fn limits_stop_new_accounts_vaults_and_agents() {
                     signature: None,
                 },
                 log_entry: None,
+                kind: Default::default(),
             }),
         )
         .await
@@ -896,4 +898,162 @@ async fn a_full_database_turns_the_server_read_only_until_there_is_room() {
         .await
         .unwrap();
     assert_eq!(stored.max_storage_mb, Limit::Max(1024));
+}
+
+/// A quick note made by pushing its first content (no key of its own).
+fn quick_note(u: &User, v: &str, id: &str) -> PushUpdate {
+    let text = NoteDoc::new().set_text(id).unwrap();
+    u.encrypt_update(v, id, &text)
+}
+
+/// Quick notes hold as many notes as the instance's `quick_notes_per_user`
+/// or the person's own allowance say; both through the admin API. Lowering
+/// takes nothing away, and quick notes count as no vault.
+#[tokio::test]
+async fn quick_notes_hold_as_many_notes_as_allowed() {
+    use notekpr_core::engine;
+    let srv = start_with_operator().await;
+    let mut alice = new_user(&srv.base, "alice").await;
+    settings(
+        &srv,
+        serde_json::json!({ "quick_notes_per_user": 2, "vaults_per_user": 0 }),
+    )
+    .await;
+    // No vault may be made, quick notes still can.
+    assert_eq!(try_create_vault(&alice).await, 403);
+    let q = alice.create_quick_notes().await.unwrap();
+    assert_eq!(q.note_limit, Limit::Max(2));
+    let q = q.id;
+    let mut ws = Ws::connect(&srv.ws, alice.api.token.as_ref().unwrap()).await;
+
+    // Two notes fit; the third waits. Edits to the two and the index don't.
+    let r = alice
+        .push(
+            &q,
+            vec![
+                quick_note(&alice, &q, "n1"),
+                quick_note(&alice, &q, "n2"),
+                quick_note(&alice, &q, "n3"),
+                quick_note(&alice, &q, "n1"),
+                alice.encrypt_update(&q, INDEX_OBJECT_ID, b"\0"),
+            ],
+        )
+        .await
+        .unwrap();
+    assert_eq!(r.results.len(), 4);
+    assert_eq!(r.rejected.len(), 1);
+    assert_eq!(r.rejected[0].object_id, "n3");
+    assert_eq!(r.rejected[0].code, REJECT_QUICK_NOTES_FULL);
+    // A new note's own key is refused the same way.
+    let (_, key) = engine::new_document_key(alice.ring(&q), "n4", "Later").unwrap();
+    let err = alice
+        .api
+        .call::<_, ()>(
+            Method::PUT,
+            &format!("/vaults/{q}/objects/n4/key"),
+            Some(&key),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(err.0, 403);
+    assert!(err.1.contains(ERROR_LIMIT_REACHED), "{}", err.1);
+
+    // Deleting one for good makes room.
+    let purge = format!("/vaults/{q}/objects/n1");
+    assert_eq!(
+        alice.api.status::<()>(Method::DELETE, &purge, None).await,
+        204
+    );
+    let r = alice
+        .push(&q, vec![quick_note(&alice, &q, "n3")])
+        .await
+        .unwrap();
+    assert!(r.rejected.is_empty());
+
+    // A person's own allowance, told to their apps.
+    let path = format!("/admin/users/{}", alice.id);
+    let r = operator(&srv, Method::PATCH, &path)
+        .json(&serde_json::json!({ "quick_note_allowance": 3 }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status().as_u16(), 200);
+    ws.until(|m| match m {
+        ServerMessage::UserEvent {
+            event: UserEventKind::VaultsChanged,
+            ..
+        } => Some(()),
+        _ => None,
+    })
+    .await;
+    let info: VaultInfo = alice.api.get(&format!("/vaults/{q}")).await;
+    assert_eq!(info.note_limit, Limit::Max(3));
+    let r = alice
+        .push(&q, vec![quick_note(&alice, &q, "n5")])
+        .await
+        .unwrap();
+    assert!(r.rejected.is_empty());
+    let users: Vec<AdminUser> = operator(&srv, Method::GET, "/admin/users")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let a = users.iter().find(|u| u.id == alice.id).unwrap();
+    assert_eq!(a.quick_note_allowance, Allowance::Max(3));
+    assert_eq!(a.quick_note_count, 3);
+    assert_eq!((a.vault_count, a.owned_vault_count), (0, 0));
+    let stats: AdminStats = operator(&srv, Method::GET, "/admin/stats")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(stats.vaults, 0, "quick notes are no vault");
+
+    // Back to the instance's default, lowered: nothing is taken away.
+    let r = operator(&srv, Method::PATCH, &path)
+        .json(&serde_json::json!({ "quick_note_allowance": "default" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status().as_u16(), 200);
+    let s = settings(&srv, serde_json::json!({ "quick_notes_per_user": 1 })).await;
+    assert_eq!(s.settings.quick_notes_per_user, Limit::Max(1));
+    let info: VaultInfo = alice.api.get(&format!("/vaults/{q}")).await;
+    assert_eq!(info.note_limit, Limit::Max(1));
+    let r = alice
+        .push(
+            &q,
+            vec![quick_note(&alice, &q, "n2"), quick_note(&alice, &q, "n6")],
+        )
+        .await
+        .unwrap();
+    assert_eq!(r.results.len(), 1, "the old one is still edited");
+    assert_eq!(r.rejected[0].object_id, "n6");
+    // Unlimited for everyone.
+    settings(
+        &srv,
+        serde_json::json!({ "quick_notes_per_user": "unlimited" }),
+    )
+    .await;
+    let r = alice
+        .push(&q, vec![quick_note(&alice, &q, "n6")])
+        .await
+        .unwrap();
+    assert!(r.rejected.is_empty());
+    // Agents have no allowance.
+    let agent = create_agent(&alice).await.unwrap();
+    let r = operator(
+        &srv,
+        Method::PATCH,
+        &format!("/admin/users/{}", agent.agent.id),
+    )
+    .json(&serde_json::json!({ "quick_note_allowance": 1 }))
+    .send()
+    .await
+    .unwrap();
+    assert_eq!(r.status().as_u16(), 400);
 }

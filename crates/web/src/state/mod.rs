@@ -247,7 +247,8 @@ pub enum Modal {
         id: String,
     },
     Import(String),
-    Promote {
+    /// Move a note to another vault (a quick note to a vault).
+    MoveToVault {
         vault: String,
         id: String,
     },
@@ -443,9 +444,6 @@ pub struct Prefs {
     /// Trust-on-first-use pins: user id → account key fingerprint.
     #[serde(default)]
     pub pins: BTreeMap<String, String>,
-    /// The vault quick notes go to (`None`: the default, see `crate::quick`).
-    #[serde(default)]
-    pub quick_vault: Option<String>,
     /// The default note width on all devices (`None`: each browser's own,
     /// `UiPrefs::note_width`).
     #[serde(default, deserialize_with = "crate::width::lenient")]
@@ -614,6 +612,21 @@ impl Core {
 
     pub fn entry(&self, vault: &str, id: &str) -> Option<notekpr_core::doc::Entry> {
         self.replicas.get(vault)?.index.get(id)
+    }
+
+    /// The person's quick notes: their vault of that kind (see
+    /// `crate::quick`), once listed.
+    pub fn quick_notes(&self) -> Option<String> {
+        self.vault_infos
+            .values()
+            .find(|i| i.is_own_quick_notes(&self.user_id))
+            .map(|i| i.id.clone())
+    }
+
+    pub fn is_quick_notes(&self, vault: &str) -> bool {
+        self.vault_infos
+            .get(vault)
+            .is_some_and(|i| i.is_own_quick_notes(&self.user_id))
     }
 
     pub fn vault_name(&self, vault: &str) -> String {

@@ -344,21 +344,28 @@ button.list-row:hover:not(:disabled) { background: var(--bg-2); }
 .quick-capture { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
 .quick-capture textarea { width: 100%; min-height: 96px; font-size: 16px; }
 .qc-bar { display: flex; align-items: center; gap: 10px; }
-.qn-novault { border-radius: 10px; border: none; margin: 8px 0; }
+.qn-novault, .qn-full { border-radius: 10px; border: none; margin: 8px 0; }
+.qn-count { white-space: nowrap; }
+.qn-count.near { color: var(--warn); }
+.qn-count.full { color: var(--danger); }
+.qn-explain { margin: 4px 0 0; }
 .qn-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 24px; }
 .page-body .qn-head h2 { margin: 0; }
 .qn-head .check { margin: 0; }
 .qn-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 10px; margin-top: 10px; }
 .qn-card { display: flex; flex-direction: column; min-width: 0; min-height: 110px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg); overflow: hidden; }
 .qn-card:hover { border-color: var(--border-strong); }
-.qn-card.archived { opacity: 0.7; }
 .qn-open { flex: 1; display: flex; flex-direction: column; gap: 4px; min-width: 0; padding: 12px 14px 6px; border: none; background: none; text-align: left; cursor: pointer; }
 .qn-text, .qn-rest { overflow: hidden; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; }
 .qn-text { font-weight: 600; }
 .qn-rest { color: var(--fg-2); font-size: 13px; }
-.qn-foot { display: flex; align-items: center; gap: 2px; padding: 2px 6px 6px 14px; color: var(--muted); font-size: 12px; }
+/* The time, and the buttons together: below it when the card is narrow. */
+.qn-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 6px; padding: 2px 6px 6px 14px; color: var(--muted); font-size: 12px; }
+.qn-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin-right: auto; }
+.qn-time { white-space: nowrap; }
+.qn-meta .pill { margin: 0; }
+.qn-actions { display: flex; gap: 2px; margin-left: auto; }
 .qn-foot .btn .ic { width: 14px; height: 14px; }
-.qn-foot .pill { margin: 0 4px 0 0; }
 
 /* note page */
 /* Pages are as tall as what's on them, not squeezed to the window by

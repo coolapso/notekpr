@@ -234,7 +234,13 @@ pub async fn forward(dirs: &Dirs, mut cli: Cli) -> Result<bool> {
     // What the command would read here: stdin, and paths relative to here.
     let stdin = match &cli.command {
         Command::Write { .. } => Some(ui::read_stdin().context("reading stdin")?),
-        Command::Quick(QuickArgs { text, list, .. }) if text.is_empty() && !list => {
+        Command::Quick(QuickArgs {
+            text,
+            list,
+            delete: None,
+            move_note: None,
+            ..
+        }) if text.is_empty() && !list => {
             if ui::stdin_is_tty() {
                 eprintln!("Type your quick note, then press Ctrl+D:");
             }

@@ -107,6 +107,12 @@ reload on change pick up remote edits cleanly.
   folder by itself. See
   [desktop-client.md §7](desktop-client.md#7-conflicts-duplicates-deletes-and-renames)
   for confirming a deliberate mass deletion.
+* **Quick notes are the folder `Quick notes/`.** Drop a `.md` file there to
+  capture a thought (while there's room: 20 unless your server says
+  otherwise); move it into a vault's folder to keep it there. It is flat —
+  files in folders inside it aren't synced — and deleting a file there
+  deletes the quick note for good (they have no trash). See
+  [desktop-client.md §4](desktop-client.md#layout).
 * **CLI commands while the daemon runs:** reading ones (`cat`, `ls`,
   `search`, …) work and show the daemon's copies; changing ones (`write`,
   `mv`, …) are handed to the daemon, which runs them on its copies (of the

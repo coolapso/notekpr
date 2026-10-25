@@ -28,7 +28,8 @@ async fn shared_vault_reaches_running_sync_live() {
 
     // Bob's sync is running before Alice writes anything.
     let bob_live = live(hub(&bob).await).await;
-    assert_eq!(bob_live.hub.vault_ids().len(), 1);
+    // Family, and his own quick notes.
+    assert_eq!(bob_live.hub.vault_ids().len(), 2);
 
     ops::put_document(&alice_hub, "Family", "Welcome.md", "# Hi Bob\n", None)
         .await
@@ -367,7 +368,14 @@ async fn a_server_error_from_a_proxy_counts_as_offline() {
         .await
         .unwrap();
     assert!(out.pending_changes > 0, "kept for later, not an error");
-    let vid = offline.vault_ids()[0].clone();
+    let vid = offline
+        .resolve("Notes")
+        .await
+        .unwrap()
+        .lock()
+        .await
+        .id()
+        .to_string();
     let o = offline.push(&vid).await.unwrap();
     assert!(o.offline && o.remaining > 0);
     drop(offline);

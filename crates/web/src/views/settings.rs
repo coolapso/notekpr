@@ -476,24 +476,10 @@ fn NoteWidthPrefs() -> impl IntoView {
     }
 }
 
-/// Where quick notes go (synced) and whether the sidebar shows them (this browser).
+/// Whether the sidebar shows the quick notes (this browser).
 #[component]
 fn QuickNotesPrefs() -> impl IntoView {
     let ui = ui();
-    let choice = Memo::new(move |_| {
-        ui.prefs_rev.get();
-        ui.vaults.get();
-        let chosen = step(|c| c.prefs.quick_vault.clone());
-        let mut writable: Vec<(String, String)> = crate::quick::candidates()
-            .into_iter()
-            .filter(|v| v.writable)
-            .map(|v| (v.id, v.name))
-            .collect();
-        writable.sort_by_key(|(_, n)| n.to_lowercase());
-        let default = crate::quick::choose_vault(None, &crate::quick::candidates())
-            .map(|v| state::step(|c| c.vault_name(&v)));
-        (chosen, writable, default)
-    });
     view! {
         <h3>"Quick notes"</h3>
         <label class="check">
@@ -501,30 +487,7 @@ fn QuickNotesPrefs() -> impl IntoView {
                 on:change=move |ev| { let on = event_target_checked(&ev); state::set_ui_prefs(|p| p.quick_notes = on); }/>
             " Show quick notes in the sidebar"
         </label>
-        <label class="field">
-            <span class="small muted">"Vault for quick notes (synced to your other devices)"</span>
-            <select class="input quick-vault" on:change=move |ev| {
-                let v = event_target_value(&ev);
-                step(|c| state::set_quick_vault(c, if v.is_empty() { None } else { Some(v) }));
-            }>
-                {move || {
-                    let (chosen, list, default) = choice.get();
-                    let auto = match default {
-                        Some(n) => format!("Automatic ({n})"),
-                        None => "Automatic".to_string(),
-                    };
-                    let c2 = chosen.clone();
-                    view! {
-                        <option value="" selected=chosen.is_none()>{auto}</option>
-                        {list.into_iter().map(|(id, name)| {
-                            let sel = c2.as_deref() == Some(id.as_str());
-                            view! { <option value=id selected=sel>{name}</option> }
-                        }).collect_view()}
-                    }
-                }}
-            </select>
-        </label>
-        <p class="muted small">{format!("Quick notes are regular notes in the “{}” folder of that vault. New one: Alt+Q.", crate::quick::FOLDER)}</p>
+        <p class="muted small">"Quick notes are yours alone, in no vault: move one to a vault to keep it. New one: Alt+Q."</p>
     }
 }
 
@@ -585,15 +548,18 @@ fn Admin() -> impl IntoView {
                     move || editing.get().as_deref() == Some(id.as_str())
                 };
                 let (owned, agent_count, va, aa) = (u.owned_vault_count, u.agent_count, u.vault_allowance, u.agent_allowance);
+                let (quick_count, qa) = (u.quick_note_count, u.quick_note_allowance);
                 let usage = move || person.then(|| {
                     let d = defaults.get();
                     format!(
-                        "owns {} · {}",
+                        "owns {} · {} · {}",
                         allowance_usage(owned, va, d.as_ref().map(|d| d.vaults_per_user), "vault"),
                         allowance_usage(agent_count, aa, d.as_ref().map(|d| d.agents_per_user), "agent"),
+                        allowance_usage(quick_count, qa, d.as_ref().map(|d| d.quick_notes_per_user), "quick note"),
                     )
                 });
                 let (vaults, agents) = (RwSignal::new(u.vault_allowance), RwSignal::new(u.agent_allowance));
+                let quick_notes = RwSignal::new(u.quick_note_allowance);
                 view! {
                     <div class="list-row col" class:dim=disabled data-user=u.display_name.clone()>
                         <div class="row">
@@ -629,12 +595,14 @@ fn Admin() -> impl IntoView {
                                 <div class="allowances">
                                     <AllowanceField label="Vaults they may own" value=vaults default=d.as_ref().map(|d| d.vaults_per_user) class="vault-allowance"/>
                                     <AllowanceField label="Agents they may have" value=agents default=d.as_ref().map(|d| d.agents_per_user) class="agent-allowance"/>
+                                    <AllowanceField label="Quick notes they may keep" value=quick_notes default=d.as_ref().map(|d| d.quick_notes_per_user) class="quick-note-allowance"/>
                                     <div class="row">
                                         <button class="btn small primary save-allowances" on:click=move |_| {
                                             editing.set(None);
                                             patch_user(id.clone(), AdminUpdateUser {
                                                 vault_allowance: Some(vaults.get_untracked()),
                                                 agent_allowance: Some(agents.get_untracked()),
+                                                quick_note_allowance: Some(quick_notes.get_untracked()),
                                                 ..Default::default()
                                             });
                                         }>"Save"</button>
@@ -814,9 +782,10 @@ fn InstanceSettingsPanel(
         RwSignal::new(s.max_vaults),
         RwSignal::new(s.vaults_per_user),
         RwSignal::new(s.agents_per_user),
+        RwSignal::new(s.quick_notes_per_user),
         RwSignal::new(s.max_storage_mb),
     );
-    let (users, agents, vaults, vaults_per_user, agents_per_user, storage) = fields;
+    let (users, agents, vaults, vaults_per_user, agents_per_user, quick_per_user, storage) = fields;
     let show = move |a: AdminSettings| {
         let s = &a.settings;
         users.set(s.max_users);
@@ -824,6 +793,7 @@ fn InstanceSettingsPanel(
         vaults.set(s.max_vaults);
         vaults_per_user.set(s.vaults_per_user);
         agents_per_user.set(s.agents_per_user);
+        quick_per_user.set(s.quick_notes_per_user);
         storage.set(s.max_storage_mb);
         defaults.set(Some(a.settings.clone()));
         status.set(Some(a));
@@ -873,6 +843,7 @@ fn InstanceSettingsPanel(
                     <LimitField label="Vaults" value=vaults class="max-vaults"/>
                     <LimitField label="Vaults per person" value=vaults_per_user class="vaults-per-user"/>
                     <LimitField label="Agents per person" value=agents_per_user class="agents-per-user"/>
+                    <LimitField label="Quick notes per person" value=quick_per_user class="quick-notes-per-user"/>
                     <LimitField label="Database size (MiB)" value=storage class="max-storage"/>
                 </div>
                 <div class="row">
@@ -882,6 +853,7 @@ fn InstanceSettingsPanel(
                         max_vaults: Some(vaults.get_untracked()),
                         vaults_per_user: Some(vaults_per_user.get_untracked()),
                         agents_per_user: Some(agents_per_user.get_untracked()),
+                        quick_notes_per_user: Some(quick_per_user.get_untracked()),
                         max_storage_mb: Some(storage.get_untracked()),
                         ..Default::default()
                     })>"Save limits"</button>

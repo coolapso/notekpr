@@ -16,8 +16,10 @@
 //! are therefore preserved, never overwritten.
 //!
 //! New files create entries; deleted files move entries to the trash
-//! (recoverable); a delete plus a create of identical content within a short
-//! window is a rename. Dotfiles, editor swap/backup files and our own
+//! (recoverable) — in the quick notes, which keep no trash, they are deleted
+//! for good; a delete plus a create of identical content within a short
+//! window is a rename. The quick notes' folder is flat and holds at most as
+//! many notes as they may: other new files wait on disk. Dotfiles, editor swap/backup files and our own
 //! temporary files are ignored. Change detection compares size + mtime and
 //! falls back to content hashes, so our own writes are recognised.
 
@@ -56,6 +58,9 @@ const STALE_TEMP_AGE: Duration = Duration::from_secs(60);
 /// and more than half of them — looks like a moved or unmounted folder, not
 /// like deletions: nothing is trashed until confirmed.
 pub const MASS_DELETE_MIN_FILES: usize = 10;
+/// In the quick notes, deleting a file deletes the note for good: more than
+/// this many missing at once are held the same way, however few they are.
+pub const QUICK_MASS_DELETE_MIN_FILES: usize = 3;
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 struct Base {
@@ -1087,6 +1092,32 @@ fn ingest_new_file(
             Err(e) => tracing::debug!("rename not applied: {e:#}"),
         }
     }
+    // The quick notes are flat, hold a limited number of notes and keep
+    // files only for the notes linking to them: other files wait on disk
+    // (tried again on every pass).
+    if v.is_quick_notes() {
+        if !notekpr_core::quick::is_top_level(path) {
+            mv.warn_once(
+                "quick:folders",
+                "quick notes have no folders: files in folders inside 'Quick notes' are not synced",
+            );
+            return Ok(());
+        }
+        if is_note && let Err(e) = v.require_room() {
+            mv.warn_once(
+                &format!("quick:full:{path}"),
+                &format!("{e:#} A new file in 'Quick notes' is synced once there's room."),
+            );
+            return Ok(());
+        }
+        if !is_note && v.require_linked(path).is_err() {
+            mv.warn_once(
+                &format!("quick:unlinked:{path}"),
+                "quick notes keep files only for their notes: a file in 'Quick notes' is synced once a quick note links to it",
+            );
+            return Ok(());
+        }
+    }
     let (r, state) = if is_note {
         let Ok(text) = String::from_utf8(data) else {
             mv.warn_once(
@@ -1535,9 +1566,7 @@ impl Mirror {
             opts,
             fold,
         };
-        for id in m.hub.vault_ids() {
-            m.attach_or_warn(&id).await;
-        }
+        m.attach_all().await;
         Ok(m)
     }
 
@@ -1556,6 +1585,18 @@ impl Mirror {
 
     /// Attach a vault; a vault that cannot be mirrored is reported (once) and
     /// skipped, it does not stop the others.
+    /// Mirror every open vault, the quick notes first: the folder named
+    /// after them is theirs.
+    async fn attach_all(&mut self) {
+        if let Some(q) = self.hub.quick_notes().await {
+            let id = q.lock().await.id().to_string();
+            self.attach_or_warn(&id).await;
+        }
+        for id in self.hub.vault_ids() {
+            self.attach_or_warn(&id).await;
+        }
+    }
+
     async fn attach_or_warn(&mut self, vault_id: &str) {
         if let Err(e) = self.attach(vault_id).await
             && self.warned.insert(format!("attach:{vault_id}"))
@@ -1711,9 +1752,7 @@ impl Mirror {
     /// A vault that fails is reported and does not stop the others.
     pub async fn reconcile_all(&mut self, final_pass: bool) -> Result<Report> {
         let mut total = Report::default();
-        for id in self.hub.vault_ids() {
-            self.attach_or_warn(&id).await;
-        }
+        self.attach_all().await;
         let ids: Vec<String> = self.vaults.keys().cloned().collect();
         for id in ids {
             match self.reconcile_vault(&id, final_pass).await {
@@ -1776,11 +1815,13 @@ impl Mirror {
         }
 
         // 2. New files: renames (same content as a missing file) or creations.
-        let new_files: Vec<(String, Stat)> = disk
+        let mut new_files: Vec<(String, Stat)> = disk
             .iter()
             .filter(|(p, _)| !claimed.contains(&mv.key(p)))
             .map(|(p, s)| (p.clone(), *s))
             .collect();
+        // Notes first: a file in the quick notes needs a note linking to it.
+        new_files.sort_by_key(|(p, _)| !paths::is_note(p));
         if writable {
             for (path, st) in new_files {
                 if let Err(e) = ingest_new_file(
@@ -1804,8 +1845,13 @@ impl Mirror {
         let total = mv.state.files.len();
         let missing = mv.missing_since.len();
         let dir_gone = total > 0 && !mv.dir.is_dir();
-        let mass =
-            missing > 0 && (dir_gone || (missing > MASS_DELETE_MIN_FILES && missing * 2 > total));
+        let quick = v.is_quick_notes();
+        let many = if quick {
+            missing > QUICK_MASS_DELETE_MIN_FILES
+        } else {
+            missing > MASS_DELETE_MIN_FILES && missing * 2 > total
+        };
+        let mass = missing > 0 && (dir_gone || many);
         let mut expired: Vec<String> = mv
             .missing_since
             .iter()
@@ -1828,10 +1874,15 @@ impl Mirror {
                 } else {
                     format!("{missing} of {total} mirrored files disappeared at once")
                 };
+                let (nothing, gone) = if quick {
+                    ("Nothing was deleted", "deletes those quick notes for good")
+                } else {
+                    ("Nothing was moved to the trash", "moves them to the trash")
+                };
                 ui::warn(&format!(
-                    "vault '{name}': {what}. Nothing was moved to the trash. If the folder was moved, renamed or \
+                    "vault '{name}': {what}. {nothing}. If the folder was moved, renamed or \
                      unmounted, put it back. If you deleted the files on purpose, stop `notekpr sync` and run \
-                     `notekpr sync --once --allow-mass-delete` (moves them to the trash), or \
+                     `notekpr sync --once --allow-mass-delete` ({gone}), or \
                      `--restore-missing` to get the files back"
                 ));
             }
@@ -1901,12 +1952,20 @@ impl Mirror {
         if changed {
             v.save()?;
         }
+        let quick = v.is_quick_notes();
         drop(v);
         let renamed = std::mem::take(&mut mv.renamed);
         if changed {
             self.hub
                 .local_changed(vault_id, touched.into_iter().collect(), true)
                 .await;
+        }
+        // The quick notes keep no trash: what was deleted goes for good.
+        if quick
+            && report.trashed > 0
+            && let Err(e) = crate::ops::purge_deleted_quick_notes(&self.hub).await
+        {
+            ui::warn(&format!("quick notes: {e:#}"));
         }
         for id in renamed {
             if let Err(e) = crate::note_shares::refresh_meta(&self.hub.session, &shared, &id).await
@@ -1916,8 +1975,12 @@ impl Mirror {
         }
         if report.local_changes() > 0 {
             ui::status(&format!(
-                "vault '{name}': {} local edit(s), {} new, {} moved, {} trashed",
-                report.ingested, report.created, report.renamed, report.trashed
+                "vault '{name}': {} local edit(s), {} new, {} moved, {} {}",
+                report.ingested,
+                report.created,
+                report.renamed,
+                report.trashed,
+                if quick { "deleted" } else { "trashed" }
             ));
         }
         Ok(report)

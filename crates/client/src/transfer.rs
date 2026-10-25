@@ -344,7 +344,9 @@ pub async fn import(
         bail!("{} is neither a directory nor a .zip file", src.display());
     };
     drop_comments(&mut collected, &mut report);
-    let (files, dirs) = collected;
+    let (mut files, dirs) = collected;
+    // Notes first: a file in the quick notes needs a note linking to it.
+    files.sort_by_key(|(rel, _)| !paths::is_note(rel));
     let prefix = match into {
         Some(f) if !f.trim_matches('/').is_empty() => paths::normalize(f)?,
         _ => String::new(),

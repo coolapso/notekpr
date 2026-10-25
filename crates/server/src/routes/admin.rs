@@ -10,6 +10,7 @@ use axum::http::StatusCode;
 use notekpr_core::protocol::{
     AdminClientInfo, AdminScope, AdminSettings, AdminStats, AdminUpdateUser, AdminUser,
     CreateAdminClient, CreatedAdminToken, InstanceSettingsUpdate, PrincipalKind, UpdateAdminClient,
+    UserEventKind,
 };
 use serde::Deserialize;
 
@@ -19,6 +20,7 @@ use crate::db;
 use crate::error::{AppError, AppResult, bad, forbidden};
 use crate::hub::Control;
 use crate::repo;
+use crate::routes::me::notify_user;
 use crate::state::AppState;
 
 #[derive(Deserialize)]
@@ -81,7 +83,10 @@ pub async fn update_user(
     Path(id): Path<String>,
     Json(req): Json<AdminUpdateUser>,
 ) -> AppResult<Json<serde_json::Value>> {
-    if req.disabled.is_some() || req.vault_allowance.is_some() || req.agent_allowance.is_some() {
+    let allowances = req.vault_allowance.is_some()
+        || req.agent_allowance.is_some()
+        || req.quick_note_allowance.is_some();
+    if req.disabled.is_some() || allowances {
         admin.require(AdminScope::Accounts)?;
     }
     if req.is_admin.is_some() {
@@ -98,7 +103,6 @@ pub async fn update_user(
     {
         return Err(bad("you cannot disable or demote yourself"));
     }
-    let allowances = req.vault_allowance.is_some() || req.agent_allowance.is_some();
     {
         let _w = state.write_lock.lock().await;
         let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
@@ -127,7 +131,14 @@ pub async fn update_user(
         if let Some(a) = req.agent_allowance {
             repo::users::set_agent_allowance(&mut *tx, &id, a).await?;
         }
+        if let Some(a) = req.quick_note_allowance {
+            repo::users::set_quick_note_allowance(&mut *tx, &id, a).await?;
+        }
         tx.commit().await?;
+    }
+    // Their apps reload their quick notes' limit.
+    if req.quick_note_allowance.is_some() {
+        notify_user(&state, &id, UserEventKind::VaultsChanged);
     }
     if req.disabled == Some(true) {
         let sessions = repo::sessions::revoke_for_user(&state.db, &id, db::now()).await?;
@@ -152,6 +163,7 @@ pub async fn update_user(
             "is_admin": req.is_admin,
             "vault_allowance": req.vault_allowance,
             "agent_allowance": req.agent_allowance,
+            "quick_note_allowance": req.quick_note_allowance,
         }),
     )
     .await;
@@ -189,6 +201,12 @@ pub async fn update_settings(
         state.instance.update(&state.db, &req).await?
     };
     tracing::info!(read_only = ?state.instance.read_only(), "instance settings changed");
+    // Apps reload their quick notes' limit.
+    if req.quick_notes_per_user.is_some() {
+        for owner in repo::vaults::quick_notes_owners(&state.db).await? {
+            notify_user(&state, &owner, UserEventKind::VaultsChanged);
+        }
+    }
     audit(
         &state,
         &admin,

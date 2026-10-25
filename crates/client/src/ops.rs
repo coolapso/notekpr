@@ -3,14 +3,14 @@
 //! read-only flag; errors carry a category that front ends map to HTTP status
 //! codes.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
 use notekpr_core::doc::{Entry, EntryKind};
-use notekpr_core::protocol::{INDEX_OBJECT_ID, PrefsBlob, Role, Snapshot, SnapshotInfo};
-use notekpr_core::{paths, search};
+use notekpr_core::protocol::{INDEX_OBJECT_ID, Limit, Snapshot, SnapshotInfo};
+use notekpr_core::{markdown, paths, quick, search};
 use serde::Serialize;
 
-use crate::api::ApiError;
 use crate::hub::{Hub, VaultSummary};
 use crate::session::{Session, SharedVault};
 use crate::vault::{Vault, WriteResult, content_hash};
@@ -703,6 +703,14 @@ pub async fn delete_document(hub: &Hub, vref: &str, path: &str) -> OpResult<(Str
         (g.id().to_string(), ids)
     };
     hub.local_changed(&vault_id, vec![], true).await;
+    // The quick notes keep no trash.
+    if hub
+        .quick_notes()
+        .await
+        .is_some_and(|q| q.try_lock().is_ok_and(|g| g.id() == vault_id))
+    {
+        purge_deleted_quick_notes(hub).await?;
+    }
     Ok((vault_id, ids))
 }
 
@@ -935,20 +943,15 @@ pub async fn empty_trash(hub: &Hub, vref: &str) -> OpResult<usize> {
 
 // ---------------------------------------------------------------- quick notes
 //
-// Quick notes are ordinary notes in `Quick notes/` of one vault, as in the
-// web client (crates/web/src/quick.rs): same folder, naming, preview and
-// default-vault rule.
-
-/// Folder of the quick notes in their vault.
-pub const QUICK_FOLDER: &str = "Quick notes";
-/// Archived quick notes.
-pub const QUICK_ARCHIVE: &str = "Quick notes/Archive";
+// Each person's quick notes are a vault of that kind (`notekpr_core::quick`):
+// flat, never shared, a limited number of notes, deleted for good. A quick
+// note leaves them by moving to a vault ([`move_to_vault`]).
 
 /// Name of a quick note made at `ms`, in local time: `2026-10-19 14.32`
 /// (no `:`, which Windows file names don't allow).
 pub fn quick_note_name(ms: i64) -> String {
     let (y, mo, d, h, mi) = local_time(ms);
-    format!("{y:04}-{mo:02}-{d:02} {h:02}.{mi:02}")
+    quick::stamp_name(y, mo, d, h, mi)
 }
 
 /// Year, month, day, hour and minute of `ms` in the local time zone (UTC
@@ -981,192 +984,25 @@ fn local_time(ms: i64) -> (i32, u32, u32, u32, u32) {
     )
 }
 
-pub fn is_quick_note(path: &str) -> bool {
-    paths::is_within(path, QUICK_FOLDER) && paths::is_note(path)
+/// The person's quick notes, made the first time.
+async fn quick_vault(hub: &Hub) -> OpResult<SharedVault> {
+    hub.ensure_quick_notes()
+        .await
+        .map_err(|e| OpError::Unavailable(format!("{e:#}")))
 }
 
-pub fn is_archived_quick_note(path: &str) -> bool {
-    paths::is_within(path, QUICK_ARCHIVE)
-}
-
-/// A line without Markdown block markers (headings, quotes, bullets, tasks).
-fn plain_line(line: &str) -> &str {
-    let mut s = line.trim();
-    loop {
-        let before = s;
-        let hashes = s.len() - s.trim_start_matches('#').len();
-        if (1..=6).contains(&hashes) && s[hashes..].starts_with(' ') {
-            s = s[hashes..].trim_start();
-        }
-        if let Some(r) = s.strip_prefix('>') {
-            s = r.trim_start();
-        }
-        for m in ["- ", "* ", "+ "] {
-            if let Some(r) = s.strip_prefix(m) {
-                s = r.trim_start();
-            }
-        }
-        let digits = s.len() - s.trim_start_matches(|c: char| c.is_ascii_digit()).len();
-        if digits > 0 && (s[digits..].starts_with(". ") || s[digits..].starts_with(") ")) {
-            s = s[digits + 2..].trim_start();
-        }
-        for m in ["[ ] ", "[x] ", "[X] "] {
-            if let Some(r) = s.strip_prefix(m) {
-                s = r.trim_start();
-            }
-        }
-        if s == before {
-            return s;
-        }
-    }
-}
-
-/// What lists show for a quick note: its first non-empty line (without
-/// front matter and Markdown markers), or `title` if it has no text yet.
-pub fn quick_preview(text: &str, title: &str) -> String {
-    // As shown: without HTML tags (colors).
-    let text = &notekpr_core::markdown::shown_text(text);
-    let mut lines = text.lines().peekable();
-    // Only a closed block at the start is front matter.
-    if lines.peek().is_some_and(|l| l.trim_end() == "---")
-        && text.lines().skip(1).any(|l| l.trim_end() == "---")
-    {
-        lines.next();
-        for l in lines.by_ref() {
-            if l.trim_end() == "---" {
-                break;
-            }
-        }
-    }
-    let first = lines
-        .filter(|l| !l.trim_start().starts_with("```"))
-        .map(plain_line)
-        .find(|l| !l.is_empty() && *l != "---");
-    match first {
-        Some(l) if l.chars().count() > 160 => {
-            let mut s: String = l.chars().take(160).collect();
-            s = s.trim_end().to_string();
-            s.push('…');
-            s
-        }
-        Some(l) => l.to_string(),
-        None => title.to_string(),
-    }
-}
-
-/// A vault that could hold the quick notes.
-#[derive(Clone, Debug)]
-pub struct QuickVaultCandidate {
-    pub id: String,
-    pub name: String,
-    pub owned: bool,
-    pub writable: bool,
-    pub archived: bool,
-    /// When the vault was created (`i64::MAX` if unknown).
-    pub created_at: i64,
-}
-
-/// The quick-notes vault: the chosen one if it can still be edited,
-/// otherwise the first vault the person owns (their personal vault, the
-/// oldest), otherwise the first they can edit. Archived vaults only when
-/// chosen.
-pub fn choose_quick_vault(pref: Option<&str>, vaults: &[QuickVaultCandidate]) -> Option<String> {
-    if let Some(p) = pref
-        && vaults.iter().any(|v| v.id == p && v.writable)
-    {
-        return Some(p.to_string());
-    }
-    let mut c: Vec<&QuickVaultCandidate> = vaults
-        .iter()
-        .filter(|v| v.writable && !v.archived)
-        .collect();
-    c.sort_by(|a, b| {
-        a.created_at
-            .cmp(&b.created_at)
-            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
-            .then_with(|| a.id.cmp(&b.id))
-    });
-    c.iter()
-        .find(|v| v.owned)
-        .or_else(|| c.first())
-        .map(|v| v.id.clone())
-}
-
-/// The quick-notes vault chosen in the synced preferences (`quick_vault`
-/// of the web client's encrypted prefs). `Ok(None)`: not chosen.
-pub async fn quick_vault_pref(session: &Session) -> anyhow::Result<Option<String>> {
-    /// The one field needed from the web client's `Prefs`.
-    #[derive(serde::Deserialize)]
-    struct QuickPrefs {
-        #[serde(default)]
-        quick_vault: Option<String>,
-    }
-    let blob: PrefsBlob = session.api.get("/me/prefs").await?;
-    let Some(ct) = blob.ciphertext else {
-        return Ok(None);
-    };
-    let pt = session.account().open_private(&session.user_id, &ct)?;
-    Ok(serde_json::from_slice::<QuickPrefs>(&pt)?.quick_vault)
-}
-
-/// Where quick notes go, decided with the server: the preference, else the
-/// default rule over the vault list. `Ok(None)`: no vault can be edited.
-/// `Err`: the server can't be asked (use [`local_quick_vault`]).
-pub async fn quick_vault_online(session: &Session) -> Result<Option<String>, ApiError> {
-    let infos = session.api.vaults().await?;
-    let pref = match quick_vault_pref(session).await {
-        Ok(p) => p,
-        Err(e) => {
-            crate::ui::warn(&format!(
-                "could not read your quick-notes vault setting ({e:#}); using the default"
-            ));
-            None
-        }
-    };
-    let cands: Vec<QuickVaultCandidate> = infos
-        .iter()
-        .map(|i| QuickVaultCandidate {
-            id: i.id.clone(),
-            name: String::new(),
-            owned: i.role == Role::Owner,
-            writable: i.role.can_write(),
-            archived: i.archived,
-            created_at: i.created_at,
-        })
-        .collect();
-    Ok(choose_quick_vault(pref.as_deref(), &cands))
-}
-
-/// The default quick-notes vault among the hub's local copies, for when the
-/// server (and so the preference) can't be reached.
-pub async fn local_quick_vault(hub: &Hub) -> Option<String> {
-    let mut cands = Vec::new();
-    for v in hub.vaults() {
-        let g = v.lock().await;
-        cands.push(QuickVaultCandidate {
-            id: g.id().to_string(),
-            name: g.name().to_string(),
-            owned: g.role() == Role::Owner,
-            writable: g.require_writable().is_ok(),
-            archived: g.archived,
-            created_at: i64::MAX,
-        });
-    }
-    choose_quick_vault(None, &cands)
-}
-
-/// Create a quick note with `text` in `Quick notes/` of a vault.
-pub async fn create_quick_note(hub: &Hub, vref: &str, text: &str) -> OpResult<PutOutcome> {
+/// Add a quick note with `text`, named after the minute it is made.
+pub async fn create_quick_note(hub: &Hub, text: &str) -> OpResult<PutOutcome> {
     let text = text.trim_end().trim_start_matches(['\n', '\r']);
     let name = quick_note_name(notekpr_core::now_ms());
-    let v = vault(hub, vref).await?;
+    let v = quick_vault(hub).await?;
     let (vault_id, res) = {
         let mut g = v.lock().await;
         check_write(hub, &g)?;
+        g.require_room()
+            .map_err(|e| OpError::Conflict(format!("{e:#}")))?;
         let taken: BTreeSet<String> = g.paths().keys().map(|p| p.to_lowercase()).collect();
-        let path = paths::unique(&paths::join(QUICK_FOLDER, &format!("{name}.md")), |p| {
-            taken.contains(&p.to_lowercase())
-        });
+        let path = paths::unique(&format!("{name}.md"), |p| taken.contains(&p.to_lowercase()));
         let res = g.create_note(&path, text).map_err(bad)?;
         g.save()?;
         (g.id().to_string(), res)
@@ -1176,30 +1012,41 @@ pub async fn create_quick_note(hub: &Hub, vref: &str, text: &str) -> OpResult<Pu
 
 #[derive(Serialize, Clone, Debug)]
 pub struct QuickNote {
-    pub vault: String,
     pub path: String,
     pub id: String,
     pub title: String,
     pub preview: String,
     pub created: i64,
     pub modified: i64,
-    pub archived: bool,
+    /// Made on this device and waiting for room in the quick notes.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub waiting_for_room: bool,
 }
 
-/// Quick notes of a vault, newest first (archived ones only with `archived`).
-pub async fn list_quick_notes(
-    hub: &Hub,
-    vref: &str,
-    archived: bool,
-    limit: usize,
-) -> OpResult<Vec<QuickNote>> {
-    let v = vault(hub, vref).await?;
+#[derive(Serialize, Clone, Debug)]
+pub struct QuickNotes {
+    /// The vault holding them (absent before the first one).
+    pub vault: Option<String>,
+    /// How many there are, and may be.
+    pub count: usize,
+    pub limit: Option<Limit>,
+    /// Newest first.
+    pub notes: Vec<QuickNote>,
+}
+
+/// The quick notes, newest first (at most `limit` of them).
+pub async fn list_quick_notes(hub: &Hub, limit: usize) -> OpResult<QuickNotes> {
+    let Some(v) = hub.quick_notes().await else {
+        return Ok(QuickNotes {
+            vault: None,
+            count: 0,
+            limit: None,
+            notes: vec![],
+        });
+    };
     let g = v.lock().await;
-    let mut notes: Vec<(String, Entry)> = g
-        .notes()
-        .into_iter()
-        .filter(|(p, _)| is_quick_note(p) && (archived || !is_archived_quick_note(p)))
-        .collect();
+    let mut notes = g.notes();
+    let count = notes.len();
     notes.sort_by(|(_, a), (_, b)| {
         b.created
             .cmp(&a.created)
@@ -1207,22 +1054,292 @@ pub async fn list_quick_notes(
             .then(a.id.cmp(&b.id))
     });
     notes.truncate(limit);
-    Ok(notes
+    Ok(QuickNotes {
+        vault: Some(g.id().to_string()),
+        count,
+        limit: Some(g.note_limit),
+        notes: notes
+            .into_iter()
+            .map(|(p, e)| {
+                let title = paths::title(&p).to_string();
+                QuickNote {
+                    preview: quick::preview(&g.note_text(&e.id), &title),
+                    waiting_for_room: g.outbox.waits_for_room(&e.id),
+                    title,
+                    path: p,
+                    id: e.id,
+                    created: e.created,
+                    modified: e.modified,
+                }
+            })
+            .collect(),
+    })
+}
+
+/// The attachments the note `id` links to (`(id, path)`), and whether no
+/// other note of the vault does.
+fn linked_attachments(g: &Vault, id: &str) -> Vec<(String, String, bool)> {
+    let cands = g.link_candidates();
+    let all = g.paths();
+    let attachments: BTreeMap<&str, &str> = all
+        .iter()
+        .filter(|(_, e)| e.kind == EntryKind::Attachment)
+        .map(|(p, e)| (e.id.as_str(), p.as_str()))
+        .collect();
+    let path_of = |n: &str| g.display_path(n).unwrap_or_default();
+    let mine = markdown::linked_ids(&g.note_text(id), &path_of(id), &cands);
+    let others: BTreeSet<String> = g
+        .notes()
         .into_iter()
-        .map(|(p, e)| {
-            let title = paths::title(&p).to_string();
-            QuickNote {
-                vault: g.id().to_string(),
-                preview: quick_preview(&g.note_text(&e.id), &title),
-                archived: is_archived_quick_note(&p),
-                title,
-                path: p,
-                id: e.id,
-                created: e.created,
-                modified: e.modified,
-            }
+        .filter(|(_, e)| e.id != id)
+        .flat_map(|(p, e)| markdown::linked_ids(&g.note_text(&e.id), &p, &cands))
+        .collect();
+    mine.into_iter()
+        .filter_map(|a| {
+            let path = attachments.get(a.as_str())?;
+            Some((a.clone(), path.to_string(), !others.contains(&a)))
         })
-        .collect())
+        .collect()
+}
+
+/// Delete a quick note for good, with the attachments only it uses. Offline
+/// it is gone from this device at once and from the server once online.
+pub async fn delete_quick_note(hub: &Hub, reference: &str) -> OpResult<String> {
+    let v = hub
+        .quick_notes()
+        .await
+        .ok_or_else(|| OpError::NotFound("you have no quick notes yet".into()))?;
+    let (vault_id, path) = {
+        let mut g = v.lock().await;
+        check_write(hub, &g)?;
+        let (path, e) = g
+            .find_note(reference)
+            .map_err(|e| OpError::NotFound(format!("{e:#}")))?;
+        let own: Vec<String> = linked_attachments(&g, &e.id)
+            .into_iter()
+            .filter(|(_, _, only_here)| *only_here)
+            .map(|(id, _, _)| id)
+            .collect();
+        g.trash_id(&e.id).map_err(bad)?;
+        for a in own {
+            g.trash_id(&a).map_err(bad)?;
+        }
+        g.save()?;
+        (g.id().to_string(), path)
+    };
+    hub.local_changed(&vault_id, vec![], true).await;
+    purge_deleted_quick_notes(hub).await?;
+    Ok(path)
+}
+
+/// Delete for good what was deleted from the quick notes (they keep no
+/// trash). Without the server it waits: deleted ones stay out of sight.
+pub async fn purge_deleted_quick_notes(hub: &Hub) -> OpResult<usize> {
+    let Some(v) = hub.quick_notes().await else {
+        return Ok(0);
+    };
+    let (id, any) = {
+        let g = v.lock().await;
+        (
+            g.id().to_string(),
+            !g.trashed().is_empty() && g.read_only.is_none(),
+        )
+    };
+    if !any || hub.read_only {
+        return Ok(0);
+    }
+    match empty_trash(hub, &id).await {
+        Err(OpError::Unavailable(_)) => Ok(0),
+        r => r,
+    }
+}
+
+/// Delete for good the files no quick note links to any more (unchanged for
+/// [`quick::UNLINKED_FILE_GRACE_MS`]): the quick notes keep files only for
+/// their notes. Call it once they are caught up with the server — before,
+/// the edit with a file's link may not have arrived. `now`: the time (ms).
+pub async fn drop_unlinked_quick_files(hub: &Hub, now: i64) -> OpResult<usize> {
+    let Some(v) = hub.quick_notes().await else {
+        return Ok(0);
+    };
+    if hub.read_only {
+        return Ok(0);
+    }
+    let vault_id = {
+        let mut g = v.lock().await;
+        if g.read_only.is_some() {
+            return Ok(0);
+        }
+        let before = now - quick::UNLINKED_FILE_GRACE_MS;
+        let ids = quick::unlinked_files(&g.replica, before).unwrap_or_default();
+        if ids.is_empty() {
+            return Ok(0);
+        }
+        for id in &ids {
+            g.trash_id(id).map_err(bad)?;
+        }
+        g.save()?;
+        g.id().to_string()
+    };
+    hub.local_changed(&vault_id, vec![], true).await;
+    purge_deleted_quick_notes(hub).await
+}
+
+#[derive(Serialize, Clone, Debug)]
+pub struct MovedNote {
+    pub from_vault: String,
+    pub from_path: String,
+    pub vault: String,
+    pub path: String,
+    pub id: String,
+    /// Attachments the note links to, copied along.
+    pub attachments: usize,
+    /// The original is gone: deleted for good from the quick notes, to the
+    /// trash of another vault. `false` if the target vault doesn't have the
+    /// copy yet (the server couldn't be reached): both are kept.
+    pub removed: bool,
+}
+
+/// Move a note to another vault: a new note there with its text and the
+/// attachments it links to, then — once the server has the copy — the
+/// original goes, with the attachments no other note uses: deleted for good
+/// from the quick notes, to the trash of a vault. Its history, comments and
+/// shares stay behind. `from` `None`: the quick notes. The new note is
+/// `folder/name` (`name` `None`: the note's own title, or for a quick note a
+/// title from its first line).
+pub async fn move_to_vault(
+    hub: &Hub,
+    from: Option<&str>,
+    reference: &str,
+    to: &str,
+    folder: &str,
+    name: Option<&str>,
+) -> OpResult<MovedNote> {
+    let src = match from {
+        Some(r) => vault(hub, r).await?,
+        None => hub
+            .quick_notes()
+            .await
+            .ok_or_else(|| OpError::NotFound("you have no quick notes yet".into()))?,
+    };
+    let dst = vault(hub, to).await?;
+    if Arc::ptr_eq(&src, &dst) {
+        return Err(OpError::BadRequest(
+            "that is the same vault: use `notekpr mv` to move within it".into(),
+        ));
+    }
+    if !hub.is_online() {
+        return Err(OpError::Unavailable(
+            "moving a note to another vault needs the server".into(),
+        ));
+    }
+    // What to copy.
+    let (from_vault, from_path, note_id, text, attachments, title) = {
+        let g = src.lock().await;
+        check_write(hub, &g)?;
+        let (path, e) = g
+            .find_note(reference)
+            .map_err(|e| OpError::NotFound(format!("{e:#}")))?;
+        let text = g.note_text(&e.id);
+        let title = match name.map(str::trim).filter(|n| !n.is_empty()) {
+            Some(n) => n.to_string(),
+            None if g.is_quick_notes() => Some(quick::suggested_title(&text))
+                .filter(|t| !t.is_empty())
+                .unwrap_or_else(|| paths::title(&path).to_string()),
+            None => paths::title(&path).to_string(),
+        };
+        let attachments = linked_attachments(&g, &e.id);
+        (g.id().to_string(), path, e.id, text, attachments, title)
+    };
+    if title.contains(['/', '\\']) {
+        return Err(OpError::BadRequest(
+            "give the note a name without '/'".into(),
+        ));
+    }
+    let mut files = Vec::new();
+    for (id, path, only_here) in &attachments {
+        let data = hub
+            .session
+            .attachment(&src, id)
+            .await
+            .map_err(|e| OpError::Unavailable(format!("{e:#}")))?;
+        files.push((id.clone(), path.clone(), *only_here, data));
+    }
+    // The copy.
+    let copied = {
+        let mut g = dst.lock().await;
+        check_write(hub, &g)?;
+        if g.is_quick_notes() {
+            return Err(OpError::BadRequest(
+                "notes move from the quick notes to a vault, not into them".into(),
+            ));
+        }
+        let folder = match folder.trim().trim_matches('/') {
+            "" => String::new(),
+            f => paths::normalize(f).map_err(|e| OpError::BadRequest(e.to_string()))?,
+        };
+        let mut text = text.clone();
+        let mut copies = Vec::new();
+        for (id, path, _, data) in &files {
+            let taken: BTreeSet<String> = g.paths().keys().map(|p| p.to_lowercase()).collect();
+            let target = paths::unique(&paths::join(&folder, paths::file_name(path)), |p| {
+                taken.contains(&p.to_lowercase())
+            });
+            copies.push(g.add_attachment(&target, data, None).map_err(bad)?.id);
+            // A file of that name was there already: link the copy instead.
+            if paths::file_name(&target) != paths::file_name(path) {
+                let cands = vec![(id.clone(), path.clone())];
+                if let Some(t) = markdown::rewrite_links(&text, paths::file_name(&target), |l| {
+                    markdown::resolve(l, &from_path, &cands) == Some(id.as_str())
+                }) {
+                    text = t;
+                }
+            }
+        }
+        let taken: BTreeSet<String> = g.paths().keys().map(|p| p.to_lowercase()).collect();
+        let path = paths::normalize_note(&paths::join(&folder, &title))
+            .map_err(|e| OpError::BadRequest(e.to_string()))?;
+        let path = paths::unique(&path, |p| taken.contains(&p.to_lowercase()));
+        let res = g.create_note(&path, &text).map_err(bad)?;
+        g.save()?;
+        (g.id().to_string(), res, copies)
+    };
+    let (vault_id, res, copies) = copied;
+    let pushed = hub
+        .local_changed(&vault_id, vec![res.id.clone()], true)
+        .await;
+    let stored = !pushed.offline && !pushed.read_only && {
+        let g = dst.lock().await;
+        copies.iter().all(|a| !g.pending_blobs.contains(a))
+            && !g.outbox.unconfirmed(&g.replica, &res.id)
+            && !g.outbox.unconfirmed(&g.replica, INDEX_OBJECT_ID)
+    };
+    // The original, once the vault has the copy.
+    if stored {
+        {
+            let mut g = src.lock().await;
+            g.trash_id(&note_id).map_err(bad)?;
+            for (id, _, only_here, _) in &files {
+                if *only_here {
+                    g.trash_id(id).map_err(bad)?;
+                }
+            }
+            g.save()?;
+        }
+        hub.local_changed(&from_vault, vec![], true).await;
+        if from.is_none() || src.lock().await.is_quick_notes() {
+            purge_deleted_quick_notes(hub).await?;
+        }
+    }
+    Ok(MovedNote {
+        from_vault,
+        from_path,
+        vault: vault_id,
+        path: res.path,
+        id: res.id,
+        attachments: files.len(),
+        removed: stored,
+    })
 }
 
 #[cfg(test)]
@@ -1240,66 +1357,5 @@ mod quick_tests {
         );
         assert_eq!(n.chars().filter(|c| c.is_ascii_digit()).count(), 12, "{n}");
         assert!(!n.contains(':'));
-    }
-
-    #[test]
-    fn previews_and_paths() {
-        assert_eq!(
-            quick_preview("\n  # Call the dentist\nmore", "t"),
-            "Call the dentist"
-        );
-        assert_eq!(quick_preview("", "2026-10-19 14.32"), "2026-10-19 14.32");
-        assert_eq!(quick_preview("- [ ] milk", "t"), "milk");
-        assert_eq!(
-            quick_preview("- [ ] <span style=\"color: #e44045\">milk</span>", "t"),
-            "milk"
-        );
-        assert_eq!(quick_preview("---\na: b\n---\nText", "t"), "Text");
-        assert_eq!(quick_preview("---\nText", "t"), "Text");
-        assert!(is_quick_note("Quick notes/a.md") && !is_quick_note("Quick notes/a.png"));
-        assert!(is_archived_quick_note("Quick notes/Archive/a.md"));
-        assert!(!is_quick_note("Other/Quick notes/a.md"));
-    }
-
-    #[test]
-    fn default_quick_vault() {
-        let c =
-            |id: &str, owned: bool, writable: bool, archived: bool, at: i64| QuickVaultCandidate {
-                id: id.into(),
-                name: id.into(),
-                owned,
-                writable,
-                archived,
-                created_at: at,
-            };
-        let vaults = [
-            c("shared", false, true, false, 1),
-            c("work", true, true, false, 30),
-            c("mine", true, true, false, 10),
-            c("ro", false, false, false, 0),
-            c("old", true, true, true, 5),
-        ];
-        assert_eq!(choose_quick_vault(None, &vaults).as_deref(), Some("mine"));
-        assert_eq!(
-            choose_quick_vault(Some("work"), &vaults).as_deref(),
-            Some("work")
-        );
-        assert_eq!(
-            choose_quick_vault(Some("old"), &vaults).as_deref(),
-            Some("old")
-        );
-        assert_eq!(
-            choose_quick_vault(Some("ro"), &vaults).as_deref(),
-            Some("mine")
-        );
-        assert_eq!(
-            choose_quick_vault(Some("gone"), &vaults).as_deref(),
-            Some("mine")
-        );
-        assert_eq!(
-            choose_quick_vault(None, &vaults[..1]).as_deref(),
-            Some("shared")
-        );
-        assert_eq!(choose_quick_vault(None, &vaults[3..4]), None);
     }
 }

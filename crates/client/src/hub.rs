@@ -11,7 +11,10 @@ use std::sync::{Arc, RwLock};
 
 use anyhow::{Result, anyhow, bail};
 use notekpr_core::engine::Applied;
-use notekpr_core::protocol::{INDEX_OBJECT_ID, ReadOnly, Role, VaultInfo};
+use notekpr_core::protocol::{
+    INDEX_OBJECT_ID, Limit, PrincipalKind, ReadOnly, Role, VaultInfo, VaultKind,
+};
+use notekpr_core::quick;
 use serde::Serialize;
 use tokio::sync::{Mutex, broadcast};
 
@@ -55,6 +58,9 @@ pub struct HubOptions {
     /// Another process owns this profile's local data (a running sync
     /// daemon): only read the local copies — no network sync, no writes.
     pub detached: bool,
+    /// Open the person's quick notes as well, whatever `vaults` says; with
+    /// `vaults` empty, only them.
+    pub quick_notes: bool,
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -66,6 +72,12 @@ pub struct VaultSummary {
     pub icon: Option<String>,
     pub role: Role,
     pub archived: bool,
+    /// `quick_notes` for the person's quick notes (absent for vaults).
+    #[serde(skip_serializing_if = "VaultKind::is_regular")]
+    pub kind: VaultKind,
+    /// For quick notes: how many they may hold.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note_limit: Option<Limit>,
     pub documents: usize,
     pub pending_changes: usize,
     /// Local changes too large for the server: kept here, not uploaded.
@@ -82,6 +94,9 @@ pub struct Hub {
     vaults: RwLock<BTreeMap<String, SharedVault>>,
     /// Allow-list as given by the user (ids or names).
     allow: Vec<String>,
+    /// The quick notes are admitted whatever the allow-list says, and with
+    /// it empty only they are.
+    with_quick_notes: bool,
     /// Ids admitted by the allow-list (None = no restriction).
     allowed: RwLock<Option<BTreeSet<String>>>,
     pub read_only: bool,
@@ -113,6 +128,7 @@ impl Hub {
             session,
             vaults: RwLock::new(BTreeMap::new()),
             allow: opts.vaults.clone(),
+            with_quick_notes: opts.quick_notes,
             allowed: RwLock::new(None),
             read_only: opts.read_only || opts.detached,
             events,
@@ -159,6 +175,17 @@ impl Hub {
                 let _ = self.limits().await;
                 self.preresolve_allow_list(&list);
                 self.open_listed(&list).await?;
+                // Quick notes are there from the start (the Markdown folder
+                // shows them), once per person.
+                if (!self.restricted() || self.with_quick_notes)
+                    && !self.read_only
+                    && !list
+                        .iter()
+                        .any(|v| v.is_own_quick_notes(&self.session.user_id))
+                    && let Err(e) = self.ensure_quick_notes().await
+                {
+                    tracing::debug!("quick notes not set up yet: {e:#}");
+                }
             }
             Err(e)
                 if (e.is_offline() || e.is_unauthorized() || matches!(e, ApiError::Auth(_)))
@@ -276,11 +303,16 @@ impl Hub {
         Ok(added)
     }
 
+    /// Whether only some vaults are open.
+    fn restricted(&self) -> bool {
+        !self.allow.is_empty() || self.with_quick_notes
+    }
+
     /// Resolve the allow-list from vault ids and the names cached in local
     /// replicas, so a command about one vault does not open all of them. Falls
     /// back to opening everything (names need decryption) when unsure.
     fn preresolve_allow_list(&self, list: &[VaultInfo]) {
-        if self.allow.is_empty() {
+        if !self.restricted() {
             return;
         }
         let names: Vec<(String, Option<String>)> = list
@@ -301,18 +333,31 @@ impl Hub {
                 ids.insert(r.clone());
                 continue;
             }
+            // The name is the quick notes', whatever else may be called so.
+            let reserved = quick::is_reserved_name(r);
             let matching: Vec<&String> = names
                 .iter()
-                .filter(|(_, n)| n.as_deref().is_some_and(|n| lower(n) == lower(r)))
-                .map(|(id, _)| id)
+                .zip(list)
+                .filter(|((_, n), i)| {
+                    i.is_own_quick_notes(&self.session.user_id) == reserved
+                        && (reserved || n.as_deref().is_some_and(|n| lower(n) == lower(r)))
+                })
+                .map(|((id, _), _)| id)
                 .collect();
-            let unknown = names.iter().any(|(_, n)| n.is_none());
+            let unknown = !reserved && names.iter().any(|(_, n)| n.is_none());
             match matching.as_slice() {
                 [one] if !unknown => {
                     ids.insert((*one).clone());
                 }
                 _ => return,
             }
+        }
+        if self.with_quick_notes {
+            ids.extend(
+                list.iter()
+                    .filter(|i| i.is_own_quick_notes(&self.session.user_id))
+                    .map(|i| i.id.clone()),
+            );
         }
         *self.allowed.write().unwrap() = Some(ids);
     }
@@ -327,30 +372,34 @@ impl Hub {
     /// Resolve the allow-list (names need decrypted metadata) and close every
     /// vault it does not admit.
     fn apply_allow_list(&self) -> Result<()> {
-        if self.allow.is_empty() {
+        if !self.restricted() {
             return Ok(());
         }
         let mut ids = BTreeSet::new();
-        let open: Vec<(String, String)> = self
+        // (id, name, quick notes?)
+        let open: Vec<(String, String, bool)> = self
             .vaults
             .read()
             .unwrap()
             .iter()
             .map(|(id, v)| {
-                (
-                    id.clone(),
-                    v.try_lock()
-                        .map(|g| g.name().to_string())
-                        .unwrap_or_default(),
-                )
+                let (name, quick) = v
+                    .try_lock()
+                    .map(|g| (g.name().to_string(), g.is_quick_notes()))
+                    .unwrap_or_default();
+                (id.clone(), name, quick)
             })
             .collect();
         for r in &self.allow {
-            let by_id = open.iter().find(|(id, _)| id == r);
-            let by_name: Vec<&(String, String)> =
-                open.iter().filter(|(_, n)| lower(n) == lower(r)).collect();
+            let by_id = open.iter().find(|(id, _, _)| id == r);
+            // The name is the quick notes', whatever else may be called so.
+            let reserved = quick::is_reserved_name(r);
+            let by_name: Vec<&(String, String, bool)> = open
+                .iter()
+                .filter(|(_, n, q)| *q == reserved && (reserved || lower(n) == lower(r)))
+                .collect();
             match (by_id, by_name.as_slice()) {
-                (Some((id, _)), _) => {
+                (Some((id, _, _)), _) => {
                     ids.insert(id.clone());
                 }
                 (None, [one]) => {
@@ -358,6 +407,13 @@ impl Hub {
                 }
                 (None, []) => bail!("no vault '{r}' is accessible to this profile"),
                 (None, _) => bail!("vault name '{r}' is ambiguous; use the vault id"),
+            }
+        }
+        if self.with_quick_notes {
+            for (id, v) in self.vaults.read().unwrap().iter() {
+                if v.try_lock().is_ok_and(|g| g.is_quick_notes()) {
+                    ids.insert(id.clone());
+                }
             }
         }
         self.vaults
@@ -469,9 +525,22 @@ impl Hub {
         if let Some(v) = self.get(reference) {
             return Ok(v);
         }
+        // The name is the quick notes', whatever else may be called so.
+        if quick::is_reserved_name(reference) {
+            return self
+                .quick_notes()
+                .await
+                .ok_or_else(|| anyhow!("there are no quick notes on this device yet"));
+        }
         let mut matches = Vec::new();
         for v in self.vaults() {
-            let name = v.lock().await.name().to_string();
+            let (name, is_quick) = {
+                let g = v.lock().await;
+                (g.name().to_string(), g.is_quick_notes())
+            };
+            if is_quick {
+                continue;
+            }
             if name == reference {
                 return Ok(v);
             }
@@ -484,6 +553,58 @@ impl Hub {
             0 => bail!("no vault '{reference}' (see `notekpr vault list`)"),
             _ => bail!("vault name '{reference}' is ambiguous; use the vault id"),
         }
+    }
+
+    /// The person's quick notes, if they are open here.
+    pub async fn quick_notes(&self) -> Option<SharedVault> {
+        for v in self.vaults() {
+            if v.lock().await.is_quick_notes() {
+                return Some(v);
+            }
+        }
+        None
+    }
+
+    /// The person's quick notes, made the first time (online, people only).
+    pub async fn ensure_quick_notes(&self) -> Result<SharedVault> {
+        if let Some(v) = self.quick_notes().await {
+            return Ok(v);
+        }
+        if self.session.kind == PrincipalKind::Agent {
+            bail!("agents have no quick notes");
+        }
+        if self.read_only {
+            bail!("this endpoint is read-only");
+        }
+        if !self.is_online() {
+            bail!("quick notes are set up the first time this device is online");
+        }
+        if let Some(v) = crate::manage::create_quick_notes(&self.session).await? {
+            let id = v.id().to_string();
+            if let Some(set) = self.allowed.write().unwrap().as_mut() {
+                set.insert(id.clone());
+            }
+            let shared = Arc::new(Mutex::new(v));
+            self.vaults
+                .write()
+                .unwrap()
+                .insert(id.clone(), shared.clone());
+            self.emit(HubEvent::VaultAdded { vault_id: id });
+            return Ok(shared);
+        }
+        // Another app made them meanwhile.
+        let list = self.session.api.vaults().await?;
+        if let Some(set) = self.allowed.write().unwrap().as_mut() {
+            set.extend(
+                list.iter()
+                    .filter(|i| i.is_own_quick_notes(&self.session.user_id))
+                    .map(|i| i.id.clone()),
+            );
+        }
+        self.open_listed(&list).await?;
+        self.quick_notes()
+            .await
+            .ok_or_else(|| anyhow!("your quick notes could not be opened"))
     }
 
     pub async fn summaries(&self) -> Vec<VaultSummary> {
@@ -688,6 +809,8 @@ pub fn summary(v: &Vault) -> VaultSummary {
         icon: v.replica.meta.icon.clone(),
         role: v.role(),
         archived: v.archived,
+        kind: v.kind,
+        note_limit: v.is_quick_notes().then_some(v.note_limit),
         documents: v.notes().len(),
         pending_changes: v.replica.pending.len(),
         too_large_changes: v.outbox.held_count(),

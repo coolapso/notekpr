@@ -400,10 +400,12 @@ Administration → Instance in the web app, or the admin API (`GET`/`PATCH
 They are kept in the database, so they survive restarts and backups.
 
 * **Limits**: accounts (people who aren't disabled), agents and vaults on
-  the server; vaults and agents per person, by default and for one person
-  (their own allowance, under Accounts → Limits). Each is a number or no
-  limit; `0` means none at all. A limit only stops new ones: lowering it
-  takes nothing away, and nothing stops working.
+  the server; vaults, agents and quick notes per person, by default and for
+  one person (their own allowance, under Accounts → Limits). Each is a number
+  or no limit; `0` means none at all (defaults: no limit, but 50 agents and
+  20 quick notes per person). A limit only stops new ones: lowering it takes
+  nothing away, and nothing stops working. Everyone's quick notes (one place
+  per person) count as no vault.
 * **Read-only**: the server keeps everything and serves it, but accepts no
   changes. The apps keep people's edits (in the browser, in the CLI's local
   copies) and send them the moment you switch it off; signing in and out,
@@ -442,11 +444,11 @@ t=notekpr_a_…            # the client's token
 url=https://notes.example.com/api/v1
 curl -H "Authorization: Bearer $t" $url/admin/settings
 curl -H "Authorization: Bearer $t" -X PATCH $url/admin/settings -H 'Content-Type: application/json' \
-     -d '{"vaults_per_user": 1, "max_storage_mb": 20480}'
+     -d '{"vaults_per_user": 1, "quick_notes_per_user": 30, "max_storage_mb": 20480}'
 # one person, by e-mail or by their sign-in identity (issuer|subject)
 curl -H "Authorization: Bearer $t" "$url/admin/users?email=ana@example.com"
 curl -H "Authorization: Bearer $t" -X PATCH $url/admin/users/<id> -H 'Content-Type: application/json' \
-     -d '{"vault_allowance": 3}'          # or "unlimited", or "default"
+     -d '{"vault_allowance": 3, "quick_note_allowance": 50}'   # each a number, "unlimited" or "default"
 ```
 
 **From the server's command line** — for the first client on an instance

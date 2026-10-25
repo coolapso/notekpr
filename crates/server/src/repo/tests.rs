@@ -1,7 +1,7 @@
 //! Repository tests against a real, migrated SQLite database (a temporary
 //! file with the production settings: WAL, foreign keys).
 
-use notekpr_core::protocol::{PublicAccountKey, Role};
+use notekpr_core::protocol::{PublicAccountKey, Role, VaultKind};
 
 use super::*;
 use crate::access;
@@ -48,7 +48,11 @@ async fn account_key(db: &Db, user: &str) {
 
 /// A vault owned by `owner` with `members` as `(user, role)`.
 async fn vault(db: &Db, id: &str, owner: &str, members: &[(&str, Role)]) {
-    assert!(vaults::insert(db, id, owner, b"meta", NOW).await.unwrap());
+    assert!(
+        vaults::insert(db, id, owner, b"meta", VaultKind::Regular, NOW)
+            .await
+            .unwrap()
+    );
     assert!(
         vaults::insert_member(db, id, owner, Role::Owner, owner, NOW)
             .await
@@ -134,7 +138,11 @@ async fn member_roles_and_owner_only_rules() {
             .await
             .unwrap()
     );
-    assert!(!vaults::insert(db, "v", "ed", b"m", NOW).await.unwrap());
+    assert!(
+        !vaults::insert(db, "v", "ed", b"m", VaultKind::Regular, NOW)
+            .await
+            .unwrap()
+    );
 
     assert_eq!(
         vaults::set_member_role(db, "v", "ed", Role::Viewer)
@@ -183,6 +191,64 @@ async fn member_roles_and_owner_only_rules() {
     // Deleting the vault removes every membership.
     vaults::delete(db, "v").await.unwrap();
     assert_eq!(vaults::member_role(db, "v", "owner").await.unwrap(), None);
+}
+
+#[tokio::test]
+async fn quick_notes_are_once_per_person_and_count_their_notes() {
+    let t = test_db().await;
+    let db = &t.db;
+    human(db, "alice").await;
+    human(db, "bob").await;
+    vault(db, "home", "alice", &[]).await;
+    assert!(
+        vaults::insert(db, "q", "alice", b"m", VaultKind::QuickNotes, NOW)
+            .await
+            .unwrap()
+    );
+    // A second one for the same person is refused by the database too.
+    assert!(
+        !vaults::insert(db, "q2", "alice", b"m", VaultKind::QuickNotes, NOW)
+            .await
+            .unwrap()
+    );
+    assert!(
+        vaults::insert(db, "qb", "bob", b"m", VaultKind::QuickNotes, NOW)
+            .await
+            .unwrap()
+    );
+    assert_eq!(
+        vaults::quick_notes_of(db, "alice")
+            .await
+            .unwrap()
+            .as_deref(),
+        Some("q")
+    );
+    assert!(vaults::is_quick_notes(db, "q").await.unwrap());
+    assert!(!vaults::is_quick_notes(db, "home").await.unwrap());
+    assert_eq!(
+        vaults::kind_and_owner(db, "home").await.unwrap(),
+        Some((VaultKind::Regular, "alice".to_string()))
+    );
+    // Quick notes are no vault for the limits.
+    assert_eq!(users::owned_vaults(db, "alice").await.unwrap(), 1);
+    assert_eq!(settings::vaults(db).await.unwrap(), 1);
+    let mut owners = vaults::quick_notes_owners(db).await.unwrap();
+    owners.sort();
+    assert_eq!(owners, ["alice", "bob"]);
+
+    // Notes are the objects other than the index and comments, until purged.
+    for o in ["index", "n1", "n2", "c_n1"] {
+        shares::ensure_object(db, "q", o, "alice", NOW)
+            .await
+            .unwrap();
+    }
+    assert_eq!(vaults::note_count(db, "q").await.unwrap(), 2);
+    sqlx::query("UPDATE objects SET purged_at = 1 WHERE vault_id = 'q' AND id = 'n1'")
+        .execute(db)
+        .await
+        .unwrap();
+    assert_eq!(vaults::note_count(db, "q").await.unwrap(), 1);
+    assert_eq!(vaults::note_count(db, "qb").await.unwrap(), 0);
 }
 
 #[tokio::test]

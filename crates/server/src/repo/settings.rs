@@ -55,9 +55,12 @@ pub async fn agents(db: impl SqliteExecutor<'_>) -> AppResult<i64> {
 }
 
 pub async fn vaults(db: impl SqliteExecutor<'_>) -> AppResult<i64> {
-    Ok(sqlx::query_scalar("SELECT COUNT(*) FROM vaults")
-        .fetch_one(db)
-        .await?)
+    // Quick notes don't count: everyone may have them.
+    Ok(
+        sqlx::query_scalar("SELECT COUNT(*) FROM vaults WHERE kind = 'regular'")
+            .fetch_one(db)
+            .await?,
+    )
 }
 
 /// Bytes the database uses: its pages minus the free ones (deleting data

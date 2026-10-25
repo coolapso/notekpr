@@ -710,9 +710,17 @@ impl Person {
     }
 
     async fn quick_note(&mut self) -> Result<()> {
+        // Full quick notes get cleared out first, as a person would.
+        if let Ok(q) = ops::list_quick_notes(&self.hub, usize::MAX).await
+            && q.limit
+                .is_some_and(|l| !notekpr_core::quick::has_room(q.count, l))
+            && let Some(oldest) = q.notes.last()
+        {
+            let _ = ops::delete_quick_note(&self.hub, &oldest.title).await;
+        }
         let text = world::sentence(&mut self.rng);
         let t0 = Instant::now();
-        let res = ops::create_quick_note(&self.hub, &self.personal, &text).await;
+        let res = ops::create_quick_note(&self.hub, &text).await;
         self.world.bus.action(
             self.id,
             Action::Quick,
@@ -772,25 +780,17 @@ impl Person {
         Ok(())
     }
 
-    /// Clear out an old quick note.
+    /// Clear out a quick note (deleted for good: they keep no trash).
     async fn trash(&mut self) -> Result<()> {
-        let Some(v) = self.hub.get(&self.personal) else {
+        let Ok(q) = ops::list_quick_notes(&self.hub, usize::MAX).await else {
             return Ok(());
         };
-        let quick: Vec<String> = v
-            .lock()
-            .await
-            .notes()
-            .into_iter()
-            .filter(|(p, _)| ops::is_quick_note(p))
-            .map(|(p, _)| p)
-            .collect();
-        if quick.len() < 2 {
+        if q.notes.len() < 2 {
             return Ok(());
         }
-        let path = self.rng.pick(&quick).clone();
+        let name = self.rng.pick(&q.notes).title.clone();
         let t0 = Instant::now();
-        let res = ops::delete_document(&self.hub, &self.personal, &path).await;
+        let res = ops::delete_quick_note(&self.hub, &name).await;
         self.world
             .bus
             .action(self.id, Action::Trash, None, 0, t0.elapsed(), ok(&res));

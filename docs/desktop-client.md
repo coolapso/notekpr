@@ -154,11 +154,15 @@ directory, never deleted) and enrolls the computer as a new device.
 ## 3. Everyday commands
 
 Vaults are referred to by id or by (unique, case-insensitive) name; paths are
-vault-relative, `.md` is optional for notes.
+vault-relative, `.md` is optional for notes. Your quick notes answer to the
+name `Quick notes`, which no vault may have (in any case): `vault create` and
+`vault rename` refuse it, as the web app does. A vault named so anyway (by a
+client that doesn't check: the server can't, names are encrypted) is reached
+by its id.
 
 | Command | |
 |---|---|
-| `vault list` / `vault create <name>` | list (with role and document count) / create |
+| `vault list` / `vault create <name>` | list (with role and document count, and how many quick notes there are) / create |
 | `vault rename <v> <name>` / `vault archive <v> [--undo]` / `vault delete <v>` | owner only; delete asks you to type the name (`--yes` skips that; without a terminal it is required) |
 | `vault icon <v> <emoji>` / `vault icon <v> --remove` | owner only; the vault's icon (replaces a picture set in the browser) |
 | `vault viewers-comment <v> on\|off` | owner only; whether viewers (and people its notes are shared with read-only) may comment (on by default) |
@@ -168,8 +172,9 @@ vault-relative, `.md` is optional for notes.
 | `ls <v> [folder] [-r]` | folders, notes and attachments, in the sidebar's order (`-r`: each folder followed by what's in it) |
 | `cat <v> <path>` | note text (or attachment bytes) |
 | `write <v> <path>` | create or update a note from stdin — diff-merged, never a blind overwrite; `--append`, `--attachment`, `--if-match <hash>` (ignored with the other two). `@today`, `@tomorrow` and `@yesterday` in the text become those days' dates (`@2026-10-23`, in the local time zone), as in the web app; so do they with `quick`, `shared write` and the gateway, but not in files of the Markdown folder |
-| `quick [text…]` / `quick --list` | capture a quick note (text or stdin) / list the newest; see [Quick notes](#quick-notes) |
-| `mkdir <v> <path>`, `mv <v> <from> <to> [--update-links]`, `rm <v> <path>` | `rm` moves to the trash; `mv` into `dir/` keeps the name; `--update-links` rewrites `[[links]]` |
+| `quick [text…]` / `quick --list` / `quick --move <note> --to <v>` / `quick --delete <note>` | capture a quick note (text or stdin) / list them / move one to a vault / delete one for good; see [Quick notes](#quick-notes) |
+| `mkdir <v> <path>`, `mv <v> <from> <to> [--update-links]`, `rm <v> <path>` | `rm` moves to the trash (from the quick notes: deletes for good); `mv` into `dir/` keeps the name; `--update-links` rewrites `[[links]]` |
+| `mv <v> <note> <to> --to-vault <other>` | move a note to another vault: `to` is its folder there (ending in `/`, `/` alone for the top level) or its new path. The attachments it links to come along; the original goes to the trash once the server has the copy, with the attachments no other note uses. Its history, comments and shares stay with the original |
 | `order <v> <path> --before\|--after <other>` / `order <v> <folder> --reset` | put a note, attachment or folder just before or after another of the same folder (the order the sidebar and `ls` show; folders stay above notes; a folder only made by its notes gets an entry), or a folder's contents (`/` = the top level) back to A–Z; moving something to another folder drops its place |
 | `comments list <v> <note> [--all]` | a note's comment threads: the text each is about, the comments and replies with their authors, ids (first 8 characters) and whether unverified, not sent yet or edited; `--all` adds resolved ones; `--json` for the full ids |
 | `comments add <v> <note> --on <quote> [text…]` | comment on the quoted text (it must appear once in the note); the comment is the words or stdin. Viewers can comment too, unless the vault's owner turned it off |
@@ -224,31 +229,50 @@ five edits accumulated) and when it is compacted (every ~200 updates).
 
 ### Quick notes
 
-Quick notes are for thoughts that don't have a home yet. They are ordinary
-notes in the `Quick notes/` folder of one vault, so they sync, mirror to
-Markdown files and open in any editor like every other note. The web app
-lists them on its *Quick notes* page (the sidebar's *Quick notes* entry;
-`Alt+Q` makes one), where they can be promoted to a regular note or
-archived (moved to `Quick notes/Archive/`).
+Quick notes are for thoughts that don't have a home yet: a place of your
+own, in no vault, the same from every app and device. They are never shared
+(no members, no single-note shares, no agents, no comments) and stay flat
+(no folders). There are at most 20 of them unless the server's
+administrators say otherwise (`quick_notes_per_user`, or a limit of your
+own): they are a place to look through, not to keep things. A quick note
+leaves by moving to a vault, or by being deleted — for good: quick notes
+have no trash. The web app lists them on its *Quick notes* page (the
+sidebar's *Quick notes* entry; `Alt+Q` makes one).
 
 ```sh
 notekpr quick Call the dentist about Tuesday   # words are joined with spaces
 echo "Gift ideas: a kite" | notekpr quick      # or the text from stdin
-notekpr quick --vault Work "Ask about the release date"
 notekpr quick --list                           # newest first: name and first line
-notekpr quick --list --archived --limit 50 --json
+notekpr quick --list --limit 50 --json
+notekpr quick --move "2026-10-19 14.32" --to Family --folder Plans   # named after its first line
+notekpr quick --move "2026-10-19 14.32" --to Family --name "Dentist"
+notekpr quick --delete "2026-10-19 14.32"     # for good
 ```
 
-A new quick note is named by the local time, e.g.
-`Quick notes/2026-10-19 14.32.md` (a second one in the same minute gets
-` 2`, ` 3`, …; there is no `:` because Windows doesn't allow it in file
-names). The vault is the one given with `--vault`, otherwise the one chosen
-in the web app (Settings → Editor → *Vault for quick notes*, stored in your
-encrypted, synced preferences), otherwise your own first vault (the oldest
-one you own), otherwise the first vault you can edit. Without a connection
-to the server the setting can't be read: the default among the local copies
-is used, with a warning. `quick` changes data, so it waits for the profile
-lock like `write`; `quick --list` only reads.
+A new quick note is named by the local time, e.g. `2026-10-19 14.32` (a
+second one in the same minute gets ` 2`, ` 3`, …; there is no `:` because
+Windows doesn't allow it in file names). Behind the scenes they are a vault
+of their own of a special kind, made the first time an app is online with
+your account; `vault list` shows how many there are, not the vault.
+
+When they are full, a new one is refused ("Quick notes are full (20 of 20):
+move some to a vault or delete them first"). One made on a device that
+didn't know yet (offline, say, while another device filled them) is kept on
+that device — `quick --list` marks it — and uploaded once there's room.
+
+Moving one takes the attachments it links to along (renamed if the name is
+taken there, with its links following) and needs the server: the quick note
+goes only once the vault has the copy. Its history stays behind. Deleting one
+deletes the attachments only it uses too. `quick` changes data, so it waits
+for the profile lock like `write`; `quick --list` only reads.
+
+Quick notes keep files only for the notes that link to them (`![](scan.png)`,
+`![[scan.png]]`, `[[plan.pdf]]`): `write --attachment`, `import` and the
+gateway refuse a file no quick note links to yet, and the web app only takes
+files into a quick note's editor. A file whose link is edited out goes for
+good the next time an app catches up with the server, once it has been in the
+quick notes for an hour (time for a link made on another device to arrive).
+Only apps can tell: the server sees no links.
 
 ## 4. Sync and the Markdown mirror
 
@@ -324,7 +348,20 @@ are unaffected.
     assets/photo.jpg      <- attachments are plain files
     Empty folder/         <- explicit (empty) folders are directories
   Work (3f2a1c)/          <- a second vault with the same name gets its id suffix
+  Quick notes/            <- your quick notes: flat, no folders
+    2026-10-19 14.32.md
 ```
+
+**Quick notes** ([§3](#quick-notes)) are the folder `Quick notes/`, mirrored
+first so the name is theirs (a vault named so anyway gets the id suffix). It is
+flat: what is put into folders inside it is not synced (you are told once).
+Any `.md` file dropped there becomes a quick note, whatever its name, while
+there is room; beyond the limit a new file stays on disk, not synced, and
+goes up once there's room (moved or deleted ones). Any other file waits on
+disk the same way until a quick note links to it. Moving a file from there
+into a vault's folder moves the note there. Deleting a file deletes the note
+**for good** — quick notes have no trash — so more than 3 of them vanishing at
+once is held like a mass deletion (below).
 
 Besides the characters shown, control characters become `_`, surrounding
 spaces, leading dots and trailing dots are dropped, Windows device names get
@@ -459,13 +496,15 @@ the remote edit.
   (everywhere, deterministically — nothing is renamed in the shared state).
 * **Deleting a file** moves the note to the vault's **trash** (never a
   permanent delete). `notekpr trash list|restore` or the web app bring it
-  back, and the mirror writes it again.
+  back, and the mirror writes it again. In `Quick notes/` it deletes the
+  quick note for good (offline: once online).
 * **Many files vanishing at once is not a deletion.** If a vault's whole
   folder disappears, or more than 10 of its mirrored files and more than half
   of them are missing at the same time (a moved, renamed or unmounted folder,
   a sync tool gone wrong), nothing is moved to the trash — not even by
   `--once` — and the folder is not re-created; the client warns and waits for
-  the files to come back. If you really deleted them, stop the daemon and run
+  the files to come back. In `Quick notes/`, where deleting is for good, more
+  than 3 missing at once are held. If you really deleted them, stop the daemon and run
   `notekpr sync --once --allow-mass-delete` (asked interactively with
   `--once` on a terminal); `--restore-missing` writes them back from the local
   copies instead.

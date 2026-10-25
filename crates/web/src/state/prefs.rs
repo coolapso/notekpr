@@ -8,7 +8,6 @@ use super::*;
 /// preferences, these win.
 #[derive(Clone, Debug, Default)]
 pub(super) struct Unsaved {
-    pub quick_vault: bool,
     pub default_width: bool,
     /// Notes whose own width was set or removed.
     pub widths: BTreeSet<String>,
@@ -16,13 +15,6 @@ pub(super) struct Unsaved {
 
 thread_local! {
     static UNSAVED: RefCell<Unsaved> = RefCell::default();
-}
-
-/// Choose the vault quick notes go to (`None`: the default).
-pub fn set_quick_vault(c: &mut Core, vault: Option<String>) {
-    c.prefs.quick_vault = vault;
-    UNSAVED.with_borrow_mut(|u| u.quick_vault = true);
-    save_prefs(c);
 }
 
 // ------------------------------------------------------------------ note width
@@ -210,9 +202,6 @@ pub(super) fn merge_prefs(theirs: &mut Prefs, mine: Prefs, unsaved: &Unsaved) {
     }
     recent.truncate(30);
     theirs.recent = recent;
-    if unsaved.quick_vault {
-        theirs.quick_vault = mine.quick_vault;
-    }
     if unsaved.default_width {
         theirs.note_width = mine.note_width;
     }

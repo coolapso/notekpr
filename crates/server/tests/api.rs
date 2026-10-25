@@ -3726,3 +3726,150 @@ async fn whoever_can_read_a_note_can_comment_on_it() {
     let c = comment_update(&bob, &v, "n", bob.ring(&v), "Late");
     assert_eq!(bob.push(&v, vec![c]).await.unwrap_err().0, 404);
 }
+
+/// Quick notes: one vault of that kind per person, never shared (no
+/// members, agents, note shares or comments), invisible to everyone else.
+#[tokio::test]
+async fn quick_notes_are_one_per_person_and_never_shared() {
+    use notekpr_core::engine;
+    let srv = start().await;
+    let mut alice = new_user(&srv.base, "alice").await;
+    let bob = new_user(&srv.base, "bob").await;
+    let info = alice.create_quick_notes().await.unwrap();
+    let q = info.id.clone();
+    assert_eq!(info.kind, VaultKind::QuickNotes);
+    assert_eq!(info.role, Role::Owner);
+    assert_eq!(
+        info.note_limit,
+        Limit::Max(DEFAULT_QUICK_NOTES_PER_USER),
+        "the instance's default"
+    );
+    // Once per person.
+    assert_eq!(alice.create_quick_notes().await.unwrap_err().0, 409);
+    let regular = alice.create_vault("Home").await;
+    let list: Vec<VaultInfo> = alice.api.get("/vaults").await;
+    let kinds: Vec<(String, VaultKind, Limit)> = list
+        .iter()
+        .map(|v| (v.id.clone(), v.kind, v.note_limit))
+        .collect();
+    assert!(kinds.contains(&(
+        q.clone(),
+        VaultKind::QuickNotes,
+        Limit::Max(DEFAULT_QUICK_NOTES_PER_USER)
+    )));
+    assert!(kinds.contains(&(regular.clone(), VaultKind::Regular, Limit::Unlimited)));
+
+    // Notes come and go as anywhere: their own key first, then content.
+    let (doc, req) = engine::new_document_key(alice.ring(&q), "n", "2026-10-25 09.15").unwrap();
+    put_key(&alice, &q, "n", &req).await.unwrap();
+    let text = NoteDoc::new().set_text("call the plumber").unwrap();
+    let pushed = alice
+        .push(
+            &q,
+            vec![PushUpdate {
+                object_id: "n".into(),
+                client_update_id: random_id(),
+                payload: doc.encrypt(Purpose::Update, "n", &text).unwrap(),
+                signature: None,
+            }],
+        )
+        .await
+        .unwrap();
+    assert_eq!(pushed.results.len(), 1);
+
+    // Nobody joins: not people, not agents.
+    let bob_key: PublicUser = alice.api.get(&format!("/users/{}", bob.id)).await;
+    let public = bob_key.account_key.as_ref().unwrap().verify().unwrap();
+    let (epoch, key) = alice.ring(&q).current().unwrap();
+    let envelope = keys::wrap_vault_key(key, &q, epoch, &bob.id, &public.enc_public).unwrap();
+    let add = AddMemberRequest {
+        user_id: bob.id.clone(),
+        role: Role::Editor,
+        key_envelope: Some(KeyEnvelope {
+            user_id: bob.id.clone(),
+            epoch,
+            envelope: envelope.clone(),
+            signature: None,
+        }),
+        log_entry: None,
+    };
+    assert_eq!(
+        alice
+            .api
+            .status(Method::POST, &format!("/vaults/{q}/members"), Some(&add))
+            .await,
+        400
+    );
+    // No note is shared on its own either.
+    let share = AddObjectShareRequest {
+        user_id: bob.id.clone(),
+        role: Role::Viewer,
+        envelope: KeyEnvelope {
+            user_id: bob.id.clone(),
+            epoch,
+            envelope,
+            signature: None,
+        },
+        log_entry: None,
+    };
+    assert_eq!(
+        alice
+            .api
+            .status(
+                Method::POST,
+                &format!("/vaults/{q}/objects/n/shares"),
+                Some(&share)
+            )
+            .await,
+        400
+    );
+    let (_, mut start_sharing) =
+        engine::new_document_key(alice.ring(&q), "m", "Not shared").unwrap();
+    start_sharing.private = false;
+    assert_eq!(put_key(&alice, &q, "m", &start_sharing).await, Err(400));
+    // No comments; name and settings stay.
+    let c = comment_update(&alice, &q, "n", &doc, "a note to self");
+    assert_eq!(alice.push(&q, vec![c]).await.unwrap_err().0, 403);
+    for change in [
+        UpdateVaultRequest {
+            archived: Some(true),
+            ..Default::default()
+        },
+        UpdateVaultRequest {
+            viewers_comment: Some(true),
+            ..Default::default()
+        },
+        UpdateVaultRequest {
+            encrypted_meta: Some(vec![1; 64]),
+            ..Default::default()
+        },
+    ] {
+        assert_eq!(
+            alice
+                .api
+                .status(Method::PATCH, &format!("/vaults/{q}"), Some(&change))
+                .await,
+            400
+        );
+    }
+
+    // Nobody else learns anything about them.
+    for path in [
+        format!("/vaults/{q}"),
+        format!("/vaults/{q}/keys"),
+        format!("/vaults/{q}/changes?since=0"),
+    ] {
+        assert_eq!(bob.api.status::<()>(Method::GET, &path, None).await, 404);
+    }
+    let bobs: Vec<VaultInfo> = bob.api.get("/vaults").await;
+    assert!(bobs.is_empty());
+
+    // Deleted for good by their owner.
+    assert_eq!(
+        alice
+            .api
+            .status::<()>(Method::DELETE, &format!("/vaults/{q}/objects/n"), None)
+            .await,
+        204
+    );
+}

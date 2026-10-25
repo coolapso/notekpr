@@ -1,6 +1,6 @@
 //! Vaults, their members and roles.
 
-use notekpr_core::protocol::{Role, VaultInfo};
+use notekpr_core::protocol::{Limit, Role, VaultInfo, VaultKind};
 use sqlx::{Row, SqliteExecutor};
 
 use crate::error::AppResult;
@@ -18,6 +18,9 @@ fn vault_row(r: &sqlx::sqlite::SqliteRow) -> VaultInfo {
         created_at: r.get("created_at"),
         updated_at: r.get("updated_at"),
         viewers_comment: r.get("viewers_comment"),
+        kind: VaultKind::parse(r.get("kind")).unwrap_or_default(),
+        // Filled in by the routes (it depends on the instance's settings).
+        note_limit: Limit::Unlimited,
     }
 }
 
@@ -28,7 +31,7 @@ pub async fn list_for_member(
 ) -> AppResult<Vec<VaultInfo>> {
     let rows = sqlx::query(
         "SELECT v.id, v.owner_id, m.role, v.encrypted_meta, v.key_epoch, v.head_seq, v.archived,
-                v.created_at, v.updated_at, v.viewers_comment,
+                v.created_at, v.updated_at, v.viewers_comment, v.kind,
                 (SELECT COUNT(*) FROM vault_members m2 WHERE m2.vault_id = v.id) AS member_count
          FROM vaults v JOIN vault_members m ON m.vault_id = v.id AND m.user_id = ?
          ORDER BY v.created_at",
@@ -47,7 +50,7 @@ pub async fn get_for_member(
 ) -> AppResult<Option<VaultInfo>> {
     Ok(sqlx::query(
         "SELECT v.id, v.owner_id, m.role, v.encrypted_meta, v.key_epoch, v.head_seq, v.archived,
-                v.created_at, v.updated_at, v.viewers_comment,
+                v.created_at, v.updated_at, v.viewers_comment, v.kind,
                 (SELECT COUNT(*) FROM vault_members m2 WHERE m2.vault_id = v.id) AS member_count
          FROM vaults v JOIN vault_members m ON m.vault_id = v.id AND m.user_id = ?
          WHERE v.id = ?",
@@ -60,27 +63,85 @@ pub async fn get_for_member(
     .map(vault_row))
 }
 
-/// New vault at key epoch 1; `Ok(false)` if the id is taken.
+/// New vault at key epoch 1; `Ok(false)` if the id is taken (or, for
+/// quick notes, the owner has them already).
 pub async fn insert(
     db: impl SqliteExecutor<'_>,
     id: &str,
     owner_id: &str,
     encrypted_meta: &[u8],
+    kind: VaultKind,
     now: i64,
 ) -> AppResult<bool> {
     super::inserted(
         sqlx::query(
-            "INSERT INTO vaults (id, owner_id, encrypted_meta, key_epoch, head_seq, created_at, updated_at)
-             VALUES (?, ?, ?, 1, 0, ?, ?)",
+            "INSERT INTO vaults (id, owner_id, encrypted_meta, key_epoch, head_seq, kind, created_at, updated_at)
+             VALUES (?, ?, ?, 1, 0, ?, ?, ?)",
         )
         .bind(id)
         .bind(owner_id)
         .bind(encrypted_meta)
+        .bind(kind.as_str())
         .bind(now)
         .bind(now)
         .execute(db)
         .await,
     )
+}
+
+/// A vault's kind and owner (`None`: no such vault).
+pub async fn kind_and_owner(
+    db: impl SqliteExecutor<'_>,
+    vault_id: &str,
+) -> AppResult<Option<(VaultKind, String)>> {
+    let row: Option<(String, String)> =
+        sqlx::query_as("SELECT kind, owner_id FROM vaults WHERE id = ?")
+            .bind(vault_id)
+            .fetch_optional(db)
+            .await?;
+    Ok(row.map(|(k, o)| (VaultKind::parse(&k).unwrap_or_default(), o)))
+}
+
+/// Whether `vault_id` is someone's quick notes.
+pub async fn is_quick_notes(db: impl SqliteExecutor<'_>, vault_id: &str) -> AppResult<bool> {
+    Ok(kind_and_owner(db, vault_id)
+        .await?
+        .is_some_and(|(k, _)| k == VaultKind::QuickNotes))
+}
+
+/// The id of `owner_id`'s quick-notes vault, if they have one.
+pub async fn quick_notes_of(
+    db: impl SqliteExecutor<'_>,
+    owner_id: &str,
+) -> AppResult<Option<String>> {
+    Ok(
+        sqlx::query_scalar("SELECT id FROM vaults WHERE owner_id = ? AND kind = 'quick_notes'")
+            .bind(owner_id)
+            .fetch_optional(db)
+            .await?,
+    )
+}
+
+/// People who have quick notes.
+pub async fn quick_notes_owners(db: impl SqliteExecutor<'_>) -> AppResult<Vec<String>> {
+    Ok(
+        sqlx::query_scalar("SELECT owner_id FROM vaults WHERE kind = 'quick_notes'")
+            .fetch_all(db)
+            .await?,
+    )
+}
+
+/// Notes in a vault that aren't deleted for good: its objects apart from
+/// the index and the notes' comments (`c_…`; note ids never contain `_`).
+pub async fn note_count(db: impl SqliteExecutor<'_>, vault_id: &str) -> AppResult<u64> {
+    let n: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM objects
+         WHERE vault_id = ? AND purged_at IS NULL AND id <> 'index' AND substr(id, 1, 2) <> 'c_'",
+    )
+    .bind(vault_id)
+    .fetch_one(db)
+    .await?;
+    Ok(n as u64)
 }
 
 pub async fn set_meta(

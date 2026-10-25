@@ -94,6 +94,12 @@ pub struct StoredState {
     /// Viewers may comment (the vault owner's setting).
     #[serde(default = "yes")]
     pub viewers_comment: bool,
+    /// What the vault is for (quick notes, or a regular vault).
+    #[serde(default)]
+    pub kind: notekpr_core::protocol::VaultKind,
+    /// Notes the vault may hold (quick notes: the owner's limit).
+    #[serde(default)]
+    pub note_limit: notekpr_core::protocol::Limit,
 }
 
 fn yes() -> bool {

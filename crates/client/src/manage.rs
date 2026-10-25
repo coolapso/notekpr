@@ -19,6 +19,9 @@ pub async fn create_vault(session: &Session, name: &str) -> Result<Vault> {
     if name.is_empty() {
         bail!("the vault name must not be empty");
     }
+    if notekpr_core::quick::is_reserved_name(name) {
+        bail!(notekpr_core::quick::reserved_name_message());
+    }
     if session.kind == PrincipalKind::Agent {
         bail!("agents cannot create vaults; the owner shares vaults with them");
     }
@@ -42,6 +45,40 @@ pub async fn create_vault(session: &Session, name: &str) -> Result<Vault> {
     Ok(v)
 }
 
+/// Make the person's quick notes: a vault of their own of that kind.
+/// `Ok(None)`: they have them already (another app made them).
+pub async fn create_quick_notes(session: &Session) -> Result<Option<Vault>> {
+    if session.kind == PrincipalKind::Agent {
+        bail!("agents have no quick notes");
+    }
+    let meta = VaultMeta::named(notekpr_core::quick::NAME);
+    let (mut req, ring) = engine::new_vault(
+        session.account(),
+        &session.user_id,
+        &meta,
+        notekpr_core::now_ms(),
+    )?;
+    req.kind = VaultKind::QuickNotes;
+    let info: VaultInfo = match session.api.post("/vaults", &req).await {
+        Ok(info) => info,
+        Err(e) if e.status() == Some(409) => return Ok(None),
+        Err(e) => return Err(e.into()),
+    };
+    let replica = VaultReplica::new(&info.id, info.role, ring, meta);
+    let mut v = Vault::new(
+        session.vault_store(&info.id)?,
+        replica,
+        &info.owner_id,
+        info.archived,
+    );
+    v.kind = info.kind;
+    v.note_limit = info.note_limit;
+    v.outbox.note_keys = true;
+    v.set_limits(&session.limits());
+    v.save()?;
+    Ok(Some(v))
+}
+
 pub(crate) fn require_owner(v: &Vault) -> Result<()> {
     if v.role() != Role::Owner {
         bail!("only the owner of vault '{}' can do this", v.name());
@@ -60,6 +97,9 @@ pub async fn rename_vault(session: &Session, vault: &SharedVault, name: &str) ->
         meta.name = name.trim().to_string();
         if meta.name.is_empty() {
             bail!("the vault name must not be empty");
+        }
+        if notekpr_core::quick::is_reserved_name(&meta.name) {
+            bail!(notekpr_core::quick::reserved_name_message());
         }
         (v.id().to_string(), meta.encrypt(&v.replica.keyring)?, meta)
     };

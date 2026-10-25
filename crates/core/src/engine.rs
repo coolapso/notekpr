@@ -338,6 +338,7 @@ pub fn new_vault(
             signature: None,
         },
         log_entry: Some(log_entry),
+        kind: Default::default(),
     };
     Ok((req, ring))
 }

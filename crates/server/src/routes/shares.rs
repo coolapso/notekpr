@@ -196,6 +196,9 @@ pub(crate) async fn apply_key_change(
                 "only the vault's owner can share notes or rotate their keys",
             ));
         }
+        if kind == KeyChange::ShareStart {
+            access::require_shareable(&mut **tx, v).await?;
+        }
     }
     if kind != KeyChange::Rotation && !req.envelopes.is_empty() {
         return Err(bad("add people after sharing started"));
@@ -243,6 +246,8 @@ pub(crate) async fn apply_key_change(
         return Err(bad("invalid envelope"));
     }
     let epoch = req.epoch as i64;
+    // A new note's key is the first thing stored of it.
+    state.instance.check_new_note(tx, v, o).await?;
     repo::shares::ensure_object(&mut **tx, v, o, &who.user_id, now).await?;
     repo::keys::insert_document_key(
         &mut **tx,
@@ -459,6 +464,7 @@ pub async fn add(
     who.require_human()?;
     check_object(&o)?;
     access::require_owner(&state.db, &v, &who.user_id).await?;
+    access::require_shareable(&state.db, &v).await?;
     if !matches!(req.role, Role::Editor | Role::Viewer) {
         return Err(bad("notes can be shared as editor or viewer"));
     }

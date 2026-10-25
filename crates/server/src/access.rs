@@ -24,7 +24,7 @@ use notekpr_core::protocol::{INDEX_OBJECT_ID, Role, comments_note};
 use sqlx::SqliteExecutor;
 
 use crate::db::Db;
-use crate::error::{AppError, AppResult, forbidden};
+use crate::error::{AppError, AppResult, bad, forbidden};
 use crate::repo;
 
 /// The caller's role in a vault. Non-members get `NotFound` so that vault ids
@@ -112,6 +112,9 @@ pub async fn comment_access(
     if note_id == INDEX_OBJECT_ID || comments_note(note_id).is_some() || !live {
         return Err(AppError::NotFound);
     }
+    if repo::vaults::is_quick_notes(db, vault_id).await? {
+        return Err(forbidden("quick notes have no comments"));
+    }
     if !role.can_write() && !repo::vaults::viewers_comment(db, vault_id).await? {
         return Err(forbidden("the vault's owner doesn't let viewers comment"));
     }
@@ -141,6 +144,19 @@ pub async fn require_admin(
         Ok(())
     } else {
         Err(forbidden("only the vault's owner and admins can do this"))
+    }
+}
+
+/// Quick notes are never shared: no members (people or agents), no note
+/// shares. Checked after the caller's own access, so nobody else learns
+/// what a vault is.
+pub async fn require_shareable(db: impl SqliteExecutor<'_>, vault_id: &str) -> AppResult<()> {
+    if repo::vaults::is_quick_notes(db, vault_id).await? {
+        Err(bad(
+            "quick notes are never shared: move the note to a vault first",
+        ))
+    } else {
+        Ok(())
     }
 }
 

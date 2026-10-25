@@ -55,6 +55,20 @@ impl ApiError {
         matches!(self, ApiError::Status { status: 503, code, .. } if code == notekpr_core::protocol::ERROR_READ_ONLY)
     }
 
+    /// An instance limit refused something new (a vault, an agent, a quick
+    /// note).
+    pub fn is_limit_reached(&self) -> bool {
+        matches!(self, ApiError::Status { code, .. } if code == notekpr_core::protocol::ERROR_LIMIT_REACHED)
+    }
+
+    /// The server's explanation, or the error itself.
+    pub fn message(&self) -> String {
+        match self {
+            ApiError::Status { message, .. } => message.clone(),
+            e => e.to_string(),
+        }
+    }
+
     pub fn is_unauthorized(&self) -> bool {
         self.status() == Some(401)
     }

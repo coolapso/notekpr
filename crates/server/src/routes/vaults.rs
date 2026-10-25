@@ -11,7 +11,7 @@ use axum::http::StatusCode;
 use notekpr_core::protocol::{
     AddMemberRequest, AuditEntry, CreateVaultRequest, GrantKeysRequest, MemberInfo,
     ObjectEventKind, RemoveMemberRequest, Role, RotateKeysRequest, UpdateMemberRequest,
-    UpdateVaultRequest, UserEventKind, VaultEventKind, VaultInfo, VaultKeysResponse,
+    UpdateVaultRequest, UserEventKind, VaultEventKind, VaultInfo, VaultKeysResponse, VaultKind,
 };
 use sqlx::SqliteExecutor;
 
@@ -35,15 +35,30 @@ pub async fn list(
     State(state): State<AppState>,
     who: Principal,
 ) -> AppResult<Json<Vec<VaultInfo>>> {
-    Ok(Json(
-        repo::vaults::list_for_member(&state.db, &who.user_id).await?,
-    ))
+    let mut list = repo::vaults::list_for_member(&state.db, &who.user_id).await?;
+    for v in &mut list {
+        with_note_limit(&state, v).await?;
+    }
+    Ok(Json(list))
+}
+
+/// Quick notes carry how many notes they may hold (their owner's limit).
+async fn with_note_limit(state: &AppState, v: &mut VaultInfo) -> AppResult<()> {
+    if v.is_quick_notes() {
+        v.note_limit = state
+            .instance
+            .quick_notes_limit(&state.db, &v.owner_id)
+            .await?;
+    }
+    Ok(())
 }
 
 async fn load(state: &AppState, who: &Principal, vault_id: &str) -> AppResult<VaultInfo> {
-    repo::vaults::get_for_member(&state.db, &who.user_id, vault_id)
+    let mut v = repo::vaults::get_for_member(&state.db, &who.user_id, vault_id)
         .await?
-        .ok_or(AppError::NotFound)
+        .ok_or(AppError::NotFound)?;
+    with_note_limit(state, &mut v).await?;
+    Ok(v)
 }
 
 pub async fn get(
@@ -83,11 +98,34 @@ pub async fn create(
         let _w = state.write_lock.lock().await;
         let now = db::now();
         let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
-        state
-            .instance
-            .check_new_vault(&mut tx, &who.user_id)
-            .await?;
-        if !repo::vaults::insert(&mut *tx, &req.id, &who.user_id, &req.encrypted_meta, now).await? {
+        match req.kind {
+            VaultKind::Regular => {
+                state
+                    .instance
+                    .check_new_vault(&mut tx, &who.user_id)
+                    .await?;
+            }
+            // Everyone may have quick notes (they count against no vault
+            // limit), once.
+            VaultKind::QuickNotes => {
+                if repo::vaults::quick_notes_of(&mut *tx, &who.user_id)
+                    .await?
+                    .is_some()
+                {
+                    return Err(conflict("you have quick notes already"));
+                }
+            }
+        }
+        if !repo::vaults::insert(
+            &mut *tx,
+            &req.id,
+            &who.user_id,
+            &req.encrypted_meta,
+            req.kind,
+            now,
+        )
+        .await?
+        {
             return Err(conflict("vault id already exists"));
         }
         repo::vaults::insert_member(
@@ -127,7 +165,7 @@ pub async fn create(
         Some(&req.id),
         "vault.create",
         None,
-        serde_json::json!({}),
+        serde_json::json!({ "kind": req.kind.as_str() }),
     )
     .await;
     notify_user(&state, &who.user_id, UserEventKind::VaultsChanged);
@@ -150,6 +188,10 @@ pub async fn update(
         .is_some_and(|meta| meta.is_empty() || meta.len() > MAX_META_BYTES)
     {
         return Err(bad("invalid vault metadata"));
+    }
+    // Their name, archive flag and comments setting are fixed.
+    if repo::vaults::is_quick_notes(&state.db, &v).await? {
+        return Err(bad("quick notes keep their name and settings"));
     }
     {
         let _w = state.write_lock.lock().await;
@@ -274,6 +316,7 @@ pub async fn add_member(
 ) -> AppResult<(StatusCode, Json<MemberInfo>)> {
     who.require_human()?;
     access::require_owner(&state.db, &v, &who.user_id).await?;
+    access::require_shareable(&state.db, &v).await?;
     if req.role == Role::Owner {
         return Err(bad("a vault has exactly one owner"));
     }

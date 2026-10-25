@@ -14,8 +14,8 @@ use notekpr_core::crypto::Purpose;
 use notekpr_core::doc;
 use notekpr_core::engine::{Pending, VaultReplica};
 use notekpr_core::protocol::{
-    ObjectKeyUpdate, PushResult, PushUpdate, REJECT_PURGED, REJECT_STALE_KEY, REJECT_TOO_LARGE,
-    RejectedUpdate, comments_note,
+    ObjectKeyUpdate, PushResult, PushUpdate, REJECT_PURGED, REJECT_QUICK_NOTES_FULL,
+    REJECT_STALE_KEY, REJECT_TOO_LARGE, RejectedUpdate, comments_note,
 };
 use notekpr_core::random_id;
 use serde::{Deserialize, Serialize};
@@ -74,6 +74,10 @@ impl Default for Limits {
     }
 }
 
+/// What [`Outbox`]'s `held_under` notes for updates waiting for room in the
+/// quick notes rather than for a larger size limit.
+const NO_ROOM: usize = usize::MAX;
+
 /// An update kept back from uploading.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Held {
@@ -88,6 +92,9 @@ pub struct Held {
 pub enum HoldReason {
     /// Larger than the server accepts; goes out again once it fits.
     TooLarge,
+    /// A new quick note while the quick notes are full; goes out again
+    /// once there's room ([`Outbox::room_freed`]).
+    NoRoom,
     /// The server refused it for another reason (bad request).
     Refused(String),
 }
@@ -130,6 +137,11 @@ pub struct Outbox {
     /// thought fits must not make us resend it forever).
     #[serde(skip)]
     held_under: std::collections::HashMap<String, usize>,
+    /// New quick notes the server has no room for: their keys aren't
+    /// registered and their held updates aren't sent until
+    /// [`Outbox::room_freed`] (tried again on each connection).
+    #[serde(skip)]
+    no_room: BTreeSet<String>,
 }
 
 /// A new note's document key waiting to be registered
@@ -299,6 +311,48 @@ impl Outbox {
         });
     }
 
+    /// The server refused a new note's key because the quick notes are full:
+    /// keep the key and the note's updates, and register it once there's
+    /// room.
+    pub fn key_without_room(&mut self, object_id: &str) {
+        if self.waits_for_key(object_id) {
+            self.no_room.insert(object_id.to_string());
+        }
+    }
+
+    /// There may be room in the quick notes again (a note was deleted for
+    /// good or moved away, the limit grew, a new connection): register the
+    /// keys and send the updates that waited for it. Returns how many
+    /// updates were queued again.
+    pub fn room_freed(&mut self, r: &mut VaultReplica) -> usize {
+        self.no_room.clear();
+        let waiting: Vec<String> = self
+            .held_under
+            .iter()
+            .filter(|(_, under)| **under == NO_ROOM)
+            .map(|(id, _)| id.clone())
+            .collect();
+        let (back, keep): (Vec<Pending>, Vec<Pending>) = std::mem::take(&mut self.held)
+            .into_iter()
+            .partition(|p| waiting.contains(&p.client_update_id));
+        self.held = keep;
+        let n = back.len();
+        for p in back {
+            self.held_under.remove(&p.client_update_id);
+            r.pending.push(p);
+        }
+        n
+    }
+
+    /// Whether a new quick note waits for room in the quick notes.
+    pub fn waits_for_room(&self, object_id: &str) -> bool {
+        self.no_room.contains(object_id)
+            || self.held.iter().any(|p| {
+                p.object_id == object_id
+                    && self.held_under.get(&p.client_update_id) == Some(&NO_ROOM)
+            })
+    }
+
     /// Whether a new note's key is still to be registered.
     pub fn waits_for_key(&self, object_id: &str) -> bool {
         self.new_keys.iter().any(|k| k.object_id == object_id)
@@ -361,6 +415,7 @@ impl Outbox {
     /// sent again on the next plan (with the same ids).
     pub fn connection_reset(&mut self) {
         self.in_flight.clear();
+        self.no_room.clear();
     }
 
     /// These updates could not be handed to the transport (e.g. the socket
@@ -442,12 +497,32 @@ impl Outbox {
         if writer {
             plan.released = self.release_fitting(r, limits);
             self.merge_unsent(r, limits);
-            plan.register = self.new_keys.clone();
+            plan.register = self
+                .new_keys
+                .iter()
+                .filter(|k| !self.no_room.contains(&k.object_id))
+                .cloned()
+                .collect();
         }
         let max = limits.max_update_bytes;
         let mut ready: Vec<PushUpdate> = Vec::new();
         let mut hold_ids = Vec::new();
+        // New edits of a quick note waiting for room wait with it (sent, they
+        // would only be refused again).
+        let waiting: BTreeSet<&str> = self
+            .held
+            .iter()
+            .filter(|p| self.held_under.get(&p.client_update_id) == Some(&NO_ROOM))
+            .map(|p| p.object_id.as_str())
+            .collect();
+        let mut no_room_ids = Vec::new();
         for p in &r.pending {
+            if waiting.contains(p.object_id.as_str())
+                && !self.in_flight.contains(&p.client_update_id)
+            {
+                no_room_ids.push(p.client_update_id.clone());
+                continue;
+            }
             if self.in_flight.contains(&p.client_update_id)
                 || self.waits_for_key(&p.object_id)
                 || (!writer && comments_note(&p.object_id).is_none())
@@ -474,6 +549,7 @@ impl Outbox {
             }
         }
         self.hold(r, &hold_ids, max);
+        self.hold(r, &no_room_ids, NO_ROOM);
         plan.held
             .retain(|h| self.reported.insert(h.client_update_id.clone()));
         // Single pushes first for updates an older server refused as part of
@@ -527,6 +603,7 @@ impl Outbox {
     ) -> Reaction {
         let mut out = Reaction::default();
         let mut hold_ids = Vec::new();
+        let mut no_room_ids = Vec::new();
         for x in rejected {
             self.in_flight.remove(&x.client_update_id);
             self.alone.remove(&x.client_update_id);
@@ -539,6 +616,17 @@ impl Outbox {
                 }
                 REJECT_STALE_KEY => {
                     out.reload_keys = true;
+                }
+                REJECT_QUICK_NOTES_FULL => {
+                    no_room_ids.push(x.client_update_id.clone());
+                    if self.reported.insert(x.client_update_id.clone()) {
+                        out.held.push(Held {
+                            client_update_id: x.client_update_id.clone(),
+                            object_id: x.object_id.clone(),
+                            bytes: 0,
+                            reason: HoldReason::NoRoom,
+                        });
+                    }
                 }
                 code => {
                     let reason = if code == REJECT_TOO_LARGE {
@@ -559,6 +647,26 @@ impl Outbox {
             }
         }
         self.hold(r, &hold_ids, limits.max_update_bytes);
+        self.hold(r, &no_room_ids, NO_ROOM);
+        // The note's later updates wait with it.
+        let objects: BTreeSet<String> = no_room_ids
+            .iter()
+            .filter_map(|id| {
+                self.held
+                    .iter()
+                    .find(|p| &p.client_update_id == id)
+                    .map(|p| p.object_id.clone())
+            })
+            .collect();
+        let later: Vec<String> = r
+            .pending
+            .iter()
+            .filter(|p| {
+                objects.contains(&p.object_id) && !self.in_flight.contains(&p.client_update_id)
+            })
+            .map(|p| p.client_update_id.clone())
+            .collect();
+        self.hold(r, &later, NO_ROOM);
         out.resend = !r.pending.is_empty() && !out.reload_keys;
         out
     }
@@ -640,7 +748,8 @@ impl Outbox {
     }
 
     /// Queue held updates that fit within `limits` again (the administrator
-    /// raised the limit). Returns how many.
+    /// raised the limit). Returns how many. Those waiting for room in the
+    /// quick notes stay (see [`Outbox::room_freed`]).
     pub fn release_fitting(&mut self, r: &mut VaultReplica, limits: &Limits) -> usize {
         if self.held.is_empty() {
             return 0;
@@ -651,7 +760,7 @@ impl Outbox {
             std::mem::take(&mut self.held).into_iter().partition(|p| {
                 held_under
                     .get(&p.client_update_id)
-                    .is_none_or(|&under| max > under)
+                    .is_none_or(|&under| under != NO_ROOM && max > under)
                     && r.encrypt_object(Purpose::Update, &p.object_id, &p.update)
                         .is_ok_and(|c| c.len() <= max)
             });

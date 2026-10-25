@@ -11,7 +11,7 @@ pub async fn admin_stats(db: &Db) -> AppResult<AdminStats> {
     Ok(AdminStats {
         users: count("SELECT COUNT(*) FROM users WHERE kind = 'human'").await?,
         agents: count("SELECT COUNT(*) FROM users WHERE kind = 'agent'").await?,
-        vaults: count("SELECT COUNT(*) FROM vaults").await?,
+        vaults: count("SELECT COUNT(*) FROM vaults WHERE kind = 'regular'").await?,
         objects: count("SELECT COUNT(*) FROM objects WHERE purged_at IS NULL").await?,
         updates: count("SELECT COUNT(*) FROM updates").await?,
         snapshots: count("SELECT COUNT(*) FROM snapshots").await?,

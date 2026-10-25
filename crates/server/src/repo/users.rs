@@ -442,11 +442,15 @@ pub async fn admin_list(
     let (issuer, subject) = identity.unzip();
     let rows = sqlx::query(
         "SELECT u.id, u.display_name, u.email, u.kind, u.owner_id, u.is_admin, u.disabled, u.created_at, u.last_login_at,
-                u.vault_allowance, u.agent_allowance,
-                (SELECT COUNT(*) FROM vault_members m WHERE m.user_id = u.id) AS vault_count,
+                u.vault_allowance, u.agent_allowance, u.quick_note_allowance,
+                (SELECT COUNT(*) FROM vault_members m JOIN vaults v ON v.id = m.vault_id
+                 WHERE m.user_id = u.id AND v.kind = 'regular') AS vault_count,
                 (SELECT COUNT(*) FROM devices d WHERE d.user_id = u.id AND d.status = 'active') AS device_count,
-                (SELECT COUNT(*) FROM vaults v WHERE v.owner_id = u.id) AS owned_vault_count,
-                (SELECT COUNT(*) FROM users a WHERE a.owner_id = u.id AND a.kind = 'agent') AS agent_count
+                (SELECT COUNT(*) FROM vaults v WHERE v.owner_id = u.id AND v.kind = 'regular') AS owned_vault_count,
+                (SELECT COUNT(*) FROM users a WHERE a.owner_id = u.id AND a.kind = 'agent') AS agent_count,
+                (SELECT COUNT(*) FROM objects o JOIN vaults v ON v.id = o.vault_id
+                 WHERE v.owner_id = u.id AND v.kind = 'quick_notes' AND o.purged_at IS NULL
+                   AND o.id <> 'index' AND substr(o.id, 1, 2) <> 'c_') AS quick_note_count
          FROM users u
          WHERE (?1 IS NULL OR lower(u.email) = lower(?1))
            AND (?2 IS NULL OR EXISTS (SELECT 1 FROM identities i
@@ -474,8 +478,10 @@ pub async fn admin_list(
             device_count: r.get("device_count"),
             owned_vault_count: r.get("owned_vault_count"),
             agent_count: r.get("agent_count"),
+            quick_note_count: r.get("quick_note_count"),
             vault_allowance: allowance(r.get("vault_allowance")),
             agent_allowance: allowance(r.get("agent_allowance")),
+            quick_note_allowance: allowance(r.get("quick_note_allowance")),
         })
         .collect())
 }
@@ -497,18 +503,27 @@ fn allowance_column(a: Allowance) -> Option<i64> {
     }
 }
 
-/// `(vault allowance, agent allowance)` of a person.
-pub async fn allowances(
-    db: impl SqliteExecutor<'_>,
-    id: &str,
-) -> AppResult<(Allowance, Allowance)> {
-    let row: Option<(Option<i64>, Option<i64>)> =
-        sqlx::query_as("SELECT vault_allowance, agent_allowance FROM users WHERE id = ?")
-            .bind(id)
-            .fetch_optional(db)
-            .await?;
-    let (v, a) = row.unwrap_or_default();
-    Ok((allowance(v), allowance(a)))
+/// A person's own limits, set by an administrator.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Allowances {
+    pub vaults: Allowance,
+    pub agents: Allowance,
+    pub quick_notes: Allowance,
+}
+
+pub async fn allowances(db: impl SqliteExecutor<'_>, id: &str) -> AppResult<Allowances> {
+    let row: Option<(Option<i64>, Option<i64>, Option<i64>)> = sqlx::query_as(
+        "SELECT vault_allowance, agent_allowance, quick_note_allowance FROM users WHERE id = ?",
+    )
+    .bind(id)
+    .fetch_optional(db)
+    .await?;
+    let (v, a, q) = row.unwrap_or_default();
+    Ok(Allowances {
+        vaults: allowance(v),
+        agents: allowance(a),
+        quick_notes: allowance(q),
+    })
 }
 
 /// Only people have allowances (agents belong to one).
@@ -538,10 +553,23 @@ pub async fn set_agent_allowance(
     Ok(())
 }
 
+pub async fn set_quick_note_allowance(
+    db: impl SqliteExecutor<'_>,
+    id: &str,
+    a: Allowance,
+) -> AppResult<()> {
+    sqlx::query("UPDATE users SET quick_note_allowance = ? WHERE id = ? AND kind = 'human'")
+        .bind(allowance_column(a))
+        .bind(id)
+        .execute(db)
+        .await?;
+    Ok(())
+}
+
 /// Vaults this person owns.
 pub async fn owned_vaults(db: impl SqliteExecutor<'_>, id: &str) -> AppResult<i64> {
     Ok(
-        sqlx::query_scalar("SELECT COUNT(*) FROM vaults WHERE owner_id = ?")
+        sqlx::query_scalar("SELECT COUNT(*) FROM vaults WHERE owner_id = ? AND kind = 'regular'")
             .bind(id)
             .fetch_one(db)
             .await?,

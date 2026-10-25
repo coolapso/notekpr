@@ -15,6 +15,7 @@ pub mod memberlog;
 pub mod order;
 pub mod paths;
 pub mod protocol;
+pub mod quick;
 pub mod recover;
 pub mod search;
 pub mod textdiff;

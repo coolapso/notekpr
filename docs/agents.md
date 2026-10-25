@@ -169,7 +169,7 @@ G=http://127.0.0.1:7878/v1
 | Endpoint | |
 |---|---|
 | `GET /v1/status` | `{user_id, kind, online, read_only, vaults}` (`kind`: `human` or `agent`; `vaults`: how many are exposed) |
-| `GET /v1/vaults` | `[{id, name, role, archived, documents, pending_changes, seq, last_sync}]`, plus `icon`, `read_only` (why) and `too_large_changes` when set |
+| `GET /v1/vaults` | `[{id, name, role, archived, documents, pending_changes, seq, last_sync}]`, plus `icon`, `read_only` (why) and `too_large_changes` when set. Run with a person's own profile, their quick notes are listed too, with `kind: "quick_notes"` and `note_limit`: flat, at most that many notes, deleting is for good (an agent has none, and can't be given any) |
 | `GET /v1/vaults/{v}/documents[?folder=F&all=true]` | everything below `F` (recursively): `[{vault, path, id, title, kind, tags, created, modified, size}]`, plus `mime` and `icon` when set (`all` adds attachments) |
 | `GET /v1/vaults/{v}/documents/{path}` | Markdown body, `ETag: "<content hash>"`; `?format=json` → `{…info, hash, links, content}` |
 | `PUT /v1/vaults/{v}/documents/{path}` | create (`201`) or update (`200`) with the request body (`@today`, `@tomorrow` and `@yesterday` in it become those days' dates, `@2026-10-23`) → `{vault, path, id, created, changed, hash, bytes, pending_changes}` and the new `ETag`; `If-Match: "<hash>"` → `412` if it changed meanwhile (`If-Match: *`: it must exist); `If-None-Match: *` → create only |

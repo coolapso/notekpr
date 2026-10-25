@@ -23,7 +23,8 @@
 | Revision history | encrypted snapshots | count, size, time, author |
 | Comments (text, quotes, what they are about, replies, whom they @mention) | encrypted with the note's key; each signed by its author | that a note has comments, and the number, sizes, times and authors of the records; each vault's *viewers can comment* setting. Not who is mentioned: people's own devices find their mentions |
 | Presence (which note, cursor) | encrypted awareness messages | that a user is connected to a vault; on individually shared notes also which of them someone has open, and when (clients announce themselves on the note too, under its id) |
-| Favorites, recent notes, key pins, synced settings (the vault for quick notes, note widths, which mentions were read) | account-key encryption | no |
+| Favorites, recent notes, key pins, synced settings (note widths, which mentions were read) | account-key encryption | no |
+| Quick notes (text, names, attachments) | a vault of their own, encrypted like any other | which vault holds someone's quick notes, how many notes are in it, and — from a new note in a vault at about the time one leaves the quick notes — roughly when one moved where |
 | Vault keys | HPKE to each member's account key | no |
 | Document keys (every note has its own) | wrapped under the vault key for members, HPKE to each person a note is shared with | no; it learns which notes are shared, with whom, and when sharing started |
 | Account secrets | HPKE to each device, and to the recovery key | no |
@@ -48,8 +49,8 @@ Nothing in the app or the logs shows it:
 * **Administrators** (Settings → Administration, and admin clients over
   `/admin/*`) see each account's name, e-mail, kind (person or agent),
   role, whether it is disabled, when it was created and last signed in, how
-  many vaults it is in and owns, how many devices and agents it has, and its
-  own limits; plus totals for the instance (accounts, vaults, objects,
+  many vaults it is in and owns, how many devices, agents and quick notes it
+  has, and its own limits; plus totals for the instance (accounts, vaults, objects,
   updates, storage) and the instance settings. Not who is in which vault,
   not who shares with whom, not activity — and never content.
 * **Logs** have one line per request — method, path with ids replaced by
@@ -62,7 +63,7 @@ What the database holds, besides ciphertext and public keys:
 |---|---|
 | `users`, `identities` | accounts: display name, e-mail, OIDC issuer and subject, administrator, disabled, created and last sign-in; an agent's owner |
 | `devices`, `sessions`, `agent_credentials` | each account's devices and their names (the browser and system, or `notekpr CLI on <host name>`), sessions, and when each was created, last used (to the minute; only the latest time is kept), revoked |
-| `vaults`, `vault_members`, `member_log` | who owns each vault, who is in it with which role, who added them and when; the membership log's entries (user ids, roles, public keys, key commitments, times) |
+| `vaults`, `vault_members`, `member_log` | who owns each vault, who is in it with which role, who added them and when; which vault is someone's quick notes; the membership log's entries (user ids, roles, public keys, key commitments, times) |
 | `objects`, `updates`, `snapshots` | how many notes and other objects a vault has, when each was created and changed, and for every change (notes, the file tree, comments): who wrote it, from which device, when, and its size. Comment threads are objects named after their note (`c_<note id>`), so it also tells which notes have comments |
 | `attachments` | each attachment's size, who uploaded it, when |
 | `object_shares`, `object_keys` | which notes are shared individually, with whom, with which role, by whom and since when |
@@ -116,6 +117,11 @@ primitives. Formats:
   to members the verified log lists with that role and key, members see
   anyone the log doesn't list flagged in the member list, and rotation stops
   with a security warning if the server lists an unknown member with keys.
+* **Shares someone's quick notes?** The server refuses members and note
+  shares there, and as with every vault it can't add anyone on its own:
+  their owner's apps never sign anyone into them. Nor can it make a vault
+  someone else owns or shares pass for one's quick notes: apps take for them
+  only a vault of that kind the person owns alone.
 * **Hands a member a vault key it made itself** (so it could read what they
   write next)? The owner commits to every epoch's key in the log; clients
   check each key they receive against the commitment and refuse a vault

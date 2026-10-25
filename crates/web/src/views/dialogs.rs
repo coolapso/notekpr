@@ -142,7 +142,7 @@ pub fn ModalHost() -> impl IntoView {
             Modal::NewFolder { vault, parent } => view! { <NewFolder vault=vault parent=parent/> }.into_any(),
             Modal::Move { vault, id } => view! { <MoveDialog vault=vault id=id/> }.into_any(),
             Modal::Import(v) => view! { <ImportDialog vault=v/> }.into_any(),
-            Modal::Promote { vault, id } => view! { <super::quick::PromoteDialog vault=vault id=id/> }.into_any(),
+            Modal::MoveToVault { vault, id } => view! { <super::quick::MoveToVaultDialog vault=vault id=id/> }.into_any(),
             Modal::EntryIcon { vault, id, path, folder } => view! { <EntryIconDialog vault=vault id=id path=path folder=folder/> }.into_any(),
         })}
     }

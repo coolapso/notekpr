@@ -404,6 +404,40 @@ pub struct ChainLink {
     pub link: Vec<u8>,
 }
 
+/// What a vault is for: set when it is created, never changed.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum VaultKind {
+    #[default]
+    Regular,
+    /// A person's quick notes: one per account, never shared (no members,
+    /// note shares, agents or comments), at most
+    /// [`VaultInfo::note_limit`] notes. Apps keep it flat and out of their
+    /// vault lists.
+    QuickNotes,
+}
+
+impl VaultKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            VaultKind::Regular => "regular",
+            VaultKind::QuickNotes => "quick_notes",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "regular" => Some(VaultKind::Regular),
+            "quick_notes" => Some(VaultKind::QuickNotes),
+            _ => None,
+        }
+    }
+
+    pub fn is_regular(&self) -> bool {
+        *self == VaultKind::Regular
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct VaultInfo {
     pub id: String,
@@ -421,6 +455,30 @@ pub struct VaultInfo {
     /// servers, which have no comments.
     #[serde(default)]
     pub viewers_comment: bool,
+    /// What the vault is for; absent on older servers (regular).
+    #[serde(default)]
+    pub kind: VaultKind,
+    /// Notes the vault may hold: for quick notes the owner's allowance
+    /// (`quick_notes_per_user` unless an administrator set their own),
+    /// unlimited for other vaults.
+    #[serde(default)]
+    pub note_limit: Limit,
+}
+
+impl VaultInfo {
+    pub fn is_quick_notes(&self) -> bool {
+        self.kind == VaultKind::QuickNotes
+    }
+
+    /// Whether these are `user_id`'s own quick notes: of that kind, and
+    /// theirs alone. Apps take nothing else for them, so a vault someone
+    /// else owns or shares never passes for one's quick notes.
+    pub fn is_own_quick_notes(&self, user_id: &str) -> bool {
+        self.is_quick_notes()
+            && self.owner_id == user_id
+            && self.role == Role::Owner
+            && self.member_count <= 1
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -432,6 +490,9 @@ pub struct CreateVaultRequest {
     /// The membership log's first entry (`Create`), signed by the owner.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub log_entry: Option<LogEntry>,
+    /// `quick_notes`: the account's quick-notes vault (at most one).
+    #[serde(default, skip_serializing_if = "VaultKind::is_regular")]
+    pub kind: VaultKind,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
@@ -791,7 +852,8 @@ pub struct RejectedUpdate {
     pub client_update_id: String,
     pub object_id: String,
     /// [`REJECT_TOO_LARGE`], [`REJECT_PURGED`], [`REJECT_STALE_KEY`],
-    /// [`REJECT_UNSIGNED`], [`REJECT_BAD_SIGNATURE`] or `bad_request`.
+    /// [`REJECT_UNSIGNED`], [`REJECT_BAD_SIGNATURE`],
+    /// [`REJECT_QUICK_NOTES_FULL`] or `bad_request`.
     pub code: String,
     pub message: String,
 }
@@ -804,6 +866,9 @@ pub const REJECT_PURGED: &str = "purged";
 pub const REJECT_STALE_KEY: &str = "stale_key";
 /// Not signed, but the vault requires signed content (update the app).
 pub const REJECT_UNSIGNED: &str = "unsigned";
+/// A new note in the quick-notes vault while it holds as many notes as it
+/// may ([`VaultInfo::note_limit`]): kept, and sent again once there's room.
+pub const REJECT_QUICK_NOTES_FULL: &str = "quick_notes_full";
 /// The signature doesn't match the author's account key.
 pub const REJECT_BAD_SIGNATURE: &str = "bad_signature";
 
@@ -944,10 +1009,15 @@ pub struct AdminUser {
     /// Agents this person has.
     #[serde(default)]
     pub agent_count: i64,
+    /// Quick notes this person keeps (what their quick-note allowance counts).
+    #[serde(default)]
+    pub quick_note_count: i64,
     #[serde(default)]
     pub vault_allowance: Allowance,
     #[serde(default)]
     pub agent_allowance: Allowance,
+    #[serde(default)]
+    pub quick_note_allowance: Allowance,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
@@ -962,6 +1032,9 @@ pub struct AdminUpdateUser {
     /// How many agents this person may have (absent: unchanged).
     #[serde(default)]
     pub agent_allowance: Option<Allowance>,
+    /// How many quick notes this person may keep (absent: unchanged).
+    #[serde(default)]
+    pub quick_note_allowance: Option<Allowance>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -1005,7 +1078,7 @@ impl Limit {
     }
 }
 
-/// A person's own limit (vaults, agents): the instance's default for
+/// A person's own limit (vaults, agents, quick notes): the instance's default for
 /// everyone, or theirs. In JSON `"default"`, `"unlimited"` or a number.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[serde(into = "LimitRepr", from = "LimitRepr")]
@@ -1089,6 +1162,13 @@ fn default_agents_per_user() -> Limit {
     Limit::Max(DEFAULT_AGENTS_PER_USER)
 }
 
+/// Quick notes a person may keep unless an administrator says otherwise.
+pub const DEFAULT_QUICK_NOTES_PER_USER: u64 = 20;
+
+fn default_quick_notes_per_user() -> Limit {
+    Limit::Max(DEFAULT_QUICK_NOTES_PER_USER)
+}
+
 /// Settings an instance's administrators change while it runs
 /// (`GET`/`PATCH /admin/settings`). Limits never take anything away: below
 /// them nothing changes, at them nothing more can be created.
@@ -1110,6 +1190,10 @@ pub struct InstanceSettings {
     /// Agents a person may have, unless they have their own allowance.
     #[serde(default = "default_agents_per_user")]
     pub agents_per_user: Limit,
+    /// Quick notes a person may keep, unless they have their own allowance.
+    /// Lowering it takes none away: only new ones wait for room.
+    #[serde(default = "default_quick_notes_per_user")]
+    pub quick_notes_per_user: Limit,
     /// The server refuses every change; clients keep theirs and send them
     /// when it's writable again.
     #[serde(default)]
@@ -1128,6 +1212,7 @@ impl Default for InstanceSettings {
             max_vaults: Limit::Unlimited,
             vaults_per_user: Limit::Unlimited,
             agents_per_user: default_agents_per_user(),
+            quick_notes_per_user: default_quick_notes_per_user(),
             read_only: false,
             max_storage_mb: Limit::Unlimited,
         }
@@ -1148,6 +1233,8 @@ pub struct InstanceSettingsUpdate {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agents_per_user: Option<Limit>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quick_notes_per_user: Option<Limit>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub read_only: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_storage_mb: Option<Limit>,
@@ -1161,6 +1248,7 @@ impl InstanceSettings {
             max_vaults,
             vaults_per_user,
             agents_per_user,
+            quick_notes_per_user,
             read_only,
             max_storage_mb,
         } = u.clone();
@@ -1169,6 +1257,7 @@ impl InstanceSettings {
         self.max_vaults = max_vaults.unwrap_or(self.max_vaults);
         self.vaults_per_user = vaults_per_user.unwrap_or(self.vaults_per_user);
         self.agents_per_user = agents_per_user.unwrap_or(self.agents_per_user);
+        self.quick_notes_per_user = quick_notes_per_user.unwrap_or(self.quick_notes_per_user);
         self.read_only = read_only.unwrap_or(self.read_only);
         self.max_storage_mb = max_storage_mb.unwrap_or(self.max_storage_mb);
     }
@@ -1618,10 +1707,79 @@ mod tests {
             }
         );
         assert_eq!(s.agents_per_user, Limit::Max(DEFAULT_AGENTS_PER_USER));
+        assert_eq!(
+            s.quick_notes_per_user,
+            Limit::Max(DEFAULT_QUICK_NOTES_PER_USER)
+        );
         let mut s = InstanceSettings::default();
         s.apply(&serde_json::from_str(r#"{"read_only": true, "vaults_per_user": 1}"#).unwrap());
         assert!(s.read_only);
         assert_eq!(s.vaults_per_user, Limit::Max(1));
         assert_eq!(s.max_users, Limit::Unlimited);
+        s.apply(&serde_json::from_str(r#"{"quick_notes_per_user": "unlimited"}"#).unwrap());
+        assert_eq!(s.quick_notes_per_user, Limit::Unlimited);
+        assert_eq!(s.vaults_per_user, Limit::Max(1));
+    }
+
+    #[test]
+    fn only_ones_own_quick_notes_count() {
+        let mine = VaultInfo {
+            id: "q".into(),
+            owner_id: "me".into(),
+            role: Role::Owner,
+            encrypted_meta: vec![],
+            key_epoch: 1,
+            head_seq: 0,
+            archived: false,
+            member_count: 1,
+            created_at: 0,
+            updated_at: 0,
+            viewers_comment: false,
+            kind: VaultKind::QuickNotes,
+            note_limit: Limit::Max(20),
+        };
+        assert!(mine.is_own_quick_notes("me"));
+        assert!(!mine.is_own_quick_notes("you"));
+        let shared = VaultInfo {
+            member_count: 2,
+            ..mine.clone()
+        };
+        assert!(!shared.is_own_quick_notes("me"));
+        let theirs = VaultInfo {
+            owner_id: "you".into(),
+            role: Role::Editor,
+            ..mine.clone()
+        };
+        assert!(!theirs.is_own_quick_notes("me"));
+        let regular = VaultInfo {
+            kind: VaultKind::Regular,
+            ..mine
+        };
+        assert!(!regular.is_own_quick_notes("me"));
+    }
+
+    #[test]
+    fn vault_kinds_default_to_regular() {
+        let req: CreateVaultRequest = serde_json::from_value(serde_json::json!({
+            "id": "v1",
+            "encrypted_meta": "AA==",
+            "key_envelope": {"user_id": "u", "epoch": 1, "envelope": "AA=="},
+        }))
+        .unwrap();
+        assert_eq!(req.kind, VaultKind::Regular);
+        // Regular is the default and isn't written out (older servers).
+        assert!(serde_json::to_value(&req).unwrap().get("kind").is_none());
+        let quick = CreateVaultRequest {
+            kind: VaultKind::QuickNotes,
+            ..req
+        };
+        assert_eq!(
+            serde_json::to_value(&quick).unwrap()["kind"],
+            serde_json::json!("quick_notes")
+        );
+        for k in [VaultKind::Regular, VaultKind::QuickNotes] {
+            assert_eq!(VaultKind::parse(k.as_str()), Some(k));
+        }
+        assert_eq!(VaultKind::parse("other"), None);
     }
 }

@@ -508,3 +508,89 @@ fn an_older_note_gets_its_own_key_at_its_next_snapshot() {
         _ => panic!("the index stays under the vault key"),
     }
 }
+
+#[test]
+fn a_new_quick_note_without_room_waits_with_its_key() {
+    let (mut r, mut o) = (replica(), keyed());
+    o.new_document_key(&mut r, "n1", "2026-10-25 09.15");
+    edit(&mut r, "n1", "call the plumber");
+    let plan = o.plan(&mut r, &Limits::default());
+    assert_eq!(plan.register.len(), 1);
+    // The server is full: the key stays, unregistered, and isn't sent again.
+    o.key_without_room("n1");
+    assert!(o.waits_for_room("n1"));
+    let plan = o.plan(&mut r, &Limits::default());
+    assert!(plan.register.is_empty() && plan.pushes.is_empty());
+    assert!(o.unconfirmed(&r, "n1"), "the note is kept");
+    // Room again: the key goes out, then the text under it.
+    o.room_freed(&mut r);
+    assert!(!o.waits_for_room("n1"));
+    let plan = o.plan(&mut r, &Limits::default());
+    assert_eq!(plan.register.len(), 1);
+    o.key_registered("n1");
+    let plan = o.plan(&mut r, &Limits::default());
+    assert_eq!(plan.ids().len(), 1);
+    // A new connection tries again as well.
+    o.new_document_key(&mut r, "n2", "Later");
+    o.key_without_room("n2");
+    o.connection_reset();
+    assert_eq!(o.plan(&mut r, &Limits::default()).register.len(), 1);
+}
+
+#[test]
+fn updates_refused_for_full_quick_notes_wait_for_room() {
+    let (mut r, mut o) = (replica(), Outbox::default());
+    edit(&mut r, "n1", "first");
+    edit(&mut r, "old", "edit");
+    let plan = o.plan(&mut r, &Limits::default());
+    let id = |r: &VaultReplica, obj: &str| {
+        r.pending
+            .iter()
+            .find(|p| p.object_id == obj)
+            .unwrap()
+            .client_update_id
+            .clone()
+    };
+    let (n1, old) = (id(&r, "n1"), id(&r, "old"));
+    // A later edit of the new note, not sent yet.
+    edit(&mut r, "n1", " and more");
+    let reaction = o.on_rejected(
+        &mut r,
+        &[RejectedUpdate {
+            client_update_id: n1.clone(),
+            object_id: "n1".into(),
+            code: REJECT_QUICK_NOTES_FULL.into(),
+            message: "full".into(),
+        }],
+        &Limits::default(),
+    );
+    o.on_ack(
+        &mut r,
+        &[PushResult {
+            client_update_id: old,
+            seq: 1,
+        }],
+        true,
+    );
+    assert_eq!(reaction.held.len(), 1, "told once");
+    assert_eq!(reaction.held[0].reason, HoldReason::NoRoom);
+    assert!(o.waits_for_room("n1"));
+    assert_eq!(o.held_count(), 2, "the note's later edit waits with it");
+    assert!(r.pending.is_empty());
+    // So do edits made while it waits: not sent, not told about again.
+    edit(&mut r, "n1", " and later");
+    let waiting = o.plan(&mut r, &Limits::default());
+    assert!(waiting.pushes.is_empty() && waiting.held.is_empty());
+    assert_eq!(o.held_count(), 3);
+    // A larger size limit doesn't release them, room does.
+    o.connection_reset();
+    let bigger = Limits::new(Limits::DEFAULT_MAX_UPDATE * 2);
+    let plan2 = o.plan(&mut r, &bigger);
+    assert_eq!(plan2.released, 0);
+    assert!(plan2.pushes.is_empty());
+    assert_eq!(o.room_freed(&mut r), 3);
+    // The refused one keeps its id (it was sent once); the later ones merge.
+    assert_eq!(o.plan(&mut r, &Limits::default()).ids().len(), 2);
+    assert_eq!(o.held_count(), 0);
+    drop(plan);
+}

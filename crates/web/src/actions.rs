@@ -27,29 +27,41 @@ fn now() -> i64 {
 // ------------------------------------------------------------------ vaults
 
 pub async fn create_vault(name: String) -> Option<String> {
+    if notekpr_core::quick::is_reserved_name(&name) {
+        error(notekpr_core::quick::reserved_name_message());
+        return None;
+    }
+    match create_vault_of(&name, VaultKind::Regular).await {
+        Ok(v) => v,
+        Err(e) => {
+            error(format!("Could not create the vault: {e}"));
+            None
+        }
+    }
+}
+
+/// Create a vault of `kind` named `name`. `Ok(None)`: nothing to make (no
+/// name, no keys) or, for quick notes, they exist already.
+pub async fn create_vault_of(name: &str, kind: VaultKind) -> Result<Option<String>, String> {
     let name = name.trim().to_string();
     if name.is_empty() {
-        return None;
+        return Ok(None);
     }
     let made = step(|c| {
         c.account
             .as_ref()
             .map(|a| engine::new_vault(a, &c.user_id, &VaultMeta::named(&name), now()))
     });
-    let (req, ring) = match made {
+    let (mut req, ring) = match made {
         Some(Ok(x)) => x,
-        Some(Err(e)) => {
-            error(e.to_string());
-            return None;
-        }
-        None => return None,
+        Some(Err(e)) => return Err(e.to_string()),
+        None => return Ok(None),
     };
+    req.kind = kind;
     let info: VaultInfo = match api::post("/vaults", &req).await {
         Ok(i) => i,
-        Err(e) => {
-            error(format!("Could not create the vault: {e}"));
-            return None;
-        }
+        Err(e) if e.status == 409 && kind == VaultKind::QuickNotes => return Ok(None),
+        Err(e) => return Err(e.to_string()),
     };
     let id = info.id.clone();
     let note_keys = state::ui()
@@ -89,7 +101,7 @@ pub async fn create_vault(name: String) -> Option<String> {
     // Every change to the new vault is signed by its author from the start.
     state::sign_vault(id.clone()).await;
     step(|c| state::publish_vaults(c));
-    Some(id)
+    Ok(Some(id))
 }
 
 /// Change the vault's metadata (its name, icon or picture; the owner's to
@@ -144,6 +156,9 @@ pub async fn update_vault_meta(
 pub async fn rename_vault(vault: &str, name: &str) -> bool {
     let name = name.trim().to_string();
     update_vault_meta(vault, |m| {
+        if notekpr_core::quick::is_reserved_name(&name) {
+            return Err(notekpr_core::quick::reserved_name_message());
+        }
         m.name = name;
         Ok(())
     })
@@ -1022,6 +1037,17 @@ pub async fn create_note_with(
         error("You can only read this vault.");
         return None;
     }
+    // Quick notes are flat, and hold a limited number of notes.
+    if state::step(|c| c.is_quick_notes(vault)) {
+        if !folder.trim_matches('/').is_empty() {
+            error("Quick notes have no folders: move the note to a vault first.");
+            return None;
+        }
+        if !crate::quick::has_room() {
+            error(notekpr_core::quick::full_message(crate::quick::limit()));
+            return None;
+        }
+    }
     let title = if title.trim().is_empty() {
         "Untitled"
     } else {
@@ -1376,6 +1402,169 @@ pub fn restore(vault: &str, id: &str) {
     }
 }
 
+/// Move an entry to the trash without saying so (the caller does).
+pub fn trash_quietly(vault: &str, id: &str) {
+    if step(|c| change_index(c, vault, |ix| ix.trash(id, now()))) {
+        state::ui().tree_rev.update(|v| *v += 1);
+    }
+}
+
+/// Like [`purge`], but offline (or with the server away) it just waits:
+/// `false`, nothing said.
+pub async fn purge_quietly(vault: &str, id: &str) -> bool {
+    let kind = state::step(|c| c.entry(vault, id)).map(|e| e.kind);
+    let r = match kind {
+        Some(EntryKind::Attachment) => {
+            api::delete(&format!("/vaults/{vault}/attachments/{id}")).await
+        }
+        Some(EntryKind::Note) => api::delete(&format!("/vaults/{vault}/objects/{id}")).await,
+        _ => Ok(()),
+    };
+    match r {
+        Ok(()) | Err(api::Error { status: 404, .. }) => {
+            step(|c| change_index(c, vault, |ix| ix.remove(id)));
+            state::ui().tree_rev.update(|v| *v += 1);
+            true
+        }
+        Err(e) if e.is_offline() => false,
+        Err(e) => {
+            error(e.message);
+            false
+        }
+    }
+}
+
+/// The attachments note `id` links to, as `(id, path, only here)`: whether
+/// no other note of the vault links to it too.
+pub fn linked_attachments(c: &Core, vault: &str, id: &str) -> Vec<(String, String, bool)> {
+    let Some(r) = c.replicas.get(vault) else {
+        return vec![];
+    };
+    let live = c.live_entries(vault);
+    let cands: Vec<(String, String)> = live
+        .iter()
+        .filter(|e| e.kind != EntryKind::Folder)
+        .map(|e| (e.id.clone(), e.path.clone()))
+        .collect();
+    let Some(me) = live.iter().find(|e| e.id == id) else {
+        return vec![];
+    };
+    let mine = markdown::linked_ids(&r.note_text(id), &me.path, &cands);
+    let others: BTreeSet<String> = live
+        .iter()
+        .filter(|e| e.kind == EntryKind::Note && e.id != id)
+        .flat_map(|e| markdown::linked_ids(&r.note_text(&e.id), &e.path, &cands))
+        .collect();
+    mine.into_iter()
+        .filter_map(|a| {
+            let e = live
+                .iter()
+                .find(|e| e.id == a && e.kind == EntryKind::Attachment)?;
+            Some((a.clone(), e.path.clone(), !others.contains(&a)))
+        })
+        .collect()
+}
+
+/// Move a note to another vault: a new note `folder/title` there with its
+/// text and the attachments it links to, then — once the server has the
+/// copy — the original goes, with the attachments no other note uses:
+/// deleted for good from the quick notes, to the trash of a vault. Its
+/// history, comments and shares stay behind. Returns the new note's id.
+pub async fn move_to_vault(
+    from: &str,
+    id: &str,
+    to: &str,
+    folder: &str,
+    title: &str,
+) -> Result<String, String> {
+    let title = title.trim();
+    if title.is_empty() || title.contains(['/', '\\']) {
+        return Err("Give the note a name without '/'.".into());
+    }
+    if from == to {
+        return Err("Pick another vault.".into());
+    }
+    let (writable, into_quick, online) = step(|c| {
+        (
+            c.can_write(from) && c.can_write(to),
+            c.is_quick_notes(to),
+            c.socket.as_ref().is_some_and(|s| s.is_ready()),
+        )
+    });
+    if !writable || into_quick {
+        return Err("You can't move notes there.".into());
+    }
+    if !online {
+        return Err(
+            "Moving a note to another vault needs the server: try again once online.".into(),
+        );
+    }
+    let folder = match folder.trim().trim_matches('/') {
+        "" => String::new(),
+        f => paths::normalize(f).map_err(|e| e.to_string())?,
+    };
+    let (text, from_path, files) = step(|c| {
+        let text = c.replicas.get(from).map(|r| r.note_text(id));
+        let path = c.entry(from, id).map(|e| e.path);
+        (text, path, linked_attachments(c, from, id))
+    });
+    let (Some(mut text), Some(from_path)) = (text, from_path) else {
+        return Err("That note is gone.".into());
+    };
+    // The attachments first, each under a free name (links follow a rename).
+    for (aid, apath, _) in &files {
+        let bytes = attachment_bytes(from, aid)
+            .await
+            .ok_or("An attachment of the note could not be read.")?;
+        let target = paths::join(&folder, paths::file_name(apath));
+        let placed = upload_bytes(to, &target, &bytes)
+            .await
+            .ok_or("An attachment of the note could not be copied.")?;
+        if paths::file_name(&placed) != paths::file_name(apath) {
+            let cands = vec![(aid.clone(), apath.clone())];
+            if let Some(t) = markdown::rewrite_links(&text, paths::file_name(&placed), |l| {
+                markdown::resolve(l, &from_path, &cands) == Some(aid.as_str())
+            }) {
+                text = t;
+            }
+        }
+    }
+    let new_id = create_note_with(to, &folder, title, &text)
+        .await
+        .ok_or("The note could not be created there.")?;
+    // The original goes once the server has the copy.
+    let mut stored = false;
+    for _ in 0..150 {
+        stored = step(|c| {
+            let (Some(r), Some(o)) = (c.replicas.get(to), c.outboxes.get(to)) else {
+                return false;
+            };
+            !o.unconfirmed(r, &new_id) && !o.unconfirmed(r, INDEX_OBJECT_ID)
+        });
+        if stored {
+            break;
+        }
+        util::sleep(100).await;
+    }
+    if !stored {
+        return Err(
+            "The copy isn't on the server yet, so the original stays: delete it once the copy is synced."
+                .into(),
+        );
+    }
+    let quick = step(|c| c.is_quick_notes(from));
+    trash_quietly(from, id);
+    for (aid, _, only_here) in &files {
+        if *only_here {
+            trash_quietly(from, aid);
+        }
+    }
+    if quick {
+        crate::quick::purge_deleted().await;
+    }
+    Ok(new_id)
+}
+
 /// Permanently delete a trashed entry (server data and index entry): the
 /// vault's owner and admins only. Returns whether it is gone.
 pub async fn purge(vault: &str, id: &str) -> bool {
@@ -1656,6 +1845,12 @@ pub async fn upload_files(vault: &str, files: Vec<web_sys::File>, folder: &str) 
 }
 
 pub async fn upload_bytes(vault: &str, path: &str, bytes: &[u8]) -> Option<String> {
+    // Quick notes are flat.
+    let path = if step(|c| c.is_quick_notes(vault)) {
+        paths::file_name(path)
+    } else {
+        path
+    };
     let id = state::new_id();
     let ct = step(|c| c.replicas.get(vault)?.encrypt_attachment(&id, bytes).ok())?;
     if let Err(e) = api::put_bytes(&format!("/vaults/{vault}/attachments/{id}"), &ct).await {

@@ -97,10 +97,15 @@ which is what makes each vault's live stream gapless and ordered.
 * **Note objects**: one per note, CRDT text holding the Markdown source.
 * **Attachments**: encrypted blobs addressed by a random id; their name and
   type are in the index.
-* **Per-user private data** (favorites, recent notes, key pins, the vault
-  for quick notes, note widths, and a counter that goes up with every save so an older
-  copy handed out by the server is noticed): one blob encrypted with the
-  user's account key.
+* **Per-user private data** (favorites, recent notes, key pins, note
+  widths, and a counter that goes up with every save so an older copy handed
+  out by the server is noticed): one blob encrypted with the user's account
+  key.
+* **Quick notes**: each person's own vault of the kind `quick_notes` —
+  encrypted, synced and mirrored like any vault, but never shared, flat and
+  holding a limited number of notes (protocol.md §5.3). Apps show it as
+  *Quick notes*, never as a vault; a note leaves it by moving to a vault
+  (a copy there, then the original deleted for good).
 
 The server sees: how many objects a vault has, their sizes and change times,
 who wrote each update, and membership. It does not see names, paths, folder

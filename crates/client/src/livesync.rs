@@ -300,6 +300,10 @@ async fn session_loop(
     {
         tracing::warn!("refreshing the vault list: {e:#}");
     }
+    // Quick notes deleted while offline go for good now.
+    if let Err(e) = crate::ops::purge_deleted_quick_notes(hub).await {
+        tracing::warn!("deleting quick notes: {e:#}");
+    }
     for id in hub.vault_ids() {
         // Only vaults actually subscribed are waited for: a read-only one
         // would otherwise keep live uploads off after every reconnect.
@@ -542,6 +546,13 @@ async fn handle(
                 }
                 if let Err(e) = h.session.grant_missing_keys(&v).await {
                     tracing::warn!("granting keys: {e:#}");
+                }
+                // Caught up: files of the quick notes no note links to go.
+                if v.lock().await.is_quick_notes()
+                    && let Err(e) =
+                        crate::ops::drop_unlinked_quick_files(&h, notekpr_core::now_ms()).await
+                {
+                    tracing::warn!("tidying the quick notes: {e:#}");
                 }
             });
             if conn.subscribed.iter().all(|id| conn.synced.contains(id)) {

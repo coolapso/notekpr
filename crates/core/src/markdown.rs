@@ -584,6 +584,20 @@ pub fn resolve<'a>(
     best.map(|(id, _)| id.as_str())
 }
 
+/// The entries (ids among `candidates`) the note at `from_path` links to or
+/// embeds, each once, in the order they first appear.
+pub fn linked_ids(text: &str, from_path: &str, candidates: &[(String, String)]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for l in analyze(text).links {
+        if let Some(id) = resolve(&l, from_path, candidates)
+            && !out.iter().any(|o| o == id)
+        {
+            out.push(id.to_string());
+        }
+    }
+    out
+}
+
 fn join_relative(folder: &str, target: &str) -> Option<String> {
     let mut segs: Vec<&str> = if folder.is_empty() {
         vec![]
@@ -668,6 +682,22 @@ mod tests {
         assert_eq!(percent_decode("%%41"), "%A");
         // Invalid UTF-8 after decoding falls back to the input.
         assert_eq!(percent_decode("%FF"), "%FF");
+    }
+
+    #[test]
+    fn linked_ids_are_the_entries_a_note_points_at() {
+        let cands = vec![
+            ("p".to_string(), "photo.png".to_string()),
+            ("d".to_string(), "Docs/report.pdf".to_string()),
+            ("n".to_string(), "Other.md".to_string()),
+        ];
+        let text =
+            "![[photo.png]] see [[Other]] and [r](Docs/report.pdf), ![[photo.png]] [[gone.png]]";
+        assert_eq!(
+            linked_ids(text, "2026-10-25 09.15.md", &cands),
+            ["p", "n", "d"]
+        );
+        assert!(linked_ids("no links", "a.md", &cands).is_empty());
     }
 
     #[test]

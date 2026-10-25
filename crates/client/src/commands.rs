@@ -52,6 +52,16 @@ impl Ctx {
     /// A hub for one-shot commands: catches up and pushes the given vaults
     /// (or, detached, only reads the local copies).
     async fn hub(&self, vaults: &[&str]) -> Result<Arc<Hub>> {
+        self.open_hub(vaults, false).await
+    }
+
+    /// A hub with the person's quick notes open (made the first time), and
+    /// `vaults` too.
+    async fn hub_with_quick_notes(&self, vaults: &[&str]) -> Result<Arc<Hub>> {
+        self.open_hub(vaults, true).await
+    }
+
+    async fn open_hub(&self, vaults: &[&str], quick_notes: bool) -> Result<Arc<Hub>> {
         if let Some(hub) = &self.attached {
             for v in vaults {
                 if hub.resolve(v).await.is_err() {
@@ -69,6 +79,7 @@ impl Ctx {
             offline_ok: true,
             catch_up: !self.detached,
             detached: self.detached,
+            quick_notes,
         };
         Hub::start(self.session()?, opts).await
     }
@@ -594,7 +605,43 @@ async fn execute(ctx: Ctx, command: Command) -> Result<()> {
             vault,
             from,
             to,
+            to_vault: Some(target),
+            ..
+        } => {
+            let hub = ctx.hub(&[&vault, &target]).await?;
+            let (folder, name) = if to.is_empty() || to.ends_with('/') {
+                (to.trim_end_matches('/').to_string(), None)
+            } else {
+                let to = to.trim_matches('/');
+                (
+                    notekpr_core::paths::parent(to).to_string(),
+                    Some(notekpr_core::paths::title(to).to_string()),
+                )
+            };
+            let m = op(ops::move_to_vault(
+                &hub,
+                Some(&vault),
+                &from,
+                &target,
+                &folder,
+                name.as_deref(),
+            )
+            .await)?;
+            let tname = hub.resolve(&m.vault).await?.lock().await.name().to_string();
+            crate::out!("moved to '{tname}': {}", m.path);
+            if !m.removed {
+                ui::warn(&format!(
+                    "the copy in '{tname}' isn't on the server yet, so the original stays in '{vault}'"
+                ));
+            }
+            Ok(())
+        }
+        Command::Mv {
+            vault,
+            from,
+            to,
             update_links,
+            to_vault: None,
         } => {
             let hub = ctx.hub(&[&vault]).await?;
             // Recipients of a shared note see its new name (ops does it).
@@ -1146,6 +1193,10 @@ async fn vault(ctx: &Ctx, c: VaultCmd) -> Result<()> {
                 ctx.print_json(&list);
                 return Ok(());
             }
+            // The quick notes are no vault: a line of their own.
+            let (quick, list): (Vec<_>, Vec<_>) = list
+                .into_iter()
+                .partition(|s| s.kind == notekpr_core::protocol::VaultKind::QuickNotes);
             if list.is_empty() {
                 crate::out!("no vaults yet — create one with `notekpr vault create <name>`");
             }
@@ -1168,6 +1219,12 @@ async fn vault(ctx: &Ctx, c: VaultCmd) -> Result<()> {
             }
             for id in hub.waiting_for_keys() {
                 crate::out!("{:<28} (waiting for its key from the owner)  [{id}]", "?");
+            }
+            for q in quick {
+                crate::out!(
+                    "\n{} (`notekpr quick --list`)",
+                    quick_count(q.documents, q.note_limit)
+                );
             }
             Ok(())
         }
@@ -1738,12 +1795,70 @@ async fn mentions(ctx: &Ctx, a: MentionsArgs) -> Result<()> {
     Ok(())
 }
 
-/// `quick`: add a quick note (or list them) in the quick-notes vault: the
-/// one named with --vault, else the synced preference, else the default.
+/// `quick`: add a quick note, list them, delete one for good or move one to
+/// a vault. Only the quick notes are opened (and the vault moved to).
 async fn quick(ctx: &Ctx, a: QuickArgs) -> Result<()> {
-    let text = if a.list {
-        String::new()
-    } else if a.text.is_empty() {
+    if a.list {
+        let hub = ctx.hub_with_quick_notes(&[]).await?;
+        let q = op(ops::list_quick_notes(&hub, a.limit).await)?;
+        if ctx.json {
+            ctx.print_json(&q);
+        } else if q.count == 0 {
+            crate::out!("no quick notes yet — add one with `notekpr quick <text>`");
+        } else {
+            crate::out!("{}", quick_count(q.count, q.limit));
+            for n in &q.notes {
+                crate::out!(
+                    "{:<18}  {}{}",
+                    n.title,
+                    n.preview,
+                    if n.waiting_for_room {
+                        "  (on this device until there's room)"
+                    } else {
+                        ""
+                    }
+                );
+            }
+            if q.notes.len() < q.count {
+                crate::out!("… and {} older (--limit)", q.count - q.notes.len());
+            }
+        }
+        return Ok(());
+    }
+    if let Some(note) = &a.delete {
+        let hub = ctx.hub_with_quick_notes(&[]).await?;
+        let path = op(ops::delete_quick_note(&hub, note).await)?;
+        crate::out!("deleted '{}' for good", notekpr_core::paths::title(&path));
+        return Ok(());
+    }
+    if let Some(note) = &a.move_note {
+        let to = a.to.clone().unwrap_or_default();
+        let hub = ctx.hub_with_quick_notes(&[&to]).await?;
+        let m = op(ops::move_to_vault(
+            &hub,
+            None,
+            note,
+            &to,
+            a.folder.as_deref().unwrap_or(""),
+            a.name.as_deref(),
+        )
+        .await)?;
+        if ctx.json {
+            ctx.print_json(&m);
+            return Ok(());
+        }
+        let name = hub.resolve(&m.vault).await?.lock().await.name().to_string();
+        crate::out!("moved to '{name}': {}", m.path);
+        if !m.removed {
+            ui::warn(&format!(
+                "the copy in '{name}' isn't on the server yet, so the quick note is kept; delete it with \
+                 `notekpr quick --delete \"{}\"` once it is",
+                notekpr_core::paths::title(&m.from_path)
+            ));
+        }
+        return Ok(());
+    }
+    let text = if a.text.is_empty() {
         if ui::stdin_is_tty() {
             eprintln!("Type your quick note, then press Ctrl+D:");
         }
@@ -1752,72 +1867,22 @@ async fn quick(ctx: &Ctx, a: QuickArgs) -> Result<()> {
     } else {
         a.text.join(" ")
     };
-    if !a.list && text.trim().is_empty() {
+    if text.trim().is_empty() {
         bail!("nothing to save: pass the text as an argument or on stdin");
     }
-    let no_vault = || {
-        anyhow!(
-            "quick notes need a vault you can edit: create one with `notekpr vault create <name>`"
-        )
-    };
-    // Decided before opening the hub, so only that vault is synced.
-    let target = match &a.vault {
-        Some(v) => Some(v.clone()),
-        None => match ops::quick_vault_online(&*ctx.session()?).await {
-            Ok(Some(id)) => Some(id),
-            Ok(None) => return Err(no_vault()),
-            // Offline or signed out: the default among the local copies.
-            Err(e) => {
-                tracing::debug!("cannot ask the server for the quick-notes vault: {e}");
-                None
-            }
-        },
-    };
-    let refs: Vec<&str> = target.as_deref().into_iter().collect();
-    let hub = ctx.hub(&refs).await?;
-    let vref = match target {
-        Some(t) => t,
-        None => {
-            let id = ops::local_quick_vault(&hub).await.ok_or_else(no_vault)?;
-            let name = hub.resolve(&id).await?.lock().await.name().to_string();
-            ui::warn(&format!(
-                "could not read your quick-notes vault setting from the server; using '{name}'"
-            ));
-            id
-        }
-    };
-    if a.list {
-        let notes = op(ops::list_quick_notes(&hub, &vref, a.archived, a.limit).await)?;
-        if ctx.json {
-            ctx.print_json(&notes);
-        } else if notes.is_empty() {
-            crate::out!("no quick notes yet — add one with `notekpr quick <text>`");
-        } else {
-            for n in notes {
-                crate::out!(
-                    "{:<18}  {}{}",
-                    n.title,
-                    n.preview,
-                    if n.archived { "  (archived)" } else { "" }
-                );
-            }
-        }
-        return Ok(());
-    }
-    let out = op(ops::create_quick_note(&hub, &vref, &text).await)?;
+    let hub = ctx.hub_with_quick_notes(&[]).await?;
+    let out = op(ops::create_quick_note(&hub, &text).await)?;
     hub.snapshot_idle(Duration::ZERO, livesync::SESSION_MIN_UPDATES)
         .await;
     if ctx.json {
         ctx.print_json(&out);
     } else {
-        let name = hub
-            .resolve(&out.vault)
-            .await?
-            .lock()
-            .await
-            .name()
-            .to_string();
-        crate::out!("created {} in '{name}'", out.path);
+        let q = op(ops::list_quick_notes(&hub, 0).await)?;
+        crate::out!(
+            "added {} ({})",
+            notekpr_core::paths::title(&out.path),
+            quick_count(q.count, q.limit)
+        );
     }
     if out.pending_changes > 0 {
         ui::status(&format!(
@@ -1826,6 +1891,15 @@ async fn quick(ctx: &Ctx, a: QuickArgs) -> Result<()> {
         ));
     }
     Ok(())
+}
+
+/// "3 of 20 quick notes".
+fn quick_count(count: usize, limit: Option<notekpr_core::protocol::Limit>) -> String {
+    match limit.and_then(|l| l.max()) {
+        Some(max) => format!("{count} of {max} quick notes"),
+        None if count == 1 => "1 quick note".to_string(),
+        None => format!("{count} quick notes"),
+    }
 }
 
 async fn trash(ctx: &Ctx, c: TrashCmd) -> Result<()> {
@@ -2081,6 +2155,7 @@ async fn sync(ctx: &Ctx, a: SyncArgs) -> Result<()> {
             offline_ok: true,
             catch_up: true,
             detached: false,
+            quick_notes: false,
         },
     )
     .await?;
@@ -2419,6 +2494,7 @@ async fn gateway_cmd(ctx: &Ctx, a: GatewayArgs) -> Result<()> {
             offline_ok: true,
             catch_up: true,
             detached: false,
+            quick_notes: false,
         },
     )
     .await?;

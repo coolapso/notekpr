@@ -253,6 +253,19 @@ impl Session {
         v.owner_id = info.owner_id.clone();
         v.archived = info.archived;
         v.viewers_comment = info.viewers_comment;
+        // Only one's own quick notes are taken for them.
+        v.kind = if info.is_quick_notes() && !info.is_own_quick_notes(&self.user_id) {
+            tracing::warn!(vault = %info.id, "a vault listed as quick notes isn't yours alone; it is shown as a vault");
+            VaultKind::Regular
+        } else {
+            info.kind
+        };
+        let grew = info.note_limit != v.note_limit;
+        v.note_limit = info.note_limit;
+        // A changed limit may have made room for notes waiting on this device.
+        if grew && v.is_quick_notes() {
+            v.room_freed();
+        }
         v.read_only = None;
         self.load_member_log(v).await?;
         match VaultMeta::decrypt(&v.replica.keyring, &info.encrypted_meta) {
@@ -688,7 +701,7 @@ impl Session {
                 let plan = v.plan_push();
                 if !plan.held.is_empty() {
                     out.quarantined += plan.held.len();
-                    warn_too_large(v.name(), plan.held.len(), limits.max_update_bytes as usize);
+                    warn_held(&v, &plan.held, limits.max_update_bytes as usize);
                 }
                 v.save()?;
                 plan
@@ -712,6 +725,21 @@ impl Session {
                     Err(e) if e.is_offline() => {
                         out.offline = true;
                         break 'rounds;
+                    }
+                    // No room in the quick notes: the note waits on this
+                    // device until there is.
+                    Err(e) if e.is_limit_reached() => {
+                        let mut v = vault.lock().await;
+                        if v.is_quick_notes() {
+                            v.outbox.key_without_room(&k.object_id);
+                            ui::warn(&format!(
+                                "{} A new quick note stays on this device until then.",
+                                e.message()
+                            ));
+                        } else {
+                            v.key_refused(&k.object_id);
+                        }
+                        v.save()?;
                     }
                     // Wrapped under a vault key that was replaced meanwhile:
                     // with fresh keys, a new key under the current one.
@@ -765,11 +793,7 @@ impl Session {
                         v.save()?;
                         if !reaction.held.is_empty() {
                             out.quarantined += reaction.held.len();
-                            warn_too_large(
-                                v.name(),
-                                reaction.held.len(),
-                                limits.max_update_bytes as usize,
-                            );
+                            warn_held(&v, &reaction.held, limits.max_update_bytes as usize);
                         }
                         if !reaction.purged.is_empty() {
                             tracing::warn!(vault = %id, "{} document(s) were permanently deleted elsewhere (unsent edits are kept as recovered notes)", reaction.purged.len());
@@ -807,11 +831,7 @@ impl Session {
                         v.save()?;
                         if !reaction.held.is_empty() {
                             out.quarantined += reaction.held.len();
-                            warn_too_large(
-                                v.name(),
-                                reaction.held.len(),
-                                limits.max_update_bytes as usize,
-                            );
+                            warn_held(&v, &reaction.held, limits.max_update_bytes as usize);
                         }
                         drop(v);
                         if e.status() == Some(409) {
@@ -1295,6 +1315,23 @@ impl Session {
             }
         }
         bail!("could not rotate the vault key (membership keeps changing); try again")
+    }
+}
+
+/// Tell why changes were kept back: too large, or no room in the quick notes.
+fn warn_held(v: &crate::vault::Vault, held: &[notekpr_sync::Held], max: usize) {
+    let no_room = held
+        .iter()
+        .filter(|h| h.reason == notekpr_sync::HoldReason::NoRoom)
+        .count();
+    if no_room > 0 {
+        ui::warn(&format!(
+            "{} {no_room} new quick note(s) stay on this device until then.",
+            notekpr_core::quick::full_message(v.note_limit)
+        ));
+    }
+    if held.len() > no_room {
+        warn_too_large(v.name(), held.len() - no_room, max);
     }
 }
 

@@ -229,6 +229,7 @@ impl User {
                         signature: None,
                     },
                     log_entry: None,
+                    kind: Default::default(),
                 },
             )
             .await;
@@ -244,6 +245,20 @@ impl User {
         let _: VaultInfo = self.api.post("/vaults", &req).await;
         self.keyrings.insert(req.id.clone(), ring);
         req.id
+    }
+
+    /// This person's quick notes (a vault of that kind), as the apps make it.
+    pub async fn create_quick_notes(&mut self) -> Result<VaultInfo, (u16, String)> {
+        let meta = notekpr_core::engine::VaultMeta::named(notekpr_core::quick::NAME);
+        let (mut req, ring) =
+            notekpr_core::engine::new_vault(&self.account, &self.id, &meta, 1).unwrap();
+        req.kind = VaultKind::QuickNotes;
+        let info: VaultInfo = self
+            .api
+            .call(reqwest::Method::POST, "/vaults", Some(&req))
+            .await?;
+        self.keyrings.insert(req.id.clone(), ring);
+        Ok(info)
     }
 
     /// The vault's membership log as the server has it.

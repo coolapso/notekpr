@@ -212,11 +212,16 @@ pub(super) fn on_server_message(m: ServerMessage) {
                 if had_pending {
                     rescue(c, &vault_id, &object_id);
                 }
+                let quick = c.is_quick_notes(&vault_id);
                 let r = c.replicas.get_mut(&vault_id)?;
-                c.outboxes
-                    .entry(vault_id.clone())
-                    .or_default()
-                    .drop_object(r, &object_id);
+                let o = c.outboxes.entry(vault_id.clone()).or_default();
+                o.drop_object(r, &object_id);
+                // A note deleted for good makes room in the quick notes.
+                if quick && o.room_freed(r) > 0 {
+                    persist_pending(c, &vault_id);
+                    send_planned(c, &vault_id);
+                }
+                let r = c.replicas.get_mut(&vault_id)?;
                 let applied = r.apply_purge(&object_id, seq);
                 if had_pending {
                     // A push with updates of the purged note is refused as a
@@ -489,6 +494,10 @@ pub(super) fn on_synced(vault_id: &str, head: i64) {
         (rolled_back, applied)
     });
     after_apply(vault_id, applied);
+    // Caught up: files of the quick notes no note links to go.
+    if step(|c| c.is_quick_notes(vault_id)) {
+        leptos::task::spawn_local(crate::quick::drop_unlinked_files());
+    }
     if rolled_back {
         ui().warning.set(Some(
             "The server's copy of a vault is older than what this browser saw before (restored backup or a server problem). Your local changes are being re-sent.".into(),
@@ -782,6 +791,19 @@ async fn register_keys(vault_id: String, keys: Vec<notekpr_sync::NewKey>) {
             // Offline or a server problem: tried again with a later plan
             // (the next edit or reconnect).
             Err(e) if e.status == 0 || e.status >= 500 => {}
+            // The quick notes are full: the note stays on this device until
+            // there's room.
+            Err(e) if e.code == ERROR_LIMIT_REACHED && step(|c| c.is_quick_notes(&vault_id)) => {
+                step(|c| {
+                    if let Some(o) = c.outboxes.get_mut(&vault_id) {
+                        o.key_without_room(&k.object_id);
+                    }
+                });
+                error(format!(
+                    "{} The new quick note stays on this device until then.",
+                    e.message
+                ));
+            }
             // Wrapped under a replaced vault key (412), or refused; perhaps it
             // is registered and the answer got lost: fresh keys show
             // (`Outbox::keys_reloaded`).
@@ -832,8 +854,23 @@ pub fn limits() -> notekpr_sync::Limits {
     notekpr_sync::Limits::new(max_update_bytes()).with_snapshot(snapshot as usize)
 }
 
-/// Tell the user (once per update) about changes held back as too large.
+/// Tell the user (once per update) about changes held back: too large, or
+/// new quick notes without room.
 pub(super) fn report_held(c: &Core, vault_id: &str, held: &[notekpr_sync::Held]) {
+    let (no_room, held): (Vec<&notekpr_sync::Held>, Vec<&notekpr_sync::Held>) = held
+        .iter()
+        .partition(|h| h.reason == notekpr_sync::HoldReason::NoRoom);
+    if !no_room.is_empty() {
+        let limit = c
+            .vault_infos
+            .get(vault_id)
+            .map(|i| i.note_limit)
+            .unwrap_or_default();
+        error(format!(
+            "{} New quick notes stay on this device until then.",
+            notekpr_core::quick::full_message(limit)
+        ));
+    }
     let Some(biggest) = held.iter().max_by_key(|h| h.bytes) else {
         return;
     };

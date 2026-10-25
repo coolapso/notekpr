@@ -431,6 +431,14 @@ async fn a_file_replaced_by_a_symlink_is_not_trashed() {
     assert_eq!(note(&h, &vid, "A.md").await.as_deref(), Some("a2\n"));
 }
 
+/// The quick notes' names, sorted.
+async fn names(h: &notekpr_client::hub::Hub) -> Vec<String> {
+    let q = ops::list_quick_notes(h, 100).await.unwrap();
+    let mut n: Vec<String> = q.notes.into_iter().map(|n| n.title).collect();
+    n.sort();
+    n
+}
+
 async fn note_count(h: &notekpr_client::hub::Hub, vid: &str) -> usize {
     h.get(vid).unwrap().lock().await.notes().len()
 }
@@ -849,4 +857,112 @@ async fn a_note_renamed_in_the_folder_is_renamed_for_whom_it_is_shared_with() {
     assert_eq!(r.renamed, 1, "{r:?}");
     let shared = note_shares::shared_with_me(&carol).await.unwrap();
     assert_eq!(shared[0].title, "Winter soup");
+}
+
+/// The quick notes are a flat `Quick notes/` folder: new Markdown files
+/// become quick notes (while there's room), folders in it aren't synced,
+/// moving a file into a vault's folder moves the note, and deleting files
+/// deletes the notes for good — a few at a time; more at once are held.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn quick_notes_are_a_flat_folder_that_deletes_for_good() {
+    use notekpr_core::protocol::{InstanceSettingsUpdate, Limit};
+    let srv = start().await;
+    let alice = login(&srv, "alice").await;
+    manage::create_vault(&alice, "Home").await.unwrap();
+    let change = InstanceSettingsUpdate {
+        quick_notes_per_user: Some(Limit::Max(6)),
+        ..Default::default()
+    };
+    srv.state
+        .instance
+        .update(&srv.state.db, &change)
+        .await
+        .unwrap();
+    let h = hub(&alice).await;
+    let q = h.quick_notes().await.unwrap();
+    let qid = q.lock().await.id().to_string();
+    let home = h.resolve("Home").await.unwrap();
+    let hid = home.lock().await.id().to_string();
+    let root = srv.path("alice-mirror");
+    let mut mirror = Mirror::new(h.clone(), &root).await.unwrap();
+    mirror.reconcile_all(false).await.unwrap();
+    let dir = mirror.vault_dir(&qid).unwrap().to_path_buf();
+    assert_eq!(dir.file_name().unwrap(), "Quick notes");
+    let home_dir = mirror.vault_dir(&hid).unwrap().to_path_buf();
+
+    // Dropped files become quick notes; a folder in there doesn't.
+    for i in 1..=6 {
+        write(&dir.join(format!("idea {i}.md")), &format!("idea {i}\n"));
+    }
+    write(&dir.join("Later/kept.md"), "in a folder\n");
+    write(&dir.join("idea 7.md"), "one too many\n");
+    mirror.reconcile_all(true).await.unwrap();
+    let six: Vec<String> = (1..=6).map(|i| format!("idea {i}")).collect();
+    assert_eq!(names(&h).await, six, "full at 6, nothing from folders");
+    // The extra file waits on disk.
+    assert_eq!(read(&dir.join("idea 7.md")), "one too many\n");
+
+    // Moving a file into a vault's folder moves the note; there's room now.
+    std::fs::rename(dir.join("idea 1.md"), home_dir.join("idea 1.md")).unwrap();
+    mirror.reconcile_all(true).await.unwrap();
+    mirror.reconcile_all(true).await.unwrap();
+    assert_eq!(
+        note(&h, &hid, "idea 1.md").await.as_deref(),
+        Some("idea 1\n")
+    );
+    let now: Vec<String> = names(&h).await;
+    assert!(!now.contains(&"idea 1".to_string()), "{now:?}");
+    assert!(now.contains(&"idea 7".to_string()), "{now:?}");
+    // Deleted from the quick notes for good: nothing in their trash.
+    std::fs::remove_file(dir.join("idea 2.md")).unwrap();
+    mirror.reconcile_all(true).await.unwrap();
+    assert!(!names(&h).await.contains(&"idea 2".to_string()));
+    assert!(q.lock().await.trashed().is_empty());
+    assert_eq!(note_count(&h, &qid).await, 5);
+
+    // Many at once look like a sync tool gone wrong: held.
+    for i in 3..=6 {
+        std::fs::remove_file(dir.join(format!("idea {i}.md"))).unwrap();
+    }
+    let r = mirror.reconcile_all(true).await.unwrap();
+    assert_eq!(r.held, 4);
+    assert_eq!(note_count(&h, &qid).await, 5);
+}
+
+/// A file in `Quick notes/` goes up only once a quick note links to it; until
+/// then it waits on disk.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn quick_notes_folder_takes_files_only_for_their_notes() {
+    let srv = start().await;
+    let alice = login(&srv, "alice").await;
+    let h = hub(&alice).await;
+    let q = h.quick_notes().await.unwrap();
+    let qid = q.lock().await.id().to_string();
+    let root = srv.path("alice-mirror");
+    let mut mirror = Mirror::new(h.clone(), &root).await.unwrap();
+    mirror.reconcile_all(false).await.unwrap();
+    let dir = mirror.vault_dir(&qid).unwrap().to_path_buf();
+    let synced = |name: &'static str| {
+        let q = q.clone();
+        async move { q.lock().await.find(name).is_some() }
+    };
+
+    write(&dir.join("loose.pdf"), "a file of its own");
+    mirror.reconcile_all(true).await.unwrap();
+    assert!(!synced("loose.pdf").await);
+    assert_eq!(read(&dir.join("loose.pdf")), "a file of its own");
+    // A note and the picture it links to, in one look at the folder (the
+    // picture comes first on disk).
+    write(&dir.join("Receipt.md"), "Paid: ![](Photo.png)\n");
+    write(&dir.join("Photo.png"), "a picture");
+    mirror.ingest(&qid, false).await.unwrap();
+    assert!(synced("Receipt.md").await && synced("Photo.png").await);
+    assert!(!synced("loose.pdf").await);
+    // Once linked, the waiting file goes up too.
+    write(
+        &dir.join("Receipt.md"),
+        "Paid: ![](Photo.png) [[loose.pdf]]\n",
+    );
+    mirror.reconcile_all(true).await.unwrap();
+    assert!(synced("loose.pdf").await);
 }

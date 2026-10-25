@@ -34,6 +34,13 @@ pub async fn refresh_vaults() {
     // In parallel: each needs its own key request (and local copy read).
     futures::future::join_all(infos.into_iter().map(load_vault)).await;
     step(|c| publish_vaults(c));
+    // Quick notes are there from the start (once per person); ones deleted
+    // offline go for good now.
+    leptos::task::spawn_local(async {
+        if crate::quick::ensure().await.is_some() {
+            crate::quick::purge_deleted().await;
+        }
+    });
 }
 
 /// Load (or refresh) one vault's keys and metadata.
@@ -277,7 +284,21 @@ pub(super) async fn load_vault_with(info: VaultInfo, force: bool, keys: Option<V
             }
         });
     }
-    step(|c| c.vault_infos.insert(id, info));
+    step(|c| {
+        // A changed limit may have made room for quick notes waiting here.
+        let room = info.is_own_quick_notes(&c.user_id)
+            && c.vault_infos
+                .get(&id)
+                .is_some_and(|old| old.note_limit != info.note_limit);
+        c.vault_infos.insert(id.clone(), info);
+        if room
+            && let (Some(r), Some(o)) = (c.replicas.get_mut(&id), c.outboxes.get_mut(&id))
+            && o.room_freed(r) > 0
+        {
+            persist_pending(c, &id);
+            send_planned(c, &id);
+        }
+    });
 }
 
 /// Remove the cached blob URLs of decrypted attachments (of one vault, or
@@ -316,9 +337,11 @@ pub(super) fn drop_vault(c: &mut Core, v: &str) {
 
 pub fn publish_vaults(c: &Core) {
     let views = {
+        // The quick notes are no vault to the person (`crate::quick`).
         let mut v: Vec<VaultView> = c
             .vault_infos
             .values()
+            .filter(|i| !i.is_own_quick_notes(&c.user_id))
             .map(|i| {
                 let r = c.replicas.get(&i.id);
                 let meta = r.map(|r| &r.meta);

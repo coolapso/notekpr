@@ -314,7 +314,11 @@ pub fn NoteView(vault: String, note: String) -> impl IntoView {
     let title_text = RwSignal::new(String::new());
 
     let v = vault.clone();
-    let loaded = Memo::new(move |_| ui.vaults.get().iter().any(|x| x.id == v && x.loaded));
+    // (From the state, not the vault list: the quick notes aren't in it.)
+    let loaded = Memo::new(move |_| {
+        ui.vaults.track();
+        state::step(|c| c.loaded.contains(&v))
+    });
     let (v, n2) = (vault.clone(), note.clone());
     let exists = Memo::new(move |_| {
         ui.tree_rev.get();
@@ -577,6 +581,9 @@ pub fn NoteView(vault: String, note: String) -> impl IntoView {
     let fav2 = fav.clone();
     let more = RwSignal::new(false);
     super::close_on_outside(more);
+    // A quick note: never shared, no comments, deleted for good; it leaves
+    // the quick notes by moving to a vault.
+    let quick = state::step(|c| c.is_quick_notes(&vault));
     let (vm, nm) = (vault.clone(), note.clone());
     let (vs, vh, nh) = (vault.clone(), vault.clone(), note.clone());
     let (vfa, nfa) = (vault.clone(), note.clone());
@@ -604,7 +611,7 @@ pub fn NoteView(vault: String, note: String) -> impl IntoView {
                     <button class:on=move || ui.mode.get() == ViewMode::Reading title=format!("Reading view ({}+E)", util::mod_key()) aria-label="Reading view" aria-pressed=move || (ui.mode.get() == ViewMode::Reading).to_string() on:click=move |_| ui.mode.set(ViewMode::Reading)><Icon name="book"/></button>
                 </div>
                 <button class="icon-btn fav" class:on=fav.clone() title=move || if fav2() { "Remove from favorites" } else { "Add to favorites" } aria-label="Favorite" aria-pressed=move || fav().to_string() on:click=move |_| actions::toggle_favorite(&vfa, &nfa)><Icon name="star"/></button>
-                <Show when=move || state::step(|c| c.is_owner(&vs))>
+                <Show when=move || !quick && state::step(|c| c.is_owner(&vs))>
                     {
                         let (v, n) = (vault.clone(), note.clone());
                         let (v2, n2) = (vault.clone(), note.clone());
@@ -616,10 +623,10 @@ pub fn NoteView(vault: String, note: String) -> impl IntoView {
                             on:click=move |_| ui.modal.set(Some(Modal::ShareNote(v.clone(), n.clone())))><Icon name="share"/></button> }
                     }
                 </Show>
-                {comments_button(vcb.clone(), ncb.clone(), move || {
+                {(!quick).then(|| comments_button(vcb.clone(), ncb.clone(), move || {
                     let narrow = util::window().inner_width().ok().and_then(|w| w.as_f64()).unwrap_or(1200.0) <= 1100.0;
                     if narrow { ui.panel_overlay.set(true) } else { state::set_ui_prefs(|p| p.right_panel = true) }
-                })}
+                }))}
                 <button class="icon-btn" title="Version history" aria-label="Version history" on:click=move |_| ui.modal.set(Some(Modal::History(vh.clone(), nh.clone())))><Icon name="history"/></button>
                 <button class="icon-btn" class:on=move || ui.ui_prefs.get().right_panel || ui.panel_overlay.get() title=format!("Side panel ({}+\\)", util::mod_key()) aria-label="Side panel"
                     on:click=move |_| {
@@ -634,7 +641,7 @@ pub fn NoteView(vault: String, note: String) -> impl IntoView {
                             let (v2, n2) = (vm.clone(), nm.clone());
                             let (v3, n3) = (vm.clone(), nm.clone());
                             let (v4, n4) = (vm.clone(), nm.clone());
-                            let owner = state::step(|c| c.is_owner(&vm));
+                            let owner = !quick && state::step(|c| c.is_owner(&vm));
                             let share = (vm.clone(), nm.clone());
                             view! {
                                 <div class="menu right" on:click=move |_| more.set(false)>
@@ -658,10 +665,27 @@ pub fn NoteView(vault: String, note: String) -> impl IntoView {
                                         {
                                             let (v3, n3) = (v3.clone(), n3.clone());
                                             let (v4, n4) = (v4.clone(), n4.clone());
+                                            let (v5, n5) = (v3.clone(), n3.clone());
                                             view! {
                                                 <button on:click=move |_| open_icon.with_value(|f| f())><Icon name="smile"/>" Set icon…"</button>
-                                                <button on:click=move |_| ui.modal.set(Some(Modal::Move { vault: v3.clone(), id: n3.clone() }))><Icon name="move"/>" Move to…"</button>
-                                                <button class="danger" on:click=move |_| { actions::trash(&v4, &n4); state::navigate(Route::Vault(v4.clone())); }><Icon name="trash"/>" Move to trash"</button>
+                                                {(!quick).then(|| view! {
+                                                    <button on:click=move |_| ui.modal.set(Some(Modal::Move { vault: v3.clone(), id: n3.clone() }))><Icon name="move"/>" Move to…"</button>
+                                                })}
+                                                <button class="move-to-vault" on:click=move |_| ui.modal.set(Some(Modal::MoveToVault { vault: v5.clone(), id: n5.clone() }))><Icon name="file-plus"/>" Move to vault…"</button>
+                                                {if quick {
+                                                    view! { <button class="danger" on:click=move |_| {
+                                                        if util::confirm("Delete this quick note for good? Quick notes have no trash.") {
+                                                            let n = n4.clone();
+                                                            leptos::task::spawn_local(async move {
+                                                                if crate::quick::delete(&n).await {
+                                                                    state::success("Deleted.");
+                                                                }
+                                                            });
+                                                        }
+                                                    }><Icon name="trash"/>" Delete for good"</button> }.into_any()
+                                                } else {
+                                                    view! { <button class="danger" on:click=move |_| { actions::trash(&v4, &n4); state::navigate(Route::Vault(v4.clone())); }><Icon name="trash"/>" Move to trash"</button> }.into_any()
+                                                }}
                                             }
                                         }
                                     </Show>
@@ -689,7 +713,11 @@ pub fn NoteView(vault: String, note: String) -> impl IntoView {
                                     } else {
                                         view! { <p>"This note doesn't exist (anymore)."</p> }.into_any()
                                     }}
-                                    <button class="btn ghost" on:click=move |_| state::navigate(Route::Vault(vback.clone()))>"Back to vault"</button>
+                                    {if quick {
+                                        view! { <button class="btn ghost" on:click=move |_| state::navigate(Route::Quick)>"Back to quick notes"</button> }.into_any()
+                                    } else {
+                                        view! { <button class="btn ghost" on:click=move |_| state::navigate(Route::Vault(vback.clone()))>"Back to vault"</button> }.into_any()
+                                    }}
                                 </div>
                             }.into_any();
                         }

@@ -935,12 +935,18 @@ def test_code_wrapping(env):
             const lefts = [...new Set(rows.values())];
             const tops = rows;
             const guide = lc.parentElement.querySelector('.igs').getBoundingClientRect();
-            return [tops.size, lefts, Math.round(guide.right), getComputedStyle(lc).whiteSpace];
+            const ind = lc.parentElement.querySelector('.ind');
+            const i = ind.getBoundingClientRect();
+            return [tops.size, lefts, [guide.left, guide.right], [i.left, i.width, ind.textContent.length]];
         """
-        n, lefts, guide_right, ws = b.js(rows)
+        n, lefts, guide, ind = b.js(rows)
         check(n > 1, f"a long line wraps by default ({n} rows)")
         check(len(lefts) == 1, f"wrapped rows start under the text, not under the indentation ({lefts})")
-        check(guide_right <= lefts[0], "the indentation guide stays clear of the text")
+        # Measured against the code's own font: a guide drawn with another
+        # width of a column (Chromium 154 took `ch` as 0.5em) drifts.
+        column = ind[1] / ind[2]
+        check(abs(guide[0] - (ind[0] + column / 2)) <= 1 and abs(guide[1] - lefts[0]) <= 1,
+              f"the indentation guide is drawn half a column into the indentation and ends where the text starts ({guide}, {ind}, {lefts})")
         b.shot("code-wrapping")
         # wrap=false: the block scrolls sideways, its lines together.
         # Ctrl+Home reaches the fence even while it is hidden behind the header.
@@ -950,7 +956,7 @@ def test_code_wrapping(env):
         b.chord(KEYS["ctrl"], KEYS["end"])
         time.sleep(0.6)
         check(editor_text(b).startswith("```py wrap=false\n"), "Ctrl+Home goes to the fence: wrap=false after the language")
-        n, lefts, guide_right, ws = b.js(rows)
+        n, lefts, guide, ind = b.js(rows)
         check(n == 1, f"wrap=false: the long line doesn't wrap ({n} rows)")
         lx = "Array.from(document.querySelectorAll('.ed .ln.code > .lx'))"
         widths = b.js(f"return {lx}.map(x => [x.scrollWidth, x.clientWidth])")

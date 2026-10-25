@@ -627,9 +627,10 @@ button.list-row:hover:not(:disabled) { background: var(--bg-2); }
 .reading .codeblock.nonum .cl::before, .no-code-numbers .reading .cl::before { content: none; }
 .reading .cl.chl { background: var(--code-hl); box-shadow: inset 3px 0 var(--accent); }
 /* Indentation guides: an empty element per line of code (no text), a line
-   at the start of each indentation level (--ig levels, --iu columns each). */
+   half a column into each indentation level (--ig levels, --iu columns
+   each), ending where the indentation does. */
 .ed.live .ln.code > .igs, .ed.live .ln.code > .lx > .igs, .reading .cl > .igs {
-  display: block; position: absolute; top: 0; bottom: 0; left: calc(var(--code-pad) + 0.5ch); width: calc(var(--ig) * var(--iu));
+  display: block; position: absolute; top: 0; bottom: 0; left: calc(var(--code-pad) + 0.5ch); width: calc(var(--ig) * var(--iu) - 0.5ch);
   background: repeating-linear-gradient(to right, var(--guide) 0 1px, transparent 1px var(--iu)); pointer-events: none;
 }
 .ed.live .ln.code > .lx > .igs { left: 0.5ch; }

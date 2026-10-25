@@ -526,6 +526,12 @@ pub(super) fn restore_stored_pending(c: &mut Core, vault_id: &str) -> engine::Ap
             return applied;
         };
         for (key, items) in stored {
+            // This page's own: what it hasn't sent is in `pending`, the rest
+            // was stored meanwhile (a vault written to before its first
+            // catch-up ended, say a brand-new one).
+            if storage::is_own_pending_key(&uid, vault_id, &key) {
+                continue;
+            }
             let mut complete = true;
             for p in items {
                 if r.pending
@@ -567,7 +573,7 @@ pub(super) fn restore_stored_pending(c: &mut Core, vault_id: &str) -> engine::Ap
                     Err(_) => complete = false,
                 }
             }
-            if complete && !storage::is_own_pending_key(&uid, vault_id, &key) {
+            if complete {
                 done_keys.push(key);
             }
         }

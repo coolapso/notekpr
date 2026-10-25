@@ -11,6 +11,7 @@ use crate::util;
 use crate::views::SyncStatus;
 use crate::views::dialogs::Dialog;
 use crate::views::focus_on_mount;
+use crate::views::home::note_card;
 use crate::views::icons::Icon;
 
 /// The quick notes (newest first) and how many there may be, recomputed when
@@ -139,18 +140,16 @@ pub fn QuickPage() -> impl IntoView {
                             <Icon name="check"/>" Save"</button>
                     </div>
                 </form>
-                <div class="qn-head">
-                    <h2 class="grow">
-                        <span class="qn-count" class:near=move || nearly_full.get() class:full=move || full.get()
-                            title="How many quick notes there are, and may be">{counter}</span>
-                        {move || {
-                            let (_, notes, limit) = data.get();
-                            if notes.len() == 1 && limit.max().is_none() { " quick note" } else { " quick notes" }
-                        }}
-                    </h2>
-                </div>
+                <h2 class="qn-head">
+                    <span class="qn-count" class:near=move || nearly_full.get() class:full=move || full.get()
+                        title="How many quick notes there are, and may be">{counter}</span>
+                    {move || {
+                        let (_, notes, limit) = data.get();
+                        if notes.len() == 1 && limit.max().is_none() { " quick note" } else { " quick notes" }
+                    }}
+                </h2>
                 <p class="muted small qn-explain">"Quick notes are yours alone. Move one to a vault to keep it, share it or comment on it; deleting one deletes it for good."</p>
-                <div class="qn-cards">
+                <div class="note-list">
                     {move || data.get().1.into_iter().map(|q| view! { <QuickCard q=q/> }).collect_view()}
                 </div>
             </div>
@@ -158,42 +157,35 @@ pub fn QuickPage() -> impl IntoView {
     }
 }
 
+/// A quick note: a vault's note card, with its buttons over the corner.
 #[component]
 fn QuickCard(q: QuickNote) -> impl IntoView {
     let ui = ui();
-    let (v, id) = (q.vault.clone(), q.id.clone());
-    let (v2, id2) = (q.vault.clone(), q.id.clone());
-    let id3 = q.id.clone();
+    let (v, id) = (q.vault.clone(), q.entry.id.clone());
+    let id2 = id.clone();
+    let badge = q.waiting.then_some((
+        "this device only",
+        "Made while the quick notes were full: on this device until there's room",
+    ));
     view! {
         <div class="qn-card">
-            <button class="qn-open" title=format!("Open {}", q.title) on:click=move |_| state::navigate(Route::Note(v.clone(), id.clone()))>
-                <span class="qn-text">{q.preview.clone()}</span>
-                {(!q.rest.is_empty()).then(|| view! { <span class="qn-rest">{q.rest.clone()}</span> })}
-            </button>
-            <div class="qn-foot">
-                <span class="qn-meta">
-                    <span class="qn-time" title=util::absolute_time(q.created)>{util::relative_time(q.created)}</span>
-                    {q.waiting.then(|| view! {
-                        <span class="pill qn-waiting" title="Made while the quick notes were full: on this device until there's room">"this device only"</span>
-                    })}
-                </span>
-                <span class="qn-actions">
-                    <button class="btn ghost tiny qn-move" title="Move to a vault as a regular note"
-                        on:click=move |_| ui.modal.set(Some(Modal::MoveToVault { vault: v2.clone(), id: id2.clone() }))>
-                        <Icon name="file-plus"/>" Move to vault…"</button>
-                    <button class="btn ghost tiny danger qn-delete" title="Delete for good"
-                        on:click=move |_| {
-                            if util::confirm("Delete this quick note for good? Quick notes have no trash.") {
-                                let id = id3.clone();
-                                leptos::task::spawn_local(async move {
-                                    if quick::delete(&id).await {
-                                        state::success("Deleted.");
-                                    }
-                                });
-                            }
-                        }>
-                        <Icon name="trash"/>" Delete"</button>
-                </span>
+            {note_card(q.vault, q.entry, &q.text, badge)}
+            <div class="qn-actions">
+                <button class="icon-btn tiny qn-move" title="Move to a vault…" aria-label="Move to a vault"
+                    on:click=move |_| ui.modal.set(Some(Modal::MoveToVault { vault: v.clone(), id: id.clone() }))>
+                    <Icon name="file-plus"/></button>
+                <button class="icon-btn tiny qn-delete" title="Delete for good" aria-label="Delete for good"
+                    on:click=move |_| {
+                        if util::confirm("Delete this quick note for good? Quick notes have no trash.") {
+                            let id = id2.clone();
+                            leptos::task::spawn_local(async move {
+                                if quick::delete(&id).await {
+                                    state::success("Deleted.");
+                                }
+                            });
+                        }
+                    }>
+                    <Icon name="trash"/></button>
             </div>
         </div>
     }

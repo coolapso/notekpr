@@ -1351,7 +1351,7 @@ def test_offline_start(env):
 
 def test_quick_notes(env):
     b, m = Browser(), None
-    cards = "return Array.from(document.querySelectorAll('.qn-card .qn-text')).map(e => e.textContent)"
+    cards = "return Array.from(document.querySelectorAll('.qn-card .nc-snip')).map(e => e.textContent)"
     try:
         signup(b, uniq("quinn"))
         # The shortcut, even from inside the editor: a new quick note, ready to type.
@@ -1392,24 +1392,26 @@ def test_quick_notes(env):
         b.keys("Garden plan" + KEYS["enter"] + "tomatoes and beans")
         b.chord(KEYS["ctrl"], KEYS["enter"])
         b.wait("return document.querySelector('.quick-capture textarea').value === ''", 5, "the box is cleared")
-        b.wait(cards + ".join('|') === 'Garden plan|Call the dentist'", 10, "two cards, newest first")
+        b.wait(cards + ".join('|') === 'Garden plan tomatoes and beans|Call the dentist'", 10, "two cards, newest first")
         check(b.js("return location.pathname") == "/quick", "Ctrl+Enter saves a quick note without leaving the page and clears the box")
-        check("tomatoes and beans" in b.js("return document.querySelector('.qn-card .qn-rest').textContent"), "cards show more of the text")
+        check(b.js("return Array.from(document.querySelectorAll('.qn-card .nc-title')).every(t => /^\\d{4}-\\d\\d-\\d\\d \\d\\d\\.\\d\\d/.test(t.textContent))"),
+              "cards are a vault's note cards: the note's name, then the start of its text")
         b.keys("Old thought")
         b.click(".quick-capture button[type=submit]")
-        b.wait(cards + ".join('|') === 'Old thought|Garden plan|Call the dentist'", 10, "three cards")
+        b.wait(cards + ".join('|') === 'Old thought|Garden plan tomatoes and beans|Call the dentist'", 10, "three cards")
         b.wait("return document.activeElement === document.querySelector('.quick-capture textarea')", 5, "focus back in the box")
         check(True, "the Save button saves too and leaves the focus in the box")
         clash = b.js("""return Array.from(document.querySelectorAll('.qn-card')).filter(c => {
-            const time = c.querySelector('.qn-time'), t = time.getBoundingClientRect();
-            const a = c.querySelector('.qn-actions').getBoundingClientRect();
-            const overlap = t.right > a.left && t.left < a.right && t.bottom > a.top && t.top < a.bottom;
-            return overlap || time.getClientRects().length != 1;
+            const meta = c.querySelector('.nc-meta'), r = document.createRange();
+            r.selectNodeContents(meta);
+            const t = r.getBoundingClientRect(), a = c.querySelector('.qn-actions').getBoundingClientRect();
+            const overlap = t.right > a.left && t.bottom > a.top && t.top < a.bottom;
+            return overlap || meta.querySelector('span').getClientRects().length != 1;
         }).length""")
         b.shot("quick-notes-cards")
         check(clash == 0, "on narrow cards the time stays on one line, clear of the buttons")
         # A card opens its note.
-        b.click_el(b.find_text(".qn-open", "Garden plan"))
+        b.click_el(b.find_text(".qn-card .note-card", "Garden plan"))
         b.wait("return !!document.querySelector('.note-title') && document.querySelector('.note-title').value !== ''", 10, "the card opens its note")
         check(editor_text(b) == "Garden plan\ntomatoes and beans", "a card opens its note")
         b.js("history.back()")

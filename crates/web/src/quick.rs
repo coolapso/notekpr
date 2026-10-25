@@ -10,25 +10,21 @@
 use std::cell::Cell;
 
 use leptos::prelude::*;
-use notekpr_core::doc::EntryKind;
+use notekpr_core::doc::{Entry, EntryKind};
 use notekpr_core::protocol::{Limit, VaultKind};
 use notekpr_core::quick as rules;
 
 use crate::actions;
 use crate::state::{self, Route, ViewMode, step};
 
-pub use notekpr_core::quick::{NAME, preview, rest, suggested_title};
+pub use notekpr_core::quick::{NAME, suggested_title};
 
 /// A quick note for the views.
 #[derive(Clone, Debug, PartialEq)]
 pub struct QuickNote {
     pub vault: String,
-    pub id: String,
-    pub title: String,
-    pub preview: String,
-    pub rest: String,
-    pub created: i64,
-    pub modified: i64,
+    pub entry: Entry,
+    pub text: String,
     /// Made here while there was no room: on this device only, for now.
     pub waiting: bool,
 }
@@ -132,18 +128,11 @@ pub fn notes(limit: usize) -> Vec<QuickNote> {
             .collect::<Vec<_>>()
     });
     list.into_iter()
-        .map(|(e, text, waiting)| {
-            let title = e.title().to_string();
-            QuickNote {
-                vault: vault.clone(),
-                preview: preview(&text, &title),
-                rest: rest(&text),
-                id: e.id,
-                title,
-                created: e.created,
-                modified: e.modified,
-                waiting,
-            }
+        .map(|(entry, text, waiting)| QuickNote {
+            vault: vault.clone(),
+            entry,
+            text,
+            waiting,
         })
         .collect()
 }
@@ -270,7 +259,6 @@ mod tests {
     #[test]
     fn the_rules_are_the_core_ones() {
         assert_eq!(NAME, "Quick notes");
-        assert_eq!(preview("# Big idea\nbody", "t"), "Big idea");
         assert_eq!(suggested_title("Garden plan\nmore"), "Garden plan");
     }
 }

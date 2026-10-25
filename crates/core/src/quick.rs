@@ -200,17 +200,6 @@ pub fn preview(text: &str, title: &str) -> String {
         .unwrap_or_else(|| title.to_string())
 }
 
-/// The text after the preview line, joined into one line (card snippets).
-pub fn rest(text: &str) -> String {
-    clip(
-        &content_lines(&markdown::shown_text(text))
-            .skip(1)
-            .collect::<Vec<_>>()
-            .join(" "),
-        280,
-    )
-}
-
 /// A suggested note name for moving a quick note to a vault: its first
 /// line, without characters that break file names or `[[links]]`.
 pub fn suggested_title(text: &str) -> String {
@@ -357,8 +346,6 @@ mod tests {
         let long = "word ".repeat(100);
         let p = preview(&long, "t");
         assert!(p.chars().count() <= 161 && p.ends_with('…'), "{p}");
-        assert_eq!(rest("Title line\n\nsecond\n- third"), "second third");
-        assert_eq!(rest("only one"), "");
     }
 
     #[test]

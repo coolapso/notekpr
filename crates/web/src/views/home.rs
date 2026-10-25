@@ -1,7 +1,7 @@
 //! Home (all vaults), a vault's overview page, and the trash.
 
 use leptos::prelude::*;
-use notekpr_core::doc::EntryKind;
+use notekpr_core::doc::{Entry, EntryKind};
 use notekpr_core::protocol::Role;
 
 use crate::actions;
@@ -150,19 +150,8 @@ pub fn VaultHome(vault: String) -> impl IntoView {
                             view! {
                                 <div class="note-list">
                                     {items.into_iter().map(|e| {
-                                        let (v2, id) = (v.clone(), e.id.clone());
-                                        let folder = notekpr_core::paths::parent(&e.path).to_string();
                                         let text = step(|c| c.replicas.get(&v).map(|r| r.note_text(&e.id))).unwrap_or_default();
-                                        // As shown: without HTML tags (colors).
-                                        let text = notekpr_core::markdown::shown_text(&text);
-                                        let snippet: String = text.lines().filter(|l| !l.trim().is_empty() && !l.starts_with('#') && !l.starts_with("---")).take(2).collect::<Vec<_>>().join(" ").chars().take(140).collect();
-                                        view! {
-                                            <button class="note-card" on:click=move |_| state::navigate(Route::Note(v2.clone(), id.clone()))>
-                                                <div class="nc-title">{e.icon.clone().map(|i| view! { <span class="entry-icon" aria-hidden="true">{i}</span> })}{e.title().to_string()}</div>
-                                                <div class="nc-snip">{snippet}</div>
-                                                <div class="nc-meta">{if folder.is_empty() { String::new() } else { format!("{folder} · ") }}{util::relative_time(e.modified)}</div>
-                                            </button>
-                                        }
+                                        note_card(v.clone(), e, &text, None)
                                     }).collect_view()}
                                 </div>
                             }.into_any()
@@ -180,6 +169,41 @@ pub fn VaultHome(vault: String) -> impl IntoView {
                 }}
             </div>
         </div>
+    }
+}
+
+/// A note as a card (a vault's recently edited notes, the quick notes): its
+/// icon and title, the start of its `text`, where it is and when it
+/// changed, then `badge` (a pill: its text and what it means), if any.
+pub fn note_card(
+    vault: String,
+    e: Entry,
+    text: &str,
+    badge: Option<(&'static str, &'static str)>,
+) -> impl IntoView + use<> {
+    let id = e.id.clone();
+    let folder = notekpr_core::paths::parent(&e.path).to_string();
+    // As shown: without HTML tags (colors).
+    let text = notekpr_core::markdown::shown_text(text);
+    let snippet: String = text
+        .lines()
+        .filter(|l| !l.trim().is_empty() && !l.starts_with('#') && !l.starts_with("---"))
+        .take(2)
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .take(140)
+        .collect();
+    view! {
+        <button class="note-card" on:click=move |_| state::navigate(Route::Note(vault.clone(), id.clone()))>
+            <div class="nc-title">{e.icon.clone().map(|i| view! { <span class="entry-icon" aria-hidden="true">{i}</span> })}{e.title().to_string()}</div>
+            <div class="nc-snip">{snippet}</div>
+            <div class="nc-meta">
+                {if folder.is_empty() { String::new() } else { format!("{folder} · ") }}
+                <span title=util::absolute_time(e.modified)>{util::relative_time(e.modified)}</span>
+                {badge.map(|(t, why)| view! { <span class="pill" title=why>{t}</span> })}
+            </div>
+        </button>
     }
 }
 

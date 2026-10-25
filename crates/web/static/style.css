@@ -348,24 +348,18 @@ button.list-row:hover:not(:disabled) { background: var(--bg-2); }
 .qn-count { white-space: nowrap; }
 .qn-count.near { color: var(--warn); }
 .qn-count.full { color: var(--danger); }
-.qn-explain { margin: 4px 0 0; }
-.qn-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 24px; }
-.page-body .qn-head h2 { margin: 0; }
-.qn-head .check { margin: 0; }
-.qn-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 10px; margin-top: 10px; }
-.qn-card { display: flex; flex-direction: column; min-width: 0; min-height: 110px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg); overflow: hidden; }
-.qn-card:hover { border-color: var(--border-strong); }
-.qn-open { flex: 1; display: flex; flex-direction: column; gap: 4px; min-width: 0; padding: 12px 14px 6px; border: none; background: none; text-align: left; cursor: pointer; }
-.qn-text, .qn-rest { overflow: hidden; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; }
-.qn-text { font-weight: 600; }
-.qn-rest { color: var(--fg-2); font-size: 13px; }
-/* The time, and the buttons together: below it when the card is narrow. */
-.qn-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 6px; padding: 2px 6px 6px 14px; color: var(--muted); font-size: 12px; }
-.qn-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin-right: auto; }
-.qn-time { white-space: nowrap; }
-.qn-meta .pill { margin: 0; }
-.qn-actions { display: flex; gap: 2px; margin-left: auto; }
-.qn-foot .btn .ic { width: 14px; height: 14px; }
+.qn-explain { margin: -4px 0 10px; }
+/* A quick note's card is a vault's note card (.note-card), with its buttons
+   over the corner while it is pointed at (always on touch screens). */
+.qn-card { position: relative; display: flex; min-width: 0; }
+.qn-card > .note-card { flex: 1; min-width: 0; }
+.qn-card:hover > .note-card { border-color: var(--border-strong); background: var(--bg-2); }
+.qn-actions { position: absolute; right: 8px; bottom: 8px; display: flex; gap: 2px; border-radius: 6px; background: var(--bg); opacity: 0; transition: opacity 0.12s; }
+.qn-card:hover .qn-actions, .qn-card:focus-within .qn-actions { opacity: 1; background: var(--bg-2); }
+.qn-actions .icon-btn { color: var(--muted); }
+.qn-actions .icon-btn:hover { color: var(--fg); }
+.qn-actions .qn-delete:hover { color: var(--danger); }
+.nc-meta .pill { margin-left: 6px; }
 
 /* note page */
 /* Pages are as tall as what's on them, not squeezed to the window by
@@ -874,9 +868,7 @@ table.keys td:first-child { white-space: nowrap; width: 1%; padding-right: 16px;
   .ed.live .ln.table > .td > .tc, .reading .tc { width: max-content; max-width: 12em; min-width: min-content; }
   .ed.live .ln.table > .td.ac > .tc, .reading .tc.ac { margin-inline: auto; }
   .ed.live .ln.table > .td.ar > .tc, .reading .tc.ar { margin-left: auto; }
-  .qn-cards { grid-template-columns: 1fr; }
   .qc-bar .btn { flex: 1; padding: 10px 14px; }
-  .qn-foot .btn.tiny { padding: 6px 9px; font-size: 13px; }
 }
 .note-title:focus-visible { box-shadow: 0 2px 0 0 var(--accent); }
 
@@ -906,7 +898,7 @@ label.btn.disabled { opacity: .6; pointer-events: none; }
 .note-icon.add { color: var(--muted); opacity: .35; }
 .note-icon.add .ic { width: 26px; height: 26px; }
 .note-title-row:hover .note-icon.add, .note-icon.add:focus-visible { opacity: 1; }
-@media (hover: none) { .note-icon.add { opacity: .6; } }
+@media (hover: none) { .note-icon.add { opacity: .6; } .qn-actions { opacity: 1; } .qn-actions .icon-btn.tiny { width: 32px; height: 32px; } }
 .note-icon:hover:not(:disabled) { background: var(--bg-3); }
 .note-icon:disabled { cursor: default; }
 .nc-title .entry-icon { width: auto; margin-right: 6px; font-size: 1em; }

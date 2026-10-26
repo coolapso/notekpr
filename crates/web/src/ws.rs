@@ -87,6 +87,16 @@ impl Socket {
         self.state.get()
     }
 
+    /// No connection to the server: it was lost or couldn't be made, or the
+    /// server is restarting (not while the first one is being made).
+    pub fn lost(&self) -> bool {
+        match self.state.get() {
+            ConnState::Open => false,
+            ConnState::Offline => true,
+            ConnState::Connecting => self.restart_at.get() > 0,
+        }
+    }
+
     /// True once the server accepted our token on the current connection.
     pub fn is_ready(&self) -> bool {
         self.ready.get() && self.state.get() == ConnState::Open

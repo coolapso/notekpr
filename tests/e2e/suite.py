@@ -1403,6 +1403,8 @@ def test_offline_tabs(env):
         b.switch(tab_b)
         env.start_server()
         b.go(url)
+        b.find_text(".toast", "Sending changes saved while offline", 30)
+        check(True, "taking over changes saved while offline says so")
         b.wait("const t = document.querySelector('.ed') && document.querySelector('.ed').textContent; return t && t.includes('fromA') && t.includes('fromB')", 30,
                "both offline edits after reconnecting")
         check(True, "unsent changes of a closed tab survive another tab's")
@@ -1573,6 +1575,11 @@ def test_quick_notes(env):
         signup(m, uniq("quip"))
         m.go(env.url + "quick")
         m.wait("const t = document.querySelector('.quick-capture textarea'); return t && !t.disabled", 20, "the capture box")
+        # Loaded right after signing up: what that page hadn't sent yet is
+        # sent without claiming anyone was offline.
+        time.sleep(1)
+        check(not m.js("return Array.from(document.querySelectorAll('.toast')).some(t => t.textContent.includes('offline'))"),
+              "a page taking over changes an online page hadn't sent doesn't say \"offline\"")
         m.click(".quick-capture textarea")
         m.keys("Idea on the go")
         m.click(".quick-capture button[type=submit]")

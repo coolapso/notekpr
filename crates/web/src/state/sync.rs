@@ -16,6 +16,9 @@ pub(super) fn connect_socket() {
     let on_state = Rc::new(|s: ConnState| {
         let ui = ui();
         ui.conn.set(s);
+        if s != ConnState::Open {
+            step(store_pending_offline);
+        }
     });
     let sock = Socket::new(token, on_message, on_state);
     step(|c| c.socket = Some(sock));
@@ -516,10 +519,11 @@ pub(super) fn show_loaded(c: &Core, vault_id: &str) {
 }
 
 /// Updates left unsent by earlier page loads or other tabs (closed while
-/// offline): apply them locally (they are ours) and send them again. Another
-/// tab still sending the same updates is harmless: the server keeps one copy
-/// per update id. Their storage keys are removed once everything in them is
-/// stored under this page's key. Returns what was applied (for
+/// offline, or before they were sent): apply them locally (they are ours)
+/// and send them again, saying so only for those saved while offline.
+/// Another tab still sending the same updates is harmless: the server keeps
+/// one copy per update id. Their storage keys are removed once everything
+/// in them is stored under this page's key. Returns what was applied (for
 /// [`after_apply`]).
 pub(super) fn restore_stored_pending(c: &mut Core, vault_id: &str) -> engine::Applied {
     let uid = c.user_id.clone();
@@ -529,12 +533,15 @@ pub(super) fn restore_stored_pending(c: &mut Core, vault_id: &str) -> engine::Ap
         return applied;
     }
     let mut adopted = 0;
+    // Some were saved while that page had no connection, not only on their
+    // way when it was closed (say reloaded right after typing).
+    let mut offline = false;
     let mut done_keys = Vec::new();
     {
         let Some(r) = c.replicas.get_mut(vault_id) else {
             return applied;
         };
-        for (key, items) in stored {
+        for (key, page) in stored {
             // This page's own: what it hasn't sent is in `pending`, the rest
             // was stored meanwhile (a vault written to before its first
             // catch-up ended, say a brand-new one).
@@ -542,7 +549,7 @@ pub(super) fn restore_stored_pending(c: &mut Core, vault_id: &str) -> engine::Ap
                 continue;
             }
             let mut complete = true;
-            for p in items {
+            for p in page.updates {
                 if r.pending
                     .iter()
                     .any(|x| x.client_update_id == p.client_update_id)
@@ -552,6 +559,7 @@ pub(super) fn restore_stored_pending(c: &mut Core, vault_id: &str) -> engine::Ap
                 match r.decrypt_object(Purpose::Update, &p.object_id, &p.payload) {
                     Ok(plain) => {
                         adopted += 1;
+                        offline |= page.offline;
                         if let Some(note) = notekpr_core::protocol::comments_note(&p.object_id) {
                             // Shown again, marked as not stored yet.
                             let pending = engine::Pending {
@@ -596,10 +604,35 @@ pub(super) fn restore_stored_pending(c: &mut Core, vault_id: &str) -> engine::Ap
             storage::remove_pending_key(k);
         }
     }
-    if adopted > 0 {
-        info("Sending changes saved while you were offline.");
+    if offline {
+        info("Sending changes saved while offline.");
     }
     applied
+}
+
+/// Whether the connection to the server is lost (see [`Socket::lost`]).
+fn connection_lost(c: &Core) -> bool {
+    c.socket.as_ref().is_some_and(|s| s.lost())
+}
+
+/// The connection is lost: what this page hasn't sent now waits for it.
+/// Stored again marked so, for a page taking it over after this one is
+/// closed.
+fn store_pending_offline(c: &mut Core) {
+    if !connection_lost(c) {
+        return;
+    }
+    let unsent: Vec<String> = c
+        .replicas
+        .iter()
+        .filter(|(v, r)| {
+            !r.pending.is_empty() || c.outboxes.get(*v).is_some_and(|o| !o.held.is_empty())
+        })
+        .map(|(v, _)| v.clone())
+        .collect();
+    for v in unsent {
+        persist_pending(c, &v);
+    }
 }
 
 /// Send everything not acknowledged again (after a reconnect, new keys or a
@@ -1073,11 +1106,11 @@ pub(super) fn persist_pending(c: &mut Core, vault_id: &str) -> bool {
     let copies = c.replicas.get(vault_id).map(|r| {
         let empty = notekpr_sync::Outbox::default();
         let o = c.outboxes.get(vault_id).unwrap_or(&empty);
-        notekpr_sync::stored_copies(r, o, &previous)
+        notekpr_sync::stored_copies(r, o, &previous.updates)
     });
     let ups = match copies {
         // The replica is gone (e.g. the last note shared with us from this vault).
-        None => return storage::set_pending(&uid, vault_id, &[]).is_ok(),
+        None => return storage::set_pending(&uid, vault_id, &[], false).is_ok(),
         // Never replace stored changes with nothing because of an error.
         Some(None) => {
             util::warn("unsent updates could not be encrypted; keeping the stored copies");
@@ -1085,7 +1118,18 @@ pub(super) fn persist_pending(c: &mut Core, vault_id: &str) -> bool {
         }
         Some(Some(ups)) => ups,
     };
-    if let Err(e) = storage::set_pending(&uid, vault_id, &ups) {
+    // Saved without a connection now, or before and still not sent.
+    let offline = connection_lost(c)
+        || (previous.offline && {
+            let before: HashSet<&str> = previous
+                .updates
+                .iter()
+                .map(|p| p.client_update_id.as_str())
+                .collect();
+            ups.iter()
+                .any(|u| before.contains(u.client_update_id.as_str()))
+        });
+    if let Err(e) = storage::set_pending(&uid, vault_id, &ups, offline) {
         util::warn(&format!("could not store unsent changes: {e}"));
         storage_full(c);
         return false;

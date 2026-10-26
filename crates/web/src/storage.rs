@@ -6,7 +6,8 @@
 //! * Device key: `localStorage`, keyed by user id. It never leaves the browser.
 //!   Anyone with access to this browser profile can use it, as with any web
 //!   app holding keys; rely on OS account security and disk encryption.
-//! * Unsent updates: `localStorage`, already encrypted (vault or note key).
+//! * Unsent updates: `localStorage`, already encrypted (vault or note key),
+//!   marked when some were saved without a connection.
 //! * Keys of new notes not registered yet: `localStorage`, wrapped under the
 //!   vault key.
 //! * Only with "Keep this browser usable offline": what starting without the
@@ -156,16 +157,42 @@ fn pending_key(user_id: &str, vault_id: &str) -> String {
     PAGE.with(|p| format!("notekpr.pending.{user_id}.{vault_id}.{p}"))
 }
 
+/// A page's unsent updates of a vault, as stored.
+#[derive(Deserialize, Default)]
+pub struct StoredPending {
+    pub updates: Vec<PushUpdate>,
+    /// Some were saved while the page had no connection: they wait for it
+    /// rather than being on their way (a page taking them over says so).
+    #[serde(default)]
+    pub offline: bool,
+}
+
+#[derive(Serialize)]
+struct StoringPending<'a> {
+    updates: &'a [PushUpdate],
+    offline: bool,
+}
+
+fn read_pending(key: &str) -> Option<StoredPending> {
+    let s = get(local(), key)?;
+    serde_json::from_str(&s).ok().or_else(|| {
+        // Older versions stored the updates alone (and only said "offline").
+        let updates = serde_json::from_str(&s).ok()?;
+        Some(StoredPending {
+            updates,
+            offline: true,
+        })
+    })
+}
+
 /// This page's unsent updates of a vault.
-pub fn pending(user_id: &str, vault_id: &str) -> Vec<PushUpdate> {
-    get(local(), &pending_key(user_id, vault_id))
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_default()
+pub fn pending(user_id: &str, vault_id: &str) -> StoredPending {
+    read_pending(&pending_key(user_id, vault_id)).unwrap_or_default()
 }
 
 /// Unsent updates of a vault stored by any page (earlier loads, other tabs,
 /// and the single key of older versions), by storage key.
-pub fn all_pending(user_id: &str, vault_id: &str) -> Vec<(String, Vec<PushUpdate>)> {
+pub fn all_pending(user_id: &str, vault_id: &str) -> Vec<(String, StoredPending)> {
     let Some(s) = local() else { return vec![] };
     let legacy = format!("notekpr.pending.{user_id}.{vault_id}");
     let prefix = format!("{legacy}.");
@@ -175,10 +202,7 @@ pub fn all_pending(user_id: &str, vault_id: &str) -> Vec<(String, Vec<PushUpdate
         .filter(|k| *k == legacy || k.starts_with(&prefix))
         .collect();
     keys.into_iter()
-        .filter_map(|k| {
-            let v = serde_json::from_str(&get(local(), &k)?).ok()?;
-            Some((k, v))
-        })
+        .filter_map(|k| Some((k.clone(), read_pending(&k)?)))
         .collect()
 }
 
@@ -193,15 +217,26 @@ pub fn remove_pending_key(key: &str) {
     }
 }
 
-pub fn set_pending(user_id: &str, vault_id: &str, p: &[PushUpdate]) -> Result<(), String> {
+/// Store this page's unsent updates of a vault; `offline`: some were saved
+/// without a connection.
+pub fn set_pending(
+    user_id: &str,
+    vault_id: &str,
+    p: &[PushUpdate],
+    offline: bool,
+) -> Result<(), String> {
     if p.is_empty() {
         remove(local(), &pending_key(user_id, vault_id));
         Ok(())
     } else {
+        let stored = StoringPending {
+            updates: p,
+            offline,
+        };
         try_set(
             local(),
             &pending_key(user_id, vault_id),
-            &serde_json::to_string(p).unwrap(),
+            &serde_json::to_string(&stored).unwrap(),
         )
     }
 }

@@ -182,7 +182,7 @@ by its id.
 | `@Name` in a comment's text | mentions that member of the vault (any case; longer names win: `@Ann Lee` over `@Ann`). Only the vault's members can be mentioned: other `@words` stay text, with a warning. The output says whom it mentioned |
 | `mentions [--vault v] [--unread] [--mark-read] [--limit n]` | comments that mention you, newest first (`*`: not read on any device yet), with the note, who and when; `--mark-read` marks them read everywhere (the web app's inbox too), with everything before them |
 | `icon <v> <path> <emoji>` / `icon <v> <path> --remove` | a note's, attachment's or folder's icon; `ls` and `vault list` show icons, and people a note is shared with see its icon and new name |
-| `trash list\|restore\|empty <v>` | restore by path or id; `empty` deletes permanently (the vault's owner and admins; asks first; `--yes`) |
+| `trash list\|restore\|undo\|empty <v>` | restore by path or id; `empty` deletes for good (the vault's owner and admins; asks first; `--yes`), which `undo <v> <entry>` takes back while the server keeps it (`--purge-undo-days`, 30 by default): the entry goes back to the trash. `list` shows those too, for the owner and admins, with how long they are kept (`kept_until` with `--json`) |
 | `search <query> [--vault v] [--limit n]` | terms, `"phrases"`, `tag:x`, `folder:x`, `title:x`, `vault:x`; 20 results unless `--limit` |
 | `backlinks <v> <path>` | notes linking to a note |
 | `history <v> <path>`, `history show\|restore <v> <path> <rev>` | encrypted revisions stored on the server |
@@ -555,8 +555,8 @@ once you share with them again with `--accept-new-key`.
   for someone who is already a member changes their role to the given
   `--role`.
 * Roles: `editor` writes and moves things to the trash; `admin` also empties
-  the trash (deleting for good, which editors can't) and sees the vault's
-  activity log — people only, never agents; `viewer` reads (and comments,
+  the trash (deleting for good, which editors can't, and undoing that for a
+  while: `trash undo`) and sees the vault's activity log — people only, never agents; `viewer` reads (and comments,
   unless the owner turns it off).
 * People who have not set up encryption yet are added without a key; your
   client wraps the vault key for them automatically once they have (during

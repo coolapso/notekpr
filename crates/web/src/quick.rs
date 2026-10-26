@@ -212,7 +212,7 @@ pub async fn purge_deleted() {
                 r.index
                     .entries()
                     .into_iter()
-                    .filter(|e| !e.is_live())
+                    .filter(|e| e.in_trash())
                     .map(|e| e.id)
                     .collect()
             })

@@ -51,6 +51,50 @@ impl Blobs {
         }
     }
 
+    /// Delete for good, undoable for a while: the bytes stay, out of
+    /// reach, until [`erase_purged_before`](Self::erase_purged_before).
+    /// Repeating it is fine; `NotFound` if there is no such attachment.
+    pub async fn purge(&self, vault_id: &str, id: &str, now: i64) -> AppResult<()> {
+        match self {
+            Blobs::Sqlite(db) => {
+                if attachments::purge(db, vault_id, id, now).await? {
+                    Ok(())
+                } else {
+                    Err(AppError::NotFound)
+                }
+            }
+        }
+    }
+
+    /// Undo [`purge`](Self::purge) if that was at `since` or later;
+    /// `NotFound` otherwise.
+    pub async fn restore(&self, vault_id: &str, id: &str, since: i64) -> AppResult<()> {
+        match self {
+            Blobs::Sqlite(db) => {
+                if attachments::restore(db, vault_id, id, since).await? {
+                    Ok(())
+                } else {
+                    Err(AppError::NotFound)
+                }
+            }
+        }
+    }
+
+    /// Attachments of a vault deleted for good at `since` or later, as
+    /// `(id, purged_at)`, newest first.
+    pub async fn purged_since(&self, vault_id: &str, since: i64) -> AppResult<Vec<(String, i64)>> {
+        match self {
+            Blobs::Sqlite(db) => attachments::purged_since(db, vault_id, since).await,
+        }
+    }
+
+    /// Delete for real what was deleted for good before `before`.
+    pub async fn erase_purged_before(&self, before: i64) -> AppResult<u64> {
+        match self {
+            Blobs::Sqlite(db) => attachments::erase_purged_before(db, before).await,
+        }
+    }
+
     pub async fn delete(&self, vault_id: &str, id: &str) -> AppResult<()> {
         match self {
             Blobs::Sqlite(db) => {

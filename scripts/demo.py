@@ -155,7 +155,7 @@ HOME = [
         - [ ] Open [[Garden plan]] and its history (the clock button at the top) to compare versions
         - [ ] Sign in as **bob** in another tab and edit *Shopping list* in the *Family* vault together
         - [ ] Click a link to a note that doesn't exist yet: [[Greenhouse]]
-        - [ ] Look in the trash: a shopping list is waiting to be restored
+        - [ ] Look in the trash: a shopping list is waiting to be restored, and under *Deleted for good* an old to-do list whose emptied trash can still be undone (*Undo* puts it back in the trash)
 
         ## More to try
 
@@ -1259,6 +1259,10 @@ def seed(cli, url, data):
     step("alice: quick notes and something in the trash")
     for text in QUICK_NOTES:
         cli.run(a, "-q", "quick", text)
+    # Deleted for good (the trash emptied), which can still be undone.
+    cli.write(a, "Home", "Old to-do list.md", "# Old to-do list\n\n- [x] Call the plumber\n- [x] Return the library books\n")
+    cli.run(a, "-q", "rm", "Home", "Old to-do list.md")
+    cli.run(a, "-q", "trash", "empty", "Home", "--yes")
     cli.write(a, "Home", "Old shopping list.md", "# Old shopping list\n\n- [x] Batteries\n- [x] Light bulbs\n")
     cli.run(a, "-q", "rm", "Home", "Old shopping list.md")
 

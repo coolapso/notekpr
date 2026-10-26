@@ -238,6 +238,20 @@ pub(super) fn on_server_message(m: ServerMessage) {
                 after_apply(&vault_id, a);
             }
         }
+        ServerMessage::Restored {
+            vault_id,
+            object_id,
+            seq,
+        } => {
+            let applied = step(|c| {
+                c.replicas
+                    .get_mut(&vault_id)
+                    .map(|r| r.apply_restore(&object_id, seq))
+            });
+            if let Some(a) = applied {
+                after_apply(&vault_id, a);
+            }
+        }
         ServerMessage::Snapshot { vault_id, snapshot } => {
             let applied = step(|c| {
                 c.replicas
@@ -458,7 +472,7 @@ pub(super) fn drop_rejected(c: &mut Core, vault_id: &str) -> bool {
 
 /// The first catch-up of a vault (or a later one) is complete (an edge).
 pub(super) fn on_synced(vault_id: &str, head: i64) {
-    let (rolled_back, applied) = step(|c| {
+    let (rolled_back, applied, first_sync) = step(|c| {
         c.loaded.insert(vault_id.to_string());
         let first = c.synced.insert(vault_id.to_string());
         if first {
@@ -494,9 +508,13 @@ pub(super) fn on_synced(vault_id: &str, head: i64) {
         if first {
             show_loaded(c, vault_id);
         }
-        (rolled_back, applied)
+        (rolled_back, applied, first)
     });
     after_apply(vault_id, applied);
+    if first_sync {
+        let v = vault_id.to_string();
+        leptos::task::spawn_local(async move { crate::actions::forget_erased(&v).await });
+    }
     // Caught up: files of the quick notes no note links to go.
     if step(|c| c.is_quick_notes(vault_id)) {
         leptos::task::spawn_local(crate::quick::drop_unlinked_files());
@@ -1013,6 +1031,9 @@ pub fn after_apply(vault_id: &str, applied: engine::Applied) {
     if applied.is_empty() {
         return;
     }
+    for o in &applied.restored {
+        leptos::task::spawn_local(fetch_restored(vault_id.to_string(), o.clone()));
+    }
     let ui = ui();
     let (content, open) = step(|c| {
         crate::cache::note_applied(c, vault_id, &applied);
@@ -1062,6 +1083,64 @@ pub fn after_apply(vault_id: &str, applied: engine::Applied) {
         ui.comments_rev.update(|n| *n += 1);
         super::announce_mentions();
     }
+}
+
+/// Deleting a note for good was undone: fetch its changes from the start
+/// and apply them (an edge). Until then the vault's cursor stays before the
+/// undo, so a reload or reconnect delivers it again and this is retried.
+async fn fetch_restored(vault_id: String, object_id: String) {
+    let mut since = 0;
+    let mut snapshots = true;
+    loop {
+        let path = format!(
+            "/vaults/{vault_id}/objects/{object_id}/changes?since={since}&snapshots={snapshots}"
+        );
+        let page = match api::get::<ChangesResponse>(&path).await {
+            Ok(p) => p,
+            // Deleted again, or no longer ours to read: nothing to wait for.
+            Err(e) if e.status == 404 => break,
+            Err(_) => {
+                util::sleep(5000).await;
+                let waiting = step(|c| {
+                    c.replicas
+                        .get(&vault_id)
+                        .is_some_and(|r| r.restoring.values().any(|o| *o == object_id))
+                });
+                if !waiting {
+                    return;
+                }
+                continue;
+            }
+        };
+        let applied = step(|c| {
+            let r = c.replicas.get_mut(&vault_id)?;
+            let (applied, errors) = r.apply_restored(&object_id, &page);
+            if !errors.is_empty() {
+                util::warn(&format!(
+                    "{} items of a restored note could not be decrypted",
+                    errors.len()
+                ));
+            }
+            if r.needs_keys() {
+                keys_missing(c, &vault_id);
+            }
+            Some(applied)
+        });
+        if let Some(a) = applied {
+            after_apply(&vault_id, a);
+        }
+        if !page.has_more {
+            break;
+        }
+        since = page.next_since;
+        snapshots = false;
+    }
+    step(|c| {
+        if let Some(r) = c.replicas.get_mut(&vault_id) {
+            r.restored(&object_id);
+        }
+        crate::cache::schedule(c);
+    });
 }
 
 // ------------------------------------------------------------------ local edits

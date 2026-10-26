@@ -636,9 +636,61 @@ impl Session {
                 {
                     ui::warn(&format!("could not refresh keys: {e:#}"));
                 }
+                // Deleting notes for good was undone: fetch them again.
+                for o in all.restored.clone() {
+                    merge_applied(&mut all, self.fetch_restored(vault, &o).await?);
+                }
                 return Ok(all);
             }
         }
+    }
+
+    /// Fetch the changes of a note whose deletion for good was undone, from
+    /// the start, and apply them. Until it is done, the vault's cursor stays
+    /// before the undo: on failure, the next catch-up brings it again.
+    pub async fn fetch_restored(
+        &self,
+        vault: &SharedVault,
+        object_id: &str,
+    ) -> Result<Applied, ApiError> {
+        let id = vault.lock().await.id().to_string();
+        let mut all = Applied::default();
+        let (mut since, mut snapshots) = (0, true);
+        loop {
+            let page: ChangesResponse = match self
+                .api
+                .get(&format!(
+                    "/vaults/{id}/objects/{object_id}/changes?since={since}&snapshots={snapshots}"
+                ))
+                .await
+            {
+                Ok(p) => p,
+                // Deleted again, or no longer ours to read.
+                Err(e) if e.is_not_found() => break,
+                Err(e) => return Err(e),
+            };
+            merge_applied(
+                &mut all,
+                vault.lock().await.apply_restored(object_id, &page),
+            );
+            if !page.has_more {
+                break;
+            }
+            since = page.next_since;
+            snapshots = false;
+        }
+        let mut v = vault.lock().await;
+        v.restored(object_id);
+        if let Err(e) = v.save() {
+            ui::warn(&format!("could not save the local copy: {e:#}"));
+        }
+        drop(v);
+        if vault.lock().await.replica.needs_keys()
+            && let Err(e) = self.refresh_keys(vault).await
+        {
+            ui::warn(&format!("could not refresh keys: {e:#}"));
+        }
+        Ok(all)
     }
 
     /// Upload pending attachments, then pending updates in batches.

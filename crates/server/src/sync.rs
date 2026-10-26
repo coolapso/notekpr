@@ -1,4 +1,5 @@
-//! The per-vault encrypted log: ordered updates, compacted snapshots and purges.
+//! The per-vault encrypted log: ordered updates, compacted snapshots, purges
+//! and their undoing.
 //!
 //! The server cannot read any payload. It only enforces who may append, keeps
 //! the log ordered (one sequence counter per vault), makes retries idempotent
@@ -9,10 +10,10 @@ use std::collections::HashMap;
 use notekpr_core::keys::AccountPublic;
 use notekpr_core::memberlog;
 use notekpr_core::protocol::{
-    ChangesResponse, CreateSnapshotRequest, INDEX_OBJECT_ID, ObjectState, PurgedObject, PushResult,
-    PushUpdate, REJECT_BAD_SIGNATURE, REJECT_PURGED, REJECT_QUICK_NOTES_FULL, REJECT_STALE_KEY,
-    REJECT_TOO_LARGE, REJECT_UNSIGNED, RejectedUpdate, Snapshot, SnapshotInfo, Update,
-    comments_note, comments_object,
+    ChangesResponse, CreateSnapshotRequest, INDEX_OBJECT_ID, ObjectState, PurgedItem, PurgedObject,
+    PushResult, PushUpdate, REJECT_BAD_SIGNATURE, REJECT_PURGED, REJECT_QUICK_NOTES_FULL,
+    REJECT_STALE_KEY, REJECT_TOO_LARGE, REJECT_UNSIGNED, RejectedUpdate, RestoredObject, Snapshot,
+    SnapshotInfo, Update, comments_note, comments_object,
 };
 use sqlx::Row;
 
@@ -117,11 +118,15 @@ pub async fn changes_since(
         .filter(|o| comments_note(o).is_none())
         .map(comments_object);
     let keyed = object.map(|o| comments_note(o).unwrap_or(o));
+    // Objects deleted for good keep their updates while that can be undone;
+    // they aren't served.
     let rows = sqlx::query(
         "SELECT object_id, seq, author_id, payload, created_at, signature FROM updates
          WHERE vault_id = ? AND seq > ? AND (? IS NULL OR object_id = ? OR object_id = ?)
            AND (? = 0 OR substr(payload, 2, 4) >= (SELECT ob.share_from FROM objects ob
                 WHERE ob.vault_id = updates.vault_id AND ob.id = COALESCE(?, updates.object_id)))
+           AND NOT EXISTS (SELECT 1 FROM objects gone WHERE gone.vault_id = updates.vault_id
+                AND gone.id = updates.object_id AND gone.purged_at IS NOT NULL)
          ORDER BY seq LIMIT ?",
     )
     .bind(vault_id)
@@ -193,10 +198,26 @@ pub async fn changes_since(
         .iter()
         .map(|r| PurgedObject { object_id: r.get("id"), seq: r.get("purged_seq") })
         .collect();
+    // Also from the start: a copy can have dropped the object without
+    // having caught up yet (deleted for good from that copy).
+    let restored = sqlx::query(
+        "SELECT id, restored_seq FROM objects WHERE vault_id = ? AND restored_seq > ? AND restored_seq <= ? AND (? IS NULL OR id = ?)",
+    )
+        .bind(vault_id)
+        .bind(since)
+        .bind(upper)
+        .bind(object)
+        .bind(object)
+        .fetch_all(db)
+        .await?
+        .iter()
+        .map(|r| RestoredObject { object_id: r.get("id"), seq: r.get("restored_seq") })
+        .collect();
     Ok(ChangesResponse {
         updates,
         snapshots,
         purged,
+        restored,
         head_seq: head,
         has_more,
         next_since,
@@ -827,12 +848,28 @@ pub async fn insert_snapshot(
     Ok(())
 }
 
+/// `NotFound` for an object deleted for good (its data may still be kept,
+/// for an undo).
+async fn not_purged(db: &Db, vault_id: &str, object_id: &str) -> AppResult<()> {
+    let purged: Option<Option<i64>> =
+        sqlx::query_scalar("SELECT purged_at FROM objects WHERE vault_id = ? AND id = ?")
+            .bind(vault_id)
+            .bind(object_id)
+            .fetch_optional(db)
+            .await?;
+    match purged {
+        Some(Some(_)) => Err(AppError::NotFound),
+        _ => Ok(()),
+    }
+}
+
 pub async fn list_snapshots(
     db: &Db,
     vault_id: &str,
     object_id: &str,
     doc_only: bool,
 ) -> AppResult<Vec<SnapshotInfo>> {
+    not_purged(db, vault_id, object_id).await?;
     Ok(sqlx::query(
         "SELECT id, object_id, covers_seq, author_id, created_at, size FROM snapshots
          WHERE vault_id = ? AND object_id = ? AND (? = 0 OR substr(payload, 2, 4) >= (SELECT ob.share_from FROM objects ob WHERE ob.vault_id = snapshots.vault_id AND ob.id = snapshots.object_id)) ORDER BY covers_seq DESC, created_at DESC",
@@ -861,6 +898,7 @@ pub async fn get_snapshot(
     id: &str,
     doc_only: bool,
 ) -> AppResult<Snapshot> {
+    not_purged(db, vault_id, object_id).await?;
     sqlx::query(
         "SELECT id, object_id, covers_seq, author_id, payload, created_at, signature FROM snapshots
          WHERE vault_id = ? AND object_id = ? AND id = ? AND (? = 0 OR substr(payload, 2, 4) >= (SELECT ob.share_from FROM objects ob WHERE ob.vault_id = snapshots.vault_id AND ob.id = snapshots.object_id))",
@@ -875,9 +913,16 @@ pub async fn get_snapshot(
     .ok_or(AppError::NotFound)
 }
 
-/// Permanently delete an object's data (e.g. emptying the trash): the
-/// vault's owner and admins only, so an editor can't destroy what others
-/// wrote (they move things to the trash).
+/// Delete an object for good (e.g. emptying the trash): the vault's owner
+/// and admins only, so an editor can't destroy what others wrote (they move
+/// things to the trash). It is gone for everyone at once — its content and
+/// comments aren't served, writes to it are refused, the people it was
+/// shared with lose it (for good: an undo doesn't share it again) — but the
+/// server keeps its data for `--purge-undo-days`, during which [`restore`]
+/// undoes it; [`erase_expired`] deletes it after. Meanwhile its document key
+/// still moves on with every rotation of the vault's key, so an undo never
+/// brings back a key a removed member knew. Repeated while it can be undone,
+/// it changes nothing.
 pub async fn purge(
     state: &AppState,
     who: &Principal,
@@ -897,14 +942,16 @@ pub async fn purge(
     let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
     // Re-checked in the transaction: the role may have changed meanwhile.
     access::require_admin(&mut *tx, vault_id, &who.user_id).await?;
-    let exists: Option<Option<i64>> =
-        sqlx::query_scalar("SELECT purged_at FROM objects WHERE vault_id = ? AND id = ?")
+    let row: Option<(Option<i64>, Option<i64>)> =
+        sqlx::query_as("SELECT purged_seq, erased_at FROM objects WHERE vault_id = ? AND id = ?")
             .bind(vault_id)
             .bind(object_id)
             .fetch_optional(&mut *tx)
             .await?;
-    if !matches!(exists, Some(None)) {
-        return Err(AppError::NotFound);
+    match row {
+        Some((None, None)) => {}
+        Some((Some(seq), None)) => return Ok(seq),
+        _ => return Err(AppError::NotFound),
     }
     let seq: i64 = sqlx::query_scalar(
         "UPDATE vaults SET head_seq = head_seq + 1, updated_at = ? WHERE id = ? RETURNING head_seq",
@@ -920,12 +967,11 @@ pub async fn purge(
     .bind(object_id)
     .fetch_all(&mut *tx)
     .await?;
+    // Its shares end now; members keep the note's key (wrapped under the
+    // vault key, user_id '') for an undo.
     for q in [
-        "DELETE FROM updates WHERE vault_id = ? AND object_id = ?",
-        "DELETE FROM snapshots WHERE vault_id = ? AND object_id = ?",
         "DELETE FROM object_shares WHERE vault_id = ? AND object_id = ?",
-        "DELETE FROM object_keys WHERE vault_id = ? AND object_id = ?",
-        "DELETE FROM object_key_chain WHERE vault_id = ? AND object_id = ?",
+        "DELETE FROM object_keys WHERE vault_id = ? AND object_id = ? AND user_id <> ''",
     ] {
         sqlx::query(q)
             .bind(vault_id)
@@ -935,14 +981,9 @@ pub async fn purge(
     }
     // Its comments go with it (clients drop them with the note).
     let comments = comments_object(object_id);
-    sqlx::query("DELETE FROM updates WHERE vault_id = ? AND object_id = ?")
-        .bind(vault_id)
-        .bind(&comments)
-        .execute(&mut *tx)
-        .await?;
     for o in [object_id, comments.as_str()] {
         sqlx::query(
-            "UPDATE objects SET purged_at = ?, purged_seq = ? WHERE vault_id = ? AND id = ?",
+            "UPDATE objects SET purged_at = ?, purged_seq = ?, restored_seq = NULL WHERE vault_id = ? AND id = ?",
         )
         .bind(now)
         .bind(seq)
@@ -950,6 +991,9 @@ pub async fn purge(
         .bind(o)
         .execute(&mut *tx)
         .await?;
+        if state.config.purge_undo_days == 0 {
+            erase(&mut tx, vault_id, o, now).await?;
+        }
     }
     tx.commit().await?;
     state.hub.publish(
@@ -980,4 +1024,166 @@ pub async fn purge(
     )
     .await;
     Ok(seq)
+}
+
+/// Undo deleting an object for good, while the server still keeps it: it
+/// is back for everyone, with its history and comments, though shared with
+/// nobody. The vault's owner and admins only, as deleting it.
+pub async fn restore(
+    state: &AppState,
+    who: &Principal,
+    vault_id: &str,
+    object_id: &str,
+) -> AppResult<i64> {
+    validate_object_id(object_id)?;
+    if object_id == INDEX_OBJECT_ID || comments_note(object_id).is_some() {
+        return Err(AppError::NotFound);
+    }
+    access::require_admin(&state.db, vault_id, &who.user_id).await?;
+    let _w = state.write_lock.lock().await;
+    let now = db::now();
+    let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
+    access::require_admin(&mut *tx, vault_id, &who.user_id).await?;
+    let row: Option<(Option<i64>, Option<i64>)> =
+        sqlx::query_as("SELECT purged_at, erased_at FROM objects WHERE vault_id = ? AND id = ?")
+            .bind(vault_id)
+            .bind(object_id)
+            .fetch_optional(&mut *tx)
+            .await?;
+    match row {
+        Some((Some(at), None)) if at >= now - state.config.purge_undo_ms() => {}
+        _ => return Err(AppError::NotFound),
+    }
+    let seq: i64 = sqlx::query_scalar(
+        "UPDATE vaults SET head_seq = head_seq + 1, updated_at = ? WHERE id = ? RETURNING head_seq",
+    )
+    .bind(now)
+    .bind(vault_id)
+    .fetch_one(&mut *tx)
+    .await?;
+    let comments = comments_object(object_id);
+    for o in [object_id, comments.as_str()] {
+        sqlx::query(
+            "UPDATE objects SET purged_at = NULL, purged_seq = NULL, restored_seq = ? WHERE vault_id = ? AND id = ?",
+        )
+        .bind(seq)
+        .bind(vault_id)
+        .bind(o)
+        .execute(&mut *tx)
+        .await?;
+    }
+    tx.commit().await?;
+    state.hub.publish(
+        vault_id,
+        VaultEvent::Restored {
+            object_id: object_id.to_string(),
+            seq,
+        },
+    );
+    db::audit(
+        &state.db,
+        Some(&who.user_id),
+        None,
+        Some(vault_id),
+        "object.restore",
+        Some(object_id),
+        serde_json::json!({}),
+    )
+    .await;
+    Ok(seq)
+}
+
+/// What of a vault was deleted for good and can still be undone (notes and
+/// attachments), newest first.
+pub async fn purged_items(state: &AppState, vault_id: &str) -> AppResult<Vec<PurgedItem>> {
+    let keep = state.config.purge_undo_ms();
+    let since = db::now() - keep;
+    let notes: Vec<(String, i64)> = sqlx::query_as(
+        "SELECT id, purged_at FROM objects
+         WHERE vault_id = ? AND purged_at >= ? AND erased_at IS NULL
+           AND id <> 'index' AND substr(id, 1, 2) <> 'c_'",
+    )
+    .bind(vault_id)
+    .bind(since)
+    .fetch_all(&state.db)
+    .await?;
+    let files = state.blobs.purged_since(vault_id, since).await?;
+    let mut out: Vec<PurgedItem> = notes
+        .into_iter()
+        .map(|n| (n, false))
+        .chain(files.into_iter().map(|f| (f, true)))
+        .map(|((id, purged_at), attachment)| PurgedItem {
+            id,
+            attachment,
+            purged_at,
+            kept_until: purged_at + keep,
+        })
+        .collect();
+    out.sort_by(|a, b| b.purged_at.cmp(&a.purged_at).then(a.id.cmp(&b.id)));
+    Ok(out)
+}
+
+/// Delete an object's data for real (it was purged): its log, history,
+/// keys; the row stays, so the purge is still reported to catch-ups and
+/// writes to it are refused.
+async fn erase(
+    tx: &mut sqlx::Transaction<'static, sqlx::Sqlite>,
+    vault_id: &str,
+    object_id: &str,
+    now: i64,
+) -> AppResult<()> {
+    for q in [
+        "DELETE FROM updates WHERE vault_id = ? AND object_id = ?",
+        "DELETE FROM snapshots WHERE vault_id = ? AND object_id = ?",
+        "DELETE FROM object_shares WHERE vault_id = ? AND object_id = ?",
+        "DELETE FROM object_keys WHERE vault_id = ? AND object_id = ?",
+        "DELETE FROM object_key_chain WHERE vault_id = ? AND object_id = ?",
+    ] {
+        sqlx::query(q)
+            .bind(vault_id)
+            .bind(object_id)
+            .execute(&mut **tx)
+            .await?;
+    }
+    sqlx::query(
+        "UPDATE objects SET erased_at = ?, key_epoch = NULL, encrypted_meta = NULL, share_from = NULL
+         WHERE vault_id = ? AND id = ?",
+    )
+    .bind(now)
+    .bind(vault_id)
+    .bind(object_id)
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
+/// Most objects [`erase_expired`] erases in one transaction.
+const ERASE_BATCH: i64 = 200;
+
+/// Delete for real what was deleted for good longer ago than the undo
+/// period: objects (in batches) and attachments. Returns how many.
+pub async fn erase_expired(state: &AppState) -> AppResult<u64> {
+    let now = db::now();
+    let before = now - state.config.purge_undo_ms();
+    let mut n = 0;
+    loop {
+        let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
+        let due: Vec<(String, String)> = sqlx::query_as(
+            "SELECT vault_id, id FROM objects
+             WHERE purged_at IS NOT NULL AND erased_at IS NULL AND purged_at < ? LIMIT ?",
+        )
+        .bind(before)
+        .bind(ERASE_BATCH)
+        .fetch_all(&mut *tx)
+        .await?;
+        for (v, o) in &due {
+            erase(&mut tx, v, o, now).await?;
+        }
+        tx.commit().await?;
+        n += due.len() as u64;
+        if (due.len() as i64) < ERASE_BATCH {
+            break;
+        }
+    }
+    Ok(n + state.blobs.erase_purged_before(before).await?)
 }

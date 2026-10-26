@@ -44,6 +44,8 @@ async fn full_log(
         all.has_more = page.has_more;
         all.next_since = page.next_since;
     }
+    // From the start, everything undone is in it already.
+    all.restored.clear();
     Ok(all)
 }
 

@@ -611,8 +611,14 @@ impl Core {
             .map(|e| e.title().to_string())
     }
 
+    /// An entry of a vault's file tree, also one in the trash; not one
+    /// deleted for good (only the trash lists those, to undo it).
     pub fn entry(&self, vault: &str, id: &str) -> Option<notekpr_core::doc::Entry> {
-        self.replicas.get(vault)?.index.get(id)
+        self.replicas
+            .get(vault)?
+            .index
+            .get(id)
+            .filter(|e| e.purged.is_none())
     }
 
     /// The person's quick notes: their vault of that kind (see

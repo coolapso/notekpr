@@ -868,6 +868,9 @@ pub struct Applied {
     pub objects: BTreeSet<String>,
     pub index_changed: bool,
     pub purged: BTreeSet<String>,
+    /// Objects whose deletion for good was undone: fetch their changes
+    /// again and apply them with [`VaultReplica::apply_restored`].
+    pub restored: BTreeSet<String>,
     /// Notes whose comments changed.
     pub comments: BTreeSet<String>,
 }
@@ -877,6 +880,7 @@ impl Applied {
         self.objects.is_empty()
             && !self.index_changed
             && self.purged.is_empty()
+            && self.restored.is_empty()
             && self.comments.is_empty()
     }
 
@@ -884,6 +888,7 @@ impl Applied {
         self.objects.extend(o.objects);
         self.index_changed |= o.index_changed;
         self.purged.extend(o.purged);
+        self.restored.extend(o.restored);
         self.comments.extend(o.comments);
     }
 }
@@ -925,6 +930,12 @@ pub struct VaultReplica {
     pub pending: Vec<Pending>,
     /// Objects permanently deleted on the server.
     pub purged: BTreeSet<String>,
+    /// Objects whose deletion for good was undone, by the sequence number
+    /// of the undo, until their content is fetched again and applied
+    /// ([`apply_restored`](Self::apply_restored)). Like [`dropped`](Self::dropped),
+    /// `seq` never moves past them before: a catch-up after a reload or a
+    /// lost connection delivers the undo again, and the fetch is retried.
+    pub restoring: BTreeMap<i64, String>,
     /// Document keyrings of individually shared notes (object id → keys).
     /// Content of these notes is encrypted with their own key instead of the vault key.
     pub doc_keys: HashMap<String, VaultKeyring>,
@@ -971,6 +982,7 @@ impl VaultReplica {
             since_snapshot: HashMap::new(),
             pending: Vec::new(),
             purged: BTreeSet::new(),
+            restoring: BTreeMap::new(),
             doc_keys: HashMap::new(),
             shared: BTreeSet::new(),
             share_from: HashMap::new(),
@@ -1079,10 +1091,16 @@ impl VaultReplica {
     }
 
     /// Move the sequence cursor forward, but never past an update that was
-    /// dropped because it couldn't be kept (see [`VaultReplica::dropped`]).
+    /// dropped because it couldn't be kept (see [`VaultReplica::dropped`]),
+    /// or an undone deletion whose content isn't back yet
+    /// ([`VaultReplica::restoring`]).
     fn advance(&mut self, seq: i64) {
         self.seq = self.seq.max(seq);
-        if let Some((&first, _)) = self.dropped.first_key_value() {
+        let first = [self.dropped.keys().next(), self.restoring.keys().next()]
+            .into_iter()
+            .flatten()
+            .min();
+        if let Some(&first) = first {
             self.seq = self.seq.min(first - 1);
         }
     }
@@ -1101,6 +1119,7 @@ impl VaultReplica {
     /// local state then lacks changes that `seq` already counts.
     fn object_incomplete(&self, object_id: &str) -> bool {
         self.dropped.values().any(|o| o == object_id)
+            || self.restoring.values().any(|o| o == object_id)
             || self.deferred.iter().any(|d| match d {
                 Deferred::Update(u) => u.object_id == object_id,
                 Deferred::Snapshot(s) => s.object_id == object_id,
@@ -1251,10 +1270,73 @@ impl VaultReplica {
         self.pending.retain(|p| p.object_id != object_id);
         self.purged.insert(object_id.to_string());
         self.dropped.retain(|_, o| o != object_id);
+        self.restoring.retain(|_, o| o != object_id);
         self.advance(seq);
         let mut a = Applied::default();
         a.purged.insert(object_id.to_string());
         a
+    }
+
+    /// Deleting an object for good was undone (at `seq`): it is back, but
+    /// its content has to be fetched again — this replica dropped it, or
+    /// (a stored copy reloaded, say) may not have it all. Until
+    /// [`apply_restored`](Self::apply_restored) and
+    /// [`restored`](Self::restored), the object counts as incomplete and
+    /// `seq` stays before the undo.
+    pub fn apply_restore(&mut self, object_id: &str, seq: i64) -> Applied {
+        self.purged.remove(object_id);
+        self.restoring.insert(seq, object_id.to_string());
+        self.advance(seq);
+        let mut a = Applied::default();
+        a.restored.insert(object_id.to_string());
+        a
+    }
+
+    /// Apply one page of a restored object's changes, fetched from the
+    /// start (`GET …/objects/{o}/changes?since=0`; it holds the note's
+    /// comments too). Anything else in the page is left alone, and the
+    /// cursor doesn't move past what the vault's own stream delivered.
+    pub fn apply_restored(
+        &mut self,
+        object_id: &str,
+        page: &ChangesResponse,
+    ) -> (Applied, Vec<EngineError>) {
+        let mut all = Applied::default();
+        let mut errors = Vec::new();
+        let ours = |o: &str| comments_note(o).unwrap_or(o) == object_id;
+        let waiting = |r: &Self| r.deferred.len() + r.unverified.len();
+        for s in page.snapshots.iter().filter(|s| ours(&s.object_id)) {
+            let before = waiting(self);
+            match self.apply_snapshot(s) {
+                Ok(a) => all.merge(a),
+                Err(_) if waiting(self) > before => {}
+                Err(e) => errors.push(e),
+            }
+        }
+        for u in page.updates.iter().filter(|u| ours(&u.object_id)) {
+            let before = waiting(self);
+            match self.apply_update(u) {
+                Ok(a) => all.merge(a),
+                Err(_) if waiting(self) > before => {}
+                Err(e) => errors.push(e),
+            }
+        }
+        (all, errors)
+    }
+
+    /// Every page of a restored object's changes was applied (or it is gone
+    /// again, `404`): the cursor may move past its undo.
+    pub fn restored(&mut self, object_id: &str) {
+        let last = self
+            .restoring
+            .iter()
+            .filter(|(_, o)| *o == object_id)
+            .map(|(s, _)| *s)
+            .max();
+        self.restoring.retain(|_, o| o != object_id);
+        if let Some(s) = last {
+            self.advance(s);
+        }
     }
 
     /// Apply one catch-up page. Decryption failures of individual items are
@@ -1281,8 +1363,24 @@ impl VaultReplica {
                 Err(e) => errors.push(e),
             }
         }
-        for p in &ch.purged {
-            all.merge(self.apply_purge(&p.object_id, p.seq));
+        // Deleted for good and undone, in the order they happened.
+        let mut gone: Vec<(i64, &str, bool)> = ch
+            .purged
+            .iter()
+            .map(|p| (p.seq, p.object_id.as_str(), false))
+            .chain(
+                ch.restored
+                    .iter()
+                    .map(|r| (r.seq, r.object_id.as_str(), true)),
+            )
+            .collect();
+        gone.sort();
+        for (seq, object_id, back) in gone {
+            all.merge(if back {
+                self.apply_restore(object_id, seq)
+            } else {
+                self.apply_purge(object_id, seq)
+            });
         }
         self.advance(ch.next_since.min(ch.head_seq));
         self.observe_head(ch.head_seq);
@@ -1833,6 +1931,7 @@ mod tests {
             ],
             snapshots: vec![],
             purged: vec![],
+            restored: vec![],
             head_seq: 2,
             has_more: false,
             next_since: 2,
@@ -2211,6 +2310,100 @@ mod tests {
     }
 
     #[test]
+    fn an_undone_deletion_brings_the_note_back_once_its_changes_are_fetched() {
+        let alice = AccountSecret::generate();
+        let (_, ring) = new_vault(&alice, "alice", &VaultMeta::named("V"), 1).unwrap();
+        let mut a = VaultReplica::new(
+            ring.vault_id(),
+            Role::Owner,
+            ring.clone(),
+            VaultMeta::default(),
+        );
+        let mut b = VaultReplica::new(
+            ring.vault_id(),
+            Role::Editor,
+            ring.clone(),
+            VaultMeta::default(),
+        );
+        let u = a
+            .notes
+            .entry("n".into())
+            .or_default()
+            .set_text("kept")
+            .unwrap();
+        let p = a.local_change("n", u).unwrap();
+        let update = Update {
+            object_id: "n".into(),
+            seq: 1,
+            author_id: "a".into(),
+            payload: p.payload,
+            created_at: 0,
+            signature: None,
+        };
+        b.apply_update(&update).unwrap();
+        b.apply_purge("n", 2);
+        assert!(!b.notes.contains_key("n") && b.purged.contains("n"));
+        // Undone at 3; the stream goes on at 4.
+        let applied = b.apply_restore("n", 3);
+        assert!(applied.restored.contains("n") && !b.purged.contains("n"));
+        b.synced(4);
+        assert_eq!(b.seq, 2, "the cursor waits for the note's content");
+        assert!(!b.is_complete("n"));
+        let page = ChangesResponse {
+            updates: vec![update],
+            snapshots: vec![],
+            purged: vec![],
+            restored: vec![],
+            head_seq: 4,
+            has_more: false,
+            next_since: 4,
+        };
+        let (got, errors) = b.apply_restored("n", &page);
+        assert!(errors.is_empty() && got.objects.contains("n"));
+        assert_eq!(b.note_text("n"), "kept");
+        assert_eq!(b.seq, 2, "not before every page is in");
+        b.restored("n");
+        assert_eq!(b.seq, 3);
+        assert!(b.is_complete("n") && b.restoring.is_empty());
+    }
+
+    #[test]
+    fn deletions_and_undos_in_one_page_apply_in_order() {
+        let ring = VaultKeyring::new("v");
+        let page = |purged: &[(&str, i64)], restored: &[(&str, i64)]| ChangesResponse {
+            updates: vec![],
+            snapshots: vec![],
+            purged: purged
+                .iter()
+                .map(|(o, seq)| PurgedObject {
+                    object_id: o.to_string(),
+                    seq: *seq,
+                })
+                .collect(),
+            restored: restored
+                .iter()
+                .map(|(o, seq)| RestoredObject {
+                    object_id: o.to_string(),
+                    seq: *seq,
+                })
+                .collect(),
+            head_seq: 9,
+            has_more: false,
+            next_since: 9,
+        };
+        // Deleted, then undone: back (to be fetched).
+        let mut r = VaultReplica::new("v", Role::Editor, ring.clone(), VaultMeta::default());
+        let (a, _) = r.apply_changes(&page(&[("n", 2)], &[("n", 5)]));
+        assert!(!r.purged.contains("n") && a.restored.contains("n"));
+        assert_eq!(r.seq, 4);
+        // Undone, then deleted again: gone.
+        let mut r = VaultReplica::new("v", Role::Editor, ring, VaultMeta::default());
+        r.apply_changes(&page(&[("n", 7)], &[("n", 5)]));
+        assert!(r.purged.contains("n") && r.restoring.is_empty());
+        assert_eq!(r.seq, 9);
+    }
+
+    #[test]
     fn updates_that_cannot_be_kept_are_fetched_again() {
         let alice = AccountSecret::generate();
         let (_, ring) = new_vault(&alice, "alice", &VaultMeta::named("V"), 1).unwrap();
@@ -2319,6 +2512,7 @@ mod tests {
             }],
             snapshots: vec![],
             purged: vec![],
+            restored: vec![],
             head_seq: 3,
             has_more: false,
             next_since: 3,

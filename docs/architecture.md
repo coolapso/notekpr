@@ -234,7 +234,11 @@ warn and re-push their full state; CRDT merging restores anything missing.
 **Deletion.** Deleting moves entries to the trash (an index field). Only
 "delete forever" purges data. If someone purges a note while another person
 has unsent edits to it, that person's client saves their version as a new
-"(recovered)" note instead of dropping it.
+"(recovered)" note instead of dropping it. A purge can be undone for a while
+(`--purge-undo-days`): the server hides the note at once but keeps its data,
+and the index keeps its entry marked `purged`; undoing it puts the entry
+back in the trash and clients fetch the note again (`restored`). After that
+period the server deletes the data and an admin's client drops the entry.
 
 ## 6. Markdown portability and external editors
 

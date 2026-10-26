@@ -64,8 +64,8 @@ What the database holds, besides ciphertext and public keys:
 | `users`, `identities` | accounts: display name, e-mail, OIDC issuer and subject, administrator, disabled, created and last sign-in; an agent's owner |
 | `devices`, `sessions`, `agent_credentials` | each account's devices and their names (the browser and system, or `notekpr CLI on <host name>`), sessions, and when each was created, last used (to the minute; only the latest time is kept), revoked |
 | `vaults`, `vault_members`, `member_log` | who owns each vault, who is in it with which role, who added them and when; which vault is someone's quick notes; the membership log's entries (user ids, roles, public keys, key commitments, times) |
-| `objects`, `updates`, `snapshots` | how many notes and other objects a vault has, when each was created and changed, and for every change (notes, the file tree, comments): who wrote it, from which device, when, and its size. Comment threads are objects named after their note (`c_<note id>`), so it also tells which notes have comments |
-| `attachments` | each attachment's size, who uploaded it, when |
+| `objects`, `updates`, `snapshots` | how many notes and other objects a vault has, when each was created and changed, and for every change (notes, the file tree, comments): who wrote it, from which device, when, and its size. Comment threads are objects named after their note (`c_<note id>`), so it also tells which notes have comments. When a note was deleted for good, and whether that was undone |
+| `attachments` | each attachment's size, who uploaded it, when; when it was deleted for good |
 | `device_grants` | device sign-ins waiting for approval: the client's name, when it asked, and the address it asked from — the address only until the code is approved, denied or expires (it is shown to whoever approves the code, so one asked for by someone else stands out) |
 | `object_shares`, `object_keys` | which notes are shared individually, with whom, with which role, by whom and since when |
 | `user_prefs` | when someone's encrypted preferences last changed, and their size |
@@ -76,6 +76,12 @@ Kept only in memory, never written: IP addresses (used for rate limits;
 except a device sign-in code's, above), who is connected right now, and
 presence (which vault — and, for individually shared notes, which note —
 someone has open).
+
+Deleting something for good (emptying the trash) takes it away from everyone
+at once, but the server keeps its ciphertext for `--purge-undo-days`
+(default 30; 0 deletes at once), so that the vault's owner and admins can
+undo it; then it is deleted. Database backups keep it for as long as they
+are kept.
 
 ## Cryptography
 
@@ -224,10 +230,11 @@ primitives. Formats:
   of history (e.g. snapshots that drop content; a per-person cooldown keeps
   this slow).
   Members' local replicas, Markdown exports and server backups are the
-  recovery path; owner-recoverable deletes are planned.
+  recovery path. Deleting for good is not theirs, and the owner and admins
+  can undo it for a while (above).
 * **Admins** are editors the owner trusts with the vault's tasks: emptying
-  the trash (permanent deletes, recorded in the vault's activity log) and
-  reading that log. They don't manage members, keys or the vault's settings.
+  the trash (deleting for good, recorded in the vault's activity log, and
+  undoing that while the server keeps it) and reading that log. They don't manage members, keys or the vault's settings.
   Their role is in the owner-signed membership log like every other, so a
   server can't present someone as an admin the owner didn't make — though,
   holding the data, it could delete it without anyone's help. Agents can't
@@ -236,7 +243,8 @@ primitives. Formats:
   rotated, so content written afterwards is unreadable to them even if they
   obtain ciphertext. Data they downloaded before removal cannot be revoked —
   the UI says so. Every note's document key is renewed in the same request
-  (members could unwrap them all).
+  (members could unwrap them all) — also the keys of notes deleted for good
+  that can still be undone, so undoing it brings back no key they knew.
 * **Recipients of a single note** hold only that note's document keys from
   the moment sharing started. Sharing gives the note a fresh key that has no
   chain link to its earlier ones, so even with all the ciphertext a recipient

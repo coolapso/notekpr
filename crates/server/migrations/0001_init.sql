@@ -191,17 +191,24 @@ CREATE TABLE vault_key_chain (
     PRIMARY KEY (vault_id, epoch)
 );
 
+-- Deleting an object for good (purge) hides it at once and keeps its data
+-- for the undo period: `erased_at` is set once the data is gone for good.
+-- An undo clears `purged_at`/`purged_seq` and sets `restored_seq`.
 CREATE TABLE objects (
-    vault_id   TEXT NOT NULL REFERENCES vaults(id) ON DELETE CASCADE,
-    id         TEXT NOT NULL,
-    created_by TEXT,
-    created_at INTEGER NOT NULL,
-    updated_at INTEGER NOT NULL,
-    purged_at  INTEGER,
-    purged_seq INTEGER,
+    vault_id     TEXT NOT NULL REFERENCES vaults(id) ON DELETE CASCADE,
+    id           TEXT NOT NULL,
+    created_by   TEXT,
+    created_at   INTEGER NOT NULL,
+    updated_at   INTEGER NOT NULL,
+    purged_at    INTEGER,
+    purged_seq   INTEGER,
+    restored_seq INTEGER,
+    erased_at    INTEGER,
     PRIMARY KEY (vault_id, id)
 );
 CREATE INDEX objects_purged ON objects(vault_id, purged_seq);
+CREATE INDEX objects_restored ON objects(vault_id, restored_seq) WHERE restored_seq IS NOT NULL;
+CREATE INDEX objects_to_erase ON objects(purged_at) WHERE purged_at IS NOT NULL AND erased_at IS NULL;
 
 CREATE TABLE updates (
     vault_id         TEXT NOT NULL REFERENCES vaults(id) ON DELETE CASCADE,
@@ -238,8 +245,11 @@ CREATE TABLE attachments (
     author_id  TEXT NOT NULL,
     data       BLOB NOT NULL,
     created_at INTEGER NOT NULL,
+    -- Deleted for good, kept for the undo period (as objects).
+    purged_at  INTEGER,
     PRIMARY KEY (vault_id, id)
 );
+CREATE INDEX attachments_purged ON attachments(purged_at) WHERE purged_at IS NOT NULL;
 
 -- Per-user private data, encrypted with the account key.
 CREATE TABLE user_prefs (

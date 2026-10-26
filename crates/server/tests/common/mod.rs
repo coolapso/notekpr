@@ -420,10 +420,16 @@ impl User {
         let meta = ring.encrypt_meta(br#"{"name":"rotated"}"#).unwrap();
         let mut objects = Vec::new();
         for (oid, doc_ring) in &doc_rings {
+            // None for a note deleted for good (still kept for an undo).
             let shares: Vec<ObjectShareInfo> = self
                 .api
-                .get(&format!("/vaults/{vault_id}/objects/{oid}/shares"))
-                .await;
+                .call::<(), _>(
+                    reqwest::Method::GET,
+                    &format!("/vaults/{vault_id}/objects/{oid}/shares"),
+                    None,
+                )
+                .await
+                .unwrap_or_default();
             let (gone, users): (Vec<PublicUser>, Vec<PublicUser>) = shares
                 .into_iter()
                 .map(|s| s.user)

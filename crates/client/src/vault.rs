@@ -622,6 +622,30 @@ impl Vault {
         a
     }
 
+    /// Deleting `object_id` for good was undone: fetch its changes again
+    /// ([`Self::apply_restored`], then [`Self::restored`]).
+    pub fn apply_restore(&mut self, object_id: &str, seq: i64) -> Applied {
+        let a = self.replica.apply_restore(object_id, seq);
+        self.mark_applied(&a);
+        a
+    }
+
+    /// One page of a restored object's changes, fetched from the start.
+    pub fn apply_restored(&mut self, object_id: &str, page: &ChangesResponse) -> Applied {
+        let (a, errors) = self.replica.apply_restored(object_id, page);
+        for e in errors {
+            tracing::warn!(vault = %self.replica.id, "skipped a change of a restored note that could not be decrypted: {e}");
+        }
+        self.mark_applied(&a);
+        a
+    }
+
+    /// All of a restored object's changes are in.
+    pub fn restored(&mut self, object_id: &str) {
+        self.replica.restored(object_id);
+        self.dirty_state = true;
+    }
+
     pub fn apply_purge(&mut self, object_id: &str, seq: i64) -> Applied {
         self.rescue(object_id);
         let before = self.outbox.held.len();
@@ -1215,9 +1239,23 @@ impl Vault {
             .index
             .entries()
             .into_iter()
-            .filter(|e| e.trashed.is_some())
+            .filter(|e| e.in_trash())
             .collect();
         v.sort_by(|a, b| b.trashed.cmp(&a.trashed).then(a.path.cmp(&b.path)));
+        v
+    }
+
+    /// Entries deleted for good, still in the index while the server may
+    /// keep them for an undo (newest first).
+    pub fn deleted_for_good(&self) -> Vec<Entry> {
+        let mut v: Vec<Entry> = self
+            .replica
+            .index
+            .entries()
+            .into_iter()
+            .filter(|e| e.purged.is_some())
+            .collect();
+        v.sort_by(|a, b| b.purged.cmp(&a.purged).then(a.path.cmp(&b.path)));
         v
     }
 
@@ -1655,6 +1693,43 @@ impl Vault {
     /// Drop a purged entry from the index.
     pub fn remove_entry(&mut self, id: &str) -> Result<()> {
         let u = self.replica.index.remove(id);
+        self.record_index(u)
+    }
+
+    /// Mark trashed entries deleted for good (the server keeps them a
+    /// while, so this can be undone).
+    pub fn mark_purged(&mut self, ids: &[String]) -> Result<()> {
+        let u = self
+            .replica
+            .index
+            .mark_purged(ids.iter().map(String::as_str), now_ms());
+        self.record_index(u)
+    }
+
+    /// An entry deleted for good, by id or by its (former) path.
+    pub fn find_deleted_for_good(&self, reference: &str) -> Result<Entry> {
+        let gone = self.deleted_for_good();
+        gone.iter()
+            .find(|e| e.id == reference)
+            .or_else(|| {
+                let p = paths::normalize(reference).ok()?;
+                gone.iter()
+                    .find(|e| e.path == p || e.path == format!("{p}.md"))
+            })
+            .cloned()
+            .ok_or_else(|| {
+                anyhow!(
+                    "nothing named '{reference}' was deleted for good in vault '{}'",
+                    self.name()
+                )
+            })
+    }
+
+    /// Deleting an entry for good was undone on the server: back in the
+    /// trash.
+    pub fn unmark_purged(&mut self, id: &str) -> Result<()> {
+        self.require_writable()?;
+        let u = self.replica.index.unmark_purged(id);
         self.record_index(u)
     }
 

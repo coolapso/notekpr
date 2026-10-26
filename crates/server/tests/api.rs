@@ -2481,6 +2481,306 @@ async fn only_the_owner_and_admins_delete_for_good() {
     );
 }
 
+/// Deleting for good can be undone for a while: gone for everyone at once,
+/// kept by the server for `--purge-undo-days`, back with everything (but
+/// its shares) when the owner or an admin undoes it, erased after.
+#[tokio::test]
+async fn deleting_for_good_can_be_undone_for_a_while() {
+    use notekpr_core::engine;
+    let srv = start().await;
+    let mut alice = new_user(&srv.base, "alice").await;
+    let mut bob = new_user(&srv.base, "bob").await;
+    let v = alice.create_vault("Team").await;
+    alice.share(&v, &bob.id, Role::Editor).await.unwrap();
+    bob.load_keys(&v).await.unwrap();
+    let note = NoteDoc::new();
+    let u = note.set_text("worth keeping").unwrap();
+    bob.push(&v, vec![bob.encrypt_update(&v, "n1", &u)])
+        .await
+        .unwrap();
+    // A note with its own key, and an attachment.
+    let (doc, req) = engine::new_document_key(alice.ring(&v), "n2", "Own").unwrap();
+    put_key(&alice, &v, "n2", &req).await.unwrap();
+    let own = NoteDoc::new().set_text("under its own key").unwrap();
+    alice
+        .push(
+            &v,
+            vec![PushUpdate {
+                object_id: "n2".into(),
+                client_update_id: random_id(),
+                payload: doc.encrypt(Purpose::Update, "n2", &own).unwrap(),
+                signature: None,
+            }],
+        )
+        .await
+        .unwrap();
+    assert_eq!(put_attachment(&bob, &v, "a1").await, 201);
+    let object = |o: &str| format!("/vaults/{v}/objects/{o}");
+    let attachment = |a: &str| format!("/vaults/{v}/attachments/{a}");
+    let purged_list = format!("/vaults/{v}/purged");
+    let mut wb = Ws::connect(&srv.ws, bob.api.token.as_deref().unwrap()).await;
+    wb.send(&ClientMessage::Subscribe {
+        vault_id: v.clone(),
+        since: None,
+        object_id: None,
+    })
+    .await;
+
+    for path in [object("n1"), object("n2"), attachment("a1")] {
+        assert_eq!(
+            alice.api.status::<()>(Method::DELETE, &path, None).await,
+            204
+        );
+    }
+    // Once more while it is kept: nothing changes.
+    let head: ChangesResponse = bob.api.get(&format!("/vaults/{v}/changes?since=0")).await;
+    assert_eq!(
+        alice
+            .api
+            .status::<()>(Method::DELETE, &object("n1"), None)
+            .await,
+        204
+    );
+    let again: ChangesResponse = bob.api.get(&format!("/vaults/{v}/changes?since=0")).await;
+    assert_eq!(again.head_seq, head.head_seq);
+    let purge_seq = wb
+        .until(|m| match m {
+            ServerMessage::Purged { object_id, seq, .. } if object_id == "n1" => Some(*seq),
+            _ => None,
+        })
+        .await;
+
+    // Gone for everyone: nothing of it is served, nobody writes to it.
+    assert!(again.updates.iter().all(|u| u.object_id != "n1"));
+    assert!(again.purged.iter().any(|p| p.object_id == "n1"));
+    for path in [
+        object("n1"),
+        format!("{}/snapshots", object("n1")),
+        attachment("a1"),
+    ] {
+        assert_eq!(bob.api.status::<()>(Method::GET, &path, None).await, 404);
+    }
+    let one: ChangesResponse = bob
+        .api
+        .get(&format!("{}/changes?since=0", object("n1")))
+        .await;
+    assert!(one.updates.is_empty() && one.snapshots.is_empty());
+    let late = bob.encrypt_update(&v, "n1", &NoteDoc::new().set_text("x").unwrap());
+    assert_eq!(
+        bob.push(&v, vec![late]).await.unwrap().rejected[0].code,
+        REJECT_PURGED
+    );
+
+    // Only the owner and admins see what can be undone, and undo it.
+    assert_eq!(
+        bob.api.status::<()>(Method::GET, &purged_list, None).await,
+        403
+    );
+    assert_eq!(
+        bob.api
+            .status::<()>(Method::POST, &format!("{}/restore", object("n1")), None)
+            .await,
+        403
+    );
+    let items: Vec<PurgedItem> = alice.api.get(&purged_list).await;
+    let mut ids: Vec<(&str, bool)> = items
+        .iter()
+        .map(|i| (i.id.as_str(), i.attachment))
+        .collect();
+    ids.sort();
+    assert_eq!(ids, [("a1", true), ("n1", false), ("n2", false)]);
+    assert!(
+        items
+            .iter()
+            .all(|i| i.kept_until == i.purged_at + 30 * 24 * 3600 * 1000)
+    );
+    let info: ServerInfo = alice.api.get("/info").await;
+    assert_eq!(info.purge_undo_days, 30);
+
+    // While kept, a note's own key still moves on with the vault's.
+    alice.rotate(&v).await;
+    let vk: VaultKeysResponse = alice.api.get(&format!("/vaults/{v}/keys")).await;
+    assert!(
+        vk.objects
+            .iter()
+            .any(|e| e.object_id == "n2" && e.epoch == notekpr_core::keys::FIRST_DOC_EPOCH + 1)
+    );
+
+    // Undone: back for everyone, with its content.
+    for path in [
+        format!("{}/restore", object("n1")),
+        format!("{}/restore", object("n2")),
+        format!("{}/restore", attachment("a1")),
+    ] {
+        assert_eq!(
+            alice.api.status::<()>(Method::POST, &path, None).await,
+            204,
+            "{path}"
+        );
+    }
+    let restore_seq = wb
+        .until(|m| match m {
+            ServerMessage::Restored { object_id, seq, .. } if object_id == "n1" => Some(*seq),
+            _ => None,
+        })
+        .await;
+    assert!(restore_seq > purge_seq);
+    // Not twice.
+    assert_eq!(
+        alice
+            .api
+            .status::<()>(Method::POST, &format!("{}/restore", object("n1")), None)
+            .await,
+        404
+    );
+    let since_purge: ChangesResponse = bob
+        .api
+        .get(&format!("/vaults/{v}/changes?since={purge_seq}"))
+        .await;
+    assert!(
+        since_purge
+            .restored
+            .iter()
+            .any(|r| r.object_id == "n1" && r.seq == restore_seq)
+    );
+    let one: ChangesResponse = bob
+        .api
+        .get(&format!("{}/changes?since=0", object("n1")))
+        .await;
+    let (_, notes) = decode_changes(bob.ring(&v), &[one]);
+    assert_eq!(notes["n1"].text(), "worth keeping");
+    assert_eq!(
+        bob.api
+            .status::<()>(Method::GET, &attachment("a1"), None)
+            .await,
+        200
+    );
+    assert!(
+        alice
+            .api
+            .get::<Vec<PurgedItem>>(&purged_list)
+            .await
+            .is_empty()
+    );
+    // The note with its own key needs the rotated one now.
+    let stale = PushUpdate {
+        object_id: "n2".into(),
+        client_update_id: random_id(),
+        payload: doc
+            .encrypt(
+                Purpose::Update,
+                "n2",
+                &NoteDoc::new().set_text("y").unwrap(),
+            )
+            .unwrap(),
+        signature: None,
+    };
+    assert_eq!(
+        alice.push(&v, vec![stale]).await.unwrap().rejected[0].code,
+        REJECT_STALE_KEY
+    );
+    let log: Vec<AuditEntry> = alice.api.get(&format!("/vaults/{v}/audit")).await;
+    assert!(log.iter().any(|a| a.action == "object.restore"));
+
+    // Deleted again and kept past the period: erased, for good.
+    for path in [object("n1"), attachment("a1")] {
+        assert_eq!(
+            alice.api.status::<()>(Method::DELETE, &path, None).await,
+            204
+        );
+    }
+    let month = 31 * 24 * 3600 * 1000_i64;
+    for q in [
+        "UPDATE objects SET purged_at = purged_at - ? WHERE purged_at IS NOT NULL",
+        "UPDATE attachments SET purged_at = purged_at - ? WHERE purged_at IS NOT NULL",
+    ] {
+        sqlx::query(q)
+            .bind(month)
+            .execute(&srv.state.db)
+            .await
+            .unwrap();
+    }
+    assert!(
+        alice
+            .api
+            .get::<Vec<PurgedItem>>(&purged_list)
+            .await
+            .is_empty()
+    );
+    assert_eq!(
+        alice
+            .api
+            .status::<()>(Method::POST, &format!("{}/restore", object("n1")), None)
+            .await,
+        404
+    );
+    assert_eq!(
+        notekpr_server::sync::erase_expired(&srv.state)
+            .await
+            .unwrap(),
+        2,
+        "the note and the attachment"
+    );
+    let left: i64 = sqlx::query_scalar(
+        "SELECT (SELECT COUNT(*) FROM updates WHERE object_id = 'n1')
+              + (SELECT COUNT(*) FROM attachments WHERE id = 'a1')",
+    )
+    .fetch_one(&srv.state.db)
+    .await
+    .unwrap();
+    assert_eq!(left, 0);
+    // Still reported as deleted, and refused.
+    let ch: ChangesResponse = bob.api.get(&format!("/vaults/{v}/changes?since=0")).await;
+    assert!(ch.purged.iter().any(|p| p.object_id == "n1"));
+    assert_eq!(
+        alice
+            .api
+            .status::<()>(Method::DELETE, &object("n1"), None)
+            .await,
+        404
+    );
+}
+
+/// With `--purge-undo-days 0`, deleting for good is what it says, at once.
+#[tokio::test]
+async fn without_an_undo_period_deleting_for_good_is_immediate() {
+    let srv = start_with(|c| c.purge_undo_days = 0).await;
+    let mut alice = new_user(&srv.base, "alice").await;
+    let v = alice.create_vault("Home").await;
+    let u = NoteDoc::new().set_text("gone").unwrap();
+    alice
+        .push(&v, vec![alice.encrypt_update(&v, "n1", &u)])
+        .await
+        .unwrap();
+    assert_eq!(put_attachment(&alice, &v, "a1").await, 201);
+    for path in [
+        format!("/vaults/{v}/objects/n1"),
+        format!("/vaults/{v}/attachments/a1"),
+    ] {
+        assert_eq!(
+            alice.api.status::<()>(Method::DELETE, &path, None).await,
+            204
+        );
+        assert_eq!(
+            alice
+                .api
+                .status::<()>(Method::POST, &format!("{path}/restore"), None)
+                .await,
+            404
+        );
+    }
+    let left: i64 = sqlx::query_scalar(
+        "SELECT (SELECT COUNT(*) FROM updates WHERE object_id = 'n1')
+              + (SELECT COUNT(*) FROM attachments WHERE id = 'a1')",
+    )
+    .fetch_one(&srv.state.db)
+    .await
+    .unwrap();
+    assert_eq!(left, 0);
+    let items: Vec<PurgedItem> = alice.api.get(&format!("/vaults/{v}/purged")).await;
+    assert!(items.is_empty());
+}
+
 async fn put_key(u: &User, v: &str, o: &str, req: &ObjectKeyUpdate) -> Result<(), u16> {
     u.api
         .call::<_, ()>(

@@ -539,11 +539,16 @@ pub enum VaultCmd {
 
 #[derive(Subcommand, Clone, Debug, Serialize, Deserialize)]
 pub enum TrashCmd {
-    /// List trashed entries.
+    /// List trashed entries, and (owner and admins) what was deleted for
+    /// good and can still be undone.
     List { vault: String },
     /// Restore an entry by path or id.
     Restore { vault: String, entry: String },
-    /// Permanently delete everything in the trash (owner and admins).
+    /// Undo deleting an entry for good (by path or id) while the server
+    /// still keeps it: it goes back to the trash (owner and admins).
+    Undo { vault: String, entry: String },
+    /// Delete everything in the trash for good (owner and admins); it can
+    /// be undone for as long as the server keeps it (`trash list`).
     Empty {
         vault: String,
         #[arg(long)]

@@ -2595,6 +2595,7 @@ mod tests {
             size: None,
             mime: None,
             trashed: None,
+            purged: None,
             icon: None,
             order: None,
         };
@@ -2755,6 +2756,7 @@ mod path_properties {
             created: 0,
             modified: 0,
             trashed: None,
+            purged: None,
             size: None,
             mime: None,
             icon: None,

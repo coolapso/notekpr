@@ -16,7 +16,8 @@
 //!
 //! 1. **Per-vault order.** Events published for one vault reach each
 //!    subscription in the order they were published. Writers of log events
-//!    ([`VaultEvent::Update`], [`VaultEvent::Purged`]) commit and publish
+//!    ([`VaultEvent::Update`], [`VaultEvent::Purged`],
+//!    [`VaultEvent::Restored`]) commit and publish
 //!    while holding the server's write lock, so publish order is sequence
 //!    order. A multi-process backend must order a vault's log events by
 //!    their sequence number, whichever process wrote them.
@@ -79,6 +80,11 @@ pub enum VaultEvent {
         object_id: String,
         seq: i64,
     },
+    /// Deleting an object for good was undone.
+    Restored {
+        object_id: String,
+        seq: i64,
+    },
     Awareness {
         object_id: String,
         from_user: String,
@@ -100,6 +106,7 @@ impl VaultEvent {
             VaultEvent::Snapshot { snapshot } => Some(&snapshot.object_id),
             VaultEvent::SnapshotCreated { object_id, .. }
             | VaultEvent::Purged { object_id, .. }
+            | VaultEvent::Restored { object_id, .. }
             | VaultEvent::Awareness { object_id, .. }
             | VaultEvent::Object { object_id, .. } => Some(object_id),
             VaultEvent::Event(_) => None,
@@ -110,7 +117,7 @@ impl VaultEvent {
     pub fn seq(&self) -> Option<i64> {
         match self {
             VaultEvent::Update { update, .. } => Some(update.seq),
-            VaultEvent::Purged { seq, .. } => Some(*seq),
+            VaultEvent::Purged { seq, .. } | VaultEvent::Restored { seq, .. } => Some(*seq),
             _ => None,
         }
     }

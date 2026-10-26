@@ -163,7 +163,8 @@ after a rename and among people with the same name.
 * **Reading and live events:** whoever can read the note reads its comments;
   a subscription to one note (people it's shared with) also gets its
   comments object's updates.
-* **Purging a note** purges its comments; trashing doesn't.
+* **Purging a note** purges its comments; trashing doesn't. Undoing the
+  purge brings them back with it.
 
 ## 5. Keys and single-note sharing
 

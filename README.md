@@ -105,8 +105,10 @@ read anything.
 * Move a note, or a folder with everything in it, to another vault, with
   the attachments its notes link to (`Move to vault…` in the file tree's
   menu or the note's ⋯ menu, `notekpr mv … --to-vault`).
-* A trash with restore, and the version history of every note with preview
-  and restore.
+* A trash with restore — even emptying it can be undone for a while (30
+  days unless the server is set otherwise), from the trash or
+  `notekpr trash undo` — and the version history of every note with
+  preview and restore.
 
 **Working together**
 

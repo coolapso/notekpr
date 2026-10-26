@@ -329,6 +329,17 @@ pub struct Config {
     )]
     pub snapshot_cooldown_secs: i64,
 
+    /// Days during which deleting something for good (emptying the trash)
+    /// can be undone by the vault's owner and admins: the server keeps it
+    /// that long, then deletes it. 0: deleted at once.
+    #[arg(
+        long,
+        env = "NOTEKPR_PURGE_UNDO_DAYS",
+        default_value_t = 30,
+        global = true
+    )]
+    pub purge_undo_days: u32,
+
     /// Trust X-Forwarded-For / X-Real-IP (only behind a reverse proxy you control).
     #[arg(
         long,
@@ -406,6 +417,11 @@ impl Config {
             Some(kb) => (kb * 1024).max(self.max_update_bytes()),
             None => (self.max_update_bytes() * 16).max(32 * 1024 * 1024),
         }
+    }
+
+    /// How long something deleted for good is kept, in milliseconds.
+    pub fn purge_undo_ms(&self) -> i64 {
+        self.purge_undo_days as i64 * 24 * 3600 * 1000
     }
 
     pub fn is_admin_identity(&self, issuer: &str, subject: &str) -> bool {

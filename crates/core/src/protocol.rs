@@ -138,6 +138,10 @@ pub struct ServerInfo {
     /// Set while the server refuses changes (see [`ServerMessage::Mode`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub read_only: Option<ReadOnly>,
+    /// Days during which deleting something for good can be undone: the
+    /// server keeps it that long. 0: at once gone (and older servers).
+    #[serde(default)]
+    pub purge_undo_days: u32,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -791,6 +795,15 @@ pub struct PurgedObject {
     pub seq: i64,
 }
 
+/// A deletion for good that was undone: the object is back, with
+/// everything it had. Clients that dropped it fetch its changes again
+/// (`GET …/objects/{o}/changes`).
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct RestoredObject {
+    pub object_id: String,
+    pub seq: i64,
+}
+
 /// A page of a vault's log after some sequence number. Objects whose latest
 /// snapshot covers part of the range are delivered as that snapshot plus the
 /// updates after it.
@@ -799,9 +812,24 @@ pub struct ChangesResponse {
     pub updates: Vec<Update>,
     pub snapshots: Vec<Snapshot>,
     pub purged: Vec<PurgedObject>,
+    /// Absent from older servers.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub restored: Vec<RestoredObject>,
     pub head_seq: i64,
     pub has_more: bool,
     pub next_since: i64,
+}
+
+/// Something of a vault deleted for good that can still be undone
+/// (`GET /vaults/{v}/purged`): the server keeps it until `kept_until`.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct PurgedItem {
+    /// The note's object id, or the attachment's id.
+    pub id: String,
+    #[serde(default)]
+    pub attachment: bool,
+    pub purged_at: i64,
+    pub kept_until: i64,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -1498,6 +1526,12 @@ pub enum ServerMessage {
         covers_seq: i64,
     },
     Purged {
+        vault_id: String,
+        object_id: String,
+        seq: i64,
+    },
+    /// Deleting `object_id` for good was undone ([`RestoredObject`]).
+    Restored {
         vault_id: String,
         object_id: String,
         seq: i64,

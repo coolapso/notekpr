@@ -4,8 +4,8 @@ use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use notekpr_core::protocol::{
-    ChangesResponse, CreateSnapshotRequest, ObjectState, PushRequest, PushResponse, Snapshot,
-    SnapshotInfo,
+    ChangesResponse, CreateSnapshotRequest, ObjectState, PurgedItem, PushRequest, PushResponse,
+    Snapshot, SnapshotInfo,
 };
 use serde::Deserialize;
 
@@ -136,4 +136,25 @@ pub async fn purge(
 ) -> AppResult<StatusCode> {
     sync::purge(&state, &who, &v, &o).await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// Undo deleting a note for good (owner and admins, while it is kept).
+pub async fn restore(
+    State(state): State<AppState>,
+    who: Principal,
+    Path((v, o)): Path<(String, String)>,
+) -> AppResult<StatusCode> {
+    sync::restore(&state, &who, &v, &o).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// What was deleted for good and can still be undone: for the vault's
+/// owner and admins, who can undo it.
+pub async fn purged(
+    State(state): State<AppState>,
+    who: Principal,
+    Path(v): Path<String>,
+) -> AppResult<Json<Vec<PurgedItem>>> {
+    access::require_admin(&state.db, &v, &who.user_id).await?;
+    Ok(Json(sync::purged_items(&state, &v).await?))
 }

@@ -68,7 +68,8 @@ pub async fn get(
 }
 
 /// Deleting an attachment for good (emptying the trash): the vault's owner
-/// and admins only, as for notes (`sync::purge`).
+/// and admins only, as for notes (`sync::purge`). Kept for the undo period
+/// like them, unless that is 0.
 pub async fn delete(
     State(state): State<AppState>,
     who: Principal,
@@ -77,6 +78,25 @@ pub async fn delete(
     access::require_admin(&state.db, &v, &who.user_id).await?;
     let _w = state.write_lock.lock().await;
     access::require_admin(&state.db, &v, &who.user_id).await?;
-    state.blobs.delete(&v, &id).await?;
+    if state.config.purge_undo_days == 0 {
+        state.blobs.delete(&v, &id).await?;
+    } else {
+        state.blobs.purge(&v, &id, db::now()).await?;
+    }
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Undo deleting an attachment for good, while it is kept (owner and
+/// admins, as deleting it).
+pub async fn restore(
+    State(state): State<AppState>,
+    who: Principal,
+    Path((v, id)): Path<(String, String)>,
+) -> AppResult<StatusCode> {
+    access::require_admin(&state.db, &v, &who.user_id).await?;
+    let _w = state.write_lock.lock().await;
+    access::require_admin(&state.db, &v, &who.user_id).await?;
+    let since = db::now() - state.config.purge_undo_ms();
+    state.blobs.restore(&v, &id, since).await?;
     Ok(StatusCode::NO_CONTENT)
 }

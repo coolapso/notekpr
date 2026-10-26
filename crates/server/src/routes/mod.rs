@@ -119,6 +119,8 @@ pub fn router(state: AppState) -> Router {
             "/vaults/{v}/objects/{o}/snapshots/{id}",
             get(sync::get_snapshot),
         )
+        .route("/vaults/{v}/objects/{o}/restore", post(sync::restore))
+        .route("/vaults/{v}/purged", get(sync::purged))
         .route("/vaults/{v}/objects/{o}/changes", get(sync::object_changes))
         .route("/vaults/{v}/objects/{o}/keys", get(shares::object_keys))
         .route(
@@ -145,6 +147,10 @@ pub fn router(state: AppState) -> Router {
                 .layer(attachment_limit)
                 .get(attachments::get)
                 .delete(attachments::delete),
+        )
+        .route(
+            "/vaults/{v}/attachments/{id}/restore",
+            post(attachments::restore),
         )
         .route("/agents", get(agents::list).post(agents::create))
         .route("/agents/{id}", delete(agents::delete))

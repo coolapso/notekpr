@@ -288,6 +288,11 @@ impl Api {
         self.request(Method::POST, path, Some(body)).await
     }
 
+    /// `POST` without a body (e.g. undoing a deletion).
+    pub async fn post_empty(&self, path: &str) -> ApiResult<()> {
+        self.request(Method::POST, path, None::<&()>).await
+    }
+
     pub async fn put<B: Serialize, T: DeserializeOwned>(
         &self,
         path: &str,

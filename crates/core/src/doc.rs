@@ -361,6 +361,13 @@ pub struct Entry {
     pub created: i64,
     pub modified: i64,
     pub trashed: Option<i64>,
+    /// When it was deleted for good (emptying the trash): the server keeps
+    /// its data for a while, so this can still be undone (back to the
+    /// trash) until then. Such entries show nowhere but in the trash's list
+    /// of what was deleted for good; the entry goes once the server let go
+    /// of the data.
+    #[serde(default)]
+    pub purged: Option<i64>,
     pub size: Option<u64>,
     pub mime: Option<String>,
     /// A note's or folder's icon, usually an emoji ([`clean_icon`]).
@@ -392,7 +399,12 @@ impl Entry {
     }
 
     pub fn is_live(&self) -> bool {
-        self.trashed.is_none()
+        self.trashed.is_none() && self.purged.is_none()
+    }
+
+    /// In the trash: trashed, not deleted for good.
+    pub fn in_trash(&self) -> bool {
+        self.trashed.is_some() && self.purged.is_none()
     }
 }
 
@@ -468,6 +480,7 @@ impl IndexDoc {
                 .map(|n| n as i64)
                 .unwrap_or(created),
             trashed: any_num(m.get(txn, "trashed")).map(|n| n as i64),
+            purged: any_num(m.get(txn, "purged")).map(|n| n as i64),
             size: any_num(m.get(txn, "size")).map(|n| n as u64),
             mime: any_str(m.get(txn, "mime")),
             // Anyone who can write sets it: only a valid one is shown.
@@ -714,10 +727,45 @@ impl IndexDoc {
         })
     }
 
+    /// Take an entry out of the trash. Not one deleted for good: its data is
+    /// gone from the server, or held there only for [`unmark_purged`].
+    ///
+    /// [`unmark_purged`]: Self::unmark_purged
     pub fn restore(&self, id: &str) -> Option<Vec<u8>> {
         self.mutate(|txn| {
-            if let Some(m) = self.entry_map(txn, id) {
+            if let Some(m) = self.entry_map(txn, id)
+                && m.get(txn, "purged").is_none()
+            {
                 m.remove(txn, "trashed");
+            }
+        })
+    }
+
+    /// Mark trashed entries deleted for good (their data was purged on the
+    /// server, which keeps it a while, see [`Entry::purged`]). `now` is Unix
+    /// milliseconds.
+    pub fn mark_purged<'a>(
+        &self,
+        ids: impl IntoIterator<Item = &'a str>,
+        now: i64,
+    ) -> Option<Vec<u8>> {
+        self.mutate(|txn| {
+            for id in ids {
+                if let Some(m) = self.entry_map(txn, id) {
+                    if m.get(txn, "trashed").is_none() {
+                        m.try_update(txn, "trashed", now as f64);
+                    }
+                    m.try_update(txn, "purged", now as f64);
+                }
+            }
+        })
+    }
+
+    /// Undoing a deletion for good: the entry is back in the trash.
+    pub fn unmark_purged(&self, id: &str) -> Option<Vec<u8>> {
+        self.mutate(|txn| {
+            if let Some(m) = self.entry_map(txn, id) {
+                m.remove(txn, "purged");
             }
         })
     }
@@ -947,6 +995,34 @@ mod tests {
         b.apply_update(&r).unwrap();
         assert!(b.get("n1").unwrap().is_live());
         assert_eq!(b.folders(), vec!["Projects".to_string()]);
+    }
+
+    #[test]
+    fn deleted_for_good_leaves_the_trash_until_undone() {
+        let a = IndexDoc::new();
+        a.create("n", "Old.md", EntryKind::Note, 1);
+        a.create("m", "Other.md", EntryKind::Note, 1);
+        a.trash("n", 2);
+        let u = a.mark_purged(["n", "m"], 3).unwrap();
+        let b = IndexDoc::from_updates([a.encode_state().as_slice(), u.as_slice()]).unwrap();
+        for d in [&a, &b] {
+            let e = d.get("n").unwrap();
+            assert_eq!((e.trashed, e.purged), (Some(2), Some(3)));
+            assert!(!e.is_live() && !e.in_trash());
+            // Deleted for good straight away (never trashed): trashed too.
+            let m = d.get("m").unwrap();
+            assert_eq!((m.trashed, m.purged), (Some(3), Some(3)));
+        }
+        // Can't come out of the trash while deleted for good.
+        assert!(a.restore("n").is_none());
+        assert!(!a.get("n").unwrap().is_live());
+        assert!(a.find_by_path("Old.md").is_none());
+        // Undone: back in the trash, from where it can be restored.
+        b.apply_update(&a.unmark_purged("n").unwrap()).unwrap();
+        let e = b.get("n").unwrap();
+        assert!(e.in_trash() && e.purged.is_none());
+        b.restore("n").unwrap();
+        assert!(b.get("n").unwrap().is_live());
     }
 
     #[test]

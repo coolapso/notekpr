@@ -36,6 +36,7 @@ pub async fn info(State(state): State<AppState>) -> Json<ServerInfo> {
         note_keys: true,
         max_snapshot_bytes: state.config.max_snapshot_bytes(),
         read_only: state.instance.read_only(),
+        purge_undo_days: state.config.purge_undo_days,
         demo_resets_at: state
             .config
             .demo_resets_at

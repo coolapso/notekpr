@@ -590,6 +590,11 @@ async fn forward(
                 object_id: object_id.clone(),
                 seq: *seq,
             },
+            VaultEvent::Restored { object_id, seq } => ServerMessage::Restored {
+                vault_id: v,
+                object_id: object_id.clone(),
+                seq: *seq,
+            },
             VaultEvent::Awareness {
                 object_id,
                 from_user,

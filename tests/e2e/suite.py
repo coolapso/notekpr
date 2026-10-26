@@ -2589,6 +2589,48 @@ def test_vault_admins(env):
         b.close()
 
 
+def test_undo_purge(env):
+    """Deleting for good can be undone from the trash for a while."""
+    a, b = Browser(), Browser()
+    try:
+        an, bn = uniq("uma"), uniq("vic")
+        signup(a, an)
+        signup(b, bn)
+        new_note(a, "Keeper", "worth keeping")
+        path = a.js("return location.pathname")
+        share(a, ".sb-bottom button:nth-child(2)", bn)
+        b.go(env.url.rstrip("/") + path)
+        b.wait("return document.querySelector('.ed') && document.querySelector('.ed').textContent.includes('worth keeping')", 20, "vic sees the note")
+        a.click(".note-head .tb-drop .icon-btn")
+        a.click_el(a.find_text(".menu button", "Move to trash"))
+        time.sleep(0.6)
+        a.click_el(a.find_text(".sb-link", "Trash"))
+        a.js("window.confirm = (m) => { window.asked = m; return true; }")
+        a.click_el(a.find_text(".list-row .btn", "Delete forever"))
+        a.find_text(".trash-gone-list .list-row", "Keeper", 10)
+        check("undo it here for 30 days" in a.js("return window.asked"), "deleting for good says it can be undone, and for how long")
+        check("The trash is empty." in a.text(".page-body") and "kept until" in a.text(".trash-gone-list"),
+              "gone from the trash, listed as deleted for good")
+        check(not a.js("return Array.from(document.querySelectorAll('.sb-link')).some(e => e.textContent.includes('Keeper'))"),
+              "and nowhere else (not in Recent)")
+        b.wait("return !document.querySelector('.ed')", 15, "gone for vic too")
+        a.shot("trash-deleted-for-good")
+        a.click_el(a.find_text(".trash-gone-list .btn", "Undo"))
+        a.find_text(".toast", "Back in the trash", 10)
+        a.wait("return !document.querySelector('.trash-gone-list')", 10, "nothing left to undo")
+        a.click_el(a.find_text(".list-row .btn", "Restore", 10))
+        a.click_el(a.find_text(".tree-item", "Keeper", 10))
+        a.wait("return document.querySelector('.ed') && document.querySelector('.ed').textContent.includes('worth keeping')", 20,
+               "restored with its text")
+        b.go(env.url.rstrip("/") + path)
+        b.wait("return document.querySelector('.ed') && document.querySelector('.ed').textContent.includes('worth keeping')", 20,
+               "and vic has it back too")
+        check(not severe_logs(a, b), "no browser errors")
+    finally:
+        a.close()
+        b.close()
+
+
 def test_device_code(env):
     """Approving a device sign-in shows when and from where it was asked for."""
     import urllib.parse, urllib.request
@@ -2609,7 +2651,7 @@ def test_device_code(env):
         a.close()
 
 
-TESTS = [test_onboarding, test_collab, test_devices_and_recovery, test_features, test_attachments, test_move_to_vault, test_note_sharing, test_tables, test_code_blocks, test_html, test_callouts, test_colors, test_code_wrapping, test_editor_mouse, test_editor_safety, test_local_copy, test_ui_basics, test_offline_tabs, test_offline_start, test_mobile, test_quick_notes, test_vault_icons, test_entry_icons, test_tree_order, test_session_ended_while_away, test_comments, test_mentions, test_dates, test_graph, test_recovered_copy, test_note_width, test_admin, test_vault_admins, test_device_code]
+TESTS = [test_onboarding, test_collab, test_devices_and_recovery, test_features, test_attachments, test_move_to_vault, test_note_sharing, test_tables, test_code_blocks, test_html, test_callouts, test_colors, test_code_wrapping, test_editor_mouse, test_editor_safety, test_local_copy, test_ui_basics, test_offline_tabs, test_offline_start, test_mobile, test_quick_notes, test_vault_icons, test_entry_icons, test_tree_order, test_session_ended_while_away, test_comments, test_mentions, test_dates, test_graph, test_recovered_copy, test_note_width, test_admin, test_vault_admins, test_undo_purge, test_device_code]
 
 
 def main():

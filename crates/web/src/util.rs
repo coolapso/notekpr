@@ -82,6 +82,13 @@ pub fn absolute_time(ms: i64) -> String {
     s
 }
 
+/// The local date, without the time.
+pub fn date(ms: i64) -> String {
+    let d = js_sys::Date::new(&JsValue::from_f64(ms as f64));
+    d.to_locale_date_string("default", &JsValue::UNDEFINED)
+        .into()
+}
+
 /// The local time of day, "15:04".
 pub fn clock_time(ms: i64) -> String {
     let d = js_sys::Date::new(&JsValue::from_f64(ms as f64));

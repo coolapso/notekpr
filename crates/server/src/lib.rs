@@ -92,6 +92,11 @@ fn spawn_maintenance(state: AppState) {
             let _ = repo::sessions::delete_expired_oidc_states(db, now).await;
             let _ = repo::sessions::delete_device_grants_expired_before(db, now - 86_400_000).await;
             let _ = repo::sessions::forget_device_grant_addresses(db, now).await;
+            match sync::erase_expired(&state).await {
+                Ok(0) => {}
+                Ok(n) => tracing::info!(n, "erased what was deleted for good and no longer kept"),
+                Err(e) => tracing::warn!(error = %e, "could not erase what was deleted for good"),
+            }
             let _ = repo::sessions::delete_ended_before(db, now - month).await;
         }
     });

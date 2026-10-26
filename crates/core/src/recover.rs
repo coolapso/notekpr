@@ -236,6 +236,11 @@ pub fn vault_files(
     // note's own path is never taken by another's comments.
     let mut commented = Vec::new();
     for e in replica.index.entries() {
+        // Deleted for good: an export doesn't hold it, even while it can
+        // still be undone.
+        if e.purged.is_some() {
+            continue;
+        }
         let trashed = !e.is_live();
         match e.kind {
             EntryKind::Folder => {
@@ -515,6 +520,7 @@ mod tests {
                     updates,
                     snapshots: vec![],
                     purged: vec![],
+                    restored: vec![],
                     head_seq: seq,
                     has_more: false,
                     next_since: seq,
@@ -613,6 +619,7 @@ mod tests {
                         signature: None,
                     }],
                     purged: vec![],
+                    restored: vec![],
                     head_seq: seq + 1,
                     has_more: false,
                     next_since: seq + 1,

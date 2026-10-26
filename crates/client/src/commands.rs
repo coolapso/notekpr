@@ -1921,8 +1921,34 @@ async fn trash(ctx: &Ctx, c: TrashCmd) -> Result<()> {
             let hub = ctx.hub(&[&vault]).await?;
             let v = hub.resolve(&vault).await?;
             let list = v.lock().await.trashed();
+            // Deleted for good, still kept by the server (owner and admins).
+            let gone = match ops::deleted_for_good(&hub, &vault).await {
+                Ok(g) => g,
+                Err(e) => {
+                    ui::warn(&format!("could not list what was deleted for good: {e}"));
+                    vec![]
+                }
+            };
             if ctx.json {
-                ctx.print_json(&list);
+                #[derive(Serialize)]
+                struct Item {
+                    #[serde(flatten)]
+                    entry: Entry,
+                    #[serde(skip_serializing_if = "Option::is_none")]
+                    kept_until: Option<i64>,
+                }
+                let items: Vec<Item> = list
+                    .into_iter()
+                    .map(|entry| Item {
+                        entry,
+                        kept_until: None,
+                    })
+                    .chain(gone.into_iter().map(|(entry, until)| Item {
+                        entry,
+                        kept_until: Some(until),
+                    }))
+                    .collect();
+                ctx.print_json(&items);
                 return Ok(());
             }
             if list.is_empty() {
@@ -1937,6 +1963,30 @@ async fn trash(ctx: &Ctx, c: TrashCmd) -> Result<()> {
                     e.id
                 );
             }
+            if !gone.is_empty() {
+                crate::out!(
+                    "deleted for good, can be undone (`notekpr trash undo <vault> <entry>`):"
+                );
+                for (e, until) in gone {
+                    crate::out!(
+                        "{}  {:<10}  {}  [{}]  kept until {}",
+                        ui::fmt_time(e.purged.unwrap_or(0)),
+                        e.kind.as_str(),
+                        e.path,
+                        e.id,
+                        ui::fmt_time(until)
+                    );
+                }
+            }
+            Ok(())
+        }
+        TrashCmd::Undo { vault, entry } => {
+            let hub = ctx.hub(&[&vault]).await?;
+            let e = op(ops::undo_purge(&hub, &vault, &entry).await)?;
+            crate::out!(
+                "{} is back in the trash (`notekpr trash restore` takes it out)",
+                e.path
+            );
             Ok(())
         }
         TrashCmd::Restore { vault, entry } => {
@@ -1954,9 +2004,9 @@ async fn trash(ctx: &Ctx, c: TrashCmd) -> Result<()> {
         }
         TrashCmd::Empty { vault, yes } => {
             let hub = ctx.hub(&[&vault]).await?;
-            confirm_or_flag(yes, "Permanently delete everything in the trash?")?;
+            confirm_or_flag(yes, "Delete everything in the trash for good?")?;
             let n = op(ops::empty_trash(&hub, &vault).await)?;
-            crate::out!("permanently deleted {n} item(s)");
+            crate::out!("deleted {n} item(s) for good");
             Ok(())
         }
     }

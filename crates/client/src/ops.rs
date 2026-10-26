@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use notekpr_core::doc::{Entry, EntryKind};
 use notekpr_core::moving::{self, Unmovable, What};
-use notekpr_core::protocol::{INDEX_OBJECT_ID, Limit, Snapshot, SnapshotInfo};
+use notekpr_core::protocol::{INDEX_OBJECT_ID, Limit, PurgedItem, Snapshot, SnapshotInfo};
 use notekpr_core::{markdown, paths, quick, search};
 use serde::Serialize;
 
@@ -885,8 +885,10 @@ pub async fn put_attachment(
     Ok(finish(hub, &vault_id, res, data).await)
 }
 
-/// Permanently delete everything in a vault's trash (server and index): the
-/// vault's owner and admins only.
+/// Delete everything in a vault's trash for good: the vault's owner and
+/// admins only. The server keeps it for a while (`purge_undo_days`), so the
+/// index keeps the entries, marked, for [`undo_purge`]; entries with nothing
+/// on the server (folders, what is gone already) are removed.
 pub async fn empty_trash(hub: &Hub, vref: &str) -> OpResult<usize> {
     let v = vault(hub, vref).await?;
     let (vid, entries) = {
@@ -901,6 +903,8 @@ pub async fn empty_trash(hub: &Hub, vref: &str) -> OpResult<usize> {
     };
     let api = &hub.session.api;
     let mut purged = BTreeSet::new();
+    // Kept by the server (marked), or nothing there (removed).
+    let mut kept = Vec::new();
     for e in &entries {
         let res = match e.kind {
             EntryKind::Note => api.delete(&format!("/vaults/{vid}/objects/{}", e.id)).await,
@@ -908,10 +912,14 @@ pub async fn empty_trash(hub: &Hub, vref: &str) -> OpResult<usize> {
                 api.delete(&format!("/vaults/{vid}/attachments/{}", e.id))
                     .await
             }
-            EntryKind::Folder => Ok(()),
+            // Nothing on the server.
+            EntryKind::Folder => {
+                purged.insert(e.id.clone());
+                continue;
+            }
         };
         match res {
-            Ok(()) => {}
+            Ok(()) => kept.push(e.id.clone()),
             Err(err) if err.is_not_found() => {}
             Err(err) if err.is_offline() => return Err(OpError::Unavailable(err.to_string())),
             Err(err) => {
@@ -934,12 +942,135 @@ pub async fn empty_trash(hub: &Hub, vref: &str) -> OpResult<usize> {
                     g.apply_purge(id, 0);
                 }
             }
-            g.remove_entry(id)?;
+            if !kept.contains(id) {
+                g.remove_entry(id)?;
+            }
         }
+        g.mark_purged(&kept)?;
         g.save()?;
     }
     hub.local_changed(&vid, vec![], true).await;
     Ok(purged.len())
+}
+
+/// What of a vault was deleted for good and can still be undone, with how
+/// long it is kept (the vault's owner and admins).
+pub async fn deleted_for_good(hub: &Hub, vref: &str) -> OpResult<Vec<(Entry, i64)>> {
+    let v = vault(hub, vref).await?;
+    let (vid, entries) = {
+        let g = v.lock().await;
+        if !g.role().can_administer() {
+            return Ok(vec![]);
+        }
+        (g.id().to_string(), g.deleted_for_good())
+    };
+    if entries.is_empty() {
+        return Ok(vec![]);
+    }
+    let kept: Vec<PurgedItem> = match hub.session.api.get(&format!("/vaults/{vid}/purged")).await {
+        Ok(k) => k,
+        Err(e) if e.is_offline() => return Err(OpError::Unavailable(e.to_string())),
+        Err(e) => return Err(OpError::Internal(anyhow::anyhow!(e))),
+    };
+    Ok(entries
+        .into_iter()
+        .filter_map(|e| {
+            let until = kept.iter().find(|k| k.id == e.id)?.kept_until;
+            Some((e, until))
+        })
+        .collect())
+}
+
+/// Undo deleting an entry for good (by path or id), while the server keeps
+/// it: back in the trash. The vault's owner and admins only.
+pub async fn undo_purge(hub: &Hub, vref: &str, reference: &str) -> OpResult<Entry> {
+    let v = vault(hub, vref).await?;
+    let (vid, e) = {
+        let g = v.lock().await;
+        check_write(hub, &g)?;
+        if !g.role().can_administer() {
+            return Err(OpError::Forbidden(
+                "only the vault's owner and its admins can undo deleting for good".into(),
+            ));
+        }
+        let e = g
+            .find_deleted_for_good(reference)
+            .map_err(|e| OpError::NotFound(format!("{e:#}")))?;
+        (g.id().to_string(), e)
+    };
+    let path = match e.kind {
+        EntryKind::Note => format!("/vaults/{vid}/objects/{}/restore", e.id),
+        EntryKind::Attachment => format!("/vaults/{vid}/attachments/{}/restore", e.id),
+        EntryKind::Folder => {
+            return Err(OpError::NotFound("a folder can't be brought back".into()));
+        }
+    };
+    match hub.session.api.post_empty(&path).await {
+        Ok(()) => {}
+        Err(err) if err.is_not_found() => {
+            return Err(OpError::NotFound(format!(
+                "'{}' can't be brought back any more: it is gone for good",
+                e.path
+            )));
+        }
+        Err(err) if err.is_offline() => return Err(OpError::Unavailable(err.to_string())),
+        Err(err) => return Err(OpError::Internal(anyhow::anyhow!(err))),
+    }
+    {
+        let mut g = v.lock().await;
+        g.unmark_purged(&e.id)?;
+        g.save()?;
+    }
+    hub.local_changed(&vid, vec![], true).await;
+    // The note's content comes back with the server's `restored`.
+    Ok(e)
+}
+
+/// Entries deleted for good stay in the index (marked) while the server
+/// keeps their data; once their undo period is over and the server let go
+/// of it, the vault's owner or an admin drops them. Asks the server only
+/// when there are such entries. Returns how many were dropped.
+pub async fn forget_erased(hub: &Hub, vault_id: &str, undo_days: u32) -> OpResult<usize> {
+    let Some(v) = hub.get(vault_id) else {
+        return Ok(0);
+    };
+    let over = notekpr_core::now_ms() - undo_days as i64 * 24 * 3600 * 1000;
+    let due: Vec<String> = {
+        let g = v.lock().await;
+        if !g.role().can_administer() || g.read_only.is_some() || hub.read_only {
+            return Ok(0);
+        }
+        g.deleted_for_good()
+            .into_iter()
+            .filter(|e| e.purged.is_some_and(|at| at <= over))
+            .map(|e| e.id)
+            .collect()
+    };
+    if due.is_empty() {
+        return Ok(0);
+    }
+    let kept: Vec<PurgedItem> = hub
+        .session
+        .api
+        .get(&format!("/vaults/{vault_id}/purged"))
+        .await
+        .map_err(|e| OpError::Unavailable(e.to_string()))?;
+    let gone: Vec<String> = due
+        .into_iter()
+        .filter(|id| !kept.iter().any(|k| &k.id == id))
+        .collect();
+    if gone.is_empty() {
+        return Ok(0);
+    }
+    {
+        let mut g = v.lock().await;
+        for id in &gone {
+            g.remove_entry(id)?;
+        }
+        g.save()?;
+    }
+    hub.local_changed(vault_id, vec![], true).await;
+    Ok(gone.len())
 }
 
 // ---------------------------------------------------------------- quick notes

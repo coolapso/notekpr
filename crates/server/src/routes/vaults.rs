@@ -638,7 +638,7 @@ pub async fn rotate_keys(
     }
     let now = db::now();
     // Every note's key moves on with the vault key: removed members knew
-    // them all (R2).
+    // them all (R2) — also of notes deleted for good that can be undone.
     let keyed: HashSet<String> = repo::shares::keyed_in_vault(&mut *tx, &v)
         .await?
         .into_iter()
@@ -655,6 +655,7 @@ pub async fn rotate_keys(
             &state,
             &mut tx,
             &who,
+            true,
             true,
             &v,
             &c.object_id,

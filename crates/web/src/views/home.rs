@@ -2,9 +2,10 @@
 
 use leptos::prelude::*;
 use notekpr_core::doc::{Entry, EntryKind};
-use notekpr_core::protocol::Role;
+use notekpr_core::protocol::{PurgedItem, Role};
 
 use crate::actions;
+use crate::api;
 use crate::state::{self, Modal, Route, step, ui};
 use crate::util;
 use crate::views::icons::Icon;
@@ -211,17 +212,18 @@ pub fn note_card(
 pub fn Trash(vault: String) -> impl IntoView {
     let ui = ui();
     let v = vault.clone();
-    let items = move || {
+    let entries = move || {
         ui.tree_rev.get();
-        let mut e: Vec<_> = step(|c| {
+        step(|c| {
             c.replicas
                 .get(&v)
                 .map(|r| r.index.entries())
                 .unwrap_or_default()
         })
-        .into_iter()
-        .filter(|e| !e.is_live())
-        .collect();
+    };
+    let all = entries.clone();
+    let items = move || {
+        let mut e: Vec<_> = all().into_iter().filter(|e| e.in_trash()).collect();
         e.sort_by_key(|x| std::cmp::Reverse(x.trashed));
         e
     };
@@ -236,10 +238,43 @@ pub fn Trash(vault: String) -> impl IntoView {
         ui.vaults.get();
         state::step(|c| c.can_administer(&v))
     };
+    // What was deleted for good and can still be undone: the server's list,
+    // named by the entries it left in the index (owner and admins).
+    let kept = RwSignal::new(Vec::<PurgedItem>::new());
+    let (vk, ak) = (vault.clone(), admin.clone());
+    Effect::new(move |_| {
+        ui.tree_rev.get();
+        if !ak() {
+            kept.set(vec![]);
+            return;
+        }
+        let v = vk.clone();
+        leptos::task::spawn_local(async move {
+            if let Ok(l) = api::get::<Vec<PurgedItem>>(&format!("/vaults/{v}/purged")).await {
+                kept.set(l);
+            }
+        });
+    });
+    let undoable = move || {
+        let list = kept.get();
+        let mut out: Vec<(Entry, i64)> = entries()
+            .into_iter()
+            .filter(|e| e.purged.is_some())
+            .filter_map(|e| {
+                let until = list.iter().find(|k| k.id == e.id)?.kept_until;
+                Some((e, until))
+            })
+            .collect();
+        out.sort_by_key(|(e, _)| std::cmp::Reverse(e.purged));
+        out
+    };
+    let period = actions::purge_undo_period();
     let items2 = items.clone();
     let ve = vault.clone();
     let vi = vault.clone();
+    let vu = vault.clone();
     let (w2, a2, a3) = (writable.clone(), admin.clone(), admin.clone());
+    let (p1, p2) = (period.clone(), period.clone());
     view! {
         <div class="page">
             <header class="page-head">
@@ -248,9 +283,14 @@ pub fn Trash(vault: String) -> impl IntoView {
                 <Show when=move || admin() && !items2().is_empty()>
                     {
                         let ve = ve.clone();
+                        let p1 = p1.clone();
                         view! {
                             <button class="btn danger small" on:click=move |_| {
-                                if util::confirm("Permanently delete everything in the trash? This cannot be undone.") {
+                                let ask = match &p1 {
+                                    Some(p) => format!("Delete everything in the trash for good? You can still undo it here for {p}."),
+                                    None => "Permanently delete everything in the trash? This cannot be undone.".into(),
+                                };
+                                if util::confirm(&ask) {
                                     let v = ve.clone();
                                     leptos::task::spawn_local(async move { actions::empty_trash(&v).await });
                                 }
@@ -276,6 +316,7 @@ pub fn Trash(vault: String) -> impl IntoView {
                             {list.into_iter().map(|e| {
                                 let (v1, id1) = (vi.clone(), e.id.clone());
                                 let (v2, id2) = (vi.clone(), e.id.clone());
+                                let p2 = p2.clone();
                                 view! {
                                     <div class="list-row">
                                         <Icon name=if e.kind == EntryKind::Folder { "folder" } else { "file" }/>
@@ -288,7 +329,11 @@ pub fn Trash(vault: String) -> impl IntoView {
                                         })}
                                         {admin.then(|| view! {
                                             <button class="btn small danger" on:click=move |_| {
-                                                if util::confirm("Delete this permanently? This cannot be undone.") {
+                                                let ask = match &p2 {
+                                                    Some(p) => format!("Delete this for good? You can still undo it here for {p}."),
+                                                    None => "Delete this permanently? This cannot be undone.".into(),
+                                                };
+                                                if util::confirm(&ask) {
                                                     let (v, id) = (v2.clone(), id2.clone());
                                                     leptos::task::spawn_local(async move { actions::purge(&v, &id).await; });
                                                 }
@@ -299,6 +344,34 @@ pub fn Trash(vault: String) -> impl IntoView {
                             }).collect_view()}
                         </div>
                     }.into_any()
+                }}
+                {move || {
+                    let list = undoable();
+                    (!list.is_empty()).then(|| view! {
+                        <h2 class="trash-gone">"Deleted for good"</h2>
+                        <p class="muted small">"Kept a while longer: until then, undoing it puts it back in the trash."</p>
+                        <div class="list trash-gone-list">
+                            {list.into_iter().map(|(e, until)| {
+                                let (v, id) = (vu.clone(), e.id.clone());
+                                view! {
+                                    <div class="list-row">
+                                        <Icon name=if e.kind == EntryKind::Folder { "folder" } else { "file" }/>
+                                        <div class="grow">
+                                            <div>{e.path.clone()}</div>
+                                            <div class="muted small">
+                                                {format!("deleted for good {} · ", util::relative_time(e.purged.unwrap_or(0)))}
+                                                <span title=util::absolute_time(until)>{format!("kept until {}", util::date(until))}</span>
+                                            </div>
+                                        </div>
+                                        <button class="btn small" on:click=move |_| {
+                                            let (v, id) = (v.clone(), id.clone());
+                                            leptos::task::spawn_local(async move { actions::undo_purge(&v, &id).await; });
+                                        }>"Undo"</button>
+                                    </div>
+                                }
+                            }).collect_view()}
+                        </div>
+                    })
                 }}
             </div>
         </div>

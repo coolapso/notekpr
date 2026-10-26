@@ -188,6 +188,7 @@ env file) counts as not set.
 | `--max-snapshot-kb` / `NOTEKPR_MAX_SNAPSHOT_KB` | 16 × the update limit, at least 32 MiB | maximum size of one snapshot (a note's full state; also how a change too large for one update still reaches others) |
 | `--snapshot-retention` / `NOTEKPR_SNAPSHOT_RETENTION` | `100` | revisions kept per document (never fewer than 2) |
 | `--snapshot-cooldown-secs` / `NOTEKPR_SNAPSHOT_COOLDOWN_SECS` | `30` | minimum time between two snapshots of one note by one person |
+| `--purge-undo-days` / `NOTEKPR_PURGE_UNDO_DAYS` | `30` | how long something deleted for good (emptying the trash) is kept so the vault's owner and admins can undo it; then it is deleted. `0`: deleted at once. It takes room in the database meanwhile |
 | `--trust-proxy` / `NOTEKPR_TRUST_PROXY` | `false` | use `X-Forwarded-For` (or, without a usable one, `X-Real-IP`) for rate limiting (only behind your proxy, §4) |
 | `--rate-limit-rps` / `NOTEKPR_RATE_LIMIT_RPS` | `50` | API requests per second per IP (burst ×4) |
 | `--auth-rate-limit-per-min` / `NOTEKPR_AUTH_RATE_LIMIT_PER_MIN` | `30` | login/token requests per minute per IP |

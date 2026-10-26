@@ -811,6 +811,61 @@ async fn unsent_edits_refused_because_their_note_is_gone_are_kept() {
     assert!(note(&bh, &vid, "Soup (recovered 2).md").await.is_none());
 }
 
+/// Emptying the trash can be undone for a while: what was deleted for good
+/// goes back to the trash, and its text comes back to everyone's copy.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn deleting_for_good_can_be_undone() {
+    let srv = start().await;
+    let alice = login(&srv, "alice").await;
+    let bob = login(&srv, "bob").await;
+    manage::create_vault(&alice, "Home").await.unwrap();
+    let ah = hub(&alice).await;
+    ops::put_document(&ah, "Home", "Soup.md", "leeks\n", None)
+        .await
+        .unwrap();
+    let av = ah.resolve("Home").await.unwrap();
+    let vid = av.lock().await.id().to_string();
+    manage::share(&alice, &av, "bob", Role::Editor, false)
+        .await
+        .unwrap();
+    let bh = hub(&bob).await;
+    let bv = bh.resolve(&vid).await.unwrap();
+    bh.sync_vault(&vid).await.unwrap();
+    assert_eq!(note(&bh, &vid, "Soup.md").await.as_deref(), Some("leeks\n"));
+
+    ops::delete_document(&ah, &vid, "Soup.md").await.unwrap();
+    assert_eq!(ops::empty_trash(&ah, &vid).await.unwrap(), 1);
+    assert!(av.lock().await.trashed().is_empty());
+    let gone = ops::deleted_for_good(&ah, &vid).await.unwrap();
+    assert_eq!(gone.len(), 1, "{gone:?}");
+    assert_eq!(gone[0].0.path, "Soup.md");
+    // Editors don't see it, nor undo it.
+    bh.sync_vault(&vid).await.unwrap();
+    assert!(bv.lock().await.trashed().is_empty());
+    assert!(bv.lock().await.note_text(&gone[0].0.id).is_empty());
+    assert!(ops::deleted_for_good(&bh, &vid).await.unwrap().is_empty());
+    let err = ops::undo_purge(&bh, &vid, "Soup.md").await.unwrap_err();
+    assert!(matches!(err, ops::OpError::Forbidden(_)), "{err:?}");
+
+    // Undone: back in the trash, everywhere, with its text.
+    let e = ops::undo_purge(&ah, &vid, "Soup.md").await.unwrap();
+    assert_eq!(e.path, "Soup.md");
+    let err = ops::undo_purge(&ah, &vid, "Soup.md").await.unwrap_err();
+    assert!(matches!(err, ops::OpError::NotFound(_)), "{err:?}");
+    assert!(ops::deleted_for_good(&ah, &vid).await.unwrap().is_empty());
+    bh.sync_vault(&vid).await.unwrap();
+    assert_eq!(bv.lock().await.trashed().len(), 1);
+    {
+        let mut g = bv.lock().await;
+        g.restore("Soup.md").unwrap();
+        g.save().unwrap();
+    }
+    assert_eq!(note(&bh, &vid, "Soup.md").await.as_deref(), Some("leeks\n"));
+    bh.sync_vault(&vid).await.unwrap();
+    ah.sync_vault(&vid).await.unwrap();
+    assert_eq!(note(&ah, &vid, "Soup.md").await.as_deref(), Some("leeks\n"));
+}
+
 /// Editors move notes to the trash; emptying it is the owner's and the
 /// vault's admins'. The owner makes someone an admin in the signed log.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

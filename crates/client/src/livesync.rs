@@ -482,6 +482,27 @@ fn is_missing_epoch(e: &anyhow::Error) -> bool {
     )
 }
 
+/// Fetch the notes whose deletion for good was undone (in the background:
+/// the cursor waits for them, so a failure is retried with the next
+/// catch-up).
+fn spawn_fetch_restored(hub: &Arc<Hub>, vault_id: &str, a: &notekpr_core::engine::Applied) {
+    if a.restored.is_empty() {
+        return;
+    }
+    let (h, vault_id, ids) = (hub.clone(), vault_id.to_string(), a.restored.clone());
+    tokio::spawn(async move {
+        let Some(v) = h.get(&vault_id) else {
+            return;
+        };
+        for o in ids {
+            match h.session.fetch_restored(&v, &o).await {
+                Ok(a) => h.emit_applied(&vault_id, &a, false),
+                Err(e) => tracing::warn!("fetching a restored note: {e:#}"),
+            }
+        }
+    });
+}
+
 async fn handle(
     hub: &Arc<Hub>,
     msg: ServerMessage,
@@ -519,6 +540,18 @@ async fn handle(
             hub.emit_applied(&vault_id, &a, false);
             upload_rescued(hub, &vault_id, rescued).await;
             reload_log_if_needed(hub, &v);
+            spawn_fetch_restored(hub, &vault_id, &a);
+        }
+        ServerMessage::Restored {
+            vault_id,
+            object_id,
+            seq,
+        } => {
+            if let Some(v) = hub.get(&vault_id) {
+                let a = v.lock().await.apply_restore(&object_id, seq);
+                hub.emit_applied(&vault_id, &a, false);
+                spawn_fetch_restored(hub, &vault_id, &a);
+            }
         }
         ServerMessage::Synced {
             vault_id, head_seq, ..
@@ -546,6 +579,13 @@ async fn handle(
                 }
                 if let Err(e) = h.session.grant_missing_keys(&v).await {
                     tracing::warn!("granting keys: {e:#}");
+                }
+                // Entries deleted for good that the server no longer keeps.
+                if let Ok(days) = h.session.server_info().await.map(|i| i.purge_undo_days) {
+                    let id = v.lock().await.id().to_string();
+                    if let Err(e) = crate::ops::forget_erased(&h, &id, days).await {
+                        tracing::warn!("tidying what was deleted for good: {e:#}");
+                    }
                 }
                 // Caught up: files of the quick notes no note links to go.
                 if v.lock().await.is_quick_notes()

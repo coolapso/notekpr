@@ -1418,29 +1418,135 @@ pub fn trash_quietly(vault: &str, id: &str) {
     }
 }
 
+/// Delete an entry for good on the server, then in the index: marked
+/// while the server keeps it (it can be undone, [`undo_purge`]), removed if
+/// nothing of it is there (a folder, or gone already).
+async fn purge_entry(vault: &str, id: &str) -> Result<(), api::Error> {
+    let entry = step(|c| c.replicas.get(vault).and_then(|r| r.index.get(id)));
+    if entry.as_ref().is_some_and(|e| e.purged.is_some()) {
+        return Ok(());
+    }
+    let r = match entry.map(|e| e.kind) {
+        Some(EntryKind::Attachment) => api::delete(&format!("/vaults/{vault}/attachments/{id}"))
+            .await
+            .map(|()| true),
+        Some(EntryKind::Note) => api::delete(&format!("/vaults/{vault}/objects/{id}"))
+            .await
+            .map(|()| true),
+        _ => Ok(false),
+    };
+    match r {
+        Ok(true) => step(|c| change_index(c, vault, |ix| ix.mark_purged([id], now()))),
+        Ok(false) | Err(api::Error { status: 404, .. }) => {
+            step(|c| change_index(c, vault, |ix| ix.remove(id)))
+        }
+        Err(e) => return Err(e),
+    };
+    state::ui().tree_rev.update(|v| *v += 1);
+    Ok(())
+}
+
 /// Like [`purge`], but offline (or with the server away) it just waits:
 /// `false`, nothing said.
 pub async fn purge_quietly(vault: &str, id: &str) -> bool {
-    let kind = state::step(|c| c.entry(vault, id)).map(|e| e.kind);
-    let r = match kind {
-        Some(EntryKind::Attachment) => {
-            api::delete(&format!("/vaults/{vault}/attachments/{id}")).await
-        }
-        Some(EntryKind::Note) => api::delete(&format!("/vaults/{vault}/objects/{id}")).await,
-        _ => Ok(()),
-    };
-    match r {
-        Ok(()) | Err(api::Error { status: 404, .. }) => {
-            step(|c| change_index(c, vault, |ix| ix.remove(id)));
-            state::ui().tree_rev.update(|v| *v += 1);
-            true
-        }
+    match purge_entry(vault, id).await {
+        Ok(()) => true,
         Err(e) if e.is_offline() => false,
         Err(e) => {
             error(e.message);
             false
         }
     }
+}
+
+/// How long deleting something for good can be undone, as said to people
+/// ("30 days"), if it can.
+pub fn purge_undo_period() -> Option<String> {
+    match state::ui()
+        .server
+        .with_untracked(|s| s.as_ref().map(|s| s.purge_undo_days))
+        .unwrap_or(0)
+    {
+        0 => None,
+        1 => Some("1 day".into()),
+        n => Some(format!("{n} days")),
+    }
+}
+
+/// Undo deleting an entry for good, while the server still keeps it (the
+/// vault's owner and admins): it is back in the trash.
+pub async fn undo_purge(vault: &str, id: &str) -> bool {
+    let kind = step(|c| c.replicas.get(vault).and_then(|r| r.index.get(id)))
+        .filter(|e| e.purged.is_some())
+        .map(|e| e.kind);
+    let path = match kind {
+        Some(EntryKind::Attachment) => format!("/vaults/{vault}/attachments/{id}/restore"),
+        Some(EntryKind::Note) => format!("/vaults/{vault}/objects/{id}/restore"),
+        _ => return false,
+    };
+    match api::post_empty::<()>(&path).await {
+        Ok(()) => {
+            step(|c| change_index(c, vault, |ix| ix.unmark_purged(id)));
+            state::ui().tree_rev.update(|v| *v += 1);
+            success("Back in the trash.");
+            true
+        }
+        Err(e) if e.status == 404 => {
+            error("This can't be undone any more: it is gone for good.");
+            false
+        }
+        Err(e) => {
+            error(e.message);
+            false
+        }
+    }
+}
+
+/// Entries deleted for good stay in the index (marked) while the server
+/// keeps their data; once their undo period is over and the server let go
+/// of it, the vault's owner or an admin drops them. Called once a vault is
+/// caught up; asks the server only when there are such entries.
+pub async fn forget_erased(vault: &str) {
+    let days = state::ui()
+        .server
+        .with_untracked(|s| s.as_ref().map(|s| s.purge_undo_days))
+        .unwrap_or(0) as i64;
+    let over = now() - days * 24 * 3600 * 1000;
+    let due: Vec<String> = step(|c| {
+        if !c.can_administer(vault) {
+            return vec![];
+        }
+        c.replicas
+            .get(vault)
+            .map(|r| {
+                r.index
+                    .entries()
+                    .into_iter()
+                    .filter(|e| e.purged.is_some_and(|at| at <= over))
+                    .map(|e| e.id)
+                    .collect()
+            })
+            .unwrap_or_default()
+    });
+    if due.is_empty() {
+        return;
+    }
+    let Ok(kept) = api::get::<Vec<PurgedItem>>(&format!("/vaults/{vault}/purged")).await else {
+        return;
+    };
+    let gone: Vec<String> = due
+        .into_iter()
+        .filter(|id| !kept.iter().any(|k| &k.id == id))
+        .collect();
+    if gone.is_empty() {
+        return;
+    }
+    step(|c| {
+        for id in &gone {
+            change_index(c, vault, |ix| ix.remove(id));
+        }
+    });
+    state::ui().tree_rev.update(|v| *v += 1);
 }
 
 /// The attachments note `id` links to, as `(id, path, only here)`: whether
@@ -1599,23 +1705,12 @@ pub async fn move_to_vault(
     Ok(ids)
 }
 
-/// Permanently delete a trashed entry (server data and index entry): the
-/// vault's owner and admins only. Returns whether it is gone.
+/// Delete a trashed entry for good: the vault's owner and admins only. The
+/// server keeps it a while ([`purge_undo_period`]), so it can be undone.
+/// Returns whether it is gone.
 pub async fn purge(vault: &str, id: &str) -> bool {
-    let kind = state::step(|c| c.entry(vault, id)).map(|e| e.kind);
-    let r = match kind {
-        Some(EntryKind::Attachment) => {
-            api::delete(&format!("/vaults/{vault}/attachments/{id}")).await
-        }
-        Some(EntryKind::Note) => api::delete(&format!("/vaults/{vault}/objects/{id}")).await,
-        _ => Ok(()),
-    };
-    match r {
-        Ok(()) | Err(api::Error { status: 404, .. }) => {
-            step(|c| change_index(c, vault, |ix| ix.remove(id)));
-            state::ui().tree_rev.update(|v| *v += 1);
-            true
-        }
+    match purge_entry(vault, id).await {
+        Ok(()) => true,
         Err(e) => {
             error(e.message);
             false
@@ -1629,7 +1724,7 @@ pub async fn empty_trash(vault: &str) {
             r.index
                 .entries()
                 .into_iter()
-                .filter(|e| !e.is_live())
+                .filter(|e| e.in_trash())
                 .map(|e| e.id)
                 .collect()
         })

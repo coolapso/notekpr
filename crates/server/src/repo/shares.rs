@@ -431,10 +431,11 @@ pub async fn share_from_in_vault(
         .collect())
 }
 
-/// Notes of a vault with a document key (not purged).
+/// Notes of a vault with a document key: also those deleted for good that
+/// can still be undone (erasing their data drops their key).
 pub async fn keyed_in_vault(db: impl SqliteExecutor<'_>, vault_id: &str) -> AppResult<Vec<String>> {
     Ok(sqlx::query_scalar(
-        "SELECT id FROM objects WHERE vault_id = ? AND key_epoch IS NOT NULL AND purged_at IS NULL ORDER BY id",
+        "SELECT id FROM objects WHERE vault_id = ? AND key_epoch IS NOT NULL ORDER BY id",
     )
     .bind(vault_id)
     .fetch_all(db)

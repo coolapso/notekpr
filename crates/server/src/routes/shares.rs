@@ -50,10 +50,18 @@ fn check_object(o: &str) -> AppResult<()> {
     Ok(())
 }
 
-async fn object_key_epoch(db: impl SqliteExecutor<'_>, v: &str, o: &str) -> AppResult<Option<i64>> {
+/// A note's current document key epoch. One deleted for good counts only
+/// with `kept`: while it can be undone, its key still moves on with the
+/// vault's (`sync::purge`); once its data is gone, it has no key.
+async fn object_key_epoch(
+    db: impl SqliteExecutor<'_>,
+    v: &str,
+    o: &str,
+    kept: bool,
+) -> AppResult<Option<i64>> {
     match repo::shares::object_state(db, v, o).await? {
-        Some((Some(_), _)) => Err(AppError::NotFound),
-        Some((None, e)) => Ok(e),
+        Some((Some(_), _)) if !kept => Err(AppError::NotFound),
+        Some((_, e)) => Ok(e),
         None => Ok(None),
     }
 }
@@ -120,13 +128,16 @@ pub(crate) enum KeyChange {
 /// Check one change of a note's document key and store it, inside the
 /// caller's write transaction. `vault_epoch` is the vault key epoch the new
 /// key must be wrapped under; `owner` whether the caller owns the vault
-/// (otherwise they are a writer). Returns what kind of change it was.
+/// (otherwise they are a writer); `with_vault` whether it is part of
+/// rotating the vault's key, which also moves the keys of notes deleted for
+/// good that can still be undone. Returns what kind of change it was.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn apply_key_change(
     state: &AppState,
     tx: &mut sqlx::Transaction<'static, sqlx::Sqlite>,
     who: &Principal,
     owner: bool,
+    with_vault: bool,
     v: &str,
     o: &str,
     req: &ObjectKeyUpdate,
@@ -151,7 +162,7 @@ pub(crate) async fn apply_key_change(
             "wrap the document key with the vault's current key".into(),
         ));
     }
-    let current = object_key_epoch(&mut **tx, v, o).await?;
+    let current = object_key_epoch(&mut **tx, v, o, with_vault).await?;
     let recipients: HashSet<String> =
         repo::shares::recipient_ids_with_account_keys(&mut **tx, v, o)
             .await?
@@ -327,8 +338,19 @@ pub async fn set_key(
         .await?
         .ok_or_else(|| AppError::Internal(anyhow::anyhow!("vault without a key epoch")))?;
     let now = db::now();
-    let kind =
-        apply_key_change(&state, &mut tx, &who, owner, &v, &o, &req, vault_epoch, now).await?;
+    let kind = apply_key_change(
+        &state,
+        &mut tx,
+        &who,
+        owner,
+        false,
+        &v,
+        &o,
+        &req,
+        vault_epoch,
+        now,
+    )
+    .await?;
     tx.commit().await?;
     drop(_w);
     match kind {
@@ -398,7 +420,7 @@ pub async fn set_meta(
     Json(req): Json<ObjectMetaUpdate>,
 ) -> AppResult<StatusCode> {
     access::require_writer(&state.db, &v, &who.user_id).await?;
-    let Some(cur) = object_key_epoch(&state.db, &v, &o).await? else {
+    let Some(cur) = object_key_epoch(&state.db, &v, &o, false).await? else {
         return Err(AppError::NotFound);
     };
     if req.encrypted_meta.is_empty() || req.encrypted_meta.len() > MAX_META_BYTES {
@@ -421,7 +443,7 @@ pub async fn set_meta(
         let _w = state.write_lock.lock().await;
         let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
         access::require_writer(&mut *tx, &v, &who.user_id).await?;
-        let Some(cur) = object_key_epoch(&mut *tx, &v, &o).await? else {
+        let Some(cur) = object_key_epoch(&mut *tx, &v, &o, false).await? else {
             return Err(AppError::NotFound);
         };
         check_epoch(cur)?;
@@ -439,7 +461,9 @@ pub async fn list(
     Path((v, o)): Path<(String, String)>,
 ) -> AppResult<Json<Vec<ObjectShareInfo>>> {
     access::member_role(&state.db, &v, &who.user_id).await?;
-    let cur = object_key_epoch(&state.db, &v, &o).await?.unwrap_or(0);
+    let cur = object_key_epoch(&state.db, &v, &o, false)
+        .await?
+        .unwrap_or(0);
     let rows = repo::shares::recipients(&state.db, &v, &o, cur).await?;
     let mut out = Vec::with_capacity(rows.len());
     for r in rows {
@@ -493,7 +517,7 @@ pub async fn add(
     {
         return Err(conflict("this person already has access through the vault"));
     }
-    let Some(cur) = object_key_epoch(&mut *tx, &v, &o).await? else {
+    let Some(cur) = object_key_epoch(&mut *tx, &v, &o, false).await? else {
         return Err(conflict(
             "start sharing the note (set its document key) first",
         ));

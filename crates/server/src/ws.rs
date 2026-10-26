@@ -335,7 +335,7 @@ impl Conn {
                 }
                 // Subscribe before `forward` reads the log, so nothing
                 // committed after its catch-up read can be missed (hub.rs).
-                let rx = self.state.hub.subscribe(&vault_id);
+                let rx = self.state.hub.subscribe(&vault_id, &self.who.user_id);
                 let task = tokio::spawn(forward(
                     self.state.clone(),
                     vault_id,

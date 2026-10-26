@@ -530,6 +530,8 @@ pub struct Core {
     pub reloading: HashSet<String>,
     /// Reloads asked for while one was running: run once more afterwards.
     pub reload_again: HashSet<String>,
+    /// Vaults whose keys someone who left still knows are being renewed.
+    pub renewing_keys: HashSet<String>,
     /// The shared note we last announced our presence on.
     pub presence_note: Option<(String, String)>,
     pub flush: util::Debounce,
@@ -586,7 +588,9 @@ mod sync;
 mod vaults;
 
 pub use comments::*;
-pub use members::{log_entry, member_log, pin_member_key, reload_log, sign_vault, vouched};
+pub use members::{
+    log_entry, log_entry_after, member_log, pin_member_key, reload_log, sign_vault, vouched,
+};
 pub use mentions::*;
 pub use nav::*;
 pub use offline::{

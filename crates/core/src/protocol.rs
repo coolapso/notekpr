@@ -467,6 +467,16 @@ pub struct VaultInfo {
     /// unlimited for other vaults.
     #[serde(default)]
     pub note_limit: Limit,
+    /// For the owner: someone who no longer has access still knows the
+    /// vault's key (they left, or their agent was deleted). The owner's apps
+    /// rotate it as soon as they can.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub rotation_pending: bool,
+    /// For the owner: notes whose key someone who no longer has access to
+    /// them still knows (they removed the note from their list, or it was
+    /// deleted for good and brought back); rotated the same way.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub notes_rotation_pending: Vec<String>,
 }
 
 impl VaultInfo {
@@ -698,13 +708,33 @@ pub struct UpdateMemberRequest {
     pub log_entry: Option<LogEntry>,
 }
 
-/// Optional body of `DELETE /vaults/{v}/members/{u}`.
+/// Body of `DELETE /vaults/{v}/members/{u}` (optional when leaving).
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct RemoveMemberRequest {
     /// `Remove` (signed by the owner, required once the vault has a log) or
     /// `Leave` (signed by the member; leaving works without it).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub log_entry: Option<LogEntry>,
+    /// The owner's removal carries the vault's new key, for the members who
+    /// stay (its `Rotate` entry signed right after the `Remove`): both happen
+    /// together, so nothing is ever written under a key the removed person
+    /// knows. Required when the owner removes someone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rotation: Option<RotateKeysRequest>,
+}
+
+/// Body of `DELETE /vaults/{v}/objects/{o}/shares/{u}` (optional when
+/// removing a note from one's own list).
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct RemoveShareRequest {
+    /// `Unshare`, signed by the owner (required once the vault has a log).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub log_entry: Option<LogEntry>,
+    /// The note's new key for the people it stays shared with (a rotation),
+    /// stored together with the removal. Required when the owner stops
+    /// sharing a note with someone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rotation: Option<ObjectKeyUpdate>,
 }
 
 /// `POST /vaults/{v}/log`: entries that change nothing else on the server
@@ -1775,6 +1805,8 @@ mod tests {
             viewers_comment: false,
             kind: VaultKind::QuickNotes,
             note_limit: Limit::Max(20),
+            rotation_pending: false,
+            notes_rotation_pending: vec![],
         };
         assert!(mine.is_own_quick_notes("me"));
         assert!(!mine.is_own_quick_notes("you"));

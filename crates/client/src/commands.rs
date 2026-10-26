@@ -2505,7 +2505,7 @@ async fn agent(ctx: &Ctx, c: AgentCmd) -> Result<()> {
             )?;
             manage::delete_agent(&s, &a.id).await?;
             crate::out!(
-                "deleted '{}'. Rotate the keys of vaults it could read (`vault rotate`) if its machine may be compromised.",
+                "deleted '{}'. The keys of the vaults and notes it could read are renewed the next time you sync them (`notekpr sync`).",
                 a.display_name
             );
             Ok(())

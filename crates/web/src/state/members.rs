@@ -275,6 +275,25 @@ pub fn log_entry(c: &Core, vault_id: &str, body: LogBody) -> Option<LogEntry> {
     )
 }
 
+/// Sign `body` as the entry after `prev` (signed, not sent yet: two changes
+/// in one request), or as the next one.
+pub fn log_entry_after(
+    c: &Core,
+    vault_id: &str,
+    prev: Option<&LogEntry>,
+    body: LogBody,
+) -> Option<LogEntry> {
+    let log = c.member_logs.get(vault_id)?;
+    log.next_after(
+        c.account.as_ref()?,
+        &c.user_id,
+        vault_id,
+        prev,
+        body,
+        util::now_ms(),
+    )
+}
+
 pub fn member_log(c: &Core, vault_id: &str) -> MemberLog {
     c.member_logs.get(vault_id).cloned().unwrap_or_default()
 }

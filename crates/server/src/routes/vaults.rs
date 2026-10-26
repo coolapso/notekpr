@@ -38,6 +38,7 @@ pub async fn list(
     let mut list = repo::vaults::list_for_member(&state.db, &who.user_id).await?;
     for v in &mut list {
         with_note_limit(&state, v).await?;
+        with_pending_rotations(&state, v).await?;
     }
     Ok(Json(list))
 }
@@ -53,11 +54,20 @@ async fn with_note_limit(state: &AppState, v: &mut VaultInfo) -> AppResult<()> {
     Ok(())
 }
 
+/// The owner learns which notes' keys their apps are to rotate.
+async fn with_pending_rotations(state: &AppState, v: &mut VaultInfo) -> AppResult<()> {
+    if v.role == Role::Owner {
+        v.notes_rotation_pending = repo::shares::rotation_pending(&state.db, &v.id).await?;
+    }
+    Ok(())
+}
+
 async fn load(state: &AppState, who: &Principal, vault_id: &str) -> AppResult<VaultInfo> {
     let mut v = repo::vaults::get_for_member(&state.db, &who.user_id, vault_id)
         .await?
         .ok_or(AppError::NotFound)?;
     with_note_limit(state, &mut v).await?;
+    with_pending_rotations(state, &mut v).await?;
     Ok(v)
 }
 
@@ -472,9 +482,11 @@ pub async fn update_member(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// Remove a member (owner), or leave a vault (any non-owner member). Owners
-/// should rotate the vault key afterwards so the removed member cannot read
-/// future content even if they obtained ciphertext some other way.
+/// Remove a member (owner), or leave a vault (any non-owner member). The
+/// owner's removal carries the vault's new key, stored in the same
+/// transaction, so nothing is ever written under a key the removed member
+/// knows. Someone leaving can't renew the key: the vault is marked for its
+/// owner's apps to rotate it.
 pub async fn remove_member(
     State(state): State<AppState>,
     who: Principal,
@@ -482,9 +494,10 @@ pub async fn remove_member(
     req: Option<Json<RemoveMemberRequest>>,
 ) -> AppResult<StatusCode> {
     let req = req.map(|Json(r)| r).unwrap_or_default();
+    let leaving = u == who.user_id;
     // Owners remove others; anyone but the owner may leave.
     let may_remove = |role: Role| {
-        if u == who.user_id {
+        if leaving {
             if role == Role::Owner {
                 return Err(bad("the owner cannot leave; delete the vault instead"));
             }
@@ -494,6 +507,20 @@ pub async fn remove_member(
         Ok(())
     };
     may_remove(access::member_role(&state.db, &v, &who.user_id).await?)?;
+    match (&req.rotation, leaving) {
+        (Some(_), true) => return Err(bad("only the vault's owner rotates its key")),
+        (None, false) => {
+            return Err(bad(
+                "send the vault's new key with the removal (update the app)",
+            ));
+        }
+        (Some(r), false) => {
+            who.require_human()?;
+            check_rotation(r)?;
+        }
+        (None, true) => {}
+    }
+    let now = db::now();
     {
         let _w = state.write_lock.lock().await;
         let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
@@ -501,17 +528,30 @@ pub async fn remove_member(
         if repo::vaults::delete_member(&mut *tx, &v, &u).await? == 0 {
             return Err(AppError::NotFound);
         }
-        repo::keys::delete_vault_keys_of(&mut *tx, &v, &u).await?;
+        let had_keys = repo::keys::delete_vault_keys_of(&mut *tx, &v, &u).await?;
         member_log::check_and_append(
             &mut tx,
             &v,
             &who,
             req.log_entry.as_ref(),
             Expect::Remove { user_id: &u },
-            db::now(),
+            now,
         )
         .await?;
+        let shared = match &req.rotation {
+            Some(r) => Some(rotate_in(&state, &mut tx, &who, &v, r, now).await?),
+            None => {
+                if had_keys {
+                    repo::vaults::set_rotation_pending(&mut *tx, &v).await?;
+                }
+                None
+            }
+        };
         tx.commit().await?;
+        state.hub.control(&u, Control::RevokeVault(v.clone()));
+        if let Some(shared) = &shared {
+            published_rotation(&state, &v, shared, Some(&u));
+        }
     }
     db::audit(
         &state.db,
@@ -523,7 +563,9 @@ pub async fn remove_member(
         serde_json::json!({}),
     )
     .await;
-    state.hub.control(&u, Control::RevokeVault(v.clone()));
+    if let Some(r) = &req.rotation {
+        audit_rotation(&state, &who, &v, r.new_epoch).await;
+    }
     state
         .hub
         .publish(&v, VaultEvent::Event(VaultEventKind::MembersChanged));
@@ -606,6 +648,20 @@ pub async fn rotate_keys(
 ) -> AppResult<StatusCode> {
     who.require_human()?;
     access::require_owner(&state.db, &v, &who.user_id).await?;
+    check_rotation(&req)?;
+    let _w = state.write_lock.lock().await;
+    let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
+    access::require_owner(&mut *tx, &v, &who.user_id).await?;
+    let shared = rotate_in(&state, &mut tx, &who, &v, &req, db::now()).await?;
+    tx.commit().await?;
+    published_rotation(&state, &v, &shared, None);
+    drop(_w);
+    audit_rotation(&state, &who, &v, req.new_epoch).await;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// What a rotation request must look like before anything is locked.
+fn check_rotation(req: &RotateKeysRequest) -> AppResult<()> {
     if req.encrypted_meta.is_empty()
         || req.encrypted_meta.len() > MAX_META_BYTES
         || req.chain_link.is_empty()
@@ -613,14 +669,25 @@ pub async fn rotate_keys(
     {
         return Err(bad("invalid rotation payload"));
     }
-    let _w = state.write_lock.lock().await;
-    let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
-    access::require_owner(&mut *tx, &v, &who.user_id).await?;
-    let epoch = current_epoch(&mut *tx, &v).await?;
+    Ok(())
+}
+
+/// Check a rotation of the vault key and store it, inside the caller's
+/// write transaction (the caller checked there that `who` owns the vault).
+/// Returns the notes shared individually, whose recipients reload keys.
+async fn rotate_in(
+    state: &AppState,
+    tx: &mut sqlx::Transaction<'static, sqlx::Sqlite>,
+    who: &Principal,
+    v: &str,
+    req: &RotateKeysRequest,
+    now: i64,
+) -> AppResult<Vec<String>> {
+    let epoch = current_epoch(&mut **tx, v).await?;
     if req.new_epoch != epoch + 1 {
         return Err(conflict(format!("expected new epoch {}", epoch + 1)));
     }
-    let need: HashSet<String> = repo::vaults::member_ids_with_account_keys(&mut *tx, &v)
+    let need: HashSet<String> = repo::vaults::member_ids_with_account_keys(&mut **tx, v)
         .await?
         .into_iter()
         .collect();
@@ -636,10 +703,9 @@ pub async fn rotate_keys(
     }) {
         return Err(bad("invalid envelope"));
     }
-    let now = db::now();
     // Every note's key moves on with the vault key: removed members knew
     // them all (R2) — also of notes deleted for good that can be undone.
-    let keyed: HashSet<String> = repo::shares::keyed_in_vault(&mut *tx, &v)
+    let keyed: HashSet<String> = repo::shares::keyed_in_vault(&mut **tx, v)
         .await?
         .into_iter()
         .collect();
@@ -652,12 +718,12 @@ pub async fn rotate_keys(
     let mut shared_notes = Vec::new();
     for c in &req.objects {
         let kind = crate::routes::shares::apply_key_change(
-            &state,
-            &mut tx,
-            &who,
+            state,
+            tx,
+            who,
             true,
             true,
-            &v,
+            v,
             &c.object_id,
             &c.update,
             req.new_epoch as i64,
@@ -671,12 +737,12 @@ pub async fn rotate_keys(
             shared_notes.push(c.object_id.clone());
         }
     }
-    repo::keys::insert_vault_chain_link(&mut *tx, &v, req.new_epoch as i64, &req.chain_link)
+    repo::keys::insert_vault_chain_link(&mut **tx, v, req.new_epoch as i64, &req.chain_link)
         .await?;
     for e in &req.envelopes {
         repo::keys::insert_vault_key(
-            &mut *tx,
-            &v,
+            &mut **tx,
+            v,
             e.epoch as i64,
             &e.user_id,
             &e.envelope,
@@ -686,9 +752,9 @@ pub async fn rotate_keys(
         .await?;
     }
     member_log::check_and_append(
-        &mut tx,
-        &v,
-        &who,
+        tx,
+        v,
+        who,
         req.log_entry.as_ref(),
         Expect::Rotate {
             epoch: req.new_epoch,
@@ -696,28 +762,40 @@ pub async fn rotate_keys(
         now,
     )
     .await?;
-    repo::vaults::set_key_epoch(&mut *tx, &v, req.new_epoch as i64, &req.encrypted_meta, now)
+    repo::vaults::set_key_epoch(&mut **tx, v, req.new_epoch as i64, &req.encrypted_meta, now)
         .await?;
-    tx.commit().await?;
-    state
-        .hub
-        .publish(&v, VaultEvent::Event(VaultEventKind::KeyRotated));
-    // People single notes are shared with reload those notes' keys.
-    for o in &shared_notes {
-        crate::routes::shares::publish(&state, &v, o, ObjectEventKind::KeyRotated);
+    Ok(shared_notes)
+}
+
+/// Tell subscribers about a committed rotation (still under the write lock),
+/// but not someone it removed: their subscriptions may not have ended yet.
+fn published_rotation(state: &AppState, v: &str, shared_notes: &[String], removed: Option<&str>) {
+    let rotated = VaultEvent::Event(VaultEventKind::KeyRotated);
+    match removed {
+        Some(u) => state.hub.publish_except(v, rotated, u),
+        None => state.hub.publish(v, rotated),
     }
-    drop(_w);
+    // People single notes are shared with reload those notes' keys.
+    for o in shared_notes {
+        let rotated = ObjectEventKind::KeyRotated;
+        match removed {
+            Some(u) => crate::routes::shares::publish_except(state, v, o, rotated, u),
+            None => crate::routes::shares::publish(state, v, o, rotated),
+        }
+    }
+}
+
+async fn audit_rotation(state: &AppState, who: &Principal, v: &str, epoch: u32) {
     db::audit(
         &state.db,
         Some(&who.user_id),
         None,
-        Some(&v),
+        Some(v),
         "keys.rotate",
         None,
-        serde_json::json!({ "epoch": req.new_epoch }),
+        serde_json::json!({ "epoch": epoch }),
     )
     .await;
-    Ok(StatusCode::NO_CONTENT)
 }
 
 pub async fn audit(

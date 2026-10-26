@@ -122,17 +122,18 @@ pub async fn put_vault_key(
 }
 
 /// Drop every vault-key envelope of a (removed) member.
+/// Drop someone's copies of the vault's keys; whether they had any.
 pub async fn delete_vault_keys_of(
     db: impl SqliteExecutor<'_>,
     vault_id: &str,
     user_id: &str,
-) -> AppResult<()> {
-    sqlx::query("DELETE FROM vault_keys WHERE vault_id = ? AND user_id = ?")
+) -> AppResult<bool> {
+    let r = sqlx::query("DELETE FROM vault_keys WHERE vault_id = ? AND user_id = ?")
         .bind(vault_id)
         .bind(user_id)
         .execute(db)
         .await?;
-    Ok(())
+    Ok(r.rows_affected() > 0)
 }
 
 pub async fn insert_vault_chain_link(
@@ -349,19 +350,21 @@ pub async fn insert_document_chain_link(
 }
 
 /// Drop a recipient's envelopes for one note.
+/// Drop someone's copies of a note's keys; whether they had any.
 pub async fn delete_document_keys_of(
     db: impl SqliteExecutor<'_>,
     vault_id: &str,
     object_id: &str,
     user_id: &str,
-) -> AppResult<()> {
-    sqlx::query("DELETE FROM object_keys WHERE vault_id = ? AND object_id = ? AND user_id = ?")
-        .bind(vault_id)
-        .bind(object_id)
-        .bind(user_id)
-        .execute(db)
-        .await?;
-    Ok(())
+) -> AppResult<bool> {
+    let r =
+        sqlx::query("DELETE FROM object_keys WHERE vault_id = ? AND object_id = ? AND user_id = ?")
+            .bind(vault_id)
+            .bind(object_id)
+            .bind(user_id)
+            .execute(db)
+            .await?;
+    Ok(r.rows_affected() > 0)
 }
 
 /// Drop a recipient's envelopes for every note of a vault.

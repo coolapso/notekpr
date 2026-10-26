@@ -44,7 +44,8 @@ pub async fn ensure_object(
     Ok(())
 }
 
-/// Move a note to a document key epoch, with its title under that key.
+/// Move a note to a document key epoch, with its title under that key. No
+/// one who lost access knows the new key.
 pub async fn set_document_epoch(
     db: impl SqliteExecutor<'_>,
     vault_id: &str,
@@ -53,15 +54,65 @@ pub async fn set_document_epoch(
     encrypted_meta: &[u8],
     now: i64,
 ) -> AppResult<()> {
-    sqlx::query("UPDATE objects SET key_epoch = ?, encrypted_meta = ?, updated_at = ? WHERE vault_id = ? AND id = ?")
-        .bind(epoch)
-        .bind(encrypted_meta)
-        .bind(now)
+    sqlx::query(
+        "UPDATE objects SET key_epoch = ?, encrypted_meta = ?, rotation_pending = 0, updated_at = ?
+         WHERE vault_id = ? AND id = ?",
+    )
+    .bind(epoch)
+    .bind(encrypted_meta)
+    .bind(now)
+    .bind(vault_id)
+    .bind(object_id)
+    .execute(db)
+    .await?;
+    Ok(())
+}
+
+/// Someone who lost access to a note still knows its current key: the
+/// vault owner's apps rotate it (which clears this).
+pub async fn set_rotation_pending(
+    db: impl SqliteExecutor<'_>,
+    vault_id: &str,
+    object_id: &str,
+) -> AppResult<()> {
+    sqlx::query("UPDATE objects SET rotation_pending = 1 WHERE vault_id = ? AND id = ?")
         .bind(vault_id)
         .bind(object_id)
         .execute(db)
         .await?;
     Ok(())
+}
+
+/// Every note whose key someone going holds (an agent deleted).
+pub async fn set_rotation_pending_for_holder(
+    db: impl SqliteExecutor<'_>,
+    user_id: &str,
+) -> AppResult<()> {
+    sqlx::query(
+        "UPDATE objects SET rotation_pending = 1
+         WHERE (vault_id, id) IN (SELECT vault_id, object_id FROM object_keys WHERE user_id = ?)",
+    )
+    .bind(user_id)
+    .execute(db)
+    .await?;
+    Ok(())
+}
+
+/// Notes whose key is to be rotated, among those that can be: deleted for
+/// good ones wait until they are brought back (a vault rotation moves them
+/// too).
+pub async fn rotation_pending(
+    db: impl SqliteExecutor<'_>,
+    vault_id: &str,
+) -> AppResult<Vec<String>> {
+    Ok(sqlx::query_scalar(
+        "SELECT id FROM objects
+         WHERE vault_id = ? AND rotation_pending = 1 AND key_epoch IS NOT NULL AND purged_at IS NULL
+         ORDER BY id",
+    )
+    .bind(vault_id)
+    .fetch_all(db)
+    .await?)
 }
 
 pub async fn set_title(

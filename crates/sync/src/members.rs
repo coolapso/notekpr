@@ -93,6 +93,31 @@ impl MemberLog {
         ))
     }
 
+    /// Sign `body` as the entry after `prev` — signed, but not sent yet: two
+    /// changes in one request, such as removing someone and the new key —
+    /// or, without one, as the next entry (as [`MemberLog::next`]).
+    pub fn next_after(
+        &self,
+        account: &AccountSecret,
+        signer: &str,
+        vault_id: &str,
+        prev: Option<&LogEntry>,
+        body: LogBody,
+        now: i64,
+    ) -> Option<LogEntry> {
+        match prev {
+            Some(p) => Some(LogEntry::sign(
+                account,
+                signer,
+                vault_id,
+                Some(p),
+                body,
+                now,
+            )),
+            None => self.next(account, signer, vault_id, body, now),
+        }
+    }
+
     /// Whether the server's member is who the log says (role and key; for
     /// someone without keys, that they are pending in the log too). Without
     /// a log, everyone is taken as listed (vaults from before the log).
@@ -538,6 +563,60 @@ mod tests {
                     3
                 )
                 .is_none()
+        );
+    }
+
+    #[test]
+    fn a_removal_and_the_new_key_are_signed_one_after_the_other() {
+        let (alice, bob) = (p("alice"), p("bob"));
+        let anchor = alice.secret.public();
+        let (mut log, mut ring) = vault(&alice);
+        push(
+            &mut log,
+            &alice,
+            LogBody::Add {
+                member: log_member("bob", Role::Editor, Some(&bob.secret.public())),
+            },
+            &anchor,
+        );
+        ring.insert(2, VaultKey::generate());
+        let remove = log.next(
+            &alice.secret,
+            "alice",
+            "v",
+            LogBody::Remove {
+                user_id: "bob".into(),
+            },
+            3,
+        );
+        let rotate = log
+            .next_after(
+                &alice.secret,
+                "alice",
+                "v",
+                remove.as_ref(),
+                rotation("v", &ring).unwrap(),
+                3,
+            )
+            .unwrap();
+        let mut entries = log.entries.clone();
+        entries.extend(remove);
+        entries.push(rotate);
+        let after = MemberLog::verify("v", &anchor, entries, None).unwrap();
+        assert!(!after.vouches_for(&info(&bob, Role::Editor, true)));
+        assert_eq!(after.check_keyring(&ring), Ok(()));
+        // Without a log, neither is signed.
+        let none = MemberLog::default();
+        assert!(
+            none.next_after(
+                &alice.secret,
+                "alice",
+                "v",
+                None,
+                rotation("v", &ring).unwrap(),
+                3
+            )
+            .is_none()
         );
     }
 }

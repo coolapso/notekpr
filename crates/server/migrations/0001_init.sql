@@ -156,6 +156,9 @@ CREATE TABLE vaults (
     -- What the vault is for: 'quick_notes' is its owner's quick notes
     -- (never shared, a limited number of notes), at most one per person.
     kind           TEXT NOT NULL DEFAULT 'regular' CHECK (kind IN ('regular', 'quick_notes')),
+    -- Someone who lost access still knows the current key (they left, or
+    -- their agent was deleted): the owner's apps rotate it. Cleared by that.
+    rotation_pending INTEGER NOT NULL DEFAULT 0,
     created_at     INTEGER NOT NULL,
     updated_at     INTEGER NOT NULL
 );
@@ -204,6 +207,9 @@ CREATE TABLE objects (
     purged_seq   INTEGER,
     restored_seq INTEGER,
     erased_at    INTEGER,
+    -- As for vaults, for the note's own key: someone it was shared with
+    -- lost access without it being rotated.
+    rotation_pending INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (vault_id, id)
 );
 CREATE INDEX objects_purged ON objects(vault_id, purged_seq);

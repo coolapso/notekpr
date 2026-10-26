@@ -188,19 +188,9 @@ async fn viewers_are_read_only_and_revocation_rotates_keys() {
         403
     );
 
-    // Remove Bob and rotate: Bob loses access; Carol can read old and new content.
-    assert_eq!(
-        alice
-            .api
-            .status::<()>(
-                Method::DELETE,
-                &format!("/vaults/{v}/members/{}", bob.id),
-                None
-            )
-            .await,
-        204
-    );
-    alice.rotate(&v).await;
+    // Remove Bob, with a new key: Bob loses access; Carol can read old and
+    // new content.
+    assert_eq!(alice.remove(&v, &bob.id).await, 204);
     let u2 = note.set_text("after rotation").unwrap();
     alice
         .push(&v, vec![alice.encrypt_update(&v, "n", &u2)])
@@ -524,17 +514,7 @@ async fn websocket_live_sync_acks_and_presence() {
     assert_eq!(payload, vec![9, 9, 9]);
 
     // Revoking Bob drops his subscription immediately.
-    assert_eq!(
-        alice
-            .api
-            .status::<()>(
-                Method::DELETE,
-                &format!("/vaults/{v}/members/{}", bob.id),
-                None
-            )
-            .await,
-        204
-    );
+    assert_eq!(alice.remove(&v, &bob.id).await, 204);
     wb.until(|m| {
         matches!(
             m,
@@ -989,6 +969,18 @@ async fn agents_are_scoped_to_shared_vaults() {
         agent_api.status::<()>(Method::GET, "/vaults", None).await,
         401
     );
+
+    // Deleting it: the owner's apps rotate the vault key it held.
+    assert!(!vault_info(&alice, &shared).await.rotation_pending);
+    assert_eq!(
+        alice
+            .api
+            .status::<()>(Method::DELETE, &format!("/agents/{aid}"), None)
+            .await,
+        204
+    );
+    assert!(vault_info(&alice, &shared).await.rotation_pending);
+    assert!(!vault_info(&alice, &private).await.rotation_pending);
 }
 
 #[tokio::test]
@@ -1598,40 +1590,16 @@ async fn individual_note_sharing() {
         .unwrap();
     assert_eq!(carol.push(&v, vec![pc]).await.unwrap_err().0, 403);
 
-    // Revoking Bob: his access ends immediately and the key rotates.
-    assert_eq!(
-        alice
-            .api
-            .status::<()>(
-                Method::DELETE,
-                &format!("/vaults/{v}/objects/n1/shares/{}", bob.id),
-                None
-            )
-            .await,
-        204
-    );
-    wb.until(|m| {
-        matches!(
-            m,
-            ServerMessage::ObjectEvent {
-                event: ObjectEventKind::AccessRevoked,
-                ..
-            }
-        )
-        .then_some(())
-    })
-    .await;
-    assert_eq!(
-        bob.api
-            .status::<()>(Method::GET, &format!("/vaults/{v}/objects/n1"), None)
-            .await,
-        404
-    );
+    // Revoking Bob: the note's new key, for everyone else, comes with it.
     let remaining: Vec<ObjectShareInfo> = alice
         .api
         .get(&format!("/vaults/{v}/objects/n1/shares"))
         .await;
-    let users: Vec<PublicUser> = remaining.into_iter().map(|s| s.user).collect();
+    let users: Vec<PublicUser> = remaining
+        .into_iter()
+        .map(|s| s.user)
+        .filter(|u| u.id != bob.id)
+        .collect();
     let (next, rot) = engine::rotate_object_key(
         alice.ring(&v),
         &ring,
@@ -1640,24 +1608,60 @@ async fn individual_note_sharing() {
         &users,
     )
     .unwrap();
-    // Rotation must cover exactly the remaining recipients.
+    let bob_share = format!("/vaults/{v}/objects/n1/shares/{}", bob.id);
+    let unshare = |rotation| RemoveShareRequest {
+        log_entry: None,
+        rotation,
+    };
+    // Never without it; and it must cover exactly the remaining recipients,
+    // or nothing changes.
+    assert_eq!(
+        alice
+            .api
+            .status(Method::DELETE, &bob_share, Some(&unshare(None)))
+            .await,
+        400
+    );
     let mut wrong = rot.clone();
     wrong.envelopes.clear();
     assert_eq!(
         alice
             .api
-            .status(
-                Method::PUT,
-                &format!("/vaults/{v}/objects/n1/key"),
-                Some(&wrong)
-            )
+            .status(Method::DELETE, &bob_share, Some(&unshare(Some(wrong))))
             .await,
         409
     );
-    let _: () = alice
-        .api
-        .put(&format!("/vaults/{v}/objects/n1/key"), &rot)
+    assert_eq!(
+        bob.api
+            .status::<()>(Method::GET, &format!("/vaults/{v}/objects/n1"), None)
+            .await,
+        200
+    );
+    assert_eq!(
+        alice
+            .api
+            .status(Method::DELETE, &bob_share, Some(&unshare(Some(rot))))
+            .await,
+        204
+    );
+    // The note's new key is announced to everyone but him.
+    let rotated_first = wb
+        .until(|m| match m {
+            ServerMessage::ObjectEvent { event, .. } => match event {
+                ObjectEventKind::AccessRevoked => Some(false),
+                ObjectEventKind::KeyRotated => Some(true),
+                _ => None,
+            },
+            _ => None,
+        })
         .await;
+    assert!(!rotated_first);
+    assert_eq!(
+        bob.api
+            .status::<()>(Method::GET, &format!("/vaults/{v}/objects/n1"), None)
+            .await,
+        404
+    );
     ar.doc_keys.insert("n1".into(), next);
     let pn = ar
         .local_change(
@@ -1774,17 +1778,7 @@ async fn removed_members_lose_per_note_subscriptions() {
         .await;
 
     // Removing him from the vault ends that subscription as well.
-    assert_eq!(
-        alice
-            .api
-            .status::<()>(
-                Method::DELETE,
-                &format!("/vaults/{v}/members/{}", bob.id),
-                None
-            )
-            .await,
-        204
-    );
+    assert_eq!(alice.remove(&v, &bob.id).await, 204);
     wb.until(|m| {
         matches!(
             m,
@@ -2214,17 +2208,7 @@ async fn role_dependent_writes_follow_role_changes() {
     assert_eq!(bob.push(&v, vec![w]).await.unwrap_err().0, 403);
 
     // Once removed, bob gets no envelope back, and everything is 404 to him.
-    assert_eq!(
-        alice
-            .api
-            .status::<()>(
-                Method::DELETE,
-                &format!("/vaults/{v}/members/{}", bob.id),
-                None
-            )
-            .await,
-        204
-    );
+    assert_eq!(alice.remove(&v, &bob.id).await, 204);
     let bob_pub: PublicUser = alice.api.get(&format!("/users/{}", bob.id)).await;
     let (epoch, key) = alice.ring(&v).current().unwrap();
     let grant = GrantKeysRequest {
@@ -3152,6 +3136,7 @@ async fn membership_changes_carry_owner_signed_log_entries() {
             &role_path,
             Some(&RemoveMemberRequest {
                 log_entry: Some(leave),
+                ..Default::default()
             }),
         )
         .await;
@@ -3261,15 +3246,7 @@ async fn an_existing_vault_starts_its_log_with_a_checkpoint() {
     let s = LogState::verify(&v, &alice.account.public(), &alice.member_log(&v).await).unwrap();
     assert!(s.vouches_for(&bob.id, Role::Viewer, &bob.account.public()));
     // From now on unsigned changes are refused.
-    let st = alice
-        .api
-        .status::<()>(
-            Method::DELETE,
-            &format!("/vaults/{v}/members/{}", bob.id),
-            None,
-        )
-        .await;
-    assert_eq!(st, 409);
+    assert_eq!(alice.remove(&v, &bob.id).await, 409);
 }
 
 #[tokio::test]
@@ -4173,5 +4150,350 @@ async fn quick_notes_are_one_per_person_and_never_shared() {
             .status::<()>(Method::DELETE, &format!("/vaults/{q}/objects/n"), None)
             .await,
         204
+    );
+}
+
+async fn vault_info(u: &User, v: &str) -> VaultInfo {
+    u.api.get(&format!("/vaults/{v}")).await
+}
+
+/// Give note `o` some content and share it with `with`, as the apps do;
+/// returns the note's key.
+async fn share_note(owner: &User, v: &str, o: &str, with: &User) -> keys::VaultKeyring {
+    use notekpr_core::engine;
+    let note = NoteDoc::new();
+    let u = note.set_text("shared").unwrap();
+    let head = owner
+        .push(v, vec![owner.encrypt_update(v, o, &u)])
+        .await
+        .unwrap()
+        .head_seq;
+    let (ring, req) = engine::start_sharing(
+        owner.ring(v),
+        o,
+        &engine::ObjectMeta::titled("Shared"),
+        &note.encode_state(),
+        head,
+    )
+    .unwrap();
+    let _: () = owner
+        .api
+        .put(&format!("/vaults/{v}/objects/{o}/key"), &req)
+        .await;
+    let public: PublicUser = owner.api.get(&format!("/users/{}", with.id)).await;
+    let _: ObjectShareInfo = owner
+        .api
+        .post(
+            &format!("/vaults/{v}/objects/{o}/shares"),
+            &AddObjectShareRequest {
+                user_id: with.id.clone(),
+                role: Role::Editor,
+                envelope: engine::object_share_envelope(&ring, o, &public).unwrap(),
+                log_entry: None,
+            },
+        )
+        .await;
+    ring
+}
+
+#[tokio::test]
+async fn removing_someone_renews_the_key_in_the_same_request() {
+    let srv = start().await;
+    let mut alice = new_user(&srv.base, "alice").await;
+    let mut bob = new_user(&srv.base, "bob").await;
+    let mut carol = new_user(&srv.base, "carol").await;
+    let v = alice.create_vault("Family").await;
+    alice.share(&v, &bob.id, Role::Editor).await.unwrap();
+    alice.share(&v, &carol.id, Role::Editor).await.unwrap();
+    bob.load_keys(&v).await.unwrap();
+    carol.load_keys(&v).await.unwrap();
+    let bob_member = format!("/vaults/{v}/members/{}", bob.id);
+
+    // Never without the new key, nor with one that still goes to bob or
+    // misses someone who stays: then nothing changes.
+    assert_eq!(
+        alice
+            .api
+            .status(
+                Method::DELETE,
+                &bob_member,
+                Some(&RemoveMemberRequest::default())
+            )
+            .await,
+        400
+    );
+    let (with_bob, _) = alice.rotation(&v, None, &[], true).await;
+    let (mut without_carol, _) = alice.rotation(&v, Some(&bob.id), &[], true).await;
+    without_carol.envelopes.retain(|e| e.user_id != carol.id);
+    for rotation in [with_bob, without_carol] {
+        let req = RemoveMemberRequest {
+            log_entry: None,
+            rotation: Some(rotation),
+        };
+        assert_eq!(
+            alice
+                .api
+                .status(Method::DELETE, &bob_member, Some(&req))
+                .await,
+            409
+        );
+    }
+    assert!(bob.load_keys(&v).await.is_ok());
+    let info = vault_info(&alice, &v).await;
+    assert_eq!((info.key_epoch, info.member_count), (1, 3));
+
+    // With it, bob is out and what is written from now on is under a key he
+    // never had: content under the old one is refused.
+    assert_eq!(alice.remove(&v, &bob.id).await, 204);
+    assert_eq!(bob.load_keys(&v).await, Err(404));
+    let info = vault_info(&alice, &v).await;
+    assert_eq!(
+        (info.key_epoch, info.member_count, info.rotation_pending),
+        (2, 2, false)
+    );
+    let stale = carol.encrypt_update(&v, "n", &NoteDoc::new().set_text("x").unwrap());
+    assert_eq!(
+        carol.push(&v, vec![stale]).await.unwrap().rejected[0].code,
+        REJECT_STALE_KEY
+    );
+    carol.load_keys(&v).await.unwrap();
+    assert_eq!(carol.ring(&v).current().unwrap().0, 2);
+
+    // Members leave without a new key: only the owner makes one.
+    let (rotation, _) = alice.rotation(&v, Some(&carol.id), &[], true).await;
+    let leave = RemoveMemberRequest {
+        log_entry: None,
+        rotation: Some(rotation),
+    };
+    assert_eq!(
+        carol
+            .api
+            .status(
+                Method::DELETE,
+                &format!("/vaults/{v}/members/{}", carol.id),
+                Some(&leave)
+            )
+            .await,
+        400
+    );
+}
+
+#[tokio::test]
+async fn a_signed_removal_carries_the_new_keys_entry() {
+    use notekpr_core::memberlog::{LogBody, LogEntry, LogMember, LogState, key_commitment};
+    let srv = start().await;
+    let mut alice = new_user(&srv.base, "alice").await;
+    let bob = new_user(&srv.base, "bob").await;
+    let v = alice.create_signed_vault("Signed").await;
+    let e = alice
+        .sign_next(
+            &v,
+            LogBody::Add {
+                member: LogMember::new(&bob.id, Role::Editor, &bob.account.public()),
+            },
+        )
+        .await;
+    let add = AddMemberRequest {
+        user_id: bob.id.clone(),
+        role: Role::Editor,
+        key_envelope: None,
+        log_entry: Some(e),
+    };
+    assert_eq!(
+        alice
+            .api
+            .status(Method::POST, &format!("/vaults/{v}/members"), Some(&add))
+            .await,
+        201
+    );
+
+    // `Remove`, then `Rotate` signed right after it.
+    let (mut rotation, ring) = alice.rotation(&v, Some(&bob.id), &[], true).await;
+    let remove = alice
+        .sign_next(
+            &v,
+            LogBody::Remove {
+                user_id: bob.id.clone(),
+            },
+        )
+        .await;
+    let rotate = LogEntry::sign(
+        &alice.account,
+        &alice.id,
+        &v,
+        Some(&remove),
+        LogBody::Rotate {
+            epoch: 2,
+            key_commit: key_commitment(&v, 2, ring.get(2).unwrap()),
+        },
+        1,
+    );
+    let bob_member = format!("/vaults/{v}/members/{}", bob.id);
+    let req = |rotation: &RotateKeysRequest| RemoveMemberRequest {
+        log_entry: Some(remove.clone()),
+        rotation: Some(rotation.clone()),
+    };
+    // Without the new key's entry, nothing changes.
+    assert_eq!(
+        alice
+            .api
+            .status(Method::DELETE, &bob_member, Some(&req(&rotation)))
+            .await,
+        409
+    );
+    assert_eq!(alice.member_log(&v).await.len(), 2);
+    rotation.log_entry = Some(rotate);
+    assert_eq!(
+        alice
+            .api
+            .status(Method::DELETE, &bob_member, Some(&req(&rotation)))
+            .await,
+        204
+    );
+    let s = LogState::verify(&v, &alice.account.public(), &alice.member_log(&v).await).unwrap();
+    assert!(s.member(&bob.id).is_none());
+    assert_eq!(s.epoch, 2);
+    assert_eq!(s.check_key(2, ring.get(2).unwrap()), Ok(true));
+}
+
+#[tokio::test]
+async fn keys_someone_who_left_still_knows_are_marked_for_rotation() {
+    use notekpr_core::engine;
+    let srv = start().await;
+    let mut alice = new_user(&srv.base, "alice").await;
+    let bob = new_user(&srv.base, "bob").await;
+    let carol = new_user(&srv.base, "carol").await;
+    let dana = new_user(&srv.base, "dana").await;
+    let erin = new_user(&srv.base, "erin").await;
+    let frank = new_user(&srv.base, "frank").await;
+    let v = alice.create_vault("Family").await;
+    alice.share(&v, &bob.id, Role::Editor).await.unwrap();
+    alice.share(&v, &carol.id, Role::Viewer).await.unwrap();
+    let member = |u: &User| format!("/vaults/{v}/members/{}", u.id);
+
+    // Someone who never got the key leaves: nothing to rotate.
+    let add = AddMemberRequest {
+        user_id: dana.id.clone(),
+        role: Role::Viewer,
+        key_envelope: None,
+        log_entry: None,
+    };
+    assert_eq!(
+        alice
+            .api
+            .status(Method::POST, &format!("/vaults/{v}/members"), Some(&add))
+            .await,
+        201
+    );
+    assert_eq!(
+        dana.api
+            .status::<()>(Method::DELETE, &member(&dana), None)
+            .await,
+        204
+    );
+    assert!(!vault_info(&alice, &v).await.rotation_pending);
+
+    // Bob leaves with it: the owner (only) is told, and rotating clears it.
+    assert_eq!(
+        bob.api
+            .status::<()>(Method::DELETE, &member(&bob), None)
+            .await,
+        204
+    );
+    assert!(vault_info(&alice, &v).await.rotation_pending);
+    assert!(!vault_info(&carol, &v).await.rotation_pending);
+    alice.rotate(&v).await;
+    assert!(!vault_info(&alice, &v).await.rotation_pending);
+
+    // Erin removes a note shared with her from her list: its key is marked.
+    let ring = share_note(&alice, &v, "n1", &erin).await;
+    let erin_share = format!("/vaults/{v}/objects/n1/shares/{}", erin.id);
+    // Only the owner makes a note's new key.
+    let (_, rot) = engine::rotate_object_key(
+        alice.ring(&v),
+        &ring,
+        "n1",
+        &engine::ObjectMeta::titled("Shared"),
+        &[],
+    )
+    .unwrap();
+    let with_key = RemoveShareRequest {
+        log_entry: None,
+        rotation: Some(rot.clone()),
+    };
+    assert_eq!(
+        erin.api
+            .status(Method::DELETE, &erin_share, Some(&with_key))
+            .await,
+        400
+    );
+    assert_eq!(
+        erin.api
+            .status::<()>(Method::DELETE, &erin_share, None)
+            .await,
+        204
+    );
+    assert_eq!(vault_info(&alice, &v).await.notes_rotation_pending, ["n1"]);
+    assert!(
+        vault_info(&carol, &v)
+            .await
+            .notes_rotation_pending
+            .is_empty()
+    );
+    let _: () = alice
+        .api
+        .put(&format!("/vaults/{v}/objects/n1/key"), &rot)
+        .await;
+    assert!(
+        vault_info(&alice, &v)
+            .await
+            .notes_rotation_pending
+            .is_empty()
+    );
+
+    // A note shared with frank is deleted for good: its key is rotated once
+    // it is brought back (the owner hears of it), or with the vault's.
+    share_note(&alice, &v, "n2", &frank).await;
+    let mut wa = Ws::connect(&srv.ws, alice.api.token.as_ref().unwrap()).await;
+    wa.send(&ClientMessage::Subscribe {
+        vault_id: v.clone(),
+        since: None,
+        object_id: None,
+    })
+    .await;
+    wa.until(|m| matches!(m, ServerMessage::Synced { .. }).then_some(()))
+        .await;
+    let n2 = format!("/vaults/{v}/objects/n2");
+    assert_eq!(alice.api.status::<()>(Method::DELETE, &n2, None).await, 204);
+    assert!(
+        vault_info(&alice, &v)
+            .await
+            .notes_rotation_pending
+            .is_empty()
+    );
+    let st = alice
+        .api
+        .status::<()>(Method::POST, &format!("{n2}/restore"), None)
+        .await;
+    assert!((200..300).contains(&st), "{st}");
+    wa.until(|m| {
+        matches!(
+            m,
+            ServerMessage::ObjectEvent {
+                object_id,
+                event: ObjectEventKind::SharesChanged,
+                ..
+            } if object_id == "n2"
+        )
+        .then_some(())
+    })
+    .await;
+    assert_eq!(vault_info(&alice, &v).await.notes_rotation_pending, ["n2"]);
+    alice.rotate(&v).await;
+    assert!(
+        vault_info(&alice, &v)
+            .await
+            .notes_rotation_pending
+            .is_empty()
     );
 }

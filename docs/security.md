@@ -240,11 +240,21 @@ primitives. Formats:
   holding the data, it could delete it without anyone's help. Agents can't
   be admins.
 * **Removed members** lose server access immediately and the vault key is
-  rotated, so content written afterwards is unreadable to them even if they
-  obtain ciphertext. Data they downloaded before removal cannot be revoked —
-  the UI says so. Every note's document key is renewed in the same request
-  (members could unwrap them all) — also the keys of notes deleted for good
-  that can still be undone, so undoing it brings back no key they knew.
+  rotated in the same request, so content written afterwards is unreadable
+  to them even if they obtain ciphertext: the server refuses a removal
+  without the new key, and stores both or neither. Data they downloaded
+  before removal cannot be revoked — the UI says so. Every note's document
+  key is renewed with it (members could unwrap them all) — also the keys of
+  notes deleted for good that can still be undone, so undoing it brings back
+  no key they knew.
+* **People who leave on their own** (or an agent that is deleted) can't renew
+  the key: only the owner can. The server marks it, and the owner's apps
+  rotate it the next time they're online (protocol.md §5.4). Until then new
+  content is written under a key the person still knows; they could read it
+  only if the server — or a leak of its data — handed them the ciphertext.
+  Writes aren't held back meanwhile, so a vault stays usable while its
+  owner is away. The same goes for someone removing a note shared with them
+  from their list, and for a shared note deleted for good and brought back.
 * **Recipients of a single note** hold only that note's document keys from
   the moment sharing started. Sharing gives the note a fresh key that has no
   chain link to its earlier ones, so even with all the ciphertext a recipient
@@ -255,8 +265,8 @@ primitives. Formats:
   working on that note. Of its comments they get those written since it was
   shared, and earlier ones only if the sharer chose to include them (then
   everyone the note is shared with gets them). They cannot share it further or change its key. When
-  one is removed, the owner's client rotates the document key; as with vault
-  members, what they already downloaded stays with them. Images embedded from
+  the owner removes one, the note's new key comes in the same request; as
+  with vault members, what they already downloaded stays with them. Images embedded from
   vault attachments are not shown to them (the attachments aren't shared).
 
 ### Compromised device
@@ -387,3 +397,6 @@ reported, never applied partially. Duplicate deliveries are no-ops.
 4. Browser key storage relies on the browser profile's security.
 5. Post-quantum: key wrapping uses X25519 today; the format is versioned for a
    move to hybrid ML-KEM (X-Wing).
+6. Someone who leaves on their own still knows the key until the owner's
+   apps renew it (above): content written in between is readable to them
+   with the server's help.

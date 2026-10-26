@@ -259,6 +259,13 @@ pub(super) async fn load_vault_with(info: VaultInfo, force: bool, keys: Option<V
                     if is_new {
                         leptos::task::spawn_local(super::members::sign_missing_grants(id.clone()));
                     }
+                    // Someone who left still knows a key: renew it.
+                    if info.rotation_pending || !info.notes_rotation_pending.is_empty() {
+                        let id = id.clone();
+                        leptos::task::spawn_local(async move {
+                            crate::actions::renew_pending_keys(&id).await
+                        });
+                    }
                 }
                 after_apply(&id, applied);
                 if is_new && restored {

@@ -14,7 +14,7 @@ use std::collections::HashMap;
 use anyhow::{Context, Result, anyhow, bail};
 use notekpr_core::comments::{self, Person};
 use notekpr_core::engine::{self, ObjectMeta, PinStatus, VaultReplica};
-use notekpr_core::keys::AccountPublic;
+use notekpr_core::keys::{AccountPublic, VaultKeyring};
 use notekpr_core::memberlog::LogBody;
 use notekpr_core::protocol::*;
 use notekpr_sync::members;
@@ -214,18 +214,19 @@ async fn ensure_document_key(
     bail!("could not start sharing the note; try again")
 }
 
-/// Stop sharing a note with someone and rotate the note's key.
+/// Stop sharing a note with someone, with the note's new key for everyone
+/// else in the same request: nothing is written under a key they know.
 pub async fn unshare_note(
     session: &Session,
     vault: &SharedVault,
     path: &str,
     user_ref: &str,
 ) -> Result<PublicUser> {
-    let (id, note_id, vault_name) = {
+    let (id, note_id) = {
         let v = vault.lock().await;
         manage::require_owner(&v)?;
         let (_, e) = v.find_note(path)?;
-        (v.id().to_string(), e.id, v.name().to_string())
+        (v.id().to_string(), e.id)
     };
     let shares = note_shares(session, &id, &note_id).await?;
     let user = shares
@@ -240,34 +241,43 @@ pub async fn unshare_note(
         })
         .cloned()
         .ok_or_else(|| anyhow!("the note is not shared with '{user_ref}'"))?;
-    let log_entry = session
-        .log_entry(
-            vault,
-            LogBody::Unshare {
-                object_id: note_id.clone(),
-                user_id: user.id.clone(),
-            },
-        )
-        .await;
-    session
-        .api
-        .delete_with(
-            &format!("/vaults/{id}/objects/{note_id}/shares/{}", user.id),
-            &RemoveMemberRequest { log_entry },
-        )
-        .await?;
-    session.reload_member_log(vault).await?;
-    rotate_note_key(session, vault, &id, &note_id)
-        .await
-        .with_context(|| {
-            format!(
-                "{} no longer has access, but the note's key could not be renewed, so they could still read \
-                 new changes if the server passed them on. Finish with `notekpr rotate-note-key \
-                 \"{vault_name}\" \"{path}\"`",
-                user.display_name
+    for attempt in 0..2 {
+        let log_entry = session
+            .log_entry(
+                vault,
+                LogBody::Unshare {
+                    object_id: note_id.clone(),
+                    user_id: user.id.clone(),
+                },
             )
-        })?;
-    Ok(user)
+            .await;
+        let r = note_rotation(session, vault, &id, &note_id, Some(&user.id)).await?;
+        let req = RemoveShareRequest {
+            log_entry,
+            rotation: Some(r.req.clone()),
+        };
+        match session
+            .api
+            .delete_with(
+                &format!("/vaults/{id}/objects/{note_id}/shares/{}", user.id),
+                &req,
+            )
+            .await
+        {
+            Ok(()) => {
+                session.reload_member_log(vault).await?;
+                r.store(vault, &note_id).await?;
+                return Ok(user);
+            }
+            // Recipients, keys or the log changed meanwhile: retry once.
+            Err(e) if matches!(e.status(), Some(409) | Some(412)) && attempt == 0 => {
+                session.refresh_note_keys(vault, &note_id).await?;
+                session.reload_member_log(vault).await?;
+            }
+            Err(e) => return Err(anyhow!(e).context("removing them from the note")),
+        }
+    }
+    bail!("could not stop sharing the note (its recipients keep changing); try again")
 }
 
 /// New document key for the note's remaining recipients.
@@ -277,6 +287,43 @@ pub async fn rotate_note_key(
     id: &str,
     note_id: &str,
 ) -> Result<()> {
+    let r = note_rotation(session, vault, id, note_id, None).await?;
+    session
+        .api
+        .put::<_, ()>(&format!("/vaults/{id}/objects/{note_id}/key"), &r.req)
+        .await
+        .context("rotating the note key")?;
+    r.store(vault, note_id).await
+}
+
+/// A note's new key, prepared for the server.
+struct NoteRotation {
+    next: VaultKeyring,
+    req: ObjectKeyUpdate,
+    /// Whether anyone keeps the note (or is left out of its key for now).
+    shared: bool,
+}
+
+impl NoteRotation {
+    /// The server took it: keep the key.
+    async fn store(self, vault: &SharedVault, note_id: &str) -> Result<()> {
+        let mut v = vault.lock().await;
+        v.set_note_keyring(note_id, self.next);
+        if !self.shared {
+            v.replica.shared.remove(note_id);
+        }
+        v.save()
+    }
+}
+
+/// The note's new key for its recipients but `removing`.
+async fn note_rotation(
+    session: &Session,
+    vault: &SharedVault,
+    id: &str,
+    note_id: &str,
+    removing: Option<&str>,
+) -> Result<NoteRotation> {
     // Never to a key that changed since it was pinned: such people are left
     // out of the new key until verified (`share-note --accept-new-key`).
     let (users, changed) = session.split_changed_keys(
@@ -284,6 +331,7 @@ pub async fn rotate_note_key(
             .await?
             .into_iter()
             .map(|s| s.user)
+            .filter(|u| Some(u.id.as_str()) != removing)
             .collect(),
     );
     let (next, req) = {
@@ -313,17 +361,11 @@ pub async fn rotate_note_key(
             names.join(", ")
         ));
     }
-    session
-        .api
-        .put::<_, ()>(&format!("/vaults/{id}/objects/{note_id}/key"), &req)
-        .await
-        .context("rotating the note key")?;
-    let mut v = vault.lock().await;
-    v.set_note_keyring(note_id, next);
-    if users.is_empty() && changed.is_empty() {
-        v.replica.shared.remove(note_id);
-    }
-    v.save()
+    Ok(NoteRotation {
+        next,
+        req,
+        shared: !users.is_empty() || !changed.is_empty(),
+    })
 }
 
 pub async fn note_shares(

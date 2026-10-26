@@ -6,10 +6,11 @@ use sqlx::{Row, SqliteExecutor};
 use crate::error::AppResult;
 
 fn vault_row(r: &sqlx::sqlite::SqliteRow) -> VaultInfo {
+    let role = Role::parse(r.get("role")).unwrap_or(Role::Viewer);
     VaultInfo {
         id: r.get("id"),
         owner_id: r.get("owner_id"),
-        role: Role::parse(r.get("role")).unwrap_or(Role::Viewer),
+        role,
         encrypted_meta: r.get("encrypted_meta"),
         key_epoch: r.get::<i64, _>("key_epoch") as u32,
         head_seq: r.get("head_seq"),
@@ -21,6 +22,10 @@ fn vault_row(r: &sqlx::sqlite::SqliteRow) -> VaultInfo {
         kind: VaultKind::parse(r.get("kind")).unwrap_or_default(),
         // Filled in by the routes (it depends on the instance's settings).
         note_limit: Limit::Unlimited,
+        // Only the owner can rotate keys.
+        rotation_pending: role == Role::Owner && r.get::<bool, _>("rotation_pending"),
+        // Filled in by the routes, for the owner.
+        notes_rotation_pending: vec![],
     }
 }
 
@@ -31,7 +36,7 @@ pub async fn list_for_member(
 ) -> AppResult<Vec<VaultInfo>> {
     let rows = sqlx::query(
         "SELECT v.id, v.owner_id, m.role, v.encrypted_meta, v.key_epoch, v.head_seq, v.archived,
-                v.created_at, v.updated_at, v.viewers_comment, v.kind,
+                v.created_at, v.updated_at, v.viewers_comment, v.kind, v.rotation_pending,
                 (SELECT COUNT(*) FROM vault_members m2 WHERE m2.vault_id = v.id) AS member_count
          FROM vaults v JOIN vault_members m ON m.vault_id = v.id AND m.user_id = ?
          ORDER BY v.created_at",
@@ -50,7 +55,7 @@ pub async fn get_for_member(
 ) -> AppResult<Option<VaultInfo>> {
     Ok(sqlx::query(
         "SELECT v.id, v.owner_id, m.role, v.encrypted_meta, v.key_epoch, v.head_seq, v.archived,
-                v.created_at, v.updated_at, v.viewers_comment, v.kind,
+                v.created_at, v.updated_at, v.viewers_comment, v.kind, v.rotation_pending,
                 (SELECT COUNT(*) FROM vault_members m2 WHERE m2.vault_id = v.id) AS member_count
          FROM vaults v JOIN vault_members m ON m.vault_id = v.id AND m.user_id = ?
          WHERE v.id = ?",
@@ -200,7 +205,8 @@ pub async fn set_viewers_comment(
     Ok(())
 }
 
-/// Move to a new key epoch, with the vault name re-encrypted under it.
+/// Move to a new key epoch, with the vault name re-encrypted under it. No
+/// one who lost access knows the new key.
 pub async fn set_key_epoch(
     db: impl SqliteExecutor<'_>,
     vault_id: &str,
@@ -208,13 +214,42 @@ pub async fn set_key_epoch(
     encrypted_meta: &[u8],
     now: i64,
 ) -> AppResult<()> {
-    sqlx::query("UPDATE vaults SET key_epoch = ?, encrypted_meta = ?, updated_at = ? WHERE id = ?")
-        .bind(epoch)
-        .bind(encrypted_meta)
-        .bind(now)
+    sqlx::query(
+        "UPDATE vaults SET key_epoch = ?, encrypted_meta = ?, rotation_pending = 0, updated_at = ?
+         WHERE id = ?",
+    )
+    .bind(epoch)
+    .bind(encrypted_meta)
+    .bind(now)
+    .bind(vault_id)
+    .execute(db)
+    .await?;
+    Ok(())
+}
+
+/// Someone who lost access still knows the vault's current key: its owner's
+/// apps rotate it (which clears this).
+pub async fn set_rotation_pending(db: impl SqliteExecutor<'_>, vault_id: &str) -> AppResult<()> {
+    sqlx::query("UPDATE vaults SET rotation_pending = 1 WHERE id = ?")
         .bind(vault_id)
         .execute(db)
         .await?;
+    Ok(())
+}
+
+/// Every vault whose key someone going holds (an agent deleted): its
+/// owner's apps rotate it.
+pub async fn set_rotation_pending_for_holder(
+    db: impl SqliteExecutor<'_>,
+    user_id: &str,
+) -> AppResult<()> {
+    sqlx::query(
+        "UPDATE vaults SET rotation_pending = 1
+         WHERE id IN (SELECT vault_id FROM vault_keys WHERE user_id = ?)",
+    )
+    .bind(user_id)
+    .execute(db)
+    .await?;
     Ok(())
 }
 

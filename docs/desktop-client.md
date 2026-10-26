@@ -561,8 +561,13 @@ once you share with them again with `--accept-new-key`.
 * People who have not set up encryption yet are added without a key; your
   client wraps the vault key for them automatically once they have (during
   `sync`, `vault members`, or any sync of that vault).
-* `vault unshare` removes the member **and rotates the vault key**: they keep
-  what they already downloaded, but cannot decrypt anything written later.
+* `vault unshare` removes the member **and rotates the vault key**, in one
+  request: they keep what they already downloaded, but cannot decrypt
+  anything written later.
+* When someone leaves on their own (or you delete an agent), the server marks
+  the key they knew, and your client rotates it the next time it syncs that
+  vault (`sync`, the sync daemon, `vault members`, `status`). The same goes
+  for a note someone removed from their list.
 * `vault rotate` rotates manually (e.g. after revoking a lost device).
 * Members holding the new key can still read old content through the key chain.
 
@@ -589,10 +594,10 @@ running `share-note` again for someone who already has the note changes
 their role.
 
 A new key is never wrapped for someone whose account key changed since it was
-pinned: the rotation stops and says who. Verify the fingerprint with them and
-re-share with `--accept-new-key` (or stop sharing with them), then finish an
-interrupted removal with `notekpr rotate-note-key Family "Plans/Trip.md"`
-(or `notekpr vault rotate Family` for a vault).
+pinned: the rotation goes ahead without them and says who. Verify the
+fingerprint with them and share with them again with `--accept-new-key` (or
+stop sharing with them). `notekpr rotate-note-key Family "Plans/Trip.md"`
+renews a note's key by hand.
 
 Notes shared *with you*:
 

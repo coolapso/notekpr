@@ -10,10 +10,10 @@ use std::collections::HashMap;
 use notekpr_core::keys::AccountPublic;
 use notekpr_core::memberlog;
 use notekpr_core::protocol::{
-    ChangesResponse, CreateSnapshotRequest, INDEX_OBJECT_ID, ObjectState, PurgedItem, PurgedObject,
-    PushResult, PushUpdate, REJECT_BAD_SIGNATURE, REJECT_PURGED, REJECT_QUICK_NOTES_FULL,
-    REJECT_STALE_KEY, REJECT_TOO_LARGE, REJECT_UNSIGNED, RejectedUpdate, RestoredObject, Snapshot,
-    SnapshotInfo, Update, comments_note, comments_object,
+    ChangesResponse, CreateSnapshotRequest, INDEX_OBJECT_ID, ObjectEventKind, ObjectState,
+    PurgedItem, PurgedObject, PushResult, PushUpdate, REJECT_BAD_SIGNATURE, REJECT_PURGED,
+    REJECT_QUICK_NOTES_FULL, REJECT_STALE_KEY, REJECT_TOO_LARGE, REJECT_UNSIGNED, RejectedUpdate,
+    RestoredObject, Snapshot, SnapshotInfo, Update, comments_note, comments_object,
 };
 use sqlx::Row;
 
@@ -979,6 +979,10 @@ pub async fn purge(
             .execute(&mut *tx)
             .await?;
     }
+    // They know its key, which an undo would bring back: it is rotated then.
+    if !recipients.is_empty() {
+        repo::shares::set_rotation_pending(&mut *tx, vault_id, object_id).await?;
+    }
     // Its comments go with it (clients drop them with the note).
     let comments = comments_object(object_id);
     for o in [object_id, comments.as_str()] {
@@ -1044,16 +1048,17 @@ pub async fn restore(
     let now = db::now();
     let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
     access::require_admin(&mut *tx, vault_id, &who.user_id).await?;
-    let row: Option<(Option<i64>, Option<i64>)> =
-        sqlx::query_as("SELECT purged_at, erased_at FROM objects WHERE vault_id = ? AND id = ?")
-            .bind(vault_id)
-            .bind(object_id)
-            .fetch_optional(&mut *tx)
-            .await?;
-    match row {
-        Some((Some(at), None)) if at >= now - state.config.purge_undo_ms() => {}
+    let row: Option<(Option<i64>, Option<i64>, bool)> = sqlx::query_as(
+        "SELECT purged_at, erased_at, rotation_pending FROM objects WHERE vault_id = ? AND id = ?",
+    )
+    .bind(vault_id)
+    .bind(object_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let rotation_pending = match row {
+        Some((Some(at), None, pending)) if at >= now - state.config.purge_undo_ms() => pending,
         _ => return Err(AppError::NotFound),
-    }
+    };
     let seq: i64 = sqlx::query_scalar(
         "UPDATE vaults SET head_seq = head_seq + 1, updated_at = ? WHERE id = ? RETURNING head_seq",
     )
@@ -1080,6 +1085,10 @@ pub async fn restore(
             seq,
         },
     );
+    // It was shared when deleted: the owner's apps rotate its key now.
+    if rotation_pending {
+        crate::routes::shares::publish(state, vault_id, object_id, ObjectEventKind::SharesChanged);
+    }
     db::audit(
         &state.db,
         Some(&who.user_id),

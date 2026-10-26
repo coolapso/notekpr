@@ -42,6 +42,11 @@
 //!    never `0` (`origin_conn = 0` marks a REST push without a connection).
 //! 7. **Publishing never blocks or fails** for the caller: it happens while
 //!    the write lock is held. A remote backend queues internally.
+//! 8. **Exclusions hold.** An event published with
+//!    [`EventBus::publish_except`] never reaches that user's subscriptions,
+//!    though revoking their access ([`Control`]) may not have ended them
+//!    yet: the new key of a vault or note someone was just removed from
+//!    doesn't reach them.
 //!
 //! Events carry only what the server already holds: ciphertext, ids, sequence
 //! numbers and encrypted presence payloads — never plaintext.
@@ -178,11 +183,12 @@ impl EventBus {
         }
     }
 
-    /// Start receiving a vault's events. Everything published after this
-    /// returns is delivered (or reported as [`RecvError::Lagged`]).
-    pub fn subscribe(&self, vault_id: &str) -> VaultSubscription {
+    /// Start receiving a vault's events, for `user_id`. Everything published
+    /// after this returns is delivered (or reported as
+    /// [`RecvError::Lagged`]), but what is published except for them.
+    pub fn subscribe(&self, vault_id: &str, user_id: &str) -> VaultSubscription {
         match self {
-            EventBus::Local(b) => b.subscribe(vault_id),
+            EventBus::Local(b) => b.subscribe(vault_id, user_id),
         }
     }
 
@@ -190,7 +196,17 @@ impl EventBus {
     /// published after their transaction committed, under the write lock.
     pub fn publish(&self, vault_id: &str, event: VaultEvent) {
         match self {
-            EventBus::Local(b) => b.publish(vault_id, event),
+            EventBus::Local(b) => b.publish(vault_id, event, None),
+        }
+    }
+
+    /// Deliver a notice to the vault's subscribers but `user_id`'s: they
+    /// just lost access, and their subscriptions may not have ended yet.
+    /// Never for log events (every subscriber needs those, in order).
+    pub fn publish_except(&self, vault_id: &str, event: VaultEvent, user_id: &str) {
+        debug_assert!(event.seq().is_none(), "log events go to everyone");
+        match self {
+            EventBus::Local(b) => b.publish(vault_id, event, Some(user_id.to_string())),
         }
     }
 
@@ -217,20 +233,35 @@ impl EventBus {
 }
 
 /// The receiving half of [`EventBus::subscribe`].
-pub struct VaultSubscription(SubscriptionInner);
+pub struct VaultSubscription {
+    user_id: String,
+    inner: SubscriptionInner,
+}
 
 enum SubscriptionInner {
-    Local(broadcast::Receiver<Arc<VaultEvent>>),
+    Local(broadcast::Receiver<Arc<Published>>),
+}
+
+/// An event as the local bus carries it.
+struct Published {
+    event: Arc<VaultEvent>,
+    /// The user it is not for ([`EventBus::publish_except`]).
+    except: Option<String>,
 }
 
 impl VaultSubscription {
-    /// The next event, in publish order.
+    /// The next event for this subscriber, in publish order.
     pub async fn recv(&mut self) -> Result<Arc<VaultEvent>, RecvError> {
-        match &mut self.0 {
-            SubscriptionInner::Local(rx) => rx.recv().await.map_err(|e| match e {
-                broadcast::error::RecvError::Lagged(_) => RecvError::Lagged,
-                broadcast::error::RecvError::Closed => RecvError::Closed,
-            }),
+        match &mut self.inner {
+            SubscriptionInner::Local(rx) => loop {
+                let p = rx.recv().await.map_err(|e| match e {
+                    broadcast::error::RecvError::Lagged(_) => RecvError::Lagged,
+                    broadcast::error::RecvError::Closed => RecvError::Closed,
+                })?;
+                if p.except.as_deref() != Some(self.user_id.as_str()) {
+                    return Ok(p.event.clone());
+                }
+            },
         }
     }
 }
@@ -254,7 +285,7 @@ impl ControlReceiver {
 /// In-process fan-out: one broadcast channel per vault with subscribers,
 /// one unbounded queue per connection.
 pub struct LocalBus {
-    vaults: DashMap<String, broadcast::Sender<Arc<VaultEvent>>>,
+    vaults: DashMap<String, broadcast::Sender<Arc<Published>>>,
     users: DashMap<String, Vec<(u64, mpsc::UnboundedSender<Control>)>>,
     next_conn: AtomicU64,
 }
@@ -295,19 +326,26 @@ impl LocalBus {
         }
     }
 
-    fn subscribe(&self, vault_id: &str) -> VaultSubscription {
+    fn subscribe(&self, vault_id: &str, user_id: &str) -> VaultSubscription {
         let rx = self
             .vaults
             .entry(vault_id.to_string())
             .or_insert_with(|| broadcast::channel(VAULT_CHANNEL_CAPACITY).0)
             .subscribe();
-        VaultSubscription(SubscriptionInner::Local(rx))
+        VaultSubscription {
+            user_id: user_id.to_string(),
+            inner: SubscriptionInner::Local(rx),
+        }
     }
 
-    fn publish(&self, vault_id: &str, event: VaultEvent) {
+    fn publish(&self, vault_id: &str, event: VaultEvent, except: Option<String>) {
         let mut empty = false;
         if let Some(tx) = self.vaults.get(vault_id) {
-            empty = tx.send(Arc::new(event)).is_err();
+            let p = Published {
+                event: Arc::new(event),
+                except,
+            };
+            empty = tx.send(Arc::new(p)).is_err();
         }
         if empty {
             self.vaults
@@ -343,12 +381,12 @@ mod tests {
     async fn subscribers_get_everything_published_after_subscribing_in_order() {
         let bus = EventBus::new();
         bus.publish("v", purged(1)); // nobody listening: dropped
-        let mut a = bus.subscribe("v");
-        let mut other = bus.subscribe("w");
+        let mut a = bus.subscribe("v", "alice");
+        let mut other = bus.subscribe("w", "alice");
         for s in 2..=5 {
             bus.publish("v", purged(s));
         }
-        let mut b = bus.subscribe("v");
+        let mut b = bus.subscribe("v", "bob");
         bus.publish("v", purged(6));
         for s in 2..=6 {
             assert_eq!(a.recv().await.unwrap().seq(), Some(s));
@@ -361,7 +399,7 @@ mod tests {
     #[tokio::test]
     async fn slow_subscribers_are_told_they_lagged() {
         let bus = EventBus::new();
-        let mut rx = bus.subscribe("v");
+        let mut rx = bus.subscribe("v", "alice");
         let n = VAULT_CHANNEL_CAPACITY as i64 + 10;
         for s in 1..=n {
             bus.publish("v", purged(s));
@@ -371,6 +409,25 @@ mod tests {
         let first = rx.recv().await.unwrap().seq().unwrap();
         assert!(first > 1);
         assert_eq!(rx.recv().await.unwrap().seq(), Some(first + 1));
+    }
+
+    #[tokio::test]
+    async fn what_is_published_except_for_someone_never_reaches_them() {
+        let bus = EventBus::new();
+        let mut alice = bus.subscribe("v", "alice");
+        let mut bob = bus.subscribe("v", "bob");
+        bus.publish_except("v", VaultEvent::Event(VaultEventKind::KeyRotated), "bob");
+        bus.publish("v", purged(2));
+        assert!(matches!(
+            *alice.recv().await.unwrap(),
+            VaultEvent::Event(VaultEventKind::KeyRotated)
+        ));
+        assert_eq!(alice.recv().await.unwrap().seq(), Some(2));
+        assert_eq!(
+            bob.recv().await.unwrap().seq(),
+            Some(2),
+            "only the log event"
+        );
     }
 
     #[tokio::test]

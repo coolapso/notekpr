@@ -373,7 +373,58 @@ impl User {
     /// purpose if `declare`. Returns the server's status; the new key is kept
     /// only if it accepted.
     pub async fn rotate_leaving_out(&mut self, vault_id: &str, out: &[&str], declare: bool) -> u16 {
+        let (req, ring) = self.rotation(vault_id, None, out, declare).await;
+        let status = self
+            .api
+            .status(
+                reqwest::Method::POST,
+                &format!("/vaults/{vault_id}/keys/rotate"),
+                Some(&req),
+            )
+            .await;
+        if (200..300).contains(&status) {
+            self.keyrings.insert(vault_id.to_string(), ring);
+        }
+        status
+    }
+
+    /// Remove a member, with the vault's new key for everyone else (as the
+    /// apps do). Returns the server's status; the new key is kept only if it
+    /// accepted.
+    pub async fn remove(&mut self, vault_id: &str, user_id: &str) -> u16 {
+        let (req, ring) = self.rotation(vault_id, Some(user_id), &[], true).await;
+        let status = self
+            .api
+            .status(
+                reqwest::Method::DELETE,
+                &format!("/vaults/{vault_id}/members/{user_id}"),
+                Some(&RemoveMemberRequest {
+                    log_entry: None,
+                    rotation: Some(req),
+                }),
+            )
+            .await;
+        if (200..300).contains(&status) {
+            self.keyrings.insert(vault_id.to_string(), ring);
+        }
+        status
+    }
+
+    /// A new vault key (and every note's) for the members but `gone` (being
+    /// removed), as [`User::rotate_leaving_out`] describes, with the keyring
+    /// that holds it.
+    pub async fn rotation(
+        &self,
+        vault_id: &str,
+        gone: Option<&str>,
+        out: &[&str],
+        declare: bool,
+    ) -> (RotateKeysRequest, VaultKeyring) {
         let members: Vec<MemberInfo> = self.api.get(&format!("/vaults/{vault_id}/members")).await;
+        let members: Vec<MemberInfo> = members
+            .into_iter()
+            .filter(|m| Some(m.user.id.as_str()) != gone)
+            .collect();
         let (epoch, old) = {
             let (e, k) = self.ring(vault_id).current().unwrap();
             (e, k.clone())
@@ -448,26 +499,16 @@ impl User {
                 update,
             });
         }
-        let status = self
-            .api
-            .status(
-                reqwest::Method::POST,
-                &format!("/vaults/{vault_id}/keys/rotate"),
-                Some(&RotateKeysRequest {
-                    new_epoch,
-                    chain_link: keys::encrypt_chain_link(&new, new_epoch, &old, vault_id),
-                    encrypted_meta: meta,
-                    envelopes,
-                    objects,
-                    log_entry: None,
-                    without: members_out,
-                }),
-            )
-            .await;
-        if (200..300).contains(&status) {
-            self.keyrings.insert(vault_id.to_string(), ring);
-        }
-        status
+        let req = RotateKeysRequest {
+            new_epoch,
+            chain_link: keys::encrypt_chain_link(&new, new_epoch, &old, vault_id),
+            encrypted_meta: meta,
+            envelopes,
+            objects,
+            log_entry: None,
+            without: members_out,
+        };
+        (req, ring)
     }
 
     /// Rebuild a vault's index and notes from the server, decrypting everything.

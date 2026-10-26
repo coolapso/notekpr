@@ -15,7 +15,7 @@ use axum::http::StatusCode;
 use notekpr_core::keys::{FIRST_DOC_EPOCH, is_doc_epoch};
 use notekpr_core::protocol::{
     AddObjectShareRequest, INDEX_OBJECT_ID, ObjectEventKind, ObjectKeyUpdate, ObjectKeysResponse,
-    ObjectMetaUpdate, ObjectShareInfo, RemoveMemberRequest, Role, SharedNote, SignGrantsRequest,
+    ObjectMetaUpdate, ObjectShareInfo, RemoveShareRequest, Role, SharedNote, SignGrantsRequest,
     UpdateMemberRequest, UserEventKind,
 };
 use sqlx::SqliteExecutor;
@@ -67,13 +67,25 @@ async fn object_key_epoch(
 }
 
 pub(crate) fn publish(state: &AppState, v: &str, o: &str, event: ObjectEventKind) {
-    state.hub.publish(
-        v,
-        VaultEvent::Object {
-            object_id: o.to_string(),
-            event,
-        },
-    );
+    state.hub.publish(v, object_event(o, event));
+}
+
+/// [`publish`], but not to `user_id`, who just lost access to the note.
+pub(crate) fn publish_except(
+    state: &AppState,
+    v: &str,
+    o: &str,
+    event: ObjectEventKind,
+    user_id: &str,
+) {
+    state.hub.publish_except(v, object_event(o, event), user_id);
+}
+
+fn object_event(o: &str, event: ObjectEventKind) -> VaultEvent {
+    VaultEvent::Object {
+        object_id: o.to_string(),
+        event,
+    }
 }
 
 /// Notes shared with the caller individually.
@@ -667,27 +679,40 @@ async fn may_remove(
 }
 
 /// Stop sharing a note with someone (owner), or remove a note shared with
-/// you from your list. Owners should rotate the note's key afterwards.
+/// you from your list. The owner's removal carries the note's new key,
+/// stored in the same transaction; someone removing it from their list
+/// can't renew it: the note is marked for the owner's apps to rotate it.
 pub async fn remove(
     State(state): State<AppState>,
     who: Principal,
     Path((v, o, u)): Path<(String, String, String)>,
-    req: Option<Json<RemoveMemberRequest>>,
+    req: Option<Json<RemoveShareRequest>>,
 ) -> AppResult<StatusCode> {
     let req = req.map(|Json(r)| r).unwrap_or_default();
+    let leaving = u == who.user_id;
     may_remove(&state.db, &v, &o, &u, &who.user_id).await?;
+    match (&req.rotation, leaving) {
+        (Some(_), true) => return Err(bad("only the vault's owner rotates a note's key")),
+        (None, false) => {
+            return Err(bad(
+                "send the note's new key with the removal (update the app)",
+            ));
+        }
+        _ => {}
+    }
+    let now = db::now();
     {
         let _w = state.write_lock.lock().await;
         let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
         may_remove(&mut *tx, &v, &o, &u, &who.user_id).await?;
         if repo::shares::delete(&mut *tx, &v, &o, &u).await? == 0 {
-            return Err(if u == who.user_id {
+            return Err(if leaving {
                 AppError::NotFound
             } else {
                 forbidden("the note is not shared with this person")
             });
         }
-        repo::keys::delete_document_keys_of(&mut *tx, &v, &o, &u).await?;
+        let had_keys = repo::keys::delete_document_keys_of(&mut *tx, &v, &o, &u).await?;
         member_log::check_and_append(
             &mut tx,
             &v,
@@ -697,10 +722,42 @@ pub async fn remove(
                 object_id: &o,
                 user_id: &u,
             },
-            db::now(),
+            now,
         )
         .await?;
+        match &req.rotation {
+            Some(r) => {
+                let vault_epoch = repo::vaults::key_epoch(&mut *tx, &v)
+                    .await?
+                    .ok_or(AppError::NotFound)?;
+                let kind = apply_key_change(
+                    &state,
+                    &mut tx,
+                    &who,
+                    true,
+                    false,
+                    &v,
+                    &o,
+                    r,
+                    vault_epoch,
+                    now,
+                )
+                .await?;
+                if kind != KeyChange::Rotation {
+                    return Err(bad("the note's new key needs a chain link"));
+                }
+            }
+            None if had_keys => repo::shares::set_rotation_pending(&mut *tx, &v, &o).await?,
+            None => {}
+        }
         tx.commit().await?;
+        state
+            .hub
+            .control(&u, Control::RevokeObject(v.clone(), o.clone()));
+        // Not to them: their subscription may not have ended yet.
+        if req.rotation.is_some() {
+            publish_except(&state, &v, &o, ObjectEventKind::KeyRotated, &u);
+        }
     }
     db::audit(
         &state.db,
@@ -712,9 +769,18 @@ pub async fn remove(
         serde_json::json!({ "user": u }),
     )
     .await;
-    state
-        .hub
-        .control(&u, Control::RevokeObject(v.clone(), o.clone()));
+    if let Some(r) = &req.rotation {
+        db::audit(
+            &state.db,
+            Some(&who.user_id),
+            None,
+            Some(&v),
+            "object.key_rotate",
+            Some(&o),
+            serde_json::json!({ "epoch": r.epoch }),
+        )
+        .await;
+    }
     publish(&state, &v, &o, ObjectEventKind::SharesChanged);
     notify_user(&state, &u, UserEventKind::SharesChanged);
     Ok(StatusCode::NO_CONTENT)

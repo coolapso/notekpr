@@ -485,6 +485,15 @@ fn is_missing_epoch(e: &anyhow::Error) -> bool {
 /// Fetch the notes whose deletion for good was undone (in the background:
 /// the cursor waits for them, so a failure is retried with the next
 /// catch-up).
+/// Owner: renew keys someone who no longer has access still knows.
+async fn renew_pending_keys(hub: &Hub, v: &SharedVault) {
+    if let Err(e) = hub.session.renew_pending_keys(v).await {
+        ui::warn(&format!(
+            "could not renew a key someone who left still knows: {e:#}"
+        ));
+    }
+}
+
 fn spawn_fetch_restored(hub: &Arc<Hub>, vault_id: &str, a: &notekpr_core::engine::Applied) {
     if a.restored.is_empty() {
         return;
@@ -580,6 +589,7 @@ async fn handle(
                 if let Err(e) = h.session.grant_missing_keys(&v).await {
                     tracing::warn!("granting keys: {e:#}");
                 }
+                renew_pending_keys(&h, &v).await;
                 // Entries deleted for good that the server no longer keeps.
                 if let Ok(days) = h.session.server_info().await.map(|i| i.purge_undo_days) {
                     let id = v.lock().await.id().to_string();
@@ -721,6 +731,7 @@ async fn handle(
                             Ok(_) => {}
                             Err(e) => tracing::warn!("granting keys: {e:#}"),
                         }
+                        renew_pending_keys(&h, &v).await;
                     });
                 }
                 VaultEventKind::Deleted => {
@@ -749,6 +760,13 @@ async fn handle(
                 && let Err(e) = session.refresh_note_keys(&v, &object_id).await
             {
                 ui::warn(&format!("could not fetch the note's key: {e:#}"));
+            }
+            // Someone it was shared with may have gone: the owner renews its key.
+            if event == ObjectEventKind::SharesChanged
+                && let Some(v) = hub.get(&vault_id)
+            {
+                let h = hub.clone();
+                tokio::spawn(async move { renew_pending_keys(&h, &v).await });
             }
         }
         ServerMessage::UserEvent { event } => match event {

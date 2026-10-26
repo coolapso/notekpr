@@ -245,9 +245,9 @@ tells you if some are still queued) and retried automatically.
   key; `vault rotate` does it on demand. Content written afterwards is
   unreadable for anyone without the new key.
 * **Compromised agent machine**: delete the agent (`notekpr agent delete`,
-  or the web app) — this removes its memberships and sessions — and rotate the
-  keys of the vaults it could read. Create a new agent rather than reusing
-  keys.
+  or the web app) — this removes its memberships and sessions, and your apps
+  then rotate the keys of the vaults and notes it could read on their own.
+  Create a new agent rather than reusing keys.
 
 ## 6. Audit log
 

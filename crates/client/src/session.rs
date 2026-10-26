@@ -37,6 +37,8 @@ pub struct Session {
     pub local_key: Arc<LocalKey>,
     info: OnceCell<ServerInfo>,
     limits: std::sync::Mutex<(ServerLimits, bool)>,
+    /// Vaults whose pending keys are being renewed (one at a time each).
+    renewing: std::sync::Mutex<std::collections::BTreeSet<String>>,
 }
 
 /// What happened during a push.
@@ -118,6 +120,7 @@ impl Session {
             local_key: Arc::new(secrets.into_local_key()),
             info: OnceCell::new(),
             limits: std::sync::Mutex::new(limits),
+            renewing: Default::default(),
         })
     }
 
@@ -1215,151 +1218,13 @@ impl Session {
     pub async fn rotate_keys(&self, vault: &SharedVault) -> Result<u32> {
         let id = vault.lock().await.id().to_string();
         for attempt in 0..2 {
-            // The rotation must cover exactly the notes the server has keys for.
-            self.refresh_keys(vault).await?;
-            self.reload_member_log(vault).await?;
-            let members = self.api.members(&id).await?;
-            // The new key goes only to members the owner's log vouches for
-            // and whose key still matches its pin; anyone else is left out on
-            // purpose and gets it once verified.
-            let (_, changed) =
-                self.split_changed_keys(members.iter().map(|m| m.user.clone()).collect());
-            let (members, left_out): (Vec<MemberInfo>, Vec<MemberInfo>) = {
-                let v = vault.lock().await;
-                members.into_iter().partition(|m| {
-                    m.user.account_key.is_none()
-                        || (v.log.vouches_for(m) && !changed.iter().any(|u| u.id == m.user.id))
-                })
-            };
-            let mut not_given: Vec<String> = left_out
-                .iter()
-                .map(|m| m.user.display_name.clone())
-                .collect();
-            let mut recipients_out = std::collections::HashMap::new();
-            let (keyed, shared) = {
-                let v = vault.lock().await;
-                let keyed: Vec<String> = v
-                    .replica
-                    .doc_keys
-                    .keys()
-                    .filter(|o| !v.outbox.waits_for_key(o))
-                    .cloned()
-                    .collect();
-                (keyed, v.replica.shared.clone())
-            };
-            let mut recipients = std::collections::HashMap::new();
-            for oid in keyed.iter().filter(|o| shared.contains(*o)) {
-                let shares: Vec<notekpr_core::protocol::ObjectShareInfo> = match self
-                    .api
-                    .get(&format!("/vaults/{id}/objects/{oid}/shares"))
-                    .await
-                {
-                    Ok(s) => s,
-                    Err(e) if e.is_not_found() => vec![],
-                    Err(e) => {
-                        return Err(anyhow!(e).context("listing a shared note's recipients"));
-                    }
-                };
-                let (users, changed) =
-                    self.split_changed_keys(shares.into_iter().map(|s| s.user).collect());
-                not_given.extend(changed.iter().map(|u| u.display_name.clone()));
-                recipients_out.insert(
-                    oid.clone(),
-                    changed.into_iter().map(|u| u.id).collect::<Vec<_>>(),
-                );
-                recipients.insert(oid.clone(), users);
-            }
-            let (req, ring, rings) = {
-                let v = vault.lock().await;
-                let notes: Vec<_> = keyed
-                    .iter()
-                    .map(|oid| {
-                        let meta = v
-                            .replica
-                            .index
-                            .get(oid)
-                            .map(|e| engine::ObjectMeta::of(&e))
-                            .unwrap_or_default();
-                        (
-                            oid.clone(),
-                            &v.replica.doc_keys[oid],
-                            meta,
-                            recipients.remove(oid).unwrap_or_default(),
-                        )
-                    })
-                    .collect();
-                let mut ring = v.replica.keyring.clone();
-                let (mut req, rings) =
-                    engine::rotate_with_notes(&mut ring, &members, &v.replica.meta, &notes)?;
-                // Left out on purpose, so the server knows it's no oversight.
-                req.without = left_out
-                    .iter()
-                    .filter(|m| m.user.account_key.is_some())
-                    .map(|m| m.user.id.clone())
-                    .collect();
-                for o in &mut req.objects {
-                    o.update.without = recipients_out.remove(&o.object_id).unwrap_or_default();
-                }
-                for o in &mut req.objects {
-                    if let Some(next) = rings.get(&o.object_id) {
-                        members::sign_grants(
-                            &self.account,
-                            &id,
-                            &o.object_id,
-                            next,
-                            &mut o.update.envelopes,
-                        );
-                    }
-                }
-                req.log_entry = members::rotation(&id, &ring).and_then(|body| {
-                    v.log.next(
-                        &self.account,
-                        &self.user_id,
-                        &id,
-                        body,
-                        notekpr_core::now_ms(),
-                    )
-                });
-                (req, ring, rings)
-            };
+            let r = self.prepare_rotation(vault, None).await?;
             match self
                 .api
-                .post::<_, ()>(&format!("/vaults/{id}/keys/rotate"), &req)
+                .post::<_, ()>(&format!("/vaults/{id}/keys/rotate"), &r.req)
                 .await
             {
-                Ok(()) => {
-                    let mut v = vault.lock().await;
-                    v.set_keyring(ring);
-                    for (oid, next) in rings {
-                        v.set_note_keyring(&oid, next);
-                    }
-                    if let Err(e) = self.load_member_log(&mut v).await {
-                        ui::warn(&format!("{e:#}"));
-                    }
-                    // New notes' keys not registered yet were wrapped under
-                    // the old vault key.
-                    let waiting: Vec<String> = v
-                        .outbox
-                        .new_keys
-                        .iter()
-                        .map(|k| k.object_id.clone())
-                        .collect();
-                    for oid in waiting {
-                        v.key_refused(&oid);
-                    }
-                    v.save()?;
-                    if !not_given.is_empty() {
-                        ui::warn(&format!(
-                            "the new key of '{}' went to everyone except {}: their account key changed (or the \
-                             owner never added them). Verify their fingerprint with them, then give them access \
-                             again with `notekpr vault share` (or `share-note` for a single note) and \
-                             --accept-new-key",
-                            v.name(),
-                            not_given.join(", ")
-                        ));
-                    }
-                    return Ok(req.new_epoch);
-                }
+                Ok(()) => return self.rotated(vault, r).await,
                 // Membership or notes changed meanwhile, or someone else
                 // rotated: retry once with fresh keys.
                 Err(e) if e.status() == Some(409) && attempt == 0 => {}
@@ -1368,6 +1233,294 @@ impl Session {
         }
         bail!("could not rotate the vault key (membership keeps changing); try again")
     }
+
+    /// Remove a member, with the vault's new key for everyone else in the
+    /// same request: nothing is ever written under a key they know. Returns
+    /// the new epoch.
+    pub async fn remove_member(&self, vault: &SharedVault, user_id: &str) -> Result<u32> {
+        let id = vault.lock().await.id().to_string();
+        for attempt in 0..2 {
+            let mut r = self.prepare_rotation(vault, Some(user_id)).await?;
+            let req = RemoveMemberRequest {
+                log_entry: r.removal.take(),
+                rotation: Some(r.req.clone()),
+            };
+            match self
+                .api
+                .delete_with(&format!("/vaults/{id}/members/{user_id}"), &req)
+                .await
+            {
+                Ok(()) => return self.rotated(vault, r).await,
+                // Membership, notes or the log changed meanwhile: retry
+                // once with fresh keys.
+                Err(e) if e.status() == Some(409) && attempt == 0 => {}
+                Err(e) => return Err(anyhow!(e).context("removing the member")),
+            }
+        }
+        bail!("could not remove the member (the vault keeps changing); try again")
+    }
+
+    /// As owner, rotate the keys someone who no longer has access still
+    /// knows (they left, their agent was deleted, a note was removed from
+    /// their list): the server marks them, and this renews them.
+    pub async fn renew_pending_keys(&self, vault: &SharedVault) -> Result<()> {
+        let id = {
+            let v = vault.lock().await;
+            if v.role() != Role::Owner || v.read_only.is_some() {
+                return Ok(());
+            }
+            v.id().to_string()
+        };
+        // Already on it (several events can ask at once).
+        let Some(_on_it) = Renewing::start(&self.renewing, &id) else {
+            return Ok(());
+        };
+        self.renew_pending(vault, &id).await
+    }
+
+    async fn renew_pending(&self, vault: &SharedVault, id: &str) -> Result<()> {
+        for attempt in 0..2 {
+            let info: VaultInfo = self.api.get(&format!("/vaults/{id}")).await?;
+            if info.rotation_pending {
+                // Every note's key moves on with the vault's.
+                let r = self.prepare_rotation(vault, None).await?;
+                match self
+                    .api
+                    .post::<_, ()>(&format!("/vaults/{id}/keys/rotate"), &r.req)
+                    .await
+                {
+                    Ok(()) => {
+                        self.rotated(vault, r).await?;
+                        return Ok(());
+                    }
+                    // Changed meanwhile (perhaps another app of ours
+                    // rotated): look again.
+                    Err(e) if e.status() == Some(409) && attempt == 0 => continue,
+                    Err(e) => return Err(anyhow!(e).context("rotating the vault key")),
+                }
+            }
+            if !info.notes_rotation_pending.is_empty() {
+                self.refresh_keys(vault).await?;
+            }
+            for note in &info.notes_rotation_pending {
+                crate::note_shares::rotate_note_key(self, vault, id, note).await?;
+            }
+            return Ok(());
+        }
+        Ok(())
+    }
+
+    /// The vault's new key and every note's, for the members but `removing`
+    /// (with the removal's log entry, signed before the new key's).
+    async fn prepare_rotation(
+        &self,
+        vault: &SharedVault,
+        removing: Option<&str>,
+    ) -> Result<Rotation> {
+        let id = vault.lock().await.id().to_string();
+        // The rotation must cover exactly the notes the server has keys for.
+        self.refresh_keys(vault).await?;
+        self.reload_member_log(vault).await?;
+        let members: Vec<MemberInfo> = self
+            .api
+            .members(&id)
+            .await?
+            .into_iter()
+            .filter(|m| Some(m.user.id.as_str()) != removing)
+            .collect();
+        // The new key goes only to members the owner's log vouches for
+        // and whose key still matches its pin; anyone else is left out on
+        // purpose and gets it once verified.
+        let (_, changed) =
+            self.split_changed_keys(members.iter().map(|m| m.user.clone()).collect());
+        let (members, left_out): (Vec<MemberInfo>, Vec<MemberInfo>) = {
+            let v = vault.lock().await;
+            members.into_iter().partition(|m| {
+                m.user.account_key.is_none()
+                    || (v.log.vouches_for(m) && !changed.iter().any(|u| u.id == m.user.id))
+            })
+        };
+        let mut not_given: Vec<String> = left_out
+            .iter()
+            .map(|m| m.user.display_name.clone())
+            .collect();
+        let mut recipients_out = std::collections::HashMap::new();
+        let (keyed, shared) = {
+            let v = vault.lock().await;
+            let keyed: Vec<String> = v
+                .replica
+                .doc_keys
+                .keys()
+                .filter(|o| !v.outbox.waits_for_key(o))
+                .cloned()
+                .collect();
+            (keyed, v.replica.shared.clone())
+        };
+        let mut recipients = std::collections::HashMap::new();
+        for oid in keyed.iter().filter(|o| shared.contains(*o)) {
+            let shares: Vec<notekpr_core::protocol::ObjectShareInfo> = match self
+                .api
+                .get(&format!("/vaults/{id}/objects/{oid}/shares"))
+                .await
+            {
+                Ok(s) => s,
+                Err(e) if e.is_not_found() => vec![],
+                Err(e) => {
+                    return Err(anyhow!(e).context("listing a shared note's recipients"));
+                }
+            };
+            let (users, changed) =
+                self.split_changed_keys(shares.into_iter().map(|s| s.user).collect());
+            not_given.extend(changed.iter().map(|u| u.display_name.clone()));
+            recipients_out.insert(
+                oid.clone(),
+                changed.into_iter().map(|u| u.id).collect::<Vec<_>>(),
+            );
+            recipients.insert(oid.clone(), users);
+        }
+        let v = vault.lock().await;
+        let notes: Vec<_> = keyed
+            .iter()
+            .map(|oid| {
+                let meta = v
+                    .replica
+                    .index
+                    .get(oid)
+                    .map(|e| engine::ObjectMeta::of(&e))
+                    .unwrap_or_default();
+                (
+                    oid.clone(),
+                    &v.replica.doc_keys[oid],
+                    meta,
+                    recipients.remove(oid).unwrap_or_default(),
+                )
+            })
+            .collect();
+        let mut ring = v.replica.keyring.clone();
+        let (mut req, rings) =
+            engine::rotate_with_notes(&mut ring, &members, &v.replica.meta, &notes)?;
+        // Left out on purpose, so the server knows it's no oversight.
+        req.without = left_out
+            .iter()
+            .filter(|m| m.user.account_key.is_some())
+            .map(|m| m.user.id.clone())
+            .collect();
+        for o in &mut req.objects {
+            o.update.without = recipients_out.remove(&o.object_id).unwrap_or_default();
+        }
+        for o in &mut req.objects {
+            if let Some(next) = rings.get(&o.object_id) {
+                members::sign_grants(
+                    &self.account,
+                    &id,
+                    &o.object_id,
+                    next,
+                    &mut o.update.envelopes,
+                );
+            }
+        }
+        let now = notekpr_core::now_ms();
+        let removal = removing.and_then(|u| {
+            v.log.next(
+                &self.account,
+                &self.user_id,
+                &id,
+                LogBody::Remove {
+                    user_id: u.to_string(),
+                },
+                now,
+            )
+        });
+        req.log_entry = members::rotation(&id, &ring).and_then(|body| {
+            v.log.next_after(
+                &self.account,
+                &self.user_id,
+                &id,
+                removal.as_ref(),
+                body,
+                now,
+            )
+        });
+        Ok(Rotation {
+            req,
+            removal,
+            ring,
+            rings,
+            not_given,
+        })
+    }
+
+    /// The server took a rotation: keep its keys. Returns the new epoch.
+    async fn rotated(&self, vault: &SharedVault, r: Rotation) -> Result<u32> {
+        let mut v = vault.lock().await;
+        v.set_keyring(r.ring);
+        for (oid, next) in r.rings {
+            v.set_note_keyring(&oid, next);
+        }
+        if let Err(e) = self.load_member_log(&mut v).await {
+            ui::warn(&format!("{e:#}"));
+        }
+        // New notes' keys not registered yet were wrapped under the old
+        // vault key.
+        let waiting: Vec<String> = v
+            .outbox
+            .new_keys
+            .iter()
+            .map(|k| k.object_id.clone())
+            .collect();
+        for oid in waiting {
+            v.key_refused(&oid);
+        }
+        v.save()?;
+        if !r.not_given.is_empty() {
+            ui::warn(&format!(
+                "the new key of '{}' went to everyone except {}: their account key changed (or the \
+                 owner never added them). Verify their fingerprint with them, then give them access \
+                 again with `notekpr vault share` (or `share-note` for a single note) and \
+                 --accept-new-key",
+                v.name(),
+                r.not_given.join(", ")
+            ));
+        }
+        Ok(r.req.new_epoch)
+    }
+}
+
+/// A vault's pending keys being renewed, until dropped.
+struct Renewing<'a> {
+    set: &'a std::sync::Mutex<std::collections::BTreeSet<String>>,
+    id: String,
+}
+
+impl<'a> Renewing<'a> {
+    fn start(
+        set: &'a std::sync::Mutex<std::collections::BTreeSet<String>>,
+        id: &str,
+    ) -> Option<Self> {
+        set.lock()
+            .unwrap()
+            .insert(id.to_string())
+            .then(|| Renewing {
+                set,
+                id: id.to_string(),
+            })
+    }
+}
+
+impl Drop for Renewing<'_> {
+    fn drop(&mut self) {
+        self.set.lock().unwrap().remove(&self.id);
+    }
+}
+
+/// A new vault key, prepared for the server (`Session::prepare_rotation`).
+struct Rotation {
+    req: RotateKeysRequest,
+    /// The `Remove` entry signed before the new key's, when removing someone.
+    removal: Option<LogEntry>,
+    ring: VaultKeyring,
+    rings: std::collections::HashMap<String, VaultKeyring>,
+    not_given: Vec<String>,
 }
 
 /// Tell why changes were kept back: too large, or no room in the quick notes.

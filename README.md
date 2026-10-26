@@ -140,9 +140,10 @@ read anything.
 * End-to-end encrypted: note text, titles, file and folder names,
   attachments, vault names and icons, presence and your settings. The server
   only stores ciphertext and can't read any of it.
-* Every note has its own key; removing someone renews the keys, and sharing a
-  note never gives away its earlier history. Owners can also renew a vault's
-  key by hand.
+* Every note has its own key; removing someone renews the keys in the same
+  step, and when someone leaves on their own the owner's apps renew them
+  next time they're online. Sharing a note never gives away its earlier
+  history. Owners can also renew a vault's key by hand.
 * The vault's owner signs who belongs to it, and every change is signed by
   its author, so even a compromised server can't add people or forge edits.
 * Key fingerprints to check who you share with, and a loud warning when

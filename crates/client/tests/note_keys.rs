@@ -219,3 +219,54 @@ async fn an_older_note_moves_to_its_own_key_at_its_next_snapshot() {
         Some("under the vault key\nthen its own\n")
     );
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn keys_someone_who_left_knows_are_renewed_by_the_owners_sync() {
+    let srv = start().await;
+    let alice = login(&srv, "alice").await;
+    let bob = login(&srv, "bob").await;
+    let carol = login(&srv, "carol").await;
+    manage::create_vault(&alice, "Team").await.unwrap();
+    let ah = hub(&alice).await;
+    let v = ah.resolve("Team").await.unwrap();
+    let vid = v.lock().await.id().to_string();
+    manage::share(&alice, &v, "bob", Role::Editor, false)
+        .await
+        .unwrap();
+    ops::put_document(&ah, "Team", "Shared.md", "s\n", None)
+        .await
+        .unwrap();
+    ah.sync_vault(&vid).await.unwrap();
+    note_shares::share_note(&alice, &v, "Shared", "carol", Role::Editor, false)
+        .await
+        .unwrap();
+    let oid = v.lock().await.find_note("Shared").unwrap().1.id;
+    let alice_live = live(ah.clone()).await;
+
+    // Bob leaves on his own: the owner's running sync renews the vault's key.
+    let bh = hub(&bob).await;
+    let bv = bh.resolve("Team").await.unwrap();
+    manage::leave_vault(&bob, &bv).await.unwrap();
+    eventually(10, "the vault's key is renewed", || async {
+        alice.api.vault_keys(&vid).await.unwrap().current_epoch == 2
+    })
+    .await;
+
+    // Carol removes the note from her list: its key is renewed.
+    let before = note_epoch(&alice.api.vault_keys(&vid).await.unwrap(), &oid).unwrap();
+    carol
+        .api
+        .delete(&format!(
+            "/vaults/{vid}/objects/{oid}/shares/{}",
+            carol.user_id
+        ))
+        .await
+        .unwrap();
+    eventually(10, "the note's key is renewed", || async {
+        note_epoch(&alice.api.vault_keys(&vid).await.unwrap(), &oid) == Some(before + 1)
+    })
+    .await;
+    let info = alice.api.vault(&vid).await.unwrap();
+    assert!(!info.rotation_pending && info.notes_rotation_pending.is_empty());
+    alice_live.stop().await;
+}

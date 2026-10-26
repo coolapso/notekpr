@@ -249,7 +249,11 @@ async fn an_older_vault_gets_a_signed_checkpoint() {
         .delete(&format!("/vaults/{vid}/members/{}", bob.user_id))
         .await
         .unwrap_err();
-    assert_eq!(st.status(), Some(409), "unsigned removal");
+    assert_eq!(
+        st.status(),
+        Some(400),
+        "a removal without its signed new key"
+    );
     let (_, epoch) = manage::unshare(&alice, &v, "bob").await.unwrap();
     assert_eq!(epoch, 2);
 }

@@ -9,13 +9,14 @@ use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use notekpr_core::protocol::{
-    AgentInfo, CreateAgentRequest, CreateAgentResponse, CreatedCredential, UserEventKind,
+    AgentInfo, CreateAgentRequest, CreateAgentResponse, CreatedCredential, ObjectEventKind,
+    UserEventKind, VaultEventKind,
 };
 
 use crate::auth::Principal;
 use crate::db;
 use crate::error::{AppError, AppResult, bad};
-use crate::hub::Control;
+use crate::hub::{Control, VaultEvent};
 use crate::repo;
 use crate::routes::me::notify_user;
 use crate::routes::users::account_key;
@@ -126,16 +127,30 @@ pub async fn delete(
         let vaults = repo::vaults::ids_of_member(&mut *tx, &id).await?;
         let notes = repo::shares::of_user(&mut *tx, &id).await?;
         let sessions = repo::sessions::unrevoked_ids(&mut *tx, &id).await?;
+        // The keys it held are rotated by the owner's apps (the caller's).
+        repo::vaults::set_rotation_pending_for_holder(&mut *tx, &id).await?;
+        repo::shares::set_rotation_pending_for_holder(&mut *tx, &id).await?;
         repo::agents::delete(&mut *tx, &id, &who.user_id).await?;
         tx.commit().await?;
         (vaults, notes, sessions)
     };
     // End its live connections now, not at the next session check.
-    for v in vaults {
-        state.hub.control(&id, Control::RevokeVault(v));
+    for v in &vaults {
+        state.hub.control(&id, Control::RevokeVault(v.clone()));
     }
-    for (v, o) in notes {
-        state.hub.control(&id, Control::RevokeObject(v, o));
+    for (v, o) in &notes {
+        state
+            .hub
+            .control(&id, Control::RevokeObject(v.clone(), o.clone()));
+    }
+    // The owner's apps then renew the keys it held.
+    for v in &vaults {
+        state
+            .hub
+            .publish(v, VaultEvent::Event(VaultEventKind::MembersChanged));
+    }
+    for (v, o) in &notes {
+        crate::routes::shares::publish(&state, v, o, ObjectEventKind::SharesChanged);
     }
     for s in sessions {
         state.hub.control(&id, Control::SessionRevoked(s));

@@ -152,10 +152,12 @@ Account public key ──── HPKE ─────▶ Vault key, epoch N  ─�
   before the log start it with an owner-signed checkpoint. Authors sign
   every update and snapshot; once the log requires it, clients accept
   content only from people the log lets write it.
-* **Rotation / revocation**: removing a member triggers a new epoch: a fresh
-  vault key, wrapped for remaining members, plus a chain link so members can
-  still read history, and in the same request a new epoch of every note's key.
-  New content always uses the newest epoch. Already downloaded data cannot be
+* **Rotation / revocation**: removing a member comes with a new epoch in the
+  same request: a fresh vault key, wrapped for remaining members, plus a
+  chain link so members can still read history, and a new epoch of every
+  note's key. New content always uses the newest epoch. Someone who leaves
+  on their own can't renew the key, so the server marks it and the owner's
+  apps rotate it when they're next online. Already downloaded data cannot be
   revoked (stated in the UI).
 * **Devices removed** lose their envelope and sessions immediately. Because a
   device held the account secret, a *compromised* device warrants rotating the

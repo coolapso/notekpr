@@ -1,7 +1,7 @@
 //! Account and vault administration: vaults, members and sharing (with TOFU
 //! key pinning), key rotation, devices, recovery keys and agent identities.
 
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Result, anyhow, bail};
 use notekpr_core::engine::{self, PinStatus, VaultMeta, VaultReplica};
 use notekpr_core::keys::RecoveryKey;
 use notekpr_core::memberlog::LogBody;
@@ -208,7 +208,10 @@ pub async fn leave_vault(session: &Session, vault: &SharedVault) -> Result<()> {
         .api
         .delete_with(
             &format!("/vaults/{id}/members/{}", session.user_id),
-            &RemoveMemberRequest { log_entry },
+            &RemoveMemberRequest {
+                log_entry,
+                ..Default::default()
+            },
         )
         .await
     {
@@ -460,7 +463,7 @@ fn is_log_race(e: &crate::api::ApiError) -> bool {
     e.status() == Some(409) && e.to_string().contains("changed meanwhile")
 }
 
-/// Remove a member and rotate the vault key so they cannot read anything
+/// Remove a member, with the vault's new key so they cannot read anything
 /// written afterwards. Returns the new epoch.
 pub async fn unshare(
     session: &Session,
@@ -487,29 +490,7 @@ pub async fn unshare(
     if user.id == session.user_id {
         bail!("the owner cannot be removed");
     }
-    let log_entry = session
-        .log_entry(
-            vault,
-            LogBody::Remove {
-                user_id: user.id.clone(),
-            },
-        )
-        .await;
-    session
-        .api
-        .delete_with(
-            &format!("/vaults/{id}/members/{}", user.id),
-            &RemoveMemberRequest { log_entry },
-        )
-        .await?;
-    let name = vault.lock().await.name().to_string();
-    let epoch = session.rotate_keys(vault).await.with_context(|| {
-        format!(
-            "{} was removed, but the vault key could not be renewed, so they could still read new notes if \
-             the server passed them on. Finish with `notekpr vault rotate \"{name}\"`",
-            user.display_name
-        )
-    })?;
+    let epoch = session.remove_member(vault, &user.id).await?;
     Ok((user, epoch))
 }
 
@@ -668,7 +649,8 @@ pub fn pin_label(p: PinStatus) -> &'static str {
     }
 }
 
-/// Owner housekeeping run by `vault members`/`status`: grant pending keys.
+/// Owner housekeeping run by `vault members`/`status`: grant pending keys,
+/// and renew keys someone who left still knows.
 pub async fn grant_pending(hub: &Hub) {
     for v in hub.vaults() {
         match hub.session.grant_missing_keys(&v).await {
@@ -677,6 +659,11 @@ pub async fn grant_pending(hub: &Hub) {
             }
             Ok(_) => {}
             Err(e) => tracing::debug!("granting keys: {e:#}"),
+        }
+        if let Err(e) = hub.session.renew_pending_keys(&v).await {
+            ui::warn(&format!(
+                "could not renew a key someone who left still knows: {e:#}"
+            ));
         }
     }
 }

@@ -471,7 +471,20 @@ pub(super) fn on_object_event(vault: String, note: String, event: ObjectEventKin
             ObjectEventKind::Shared | ObjectEventKind::KeyRotated => {
                 leptos::task::spawn_local(reload_note_keys(vault, note))
             }
-            ObjectEventKind::SharesChanged => ui().shares_rev.update(|v| *v += 1),
+            ObjectEventKind::SharesChanged => {
+                ui().shares_rev.update(|v| *v += 1);
+                // Someone it was shared with may have gone: the owner
+                // renews its key.
+                if step(|c| {
+                    c.replicas
+                        .get(&vault)
+                        .is_some_and(|r| r.role == Role::Owner)
+                }) {
+                    leptos::task::spawn_local(async move {
+                        crate::actions::renew_pending_keys(&vault).await
+                    });
+                }
+            }
             // Members read titles from the vault index.
             ObjectEventKind::MetaChanged
             | ObjectEventKind::AccessRevoked

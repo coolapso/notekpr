@@ -676,6 +676,11 @@ impl Hub {
             if let Err(e) = self.session.grant_missing_keys(&v).await {
                 tracing::warn!("granting keys failed: {e:#}");
             }
+            if let Err(e) = self.session.renew_pending_keys(&v).await {
+                ui::warn(&format!(
+                    "could not renew a key someone who left still knows: {e:#}"
+                ));
+            }
         }
         Ok(out)
     }

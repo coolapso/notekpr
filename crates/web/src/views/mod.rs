@@ -10,6 +10,7 @@ pub mod panels;
 pub mod quick;
 pub mod settings;
 pub mod sidebar;
+pub mod suggest;
 pub mod tree;
 pub mod width;
 

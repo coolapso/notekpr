@@ -592,6 +592,24 @@ def test_move_to_vault(env):
         time.sleep(0.3)
         check(b.js("return document.querySelector('.mtv-name').value") == "Recipes" and "Everything in it moves" in b.text(".modal"),
               "a folder is offered the move too, keeping its name")
+        # The folders there: a list right under the field, as wide as it.
+        menu = "document.querySelector('.suggest .menu')"
+        b.click(".suggest-toggle")
+        b.find(".suggest .menu", 5)
+        placed = b.js("const f = document.querySelector('.mtv-folder').getBoundingClientRect(), m = " + menu + ".getBoundingClientRect();"
+                      "return Math.abs(m.left - f.left) < 1 && Math.abs(m.right - f.right) < 1 && m.top >= f.bottom && m.top - f.bottom < 8;")
+        check(placed and b.js("return Array.from(document.querySelectorAll('.suggest [role=option]')).map(o => o.textContent)") == ["2026"],
+              "the other vault's folders open in a list under the folder field")
+        b.keys(KEYS["down"] + KEYS["enter"])
+        check(b.js("return document.querySelector('.mtv-folder').value") == "2026" and b.js("return !" + menu),
+              "a folder is picked from the list with the keys")
+        b.js("const i=document.querySelector('.mtv-folder'); i.focus(); i.select();")
+        b.keys("zz")
+        check(b.js("return !" + menu), "typing narrows the list (nothing matches: no list)")
+        b.keys(KEYS["backspace"] + KEYS["backspace"])
+        b.find(".suggest .menu", 5)
+        b.chord(KEYS["escape"])
+        check(b.js("return !" + menu + " && !!document.querySelector('.modal')"), "Escape closes the list, not the dialog")
         b.click(".modal button[type=submit]")
         b.wait("return !document.querySelector('.modal') && document.querySelector('.crumbs') && document.querySelector('.crumbs').textContent === 'Archive / Recipes'",
                20, "the moved folder's note")

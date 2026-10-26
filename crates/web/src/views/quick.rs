@@ -16,6 +16,7 @@ use crate::views::dialogs::Dialog;
 use crate::views::focus_on_mount;
 use crate::views::home::note_card;
 use crate::views::icons::Icon;
+use crate::views::suggest::SuggestField;
 
 /// The quick notes (newest first) and how many there may be, recomputed when
 /// notes, their text or the vaults change.
@@ -293,14 +294,10 @@ pub fn MoveToVaultDialog(vault: String, what: What) -> impl IntoView {
                         }).collect_view()}
                     </select>
                 </label>
-                <label class="field">
-                    <span class="small muted">"Folder (pick one or type a new one; empty: the vault's top level)"</span>
-                    <input class="input mtv-folder" list="mtv-folders" placeholder="(top level)"
-                        prop:value=move || folder.get() on:input=move |ev| folder.set(event_target_value(&ev))/>
-                </label>
-                <datalist id="mtv-folders">
-                    {move || folders.get().into_iter().map(|f| view! { <option value=f.clone()></option> }).collect_view()}
-                </datalist>
+                <div class="field">
+                    <label class="small muted" for="mtv-folder">"Folder (pick one or type a new one; empty: the vault's top level)"</label>
+                    <SuggestField id="mtv-folder" class="mtv-folder" value=folder options=folders placeholder="(top level)"/>
+                </div>
                 <label class="field">
                     <span class="small muted">"Name"</span>
                     <input class="input mtv-name" use:focus_on_mount prop:value=move || name.get()

@@ -336,6 +336,20 @@ button.list-row:hover:not(:disabled) { background: var(--bg-2); }
 .cred { display: flex; gap: 10px; align-items: center; padding-left: 28px; }
 .empty { display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 80px 20px; color: var(--fg-2); }
 .field { display: flex; flex-direction: column; gap: 4px; }
+/* A text field with suggestions under it (views/suggest.rs): opens like the
+   other menus, as wide as the field, under its ▾. */
+.suggest { position: relative; display: flex; }
+.suggest .input { flex: 1; padding-right: 32px; }
+.suggest-toggle {
+  position: absolute; right: 4px; top: 50%; transform: translateY(-50%); display: inline-flex;
+  padding: 4px; border: none; border-radius: 6px; background: none; color: var(--muted); cursor: pointer;
+}
+.suggest-toggle:hover { color: var(--fg); background: var(--bg-3); }
+.suggest-toggle .ic { width: 16px; height: 16px; }
+.suggest .menu { top: calc(100% + 4px); left: 0; right: 0; min-width: 0; max-height: min(220px, 40vh); overflow-y: auto; }
+.suggest .menu button { flex: none; }
+.suggest .menu button.active { background: var(--bg-2); }
+.suggest .menu button.current { color: var(--accent); }
 .settings-body .field { max-width: 420px; }
 
 /* quick notes */

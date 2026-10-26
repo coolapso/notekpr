@@ -147,6 +147,8 @@ read anything.
   someone's key changes.
 * New devices are approved from one you already use (with a verification
   code) or unlocked with your recovery key; any browser can be forgotten.
+  Approving the command line's sign-in shows when, and from which address,
+  it was asked for.
   See where you're signed in and sign out remotely, and make a new recovery
   key whenever you need one.
 * Sign in with your own identity provider (OIDC: Authelia, Keycloak,

@@ -875,13 +875,14 @@ async fn single_use_login_records() {
             .is_none()
     );
 
+    let ip = "203.0.113.7";
     assert!(
-        sessions::insert_device_grant(db, b"dc", "ABCD-EFGH", "cli", NOW, NOW + 100)
+        sessions::insert_device_grant(db, b"dc", "ABCD-EFGH", "cli", ip, NOW, NOW + 100)
             .await
             .unwrap()
     );
     assert!(
-        !sessions::insert_device_grant(db, b"dc2", "ABCD-EFGH", "cli", NOW, NOW + 100)
+        !sessions::insert_device_grant(db, b"dc2", "ABCD-EFGH", "cli", ip, NOW, NOW + 100)
             .await
             .unwrap()
     );
@@ -891,12 +892,39 @@ async fn single_use_login_records() {
             .unwrap()
             .is_none()
     );
+    let pending = sessions::pending_device_grant(db, "ABCD-EFGH", NOW)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(pending.3.as_deref(), Some(ip));
     assert_eq!(
         sessions::decide_device_grant(db, "ABCD-EFGH", true, "alice", NOW)
             .await
             .unwrap(),
         1
     );
+    // The address is forgotten once decided, and once expired.
+    let kept = |code: &'static [u8]| {
+        sqlx::query_scalar::<_, Option<String>>(
+            "SELECT requested_from FROM device_grants WHERE device_code_hash = ?",
+        )
+        .bind(code)
+        .fetch_one(db)
+    };
+    assert_eq!(kept(b"dc").await.unwrap(), None);
+    assert!(
+        sessions::insert_device_grant(db, b"dc3", "WXYZ-WXYZ", "cli", ip, NOW, NOW + 100)
+            .await
+            .unwrap()
+    );
+    sessions::forget_device_grant_addresses(db, NOW + 99)
+        .await
+        .unwrap();
+    assert_eq!(kept(b"dc3").await.unwrap().as_deref(), Some(ip));
+    sessions::forget_device_grant_addresses(db, NOW + 100)
+        .await
+        .unwrap();
+    assert_eq!(kept(b"dc3").await.unwrap(), None);
     // Decided once only.
     assert_eq!(
         sessions::decide_device_grant(db, "ABCD-EFGH", false, "alice", NOW)

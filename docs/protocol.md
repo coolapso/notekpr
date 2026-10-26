@@ -106,8 +106,13 @@ still sign in.
 1. `POST /oauth/device_authorization` (form: `client_id`, `client_name`) →
    `{device_code, user_code, verification_uri, verification_uri_complete, expires_in, interval}`.
 2. The user opens `verification_uri_complete` in the web app (signed in via OIDC);
-   the web app calls `GET /oauth/device?user_code=` and
-   `POST /oauth/device/decision {user_code, approve}`.
+   the web app calls `GET /oauth/device?user_code=` →
+   `{user_code, client_name, created_at, expires_at, requested_from?}` and
+   `POST /oauth/device/decision {user_code, approve}`. `requested_from` is
+   the address step 1 came from (with `--trust-proxy`, the one the proxy
+   reports), shown so a code someone else asked for — sent to the user to
+   phish an approval — stands out. The server keeps it only with the pending
+   code and never logs it ([security](security.md)).
 3. The client polls `POST /oauth/token` (form: `grant_type=urn:ietf:params:oauth:grant-type:device_code`,
    `device_code`) and gets `authorization_pending`, `slow_down`, `access_denied`,
    `expired_token`, `invalid_grant` (unknown or used code), `invalid_request`

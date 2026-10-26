@@ -5,7 +5,10 @@
 //! * RFC 6749 §4.4 client credentials grant: agent identities authenticate with
 //!   a revocable, per-agent client secret and receive short-lived tokens.
 
-use axum::extract::{Query, State};
+use std::net::SocketAddr;
+
+use axum::Extension;
+use axum::extract::{ConnectInfo, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::{Form, Json};
@@ -45,10 +48,19 @@ pub struct DeviceAuthorizationForm {
     client_name: Option<String>,
 }
 
+/// Start a device login. The requesting address is kept with the pending
+/// code, so whoever approves it can see where it came from (a code sent to
+/// them by someone else, phishing, would show a stranger's address); it is
+/// never logged, and forgotten once the code is decided or expired.
 pub async fn device_authorization(
     State(state): State<AppState>,
+    peer: Option<Extension<ConnectInfo<SocketAddr>>>,
+    headers: HeaderMap,
     Form(f): Form<DeviceAuthorizationForm>,
 ) -> AppResult<Json<DeviceAuthorizationResponse>> {
+    let requested_from =
+        crate::ratelimit::client_ip(&headers, peer.map(|p| p.0.0), state.config.trust_proxy)
+            .to_string();
     let client_name: String = f
         .client_name
         .or(f.client_id)
@@ -67,6 +79,7 @@ pub async fn device_authorization(
             &hash,
             &user_code,
             &client_name,
+            &requested_from,
             now,
             now + DEVICE_CODE_TTL_MS,
         )
@@ -269,7 +282,7 @@ pub async fn device_lookup(
 ) -> AppResult<Json<DeviceCodeLookup>> {
     who.require_human()?;
     let code = normalize_user_code(&q.user_code);
-    let (client_name, created_at, expires_at) =
+    let (client_name, created_at, expires_at, requested_from) =
         repo::sessions::pending_device_grant(&state.db, &code, db::now())
             .await?
             .ok_or(AppError::NotFound)?;
@@ -278,6 +291,7 @@ pub async fn device_lookup(
         client_name,
         created_at,
         expires_at,
+        requested_from,
     }))
 }
 

@@ -127,7 +127,10 @@ CREATE TABLE device_grants (
     user_id          TEXT REFERENCES users(id) ON DELETE CASCADE,
     created_at       INTEGER NOT NULL,
     expires_at       INTEGER NOT NULL,
-    last_poll_at     INTEGER
+    last_poll_at     INTEGER,
+    -- The address the code was requested from, shown when approving it;
+    -- forgotten once it is decided or expired.
+    requested_from   TEXT
 );
 
 -- OAuth 2.0 client credentials for agent identities.

@@ -2589,7 +2589,27 @@ def test_vault_admins(env):
         b.close()
 
 
-TESTS = [test_onboarding, test_collab, test_devices_and_recovery, test_features, test_attachments, test_move_to_vault, test_note_sharing, test_tables, test_code_blocks, test_html, test_callouts, test_colors, test_code_wrapping, test_editor_mouse, test_editor_safety, test_local_copy, test_ui_basics, test_offline_tabs, test_offline_start, test_mobile, test_quick_notes, test_vault_icons, test_entry_icons, test_tree_order, test_session_ended_while_away, test_comments, test_mentions, test_dates, test_graph, test_recovered_copy, test_note_width, test_admin, test_vault_admins]
+def test_device_code(env):
+    """Approving a device sign-in shows when and from where it was asked for."""
+    import urllib.parse, urllib.request
+    a = Browser()
+    try:
+        signup(a, uniq("wes"))
+        body = urllib.parse.urlencode({"client_name": "test laptop"}).encode()
+        with urllib.request.urlopen(env.url + "api/v1/oauth/device_authorization", body) as r:
+            code = json.load(r)["user_code"]
+        a.go(env.url + "device?code=" + code)
+        a.find_text(".alert", "test laptop", 10)
+        origin = a.text(".device-origin")
+        check("just now" in origin and "127.0.0.1" in origin, f"the code was requested just now from 127.0.0.1 ({origin})")
+        a.click_el(a.find_text(".alert .btn", "Deny"))
+        a.find_text(".alert", "Request denied.", 10)
+        check(True, "denied")
+    finally:
+        a.close()
+
+
+TESTS = [test_onboarding, test_collab, test_devices_and_recovery, test_features, test_attachments, test_move_to_vault, test_note_sharing, test_tables, test_code_blocks, test_html, test_callouts, test_colors, test_code_wrapping, test_editor_mouse, test_editor_safety, test_local_copy, test_ui_basics, test_offline_tabs, test_offline_start, test_mobile, test_quick_notes, test_vault_icons, test_entry_icons, test_tree_order, test_session_ended_while_away, test_comments, test_mentions, test_dates, test_graph, test_recovered_copy, test_note_width, test_admin, test_vault_admins, test_device_code]
 
 
 def main():

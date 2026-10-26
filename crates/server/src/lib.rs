@@ -91,6 +91,7 @@ fn spawn_maintenance(state: AppState) {
             let _ = repo::sessions::delete_expired_login_codes(db, now).await;
             let _ = repo::sessions::delete_expired_oidc_states(db, now).await;
             let _ = repo::sessions::delete_device_grants_expired_before(db, now - 86_400_000).await;
+            let _ = repo::sessions::forget_device_grant_addresses(db, now).await;
             let _ = repo::sessions::delete_ended_before(db, now - month).await;
         }
     });

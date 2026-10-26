@@ -825,6 +825,8 @@ async fn device_authorization_grant_for_cli() {
         ))
         .await;
     assert_eq!(look.client_name, "test laptop");
+    // Where the code was asked for, to spot one sent by someone else.
+    assert_eq!(look.requested_from.as_deref(), Some("127.0.0.1"));
     let _: () = alice
         .api
         .post(

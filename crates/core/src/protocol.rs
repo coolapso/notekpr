@@ -981,6 +981,10 @@ pub struct DeviceCodeLookup {
     pub client_name: String,
     pub created_at: i64,
     pub expires_at: i64,
+    /// The address the code was requested from, as the server saw it
+    /// (absent from older servers).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requested_from: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]

@@ -36,8 +36,8 @@ with what role, how many objects a vault contains, sizes and timestamps of
 ciphertexts, which user and device wrote each update, and when people use it.
 This is the minimum needed to authenticate, authorize, route and store data;
 it is documented here so operators and users can judge it. It also sees each
-connection's IP address, as any server does, but neither stores nor logs it
-(below).
+connection's IP address, as any server does, but never logs it, and stores
+one only while a device sign-in code waits for approval (below).
 
 ### Where the metadata is, and who can see it
 
@@ -66,14 +66,16 @@ What the database holds, besides ciphertext and public keys:
 | `vaults`, `vault_members`, `member_log` | who owns each vault, who is in it with which role, who added them and when; which vault is someone's quick notes; the membership log's entries (user ids, roles, public keys, key commitments, times) |
 | `objects`, `updates`, `snapshots` | how many notes and other objects a vault has, when each was created and changed, and for every change (notes, the file tree, comments): who wrote it, from which device, when, and its size. Comment threads are objects named after their note (`c_<note id>`), so it also tells which notes have comments |
 | `attachments` | each attachment's size, who uploaded it, when |
+| `device_grants` | device sign-ins waiting for approval: the client's name, when it asked, and the address it asked from — the address only until the code is approved, denied or expires (it is shown to whoever approves the code, so one asked for by someone else stands out) |
 | `object_shares`, `object_keys` | which notes are shared individually, with whom, with which role, by whom and since when |
 | `user_prefs` | when someone's encrypted preferences last changed, and their size |
 | `instance_settings` | the instance's limits and read-only switch, and when they last changed |
 | `audit_log` | account, device, membership, sharing and key events: who did what to whom, when (ids, roles and device names; never names of notes or vaults) |
 
-Kept only in memory, never written: IP addresses (used for rate limits), who
-is connected right now, and presence (which vault — and, for individually
-shared notes, which note — someone has open).
+Kept only in memory, never written: IP addresses (used for rate limits;
+except a device sign-in code's, above), who is connected right now, and
+presence (which vault — and, for individually shared notes, which note —
+someone has open).
 
 ## Cryptography
 

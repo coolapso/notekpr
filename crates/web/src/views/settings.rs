@@ -1001,6 +1001,12 @@ pub fn DeviceCodePage(code: Option<String>) -> impl IntoView {
                 {move || found.get().map(|l| view! {
                     <div class="alert">
                         <p>{format!("“{}” wants to sign in as you. Only continue if you started this yourself, just now.", l.client_name)}</p>
+                        // Where it came from: a code someone sent you was asked for from their address.
+                        <p class="muted small device-origin">
+                            {format!("Requested {}", util::relative_time(l.created_at))}
+                            {l.requested_from.map(|ip| view! { " from " <span class="mono">{ip}</span> })}
+                            "."
+                        </p>
                         <div class="row">
                             <button class="btn primary" on:click=move |_| decide(true)>"Allow"</button>
                             <button class="btn danger" on:click=move |_| decide(false)>"Deny"</button>

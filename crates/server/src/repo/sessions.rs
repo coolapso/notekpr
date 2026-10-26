@@ -370,22 +370,25 @@ pub struct DeviceGrant {
 }
 
 /// New pending grant; `Ok(false)` if the device or user code is taken.
+/// `requested_from`: the address that asked for it, shown when approving.
 pub async fn insert_device_grant(
     db: impl SqliteExecutor<'_>,
     device_code_hash: &[u8],
     user_code: &str,
     client_name: &str,
+    requested_from: &str,
     now: i64,
     expires_at: i64,
 ) -> AppResult<bool> {
     super::inserted(
         sqlx::query(
-            "INSERT INTO device_grants (device_code_hash, user_code, client_name, status, created_at, expires_at)
-             VALUES (?, ?, ?, 'pending', ?, ?)",
+            "INSERT INTO device_grants (device_code_hash, user_code, client_name, requested_from, status, created_at, expires_at)
+             VALUES (?, ?, ?, ?, 'pending', ?, ?)",
         )
         .bind(device_code_hash)
         .bind(user_code)
         .bind(client_name)
+        .bind(requested_from)
         .bind(now)
         .bind(expires_at)
         .execute(db)
@@ -436,14 +439,15 @@ pub async fn consume_device_grant(
     Ok(())
 }
 
-/// `(client name, created at, expires at)` of a pending, unexpired grant.
+/// `(client name, created at, expires at, requested from)` of a pending,
+/// unexpired grant.
 pub async fn pending_device_grant(
     db: impl SqliteExecutor<'_>,
     user_code: &str,
     now: i64,
-) -> AppResult<Option<(String, i64, i64)>> {
+) -> AppResult<Option<(String, i64, i64, Option<String>)>> {
     Ok(sqlx::query_as(
-        "SELECT client_name, created_at, expires_at FROM device_grants
+        "SELECT client_name, created_at, expires_at, requested_from FROM device_grants
          WHERE user_code = ? AND status = 'pending' AND expires_at > ?",
     )
     .bind(user_code)
@@ -452,7 +456,8 @@ pub async fn pending_device_grant(
     .await?)
 }
 
-/// Approve or deny a pending, unexpired grant; returns the rows affected.
+/// Approve or deny a pending, unexpired grant (its address is forgotten);
+/// returns the rows affected.
 pub async fn decide_device_grant(
     db: impl SqliteExecutor<'_>,
     user_code: &str,
@@ -462,7 +467,8 @@ pub async fn decide_device_grant(
 ) -> AppResult<u64> {
     let status = if approve { "approved" } else { "denied" };
     Ok(sqlx::query(
-        "UPDATE device_grants SET status = ?, user_id = ? WHERE user_code = ? AND status = 'pending' AND expires_at > ?",
+        "UPDATE device_grants SET status = ?, user_id = ?, requested_from = NULL
+         WHERE user_code = ? AND status = 'pending' AND expires_at > ?",
     )
     .bind(status)
     .bind(user_id)
@@ -471,6 +477,18 @@ pub async fn decide_device_grant(
     .execute(db)
     .await?
     .rows_affected())
+}
+
+/// Forget the addresses of expired grants (kept a while longer themselves,
+/// for the token endpoint's answers).
+pub async fn forget_device_grant_addresses(db: impl SqliteExecutor<'_>, now: i64) -> AppResult<()> {
+    sqlx::query(
+        "UPDATE device_grants SET requested_from = NULL WHERE expires_at <= ? AND requested_from IS NOT NULL",
+    )
+    .bind(now)
+    .execute(db)
+    .await?;
+    Ok(())
 }
 
 pub async fn delete_device_grants_expired_before(

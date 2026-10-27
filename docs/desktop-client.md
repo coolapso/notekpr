@@ -502,7 +502,9 @@ the remote edit.
 * **Deleting a file** moves the note to the vault's **trash** (never a
   permanent delete). `notekpr trash list|restore` or the web app bring it
   back, and the mirror writes it again. In `Quick notes/` it deletes the
-  quick note for good (offline: once online).
+  quick note for good (offline: once online). **Deleting a folder** moves it
+  to the trash once what was in it is there; meanwhile it isn't made again on
+  disk.
 * **Many files vanishing at once is not a deletion.** If a vault's whole
   folder disappears, or more than 10 of its mirrored files and more than half
   of them are missing at the same time (a moved, renamed or unmounted folder,

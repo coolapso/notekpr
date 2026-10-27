@@ -1311,6 +1311,11 @@ fn apply_move(
 fn write_folder(mv: &mut MirrorVault, id: &str, p: &str) -> Result<()> {
     let path = disk_path(&mv.dir, p)?;
     if stat(&path)? == Node::Missing {
+        // Deleted here: reading the disk takes it to the trash once what
+        // was in it went.
+        if mv.state.folders.get(id).map(String::as_str) == Some(p) {
+            return Ok(());
+        }
         fsutil::create_private_dir(&path)?;
     }
     if path.is_dir() && mv.state.folders.get(id).map(String::as_str) != Some(p) {
@@ -1911,7 +1916,7 @@ impl Mirror {
         }
 
         // 4. Explicit folders: new empty directories, removed folder entries.
-        if writable && !mv.held {
+        if writable && !mv.held && mv.dir.is_dir() {
             for d in &empty_dirs {
                 let dk = mv.key(d);
                 let known = mv.state.folders.values().any(|p| mv.key(p) == dk)
@@ -1934,10 +1939,18 @@ impl Mirror {
                 .map(|(id, p)| (id.clone(), p.clone()))
                 .collect();
             for (id, p) in gone {
+                // What's in it goes to the trash first (or comes back): until
+                // then the folder stays, and isn't made again on disk.
+                if !opts.restore_missing && v.paths().keys().any(|q| paths::is_within(q, &p)) {
+                    continue;
+                }
                 mv.state.folders.remove(&id);
                 mv.dirty = true;
-                let has_children = v.paths().keys().any(|q| paths::is_within(q, &p));
-                if !has_children && v.entry(&id).is_some_and(|e| e.is_live()) {
+                // Restoring: written again.
+                if opts.restore_missing {
+                    continue;
+                }
+                if v.entry(&id).is_some_and(|e| e.is_live()) {
                     if let Err(e) = v.trash_id(&id) {
                         mv.entry_failed(&name, &id, &e);
                         continue;

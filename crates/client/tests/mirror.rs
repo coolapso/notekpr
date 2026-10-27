@@ -966,3 +966,40 @@ async fn quick_notes_folder_takes_files_only_for_their_notes() {
     mirror.reconcile_all(true).await.unwrap();
     assert!(synced("loose.pdf").await);
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_folder_deleted_with_what_is_in_it_goes_to_the_trash() {
+    let srv = start().await;
+    let alice = login(&srv, "alice").await;
+    manage::create_vault(&alice, "Work").await.unwrap();
+    let h = hub(&alice).await;
+    let v = h.resolve("Work").await.unwrap();
+    let vid = v.lock().await.id().to_string();
+    for i in 0..4 {
+        ops::put_document(&h, &vid, &format!("N{i}.md"), "x\n", None)
+            .await
+            .unwrap();
+    }
+    v.lock().await.create_folder("Board").unwrap();
+    ops::put_document(&h, &vid, "Board/Notes.md", "notes\n", None)
+        .await
+        .unwrap();
+    let root = srv.path("mirror");
+    let mut m = Mirror::new(h.clone(), &root).await.unwrap();
+    m.reconcile_all(true).await.unwrap();
+    let dir = m.vault_dir(&vid).unwrap().to_path_buf();
+    assert_eq!(read(&dir.join("Board/Notes.md")), "notes\n");
+
+    std::fs::remove_dir_all(dir.join("Board")).unwrap();
+    // Not yet final: the note may still turn up elsewhere (a move), so the
+    // folder waits for it — and isn't made again on disk meanwhile.
+    m.reconcile_all(false).await.unwrap();
+    assert!(!dir.join("Board").exists());
+    assert!(v.lock().await.is_folder("Board"));
+    let r = m.reconcile_all(true).await.unwrap();
+    assert_eq!((r.trashed, r.held), (2, 0), "{r:?}");
+    assert!(!dir.join("Board").exists());
+    let g = v.lock().await;
+    assert!(g.find("Board/Notes.md").is_none());
+    assert!(!g.is_folder("Board"));
+}

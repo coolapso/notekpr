@@ -32,6 +32,9 @@ pub enum Unmovable {
     Gone,
     /// The text of one of its notes hasn't all arrived: a copy would lack it.
     Loading,
+    /// The folder holds things of a kind a newer release added, which this
+    /// one can't copy.
+    NeedsNewerApp,
 }
 
 #[derive(Clone, Debug)]
@@ -134,6 +137,9 @@ pub fn plan(r: &VaultReplica, what: &What) -> Result<Plan, Unmovable> {
                 .collect();
             if items.is_empty() {
                 return Err(Unmovable::Gone);
+            }
+            if r.index.holds_unknown(&folder) {
+                return Err(Unmovable::NeedsNewerApp);
             }
             (folder, items)
         }
@@ -566,5 +572,13 @@ mod tests {
         );
         from.notes.entry("m".into()).or_default();
         assert!(plan(&from, &What::Folder("Empty".into())).is_ok());
+        // Nor a folder holding something of a kind a newer release added:
+        // this one couldn't copy it.
+        from.index.create_unknown_kind("b", "Empty/Sub/plan");
+        assert_eq!(
+            plan(&from, &What::Folder("Empty".into())).err(),
+            Some(Unmovable::NeedsNewerApp)
+        );
+        assert!(plan(&from, &What::Note("m".into())).is_ok());
     }
 }

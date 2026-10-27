@@ -1003,3 +1003,64 @@ async fn a_folder_deleted_with_what_is_in_it_goes_to_the_trash() {
     assert!(g.find("Board/Notes.md").is_none());
     assert!(!g.is_folder("Board"));
 }
+
+/// An index entry of a kind a newer release added, as that release writes it.
+fn newer_kind_entry(index: &notekpr_core::doc::IndexDoc, id: &str, path: &str) -> Vec<u8> {
+    use notekpr_core::yrs::updates::decoder::Decode;
+    use notekpr_core::yrs::{Any, Doc, In, Map, MapPrelim, ReadTxn, Transact, Update};
+    let doc = Doc::new();
+    let files = doc.get_or_insert_map("files");
+    doc.transact_mut()
+        .apply_update(Update::decode_v1(&index.encode_state()).unwrap())
+        .unwrap();
+    let before = doc.transact().state_vector();
+    let fields: MapPrelim = [
+        ("path".to_string(), In::from(Any::from(path))),
+        ("kind".to_string(), In::from(Any::from("board"))),
+    ]
+    .into_iter()
+    .collect();
+    files.insert(&mut doc.transact_mut(), id, fields);
+    doc.transact().encode_diff_v1(&before)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_deleted_folder_takes_what_a_newer_release_added_in_it_along() {
+    let srv = start().await;
+    let alice = login(&srv, "alice").await;
+    manage::create_vault(&alice, "Work").await.unwrap();
+    let h = hub(&alice).await;
+    let v = h.resolve("Work").await.unwrap();
+    let vid = v.lock().await.id().to_string();
+    for i in 0..4 {
+        ops::put_document(&h, &vid, &format!("N{i}.md"), "x\n", None)
+            .await
+            .unwrap();
+    }
+    v.lock().await.create_folder("Board").unwrap();
+    ops::put_document(&h, &vid, "Board/Notes.md", "notes\n", None)
+        .await
+        .unwrap();
+    {
+        let mut g = v.lock().await;
+        let update = newer_kind_entry(&g.replica.index, "b1", "Board/plan");
+        g.replica.index.apply_update(&update).unwrap();
+        g.record_index_batch(vec![update]).unwrap();
+        assert!(g.replica.index.holds_unknown("Board"));
+    }
+    let root = srv.path("mirror");
+    let mut m = Mirror::new(h.clone(), &root).await.unwrap();
+    m.reconcile_all(true).await.unwrap();
+    let dir = m.vault_dir(&vid).unwrap().to_path_buf();
+    assert_eq!(read(&dir.join("Board/Notes.md")), "notes\n");
+
+    // The folder goes, and what this release couldn't show goes with it
+    // (to the trash, where a newer one can restore it).
+    std::fs::remove_dir_all(dir.join("Board")).unwrap();
+    let r = m.reconcile_all(true).await.unwrap();
+    assert_eq!(r.held, 0, "{r:?}");
+    let g = v.lock().await;
+    assert!(g.find("Board/Notes.md").is_none());
+    assert!(!g.is_folder("Board"));
+    assert!(!g.replica.index.holds_unknown("Board"));
+}

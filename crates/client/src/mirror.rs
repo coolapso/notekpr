@@ -1951,7 +1951,9 @@ impl Mirror {
                     continue;
                 }
                 if v.entry(&id).is_some_and(|e| e.is_live()) {
-                    if let Err(e) = v.trash_id(&id) {
+                    // With what's left in it that a newer release added (not
+                    // on disk: this one doesn't know its kind).
+                    if let Err(e) = v.trash_path(&p) {
                         mv.entry_failed(&name, &id, &e);
                         continue;
                     }

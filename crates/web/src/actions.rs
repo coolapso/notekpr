@@ -1774,6 +1774,10 @@ pub async fn move_to_vault(
         (Unmovable::Loading, _) => {
             "Some of it hasn't arrived from the server yet: try again in a moment.".to_string()
         }
+        (Unmovable::NeedsNewerApp, _) => {
+            "It holds things a newer version of notekpr added: reload the page to move it."
+                .to_string()
+        }
     })?;
     let placed = step(|c| match c.replicas.get(to) {
         Some(r) => plan.place(r, folder, name).map_err(|e| e.to_string()),

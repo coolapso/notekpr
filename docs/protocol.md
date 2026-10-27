@@ -633,3 +633,8 @@ it the least it could mean, rather than fail on the message that carries it:
   information, keys and membership log), the note's keys, or the person's
   lists (vaults, shared notes, devices).
 * **WebSocket messages** of a `type` an app doesn't know are skipped.
+* **Items in the vault index** (`kind`: `note`, `attachment`, `folder`): an
+  unknown kind isn't shown, but its folder holds it — it moves when the
+  folder is renamed or moved and goes to the trash with it (in the CRDT,
+  nothing of it is lost). A folder holding one isn't moved to another vault
+  (the app couldn't copy it): the app says to update.

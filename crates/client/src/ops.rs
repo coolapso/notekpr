@@ -1397,6 +1397,10 @@ pub async fn move_to_vault(
             Unmovable::Loading => OpError::Unavailable(
                 "some of it hasn't arrived from the server yet: try again once synced".into(),
             ),
+            Unmovable::NeedsNewerApp => OpError::Conflict(
+                "it holds things a newer version of notekpr added: update notekpr to move it"
+                    .into(),
+            ),
         })?;
         let name = match (name.map(str::trim).filter(|n| !n.is_empty()), &what) {
             (Some(n), _) => n.to_string(),

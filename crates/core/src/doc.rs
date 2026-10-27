@@ -12,7 +12,7 @@
 //!
 //! [`INDEX_OBJECT_ID`]: crate::protocol::INDEX_OBJECT_ID
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
 use yrs::updates::decoder::Decode;
@@ -610,16 +610,64 @@ impl IndexDoc {
         })
     }
 
+    /// Every entry as `(id, path, live)` — also those of kinds this release
+    /// doesn't know (a newer one added them): left out of
+    /// [`entries`](Self::entries), they still hold their folders, move and go
+    /// to the trash with them.
+    fn all_paths(&self) -> Vec<(String, String, bool)> {
+        let txn = self.doc.transact();
+        self.files
+            .iter(&txn)
+            .filter_map(|(id, v)| {
+                let Out::YMap(m) = v else { return None };
+                let path = any_str(m.get(&txn, "path"))?;
+                let live = m.get(&txn, "trashed").is_none() && m.get(&txn, "purged").is_none();
+                Some((id.to_string(), path, live))
+            })
+            .collect()
+    }
+
+    /// [`all_paths`](Self::all_paths) at `folder` or in it.
+    fn within(&self, folder: &str) -> Vec<(String, String, bool)> {
+        self.all_paths()
+            .into_iter()
+            .filter(|(_, path, _)| path == folder || paths::is_within(path, folder))
+            .collect()
+    }
+
+    /// An entry of a kind a newer release added, as that release writes it.
+    #[cfg(test)]
+    pub(crate) fn create_unknown_kind(&self, id: &str, path: &str) {
+        self.mutate(|txn| {
+            let prelim: MapPrelim = [
+                ("path".to_string(), yrs::In::from(Any::from(path))),
+                ("kind".to_string(), yrs::In::from(Any::from("board"))),
+                ("created".to_string(), yrs::In::from(Any::from(1.0))),
+            ]
+            .into_iter()
+            .collect();
+            self.files.insert(txn, id, prelim);
+        });
+    }
+
+    /// Whether `folder` holds entries of kinds this release doesn't know
+    /// (see [`within`](Self::within)).
+    pub fn holds_unknown(&self, folder: &str) -> bool {
+        let known: HashSet<String> = self.entries().into_iter().map(|e| e.id).collect();
+        self.within(folder)
+            .into_iter()
+            .any(|(id, _, live)| live && !known.contains(&id))
+    }
+
     /// Rename a folder: moves every entry beneath it (and the folder entry
     /// itself, which loses its order key if it moves to another folder).
     pub fn rename_folder(&self, old_folder: &str, new_folder: &str, now: i64) -> Option<Vec<u8>> {
         let moves: Vec<(String, String)> = self
-            .entries()
+            .within(old_folder)
             .into_iter()
-            .filter(|e| e.path == old_folder || paths::is_within(&e.path, old_folder))
-            .map(|e| {
-                let rest = &e.path[old_folder.len()..];
-                (e.id, format!("{new_folder}{rest}"))
+            .map(|(id, path, _)| {
+                let rest = &path[old_folder.len()..];
+                (id, format!("{new_folder}{rest}"))
             })
             .collect();
         if moves.is_empty() {
@@ -663,10 +711,10 @@ impl IndexDoc {
     /// Trash a folder and everything in it.
     pub fn trash_folder(&self, folder: &str, now: i64) -> Option<Vec<u8>> {
         let ids: Vec<String> = self
-            .entries()
+            .within(folder)
             .into_iter()
-            .filter(|e| e.is_live() && (e.path == folder || paths::is_within(&e.path, folder)))
-            .map(|e| e.id)
+            .filter(|(_, _, live)| *live)
+            .map(|(id, _, _)| id)
             .collect();
         self.trash_all(ids.iter().map(String::as_str), now)
     }
@@ -777,14 +825,17 @@ impl IndexDoc {
         })
     }
 
-    /// Folders: explicit folder entries plus every parent of a live entry.
+    /// Folders: explicit folder entries plus every parent of a live entry
+    /// (of any kind, see [`all_paths`](Self::all_paths)).
     pub fn folders(&self) -> Vec<String> {
         let mut set = std::collections::BTreeSet::new();
         for e in self.entries().into_iter().filter(|e| e.is_live()) {
             if e.kind == EntryKind::Folder {
                 set.insert(e.path.clone());
             }
-            let mut p = paths::parent(&e.path);
+        }
+        for (_, path, _) in self.all_paths().into_iter().filter(|(_, _, live)| *live) {
+            let mut p = paths::parent(&path);
             while !p.is_empty() {
                 set.insert(p.to_string());
                 p = paths::parent(p);
@@ -1038,6 +1089,41 @@ mod tests {
         assert_eq!(ra.get("Note.md").unwrap().id, "x");
         assert_eq!(ra.get("Note 2.md").unwrap().id, "y");
         assert_eq!(ra.keys().collect::<Vec<_>>(), rb.keys().collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn kinds_from_newer_releases_stay_hidden_but_go_with_their_folder() {
+        let a = IndexDoc::new();
+        a.create("f", "A", EntryKind::Folder, 1);
+        a.create("n", "A/c.md", EntryKind::Note, 1);
+        a.create_unknown_kind("b", "A/plan");
+        a.create_unknown_kind("solo", "Only/board");
+        assert_eq!(
+            a.entries()
+                .iter()
+                .map(|e| e.id.as_str())
+                .collect::<Vec<_>>(),
+            ["f", "n"]
+        );
+        assert!(a.get("b").is_none());
+        assert!(a.holds_unknown("A") && !a.holds_unknown("B"));
+        // A folder holding only such an entry is still a folder.
+        assert!(a.folders().contains(&"Only".to_string()));
+
+        let raw = |id: &str| {
+            a.all_paths()
+                .into_iter()
+                .find(|(i, _, _)| i == id)
+                .map(|(_, p, live)| (p, live))
+                .unwrap()
+        };
+        a.rename_folder("A", "Z", 2).unwrap();
+        assert_eq!(raw("b"), ("Z/plan".to_string(), true));
+        assert_eq!(a.get("n").unwrap().path, "Z/c.md");
+        a.trash_folder("Z", 3).unwrap();
+        assert_eq!(raw("b"), ("Z/plan".to_string(), false));
+        assert!(a.get("n").unwrap().in_trash());
+        assert!(!a.holds_unknown("Z"));
     }
 
     #[test]

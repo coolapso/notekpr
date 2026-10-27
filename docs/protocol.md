@@ -641,3 +641,10 @@ it the least it could mean, rather than fail on the message that carries it:
 * **Comment records** (§6.1) of an unknown `kind`: kept in the local copy as
   signed, so the app reads them once it knows them, and change nothing in
   the threads meanwhile.
+* **Membership log entries** (§5.2) of an unknown `kind` can't be verified
+  (what is signed depends on their fields), so the log stops being
+  trustworthy there: the app doesn't open the vault and says to update —
+  plainly, not as a security warning — and keeps its local copy. Servers
+  refuse kinds they don't know (`400`), and serve stored entries as written
+  (`GET /vaults/{v}/log`), so a server taken back to an older release
+  passes on what a newer one stored.

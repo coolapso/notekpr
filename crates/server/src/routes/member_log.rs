@@ -11,7 +11,7 @@ use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use notekpr_core::memberlog::{LogBody, LogEntry, LogMember};
-use notekpr_core::protocol::{AppendLogRequest, MemberLogResponse, Role, VaultEventKind};
+use notekpr_core::protocol::{AppendLogRequest, Role, VaultEventKind};
 use serde::Deserialize;
 use sqlx::Sqlite;
 
@@ -70,6 +70,9 @@ pub(crate) async fn check_and_append(
     now: i64,
 ) -> AppResult<()> {
     let head = repo::member_log::head(&mut **tx, vault_id).await?;
+    if entry.is_some_and(|e| e.body == LogBody::Unknown) {
+        return Err(bad("unknown kind of membership log entry"));
+    }
     let Some(e) = entry else {
         return match (&head, &expect) {
             // A vault without a log yet (older clients).
@@ -247,17 +250,18 @@ pub struct LogQuery {
     since: u64,
 }
 
-/// The vault's membership log (members only).
+/// The vault's membership log (members only): a
+/// [`MemberLogResponse`](notekpr_core::protocol::MemberLogResponse), its
+/// entries as stored.
 pub async fn log(
     State(state): State<AppState>,
     who: Principal,
     Path(v): Path<String>,
     Query(q): Query<LogQuery>,
-) -> AppResult<Json<MemberLogResponse>> {
+) -> AppResult<Json<serde_json::Value>> {
     access::member_role(&state.db, &v, &who.user_id).await?;
-    Ok(Json(MemberLogResponse {
-        entries: repo::member_log::since(&state.db, &v, q.since).await?,
-    }))
+    let entries = repo::member_log::since(&state.db, &v, q.since).await?;
+    Ok(Json(serde_json::json!({ "entries": entries })))
 }
 
 /// Append an entry that changes nothing else (owner).

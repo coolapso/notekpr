@@ -4524,3 +4524,55 @@ async fn keys_someone_who_left_still_knows_are_marked_for_rotation() {
             .is_empty()
     );
 }
+
+/// Membership log entries of a kind a newer release added: nobody appends
+/// one through this server, and what a newer one stored (before going back
+/// to this release) is served as written — apps that know it verify it,
+/// older ones say to update.
+#[tokio::test]
+async fn log_entries_of_kinds_from_newer_releases_pass_through_as_written() {
+    use notekpr_core::memberlog::{LogBody, LogEntry, LogError, LogState};
+    let srv = start().await;
+    let mut alice = new_user(&srv.base, "alice").await;
+    let v = alice.create_signed_vault("Team").await;
+    let log = alice.member_log(&v).await;
+    let head = log.last().unwrap();
+    let mut newer = serde_json::to_value(LogEntry::sign(
+        &alice.account,
+        &alice.id,
+        &v,
+        Some(head),
+        LogBody::RequireSigned { from_seq: 0 },
+        2,
+    ))
+    .unwrap();
+    newer["body"] = serde_json::json!({ "kind": "transfer", "to": "bob" });
+    assert_eq!(
+        alice
+            .api
+            .status(
+                Method::POST,
+                &format!("/vaults/{v}/log"),
+                Some(&serde_json::json!({ "entry": newer }))
+            )
+            .await,
+        400
+    );
+    sqlx::query(
+        "INSERT INTO member_log (vault_id, seq, entry, hash, created_at) VALUES (?, ?, ?, ?, 0)",
+    )
+    .bind(&v)
+    .bind((head.seq + 1) as i64)
+    .bind(newer.to_string())
+    .bind(vec![0u8; 32])
+    .execute(&srv.state.db)
+    .await
+    .unwrap();
+    let raw: serde_json::Value = alice.api.get(&format!("/vaults/{v}/log")).await;
+    assert_eq!(raw["entries"][1], newer);
+    let entries = alice.member_log(&v).await;
+    assert_eq!(
+        LogState::verify(&v, &alice.account.public(), &entries).err(),
+        Some(LogError::Newer(head.seq + 1))
+    );
+}

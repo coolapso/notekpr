@@ -41,12 +41,14 @@ pub async fn append(
     Ok(())
 }
 
-/// Entries with `seq >= since`, in order.
+/// Entries with `seq >= since`, in order, as they were stored: also kinds
+/// this release doesn't know (after going back to it from a newer one),
+/// which apps that know them can verify.
 pub async fn since(
     db: impl SqliteExecutor<'_>,
     vault_id: &str,
     since: u64,
-) -> AppResult<Vec<LogEntry>> {
+) -> AppResult<Vec<serde_json::Value>> {
     let rows: Vec<String> = sqlx::query_scalar(
         "SELECT entry FROM member_log WHERE vault_id = ? AND seq >= ? ORDER BY seq",
     )

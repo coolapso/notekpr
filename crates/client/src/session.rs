@@ -9,7 +9,7 @@ use std::time::Duration;
 use anyhow::{Context, Result, anyhow, bail};
 use notekpr_core::engine::{self, Applied, PinStatus, VaultMeta, VaultReplica};
 use notekpr_core::keys::{AccountPublic, AccountSecret, VaultKeyring};
-use notekpr_core::memberlog::{KeyCheckError, LogBody, LogEntry};
+use notekpr_core::memberlog::{KeyCheckError, LogBody, LogEntry, LogError};
 use notekpr_core::protocol::*;
 use notekpr_sync::SnapshotAction;
 use notekpr_sync::members::{self, MemberLog};
@@ -350,12 +350,17 @@ impl Session {
                 entries,
                 seen.as_ref().map(|(s, h)| (*s, h.as_slice())),
             )
-            .map_err(|e| {
-                anyhow!(
+            .map_err(|e| match e {
+                LogError::Newer(_) => anyhow!(
+                    "who is in vault '{}' was changed by a newer version of notekpr: update notekpr to use \
+                     it (nothing was changed here)",
+                    v.name()
+                ),
+                e => anyhow!(
                     "SECURITY: the membership history of vault '{}' does not check out ({e}). The server may \
                      have been tampered with; nothing was changed. Tell the vault's owner and your administrator",
                     v.name()
-                )
+                ),
             })?;
             match log.check_keyring(&v.replica.keyring) {
                 Ok(()) => {

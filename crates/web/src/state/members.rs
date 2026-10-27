@@ -5,7 +5,7 @@
 //! vouches for.
 
 use notekpr_core::keys::{AccountPublic, VaultKeyring};
-use notekpr_core::memberlog::{KeyCheckError, LogBody, LogEntry};
+use notekpr_core::memberlog::{KeyCheckError, LogBody, LogEntry, LogError};
 use notekpr_sync::members::{self as rules, MemberLog};
 
 use super::*;
@@ -78,10 +78,11 @@ pub(super) async fn load_log(
             entries,
             seen.as_ref().map(|(s, h)| (*s, h.as_slice())),
         )
-        .map_err(|e| {
-            format!(
+        .map_err(|e| match e {
+            LogError::Newer(_) => "Who is in this vault was changed by a newer version of notekpr: reload the page to open it.".to_string(),
+            e => format!(
                 "Security warning: this vault's membership history doesn't check out ({e}). The server may have been tampered with; tell the vault's owner and your administrator."
-            )
+            ),
         })?;
         match log.check_keyring(ring) {
             Ok(()) => {

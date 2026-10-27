@@ -130,7 +130,9 @@ primitives. Formats:
   with a security warning if the server lists an unknown member with keys.
   A role from a newer release that an older app doesn't know is kept as
   signed and allowed nothing beyond reading (protocol.md §11), so it can't
-  make an older app accept anyone's writing.
+  make an older app accept anyone's writing. A log entry of a kind an older
+  app doesn't know stops it from opening the vault (it says to update), so
+  a server can't slip a change past it that way.
 * **Shares someone's quick notes?** The server refuses members and note
   shares there, and as with every vault it can't add anyone on its own:
   their owner's apps never sign anyone into them. Nor can it make a vault

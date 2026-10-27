@@ -145,6 +145,12 @@ pub enum LogBody {
     RequireSigned {
         from_seq: i64,
     },
+    /// A kind of entry from a newer release. It can't be checked (what is
+    /// signed depends on fields this release doesn't know), so the log can't
+    /// be verified from here on: apps say to update ([`LogError::Newer`]).
+    /// Servers refuse it.
+    #[serde(other)]
+    Unknown,
 }
 
 impl LogBody {
@@ -209,6 +215,8 @@ impl LogBody {
                 parts.push(b"require-signed".to_vec());
                 parts.push(from_seq.to_be_bytes().to_vec());
             }
+            // Never verified (see `LogBody::Unknown`).
+            LogBody::Unknown => parts.push(b"unknown".to_vec()),
         }
         let refs: Vec<&[u8]> = parts.iter().map(|p| p.as_slice()).collect();
         crypto::statement("body", &refs)
@@ -226,7 +234,8 @@ impl LogBody {
             LogBody::Create { .. }
             | LogBody::Checkpoint { .. }
             | LogBody::Rotate { .. }
-            | LogBody::RequireSigned { .. } => None,
+            | LogBody::RequireSigned { .. }
+            | LogBody::Unknown => None,
         }
     }
 }
@@ -334,6 +343,9 @@ pub enum LogError {
     Invalid(u64, &'static str),
     #[error("malformed key in the membership log")]
     Key,
+    /// Not a security problem: the app is too old for this log.
+    #[error("membership log entry {0} is of a kind a newer version of notekpr added")]
+    Newer(u64),
 }
 
 impl From<CryptoError> for LogError {
@@ -389,6 +401,9 @@ impl LogState {
         }
         if first.prev != [0u8; 32] {
             return Err(LogError::Fork(0));
+        }
+        if first.body == LogBody::Unknown {
+            return Err(LogError::Newer(0));
         }
         first.verify_signature(vault_id, owner_key)?;
         let owner = first.signer.clone();
@@ -501,6 +516,9 @@ impl LogState {
         }
         if e.prev != self.head_hash {
             return Err(LogError::Fork(e.seq));
+        }
+        if e.body == LogBody::Unknown {
+            return Err(LogError::Newer(e.seq));
         }
         let signer_key = match &e.body {
             LogBody::Leave { user_id } => {
@@ -616,6 +634,7 @@ impl LogState {
                 }
                 self.signed_from = Some(*from_seq);
             }
+            LogBody::Unknown => return Err(LogError::Newer(n)),
         }
         self.head_seq = n;
         self.head_hash = e.hash();
@@ -1137,6 +1156,35 @@ mod tests {
         let forged: Vec<LogEntry> =
             serde_json::from_str(&json.replace("\"commenter\"", "\"editor\"")).unwrap();
         assert!(LogState::verify(V, &alice.secret.public(), &forged).is_err());
+    }
+
+    #[test]
+    fn entries_of_kinds_from_newer_releases_stop_the_check_plainly() {
+        let (alice, bob) = (person("alice"), person("bob"));
+        let (mut log, _) = created(&alice);
+        append(
+            &mut log,
+            &alice,
+            LogBody::Add {
+                member: member(&bob, Role::Editor),
+            },
+        );
+        // As a newer release writes one, signed.
+        let mut json = serde_json::to_value(&log).unwrap();
+        json[1]["body"] = serde_json::json!({ "kind": "transfer", "to": "bob" });
+        let read: Vec<LogEntry> = serde_json::from_value(json.clone()).unwrap();
+        assert_eq!(read[1].body, LogBody::Unknown);
+        assert_eq!(
+            LogState::verify(V, &alice.secret.public(), &read).err(),
+            Some(LogError::Newer(1))
+        );
+        // Also as the first entry.
+        json[0]["body"] = serde_json::json!({ "kind": "genesis" });
+        let read: Vec<LogEntry> = serde_json::from_value(json).unwrap();
+        assert_eq!(
+            LogState::verify(V, &alice.secret.public(), &read).err(),
+            Some(LogError::Newer(0))
+        );
     }
 
     #[test]

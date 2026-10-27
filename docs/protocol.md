@@ -626,3 +626,10 @@ it the least it could mean, rather than fail on the message that carries it:
   managing it (as `viewer`; the server enforces what the role really may).
   Content signed by someone whose roles were all unknown is refused, as a
   viewer's would be.
+* **Read-only reasons** (`mode`, `GET /info`, §9): an unknown one is
+  read-only all the same ("the server is read-only for now").
+* **Events** (`vault_event`, `object_event`, `user_event`, §7): an unknown
+  kind makes an app reload what it could be about — the vault (its
+  information, keys and membership log), the note's keys, or the person's
+  lists (vaults, shared notes, devices).
+* **WebSocket messages** of a `type` an app doesn't know are skipped.

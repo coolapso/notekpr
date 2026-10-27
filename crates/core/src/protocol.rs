@@ -715,6 +715,9 @@ pub enum ObjectEventKind {
     /// The caller can no longer access this note.
     AccessRevoked,
     Deleted,
+    /// An event from a newer release: apps reload what they know of the note.
+    #[serde(other)]
+    Other,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -1374,6 +1377,9 @@ pub enum ReadOnly {
     Manual,
     /// The database reached the size limit (`max_storage_mb`).
     StorageFull,
+    /// A reason from a newer release: read-only all the same.
+    #[serde(other)]
+    Other,
 }
 
 /// `GET`/`PATCH /admin/settings`.
@@ -1510,6 +1516,9 @@ pub enum VaultEventKind {
     Deleted,
     AccessRevoked,
     RoleChanged,
+    /// An event from a newer release: apps reload the vault.
+    #[serde(other)]
+    Other,
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
@@ -1525,6 +1534,10 @@ pub enum UserEventKind {
     SessionRevoked,
     /// A note was shared with (or unshared from) this user.
     SharesChanged,
+    /// An event from a newer release: apps reload their lists (vaults,
+    /// shared notes, devices).
+    #[serde(other)]
+    Other,
 }
 
 /// The WebSocket close code a server sends when it shuts down to be
@@ -1813,6 +1826,56 @@ mod tests {
             .replace("editor", "commenter");
         let m: MemberInfo = serde_json::from_str(&json).unwrap();
         assert_eq!(m.role.as_str(), "commenter");
+    }
+
+    #[test]
+    fn reasons_and_events_from_newer_releases_still_read() {
+        let mode: ServerMessage =
+            serde_json::from_str(r#"{"type":"mode","read_only":"vault_full"}"#).unwrap();
+        assert!(matches!(
+            mode,
+            ServerMessage::Mode {
+                read_only: Some(ReadOnly::Other)
+            }
+        ));
+        let m: ServerMessage =
+            serde_json::from_str(r#"{"type":"vault_event","vault_id":"v","event":"archived"}"#)
+                .unwrap();
+        assert!(matches!(
+            m,
+            ServerMessage::VaultEvent {
+                event: VaultEventKind::Other,
+                ..
+            }
+        ));
+        let m: ServerMessage = serde_json::from_str(
+            r#"{"type":"object_event","vault_id":"v","object_id":"n","event":"locked"}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            m,
+            ServerMessage::ObjectEvent {
+                event: ObjectEventKind::Other,
+                ..
+            }
+        ));
+        let m: ServerMessage =
+            serde_json::from_str(r#"{"type":"user_event","event":"moved"}"#).unwrap();
+        assert!(matches!(
+            m,
+            ServerMessage::UserEvent {
+                event: UserEventKind::Other
+            }
+        ));
+        // Known ones read as before.
+        let m: ServerMessage =
+            serde_json::from_str(r#"{"type":"mode","read_only":"storage_full"}"#).unwrap();
+        assert!(matches!(
+            m,
+            ServerMessage::Mode {
+                read_only: Some(ReadOnly::StorageFull)
+            }
+        ));
     }
 
     #[test]

@@ -112,7 +112,7 @@ impl IntoResponse for AppError {
 /// changes, such as a new vault, are tried again by the person).
 fn read_only_message(why: ReadOnly) -> &'static str {
     match why {
-        ReadOnly::Manual => "the server is read-only for now; try again later",
+        ReadOnly::Manual | ReadOnly::Other => "the server is read-only for now; try again later",
         ReadOnly::StorageFull => "the server's storage is full; try again later",
     }
 }

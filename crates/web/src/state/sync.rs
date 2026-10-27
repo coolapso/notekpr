@@ -287,6 +287,12 @@ pub(super) fn on_server_message(m: ServerMessage) {
             UserEventKind::SessionRevoked => {
                 sign_out_local(Some("This session was signed out.".into()))
             }
+            // An event from a newer release: reload the lists it may be about.
+            UserEventKind::Other => leptos::task::spawn_local(async {
+                refresh_vaults().await;
+                refresh_shares().await;
+                refresh_pending_devices().await;
+            }),
         },
         ServerMessage::Error {
             code,
@@ -982,10 +988,12 @@ pub fn outbox_bytes(c: &Core, vault_id: &str) -> usize {
 /// A vault event from the server (an edge).
 pub(super) fn on_vault_event(vault_id: String, event: VaultEventKind) {
     match event {
+        // (An event from a newer release: the vault is reloaded.)
         VaultEventKind::KeyRotated
         | VaultEventKind::MetaChanged
         | VaultEventKind::RoleChanged
-        | VaultEventKind::MembersChanged => {
+        | VaultEventKind::MembersChanged
+        | VaultEventKind::Other => {
             if event == VaultEventKind::MembersChanged {
                 // Who may be mentioned there: asked again when needed.
                 step(|c| c.mention_people.remove(&vault_id));

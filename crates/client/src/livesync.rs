@@ -393,7 +393,7 @@ pub const SESSION_MIN_UPDATES: u32 = 5;
 
 pub fn read_only_reason(why: ReadOnly) -> &'static str {
     match why {
-        ReadOnly::Manual => "the server is read-only for now",
+        ReadOnly::Manual | ReadOnly::Other => "the server is read-only for now",
         ReadOnly::StorageFull => "the server's storage is full",
     }
 }
@@ -715,7 +715,10 @@ async fn handle(
                         ui::warn(&format!("could not fetch the rotated vault key: {e:#}"));
                     }
                 }
-                VaultEventKind::MetaChanged | VaultEventKind::RoleChanged => {
+                // An event from a newer release: reload the vault.
+                VaultEventKind::MetaChanged
+                | VaultEventKind::RoleChanged
+                | VaultEventKind::Other => {
                     let h = hub.clone();
                     tokio::spawn(async move {
                         if let Err(e) = h.session.refresh_vault(&v).await {
@@ -757,9 +760,11 @@ async fn handle(
             event,
         } => {
             // A note of a vault we sync got (or rotated) its own key: reload
-            // that note's keys only.
-            if matches!(event, ObjectEventKind::Shared | ObjectEventKind::KeyRotated)
-                && let Some(v) = hub.get(&vault_id)
+            // that note's keys only (also for an event from a newer release).
+            if matches!(
+                event,
+                ObjectEventKind::Shared | ObjectEventKind::KeyRotated | ObjectEventKind::Other
+            ) && let Some(v) = hub.get(&vault_id)
                 && let Err(e) = session.refresh_note_keys(&v, &object_id).await
             {
                 ui::warn(&format!("could not fetch the note's key: {e:#}"));
@@ -773,7 +778,8 @@ async fn handle(
             }
         }
         ServerMessage::UserEvent { event } => match event {
-            UserEventKind::VaultsChanged => {
+            // (An event from a newer release: the vault list is what we keep.)
+            UserEventKind::VaultsChanged | UserEventKind::Other => {
                 let opened = match session.api.vaults().await {
                     Ok(list) => hub.open_listed(&list).await,
                     Err(e) => Err(anyhow!(e)),

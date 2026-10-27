@@ -94,7 +94,7 @@ fn Banners() -> impl IntoView {
         {move || ui.read_only.get().map(|why| view! {
             <div class="banner warn read-only-banner"><Icon name="cloud-off"/>
                 <span>{match why {
-                    ReadOnly::Manual => "The server is read-only for now.",
+                    ReadOnly::Manual | ReadOnly::Other => "The server is read-only for now.",
                     ReadOnly::StorageFull => "The server's storage is full.",
                 }}" Your edits are kept in this browser and sent as soon as it accepts changes again."</span></div>
         })}

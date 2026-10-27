@@ -471,6 +471,11 @@ pub(super) fn on_object_event(vault: String, note: String, event: ObjectEventKin
             ObjectEventKind::Shared | ObjectEventKind::KeyRotated => {
                 leptos::task::spawn_local(reload_note_keys(vault, note))
             }
+            // An event from a newer release: reload what we know of it.
+            ObjectEventKind::Other => {
+                ui().shares_rev.update(|v| *v += 1);
+                leptos::task::spawn_local(reload_note_keys(vault, note))
+            }
             ObjectEventKind::SharesChanged => {
                 ui().shares_rev.update(|v| *v += 1);
                 // Someone it was shared with may have gone: the owner
@@ -502,6 +507,12 @@ pub(super) fn on_object_event(vault: String, note: String, event: ObjectEventKin
         ObjectEventKind::MetaChanged | ObjectEventKind::SharesChanged => {
             leptos::task::spawn_local(refresh_shares())
         }
+        // An event from a newer release: reload what we know of it.
+        ObjectEventKind::Other => leptos::task::spawn_local(async move {
+            reload_share_keys(&vault, &note).await;
+            refresh_shares().await;
+            step(|c| resend_pending(c, &vault));
+        }),
         ObjectEventKind::AccessRevoked | ObjectEventKind::Deleted => {
             let title = step(|c| {
                 let title = c

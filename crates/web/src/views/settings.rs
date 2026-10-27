@@ -855,6 +855,7 @@ fn InstanceSettingsPanel(
                         None => format!("Accepting changes. Database: {used}{of}."),
                         Some(ReadOnly::Manual) => format!("Read-only, switched on by an administrator. Database: {used}{of}."),
                         Some(ReadOnly::StorageFull) => format!("Read-only: the database reached its size limit ({used}{of}). Raise the limit to accept changes again."),
+                        Some(ReadOnly::Other) => format!("Read-only. Database: {used}{of}."),
                     }
                 })}</p>
                 <div class="limits">

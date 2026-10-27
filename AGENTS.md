@@ -80,7 +80,9 @@ crates/core     crypto.rs (envelopes, HPKE, signatures) · comments.rs (signed c
                 (the file tree's order: folders first, places set by drag and
                 drop, A–Z) · moving.rs (a note or folder to another vault: what
                 goes, where, what stays) · version.rs (release versions, for apps
-                too old for a server) · markdown, search, paths, textdiff
+                too old for a server) · account_export.rs (vaults and quick notes
+                as one Markdown .zip, to move servers) · markdown, search, paths,
+                textdiff
 crates/sync     the client sync engine both clients use (sans-IO): outbox (merge, hold,
                 batch pushes, acks and refusals), rollback recovery, edit splitting ·
                 members.rs (membership log checks, whom to trust) · snapshot.rs (when

@@ -248,8 +248,16 @@ pub async fn forward(dirs: &Dirs, mut cli: Cli) -> Result<bool> {
         }
         _ => None,
     };
-    if let Command::Import { source, .. } = &mut cli.command {
-        *source = absolute(source)?;
+    if let Command::Import { vault, source, .. } = &mut cli.command {
+        match source {
+            Some(s) => *s = absolute(s)?,
+            // Alone, it's the export to import.
+            None => {
+                *vault = absolute(std::path::Path::new(vault.as_str()))?
+                    .to_string_lossy()
+                    .into_owned()
+            }
+        }
     }
     let quiet = cli.quiet;
     let req = Request {

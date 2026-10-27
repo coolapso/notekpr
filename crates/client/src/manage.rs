@@ -139,6 +139,32 @@ pub async fn set_vault_icon(
     v.save()
 }
 
+/// The vault's description, icon and picture as `from`'s (its name stays).
+pub async fn set_vault_looks(
+    session: &Session,
+    vault: &SharedVault,
+    from: &VaultMeta,
+) -> Result<()> {
+    let (id, ct, meta) = {
+        let v = vault.lock().await;
+        require_owner(&v)?;
+        let mut meta = v.replica.meta.clone();
+        meta.description = from.description.clone();
+        meta.icon = from.icon.clone();
+        meta.picture = from.picture.clone();
+        (v.id().to_string(), meta.encrypt(&v.replica.keyring)?, meta)
+    };
+    let req = UpdateVaultRequest {
+        encrypted_meta: Some(ct),
+        archived: None,
+        ..Default::default()
+    };
+    let _: VaultInfo = session.api.patch(&format!("/vaults/{id}"), &req).await?;
+    let mut v = vault.lock().await;
+    v.set_meta(meta);
+    v.save()
+}
+
 pub async fn set_archived(session: &Session, vault: &SharedVault, archived: bool) -> Result<()> {
     let id = {
         let v = vault.lock().await;

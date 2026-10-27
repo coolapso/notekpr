@@ -192,6 +192,7 @@ by its id.
 | `backlinks <v> <path>` | notes linking to a note |
 | `history <v> <path>`, `history show\|restore <v> <path> <rev>` | encrypted revisions stored on the server |
 | `export <v> --out <dir\|file.zip>`, `import <v> <dir\|file.zip>` | see [§9](#9-export-and-import) |
+| `export --out <dir\|file.zip> [--skip <v>]… [--no-quick-notes]`, `import <dir\|file.zip>` | every vault and the quick notes at once, to move to another server: see [§9](#moving-to-another-server) |
 | `agent …`, `gateway …` | AI agents and the local HTTP API: see [agents.md §2](agents.md#2-setting-up-an-agent) and [§4](agents.md#4-the-gateway-local-http-api) |
 
 Every command first catches up with the server (REST) and uploads queued
@@ -663,6 +664,28 @@ are empty attachment files and files over the server's attachment limit
 (reported), and an export's `_comments/` folder (comments can't be brought
 back: they are signed by their authors). `--dry-run` reports what an import would create, update or leave
 unchanged without changing anything.
+
+### Moving to another server
+
+```sh
+notekpr export --out ~/notes.zip --skip Scratch      # every vault but Scratch, and the quick notes
+notekpr --profile new login --server https://notes.example.org
+notekpr --profile new import ~/notes.zip [--dry-run]
+```
+
+Without a vault, `export` takes every vault (but those `--skip` names) and
+the quick notes (unless `--no-quick-notes`) into one `.zip` or directory: a
+folder per vault (named after it; a name some file systems can't store has
+`_` instead), one called `Quick notes`, and `.notekpr-export.json` naming
+which folder is which vault — with its name, description, icon and picture,
+and its notes', files' and folders' icons. The web app makes the same export
+(Settings → Account → Data). `import` with only that `.zip` or directory —
+on any server, also the same one — creates the vaults again, named as they
+were (a name the account has already gets a number: `Family 2`), and adds
+the quick notes to the account's, as many as there's room for (the rest are
+reported). Nothing else comes along: no history, comments (only the
+`_comments/` files, which aren't imported), members or shares — the new
+server starts fresh.
 
 ### Encrypted export and offline recovery
 

@@ -288,3 +288,162 @@ async fn exports_carry_comments_that_imports_leave_out() {
     let paths: Vec<String> = copy.lock().await.paths().into_keys().collect();
     assert_eq!(paths, ["Projects/Plan.md", "Quiet.md"]);
 }
+
+async fn run(srv: &TestServer, who: &str, args: &[&str]) -> anyhow::Result<()> {
+    use clap::Parser;
+    let mut argv = vec!["notekpr", "-q", "--profile", who];
+    argv.extend_from_slice(args);
+    notekpr_client::commands::run_in(
+        notekpr_client::cli::Cli::try_parse_from(argv)?,
+        srv.dirs(who),
+    )
+    .await
+}
+
+/// Moving to another server: the vaults (but those left out) and the quick
+/// notes exported as one .zip, imported there by a new account — named as
+/// they were (a name taken gets a number), with folders, files and icons.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn vaults_and_quick_notes_move_to_another_server() {
+    let old = start().await;
+    let alice = login(&old, "alice").await;
+    manage::create_vault(&alice, "Family").await.unwrap();
+    manage::create_vault(&alice, "Secret").await.unwrap();
+    let h = hub(&alice).await;
+    ops::put_document(&h, "Family", "Trips/2026.md", "Lisbon\n", None)
+        .await
+        .unwrap();
+    ops::put_attachment(&h, "Family", "assets/map.png", &[1, 2, 3], None)
+        .await
+        .unwrap();
+    {
+        let v = h.resolve("Family").await.unwrap();
+        let mut g = v.lock().await;
+        g.create_folder("Empty").unwrap();
+        g.set_icon("Trips/2026.md", Some("✈️")).unwrap();
+        g.save().unwrap();
+    }
+    let family = h.resolve("Family").await.unwrap();
+    manage::set_vault_icon(&alice, &family, Some("🏡"))
+        .await
+        .unwrap();
+    ops::put_document(&h, "Secret", "Hidden.md", "stays\n", None)
+        .await
+        .unwrap();
+    ops::create_quick_note(&h, "Call mum").await.unwrap();
+    for id in h.vault_ids() {
+        h.push(&id).await.unwrap();
+    }
+    drop((h, family));
+    let zip = old.path("notes.zip");
+    let zip_arg = zip.to_str().unwrap();
+    run(
+        &old,
+        "alice",
+        &["export", "--out", zip_arg, "--skip", "secret"],
+    )
+    .await
+    .unwrap();
+    // A name that isn't a vault is refused, not silently ignored.
+    let e = run(
+        &old,
+        "alice",
+        &[
+            "export",
+            "--out",
+            old.path("x.zip").to_str().unwrap(),
+            "--skip",
+            "Nope",
+        ],
+    )
+    .await
+    .unwrap_err();
+    assert!(e.to_string().contains("no vault 'Nope'"), "{e:#}");
+
+    // Another server, where the new account has a "Family" already.
+    let new = start().await;
+    let bob = login(&new, "bob").await;
+    manage::create_vault(&bob, "Family").await.unwrap();
+    drop(bob);
+    run(&new, "bob", &["import", zip_arg, "--dry-run"])
+        .await
+        .unwrap();
+    let hb = hub(&reopen(&new, "bob", "bob").await).await;
+    assert!(
+        hb.resolve("Family 2").await.is_err(),
+        "a dry run makes nothing"
+    );
+    drop(hb);
+    run(&new, "bob", &["import", zip_arg]).await.unwrap();
+
+    let hb = hub(&reopen(&new, "bob", "bob").await).await;
+    assert_eq!(
+        note(&hb, "Family 2", "Trips/2026.md").await.as_deref(),
+        Some("Lisbon\n")
+    );
+    let moved = hb.resolve("Family 2").await.unwrap();
+    {
+        let g = moved.lock().await;
+        assert_eq!(g.replica.meta.icon.as_deref(), Some("🏡"));
+        assert!(g.is_folder("Empty"));
+        let (_, e) = g.find("Trips/2026.md").unwrap();
+        assert_eq!(e.icon.as_deref(), Some("✈️"));
+    }
+    let (_, map) = moved.lock().await.find("assets/map.png").unwrap();
+    assert_eq!(
+        hb.session.attachment(&moved, &map.id).await.unwrap(),
+        [1, 2, 3]
+    );
+    assert!(
+        hb.resolve("Secret").await.is_err(),
+        "what was left out stays"
+    );
+    let quick = ops::list_quick_notes(&hb, 10).await.unwrap();
+    let q = hb.quick_notes().await.unwrap();
+    assert!(
+        quick
+            .notes
+            .iter()
+            .any(|n| q.try_lock().unwrap().note_text(&n.id) == "Call mum"),
+        "the quick notes join that account's"
+    );
+    drop((hb, q, moved));
+
+    // The same as a directory, into a third account there.
+    let dir = old.path("notes-dir");
+    run(
+        &old,
+        "alice",
+        &["export", "--out", dir.to_str().unwrap(), "--no-quick-notes"],
+    )
+    .await
+    .unwrap();
+    assert!(
+        dir.join(".notekpr-export.json").is_file() && dir.join("Family/Trips/2026.md").is_file()
+    );
+    drop(login(&new, "carol").await);
+    run(&new, "carol", &["import", dir.to_str().unwrap()])
+        .await
+        .unwrap();
+    let hc = hub(&reopen(&new, "carol", "carol").await).await;
+    assert_eq!(
+        note(&hc, "Secret", "Hidden.md").await.as_deref(),
+        Some("stays\n")
+    );
+    assert!(
+        ops::list_quick_notes(&hc, 10)
+            .await
+            .map_or(true, |q| q.notes.is_empty()),
+        "the quick notes were left out"
+    );
+    drop(hc);
+
+    // Something that isn't such an export: told how to import it instead.
+    let plain = new.path("plain");
+    std::fs::create_dir_all(&plain).unwrap();
+    std::fs::write(plain.join("a.md"), "a\n").unwrap();
+    let e = run(&new, "bob", &["import", plain.to_str().unwrap()])
+        .await
+        .unwrap_err();
+    assert!(e.to_string().contains("notekpr import <vault>"), "{e:#}");
+}

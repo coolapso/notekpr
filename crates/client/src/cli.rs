@@ -153,13 +153,21 @@ pub enum Command {
     Backlinks { vault: String, path: String },
     /// Revision history of a note.
     History(HistoryArgs),
-    /// Export a vault as plain Markdown files and attachments (directory or .zip).
+    /// Export a vault as plain Markdown files and attachments (directory or
+    /// .zip) — without one, every vault and the quick notes, to import on
+    /// another server (`import <file>`).
     Export {
-        vault: String,
+        vault: Option<String>,
         #[arg(long)]
         out: PathBuf,
         #[arg(long)]
         force: bool,
+        /// Without a vault: leave this vault out (repeatable).
+        #[arg(long, value_name = "VAULT", conflicts_with = "vault")]
+        skip: Vec<String>,
+        /// Without a vault: leave the quick notes out.
+        #[arg(long, conflicts_with = "vault")]
+        no_quick_notes: bool,
     },
     /// Save an encrypted export of everything this account can read (a backup
     /// that `recover` can turn into Markdown files without any server).
@@ -173,10 +181,13 @@ pub enum Command {
     /// Decrypt an encrypted export into plain Markdown files, offline: with
     /// --from and your recovery key, or (without --from) with this signed-in device.
     Recover(RecoverArgs),
-    /// Import Markdown files and attachments (directory or .zip), keeping folders.
+    /// Import Markdown files and attachments (directory or .zip) into a vault,
+    /// keeping folders — or, with only a source, an export of vaults and quick
+    /// notes (`export --out`): its vaults are created again.
     Import {
+        /// The vault to import into (or, alone, an export of vaults).
         vault: String,
-        source: PathBuf,
+        source: Option<PathBuf>,
         /// Put everything below this folder of the vault.
         #[arg(long)]
         into: Option<String>,

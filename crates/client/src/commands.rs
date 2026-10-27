@@ -758,11 +758,28 @@ async fn execute(ctx: Ctx, command: Command) -> Result<()> {
             Ok(())
         }
         Command::History(h) => history(&ctx, h).await,
-        Command::Export { vault, out, force } => {
+        Command::Export {
+            vault: Some(vault),
+            out,
+            force,
+            ..
+        } => {
             let hub = ctx.hub(&[&vault]).await?;
             let v = hub.resolve(&vault).await?;
             let r = transfer::export(&hub, &v, &out, force).await?;
             print_transfer("exported", &r);
+            Ok(())
+        }
+        Command::Export {
+            vault: None,
+            out,
+            force,
+            skip,
+            no_quick_notes,
+        } => {
+            let hub = ctx.hub(&[]).await?;
+            let r = transfer::export_account(&hub, &out, force, &skip, !no_quick_notes).await?;
+            print_account_transfer("exported", &r, &out);
             Ok(())
         }
         Command::ExportEncrypted { out, force } => {
@@ -787,8 +804,42 @@ async fn execute(ctx: Ctx, command: Command) -> Result<()> {
         }
         Command::Recover(a) => recover_cmd(&ctx, a).await,
         Command::Import {
+            vault: source,
+            source: None,
+            into,
+            skip_existing,
+            dry_run,
+        } => {
+            if into.is_some() || skip_existing {
+                bail!(
+                    "--into and --skip-existing are for importing into a vault: notekpr import <vault> <source>"
+                );
+            }
+            let source = std::path::PathBuf::from(source);
+            let hub = ctx.hub(&[]).await?;
+            let Some(r) = transfer::import_account(&hub, &source, dry_run).await? else {
+                bail!(
+                    "{} isn't an export of vaults (it has no {}): to import files into a vault, name it — \
+                     notekpr import <vault> {}",
+                    source.display(),
+                    notekpr_core::account_export::MANIFEST,
+                    source.display()
+                );
+            };
+            print_account_transfer(
+                if dry_run {
+                    "dry run: would import"
+                } else {
+                    "imported"
+                },
+                &r,
+                &source,
+            );
+            Ok(())
+        }
+        Command::Import {
             vault,
-            source,
+            source: Some(source),
             into,
             skip_existing,
             dry_run,
@@ -936,6 +987,25 @@ fn report_push(o: crate::session::PushOutcome) {
             o.remaining
         ));
     }
+}
+
+fn print_account_transfer(verb: &str, r: &transfer::AccountReport, at: &std::path::Path) {
+    crate::out!(
+        "{verb} {} vault(s){}{}: {}",
+        r.vaults.len(),
+        if r.vaults.is_empty() {
+            String::new()
+        } else {
+            format!(" ({})", r.vaults.join(", "))
+        },
+        if r.quick_notes > 0 {
+            format!(" and {} quick note(s)", r.quick_notes)
+        } else {
+            String::new()
+        },
+        at.display()
+    );
+    print_transfer("in all:", &r.totals);
 }
 
 fn print_transfer(verb: &str, r: &transfer::TransferReport) {

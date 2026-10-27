@@ -509,6 +509,9 @@ def test_attachments(env):
         b.click_el(b.find_text(".settings-body button", "Export My notes", 10))
         b.wait("return window.__downloads.includes('My notes.zip')", 15, "vault export downloaded")
         check(True, "account settings export a vault as a .zip")
+        b.wait("return (document.querySelector('.app-version')?.textContent || '').includes('the server:')", 10, "the versions")
+        version = api_get(b, "/info")["version"]
+        check(b.text(".app-version") == f"This app: {version} · the server: {version}", "account settings say which version the app and the server are")
         b.click_el(b.find_text(".settings-body button", "Sign out", 10))
         b.find(".dev-box input", 15)
         check(not blob_loads(), "signing out revokes decrypted attachment URLs")
@@ -2445,6 +2448,9 @@ def test_admin(env):
         a.go(env.url + "settings/admin")
         a.find(".instance-settings .save-limits", 15)
         check(a.js("return document.querySelector('.instance-status').textContent.startsWith('Accepting changes')"), "the instance settings say the server accepts changes")
+        version = api_get(a, "/info")["version"]
+        a.find(".server-version", 10)
+        check(a.text(".server-version") == f"Server version {version}", "the admin page shows the server's version")
         a.js(choose, ".vaults-per-user .limit-kind", "max")
         a.find(".vaults-per-user .limit-num", 5)
         a.js(number, ".vaults-per-user .limit-num", "1")

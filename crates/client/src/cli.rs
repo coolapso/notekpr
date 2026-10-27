@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Parser, Clone, Debug, Serialize, Deserialize)]
 #[command(
     name = "notekpr",
-    version,
+    version = notekpr_core::VERSION,
     about = "End-to-end encrypted, local-first Markdown notes: desktop sync, file mirror and agent gateway",
     after_help = "Use several profiles side by side, e.g. `--profile alice` and `--profile bob`.\n\
                   Documentation: docs/desktop-client.md and docs/agents.md"

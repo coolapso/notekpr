@@ -34,6 +34,11 @@ install -m 0755 target/release/notekpr ~/.local/bin/
 notekpr --help
 ```
 
+`notekpr --version` says which release it is; one built from source says
+`dev` unless `NOTEKPR_VERSION` names a version while building
+(`NOTEKPR_VERSION=0.2.0 cargo build …`). It sends that with every request
+to the server (`Notekpr-App: cli/<version>`, protocol.md).
+
 ## 2. Signing in
 
 ### With your identity provider (normal use)

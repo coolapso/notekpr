@@ -124,7 +124,9 @@ sudo mkdir -p /usr/local/share/notekpr && sudo cp -r dist/web /usr/local/share/n
 ```
 
 Serve a copy of the web client outside the checkout: `build-web.sh` replaces
-`dist/web` every time it runs (also during development).
+`dist/web` every time it runs (also during development). Builds from source
+say they are version `dev`; to have them name a release, set
+`NOTEKPR_VERSION` (say `NOTEKPR_VERSION=0.2.0`) for both commands.
 
 ```ini
 # /etc/systemd/system/notekpr.service
@@ -639,9 +641,13 @@ proxy answers then (§4, "Holding requests during an update").
 * Logs: one line per request (method, redacted path, status, latency) plus
   lifecycle events; `--log-format json` for log shippers. No user ids, IP
   addresses or names.
-* Administrators see accounts and storage statistics in Settings →
-  Administration (never content or vault membership). The server logs when
-  the storage limit turns it read-only and when it is below it again.
+* The version that runs: `notekpr-server --version`, the start-up log
+  (`notekpr server ready`), `version` in `GET /api/v1/info`.
+* Administrators see accounts, storage statistics and the server's version
+  in Settings → Administration (never content or vault membership); admin
+  clients get the statistics and version from `GET /api/v1/admin/stats`. The
+  server logs when the storage limit turns it read-only and when it is below
+  it again.
 
 ## 9. Development mode
 

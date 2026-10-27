@@ -14,6 +14,17 @@ use crate::keys::AccountPublic;
 pub use crate::memberlog::LogEntry;
 
 pub const API_PREFIX: &str = "/api/v1";
+/// The header every app sends with each request: which app it is and its
+/// version ([`app_id`]). Browsers can't set headers on WebSockets, so the
+/// `auth` message carries the same text ([`ClientMessage::Auth`]).
+pub const APP_HEADER: &str = "notekpr-app";
+
+/// What an app sends in [`APP_HEADER`]: its kind (`web`, `cli`) and the
+/// version it was built as, `web/0.3.0`.
+pub fn app_id(kind: &str) -> String {
+    format!("{kind}/{}", crate::VERSION)
+}
+
 /// Object id of each vault's index document (file tree, paths, trash).
 pub const INDEX_OBJECT_ID: &str = "index";
 /// Prefix of the object holding a note's comments: `c_<note id>`
@@ -1101,6 +1112,9 @@ pub struct AdminUpdateUser {
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct AdminStats {
+    /// The server's version ([`crate::VERSION`]); absent from older servers.
+    #[serde(default)]
+    pub version: String,
     pub users: i64,
     pub agents: i64,
     pub vaults: i64,
@@ -1499,6 +1513,10 @@ pub enum ClientMessage {
     /// Must be the first message; browsers cannot set headers on WebSockets.
     Auth {
         token: String,
+        /// The app and its version, as in [`APP_HEADER`]; absent from
+        /// older apps.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        app: Option<String>,
     },
     /// Start receiving a vault's updates. With `since`, the server first replays
     /// everything after that sequence number (including snapshots for compacted
@@ -1709,6 +1727,21 @@ mod tests {
         assert!(s.contains(r#""payload":"AQID""#));
         let back: ClientMessage = serde_json::from_str(&s).unwrap();
         assert!(matches!(back, ClientMessage::Push { .. }));
+    }
+
+    #[test]
+    fn apps_say_which_version_they_are() {
+        assert!(!crate::VERSION.is_empty());
+        assert_eq!(app_id("web"), format!("web/{}", crate::VERSION));
+        let m = ClientMessage::Auth {
+            token: "t".into(),
+            app: Some(app_id("cli")),
+        };
+        let s = serde_json::to_string(&m).unwrap();
+        assert!(s.contains(&format!(r#""app":"cli/{}""#, crate::VERSION)));
+        // Older apps authenticate without it.
+        let old: ClientMessage = serde_json::from_str(r#"{"type":"auth","token":"t"}"#).unwrap();
+        assert!(matches!(old, ClientMessage::Auth { app: None, .. }));
     }
 
     #[test]

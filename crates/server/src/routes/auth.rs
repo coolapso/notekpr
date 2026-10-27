@@ -24,7 +24,7 @@ const OIDC_STATE_TTL_MS: i64 = 600_000;
 pub async fn info(State(state): State<AppState>) -> Json<ServerInfo> {
     Json(ServerInfo {
         name: "notekpr".into(),
-        version: env!("CARGO_PKG_VERSION").into(),
+        version: notekpr_core::VERSION.into(),
         dev_mode: state.config.dev_mode,
         oidc_enabled: state.oidc.is_some(),
         oidc_display_name: state

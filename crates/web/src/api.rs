@@ -2,7 +2,7 @@
 
 use std::cell::RefCell;
 
-use notekpr_core::protocol::ApiError;
+use notekpr_core::protocol::{APP_HEADER, ApiError, app_id};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use wasm_bindgen::{JsCast, JsValue};
@@ -12,6 +12,12 @@ use web_sys::{Headers, Request, RequestInit, Response};
 use crate::util::window;
 
 pub const BASE: &str = "/api/v1";
+
+/// What this app says it is in [`APP_HEADER`] and the WebSocket's `auth`
+/// message.
+pub fn app() -> String {
+    app_id("web")
+}
 
 #[derive(Debug, Clone)]
 pub struct Error {
@@ -90,6 +96,7 @@ async fn send(
     let opts = RequestInit::new();
     opts.set_method(method);
     let headers = Headers::new().map_err(Error::network)?;
+    headers.set(APP_HEADER, &app()).map_err(Error::network)?;
     if let Some(t) = token() {
         headers
             .set("Authorization", &format!("Bearer {t}"))

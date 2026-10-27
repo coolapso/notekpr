@@ -315,6 +315,16 @@ The first release is `task release VERSION=0.1.0`: the history before it
 predates Conventional Commits, so `task release:check` lints commit
 messages only once a release tag exists.
 
+The version is also baked into what the image holds: the server
+(`--version`, `/info`, the start-up log, the admin page and
+`/admin/stats`), the CLI (`--version`, its requests) and the web app
+(Settings → Account, its requests). The Dockerfile hands its `VERSION`
+build argument to the builds as `NOTEKPR_VERSION`, which `crates/core`
+reads at compile time (`notekpr_core::VERSION`; Cargo rebuilds when it
+changes). Without it — `task dev`, `cargo build`, `task docker:build` —
+everything says `dev`. The crates' own versions in `Cargo.toml` aren't
+used for this and stay `0.1.0`.
+
 ## Conventions
 
 * Anything that touches keys or ciphertext formats lives in `crates/core`

@@ -23,6 +23,14 @@ pub mod textdiff;
 
 pub use yrs;
 
+/// The notekpr version this was built as: `NOTEKPR_VERSION` at build time
+/// (the release builds set it, docs/development.md §Releases), `dev` when it
+/// isn't set. Cargo rebuilds when the variable changes.
+pub const VERSION: &str = match option_env!("NOTEKPR_VERSION") {
+    Some(v) if !v.is_empty() => v,
+    _ => "dev",
+};
+
 /// Current time in Unix milliseconds.
 #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
 pub fn now_ms() -> i64 {

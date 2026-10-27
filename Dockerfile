@@ -19,9 +19,12 @@ RUN --mount=type=cache,id=notekpr-registry-web,target=/usr/local/cargo/registry 
     cargo install wasm-bindgen-cli --version ${WASM_BINDGEN_VERSION} --locked
 WORKDIR /src
 COPY . .
+# The release version (`task docker:push`), baked into the app and the
+# binaries below; `dev` for local builds.
+ARG VERSION=dev
 RUN --mount=type=cache,id=notekpr-registry-web,target=/usr/local/cargo/registry \
     --mount=type=cache,id=notekpr-target-web,target=/src/target \
-    ./scripts/build-web.sh \
+    NOTEKPR_VERSION="$VERSION" ./scripts/build-web.sh \
  && mkdir -p /out \
  && cp -r dist/web /out/web
 
@@ -50,10 +53,11 @@ ENV CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=x86_64-linux-gnu-gcc \
     CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc
 WORKDIR /src
 COPY . .
+ARG VERSION=dev
 RUN --mount=type=cache,id=notekpr-registry-$TARGETARCH,target=/usr/local/cargo/registry \
     --mount=type=cache,id=notekpr-target-$TARGETARCH,target=/src/target \
     target=$(cat /rust-target) \
- && cargo build --release --locked --target "$target" -p notekpr-server -p notekpr-client \
+ && NOTEKPR_VERSION="$VERSION" cargo build --release --locked --target "$target" -p notekpr-server -p notekpr-client \
  && mkdir -p /out/bin /out/data \
  && cp "target/$target/release/notekpr-server" "target/$target/release/notekpr" /out/bin/
 

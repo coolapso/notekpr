@@ -154,6 +154,10 @@ async fn an_admin_client_manages_the_instance_but_never_reaches_a_vault() {
         .await
         .unwrap();
     assert_eq!(stats.vaults, 1);
+    // The version the server was built as, as in `/info`.
+    assert_eq!(stats.version, notekpr_core::VERSION);
+    let info: ServerInfo = Api::new(&srv.base).get("/info").await;
+    assert_eq!(info.version, notekpr_core::VERSION);
 
     // It manages accounts: disabling ends the person's sessions.
     let r = operator(&srv, Method::PATCH, &format!("/admin/users/{}", bob.id))
@@ -202,6 +206,7 @@ async fn an_admin_client_manages_the_instance_but_never_reaches_a_vault() {
     use futures::{SinkExt, StreamExt};
     let auth = serde_json::to_string(&ClientMessage::Auth {
         token: TOKEN.into(),
+        app: None,
     })
     .unwrap();
     ws.send(tokio_tungstenite::tungstenite::Message::Text(auth.into()))

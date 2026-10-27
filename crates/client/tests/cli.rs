@@ -16,6 +16,16 @@ async fn run(srv: &TestServer, who: &str, args: &[&str]) -> anyhow::Result<()> {
     commands::run_in(Cli::try_parse_from(argv)?, srv.dirs(who)).await
 }
 
+#[test]
+fn says_which_version_it_is() {
+    let e = Cli::try_parse_from(["notekpr", "--version"]).unwrap_err();
+    assert_eq!(e.kind(), clap::error::ErrorKind::DisplayVersion);
+    assert_eq!(
+        e.to_string().trim(),
+        format!("notekpr {}", notekpr_core::VERSION)
+    );
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn plaintext_mirror_is_confirmed_per_directory() {
     let srv = start().await;

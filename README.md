@@ -190,7 +190,8 @@ read anything.
 * Updates without fuss: the server tells connected apps it's restarting;
   they keep working and are back about a second after it is.
 * Backups, upgrades, Prometheus metrics, and an admin page for accounts
-  (make admins, disable accounts) and server statistics — never content;
+  (make admins, disable accounts), server statistics and the server's
+  version — never content;
   size limits for changes, snapshots and attachments.
 * Instance settings that change without a restart: limits on accounts,
   agents and vaults, vaults and agents per person (with each person's own

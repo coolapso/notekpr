@@ -570,6 +570,7 @@ impl Ws {
         let (mut stream, _) = tokio_tungstenite::connect_async(url).await.unwrap();
         let auth = serde_json::to_string(&ClientMessage::Auth {
             token: token.into(),
+            app: Some(app_id("test")),
         })
         .unwrap();
         stream.send(Message::Text(auth.into())).await.unwrap();

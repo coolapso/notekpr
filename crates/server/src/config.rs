@@ -6,7 +6,7 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 #[derive(Parser, Debug)]
 #[command(
     name = "notekpr-server",
-    version,
+    version = notekpr_core::VERSION,
     about = "Zero-knowledge sync server for notekpr"
 )]
 pub struct Cli {
@@ -475,5 +475,20 @@ impl Config {
         c.snapshot_cooldown_secs = 0;
         c.auth_rate_limit_per_min = 10_000;
         c
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn says_which_version_it_is() {
+        let e = Cli::try_parse_from(["notekpr-server", "--version"]).unwrap_err();
+        assert_eq!(e.kind(), clap::error::ErrorKind::DisplayVersion);
+        assert_eq!(
+            e.to_string().trim(),
+            format!("notekpr-server {}", notekpr_core::VERSION)
+        );
     }
 }

@@ -214,7 +214,10 @@ async fn connect(hub: &Hub) -> Result<Ws> {
     .await
     .map_err(|_| anyhow!("connection timed out"))?
     .map_err(|e| anyhow!("websocket connection failed: {e}"))?;
-    let auth = serde_json::to_string(&ClientMessage::Auth { token })?;
+    let auth = serde_json::to_string(&ClientMessage::Auth {
+        token,
+        app: Some(crate::api::app()),
+    })?;
     ws.send(Message::Text(auth.into())).await?;
     let first = tokio::time::timeout(Duration::from_secs(10), ws.next())
         .await

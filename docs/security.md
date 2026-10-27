@@ -37,7 +37,9 @@ ciphertexts, which user and device wrote each update, and when people use it.
 This is the minimum needed to authenticate, authorize, route and store data;
 it is documented here so operators and users can judge it. It also sees each
 connection's IP address, as any server does, but never logs it, and stores
-one only while a device sign-in code waits for approval (below).
+one only while a device sign-in code waits for approval (below); and which
+app and release each request comes from (`web/0.3.0`, `cli/0.3.0`), which it
+neither logs nor stores.
 
 ### Where the metadata is, and who can see it
 
@@ -51,8 +53,9 @@ Nothing in the app or the logs shows it:
   role, whether it is disabled, when it was created and last signed in, how
   many vaults it is in and owns, how many devices, agents and quick notes it
   has, and its own limits; plus totals for the instance (accounts, vaults, objects,
-  updates, storage) and the instance settings. Not who is in which vault,
-  not who shares with whom, not activity — and never content.
+  updates, storage), the server's version and the instance settings. Not
+  who is in which vault, not who shares with whom, not activity — and never
+  content.
 * **Logs** have one line per request — method, path with ids replaced by
   `:id`, status, duration — plus start-up and shut-down events. No user or
   vault ids, IP addresses, tokens, query strings, bodies or names.

@@ -312,7 +312,7 @@ async fn serve(config: Config) -> anyhow::Result<()> {
     let listener = tokio::net::TcpListener::bind(listen)
         .await
         .with_context(|| format!("binding {listen}"))?;
-    tracing::info!(%listen, %public_url, version = env!("CARGO_PKG_VERSION"), "notekpr server ready");
+    tracing::info!(%listen, %public_url, version = notekpr_core::VERSION, "notekpr server ready");
     axum::serve(
         listener,
         app.into_make_service_with_connect_info::<SocketAddr>(),

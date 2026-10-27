@@ -7,7 +7,12 @@ ciphertexts) are **standard base64 with padding**. Timestamps are Unix
 [`crates/core/src/protocol.rs`](../crates/core/src/protocol.rs), shared by the
 server and every Rust client (CLI, agent gateway, browser).
 
-Authenticated calls send `Authorization: Bearer <token>`. Errors return
+Authenticated calls send `Authorization: Bearer <token>`. Every app also
+sends `Notekpr-App: <app>/<version>` with each request — `web/0.3.0`,
+`cli/0.3.0`: which app it is and the release it was built as (`dev` for
+builds not made for a release) — so the server can later tell an app too
+old for it to update. The server accepts requests without it (older apps,
+scripts). Errors return
 `{"error": "<code>", "message": "..."}` (`/oauth/token` uses the OAuth shape
 instead, §3) with codes `bad_request`, `unauthorized`, `forbidden`,
 `not_found`, `conflict`, `stale_key` (412: content was encrypted with an
@@ -86,7 +91,7 @@ Defined in `crates/core/src/crypto.rs` and `keys.rs`.
 
 | Endpoint | Purpose |
 |---|---|
-| `GET /info` | server name, version, `dev_mode`, `oidc_enabled`, `oidc_display_name` (the login button's label; null without OIDC), size limits (`max_attachment_bytes`, `max_update_bytes`, `max_snapshot_bytes`; older servers omit the last: it is `max(16 × max_update_bytes, 32 MiB)`), `note_keys` (notes can have their own keys, §5.1), `read_only` (`manual` or `storage_full` while the server refuses changes, §9; absent otherwise), `purge_undo_days` (how long deleting something for good can be undone, §6; 0 or absent: not at all) (no auth) |
+| `GET /info` | server name, `version` (the release it was built as; `dev` for builds not made for a release), `dev_mode`, `oidc_enabled`, `oidc_display_name` (the login button's label; null without OIDC), size limits (`max_attachment_bytes`, `max_update_bytes`, `max_snapshot_bytes`; older servers omit the last: it is `max(16 × max_update_bytes, 32 MiB)`), `note_keys` (notes can have their own keys, §5.1), `read_only` (`manual` or `storage_full` while the server refuses changes, §9; absent otherwise), `purge_undo_days` (how long deleting something for good can be undone, §6; 0 or absent: not at all) (no auth) |
 | `GET /auth/oidc/start?return_to=/path` | 303 to the identity provider (authorization code + PKCE + nonce); sets an HttpOnly, SameSite=Lax `notekpr_login` cookie that binds the login to this browser |
 | `GET /auth/oidc/callback` | provider redirect target; requires the `notekpr_login` cookie of the browser that started the login (otherwise `#error=login_failed`, which closes login CSRF); redirects to `/auth/complete#code=…&return_to=…` |
 | `POST /auth/exchange {code}` | one-time code (120 s) → `SessionResponse {token, expires_at, user}` |
@@ -447,8 +452,9 @@ key (they keep their authors' signatures), which `share_from` in
 
 JSON text frames, tagged with `"type"`.
 
-Client → server: `auth {token}` (must be first, within 10 s; a session the
-server doesn't know gets `error {code: "unauthorized"}` and the connection
+Client → server: `auth {token, app?}` (`app` as in the `Notekpr-App`
+header, which browsers can't set on a WebSocket; must be first, within
+10 s; a session the server doesn't know gets `error {code: "unauthorized"}` and the connection
 closes — the only way a browser learns why, so clients sign out on it),
 `subscribe {vault_id, since?, object_id?}`, `unsubscribe {vault_id, object_id?}`,
 `push {vault_id, updates}`, `awareness {vault_id, object_id, payload}`,
@@ -554,7 +560,7 @@ role can't be given: `400`): only admin clients administer it.
 |---|---|
 | `GET /admin/users?email=&identity=` | `read`: accounts with kind, e-mail, owner (agents), admin and disabled flags, last sign-in, vault (member of; quick notes not counted) and device counts, `owned_vault_count`, `agent_count`, `quick_note_count`, `vault_allowance`, `agent_allowance`, `quick_note_allowance` — no content. `email` (any case) or `identity` (`issuer\|subject`, or `dev:<name>` in development mode) finds one person |
 | `PATCH /admin/users/{id} {disabled?, is_admin?, vault_allowance?, agent_allowance?, quick_note_allowance?}` | `accounts` (`admins` for `is_admin`): disable (ends the person's sessions and their agents') or enable (counts against `max_users`), (un)make administrator, set a person's own limits: `"default"` (the instance's), `"unlimited"` or a number. Agents have no allowance (`400`). A new quick-note allowance is announced to the person's apps (`vaults_changed`) |
-| `GET /admin/stats` | `read`: counts of users, agents, vaults, objects, updates, snapshots and attachments, and the database's size (`storage_bytes`: pages in use) |
+| `GET /admin/stats` | `read`: the server's `version` (as in `GET /info`), counts of users, agents, vaults, objects, updates, snapshots and attachments, and the database's size (`storage_bytes`: pages in use) |
 | `GET /admin/settings` | `read`: `{settings, read_only?, storage_bytes}`: the instance settings below, whether (and why) the server refuses changes now, and the database's size |
 | `PATCH /admin/settings {…}` | `settings`: change any of the settings; the rest stay. Answers like `GET`. Takes effect at once (no restart) and is kept in the database |
 | `GET /admin/clients` | the admin clients: `id`, `name`, `scopes`, `created_at`, `managed`, `tokens` (`id`, `hint` — the last characters —, `created_at`, `last_used_at`; never the tokens) |

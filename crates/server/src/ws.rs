@@ -70,7 +70,7 @@ async fn connection(socket: WebSocket, state: AppState) {
     // Authenticate with the first message.
     let token = match tokio::time::timeout(AUTH_TIMEOUT, stream.next()).await {
         Ok(Some(Ok(Message::Text(t)))) => match serde_json::from_str::<ClientMessage>(&t) {
-            Ok(ClientMessage::Auth { token }) => token,
+            Ok(ClientMessage::Auth { token, .. }) => token,
             _ => return,
         },
         _ => return,

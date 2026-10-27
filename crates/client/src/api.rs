@@ -149,15 +149,30 @@ pub fn read_secret_file(path: &std::path::Path) -> Result<String, ApiError> {
     Ok(s)
 }
 
+/// What this app says it is in [`APP_HEADER`] and the WebSocket's `auth`
+/// message.
+pub fn app() -> String {
+    app_id("cli")
+}
+
 impl Api {
     /// `server` is the origin as stored in the profile (see `normalize_server_url`).
     pub fn new(server: &str, creds: Credentials) -> ApiResult<Api> {
+        let init = |e: &dyn std::fmt::Display| {
+            ApiError::Network(format!("cannot initialise HTTP client: {e}"))
+        };
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert(
+            APP_HEADER,
+            reqwest::header::HeaderValue::from_str(&app()).map_err(|e| init(&e))?,
+        );
         let http = reqwest::Client::builder()
-            .user_agent(concat!("notekpr-client/", env!("CARGO_PKG_VERSION")))
+            .user_agent(format!("notekpr-client/{}", notekpr_core::VERSION))
+            .default_headers(headers)
             .connect_timeout(Duration::from_secs(10))
             .timeout(Duration::from_secs(120))
             .build()
-            .map_err(|e| ApiError::Network(format!("cannot initialise HTTP client: {e}")))?;
+            .map_err(|e| init(&e))?;
         Ok(Api {
             server: server.trim_end_matches('/').to_string(),
             base: format!("{}{}", server.trim_end_matches('/'), API_PREFIX),

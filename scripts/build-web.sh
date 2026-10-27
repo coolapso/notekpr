@@ -2,6 +2,8 @@
 # Build the browser client with the Rust toolchain only (no npm):
 #   cargo (wasm32-unknown-unknown) + wasm-bindgen CLI (version must match the crate).
 # Output: dist/web (serve with `notekpr-server --web-dir dist/web`).
+# NOTEKPR_VERSION, if set, is the version the app says it is (the Dockerfile
+# sets it for releases); `dev` otherwise.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 

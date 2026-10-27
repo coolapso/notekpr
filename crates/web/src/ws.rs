@@ -165,7 +165,10 @@ impl Socket {
                 s.last_rx.set(now_ms());
                 let token = s.token.borrow().clone();
                 if let Some(ws) = s.ws.borrow().as_ref() {
-                    let m = ClientMessage::Auth { token };
+                    let m = ClientMessage::Auth {
+                        token,
+                        app: Some(crate::api::app()),
+                    };
                     let _ = ws.send_with_str(&serde_json::to_string(&m).unwrap());
                 }
             }

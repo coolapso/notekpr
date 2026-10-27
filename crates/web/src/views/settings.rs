@@ -64,6 +64,23 @@ fn Account() -> impl IntoView {
     let ui = ui();
     let u = ui.user.get_untracked();
     let fp = step(|c| c.account.as_ref().map(|a| a.public().fingerprint())).unwrap_or_default();
+    // Asked afresh: the server may have been updated since this page loaded.
+    let server_version = RwSignal::new(None::<String>);
+    leptos::task::spawn_local(async move {
+        if let Ok(i) = api::get::<ServerInfo>("/info").await {
+            server_version.set(Some(i.version));
+        }
+    });
+    let versions = move || {
+        let app = notekpr_core::VERSION;
+        match server_version.get() {
+            None => format!("This app: {app}"),
+            Some(s) if s == app => format!("This app: {app} · the server: {s}"),
+            Some(s) => format!(
+                "This app: {app} · the server: {s} — reload the page to use the server's version"
+            ),
+        }
+    };
     view! {
         {u.map(|u| view! {
             <div class="person big">
@@ -99,6 +116,8 @@ fn Account() -> impl IntoView {
             <button class="btn" on:click=move |_| leptos::task::spawn_local(state::sign_out())><Icon name="logout"/>" Sign out"</button>
             <button class="btn danger" on:click=move |_| leptos::task::spawn_local(state::forget_browser())>"Forget this browser"</button>
         </div>
+        <h3>"Version"</h3>
+        <p class="muted small app-version">{versions}</p>
     }
 }
 
@@ -531,6 +550,7 @@ fn Admin() -> impl IntoView {
                 <div><b>{s.attachments}</b><span>"files"</span></div>
                 <div><b>{util::human_bytes(s.storage_bytes as u64)}</b><span>"database"</span></div>
             </div>
+            <p class="muted small server-version">{format!("Server version {}", s.version)}</p>
         })}
         <InstanceSettingsPanel defaults=defaults on_saved=Callback::new(move |()| reload())/>
         <h3>"Accounts"</h3>

@@ -138,7 +138,8 @@ fn Account() -> impl IntoView {
                 <label class="check">
                     <input type="checkbox" class="export-quick" prop:checked=move || quick_notes.get()
                         on:change=move |ev| quick_notes.set(event_target_checked(&ev))/>
-                    <span>"Quick notes"</span>
+                    <Icon name="zap"/>
+                    <span class="grow ellipsis">"Quick notes"</span>
                 </label>
             })}
             {move || ui.vaults.get().into_iter().map(|v| {
@@ -154,8 +155,8 @@ fn Account() -> impl IntoView {
                                 skipped.update(|s| { if on { s.remove(&id2); } else { s.insert(id2.clone()); } });
                             }/>
                         {super::vault_icon(Some(&v))}
-                        <span class="ellipsis">{v.name.clone()}</span>
-                        {(v.role != Role::Owner).then(|| view! { <span class="muted small">"shared with you"</span> })}
+                        <span class="grow ellipsis">{v.name.clone()}</span>
+                        {(v.role != Role::Owner).then(|| view! { <span class="pill" title="Shared with you: you get a copy of your own">"shared"</span> })}
                     </label>
                 }
             }).collect_view()}

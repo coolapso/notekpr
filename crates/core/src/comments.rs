@@ -88,6 +88,10 @@ pub enum Action {
     Reopen {
         thread: String,
     },
+    /// A kind of record from a newer release: kept as signed (a newer app
+    /// reads it from the local copy), but it changes nothing here.
+    #[serde(other)]
+    Other,
 }
 
 /// One record of a note's comments.
@@ -158,7 +162,7 @@ impl Record {
         if !self.mentions.is_empty() {
             if !matches!(
                 self.action,
-                Action::Comment { .. } | Action::Reply { .. } | Action::Edit { .. }
+                Action::Comment { .. } | Action::Reply { .. } | Action::Edit { .. } | Action::Other
             ) {
                 return Err(CommentError::Invalid("only a text mentions people"));
             }
@@ -205,6 +209,7 @@ impl Record {
                     return Err(CommentError::Invalid("bad thread"));
                 }
             }
+            Action::Other => {}
         }
         Ok(())
     }
@@ -237,6 +242,9 @@ impl Signed {
         record: &Record,
     ) -> Result<Signed, CommentError> {
         record.check()?;
+        if record.action == Action::Other {
+            return Err(CommentError::Invalid("unknown kind of record"));
+        }
         let bytes = serde_json::to_vec(record).map_err(|e| CommentError::Format(e.to_string()))?;
         let signature = account.sign(&statement(vault_id, note_id, &bytes)).to_vec();
         Ok(Signed {
@@ -529,6 +537,7 @@ pub fn threads(
                     threads[t].resolved_by = None;
                 }
             }
+            Action::Other => {}
         }
     }
     threads
@@ -990,6 +999,32 @@ mod tests {
                 |u| u == "owner",
             )
         }
+    }
+
+    #[test]
+    fn records_of_kinds_from_newer_releases_are_kept_but_change_nothing() {
+        let p = People::new();
+        let c = comment("alice", "Nice");
+        // As a newer release signs a kind of record this one doesn't know.
+        let bytes = format!(
+            r#"{{"id":"r9","author":"bob","created":2,"kind":"react","target":"{}","emoji":"👍","mentions":["alice"]}}"#,
+            c.id
+        )
+        .into_bytes();
+        let newer = Signed {
+            signature: p.keys["bob"].sign(&statement(V, N, &bytes)).to_vec(),
+            record: bytes,
+        };
+        assert_eq!(newer.decode().unwrap().action, Action::Other);
+        let mut log = p.log(&[&c]);
+        assert!(log.insert(newer.clone(), Some(2), 1).unwrap());
+        assert_eq!(p.threads(&log), p.threads(&p.log(&[&c])));
+        // The local copy keeps it as signed, for when the app knows it.
+        let kept = CommentLog::from_bytes(&log.to_bytes()).unwrap();
+        assert_eq!(kept.entries().len(), 2);
+        assert_eq!(kept.entries()[1].signed, newer);
+        // This release never signs one.
+        assert!(Signed::sign(&p.keys["bob"], V, N, &record("bob", Action::Other)).is_err());
     }
 
     #[test]

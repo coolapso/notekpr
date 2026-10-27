@@ -638,3 +638,6 @@ it the least it could mean, rather than fail on the message that carries it:
   folder is renamed or moved and goes to the trash with it (in the CRDT,
   nothing of it is lost). A folder holding one isn't moved to another vault
   (the app couldn't copy it): the app says to update.
+* **Comment records** (§6.1) of an unknown `kind`: kept in the local copy as
+  signed, so the app reads them once it knows them, and change nothing in
+  the threads meanwhile.

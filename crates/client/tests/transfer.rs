@@ -438,6 +438,18 @@ async fn vaults_and_quick_notes_move_to_another_server() {
     );
     drop(hc);
 
+    // Last, the account on the old server goes, with this profile.
+    let old_id = alice.user_id.clone();
+    drop(alice);
+    run(&old, "alice", &["delete-account", "--yes"])
+        .await
+        .unwrap();
+    let store = notekpr_client::profile::ProfileStore::new(&old.dirs("alice"), "alice").unwrap();
+    assert!(store.load().unwrap().is_none(), "the profile is gone");
+    let again = login(&old, "alice").await;
+    assert_ne!(again.user_id, old_id, "signing in again is a new account");
+    drop(again);
+
     // Something that isn't such an export: told how to import it instead.
     let plain = new.path("plain");
     std::fs::create_dir_all(&plain).unwrap();

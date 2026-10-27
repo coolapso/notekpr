@@ -247,6 +247,8 @@ pub enum Modal {
         id: String,
     },
     Import(String),
+    /// Delete one's account, after saying what goes.
+    DeleteAccount,
     /// Move a note, or a folder with everything in it, to another vault (a
     /// quick note to a vault).
     MoveToVault {

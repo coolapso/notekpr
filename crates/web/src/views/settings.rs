@@ -167,7 +167,10 @@ fn Account() -> impl IntoView {
             <button class="btn import-account" disabled=move || busy.get() on:click=import><Icon name="upload"/>" Import an export…"</button>
             <Show when=move || busy.get()><span class="spinner inline"></span></Show>
         </div>
-        <p class="muted small">"Moving to another notekpr server? Export here, sign up there and import the .zip under Settings → Account. The vaults come back named as they were, with their folders, files and icons, and your quick notes join that account's — without history, comments or the people they were shared with: the new server starts fresh."</p>
+        <p class="muted small">"Moving to another notekpr server? Export here, sign up there and import the .zip under Settings → Account. The vaults come back named as they were, with their folders, files and icons, and your quick notes join that account's — without history, comments or the people they were shared with: the new server starts fresh. Then delete your account here, if you like."</p>
+        <div class="row">
+            <button class="btn danger delete-account" on:click=move |_| ui.modal.set(Some(Modal::DeleteAccount))>"Delete my account…"</button>
+        </div>
         <h3>"This browser"</h3>
         <p class="muted small">"Signing out keeps this browser as one of your devices: it keeps its key and your unsent changes, so next time you only sign in and your notes open right away."</p>
         <p class="muted small">"On a shared or borrowed computer, forget this browser instead: it signs out, removes this device from your account and deletes its key, unsent changes and local copy of your notes. Signing in here again then needs approval from another device or your recovery key."</p>

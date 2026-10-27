@@ -140,6 +140,7 @@ unless noted), not the `{error, message}` shape above; an unknown
 | Endpoint | Notes |
 |---|---|
 | `GET /me` | `MeResponse {user, account_key?, has_recovery, session}` |
+| `DELETE /me` | people (agents `403`): delete one's account for good, at once — the vaults one owns, with everything in them (their members get `deleted`), one's quick notes, agents, devices, sessions, keys, sign-in identities and preferences; one leaves the other vaults (`members_changed`) and notes shared with one (`shares_changed`), whose owners' apps renew the keys one held (§5.4). Signing in again makes a new account. `204` |
 | `PUT /me/account-key` | one-time `AccountSetupRequest`. Humans must include `recovery_envelope` and `device` (first device with its account envelope and an approval signature). Agents send only `key`. |
 | `GET /me/recovery` | the recovery envelope (encrypted under the recovery key) |
 | `PUT /me/recovery {recovery_envelope, signature, version?}` | rotate the recovery key; signature by the account key. With a `version` (clients use the time in ms) the signature covers it and the server accepts only a higher one than the last (`409` otherwise); once one is stored, unversioned updates are refused too, so older updates can't be replayed |

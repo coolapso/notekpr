@@ -5,14 +5,14 @@ use axum::extract::State;
 use axum::http::StatusCode;
 use notekpr_core::keys::AccountPublic;
 use notekpr_core::protocol::{
-    AccountSetupRequest, AuditEntry, BindDeviceRequest, MeResponse, PrefsBlob, PutPrefsRequest,
-    RecoveryEnvelope, RecoveryUpdate, SessionInfo, UserEventKind,
+    AccountSetupRequest, AuditEntry, BindDeviceRequest, MeResponse, ObjectEventKind, PrefsBlob,
+    PutPrefsRequest, RecoveryEnvelope, RecoveryUpdate, SessionInfo, UserEventKind, VaultEventKind,
 };
 
 use crate::auth::{self, Principal};
 use crate::db;
 use crate::error::{AppError, AppResult, bad, conflict, forbidden};
-use crate::hub::Control;
+use crate::hub::{Control, VaultEvent};
 use crate::repo;
 use crate::routes::users::account_key;
 use crate::state::AppState;
@@ -28,6 +28,84 @@ pub async fn export(
     Ok(Json(
         crate::export::user_export(&state.db, &state.blobs, &who.user_id).await?,
     ))
+}
+
+/// Delete one's own account (people; agents are deleted by their owner):
+/// the vaults they own go for everyone, with everything in them; they
+/// leave the others, whose owners' apps then renew the keys they held, as
+/// for notes shared with them. Their agents go too. Signing in again makes
+/// a new account.
+pub async fn delete_account(
+    State(state): State<AppState>,
+    who: Principal,
+) -> AppResult<StatusCode> {
+    who.require_human()?;
+    // Who to tell is read in the same transaction as the delete.
+    let (owned, joined, notes, connections) = {
+        let _w = state.write_lock.lock().await;
+        let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
+        let mut owned = Vec::new();
+        for v in repo::vaults::ids_owned(&mut *tx, &who.user_id).await? {
+            let members = repo::vaults::member_ids(&mut *tx, &v).await?;
+            let recipients = repo::shares::in_vault(&mut *tx, &v).await?;
+            owned.push((v, members, recipients));
+        }
+        // The person and their agents: what they belong to elsewhere, and
+        // their connections to close.
+        let mut holders = vec![who.user_id.clone()];
+        holders.extend(repo::agents::ids(&mut *tx, &who.user_id).await?);
+        let (mut joined, mut notes, mut connections) = (Vec::new(), Vec::new(), Vec::new());
+        for h in &holders {
+            for v in repo::vaults::ids_of_member(&mut *tx, h).await? {
+                if !owned.iter().any(|(o, _, _)| *o == v) {
+                    joined.push((h.clone(), v));
+                }
+            }
+            for (v, o) in repo::shares::of_user(&mut *tx, h).await? {
+                notes.push((h.clone(), v, o));
+            }
+            for s in repo::sessions::unrevoked_ids(&mut *tx, h).await? {
+                connections.push((h.clone(), s));
+            }
+            // The keys they held are renewed by the owners' apps.
+            repo::vaults::set_rotation_pending_for_holder(&mut *tx, h).await?;
+            repo::shares::set_rotation_pending_for_holder(&mut *tx, h).await?;
+        }
+        repo::users::delete_person(&mut *tx, &who.user_id).await?;
+        tx.commit().await?;
+        (owned, joined, notes, connections)
+    };
+    for (v, members, recipients) in owned {
+        for (u, o) in recipients {
+            state.hub.control(&u, Control::RevokeObject(v.clone(), o));
+            notify_user(&state, &u, UserEventKind::SharesChanged);
+        }
+        state
+            .hub
+            .publish(&v, VaultEvent::Event(VaultEventKind::Deleted));
+        for m in members.into_iter().filter(|m| *m != who.user_id) {
+            state.hub.control(&m, Control::RevokeVault(v.clone()));
+            notify_user(&state, &m, UserEventKind::VaultsChanged);
+        }
+    }
+    for (h, v) in joined {
+        state.hub.control(&h, Control::RevokeVault(v.clone()));
+        state
+            .hub
+            .publish(&v, VaultEvent::Event(VaultEventKind::MembersChanged));
+    }
+    for (h, v, o) in notes {
+        state
+            .hub
+            .control(&h, Control::RevokeObject(v.clone(), o.clone()));
+        crate::routes::shares::publish(&state, &v, &o, ObjectEventKind::SharesChanged);
+    }
+    for (h, s) in connections {
+        state.hub.control(&h, Control::SessionRevoked(s));
+    }
+    // (No audit entry: the account it would name is gone.)
+    tracing::info!("an account was deleted by its owner");
+    Ok(StatusCode::NO_CONTENT)
 }
 
 pub async fn me(State(state): State<AppState>, who: Principal) -> AppResult<Json<MeResponse>> {

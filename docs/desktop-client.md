@@ -193,6 +193,7 @@ by its id.
 | `history <v> <path>`, `history show\|restore <v> <path> <rev>` | encrypted revisions stored on the server |
 | `export <v> --out <dir\|file.zip>`, `import <v> <dir\|file.zip>` | see [§9](#9-export-and-import) |
 | `export --out <dir\|file.zip> [--skip <v>]… [--no-quick-notes]`, `import <dir\|file.zip>` | every vault and the quick notes at once, to move to another server: see [§9](#moving-to-another-server) |
+| `delete-account [--yes] [--remove-mirror]` | delete your account on the server for good — the vaults you own go, also for the people you share them with; you leave the others — and this profile with its local data (asks first; `--remove-mirror` deletes its Markdown folders too, asked otherwise) |
 | `agent …`, `gateway …` | AI agents and the local HTTP API: see [agents.md §2](agents.md#2-setting-up-an-agent) and [§4](agents.md#4-the-gateway-local-http-api) |
 
 Every command first catches up with the server (REST) and uploads queued
@@ -671,6 +672,7 @@ unchanged without changing anything.
 notekpr export --out ~/notes.zip --skip Scratch      # every vault but Scratch, and the quick notes
 notekpr --profile new login --server https://notes.example.org
 notekpr --profile new import ~/notes.zip [--dry-run]
+notekpr delete-account                                # then, if you like, on the old server
 ```
 
 Without a vault, `export` takes every vault (but those `--skip` names) and

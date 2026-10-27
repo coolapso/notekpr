@@ -614,6 +614,33 @@ def test_export_import(env):
         b.close()
 
 
+def test_delete_account(env):
+    """Deleting one's account: what goes is said first; signing in again
+    starts a new, empty account."""
+    b = Browser()
+    try:
+        name = uniq("del")
+        signup(b, name)
+        new_note(b, "Last words", "goodbye")
+        b.js(TO_ACCOUNT_SETTINGS)
+        b.click(".delete-account")
+        b.find(".delete-what", 10)
+        check("My notes" in b.js("return document.querySelector('.delete-what').textContent"), "the dialog says which vaults go")
+        check(b.js("return document.querySelector('.delete-account-now').disabled"), "nothing goes before \"delete\" is typed")
+        b.type(".delete-confirm", "delete")
+        b.shot("delete-account")
+        b.click(".delete-account-now")
+        b.find(".dev-box input", 15)
+        check("Your account was deleted" in b.js("return document.body.innerText"), "then it is signed out, saying so")
+        b.type(".dev-box input", name)
+        b.click(".dev-box button[type=submit]")
+        b.find_text(".auth-card button", "Create my keys", 15)
+        check(True, "signing in again starts a new account")
+        check(not severe_logs(b), "no browser errors")
+    finally:
+        b.close()
+
+
 def test_move_to_vault(env):
     b = Browser()
     try:
@@ -2795,7 +2822,7 @@ def test_device_code(env):
         a.close()
 
 
-TESTS = [test_onboarding, test_collab, test_devices_and_recovery, test_features, test_attachments, test_export_import, test_move_to_vault, test_note_sharing, test_tables, test_code_blocks, test_html, test_callouts, test_colors, test_code_wrapping, test_editor_mouse, test_editor_safety, test_local_copy, test_ui_basics, test_offline_tabs, test_offline_start, test_mobile, test_quick_notes, test_vault_icons, test_entry_icons, test_tree_order, test_session_ended_while_away, test_outdated, test_comments, test_mentions, test_dates, test_graph, test_recovered_copy, test_note_width, test_admin, test_vault_admins, test_undo_purge, test_device_code]
+TESTS = [test_onboarding, test_collab, test_devices_and_recovery, test_features, test_attachments, test_export_import, test_delete_account, test_move_to_vault, test_note_sharing, test_tables, test_code_blocks, test_html, test_callouts, test_colors, test_code_wrapping, test_editor_mouse, test_editor_safety, test_local_copy, test_ui_basics, test_offline_tabs, test_offline_start, test_mobile, test_quick_notes, test_vault_icons, test_entry_icons, test_tree_order, test_session_ended_while_away, test_outdated, test_comments, test_mentions, test_dates, test_graph, test_recovered_copy, test_note_width, test_admin, test_vault_admins, test_undo_purge, test_device_code]
 
 
 def main():

@@ -142,6 +142,7 @@ pub fn ModalHost() -> impl IntoView {
             Modal::NewFolder { vault, parent } => view! { <NewFolder vault=vault parent=parent/> }.into_any(),
             Modal::Move { vault, id } => view! { <MoveDialog vault=vault id=id/> }.into_any(),
             Modal::Import(v) => view! { <ImportDialog vault=v/> }.into_any(),
+            Modal::DeleteAccount => view! { <DeleteAccountDialog/> }.into_any(),
             Modal::MoveToVault { vault, what } => view! { <super::quick::MoveToVaultDialog vault=vault what=what/> }.into_any(),
             Modal::EntryIcon { vault, id, path, folder } => view! { <EntryIconDialog vault=vault id=id path=path folder=folder/> }.into_any(),
         })}
@@ -1285,6 +1286,89 @@ fn MoveDialog(vault: String, id: String) -> impl IntoView {
                         </button>
                     }
                 }).collect_view()}
+            </div>
+        </Dialog>
+    }
+}
+
+/// Delete one's account: what goes and what stays, an export first if
+/// wanted, and "delete" typed to be sure.
+#[component]
+fn DeleteAccountDialog() -> impl IntoView {
+    let ui = ui();
+    let typed = RwSignal::new(String::new());
+    let busy = RwSignal::new(false);
+    let err = RwSignal::new(None::<String>);
+    let vaults = ui.vaults.get_untracked();
+    let (owned, joined): (Vec<_>, Vec<_>) = vaults.iter().partition(|v| v.role == Role::Owner);
+    // ("" when there are none; the count, for "vault" or "vaults").
+    let owned_names = |shared: bool| {
+        let names: Vec<String> = owned
+            .iter()
+            .filter(|v| v.shared == shared)
+            .map(|v| format!("“{}”", v.name))
+            .collect();
+        (names.join(", "), names.len())
+    };
+    let vaults_word = |n: usize| if n == 1 { "vault" } else { "vaults" };
+    let ((shared_owned, n_shared), (private_owned, n_private)) =
+        (owned_names(true), owned_names(false));
+    let joined = joined
+        .iter()
+        .map(|v| format!("“{}”", v.name))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let everything: Vec<String> = vaults
+        .iter()
+        .filter(|v| v.loaded)
+        .map(|v| v.id.clone())
+        .collect();
+    let export = move |_| {
+        let all = everything.clone();
+        busy.set(true);
+        leptos::task::spawn_local(async move {
+            actions::export_account(all, true).await;
+            busy.set(false);
+        });
+    };
+    let delete = move |_| {
+        busy.set(true);
+        leptos::task::spawn_local(async move {
+            match state::delete_account().await {
+                Ok(()) => ui.modal.set(None),
+                Err(e) => {
+                    err.set(Some(e));
+                    busy.set(false);
+                }
+            }
+        });
+    };
+    view! {
+        <Dialog title="Delete your account">
+            {move || err.get().map(|e| view! { <div class="alert error">{e}</div> })}
+            <div class="stack">
+                <p>"Your account on this server is deleted for good, with everything that is yours here:"</p>
+                <ul class="small delete-what">
+                    {(n_private > 0).then(|| view! { <li>{format!("your {} {private_owned};", vaults_word(n_private))}</li> })}
+                    {(n_shared > 0).then(|| view! { <li><b>{format!("the {} you share with others, {shared_owned} — gone for them too;", vaults_word(n_shared))}</b></li> })}
+                    {(!joined.is_empty()).then(|| view! { <li>{format!("you leave what is shared with you ({joined}); its owners keep it;")}</li> })}
+                    <li>"your quick notes, AI agents, devices and sessions."</li>
+                </ul>
+                <p class="muted small">"Moving to another server? Export first and import the .zip there. Signing in here again starts a new, empty account."</p>
+                <div class="row">
+                    <button class="btn" disabled=move || busy.get() on:click=export><Icon name="download"/>" Export everything first"</button>
+                </div>
+                <label class="stack small">
+                    "Type delete to confirm"
+                    <input class="input delete-confirm" autocomplete="off" prop:value=move || typed.get()
+                        on:input=move |ev| typed.set(event_target_value(&ev))/>
+                </label>
+                <div class="row">
+                    <button class="btn danger delete-account-now"
+                        disabled=move || busy.get() || !typed.get().trim().eq_ignore_ascii_case("delete")
+                        on:click=delete>"Delete my account"</button>
+                    <button class="btn ghost" on:click=move |_| ui.modal.set(None)>"Cancel"</button>
+                </div>
             </div>
         </Dialog>
     }

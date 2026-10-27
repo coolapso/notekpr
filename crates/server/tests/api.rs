@@ -4576,3 +4576,102 @@ async fn log_entries_of_kinds_from_newer_releases_pass_through_as_written() {
         Some(LogError::Newer(head.seq + 1))
     );
 }
+
+/// Deleting one's own account: the vaults one owns go for everyone; one
+/// leaves the others (their owners' apps renew the keys one held, also of
+/// notes shared with one); one's agents and sessions end. Signing in again
+/// makes a new account.
+#[tokio::test]
+async fn deleting_ones_account_takes_what_one_has_and_leaves_the_rest() {
+    let srv = start().await;
+    let mut alice = new_user(&srv.base, "alice").await;
+    let mut bob = new_user(&srv.base, "bob").await;
+    let mut carol = new_user(&srv.base, "carol").await;
+    let team = alice.create_vault("Team").await;
+    alice.share(&team, &bob.id, Role::Editor).await.unwrap();
+    let club = carol.create_vault("Club").await;
+    carol.share(&club, &alice.id, Role::Editor).await.unwrap();
+    let diary = carol.create_vault("Diary").await;
+    share_note(&carol, &diary, "n1", &alice).await;
+    let agent: CreateAgentResponse = alice
+        .api
+        .post(
+            "/agents",
+            &CreateAgentRequest {
+                name: "Helper".into(),
+            },
+        )
+        .await;
+    let agent_token = srv_token(&srv, &agent).await;
+    bob.load_keys(&team).await.unwrap();
+    let mut ws = Ws::connect(&srv.ws, bob.api.token.as_ref().unwrap()).await;
+    ws.send(&ClientMessage::Subscribe {
+        vault_id: team.clone(),
+        since: Some(0),
+        object_id: None,
+    })
+    .await;
+    ws.until(|m| matches!(m, ServerMessage::Synced { .. }).then_some(()))
+        .await;
+
+    // Agents can't; people can.
+    let mut agent_api = Api::new(&srv.base);
+    agent_api.token = Some(agent_token);
+    assert_eq!(
+        agent_api.status::<()>(Method::DELETE, "/me", None).await,
+        403
+    );
+    assert_eq!(
+        alice.api.status::<()>(Method::DELETE, "/me", None).await,
+        204
+    );
+
+    // Their vault is gone for its members, at once.
+    ws.until(|m| match m {
+        ServerMessage::VaultEvent {
+            event: VaultEventKind::Deleted,
+            ..
+        } => Some(()),
+        _ => None,
+    })
+    .await;
+    assert_eq!(
+        bob.api
+            .status::<()>(Method::GET, &format!("/vaults/{team}"), None)
+            .await,
+        404
+    );
+    // The vault and the note they were in renew their keys.
+    let club_info = vault_info(&carol, &club).await;
+    assert!(club_info.rotation_pending);
+    let members: Vec<MemberInfo> = carol.api.get(&format!("/vaults/{club}/members")).await;
+    assert!(members.iter().all(|m| m.user.id != alice.id));
+    assert_eq!(
+        vault_info(&carol, &diary).await.notes_rotation_pending,
+        ["n1"]
+    );
+    // Their sessions and agents end.
+    assert_eq!(alice.api.status::<()>(Method::GET, "/me", None).await, 401);
+    assert_eq!(agent_api.status::<()>(Method::GET, "/me", None).await, 401);
+    // Signing in again is a new account.
+    let (_, again) = dev_login(&srv.base, "alice").await;
+    assert_ne!(again.user.id, alice.id);
+}
+
+/// An agent's token from its client credentials.
+async fn srv_token(srv: &TestServer, agent: &CreateAgentResponse) -> String {
+    let tok: TokenResponse = reqwest::Client::new()
+        .post(format!("{}/oauth/token", srv.base))
+        .basic_auth(
+            &agent.credential.client_id,
+            Some(&agent.credential.client_secret),
+        )
+        .form(&[("grant_type", "client_credentials")])
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    tok.access_token
+}

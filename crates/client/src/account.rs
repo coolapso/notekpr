@@ -683,6 +683,23 @@ pub async fn logout(dirs: &Dirs, profile: &str, forget: bool) -> Result<()> {
     Ok(())
 }
 
+/// Delete the account on the server, for good, and then this profile with
+/// all its local data.
+pub async fn delete_account(dirs: &Dirs, profile: &str) -> Result<()> {
+    let ps = ProfileStore::new(dirs, profile)?;
+    let Some(p) = ps.load()? else {
+        bail!("profile '{profile}' does not exist")
+    };
+    let Some(token) = &p.session_token else {
+        bail!("not signed in: run `notekpr login` first");
+    };
+    let api = Api::new(&p.server, Credentials::Session(token.clone()))?;
+    api.delete("/me").await?;
+    SecretStore::wipe(&ps.data_dir())?;
+    ps.delete()?;
+    Ok(())
+}
+
 /// Read and validate a client secret file path (shared with the CLI).
 pub fn check_secret_file(path: &Path) -> Result<()> {
     crate::api::read_secret_file(path)?;

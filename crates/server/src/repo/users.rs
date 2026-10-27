@@ -598,6 +598,17 @@ pub async fn set_disabled(db: impl SqliteExecutor<'_>, id: &str, disabled: bool)
     Ok(())
 }
 
+/// Delete a person's account with everything it has: the foreign keys
+/// cascade to the vaults they own (with all in them), their agents,
+/// memberships, shares, devices, sessions, keys and sign-in identities.
+pub async fn delete_person(db: impl SqliteExecutor<'_>, id: &str) -> AppResult<()> {
+    sqlx::query("DELETE FROM users WHERE id = ? AND kind = 'human'")
+        .bind(id)
+        .execute(db)
+        .await?;
+    Ok(())
+}
+
 /// Only people can be administrators.
 pub async fn set_admin(db: impl SqliteExecutor<'_>, id: &str, is_admin: bool) -> AppResult<()> {
     sqlx::query("UPDATE users SET is_admin = ? WHERE id = ? AND kind = 'human'")

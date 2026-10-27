@@ -86,6 +86,14 @@ at once, but the server keeps its ciphertext for `--purge-undo-days`
 undo it; then it is deleted. Database backups keep it for as long as they
 are kept.
 
+Deleting one's account (Settings → Account, `notekpr delete-account`)
+deletes at once what is the person's: the vaults they own with everything
+in them, their quick notes, agents, devices, sessions, keys, sign-in
+identities and preferences. What stays is in vaults that aren't theirs:
+what they wrote there (encrypted, with their user id as its author) and
+their user id in membership logs and audit entries — not their name or
+keys. Backups keep the rest for as long as they are kept.
+
 ## Cryptography
 
 All primitives come from maintained, widely used Rust crates (RustCrypto

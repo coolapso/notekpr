@@ -398,6 +398,26 @@ async fn execute(ctx: Ctx, command: Command) -> Result<()> {
             );
             Ok(())
         }
+        Command::DeleteAccount { yes, remove_mirror } => {
+            let server = ctx.store()?.load()?.map(|p| p.server).unwrap_or_default();
+            confirm_or_flag(
+                yes,
+                &format!(
+                    "Delete your account on {server} for good? The vaults you own go — also for the people you \
+                     share them with —, you leave the others, and your quick notes, agents and devices go too; \
+                     this profile's local data is deleted. Signing in again starts a new, empty account. \
+                     (To keep your notes, first: notekpr export --out notes.zip)"
+                ),
+            )?;
+            let ids = local_vault_ids(&ctx.store()?.data_dir());
+            let mirror = mirror_folders_to_remove(&ctx, &ids, yes, remove_mirror)?;
+            account::delete_account(&ctx.dirs, &ctx.profile).await?;
+            if let Some(folders) = mirror {
+                remove_mirror_folders(&folders);
+            }
+            crate::out!("Your account was deleted, and this profile with it.");
+            Ok(())
+        }
         Command::Status => status(&ctx).await,
         Command::Profiles => {
             for p in ctx.dirs.profiles() {

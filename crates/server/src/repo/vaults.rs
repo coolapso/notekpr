@@ -439,6 +439,16 @@ pub async fn members(db: impl SqliteExecutor<'_>, vault_id: &str) -> AppResult<V
 }
 
 /// Vault ids a user is a member of.
+/// The vaults `user_id` owns (their quick notes too).
+pub async fn ids_owned(db: impl SqliteExecutor<'_>, user_id: &str) -> AppResult<Vec<String>> {
+    Ok(
+        sqlx::query_scalar("SELECT id FROM vaults WHERE owner_id = ?")
+            .bind(user_id)
+            .fetch_all(db)
+            .await?,
+    )
+}
+
 pub async fn ids_of_member(db: impl SqliteExecutor<'_>, user_id: &str) -> AppResult<Vec<String>> {
     Ok(
         sqlx::query_scalar("SELECT vault_id FROM vault_members WHERE user_id = ?")

@@ -173,7 +173,8 @@ read anything.
 * Moving to another server: export the vaults you choose and your quick
   notes as one `.zip` (Settings → Account → Data), and import it there — the
   vaults come back with their folders, files and icons; the new server
-  starts fresh, without history, comments or shares.
+  starts fresh, without history, comments or shares. Then delete your
+  account on the old one, if you like (also from the command line).
 * Never locked in: an encrypted export plus your recovery key turn back into
   plain files without the server or the apps
   ([recovery](docs/recovery.md)).

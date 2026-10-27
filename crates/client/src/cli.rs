@@ -49,6 +49,17 @@ pub enum Command {
         #[arg(long, requires = "forget")]
         remove_mirror: bool,
     },
+    /// Delete your account on the server for good — the vaults you own go,
+    /// also for the people you share them with; you leave the others — and
+    /// this profile with its local data.
+    DeleteAccount {
+        #[arg(long)]
+        yes: bool,
+        /// Also delete this profile's decrypted Markdown mirror folders
+        /// (asked interactively otherwise).
+        #[arg(long)]
+        remove_mirror: bool,
+    },
     /// Show profile, account, devices, vaults and sync state.
     Status,
     /// List local profiles.

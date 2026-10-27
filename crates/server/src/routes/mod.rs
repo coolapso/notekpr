@@ -62,7 +62,7 @@ pub fn router(state: AppState) -> Router {
     let api = Router::new()
         .route("/info", get(auth::info))
         .route("/auth/logout", post(auth::logout))
-        .route("/me", get(me::me))
+        .route("/me", get(me::me).delete(me::delete_account))
         .route("/me/account-key", put(me::setup_account_key))
         .route("/me/recovery", get(me::get_recovery).put(me::put_recovery))
         .route("/me/prefs", get(me::get_prefs).put(me::put_prefs))

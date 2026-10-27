@@ -651,6 +651,26 @@ pub async fn forget_browser() {
     }
 }
 
+/// Delete this account on the server, for good (the vaults it owns go for
+/// everyone; it leaves the others), and everything this browser keeps of
+/// it. `Err`: the server's refusal.
+pub async fn delete_account() -> Result<(), String> {
+    // Not listening meanwhile: what the server says about it is no news here.
+    if let Some(s) = step(|c| c.socket.take()) {
+        s.stop();
+    }
+    if let Err(e) = api::delete("/me").await {
+        connect_socket();
+        return Err(e.message);
+    }
+    let uid = step(|c| c.user_id.clone());
+    sign_out_local(Some("Your account was deleted.".into()));
+    offline::forget(&uid).await;
+    storage::forget_user(&uid);
+    crate::cache::forget_user(&uid).await;
+    Ok(())
+}
+
 pub(super) async fn enter_ready() {
     let ui = ui();
     let device_id = step(|c| c.device_id.clone());

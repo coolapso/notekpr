@@ -189,13 +189,13 @@ impl MemberLog {
         &self,
         object_id: &str,
         user_id: &str,
-        role: Role,
+        role: &Role,
         key: &AccountPublic,
     ) -> bool {
         self.state.as_ref().is_some_and(|s| {
             s.shares
                 .get(&(object_id.to_string(), user_id.to_string()))
-                .is_some_and(|m| m.role == role && m.public().ok().flatten().as_ref() == Some(key))
+                .is_some_and(|m| m.role == *role && m.public().ok().flatten().as_ref() == Some(key))
         })
     }
 
@@ -234,7 +234,7 @@ pub fn checkpoint(
     Some(LogBody::Checkpoint {
         members: members
             .iter()
-            .map(|(id, role, key)| log_member(id, *role, key.as_ref()))
+            .map(|(id, role, key)| log_member(id, role.clone(), key.as_ref()))
             .collect(),
         epoch,
         key_commit: key_commitment(vault_id, epoch, key),

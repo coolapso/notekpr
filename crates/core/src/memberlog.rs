@@ -81,7 +81,7 @@ impl LogMember {
 
     fn encode(&self, out: &mut Vec<Vec<u8>>) {
         out.push(self.user_id.as_bytes().to_vec());
-        out.push(role_tag(self.role).to_vec());
+        out.push(role_tag(&self.role).to_vec());
         out.push(self.enc_public.clone());
         out.push(self.sign_public.clone());
     }
@@ -176,7 +176,7 @@ impl LogBody {
             LogBody::Role { user_id, role } => {
                 parts.push(b"role".to_vec());
                 parts.push(user_id.as_bytes().to_vec());
-                parts.push(role_tag(*role).to_vec());
+                parts.push(role_tag(role).to_vec());
             }
             LogBody::Rekey { member } => {
                 parts.push(b"rekey".to_vec());
@@ -546,7 +546,7 @@ impl LogState {
                     .members
                     .get_mut(user_id)
                     .ok_or(LogError::Invalid(n, "not a member"))?;
-                m.role = *role;
+                m.role = role.clone();
                 let m = m.clone();
                 self.note_writer(&m);
             }
@@ -586,7 +586,8 @@ impl LogState {
                         "members don't need single notes shared",
                     ));
                 }
-                if !matches!(member.role, Role::Editor | Role::Viewer) {
+                // Roles from newer releases are kept, and may only read.
+                if matches!(member.role, Role::Owner | Role::Admin) {
                     return Err(LogError::Invalid(n, "notes are shared as editor or viewer"));
                 }
                 let who = (object_id.clone(), member.user_id.clone());
@@ -961,13 +962,10 @@ fn key32(b: &[u8]) -> Result<Key32, LogError> {
     b.try_into().map_err(|_| LogError::Key)
 }
 
-fn role_tag(r: Role) -> &'static [u8] {
-    match r {
-        Role::Owner => b"owner",
-        Role::Admin => b"admin",
-        Role::Editor => b"editor",
-        Role::Viewer => b"viewer",
-    }
+/// What a role is signed as: its name, as written, so entries naming a role
+/// from a newer release ([`Role::Other`]) still verify.
+fn role_tag(r: &Role) -> &[u8] {
+    r.as_str().as_bytes()
 }
 
 #[cfg(test)]
@@ -1070,6 +1068,75 @@ mod tests {
         assert_eq!(s.check_key(2, &k1), Err(KeyCheckError::Mismatch(2)));
         assert_eq!(s.check_key(3, &k2), Err(KeyCheckError::Unannounced(3)));
         assert_eq!(s.head_seq, 6);
+    }
+
+    #[test]
+    fn roles_from_newer_releases_verify_as_written_and_may_only_read() {
+        let (alice, carol, dave, rita) = (
+            person("alice"),
+            person("carol"),
+            person("dave"),
+            person("rita"),
+        );
+        let other = |name: &str| Role::Other(name.into());
+        let (mut log, _) = created(&alice);
+        append(
+            &mut log,
+            &alice,
+            LogBody::Add {
+                member: member(&dave, other("commenter")),
+            },
+        );
+        append(
+            &mut log,
+            &alice,
+            LogBody::Add {
+                member: member(&carol, Role::Editor),
+            },
+        );
+        append(
+            &mut log,
+            &alice,
+            LogBody::Role {
+                user_id: "carol".into(),
+                role: other("auditor"),
+            },
+        );
+        append(
+            &mut log,
+            &alice,
+            LogBody::Share {
+                object_id: "n9".into(),
+                member: member(&rita, other("commenter")),
+            },
+        );
+        append(&mut log, &alice, LogBody::RequireSigned { from_seq: 0 });
+        // As an app of this release reads what a newer one wrote.
+        let json = serde_json::to_string(&log).unwrap();
+        let read: Vec<LogEntry> = serde_json::from_str(&json).unwrap();
+        let s = LogState::verify(V, &alice.secret.public(), &read).unwrap();
+        assert_eq!(s.member("dave").unwrap().role, other("commenter"));
+        assert_eq!(s.member("carol").unwrap().role, other("auditor"));
+
+        // They may comment, but nothing they write is theirs to write.
+        let a = s.authors();
+        let sig = sign_update(&dave.secret, V, "n1", b"ciphertext");
+        assert_eq!(
+            a.check_update("n1", 9, "dave", b"ciphertext", Some(&sig)),
+            Err(AuthorError::NotAWriter("dave".into()))
+        );
+        assert!(!a.comment_keys("n1", "dave").is_empty());
+        let sig = sign_update(&rita.secret, V, "n9", b"ciphertext");
+        assert!(
+            a.check_update("n9", 9, "rita", b"ciphertext", Some(&sig))
+                .is_err()
+        );
+        assert!(!a.comment_keys("n9", "rita").is_empty());
+
+        // The name is signed: a server can't turn it into a known role.
+        let forged: Vec<LogEntry> =
+            serde_json::from_str(&json.replace("\"commenter\"", "\"editor\"")).unwrap();
+        assert!(LogState::verify(V, &alice.secret.public(), &forged).is_err());
     }
 
     #[test]

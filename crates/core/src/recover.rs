@@ -180,7 +180,12 @@ fn decrypt_vault(
         Ok(m) => rv.name = m.name,
         Err(e) => rv.problems.push(format!("vault name unreadable: {e}")),
     }
-    let mut replica = VaultReplica::new(&v.vault_id, v.role, ring.clone(), VaultMeta::default());
+    let mut replica = VaultReplica::new(
+        &v.vault_id,
+        v.role.clone(),
+        ring.clone(),
+        VaultMeta::default(),
+    );
     replica.doc_keys = engine::object_keyrings(&ring, &v.keys);
     let (_, errors) = replica.apply_changes(&v.changes);
     if !errors.is_empty() {

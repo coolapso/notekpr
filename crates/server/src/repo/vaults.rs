@@ -7,6 +7,8 @@ use crate::error::AppResult;
 
 fn vault_row(r: &sqlx::sqlite::SqliteRow) -> VaultInfo {
     let role = Role::parse(r.get("role")).unwrap_or(Role::Viewer);
+    // Only the owner can rotate keys.
+    let rotation_pending = role == Role::Owner && r.get::<bool, _>("rotation_pending");
     VaultInfo {
         id: r.get("id"),
         owner_id: r.get("owner_id"),
@@ -22,8 +24,7 @@ fn vault_row(r: &sqlx::sqlite::SqliteRow) -> VaultInfo {
         kind: VaultKind::parse(r.get("kind")).unwrap_or_default(),
         // Filled in by the routes (it depends on the instance's settings).
         note_limit: Limit::Unlimited,
-        // Only the owner can rotate keys.
-        rotation_pending: role == Role::Owner && r.get::<bool, _>("rotation_pending"),
+        rotation_pending,
         // Filled in by the routes, for the owner.
         notes_rotation_pending: vec![],
     }
@@ -332,7 +333,7 @@ pub async fn insert_member(
     db: impl SqliteExecutor<'_>,
     vault_id: &str,
     user_id: &str,
-    role: Role,
+    role: &Role,
     added_by: &str,
     now: i64,
 ) -> AppResult<bool> {
@@ -353,7 +354,7 @@ pub async fn set_member_role(
     db: impl SqliteExecutor<'_>,
     vault_id: &str,
     user_id: &str,
-    role: Role,
+    role: &Role,
 ) -> AppResult<u64> {
     Ok(
         sqlx::query("UPDATE vault_members SET role = ? WHERE vault_id = ? AND user_id = ?")

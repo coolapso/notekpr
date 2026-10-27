@@ -343,7 +343,7 @@ pub async fn insert(
     vault_id: &str,
     object_id: &str,
     user_id: &str,
-    role: Role,
+    role: &Role,
     added_by: &str,
     now: i64,
 ) -> AppResult<bool> {
@@ -366,7 +366,7 @@ pub async fn set_role(
     vault_id: &str,
     object_id: &str,
     user_id: &str,
-    role: Role,
+    role: &Role,
 ) -> AppResult<u64> {
     Ok(sqlx::query(
         "UPDATE object_shares SET role = ? WHERE vault_id = ? AND object_id = ? AND user_id = ?",

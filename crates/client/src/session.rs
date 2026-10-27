@@ -232,7 +232,8 @@ impl Session {
                         tracing::warn!("cannot decrypt vault metadata: {e}");
                         VaultMeta::named(&info.id)
                     });
-                let replica = VaultReplica::new(&info.id, info.role, keys.ring.clone(), meta);
+                let replica =
+                    VaultReplica::new(&info.id, info.role.clone(), keys.ring.clone(), meta);
                 let mut v = Vault::new(store, replica, &info.owner_id, info.archived);
                 v.set_keys(keys);
                 v.save()?;
@@ -252,7 +253,7 @@ impl Session {
             let keys = self.keys(&info.id).await?;
             v.set_keys(keys);
         }
-        v.replica.role = info.role;
+        v.replica.role = info.role.clone();
         v.owner_id = info.owner_id.clone();
         v.archived = info.archived;
         v.viewers_comment = info.viewers_comment;
@@ -452,8 +453,8 @@ impl Session {
                     );
                 }
                 let key = sh.user.account_key.as_ref().expect("verified").verify()?;
-                if !v.log.has_share(&oid, &sh.user.id, sh.role, &key) {
-                    self.append_log(v, members::share(&oid, &sh.user.id, sh.role, &key))
+                if !v.log.has_share(&oid, &sh.user.id, &sh.role, &key) {
+                    self.append_log(v, members::share(&oid, &sh.user.id, sh.role.clone(), &key))
                         .await?;
                 }
             }
@@ -483,7 +484,7 @@ impl Session {
             .map(|m| {
                 (
                     m.user.id.clone(),
-                    m.role,
+                    m.role.clone(),
                     m.user.account_key.as_ref().and_then(|k| k.verify().ok()),
                 )
             })
@@ -1164,7 +1165,8 @@ impl Session {
                         .is_empty();
                     if pending {
                         let key = m.user.account_key.as_ref().expect("filtered").verify()?;
-                        self.pin_member_key(vault, &m.user.id, m.role, &key).await?;
+                        self.pin_member_key(vault, &m.user.id, m.role.clone(), &key)
+                            .await?;
                     }
                     if vault.lock().await.log.vouches_for(m) {
                         ok.push(m.clone());

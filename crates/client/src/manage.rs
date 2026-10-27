@@ -365,13 +365,13 @@ pub async fn share(
         _ => None,
     };
     // The owner vouches for them, with their key pinned, in the vault's log.
-    let member = members::log_member(&user.id, role, public.as_ref());
+    let member = members::log_member(&user.id, role.clone(), public.as_ref());
     let mut updated_role = false;
     let mut attempt = 0;
     let added = loop {
         let req = AddMemberRequest {
             user_id: user.id.clone(),
-            role,
+            role: role.clone(),
             key_envelope: envelope.clone(),
             log_entry: session
                 .log_entry(
@@ -406,7 +406,7 @@ pub async fn share(
                     vault,
                     LogBody::Role {
                         user_id: user.id.clone(),
-                        role,
+                        role: role.clone(),
                     },
                 )
                 .await;
@@ -414,7 +414,10 @@ pub async fn share(
                 .api
                 .patch::<_, ()>(
                     &format!("/vaults/{id}/members/{}", user.id),
-                    &UpdateMemberRequest { role, log_entry },
+                    &UpdateMemberRequest {
+                        role: role.clone(),
+                        log_entry,
+                    },
                 )
                 .await?;
             session.reload_member_log(vault).await?;
@@ -429,7 +432,9 @@ pub async fn share(
                     })
                 };
                 if !pinned {
-                    session.pin_member_key(vault, &user.id, role, k).await?;
+                    session
+                        .pin_member_key(vault, &user.id, role.clone(), k)
+                        .await?;
                 }
             }
             updated_role = true;

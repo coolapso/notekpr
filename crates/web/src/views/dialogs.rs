@@ -474,6 +474,7 @@ fn Share(vault: String) -> impl IntoView {
                                         })}
                                         <option value="editor" selected=m.role == Role::Editor>"Can edit"</option>
                                         <option value="viewer" selected=m.role == Role::Viewer>"Can view"</option>
+                                        {other_role(&m.role)}
                                     </select>
                                     <button class="icon-btn" title="Remove access (rotates the vault key)" aria-label="Remove access (rotates the vault key)" on:click=move |_| {
                                         if !util::confirm("Remove this person? They keep anything they already downloaded, but can't read anything new.") { return; }
@@ -495,6 +496,16 @@ fn Share(vault: String) -> impl IntoView {
 }
 
 const ADMIN_HINT: &str = "Can edit, empty the trash and see the activity log";
+
+/// A role from a newer version, shown as its name until the page is
+/// reloaded (it can't be chosen).
+fn other_role(role: &Role) -> Option<impl IntoView + use<>> {
+    let Role::Other(name) = role else { return None };
+    let name = name.clone();
+    Some(
+        view! { <option value="" selected disabled title="A role from a newer version of notekpr: reload the page to see it">{name}</option> },
+    )
+}
 
 /// A vault member's role as chosen in a role `<select>`.
 fn member_role(value: &str) -> Role {
@@ -645,10 +656,10 @@ fn ShareNote(vault: String, note: String) -> impl IntoView {
                     // changed: once verified, sharing again gives it.
                     let changed = !sh.has_current_key && actions::pin_status(&sh.user) == Some(PinStatus::Changed);
                     let verify = changed.then(|| {
-                        let (v, n, u, r) = (vr.clone(), nr.clone(), sh.user.clone(), sh.role);
+                        let (v, n, u, r) = (vr.clone(), nr.clone(), sh.user.clone(), sh.role.clone());
                         move |_| {
                             actions::trust_key(&u);
-                            let (v, n, u) = (v.clone(), n.clone(), u.clone());
+                            let (v, n, u, r) = (v.clone(), n.clone(), u.clone(), r.clone());
                             leptos::task::spawn_local(async move {
                                 if let Err(e) = actions::share_note(&v, &n, &u, r, false).await {
                                     err.set(Some(e));
@@ -679,6 +690,7 @@ fn ShareNote(vault: String, note: String) -> impl IntoView {
                             }>
                                 <option value="editor" selected=sh.role == Role::Editor>"Can edit"</option>
                                 <option value="viewer" selected=sh.role == Role::Viewer>"Can view"</option>
+                                {other_role(&sh.role)}
                             </select>
                             <button class="icon-btn" title="Stop sharing with this person (renews the note's key)" aria-label="Stop sharing with this person (renews the note's key)" on:click=move |_| {
                                 if !util::confirm("Stop sharing this note with this person? They keep anything they already downloaded, but can't read anything new.") { return; }

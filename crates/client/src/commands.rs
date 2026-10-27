@@ -446,8 +446,15 @@ async fn execute(ctx: Ctx, command: Command) -> Result<()> {
                 ShareRole::Editor => Role::Editor,
                 ShareRole::Viewer => Role::Viewer,
             };
-            let out = note_shares::share_note(&hub.session, &v, &path, &user, role, accept_new_key)
-                .await?;
+            let out = note_shares::share_note(
+                &hub.session,
+                &v,
+                &path,
+                &user,
+                role.clone(),
+                accept_new_key,
+            )
+            .await?;
             if !without_comments {
                 let n = note_shares::carry_comments(&v, &path).await?;
                 if n > 0 {
@@ -1362,7 +1369,7 @@ async fn vault(ctx: &Ctx, c: VaultCmd) -> Result<()> {
                 MemberRole::Editor => Role::Editor,
                 MemberRole::Viewer => Role::Viewer,
             };
-            let out = manage::share(&hub.session, &v, &user, role, accept_new_key).await?;
+            let out = manage::share(&hub.session, &v, &user, role.clone(), accept_new_key).await?;
             let who = format!("{} ({})", out.user.display_name, out.user.kind.as_str());
             if out.updated_role {
                 crate::out!("{who} is now {}", role.as_str());

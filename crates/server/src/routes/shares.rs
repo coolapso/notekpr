@@ -552,13 +552,13 @@ pub async fn add(
         ));
     }
     let now = db::now();
-    if !repo::shares::insert(&mut *tx, &v, &o, &req.user_id, req.role, &who.user_id, now).await? {
+    if !repo::shares::insert(&mut *tx, &v, &o, &req.user_id, &req.role, &who.user_id, now).await? {
         // Shared already: only someone left without the current key (their
         // key changed, and the owner has verified it since) gets it now.
         if repo::keys::has_document_key(&mut *tx, &v, &o, cur, &req.user_id).await? {
             return Err(conflict("the note is already shared with this person"));
         }
-        repo::shares::set_role(&mut *tx, &v, &o, &req.user_id, req.role).await?;
+        repo::shares::set_role(&mut *tx, &v, &o, &req.user_id, &req.role).await?;
     }
     repo::keys::put_document_key(
         &mut *tx,
@@ -582,7 +582,7 @@ pub async fn add(
         Expect::Share {
             object_id: &o,
             user_id: &req.user_id,
-            role: req.role,
+            role: &req.role,
         },
         now,
     )
@@ -627,7 +627,7 @@ pub async fn update(
         let _w = state.write_lock.lock().await;
         let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
         access::require_owner(&mut *tx, &v, &who.user_id).await?;
-        if repo::shares::set_role(&mut *tx, &v, &o, &u, req.role).await? == 0 {
+        if repo::shares::set_role(&mut *tx, &v, &o, &u, &req.role).await? == 0 {
             return Err(AppError::NotFound);
         }
         member_log::check_and_append(
@@ -638,7 +638,7 @@ pub async fn update(
             Expect::Share {
                 object_id: &o,
                 user_id: &u,
-                role: req.role,
+                role: &req.role,
             },
             db::now(),
         )

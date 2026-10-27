@@ -38,12 +38,13 @@ pub fn Home() -> impl IntoView {
                 <div class="cards">
                     {move || ui.vaults.get().into_iter().map(|v| {
                         let id = v.id.clone();
-                        let (label, icon) = match (v.role, v.shared) {
+                        let (label, icon) = match (&v.role, v.shared) {
                             (Role::Owner, false) => ("Private", "lock"),
                             (Role::Owner, true) => ("Shared by you", "users"),
                             (Role::Admin, _) => ("Shared with you · admin", "users"),
                             (Role::Editor, _) => ("Shared with you", "users"),
                             (Role::Viewer, _) => ("Shared with you · read only", "eye"),
+                            (Role::Other(_), _) => ("Shared with you · read only until you reload", "eye"),
                         };
                         let count = {
                             let id = id.clone();

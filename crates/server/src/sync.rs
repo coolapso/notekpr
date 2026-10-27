@@ -461,7 +461,7 @@ pub async fn push(
     let objects: std::collections::BTreeSet<&str> =
         updates.iter().map(|u| u.object_id.as_str()).collect();
     for o in objects {
-        write_access(&state.db, member, vault_id, o, &who.user_id).await?;
+        write_access(&state.db, member.clone(), vault_id, o, &who.user_id).await?;
     }
     let signer = repo::users::account_key(&state.db, &who.user_id)
         .await?

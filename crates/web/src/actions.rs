@@ -371,7 +371,7 @@ pub async fn share(vault: &str, user: &PublicUser, role: Role) -> Result<(), Str
         Some(k) => Some(k.verify().map_err(|e| e.to_string())?),
         None => None,
     };
-    let member = notekpr_sync::members::log_member(&user.id, role, key.as_ref());
+    let member = notekpr_sync::members::log_member(&user.id, role.clone(), key.as_ref());
     api::post::<_, MemberInfo>(
         &format!("/vaults/{vault}/members"),
         &AddMemberRequest {
@@ -403,7 +403,7 @@ pub async fn set_role(vault: &str, user_id: &str, role: Role) {
             vault,
             LogBody::Role {
                 user_id: user_id.to_string(),
-                role,
+                role: role.clone(),
             },
         )
     });
@@ -723,7 +723,7 @@ pub async fn grant_missing_keys(vault: &str) {
         let Some(Ok(key)) = m.user.account_key.as_ref().map(|k| k.verify()) else {
             continue;
         };
-        if let Err(e) = state::pin_member_key(vault, &m.user.id, m.role, &key).await {
+        if let Err(e) = state::pin_member_key(vault, &m.user.id, m.role.clone(), &key).await {
             util::warn(&format!("could not pin a member's key: {e}"));
         }
     }
@@ -815,9 +815,9 @@ pub async fn share_note(
     };
     let req = AddObjectShareRequest {
         user_id: user.id.clone(),
-        role,
+        log_entry: share_entry(vault, note, user, &role),
+        role: role.clone(),
         envelope,
-        log_entry: share_entry(vault, note, user, role),
     };
     match api::post::<_, ObjectShareInfo>(&format!("/vaults/{vault}/objects/{note}/shares"), &req)
         .await
@@ -827,8 +827,8 @@ pub async fn share_note(
             api::patch::<_, ()>(
                 &format!("/vaults/{vault}/objects/{note}/shares/{}", user.id),
                 &UpdateMemberRequest {
+                    log_entry: share_entry(vault, note, user, &role),
                     role,
-                    log_entry: share_entry(vault, note, user, role),
                 },
             )
             .await
@@ -994,13 +994,13 @@ pub async fn unshare_note(vault: &str, note: &str, user_id: &str) -> Result<(), 
 
 /// The log entry for sharing a note with `user` (their key pinned), if the
 /// vault has a log.
-fn share_entry(vault: &str, note: &str, user: &PublicUser, role: Role) -> Option<LogEntry> {
+fn share_entry(vault: &str, note: &str, user: &PublicUser, role: &Role) -> Option<LogEntry> {
     let key = user.account_key.as_ref()?.verify().ok()?;
     step(|c| {
         state::log_entry(
             c,
             vault,
-            notekpr_sync::members::share(note, &user.id, role, &key),
+            notekpr_sync::members::share(note, &user.id, role.clone(), &key),
         )
     })
 }
@@ -1021,8 +1021,8 @@ pub async fn set_note_share_role(
     let r = api::patch::<_, ()>(
         &format!("/vaults/{vault}/objects/{note}/shares/{user_id}"),
         &UpdateMemberRequest {
+            log_entry: share_entry(vault, note, &user, &role),
             role,
-            log_entry: share_entry(vault, note, &user, role),
         },
     )
     .await

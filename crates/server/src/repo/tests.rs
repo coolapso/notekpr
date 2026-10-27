@@ -54,13 +54,13 @@ async fn vault(db: &Db, id: &str, owner: &str, members: &[(&str, Role)]) {
             .unwrap()
     );
     assert!(
-        vaults::insert_member(db, id, owner, Role::Owner, owner, NOW)
+        vaults::insert_member(db, id, owner, &Role::Owner, owner, NOW)
             .await
             .unwrap()
     );
     for (u, r) in members {
         assert!(
-            vaults::insert_member(db, id, u, *r, owner, NOW)
+            vaults::insert_member(db, id, u, r, owner, NOW)
                 .await
                 .unwrap()
         );
@@ -71,7 +71,7 @@ async fn vault(db: &Db, id: &str, owner: &str, members: &[(&str, Role)]) {
 async fn share(db: &Db, v: &str, o: &str, user: &str, role: Role) {
     shares::ensure_object(db, v, o, "owner", NOW).await.unwrap();
     assert!(
-        shares::insert(db, v, o, user, role, "owner", NOW)
+        shares::insert(db, v, o, user, &role, "owner", NOW)
             .await
             .unwrap()
     );
@@ -134,7 +134,7 @@ async fn member_roles_and_owner_only_rules() {
 
     // Inserting a member twice is reported, not an error.
     assert!(
-        !vaults::insert_member(db, "v", "ed", Role::Viewer, "owner", NOW)
+        !vaults::insert_member(db, "v", "ed", &Role::Viewer, "owner", NOW)
             .await
             .unwrap()
     );
@@ -145,7 +145,7 @@ async fn member_roles_and_owner_only_rules() {
     );
 
     assert_eq!(
-        vaults::set_member_role(db, "v", "ed", Role::Viewer)
+        vaults::set_member_role(db, "v", "ed", &Role::Viewer)
             .await
             .unwrap(),
         1
@@ -155,7 +155,7 @@ async fn member_roles_and_owner_only_rules() {
         Some(Role::Viewer)
     );
     assert_eq!(
-        vaults::set_member_role(db, "v", "stranger", Role::Editor)
+        vaults::set_member_role(db, "v", "stranger", &Role::Editor)
             .await
             .unwrap(),
         0
@@ -284,12 +284,12 @@ async fn object_access_through_membership_or_a_share() {
     ));
 
     assert!(
-        !shares::insert(db, "v", "note", "bob", Role::Editor, "owner", NOW)
+        !shares::insert(db, "v", "note", "bob", &Role::Editor, "owner", NOW)
             .await
             .unwrap()
     );
     assert_eq!(
-        shares::set_role(db, "v", "note", "bob", Role::Editor)
+        shares::set_role(db, "v", "note", "bob", &Role::Editor)
             .await
             .unwrap(),
         1
@@ -299,7 +299,7 @@ async fn object_access_through_membership_or_a_share() {
         Some(Role::Editor)
     );
     assert_eq!(
-        shares::set_role(db, "v", "note", "carol", Role::Editor)
+        shares::set_role(db, "v", "note", "carol", &Role::Editor)
             .await
             .unwrap(),
         0
@@ -337,7 +337,7 @@ async fn object_access_through_membership_or_a_share() {
     );
 
     // Membership supersedes shares; exports don't list the note twice.
-    vaults::insert_member(db, "v", "bob", Role::Viewer, "owner", NOW)
+    vaults::insert_member(db, "v", "bob", &Role::Viewer, "owner", NOW)
         .await
         .unwrap();
     assert!(shares::exportable(db, "bob").await.unwrap().is_empty());

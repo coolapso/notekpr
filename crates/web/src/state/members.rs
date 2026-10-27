@@ -244,14 +244,18 @@ async fn require_signatures(vault_id: &str) -> Result<(), String> {
             let (st, logged) = step(|c| {
                 (
                     engine::check_pin(&mut c.prefs.pins, &sh.user.id, &key.fingerprint()),
-                    member_log(c, vault_id).has_share(&note, &sh.user.id, sh.role, &key),
+                    member_log(c, vault_id).has_share(&note, &sh.user.id, &sh.role, &key),
                 )
             });
             if st == engine::PinStatus::Changed {
                 return Err(format!("the key of {} changed", sh.user.display_name));
             }
             if !logged {
-                append(vault_id, rules::share(&note, &sh.user.id, sh.role, &key)).await?;
+                append(
+                    vault_id,
+                    rules::share(&note, &sh.user.id, sh.role.clone(), &key),
+                )
+                .await?;
             }
         }
     }
@@ -328,7 +332,7 @@ async fn start_log(vault_id: String) {
             },
             None => None,
         };
-        list.push((m.user.id.clone(), m.role, key));
+        list.push((m.user.id.clone(), m.role.clone(), key));
     }
     let entry = step(|c| {
         save_prefs(c);

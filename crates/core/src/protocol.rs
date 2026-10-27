@@ -45,8 +45,9 @@ pub fn comments_note(object_id: &str) -> Option<&str> {
 /// Issuer used for identities created by the development login.
 pub const DEV_ISSUER: &str = "urn:notekpr:dev";
 
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash)]
-#[serde(rename_all = "lowercase")]
+/// A role in a vault or on a single note. In JSON its name: `"editor"`.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash)]
+#[serde(into = "String", from = "String")]
 pub enum Role {
     Owner,
     /// An editor the owner trusts with the vault's tasks
@@ -55,34 +56,41 @@ pub enum Role {
     Admin,
     Editor,
     Viewer,
+    /// A role from a newer release, kept as written (the membership log's
+    /// signatures cover its name). It may do nothing an app would have to
+    /// allow: not write, administer or manage (the server enforces what it
+    /// really may). Servers refuse it in requests ([`Role::is_known`]).
+    Other(String),
 }
 
 impl Role {
-    pub fn can_write(self) -> bool {
+    pub fn can_write(&self) -> bool {
         matches!(self, Role::Owner | Role::Admin | Role::Editor)
     }
 
     /// Members, keys and the vault's settings: the owner's alone (the
     /// owner signs the membership log).
-    pub fn can_manage(self) -> bool {
+    pub fn can_manage(&self) -> bool {
         matches!(self, Role::Owner)
     }
 
     /// The vault's tasks: emptying the trash, deleting notes and
     /// attachments for good, reading the activity log.
-    pub fn can_administer(self) -> bool {
+    pub fn can_administer(&self) -> bool {
         matches!(self, Role::Owner | Role::Admin)
     }
 
-    pub fn as_str(self) -> &'static str {
+    pub fn as_str(&self) -> &str {
         match self {
             Role::Owner => "owner",
             Role::Admin => "admin",
             Role::Editor => "editor",
             Role::Viewer => "viewer",
+            Role::Other(name) => name,
         }
     }
 
+    /// One of the roles this release knows (never [`Role::Other`]).
     pub fn parse(s: &str) -> Option<Role> {
         match s {
             "owner" => Some(Role::Owner),
@@ -90,6 +98,25 @@ impl Role {
             "editor" => Some(Role::Editor),
             "viewer" => Some(Role::Viewer),
             _ => None,
+        }
+    }
+
+    pub fn is_known(&self) -> bool {
+        !matches!(self, Role::Other(_))
+    }
+}
+
+impl From<String> for Role {
+    fn from(s: String) -> Role {
+        Role::parse(&s).unwrap_or(Role::Other(s))
+    }
+}
+
+impl From<Role> for String {
+    fn from(r: Role) -> String {
+        match r {
+            Role::Other(name) => name,
+            known => known.as_str().to_string(),
         }
     }
 }
@@ -1757,6 +1784,35 @@ mod tests {
         assert!(!Role::Admin.can_manage());
         assert!(Role::Editor.can_write() && !Role::Editor.can_administer());
         assert!(Role::Owner.can_administer() && Role::Owner.can_manage());
+    }
+
+    #[test]
+    fn roles_from_newer_releases_are_kept_and_may_do_nothing() {
+        let r: Role = serde_json::from_str(r#""commenter""#).unwrap();
+        assert_eq!(r, Role::Other("commenter".into()));
+        assert!(!r.is_known() && !r.can_write() && !r.can_administer() && !r.can_manage());
+        assert_eq!(r.as_str(), "commenter");
+        assert_eq!(serde_json::to_string(&r).unwrap(), r#""commenter""#);
+        assert_eq!(Role::parse("commenter"), None);
+        // A response naming one still reads.
+        let m = MemberInfo {
+            user: PublicUser {
+                id: "u".into(),
+                display_name: "U".into(),
+                email: None,
+                kind: PrincipalKind::Human,
+                account_key: None,
+            },
+            role: Role::Editor,
+            has_current_key: true,
+            added_at: 0,
+            added_by: None,
+        };
+        let json = serde_json::to_string(&m)
+            .unwrap()
+            .replace("editor", "commenter");
+        let m: MemberInfo = serde_json::from_str(&json).unwrap();
+        assert_eq!(m.role.as_str(), "commenter");
     }
 
     #[test]

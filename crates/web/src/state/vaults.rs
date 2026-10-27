@@ -185,7 +185,7 @@ pub(super) async fn load_vault_with(info: VaultInfo, force: bool, keys: Option<V
                                 let before = (epochs(r), r.shared.clone());
                                 r.keyring = ring;
                                 r.meta = meta;
-                                r.role = info.role;
+                                r.role = info.role.clone();
                                 r.doc_keys = docs;
                                 r.shared = shared;
                                 r.share_from = share_from;
@@ -199,7 +199,7 @@ pub(super) async fn load_vault_with(info: VaultInfo, force: bool, keys: Option<V
                                 (false, applied, docs_changed, false, None)
                             }
                             None => {
-                                let mut r = VaultReplica::new(&id, info.role, ring, meta);
+                                let mut r = VaultReplica::new(&id, info.role.clone(), ring, meta);
                                 r.doc_keys = docs;
                                 r.shared = shared;
                                 r.share_from = share_from;
@@ -284,7 +284,7 @@ pub(super) async fn load_vault_with(info: VaultInfo, force: bool, keys: Option<V
     } else {
         step(|c| {
             if let Some(r) = c.replicas.get_mut(&id) {
-                r.role = info.role;
+                r.role = info.role.clone();
                 if let Ok(m) = VaultMeta::decrypt(&r.keyring, &info.encrypted_meta) {
                     r.meta = m;
                 }
@@ -368,7 +368,7 @@ pub fn publish_vaults(c: &Core) {
                                 notekpr_core::b64::encode(&p.data)
                             )
                         }),
-                    role: i.role,
+                    role: i.role.clone(),
                     shared: i.member_count > 1,
                     archived: i.archived,
                     owner_id: i.owner_id.clone(),

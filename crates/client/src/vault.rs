@@ -434,7 +434,7 @@ impl Vault {
     }
 
     pub fn role(&self) -> Role {
-        self.replica.role
+        self.replica.role.clone()
     }
 
     pub fn is_dirty(&self) -> bool {
@@ -511,7 +511,7 @@ impl Vault {
         self.store.save_state(&StoredState {
             format: 1,
             vault_id: self.replica.id.clone(),
-            role: self.replica.role,
+            role: self.replica.role.clone(),
             owner_id: self.owner_id.clone(),
             archived: self.archived,
             meta: self.replica.meta.clone(),

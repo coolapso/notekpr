@@ -168,6 +168,8 @@ deleting notes and attachments for good — and the activity log; people
 only, never agents), `editor` (writes, moves things to the trash) and
 `viewer` (reads; comments unless the owner turns it off, §6.1). Single notes
 are shared as `editor` or `viewer`. "editor/owner" below includes admins.
+Apps keep roles from newer releases they don't know (§11); the server
+refuses roles it doesn't know (`400`).
 
 | Endpoint | Role |
 |---|---|
@@ -277,7 +279,8 @@ hand out vault keys the owner didn't make.
 | `require_signed` | `from_seq` | content after log sequence `from_seq` (snapshots covering more) must be signed by its author |
 
 A member is `{user_id, role, enc_public, sign_public}` (`role` as in §5;
-in `share`, `editor` or `viewer`). The signature is
+in `share`, `editor` or `viewer`; a role an app doesn't know is kept as
+written and verifies, §11). The signature is
 Ed25519 over `statement("notekpr/v1/sig/member-log", [vault_id,
 seq:u64be, prev, signer, signed_at:i64be, body])`, where `body` is a
 length-prefixed encoding of the fields (never JSON). An entry's hash is
@@ -610,3 +613,16 @@ doesn't lift the other; `GET /info` and `mode` report `manual` first.
 (Prometheus; optional bearer token) live at the root, not under `/api/v1`.
 `/metrics` answers `404` when metrics are turned off and `401` without the
 right token. All responses carry a strict CSP and security headers.
+
+## 11. Older apps
+
+Installed apps keep running for months, so servers and newer apps send them
+values of fixed lists they don't know yet. Apps keep such a value and give
+it the least it could mean, rather than fail on the message that carries it:
+
+* **Roles** (§5): kept as written — the membership log signs a role's name
+  (its bytes), so entries naming one still verify (§5.2) — and allowed
+  nothing an app would have to allow: not writing, the vault's tasks or
+  managing it (as `viewer`; the server enforces what the role really may).
+  Content signed by someone whose roles were all unknown is refused, as a
+  viewer's would be.

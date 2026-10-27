@@ -648,7 +648,7 @@ impl Core {
     }
 
     pub fn role(&self, vault: &str) -> Option<Role> {
-        self.replicas.get(vault).map(|r| r.role)
+        self.replicas.get(vault).map(|r| r.role.clone())
     }
 
     pub fn can_write(&self, vault: &str) -> bool {

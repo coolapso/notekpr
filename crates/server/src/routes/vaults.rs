@@ -30,6 +30,9 @@ const MAX_META_BYTES: usize = 16 * 1024;
 const MAX_ENVELOPE_BYTES: usize = 1024;
 /// Vault admins delete things for good: people only, never an agent.
 const AGENT_NOT_ADMIN: &str = "agents can't be vault admins";
+/// A role this server doesn't know: apps keep roles from newer releases
+/// as written ([`Role::Other`]), but nothing may give one.
+const UNKNOWN_ROLE: &str = "unknown role";
 
 pub async fn list(
     State(state): State<AppState>,
@@ -142,7 +145,7 @@ pub async fn create(
             &mut *tx,
             &req.id,
             &who.user_id,
-            Role::Owner,
+            &Role::Owner,
             &who.user_id,
             now,
         )
@@ -327,6 +330,9 @@ pub async fn add_member(
     who.require_human()?;
     access::require_owner(&state.db, &v, &who.user_id).await?;
     access::require_shareable(&state.db, &v).await?;
+    if !req.role.is_known() {
+        return Err(bad(UNKNOWN_ROLE));
+    }
     if req.role == Role::Owner {
         return Err(bad("a vault has exactly one owner"));
     }
@@ -364,7 +370,7 @@ pub async fn add_member(
         // Re-checked in the transaction: the checks above ran before the lock.
         access::require_owner(&mut *tx, &v, &who.user_id).await?;
         check_envelope(current_epoch(&mut *tx, &v).await?)?;
-        if !repo::vaults::insert_member(&mut *tx, &v, &req.user_id, req.role, &who.user_id, now)
+        if !repo::vaults::insert_member(&mut *tx, &v, &req.user_id, &req.role, &who.user_id, now)
             .await?
         {
             return Err(conflict("already a member"));
@@ -392,7 +398,7 @@ pub async fn add_member(
             req.log_entry.as_ref(),
             Expect::Add {
                 user_id: &req.user_id,
-                role: req.role,
+                role: &req.role,
             },
             now,
         )
@@ -431,6 +437,9 @@ pub async fn update_member(
 ) -> AppResult<StatusCode> {
     who.require_human()?;
     access::require_owner(&state.db, &v, &who.user_id).await?;
+    if !req.role.is_known() {
+        return Err(bad(UNKNOWN_ROLE));
+    }
     if u == who.user_id || req.role == Role::Owner {
         return Err(bad("the owner's role cannot be changed"));
     }
@@ -440,7 +449,7 @@ pub async fn update_member(
         let _w = state.write_lock.lock().await;
         let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
         access::require_owner(&mut *tx, &v, &who.user_id).await?;
-        if repo::vaults::set_member_role(&mut *tx, &v, &u, req.role).await? == 0 {
+        if repo::vaults::set_member_role(&mut *tx, &v, &u, &req.role).await? == 0 {
             return Err(AppError::NotFound);
         }
         // Only for members (anyone else is 404 above), so whether an id is
@@ -459,7 +468,7 @@ pub async fn update_member(
             req.log_entry.as_ref(),
             Expect::Role {
                 user_id: &u,
-                role: req.role,
+                role: &req.role,
             },
             db::now(),
         )

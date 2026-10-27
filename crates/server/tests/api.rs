@@ -2439,30 +2439,57 @@ async fn only_the_owner_and_admins_delete_for_good() {
             .any(|m| m.user.id == aid && m.role == Role::Viewer)
     );
 
-    // A single note is shared as editor or viewer only.
-    let dave = new_user(&srv.base, "dave").await;
-    let share = AddObjectShareRequest {
-        user_id: dave.id.clone(),
-        role: Role::Admin,
-        envelope: KeyEnvelope {
-            user_id: dave.id.clone(),
-            epoch: 1,
-            envelope: vec![1; 60],
-            signature: None,
-        },
+    // Apps keep roles from newer releases as written, but nobody gives a
+    // role the server doesn't know.
+    let commenter = || Role::Other("commenter".into());
+    let erin = new_user(&srv.base, "erin").await;
+    let add_erin = AddMemberRequest {
+        user_id: erin.id.clone(),
+        role: commenter(),
+        key_envelope: None,
         log_entry: None,
     };
     assert_eq!(
         alice
             .api
-            .status(
-                Method::POST,
-                &format!("/vaults/{v}/objects/n3/shares"),
-                Some(&share)
-            )
+            .status(Method::POST, &members_path, Some(&add_erin))
             .await,
         400
     );
+    assert_eq!(
+        alice
+            .api
+            .status(Method::PATCH, &agent_member, Some(&role(commenter())))
+            .await,
+        400
+    );
+
+    // A single note is shared as editor or viewer only.
+    let dave = new_user(&srv.base, "dave").await;
+    for role in [Role::Admin, commenter()] {
+        let share = AddObjectShareRequest {
+            user_id: dave.id.clone(),
+            role,
+            envelope: KeyEnvelope {
+                user_id: dave.id.clone(),
+                epoch: 1,
+                envelope: vec![1; 60],
+                signature: None,
+            },
+            log_entry: None,
+        };
+        assert_eq!(
+            alice
+                .api
+                .status(
+                    Method::POST,
+                    &format!("/vaults/{v}/objects/n3/shares"),
+                    Some(&share)
+                )
+                .await,
+            400
+        );
+    }
 }
 
 /// Deleting for good can be undone for a while: gone for everyone at once,

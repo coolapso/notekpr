@@ -306,7 +306,7 @@ pub fn publish_shares(c: &Core) {
             note: n.clone(),
             title: s.title.clone(),
             icon: s.icon.clone(),
-            role: s.info.role,
+            role: s.info.role.clone(),
             owner: s.info.owner.display_name.clone(),
             added_at: s.info.added_at,
             loaded: s.loaded,

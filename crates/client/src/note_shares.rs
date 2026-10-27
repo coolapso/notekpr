@@ -83,10 +83,13 @@ pub async fn share_note(
         .verify()?;
     let req = AddObjectShareRequest {
         user_id: user.id.clone(),
-        role,
+        role: role.clone(),
         envelope,
         log_entry: session
-            .log_entry(vault, members::share(&note_id, &user.id, role, &key))
+            .log_entry(
+                vault,
+                members::share(&note_id, &user.id, role.clone(), &key),
+            )
             .await,
     };
     let mut updated_role = false;
@@ -102,9 +105,12 @@ pub async fn share_note(
                 .patch::<_, ()>(
                     &format!("/vaults/{id}/objects/{note_id}/shares/{}", user.id),
                     &UpdateMemberRequest {
-                        role,
+                        role: role.clone(),
                         log_entry: session
-                            .log_entry(vault, members::share(&note_id, &user.id, role, &key))
+                            .log_entry(
+                                vault,
+                                members::share(&note_id, &user.id, role.clone(), &key),
+                            )
                             .await,
                     },
                 )

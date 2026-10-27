@@ -28,11 +28,11 @@ pub(crate) enum Expect<'a> {
     Create,
     Add {
         user_id: &'a str,
-        role: Role,
+        role: &'a Role,
     },
     Role {
         user_id: &'a str,
-        role: Role,
+        role: &'a Role,
     },
     /// The owner removes someone (`Remove`), or someone leaves (`Leave`).
     Remove {
@@ -45,7 +45,7 @@ pub(crate) enum Expect<'a> {
     Share {
         object_id: &'a str,
         user_id: &'a str,
-        role: Role,
+        role: &'a Role,
     },
     /// The owner stops sharing a note with someone, or they remove it from
     /// their list.
@@ -115,7 +115,7 @@ pub(crate) async fn check_and_append(
                 && commit_ok(key_commit)
         }
         (Expect::Add { user_id, role }, LogBody::Add { member }) => {
-            member.user_id == *user_id && member.role == *role && keys_match(tx, member).await?
+            member.user_id == *user_id && member.role == **role && keys_match(tx, member).await?
         }
         (
             Expect::Role { user_id, role },
@@ -123,7 +123,7 @@ pub(crate) async fn check_and_append(
                 user_id: u,
                 role: r,
             },
-        ) => u == user_id && r == role,
+        ) => u == user_id && r == *role,
         (Expect::Remove { user_id }, LogBody::Remove { user_id: u }) => {
             u == user_id && *user_id != who.user_id
         }
@@ -152,7 +152,7 @@ pub(crate) async fn check_and_append(
         }
         (Expect::Standalone, LogBody::Rekey { member }) => {
             access::member_role_opt(&mut **tx, vault_id, &member.user_id).await?
-                == Some(member.role)
+                == Some(member.role.clone())
                 && !member.enc_public.is_empty()
                 && keys_match(tx, member).await?
         }
@@ -169,7 +169,7 @@ pub(crate) async fn check_and_append(
         ) => {
             o == object_id
                 && member.user_id == *user_id
-                && member.role == *role
+                && member.role == **role
                 && !member.enc_public.is_empty()
                 && keys_match(tx, member).await?
         }
@@ -183,7 +183,7 @@ pub(crate) async fn check_and_append(
         (Expect::Standalone, LogBody::Share { object_id, member }) => {
             head.is_some()
                 && access::share_role(&mut **tx, vault_id, object_id, &member.user_id).await?
-                    == Some(member.role)
+                    == Some(member.role.clone())
                 && !member.enc_public.is_empty()
                 && keys_match(tx, member).await?
         }

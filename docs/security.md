@@ -128,6 +128,9 @@ primitives. Formats:
   to members the verified log lists with that role and key, members see
   anyone the log doesn't list flagged in the member list, and rotation stops
   with a security warning if the server lists an unknown member with keys.
+  A role from a newer release that an older app doesn't know is kept as
+  signed and allowed nothing beyond reading (protocol.md §11), so it can't
+  make an older app accept anyone's writing.
 * **Shares someone's quick notes?** The server refuses members and note
   shares there, and as with every vault it can't add anyone on its own:
   their owner's apps never sign anyone into them. Nor can it make a vault

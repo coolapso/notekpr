@@ -716,6 +716,13 @@ lost-or-stolen-laptop case. Session tokens in the profile grant server access
   recovery key.
 * **"the session expired or was revoked"** — run `notekpr login` again;
   local data and queued changes are kept and uploaded afterwards.
+* **"this server needs notekpr X or newer"** — the server was updated past
+  what this version of the CLI works with: `sync` stops, and nothing else
+  works with that server until you install a newer `notekpr`. Local data and
+  queued changes are kept and uploaded by the new version.
+* **"who is in vault … was changed by a newer version of notekpr"** — the
+  vault's membership history has a kind of entry this version can't check,
+  so it doesn't use the vault: update `notekpr`. Nothing local is lost.
 * **"the account key … CHANGED"** — someone's key differs from the pinned one.
   Verify the new fingerprint with them before using `--accept-new-key`.
 * **"vault … was shared with you but its key has not arrived yet"** — the

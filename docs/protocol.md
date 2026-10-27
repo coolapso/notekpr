@@ -10,8 +10,8 @@ server and every Rust client (CLI, agent gateway, browser).
 Authenticated calls send `Authorization: Bearer <token>`. Every app also
 sends `Notekpr-App: <app>/<version>` with each request — `web/0.3.0`,
 `cli/0.3.0`: which app it is and the release it was built as (`dev` for
-builds not made for a release) — so the server can later tell an app too
-old for it to update. The server accepts requests without it (older apps,
+builds not made for a release) — so the server can tell an app too old for
+it to update (§11). The server accepts requests without it (older apps,
 scripts). Errors return
 `{"error": "<code>", "message": "..."}` (`/oauth/token` uses the OAuth shape
 instead, §3) with codes `bad_request`, `unauthorized`, `forbidden`,
@@ -28,7 +28,9 @@ keys), `read_only` (503: the server refuses changes for now, §9 — clients
 keep note edits and send them once it says it accepts changes again, §7;
 other changes, such as creating a vault, fail and are tried again by the
 person), `limit_reached` (403: an instance limit on accounts, vaults,
-agents or quick notes, §9, §5.3; the message says which), `unavailable`, `internal`. Vaults the
+agents or quick notes, §9, §5.3; the message says which),
+`update_required` (426: the app is older than the server accepts, with
+`oldest_version`, §11), `unavailable`, `internal`. Vaults the
 caller is not a member of always return `404` so their existence cannot be
 probed.
 
@@ -594,6 +596,7 @@ whenever it runs.
 | `quick_notes_per_user` | quick notes a person may keep unless they have their own `quick_note_allowance` (default 20, §5.3); a change is announced to everyone's apps (`vaults_changed`) |
 | `read_only` | `true`: the server refuses changes (below) |
 | `max_storage_mb` | at this database size (MiB, pages in use) the server turns read-only by itself (`storage_full`), until it is below it again — e.g. the limit was raised. Measured every 10 s and after every settings change |
+| `oldest_app_version` | the oldest version of the apps the server accepts (`"0.6.0"`), above its build's (`build_oldest_app_version` in `GET /admin/settings`); `""`: only the build's (§11) |
 
 Limits are checked when something new would be created, in the transaction
 that creates it; lowering one takes nothing away.
@@ -648,3 +651,17 @@ it the least it could mean, rather than fail on the message that carries it:
   refuse kinds they don't know (`400`), and serve stored entries as written
   (`GET /vaults/{v}/log`), so a server taken back to an older release
   passes on what a newer one stored.
+
+**Apps too old for the server.** Each server build accepts apps from some
+version on (`OLDEST_APP_VERSION` in `crates/server/src/apps.rs`, raised by
+the release that stops working with older ones); administrators can raise
+it (`oldest_app_version`, §9). An app that says it is older (`Notekpr-App`,
+or `app` in the WebSocket's `auth`) is refused everything but `GET /info`
+with `426 update_required` and the version it needs (`oldest_version`) —
+on the WebSocket, an `error` with that code, then the socket closes.
+Development builds (`dev`, a bare commit hash) and requests without the
+header aren't refused; a build a few commits after a release
+(`0.6.0-3-gabc1234`) counts as that release. Apps say so plainly and keep
+their unsent changes: the CLI stops syncing (its local copies keep them),
+the web app stops syncing, stores them in the browser and asks for a
+reload, after which it sends them.

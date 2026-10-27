@@ -8,6 +8,7 @@
 
 pub mod access;
 pub mod admin_clients;
+pub mod apps;
 pub mod auth;
 pub mod blobs;
 pub mod config;

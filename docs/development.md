@@ -325,6 +325,14 @@ changes). Without it — `task dev`, `cargo build`, `task docker:build` —
 everything says `dev`. The crates' own versions in `Cargo.toml` aren't
 used for this and stay `0.1.0`.
 
+Installed apps (the CLI now, desktop and phone apps later) keep running
+for months. A release that stops working with older apps — say it changes
+what they must understand — raises `OLDEST_APP_VERSION` in
+`crates/server/src/apps.rs` to the first version that works with it: older
+apps are then told to update instead of misbehaving
+([protocol.md §11](protocol.md#11-older-apps)). Development builds are never
+refused.
+
 ## Conventions
 
 * Anything that touches keys or ciphertext formats lives in `crates/core`

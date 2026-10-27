@@ -313,6 +313,8 @@ pub(super) fn on_server_message(m: ServerMessage) {
                         c.flush.run(READ_ONLY_RETRY_MS, || step(flush_now));
                     }
                 });
+            } else if code == ERROR_UPDATE_REQUIRED {
+                api::outdated();
             } else if code == "unauthorized" {
                 // The socket's sign-in was refused: the session is gone (a
                 // browser can't see why a WebSocket closed, so only this says
@@ -637,6 +639,25 @@ pub(super) fn restore_stored_pending(c: &mut Core, vault_id: &str) -> engine::Ap
 /// Whether the connection to the server is lost (see [`Socket::lost`]).
 fn connection_lost(c: &Core) -> bool {
     c.socket.as_ref().is_some_and(|s| s.lost())
+}
+
+/// The server needs a newer version of this page: stop syncing, and store
+/// what isn't sent, for the reloaded page to send.
+pub(super) fn outdated(c: &mut Core) {
+    if let Some(s) = &c.socket {
+        s.stop();
+    }
+    let unsent: Vec<String> = c
+        .replicas
+        .iter()
+        .filter(|(v, r)| {
+            !r.pending.is_empty() || c.outboxes.get(*v).is_some_and(|o| !o.held.is_empty())
+        })
+        .map(|(v, _)| v.clone())
+        .collect();
+    for v in unsent {
+        persist_pending(c, &v);
+    }
 }
 
 /// The connection is lost: what this page hasn't sent now waits for it.

@@ -55,6 +55,12 @@ impl ApiError {
         matches!(self, ApiError::Status { status: 503, code, .. } if code == notekpr_core::protocol::ERROR_READ_ONLY)
     }
 
+    /// The server needs a newer version of this app: it says so; unsent
+    /// changes are kept.
+    pub fn is_update_required(&self) -> bool {
+        matches!(self, ApiError::Status { code, .. } if code == ERROR_UPDATE_REQUIRED)
+    }
+
     /// An instance limit refused something new (a vault, an agent, a quick
     /// note).
     pub fn is_limit_reached(&self) -> bool {
@@ -432,6 +438,13 @@ impl Api {
         let status = resp.status().as_u16();
         let err: Option<OAuthError> = resp.json().await.ok();
         let code = err.map(|e| e.error).unwrap_or_else(|| "error".into());
+        if code == ERROR_UPDATE_REQUIRED {
+            return Err(ApiError::Status {
+                status,
+                code,
+                message: update_required_message("this server needs a newer version of notekpr"),
+            });
+        }
         Err(ApiError::Auth(if code == "invalid_client" {
             "the server rejected the agent credentials (wrong, revoked or rotated client secret)"
                 .into()
@@ -528,6 +541,15 @@ enum Body<'a> {
     Bytes(&'a [u8]),
 }
 
+/// What the CLI says when the server needs a newer version of it
+/// ([`ERROR_UPDATE_REQUIRED`]), after what the server says.
+pub fn update_required_message(server_says: &str) -> String {
+    format!(
+        "{server_says} (this is notekpr {}); local changes are kept",
+        notekpr_core::VERSION
+    )
+}
+
 async fn check(resp: reqwest::Response) -> ApiResult<reqwest::Response> {
     let status = resp.status();
     if status.is_success() {
@@ -536,6 +558,10 @@ async fn check(resp: reqwest::Response) -> ApiResult<reqwest::Response> {
     let code = status.as_u16();
     let text = resp.text().await.unwrap_or_default();
     let (err, message) = match serde_json::from_str::<ApiError2>(&text) {
+        Ok(e) if e.error == ERROR_UPDATE_REQUIRED => {
+            let message = update_required_message(&e.message);
+            (e.error, message)
+        }
         Ok(e) => (e.error, e.message),
         Err(_) => (
             "http_error".to_string(),
@@ -562,4 +588,42 @@ async fn decode<T: DeserializeOwned>(resp: reqwest::Response) -> ApiResult<T> {
     let bytes = resp.bytes().await.map_err(net)?;
     let bytes: &[u8] = if bytes.is_empty() { b"null" } else { &bytes };
     serde_json::from_slice(bytes).map_err(|e| ApiError::Decode(e.to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn answer(status: u16, body: &str) -> reqwest::Response {
+        reqwest::Response::from(
+            http::Response::builder()
+                .status(status)
+                .body(body.to_string())
+                .unwrap(),
+        )
+    }
+
+    #[tokio::test]
+    async fn a_server_that_needs_a_newer_app_is_understood() {
+        let e = check(answer(
+            426,
+            r#"{"error":"update_required","message":"this server needs notekpr 0.6.0 or newer: update this app","oldest_version":"0.6.0"}"#,
+        ))
+        .await
+        .unwrap_err();
+        assert!(e.is_update_required() && !e.is_offline());
+        let m = e.message();
+        assert!(
+            m.starts_with("this server needs notekpr 0.6.0 or newer"),
+            "{m}"
+        );
+        assert!(
+            m.contains(notekpr_core::VERSION) && m.contains("local changes are kept"),
+            "{m}"
+        );
+        let other = check(answer(403, r#"{"error":"forbidden","message":"no"}"#))
+            .await
+            .unwrap_err();
+        assert!(!other.is_update_required());
+    }
 }

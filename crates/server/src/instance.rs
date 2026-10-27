@@ -27,9 +27,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use notekpr_core::protocol::{
     InstanceSettings, InstanceSettingsUpdate, Limit, ReadOnly, VaultKind,
 };
+use notekpr_core::version::Version;
 use sqlx::{SqliteConnection, SqliteExecutor};
 use tokio::sync::watch;
 
+use crate::apps::OLDEST_APP_VERSION;
 use crate::db::{self, Db};
 use crate::error::{AppError, AppResult};
 use crate::repo;
@@ -57,6 +59,13 @@ impl Instance {
         self.settings.read().unwrap().clone()
     }
 
+    /// The oldest version of the apps the server accepts: its build's, or
+    /// the administrators' if higher.
+    pub fn oldest_app(&self) -> Version {
+        let set = Version::parse(&self.settings.read().unwrap().oldest_app_version);
+        set.map_or(OLDEST_APP_VERSION, |v| v.max(OLDEST_APP_VERSION))
+    }
+
     /// Whether, and why, the server refuses changes now.
     pub fn read_only(&self) -> Option<ReadOnly> {
         *self.mode.borrow()
@@ -80,6 +89,14 @@ impl Instance {
         db: &Db,
         change: &InstanceSettingsUpdate,
     ) -> AppResult<InstanceSettings> {
+        if let Some(v) = change.oldest_app_version.as_deref().map(str::trim)
+            && !v.is_empty()
+            && Version::parse(v).is_none()
+        {
+            return Err(AppError::BadRequest(
+                "oldest_app_version is a version like 0.6.0 (or empty)".into(),
+            ));
+        }
         let mut next = self.settings();
         next.apply(change);
         repo::settings::save(db, &next, db::now()).await?;

@@ -279,6 +279,9 @@ pub struct Ui {
     pub conn: RwSignal<ConnState>,
     /// Set while the server refuses changes (`Core::read_only`).
     pub read_only: RwSignal<Option<ReadOnly>>,
+    /// The server needs a newer version of this page: nothing syncs until
+    /// it is reloaded (`sync::outdated`).
+    pub outdated: RwSignal<bool>,
     pub pending: RwSignal<usize>,
     pub presence: RwSignal<Vec<PresenceView>>,
     pub toasts: RwSignal<Vec<Toast>>,
@@ -333,6 +336,7 @@ pub fn init_ui() -> Ui {
         content_rev: RwSignal::new(0),
         conn: RwSignal::new(ConnState::Connecting),
         read_only: RwSignal::new(None),
+        outdated: RwSignal::new(false),
         pending: RwSignal::new(0),
         presence: RwSignal::new(vec![]),
         toasts: RwSignal::new(vec![]),

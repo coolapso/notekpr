@@ -1062,3 +1062,97 @@ async fn quick_notes_hold_as_many_notes_as_allowed() {
     .unwrap();
     assert_eq!(r.status().as_u16(), 400);
 }
+
+/// Apps older than the oldest version the server accepts (its build's, or
+/// higher as administrators set it) are told to update, over REST and the
+/// WebSocket. Development builds, and requests that don't say which app
+/// they are, never are.
+#[tokio::test]
+async fn apps_older_than_the_server_accepts_are_told_to_update() {
+    use futures::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::Message;
+    let srv = start_with_operator().await;
+    let alice = new_user(&srv.base, "alice").await;
+    let token = alice.api.token.clone().unwrap();
+    let s: AdminSettings = operator(&srv, Method::GET, "/admin/settings")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(s.build_oldest_app_version, "0.0.0");
+    let get = |path: &str| {
+        reqwest::Client::new()
+            .get(format!("{}{path}", srv.base))
+            .bearer_auth(&token)
+    };
+    assert_eq!(
+        status(get("/vaults").header(APP_HEADER, "cli/0.1.0")).await,
+        200
+    );
+
+    let r = operator(&srv, Method::PATCH, "/admin/settings")
+        .json(&serde_json::json!({ "oldest_app_version": "soon" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status().as_u16(), 400);
+    let s = settings(&srv, serde_json::json!({ "oldest_app_version": "0.6.0" })).await;
+    assert_eq!(s.settings.oldest_app_version, "0.6.0");
+
+    let r = get("/vaults")
+        .header(APP_HEADER, "cli/0.5.9")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status().as_u16(), 426);
+    let body: ApiError = r.json().await.unwrap();
+    assert_eq!(body.error, ERROR_UPDATE_REQUIRED);
+    assert_eq!(body.oldest_version.as_deref(), Some("0.6.0"));
+    for fine in ["cli/0.6.0", "web/0.7.1-2-gabc1234", "cli/dev"] {
+        assert_eq!(
+            status(get("/vaults").header(APP_HEADER, fine)).await,
+            200,
+            "{fine}"
+        );
+    }
+    assert_eq!(status(get("/vaults")).await, 200);
+    // The server's version is there for every app to read.
+    assert_eq!(
+        status(get("/info").header(APP_HEADER, "cli/0.1.0")).await,
+        200
+    );
+    // Signing in is refused too.
+    let r = reqwest::Client::new()
+        .post(format!("{}/auth/dev-login", srv.base))
+        .header(APP_HEADER, "web/0.1.0")
+        .json(&serde_json::json!({ "name": "bob" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status().as_u16(), 426);
+
+    let (mut ws, _) = tokio_tungstenite::connect_async(&srv.ws).await.unwrap();
+    let auth = ClientMessage::Auth {
+        token: token.clone(),
+        app: Some("cli/0.5.0".into()),
+    };
+    ws.send(Message::Text(serde_json::to_string(&auth).unwrap().into()))
+        .await
+        .unwrap();
+    let first = ws.next().await.unwrap().unwrap();
+    let m: ServerMessage = serde_json::from_str(first.to_text().unwrap()).unwrap();
+    assert!(
+        matches!(&m, ServerMessage::Error { code, .. } if code == ERROR_UPDATE_REQUIRED),
+        "{m:?}"
+    );
+
+    // Back to only what the build needs.
+    let s = settings(&srv, serde_json::json!({ "oldest_app_version": "" })).await;
+    assert_eq!(s.settings.oldest_app_version, "");
+    assert_eq!(
+        status(get("/vaults").header(APP_HEADER, "cli/0.5.9")).await,
+        200
+    );
+}

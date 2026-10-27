@@ -91,6 +91,11 @@ fn Banners() -> impl IntoView {
                 }
             })
         }}
+        {move || ui.outdated.get().then(|| view! {
+            <div class="banner warn outdated-banner"><Icon name="alert"/>
+                <span>"This page is out of date: the server needs a newer version of notekpr. Your unsent edits are kept in this browser; reload to get the new version."</span>
+                <button class="btn small primary" on:click=|_| { let _ = util::window().location().reload(); }>"Reload"</button></div>
+        })}
         {move || ui.read_only.get().map(|why| view! {
             <div class="banner warn read-only-banner"><Icon name="cloud-off"/>
                 <span>{match why {
@@ -137,6 +142,7 @@ pub fn SyncStatus() -> impl IntoView {
     let ui = ui();
     view! {
         <span class="sync" title=move || match (ui.conn.get(), ui.pending.get()) {
+            (_, n) if ui.outdated.get() => format!("This page is out of date: changes to {n} document(s) are kept in this browser and sync after a reload"),
             (ConnState::Open, n) if ui.read_only.get().is_some() => format!("The server is read-only: changes to {n} document(s) are kept and will sync when it accepts changes again"),
             (ConnState::Open, 0) => "All changes synced (end-to-end encrypted)".to_string(),
             (ConnState::Open, n) => format!("Syncing changes to {n} document(s)…"),
@@ -145,6 +151,7 @@ pub fn SyncStatus() -> impl IntoView {
             (ConnState::Offline, n) => format!("Offline — changes to {n} document(s) are kept and will sync when you reconnect"),
         }>
             {move || match (ui.conn.get(), ui.pending.get()) {
+                (_, n) if ui.outdated.get() => view! { <Icon name="cloud-off" class="warn"/><span class="lbl">{if n > 0 { format!("Out of date · {n}") } else { "Out of date".into() }}</span> }.into_any(),
                 (ConnState::Open, n) if ui.read_only.get().is_some() => view! { <Icon name="cloud-off" class="warn"/><span class="lbl">{if n > 0 { format!("Read-only · {n}") } else { "Read-only".into() }}</span> }.into_any(),
                 (ConnState::Open, 0) => view! { <Icon name="cloud" class="ok"/><span class="lbl">"Synced"</span> }.into_any(),
                 (ConnState::Open, _) => view! { <Icon name="refresh" class="spin"/><span class="lbl">"Saving"</span> }.into_any(),

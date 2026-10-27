@@ -20,6 +20,7 @@ pub mod quick;
 pub mod recover;
 pub mod search;
 pub mod textdiff;
+pub mod version;
 
 pub use yrs;
 

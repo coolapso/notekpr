@@ -2679,6 +2679,7 @@ dependencies = [
  "clap",
  "data-encoding",
  "futures",
+ "http",
  "libc",
  "mime_guess",
  "notekpr-core",

@@ -182,6 +182,12 @@ pub fn router(state: AppState) -> Router {
         .route("/ws", get(ws::handler))
         .merge(login)
         .route_layer(from_fn_with_state(state.clone(), read_only_guard))
+        // (Before the read-only check: an app too old for the server can't
+        // be told anything else.)
+        .route_layer(from_fn_with_state(
+            state.clone(),
+            crate::apps::require_current,
+        ))
         .fallback(api_not_found)
         .layer(from_fn_with_state(state.clone(), ratelimit::api_limit))
         .layer(DefaultBodyLimit::max(1024 * 1024))

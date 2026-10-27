@@ -154,6 +154,7 @@ pub async fn run(hub: Arc<Hub>, mut shutdown: watch::Receiver<bool>) -> Result<(
             Next::Fail(e) => {
                 hub.set_online(false);
                 hub.set_push_now(true);
+                hub.save_all().await;
                 return Err(e);
             }
             Next::Retry(reason) => reason,
@@ -197,6 +198,7 @@ async fn connect(hub: &Hub) -> Result<Ws> {
     let token = match api.token().await {
         Ok(t) => t,
         Err(e) if e.is_offline() => return Err(anyhow!(e)),
+        Err(e) if e.is_update_required() => return Err(Fatal(e.message()).into()),
         Err(e) => return Err(Fatal(format!("{e}")).into()),
     };
     let connector = if url.starts_with("wss://") {
@@ -229,6 +231,10 @@ async fn connect(hub: &Hub) -> Result<Ws> {
     };
     match msg {
         ServerMessage::Ready { .. } => Ok(ws),
+        // Retrying can't help: live sync stops and says so.
+        ServerMessage::Error { code, message, .. } if code == ERROR_UPDATE_REQUIRED => {
+            Err(Fatal(crate::api::update_required_message(&message)).into())
+        }
         ServerMessage::Error { code, .. } if code == "unauthorized" => {
             if hub.session.kind == PrincipalKind::Agent {
                 api.invalidate_token().await;

@@ -806,8 +806,10 @@ fn InstanceSettingsPanel(
         RwSignal::new(s.max_storage_mb),
     );
     let (users, agents, vaults, vaults_per_user, agents_per_user, quick_per_user, storage) = fields;
+    let oldest_app = RwSignal::new(String::new());
     let show = move |a: AdminSettings| {
         let s = &a.settings;
+        oldest_app.set(s.oldest_app_version.clone());
         users.set(s.max_users);
         agents.set(s.max_agents);
         vaults.set(s.max_vaults);
@@ -880,6 +882,22 @@ fn InstanceSettingsPanel(
                     })>"Save limits"</button>
                 </div>
                 <p class="muted small">"Limits apply to what is created from now on: nothing is removed when you lower one. Accounts count people who aren't disabled; a person's own limits are under Accounts. At the database size limit the server turns read-only by itself, until it is below the limit again."</p>
+                <div class="row oldest-app">
+                    <label class="limit-field">
+                        <span class="limit-label">"Oldest app version"</span>
+                        <input class="input small oldest-app-version" placeholder="0.6.0"
+                            prop:value=move || oldest_app.get()
+                            on:input=move |ev| oldest_app.set(event_target_value(&ev))/>
+                    </label>
+                    <button class="btn save-oldest-app" on:click=move |_| save(InstanceSettingsUpdate {
+                        oldest_app_version: Some(oldest_app.get_untracked()),
+                        ..Default::default()
+                    })>"Save"</button>
+                </div>
+                <p class="muted small">{move || {
+                    let build = status.get().map(|s| s.build_oldest_app_version).unwrap_or_default();
+                    format!("Apps older than this (the command line now, desktop and phone apps later) are told to update instead of syncing, and keep their unsent edits; browsers get the current version with a reload. Empty: what this server's version needs ({build}).")
+                }}</p>
             </div>
         })}
     }

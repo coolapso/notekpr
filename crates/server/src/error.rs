@@ -1,7 +1,10 @@
 use axum::Json;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use notekpr_core::protocol::{ApiError, ERROR_LIMIT_REACHED, ERROR_READ_ONLY, ReadOnly};
+use notekpr_core::protocol::{
+    ApiError, ERROR_LIMIT_REACHED, ERROR_READ_ONLY, ERROR_UPDATE_REQUIRED, ReadOnly,
+};
+use notekpr_core::version::Version;
 
 #[derive(Debug, thiserror::Error)]
 pub enum AppError {
@@ -35,6 +38,10 @@ pub enum AppError {
     /// An instance limit (accounts, vaults, agents) is reached.
     #[error("{0}")]
     LimitReached(String),
+    /// The app is older than the oldest version the server accepts
+    /// (`apps.rs`).
+    #[error("this server needs notekpr {0} or newer: update this app")]
+    UpdateRequired(Version),
     #[error("{0}")]
     Unavailable(String),
     #[error(transparent)]
@@ -63,6 +70,7 @@ impl AppError {
             AppError::RateLimited => "rate_limited",
             AppError::ReadOnly(_) => ERROR_READ_ONLY,
             AppError::LimitReached(_) => ERROR_LIMIT_REACHED,
+            AppError::UpdateRequired(_) => ERROR_UPDATE_REQUIRED,
             AppError::Unavailable(_) => "unavailable",
             AppError::Internal(_) => "internal",
         }
@@ -81,6 +89,7 @@ impl AppError {
             AppError::RateLimited => StatusCode::TOO_MANY_REQUESTS,
             AppError::ReadOnly(_) => StatusCode::SERVICE_UNAVAILABLE,
             AppError::LimitReached(_) => StatusCode::FORBIDDEN,
+            AppError::UpdateRequired(_) => StatusCode::UPGRADE_REQUIRED,
             AppError::Unavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
             AppError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
@@ -95,6 +104,10 @@ impl AppError {
         ApiError {
             error: self.code().to_string(),
             message,
+            oldest_version: match self {
+                AppError::UpdateRequired(v) => Some(v.to_string()),
+                _ => None,
+            },
         }
     }
 }

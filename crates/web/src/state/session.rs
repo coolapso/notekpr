@@ -36,6 +36,13 @@ pub fn device_name() -> String {
 
 pub async fn boot() {
     let ui = ui();
+    api::on_outdated(|| {
+        let ui = self::ui();
+        if !ui.outdated.get_untracked() {
+            ui.outdated.set(true);
+            step(super::sync::outdated);
+        }
+    });
     api::on_unauthorized(|| {
         let ui = self::ui();
         if ui.phase.get_untracked() != (Phase::SignedOut { error: None }) {

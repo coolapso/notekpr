@@ -418,6 +418,11 @@ They are kept in the database, so they survive restarts and backups.
   (checked every 10 seconds), until it is below it again — raise the limit,
   or make room. It counts the pages in use, which is less than the file
   once data was deleted.
+* **Oldest app version**: apps older than this (`0.6.0`) are told to update
+  instead of syncing; they keep their unsent edits, and browsers get the
+  current app with a reload. Each server version accepts apps from some
+  version on by itself (shown next to the field); this only raises it. Empty:
+  only that.
 
 ### Admin clients: scripts and services
 
@@ -608,7 +613,10 @@ notekpr at all.
    git pull && cargo build --release --locked -p notekpr-server && ./scripts/build-web.sh
    # then install the binary and web client as in §1 and restart the service
    ```
-3. Clients are forward compatible within a protocol version (`/api/v1`).
+3. Clients are forward compatible within a protocol version (`/api/v1`):
+   apps tolerate what newer servers send, and a server too new for an
+   installed app tells it to update rather than letting it misbehave
+   ([protocol.md §11](protocol.md#11-older-apps)).
 
 `notekpr-server migrate` applies migrations without starting the server.
 

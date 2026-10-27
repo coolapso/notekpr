@@ -55,3 +55,5 @@ notekpr-server = { path = "../server" }
 sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "sqlite"] }
 tempfile = "3"
 proptest = { version = "1", default-features = false, features = ["std"] }
+# Server answers made up in unit tests (already in the tree through reqwest).
+http = "1"

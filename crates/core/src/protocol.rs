@@ -150,6 +150,10 @@ impl PrincipalKind {
 pub struct ApiError {
     pub error: String,
     pub message: String,
+    /// With [`ERROR_UPDATE_REQUIRED`]: the oldest version of the apps the
+    /// server accepts (`0.6.0`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oldest_version: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -1308,6 +1312,12 @@ pub struct InstanceSettings {
     /// itself, until it is below it again (e.g. the limit was raised).
     #[serde(default)]
     pub max_storage_mb: Limit,
+    /// The oldest version of the apps the server accepts (`0.6.0`), above
+    /// what its build accepts ([`AdminSettings::build_oldest_app_version`]);
+    /// empty: only that. Older apps are told to update
+    /// ([`ERROR_UPDATE_REQUIRED`]).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub oldest_app_version: String,
 }
 
 impl Default for InstanceSettings {
@@ -1321,6 +1331,7 @@ impl Default for InstanceSettings {
             quick_notes_per_user: default_quick_notes_per_user(),
             read_only: false,
             max_storage_mb: Limit::Unlimited,
+            oldest_app_version: String::new(),
         }
     }
 }
@@ -1344,6 +1355,9 @@ pub struct InstanceSettingsUpdate {
     pub read_only: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_storage_mb: Option<Limit>,
+    /// `""`: only what the server's build accepts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oldest_app_version: Option<String>,
 }
 
 impl InstanceSettings {
@@ -1357,6 +1371,7 @@ impl InstanceSettings {
             quick_notes_per_user,
             read_only,
             max_storage_mb,
+            oldest_app_version,
         } = u.clone();
         self.max_users = max_users.unwrap_or(self.max_users);
         self.max_agents = max_agents.unwrap_or(self.max_agents);
@@ -1366,6 +1381,9 @@ impl InstanceSettings {
         self.quick_notes_per_user = quick_notes_per_user.unwrap_or(self.quick_notes_per_user);
         self.read_only = read_only.unwrap_or(self.read_only);
         self.max_storage_mb = max_storage_mb.unwrap_or(self.max_storage_mb);
+        if let Some(v) = oldest_app_version {
+            self.oldest_app_version = v.trim().to_string();
+        }
     }
 }
 
@@ -1392,6 +1410,10 @@ pub struct AdminSettings {
     /// Bytes the database uses now.
     #[serde(default)]
     pub storage_bytes: u64,
+    /// The oldest version of the apps the server's build accepts (`0.0.0`:
+    /// any); [`InstanceSettings::oldest_app_version`] can only raise it.
+    #[serde(default)]
+    pub build_oldest_app_version: String,
 }
 
 /// The error code of everything refused while the server is read-only
@@ -1400,6 +1422,10 @@ pub struct AdminSettings {
 pub const ERROR_READ_ONLY: &str = "read_only";
 /// The error code of a creation refused by an instance limit (HTTP 403).
 pub const ERROR_LIMIT_REACHED: &str = "limit_reached";
+/// The error code of everything an app too old for the server asks (HTTP
+/// 426; the WebSocket's `error` before closing): it says so and keeps its
+/// unsent changes. [`ApiError::oldest_version`] says which version it needs.
+pub const ERROR_UPDATE_REQUIRED: &str = "update_required";
 
 /// What an admin client (or a person with the admin role) may do on the
 /// administration API. Every admin client can `read`.

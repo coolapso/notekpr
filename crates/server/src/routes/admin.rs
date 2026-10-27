@@ -15,6 +15,7 @@ use notekpr_core::protocol::{
 use serde::Deserialize;
 
 use crate::admin_clients;
+use crate::apps::OLDEST_APP_VERSION;
 use crate::auth::Admin;
 use crate::db;
 use crate::error::{AppError, AppResult, bad, forbidden};
@@ -185,6 +186,7 @@ pub async fn settings(
         settings: state.instance.settings(),
         read_only: state.instance.read_only(),
         storage_bytes,
+        build_oldest_app_version: OLDEST_APP_VERSION.to_string(),
     }))
 }
 
@@ -220,6 +222,7 @@ pub async fn update_settings(
         settings,
         read_only: state.instance.read_only(),
         storage_bytes: repo::settings::used_bytes(&state.db).await?,
+        build_oldest_app_version: OLDEST_APP_VERSION.to_string(),
     }))
 }
 

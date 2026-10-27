@@ -68,14 +68,18 @@ async fn connection(socket: WebSocket, state: AppState) {
     let (mut sink, mut stream) = socket.split();
 
     // Authenticate with the first message.
-    let token = match tokio::time::timeout(AUTH_TIMEOUT, stream.next()).await {
+    let (token, app) = match tokio::time::timeout(AUTH_TIMEOUT, stream.next()).await {
         Ok(Some(Ok(Message::Text(t)))) => match serde_json::from_str::<ClientMessage>(&t) {
-            Ok(ClientMessage::Auth { token, .. }) => token,
+            Ok(ClientMessage::Auth { token, app }) => (token, app),
             _ => return,
         },
         _ => return,
     };
-    let who = match auth::authenticate(&state, &token).await {
+    let who = match crate::apps::check(app.as_deref(), state.instance.oldest_app()) {
+        Ok(()) => auth::authenticate(&state, &token).await,
+        Err(e) => Err(e),
+    };
+    let who = match who {
         Ok(p) => p,
         Err(e) => {
             let m = serde_json::to_string(&error_msg(&e, None)).unwrap();

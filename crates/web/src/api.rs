@@ -2,7 +2,7 @@
 
 use std::cell::RefCell;
 
-use notekpr_core::protocol::{APP_HEADER, ApiError, app_id};
+use notekpr_core::protocol::{APP_HEADER, ApiError, ERROR_UPDATE_REQUIRED, app_id};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use wasm_bindgen::{JsCast, JsValue};
@@ -60,6 +60,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 thread_local! {
     static TOKEN: RefCell<Option<String>> = const { RefCell::new(None) };
     static ON_UNAUTHORIZED: RefCell<Option<Box<dyn Fn()>>> = const { RefCell::new(None) };
+    static ON_OUTDATED: RefCell<Option<Box<dyn Fn()>>> = const { RefCell::new(None) };
 }
 
 pub fn set_token(t: Option<String>) {
@@ -85,6 +86,20 @@ pub fn unauthorized() {
             }
         });
     }
+}
+
+/// Called whenever the server says it needs a newer version of this page
+/// ([`ERROR_UPDATE_REQUIRED`], over REST or the WebSocket).
+pub fn on_outdated(f: impl Fn() + 'static) {
+    ON_OUTDATED.with(|x| *x.borrow_mut() = Some(Box::new(f)));
+}
+
+pub fn outdated() {
+    ON_OUTDATED.with(|x| {
+        if let Some(f) = &*x.borrow() {
+            f()
+        }
+    });
 }
 
 async fn send(
@@ -134,6 +149,9 @@ async fn send(
     };
     if status == 401 {
         unauthorized();
+    }
+    if code == ERROR_UPDATE_REQUIRED {
+        outdated();
     }
     Err(Error {
         status,

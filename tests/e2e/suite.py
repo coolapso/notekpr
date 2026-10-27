@@ -1838,6 +1838,38 @@ def test_session_ended_while_away(env):
         b.close()
 
 
+def test_outdated(env):
+    """The server needs a newer app: the page says so, stops syncing, keeps
+    edits in the browser and sends them once reloaded."""
+    b = Browser()
+    pending = "return Object.keys(localStorage).filter(k => k.startsWith('notekpr.pending.') && localStorage.getItem(k) !== '[]').length"
+    try:
+        cdp(b, "Page.addScriptToEvaluateOnNewDocument", {"source": BLOCKABLE_SOCKETS})
+        signup(b, uniq("otto"))
+        new_note(b, "Kept", "first")
+        b.wait(pending + " === 0", 20, "the note is synced")
+        # As a server answers a page too old for it (development builds are
+        # never refused, so the test hands the page that answer itself).
+        b.js("""const m = JSON.stringify({type: 'error', code: 'update_required', vault_id: null,
+                  message: 'this server needs notekpr 9.0.0 or newer: update this app'});
+                window.__sockets.forEach(s => s.dispatchEvent(new MessageEvent('message', {data: m})));""")
+        b.find(".outdated-banner", 10)
+        check("out of date" in b.text(".outdated-banner"), "the page says it is out of date and to reload")
+        b.js("const ed=document.querySelector('.ed'); ed.focus(); const s=getSelection(); s.selectAllChildren(ed); s.collapseToEnd();")
+        b.keys(" second")
+        time.sleep(1.5)
+        check(b.js(pending) > 0 and "Out of date" in b.text(".sync"), "edits made meanwhile wait in the browser, not sent")
+        b.shot("outdated-banner")
+        b.click(".outdated-banner button")
+        b.wait("return document.querySelector('.ed') && document.querySelector('.ed').textContent.includes('first second')", 30, "the reloaded page has the edit")
+        b.wait(pending + " === 0", 30, "the kept edit is sent")
+        check(not b.js("return !!document.querySelector('.outdated-banner')"), "reloaded: the banner is gone")
+        check(True, "reloaded, the kept edits are sent")
+        check(not severe_logs(b), "no browser errors")
+    finally:
+        b.close()
+
+
 # Select `text` (its first occurrence) in the open note's editor, or in
 # the element given second (e.g. the reading view).
 SELECT_TEXT = """
@@ -2482,6 +2514,17 @@ def test_admin(env):
         b.find_text(".page-head h1", "Second", 15)
         check(True, "a person's own allowance lets them create more")
 
+        # The oldest app version: older apps are told to update (this page,
+        # a development build, never is).
+        a.type(".oldest-app-version", "0.6.0")
+        a.click(".save-oldest-app")
+        deadline = time.time() + 10
+        while api_get(a, "/admin/settings")["settings"].get("oldest_app_version") != "0.6.0":
+            if time.time() > deadline:
+                raise AssertionError("the oldest app version wasn't saved")
+            time.sleep(0.2)
+        check(True, "administrators raise the oldest app version the server accepts")
+
         # An admin client for a billing system: its own token and scopes.
         token_call = """window.__api = undefined;
             fetch('/api/v1' + arguments[1], {method: arguments[2], body: arguments[3] ? JSON.stringify(arguments[3]) : undefined,
@@ -2532,7 +2575,7 @@ def test_admin(env):
         check(all(any(r in m for r in refused) for m in severe_logs(a, b)), "no browser errors but what was refused on purpose")
     finally:
         # Other tests share this server.
-        api_patch(a, "/admin/settings", {"read_only": False, "vaults_per_user": "unlimited"})
+        api_patch(a, "/admin/settings", {"read_only": False, "vaults_per_user": "unlimited", "oldest_app_version": ""})
         a.close()
         b.close()
 
@@ -2657,7 +2700,7 @@ def test_device_code(env):
         a.close()
 
 
-TESTS = [test_onboarding, test_collab, test_devices_and_recovery, test_features, test_attachments, test_move_to_vault, test_note_sharing, test_tables, test_code_blocks, test_html, test_callouts, test_colors, test_code_wrapping, test_editor_mouse, test_editor_safety, test_local_copy, test_ui_basics, test_offline_tabs, test_offline_start, test_mobile, test_quick_notes, test_vault_icons, test_entry_icons, test_tree_order, test_session_ended_while_away, test_comments, test_mentions, test_dates, test_graph, test_recovered_copy, test_note_width, test_admin, test_vault_admins, test_undo_purge, test_device_code]
+TESTS = [test_onboarding, test_collab, test_devices_and_recovery, test_features, test_attachments, test_move_to_vault, test_note_sharing, test_tables, test_code_blocks, test_html, test_callouts, test_colors, test_code_wrapping, test_editor_mouse, test_editor_safety, test_local_copy, test_ui_basics, test_offline_tabs, test_offline_start, test_mobile, test_quick_notes, test_vault_icons, test_entry_icons, test_tree_order, test_session_ended_while_away, test_outdated, test_comments, test_mentions, test_dates, test_graph, test_recovered_copy, test_note_width, test_admin, test_vault_admins, test_undo_purge, test_device_code]
 
 
 def main():

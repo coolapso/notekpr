@@ -79,7 +79,8 @@ crates/core     crypto.rs (envelopes, HPKE, signatures) · comments.rs (signed c
                 membership log) · recover.rs (offline export decryption) · order.rs
                 (the file tree's order: folders first, places set by drag and
                 drop, A–Z) · moving.rs (a note or folder to another vault: what
-                goes, where, what stays) · markdown, search, paths, textdiff
+                goes, where, what stays) · version.rs (release versions, for apps
+                too old for a server) · markdown, search, paths, textdiff
 crates/sync     the client sync engine both clients use (sans-IO): outbox (merge, hold,
                 batch pushes, acks and refusals), rollback recovery, edit splitting ·
                 members.rs (membership log checks, whom to trust) · snapshot.rs (when
@@ -88,7 +89,8 @@ crates/server   axum + SQLite. routes/ (REST) · ws.rs (WebSocket, subscriptions
                 sync.rs (encrypted log, snapshots, key checks) · access.rs (who may
                 do what) · repo/ (all other SQL) · hub.rs (EventBus: live events) ·
                 blobs.rs (attachment store) · instance.rs (runtime settings: limits,
-                read-only mode) · admin_clients.rs (scripts administering the
+                read-only mode) · apps.rs (apps too old for the server:
+                OLDEST_APP_VERSION) · admin_clients.rs (scripts administering the
                 instance: scopes, tokens) · auth.rs (sessions; Admin: admins and
                 admin clients), oidc.rs · migrations/
 crates/editor   the live-preview Markdown editor. Pure model (native tests): text.rs

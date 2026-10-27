@@ -2,7 +2,7 @@
 //! resulting update for sync) or calls the REST API for membership and keys.
 
 use std::cell::RefCell;
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::rc::Rc;
 
 use leptos::prelude::Update;
@@ -2166,11 +2166,41 @@ async fn upload_file(vault: &str, path: &str, bytes: &[u8]) -> Option<(String, S
 pub async fn export_vault(vault: &str) {
     let name = state::step(|c| c.vault_name(vault));
     info("Preparing export…");
+    let (entries, _) = vault_export(vault).await;
+    let zip = match zipfile::write(&entries) {
+        Ok(z) => z,
+        Err(e) => {
+            error(format!("Export failed: {e}"));
+            return;
+        }
+    };
+    let safe: String = name
+        .chars()
+        .map(|c| {
+            if c.is_alphanumeric() || c == ' ' || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    util::download(&format!("{}.zip", safe.trim()), "application/zip", &zip);
+    success(format!("Exported {} items.", entries.len()));
+}
+
+/// A vault's files for an export, at their paths in the vault (comments as
+/// Markdown under `_comments/`), and the icons of its notes, files and
+/// folders by path.
+async fn vault_export(vault: &str) -> (Vec<zipfile::Entry>, BTreeMap<String, String>) {
     let mut entries = Vec::new();
+    let mut icons = BTreeMap::new();
     // Each note's comments go to `_comments/` (after the vault's own files,
     // which keep their paths); their authors by name.
     let mut commented = Vec::new();
     for e in state::step(|c| c.live_entries(vault)) {
+        if let Some(i) = &e.icon {
+            icons.insert(e.path.clone(), i.clone());
+        }
         match e.kind {
             EntryKind::Note => {
                 let (text, has_comments) = step(|c| {
@@ -2218,35 +2248,245 @@ pub async fn export_vault(vault: &str) {
             data: md.into_bytes(),
         });
     }
-    let zip = match zipfile::write(&entries) {
+    (entries, icons)
+}
+
+/// Export the vaults chosen, and the quick notes, as one `.zip` that
+/// [`import_account`] reads back — on this server or another (to move
+/// there). See `notekpr_core::account_export`.
+pub async fn export_account(vaults: Vec<String>, quick_notes: bool) {
+    use notekpr_core::account_export::{self, ExportedVault, Manifest};
+    info("Preparing export…");
+    let names: Vec<String> = step(|c| vaults.iter().map(|v| c.vault_name(v)).collect());
+    let folders =
+        account_export::folder_names(&names.iter().map(String::as_str).collect::<Vec<_>>());
+    let mut manifest = Manifest {
+        format: account_export::FORMAT,
+        created_at: now(),
+        vaults: Vec::new(),
+        quick_notes: None,
+    };
+    let mut files = Vec::new();
+    let within = |folder: &str, entries: Vec<zipfile::Entry>| -> Vec<zipfile::Entry> {
+        entries
+            .into_iter()
+            .map(|e| zipfile::Entry {
+                name: format!("{folder}/{}", e.name),
+                data: e.data,
+            })
+            .collect()
+    };
+    for (v, folder) in vaults.iter().zip(folders) {
+        let (entries, icons) = vault_export(v).await;
+        files.extend(within(&folder, entries));
+        let meta = step(|c| c.replicas.get(v).map(|r| r.meta.clone()))
+            .unwrap_or_else(|| VaultMeta::named(&folder));
+        manifest.vaults.push(ExportedVault {
+            folder,
+            meta,
+            icons,
+        });
+    }
+    if quick_notes && let Some(q) = step(|c| c.quick_notes()) {
+        let (entries, _) = vault_export(&q).await;
+        files.extend(within(notekpr_core::quick::NAME, entries));
+        manifest.quick_notes = Some(notekpr_core::quick::NAME.to_string());
+    }
+    files.insert(
+        0,
+        zipfile::Entry {
+            name: account_export::MANIFEST.to_string(),
+            data: serde_json::to_vec_pretty(&manifest).unwrap_or_default(),
+        },
+    );
+    let zip = match zipfile::write(&files) {
         Ok(z) => z,
         Err(e) => {
             error(format!("Export failed: {e}"));
             return;
         }
     };
-    let safe: String = name
-        .chars()
-        .map(|c| {
-            if c.is_alphanumeric() || c == ' ' || c == '-' {
-                c
-            } else {
-                '_'
-            }
-        })
+    let d = js_sys::Date::new_0();
+    let name = format!(
+        "notekpr {:04}-{:02}-{:02}.zip",
+        d.get_full_year(),
+        d.get_month() + 1,
+        d.get_date()
+    );
+    util::download(&name, "application/zip", &zip);
+    success(format!(
+        "Exported {}{}.",
+        util::count(manifest.vaults.len(), "vault", "vaults"),
+        if manifest.quick_notes.is_some() {
+            " and your quick notes"
+        } else {
+            ""
+        }
+    ));
+}
+
+/// Import an export made by [`export_account`] (here or on another server):
+/// its vaults are created again — a name already taken gets a number — and
+/// its quick notes join this account's, as many as there's room for.
+pub async fn import_account(files: Vec<(String, Vec<u8>)>) {
+    use notekpr_core::account_export;
+    let unpacked = match account_export::unpack(files) {
+        Ok(u) => u,
+        Err(e) => {
+            error(e.to_string());
+            return;
+        }
+    };
+    let quick: Vec<(String, Vec<u8>)> = unpacked
+        .quick_notes
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|(p, _)| notekpr_core::quick::is_top_level(p))
         .collect();
-    util::download(&format!("{}.zip", safe.trim()), "application/zip", &zip);
-    success(format!("Exported {} items.", entries.len()));
+    let quick_count = quick.iter().filter(|(p, _)| paths::is_note(p)).count();
+    let mut what: Vec<String> = unpacked
+        .vaults
+        .iter()
+        .map(|(v, _)| format!("“{}”", v.meta.name))
+        .collect();
+    if quick_count > 0 {
+        what.push(util::count(quick_count, "quick note", "quick notes"));
+    }
+    if what.is_empty() {
+        info("This export holds nothing to import.");
+        return;
+    }
+    if !util::confirm(&format!(
+        "Import {}? Vaults are created anew, without their history or comments.",
+        what.join(", ")
+    )) {
+        return;
+    }
+    let (mut vaults, mut notes, mut atts) = (0, 0, 0);
+    for (v, files) in unpacked.vaults {
+        let taken: std::collections::HashSet<String> = step(|c| {
+            c.replicas
+                .keys()
+                .filter(|id| !c.is_quick_notes(id))
+                .map(|id| c.vault_name(id).to_lowercase())
+                .collect()
+        });
+        let name = account_export::unique_name(v.meta.name.trim(), |n| {
+            taken.contains(&n.to_lowercase()) || notekpr_core::quick::is_reserved_name(n)
+        });
+        let id = match create_vault_of(&name, VaultKind::Regular).await {
+            Ok(Some(id)) => id,
+            Ok(None) => continue,
+            Err(e) => {
+                error(format!("Could not create the vault “{name}”: {e}"));
+                continue;
+            }
+        };
+        vaults += 1;
+        let meta = v.meta.clone();
+        if meta.description.is_some() || meta.icon.is_some() || meta.picture.is_some() {
+            update_vault_meta(&id, |m| {
+                m.description = meta.description;
+                m.icon = meta.icon;
+                m.picture = meta.picture;
+                Ok(())
+            })
+            .await;
+        }
+        let (n, a, _) = import_files(&id, files, false).await;
+        notes += n;
+        atts += a;
+        for (path, icon) in &v.icons {
+            let entry = step(|c| {
+                c.replicas
+                    .get(&id)
+                    .and_then(|r| r.index.find_by_path(path))
+                    .map(|e| e.id)
+            });
+            set_entry_icon(&id, entry.as_deref(), path, icon);
+        }
+    }
+    let mut quick_in = 0;
+    if quick_count > 0 {
+        let q = match step(|c| c.quick_notes()) {
+            Some(q) => Some(q),
+            None => create_vault_of(notekpr_core::quick::NAME, VaultKind::QuickNotes)
+                .await
+                .ok()
+                .flatten(),
+        };
+        if let Some(q) = q {
+            // As many notes as there's room for (and every file).
+            let room = crate::quick::limit().max().map_or(usize::MAX, |m| {
+                (m as usize).saturating_sub(crate::quick::count())
+            });
+            let mut left = room;
+            let quick: Vec<(String, Vec<u8>)> = quick
+                .into_iter()
+                .filter(|(p, _)| {
+                    if !paths::is_note(p) {
+                        return true;
+                    }
+                    let fits = left > 0;
+                    left = left.saturating_sub(1);
+                    fits
+                })
+                .collect();
+            let (n, a, _) = import_files(&q, quick, false).await;
+            quick_in = n;
+            atts += a;
+            if quick_in < quick_count {
+                info(format!(
+                    "{} didn't fit: {}",
+                    util::count(quick_count - quick_in, "quick note", "quick notes"),
+                    notekpr_core::quick::full_message(crate::quick::limit())
+                ));
+            }
+        }
+    }
+    success(format!(
+        "Imported {}, {} and {}{}.",
+        util::count(vaults, "vault", "vaults"),
+        util::count(notes, "note", "notes"),
+        util::count(atts, "file", "files"),
+        if quick_in > 0 {
+            format!(
+                ", and {}",
+                util::count(quick_in, "quick note", "quick notes")
+            )
+        } else {
+            String::new()
+        }
+    ));
 }
 
 /// Import Markdown files and attachments, preserving folders.
-pub async fn import(vault: &str, mut files: Vec<(String, Vec<u8>)>) {
-    files.retain(|(p, _)| !p.split('/').any(|s| s.starts_with('.') || s == "__MACOSX"));
+pub async fn import(vault: &str, files: Vec<(String, Vec<u8>)>) {
+    let (notes, atts, total) = import_files(vault, files, true).await;
+    success(format!(
+        "Imported {notes} notes and {atts} files (of {total})."
+    ));
+}
+
+/// Bring files into a vault, keeping their folders (an export's empty ones,
+/// `folder/.keep`, too): how many notes and files came in, of how many.
+/// `strip_top`: files all in one folder (a folder upload, a zip of one) go
+/// to the top level.
+async fn import_files(
+    vault: &str,
+    mut files: Vec<(String, Vec<u8>)>,
+    strip_top: bool,
+) -> (usize, usize, usize) {
+    let hidden = |s: &str| s.starts_with('.') || s == "__MACOSX";
+    files.retain(|(p, _)| {
+        let (dirs, last) = p.rsplit_once('/').unwrap_or(("", p));
+        !dirs.split('/').any(hidden) && (!hidden(last) || last == ".keep")
+    });
     // Drop a single common top-level folder (from folder uploads or zips).
     let top: Option<String> = files
         .first()
         .and_then(|(p, _)| p.split('/').next().map(str::to_string));
-    if let Some(t) = top
+    if let Some(t) = top.filter(|_| strip_top)
         && files.len() > 1
         && files.iter().all(|(p, _)| p.starts_with(&format!("{t}/")))
     {
@@ -2261,6 +2501,24 @@ pub async fn import(vault: &str, mut files: Vec<(String, Vec<u8>)>) {
     if files.len() < before {
         info("The export's comments (its _comments folder) are not imported.");
     }
+    // Empty folders.
+    let folders: Vec<String> = files
+        .iter()
+        .filter_map(|(p, _)| notekpr_core::account_export::kept_folder(p))
+        .filter_map(|f| paths::normalize(f).ok())
+        .collect();
+    files.retain(|(p, _)| !p.ends_with("/.keep") && p != ".keep");
+    step(|c| {
+        for f in &folders {
+            let exists = c
+                .replicas
+                .get(vault)
+                .is_some_and(|r| r.index.folders().contains(f));
+            if !exists && !c.is_quick_notes(vault) {
+                new_folder_at(c, vault, f);
+            }
+        }
+    });
     let total = files.len();
     let mut notes = 0;
     let mut atts = 0;
@@ -2290,9 +2548,8 @@ pub async fn import(vault: &str, mut files: Vec<(String, Vec<u8>)>) {
         }
     }
     step(state::flush_now);
-    success(format!(
-        "Imported {notes} notes and {atts} files (of {total})."
-    ));
+    state::ui().tree_rev.update(|v| *v += 1);
+    (notes, atts, total)
 }
 
 pub async fn files_to_import(files: Vec<web_sys::File>) -> Vec<(String, Vec<u8>)> {

@@ -170,6 +170,10 @@ read anything.
   recovery keys, import and export — also while its sync daemon runs.
 * Import folders of Markdown and zip files (an Obsidian vault, say) with their
   attachments; export a vault as plain `.md` files any time.
+* Moving to another server: export the vaults you choose and your quick
+  notes as one `.zip` (Settings → Account → Data), and import it there — the
+  vaults come back with their folders, files and icons; the new server
+  starts fresh, without history, comments or shares.
 * Never locked in: an encrypted export plus your recovery key turn back into
   plain files without the server or the apps
   ([recovery](docs/recovery.md)).

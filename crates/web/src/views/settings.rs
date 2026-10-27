@@ -63,6 +63,41 @@ pub fn Settings(tab: String) -> impl IntoView {
 fn Account() -> impl IntoView {
     let ui = ui();
     let u = ui.user.get_untracked();
+    // What an export leaves out (everything goes, unless unticked).
+    let skipped = RwSignal::new(std::collections::BTreeSet::<String>::new());
+    let quick_notes = RwSignal::new(true);
+    let has_quick = move || {
+        ui.vaults.track();
+        step(|c| c.quick_notes().is_some())
+    };
+    let busy = RwSignal::new(false);
+    let chosen = move || {
+        let s = skipped.get();
+        ui.vaults
+            .get()
+            .into_iter()
+            .filter(|v| v.loaded && !s.contains(&v.id))
+            .map(|v| v.id)
+            .collect::<Vec<_>>()
+    };
+    let export = move |_| {
+        let (vaults, quick) = (chosen(), quick_notes.get_untracked() && has_quick());
+        busy.set(true);
+        leptos::task::spawn_local(async move {
+            actions::export_account(vaults, quick).await;
+            busy.set(false);
+        });
+    };
+    let import = move |_| {
+        actions::pick_files(false, ".zip", move |files| {
+            busy.set(true);
+            leptos::task::spawn_local(async move {
+                let items = actions::files_to_import(files).await;
+                actions::import_account(items).await;
+                busy.set(false);
+            });
+        });
+    };
     let fp = step(|c| c.account.as_ref().map(|a| a.public().fingerprint())).unwrap_or_default();
     // Asked afresh: the server may have been updated since this page loaded.
     let server_version = RwSignal::new(None::<String>);
@@ -97,18 +132,42 @@ fn Account() -> impl IntoView {
         <p class="fp big">{fp}</p>
         <p class="muted small">"When someone shares a vault with you, they can compare this fingerprint with what their screen shows to make sure nobody is in the middle."</p>
         <h3>"Data"</h3>
-        <p class="muted small">"Export a vault as plain Markdown files in a .zip, with its folders and attachments. Your data is never locked into a proprietary format."</p>
-        <div class="settings-grid">
+        <p class="muted small">"Export your notes as plain Markdown files in one .zip: the vaults you choose and your quick notes, with their folders and attachments. Your data is never locked into a proprietary format."</p>
+        <div class="export-choice">
+            {move || has_quick().then(|| view! {
+                <label class="check">
+                    <input type="checkbox" class="export-quick" prop:checked=move || quick_notes.get()
+                        on:change=move |ev| quick_notes.set(event_target_checked(&ev))/>
+                    <span>"Quick notes"</span>
+                </label>
+            })}
             {move || ui.vaults.get().into_iter().map(|v| {
                 let id = v.id.clone();
+                let id2 = v.id.clone();
+                let loaded = v.loaded;
                 view! {
-                    <button class="btn" disabled=!v.loaded title=v.error.clone() on:click=move |_| {
-                        let id = id.clone();
-                        leptos::task::spawn_local(async move { actions::export_vault(&id).await });
-                    }><Icon name="download"/><span class="ellipsis">{format!("Export {}", v.name)}</span></button>
+                    <label class="check" title=v.error.clone()>
+                        <input type="checkbox" class="export-vault" disabled=!loaded
+                            prop:checked=move || loaded && !skipped.with(|s| s.contains(&id))
+                            on:change=move |ev| {
+                                let on = event_target_checked(&ev);
+                                skipped.update(|s| { if on { s.remove(&id2); } else { s.insert(id2.clone()); } });
+                            }/>
+                        {super::vault_icon(Some(&v))}
+                        <span class="ellipsis">{v.name.clone()}</span>
+                        {(v.role != Role::Owner).then(|| view! { <span class="muted small">"shared with you"</span> })}
+                    </label>
                 }
             }).collect_view()}
         </div>
+        <div class="row">
+            <button class="btn primary export-account"
+                disabled=move || busy.get() || (chosen().is_empty() && !(quick_notes.get() && has_quick()))
+                on:click=export><Icon name="download"/>" Export"</button>
+            <button class="btn import-account" disabled=move || busy.get() on:click=import><Icon name="upload"/>" Import an export…"</button>
+            <Show when=move || busy.get()><span class="spinner inline"></span></Show>
+        </div>
+        <p class="muted small">"Moving to another notekpr server? Export here, sign up there and import the .zip under Settings → Account. The vaults come back named as they were, with their folders, files and icons, and your quick notes join that account's — without history, comments or the people they were shared with: the new server starts fresh."</p>
         <h3>"This browser"</h3>
         <p class="muted small">"Signing out keeps this browser as one of your devices: it keeps its key and your unsent changes, so next time you only sign in and your notes open right away."</p>
         <p class="muted small">"On a shared or borrowed computer, forget this browser instead: it signs out, removes this device from your account and deletes its key, unsent changes and local copy of your notes. Signing in here again then needs approval from another device or your recovery key."</p>

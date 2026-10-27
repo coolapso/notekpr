@@ -3,6 +3,7 @@
 //! and agent gateway, and to WebAssembly for the browser client, so every
 //! component encrypts and merges documents with exactly the same code.
 
+pub mod account_export;
 pub mod b64;
 pub mod comments;
 pub mod crypto;

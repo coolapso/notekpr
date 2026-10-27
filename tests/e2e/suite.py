@@ -506,16 +506,111 @@ def test_attachments(env):
             return b.js("return window.__img") == "ok"
         check(blob_loads(), "the decrypted image is a readable blob while signed in")
         b.js("history.pushState(null, '', '/settings/account'); dispatchEvent(new PopStateEvent('popstate'));")
-        b.click_el(b.find_text(".settings-body button", "Export My notes", 10))
-        b.wait("return window.__downloads.includes('My notes.zip')", 15, "vault export downloaded")
-        check(True, "account settings export a vault as a .zip")
+        b.click(".export-account")
+        b.wait("return window.__downloads.some(n => n.startsWith('notekpr ') && n.endsWith('.zip'))", 15, "export downloaded")
+        check(True, "account settings export the vaults as a .zip")
         b.wait("return (document.querySelector('.app-version')?.textContent || '').includes('the server:')", 10, "the versions")
         version = api_get(b, "/info")["version"]
         check(b.text(".app-version") == f"This app: {version} · the server: {version}", "account settings say which version the app and the server are")
+        b.wait("return !document.querySelector('.toast')", 15, "the export's notices gone")
         b.click_el(b.find_text(".settings-body button", "Sign out", 10))
         b.find(".dev-box input", 15)
         check(not blob_loads(), "signing out revokes decrypted attachment URLs")
     finally:
+        b.close()
+
+
+# Keep what the page downloads (name and bytes, base64) in `__download`.
+CAPTURE_DOWNLOADS = """
+window.__downloads = []; window.__download = null;
+// (The page's policy doesn't let it fetch blob: URLs; the blob is read instead.)
+const blobs = new Map();
+const create = URL.createObjectURL;
+URL.createObjectURL = function (b) { const u = create.call(URL, b); blobs.set(u, b); return u; };
+const click = HTMLAnchorElement.prototype.click;
+HTMLAnchorElement.prototype.click = function () {
+  if (!this.download) return click.call(this);
+  const name = this.download;
+  window.__downloads.push(name);
+  blobs.get(this.href).arrayBuffer().then(b => {
+    let s = '';
+    new Uint8Array(b).forEach(c => s += String.fromCharCode(c));
+    window.__download = [name, btoa(s)];
+  });
+};
+"""
+
+# The next file picker the page opens gets this file (name, base64 bytes).
+CHOOSE_FILE = """
+const bytes = Uint8Array.from(atob(arguments[1]), c => c.charCodeAt(0));
+window.__file = new File([bytes], arguments[0], {type: 'application/zip'});
+const click = HTMLInputElement.prototype.click;
+HTMLInputElement.prototype.click = function () {
+  if (this.type !== 'file' || !window.__file) return click.call(this);
+  const dt = new DataTransfer();
+  dt.items.add(window.__file);
+  this.files = dt.files;
+  this.dispatchEvent(new Event('change'));
+};
+"""
+
+TO_ACCOUNT_SETTINGS = "history.pushState(null, '', '/settings/account'); dispatchEvent(new PopStateEvent('popstate'));"
+
+
+def test_export_import(env):
+    """Moving to another server by export and import: the vaults chosen and
+    the quick notes in one .zip, brought back on another account."""
+    a, b = Browser(), Browser()
+    vaults = "return Array.from(document.querySelectorAll('.export-choice .export-vault')).map(i => i.closest('label').textContent)"
+    try:
+        signup(a, uniq("ivy"))
+        new_note(a, "Packing", "socks and boots")
+        a.click(".vault-btn")
+        a.click_el(a.find_text(".vault-menu button", "New vault"))
+        a.type(".modal input", "Secret")
+        a.click(".modal button[type=submit]")
+        a.find_text(".page-head h1", "Secret", 15)
+        new_note(a, "Hidden", "not exported")
+        a.js("const ed=document.querySelector('.ed'); ed.focus(); const s=getSelection(); s.selectAllChildren(ed); s.collapseToEnd();")
+        a.chord(KEYS["alt"], "q")
+        a.wait("return /^\\d{4}-/.test((document.querySelector('.note-title') || {}).value || '')", 10, "a quick note")
+        a.keys("Call mum")
+        a.wait("return Object.keys(localStorage).filter(k => k.startsWith('notekpr.pending.') && localStorage.getItem(k) !== '[]').length === 0", 20, "synced")
+        a.js(TO_ACCOUNT_SETTINGS)
+        a.find(".export-account", 10)
+        check(a.js("return document.querySelectorAll('.export-choice input:checked').length") == 3,
+              "every vault and the quick notes are ticked for export")
+        a.js("Array.from(document.querySelectorAll('.export-choice label')).find(l => l.textContent.includes('Secret')).querySelector('input').click()")
+        a.js(CAPTURE_DOWNLOADS)
+        a.click(".export-account")
+        a.wait("return window.__download !== null", 20, "the export")
+        name, data = a.js("return window.__download")
+        check(name.startswith("notekpr ") and name.endswith(".zip"), "the vaults chosen and the quick notes go into one .zip")
+        a.shot("export-choice")
+
+        # Another account — as on another server — imports it.
+        signup(b, uniq("ivo"))
+        b.js("window.confirm = () => true")
+        b.js(TO_ACCOUNT_SETTINGS)
+        b.find(".import-account", 10)
+        b.js(CHOOSE_FILE, name, data)
+        b.click(".import-account")
+        b.find_text(".toast", "Imported 1 vault", 30)
+        b.wait("return Array.from(document.querySelectorAll('.export-choice .export-vault')).length === 2", 10, "the new vault listed")
+        names = b.js(vaults)
+        check(any("My notes 2" in n for n in names) and not any("Secret" in n for n in names),
+              "the vault chosen comes back (a name already taken gets a number), the other doesn't")
+        b.click(".vault-btn")
+        b.click_el(b.find_text(".vault-menu button", "My notes 2"))
+        b.click_el(b.find_text(".tree-item", "Packing", 15))
+        b.wait("return document.querySelector('.ed') && document.querySelector('.ed').textContent.includes('socks and boots')", 15, "the note")
+        check(True, "with its notes")
+        b.click(".sb-quick .sb-link")
+        b.wait("return Array.from(document.querySelectorAll('.qn-card .nc-snip')).some(e => e.textContent.includes('Call mum'))", 15, "the quick note")
+        check(True, "the quick notes join that account's")
+        check(not severe_logs(a, b), "no browser errors")
+    finally:
+        a.close()
         b.close()
 
 
@@ -2700,7 +2795,7 @@ def test_device_code(env):
         a.close()
 
 
-TESTS = [test_onboarding, test_collab, test_devices_and_recovery, test_features, test_attachments, test_move_to_vault, test_note_sharing, test_tables, test_code_blocks, test_html, test_callouts, test_colors, test_code_wrapping, test_editor_mouse, test_editor_safety, test_local_copy, test_ui_basics, test_offline_tabs, test_offline_start, test_mobile, test_quick_notes, test_vault_icons, test_entry_icons, test_tree_order, test_session_ended_while_away, test_outdated, test_comments, test_mentions, test_dates, test_graph, test_recovered_copy, test_note_width, test_admin, test_vault_admins, test_undo_purge, test_device_code]
+TESTS = [test_onboarding, test_collab, test_devices_and_recovery, test_features, test_attachments, test_export_import, test_move_to_vault, test_note_sharing, test_tables, test_code_blocks, test_html, test_callouts, test_colors, test_code_wrapping, test_editor_mouse, test_editor_safety, test_local_copy, test_ui_basics, test_offline_tabs, test_offline_start, test_mobile, test_quick_notes, test_vault_icons, test_entry_icons, test_tree_order, test_session_ended_while_away, test_outdated, test_comments, test_mentions, test_dates, test_graph, test_recovered_copy, test_note_width, test_admin, test_vault_admins, test_undo_purge, test_device_code]
 
 
 def main():

@@ -1040,3 +1040,5 @@ label.btn.disabled { opacity: .6; pointer-events: none; }
 .nowrap { white-space: nowrap; flex: none; }
 .admin-client-new .scopes { display: flex; flex-direction: column; margin: 4px 0 10px; }
 .admin-client-new .scopes .check { margin: 3px 0; }
+.export-choice { display: flex; flex-direction: column; margin: 4px 0 10px; }
+.export-choice .check { margin: 4px 0; min-width: 0; }

@@ -9,6 +9,7 @@ pub mod comments;
 pub mod crypto;
 pub mod dates;
 pub mod doc;
+pub mod drawing;
 pub mod engine;
 pub mod keys;
 pub mod markdown;

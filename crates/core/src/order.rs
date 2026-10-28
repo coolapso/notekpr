@@ -140,10 +140,11 @@ impl Child {
             .is_none_or(|e| e.kind == EntryKind::Folder)
     }
 
-    /// The name shown for it: a note's title, otherwise its file name.
+    /// The name shown for it: a note's or drawing's title, otherwise its
+    /// file name.
     pub fn name(&self) -> &str {
         match &self.entry {
-            Some(e) if e.kind == EntryKind::Note => e.title(),
+            Some(e) if matches!(e.kind, EntryKind::Note | EntryKind::Drawing) => e.title(),
             _ => paths::file_name(&self.path),
         }
     }

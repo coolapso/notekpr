@@ -18,6 +18,9 @@ fn paths(name: &str) -> &'static str {
         "file-plus" => {
             r#"<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M12 11v6M9 14h6"/>"#
         }
+        "drawing" => {
+            r#"<rect x="3" y="3" width="8" height="8" rx="1.5"/><circle cx="17" cy="7" r="4"/><path d="M3 18c2.5-3 5 3 7.5 0s5 3 7.5 0 2.5 1.5 3 1"/>"#
+        }
         "paperclip" => {
             r#"<path d="m21 11-8.5 8.5a5 5 0 0 1-7-7L14 4a3.5 3.5 0 0 1 5 5l-8.5 8.5a2 2 0 0 1-3-3L15 7"/>"#
         }

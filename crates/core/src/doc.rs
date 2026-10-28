@@ -331,6 +331,9 @@ pub enum EntryKind {
     Note,
     Attachment,
     Folder,
+    /// A drawing: its object holds elements, not text (see
+    /// [`crate::drawing`]).
+    Drawing,
 }
 
 impl EntryKind {
@@ -339,6 +342,7 @@ impl EntryKind {
             EntryKind::Note => "note",
             EntryKind::Attachment => "attachment",
             EntryKind::Folder => "folder",
+            EntryKind::Drawing => "drawing",
         }
     }
 
@@ -347,6 +351,7 @@ impl EntryKind {
             "note" => Some(Self::Note),
             "attachment" => Some(Self::Attachment),
             "folder" => Some(Self::Folder),
+            "drawing" => Some(Self::Drawing),
             _ => None,
         }
     }
@@ -394,8 +399,13 @@ pub fn clean_icon(icon: &str) -> std::result::Result<Option<String>, String> {
 }
 
 impl Entry {
+    /// A note's or drawing's name: its file name without `.md` or
+    /// `.excalidraw`.
     pub fn title(&self) -> &str {
-        paths::title(&self.path)
+        match self.kind {
+            EntryKind::Drawing => paths::drawing_title(&self.path),
+            _ => paths::title(&self.path),
+        }
     }
 
     pub fn is_live(&self) -> bool {

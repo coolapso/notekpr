@@ -242,6 +242,7 @@ pub fn Tree(vault: String) -> impl IntoView {
                     let icon = match row.kind {
                         EntryKind::Folder => "folder",
                         EntryKind::Note => "file",
+                        EntryKind::Drawing => "drawing",
                         EntryKind::Attachment => if crate::util::is_image(&row.name) { "image" } else { "paperclip" },
                     };
                     let indent = 8 + row.depth * 14;
@@ -254,7 +255,7 @@ pub fn Tree(vault: String) -> impl IntoView {
                         move |_| {
                             match kind {
                                 EntryKind::Folder => expanded.update(|s| { if !s.remove(&path) { s.insert(path.clone()); } }),
-                                EntryKind::Note => if let Some(id) = &id { state::navigate(Route::Note(vault.clone(), id.clone())); },
+                                EntryKind::Note | EntryKind::Drawing => if let Some(id) = &id { state::navigate(Route::Note(vault.clone(), id.clone())); },
                                 EntryKind::Attachment => if let Some(id) = &id {
                                     let (v, i) = (vault.clone(), id.clone());
                                     leptos::task::spawn_local(async move { actions::open_attachment(&v, &i).await });
@@ -439,9 +440,10 @@ fn RowMenu(
                 let id_move = id3.clone();
                 let id_del = id4.clone();
                 let p_del = p3.clone();
-                // Notes and folders; files go with the notes linking to them.
+                // Notes, drawings and folders; files go with the notes
+                // linking to them.
                 let to_vault = match kind {
-                    EntryKind::Note => id3.clone().map(What::Note),
+                    EntryKind::Note | EntryKind::Drawing => id3.clone().map(What::Note),
                     EntryKind::Folder => Some(What::Folder(path.clone())),
                     EntryKind::Attachment => None,
                 };

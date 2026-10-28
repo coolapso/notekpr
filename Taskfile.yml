@@ -284,7 +284,7 @@ tasks:
     desc: Clippy on every crate (warnings are errors), including the web client for wasm32
     deps: [rust]
     cmds:
-      - cargo clippy --locked -p notekpr-core -p notekpr-server -p notekpr-sync -p notekpr-client -p notekpr-editor -p notekpr-load-events -p notekpr-load -p notekpr-load-ui --all-targets -- -D warnings
+      - cargo clippy --locked -p notekpr-core -p notekpr-draw -p notekpr-server -p notekpr-sync -p notekpr-client -p notekpr-editor -p notekpr-load-events -p notekpr-load -p notekpr-load-ui --all-targets -- -D warnings
       # The web client's tests run natively.
       - cargo clippy --locked -p notekpr-web --tests -- -D warnings -A clippy::type_complexity
       - CARGO_TARGET_DIR={{.WEB_TARGET_DIR}} cargo clippy --locked -p notekpr-web --target wasm32-unknown-unknown -- -D warnings -A clippy::type_complexity

@@ -1064,3 +1064,89 @@ async fn a_deleted_folder_takes_what_a_newer_release_added_in_it_along() {
     assert!(!g.is_folder("Board"));
     assert!(!g.replica.index.holds_unknown("Board"));
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn drawings_are_excalidraw_files_merged_element_by_element() {
+    use notekpr_core::doc::EntryKind;
+    use notekpr_draw::file::read_drawing;
+    use notekpr_draw::restore::Ids;
+    use notekpr_draw::scene::ElementType;
+    let srv = start().await;
+    let alice = login(&srv, "alice").await;
+    manage::create_vault(&alice, "Art").await.unwrap();
+    let h = hub(&alice).await;
+    let v = h.resolve("Art").await.unwrap();
+    let vid = v.lock().await.id().to_string();
+    let file = include_str!("../../draw/tests/fixtures/example.excalidraw");
+    let scene = read_drawing(file, &mut Ids::new(1)).unwrap().scene;
+    let id = {
+        let mut g = v.lock().await;
+        let id = g.create_drawing("Board", &scene).unwrap().id;
+        g.save().unwrap();
+        id
+    };
+    let mut m = Mirror::new(h.clone(), &srv.path("mirror")).await.unwrap();
+    m.reconcile_all(true).await.unwrap();
+    let dir = m.vault_dir(&vid).unwrap().to_path_buf();
+    let path = dir.join("Board.excalidraw");
+    let on_disk = read(&path);
+    assert_eq!(
+        read_drawing(&on_disk, &mut Ids::new(2)).unwrap().scene,
+        scene
+    );
+
+    let first = |t: ElementType| {
+        scene
+            .visible()
+            .find(|e| e.kind() == t)
+            .unwrap()
+            .id()
+            .to_string()
+    };
+    let (ellipse, rect) = (first(ElementType::Ellipse), first(ElementType::Rectangle));
+    // Elsewhere, the ellipse moves…
+    {
+        let mut g = v.lock().await;
+        let mut moved = g.drawing(&id);
+        for e in &mut moved.elements {
+            if e.id() == ellipse {
+                e.set("x", serde_json::json!(7));
+            }
+        }
+        assert!(g.set_drawing(&id, &moved).unwrap());
+        g.save().unwrap();
+    }
+    // …while the file is edited here (another app recolours the rectangle).
+    let mut json: serde_json::Value = serde_json::from_str(&on_disk).unwrap();
+    for e in json["elements"].as_array_mut().unwrap() {
+        if e["id"] == rect.as_str() {
+            e["strokeColor"] = "#e03131".into();
+        }
+    }
+    write(&path, &serde_json::to_string_pretty(&json).unwrap());
+    let r = m.reconcile_all(true).await.unwrap();
+    assert_eq!(r.ingested, 1, "{r:?}");
+    for d in [
+        v.lock().await.drawing(&id),
+        read_drawing(&read(&path), &mut Ids::new(3)).unwrap().scene,
+    ] {
+        assert_eq!(d.element(&ellipse).unwrap().x(), 7.0);
+        assert_eq!(d.element(&rect).unwrap().stroke_color(), "#e03131");
+    }
+
+    // A new Excalidraw file becomes a drawing; anything else by that name
+    // stays a file.
+    write(
+        &dir.join("Sketch.excalidraw"),
+        r#"{"type":"excalidraw","version":2,"elements":[{"id":"a","type":"ellipse","width":5}]}"#,
+    );
+    write(&dir.join("Broken.excalidraw"), "not a drawing");
+    let r = m.reconcile_all(true).await.unwrap();
+    assert_eq!(r.created, 2, "{r:?}");
+    let g = v.lock().await;
+    let kind = |p: &str| g.find(p).map(|(_, e)| e.kind);
+    assert_eq!(kind("Sketch.excalidraw"), Some(EntryKind::Drawing));
+    assert_eq!(kind("Broken.excalidraw"), Some(EntryKind::Attachment));
+    let (_, sketch) = g.find("Sketch").unwrap();
+    assert_eq!(g.drawing(&sketch.id).elements[0].width(), 5.0);
+}

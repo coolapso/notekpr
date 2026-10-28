@@ -1,6 +1,7 @@
 pub mod auth;
 pub mod comments;
 pub mod dialogs;
+pub mod drawing;
 pub mod graph;
 pub mod home;
 pub mod icons;
@@ -58,7 +59,7 @@ pub fn Shell() -> impl IntoView {
                     // The quick notes' vault is shown as the quick notes.
                     Route::Vault(v) | Route::Trash(v) if state::step(|c| c.is_quick_notes(&v)) => view! { <quick::QuickPage/> }.into_any(),
                     Route::Vault(v) => view! { <home::VaultHome vault=v/> }.into_any(),
-                    Route::Note(v, n) => view! { <note::NoteView vault=v note=n/> }.into_any(),
+                    Route::Note(v, n) => view! { <drawing::Document vault=v note=n/> }.into_any(),
                     Route::Trash(v) => view! { <home::Trash vault=v/> }.into_any(),
                     Route::Settings(tab) => view! { <settings::Settings tab=tab/> }.into_any(),
                     Route::Device(code) => view! { <settings::DeviceCodePage code=code/> }.into_any(),

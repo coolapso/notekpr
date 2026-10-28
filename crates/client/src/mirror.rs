@@ -828,9 +828,75 @@ fn candidate_bases(bases: &[Base]) -> &[Base] {
     &bases[from..]
 }
 
-/// Apply an external edit of a note relative to the best base. Returns the
-/// state of the fork (a valid base for what is on disk now).
+/// What the folder holds for a note or drawing: its text, or the drawing as
+/// an Excalidraw file (Excalidraw and Obsidian's Excalidraw plugin open it).
+fn file_text(v: &Vault, id: &str, kind: EntryKind) -> String {
+    match kind {
+        EntryKind::Drawing => notekpr_draw::file::write_excalidraw(&v.drawing(id)),
+        _ => v.note_text(id),
+    }
+}
+
+/// Apply an external edit of a note or drawing relative to the best base.
+/// Returns the state of the fork (a valid base for what is on disk now).
 fn ingest_note(v: &mut Vault, id: &str, rec: &FileRecord, disk: &str) -> Result<Vec<u8>> {
+    match rec.kind {
+        EntryKind::Drawing => ingest_drawing(v, id, rec, disk),
+        _ => ingest_text(v, id, rec, disk),
+    }
+}
+
+/// A drawing read from its file in the folder; `None` if it isn't one (yet:
+/// an editor may be halfway through saving).
+fn drawing_from_file(text: &str) -> Option<notekpr_draw::scene::Scene> {
+    let mut ids = notekpr_draw::restore::Ids::new(now_ns() as u64);
+    notekpr_draw::file::read_drawing(text, &mut ids)
+        .ok()
+        .map(|d| d.scene)
+}
+
+/// [`ingest_note`] for a drawing: what changed between the base and the
+/// file, element by element and property by property, is applied to the
+/// drawing — changes made elsewhere meanwhile stay.
+fn ingest_drawing(v: &mut Vault, id: &str, rec: &FileRecord, disk: &str) -> Result<Vec<u8>> {
+    let live_state = v
+        .replica
+        .notes
+        .entry(id.to_string())
+        .or_default()
+        .encode_state();
+    let Some(scene) = drawing_from_file(disk) else {
+        bail!("an Excalidraw file in the folder is not a drawing (any more); it is not synced");
+    };
+    if v.drawing(id) == scene {
+        return Ok(live_state);
+    }
+    // The base sharing the most elements with the file is the one the
+    // editor started from.
+    let mut candidates: Vec<NoteDoc> = candidate_bases(&rec.bases)
+        .iter()
+        .filter_map(|b| fork_note(&b.state).ok())
+        .collect();
+    let shared = |doc: &NoteDoc| {
+        let base = doc.drawing().scene();
+        scene
+            .elements
+            .iter()
+            .filter(|e| base.element(e.id()) == Some(*e))
+            .count()
+    };
+    let best = (0..candidates.len()).max_by_key(|&i| (shared(&candidates[i]), i));
+    let fork = match best {
+        Some(i) => candidates.swap_remove(i),
+        None => fork_note(&live_state)?,
+    };
+    let updates = fork.drawing().set_scene_split(&scene, v.update_budget());
+    v.merge_note_updates(id, updates)?;
+    Ok(fork.encode_state())
+}
+
+/// [`ingest_note`] for a note.
+fn ingest_text(v: &mut Vault, id: &str, rec: &FileRecord, disk: &str) -> Result<Vec<u8>> {
     let live_state = v
         .replica
         .notes
@@ -1000,7 +1066,7 @@ fn ingest_record(
             }
             let hash = content_hash(&data);
             match rec.kind {
-                EntryKind::Note => {
+                EntryKind::Note | EntryKind::Drawing => {
                     let Ok(text) = String::from_utf8(data) else {
                         mv.warn_once(
                             &format!("utf8:{id}"),
@@ -1057,8 +1123,17 @@ fn ingest_new_file(
     };
     let hash = content_hash(&data);
     let is_note = paths::is_note(path);
+    // An Excalidraw file becomes a drawing (anything else by that name, or
+    // one in the quick notes, which hold notes, stays a file).
+    let drawing = if paths::is_drawing(path) && !v.is_quick_notes() {
+        std::str::from_utf8(&data).ok().and_then(drawing_from_file)
+    } else {
+        None
+    };
     let kind = if is_note {
         EntryKind::Note
+    } else if drawing.is_some() {
+        EntryKind::Drawing
     } else {
         EntryKind::Attachment
     };
@@ -1118,7 +1193,16 @@ fn ingest_new_file(
             return Ok(());
         }
     }
-    let (r, state) = if is_note {
+    let (r, state) = if let Some(scene) = &drawing {
+        let r = v.create_drawing(path, scene)?;
+        let state = v
+            .replica
+            .notes
+            .get(&r.id)
+            .map(|n| n.encode_state())
+            .unwrap_or_default();
+        (r, Some(state))
+    } else if is_note {
         let Ok(text) = String::from_utf8(data) else {
             mv.warn_once(
                 &format!("utf8:{path}"),
@@ -1202,7 +1286,7 @@ fn remove_gone(
     // a new note.
     if let Some(data) = edited
         && writable
-        && rec.kind == EntryKind::Note
+        && matches!(rec.kind, EntryKind::Note | EntryKind::Drawing)
         && v.entry(id).is_some()
         && let Ok(text) = String::from_utf8(data)
     {
@@ -1282,7 +1366,7 @@ fn apply_move(
         state => {
             if let DiskState::Modified(data, _) = state
                 && writable
-                && rec.kind == EntryKind::Note
+                && matches!(rec.kind, EntryKind::Note | EntryKind::Drawing)
                 && let Ok(text) = String::from_utf8(data)
             {
                 let hash = content_hash(text.as_bytes());
@@ -1332,6 +1416,7 @@ fn write_note(
     mv: &mut MirrorVault,
     v: &mut Vault,
     id: &str,
+    kind: EntryKind,
     p: &str,
     disk: &str,
     live_keys: &BTreeSet<String>,
@@ -1340,7 +1425,7 @@ fn write_note(
     report: &mut Report,
 ) -> Result<()> {
     let path = disk_path(&mv.dir, disk)?;
-    let text = v.note_text(id);
+    let text = file_text(v, id, kind);
     let hash = content_hash(text.as_bytes());
     let Some(mut rec) = mv.state.files.get(id).cloned() else {
         // Not written yet. A file already there is adopted if identical,
@@ -1394,7 +1479,7 @@ fn write_note(
         let mut rec = FileRecord {
             path: p.to_string(),
             disk: (disk != p).then(|| disk.to_string()),
-            kind: EntryKind::Note,
+            kind,
             hash: hash.clone(),
             size: 0,
             mtime_ns: 0,
@@ -1431,7 +1516,7 @@ fn write_note(
         }
         DiskState::Unchanged(st) => st,
     };
-    let text = v.note_text(id);
+    let text = file_text(v, id, kind);
     let hash = content_hash(text.as_bytes());
     let state = v
         .replica
@@ -2102,10 +2187,11 @@ impl Mirror {
                         }
                         Ok(())
                     }
-                    EntryKind::Note => write_note(
+                    EntryKind::Note | EntryKind::Drawing => write_note(
                         mv,
                         &mut v,
                         id,
+                        e.kind,
                         p,
                         &disk_of(id, p),
                         &live_keys,

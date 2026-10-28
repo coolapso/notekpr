@@ -1311,6 +1311,26 @@ pub fn set_note_text(c: &mut Core, vault: &str, note: &str, text: &str) -> usize
     count
 }
 
+/// Makes a drawing's content `scene` (changed elements only), in updates
+/// within the server's limit. Returns how many.
+pub fn set_drawing(
+    c: &mut Core,
+    vault: &str,
+    id: &str,
+    scene: &notekpr_draw::scene::Scene,
+) -> usize {
+    let budget = limits().edit_budget();
+    let Some(d) = c.replicas.get_mut(vault).and_then(|r| r.notes.get_mut(id)) else {
+        return 0;
+    };
+    let ups = d.drawing().set_scene_split(scene, budget);
+    let count = ups.len();
+    for u in ups {
+        local_update(c, vault, id, u);
+    }
+    count
+}
+
 pub(super) fn update_pending_count(c: &Core) {
     ui().pending.set(c.pending_count());
 }

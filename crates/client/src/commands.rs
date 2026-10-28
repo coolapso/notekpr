@@ -1648,6 +1648,10 @@ async fn cat(ctx: &Ctx, vault: &str, path: &str) -> Result<()> {
             doc.content.into_bytes()
         }
         EntryKind::Attachment => hub.session.attachment(&v, &e.id).await?,
+        // As an Excalidraw file.
+        EntryKind::Drawing => {
+            notekpr_draw::file::write_excalidraw(&v.lock().await.drawing(&e.id)).into_bytes()
+        }
         EntryKind::Folder => bail!("'{path}' is a folder; use `ls`"),
     };
     let mut out = std::io::stdout().lock();

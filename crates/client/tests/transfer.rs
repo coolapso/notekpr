@@ -9,6 +9,16 @@ use notekpr_client::hub::Hub;
 use notekpr_client::{manage, ops, transfer};
 use notekpr_core::doc::EntryKind;
 
+async fn src_id(hub: &Hub) -> String {
+    hub.resolve("Source")
+        .await
+        .unwrap()
+        .lock()
+        .await
+        .id()
+        .to_string()
+}
+
 async fn snapshot(hub: &Hub, vault: &str) -> BTreeMap<String, Vec<u8>> {
     let v = hub.resolve(vault).await.unwrap();
     let entries = v.lock().await.paths();
@@ -17,6 +27,9 @@ async fn snapshot(hub: &Hub, vault: &str) -> BTreeMap<String, Vec<u8>> {
         let data = match e.kind {
             EntryKind::Note => v.lock().await.note_text(&e.id).into_bytes(),
             EntryKind::Attachment => hub.session.attachment(&v, &e.id).await.unwrap(),
+            EntryKind::Drawing => {
+                notekpr_draw::file::write_excalidraw(&v.lock().await.drawing(&e.id)).into_bytes()
+            }
             EntryKind::Folder => b"<folder>".to_vec(),
         };
         out.insert(p, data);
@@ -66,8 +79,16 @@ async fn export_import_round_trip_preserves_paths_and_content() {
         let v = h.resolve("Source").await.unwrap();
         let mut g = v.lock().await;
         g.create_folder("Empty folder").unwrap();
+        // A drawing: exported as an Excalidraw file, imported as a drawing.
+        let file = include_str!("../../draw/tests/fixtures/example.excalidraw");
+        let mut ids = notekpr_draw::restore::Ids::new(1);
+        let scene = notekpr_draw::file::read_drawing(file, &mut ids)
+            .unwrap()
+            .scene;
+        g.create_drawing("Projects/Architecture", &scene).unwrap();
         g.save().unwrap();
     }
+    h.local_changed(&src_id(&h).await, vec![], true).await;
     ops::put_document(&h, "Source", "Trashed.md", "gone", None)
         .await
         .unwrap();
@@ -75,12 +96,16 @@ async fn export_import_round_trip_preserves_paths_and_content() {
         .await
         .unwrap();
     let original = snapshot(&h, "Source").await;
-    assert_eq!(original.len(), 5);
+    assert_eq!(original.len(), 6);
+    assert!(original.contains_key("Projects/Architecture.excalidraw"));
 
     let src = h.resolve("Source").await.unwrap();
     let dir = srv.path("export-dir");
     let r = transfer::export(&h, &src, &dir, false).await.unwrap();
-    assert_eq!((r.notes, r.attachments, r.folders), (3, 1, 1));
+    assert_eq!(
+        (r.notes, r.drawings, r.attachments, r.folders),
+        (3, 1, 1, 1)
+    );
     assert_eq!(
         std::fs::read_to_string(dir.join("Projects/Plan.md")).unwrap(),
         "---\ntags: [work]\n---\n# Plän ✓\n"
@@ -100,12 +125,20 @@ async fn export_import_round_trip_preserves_paths_and_content() {
         .await
         .unwrap();
     assert_eq!(
-        (r.notes, r.attachments, r.folders),
-        (3, 1, 1),
+        (r.notes, r.drawings, r.attachments, r.folders),
+        (3, 1, 1, 1),
         "{:?}",
         r.skipped
     );
     assert_eq!(snapshot(&h, "From dir").await, original);
+    let kinds: Vec<EntryKind> = to_dir
+        .lock()
+        .await
+        .paths()
+        .values()
+        .map(|e| e.kind)
+        .collect();
+    assert!(kinds.contains(&EntryKind::Drawing));
     let to_zip = h.resolve("From zip").await.unwrap();
     transfer::import(&h, &to_zip, &zip, None, false, false)
         .await

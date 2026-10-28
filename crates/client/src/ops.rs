@@ -915,7 +915,9 @@ pub async fn empty_trash(hub: &Hub, vref: &str) -> OpResult<usize> {
     let mut kept = Vec::new();
     for e in &entries {
         let res = match e.kind {
-            EntryKind::Note => api.delete(&format!("/vaults/{vid}/objects/{}", e.id)).await,
+            EntryKind::Note | EntryKind::Drawing => {
+                api.delete(&format!("/vaults/{vid}/objects/{}", e.id)).await
+            }
             EntryKind::Attachment => {
                 api.delete(&format!("/vaults/{vid}/attachments/{}", e.id))
                     .await
@@ -1007,7 +1009,9 @@ pub async fn undo_purge(hub: &Hub, vref: &str, reference: &str) -> OpResult<Entr
         (g.id().to_string(), e)
     };
     let path = match e.kind {
-        EntryKind::Note => format!("/vaults/{vid}/objects/{}/restore", e.id),
+        EntryKind::Note | EntryKind::Drawing => {
+            format!("/vaults/{vid}/objects/{}/restore", e.id)
+        }
         EntryKind::Attachment => format!("/vaults/{vid}/attachments/{}/restore", e.id),
         EntryKind::Folder => {
             return Err(OpError::NotFound("a folder can't be brought back".into()));
@@ -1454,6 +1458,10 @@ pub async fn move_to_vault(
                     g.add_attachment(&c.path, data, None).map_err(bad)?.id
                 }
                 EntryKind::Note => g.create_note(&c.path, &c.text).map_err(bad)?.id,
+                EntryKind::Drawing => {
+                    let scene = c.drawing.clone().unwrap_or_default();
+                    g.create_drawing(&c.path, &scene).map_err(bad)?.id
+                }
             };
             g.copy_looks(&id, c.icon.as_deref(), c.order.as_deref())
                 .map_err(bad)?;
@@ -1462,9 +1470,10 @@ pub async fn move_to_vault(
         g.save()?;
         (g.id().to_string(), placed, ids)
     };
+    // Notes and drawings: objects whose content the server must have.
     let notes: Vec<String> = ids
         .values()
-        .filter(|(k, _)| *k == EntryKind::Note)
+        .filter(|(k, _)| matches!(k, EntryKind::Note | EntryKind::Drawing))
         .map(|(_, id)| id.clone())
         .collect();
     let pushed = hub.local_changed(&vault_id, notes.clone(), true).await;

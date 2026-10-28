@@ -269,6 +269,25 @@ pub fn vault_files(
                     data: replica.note_text(&e.id).into_bytes(),
                 });
             }
+            EntryKind::Drawing => {
+                let Some(p) = place(&e.path, trashed, &mut taken) else {
+                    rv.problems.push(format!(
+                        "skipped a drawing with an unusable path: {:?}",
+                        e.path
+                    ));
+                    continue;
+                };
+                // As an Excalidraw file: Excalidraw and Obsidian open it.
+                let scene = replica
+                    .notes
+                    .get(&e.id)
+                    .map(|d| d.drawing().scene())
+                    .unwrap_or_default();
+                rv.files.push(RecoveredFile {
+                    path: p,
+                    data: notekpr_draw::file::write_excalidraw(&scene).into_bytes(),
+                });
+            }
             EntryKind::Attachment => {
                 let data = match attachment(&e.id).and_then(|ct| {
                     replica

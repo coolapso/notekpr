@@ -26,6 +26,7 @@ use crate::session::SharedVault;
 #[derive(Debug, Default, Clone)]
 pub struct TransferReport {
     pub notes: usize,
+    pub drawings: usize,
     pub attachments: usize,
     pub folders: usize,
     /// Notes whose comments were exported (one file each).
@@ -37,6 +38,11 @@ pub struct TransferReport {
 
 enum Item {
     Note {
+        path: String,
+        text: String,
+    },
+    /// A drawing, as an Excalidraw file.
+    Drawing {
         path: String,
         text: String,
     },
@@ -134,6 +140,10 @@ async fn exported(
                     }
                 }
                 EntryKind::Attachment => Item::Attachment { path: p, id: e.id },
+                EntryKind::Drawing => Item::Drawing {
+                    text: notekpr_draw::file::write_excalidraw(&v.drawing(&e.id)),
+                    path: p,
+                },
                 EntryKind::Folder => Item::Folder { path: p },
             });
         }
@@ -163,6 +173,10 @@ async fn exported(
             Item::Note { path, text } => {
                 files.push((path, text.into_bytes()));
                 report.notes += 1;
+            }
+            Item::Drawing { path, text } => {
+                files.push((path, text.into_bytes()));
+                report.drawings += 1;
             }
             Item::Comments { path, text } => {
                 files.push((path, text.into_bytes()));
@@ -584,6 +598,25 @@ async fn import_collected(
                     Ok(_) => report.unchanged += 1,
                     Err(e) => report.skipped.push((norm, format!("{e:#}"))),
                 }
+            } else if let Some(scene) = drawing_in(&norm, &data, &v) {
+                if existing.is_some() && skip_existing {
+                    report.unchanged += 1;
+                    continue;
+                }
+                if dry_run {
+                    match existing {
+                        Some((_, e)) if e.kind != EntryKind::Drawing => report
+                            .skipped
+                            .push((norm, "exists and is not a drawing".into())),
+                        _ => report.drawings += 1,
+                    }
+                    continue;
+                }
+                match v.write_drawing(&norm, &scene) {
+                    Ok(r) if r.changed => report.drawings += 1,
+                    Ok(_) => report.unchanged += 1,
+                    Err(e) => report.skipped.push((norm, format!("{e:#}"))),
+                }
             } else {
                 if data.len() as u64 > max {
                     report
@@ -626,6 +659,23 @@ async fn import_collected(
         hub.local_changed(&vault_id, vec![], true).await;
     }
     Ok(())
+}
+
+/// An `.excalidraw` file that is a drawing becomes one (not in the quick
+/// notes, which hold notes); anything else is a file.
+fn drawing_in(
+    path: &str,
+    data: &[u8],
+    v: &crate::vault::Vault,
+) -> Option<notekpr_draw::scene::Scene> {
+    if !paths::is_drawing(path) || v.is_quick_notes() {
+        return None;
+    }
+    let text = std::str::from_utf8(data).ok()?;
+    let mut ids = notekpr_draw::restore::Ids::new(notekpr_core::now_ms() as u64);
+    notekpr_draw::file::read_drawing(text, &mut ids)
+        .ok()
+        .map(|d| d.scene)
 }
 
 /// The manifest of an export of vaults and quick notes at `src` (a `.zip` or

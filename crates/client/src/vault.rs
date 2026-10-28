@@ -1015,16 +1015,22 @@ impl Vault {
             return Some((reference.to_string(), e.clone()));
         }
         if let Ok(p) = paths::normalize(reference) {
-            for cand in [p.clone(), format!("{p}.md")] {
+            for cand in [
+                p.clone(),
+                format!("{p}.md"),
+                format!("{p}{}", paths::DRAWING_EXT),
+            ] {
                 if let Some(e) = paths.get(&cand) {
                     return Some((cand, e.clone()));
                 }
             }
             let lower = p.to_lowercase();
             let lower_md = format!("{lower}.md");
-            let mut ci = paths
-                .iter()
-                .filter(|(k, _)| k.to_lowercase() == lower || k.to_lowercase() == lower_md);
+            let lower_drawing = format!("{lower}{}", paths::DRAWING_EXT);
+            let mut ci = paths.iter().filter(|(k, _)| {
+                let k = k.to_lowercase();
+                k == lower || k == lower_md || k == lower_drawing
+            });
             if let (Some((k, e)), None) = (ci.next(), ci.next()) {
                 return Some((k.clone(), e.clone()));
             }
@@ -1395,6 +1401,99 @@ impl Vault {
         })
     }
 
+    /// A drawing's content (empty if it isn't one, or hasn't arrived).
+    pub fn drawing(&self, id: &str) -> notekpr_draw::scene::Scene {
+        self.replica
+            .notes
+            .get(id)
+            .map(|d| d.drawing().scene())
+            .unwrap_or_default()
+    }
+
+    /// Creates the drawing at `path`, or makes the one there `scene`.
+    pub fn write_drawing(
+        &mut self,
+        path: &str,
+        scene: &notekpr_draw::scene::Scene,
+    ) -> Result<WriteResult> {
+        self.require_writable()?;
+        if let Some((p, e)) = self.find(path) {
+            if e.kind != EntryKind::Drawing {
+                bail!("'{p}' exists and is not a drawing");
+            }
+            let changed = self.set_drawing(&e.id, scene)?;
+            return Ok(WriteResult {
+                id: e.id,
+                path: p,
+                created: false,
+                changed,
+            });
+        }
+        self.create_drawing(path, scene)
+    }
+
+    /// Creates a drawing at `path` (`.excalidraw` is added if missing).
+    pub fn create_drawing(
+        &mut self,
+        path: &str,
+        scene: &notekpr_draw::scene::Scene,
+    ) -> Result<WriteResult> {
+        self.require_writable()?;
+        if self.is_quick_notes() {
+            bail!("quick notes hold notes: a drawing goes in Drawings or in a vault");
+        }
+        let p = paths::normalize_drawing(path)?;
+        if self.paths().contains_key(&p) {
+            bail!("'{p}' already exists");
+        }
+        let id = random_id();
+        let budget = self.update_budget();
+        let doc = self.replica.notes.entry(id.clone()).or_default();
+        let updates = doc.drawing().set_scene_split(scene, budget);
+        let size = doc.drawing().size();
+        if updates.is_empty() {
+            self.dirty_objects.insert(id.clone());
+        }
+        for u in updates {
+            self.record(&id, u)?;
+        }
+        let u =
+            self.replica
+                .index
+                .create_with(&id, &p, EntryKind::Drawing, now_ms(), Some(size), None);
+        self.record_index(u)?;
+        if self
+            .outbox
+            .new_document_key(&mut self.replica, &id, paths::drawing_title(&p))
+        {
+            self.dirty_state = true;
+        }
+        Ok(WriteResult {
+            id,
+            path: p,
+            created: true,
+            changed: true,
+        })
+    }
+
+    /// Makes a drawing's content `scene`, changing only what differs.
+    /// Returns false if nothing did.
+    pub fn set_drawing(&mut self, id: &str, scene: &notekpr_draw::scene::Scene) -> Result<bool> {
+        self.require_writable()?;
+        let budget = self.update_budget();
+        let doc = self.replica.notes.entry(id.to_string()).or_default();
+        let updates = doc.drawing().set_scene_split(scene, budget);
+        if updates.is_empty() {
+            return Ok(false);
+        }
+        let size = doc.drawing().size();
+        for u in updates {
+            self.record(id, u)?;
+        }
+        self.touch(id, size)?;
+        Ok(true)
+    }
+
     /// Replace a note's text via a diff. Returns false if nothing changed.
     pub fn set_note_text(&mut self, id: &str, text: &str) -> Result<bool> {
         self.require_writable()?;
@@ -1435,8 +1534,13 @@ impl Vault {
                 .apply_update(&u)?;
             self.record(id, u)?;
         }
-        let len = self.replica.notes.get(id).map_or(0, |n| n.len() as u64);
-        self.touch(id, len)
+        let size = match self.entry(id).map(|e| e.kind) {
+            Some(EntryKind::Drawing) => {
+                self.replica.notes.get(id).map_or(0, |d| d.drawing().size())
+            }
+            _ => self.replica.notes.get(id).map_or(0, |n| n.len() as u64),
+        };
+        self.touch(id, size)
     }
 
     fn touch(&mut self, id: &str, size: u64) -> Result<()> {

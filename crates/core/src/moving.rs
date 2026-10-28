@@ -1,7 +1,9 @@
-//! Moving a note, or a folder with everything in it, to another vault.
+//! Moving a note or drawing, or a folder with everything in it, to another
+//! vault.
 //!
-//! Each vault has its own keys, so a move copies: the note or the folder's
-//! notes, folders and files, and the files elsewhere its notes link to.
+//! Each vault has its own keys, so a move copies: the note or drawing, or
+//! the folder's notes, drawings, folders and files, and the files and
+//! drawings elsewhere its notes link to.
 //! Once the other vault has every copy, the originals go to the trash
 //! (deleted for good from the quick notes), except files a note staying
 //! behind still links to. History, comments and note shares stay with the
@@ -11,6 +13,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use notekpr_draw::scene::Scene;
+
 use crate::doc::{Entry, EntryKind};
 use crate::engine::VaultReplica;
 use crate::markdown;
@@ -19,7 +23,7 @@ use crate::paths::{self, PathError};
 /// What moves.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum What {
-    /// A note, by id.
+    /// A note or a drawing, by id.
     Note(String),
     /// A folder, by path, with everything in it.
     Folder(String),
@@ -64,6 +68,8 @@ pub struct Plan {
     items: Vec<Item>,
     /// The notes' texts, by id.
     texts: BTreeMap<String, String>,
+    /// The drawings that go, by id.
+    drawings: BTreeMap<String, Scene>,
     /// What the notes' links may point at in the vault moved from.
     candidates: Vec<(String, String)>,
     /// The originals to trash once the other vault has every copy.
@@ -80,6 +86,8 @@ pub struct Copy {
     /// A note's text, its links to files renamed on the way following them
     /// (empty for the others).
     pub text: String,
+    /// A drawing's content.
+    pub drawing: Option<Scene>,
     pub icon: Option<String>,
     /// Its place among its siblings, when they came along.
     pub order: Option<String>,
@@ -109,7 +117,7 @@ pub fn plan(r: &VaultReplica, what: &What) -> Result<Plan, Unmovable> {
         What::Note(id) => {
             let e = entries
                 .iter()
-                .find(|e| &e.id == id && e.kind == EntryKind::Note)
+                .find(|e| &e.id == id && matches!(e.kind, EntryKind::Note | EntryKind::Drawing))
                 .ok_or(Unmovable::Gone)?;
             let items = vec![Item {
                 entry: e.clone(),
@@ -155,6 +163,14 @@ pub fn plan(r: &VaultReplica, what: &What) -> Result<Plan, Unmovable> {
             texts.insert(e.id.clone(), note.text());
         }
     }
+    let content = |id: &str| -> Result<Scene, Unmovable> {
+        let doc = r
+            .notes
+            .get(id)
+            .filter(|_| r.is_complete(id))
+            .ok_or(Unmovable::Loading)?;
+        Ok(doc.drawing().scene())
+    };
     let candidates: Vec<(String, String)> = entries
         .iter()
         .filter(|e| e.kind != EntryKind::Folder)
@@ -175,7 +191,8 @@ pub fn plan(r: &VaultReplica, what: &What) -> Result<Plan, Unmovable> {
         .flat_map(|e| links(e, &r.note_text(&e.id)))
         .collect();
     for e in &entries {
-        if e.kind == EntryKind::Attachment && wanted.contains(&e.id) && !moving.contains(&e.id) {
+        let file = matches!(e.kind, EntryKind::Attachment | EntryKind::Drawing);
+        if file && wanted.contains(&e.id) && !moving.contains(&e.id) {
             items.push(Item {
                 entry: e.clone(),
                 place: Place::Beside,
@@ -184,14 +201,24 @@ pub fn plan(r: &VaultReplica, what: &What) -> Result<Plan, Unmovable> {
     }
     let trash = items
         .iter()
-        .filter(|i| i.entry.kind != EntryKind::Attachment || !kept.contains(&i.entry.id))
+        .filter(|i| {
+            let file = matches!(i.entry.kind, EntryKind::Attachment | EntryKind::Drawing);
+            !file || !kept.contains(&i.entry.id)
+        })
         .map(|i| i.entry.id.clone())
         .collect();
+    let mut drawings = BTreeMap::new();
+    for e in items.iter().map(|i| &i.entry) {
+        if e.kind == EntryKind::Drawing {
+            drawings.insert(e.id.clone(), content(&e.id)?);
+        }
+    }
     Ok(Plan {
         what: what.clone(),
         root,
         items,
         texts,
+        drawings,
         candidates,
         trash,
     })
@@ -203,10 +230,19 @@ impl Plan {
         &self.root
     }
 
-    /// The note's title or the folder's name: the copy's, unless it gets
-    /// another.
+    /// The note's or drawing's title or the folder's name: the copy's,
+    /// unless it gets another.
     pub fn name(&self) -> &str {
-        paths::title(&self.root)
+        if self.is_drawing() {
+            paths::drawing_title(&self.root)
+        } else {
+            paths::title(&self.root)
+        }
+    }
+
+    /// Whether what moves is a drawing.
+    pub fn is_drawing(&self) -> bool {
+        matches!(&self.what, What::Note(id) if self.drawings.contains_key(id))
     }
 
     pub fn is_folder(&self) -> bool {
@@ -216,6 +252,11 @@ impl Plan {
     /// How many notes go.
     pub fn notes(&self) -> usize {
         self.texts.len()
+    }
+
+    /// How many drawings go.
+    pub fn drawings(&self) -> usize {
+        self.drawings.len()
     }
 
     /// The files that go (their contents are copied), by id.
@@ -252,7 +293,11 @@ impl Plan {
         let root = paths::join(&folder, name);
         let (root, base) = match self.what {
             What::Note(_) => {
-                let root = paths::normalize_note(&root)?;
+                let root = if self.is_drawing() {
+                    paths::normalize_drawing(&root)?
+                } else {
+                    paths::normalize_note(&root)?
+                };
                 let root = paths::unique(&root, |p| taken.contains(&p.to_lowercase()));
                 (root, folder)
             }
@@ -340,7 +385,7 @@ impl Plan {
         };
         let rank = |k: EntryKind| match k {
             EntryKind::Folder => 0,
-            EntryKind::Attachment => 1,
+            EntryKind::Attachment | EntryKind::Drawing => 1,
             EntryKind::Note => 2,
         };
         placed.sort_by(|(a, pa), (b, pb)| (rank(a.entry.kind), pa).cmp(&(rank(b.entry.kind), pb)));
@@ -351,6 +396,7 @@ impl Plan {
                 kind: i.entry.kind,
                 path: path.clone(),
                 text: text_there(i, path),
+                drawing: self.drawings.get(&i.entry.id).cloned(),
                 icon: i.entry.icon.clone(),
                 // Among new siblings it has no place yet.
                 order: match i.place {

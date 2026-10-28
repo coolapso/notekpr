@@ -1243,6 +1243,25 @@ fn new_note_at(c: &mut Core, vault: &str, path: &str, text: &str) -> String {
     id
 }
 
+/// Makes a drawing at `path` (or a free name beside it); its id.
+fn new_drawing_at(
+    c: &mut Core,
+    vault: &str,
+    path: &str,
+    scene: &notekpr_draw::scene::Scene,
+) -> String {
+    let id = state::new_id();
+    let path = unique_path(c, vault, path);
+    // Its own key, registered before any of its content is sent.
+    state::new_note_key(c, vault, &id, paths::drawing_title(&path));
+    change_index(c, vault, |ix| {
+        ix.create(&id, &path, EntryKind::Drawing, now())
+    });
+    c.ensure_note_loaded(vault, &id);
+    state::set_drawing(c, vault, &id, scene);
+    id
+}
+
 pub fn new_note(vault: &str, folder: &str) {
     let (v, f) = (vault.to_string(), folder.to_string());
     leptos::task::spawn_local(async move {
@@ -1807,6 +1826,9 @@ pub async fn move_to_vault(
                 id
             }
             EntryKind::Note => step(|c| new_note_at(c, to, &copy.path, &copy.text)),
+            EntryKind::Drawing => step(|c| {
+                new_drawing_at(c, to, &copy.path, &copy.drawing.clone().unwrap_or_default())
+            }),
         };
         step(|c| {
             if let Some(icon) = &copy.icon {
@@ -2229,6 +2251,20 @@ async fn vault_export(vault: &str) -> (Vec<zipfile::Entry>, BTreeMap<String, Str
                 entries.push(zipfile::Entry {
                     name: e.path.clone(),
                     data: text.into_bytes(),
+                });
+            }
+            // As an Excalidraw file.
+            EntryKind::Drawing => {
+                let scene = step(|c| {
+                    c.replicas
+                        .get(vault)
+                        .and_then(|r| r.notes.get(&e.id))
+                        .map(|d| d.drawing().scene())
+                        .unwrap_or_default()
+                });
+                entries.push(zipfile::Entry {
+                    name: e.path.clone(),
+                    data: notekpr_draw::file::write_excalidraw(&scene).into_bytes(),
                 });
             }
             EntryKind::Attachment => match attachment_bytes(vault, &e.id).await {

@@ -68,6 +68,34 @@ pub fn is_note(path: &str) -> bool {
     path.to_ascii_lowercase().ends_with(".md")
 }
 
+/// What a drawing's file name ends with: the Markdown folder writes it as
+/// such a file, and Excalidraw and Obsidian's Excalidraw plugin open it.
+pub const DRAWING_EXT: &str = ".excalidraw";
+
+pub fn is_drawing(path: &str) -> bool {
+    path.to_ascii_lowercase().ends_with(DRAWING_EXT)
+}
+
+/// Normalise a drawing path, appending `.excalidraw` if missing.
+pub fn normalize_drawing(input: &str) -> Result<String, PathError> {
+    let p = normalize(input)?;
+    if is_drawing(&p) {
+        Ok(p)
+    } else {
+        normalize(&format!("{p}{DRAWING_EXT}"))
+    }
+}
+
+/// A drawing's name: its file name without `.excalidraw`.
+pub fn drawing_title(path: &str) -> &str {
+    let name = file_name(path);
+    if is_drawing(name) {
+        &name[..name.len() - DRAWING_EXT.len()]
+    } else {
+        name
+    }
+}
+
 /// Final path segment.
 pub fn file_name(path: &str) -> &str {
     path.rsplit('/').next().unwrap_or(path)

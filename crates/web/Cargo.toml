@@ -11,6 +11,7 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 notekpr-core = { path = "../core" }
+notekpr-draw = { path = "../draw" }
 notekpr-editor = { path = "../editor" }
 notekpr-sync = { path = "../sync" }
 leptos = { version = "0.8", features = ["csr"] }

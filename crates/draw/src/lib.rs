@@ -5,6 +5,7 @@
 //! perfect-freehand 1.2.0, the versions Excalidraw uses, so the same file
 //! draws the same picture.
 
+pub mod color;
 pub mod file;
 pub mod fonts;
 pub mod js;

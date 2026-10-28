@@ -1234,10 +1234,11 @@ impl Vault {
 
     pub fn search(&self, q: &search::Query) -> Vec<SearchHit> {
         let mut hits: Vec<SearchHit> = self
-            .notes()
+            .paths()
             .into_iter()
+            .filter(|(_, e)| matches!(e.kind, EntryKind::Note | EntryKind::Drawing))
             .filter_map(|(p, e)| {
-                let text = self.note_text(&e.id);
+                let text = self.replica.searchable_text(&e.id);
                 let tags = markdown::analyze(&text).tags;
                 search::score(q, &p, &text, &tags).map(|hit| SearchHit {
                     path: p,

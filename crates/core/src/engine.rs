@@ -1666,6 +1666,19 @@ impl VaultReplica {
         )
     }
 
+    /// What search sees of a note or drawing: a note's text, the texts in a
+    /// drawing.
+    pub fn searchable_text(&self, id: &str) -> String {
+        let is_drawing = self
+            .index
+            .get(id)
+            .is_some_and(|e| e.kind == crate::doc::EntryKind::Drawing);
+        match self.notes.get(id) {
+            Some(d) if is_drawing => d.drawing().text(),
+            _ => self.note_text(id),
+        }
+    }
+
     pub fn note_text(&self, id: &str) -> String {
         self.notes.get(id).map(|n| n.text()).unwrap_or_default()
     }

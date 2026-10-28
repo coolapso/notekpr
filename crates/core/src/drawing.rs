@@ -180,6 +180,12 @@ impl Drawing<'_> {
         }
     }
 
+    /// The text of the drawing's text elements, one per line: what search
+    /// finds in it.
+    pub fn text(&self) -> String {
+        self.scene().texts().collect::<Vec<_>>().join("\n")
+    }
+
     /// Whether the document holds a drawing at all.
     pub fn is_empty(&self) -> bool {
         let (elements, _, _) = self.roots();
@@ -356,6 +362,7 @@ mod tests {
         assert_eq!(other.drawing().scene(), scene);
         // A note's text and a drawing don't see each other.
         assert_eq!(other.text(), "");
+        assert!(other.drawing().text().contains("SearchBase Core"));
     }
 
     #[test]

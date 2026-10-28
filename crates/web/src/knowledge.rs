@@ -59,6 +59,23 @@ pub fn notes_with_text(vault: &str) -> Vec<(String, String, String)> {
     })
 }
 
+/// Notes and drawings with what search sees of them: (id, path, text).
+fn searchable(vault: &str) -> Vec<(String, String, String)> {
+    step(|c| {
+        let Some(r) = c.replicas.get(vault) else {
+            return vec![];
+        };
+        c.live_entries(vault)
+            .into_iter()
+            .filter(|e| matches!(e.kind, EntryKind::Note | EntryKind::Drawing))
+            .map(|e| {
+                let t = r.searchable_text(&e.id);
+                (e.id, e.path, t)
+            })
+            .collect()
+    })
+}
+
 fn candidates(vault: &str) -> Vec<(String, String)> {
     state::step(|c| c.live_entries(vault))
         .into_iter()
@@ -319,7 +336,7 @@ pub fn search_all(query: &str, only_vault: Option<&str>) -> Vec<Hit> {
         {
             continue;
         }
-        for (id, path, text) in notes_with_text(&vid) {
+        for (id, path, text) in searchable(&vid) {
             let info = analysis(&vid, &id, &text);
             if let Some(h) = search::score(&q, &path, &text, &info.tags) {
                 hits.push(Hit {

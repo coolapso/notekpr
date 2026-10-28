@@ -87,6 +87,10 @@ async fn export_import_round_trip_preserves_paths_and_content() {
             .scene;
         g.create_drawing("Projects/Architecture", &scene).unwrap();
         g.save().unwrap();
+        // Search finds the text in it.
+        let hits = g.search(&notekpr_core::search::parse_query("searchbase core"));
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].path, "Projects/Architecture.excalidraw");
     }
     h.local_changed(&src_id(&h).await, vec![], true).await;
     ops::put_document(&h, "Source", "Trashed.md", "gone", None)

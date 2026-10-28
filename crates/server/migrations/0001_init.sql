@@ -1,6 +1,9 @@
--- notekpr server schema v1.
+-- notekpr server schema: the starting point of the data freeze.
 -- The server stores identities, authorization state, public keys and
 -- ciphertext. It never stores plaintext note content, paths or vault names.
+--
+-- Never edit this file or any later one once applied: every schema change is
+-- a new numbered file that upgrades the database in place (AGENTS.md, rule 8).
 
 CREATE TABLE users (
     id            TEXT PRIMARY KEY,
@@ -77,6 +80,10 @@ CREATE TABLE account_keys (
     sign_public       BLOB NOT NULL,
     signature         BLOB NOT NULL,
     recovery_envelope BLOB,
+    -- The version of the last signed recovery update (R3, [S-L8]): only
+    -- higher ones are accepted, so an older update can't be replayed.
+    -- 0: none yet.
+    recovery_version  INTEGER NOT NULL DEFAULT 0,
     created_at        INTEGER NOT NULL,
     updated_at        INTEGER NOT NULL
 );
@@ -122,7 +129,11 @@ CREATE TABLE oidc_states (
     pkce_verifier TEXT NOT NULL,
     nonce         TEXT NOT NULL,
     return_to     TEXT NOT NULL,
-    expires_at    INTEGER NOT NULL
+    expires_at    INTEGER NOT NULL,
+    -- Binds the login to the browser that started it (login CSRF
+    -- protection): SHA-256 of a random value kept in an HttpOnly cookie on
+    -- that browser.
+    browser_hash  BLOB
 );
 
 -- RFC 8628 device authorization grants (CLI / desktop login).
@@ -176,6 +187,10 @@ CREATE TABLE vaults (
     -- on quick notes: their limit is the owner's
     -- (`users.quick_notes_storage_allowance`).
     storage_allowance INTEGER,
+    -- Authors sign their updates and snapshots (R3). Once the vault's
+    -- membership log requires it (`require_signed`), unsigned content after
+    -- this sequence number is refused.
+    signed_from    INTEGER,
     created_at     INTEGER NOT NULL,
     updated_at     INTEGER NOT NULL
 );
@@ -216,6 +231,18 @@ CREATE TABLE vault_key_chain (
     PRIMARY KEY (vault_id, epoch)
 );
 
+-- The vault membership log (R3): owner-signed, hash-chained entries. The
+-- server checks that each entry continues the log and matches the change it
+-- comes with; clients verify signatures and rules themselves.
+CREATE TABLE member_log (
+    vault_id   TEXT NOT NULL REFERENCES vaults(id) ON DELETE CASCADE,
+    seq        INTEGER NOT NULL,
+    entry      TEXT NOT NULL,   -- JSON `LogEntry`
+    hash       BLOB NOT NULL,   -- the entry's hash: the next entry's `prev`
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY (vault_id, seq)
+);
+
 -- Deleting an object for good (purge) hides it at once and keeps its data
 -- for the undo period: `erased_at` is set once the data is gone for good.
 -- An undo clears `purged_at`/`purged_seq` and sets `restored_seq`.
@@ -229,6 +256,15 @@ CREATE TABLE objects (
     purged_seq   INTEGER,
     restored_seq INTEGER,
     erased_at    INTEGER,
+    -- Every note has its own document key (R2). The current epoch of a
+    -- note's key once it was shared (NULL = only vault members ever had it)
+    -- and its title encrypted with that key.
+    key_epoch    INTEGER,
+    encrypted_meta BLOB,
+    -- People a note is shared with get content from here on: the envelope
+    -- epoch (4 bytes, big-endian, as in the ciphertext header) of the key
+    -- created when sharing started. NULL = never shared.
+    share_from   BLOB,
     -- As for vaults, for the note's own key: someone it was shared with
     -- lost access without it being rotated.
     rotation_pending INTEGER NOT NULL DEFAULT 0,
@@ -238,6 +274,45 @@ CREATE INDEX objects_purged ON objects(vault_id, purged_seq);
 CREATE INDEX objects_restored ON objects(vault_id, restored_seq) WHERE restored_seq IS NOT NULL;
 CREATE INDEX objects_to_erase ON objects(purged_at) WHERE purged_at IS NOT NULL AND erased_at IS NULL;
 
+-- Individually shared notes: who has access, under the note's document key.
+CREATE TABLE object_shares (
+    vault_id  TEXT NOT NULL,
+    object_id TEXT NOT NULL,
+    user_id   TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    role      TEXT NOT NULL CHECK (role IN ('editor', 'viewer')),
+    added_by  TEXT,
+    added_at  INTEGER NOT NULL,
+    PRIMARY KEY (vault_id, object_id, user_id),
+    FOREIGN KEY (vault_id, object_id) REFERENCES objects(vault_id, id) ON DELETE CASCADE
+);
+CREATE INDEX object_shares_user ON object_shares(user_id);
+
+-- Document key envelopes. user_id = '' is the copy wrapped under the vault
+-- key for vault members; other rows are HPKE envelopes for recipients.
+CREATE TABLE object_keys (
+    vault_id   TEXT NOT NULL,
+    object_id  TEXT NOT NULL,
+    epoch      INTEGER NOT NULL,
+    user_id    TEXT NOT NULL,
+    envelope   BLOB NOT NULL,
+    created_by TEXT,
+    created_at INTEGER NOT NULL,
+    -- The vault owner's signature on a key given to someone the note is
+    -- shared with (R3): recipients use only keys the owner signed for them.
+    signature  BLOB,
+    PRIMARY KEY (vault_id, object_id, epoch, user_id),
+    FOREIGN KEY (vault_id, object_id) REFERENCES objects(vault_id, id) ON DELETE CASCADE
+);
+
+CREATE TABLE object_key_chain (
+    vault_id  TEXT NOT NULL,
+    object_id TEXT NOT NULL,
+    epoch     INTEGER NOT NULL,
+    link      BLOB NOT NULL,
+    PRIMARY KEY (vault_id, object_id, epoch),
+    FOREIGN KEY (vault_id, object_id) REFERENCES objects(vault_id, id) ON DELETE CASCADE
+);
+
 CREATE TABLE updates (
     vault_id         TEXT NOT NULL REFERENCES vaults(id) ON DELETE CASCADE,
     seq              INTEGER NOT NULL,
@@ -246,6 +321,8 @@ CREATE TABLE updates (
     author_id        TEXT NOT NULL,
     device_id        TEXT,
     payload          BLOB NOT NULL,
+    -- The author's signature (R3; see vaults.signed_from).
+    signature        BLOB,
     created_at       INTEGER NOT NULL,
     PRIMARY KEY (vault_id, seq)
 );
@@ -260,9 +337,16 @@ CREATE TABLE snapshots (
     author_id  TEXT NOT NULL,
     payload    BLOB NOT NULL,
     size       INTEGER NOT NULL,
+    signature  BLOB,
+    -- A snapshot that carries changes the log doesn't have (an update too
+    -- large to push on its own) is sent to everyone with every catch-up
+    -- from before `created_head`, the vault's head when it was stored.
+    carries      INTEGER NOT NULL DEFAULT 0,
+    created_head INTEGER NOT NULL DEFAULT 0,
     created_at INTEGER NOT NULL
 );
 CREATE INDEX snapshots_object ON snapshots(vault_id, object_id, covers_seq);
+CREATE INDEX snapshots_carried ON snapshots(vault_id, created_head) WHERE carries = 1;
 
 -- Encrypted attachment bytes live in the database so a single consistent
 -- file (VACUUM INTO) is a complete backup.

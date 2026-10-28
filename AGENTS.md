@@ -59,14 +59,12 @@ Breaking one of these is a bug, even if everything compiles and tests pass.
    one session per browser tab, CLI `--profile` + `--dev-user`). It is how
    multi-user features get tested. It must stay impossible to enable by
    accident in production.
-8. **Migrations: until the data freeze, nothing has to survive.** Schema
-   changes go into the existing files in `crates/server/migrations/`, and
-   databases are wiped (`task dev:reset`, `task demo:reset`; a running
-   instance when a release changes a migration). From the data-freeze
-   release on (the TODO, Stage 1): never edit an applied migration — add a
-   new numbered file that upgrades the database in place. From 1.0.0 on,
-   every migration also works with the previous release (add, start using,
-   drop a release later).
+8. **Migrations: data survives.** Since the data freeze (0.6.0),
+   `crates/server/migrations/0001_init.sql` is the starting schema. Never
+   edit an applied migration: every schema change is a new numbered file
+   that upgrades the database in place (where SQLite can't change something
+   in place, copy the table). From 1.0.0 on, every migration also works with
+   the previous release (add, start using, drop a release later).
 
 ## Layout
 

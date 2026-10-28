@@ -125,6 +125,115 @@ pub fn fixed(x: f64, digits: u32) -> f64 {
     to_fixed(x, digits).parse().unwrap_or(x)
 }
 
+/// Whether a number counts as true in a condition (`if (x)`): anything but
+/// 0 and NaN.
+pub fn truthy(x: f64) -> bool {
+    x != 0.0 && !x.is_nan()
+}
+
+/// `x || fallback` for numbers: the fallback when `x` is 0 or NaN.
+pub fn or(x: f64, fallback: f64) -> f64 {
+    if truthy(x) { x } else { fallback }
+}
+
+/// `Math.max(a, b)`: NaN if either is (Rust's `max` drops a NaN), and +0
+/// over -0.
+pub fn max(a: f64, b: f64) -> f64 {
+    if a.is_nan() || b.is_nan() {
+        f64::NAN
+    } else if a == b {
+        if a.is_sign_negative() { b } else { a }
+    } else if a > b {
+        a
+    } else {
+        b
+    }
+}
+
+/// `Math.min(a, b)`: NaN if either is, and -0 under +0.
+pub fn min(a: f64, b: f64) -> f64 {
+    if a.is_nan() || b.is_nan() {
+        f64::NAN
+    } else if a == b {
+        if a.is_sign_negative() { a } else { b }
+    } else if a < b {
+        a
+    } else {
+        b
+    }
+}
+
+/// ToInt32, what bitwise operators and `Math.imul` do to a number: whole
+/// part, wrapped to 32 bits; NaN and infinities become 0.
+pub fn to_int32(x: f64) -> i32 {
+    if !x.is_finite() {
+        return 0;
+    }
+    let m = x.trunc().rem_euclid(4_294_967_296.0);
+    (m as u32) as i32
+}
+
+/// Whether `c` matches `\s` in a JavaScript regular expression (which is
+/// not quite Rust's `char::is_whitespace`: U+FEFF is in, U+0085 is out).
+pub fn is_space(c: char) -> bool {
+    matches!(
+        c,
+        '\t' | '\n' | '\u{b}' | '\u{c}' | '\r' | ' ' | '\u{a0}' | '\u{1680}' | '\u{2000}'
+            ..='\u{200a}'
+                | '\u{2028}'
+                | '\u{2029}'
+                | '\u{202f}'
+                | '\u{205f}'
+                | '\u{3000}'
+                | '\u{feff}'
+    )
+}
+
+/// `Array.prototype.sort(compare)`: a stable sort whose comparison returns a
+/// number (negative: `a` first, positive: `b` first, 0 or NaN: keep their
+/// order). With a consistent comparison any stable sort gives JavaScript's
+/// order; an inconsistent one (NaN coordinates) gives some order instead of
+/// a panic, as Rust's own sorts may.
+pub fn sort_by<T: Clone>(items: &mut [T], mut compare: impl FnMut(&T, &T) -> f64) {
+    let n = items.len();
+    let mut from = items.to_vec();
+    let mut to = items.to_vec();
+    let mut width = 1;
+    while width < n {
+        let mut start = 0;
+        while start < n {
+            let mid = (start + width).min(n);
+            let end = (start + 2 * width).min(n);
+            let (mut i, mut j, mut k) = (start, mid, start);
+            while i < mid && j < end {
+                // The right one goes first only when it must.
+                if compare(&from[i], &from[j]) > 0.0 {
+                    to[k] = from[j].clone();
+                    j += 1;
+                } else {
+                    to[k] = from[i].clone();
+                    i += 1;
+                }
+                k += 1;
+            }
+            while i < mid {
+                to[k] = from[i].clone();
+                i += 1;
+                k += 1;
+            }
+            while j < end {
+                to[k] = from[j].clone();
+                j += 1;
+                k += 1;
+            }
+            start = end;
+        }
+        std::mem::swap(&mut from, &mut to);
+        width *= 2;
+    }
+    items.clone_from_slice(&from);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -190,5 +299,64 @@ mod tests {
         }
         assert_eq!(number_to_string(fixed(231.2449, 2)), "231.24");
         assert_eq!(number_to_string(fixed(-0.001, 2)), "0");
+    }
+
+    #[test]
+    fn truthiness_and_or() {
+        assert!(truthy(-1.0) && truthy(0.5) && truthy(f64::INFINITY));
+        assert!(!truthy(0.0) && !truthy(-0.0) && !truthy(f64::NAN));
+        assert_eq!(or(0.0, 2.0), 2.0);
+        assert_eq!(or(f64::NAN, 1.0), 1.0);
+        assert_eq!(or(3.0, 1.0), 3.0);
+    }
+
+    #[test]
+    fn max_and_min_like_math() {
+        assert!(max(1.0, f64::NAN).is_nan());
+        assert!(min(f64::NAN, 1.0).is_nan());
+        assert_eq!(max(2.0, 3.0), 3.0);
+        assert_eq!(min(2.0, 3.0), 2.0);
+        assert!(max(-0.0, 0.0).is_sign_positive());
+        assert!(max(0.0, -0.0).is_sign_positive());
+        assert!(min(0.0, -0.0).is_sign_negative());
+        assert!(min(-0.0, 0.0).is_sign_negative());
+    }
+
+    #[test]
+    fn to_int32_wraps() {
+        assert_eq!(to_int32(1.9), 1);
+        assert_eq!(to_int32(-1.9), -1);
+        assert_eq!(to_int32(2_147_483_648.0), i32::MIN);
+        assert_eq!(to_int32(4_294_967_296.0), 0);
+        assert_eq!(to_int32(1e10), 1_410_065_408);
+        assert_eq!(to_int32(f64::NAN), 0);
+        assert_eq!(to_int32(f64::NEG_INFINITY), 0);
+    }
+
+    #[test]
+    fn spaces_like_regexp() {
+        assert!(is_space(' ') && is_space('\u{feff}') && is_space('\u{2028}'));
+        assert!(!is_space('\u{85}') && !is_space('a') && !is_space(','));
+    }
+
+    #[test]
+    fn sort_is_stable_and_takes_number_comparisons() {
+        let mut v: Vec<(f64, usize)> = [3.0, 1.0, 2.0, 1.0, 3.0, 0.0, 2.0, 1.0]
+            .into_iter()
+            .enumerate()
+            .map(|(i, x)| (x, i))
+            .collect();
+        sort_by(&mut v, |a, b| a.0 - b.0);
+        let order: Vec<usize> = v.iter().map(|x| x.1).collect();
+        assert_eq!(order, [5, 1, 3, 7, 2, 6, 0, 4]);
+        // NaN makes the comparison inconsistent: some order, no panic.
+        let mut v = vec![2.0, f64::NAN, 1.0, f64::NAN, 0.0];
+        sort_by(&mut v, |a, b| a - b);
+        assert_eq!(v.iter().filter(|x| x.is_nan()).count(), 2);
+        let mut empty: Vec<f64> = vec![];
+        sort_by(&mut empty, |a, b| a - b);
+        let mut one = vec![1.0];
+        sort_by(&mut one, |a, b| a - b);
+        assert_eq!(one, [1.0]);
     }
 }

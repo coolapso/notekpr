@@ -1,4 +1,9 @@
-# notekpr
+<h1>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/logo-dark.svg">
+    <img src="docs/assets/logo.svg" alt="notekpr" height="56">
+  </picture>
+</h1>
 
 A self-hosted, open-source, local-first Markdown knowledge base: Obsidian's
 plain-Markdown philosophy and offline access, Notion's friendly interface and

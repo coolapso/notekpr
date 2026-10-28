@@ -12,14 +12,15 @@ crates/client   desktop/CLI client, mirror, gateway    → notekpr
 crates/load     load test runner (task load)           → notekpr-load
 crates/load-events  what the load runner streams to its live view
 crates/load-ui  the load test's live view (wasm32)     → dist/load
-scripts/        build-web.sh, build-load-ui.sh, demo.py (task demo)
+scripts/        build-web.sh, build-load-ui.sh, demo.py (task demo), logo.py (the logo)
 site/           project website: static HTML + CSS, no build step (task site)
 tests/e2e       browser end-to-end tests (Python stdlib + chromedriver)
 fuzz/           fuzz targets, a separate workspace (fuzz/run.sh, task fuzz)
 vendor/yrs      yrs 0.28 with fixes, via [patch.crates-io] (see its NOTEKPR.md)
 vendor/openidconnect  openidconnect 4.0.1 on newer curve crates (see its NOTEKPR.md)
 deploy/         Kubernetes, Dex (dev OIDC), examples/ (optional reverse proxies)
-docs/           architecture, protocol, security, operations, agents, desktop client
+docs/           architecture, protocol, security, operations, agents, desktop client;
+                assets/ (the logo and icon)
 ```
 
 ## Development dependencies
@@ -332,6 +333,40 @@ what they must understand — raises `OLDEST_APP_VERSION` in
 apps are then told to update instead of misbehaving
 ([protocol.md §11](protocol.md#11-older-apps)). Development builds are never
 refused.
+
+## Logo and icon
+
+`docs/assets/` holds the logo and the icon, as SVG and PNG with transparent
+backgrounds:
+
+| File | What |
+|---|---|
+| `logo.svg`, `logo.png` | the name, for light backgrounds |
+| `logo-dark.svg`, `logo-dark.png` | the same for dark backgrounds |
+| `icon.svg`, `icon.png` | the icon alone (512×512): avatars, thumbnails |
+
+The README shows the logo for GitHub's theme with a `<picture>` element.
+
+The logo is "notekpr" in [Fira Code](https://github.com/tonsky/FiraCode)
+SemiBold, with the icon's diamond ring as the "o"; the letters are stored as
+outlines, so it looks the same without the font. `scripts/logo.py` draws it —
+its sizes, spacing and colours are at its top — and writes all six files:
+
+```sh
+python3 scripts/logo.py path/to/FiraCode-SemiBold.ttf
+```
+
+It needs fontTools (`python-fonttools`, or `pip install fonttools`),
+`rsvg-convert` (librsvg) and the font, which isn't in the repository:
+`ttf/FiraCode-SemiBold.ttf` in the zip of a
+[Fira Code release](https://github.com/tonsky/FiraCode/releases) (the logo
+was made with 6.2). None of it is part of the build, `task setup` or CI: run
+it by hand when the logo or the icon changes, and commit what it writes.
+
+The icon is the favicon, `crates/web/static/favicon.svg`. It has copies in
+`site/favicon.svg` and, drawn in the theme's colours, in the header of each
+page in `site/`. Change them together, then run `scripts/logo.py` for
+`icon.svg` and `icon.png`.
 
 ## Conventions
 

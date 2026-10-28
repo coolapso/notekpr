@@ -3,6 +3,10 @@
 //! numbers, same rounding, same path text), so the ported code computes and
 //! prints numbers the way JavaScript does.
 
+mod math;
+
+pub use math::{atan2, cos, sin};
+
 /// `Math.imul`: 32-bit integer multiplication, wrapping.
 pub fn imul(a: i32, b: i32) -> i32 {
     a.wrapping_mul(b)
@@ -163,6 +167,47 @@ pub fn min(a: f64, b: f64) -> f64 {
     }
 }
 
+/// `Math.hypot(a, b)` as V8 (Chrome, Node) computes it: both scaled by the
+/// larger and their squares added with Kahan summation. Not the C library's
+/// correctly rounded `hypot`: this one is now and then more than an ulp
+/// off, and perfect-freehand's results depend on it.
+pub fn hypot(a: f64, b: f64) -> f64 {
+    if a.is_infinite() || b.is_infinite() {
+        return f64::INFINITY;
+    }
+    if a.is_nan() || b.is_nan() {
+        return f64::NAN;
+    }
+    let (a, b) = (a.abs(), b.abs());
+    let max = if b > a { b } else { a };
+    if max == 0.0 {
+        return 0.0;
+    }
+    let mut sum = 0.0;
+    let mut compensation = 0.0;
+    for value in [a, b] {
+        let n = value / max;
+        let summand = n * n - compensation;
+        let preliminary = sum + summand;
+        compensation = (preliminary - sum) - summand;
+        sum = preliminary;
+    }
+    sum.sqrt() * max
+}
+
+/// `String(array)` of numbers (what `join` does with an array inside an
+/// array): the numbers joined with commas, so `[1.5, -2]` is `1.5,-2`.
+pub fn array_to_string(values: &[f64]) -> String {
+    let mut s = String::new();
+    for (i, &x) in values.iter().enumerate() {
+        if i > 0 {
+            s.push(',');
+        }
+        s.push_str(&number_to_string(x));
+    }
+    s
+}
+
 /// ToInt32, what bitwise operators and `Math.imul` do to a number: whole
 /// part, wrapped to 32 bits; NaN and infinities become 0.
 pub fn to_int32(x: f64) -> i32 {
@@ -320,6 +365,29 @@ mod tests {
         assert!(max(0.0, -0.0).is_sign_positive());
         assert!(min(0.0, -0.0).is_sign_negative());
         assert!(min(-0.0, 0.0).is_sign_negative());
+    }
+
+    #[test]
+    fn hypot_like_v8() {
+        assert_eq!(hypot(3.0, 4.0), 5.0);
+        assert_eq!(hypot(-3.0, 0.0), 3.0);
+        assert_eq!(hypot(0.0, -0.0), 0.0);
+        assert_eq!(hypot(f64::NAN, f64::INFINITY), f64::INFINITY);
+        assert!(hypot(f64::NAN, 1.0).is_nan());
+        // Not the correctly rounded 1.8527007313648907 of the C library:
+        // V8 is one and a half ulps off here, and so must we be.
+        assert_eq!(hypot(0.1, 1.85), 1.8527007313648902);
+        assert_eq!(hypot(0.1, 0.74), 0.7467261881037789);
+    }
+
+    #[test]
+    fn arrays_print_like_javascript() {
+        assert_eq!(array_to_string(&[1.5, -2.0]), "1.5,-2");
+        assert_eq!(
+            array_to_string(&[0.1 + 0.2, 1e21]),
+            "0.30000000000000004,1e+21"
+        );
+        assert_eq!(array_to_string(&[]), "");
     }
 
     #[test]

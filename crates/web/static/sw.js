@@ -13,6 +13,7 @@ const SHELL = [
   "/manifest.webmanifest",
   "/pkg/notekpr_web.js",
   "/pkg/notekpr_web_bg.wasm",
+  "/fonts/drawing-fonts.css",
 ];
 
 self.addEventListener("install", (event) => {
@@ -32,7 +33,8 @@ self.addEventListener("fetch", (event) => {
   const navigate = req.mode === "navigate";
   // Every page of the app is the same index.html.
   const key = navigate ? "/" : url.pathname;
-  if (!navigate && !SHELL.includes(key)) return;
+  // The drawings' fonts: kept once a drawing has used them.
+  if (!navigate && !SHELL.includes(key) && !key.startsWith("/fonts/")) return;
   event.respondWith(
     fetch(req)
       .then((res) => {

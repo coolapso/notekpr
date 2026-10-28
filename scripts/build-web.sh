@@ -33,6 +33,6 @@ wasm-bindgen --target web --no-typescript "${names[@]}" --out-dir "$OUT/pkg" \
 if command -v wasm-opt >/dev/null 2>&1 && [ "$PROFILE" != "dev" ]; then
   wasm-opt -Oz --enable-bulk-memory --enable-nontrapping-float-to-int -o "$OUT/pkg/notekpr_web_bg.wasm" "$OUT/pkg/notekpr_web_bg.wasm"
 fi
-cp crates/web/static/* "$OUT/"
+cp -r crates/web/static/* "$OUT/"
 ls -la "$OUT/pkg"
 echo "web client built into $OUT"

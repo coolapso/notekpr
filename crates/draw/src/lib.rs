@@ -5,4 +5,11 @@
 //! perfect-freehand 1.2.0, the versions Excalidraw uses, so the same file
 //! draws the same picture.
 
+pub mod file;
+pub mod fonts;
 pub mod js;
+pub mod lzstring;
+pub mod obsidian;
+pub mod order;
+pub mod restore;
+pub mod scene;

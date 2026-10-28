@@ -2,7 +2,11 @@
 
 `notekpr-draw` is written in Rust, but parts of it are ports (translations)
 of JavaScript libraries, so that drawings look exactly like they do in
-Excalidraw. Those libraries are under the MIT license, whose notice follows.
+Excalidraw. Those libraries are under the MIT license, whose notice follows; the
+fractional indices (`order.rs`) follow fractional-indexing, which is CC0,
+and Obsidian's drawing files (`obsidian.rs`) are read and written as the
+obsidian-excalidraw-plugin (Zsolt Viczian) does, which is under the
+AGPL-3.0 like notekpr.
 No JavaScript is used or shipped.
 
 | What | Ported from | Copyright |
@@ -13,6 +17,7 @@ No JavaScript is used or shipped.
 | SVG path data | path-data-parser 0.1.0 | (c) 2020 Preet Shihn |
 | pen strokes | perfect-freehand 1.2.0 | (c) 2021 Stephen Ruiz Ltd |
 | element shapes, file formats, constant-width strokes (laser-pointer) | Excalidraw | (c) 2020 Excalidraw |
+| compression of Obsidian's drawings | lz-string 1.5 | (c) 2013 pieroxy |
 
 ## The MIT license
 

@@ -52,9 +52,12 @@ Nothing in the app or the logs shows it:
   `/admin/*`) see each account's name, e-mail, kind (person or agent),
   role, whether it is disabled, when it was created and last signed in, how
   many vaults it is in and owns, how many devices, agents and quick notes it
-  has, and its own limits; plus totals for the instance (accounts, vaults, objects,
-  updates, storage), the server's version and the instance settings. Not
-  who is in which vault, not who shares with whom, not activity — and never
+  has, what the vaults it owns and its quick notes take, and its own limits;
+  each vault's id, owner, size and storage limit (to give one more room;
+  members read the id in its settings); plus
+  totals for the instance (accounts, vaults, objects, updates, storage), the
+  server's version and the instance settings. Not a vault's name, not who
+  is in which vault, not who shares with whom, not activity — and never
   content.
 * **Logs** have one line per request — method, path with ids replaced by
   `:id`, status, duration — plus start-up and shut-down events. No user or
@@ -64,9 +67,9 @@ What the database holds, besides ciphertext and public keys:
 
 | Table | What it tells |
 |---|---|
-| `users`, `identities` | accounts: display name, e-mail, OIDC issuer and subject, administrator, disabled, created and last sign-in; an agent's owner |
+| `users`, `identities` | accounts: display name, e-mail, OIDC issuer and subject, administrator, disabled, created and last sign-in; an agent's owner; a person's own limits (vaults, agents, quick notes and their storage) |
 | `devices`, `sessions`, `agent_credentials` | each account's devices and their names (the browser and system, or `notekpr CLI on <host name>`), sessions, and when each was created, last used (to the minute; only the latest time is kept), revoked |
-| `vaults`, `vault_members`, `member_log` | who owns each vault, who is in it with which role, who added them and when; which vault is someone's quick notes; the membership log's entries (user ids, roles, public keys, key commitments, times) |
+| `vaults`, `vault_members`, `member_log` | who owns each vault, who is in it with which role, who added them and when; which vault is someone's quick notes; how much its content takes, and its own storage limit; the membership log's entries (user ids, roles, public keys, key commitments, times) |
 | `objects`, `updates`, `snapshots` | how many notes and other objects a vault has, when each was created and changed, and for every change (notes, the file tree, comments): who wrote it, from which device, when, and its size. Comment threads are objects named after their note (`c_<note id>`), so it also tells which notes have comments. When a note was deleted for good, and whether that was undone |
 | `attachments` | each attachment's size, who uploaded it, when; when it was deleted for good |
 | `device_grants` | device sign-ins waiting for approval: the client's name, when it asked, and the address it asked from — the address only until the code is approved, denied or expires (it is shown to whoever approves the code, so one asked for by someone else stands out) |
@@ -79,6 +82,12 @@ Kept only in memory, never written: IP addresses (used for rate limits;
 except a device sign-in code's, above), who is connected right now, and
 presence (which vault — and, for individually shared notes, which note —
 someone has open).
+
+A vault's size (`vaults.storage_bytes`) is the sum of sizes the server
+stores anyway — ciphertexts of its log, history and files — kept current as
+they change, to hold each vault to its storage limit. Its members see it in
+the vault's settings. People a single note is shared with learn only
+whether the note's vault is full: their edits wait while it is.
 
 Deleting something for good (emptying the trash) takes it away from everyone
 at once, but the server keeps its ciphertext for `--purge-undo-days`
@@ -379,6 +388,11 @@ reported, never applied partially. Duplicate deliveries are no-ops.
   every other change, with a short list of what stays writable (signing in
   and out, devices, revoking access, administration); a new route is
   refused until it is added there.
+* A vault at its storage limit refuses new content (pushes, snapshots,
+  files, undoing a deletion) inside the writing transaction, so nobody
+  fills a shared instance past the limits by writing fast. Key rotations
+  still go through, so a full vault never keeps a removed member's key
+  current.
 * Authorization is checked on every request and every WebSocket push (under the
   write lock, so a push can't race a removal); non-members get `404` so vault
   ids cannot be probed.

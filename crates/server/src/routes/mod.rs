@@ -162,6 +162,8 @@ pub fn router(state: AppState) -> Router {
         .route("/admin/users", get(admin::users))
         .route("/admin/users/{id}", patch(admin::update_user))
         .route("/admin/stats", get(admin::stats))
+        .route("/admin/vaults", get(admin::vaults))
+        .route("/admin/vaults/{id}", patch(admin::update_vault))
         .route(
             "/admin/settings",
             get(admin::settings).patch(admin::update_settings),
@@ -281,6 +283,7 @@ const WRITABLE_WHEN_READ_ONLY: &[(&str, &str)] = &[
     ("DELETE", "/agents/{id}"),
     ("DELETE", "/agents/{id}/credentials/{client_id}"),
     ("PATCH", "/admin/users/{id}"),
+    ("PATCH", "/admin/vaults/{id}"),
     ("PATCH", "/admin/settings"),
     ("POST", "/admin/clients"),
     ("PATCH", "/admin/clients/{id}"),

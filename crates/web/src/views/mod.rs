@@ -103,6 +103,7 @@ fn Banners() -> impl IntoView {
                     ReadOnly::StorageFull => "The server's storage is full.",
                 }}" Your edits are kept in this browser and sent as soon as it accepts changes again."</span></div>
         })}
+        <VaultFullBanner/>
         {move || ui.warning.get().map(|w| view! {
             <div class="banner warn"><Icon name="alert"/><span>{w}</span>
                 <button class="btn small ghost" on:click=move |_| ui.warning.set(None)>"Dismiss"</button></div>
@@ -119,6 +120,49 @@ fn Banners() -> impl IntoView {
                 <div class="devstrip" title="The server runs in development mode: anyone can sign in as anyone.">"DEV MODE"</div>
             }.into_any(),
         })}
+    }
+}
+
+/// Vaults at their storage limit: their edits wait in this browser.
+#[component]
+fn VaultFullBanner() -> impl IntoView {
+    let ui = ui();
+    move || {
+        let full = ui.full.get();
+        ui.vaults.track();
+        // Ours by name (quick notes as such: they have no settings to show);
+        // the others are vaults of notes shared with us.
+        let ours: Vec<(String, Option<String>)> = state::step(|c| {
+            full.iter()
+                .filter(|v| c.vault_infos.contains_key(*v))
+                .map(|v| (v.clone(), (!c.is_quick_notes(v)).then(|| c.vault_name(v))))
+                .collect()
+        });
+        let text = match ours.as_slice() {
+            [] if full.is_empty() => return None,
+            [] => "The vault of a note shared with you is full: your edits of it are kept in this browser and sent once it has room.".to_string(),
+            [(_, None)] => "Your quick notes are full: your edits there are kept in this browser and sent once they have room. Deleting a quick note makes room.".to_string(),
+            [(_, Some(name))] => format!("“{name}” is full: your edits there are kept in this browser and sent once it has room."),
+            many => format!(
+                "{} vaults are full ({}): your edits there are kept in this browser and sent once they have room.",
+                many.len(),
+                many.iter()
+                    .map(|(_, n)| n.as_ref().map_or("your quick notes".into(), |n| format!("“{n}”")))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        };
+        let first = ours
+            .iter()
+            .find_map(|(v, n)| n.is_some().then(|| v.clone()));
+        Some(view! {
+            <div class="banner warn vault-full-banner"><Icon name="cloud-off"/>
+                <span>{text}</span>
+                {first.map(|v| view! {
+                    <button class="btn small" on:click=move |_| ui.modal.set(Some(Modal::VaultSettings(v.clone())))>"Details"</button>
+                })}
+            </div>
+        })
     }
 }
 
@@ -144,6 +188,7 @@ pub fn SyncStatus() -> impl IntoView {
         <span class="sync" title=move || match (ui.conn.get(), ui.pending.get()) {
             (_, n) if ui.outdated.get() => format!("This page is out of date: changes to {n} document(s) are kept in this browser and sync after a reload"),
             (ConnState::Open, n) if ui.read_only.get().is_some() => format!("The server is read-only: changes to {n} document(s) are kept and will sync when it accepts changes again"),
+            (ConnState::Open, n) if n > 0 && !ui.full.with(|f| f.is_empty()) => format!("A vault is full: changes to {n} document(s) are kept and will sync once it has room"),
             (ConnState::Open, 0) => "All changes synced (end-to-end encrypted)".to_string(),
             (ConnState::Open, n) => format!("Syncing changes to {n} document(s)…"),
             (ConnState::Connecting, _) => "Connecting…".to_string(),
@@ -153,6 +198,7 @@ pub fn SyncStatus() -> impl IntoView {
             {move || match (ui.conn.get(), ui.pending.get()) {
                 (_, n) if ui.outdated.get() => view! { <Icon name="cloud-off" class="warn"/><span class="lbl">{if n > 0 { format!("Out of date · {n}") } else { "Out of date".into() }}</span> }.into_any(),
                 (ConnState::Open, n) if ui.read_only.get().is_some() => view! { <Icon name="cloud-off" class="warn"/><span class="lbl">{if n > 0 { format!("Read-only · {n}") } else { "Read-only".into() }}</span> }.into_any(),
+                (ConnState::Open, n) if n > 0 && !ui.full.with(|f| f.is_empty()) => view! { <Icon name="cloud-off" class="warn"/><span class="lbl">{format!("Vault full · {n}")}</span> }.into_any(),
                 (ConnState::Open, 0) => view! { <Icon name="cloud" class="ok"/><span class="lbl">"Synced"</span> }.into_any(),
                 (ConnState::Open, _) => view! { <Icon name="refresh" class="spin"/><span class="lbl">"Saving"</span> }.into_any(),
                 (ConnState::Connecting, _) => view! { <Icon name="refresh" class="spin"/><span class="lbl">"Connecting"</span> }.into_any(),

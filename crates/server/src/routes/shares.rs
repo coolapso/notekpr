@@ -349,6 +349,9 @@ pub async fn set_key(
     let vault_epoch = repo::vaults::key_epoch(&mut *tx, &v)
         .await?
         .ok_or_else(|| AppError::Internal(anyhow::anyhow!("vault without a key epoch")))?;
+    // Keys change in a full vault too (a note re-encrypted under its new
+    // key may make room).
+    let was_full = state.instance.vault_full(&mut *tx, &v).await?;
     let now = db::now();
     let kind = apply_key_change(
         &state,
@@ -364,6 +367,7 @@ pub async fn set_key(
     )
     .await?;
     tx.commit().await?;
+    sync::storage_changed(&state, &v, was_full).await;
     drop(_w);
     match kind {
         // Members' clients reload keys when the note's key changes.
@@ -725,6 +729,7 @@ pub async fn remove(
             now,
         )
         .await?;
+        let was_full = state.instance.vault_full(&mut *tx, &v).await?;
         match &req.rotation {
             Some(r) => {
                 let vault_epoch = repo::vaults::key_epoch(&mut *tx, &v)
@@ -757,6 +762,7 @@ pub async fn remove(
         // Not to them: their subscription may not have ended yet.
         if req.rotation.is_some() {
             publish_except(&state, &v, &o, ObjectEventKind::KeyRotated, &u);
+            sync::storage_changed(&state, &v, was_full).await;
         }
     }
     db::audit(

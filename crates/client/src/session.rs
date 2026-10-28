@@ -52,6 +52,8 @@ pub struct PushOutcome {
     /// The server is read-only: everything stays queued until it accepts
     /// changes again.
     pub read_only: bool,
+    /// The vault is full: everything stays queued until it has room.
+    pub vault_full: bool,
     /// Updates set aside in this push because the server can't accept them.
     pub quarantined: usize,
     /// Notes whose set-aside updates went out in a snapshot carrying them.
@@ -266,6 +268,8 @@ impl Session {
         };
         let grew = info.note_limit != v.note_limit;
         v.note_limit = info.note_limit;
+        v.storage_bytes = info.storage_bytes;
+        v.storage_limit_mb = info.storage_limit_mb;
         // A changed limit may have made room for notes waiting on this device.
         if grew && v.is_quick_notes() {
             v.room_freed();
@@ -719,6 +723,12 @@ impl Session {
             out.remaining = vault.lock().await.replica.pending.len();
             return Ok(out);
         }
+        // Until the live connection says it has room (one-off commands try).
+        if vault.lock().await.full {
+            out.vault_full = true;
+            out.remaining = vault.lock().await.replica.pending.len();
+            return Ok(out);
+        }
         // Viewers send comments only (the outbox's plan picks them).
         for blob in blobs.into_iter().filter(|_| writable) {
             let ct = vault.lock().await.store().load_blob(&blob)?;
@@ -738,6 +748,14 @@ impl Session {
                     v.mark_state_dirty();
                     v.save()?;
                     out.blobs += 1;
+                }
+                // (Before `is_offline`: a 507, but no outage.)
+                Err(e) if e.is_vault_full() => {
+                    let mut v = vault.lock().await;
+                    v.full = true;
+                    out.vault_full = true;
+                    out.remaining = v.replica.pending.len();
+                    return Ok(out);
                 }
                 Err(e) if e.is_read_only() || e.is_offline() => {
                     out.read_only = e.is_read_only();
@@ -879,6 +897,13 @@ impl Session {
                         out.read_only = true;
                         break 'rounds;
                     }
+                    Err(e) if e.is_vault_full() => {
+                        let mut v = vault.lock().await;
+                        not_sent(&mut v, pushes);
+                        v.full = true;
+                        out.vault_full = true;
+                        break 'rounds;
+                    }
                     Err(e) if e.is_offline() => {
                         not_sent(&mut *vault.lock().await, pushes);
                         out.offline = true;
@@ -929,7 +954,7 @@ impl Session {
                 }
             }
         }
-        if !out.offline && !out.read_only {
+        if !out.offline && !out.read_only && !out.vault_full {
             out.carried = self.carry(vault).await?;
         }
         out.remaining = vault.lock().await.replica.pending.len();
@@ -983,7 +1008,7 @@ impl Session {
     pub async fn compact(&self, vault: &SharedVault, jitter: Option<Duration>) -> Result<usize> {
         let (id, candidates) = {
             let v = vault.lock().await;
-            if v.read_only.is_some() {
+            if v.read_only.is_some() || v.full {
                 return Ok(0);
             }
             (v.id().to_string(), v.replica.compaction_candidates())
@@ -1045,6 +1070,11 @@ impl Session {
                 v.save()?;
                 Ok(true)
             }
+            // No room for history: next time it has room.
+            Err(e) if e.is_vault_full() => {
+                vault.lock().await.full = true;
+                Ok(false)
+            }
             Err(e) if e.is_offline() => Ok(false),
             // Someone else gave it a key, or changes arrived meanwhile: next time.
             Err(e)
@@ -1062,7 +1092,7 @@ impl Session {
     pub async fn sync_vault(&self, vault: &SharedVault) -> Result<PushOutcome> {
         self.catch_up(vault).await?;
         let out = self.push(vault).await?;
-        if !out.offline && !out.read_only {
+        if !out.offline && !out.read_only && !out.vault_full {
             self.compact(vault, None).await?;
         }
         Ok(out)

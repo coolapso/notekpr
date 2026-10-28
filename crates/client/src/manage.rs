@@ -40,6 +40,8 @@ pub async fn create_vault(session: &Session, name: &str) -> Result<Vault> {
         &info.owner_id,
         info.archived,
     );
+    v.storage_bytes = info.storage_bytes;
+    v.storage_limit_mb = info.storage_limit_mb;
     v.set_limits(&session.limits());
     v.save()?;
     Ok(v)
@@ -73,6 +75,8 @@ pub async fn create_quick_notes(session: &Session) -> Result<Option<Vault>> {
     );
     v.kind = info.kind;
     v.note_limit = info.note_limit;
+    v.storage_bytes = info.storage_bytes;
+    v.storage_limit_mb = info.storage_limit_mb;
     v.outbox.note_keys = true;
     v.set_limits(&session.limits());
     v.save()?;

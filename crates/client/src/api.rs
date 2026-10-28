@@ -55,6 +55,11 @@ impl ApiError {
         matches!(self, ApiError::Status { status: 503, code, .. } if code == notekpr_core::protocol::ERROR_READ_ONLY)
     }
 
+    /// The vault is full: keep the change and send it once it has room.
+    pub fn is_vault_full(&self) -> bool {
+        matches!(self, ApiError::Status { code, .. } if code == notekpr_core::protocol::ERROR_VAULT_FULL)
+    }
+
     /// The server needs a newer version of this app: it says so; unsent
     /// changes are kept.
     pub fn is_update_required(&self) -> bool {

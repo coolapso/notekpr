@@ -101,6 +101,11 @@ pub enum VaultEvent {
         object_id: String,
         event: ObjectEventKind,
     },
+    /// The vault turned full or has room again (`instance.rs`): for every
+    /// subscriber, also of a single note.
+    Storage {
+        full: bool,
+    },
 }
 
 impl VaultEvent {
@@ -114,7 +119,7 @@ impl VaultEvent {
             | VaultEvent::Restored { object_id, .. }
             | VaultEvent::Awareness { object_id, .. }
             | VaultEvent::Object { object_id, .. } => Some(object_id),
-            VaultEvent::Event(_) => None,
+            VaultEvent::Event(_) | VaultEvent::Storage { .. } => None,
         }
     }
 

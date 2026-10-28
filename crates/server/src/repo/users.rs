@@ -6,6 +6,7 @@ use notekpr_core::protocol::{
 };
 use sqlx::{Row, SqliteExecutor};
 
+use super::{allowance, allowance_column};
 use crate::db::Db;
 use crate::error::AppResult;
 
@@ -442,7 +443,7 @@ pub async fn admin_list(
     let (issuer, subject) = identity.unzip();
     let rows = sqlx::query(
         "SELECT u.id, u.display_name, u.email, u.kind, u.owner_id, u.is_admin, u.disabled, u.created_at, u.last_login_at,
-                u.vault_allowance, u.agent_allowance, u.quick_note_allowance,
+                u.vault_allowance, u.agent_allowance, u.quick_note_allowance, u.quick_notes_storage_allowance,
                 (SELECT COUNT(*) FROM vault_members m JOIN vaults v ON v.id = m.vault_id
                  WHERE m.user_id = u.id AND v.kind = 'regular') AS vault_count,
                 (SELECT COUNT(*) FROM devices d WHERE d.user_id = u.id AND d.status = 'active') AS device_count,
@@ -450,7 +451,11 @@ pub async fn admin_list(
                 (SELECT COUNT(*) FROM users a WHERE a.owner_id = u.id AND a.kind = 'agent') AS agent_count,
                 (SELECT COUNT(*) FROM objects o JOIN vaults v ON v.id = o.vault_id
                  WHERE v.owner_id = u.id AND v.kind = 'quick_notes' AND o.purged_at IS NULL
-                   AND o.id <> 'index' AND substr(o.id, 1, 2) <> 'c_') AS quick_note_count
+                   AND o.id <> 'index' AND substr(o.id, 1, 2) <> 'c_') AS quick_note_count,
+                (SELECT COALESCE(SUM(v.storage_bytes), 0) FROM vaults v
+                 WHERE v.owner_id = u.id AND v.kind = 'regular') AS storage_bytes,
+                (SELECT COALESCE(SUM(v.storage_bytes), 0) FROM vaults v
+                 WHERE v.owner_id = u.id AND v.kind = 'quick_notes') AS quick_notes_storage_bytes
          FROM users u
          WHERE (?1 IS NULL OR lower(u.email) = lower(?1))
            AND (?2 IS NULL OR EXISTS (SELECT 1 FROM identities i
@@ -479,28 +484,14 @@ pub async fn admin_list(
             owned_vault_count: r.get("owned_vault_count"),
             agent_count: r.get("agent_count"),
             quick_note_count: r.get("quick_note_count"),
+            storage_bytes: r.get::<i64, _>("storage_bytes").max(0) as u64,
+            quick_notes_storage_bytes: r.get::<i64, _>("quick_notes_storage_bytes").max(0) as u64,
             vault_allowance: allowance(r.get("vault_allowance")),
             agent_allowance: allowance(r.get("agent_allowance")),
             quick_note_allowance: allowance(r.get("quick_note_allowance")),
+            quick_notes_storage_allowance: allowance(r.get("quick_notes_storage_allowance")),
         })
         .collect())
-}
-
-/// Stored as NULL (the instance's default), -1 (unlimited) or the number.
-fn allowance(v: Option<i64>) -> Allowance {
-    match v {
-        None => Allowance::Default,
-        Some(n) if n < 0 => Allowance::Unlimited,
-        Some(n) => Allowance::Max(n as u64),
-    }
-}
-
-fn allowance_column(a: Allowance) -> Option<i64> {
-    match a {
-        Allowance::Default => None,
-        Allowance::Unlimited => Some(-1),
-        Allowance::Max(n) => Some(n.min(i64::MAX as u64) as i64),
-    }
 }
 
 /// A person's own limits, set by an administrator.
@@ -563,6 +554,22 @@ pub async fn set_quick_note_allowance(
         .bind(id)
         .execute(db)
         .await?;
+    Ok(())
+}
+
+/// How much their quick notes may take (MiB).
+pub async fn set_quick_notes_storage_allowance(
+    db: impl SqliteExecutor<'_>,
+    id: &str,
+    a: Allowance,
+) -> AppResult<()> {
+    sqlx::query(
+        "UPDATE users SET quick_notes_storage_allowance = ? WHERE id = ? AND kind = 'human'",
+    )
+    .bind(allowance_column(a))
+    .bind(id)
+    .execute(db)
+    .await?;
     Ok(())
 }
 

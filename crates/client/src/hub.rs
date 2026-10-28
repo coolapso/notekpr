@@ -78,6 +78,13 @@ pub struct VaultSummary {
     /// For quick notes: how many they may hold.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub note_limit: Option<Limit>,
+    /// What its content takes on the server (bytes) and may take (MiB),
+    /// as the server last said.
+    pub storage_bytes: u64,
+    pub storage_limit_mb: Limit,
+    /// It is full: local changes wait here until it has room.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub full: bool,
     pub documents: usize,
     pub pending_changes: usize,
     /// Local changes too large for the server: kept here, not uploaded.
@@ -669,7 +676,7 @@ impl Hub {
                 local: true,
             });
         }
-        if !out.offline && !out.read_only {
+        if !out.offline && !out.read_only && !out.vault_full {
             if let Err(e) = self.session.compact(&v, None).await {
                 tracing::warn!("compaction failed: {e:#}");
             }
@@ -804,7 +811,7 @@ fn is_zero(n: &usize) -> bool {
 
 async fn g_read_only(v: &SharedVault) -> bool {
     let g = v.lock().await;
-    g.read_only.is_some() || !g.replica.can_write()
+    g.read_only.is_some() || g.full || !g.replica.can_write()
 }
 
 pub fn summary(v: &Vault) -> VaultSummary {
@@ -816,6 +823,9 @@ pub fn summary(v: &Vault) -> VaultSummary {
         archived: v.archived,
         kind: v.kind,
         note_limit: v.is_quick_notes().then_some(v.note_limit),
+        storage_bytes: v.storage_bytes,
+        storage_limit_mb: v.storage_limit_mb,
+        full: v.full || v.storage_limit_mb.reached_mb(v.storage_bytes),
         documents: v.notes().len(),
         pending_changes: v.replica.pending.len(),
         too_large_changes: v.outbox.held_count(),

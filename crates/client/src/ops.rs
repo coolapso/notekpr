@@ -83,6 +83,12 @@ pub struct PutOutcome {
     pub bytes: usize,
     /// Local changes not uploaded yet (offline); they sync automatically.
     pub pending_changes: usize,
+    /// They wait because the server is read-only for now.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub read_only: bool,
+    /// They wait because the vault is full, until it has room.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub vault_full: bool,
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -322,6 +328,8 @@ async fn finish(hub: &Hub, vault_id: &str, res: WriteResult, content: &[u8]) -> 
         hash: content_hash(content),
         bytes: content.len(),
         pending_changes: push.remaining,
+        read_only: push.read_only,
+        vault_full: push.vault_full,
     }
 }
 

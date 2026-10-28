@@ -204,6 +204,14 @@ read anything.
   when it ends — that also starts by itself at a database size you choose,
   and the oldest app version it accepts: older apps are told to update and
   keep their unsent edits.
+* Storage per vault: a size each vault may take, by default and for one
+  vault. A full vault takes no new content — its members' edits wait in
+  their apps and go out once it has room — while every other vault goes
+  on; emptying its trash makes room at once. Members see a vault's id and
+  how much of its room it uses in its settings, and give the id to ask for
+  more; the admin page lists vaults by size with their ids and owners, never
+  their names. Quick notes have a size of their own, by default and for one
+  person.
   From the admin page, or from scripts (a billing system, say) as admin
   clients: each with its own scopes and tokens, rotated and revoked without
   a restart, and never reaching a vault. An instance can leave everything to

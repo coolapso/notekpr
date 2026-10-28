@@ -40,6 +40,7 @@ pub mod vaults;
 #[cfg(test)]
 mod tests;
 
+use notekpr_core::protocol::Allowance;
 use sqlx::sqlite::SqliteQueryResult;
 
 use crate::error::AppResult;
@@ -50,5 +51,23 @@ fn inserted(r: Result<SqliteQueryResult, sqlx::Error>) -> AppResult<bool> {
         Ok(_) => Ok(true),
         Err(sqlx::Error::Database(e)) if e.is_unique_violation() => Ok(false),
         Err(e) => Err(e.into()),
+    }
+}
+
+/// An allowance (a person's or vault's own limit) is stored as NULL (the
+/// instance's default), -1 (unlimited) or the number.
+fn allowance(v: Option<i64>) -> Allowance {
+    match v {
+        None => Allowance::Default,
+        Some(n) if n < 0 => Allowance::Unlimited,
+        Some(n) => Allowance::Max(n as u64),
+    }
+}
+
+fn allowance_column(a: Allowance) -> Option<i64> {
+    match a {
+        Allowance::Default => None,
+        Allowance::Unlimited => Some(-1),
+        Allowance::Max(n) => Some(n.min(i64::MAX as u64) as i64),
     }
 }

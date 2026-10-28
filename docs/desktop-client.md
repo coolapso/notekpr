@@ -154,7 +154,8 @@ directory, never deleted) and enrolls the computer as a new device.
   ends its sessions; if it might be compromised, also rotate the keys of
   shared vaults (`vault rotate`).
 * `notekpr status` shows profile, server, account fingerprint, devices,
-  vaults, pending changes and sync state (`--json` for scripts).
+  vaults (with their ids, and what they take on the server of how much they
+  may), pending changes and sync state (`--json` for scripts).
 
 ## 3. Everyday commands
 
@@ -167,7 +168,7 @@ by its id.
 
 | Command | |
 |---|---|
-| `vault list` / `vault create <name>` | list (with role and document count, and how many quick notes there are) / create |
+| `vault list` / `vault create <name>` | list (with role, document count, what each takes on the server of its storage limit — `FULL` at it —, its id, and how many quick notes there are) / create |
 | `vault rename <v> <name>` / `vault archive <v> [--undo]` / `vault delete <v>` | owner only; delete asks you to type the name (`--yes` skips that; without a terminal it is required) |
 | `vault icon <v> <emoji>` / `vault icon <v> --remove` | owner only; the vault's icon (replaces a picture set in the browser) |
 | `vault viewers-comment <v> on\|off` | owner only; whether viewers (and people its notes are shared with read-only) may comment (on by default) |
@@ -266,6 +267,11 @@ When they are full, a new one is refused ("Quick notes are full (20 of 20):
 move some to a vault or delete them first"). One made on a device that
 didn't know yet (offline, say, while another device filled them) is kept on
 that device — `quick --list` marks it — and uploaded once there's room.
+They also have a storage limit of their own, the server's for quick notes
+or one an administrator gave you (`vault list` shows how much they take):
+when that is reached, changes to them stay queued ("your quick notes are
+full") until a quick note is deleted or an administrator gives them more
+room.
 
 Moving one takes the attachments it links to along (renamed if the name is
 taken there, with its links following) and needs the server: the quick note
@@ -438,6 +444,14 @@ Changes made meanwhile stay queued like offline ones and commands say so
 accepts changes again"). A running `notekpr sync` hears it over the live
 connection, uploads nothing while it lasts, and uploads the queue the moment
 the server accepts changes again.
+
+A **full vault** (at its storage limit) works the same way for that vault
+alone: its changes stay queued ("the vault is full: N change(s) will be
+uploaded once it has room"), other vaults keep uploading, and `notekpr sync`
+uploads them the moment the server says it has room — after something in it
+was deleted for good (`trash empty`), or an administrator raised its limit.
+To ask for more room, give the administrator the vault's id (`vault list`
+or `status` show it); they see ids, owners and sizes, never names.
 
 Everything works offline against the encrypted replica: `ls`, `cat`, `search`,
 `backlinks`, `write`, `mv`, `rm`, imports and mirror edits. Changes are queued

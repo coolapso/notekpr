@@ -863,6 +863,72 @@ fn EntryIconDialog(vault: String, id: Option<String>, path: String, folder: bool
     }
 }
 
+/// The vault's id and the room it takes. For more, people give the id to
+/// their server's administrator, who sees ids, owners and sizes — never
+/// names or content.
+#[component]
+fn VaultStorage(vault: String, admin: bool) -> impl IntoView {
+    let ui = ui();
+    let info = RwSignal::new(step(|c| c.vault_infos.get(&vault).cloned()));
+    // Fresh numbers: the list's are from when it was loaded.
+    {
+        let v = vault.clone();
+        leptos::task::spawn_local(async move {
+            if let Ok(i) = api::get::<VaultInfo>(&format!("/vaults/{v}")).await {
+                info.set(Some(i));
+            }
+        });
+    }
+    let full = {
+        let v = vault.clone();
+        Memo::new(move |_| ui.full.with(|f| f.contains(&v)))
+    };
+    let limited = Memo::new(move |_| {
+        info.with(|i| {
+            i.as_ref()
+                .is_some_and(|i| i.storage_limit_mb != Limit::Unlimited)
+        })
+    });
+    let id = vault.clone();
+    view! {
+        <div class="vault-storage">
+            <div class="vault-id-row">
+                <span class="muted small">"Vault id"</span>
+                <code class="vault-id">{vault.clone()}</code>
+                <button class="btn small ghost copy-vault-id" title="Copy the vault id"
+                    on:click=move |_| { util::copy_to_clipboard(&id); state::success("Vault id copied."); }>
+                    <Icon name="copy"/>" Copy"</button>
+            </div>
+            {move || info.get().map(|i| {
+                let used = util::human_bytes(i.storage_bytes);
+                match i.storage_limit_mb.max() {
+                    None => view! { <p class="storage-use small">{format!("Uses {used}.")}</p> }.into_any(),
+                    Some(mb) => {
+                        let limit = mb.saturating_mul(MIB);
+                        let pct = if i.storage_bytes >= limit { 100.0 } else { i.storage_bytes as f64 * 100.0 / limit as f64 };
+                        view! {
+                            <p class="storage-use small">{format!("Uses {used} of {}.", util::human_bytes(limit))}</p>
+                            <div class="meter" class:full=move || { full.get() || pct >= 100.0 }>
+                                <div class="meter-fill" style=format!("width: {pct:.1}%")></div></div>
+                        }.into_any()
+                    }
+                }
+            })}
+            {move || if full.get() {
+                Some(if admin {
+                    "It is full: edits wait in your browser until it has room. Delete things in it for good (empty its trash), or ask your server's administrator to raise its limit — give them the vault id."
+                } else {
+                    "It is full: edits wait in your browser until it has room. Ask its owner to delete something in it for good, or your server's administrator to raise its limit — give them the vault id."
+                })
+            } else if limited.get() {
+                Some("For more room, give your server's administrator the vault id: they find the vault by it (they never see its name or what's in it).")
+            } else {
+                None
+            }.map(|t| view! { <p class="muted small storage-help">{t}</p> })}
+        </div>
+    }
+}
+
 #[component]
 fn VaultSettings(vault: String) -> impl IntoView {
     let ui = ui();
@@ -894,6 +960,7 @@ fn VaultSettings(vault: String) -> impl IntoView {
     let (v9, va) = (vault.clone(), vault.clone());
     view! {
         <Dialog title="Vault settings" wide=true>
+            <VaultStorage vault=vault.clone() admin=admin/>
             <Show when=move || owner fallback=|| view! { <p class="muted">"Only the owner can change this vault's settings."</p> }>
                 {
                     let v1 = v1.clone();

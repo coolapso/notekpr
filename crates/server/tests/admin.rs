@@ -1156,3 +1156,460 @@ async fn apps_older_than_the_server_accepts_are_told_to_update() {
         200
     );
 }
+
+/// Upload `size` bytes (before encryption) as an attachment.
+async fn put_attachment(u: &User, v: &str, id: &str, size: usize) -> u16 {
+    let blob = u
+        .ring(v)
+        .encrypt(
+            notekpr_core::crypto::Purpose::Attachment,
+            id,
+            &vec![7; size],
+        )
+        .unwrap();
+    u.api
+        .raw()
+        .put(format!("{}/vaults/{v}/attachments/{id}", u.api.base))
+        .bearer_auth(u.api.token.clone().unwrap())
+        .body(blob)
+        .send()
+        .await
+        .unwrap()
+        .status()
+        .as_u16()
+}
+
+async fn vault_info(u: &User, v: &str) -> VaultInfo {
+    u.api.get(&format!("/vaults/{v}")).await
+}
+
+/// What a `vault_full` message says of vault `v`.
+fn vault_full(m: &ServerMessage, v: &str) -> Option<bool> {
+    match m {
+        ServerMessage::VaultFull { vault_id, full } if vault_id == v => Some(*full),
+        _ => None,
+    }
+}
+
+async fn subscribed(srv: &TestServer, u: &User, v: &str, object_id: Option<&str>) -> Ws {
+    let mut ws = Ws::connect(&srv.ws, u.api.token.as_deref().unwrap()).await;
+    ws.send(&ClientMessage::Subscribe {
+        vault_id: v.into(),
+        since: None,
+        object_id: object_id.map(Into::into),
+    })
+    .await;
+    ws.until(|m| matches!(m, ServerMessage::Synced { .. }).then_some(()))
+        .await;
+    ws
+}
+
+#[tokio::test]
+async fn a_full_vault_takes_no_new_content_until_it_has_room() {
+    let srv = start_with_operator().await;
+    let mut alice = new_user(&srv.base, "alice").await;
+    let bob = new_user(&srv.base, "bob").await;
+    let v = alice.create_vault("Photos").await;
+    let work = alice.create_vault("Work").await;
+    let text = |t: &str| NoteDoc::new().set_text(t).unwrap();
+    share_note(&alice, &v, "shared", &bob).await;
+    let plain = NoteDoc::new();
+    let first = alice.encrypt_update(&v, "plain", &plain.set_text("plain").unwrap());
+    let head = alice.push(&v, vec![first.clone()]).await.unwrap().head_seq;
+    // Deleted for good, which can still be undone.
+    alice
+        .push(&v, vec![alice.encrypt_update(&v, "old", &text("old"))])
+        .await
+        .unwrap();
+    let object = |o: &str| format!("/vaults/{v}/objects/{o}");
+    assert_eq!(
+        alice
+            .api
+            .status::<()>(Method::DELETE, &object("old"), None)
+            .await,
+        204
+    );
+
+    let s = settings(&srv, serde_json::json!({ "storage_per_vault_mb": 1 })).await;
+    assert_eq!(s.settings.storage_per_vault_mb, Limit::Max(1));
+    let info = vault_info(&alice, &v).await;
+    assert_eq!(info.storage_limit_mb, Limit::Max(1));
+    assert!(info.storage_bytes > 0 && !info.is_full());
+    let mut wa = subscribed(&srv, &alice, &v, None).await;
+    let mut wb = subscribed(&srv, &bob, &v, Some("shared")).await;
+
+    // A file fills it: everyone writing to it hears so, also someone a
+    // single note of it is shared with.
+    assert_eq!(put_attachment(&alice, &v, "photo", MIB as usize).await, 201);
+    assert!(wa.until(|m| vault_full(m, &v)).await);
+    assert!(wb.until(|m| vault_full(m, &v)).await);
+    let info = vault_info(&alice, &v).await;
+    assert!(info.is_full() && info.storage_bytes > MIB);
+
+    // Nothing new goes in: edits (over REST and the WebSocket), history,
+    // files, undoing a deletion.
+    let edit = alice.encrypt_update(&v, "plain", &plain.set_text("no room").unwrap());
+    let r = alice
+        .api
+        .req(Method::POST, &format!("/vaults/{v}/updates"))
+        .json(&PushRequest {
+            updates: vec![edit.clone()],
+        })
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(error_code(r).await, (507, ERROR_VAULT_FULL.to_string()));
+    wa.send(&ClientMessage::Push {
+        vault_id: v.clone(),
+        updates: vec![edit.clone()],
+    })
+    .await;
+    let refused = wa
+        .until(|m| match m {
+            ServerMessage::Error { code, vault_id, .. } => Some((code.clone(), vault_id.clone())),
+            _ => None,
+        })
+        .await;
+    assert_eq!(refused, (ERROR_VAULT_FULL.to_string(), Some(v.clone())));
+    let snapshot = CreateSnapshotRequest {
+        snapshot_id: random_id(),
+        covers_seq: head,
+        payload: alice
+            .ring(&v)
+            .encrypt(
+                notekpr_core::crypto::Purpose::Snapshot,
+                "plain",
+                &plain.encode_state(),
+            )
+            .unwrap(),
+        signature: None,
+        carries: false,
+    };
+    let snapshots = format!("{}/snapshots", object("plain"));
+    assert_eq!(
+        alice
+            .api
+            .status(Method::POST, &snapshots, Some(&snapshot))
+            .await,
+        507
+    );
+    assert_eq!(put_attachment(&alice, &v, "more", 10).await, 507);
+    assert_eq!(
+        alice
+            .api
+            .status::<()>(Method::POST, &format!("{}/restore", object("old")), None)
+            .await,
+        507
+    );
+    // A retry of what it already has is answered as before.
+    let again = alice.push(&v, vec![first]).await.unwrap();
+    assert_eq!(again.results.len(), 1);
+    // Other vaults go on, and so does all but new content (keys here).
+    alice
+        .push(&work, vec![alice.encrypt_update(&work, "n", &text("work"))])
+        .await
+        .unwrap();
+    alice.rotate(&v).await;
+    // A connection that subscribes now hears it before `synced`.
+    let mut late = Ws::connect(&srv.ws, alice.api.token.as_deref().unwrap()).await;
+    late.send(&ClientMessage::Subscribe {
+        vault_id: v.clone(),
+        since: None,
+        object_id: None,
+    })
+    .await;
+    assert!(late.until(|m| vault_full(m, &v)).await);
+    late.until(|m| matches!(m, ServerMessage::Synced { .. }).then_some(()))
+        .await;
+
+    // Deleting the file for good makes room at once (it is kept for the
+    // undo period, but no longer counts), and the edits go in.
+    assert_eq!(
+        alice
+            .api
+            .status::<()>(
+                Method::DELETE,
+                &format!("/vaults/{v}/attachments/photo"),
+                None
+            )
+            .await,
+        204
+    );
+    assert!(!wa.until(|m| vault_full(m, &v)).await);
+    assert!(!wb.until(|m| vault_full(m, &v)).await);
+    assert!(!vault_info(&alice, &v).await.is_full());
+    let edit = alice.encrypt_update(&v, "plain", &plain.set_text("room again").unwrap());
+    alice.push(&v, vec![edit]).await.unwrap();
+    // Undoing that fills it again.
+    assert_eq!(
+        alice
+            .api
+            .status::<()>(
+                Method::POST,
+                &format!("/vaults/{v}/attachments/photo/restore"),
+                None
+            )
+            .await,
+        204
+    );
+    assert!(wa.until(|m| vault_full(m, &v)).await);
+    // So does a lower limit for every vault, and a higher one makes room.
+    let s = settings(&srv, serde_json::json!({ "storage_per_vault_mb": 2 })).await;
+    assert_eq!(s.settings.storage_per_vault_mb, Limit::Max(2));
+    assert!(!wa.until(|m| vault_full(m, &v)).await);
+    settings(&srv, serde_json::json!({ "storage_per_vault_mb": 1 })).await;
+    assert!(wa.until(|m| vault_full(m, &v)).await);
+    settings(
+        &srv,
+        serde_json::json!({ "storage_per_vault_mb": "unlimited" }),
+    )
+    .await;
+    assert!(!wa.until(|m| vault_full(m, &v)).await);
+}
+
+#[tokio::test]
+async fn administrators_see_vaults_by_size_and_give_one_more_room() {
+    let srv = start_with_operator().await;
+    let mut alice = new_user(&srv.base, "alice").await;
+    let mut bob = new_user(&srv.base, "bob").await;
+    let diary = alice.create_vault("Diary").await;
+    let photos = alice.create_vault("Photos").await;
+    let recipes = bob.create_vault("Recipes").await;
+    assert_eq!(put_attachment(&alice, &photos, "a", 50_000).await, 201);
+    let note = NoteDoc::new().set_text("dear diary").unwrap();
+    alice
+        .push(&diary, vec![alice.encrypt_update(&diary, "n", &note)])
+        .await
+        .unwrap();
+    let list = |query: String| {
+        let r = operator(&srv, Method::GET, &format!("/admin/vaults{query}"));
+        async move {
+            r.send()
+                .await
+                .unwrap()
+                .json::<Vec<AdminVault>>()
+                .await
+                .unwrap()
+        }
+    };
+
+    // The largest first, with its owner and size: nothing of what's in it.
+    let all = list(String::new()).await;
+    assert_eq!(
+        all.iter().map(|a| a.id.as_str()).collect::<Vec<_>>(),
+        [photos.as_str(), diary.as_str(), recipes.as_str()]
+    );
+    let big = &all[0];
+    assert_eq!(
+        (big.owner_id.as_str(), big.owner_name.as_str()),
+        (alice.id.as_str(), "Alice")
+    );
+    assert_eq!(
+        big.storage_bytes,
+        vault_info(&alice, &photos).await.storage_bytes
+    );
+    assert!(big.storage_bytes > 50_000);
+    assert_eq!(big.storage_allowance, Allowance::Default);
+    let raw: Vec<serde_json::Value> = operator(&srv, Method::GET, "/admin/vaults")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let mut fields: Vec<&str> = raw[0]
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    fields.sort();
+    assert_eq!(
+        fields,
+        [
+            "created_at",
+            "id",
+            "owner_id",
+            "owner_name",
+            "storage_allowance",
+            "storage_bytes"
+        ]
+    );
+    // Found by the id people read in its settings, or by owner.
+    let one = list(format!("?id={diary}")).await;
+    assert_eq!(one.len(), 1);
+    assert_eq!(one[0].id, diary);
+    let bobs = list(format!("?owner={}", bob.id)).await;
+    assert_eq!(bobs.len(), 1);
+    assert_eq!(bobs[0].id, recipes);
+    assert!(list("?id=nothing-like-it".into()).await.is_empty());
+    // A person's total is what their vaults take.
+    let users: Vec<AdminUser> = operator(&srv, Method::GET, "/admin/users")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let theirs = users.iter().find(|u| u.id == alice.id).unwrap();
+    assert_eq!(
+        theirs.storage_bytes,
+        all[0].storage_bytes + all[1].storage_bytes
+    );
+
+    // Its own limit: members see it, other vaults keep the instance's.
+    settings(&srv, serde_json::json!({ "storage_per_vault_mb": 100 })).await;
+    let set = |vault: &str, a: serde_json::Value| {
+        let r = operator(&srv, Method::PATCH, &format!("/admin/vaults/{vault}"))
+            .json(&serde_json::json!({ "storage_allowance": a }));
+        async move { r.send().await.unwrap().status().as_u16() }
+    };
+    let mut ws = subscribed(&srv, &alice, &photos, None).await;
+    assert_eq!(set(&photos, serde_json::json!(0)).await, 200);
+    assert!(ws.until(|m| vault_full(m, &photos)).await);
+    let info = vault_info(&alice, &photos).await;
+    assert_eq!(info.storage_limit_mb, Limit::Max(0));
+    assert!(info.is_full());
+    assert_eq!(
+        vault_info(&alice, &diary).await.storage_limit_mb,
+        Limit::Max(100)
+    );
+    assert_eq!(
+        list(format!("?id={photos}")).await[0].storage_allowance,
+        Allowance::Max(0)
+    );
+    assert_eq!(set(&photos, serde_json::json!("unlimited")).await, 200);
+    assert!(!ws.until(|m| vault_full(m, &photos)).await);
+    assert_eq!(
+        vault_info(&alice, &photos).await.storage_limit_mb,
+        Limit::Unlimited
+    );
+    assert_eq!(set(&photos, serde_json::json!("default")).await, 200);
+    assert_eq!(
+        vault_info(&alice, &photos).await.storage_limit_mb,
+        Limit::Max(100)
+    );
+    assert_eq!(set("nothing-like-it", serde_json::json!(5)).await, 404);
+    // While the server is read-only too: it's administration.
+    settings(&srv, serde_json::json!({ "read_only": true })).await;
+    assert_eq!(set(&photos, serde_json::json!(200)).await, 200);
+    settings(&srv, serde_json::json!({ "read_only": false })).await;
+
+    // Reading takes `read`, limits `accounts`; people need the admin role.
+    let reader: CreatedAdminToken = operator(&srv, Method::POST, "/admin/clients")
+        .json(&CreateAdminClient {
+            name: "reader".into(),
+            scopes: vec![],
+        })
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(
+        status(as_client(&srv, &reader.token, Method::GET, "/admin/vaults")).await,
+        200
+    );
+    let patch = as_client(
+        &srv,
+        &reader.token,
+        Method::PATCH,
+        &format!("/admin/vaults/{photos}"),
+    )
+    .json(&serde_json::json!({ "storage_allowance": 1 }));
+    assert_eq!(status(patch).await, 403);
+    assert_eq!(
+        bob.api
+            .status::<()>(Method::GET, "/admin/vaults", None)
+            .await,
+        403
+    );
+}
+
+/// Someone's quick notes have a storage limit of their own, like how many
+/// they may keep: the instance's for quick notes, else the person's — never
+/// the limit per vault, and not in the vaults administrators list.
+#[tokio::test]
+async fn quick_notes_have_a_storage_limit_of_their_own_per_person() {
+    let srv = start_with_operator().await;
+    let mut alice = new_user(&srv.base, "alice").await;
+    let q = alice.create_quick_notes().await.unwrap().id;
+    alice
+        .push(&q, vec![quick_note(&alice, &q, "n1")])
+        .await
+        .unwrap();
+    assert!(vault_info(&alice, &q).await.storage_bytes > 0);
+    let mut ws = subscribed(&srv, &alice, &q, None).await;
+
+    // The limit per vault isn't theirs.
+    settings(&srv, serde_json::json!({ "storage_per_vault_mb": 0 })).await;
+    let info = vault_info(&alice, &q).await;
+    assert_eq!(info.storage_limit_mb, Limit::Unlimited);
+    assert!(!info.is_full());
+
+    // The instance's for quick notes is: they turn full, and hear so.
+    let s = settings(&srv, serde_json::json!({ "quick_notes_storage_mb": 0 })).await;
+    assert_eq!(s.settings.quick_notes_storage_mb, Limit::Max(0));
+    assert!(ws.until(|m| vault_full(m, &q)).await);
+    assert_eq!(vault_info(&alice, &q).await.storage_limit_mb, Limit::Max(0));
+    let refused = alice
+        .push(&q, vec![quick_note(&alice, &q, "n2")])
+        .await
+        .unwrap_err();
+    assert_eq!(refused.0, 507);
+
+    // Administrators see them with the person, not among the vaults.
+    let vaults: Vec<AdminVault> = operator(&srv, Method::GET, "/admin/vaults")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(vaults.iter().all(|v| v.id != q));
+    let patch_vault = operator(&srv, Method::PATCH, &format!("/admin/vaults/{q}"))
+        .json(&serde_json::json!({ "storage_allowance": 5 }));
+    assert_eq!(status(patch_vault).await, 404);
+    let person = || async {
+        let users: Vec<AdminUser> = operator(&srv, Method::GET, "/admin/users")
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        users.into_iter().find(|u| u.id == alice.id).unwrap()
+    };
+    let p = person().await;
+    assert_eq!(
+        p.quick_notes_storage_bytes,
+        vault_info(&alice, &q).await.storage_bytes
+    );
+    assert_eq!(
+        p.storage_bytes, 0,
+        "their vaults' size leaves quick notes apart"
+    );
+    assert_eq!(p.quick_notes_storage_allowance, Allowance::Default);
+
+    // The person's own allowance gives them room again, at once.
+    let set = |a: serde_json::Value| {
+        let r = operator(&srv, Method::PATCH, &format!("/admin/users/{}", alice.id))
+            .json(&serde_json::json!({ "quick_notes_storage_allowance": a }));
+        async move { status(r).await }
+    };
+    assert_eq!(set(serde_json::json!(5)).await, 200);
+    assert!(!ws.until(|m| vault_full(m, &q)).await);
+    assert_eq!(vault_info(&alice, &q).await.storage_limit_mb, Limit::Max(5));
+    assert_eq!(
+        person().await.quick_notes_storage_allowance,
+        Allowance::Max(5)
+    );
+    alice
+        .push(&q, vec![quick_note(&alice, &q, "n2")])
+        .await
+        .unwrap();
+    // Back to the instance's: full again.
+    assert_eq!(set(serde_json::json!("default")).await, 200);
+    assert!(ws.until(|m| vault_full(m, &q)).await);
+}

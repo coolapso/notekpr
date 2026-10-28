@@ -12,6 +12,7 @@ use crate::blobs::Stored;
 use crate::db;
 use crate::error::{AppError, AppResult, bad};
 use crate::state::AppState;
+use crate::sync::storage_changed;
 
 pub async fn put(
     State(state): State<AppState>,
@@ -34,10 +35,12 @@ pub async fn put(
     // under the write lock (which every membership change takes) rather than
     // in a transaction.
     access::require_writer(&state.db, &v, &who.user_id).await?;
+    state.instance.require_room(&state.db, &v).await?;
     match state.blobs.put(&v, &id, &who.user_id, &body).await? {
         Stored::AlreadyThere => Ok(StatusCode::OK),
         Stored::Created => {
             metrics::counter!("notekpr_attachment_bytes_total").increment(body.len() as u64);
+            storage_changed(&state, &v, false).await;
             Ok(StatusCode::CREATED)
         }
     }
@@ -78,11 +81,13 @@ pub async fn delete(
     access::require_admin(&state.db, &v, &who.user_id).await?;
     let _w = state.write_lock.lock().await;
     access::require_admin(&state.db, &v, &who.user_id).await?;
+    let was_full = state.instance.vault_full(&state.db, &v).await?;
     if state.config.purge_undo_days == 0 {
         state.blobs.delete(&v, &id).await?;
     } else {
         state.blobs.purge(&v, &id, db::now()).await?;
     }
+    storage_changed(&state, &v, was_full).await;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -96,7 +101,10 @@ pub async fn restore(
     access::require_admin(&state.db, &v, &who.user_id).await?;
     let _w = state.write_lock.lock().await;
     access::require_admin(&state.db, &v, &who.user_id).await?;
+    // It counts again.
+    state.instance.require_room(&state.db, &v).await?;
     let since = db::now() - state.config.purge_undo_ms();
     state.blobs.restore(&v, &id, since).await?;
+    storage_changed(&state, &v, false).await;
     Ok(StatusCode::NO_CONTENT)
 }

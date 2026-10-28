@@ -281,6 +281,8 @@ pub struct Ui {
     pub conn: RwSignal<ConnState>,
     /// Set while the server refuses changes (`Core::read_only`).
     pub read_only: RwSignal<Option<ReadOnly>>,
+    /// Vaults at their storage limit (`Core::full`).
+    pub full: RwSignal<BTreeSet<String>>,
     /// The server needs a newer version of this page: nothing syncs until
     /// it is reloaded (`sync::outdated`).
     pub outdated: RwSignal<bool>,
@@ -338,6 +340,7 @@ pub fn init_ui() -> Ui {
         content_rev: RwSignal::new(0),
         conn: RwSignal::new(ConnState::Connecting),
         read_only: RwSignal::new(None),
+        full: RwSignal::new(BTreeSet::new()),
         outdated: RwSignal::new(false),
         pending: RwSignal::new(0),
         presence: RwSignal::new(vec![]),
@@ -497,6 +500,10 @@ pub struct Core {
     /// The server refuses changes for now, as the socket last said
     /// (`ServerMessage::Mode`): edits stay queued until it accepts them.
     pub read_only: Option<ReadOnly>,
+    /// Vaults at their storage limit, as the socket last said
+    /// (`ServerMessage::VaultFull`, or a push refused with `vault_full`):
+    /// their edits stay queued until they have room again.
+    pub full: BTreeSet<String>,
     /// Upload bookkeeping per replica (`notekpr_sync::Outbox`).
     pub outboxes: BTreeMap<String, notekpr_sync::Outbox>,
     /// New notes' keys being registered, by (vault, note).

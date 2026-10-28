@@ -509,6 +509,18 @@ pub struct VaultInfo {
     /// unlimited for other vaults.
     #[serde(default)]
     pub note_limit: Limit,
+    /// Bytes the vault's encrypted content takes on the server: its log,
+    /// history and files, not what was deleted for good.
+    #[serde(default)]
+    pub storage_bytes: u64,
+    /// The vault's storage limit (MiB): its own, set by an administrator,
+    /// else the instance's `storage_per_vault_mb`; for quick notes, their
+    /// owner's own ([`AdminUser::quick_notes_storage_allowance`]), else
+    /// `quick_notes_storage_mb`. At it, the vault takes no
+    /// new content ([`ERROR_VAULT_FULL`]) until something is deleted for
+    /// good or the limit is raised.
+    #[serde(default)]
+    pub storage_limit_mb: Limit,
     /// For the owner: someone who no longer has access still knows the
     /// vault's key (they left, or their agent was deleted). The owner's apps
     /// rotate it as soon as they can.
@@ -524,6 +536,12 @@ pub struct VaultInfo {
 impl VaultInfo {
     pub fn is_quick_notes(&self) -> bool {
         self.kind == VaultKind::QuickNotes
+    }
+
+    /// Whether the vault reached its storage limit (when the list was
+    /// loaded; [`ServerMessage::VaultFull`] says when that changes).
+    pub fn is_full(&self) -> bool {
+        self.storage_limit_mb.reached_mb(self.storage_bytes)
     }
 
     /// Whether these are `user_id`'s own quick notes: of that kind, and
@@ -1119,12 +1137,23 @@ pub struct AdminUser {
     /// Quick notes this person keeps (what their quick-note allowance counts).
     #[serde(default)]
     pub quick_note_count: i64,
+    /// Bytes the vaults this person owns take ([`VaultInfo::storage_bytes`]),
+    /// their quick notes apart.
+    #[serde(default)]
+    pub storage_bytes: u64,
+    /// Bytes their quick notes take.
+    #[serde(default)]
+    pub quick_notes_storage_bytes: u64,
     #[serde(default)]
     pub vault_allowance: Allowance,
     #[serde(default)]
     pub agent_allowance: Allowance,
     #[serde(default)]
     pub quick_note_allowance: Allowance,
+    /// Their quick notes' storage limit (MiB), else the instance's
+    /// `quick_notes_storage_mb`.
+    #[serde(default)]
+    pub quick_notes_storage_allowance: Allowance,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
@@ -1142,6 +1171,35 @@ pub struct AdminUpdateUser {
     /// How many quick notes this person may keep (absent: unchanged).
     #[serde(default)]
     pub quick_note_allowance: Option<Allowance>,
+    /// How much their quick notes may take, in MiB (absent: unchanged).
+    #[serde(default)]
+    pub quick_notes_storage_allowance: Option<Allowance>,
+}
+
+/// A vault as administrators see it (`GET /admin/vaults`): its id, owner and
+/// size — never its name, members or content. People find a vault's id in
+/// its settings, to ask for more room. Someone's quick notes aren't among
+/// them: their limit is the person's ([`AdminUser`]).
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct AdminVault {
+    pub id: String,
+    pub owner_id: String,
+    pub owner_name: String,
+    /// Bytes its encrypted content takes ([`VaultInfo::storage_bytes`]).
+    pub storage_bytes: u64,
+    /// Its own storage limit (MiB), else the instance's `storage_per_vault_mb`.
+    #[serde(default)]
+    pub storage_allowance: Allowance,
+    pub created_at: i64,
+}
+
+/// `PATCH /admin/vaults/{id}`: only the fields given change.
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct AdminUpdateVault {
+    /// Its own storage limit in MiB (absent: unchanged; `"default"`: the
+    /// instance's).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub storage_allowance: Option<Allowance>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -1186,10 +1244,22 @@ impl Limit {
             Limit::Max(n) => Some(n),
         }
     }
+
+    /// For a limit in MiB: whether `bytes` reached it.
+    pub fn reached_mb(self, bytes: u64) -> bool {
+        match self {
+            Limit::Unlimited => false,
+            Limit::Max(mb) => bytes >= mb.saturating_mul(MIB),
+        }
+    }
 }
 
-/// A person's own limit (vaults, agents, quick notes): the instance's default for
-/// everyone, or theirs. In JSON `"default"`, `"unlimited"` or a number.
+/// Storage limits are in MiB.
+pub const MIB: u64 = 1024 * 1024;
+
+/// A person's or vault's own limit (vaults, agents, quick notes, storage):
+/// the instance's default for everyone, or theirs. In JSON `"default"`,
+/// `"unlimited"` or a number.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[serde(into = "LimitRepr", from = "LimitRepr")]
 pub enum Allowance {
@@ -1312,6 +1382,18 @@ pub struct InstanceSettings {
     /// itself, until it is below it again (e.g. the limit was raised).
     #[serde(default)]
     pub max_storage_mb: Limit,
+    /// The size (MiB) at which a vault takes no new content, unless it has
+    /// its own limit ([`AdminVault::storage_allowance`]). What was deleted
+    /// for good doesn't count, so emptying the trash makes room.
+    #[serde(default)]
+    pub storage_per_vault_mb: Limit,
+    /// The size (MiB) at which someone's quick notes take no new content,
+    /// unless they have their own allowance
+    /// ([`AdminUser::quick_notes_storage_allowance`]). Quick notes have their
+    /// own limit, not `storage_per_vault_mb`: like how many they may keep,
+    /// it is the person's.
+    #[serde(default)]
+    pub quick_notes_storage_mb: Limit,
     /// The oldest version of the apps the server accepts (`0.6.0`), above
     /// what its build accepts ([`AdminSettings::build_oldest_app_version`]);
     /// empty: only that. Older apps are told to update
@@ -1331,6 +1413,8 @@ impl Default for InstanceSettings {
             quick_notes_per_user: default_quick_notes_per_user(),
             read_only: false,
             max_storage_mb: Limit::Unlimited,
+            storage_per_vault_mb: Limit::Unlimited,
+            quick_notes_storage_mb: Limit::Unlimited,
             oldest_app_version: String::new(),
         }
     }
@@ -1355,12 +1439,25 @@ pub struct InstanceSettingsUpdate {
     pub read_only: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_storage_mb: Option<Limit>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub storage_per_vault_mb: Option<Limit>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quick_notes_storage_mb: Option<Limit>,
     /// `""`: only what the server's build accepts.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub oldest_app_version: Option<String>,
 }
 
 impl InstanceSettings {
+    /// The storage limit (MiB) of a vault of `kind` that has none of its own:
+    /// quick notes have theirs.
+    pub fn storage_default(&self, kind: VaultKind) -> Limit {
+        match kind {
+            VaultKind::Regular => self.storage_per_vault_mb,
+            VaultKind::QuickNotes => self.quick_notes_storage_mb,
+        }
+    }
+
     pub fn apply(&mut self, u: &InstanceSettingsUpdate) {
         let InstanceSettingsUpdate {
             max_users,
@@ -1371,6 +1468,8 @@ impl InstanceSettings {
             quick_notes_per_user,
             read_only,
             max_storage_mb,
+            storage_per_vault_mb,
+            quick_notes_storage_mb,
             oldest_app_version,
         } = u.clone();
         self.max_users = max_users.unwrap_or(self.max_users);
@@ -1381,6 +1480,8 @@ impl InstanceSettings {
         self.quick_notes_per_user = quick_notes_per_user.unwrap_or(self.quick_notes_per_user);
         self.read_only = read_only.unwrap_or(self.read_only);
         self.max_storage_mb = max_storage_mb.unwrap_or(self.max_storage_mb);
+        self.storage_per_vault_mb = storage_per_vault_mb.unwrap_or(self.storage_per_vault_mb);
+        self.quick_notes_storage_mb = quick_notes_storage_mb.unwrap_or(self.quick_notes_storage_mb);
         if let Some(v) = oldest_app_version {
             self.oldest_app_version = v.trim().to_string();
         }
@@ -1422,6 +1523,11 @@ pub struct AdminSettings {
 pub const ERROR_READ_ONLY: &str = "read_only";
 /// The error code of a creation refused by an instance limit (HTTP 403).
 pub const ERROR_LIMIT_REACHED: &str = "limit_reached";
+/// The error code of new content refused because its vault reached its
+/// storage limit (HTTP 507; the WebSocket's `error` with the vault's id).
+/// Clients keep the change and send it once a [`ServerMessage::VaultFull`]
+/// says the vault has room again.
+pub const ERROR_VAULT_FULL: &str = "vault_full";
 /// The error code of everything an app too old for the server asks (HTTP
 /// 426; the WebSocket's `error` before closing): it says so and keeps its
 /// unsent changes. [`ApiError::oldest_version`] says which version it needs.
@@ -1436,7 +1542,8 @@ pub enum AdminScope {
     Read,
     /// Change the instance settings (limits, read-only mode).
     Settings,
-    /// Disable and enable accounts, set their allowances.
+    /// Disable and enable accounts, set their allowances and vaults'
+    /// storage limits.
     Accounts,
     /// Give and take the admin role.
     Admins,
@@ -1705,6 +1812,15 @@ pub enum ServerMessage {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         read_only: Option<ReadOnly>,
     },
+    /// Whether a vault reached its storage limit: sent when it turns full or
+    /// has room again, and on subscribing to a full vault (before `synced`).
+    /// While it is full, clients keep its changes (pushes are refused with
+    /// [`ERROR_VAULT_FULL`]) and send them once it has room. Goes to
+    /// people a single note of it is shared with too.
+    VaultFull {
+        vault_id: String,
+        full: bool,
+    },
 }
 
 // ---------------------------------------------------------------- encrypted export
@@ -1857,7 +1973,7 @@ mod tests {
     #[test]
     fn reasons_and_events_from_newer_releases_still_read() {
         let mode: ServerMessage =
-            serde_json::from_str(r#"{"type":"mode","read_only":"vault_full"}"#).unwrap();
+            serde_json::from_str(r#"{"type":"mode","read_only":"maintenance"}"#).unwrap();
         assert!(matches!(
             mode,
             ServerMessage::Mode {
@@ -1943,6 +2059,27 @@ mod tests {
     }
 
     #[test]
+    fn a_vault_is_full_at_its_limit() {
+        assert!(!Limit::Max(1).reached_mb(MIB - 1));
+        assert!(Limit::Max(1).reached_mb(MIB));
+        assert!(Limit::Max(0).reached_mb(0));
+        assert!(!Limit::Unlimited.reached_mb(u64::MAX));
+        assert!(!Limit::Max(u64::MAX).reached_mb(u64::MAX - 1));
+        let v: VaultInfo = serde_json::from_value(serde_json::json!({
+            "id": "v", "owner_id": "u", "role": "owner", "encrypted_meta": "",
+            "key_epoch": 1, "head_seq": 0, "archived": false, "member_count": 1,
+            "created_at": 0, "updated_at": 0,
+            "storage_bytes": 2 * MIB, "storage_limit_mb": 2,
+        }))
+        .unwrap();
+        assert!(v.is_full());
+        // From servers without storage limits: never full.
+        let mut v: serde_json::Value = serde_json::to_value(&v).unwrap();
+        v.as_object_mut().unwrap().remove("storage_limit_mb");
+        assert!(!serde_json::from_value::<VaultInfo>(v).unwrap().is_full());
+    }
+
+    #[test]
     fn settings_fill_in_what_is_missing() {
         let s: InstanceSettings = serde_json::from_str(r#"{"max_vaults": 10}"#).unwrap();
         assert_eq!(
@@ -1983,6 +2120,8 @@ mod tests {
             viewers_comment: false,
             kind: VaultKind::QuickNotes,
             note_limit: Limit::Max(20),
+            storage_bytes: 0,
+            storage_limit_mb: Limit::Unlimited,
             rotation_pending: false,
             notes_rotation_pending: vec![],
         };

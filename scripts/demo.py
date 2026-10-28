@@ -28,6 +28,7 @@ docs/operations.md §10):
 import argparse
 import json
 import os
+import random
 import re
 import shutil
 import signal
@@ -134,6 +135,28 @@ def sunset():
     return png(480, 270, pixel)
 
 
+def scan(seed):
+    """A scanned letter: lines of text on grainy paper (the grain keeps it
+    from compressing, as a real scan; three of them take over 1 MiB)."""
+    rnd = random.Random(seed)
+    text = {}
+    for i in range(24):
+        if i in (3, 4, 19):
+            continue
+        top, length = 90 + 26 * i, rnd.randint(300, 560)
+        for y in range(top, top + 9):
+            text[y] = length
+
+    def pixel(x, y):
+        if 60 <= x < 60 + text.get(y, -60):
+            v = 60 + rnd.randint(0, 40)
+        else:
+            v = 225 + rnd.randint(0, 25)
+        return (v, v, v - 8)
+
+    return png(680, 800, pixel)
+
+
 # ---------------------------------------------------------------- content
 
 # (path, icon, text). Alice's personal vault: densely linked, for the graph.
@@ -181,7 +204,8 @@ HOME = [
         - [ ] Settings → Editor: the theme, Vim keybindings, and how wide notes are (a slider from narrow to wide). A note's ⋯ menu gives it a width of its own, only for you: try *Wide* on *Server checks* in *Work*, whose log lines don't wrap
         - [ ] Settings → Devices: the CLI and this browser; *Keep this browser usable offline*
         - [ ] Sign the command line in with a code: `task demo:cli -- --profile mine login --server http://localhost:8099` prints a link; opening it here shows when, and from which address, the code was asked for
-        - [ ] Settings → Administration: you run this server in the demo. *Instance* sets limits (accounts, vaults, agents, and per person; *Limits* next to someone gives them their own) and read-only mode: switch it on with **bob** signed in in another tab, edit there, and his edits wait in his browser until you switch it off. *Oldest app version* tells apps older than it to update (they keep their unsent edits) — development builds like this demo's never are
+        - [ ] Settings → Administration: you run this server in the demo. *Instance* sets limits (accounts, vaults, agents, and per person; *Limits* next to someone gives them their own) and read-only mode: switch it on with **bob** signed in in another tab, edit there, and his edits wait in his browser until you switch it off. *Oldest app version* tells apps older than it to update (they keep their unsent edits) — development builds like this demo's never are. *Admin clients* has the *billing* script that gave every vault 100 MiB and everyone's quick notes 20 MiB — yours 50 (*Limits* next to you; *Quick notes* shows how much of it they take)
+        - [ ] Your *Scans* vault is full: the billing script gave it only 1 MiB, and three scanned letters take more. The banner says so; edit a note there and the edit waits in your browser. *Vault settings* shows how much of its room it uses and its id (*Copy*). As the administrator, paste the id into *Find* under Settings → Administration → *Vaults* (every vault by size, with its owner — never its name) and give it more with *Limit*; or delete a letter for good from its trash. Either way the waiting edit goes out
         - [ ] Settings → AI agents: the *Home assistant* agent, which writes in *Assistant*
         - [ ] Your notes as plain Markdown files, synced both ways: `task demo:cli -- --profile alice sync --dir /tmp/alice-notes`
 
@@ -204,6 +228,7 @@ HOME = [
         | Garden club | Eve | Alice (editor) |
         | Assistant | Alice | the *Home assistant* agent |
         | Old projects | Alice | archived |
+        | Scans | Alice | full (1 MiB) |
 
         Notes shared with you on their own (Bob's training plan, Carol's logo
         ideas) are under **Shared with me**.
@@ -1213,7 +1238,17 @@ def step(text):
 # ---------------------------------------------------------------- seeding
 
 
-def seed(cli, url, data):
+def admin_api(url, token, path, body=None):
+    """Read (no body) or change something over the admin API, as an admin client."""
+    req = urllib.request.Request(
+        f"{url}/api/v1{path}", data=None if body is None else json.dumps(body).encode(),
+        method="GET" if body is None else "PATCH",
+        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=10) as r:
+        return json.loads(r.read() or b"null")
+
+
+def seed(cli, url, data, server_bin):
     keys = {}
     step("signing in alice, bob, carol, dave and eve (each gets account keys)")
     for user in USERS:
@@ -1423,6 +1458,28 @@ def seed(cli, url, data):
         - The garden needs water on Friday
         - Book club meets on Thursday: *Piranesi*
         """))
+
+    step("alice: vault Scans, three scanned letters")
+    cli.run(a, "-q", "vault", "create", "Scans")
+    cli.run(a, "-q", "vault", "icon", "Scans", "🗂️")
+    letters = [("bank", "The bank"), ("council", "The council"), ("insurance", "The insurance")]
+    cli.write(a, "Scans", "Letters.md", note("# Letters\n\nScanned, so the paper copies can go.\n\n" + "\n\n".join(
+        f"## {who}\n\n![[{name}-letter.png]]" for name, who in letters)))
+    for i, (name, _) in enumerate(letters):
+        cli.attach(a, "Scans", f"{name}-letter.png", scan(i + 1))
+
+    step("a billing script (an admin client): 100 MiB per vault, 1 MiB for Scans (now full), "
+         "20 MiB of quick notes (alice: 50)")
+    token = subprocess.run(
+        [str(server_bin), "--data-dir", str(data / "server"), "admin-client", "create",
+         "--name", "billing", "--scopes", "settings,accounts"],
+        check=True, capture_output=True, text=True).stdout.strip()
+    vaults = json.loads(cli.run(a, "--json", "vault", "list")[0])
+    scans = next(v["id"] for v in vaults if v["name"] == "Scans")
+    admin_api(url, token, "/admin/settings", {"storage_per_vault_mb": 100, "quick_notes_storage_mb": 20})
+    admin_api(url, token, f"/admin/vaults/{scans}", {"storage_allowance": 1})
+    alice = admin_api(url, token, "/admin/users?identity=dev:alice")[0]["id"]
+    admin_api(url, token, f"/admin/users/{alice}", {"quick_notes_storage_allowance": 50})
     return keys
 
 
@@ -1529,7 +1586,7 @@ def main():
             step(f"demo data already there ({data.relative_to(ROOT) if data.is_relative_to(ROOT) else data})")
         else:
             started = time.time()
-            seed(cli, url, data)
+            seed(cli, url, data, server_bin)
             marker.write_text(json.dumps({"users": USERS, "server": url, "created": int(time.time())}))
             step(f"done in {time.time() - started:.0f} s")
             if exposed:

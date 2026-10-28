@@ -580,6 +580,8 @@ fn Admin() -> impl IntoView {
     // The instance's defaults, once the settings arrived.
     let defaults = RwSignal::new(None::<InstanceSettings>);
     let editing = RwSignal::new(None::<String>);
+    // Whose vaults the vault list shows (all: `None`).
+    let vaults_of = RwSignal::new(None::<(String, String)>);
     let reload = move || {
         leptos::task::spawn_local(async move {
             if let Ok(u) = api::get("/admin/users").await {
@@ -632,17 +634,27 @@ fn Admin() -> impl IntoView {
                 };
                 let (owned, agent_count, va, aa) = (u.owned_vault_count, u.agent_count, u.vault_allowance, u.agent_allowance);
                 let (quick_count, qa) = (u.quick_note_count, u.quick_note_allowance);
+                let (quick_stored, qsa) = (u.quick_notes_storage_bytes, u.quick_notes_storage_allowance);
+                let stored = util::human_bytes(u.storage_bytes);
                 let usage = move || person.then(|| {
                     let d = defaults.get();
                     format!(
-                        "owns {} · {} · {}",
+                        "owns {} · {} · {} taking {} · their vaults take {stored}",
                         allowance_usage(owned, va, d.as_ref().map(|d| d.vaults_per_user), "vault"),
                         allowance_usage(agent_count, aa, d.as_ref().map(|d| d.agents_per_user), "agent"),
                         allowance_usage(quick_count, qa, d.as_ref().map(|d| d.quick_notes_per_user), "quick note"),
+                        storage_usage(quick_stored, qsa, d.as_ref().map(|d| d.quick_notes_storage_mb)),
                     )
                 });
+                let whose = (u.id.clone(), u.display_name.clone());
                 let (vaults, agents) = (RwSignal::new(u.vault_allowance), RwSignal::new(u.agent_allowance));
                 let quick_notes = RwSignal::new(u.quick_note_allowance);
+                let quick_notes_storage = RwSignal::new(qsa);
+                let quick_notes_full = move || person && {
+                    let d = defaults.get();
+                    qsa.resolve(d.map(|d| d.quick_notes_storage_mb).unwrap_or_default())
+                        .reached_mb(quick_stored)
+                };
                 view! {
                     <div class="list-row col" class:dim=disabled data-user=u.display_name.clone()>
                         <div class="row">
@@ -650,29 +662,40 @@ fn Admin() -> impl IntoView {
                             <div class="grow">
                                 <div>{u.display_name.clone()}{admin.then(|| view! { <span class="pill">"admin"</span> })}
                                     {(u.kind == PrincipalKind::Agent).then(|| view! { <span class="tag-agent">"agent"</span> })}
-                                    {disabled.then(|| view! { <span class="pill warn">"disabled"</span> })}</div>
+                                    {disabled.then(|| view! { <span class="pill warn">"disabled"</span> })}
+                                    {move || quick_notes_full().then(|| view! { <span class="pill warn">"quick notes full"</span> })}</div>
                                 <div class="muted small">{format!("{} · {} vaults · {} devices · last login {}", u.email.clone().unwrap_or_default(), u.vault_count, u.device_count, u.last_login_at.map(util::relative_time).unwrap_or_else(|| "never".into()))}</div>
                                 {person.then(|| view! { <div class="muted small allowance-usage">{usage}</div> })}
                             </div>
-                            {person.then(|| {
-                                let id = id3.clone();
-                                view! {
-                                    <button class="btn small limits-btn" on:click=move |ev| {
-                                        editing.update(|e| {
-                                            *e = if e.as_deref() == Some(id.as_str()) { None } else { Some(id.clone()) };
-                                        });
-                                        reveal_row(&ev);
-                                    }>"Limits"</button>
-                                }
-                            })}
-                            {(!is_me && person).then(|| view! {
-                                <button class="btn small" on:click=move |_| patch_user(id.clone(), AdminUpdateUser { is_admin: Some(!admin), ..Default::default() })>
-                                    {if admin { "Remove admin" } else { "Make admin" }}</button>
-                            })}
-                            {(!is_me).then(|| view! {
-                                <button class="btn small danger" on:click=move |_| patch_user(id2.clone(), AdminUpdateUser { disabled: Some(!disabled), ..Default::default() })>
-                                    {if disabled { "Enable" } else { "Disable" }}</button>
-                            })}
+                            <div class="row-actions">
+                                {person.then(|| {
+                                    let id = id3.clone();
+                                    let whose = whose.clone();
+                                    view! {
+                                        <button class="btn small their-vaults-btn" title="Their vaults, in the list below"
+                                            on:click=move |_| {
+                                                vaults_of.set(Some(whose.clone()));
+                                                if let Some(list) = util::window().document().and_then(|d| d.query_selector(".admin-vaults-title").ok().flatten()) {
+                                                    list.scroll_into_view();
+                                                }
+                                            }>"Vaults"</button>
+                                        <button class="btn small limits-btn" on:click=move |ev| {
+                                            editing.update(|e| {
+                                                *e = if e.as_deref() == Some(id.as_str()) { None } else { Some(id.clone()) };
+                                            });
+                                            reveal_row(&ev);
+                                        }>"Limits"</button>
+                                    }
+                                })}
+                                {(!is_me && person).then(|| view! {
+                                    <button class="btn small" on:click=move |_| patch_user(id.clone(), AdminUpdateUser { is_admin: Some(!admin), ..Default::default() })>
+                                        {if admin { "Remove admin" } else { "Make admin" }}</button>
+                                })}
+                                {(!is_me).then(|| view! {
+                                    <button class="btn small danger" on:click=move |_| patch_user(id2.clone(), AdminUpdateUser { disabled: Some(!disabled), ..Default::default() })>
+                                        {if disabled { "Enable" } else { "Disable" }}</button>
+                                })}
+                            </div>
                         </div>
                         {move || open().then(|| {
                             let id = u.id.clone();
@@ -682,6 +705,7 @@ fn Admin() -> impl IntoView {
                                     <AllowanceField label="Vaults they may own" value=vaults default=d.as_ref().map(|d| d.vaults_per_user) class="vault-allowance"/>
                                     <AllowanceField label="Agents they may have" value=agents default=d.as_ref().map(|d| d.agents_per_user) class="agent-allowance"/>
                                     <AllowanceField label="Quick notes they may keep" value=quick_notes default=d.as_ref().map(|d| d.quick_notes_per_user) class="quick-note-allowance"/>
+                                    <AllowanceField label="Quick notes storage (MiB)" value=quick_notes_storage default=d.as_ref().map(|d| d.quick_notes_storage_mb) class="quick-notes-storage-allowance"/>
                                     <div class="row">
                                         <button class="btn small primary save-allowances" on:click=move |_| {
                                             editing.set(None);
@@ -689,6 +713,7 @@ fn Admin() -> impl IntoView {
                                                 vault_allowance: Some(vaults.get_untracked()),
                                                 agent_allowance: Some(agents.get_untracked()),
                                                 quick_note_allowance: Some(quick_notes.get_untracked()),
+                                                quick_notes_storage_allowance: Some(quick_notes_storage.get_untracked()),
                                                 ..Default::default()
                                             });
                                         }>"Save"</button>
@@ -701,7 +726,144 @@ fn Admin() -> impl IntoView {
                 }
             }).collect_view()}
         </div>
+        <AdminVaults defaults=defaults owner=vaults_of on_saved=Callback::new(move |()| reload())/>
         <AdminClients/>
+    }
+}
+
+/// Vaults by size, the largest first: their id, owner and size — never a
+/// name or anything in them. People read a vault's id in its settings and
+/// give it to ask for more room; *Limit* gives a vault a limit of its own.
+#[component]
+fn AdminVaults(
+    defaults: RwSignal<Option<InstanceSettings>>,
+    owner: RwSignal<Option<(String, String)>>,
+    on_saved: Callback<()>,
+) -> impl IntoView {
+    let list = RwSignal::new(Vec::<AdminVault>::new());
+    let search = RwSignal::new(String::new());
+    let editing = RwSignal::new(None::<String>);
+    // Only the latest search's answer is shown: an earlier one may arrive last.
+    let latest = StoredValue::new(0u64);
+    let load = move || {
+        let id = search.get_untracked().trim().to_string();
+        let whose = owner.get_untracked().map(|(id, _)| id);
+        let n = latest.get_value() + 1;
+        latest.set_value(n);
+        leptos::task::spawn_local(async move {
+            let mut query = Vec::new();
+            if !id.is_empty() {
+                query.push(format!("id={}", api::q(&id)));
+            }
+            if let Some(o) = whose {
+                query.push(format!("owner={}", api::q(&o)));
+            }
+            let path = match query.is_empty() {
+                true => "/admin/vaults".to_string(),
+                false => format!("/admin/vaults?{}", query.join("&")),
+            };
+            match api::get::<Vec<AdminVault>>(&path).await {
+                Ok(l) if latest.get_value() == n => list.set(l),
+                Ok(_) => {}
+                Err(e) => state::error(e.message),
+            }
+        });
+    };
+    // Again whenever the owner filter changes.
+    Effect::new(move |_| {
+        owner.track();
+        load();
+    });
+    let save = move |id: String, a: Allowance| {
+        leptos::task::spawn_local(async move {
+            let change = AdminUpdateVault {
+                storage_allowance: Some(a),
+            };
+            match api::patch::<_, serde_json::Value>(&format!("/admin/vaults/{id}"), &change).await
+            {
+                Ok(_) => {
+                    state::success("Vault limit saved.");
+                    on_saved.run(());
+                }
+                Err(e) => state::error(e.message),
+            }
+            load();
+        });
+    };
+    view! {
+        <h3 class="admin-vaults-title">"Vaults"</h3>
+        <p class="muted small">"The largest first. You see a vault's id, owner and size — never its name or what's in it. Its members find the id in its settings, to ask you for more room. Quick notes aren't listed: their limit is the person's (Accounts → Limits)."</p>
+        <form class="row vault-search" on:submit=move |ev| { ev.prevent_default(); load(); }>
+            <input class="input grow vault-search-id" placeholder="A vault's id"
+                prop:value=move || search.get() on:input=move |ev| search.set(event_target_value(&ev))/>
+            <button class="btn" type="submit">"Find"</button>
+            {move || (!search.get().is_empty()).then(|| view! {
+                <button class="btn ghost" type="button" on:click=move |_| { search.set(String::new()); load(); }>"All"</button>
+            })}
+        </form>
+        {move || owner.get().map(|(_, name)| view! {
+            <p class="vaults-of small">{format!("{name}'s vaults ")}
+                <button class="btn small ghost" on:click=move |_| owner.set(None)>"Show all"</button></p>
+        })}
+        <div class="list scroll admin-vaults">
+            {move || {
+                let d = defaults.get();
+                let rows = list.get();
+                if rows.is_empty() {
+                    return view! { <p class="muted small">"No vault found."</p> }.into_any();
+                }
+                rows.into_iter().map(|a| {
+                    let limit = a.storage_allowance.resolve(d.as_ref().map(|d| d.storage_per_vault_mb).unwrap_or_default());
+                    let used = util::human_bytes(a.storage_bytes);
+                    let usage = match limit.max() {
+                        Some(mb) => format!("{used} of {}", util::human_bytes(mb.saturating_mul(MIB))),
+                        None => format!("{used} (no limit)"),
+                    };
+                    let full = limit.reached_mb(a.storage_bytes);
+                    let own = if a.storage_allowance == Allowance::Default { "" } else { " · its own limit" };
+                    let value = RwSignal::new(a.storage_allowance);
+                    let open = {
+                        let id = a.id.clone();
+                        move || editing.get().as_deref() == Some(id.as_str())
+                    };
+                    let (id, id2) = (a.id.clone(), a.id.clone());
+                    view! {
+                        <div class="list-row col" data-vault=a.id.clone()>
+                            <div class="row">
+                                {avatar(&a.owner_name, &a.owner_id)}
+                                <div class="grow">
+                                    <div><code class="vault-id">{a.id.clone()}</code>
+                                        {full.then(|| view! { <span class="pill warn">"full"</span> })}</div>
+                                    <div class="muted small vault-usage">{format!("{} · {usage}{own}", a.owner_name)}</div>
+                                </div>
+                                <button class="btn small vault-limit-btn" on:click=move |ev| {
+                                    editing.update(|e| {
+                                        *e = if e.as_deref() == Some(id.as_str()) { None } else { Some(id.clone()) };
+                                    });
+                                    reveal_row(&ev);
+                                }>"Limit"</button>
+                            </div>
+                            {move || open().then(|| {
+                                let id = id2.clone();
+                                let d = defaults.get_untracked();
+                                view! {
+                                    <div class="allowances">
+                                        <AllowanceField label="Storage (MiB)" value=value default=d.as_ref().map(|d| d.storage_per_vault_mb) class="storage-allowance"/>
+                                        <div class="row">
+                                            <button class="btn small primary save-vault-limit" on:click=move |_| {
+                                                editing.set(None);
+                                                save(id.clone(), value.get_untracked());
+                                            }>"Save"</button>
+                                            <span class="muted small">"At its limit a vault takes no new content until something in it is deleted for good. Nothing is removed when you lower it."</span>
+                                        </div>
+                                    </div>
+                                }
+                            })}
+                        </div>
+                    }
+                }).collect_view().into_any()
+            }}
+        </div>
     }
 }
 
@@ -748,7 +910,7 @@ fn AdminClients() -> impl IntoView {
     let scope_text = |s: AdminScope| match s {
         AdminScope::Read => "read: accounts, statistics, settings, admin clients",
         AdminScope::Settings => "settings: limits and read-only mode",
-        AdminScope::Accounts => "accounts: disable, enable, limits per person",
+        AdminScope::Accounts => "accounts: disable, enable, limits per person and per vault",
         AdminScope::Admins => "admins: give and take the admin role",
         AdminScope::Clients => {
             "clients: manage admin clients (never with more than its own scopes)"
@@ -871,6 +1033,20 @@ fn allowance_usage(n: i64, a: Allowance, default: Option<Limit>, what: &str) -> 
     }
 }
 
+/// What something takes of its storage limit (MiB): its own allowance, else
+/// `default` (unknown until the settings arrived).
+fn storage_usage(bytes: u64, a: Allowance, default: Option<Limit>) -> String {
+    let used = util::human_bytes(bytes);
+    let limit = match a {
+        Allowance::Default => default,
+        a => Some(a.resolve(Limit::Unlimited)),
+    };
+    match limit.and_then(|l| l.max()) {
+        Some(mb) => format!("{used} of {}", util::human_bytes(mb.saturating_mul(MIB))),
+        None => used,
+    }
+}
+
 /// The instance settings (limits, read-only mode).
 #[component]
 fn InstanceSettingsPanel(
@@ -887,8 +1063,20 @@ fn InstanceSettingsPanel(
         RwSignal::new(s.agents_per_user),
         RwSignal::new(s.quick_notes_per_user),
         RwSignal::new(s.max_storage_mb),
+        RwSignal::new(s.storage_per_vault_mb),
+        RwSignal::new(s.quick_notes_storage_mb),
     );
-    let (users, agents, vaults, vaults_per_user, agents_per_user, quick_per_user, storage) = fields;
+    let (
+        users,
+        agents,
+        vaults,
+        vaults_per_user,
+        agents_per_user,
+        quick_per_user,
+        storage,
+        per_vault,
+        quick_notes_storage,
+    ) = fields;
     let oldest_app = RwSignal::new(String::new());
     let show = move |a: AdminSettings| {
         let s = &a.settings;
@@ -900,6 +1088,8 @@ fn InstanceSettingsPanel(
         agents_per_user.set(s.agents_per_user);
         quick_per_user.set(s.quick_notes_per_user);
         storage.set(s.max_storage_mb);
+        per_vault.set(s.storage_per_vault_mb);
+        quick_notes_storage.set(s.quick_notes_storage_mb);
         defaults.set(Some(a.settings.clone()));
         status.set(Some(a));
     };
@@ -951,6 +1141,8 @@ fn InstanceSettingsPanel(
                     <LimitField label="Agents per person" value=agents_per_user class="agents-per-user"/>
                     <LimitField label="Quick notes per person" value=quick_per_user class="quick-notes-per-user"/>
                     <LimitField label="Database size (MiB)" value=storage class="max-storage"/>
+                    <LimitField label="Storage per vault (MiB)" value=per_vault class="storage-per-vault"/>
+                    <LimitField label="Quick notes storage (MiB)" value=quick_notes_storage class="quick-notes-storage"/>
                 </div>
                 <div class="row">
                     <button class="btn primary save-limits" on:click=move |_| save(InstanceSettingsUpdate {
@@ -961,10 +1153,12 @@ fn InstanceSettingsPanel(
                         agents_per_user: Some(agents_per_user.get_untracked()),
                         quick_notes_per_user: Some(quick_per_user.get_untracked()),
                         max_storage_mb: Some(storage.get_untracked()),
+                        storage_per_vault_mb: Some(per_vault.get_untracked()),
+                        quick_notes_storage_mb: Some(quick_notes_storage.get_untracked()),
                         ..Default::default()
                     })>"Save limits"</button>
                 </div>
-                <p class="muted small">"Limits apply to what is created from now on: nothing is removed when you lower one. Accounts count people who aren't disabled; a person's own limits are under Accounts. At the database size limit the server turns read-only by itself, until it is below the limit again."</p>
+                <p class="muted small">"Limits apply to what is created from now on: nothing is removed when you lower one. Accounts count people who aren't disabled; a person's own limits are under Accounts. At the database size limit the server turns read-only by itself, until it is below the limit again. A vault at its storage limit takes no new content until something in it is deleted for good, or you give it more room (Vaults, below). Someone's quick notes have their own storage limit, like how many they may keep: give one person more under Accounts → Limits."</p>
                 <div class="row oldest-app">
                     <label class="limit-field">
                         <span class="limit-label">"Oldest app version"</span>

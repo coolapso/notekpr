@@ -1,7 +1,7 @@
 //! Repository tests against a real, migrated SQLite database (a temporary
 //! file with the production settings: WAL, foreign keys).
 
-use notekpr_core::protocol::{PublicAccountKey, Role, VaultKind};
+use notekpr_core::protocol::{InstanceSettings, Limit, MIB, PublicAccountKey, Role, VaultKind};
 
 use super::*;
 use crate::access;
@@ -169,20 +169,26 @@ async fn member_roles_and_owner_only_rules() {
     let mut ids = vaults::member_ids(db, "v").await.unwrap();
     ids.sort();
     assert_eq!(ids, ["ed", "owner"]);
-    assert_eq!(vaults::list_for_member(db, "ed").await.unwrap().len(), 1);
+    assert_eq!(
+        vaults::list_for_member(db, "ed", &InstanceSettings::default())
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
     assert!(
-        vaults::list_for_member(db, "view")
+        vaults::list_for_member(db, "view", &InstanceSettings::default())
             .await
             .unwrap()
             .is_empty()
     );
     assert!(
-        vaults::get_for_member(db, "view", "v")
+        vaults::get_for_member(db, "view", "v", &InstanceSettings::default())
             .await
             .unwrap()
             .is_none()
     );
-    let info = vaults::get_for_member(db, "ed", "v")
+    let info = vaults::get_for_member(db, "ed", "v", &InstanceSettings::default())
         .await
         .unwrap()
         .unwrap();
@@ -249,6 +255,173 @@ async fn quick_notes_are_once_per_person_and_count_their_notes() {
         .unwrap();
     assert_eq!(vaults::note_count(db, "q").await.unwrap(), 1);
     assert_eq!(vaults::note_count(db, "qb").await.unwrap(), 0);
+}
+
+/// What a vault's content takes, counted from scratch: payloads and sizes
+/// of what wasn't deleted for good.
+async fn recount(db: &Db, v: &str) -> u64 {
+    let n: i64 = sqlx::query_scalar(
+        "SELECT
+           (SELECT COALESCE(SUM(length(payload)), 0) FROM updates u WHERE u.vault_id = ?1
+              AND NOT EXISTS (SELECT 1 FROM objects o WHERE o.vault_id = ?1 AND o.id = u.object_id AND o.purged_at IS NOT NULL))
+         + (SELECT COALESCE(SUM(size), 0) FROM snapshots s WHERE s.vault_id = ?1
+              AND NOT EXISTS (SELECT 1 FROM objects o WHERE o.vault_id = ?1 AND o.id = s.object_id AND o.purged_at IS NOT NULL))
+         + (SELECT COALESCE(SUM(size), 0) FROM attachments WHERE vault_id = ?1 AND purged_at IS NULL)",
+    )
+    .bind(v)
+    .fetch_one(db)
+    .await
+    .unwrap();
+    n as u64
+}
+
+/// `vaults.storage_bytes` follows every way content comes and goes (the
+/// schema's triggers), whichever query does it.
+#[tokio::test]
+async fn vault_storage_counts_what_the_vault_holds() {
+    let t = test_db().await;
+    let db = &t.db;
+    human(db, "alice").await;
+    vault(db, "v", "alice", &[]).await;
+    vault(db, "w", "alice", &[]).await;
+    let used =
+        |v: &'static str| async move { vaults::storage(db, v).await.unwrap().unwrap().bytes };
+    let exec = |q: &'static str| async move { sqlx::query(q).execute(db).await.unwrap() };
+    let check = |expected: u64| async move {
+        assert_eq!(used("v").await, expected);
+        assert_eq!(recount(db, "v").await, expected);
+        assert_eq!(used("w").await, 7, "another vault's size stays");
+    };
+    assert_eq!(used("v").await, 0);
+
+    for o in ["a", "b"] {
+        shares::ensure_object(db, "v", o, "alice", NOW)
+            .await
+            .unwrap();
+    }
+    exec(
+        "INSERT INTO updates (vault_id, seq, object_id, client_update_id, author_id, payload, created_at)
+         VALUES ('v', 1, 'a', 'u1', 'alice', zeroblob(100), 0), ('v', 2, 'a', 'u2', 'alice', zeroblob(200), 0),
+                ('v', 3, 'b', 'u3', 'alice', zeroblob(50), 0),
+                ('v', 4, 'new', 'u4', 'alice', zeroblob(10), 0),
+                ('w', 1, 'x', 'u1', 'alice', zeroblob(7), 0)",
+    )
+    .await;
+    exec(
+        "INSERT INTO snapshots (id, vault_id, object_id, covers_seq, author_id, payload, size, created_at)
+         VALUES ('s1', 'v', 'a', 1, 'alice', zeroblob(300), 300, 0), ('s2', 'v', 'a', 2, 'alice', zeroblob(30), 30, 0)",
+    )
+    .await;
+    check(690).await;
+    attachments::insert(db, "v", "f1", "alice", &[0; 1000], NOW)
+        .await
+        .unwrap();
+    attachments::insert(db, "v", "f2", "alice", &[0; 5], NOW)
+        .await
+        .unwrap();
+    check(1695).await;
+
+    // A snapshot prunes the updates the previous one covered, and retention
+    // drops old snapshots.
+    exec("DELETE FROM updates WHERE vault_id = 'v' AND object_id = 'a' AND seq <= 1").await;
+    exec("DELETE FROM snapshots WHERE id = 's1'").await;
+    check(1295).await;
+
+    // Deleted for good: no longer counted, back with an undo, and not
+    // counted twice when erased.
+    exec("UPDATE objects SET purged_at = 5, purged_seq = 5 WHERE vault_id = 'v' AND id = 'a'")
+        .await;
+    check(1065).await;
+    exec("UPDATE objects SET purged_at = 6 WHERE vault_id = 'v' AND id = 'a'").await;
+    check(1065).await;
+    exec(
+        "UPDATE objects SET purged_at = NULL, purged_seq = NULL WHERE vault_id = 'v' AND id = 'a'",
+    )
+    .await;
+    check(1295).await;
+    exec("UPDATE objects SET purged_at = 7 WHERE vault_id = 'v' AND id = 'a'").await;
+    exec("DELETE FROM updates WHERE vault_id = 'v' AND object_id = 'a'").await;
+    exec("DELETE FROM snapshots WHERE vault_id = 'v' AND object_id = 'a'").await;
+    check(1065).await;
+
+    assert!(attachments::purge(db, "v", "f1", 10).await.unwrap());
+    assert!(attachments::purge(db, "v", "f1", 11).await.unwrap());
+    check(65).await;
+    assert!(attachments::restore(db, "v", "f1", 0).await.unwrap());
+    check(1065).await;
+    assert!(attachments::purge(db, "v", "f1", 12).await.unwrap());
+    assert_eq!(attachments::erase_purged_before(db, 13).await.unwrap(), 1);
+    check(65).await;
+    assert_eq!(attachments::delete(db, "v", "f2").await.unwrap(), 1);
+    check(60).await;
+
+    // Deleting the vault takes everything with it.
+    exec("DELETE FROM vaults WHERE id = 'v'").await;
+    assert!(vaults::storage(db, "v").await.unwrap().is_none());
+    assert_eq!(used("w").await, 7);
+}
+
+/// The count behind `notekpr_vaults_full`: each vault against its own limit,
+/// else the instance's for its kind; quick notes against their owner's.
+#[tokio::test]
+async fn full_vaults_are_counted_against_their_own_limit_or_the_default() {
+    let t = test_db().await;
+    let db = &t.db;
+    human(db, "alice").await;
+    let mib = MIB as i64;
+    let set = |v: &'static str, bytes: i64, own: Option<i64>| async move {
+        sqlx::query("UPDATE vaults SET storage_bytes = ?, storage_allowance = ? WHERE id = ?")
+            .bind(bytes)
+            .bind(own)
+            .bind(v)
+            .execute(db)
+            .await
+            .unwrap();
+    };
+    for (v, bytes, own) in [
+        ("default_under", 2 * mib - 1, None),
+        ("default_at", 2 * mib, None),
+        ("own_under", 3 * mib, Some(5)),
+        ("own_at", 5 * mib, Some(5)),
+        ("own_small", 1, Some(0)),
+        ("own_unlimited", 9 * mib, Some(-1)),
+        ("own_huge", i64::MAX, Some(i64::MAX)),
+    ] {
+        vault(db, v, "alice", &[]).await;
+        set(v, bytes, own).await;
+    }
+    // Quick notes: bob's on the instance's limit for them, carl's and
+    // dave's on their own.
+    for (who, q, bytes, own) in [
+        ("bob", "q_bob", 3 * mib, None),
+        ("carl", "q_carl", 4 * mib, Some(5)),
+        ("dave", "q_dave", 1, Some(0)),
+    ] {
+        human(db, who).await;
+        assert!(
+            vaults::insert(db, q, who, b"meta", VaultKind::QuickNotes, NOW)
+                .await
+                .unwrap()
+        );
+        set(q, bytes, None).await;
+        users::set_quick_notes_storage_allowance(db, who, allowance(own))
+            .await
+            .unwrap();
+    }
+    let limits = |per_vault: Limit, quick_notes: Limit| InstanceSettings {
+        storage_per_vault_mb: per_vault,
+        quick_notes_storage_mb: quick_notes,
+        ..Default::default()
+    };
+    let full = |l: InstanceSettings| async move { vaults::full_count(db, &l).await.unwrap() };
+    // default_at, own_at, own_small (own_huge holds just under its limit);
+    // q_bob and q_dave.
+    assert_eq!(full(limits(Limit::Max(2), Limit::Max(3))).await, 5);
+    // default_under too; q_bob follows the quick notes' limit, not this one.
+    assert_eq!(full(limits(Limit::Max(1), Limit::Unlimited)).await, 5);
+    assert_eq!(full(limits(Limit::Max(1), Limit::Max(3))).await, 6);
+    // Only the vaults' own limits.
+    assert_eq!(full(limits(Limit::Unlimited, Limit::Unlimited)).await, 3);
 }
 
 #[tokio::test]

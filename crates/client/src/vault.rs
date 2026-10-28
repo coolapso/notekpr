@@ -75,6 +75,16 @@ pub struct Vault {
     /// shared and hold at most `note_limit` notes.
     pub kind: VaultKind,
     pub note_limit: Limit,
+    /// What its content takes on the server and may take (MiB), as the
+    /// vault list last said.
+    pub storage_bytes: u64,
+    pub storage_limit_mb: Limit,
+    /// The server said the vault is full: its changes wait here until it
+    /// says it has room ([`ServerMessage::VaultFull`], or an upload refused
+    /// with `vault_full`). Not kept between runs.
+    ///
+    /// [`ServerMessage::VaultFull`]: notekpr_core::protocol::ServerMessage::VaultFull
+    pub full: bool,
     /// Why the vault became read-only locally (access revoked, deleted).
     pub read_only: Option<String>,
     pub pending_blobs: BTreeSet<String>,
@@ -221,6 +231,9 @@ impl Vault {
             viewers_comment: true,
             kind: VaultKind::Regular,
             note_limit: Limit::Unlimited,
+            storage_bytes: 0,
+            storage_limit_mb: Limit::Unlimited,
+            full: false,
             read_only: None,
             pending_blobs: BTreeSet::new(),
             last_sync: None,
@@ -402,6 +415,9 @@ impl Vault {
             viewers_comment: s.viewers_comment,
             kind: s.kind,
             note_limit: s.note_limit,
+            storage_bytes: 0,
+            storage_limit_mb: Limit::Unlimited,
+            full: false,
             read_only: s.read_only,
             pending_blobs: s.pending_blobs,
             last_sync: s.last_sync,

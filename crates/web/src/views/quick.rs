@@ -7,6 +7,7 @@ use leptos::html;
 use leptos::prelude::*;
 use notekpr_core::moving::What;
 use notekpr_core::paths;
+use notekpr_core::protocol::{MIB, VaultInfo};
 
 use crate::quick::{self, QuickNote};
 use crate::state::{self, Modal, Route, step, ui};
@@ -152,12 +153,56 @@ pub fn QuickPage() -> impl IntoView {
                         if notes.len() == 1 && limit.max().is_none() { " quick note" } else { " quick notes" }
                     }}
                 </h2>
+                {move || data.get().0.map(|v| view! { <QuickStorage vault=v/> })}
                 <p class="muted small qn-explain">"Quick notes are yours alone. Move one to a vault to keep it, share it or comment on it; deleting one deletes it for good."</p>
                 <div class="note-list">
                     {move || data.get().1.into_iter().map(|q| view! { <QuickCard q=q/> }).collect_view()}
                 </div>
             </div>
         </div>
+    }
+}
+
+/// What the quick notes take of their storage limit, when they have one (the
+/// person's: an administrator gives them more), and what to do once full.
+#[component]
+fn QuickStorage(vault: String) -> impl IntoView {
+    let ui = ui();
+    let info = RwSignal::new(step(|c| c.vault_infos.get(&vault).cloned()));
+    let full = {
+        let v = vault.clone();
+        Memo::new(move |_| ui.full.with(|f| f.contains(&v)))
+    };
+    // Fresh numbers (the list's are from when it was loaded), again when
+    // they fill up or have room.
+    Effect::new(move |_| {
+        full.track();
+        let v = vault.clone();
+        leptos::task::spawn_local(async move {
+            if let Ok(i) = crate::api::get::<VaultInfo>(&format!("/vaults/{v}")).await {
+                info.set(Some(i));
+            }
+        });
+    });
+    move || {
+        let i = info.get()?;
+        let limit = i.storage_limit_mb.max()?.saturating_mul(MIB);
+        let pct = if i.storage_bytes >= limit {
+            100.0
+        } else {
+            i.storage_bytes as f64 * 100.0 / limit as f64
+        };
+        let is_full = full.get() || pct >= 100.0;
+        Some(view! {
+            <div class="qn-storage">
+                <p class="muted small storage-use">{format!("They take {} of {}.", util::human_bytes(i.storage_bytes), util::human_bytes(limit))}</p>
+                <div class="meter" class:full=is_full>
+                    <div class="meter-fill" style=format!("width: {pct:.1}%")></div></div>
+                {is_full.then(|| view! {
+                    <p class="muted small storage-help">"They are full: edits wait in this browser until there's room. Deleting a quick note makes room, or ask your server's administrator for more."</p>
+                })}
+            </div>
+        })
     }
 }
 

@@ -264,10 +264,12 @@ async fn subscribe(hub: &Hub, sink: &mut Sink, vault_id: &str) -> Result<bool> {
         return Ok(false);
     };
     let since = {
-        let g = v.lock().await;
+        let mut g = v.lock().await;
         if g.read_only.is_some() {
             return Ok(false);
         }
+        // The server says so first thing if it's full.
+        g.full = false;
         g.replica.seq
     };
     send(
@@ -845,6 +847,11 @@ async fn handle(
                 Some(v) if code == "not_found" => {
                     close(hub, conn, &v, "the vault is no longer accessible").await
                 }
+                Some(v) if code == ERROR_VAULT_FULL => {
+                    if let Some(sv) = hub.get(&v) {
+                        sv.lock().await.full = true;
+                    }
+                }
                 Some(v) => tracing::warn!(vault = %v, code, "server error: {message}"),
                 None => tracing::warn!(code, "server error: {message}"),
             }
@@ -865,6 +872,34 @@ async fn handle(
                         }
                     }
                     None => {}
+                }
+            }
+        }
+        ServerMessage::VaultFull { vault_id, full } => {
+            let Some(v) = hub.get(&vault_id) else {
+                return Ok(None);
+            };
+            let (was, name, quick_notes) = {
+                let mut g = v.lock().await;
+                let was = std::mem::replace(&mut g.full, full);
+                (was, g.name().to_string(), g.is_quick_notes())
+            };
+            if full && !was {
+                ui::status(&if quick_notes {
+                    "your quick notes are full: local changes are kept and uploaded once they have room (delete a quick note, or ask your administrator for more room)".to_string()
+                } else {
+                    format!(
+                        "vault '{name}' is full: local changes are kept and uploaded once it has room (delete something in it for good, or ask your administrator to raise its limit: its id is {vault_id})"
+                    )
+                });
+            } else if was && !full {
+                ui::status(&if quick_notes {
+                    "your quick notes have room again: uploading local changes".to_string()
+                } else {
+                    format!("vault '{name}' has room again: uploading local changes")
+                });
+                if conn.synced.contains(&vault_id) {
+                    spawn_push(hub, &vault_id);
                 }
             }
         }

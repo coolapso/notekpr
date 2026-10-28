@@ -1,16 +1,16 @@
-//! Service administration: accounts, usage statistics, the instance
-//! settings (`instance.rs`) and admin clients (`admin_clients.rs`).
-//! Administrators — people with the admin role, and admin clients, each
-//! limited to its scopes ([`Admin`]) — gain no access to any vault or its
-//! keys.
+//! Service administration: accounts, usage statistics, vaults' storage
+//! limits, the instance settings (`instance.rs`) and admin clients
+//! (`admin_clients.rs`). Administrators — people with the admin role, and
+//! admin clients, each limited to its scopes ([`Admin`]) — gain no access to
+//! any vault or its keys: of a vault they see its id, owner and size.
 
 use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use notekpr_core::protocol::{
-    AdminClientInfo, AdminScope, AdminSettings, AdminStats, AdminUpdateUser, AdminUser,
-    CreateAdminClient, CreatedAdminToken, InstanceSettingsUpdate, PrincipalKind, UpdateAdminClient,
-    UserEventKind,
+    AdminClientInfo, AdminScope, AdminSettings, AdminStats, AdminUpdateUser, AdminUpdateVault,
+    AdminUser, AdminVault, CreateAdminClient, CreatedAdminToken, InstanceSettingsUpdate,
+    PrincipalKind, UpdateAdminClient, UserEventKind,
 };
 use serde::Deserialize;
 
@@ -19,10 +19,11 @@ use crate::apps::OLDEST_APP_VERSION;
 use crate::auth::Admin;
 use crate::db;
 use crate::error::{AppError, AppResult, bad, forbidden};
-use crate::hub::Control;
+use crate::hub::{Control, VaultEvent};
 use crate::repo;
 use crate::routes::me::notify_user;
 use crate::state::AppState;
+use crate::sync::storage_changed;
 
 #[derive(Deserialize)]
 pub struct UsersQuery {
@@ -86,7 +87,8 @@ pub async fn update_user(
 ) -> AppResult<Json<serde_json::Value>> {
     let allowances = req.vault_allowance.is_some()
         || req.agent_allowance.is_some()
-        || req.quick_note_allowance.is_some();
+        || req.quick_note_allowance.is_some()
+        || req.quick_notes_storage_allowance.is_some();
     if req.disabled.is_some() || allowances {
         admin.require(AdminScope::Accounts)?;
     }
@@ -135,7 +137,18 @@ pub async fn update_user(
         if let Some(a) = req.quick_note_allowance {
             repo::users::set_quick_note_allowance(&mut *tx, &id, a).await?;
         }
+        // Their quick notes may fill up or have room again.
+        let mut quick_notes = None;
+        if let Some(a) = req.quick_notes_storage_allowance {
+            if let Some(q) = repo::vaults::quick_notes_of(&mut *tx, &id).await? {
+                quick_notes = Some((state.instance.vault_full(&mut *tx, &q).await?, q));
+            }
+            repo::users::set_quick_notes_storage_allowance(&mut *tx, &id, a).await?;
+        }
         tx.commit().await?;
+        if let Some((was_full, q)) = quick_notes {
+            storage_changed(&state, &q, was_full).await;
+        }
     }
     // Their apps reload their quick notes' limit.
     if req.quick_note_allowance.is_some() {
@@ -165,7 +178,69 @@ pub async fn update_user(
             "vault_allowance": req.vault_allowance,
             "agent_allowance": req.agent_allowance,
             "quick_note_allowance": req.quick_note_allowance,
+            "quick_notes_storage_allowance": req.quick_notes_storage_allowance,
         }),
+    )
+    .await;
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+#[derive(Deserialize)]
+pub struct VaultsQuery {
+    /// Only the vault with this id (people find it in its settings).
+    id: Option<String>,
+    /// Only the vaults this account owns.
+    owner: Option<String>,
+}
+
+/// Vaults by size, the largest first (at most `ADMIN_LIST_MAX`): their id,
+/// owner and size, never a name or anything in them.
+pub async fn vaults(
+    State(state): State<AppState>,
+    admin: Admin,
+    Query(q): Query<VaultsQuery>,
+) -> AppResult<Json<Vec<AdminVault>>> {
+    admin.require(AdminScope::Read)?;
+    Ok(Json(
+        repo::vaults::admin_list(&state.db, given(&q.id), given(&q.owner)).await?,
+    ))
+}
+
+/// A query parameter, unless empty.
+fn given(s: &Option<String>) -> Option<&str> {
+    s.as_deref().map(str::trim).filter(|s| !s.is_empty())
+}
+
+/// Give a vault its own storage limit (or the instance's again). Its
+/// subscribers learn at once if that fills it or makes room. Not someone's
+/// quick notes (`404`): their limit is the person's (`update_user`).
+pub async fn update_vault(
+    State(state): State<AppState>,
+    admin: Admin,
+    Path(id): Path<String>,
+    Json(req): Json<AdminUpdateVault>,
+) -> AppResult<Json<serde_json::Value>> {
+    admin.require(AdminScope::Accounts)?;
+    let Some(allowance) = req.storage_allowance else {
+        return Ok(Json(serde_json::json!({ "ok": true })));
+    };
+    {
+        let _w = state.write_lock.lock().await;
+        let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
+        let was_full = state.instance.vault_full(&mut *tx, &id).await?;
+        if repo::vaults::set_storage_allowance(&mut *tx, &id, allowance).await? == 0 {
+            return Err(AppError::NotFound);
+        }
+        tx.commit().await?;
+        storage_changed(&state, &id, was_full).await;
+    }
+    audit(
+        &state,
+        &admin,
+        None,
+        "admin.update_vault",
+        Some(&id),
+        serde_json::json!({ "storage_allowance": allowance }),
     )
     .await;
     Ok(Json(serde_json::json!({ "ok": true })))
@@ -200,7 +275,13 @@ pub async fn update_settings(
     // before is still landing.
     let settings = {
         let _w = state.write_lock.lock().await;
-        state.instance.update(&state.db, &req).await?
+        let old = state.instance.settings();
+        let settings = state.instance.update(&state.db, &req).await?;
+        // Vaults on a default limit it fills or frees.
+        for (vault_id, full) in state.instance.storage_flips(&state.db, &old).await? {
+            state.hub.publish(&vault_id, VaultEvent::Storage { full });
+        }
+        settings
     };
     tracing::info!(read_only = ?state.instance.read_only(), "instance settings changed");
     // Apps reload their quick notes' limit.

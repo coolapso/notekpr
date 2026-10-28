@@ -2,7 +2,8 @@ use axum::Json;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use notekpr_core::protocol::{
-    ApiError, ERROR_LIMIT_REACHED, ERROR_READ_ONLY, ERROR_UPDATE_REQUIRED, ReadOnly,
+    ApiError, ERROR_LIMIT_REACHED, ERROR_READ_ONLY, ERROR_UPDATE_REQUIRED, ERROR_VAULT_FULL,
+    ReadOnly,
 };
 use notekpr_core::version::Version;
 
@@ -38,6 +39,13 @@ pub enum AppError {
     /// An instance limit (accounts, vaults, agents) is reached.
     #[error("{0}")]
     LimitReached(String),
+    /// The vault reached its storage limit (`instance.rs`): it takes no new
+    /// content until something is deleted for good or the limit is raised.
+    /// Clients keep their changes and send them once it has room.
+    #[error(
+        "this vault is full: delete something in it for good, or ask an administrator to raise its limit"
+    )]
+    VaultFull,
     /// The app is older than the oldest version the server accepts
     /// (`apps.rs`).
     #[error("this server needs notekpr {0} or newer: update this app")]
@@ -70,6 +78,7 @@ impl AppError {
             AppError::RateLimited => "rate_limited",
             AppError::ReadOnly(_) => ERROR_READ_ONLY,
             AppError::LimitReached(_) => ERROR_LIMIT_REACHED,
+            AppError::VaultFull => ERROR_VAULT_FULL,
             AppError::UpdateRequired(_) => ERROR_UPDATE_REQUIRED,
             AppError::Unavailable(_) => "unavailable",
             AppError::Internal(_) => "internal",
@@ -89,6 +98,7 @@ impl AppError {
             AppError::RateLimited => StatusCode::TOO_MANY_REQUESTS,
             AppError::ReadOnly(_) => StatusCode::SERVICE_UNAVAILABLE,
             AppError::LimitReached(_) => StatusCode::FORBIDDEN,
+            AppError::VaultFull => StatusCode::INSUFFICIENT_STORAGE,
             AppError::UpdateRequired(_) => StatusCode::UPGRADE_REQUIRED,
             AppError::Unavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
             AppError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,

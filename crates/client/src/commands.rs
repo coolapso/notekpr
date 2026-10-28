@@ -8,7 +8,7 @@ use std::time::Duration;
 use anyhow::{Context, Result, anyhow, bail};
 use notekpr_core::doc::{Entry, EntryKind};
 use notekpr_core::engine::PinStatus;
-use notekpr_core::protocol::{DeviceStatus, PrincipalKind, Role};
+use notekpr_core::protocol::{DeviceStatus, MIB, PrincipalKind, Role};
 use serde::Serialize;
 use serde_json::json;
 use tokio::sync::watch;
@@ -996,15 +996,33 @@ fn show_recovery_key(rk: &str) {
 }
 
 fn report_push(o: crate::session::PushOutcome) {
-    if o.read_only {
+    report_pending(o.remaining, o.offline, o.read_only, o.vault_full, false);
+}
+
+/// What happens to changes saved here and not uploaded yet (`quick_notes`:
+/// they were made in the quick notes).
+fn report_pending(
+    remaining: usize,
+    offline: bool,
+    read_only: bool,
+    vault_full: bool,
+    quick_notes: bool,
+) {
+    if read_only {
         ui::status(&format!(
-            "saved locally; the server is read-only right now: {} change(s) will be uploaded when it accepts changes again",
-            o.remaining
+            "saved locally; the server is read-only right now: {remaining} change(s) will be uploaded when it accepts changes again"
         ));
-    } else if o.offline || o.remaining > 0 {
+    } else if vault_full && quick_notes {
         ui::status(&format!(
-            "saved locally; {} change(s) will be uploaded when the server is reachable",
-            o.remaining
+            "saved locally; your quick notes are full: {remaining} change(s) will be uploaded once they have room (delete a quick note, or ask your administrator for more room)"
+        ));
+    } else if vault_full {
+        ui::status(&format!(
+            "saved locally; the vault is full: {remaining} change(s) will be uploaded once it has room (delete something in it for good, or ask your administrator to raise its limit: `notekpr vault list` shows its id)"
+        ));
+    } else if offline || remaining > 0 {
+        ui::status(&format!(
+            "saved locally; {remaining} change(s) will be uploaded when the server is reachable"
         ));
     }
 }
@@ -1210,11 +1228,12 @@ async fn status(ctx: &Ctx) -> Result<()> {
             String::new()
         };
         crate::out!(
-            "  {:<24} {:<7} {:>4} docs  {:>3} pending{big}  synced {last}{}{ro}  [{}]",
+            "  {:<24} {:<7} {:>4} docs  {:>3} pending{big}  {}  synced {last}{}{ro}  [{}]",
             s.name,
             s.role.as_str(),
             s.documents,
             s.pending_changes,
+            storage_text(&s),
             if s.archived { " (archived)" } else { "" },
             s.id
         );
@@ -1294,6 +1313,18 @@ async fn devices(ctx: &Ctx, c: DevicesCmd) -> Result<()> {
 
 // ---------------------------------------------------------------- vaults
 
+/// What a vault takes on the server, of how much it may (`FULL`: its
+/// changes wait here until it has room; the administrator who can give it
+/// more finds it by its id).
+fn storage_text(s: &crate::hub::VaultSummary) -> String {
+    let used = ui::fmt_size(s.storage_bytes);
+    let of = match s.storage_limit_mb.max() {
+        Some(mb) => format!("{used} of {}", ui::fmt_size(mb.saturating_mul(MIB))),
+        None => used,
+    };
+    if s.full { format!("{of} FULL") } else { of }
+}
+
 async fn vault(ctx: &Ctx, c: VaultCmd) -> Result<()> {
     match c {
         VaultCmd::List => {
@@ -1316,10 +1347,11 @@ async fn vault(ctx: &Ctx, c: VaultCmd) -> Result<()> {
                     None => s.name.clone(),
                 };
                 crate::out!(
-                    "{:<28} {:<7} {:>4} docs{}{}  [{}]",
+                    "{:<28} {:<7} {:>4} docs  {}{}{}  [{}]",
                     name,
                     s.role.as_str(),
                     s.documents,
+                    storage_text(&s),
                     if s.archived { "  (archived)" } else { "" },
                     s.read_only
                         .map(|r| format!("  READ-ONLY: {r}"))
@@ -1332,8 +1364,9 @@ async fn vault(ctx: &Ctx, c: VaultCmd) -> Result<()> {
             }
             for q in quick {
                 crate::out!(
-                    "\n{} (`notekpr quick --list`)",
-                    quick_count(q.documents, q.note_limit)
+                    "\n{}, {} (`notekpr quick --list`)",
+                    quick_count(q.documents, q.note_limit),
+                    storage_text(&q)
                 );
             }
             Ok(())
@@ -1654,12 +1687,14 @@ async fn write(
         "unchanged"
     };
     crate::out!("{what} {}", out.path);
-    if out.pending_changes > 0 {
-        ui::status(&format!(
-            "saved locally; {} change(s) will be uploaded when the server is reachable",
-            out.pending_changes
-        ));
-    }
+    let quick_notes = hub.resolve(vault).await?.lock().await.is_quick_notes();
+    report_pending(
+        out.pending_changes,
+        false,
+        out.read_only,
+        out.vault_full,
+        quick_notes,
+    );
     Ok(())
 }
 
@@ -1994,12 +2029,13 @@ async fn quick(ctx: &Ctx, a: QuickArgs) -> Result<()> {
             quick_count(q.count, q.limit)
         );
     }
-    if out.pending_changes > 0 {
-        ui::status(&format!(
-            "saved locally; {} change(s) will be uploaded when the server is reachable",
-            out.pending_changes
-        ));
-    }
+    report_pending(
+        out.pending_changes,
+        false,
+        out.read_only,
+        out.vault_full,
+        true,
+    );
     Ok(())
 }
 
@@ -2348,11 +2384,22 @@ async fn sync(ctx: &Ctx, a: SyncArgs) -> Result<()> {
         }
         let mut pending = 0;
         let mut read_only = false;
+        let mut full = Vec::new();
         for id in hub.vault_ids() {
             match hub.sync_vault(&id).await {
                 Ok(o) => {
                     pending += o.remaining;
                     read_only |= o.read_only;
+                    if o.vault_full
+                        && let Some(v) = hub.get(&id)
+                    {
+                        let g = v.lock().await;
+                        full.push(if g.is_quick_notes() {
+                            "your quick notes".to_string()
+                        } else {
+                            format!("'{}' [{id}]", g.name())
+                        });
+                    }
                 }
                 Err(e) => ui::warn(&format!("vault {id}: {e:#}")),
             }
@@ -2360,6 +2407,12 @@ async fn sync(ctx: &Ctx, a: SyncArgs) -> Result<()> {
         if read_only {
             ui::warn(&format!(
                 "the server is read-only right now: {pending} change(s) stay queued and are uploaded when it accepts changes again"
+            ));
+        }
+        if !full.is_empty() {
+            ui::warn(&format!(
+                "full, so its changes stay queued until it has room (delete something in it for good, or ask your administrator to raise its limit, giving the id): {}",
+                full.join(", ")
             ));
         }
         hub.snapshot_idle(Duration::ZERO, livesync::SESSION_MIN_UPDATES)

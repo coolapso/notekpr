@@ -16,9 +16,16 @@ CREATE TABLE users (
     -- instance's default, -1 = unlimited, otherwise at most that many.
     vault_allowance INTEGER,
     agent_allowance INTEGER,
-    quick_note_allowance INTEGER
+    quick_note_allowance INTEGER,
+    -- What their quick notes may take, in MiB (NULL: the instance's
+    -- `quick_notes_storage_mb`, -1: unlimited).
+    quick_notes_storage_allowance INTEGER
 );
 CREATE INDEX users_owner ON users(owner_id);
+-- The few people whose quick notes have their own storage limit, so
+-- counting the full ones (`notekpr_vaults_full`) doesn't read everyone.
+CREATE INDEX users_quick_notes_storage ON users(quick_notes_storage_allowance)
+    WHERE quick_notes_storage_allowance IS NOT NULL;
 
 -- Settings administrators change at runtime (limits, read-only mode): one
 -- row, JSON (`InstanceSettings`; missing fields take their defaults).
@@ -159,10 +166,25 @@ CREATE TABLE vaults (
     -- Someone who lost access still knows the current key (they left, or
     -- their agent was deleted): the owner's apps rotate it. Cleared by that.
     rotation_pending INTEGER NOT NULL DEFAULT 0,
+    -- Bytes of encrypted content the vault holds: update payloads, snapshot
+    -- and attachment sizes, without what was deleted for good (kept for the
+    -- undo period, but no longer the vault's). Kept by the triggers at the
+    -- end of this file, whichever query adds or removes content.
+    storage_bytes  INTEGER NOT NULL DEFAULT 0,
+    -- Its own storage limit in MiB, set by an administrator: NULL = the
+    -- instance's default (`storage_per_vault_mb`), -1 = unlimited. Never set
+    -- on quick notes: their limit is the owner's
+    -- (`users.quick_notes_storage_allowance`).
+    storage_allowance INTEGER,
     created_at     INTEGER NOT NULL,
     updated_at     INTEGER NOT NULL
 );
 CREATE INDEX vaults_owner ON vaults(owner_id);
+CREATE INDEX vaults_storage ON vaults(storage_bytes);
+-- The few vaults with their own limit, so counting the full ones
+-- (`notekpr_vaults_full`) doesn't read every vault.
+CREATE INDEX vaults_own_storage ON vaults(storage_allowance, storage_bytes)
+    WHERE storage_allowance IS NOT NULL;
 CREATE UNIQUE INDEX vaults_quick_notes ON vaults(owner_id) WHERE kind = 'quick_notes';
 
 CREATE TABLE vault_members (
@@ -277,3 +299,61 @@ CREATE TABLE audit_log (
 );
 CREATE INDEX audit_vault ON audit_log(vault_id, id);
 CREATE INDEX audit_user ON audit_log(user_id, id);
+
+-- vaults.storage_bytes follows every change of a vault's content. An
+-- object's log and history stop counting when it is deleted for good
+-- (objects.purged_at set), count again if that is undone, and are erased
+-- later without counting twice; attachments likewise.
+CREATE TRIGGER updates_stored AFTER INSERT ON updates
+WHEN NOT EXISTS (SELECT 1 FROM objects WHERE vault_id = NEW.vault_id AND id = NEW.object_id AND purged_at IS NOT NULL)
+BEGIN
+    UPDATE vaults SET storage_bytes = storage_bytes + length(NEW.payload) WHERE id = NEW.vault_id;
+END;
+
+CREATE TRIGGER updates_removed AFTER DELETE ON updates
+WHEN NOT EXISTS (SELECT 1 FROM objects WHERE vault_id = OLD.vault_id AND id = OLD.object_id AND purged_at IS NOT NULL)
+BEGIN
+    UPDATE vaults SET storage_bytes = storage_bytes - length(OLD.payload) WHERE id = OLD.vault_id;
+END;
+
+CREATE TRIGGER snapshots_stored AFTER INSERT ON snapshots
+WHEN NOT EXISTS (SELECT 1 FROM objects WHERE vault_id = NEW.vault_id AND id = NEW.object_id AND purged_at IS NOT NULL)
+BEGIN
+    UPDATE vaults SET storage_bytes = storage_bytes + NEW.size WHERE id = NEW.vault_id;
+END;
+
+CREATE TRIGGER snapshots_removed AFTER DELETE ON snapshots
+WHEN NOT EXISTS (SELECT 1 FROM objects WHERE vault_id = OLD.vault_id AND id = OLD.object_id AND purged_at IS NOT NULL)
+BEGIN
+    UPDATE vaults SET storage_bytes = storage_bytes - OLD.size WHERE id = OLD.vault_id;
+END;
+
+CREATE TRIGGER objects_purged AFTER UPDATE OF purged_at ON objects
+WHEN (OLD.purged_at IS NULL) <> (NEW.purged_at IS NULL)
+BEGIN
+    UPDATE vaults SET storage_bytes = storage_bytes
+        + (CASE WHEN NEW.purged_at IS NULL THEN 1 ELSE -1 END) * (
+            COALESCE((SELECT SUM(length(payload)) FROM updates WHERE vault_id = NEW.vault_id AND object_id = NEW.id), 0)
+          + COALESCE((SELECT SUM(size) FROM snapshots WHERE vault_id = NEW.vault_id AND object_id = NEW.id), 0))
+    WHERE id = NEW.vault_id;
+END;
+
+CREATE TRIGGER attachments_stored AFTER INSERT ON attachments
+WHEN NEW.purged_at IS NULL
+BEGIN
+    UPDATE vaults SET storage_bytes = storage_bytes + NEW.size WHERE id = NEW.vault_id;
+END;
+
+CREATE TRIGGER attachments_removed AFTER DELETE ON attachments
+WHEN OLD.purged_at IS NULL
+BEGIN
+    UPDATE vaults SET storage_bytes = storage_bytes - OLD.size WHERE id = OLD.vault_id;
+END;
+
+CREATE TRIGGER attachments_purged AFTER UPDATE OF purged_at ON attachments
+WHEN (OLD.purged_at IS NULL) <> (NEW.purged_at IS NULL)
+BEGIN
+    UPDATE vaults SET storage_bytes = storage_bytes
+        + (CASE WHEN NEW.purged_at IS NULL THEN NEW.size ELSE -NEW.size END)
+    WHERE id = NEW.vault_id;
+END;

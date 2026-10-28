@@ -496,6 +496,25 @@ async fn forward(
             return;
         }
     };
+    // Before `synced` (after which clients send what they have): a full
+    // vault's changes stay with them until it has room.
+    match state.instance.vault_full(&state.db, &vault_id).await {
+        Ok(false) => {}
+        Ok(true) => {
+            if !send(ServerMessage::VaultFull {
+                vault_id: vault_id.clone(),
+                full: true,
+            })
+            .await
+            {
+                return;
+            }
+        }
+        Err(e) => {
+            send(error_msg(&e, Some(&vault_id))).await;
+            return;
+        }
+    }
     if !send(ServerMessage::Synced {
         vault_id: vault_id.clone(),
         head_seq: last,
@@ -513,6 +532,16 @@ async fn forward(
                 match catch_up(&state, &vault_id, object.as_deref(), doc_only, last, &out).await {
                     Ok(h) => {
                         last = h;
+                        // A `vault_full` missed in the gap: how it is now.
+                        if let Ok(full) = state.instance.vault_full(&state.db, &vault_id).await
+                            && !send(ServerMessage::VaultFull {
+                                vault_id: vault_id.clone(),
+                                full,
+                            })
+                            .await
+                        {
+                            return;
+                        }
                         if !send(ServerMessage::Synced {
                             vault_id: vault_id.clone(),
                             head_seq: last,
@@ -541,6 +570,8 @@ async fn forward(
                     .await;
                     return;
                 }
+                // Whether the vault takes the note's changes.
+                (VaultEvent::Storage { .. }, _) => {}
                 // The note and its comments.
                 (_, Some(id)) if id == o || comments_note(id) == Some(o.as_str()) => {}
                 _ => continue,
@@ -624,6 +655,10 @@ async fn forward(
                 vault_id: v,
                 object_id: object_id.clone(),
                 event: *event,
+            },
+            VaultEvent::Storage { full } => ServerMessage::VaultFull {
+                vault_id: v,
+                full: *full,
             },
         };
         if !send(msg).await {

@@ -38,7 +38,8 @@ pub async fn list(
     State(state): State<AppState>,
     who: Principal,
 ) -> AppResult<Json<Vec<VaultInfo>>> {
-    let mut list = repo::vaults::list_for_member(&state.db, &who.user_id).await?;
+    let limits = state.instance.settings();
+    let mut list = repo::vaults::list_for_member(&state.db, &who.user_id, &limits).await?;
     for v in &mut list {
         with_note_limit(&state, v).await?;
         with_pending_rotations(&state, v).await?;
@@ -66,7 +67,8 @@ async fn with_pending_rotations(state: &AppState, v: &mut VaultInfo) -> AppResul
 }
 
 async fn load(state: &AppState, who: &Principal, vault_id: &str) -> AppResult<VaultInfo> {
-    let mut v = repo::vaults::get_for_member(&state.db, &who.user_id, vault_id)
+    let limits = state.instance.settings();
+    let mut v = repo::vaults::get_for_member(&state.db, &who.user_id, vault_id, &limits)
         .await?
         .ok_or(AppError::NotFound)?;
     with_note_limit(state, &mut v).await?;
@@ -538,6 +540,7 @@ pub async fn remove_member(
             return Err(AppError::NotFound);
         }
         let had_keys = repo::keys::delete_vault_keys_of(&mut *tx, &v, &u).await?;
+        let was_full = state.instance.vault_full(&mut *tx, &v).await?;
         member_log::check_and_append(
             &mut tx,
             &v,
@@ -560,6 +563,7 @@ pub async fn remove_member(
         state.hub.control(&u, Control::RevokeVault(v.clone()));
         if let Some(shared) = &shared {
             published_rotation(&state, &v, shared, Some(&u));
+            crate::sync::storage_changed(&state, &v, was_full).await;
         }
     }
     db::audit(
@@ -661,9 +665,12 @@ pub async fn rotate_keys(
     let _w = state.write_lock.lock().await;
     let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
     access::require_owner(&mut *tx, &v, &who.user_id).await?;
+    // Keys rotate in a full vault too (the notes' new snapshots may make room).
+    let was_full = state.instance.vault_full(&mut *tx, &v).await?;
     let shared = rotate_in(&state, &mut tx, &who, &v, &req, db::now()).await?;
     tx.commit().await?;
     published_rotation(&state, &v, &shared, None);
+    crate::sync::storage_changed(&state, &v, was_full).await;
     drop(_w);
     audit_rotation(&state, &who, &v, req.new_epoch).await;
     Ok(StatusCode::NO_CONTENT)

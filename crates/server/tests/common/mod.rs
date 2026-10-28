@@ -627,3 +627,42 @@ impl Ws {
         }
     }
 }
+
+/// Give note `o` some content and share it with `with`, as the apps do;
+/// returns the note's key.
+pub async fn share_note(owner: &User, v: &str, o: &str, with: &User) -> VaultKeyring {
+    use notekpr_core::engine;
+    let note = NoteDoc::new();
+    let u = note.set_text("shared").unwrap();
+    let head = owner
+        .push(v, vec![owner.encrypt_update(v, o, &u)])
+        .await
+        .unwrap()
+        .head_seq;
+    let (ring, req) = engine::start_sharing(
+        owner.ring(v),
+        o,
+        &engine::ObjectMeta::titled("Shared"),
+        &note.encode_state(),
+        head,
+    )
+    .unwrap();
+    let _: () = owner
+        .api
+        .put(&format!("/vaults/{v}/objects/{o}/key"), &req)
+        .await;
+    let public: PublicUser = owner.api.get(&format!("/users/{}", with.id)).await;
+    let _: ObjectShareInfo = owner
+        .api
+        .post(
+            &format!("/vaults/{v}/objects/{o}/shares"),
+            &AddObjectShareRequest {
+                user_id: with.id.clone(),
+                role: Role::Editor,
+                envelope: engine::object_share_envelope(&ring, o, &public).unwrap(),
+                log_entry: None,
+            },
+        )
+        .await;
+    ring
+}

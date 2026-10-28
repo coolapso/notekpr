@@ -333,7 +333,7 @@ button.list-row { cursor: pointer; }
 button.list-row:hover:not(:disabled) { background: var(--bg-2); }
 .list-row.col { flex-direction: column; align-items: stretch; }
 .list-row.dim { opacity: 0.6; }
-/* A list that grows with the instance (accounts): about five rows,
+/* A list that grows with the instance (accounts, vaults): about five rows,
    the rest scrolls inside it. */
 .list.scroll { overflow-y: auto; max-height: 26rem; }
 /* A row scrolled into sight (`reveal_row`) stops clear of the toasts. */
@@ -365,6 +365,8 @@ button.list-row:hover:not(:disabled) { background: var(--bg-2); }
 .qc-bar { display: flex; align-items: center; gap: 10px; }
 .qn-novault, .qn-full { border-radius: 10px; border: none; margin: 8px 0; }
 .qn-count { white-space: nowrap; }
+.qn-storage { display: flex; flex-direction: column; gap: 6px; max-width: 360px; margin: 0 0 8px; }
+.qn-storage p { margin: 0; }
 .qn-count.near { color: var(--warn); }
 .qn-count.full { color: var(--danger); }
 .qn-explain { margin: -4px 0 10px; }
@@ -819,6 +821,13 @@ button.list-row:hover:not(:disabled) { background: var(--bg-2); }
 .person:hover { background: var(--bg-2); }
 .person.big .avatar { width: 52px; height: 52px; font-size: 18px; }
 .person.big .h { font-size: 18px; font-weight: 600; }
+.vault-storage { display: flex; flex-direction: column; gap: 6px; margin: 0 0 14px; padding-bottom: 12px; border-bottom: 1px solid var(--border); }
+.vault-storage p { margin: 0; }
+.vault-id-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.vault-id { font-size: 12.5px; user-select: all; overflow-wrap: anywhere; }
+.meter { height: 6px; border-radius: 3px; background: var(--bg-2); overflow: hidden; }
+.meter-fill { height: 100%; background: var(--accent); }
+.meter.full .meter-fill { background: var(--warn); }
 .settings-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px; margin: 12px 0; }
 .settings-grid .btn { justify-content: flex-start; min-width: 0; }
 .danger-zone { border-top: 1px solid var(--border); margin-top: 16px; padding-top: 14px; }
@@ -844,6 +853,9 @@ table.keys td:first-child { white-space: nowrap; width: 1%; padding-right: 16px;
 .settings-body { min-width: 0; }
 .settings-body h3 { margin: 22px 0 8px; font-size: 15px; }
 .stats { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 10px; margin: 12px 0; }
+.vault-search { margin: 8px 0; }
+.vaults-of { display: flex; align-items: center; gap: 8px; margin: 4px 0; }
+.admin-vaults .vault-id { margin-right: 6px; }
 .stats div { display: flex; flex-direction: column; padding: 12px; border: 1px solid var(--border); border-radius: 10px; }
 .stats b { font-size: 20px; }
 .stats span { color: var(--muted); font-size: 12px; }
@@ -1039,7 +1051,11 @@ label.btn.disabled { opacity: .6; pointer-events: none; }
 .limit-field { display: flex; align-items: center; gap: 8px; }
 .limit-field .limit-label { flex: 1; min-width: 0; }
 .limit-field .num { width: 90px; }
-.admin-users .list-row.col > .row { display: flex; align-items: center; gap: 10px; }
+.admin-users .list-row.col > .row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+/* The details keep a readable width: without room beside them, the buttons
+   go under them, together. */
+.admin-users .list-row.col > .row > .grow { flex: 1 1 16rem; min-width: 0; }
+.admin-users .row-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-left: auto; }
 .allowances { display: flex; flex-direction: column; gap: 8px; padding: 10px 0 2px 42px; }
 .allowances .limit-field { max-width: 460px; }
 .nowrap { white-space: nowrap; flex: none; }

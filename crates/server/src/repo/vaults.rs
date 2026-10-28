@@ -1,11 +1,17 @@
 //! Vaults, their members and roles.
 
-use notekpr_core::protocol::{Limit, Role, VaultInfo, VaultKind};
+use notekpr_core::protocol::{
+    AdminVault, Allowance, InstanceSettings, Limit, MIB, Role, VaultInfo, VaultKind,
+};
 use sqlx::{Row, SqliteExecutor};
 
+use super::{allowance, allowance_column};
 use crate::error::AppResult;
 
-fn vault_row(r: &sqlx::sqlite::SqliteRow) -> VaultInfo {
+/// `limits`: the instance's settings, for the storage limit of a vault
+/// without its own.
+fn vault_row(r: &sqlx::sqlite::SqliteRow, limits: &InstanceSettings) -> VaultInfo {
+    let kind = VaultKind::parse(r.get("kind")).unwrap_or_default();
     let role = Role::parse(r.get("role")).unwrap_or(Role::Viewer);
     // Only the owner can rotate keys.
     let rotation_pending = role == Role::Owner && r.get::<bool, _>("rotation_pending");
@@ -21,9 +27,12 @@ fn vault_row(r: &sqlx::sqlite::SqliteRow) -> VaultInfo {
         created_at: r.get("created_at"),
         updated_at: r.get("updated_at"),
         viewers_comment: r.get("viewers_comment"),
-        kind: VaultKind::parse(r.get("kind")).unwrap_or_default(),
+        kind,
         // Filled in by the routes (it depends on the instance's settings).
         note_limit: Limit::Unlimited,
+        storage_bytes: r.get::<i64, _>("storage_bytes").max(0) as u64,
+        storage_limit_mb: allowance(r.get("storage_allowance"))
+            .resolve(limits.storage_default(kind)),
         rotation_pending,
         // Filled in by the routes, for the owner.
         notes_rotation_pending: vec![],
@@ -31,21 +40,28 @@ fn vault_row(r: &sqlx::sqlite::SqliteRow) -> VaultInfo {
 }
 
 /// The vaults a user is a member of, with their role, oldest first.
+/// `limits`: the instance's settings (storage limits of vaults without
+/// their own).
 pub async fn list_for_member(
     db: impl SqliteExecutor<'_>,
     user_id: &str,
+    limits: &InstanceSettings,
 ) -> AppResult<Vec<VaultInfo>> {
     let rows = sqlx::query(
         "SELECT v.id, v.owner_id, m.role, v.encrypted_meta, v.key_epoch, v.head_seq, v.archived,
                 v.created_at, v.updated_at, v.viewers_comment, v.kind, v.rotation_pending,
+                v.storage_bytes,
+                CASE v.kind WHEN 'quick_notes' THEN o.quick_notes_storage_allowance
+                            ELSE v.storage_allowance END AS storage_allowance,
                 (SELECT COUNT(*) FROM vault_members m2 WHERE m2.vault_id = v.id) AS member_count
          FROM vaults v JOIN vault_members m ON m.vault_id = v.id AND m.user_id = ?
+              JOIN users o ON o.id = v.owner_id
          ORDER BY v.created_at",
     )
     .bind(user_id)
     .fetch_all(db)
     .await?;
-    Ok(rows.iter().map(vault_row).collect())
+    Ok(rows.iter().map(|r| vault_row(r, limits)).collect())
 }
 
 /// One vault as seen by a member (`None` for non-members).
@@ -53,12 +69,17 @@ pub async fn get_for_member(
     db: impl SqliteExecutor<'_>,
     user_id: &str,
     vault_id: &str,
+    limits: &InstanceSettings,
 ) -> AppResult<Option<VaultInfo>> {
     Ok(sqlx::query(
         "SELECT v.id, v.owner_id, m.role, v.encrypted_meta, v.key_epoch, v.head_seq, v.archived,
                 v.created_at, v.updated_at, v.viewers_comment, v.kind, v.rotation_pending,
+                v.storage_bytes,
+                CASE v.kind WHEN 'quick_notes' THEN o.quick_notes_storage_allowance
+                            ELSE v.storage_allowance END AS storage_allowance,
                 (SELECT COUNT(*) FROM vault_members m2 WHERE m2.vault_id = v.id) AS member_count
          FROM vaults v JOIN vault_members m ON m.vault_id = v.id AND m.user_id = ?
+              JOIN users o ON o.id = v.owner_id
          WHERE v.id = ?",
     )
     .bind(user_id)
@@ -66,7 +87,151 @@ pub async fn get_for_member(
     .fetch_optional(db)
     .await?
     .as_ref()
-    .map(vault_row))
+    .map(|r| vault_row(r, limits)))
+}
+
+/// What a vault's content takes, and its own limit.
+#[derive(Clone, Copy, Debug)]
+pub struct Storage {
+    pub kind: VaultKind,
+    /// Bytes (`vaults.storage_bytes`, kept by the schema's triggers).
+    pub bytes: u64,
+    /// MiB: the instance's default for its kind unless an administrator set
+    /// its own (quick notes: their owner's).
+    pub allowance: Allowance,
+}
+
+/// `None`: no such vault.
+pub async fn storage(db: impl SqliteExecutor<'_>, vault_id: &str) -> AppResult<Option<Storage>> {
+    let row: Option<(String, i64, Option<i64>)> = sqlx::query_as(
+        "SELECT v.kind, v.storage_bytes,
+                CASE v.kind WHEN 'quick_notes' THEN o.quick_notes_storage_allowance
+                            ELSE v.storage_allowance END
+         FROM vaults v JOIN users o ON o.id = v.owner_id WHERE v.id = ?",
+    )
+    .bind(vault_id)
+    .fetch_optional(db)
+    .await?;
+    Ok(row.map(|(kind, bytes, a)| Storage {
+        kind: VaultKind::parse(&kind).unwrap_or_default(),
+        bytes: bytes.max(0) as u64,
+        allowance: allowance(a),
+    }))
+}
+
+/// Set a vault's own storage limit (MiB). Rows affected: none for quick
+/// notes, whose limit is their owner's.
+pub async fn set_storage_allowance(
+    db: impl SqliteExecutor<'_>,
+    vault_id: &str,
+    a: Allowance,
+) -> AppResult<u64> {
+    Ok(
+        sqlx::query("UPDATE vaults SET storage_allowance = ? WHERE id = ? AND kind = 'regular'")
+            .bind(allowance_column(a))
+            .bind(vault_id)
+            .execute(db)
+            .await?
+            .rows_affected(),
+    )
+}
+
+/// Vaults of `kind` following the instance's storage limit for it that take
+/// at least `bytes`, as `(id, bytes)`: those a change of that limit may fill
+/// or free.
+pub async fn on_default_storage_from(
+    db: impl SqliteExecutor<'_>,
+    kind: VaultKind,
+    bytes: u64,
+) -> AppResult<Vec<(String, u64)>> {
+    let query = match kind {
+        VaultKind::Regular => sqlx::query_as(
+            "SELECT id, storage_bytes FROM vaults
+             WHERE kind = 'regular' AND storage_allowance IS NULL AND storage_bytes >= ?",
+        ),
+        VaultKind::QuickNotes => sqlx::query_as(
+            "SELECT v.id, v.storage_bytes FROM vaults v JOIN users o ON o.id = v.owner_id
+             WHERE v.kind = 'quick_notes' AND o.quick_notes_storage_allowance IS NULL
+               AND v.storage_bytes >= ?",
+        ),
+    };
+    let rows: Vec<(String, i64)> = query
+        .bind(bytes.min(i64::MAX as u64) as i64)
+        .fetch_all(db)
+        .await?;
+    Ok(rows
+        .into_iter()
+        .map(|(id, b)| (id, b.max(0) as u64))
+        .collect())
+}
+
+/// How many vaults reached their storage limit: their own, else the
+/// instance's for their kind (quick notes: their owner's, else
+/// `quick_notes_storage_mb`). `bytes >= mb * MIB` is written
+/// `bytes / MIB >= mb`, the same for whole numbers, so a large limit can't
+/// overflow. Each part reads only what may be full, through an index (`CROSS
+/// JOIN` keeps SQLite starting from the few people with their own limit).
+pub async fn full_count(db: impl SqliteExecutor<'_>, limits: &InstanceSettings) -> AppResult<u64> {
+    let bytes = |l: Limit| {
+        l.max()
+            .map(|mb| mb.saturating_mul(MIB).min(i64::MAX as u64) as i64)
+    };
+    let n: i64 = sqlx::query_scalar(
+        "SELECT
+           (SELECT COUNT(*) FROM vaults
+            WHERE kind = 'regular' AND storage_allowance IS NULL AND storage_bytes >= ?1)
+         + (SELECT COUNT(*) FROM vaults
+            WHERE kind = 'regular' AND storage_allowance >= 0 AND storage_bytes / ?3 >= storage_allowance)
+         + (SELECT COUNT(*) FROM vaults v JOIN users o ON o.id = v.owner_id
+            WHERE v.kind = 'quick_notes' AND o.quick_notes_storage_allowance IS NULL
+              AND v.storage_bytes >= ?2)
+         + (SELECT COUNT(*) FROM users o CROSS JOIN vaults v ON v.owner_id = o.id AND v.kind = 'quick_notes'
+            WHERE o.quick_notes_storage_allowance >= 0
+              AND v.storage_bytes / ?3 >= o.quick_notes_storage_allowance)",
+    )
+    .bind(bytes(limits.storage_per_vault_mb))
+    .bind(bytes(limits.quick_notes_storage_mb))
+    .bind(MIB as i64)
+    .fetch_one(db)
+    .await?;
+    Ok(n.max(0) as u64)
+}
+
+/// Most vaults [`admin_list`] returns.
+pub const ADMIN_LIST_MAX: i64 = 200;
+
+/// Vaults as administrators see them (id, owner, size), the largest first:
+/// all, the one with this id, or those of this owner. Not quick notes:
+/// their limit is their owner's.
+pub async fn admin_list(
+    db: impl SqliteExecutor<'_>,
+    id: Option<&str>,
+    owner: Option<&str>,
+) -> AppResult<Vec<AdminVault>> {
+    let rows = sqlx::query(
+        "SELECT v.id, v.owner_id, u.display_name AS owner_name, v.storage_bytes,
+                v.storage_allowance, v.created_at
+         FROM vaults v JOIN users u ON u.id = v.owner_id
+         WHERE v.kind = 'regular' AND (?1 IS NULL OR v.id = ?1) AND (?2 IS NULL OR v.owner_id = ?2)
+         ORDER BY v.storage_bytes DESC, v.created_at
+         LIMIT ?3",
+    )
+    .bind(id)
+    .bind(owner)
+    .bind(ADMIN_LIST_MAX)
+    .fetch_all(db)
+    .await?;
+    Ok(rows
+        .iter()
+        .map(|r| AdminVault {
+            id: r.get("id"),
+            owner_id: r.get("owner_id"),
+            owner_name: r.get("owner_name"),
+            storage_bytes: r.get::<i64, _>("storage_bytes").max(0) as u64,
+            storage_allowance: allowance(r.get("storage_allowance")),
+            created_at: r.get("created_at"),
+        })
+        .collect())
 }
 
 /// New vault at key epoch 1; `Ok(false)` if the id is taken (or, for

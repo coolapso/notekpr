@@ -20,12 +20,25 @@
 //! would be created (an account, a vault, an agent, a quick note), inside
 //! the transaction that creates it, so two requests at once can't both slip
 //! past them.
+//!
+//! Each vault has a storage limit too: its own, set by administrators, else
+//! `storage_per_vault_mb`. Someone's quick notes have the person's instead
+//! (`users.quick_notes_storage_allowance`, else `quick_notes_storage_mb`),
+//! like how many they may keep. The database keeps each vault's size
+//! (`vaults.storage_bytes`, see the triggers in the first migration). A
+//! vault at its limit takes no new content — updates, snapshots, files,
+//! undoing a deletion — ([`Instance::require_room`], [`AppError::VaultFull`])
+//! until something in it is deleted for good or the limit is raised; the
+//! rest (members, keys, deleting) goes on. Writes check it inside their
+//! transaction, so a vault overshoots its limit by one write at most. Its
+//! subscribers are told when it turns full or has room again
+//! (`sync::storage_changed`).
 
 use std::sync::RwLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use notekpr_core::protocol::{
-    InstanceSettings, InstanceSettingsUpdate, Limit, ReadOnly, VaultKind,
+    InstanceSettings, InstanceSettingsUpdate, Limit, MIB, ReadOnly, VaultKind,
 };
 use notekpr_core::version::Version;
 use sqlx::{SqliteConnection, SqliteExecutor};
@@ -106,14 +119,12 @@ impl Instance {
         Ok(next)
     }
 
-    /// Measure the database and turn read-only on or off by its limit.
-    /// Returns the bytes in use.
+    /// Measure the database and turn read-only on or off by its limit, and
+    /// count the vaults at their own limits (for monitoring). Returns the
+    /// bytes in use.
     pub async fn refresh_storage(&self, db: &Db) -> AppResult<u64> {
         let used = repo::settings::used_bytes(db).await?;
-        let full = match self.settings().max_storage_mb {
-            Limit::Unlimited => false,
-            Limit::Max(mb) => used >= mb.saturating_mul(1024 * 1024),
-        };
+        let full = self.settings().max_storage_mb.reached_mb(used);
         if self.storage_full.swap(full, Ordering::Relaxed) != full {
             if full {
                 tracing::warn!(
@@ -126,6 +137,8 @@ impl Instance {
         }
         self.update_mode();
         metrics::gauge!("notekpr_storage_used_bytes").set(used as f64);
+        let full_vaults = repo::vaults::full_count(db, &self.settings()).await?;
+        metrics::gauge!("notekpr_vaults_full").set(full_vaults as f64);
         Ok(used)
     }
 
@@ -220,6 +233,57 @@ impl Instance {
     ) -> AppResult<Limit> {
         let allowance = repo::users::allowances(db, owner).await?.quick_notes;
         Ok(allowance.resolve(self.settings().quick_notes_per_user))
+    }
+
+    /// Whether a vault reached its storage limit (`false` for no such vault):
+    /// its own, else the instance's for its kind.
+    pub async fn vault_full(&self, db: impl SqliteExecutor<'_>, vault_id: &str) -> AppResult<bool> {
+        let settings = self.settings();
+        Ok(repo::vaults::storage(db, vault_id).await?.is_some_and(|s| {
+            s.allowance
+                .resolve(settings.storage_default(s.kind))
+                .reached_mb(s.bytes)
+        }))
+    }
+
+    /// Refuse new content in a vault at its storage limit. Runs inside the
+    /// writing transaction (or under the write lock).
+    pub async fn require_room(&self, db: impl SqliteExecutor<'_>, vault_id: &str) -> AppResult<()> {
+        if self.vault_full(db, vault_id).await? {
+            return Err(AppError::VaultFull);
+        }
+        Ok(())
+    }
+
+    /// The vaults on the instance's storage limits (per vault, for quick
+    /// notes) that a change from `old` settings to the current ones fills or
+    /// frees, with whether they are full now.
+    pub async fn storage_flips(
+        &self,
+        db: &Db,
+        old: &InstanceSettings,
+    ) -> AppResult<Vec<(String, bool)>> {
+        let current = self.settings();
+        let mut flips = Vec::new();
+        for kind in [VaultKind::Regular, VaultKind::QuickNotes] {
+            let (old, new) = (old.storage_default(kind), current.storage_default(kind));
+            if old == new {
+                continue;
+            }
+            let from = [old, new]
+                .iter()
+                .filter_map(|l| l.max())
+                .min()
+                .map_or(u64::MAX, |mb| mb.saturating_mul(MIB));
+            flips.extend(
+                repo::vaults::on_default_storage_from(db, kind, from)
+                    .await?
+                    .into_iter()
+                    .filter(|(_, bytes)| old.reached_mb(*bytes) != new.reached_mb(*bytes))
+                    .map(|(id, bytes)| (id, new.reached_mb(bytes))),
+            );
+        }
+        Ok(flips)
     }
 
     /// For someone's quick notes: how many notes they may hold and how many

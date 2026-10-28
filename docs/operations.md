@@ -418,6 +418,23 @@ They are kept in the database, so they survive restarts and backups.
   (checked every 10 seconds), until it is below it again — raise the limit,
   or make room. It counts the pages in use, which is less than the file
   once data was deleted.
+* **Storage per vault**: at this size (MiB) a vault takes no new content —
+  its members' apps keep their edits and send them once it has room — while
+  every other vault goes on. The size is what its encrypted notes, history
+  and files take; what was deleted for good doesn't count, so emptying its
+  trash makes room at once. Give one vault more (or less) room under
+  Administration → Vaults → Limit: the list shows every vault's id, owner
+  and size, the largest first — never a name. People find a vault's id in
+  its settings (and `notekpr vault list`), and give it to you when they ask
+  for more room; *Find* takes it. Per vault rather than per person, so a full
+  personal vault doesn't stop someone's team vaults; with *vaults per
+  person*, a person's total stays bounded. To hear of full vaults, alert on
+  `notekpr_vaults_full > 0` (§8).
+* **Quick notes storage**: the same for someone's quick notes, which don't
+  follow *Storage per vault* and aren't in the Vaults list: like how many
+  quick notes someone may keep, it is the person's — give one person more
+  under Accounts → Limits. A quick note can link any number of files, so
+  their number alone doesn't bound what they take.
 * **Oldest app version**: apps older than this (`0.6.0`) are told to update
   instead of syncing; they keep their unsent edits, and browsers get the
   current app with a reload. Each server version accepts apps from some
@@ -438,7 +455,7 @@ key.
 |---|---|
 | `read` | accounts, statistics, the instance settings, admin clients (every client has it) |
 | `settings` | change limits and read-only mode |
-| `accounts` | disable and enable accounts, set their allowances |
+| `accounts` | disable and enable accounts, set their allowances and vaults' storage limits |
 | `admins` | give and take the admin role |
 | `clients` | create, change and delete admin clients and their tokens — never with a scope it doesn't have itself |
 
@@ -452,11 +469,15 @@ t=notekpr_a_…            # the client's token
 url=https://notes.example.com/api/v1
 curl -H "Authorization: Bearer $t" $url/admin/settings
 curl -H "Authorization: Bearer $t" -X PATCH $url/admin/settings -H 'Content-Type: application/json' \
-     -d '{"vaults_per_user": 1, "quick_notes_per_user": 30, "max_storage_mb": 20480}'
+     -d '{"vaults_per_user": 1, "quick_notes_per_user": 30, "quick_notes_storage_mb": 100, "max_storage_mb": 20480}'
 # one person, by e-mail or by their sign-in identity (issuer|subject)
 curl -H "Authorization: Bearer $t" "$url/admin/users?email=ana@example.com"
 curl -H "Authorization: Bearer $t" -X PATCH $url/admin/users/<id> -H 'Content-Type: application/json' \
-     -d '{"vault_allowance": 3, "quick_note_allowance": 50}'   # each a number, "unlimited" or "default"
+     -d '{"vault_allowance": 3, "quick_note_allowance": 50, "quick_notes_storage_allowance": 500}'   # each a number, "unlimited" or "default"
+# vaults by size (or the one with an id someone gave you, or someone's), and more room for one (MiB)
+curl -H "Authorization: Bearer $t" "$url/admin/vaults?id=<vault id>"
+curl -H "Authorization: Bearer $t" -X PATCH $url/admin/vaults/<vault id> -H 'Content-Type: application/json' \
+     -d '{"storage_allowance": 2048}'   # a number, "unlimited" or "default" (storage_per_vault_mb)
 ```
 
 **From the server's command line** — for the first client on an instance
@@ -642,8 +663,10 @@ proxy answers then (§4, "Holding requests during an update").
   `notekpr_attachment_bytes_total`, `notekpr_ws_connections` (live
   connections) and `notekpr_ws_connected_users` (people with at least
   one), `notekpr_rate_limited_total{scope}`, `notekpr_read_only` (1 while
-  the server refuses changes) and `notekpr_storage_used_bytes` (what
-  `max_storage_mb` is compared with),
+  the server refuses changes), `notekpr_storage_used_bytes` (what
+  `max_storage_mb` is compared with) and `notekpr_vaults_full` (how many
+  vaults are at their storage limit, counted every 10 seconds;
+  Administration → Vaults shows which — the metrics never name a vault),
   and on Linux the process's own `process_cpu_seconds_total` (a gauge) and
   `process_resident_memory_bytes`. Keep it internal (§4).
 * Logs: one line per request (method, redacted path, status, latency) plus

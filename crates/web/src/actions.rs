@@ -2104,6 +2104,19 @@ pub async fn upload_files(vault: &str, files: Vec<web_sys::File>, folder: &str) 
         .map(|s| s.max_attachment_bytes)
         .unwrap_or(25 << 20);
     let mut embeds = Vec::new();
+    if step(|c| c.full.contains(vault)) {
+        error(step(|c| {
+            if c.is_quick_notes(vault) {
+                "Your quick notes are full: files can't be added until they have room.".to_string()
+            } else {
+                format!(
+                    "{} is full: files can't be added until it has room.",
+                    c.vault_name(vault)
+                )
+            }
+        }));
+        return embeds;
+    }
     for f in files {
         let name = f.name();
         let size = f.size() as u64;

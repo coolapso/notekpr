@@ -61,6 +61,9 @@ pub(super) fn on_server_message(m: ServerMessage) {
             let offline_start = step(|c| {
                 c.conn_id = conn_id;
                 c.presence_note = None;
+                // Subscribing again, we hear afresh which vaults are full.
+                c.full.clear();
+                ui().full.set(BTreeSet::new());
                 let vaults: Vec<String> = c
                     .replicas
                     .iter()
@@ -301,7 +304,18 @@ pub(super) fn on_server_message(m: ServerMessage) {
         } => {
             // (Older servers refuse whole pushes; newer ones list single
             // refused updates in the acknowledgement, see `react`.)
-            if code == ERROR_READ_ONLY {
+            if code == ERROR_VAULT_FULL {
+                // It filled up while this push was on its way (a `vault_full`
+                // saying so follows): the push waits for room.
+                if let Some(v) = vault_id {
+                    step(|c| {
+                        if let Some(o) = c.outboxes.get_mut(&v) {
+                            o.connection_reset();
+                        }
+                        set_vault_full(c, &v, true);
+                    });
+                }
+            } else if code == ERROR_READ_ONLY {
                 // The server turned read-only while this push was on its
                 // way: it goes out again once a `mode` says it may (or with
                 // the next flush, if that `mode` crossed this refusal).
@@ -352,6 +366,26 @@ pub(super) fn on_server_message(m: ServerMessage) {
         }
         ServerMessage::Pong { .. } => {}
         ServerMessage::Mode { read_only } => step(|c| set_read_only(c, read_only)),
+        ServerMessage::VaultFull { vault_id, full } => step(|c| set_vault_full(c, &vault_id, full)),
+    }
+}
+
+/// Whether a vault takes new content. A full one keeps its edits queued
+/// (and stored in this browser); once it has room, they all go out.
+fn set_vault_full(c: &mut Core, vault_id: &str, full: bool) {
+    let changed = if full {
+        c.full.insert(vault_id.to_string())
+    } else {
+        c.full.remove(vault_id)
+    };
+    if !changed {
+        return;
+    }
+    ui().full.set(c.full.clone());
+    if full {
+        update_pending_count(c);
+    } else {
+        resend_pending(c, vault_id);
     }
 }
 
@@ -693,8 +727,9 @@ pub(super) fn resend_pending(c: &mut Core, vault_id: &str) {
 /// socket (it is closed) is planned again later — and merged with later
 /// edits meanwhile.
 pub(super) fn send_planned(c: &mut Core, vault_id: &str) {
-    // The server would refuse it: wait until it says it accepts changes.
-    if c.read_only.is_some() {
+    // The server would refuse it: wait until it says it accepts changes,
+    // or that the vault has room.
+    if c.read_only.is_some() || c.full.contains(vault_id) {
         update_pending_count(c);
         return;
     }
@@ -1317,7 +1352,7 @@ const SNAPSHOT_COOLDOWN_MS: i64 = 30_000;
 
 /// Store a snapshot of a note (in the background).
 pub fn snapshot(c: &mut Core, vault_id: &str, object_id: &str) {
-    if c.read_only.is_some() {
+    if c.read_only.is_some() || c.full.contains(vault_id) {
         return;
     }
     let key = (vault_id.to_string(), object_id.to_string());

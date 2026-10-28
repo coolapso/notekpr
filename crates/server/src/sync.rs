@@ -475,6 +475,8 @@ pub async fn push(
     let mut results = Vec::with_capacity(updates.len());
     let mut duplicates = Vec::new();
     let mut fresh: Vec<(Update, String)> = Vec::new();
+    // Checked before the first new update: retries of stored ones are fine.
+    let mut room_checked = false;
     for u in updates {
         let existing: Option<i64> = sqlx::query_scalar(
             "SELECT seq FROM updates WHERE vault_id = ? AND client_update_id = ?",
@@ -527,6 +529,10 @@ pub async fn push(
                 continue;
             }
             Err(e) => return Err(e),
+        }
+        if !room_checked && !matches!(obj, Some((Some(_), _))) {
+            state.instance.require_room(&mut *tx, vault_id).await?;
+            room_checked = true;
         }
         match obj.map(|o| o.0) {
             Some(Some(_)) => {
@@ -612,6 +618,7 @@ pub async fn push(
         .await?;
     tx.commit().await?;
     metrics::counter!("notekpr_updates_total").increment(fresh.len() as u64);
+    let stored = !fresh.is_empty();
     for (update, client_update_id) in fresh {
         state.hub.publish(
             vault_id,
@@ -621,6 +628,9 @@ pub async fn push(
                 origin_conn,
             },
         );
+    }
+    if stored {
+        storage_changed(state, vault_id, false).await;
     }
     Ok(PushOutcome {
         results,
@@ -699,6 +709,7 @@ pub async fn create_snapshot(
         return Err(AppError::RateLimited);
     }
     let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
+    state.instance.require_room(&mut *tx, vault_id).await?;
     insert_snapshot(
         &mut tx,
         &state.config,
@@ -739,6 +750,7 @@ pub async fn create_snapshot(
             covers_seq,
         },
     );
+    storage_changed(state, vault_id, false).await;
     Ok(SnapshotInfo {
         id: snapshot_id.to_string(),
         object_id: object_id.to_string(),
@@ -942,6 +954,7 @@ pub async fn purge(
     let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
     // Re-checked in the transaction: the role may have changed meanwhile.
     access::require_admin(&mut *tx, vault_id, &who.user_id).await?;
+    let was_full = state.instance.vault_full(&mut *tx, vault_id).await?;
     let row: Option<(Option<i64>, Option<i64>)> =
         sqlx::query_as("SELECT purged_seq, erased_at FROM objects WHERE vault_id = ? AND id = ?")
             .bind(vault_id)
@@ -1007,6 +1020,7 @@ pub async fn purge(
             seq,
         },
     );
+    storage_changed(state, vault_id, was_full).await;
     for u in recipients {
         state.hub.control(
             &u,
@@ -1059,6 +1073,8 @@ pub async fn restore(
         Some((Some(at), None, pending)) if at >= now - state.config.purge_undo_ms() => pending,
         _ => return Err(AppError::NotFound),
     };
+    // It counts again.
+    state.instance.require_room(&mut *tx, vault_id).await?;
     let seq: i64 = sqlx::query_scalar(
         "UPDATE vaults SET head_seq = head_seq + 1, updated_at = ? WHERE id = ? RETURNING head_seq",
     )
@@ -1085,6 +1101,7 @@ pub async fn restore(
             seq,
         },
     );
+    storage_changed(state, vault_id, false).await;
     // It was shared when deleted: the owner's apps rotate its key now.
     if rotation_pending {
         crate::routes::shares::publish(state, vault_id, object_id, ObjectEventKind::SharesChanged);
@@ -1100,6 +1117,20 @@ pub async fn restore(
     )
     .await;
     Ok(seq)
+}
+
+/// Tell a vault's subscribers (also people a note of it is shared with)
+/// when a write filled it or made room in it; `was_full`: before the write.
+/// Called after the commit, under the write lock, so that these messages
+/// keep the order of the writes.
+pub async fn storage_changed(state: &AppState, vault_id: &str, was_full: bool) {
+    match state.instance.vault_full(&state.db, vault_id).await {
+        Ok(full) if full != was_full => {
+            state.hub.publish(vault_id, VaultEvent::Storage { full });
+        }
+        Ok(_) => {}
+        Err(e) => tracing::warn!("could not tell whether a vault is full: {e}"),
+    }
 }
 
 /// What of a vault was deleted for good and can still be undone (notes and

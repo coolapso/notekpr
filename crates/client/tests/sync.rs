@@ -973,3 +973,92 @@ async fn a_read_only_server_keeps_edits_until_it_accepts_them_again() {
         Some("written meanwhile\n")
     );
 }
+
+/// A vault made here knows its storage limit at once (`vault list`), and
+/// quick notes theirs.
+#[tokio::test]
+async fn new_vaults_know_their_storage_limit_at_once() {
+    use notekpr_core::protocol::{InstanceSettingsUpdate, Limit};
+    let srv = start().await;
+    let alice = login(&srv, "alice").await;
+    let change = InstanceSettingsUpdate {
+        storage_per_vault_mb: Some(Limit::Max(100)),
+        quick_notes_storage_mb: Some(Limit::Max(20)),
+        ..Default::default()
+    };
+    srv.state
+        .instance
+        .update(&srv.state.db, &change)
+        .await
+        .unwrap();
+    let v = manage::create_vault(&alice, "Photos").await.unwrap();
+    assert_eq!(v.storage_limit_mb, Limit::Max(100));
+    let q = manage::create_quick_notes(&alice).await.unwrap().unwrap();
+    assert_eq!(q.storage_limit_mb, Limit::Max(20));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_full_vault_keeps_edits_until_it_has_room() {
+    use notekpr_core::protocol::{AdminUpdateVault, Allowance};
+    let srv = start().await;
+    // The first person in administers the server too.
+    let alice = login(&srv, "alice").await;
+    manage::create_vault(&alice, "Photos").await.unwrap();
+    manage::create_vault(&alice, "Notes").await.unwrap();
+    let live = live(hub(&alice).await).await;
+    let v = live.hub.resolve("Photos").await.unwrap();
+    let id = v.lock().await.id().to_string();
+    let path = format!("/admin/vaults/{id}");
+    let limit = |a: Allowance| {
+        let (api, path) = (&alice.api, &path);
+        async move {
+            let change = AdminUpdateVault {
+                storage_allowance: Some(a),
+            };
+            let _: serde_json::Value = api.patch(path, &change).await.unwrap();
+        }
+    };
+
+    limit(Allowance::Max(0)).await;
+    eventually(
+        10,
+        "the live connection hears the vault is full",
+        || async { v.lock().await.full },
+    )
+    .await;
+    let out = ops::put_document(&live.hub, "Photos", "Kept.md", "written meanwhile\n", None)
+        .await
+        .unwrap();
+    assert!(out.pending_changes > 0, "kept for later, not an error");
+    // An upload that tries anyway is refused and keeps everything queued.
+    v.lock().await.full = false;
+    let o = live.hub.session.push(&v).await.unwrap();
+    assert!(o.vault_full && !o.read_only && o.remaining > 0, "{o:?}");
+    assert!(v.lock().await.full);
+    let s = live.hub.summaries().await;
+    assert!(s.iter().find(|s| s.id == id).unwrap().full);
+    // Other vaults go on.
+    ops::put_document(&live.hub, "Notes", "Other.md", "fine\n", None)
+        .await
+        .unwrap();
+    let notes = live.hub.resolve("Notes").await.unwrap();
+    eventually(5, "the other vault's edit is uploaded", || async {
+        notes.lock().await.replica.pending.is_empty()
+    })
+    .await;
+    assert!(!v.lock().await.replica.pending.is_empty());
+
+    // Room again: uploaded at once, without waiting for a retry.
+    limit(Allowance::Default).await;
+    eventually(5, "the kept edit is uploaded", || async {
+        v.lock().await.replica.pending.is_empty()
+    })
+    .await;
+    assert!(!v.lock().await.full);
+    live.stop().await;
+    let fresh = hub(&reopen(&srv, "alice", "alice").await).await;
+    assert_eq!(
+        note(&fresh, "Photos", "Kept.md").await.as_deref(),
+        Some("written meanwhile\n")
+    );
+}

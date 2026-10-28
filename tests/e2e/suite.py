@@ -24,6 +24,9 @@ def free_port():
 
 
 ADMIN = "ada"
+# Another administrator, for a test after the one that made ADMIN's keys
+# (a second browser can't sign up as the same person).
+ADMIN2 = "otto"
 
 
 class Env:
@@ -42,10 +45,10 @@ class Env:
 
     def start_server(self):
         log = open(os.path.join(self.data, "server.log"), "a")
-        # ADMIN is an administrator whichever test signs in first.
+        # ADMIN and ADMIN2 are administrators whichever test signs in first.
         self.server = subprocess.Popen([self.server_bin, "--dev-mode", "--web-dir", self.web, "--data-dir", self.data,
                                         "--listen", f"127.0.0.1:{self.port}", "--public-url", self.url[:-1],
-                                        "--admin", f"dev:{ADMIN}"],
+                                        "--admin", f"dev:{ADMIN},dev:{ADMIN2}"],
                                        stdout=log, stderr=log)
         for _ in range(100):
             try:
@@ -2702,6 +2705,99 @@ def test_admin(env):
         b.close()
 
 
+def test_vault_storage(env):
+    """A vault's id and size in its settings; a full vault keeps its edits
+    until an administrator gives it room."""
+    a, b = Browser(), Browser()
+    pending = "return Object.keys(localStorage).filter(k => k.startsWith('notekpr.pending.') && localStorage.getItem(k) !== '[]').length"
+    choose = "const s = document.querySelector(arguments[0]); s.value = arguments[1]; s.dispatchEvent(new Event('change', {bubbles: true}));"
+    number = "const i = document.querySelector(arguments[0]); i.value = arguments[1]; i.dispatchEvent(new Event('input', {bubbles: true}));"
+    try:
+        signup(a, ADMIN2)
+        tina = uniq("tina")
+        signup(b, tina)  # owns the vault made at sign-up
+        new_note(b, "Full of words", "first words")
+        b.wait(pending + " === 0", 20, "the note is synced")
+        vid = next(v["id"] for v in api_get(b, "/vaults") if v.get("kind", "regular") == "regular")
+
+        # The administrator finds it by its id and gives it no room.
+        a.go(env.url + "settings/admin")
+        a.find(".vault-search-id", 15)
+        a.type(".vault-search-id", vid)
+        a.click(".vault-search button[type=submit]")
+        row = f"[data-vault='{vid}']"
+        a.wait(f"return document.querySelectorAll('.admin-vaults .list-row').length === 1 && !!document.querySelector(\"{row}\")", 10, "the vault is found by its id")
+        check(a.text(f"{row} .vault-usage").startswith(tina.capitalize()), "administrators see its owner and size, not its name")
+        a.click(f"{row} .vault-limit-btn")
+        a.js(choose, f"{row} .storage-allowance .limit-kind", "max")
+        a.find(f"{row} .storage-allowance .limit-num", 5)
+        a.js(number, f"{row} .storage-allowance .limit-num", "0")
+        a.click(f"{row} .save-vault-limit")
+        a.find_text(".toast", "Vault limit saved", 10)
+        a.wait(f"return !!document.querySelector(\"{row} .pill.warn\")", 10, "the vault shows as full")
+        a.shot("admin-vaults")
+
+        # Its members are told at once; their edits wait in the browser.
+        b.find(".vault-full-banner", 10)
+        check("is full" in b.text(".vault-full-banner"), "its members are told at once that it is full")
+        b.keys(" and more")
+        time.sleep(1.5)
+        check(b.js(pending) > 0 and "Vault full" in b.text(".sync"), "edits are kept in the browser, not sent")
+        b.shot("vault-full")
+        b.click(".vault-full-banner .btn")
+        # (textContent: WebDriver's text is empty while the dialog fades in)
+        b.wait("return document.querySelector('.vault-storage .vault-id')?.textContent === arguments[0]", 10, "the vault's id", vid)
+        check(True, "vault settings show its id, to give to an administrator")
+        b.wait("return (document.querySelector('.storage-use')?.textContent || '').includes('of 0 B')", 10, "the settings show what it takes of its limit")
+        check("It is full" in b.js("return document.querySelector('.storage-help').textContent"), "and what makes room")
+        b.shot("vault-storage")
+        b.chord(KEYS["escape"])
+
+        # Room again: the kept edits go out.
+        a.click(f"{row} .vault-limit-btn")
+        a.js(choose, f"{row} .storage-allowance .limit-kind", "default")
+        a.click(f"{row} .save-vault-limit")
+        b.wait("return !document.querySelector('.vault-full-banner')", 10, "the banner goes")
+        b.wait(pending + " === 0", 20, "the kept edits are sent")
+        check(True, "with room again, kept edits are sent right away")
+        b.js("location.reload()")
+        b.wait("return document.querySelector('.ed') && document.querySelector('.ed').textContent.includes('first words and more')", 20, "the edit is on the server")
+
+        # Quick notes have a limit of their own, the person's: not among the
+        # vaults, but under their Limits. Their owner hears of them as such,
+        # with no vault settings to show, and their page shows the room.
+        qid = next(v["id"] for v in api_get(b, "/vaults") if v.get("kind") == "quick_notes")
+        a.click(".vault-search .btn.ghost")
+        a.type(".vault-search-id", qid)
+        a.click(".vault-search button[type=submit]")
+        a.find_text(".admin-vaults p", "No vault found", 10)
+        check(a.js("return getComputedStyle(document.querySelector('.admin-vaults')).overflowY") == "auto",
+              "quick notes aren't among the vaults, and the vault list scrolls inside its box")
+        person = f"[data-user='{tina.capitalize()}']"
+        a.click(f"{person} .limits-btn")
+        a.js(choose, f"{person} .quick-notes-storage-allowance .limit-kind", "max")
+        a.find(f"{person} .quick-notes-storage-allowance .limit-num", 5)
+        a.js(number, f"{person} .quick-notes-storage-allowance .limit-num", "0")
+        a.click(f"{person} .save-allowances")
+        a.find_text(f"{person} .pill", "quick notes full", 10)
+        b.find(".vault-full-banner", 10)
+        check("Your quick notes are full" in b.text(".vault-full-banner")
+              and not b.js("return !!document.querySelector('.vault-full-banner .btn')"),
+              "full quick notes are named as such, without vault settings")
+        b.click(".sb-quick .sb-link")
+        b.find(".qn-storage .meter.full", 10)
+        check("full" in b.js("return document.querySelector('.qn-storage').textContent"),
+              "the quick notes page shows their room and what makes more")
+        a.click(f"{person} .limits-btn")
+        a.js(choose, f"{person} .quick-notes-storage-allowance .limit-kind", "default")
+        a.click(f"{person} .save-allowances")
+        b.wait("return !document.querySelector('.vault-full-banner')", 10, "the banner goes")
+        check(not severe_logs(a, b), "no browser errors")
+    finally:
+        a.close()
+        b.close()
+
+
 def test_vault_admins(env):
     """Editors move notes to the trash; the owner and admins delete for good."""
     a, b = Browser(), Browser()
@@ -2822,7 +2918,7 @@ def test_device_code(env):
         a.close()
 
 
-TESTS = [test_onboarding, test_collab, test_devices_and_recovery, test_features, test_attachments, test_export_import, test_delete_account, test_move_to_vault, test_note_sharing, test_tables, test_code_blocks, test_html, test_callouts, test_colors, test_code_wrapping, test_editor_mouse, test_editor_safety, test_local_copy, test_ui_basics, test_offline_tabs, test_offline_start, test_mobile, test_quick_notes, test_vault_icons, test_entry_icons, test_tree_order, test_session_ended_while_away, test_outdated, test_comments, test_mentions, test_dates, test_graph, test_recovered_copy, test_note_width, test_admin, test_vault_admins, test_undo_purge, test_device_code]
+TESTS = [test_onboarding, test_collab, test_devices_and_recovery, test_features, test_attachments, test_export_import, test_delete_account, test_move_to_vault, test_note_sharing, test_tables, test_code_blocks, test_html, test_callouts, test_colors, test_code_wrapping, test_editor_mouse, test_editor_safety, test_local_copy, test_ui_basics, test_offline_tabs, test_offline_start, test_mobile, test_quick_notes, test_vault_icons, test_entry_icons, test_tree_order, test_session_ended_while_away, test_outdated, test_comments, test_mentions, test_dates, test_graph, test_recovered_copy, test_note_width, test_admin, test_vault_storage, test_vault_admins, test_undo_purge, test_device_code]
 
 
 def main():

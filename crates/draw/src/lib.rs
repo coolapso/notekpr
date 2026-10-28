@@ -13,4 +13,5 @@ pub mod lzstring;
 pub mod obsidian;
 pub mod order;
 pub mod restore;
+pub mod rough;
 pub mod scene;

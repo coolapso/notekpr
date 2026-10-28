@@ -14,6 +14,7 @@ No JavaScript is used or shipped.
 | hand-drawn shapes | rough.js 4.6.4 | (c) 2019 Preet Shihn |
 | hachure fills | hachure-fill 0.5.2 | (c) 2023 Preet Shihn |
 | curves to points | points-on-curve 0.2.0 / 1.0.1 | (c) 2020 Preet Shihn |
+| SVG paths to points | points-on-path 0.2.1 | (c) 2020 Preet |
 | SVG path data | path-data-parser 0.1.0 | (c) 2020 Preet Shihn |
 | pen strokes | perfect-freehand 1.2.0 | (c) 2021 Stephen Ruiz Ltd |
 | element shapes, file formats, constant-width strokes (laser-pointer) | Excalidraw | (c) 2020 Excalidraw |

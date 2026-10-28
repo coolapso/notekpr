@@ -1,0 +1,11 @@
+[package]
+name = "notekpr-draw"
+description = "Drawings of notekpr: Excalidraw's file formats and its hand-drawn rendering, in pure Rust"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

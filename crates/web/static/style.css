@@ -333,6 +333,11 @@ button.list-row { cursor: pointer; }
 button.list-row:hover:not(:disabled) { background: var(--bg-2); }
 .list-row.col { flex-direction: column; align-items: stretch; }
 .list-row.dim { opacity: 0.6; }
+/* A list that grows with the instance (accounts): about five rows,
+   the rest scrolls inside it. */
+.list.scroll { overflow-y: auto; max-height: 26rem; }
+/* A row scrolled into sight (`reveal_row`) stops clear of the toasts. */
+.list.scroll > .list-row { scroll-margin-bottom: 5rem; }
 .cred { display: flex; gap: 10px; align-items: center; padding-left: 28px; }
 .empty { display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 80px 20px; color: var(--fg-2); }
 .field { display: flex; flex-direction: column; gap: 4px; }

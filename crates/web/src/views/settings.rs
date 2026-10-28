@@ -617,7 +617,7 @@ fn Admin() -> impl IntoView {
         })}
         <InstanceSettingsPanel defaults=defaults on_saved=Callback::new(move |()| reload())/>
         <h3>"Accounts"</h3>
-        <div class="list admin-users">
+        <div class="list scroll admin-users">
             {move || users.get().into_iter().map(|u| {
                 let id = u.id.clone();
                 let id2 = u.id.clone();
@@ -657,9 +657,12 @@ fn Admin() -> impl IntoView {
                             {person.then(|| {
                                 let id = id3.clone();
                                 view! {
-                                    <button class="btn small limits-btn" on:click=move |_| editing.update(|e| {
-                                        *e = if e.as_deref() == Some(id.as_str()) { None } else { Some(id.clone()) };
-                                    })>"Limits"</button>
+                                    <button class="btn small limits-btn" on:click=move |ev| {
+                                        editing.update(|e| {
+                                            *e = if e.as_deref() == Some(id.as_str()) { None } else { Some(id.clone()) };
+                                        });
+                                        reveal_row(&ev);
+                                    }>"Limits"</button>
                                 }
                             })}
                             {(!is_me && person).then(|| view! {
@@ -699,6 +702,23 @@ fn Admin() -> impl IntoView {
             }).collect_view()}
         </div>
         <AdminClients/>
+    }
+}
+
+/// Keep the row whose button was clicked in sight once it has opened, in a
+/// list that scrolls (`.list.scroll`).
+fn reveal_row(ev: &web_sys::MouseEvent) {
+    use wasm_bindgen::JsCast;
+    let row = ev
+        .target()
+        .and_then(|t| t.dyn_into::<web_sys::Element>().ok())
+        .and_then(|e| e.closest(".list-row").ok().flatten());
+    if let Some(row) = row {
+        request_animation_frame(move || {
+            let opts = web_sys::ScrollIntoViewOptions::new();
+            opts.set_block(web_sys::ScrollLogicalPosition::Nearest);
+            row.scroll_into_view_with_scroll_into_view_options(&opts);
+        });
     }
 }
 

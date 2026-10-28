@@ -8,6 +8,7 @@
 pub mod color;
 pub mod file;
 pub mod fonts;
+pub mod freehand;
 pub mod js;
 pub mod lzstring;
 pub mod obsidian;

@@ -1,7 +1,7 @@
-<h1>
+<h1 align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/assets/logo-dark.svg">
-    <img src="docs/assets/logo.svg" alt="notekpr" height="56">
+    <img src="docs/assets/logo.svg" alt="notekpr" height="80">
   </picture>
 </h1>
 

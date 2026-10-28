@@ -35,6 +35,9 @@ pub mod points_on_path;
 pub mod renderer;
 pub mod svg;
 
+#[cfg(test)]
+mod tests;
+
 pub use self::core::{Drawable, FillStyle, Op, OpSet, OpSetType, OpType, Options, PathInfo, Shape};
 pub use generator::{Generator, ops_to_path, to_paths};
 pub use math::Random;

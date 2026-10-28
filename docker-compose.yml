@@ -16,8 +16,10 @@
 name: notekpr
 services:
   notekpr:
-    build: .
-    image: notekpr:latest
+    # Published for amd64 and arm64 with every release, tagged with its
+    # version and latest. Pin a version (ghcr.io/coolapso/notekpr:0.6.0) to
+    # choose when you upgrade (docs/operations.md §7).
+    image: ghcr.io/coolapso/notekpr:latest
     restart: unless-stopped
     environment:
       # Passed on from the environment when set there.

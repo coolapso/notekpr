@@ -274,19 +274,28 @@ docker compose -f docker-compose.dev.yml up --build
 
 ## Run it for real
 
+The server is published as a container image for amd64 and arm64,
+`ghcr.io/coolapso/notekpr`, tagged with each release's version and `latest`.
+With Docker Compose:
+
 ```sh
+git clone https://github.com/coolapso/notekpr && cd notekpr   # or download just docker-compose.yml
 export NOTEKPR_PUBLIC_URL=https://notes.example.com
 export NOTEKPR_OIDC_ISSUER=https://auth.example.com   # Authelia, Keycloak, Authentik, …
 export NOTEKPR_OIDC_CLIENT_ID=notekpr
 export NOTEKPR_OIDC_CLIENT_SECRET=…                   # from wherever you keep secrets
-docker compose up -d --build                          # notekpr on 127.0.0.1:8080
+docker compose up -d                                  # notekpr on 127.0.0.1:8080
 ```
 
 Put the reverse proxy you use in front of it for HTTPS: notekpr serves
-plain HTTP and leaves TLS to the proxy, by design. There are optional
-examples for Caddy (automatic HTTPS in one command), Traefik on Kubernetes
-and nginx, and setups for Kubernetes and from source, in
-[docs/operations.md](docs/operations.md#1-choose-a-setup).
+plain HTTP and leaves TLS to the proxy, by design.
+
+| Setup | Files | How |
+|---|---|---|
+| Docker Compose | [`docker-compose.yml`](docker-compose.yml) | [operations](docs/operations.md#docker-compose) |
+| Kubernetes | [`deploy/kubernetes/`](deploy/kubernetes/): the server, a nightly backup, a public demo | [operations](docs/operations.md#kubernetes) |
+| From source | — | [operations](docs/operations.md#from-source) |
+| A reverse proxy, if you have none (optional) | [`deploy/examples/`](deploy/examples/): Caddy with automatic HTTPS, Traefik on Kubernetes; nginx in the docs | [operations](docs/operations.md#examples) |
 
 ### How big a server?
 

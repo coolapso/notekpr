@@ -1,8 +1,8 @@
 # A public demo of notekpr that starts over every hour
-# (docs/operations.md §10). The demo image (`task docker:build:demo`; push it
-# where your cluster pulls images from) seeds users, vaults and notes through
-# the CLI, serves them for an hour, then exits; Kubernetes restarts the
-# container and it wipes and seeds again. Visitors see when it resets.
+# (docs/operations.md §10). The demo image, published with every release,
+# seeds users, vaults and notes through the CLI, serves them for an hour, then
+# exits; Kubernetes restarts the container and it wipes and seeds again.
+# Visitors see when it resets.
 #
 # It runs in development mode: anyone who can open it can sign in as anyone
 # and upload files until the next reset. Give it its own host name and
@@ -42,7 +42,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: demo
-          image: registry.example.com/notekpr-demo:latest
+          image: ghcr.io/coolapso/notekpr-demo:latest
           # Added to the image's: --fresh --lifetime 1h --dev-mode-anywhere …
           # (a later --lifetime, e.g. 30m, replaces its 1h).
           args: ["--public-url", "https://demo.example.com"]

@@ -70,6 +70,9 @@ spec:
           type: RuntimeDefault
       containers:
         - name: notekpr
+          # Published for amd64 and arm64 with every release, tagged with its
+          # version and latest. Pin a version (:0.6.0) here and in
+          # backup-cronjob.yaml to choose when you upgrade (operations.md §7).
           image: ghcr.io/coolapso/notekpr:latest
           args: ["serve"]
           envFrom:

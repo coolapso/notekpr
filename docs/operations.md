@@ -19,9 +19,10 @@ Every setup also needs:
   and leaves certificates and HTTPS to it, by design;
 * **an OpenID Connect provider** for sign-in (§3).
 
-There are no published images yet: Compose builds the image on the machine.
-The first build compiles the server and the browser client (several minutes
-and around 2 GB of RAM); later builds are cached.
+The server is published as a container image for amd64 and arm64,
+`ghcr.io/coolapso/notekpr`, tagged with each release's version (`0.6.0`)
+and `latest`. The Compose file and the Kubernetes manifests use `latest`:
+pin a version to choose when you upgrade (§7).
 
 ### How big a machine
 
@@ -84,8 +85,11 @@ export NOTEKPR_PUBLIC_URL=https://notes.example.com   # what people type in the 
 export NOTEKPR_OIDC_ISSUER=https://auth.example.com   # your identity provider (§3)
 export NOTEKPR_OIDC_CLIENT_ID=notekpr
 export NOTEKPR_OIDC_CLIENT_SECRET=…                    # from wherever you keep secrets
-docker compose up -d --build  # notekpr on 127.0.0.1:8080
+docker compose up -d          # notekpr on 127.0.0.1:8080
 ```
+
+Compose needs only `docker-compose.yml`: downloading that file works as
+well as cloning (the clone also has the reverse proxy examples of §4).
 
 Compose passes these on from the environment it runs in, along with
 `NOTEKPR_ADMINS` and `NOTEKPR_METRICS_TOKEN` if set (§2). Hand
@@ -103,16 +107,18 @@ becomes the administrator (§5).
 
 Edit and apply [`deploy/kubernetes/notekpr.yaml`](../deploy/kubernetes/notekpr.yaml)
 (single replica, `Recreate` strategy, a `ReadWriteOnce` volume) and optionally
-[`backup-cronjob.yaml`](../deploy/kubernetes/backup-cronjob.yaml). The image
-it references isn't published yet: build it (`docker build -t
-registry.example.com/notekpr:0.1.0 .`) and push it to your registry,
-then set that image in both files. For a cluster with arm64 nodes, or a
-mix: `docker buildx build --platform linux/amd64,linux/arm64 -t
-registry.example.com/notekpr:0.1.0 --push .` builds and pushes both in
-one image. The Dockerfile cross-compiles, so this doesn't need QEMU and
-takes about as long as one native build per architecture. Put your ingress
-in front of the `notekpr` Service, with TLS (§4; for Traefik:
+[`backup-cronjob.yaml`](../deploy/kubernetes/backup-cronjob.yaml). Both use
+`ghcr.io/coolapso/notekpr:latest`: pin a version in both to choose when you
+upgrade (§7). Put your ingress in front of the `notekpr` Service, with TLS
+(§4; for Traefik:
 [`deploy/examples/traefik/`](../deploy/examples/traefik/ingressroute.yaml)).
+
+To run an image of your own instead (a fork, a patch), build it, push it to
+your registry and set it in both files. `docker buildx build --platform
+linux/amd64,linux/arm64 -t registry.example.com/notekpr:0.6.0 --push .`
+builds and pushes both architectures in one image. The Dockerfile
+cross-compiles, so this doesn't need QEMU and takes about as long as one
+native build per architecture.
 
 ### From source
 
@@ -305,7 +311,7 @@ automatic HTTPS from Let's Encrypt, for a domain with DNS pointing at the
 machine and ports 80 and 443 reachable from the internet:
 
 ```sh
-docker compose -f docker-compose.yml -f deploy/examples/caddy/compose.yml up -d --build
+docker compose -f docker-compose.yml -f deploy/examples/caddy/compose.yml up -d
 ```
 
 On a home network without public DNS, Caddy can issue certificates from its
@@ -314,7 +320,7 @@ own certificate authority instead:
 ```sh
 export NOTEKPR_PUBLIC_URL=https://notes.home.arpa   # any name your devices resolve to this machine (router DNS, /etc/hosts)
 export CADDYFILE=deploy/examples/caddy/Caddyfile.lan
-docker compose -f docker-compose.yml -f deploy/examples/caddy/compose.yml up -d --build
+docker compose -f docker-compose.yml -f deploy/examples/caddy/compose.yml up -d
 # Caddy's root certificate, to install once on every device that uses notekpr:
 docker compose -f docker-compose.yml -f deploy/examples/caddy/compose.yml cp caddy:/data/caddy/pki/authorities/local/root.crt ./caddy-root.crt
 ```
@@ -628,8 +634,10 @@ notekpr at all.
    `data/backups/pre-migration-<timestamp>.db` automatically.
 
    ```sh
-   # docker compose
-   git pull && docker compose build --pull && docker compose up -d
+   # docker compose (with a pinned version, set the new one in docker-compose.yml first)
+   docker compose pull && docker compose up -d
+   # kubernetes: set the new version in notekpr.yaml and backup-cronjob.yaml, apply them;
+   # on latest: kubectl -n notekpr rollout restart deployment notekpr
    # from source
    git pull && cargo build --release --locked -p notekpr-server && ./scripts/build-web.sh
    # then install the binary and web client as in §1 and restart the service
@@ -713,16 +721,16 @@ To let a few people try notekpr without accounts: the demo of
 `task demo` (users, vaults, shared notes, history — [development.md](development.md#a-demo-with-data))
 on a server that deletes everything and starts over every hour.
 
+The demo image is published with every release (`task release`), for
+amd64 and arm64: `ghcr.io/coolapso/notekpr-demo`, tagged with the version
+and `latest` (`task docker:push:demo` pushes one in between,
+[development.md](development.md#releases)). To build your own:
+
 ```sh
 task docker:build:demo    # notekpr-demo:latest — tag and push it to your registry
 # or for amd64 and arm64 at once, straight to your registry:
-docker buildx build --platform linux/amd64,linux/arm64 --target demo -t registry.example.com/notekpr-demo:0.1.0 --push .
+docker buildx build --platform linux/amd64,linux/arm64 --target demo -t registry.example.com/notekpr-demo:0.6.0 --push .
 ```
-
-The project's own demo is published with every release (`task release`):
-amd64 and arm64 to `ghcr.io/coolapso/notekpr-demo`, tagged with the
-version and `latest`; `task docker:push:demo` pushes one in between
-([development.md](development.md#releases)).
 
 The image (the Dockerfile's `demo` stage) runs `scripts/demo.py` with
 `--fresh --lifetime 1h --dev-mode-anywhere`: it deletes the previous demo
@@ -736,10 +744,10 @@ in development mode).
 
 On Kubernetes: [`deploy/kubernetes/demo.yaml`](../deploy/kubernetes/demo.yaml)
 (its own namespace; the data on an `emptyDir`; ready once the data is seeded,
-so the ingress waits during the reset). Set the image and `--public-url` to
+so the ingress waits during the reset). Set `--public-url` to
 your host name and route to the `notekpr-demo` Service with TLS as for
 the real server (§4). Elsewhere, any restart policy works the same, e.g.
-`docker run --restart always -p 127.0.0.1:8096:8080 notekpr-demo --public-url https://demo.example.com`
+`docker run --restart always -p 127.0.0.1:8096:8080 ghcr.io/coolapso/notekpr-demo --public-url https://demo.example.com`
 behind your proxy. `--lifetime 30m` (after the image's own) resets more often.
 
 What to know before sharing the link:

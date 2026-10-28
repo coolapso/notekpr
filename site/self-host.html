@@ -55,7 +55,7 @@
     <div class="wrap split">
       <div class="stack">
         <h2>Run it for real</h2>
-        <p>You need a machine with Docker (or a Kubernetes cluster), a domain name pointing at it, a reverse proxy for HTTPS, and an OpenID Connect provider such as Authelia, Keycloak, Authentik or Google.</p>
+        <p>You need a machine with Docker (or a Kubernetes cluster), a domain name pointing at it, a reverse proxy for HTTPS, and an OpenID Connect provider such as Authelia, Keycloak, Authentik or Google. The server comes as a container image for amd64 and arm64, <code>ghcr.io/coolapso/notekpr</code>, with every release.</p>
         <p>notekpr serves plain HTTP and leaves certificates and HTTPS to the proxy you already use. If you don't have one, the documentation has examples for Caddy (automatic HTTPS in one command), Traefik and nginx.</p>
         <p>Register notekpr with your provider, with the redirect address <code>https://your.domain/api/v1/auth/oidc/callback</code>, and hand the details to Compose through the environment, from wherever you keep your secrets.</p>
         <p>The first person to sign in becomes the administrator.</p>
@@ -66,7 +66,7 @@
 <span class="p">$ </span>export NOTEKPR_OIDC_ISSUER=https://auth.example.com
 <span class="p">$ </span>export NOTEKPR_OIDC_CLIENT_ID=notekpr
 <span class="p">$ </span>export NOTEKPR_OIDC_CLIENT_SECRET=…  <span class="c"># from your secret store</span>
-<span class="p">$ </span>docker compose up -d --build
+<span class="p">$ </span>docker compose up -d
 <span class="c"># notekpr on 127.0.0.1:8080: point your proxy at it</span></pre>
     </div>
   </section>

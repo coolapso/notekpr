@@ -27,6 +27,7 @@ spec:
                   topologyKey: kubernetes.io/hostname
           containers:
             - name: backup
+              # The same image and version as notekpr.yaml.
               image: ghcr.io/coolapso/notekpr:latest
               args: ["backup", "--out-dir", "/data/backups", "--keep", "14"]
               env:

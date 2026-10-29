@@ -41,6 +41,18 @@ pub fn Document(vault: String, note: String) -> impl IntoView {
     }
 }
 
+/// The fonts the picker's list offers, as Excalidraw names them.
+const MORE_FONTS: [(u32, &str); 8] = [
+    (notekpr_draw::fonts::EXCALIFONT, "Excalifont"),
+    (notekpr_draw::fonts::NUNITO, "Nunito"),
+    (notekpr_draw::fonts::COMIC_SHANNS, "Comic Shanns"),
+    (notekpr_draw::fonts::LILITA_ONE, "Lilita One"),
+    (notekpr_draw::fonts::VIRGIL, "Virgil"),
+    (notekpr_draw::fonts::HELVETICA, "Helvetica"),
+    (notekpr_draw::fonts::CASCADIA, "Cascadia"),
+    (notekpr_draw::fonts::LIBERATION_SANS, "Liberation Sans"),
+];
+
 /// The tools of the toolbar: icon, name, shortcut.
 const TOOLS: [(Tool, &str, &str, &str); 14] = [
     (Tool::Hand, "hand", "Hand (panning tool)", "H"),
@@ -295,6 +307,10 @@ pub fn DrawingView(vault: String, id: String) -> impl IntoView {
                         }
                         _ => false,
                     }
+                }
+                (true, "k") if w => {
+                    b.edit_link();
+                    true
                 }
                 (true, "a") => {
                     let s = b.scene();
@@ -770,7 +786,29 @@ fn Properties(board: StoredValue<Rc<Board>, LocalStorage>, rev: RwSignal<u64>) -
             rev.get();
             board.with_value(|b| current(b).as_str().unwrap_or_default().to_string())
         };
+        // Excalidraw's whole palette, in a popover.
+        let open = RwSignal::new(false);
+        let all = palette::full(key == "strokeColor");
         view! {
+            <span class="color-more">
+                <button class="pick" class:on=move || open.get() title="More colours" aria-label="More colours"
+                    on:click=move |_| open.update(|o| *o = !*o)><span class="pick-text">"⋯"</span></button>
+                <Show when=move || open.get()>
+                    <div class="color-grid" role="listbox" aria-label="Colours">
+                        {all.iter().map(|c| {
+                            let c = *c;
+                            let on = move || value() == c;
+                            view! {
+                                <button class="pick" class:on=on title=c aria-label=c
+                                    on:click=move |_| {
+                                        board.with_value(|b| b.set_property(key, json!(c)));
+                                        open.set(false);
+                                    }>{swatch(c)}</button>
+                            }
+                        }).collect_view()}
+                    </div>
+                </Show>
+            </span>
             <input class="pick-hex" type="text" spellcheck="false" aria-label="Colour (hex)" prop:value=value
                 on:change=move |ev| {
                     let v = event_target_value(&ev);
@@ -929,7 +967,16 @@ fn Properties(board: StoredValue<Rc<Board>, LocalStorage>, rev: RwSignal<u64>) -
                         (json!(notekpr_draw::fonts::NUNITO), label("Normal"), "Nunito".into()),
                         (json!(notekpr_draw::fonts::COMIC_SHANNS), label("Code"), "Comic Shanns".into()),
                         (json!(notekpr_draw::fonts::LILITA_ONE), label("Headline"), "Lilita One".into()),
-                    ])}</div></div>
+                    ])}
+                    <select class="pick-font" aria-label="More fonts"
+                        prop:value=move || { rev.get(); board.with_value(|b| font(b).as_u64().unwrap_or(5).to_string()) }
+                        on:change=move |ev| {
+                            if let Ok(f) = event_target_value(&ev).parse::<u32>() {
+                                board.with_value(|b| b.set_property("fontFamily", json!(f)));
+                            }
+                        }>
+                        {MORE_FONTS.iter().map(|(id, name)| view! { <option value=id.to_string()>{*name}</option> }).collect_view()}
+                    </select></div></div>
                 <div class="prop"><span class="prop-name">"Font size"</span>
                     <div class="picks">{choices(board, rev, "fontSize", size, vec![
                         (num(16.0), label("S"), "Small".into()),
@@ -980,6 +1027,7 @@ fn Properties(board: StoredValue<Rc<Board>, LocalStorage>, rev: RwSignal<u64>) -
                         {action("Group — Ctrl+G", "group", |b| b.command(|ed, s, r| ed.group(s, r)))}
                         {action("Ungroup — Ctrl+Shift+G", "group", |b| b.command(|ed, s, r| ed.ungroup(s, r)))}
                         {action("Lock or unlock — Ctrl+Shift+L", "lock", |b| b.command(|ed, s, r| ed.toggle_lock(s, r)))}
+                        {action("Link — Ctrl+K", "link", |b| b.edit_link())}
                     </div></div>
             </Show>
         </div>

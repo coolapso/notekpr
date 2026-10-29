@@ -393,6 +393,23 @@ pub mod palette {
     pub const STICKY_NOTE: &str = "#ffdf6b";
     pub const STICKY_NOTE_PICKS: [&str; 5] = [STICKY_NOTE, PINK[1], GREEN[1], BLUE[1], ORANGE[1]];
     pub const CANVAS_PICKS: [&str; 5] = [WHITE, "#f8f9fa", "#f5faff", "#fffce8", "#fdf8f6"];
+    /// Every colour of the palette (`DEFAULT_ELEMENT_*_PALETTE`): for
+    /// strokes (no transparent) or backgrounds, plain ones first, then
+    /// each colour's five shades.
+    pub fn full(stroke: bool) -> Vec<&'static str> {
+        let mut out = if stroke {
+            vec![BLACK, WHITE]
+        } else {
+            vec![TRANSPARENT, WHITE]
+        };
+        out.extend(GRAY);
+        out.extend(BRONZE);
+        for (_, shades) in SHADED {
+            out.extend(shades);
+        }
+        out
+    }
+
     /// The shaded colours of the full palette, in its rows' order.
     pub const SHADED: [(&str, Shades); 10] = [
         ("cyan", CYAN),

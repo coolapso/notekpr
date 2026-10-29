@@ -1092,6 +1092,9 @@ label.btn.disabled { opacity: .6; pointer-events: none; }
 .drawing-props .pick .swatch { width: 16px; height: 16px; border-radius: 4px; border: 1px solid rgba(0, 0, 0, 0.12); }
 .drawing-props .pick-hex { width: 72px; height: 28px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg); color: var(--text); padding: 0 6px; font: inherit; font-size: 12px; }
 .drawing-props input[type=range] { width: 100%; }
+.drawing-props .color-more { display: contents; }
+.drawing-props .color-grid { flex-basis: 100%; display: grid; grid-template-columns: repeat(5, 28px); gap: 4px; padding: 6px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-2, var(--bg)); }
+.drawing-props .pick-font { flex-basis: 100%; height: 28px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg); color: var(--text); font: inherit; font-size: 12px; }
 .drawing-history { position: absolute; left: 196px; bottom: 12px; display: flex; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg); overflow: hidden; }
 .drawing-history button { border: 0; background: none; color: var(--text); padding: 6px 8px; cursor: pointer; display: inline-flex; }
 .drawing-history button:hover { background: var(--accent-bg); }

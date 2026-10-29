@@ -209,6 +209,23 @@ def main():
         finally:
             b.close()
 
+        # The whole palette, and a link (Ctrl+K) on the top left box.
+        tool(a, KEYS["escape"])
+        a.click_at(CANVAS, -250, -100)
+        time.sleep(0.3)
+        a.click(".drawing-props .color-more .pick")
+        a.click(".drawing-props .color-grid .pick[title='#9c36b5']")
+        a.js("document.querySelector('.drawing-page').focus()")
+        a.chord(KEYS["ctrl"], "k")
+        time.sleep(0.3)
+        req("POST", a.p("/alert/text"), {"text": "https://example.org/plan"})
+        req("POST", a.p("/alert/accept"), {})
+        time.sleep(0.5)
+        boxes = [e for e in drawing() if e["type"] == "rectangle"]
+        check(any(e["strokeColor"] == "#9c36b5" and e.get("link") == "https://example.org/plan" for e in boxes),
+              "a colour from the whole palette, and a link")
+        a.shot("drawings-link")
+
         # The Export menu opens inside the window, with our own file first.
         a.click(".drawing-page .note-head .tb-drop .icon-btn")
         a.find(".drawing-page .note-head .menu", 5)

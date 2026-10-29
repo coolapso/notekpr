@@ -336,6 +336,10 @@ impl Board {
     /// The pointer went down on the canvas (`p` relative to it).
     pub fn pointer_down(self: &Rc<Self>, p: [f64; 2], pressure: Option<f64>, m: Mods) {
         self.finish_text_if_open();
+        if let Some(link) = self.link_at(p) {
+            self.follow_link(&link);
+            return;
+        }
         if self.laser(self.view.get().to_scene(p), true, false) {
             return;
         }
@@ -818,6 +822,75 @@ impl Board {
             util::copy_to_clipboard(&svg);
             crate::state::success("Copied as an SVG image.");
         });
+    }
+
+    /// The link whose button is at `p` (on the canvas), if one is.
+    pub fn link_at(&self, p: [f64; 2]) -> Option<String> {
+        let view = self.view.get();
+        let [x, y] = view.to_scene(p);
+        let scene = self.scene();
+        scene
+            .visible()
+            .filter_map(|e| Some((e, e.link().filter(|l| !l.is_empty())?)))
+            .find(|(e, _)| {
+                let [bx, by, w, h] = super::canvas::link_box(e, view.zoom);
+                x >= bx && x <= bx + w && y >= by && y <= by + h
+            })
+            .map(|(_, l)| l.to_string())
+    }
+
+    /// Follows a link: `[[a note]]` of the vault opens it; a web or mail
+    /// address opens in a new tab (other kinds never).
+    pub fn follow_link(&self, link: &str) {
+        let link = link.trim();
+        if let Some(target) = link.strip_prefix("[[").and_then(|l| l.strip_suffix("]]")) {
+            let target = target.split('|').next().unwrap_or(target);
+            let from = step(|c| c.entry(&self.vault, &self.id))
+                .map(|e| e.path)
+                .unwrap_or_default();
+            crate::actions::open_wiki(&self.vault, target, &from);
+            return;
+        }
+        let safe = notekpr_draw::svg::safe_link(link);
+        if safe != "about:blank" {
+            let _ = util::window().open_with_url_and_target_and_features(
+                safe,
+                "_blank",
+                "noopener,noreferrer",
+            );
+        }
+    }
+
+    /// Ctrl+K: the link of what is selected — a web address, or `[[a
+    /// note]]` of this vault — asked for; nothing takes it away.
+    pub fn edit_link(self: &Rc<Self>) {
+        let scene = self.scene();
+        let current = {
+            let ed = self.editor.borrow();
+            if ed.selection.is_empty() {
+                return;
+            }
+            ed.selected(&scene)
+                .first()
+                .and_then(|e| e.link())
+                .unwrap_or_default()
+                .to_string()
+        };
+        let Ok(Some(answer)) = util::window()
+            .prompt_with_message_and_default("Link: a web address, or [[a note]]", &current)
+        else {
+            return;
+        };
+        let v = answer.trim();
+        self.set_property(
+            "link",
+            if v.is_empty() {
+                Value::Null
+            } else {
+                serde_json::json!(v)
+            },
+        );
+        self.schedule();
     }
 
     /// Copies what shows the drawing in a note: `![[Name.drawing]]`.

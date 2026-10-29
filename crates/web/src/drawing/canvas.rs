@@ -468,6 +468,47 @@ fn binding_highlight(ctx: &CanvasRenderingContext2d, e: &Element, inside: bool, 
     ctx.restore();
 }
 
+/// Where an element's link shows: a small button just past its top right
+/// corner, the same size whatever the zoom (`getLinkHandleFromCoords`).
+pub fn link_box(e: &Element, zoom: f64) -> [f64; 4] {
+    let [_, y1, x2, _] = bounds::element_bounds(e);
+    let size = 18.0 / zoom;
+    // Clear of the selection's corner handle.
+    [x2 + 10.0 / zoom, y1 - size - 10.0 / zoom, size, size]
+}
+
+/// The links of elements that have one, as buttons (in the drawing's
+/// coordinates).
+pub fn draw_links(ctx: &CanvasRenderingContext2d, scene: &Scene, zoom: f64) {
+    ctx.save();
+    let _ = ctx.set_line_dash(&js_sys::Array::new());
+    for e in scene
+        .visible()
+        .filter(|e| e.link().is_some_and(|l| !l.is_empty()))
+    {
+        let [x, y, w, h] = link_box(e, zoom);
+        ctx.set_fill_style_str("#ffffff");
+        ctx.set_stroke_style_str(SELECTION);
+        ctx.set_line_width(1.0 / zoom);
+        ctx.begin_path();
+        let _ = ctx.round_rect_with_f64(x, y, w, h, 4.0 / zoom);
+        ctx.fill();
+        ctx.stroke();
+        // An arrow out of a box: it goes elsewhere.
+        ctx.set_line_width(1.5 / zoom);
+        ctx.set_line_cap("round");
+        let (l, t, r, b) = (x + w * 0.28, y + h * 0.28, x + w * 0.72, y + h * 0.72);
+        ctx.begin_path();
+        ctx.move_to(l, t);
+        ctx.line_to(r, t);
+        ctx.line_to(r, b);
+        ctx.move_to(r, t);
+        ctx.line_to(x + w * 0.25, y + h * 0.75);
+        ctx.stroke();
+    }
+    ctx.restore();
+}
+
 pub fn draw_overlay(
     ctx: &CanvasRenderingContext2d,
     scene: &Scene,

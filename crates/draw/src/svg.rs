@@ -86,7 +86,7 @@ fn esc(s: &str) -> String {
 
 /// A link fit to put in the image (`sanitizeUrl`): web and mail addresses
 /// and relative ones; anything else (`javascript:`, `data:`, …) goes nowhere.
-fn safe_link(link: &str) -> &str {
+pub fn safe_link(link: &str) -> &str {
     let l = link.trim();
     let lower = l.to_ascii_lowercase();
     let scheme = lower

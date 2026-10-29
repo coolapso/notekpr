@@ -256,6 +256,7 @@ impl Board {
             let s = self.pixel_ratio.get() * view.zoom;
             ctx.set_transform(s, 0.0, 0.0, s, view.scroll_x * s, view.scroll_y * s)
                 .ok();
+            canvas::draw_links(&ctx, &scene, view.zoom);
             let list = self.others.borrow();
             others::draw_selections(&ctx, &scene, &list, view.zoom);
             let mut trails = self.trails.borrow_mut();

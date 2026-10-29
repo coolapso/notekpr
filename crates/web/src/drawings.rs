@@ -1,5 +1,5 @@
 //! Pictures of drawings: previews where a note embeds one
-//! (`![[Board.excalidraw]]`, in the editor and the reading view) and the
+//! (`![[Board.drawing]]`, in the editor and the reading view) and the
 //! drawing's own page.
 //!
 //! A preview is an SVG image (`notekpr_draw::svg`) behind a blob URL, made

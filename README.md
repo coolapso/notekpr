@@ -98,14 +98,17 @@ read anything.
 * Drawn together, live, with the vault's members, and merged when
   someone drew offline.
 * Your own drawings in *Drawings*, under Quick notes; drawings in any vault,
-  in its file tree. `![[Board.excalidraw]]` in a note shows the drawing,
-  live, and the link while the cursor is on it — as Obsidian's Excalidraw
-  plugin writes it.
-* Excalidraw's files both ways: copy and paste between notekpr and
-  excalidraw.com or Obsidian; import `.excalidraw` files (also dropped on a
-  drawing), export a drawing as `.excalidraw`, Obsidian's `.excalidraw.md`,
-  SVG or PNG. The Markdown folder keeps drawings as `.excalidraw` files,
-  edited in Obsidian's Excalidraw plugin and merged element by element.
+  in its file tree. `![[Board.drawing]]` in a note shows the drawing,
+  live, and the link while the cursor is on it (the drawing's ⤓ menu copies
+  it); notes from Obsidian that show `![[Board.excalidraw]]` find the
+  imported drawing.
+* Works with Excalidraw's files: copy and paste between notekpr and
+  excalidraw.com or Obsidian; importing a folder or Obsidian vault turns
+  `.excalidraw` and Obsidian's `.excalidraw.md` drawings into drawings (and
+  files dropped on a drawing come in); export a drawing as a `.drawing` file,
+  for Excalidraw (`.excalidraw`), for Obsidian (`.excalidraw.md`), SVG or
+  PNG. The Markdown folder keeps drawings as `.drawing` files (Excalidraw's
+  JSON inside), merged element by element when edited there.
 * The text in drawings is found by search.
 * Each note's menu downloads it as Markdown or copies a `[[link]]` to it.
 

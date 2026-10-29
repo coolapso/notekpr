@@ -2327,7 +2327,7 @@ async fn vault_export(vault: &str) -> (Vec<zipfile::Entry>, BTreeMap<String, Str
                     data: text.into_bytes(),
                 });
             }
-            // As an Excalidraw file.
+            // As a .drawing file.
             EntryKind::Drawing => {
                 let scene = step(|c| {
                     c.replicas
@@ -2338,7 +2338,7 @@ async fn vault_export(vault: &str) -> (Vec<zipfile::Entry>, BTreeMap<String, Str
                 });
                 entries.push(zipfile::Entry {
                     name: e.path.clone(),
-                    data: notekpr_draw::file::write_excalidraw(&scene).into_bytes(),
+                    data: notekpr_draw::file::write_drawing(&scene).into_bytes(),
                 });
             }
             EntryKind::Attachment => match attachment_bytes(vault, &e.id).await {
@@ -2377,7 +2377,7 @@ async fn vault_export(vault: &str) -> (Vec<zipfile::Entry>, BTreeMap<String, Str
 /// Export the vaults chosen, and the quick notes, as one `.zip` that
 /// [`import_account`] reads back — on this server or another (to move
 /// there). See `notekpr_core::account_export`.
-pub async fn export_account(vaults: Vec<String>, quick_notes: bool) {
+pub async fn export_account(vaults: Vec<String>, quick_notes: bool, drawings: bool) {
     use notekpr_core::account_export::{self, ExportedVault, Manifest};
     info("Preparing export…");
     let names: Vec<String> = step(|c| vaults.iter().map(|v| c.vault_name(v)).collect());
@@ -2388,6 +2388,7 @@ pub async fn export_account(vaults: Vec<String>, quick_notes: bool) {
         created_at: now(),
         vaults: Vec::new(),
         quick_notes: None,
+        drawings: None,
     };
     let mut files = Vec::new();
     let within = |folder: &str, entries: Vec<zipfile::Entry>| -> Vec<zipfile::Entry> {
@@ -2415,6 +2416,13 @@ pub async fn export_account(vaults: Vec<String>, quick_notes: bool) {
         files.extend(within(notekpr_core::quick::NAME, entries));
         manifest.quick_notes = Some(notekpr_core::quick::NAME.to_string());
     }
+    if drawings && let Some(d) = crate::drawings::section() {
+        let (entries, _) = vault_export(&d).await;
+        if !entries.is_empty() {
+            files.extend(within(notekpr_core::drawings::NAME, entries));
+            manifest.drawings = Some(notekpr_core::drawings::NAME.to_string());
+        }
+    }
     files.insert(
         0,
         zipfile::Entry {
@@ -2437,15 +2445,14 @@ pub async fn export_account(vaults: Vec<String>, quick_notes: bool) {
         d.get_date()
     );
     util::download(&name, "application/zip", &zip);
-    success(format!(
-        "Exported {}{}.",
-        util::count(manifest.vaults.len(), "vault", "vaults"),
-        if manifest.quick_notes.is_some() {
-            " and your quick notes"
-        } else {
-            ""
-        }
-    ));
+    let mut what = vec![util::count(manifest.vaults.len(), "vault", "vaults")];
+    if manifest.quick_notes.is_some() {
+        what.push("your quick notes".into());
+    }
+    if manifest.drawings.is_some() {
+        what.push("your Drawings".into());
+    }
+    success(format!("Exported {}.", util::join_and(&what)));
 }
 
 /// Import an export made by [`export_account`] (here or on another server):
@@ -2467,6 +2474,11 @@ pub async fn import_account(files: Vec<(String, Vec<u8>)>) {
         .filter(|(p, _)| notekpr_core::quick::is_top_level(p))
         .collect();
     let quick_count = quick.iter().filter(|(p, _)| paths::is_note(p)).count();
+    let drawing_files = unpacked.drawings.unwrap_or_default();
+    let drawing_count = drawing_files
+        .iter()
+        .filter(|(p, _)| paths::drawing_path_for(p).is_some())
+        .count();
     let mut what: Vec<String> = unpacked
         .vaults
         .iter()
@@ -2474,6 +2486,12 @@ pub async fn import_account(files: Vec<(String, Vec<u8>)>) {
         .collect();
     if quick_count > 0 {
         what.push(util::count(quick_count, "quick note", "quick notes"));
+    }
+    if drawing_count > 0 {
+        what.push(format!(
+            "{} of your Drawings",
+            util::count(drawing_count, "drawing", "drawings")
+        ));
     }
     if what.is_empty() {
         info("This export holds nothing to import.");
@@ -2485,7 +2503,7 @@ pub async fn import_account(files: Vec<(String, Vec<u8>)>) {
     )) {
         return;
     }
-    let (mut vaults, mut notes, mut atts) = (0, 0, 0);
+    let (mut vaults, mut notes, mut drawings, mut atts) = (0, 0, 0, 0);
     for (v, files) in unpacked.vaults {
         let taken: std::collections::HashSet<String> = step(|c| {
             c.replicas
@@ -2518,9 +2536,10 @@ pub async fn import_account(files: Vec<(String, Vec<u8>)>) {
             })
             .await;
         }
-        let (n, a, _) = import_files(&id, files, false).await;
-        notes += n;
-        atts += a;
+        let got = import_files(&id, files, false).await;
+        notes += got.notes;
+        drawings += got.drawings;
+        atts += got.files;
         for (path, icon) in &v.icons {
             let entry = step(|c| {
                 c.replicas
@@ -2557,9 +2576,9 @@ pub async fn import_account(files: Vec<(String, Vec<u8>)>) {
                     fits
                 })
                 .collect();
-            let (n, a, _) = import_files(&q, quick, false).await;
-            quick_in = n;
-            atts += a;
+            let got = import_files(&q, quick, false).await;
+            quick_in = got.notes;
+            atts += got.files;
             if quick_in < quick_count {
                 info(format!(
                     "{} didn't fit: {}",
@@ -2569,39 +2588,69 @@ pub async fn import_account(files: Vec<(String, Vec<u8>)>) {
             }
         }
     }
-    success(format!(
-        "Imported {}, {} and {}{}.",
+    // The Drawings' go into this account's Drawings.
+    let mut drawings_in = 0;
+    if drawing_count > 0 {
+        match crate::drawings::ensure_section().await {
+            Some(d) => {
+                let got = import_files(&d, drawing_files, false).await;
+                drawings_in = got.drawings;
+                atts += got.files;
+            }
+            None => error("Your Drawings can't be made right now: import again once online."),
+        }
+    }
+    let mut what = vec![
         util::count(vaults, "vault", "vaults"),
         util::count(notes, "note", "notes"),
-        util::count(atts, "file", "files"),
-        if quick_in > 0 {
-            format!(
-                ", and {}",
-                util::count(quick_in, "quick note", "quick notes")
-            )
-        } else {
-            String::new()
-        }
-    ));
+    ];
+    if drawings > 0 {
+        what.push(util::count(drawings, "drawing", "drawings"));
+    }
+    what.push(util::count(atts, "file", "files"));
+    if quick_in > 0 {
+        what.push(util::count(quick_in, "quick note", "quick notes"));
+    }
+    if drawings_in > 0 {
+        what.push(format!(
+            "{} of your Drawings",
+            util::count(drawings_in, "drawing", "drawings")
+        ));
+    }
+    success(format!("Imported {}.", util::join_and(&what)));
 }
 
 /// Import Markdown files and attachments, preserving folders.
 pub async fn import(vault: &str, files: Vec<(String, Vec<u8>)>) {
-    let (notes, atts, total) = import_files(vault, files, true).await;
+    let got = import_files(vault, files, true).await;
     success(format!(
-        "Imported {notes} notes and {atts} files (of {total})."
+        "Imported {}{} and {} (of {}).",
+        util::count(got.notes, "note", "notes"),
+        if got.drawings > 0 {
+            format!(", {}", util::count(got.drawings, "drawing", "drawings"))
+        } else {
+            String::new()
+        },
+        util::count(got.files, "file", "files"),
+        got.total
     ));
 }
 
+/// What [`import_files`] brought in, of how many files.
+#[derive(Default)]
+struct Imported {
+    notes: usize,
+    drawings: usize,
+    files: usize,
+    total: usize,
+}
+
 /// Bring files into a vault, keeping their folders (an export's empty ones,
-/// `folder/.keep`, too): how many notes and files came in, of how many.
+/// `folder/.keep`, too): how many notes, drawings and files came in, of how
+/// many. Drawing files (ours, Excalidraw's, Obsidian's) become drawings.
 /// `strip_top`: files all in one folder (a folder upload, a zip of one) go
 /// to the top level.
-async fn import_files(
-    vault: &str,
-    mut files: Vec<(String, Vec<u8>)>,
-    strip_top: bool,
-) -> (usize, usize, usize) {
+async fn import_files(vault: &str, mut files: Vec<(String, Vec<u8>)>, strip_top: bool) -> Imported {
     let hidden = |s: &str| s.starts_with('.') || s == "__MACOSX";
     files.retain(|(p, _)| {
         let (dirs, last) = p.rsplit_once('/').unwrap_or(("", p));
@@ -2644,9 +2693,11 @@ async fn import_files(
             }
         }
     });
-    let total = files.len();
-    let mut notes = 0;
-    let mut atts = 0;
+    let mut got = Imported {
+        total: files.len(),
+        ..Imported::default()
+    };
+    let quick = step(|c| c.is_quick_notes(vault));
     let max = state::max_update_bytes();
     for (i, (path, data)) in files.into_iter().enumerate() {
         // Send in pushes of bounded size as we go, and let the page breathe.
@@ -2658,7 +2709,18 @@ async fn import_files(
         if i % 20 == 19 {
             util::sleep(0).await;
         }
-        if paths::is_note(&path) {
+        let drawing = paths::drawing_path_for(&path)
+            .filter(|_| !quick)
+            .and_then(|to| {
+                let text = std::str::from_utf8(&data).ok()?;
+                let mut ids = notekpr_draw::restore::Ids::new(js_sys::Date::now() as u64);
+                let d = notekpr_draw::file::read_drawing(text, &mut ids).ok()?;
+                Some((paths::normalize(&to).ok()?, d.scene))
+            });
+        if let Some((to, scene)) = drawing {
+            step(|c| new_drawing_at(c, vault, &to, &scene));
+            got.drawings += 1;
+        } else if paths::is_note(&path) {
             let text = String::from_utf8_lossy(&data).replace("\r\n", "\n");
             let folder = paths::parent(&path).to_string();
             let title = paths::title(&path).to_string();
@@ -2666,15 +2728,15 @@ async fn import_files(
                 .await
                 .is_some()
             {
-                notes += 1;
+                got.notes += 1;
             }
         } else if upload_bytes(vault, &path, &data).await.is_some() {
-            atts += 1;
+            got.files += 1;
         }
     }
     step(state::flush_now);
     state::ui().tree_rev.update(|v| *v += 1);
-    (notes, atts, total)
+    got
 }
 
 pub async fn files_to_import(files: Vec<web_sys::File>) -> Vec<(String, Vec<u8>)> {

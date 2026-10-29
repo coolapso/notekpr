@@ -68,15 +68,19 @@ pub fn is_note(path: &str) -> bool {
     path.to_ascii_lowercase().ends_with(".md")
 }
 
-/// What a drawing's file name ends with: the Markdown folder writes it as
-/// such a file, and Excalidraw and Obsidian's Excalidraw plugin open it.
-pub const DRAWING_EXT: &str = ".excalidraw";
+/// What a drawing's file name ends with: notekpr's own drawing files (the
+/// Markdown folder writes them, exports hold them).
+pub const DRAWING_EXT: &str = ".drawing";
+
+/// What other apps' drawing files end with: Obsidian's Excalidraw plugin's,
+/// Excalidraw's. Read on import; a vault holds them as `.drawing`.
+const OTHER_DRAWING_EXTS: [&str; 2] = [".excalidraw.md", ".excalidraw"];
 
 pub fn is_drawing(path: &str) -> bool {
     path.to_ascii_lowercase().ends_with(DRAWING_EXT)
 }
 
-/// Normalise a drawing path, appending `.excalidraw` if missing.
+/// Normalise a drawing path, appending `.drawing` if missing.
 pub fn normalize_drawing(input: &str) -> Result<String, PathError> {
     let p = normalize(input)?;
     if is_drawing(&p) {
@@ -86,7 +90,21 @@ pub fn normalize_drawing(input: &str) -> Result<String, PathError> {
     }
 }
 
-/// A drawing's name: its file name without `.excalidraw`.
+/// The path a drawing file at `path` takes in a vault: a `.drawing` as it
+/// is, Excalidraw's `X.excalidraw` and Obsidian's `X.excalidraw.md` as
+/// `X.drawing`. `None`: not a drawing file's name.
+pub fn drawing_path_for(path: &str) -> Option<String> {
+    if is_drawing(path) {
+        return Some(path.to_string());
+    }
+    let lower = path.to_ascii_lowercase();
+    OTHER_DRAWING_EXTS
+        .iter()
+        .find(|ext| lower.ends_with(*ext) && lower.len() > ext.len())
+        .map(|ext| format!("{}{DRAWING_EXT}", &path[..path.len() - ext.len()]))
+}
+
+/// A drawing's name: its file name without `.drawing`.
 pub fn drawing_title(path: &str) -> &str {
     let name = file_name(path);
     if is_drawing(name) {
@@ -156,6 +174,25 @@ pub fn unique(path: &str, taken: impl Fn(&str) -> bool) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn other_apps_drawings_become_ours() {
+        assert_eq!(
+            drawing_path_for("a/B.drawing").as_deref(),
+            Some("a/B.drawing")
+        );
+        assert_eq!(
+            drawing_path_for("a/B.excalidraw").as_deref(),
+            Some("a/B.drawing")
+        );
+        assert_eq!(
+            drawing_path_for("B.Excalidraw.md").as_deref(),
+            Some("B.drawing")
+        );
+        assert_eq!(drawing_path_for("B.md"), None);
+        assert_eq!(drawing_path_for(".excalidraw"), None);
+        assert_eq!(drawing_title("x/Board.drawing"), "Board");
+    }
 
     #[test]
     fn accents_are_written_one_way() {

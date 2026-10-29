@@ -277,7 +277,7 @@ pub fn vault_files(
                     ));
                     continue;
                 };
-                // As an Excalidraw file: Excalidraw and Obsidian open it.
+                // As a .drawing file (Excalidraw's JSON, under our name).
                 let scene = replica
                     .notes
                     .get(&e.id)
@@ -285,7 +285,7 @@ pub fn vault_files(
                     .unwrap_or_default();
                 rv.files.push(RecoveredFile {
                     path: p,
-                    data: notekpr_draw::file::write_excalidraw(&scene).into_bytes(),
+                    data: notekpr_draw::file::write_drawing(&scene).into_bytes(),
                 });
             }
             EntryKind::Attachment => {

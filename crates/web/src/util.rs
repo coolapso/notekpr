@@ -100,6 +100,15 @@ pub fn count(n: usize, one: &str, many: &str) -> String {
     format!("{n} {}", if n == 1 { one } else { many })
 }
 
+/// "a", "a and b", "a, b and c".
+pub fn join_and(items: &[String]) -> String {
+    match items {
+        [] => String::new(),
+        [one] => one.clone(),
+        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
+    }
+}
+
 pub fn human_bytes(n: u64) -> String {
     const U: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
     let mut v = n as f64;

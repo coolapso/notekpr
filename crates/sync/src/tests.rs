@@ -603,8 +603,7 @@ fn drawings_say_so_and_wait_for_room() {
     let (mut r, mut o) = (replica(), keyed());
     // As the apps make one: its key may come before its index entry.
     assert!(o.new_document_key(&mut r, "d", "Sketch"));
-    r.index
-        .create("d", "Sketch.excalidraw", EntryKind::Drawing, 1);
+    r.index.create("d", "Sketch.drawing", EntryKind::Drawing, 1);
     let u = r
         .notes
         .entry("d".into())

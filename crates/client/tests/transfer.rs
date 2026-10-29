@@ -28,7 +28,7 @@ async fn snapshot(hub: &Hub, vault: &str) -> BTreeMap<String, Vec<u8>> {
             EntryKind::Note => v.lock().await.note_text(&e.id).into_bytes(),
             EntryKind::Attachment => hub.session.attachment(&v, &e.id).await.unwrap(),
             EntryKind::Drawing => {
-                notekpr_draw::file::write_excalidraw(&v.lock().await.drawing(&e.id)).into_bytes()
+                notekpr_draw::file::write_drawing(&v.lock().await.drawing(&e.id)).into_bytes()
             }
             EntryKind::Folder => b"<folder>".to_vec(),
         };
@@ -79,7 +79,7 @@ async fn export_import_round_trip_preserves_paths_and_content() {
         let v = h.resolve("Source").await.unwrap();
         let mut g = v.lock().await;
         g.create_folder("Empty folder").unwrap();
-        // A drawing: exported as an Excalidraw file, imported as a drawing.
+        // A drawing: exported as a .drawing file, imported as a drawing.
         let file = include_str!("../../draw/tests/fixtures/example.excalidraw");
         let mut ids = notekpr_draw::restore::Ids::new(1);
         let scene = notekpr_draw::file::read_drawing(file, &mut ids)
@@ -90,7 +90,7 @@ async fn export_import_round_trip_preserves_paths_and_content() {
         // Search finds the text in it.
         let hits = g.search(&notekpr_core::search::parse_query("searchbase core"));
         assert_eq!(hits.len(), 1);
-        assert_eq!(hits[0].path, "Projects/Architecture.excalidraw");
+        assert_eq!(hits[0].path, "Projects/Architecture.drawing");
     }
     h.local_changed(&src_id(&h).await, vec![], true).await;
     ops::put_document(&h, "Source", "Trashed.md", "gone", None)
@@ -101,7 +101,7 @@ async fn export_import_round_trip_preserves_paths_and_content() {
         .unwrap();
     let original = snapshot(&h, "Source").await;
     assert_eq!(original.len(), 6);
-    assert!(original.contains_key("Projects/Architecture.excalidraw"));
+    assert!(original.contains_key("Projects/Architecture.drawing"));
 
     let src = h.resolve("Source").await.unwrap();
     let dir = srv.path("export-dir");
@@ -368,6 +368,11 @@ async fn vaults_and_quick_notes_move_to_another_server() {
         .await
         .unwrap();
     ops::create_quick_note(&h, "Call mum").await.unwrap();
+    let shed =
+        r#"{"type":"excalidraw","version":2,"elements":[{"id":"s","type":"ellipse","width":5}]}"#;
+    ops::put_drawing(&h, "Drawings", "Plans/Shed.drawing", shed)
+        .await
+        .unwrap();
     for id in h.vault_ids() {
         h.push(&id).await.unwrap();
     }
@@ -444,7 +449,12 @@ async fn vaults_and_quick_notes_move_to_another_server() {
             .any(|n| q.try_lock().unwrap().note_text(&n.id) == "Call mum"),
         "the quick notes join that account's"
     );
-    drop((hb, q, moved));
+    // The Drawings go into that account's Drawings, not a vault.
+    let d = hb.drawings().await.unwrap();
+    let shed = d.lock().await.find("Plans/Shed").map(|(_, e)| e.kind);
+    assert_eq!(shed, Some(EntryKind::Drawing));
+    assert!(hb.resolve("Drawings 2").await.is_err());
+    drop((hb, q, moved, d));
 
     // The same as a directory, into a third account there.
     let dir = old.path("notes-dir");
@@ -508,21 +518,55 @@ async fn writing_a_drawing_file_makes_a_drawing() {
         .await
         .unwrap();
     assert!(out.created);
-    assert_eq!(out.path, "Plans/Board.excalidraw");
+    assert_eq!(out.path, "Plans/Board.drawing");
     let v = h.resolve("Art").await.unwrap();
     let (_, e) = v.lock().await.find("Plans/Board").unwrap();
     assert_eq!(e.kind, EntryKind::Drawing);
     assert_eq!(v.lock().await.drawing(&e.id).elements.len(), 24);
     // The same again changes nothing; not a drawing is refused.
     assert!(
-        !ops::put_drawing(&h, "Art", "Plans/Board.excalidraw", file)
+        !ops::put_drawing(&h, "Art", "Plans/Board.drawing", file)
             .await
             .unwrap()
             .changed
     );
     assert!(
-        ops::put_drawing(&h, "Art", "Other.excalidraw", "no")
+        ops::put_drawing(&h, "Art", "Other.drawing", "no")
             .await
             .is_err()
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn importing_other_apps_drawings_makes_drawings() {
+    let srv = start().await;
+    let alice = login(&srv, "alice").await;
+    manage::create_vault(&alice, "Obsidian").await.unwrap();
+    let h = hub(&alice).await;
+    // An Obsidian vault: the plugin's drawing, Excalidraw's file, and a note
+    // that only has the name.
+    let dir = srv.path("obsidian-vault");
+    std::fs::create_dir_all(dir.join("Excalidraw")).unwrap();
+    std::fs::write(
+        dir.join("Excalidraw/Concept.excalidraw.md"),
+        include_str!("../../draw/tests/fixtures/obsidian.excalidraw.md"),
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("Board.excalidraw"),
+        include_str!("../../draw/tests/fixtures/example.excalidraw"),
+    )
+    .unwrap();
+    std::fs::write(dir.join("Just a name.excalidraw.md"), "# not a drawing\n").unwrap();
+    let v = h.resolve("Obsidian").await.unwrap();
+    let r = transfer::import(&h, &v, &dir, None, false, false)
+        .await
+        .unwrap();
+    assert_eq!((r.notes, r.drawings), (1, 2), "{:?}", r.skipped);
+    let paths = v.lock().await.paths();
+    let kind = |p: &str| paths.get(p).map(|e| e.kind);
+    assert_eq!(kind("Excalidraw/Concept.drawing"), Some(EntryKind::Drawing));
+    assert_eq!(kind("Board.drawing"), Some(EntryKind::Drawing));
+    assert_eq!(kind("Just a name.excalidraw.md"), Some(EntryKind::Note));
+    assert_eq!(kind("Board.excalidraw"), None);
 }

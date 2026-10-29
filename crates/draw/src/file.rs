@@ -1,6 +1,7 @@
-//! Excalidraw's files: drawings (`.excalidraw`, and what Excalidraw puts on
-//! the clipboard) and libraries (`.excalidrawlib`). Obsidian's
-//! `.excalidraw.md` is in [`crate::obsidian`]; [`read_drawing`] takes any.
+//! Drawing files: notekpr's own (`.drawing`), Excalidraw's (`.excalidraw`,
+//! and what Excalidraw puts on the clipboard) and libraries
+//! (`.excalidrawlib`). Obsidian's `.excalidraw.md` is in [`crate::obsidian`];
+//! [`read_drawing`] takes any.
 
 use serde::Serialize;
 use serde_json::{Map, Value, json};
@@ -13,6 +14,11 @@ use crate::scene::{Element, Props, Scene};
 /// address, Obsidian's plugin its release page).
 pub const SOURCE: &str = "https://github.com/coolapso/notekpr";
 
+/// The `type` of notekpr's own drawing files (`.drawing`): the same JSON as
+/// Excalidraw's, under notekpr's name. [`write_excalidraw`] makes the file
+/// Excalidraw opens.
+pub const DRAWING_TYPE: &str = "notekpr-drawing";
+
 #[derive(Debug, PartialEq)]
 pub enum FormatError {
     /// Not JSON, or not a drawing (or library) in it.
@@ -24,7 +30,7 @@ pub enum FormatError {
 impl std::fmt::Display for FormatError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            FormatError::NotADrawing => f.write_str("not an Excalidraw drawing"),
+            FormatError::NotADrawing => f.write_str("not a drawing"),
             FormatError::BadCompressedData => {
                 f.write_str("the drawing's compressed data can't be read")
             }
@@ -43,8 +49,8 @@ pub struct Drawing {
     pub embedded: Vec<(String, String)>,
 }
 
-/// Reads a drawing from an `.excalidraw` file, Excalidraw's clipboard, or
-/// Obsidian's `.excalidraw.md`.
+/// Reads a drawing from a `.drawing` file, an `.excalidraw` file,
+/// Excalidraw's clipboard, or Obsidian's `.excalidraw.md`.
 pub fn read_drawing(text: &str, fresh: &mut dyn Fresh) -> Result<Drawing, FormatError> {
     let trimmed = text.trim_start_matches('\u{feff}').trim_start();
     if trimmed.starts_with('{') {
@@ -57,13 +63,15 @@ pub fn read_drawing(text: &str, fresh: &mut dyn Fresh) -> Result<Drawing, Format
     obsidian::read(text, fresh)
 }
 
-/// A drawing from the JSON of an `.excalidraw` file or the clipboard.
+/// A drawing from the JSON of a `.drawing` or `.excalidraw` file or the
+/// clipboard.
 pub fn scene_from_json(v: &Value, fresh: &mut dyn Fresh) -> Result<Scene, FormatError> {
     let kind = v.get("type").and_then(Value::as_str);
     let elements = v.get("elements").and_then(Value::as_array);
     match (kind, elements) {
         (
-            Some("excalidraw" | "excalidraw/clipboard" | "excalidraw-api/clipboard") | None,
+            Some(DRAWING_TYPE | "excalidraw" | "excalidraw/clipboard" | "excalidraw-api/clipboard")
+            | None,
             Some(els),
         ) => Ok(restore::restore_scene(
             els,
@@ -100,11 +108,21 @@ pub fn used_files(scene: &Scene) -> Props {
     out
 }
 
+/// A `.drawing` file: notekpr's own, what the Markdown folder, exports and
+/// `cat` hold.
+pub fn write_drawing(scene: &Scene) -> String {
+    write(scene, DRAWING_TYPE, 1)
+}
+
 /// An `.excalidraw` file, as Excalidraw writes it (`serializeAsJSON`).
 pub fn write_excalidraw(scene: &Scene) -> String {
+    write(scene, "excalidraw", 2)
+}
+
+fn write(scene: &Scene, kind: &str, version: u32) -> String {
     let out = FileOut {
-        r#type: "excalidraw",
-        version: 2,
+        r#type: kind,
+        version,
         source: SOURCE,
         elements: scene.elements.iter().map(Element::props).collect(),
         app_state: &scene.app_state,
@@ -271,9 +289,13 @@ mod tests {
         }
         assert_eq!(again["appState"], original["appState"]);
         assert_eq!(again["type"], "excalidraw");
-        // And reads back the same.
+        // And reads back the same, from our own file too.
         let twice = read_drawing(&write_excalidraw(&d.scene), &mut Ids::new(1)).unwrap();
         assert_eq!(twice.scene, d.scene);
+        let ours = write_drawing(&d.scene);
+        assert!(ours.contains(r#""type": "notekpr-drawing""#));
+        let thrice = read_drawing(&ours, &mut Ids::new(1)).unwrap();
+        assert_eq!(thrice.scene, d.scene);
     }
 
     #[test]

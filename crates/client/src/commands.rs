@@ -1031,7 +1031,7 @@ fn report_pending(
 
 fn print_account_transfer(verb: &str, r: &transfer::AccountReport, at: &std::path::Path) {
     crate::out!(
-        "{verb} {} vault(s){}{}: {}",
+        "{verb} {} vault(s){}{}{}: {}",
         r.vaults.len(),
         if r.vaults.is_empty() {
             String::new()
@@ -1040,6 +1040,11 @@ fn print_account_transfer(verb: &str, r: &transfer::AccountReport, at: &std::pat
         },
         if r.quick_notes > 0 {
             format!(" and {} quick note(s)", r.quick_notes)
+        } else {
+            String::new()
+        },
+        if r.drawings > 0 {
+            format!(" and {} drawing(s) of your Drawings", r.drawings)
         } else {
             String::new()
         },
@@ -1676,9 +1681,9 @@ async fn cat(ctx: &Ctx, vault: &str, path: &str) -> Result<()> {
             doc.content.into_bytes()
         }
         EntryKind::Attachment => hub.session.attachment(&v, &e.id).await?,
-        // As an Excalidraw file.
+        // As a .drawing file.
         EntryKind::Drawing => {
-            notekpr_draw::file::write_excalidraw(&v.lock().await.drawing(&e.id)).into_bytes()
+            notekpr_draw::file::write_drawing(&v.lock().await.drawing(&e.id)).into_bytes()
         }
         EntryKind::Folder => bail!("'{path}' is a folder; use `ls`"),
     };
@@ -1701,7 +1706,7 @@ async fn write(
     let out = if attachment {
         op(ops::put_attachment(&hub, vault, path, &data, None).await)?
     } else if notekpr_core::paths::is_drawing(path) && !append {
-        // A drawing: its file (Excalidraw's or Obsidian's) on stdin.
+        // A drawing: its file (ours, Excalidraw's or Obsidian's) on stdin.
         let file = String::from_utf8(data).map_err(|_| anyhow!("stdin is not a drawing file"))?;
         op(ops::put_drawing(&hub, vault, path, &file).await)?
     } else {

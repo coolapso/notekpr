@@ -430,15 +430,22 @@ pub fn DrawingView(vault: String, id: String) -> impl IntoView {
             <header class="note-head">
                 <button class="icon-btn mobile-only" title="Menu" aria-label="Menu" on:click=move |_| ui.sidebar.set(true)><Icon name="menu"/></button>
                 <div class="crumbs ellipsis">{move || crumbs.get()}</div>
-                <div class="menu-wrap">
+                <div class="tb-drop">
                     <button class="icon-btn" title="Export" aria-label="Export" aria-expanded=move || export_open.get().to_string()
                         on:click=move |ev| { ev.stop_propagation(); export_open.update(|o| *o = !*o); }><Icon name="download"/></button>
                     <Show when=move || export_open.get()>
-                        <div class="menu menu-right" on:click=|ev| ev.stop_propagation()>
-                            <button on:click=move |_| export(Export::Excalidraw)><Icon name="drawing"/>" Excalidraw file (.excalidraw)"</button>
-                            <button on:click=move |_| export(Export::Obsidian)><Icon name="file"/>" Obsidian Excalidraw (.excalidraw.md)"</button>
+                        <div class="menu right" on:click=|ev| ev.stop_propagation()>
+                            <div class="menu-label">"Download as"</div>
+                            <button on:click=move |_| export(Export::Drawing)><Icon name="drawing"/>" Drawing (.drawing)"</button>
                             <button on:click=move |_| export(Export::Svg)><Icon name="image"/>" SVG image"</button>
                             <button on:click=move |_| export(Export::Png)><Icon name="image"/>" PNG image"</button>
+                            <button on:click=move |_| export(Export::Excalidraw)><Icon name="file"/>" Excalidraw (.excalidraw)"</button>
+                            <button on:click=move |_| export(Export::Obsidian)><Icon name="file"/>" Obsidian Excalidraw (.excalidraw.md)"</button>
+                            <div class="menu-sep"></div>
+                            <button on:click=move |_| {
+                                export_open.set(false);
+                                b.with_value(|b| b.copy_embed());
+                            }><Icon name="link"/>" Copy link for notes"</button>
                         </div>
                     </Show>
                 </div>

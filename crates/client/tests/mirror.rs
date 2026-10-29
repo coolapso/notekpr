@@ -1069,7 +1069,7 @@ async fn a_deleted_folder_takes_what_a_newer_release_added_in_it_along() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn drawings_are_excalidraw_files_merged_element_by_element() {
+async fn drawings_are_files_merged_element_by_element() {
     use notekpr_core::doc::EntryKind;
     use notekpr_draw::file::read_drawing;
     use notekpr_draw::restore::Ids;
@@ -1091,7 +1091,7 @@ async fn drawings_are_excalidraw_files_merged_element_by_element() {
     let mut m = Mirror::new(h.clone(), &srv.path("mirror")).await.unwrap();
     m.reconcile_all(true).await.unwrap();
     let dir = m.vault_dir(&vid).unwrap().to_path_buf();
-    let path = dir.join("Board.excalidraw");
+    let path = dir.join("Board.drawing");
     let on_disk = read(&path);
     assert_eq!(
         read_drawing(&on_disk, &mut Ids::new(2)).unwrap().scene,
@@ -1137,25 +1137,33 @@ async fn drawings_are_excalidraw_files_merged_element_by_element() {
         assert_eq!(d.element(&rect).unwrap().stroke_color(), "#e03131");
     }
 
-    // A new Excalidraw file becomes a drawing; anything else by that name
-    // stays a file.
+    // Our file is written under our name.
+    assert!(on_disk.contains(r#""type": "notekpr-drawing""#));
+    // A new .drawing file becomes a drawing (Excalidraw's JSON in it too);
+    // anything else by that name stays a file, and so do Excalidraw's own
+    // files (`notekpr import` turns those into drawings).
     write(
-        &dir.join("Sketch.excalidraw"),
+        &dir.join("Sketch.drawing"),
         r#"{"type":"excalidraw","version":2,"elements":[{"id":"a","type":"ellipse","width":5}]}"#,
     );
-    write(&dir.join("Broken.excalidraw"), "not a drawing");
+    write(&dir.join("Broken.drawing"), "not a drawing");
+    write(
+        &dir.join("Theirs.excalidraw"),
+        r#"{"type":"excalidraw","version":2,"elements":[]}"#,
+    );
     let r = m.reconcile_all(true).await.unwrap();
-    assert_eq!(r.created, 2, "{r:?}");
+    assert_eq!(r.created, 3, "{r:?}");
     let g = v.lock().await;
     let kind = |p: &str| g.find(p).map(|(_, e)| e.kind);
-    assert_eq!(kind("Sketch.excalidraw"), Some(EntryKind::Drawing));
-    assert_eq!(kind("Broken.excalidraw"), Some(EntryKind::Attachment));
+    assert_eq!(kind("Sketch.drawing"), Some(EntryKind::Drawing));
+    assert_eq!(kind("Broken.drawing"), Some(EntryKind::Attachment));
+    assert_eq!(kind("Theirs.excalidraw"), Some(EntryKind::Attachment));
     let (_, sketch) = g.find("Sketch").unwrap();
     assert_eq!(g.drawing(&sketch.id).elements[0].width(), 5.0);
 }
 
 /// The person's Drawings are the `Drawings/` folder, theirs whatever a vault
-/// may be called: Excalidraw files become drawings, files stay files,
+/// may be called: drawing files become drawings, files stay files,
 /// Markdown files wait on disk. The command line finds it by its name.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_drawings_are_a_folder_of_drawings_and_files() {
@@ -1196,7 +1204,7 @@ async fn the_drawings_are_a_folder_of_drawings_and_files() {
     let dir = m.vault_dir(&did).unwrap().to_path_buf();
     assert_eq!(dir.file_name().unwrap(), "Drawings");
     write(
-        &dir.join("Plans/Sketch.excalidraw"),
+        &dir.join("Plans/Sketch.drawing"),
         r#"{"type":"excalidraw","version":2,"elements":[{"id":"a","type":"ellipse","width":5}]}"#,
     );
     write(&dir.join("photo.png"), "not really a png");
@@ -1206,7 +1214,7 @@ async fn the_drawings_are_a_folder_of_drawings_and_files() {
     {
         let g = d.lock().await;
         let kind = |p: &str| g.find(p).map(|(_, e)| e.kind);
-        assert_eq!(kind("Plans/Sketch.excalidraw"), Some(EntryKind::Drawing));
+        assert_eq!(kind("Plans/Sketch.drawing"), Some(EntryKind::Drawing));
         assert_eq!(kind("photo.png"), Some(EntryKind::Attachment));
         assert_eq!(kind("Idea.md"), None, "notes aren't synced there");
         assert!(g.require_room().is_err(), "nor made there");

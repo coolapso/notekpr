@@ -200,7 +200,7 @@ async fn a_drawing_moves_to_another_vault_at_the_drawings_limit() {
     run(
         &srv,
         "alice",
-        &["mv", "Home", "Sketch.excalidraw", "/", "--to-vault", "Work"],
+        &["mv", "Home", "Sketch.drawing", "/", "--to-vault", "Work"],
     )
     .await
     .unwrap();
@@ -209,7 +209,7 @@ async fn a_drawing_moves_to_another_vault_at_the_drawings_limit() {
     {
         let work = h.resolve("Work").await.unwrap();
         let g = work.lock().await;
-        let (_, e) = g.find("Sketch.excalidraw").expect("the copy");
+        let (_, e) = g.find("Sketch.drawing").expect("the copy");
         assert_eq!(e.kind, EntryKind::Drawing);
         assert_eq!(g.drawing(&e.id).elements.len(), scene.elements.len());
     }
@@ -224,7 +224,7 @@ async fn a_drawing_moves_to_another_vault_at_the_drawings_limit() {
     assert!(gone);
     assert_eq!(drawings(&h).await, (Limit::Max(1), 1));
     let home = h.resolve("Home").await.unwrap();
-    assert!(home.lock().await.find("Sketch.excalidraw").is_none());
+    assert!(home.lock().await.find("Sketch.drawing").is_none());
     // The other one still waits for room.
     let work = h.resolve("Work").await.unwrap();
     assert!(work.lock().await.outbox.waits_for_room(&other.1));

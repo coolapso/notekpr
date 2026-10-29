@@ -244,7 +244,7 @@ HOME = [
         - [ ] Search everything with `Ctrl+Shift+F`: try `tag:recipe` or `"tomato sauce"`
         - [ ] Switch to the reading view with `Ctrl+E`; `Ctrl+/` lists every shortcut
         - [ ] Capture a quick note with `Alt+Q`
-        - [ ] Drawings: open [[Beds]] — its drawing shows in the note — then *Garden beds* itself, and draw with Excalidraw's keys (`R` rectangle, `O` ellipse, `A` arrow, `T` text, `Q` keeps the tool); double-click a bed to label it, drag one and its arrow follows. *Drawings* in the sidebar holds your own; export one as `.excalidraw` (the ⤓ at the top) and open it on excalidraw.com, or paste between the two
+        - [ ] Drawings: open [[Beds]] — its drawing shows in the note — then *Garden beds* itself, and draw with Excalidraw's keys (`R` rectangle, `O` ellipse, `A` arrow, `T` text, `Q` keeps the tool); double-click a bed to label it, drag one and its arrow follows. *Drawings* in the sidebar holds your own; export one for Excalidraw (the ⤓ at the top) and open it on excalidraw.com, or paste between the two
         - [ ] Open [[Garden plan]] and its history (the clock button at the top) to compare versions
         - [ ] Sign in as **bob** in another tab and edit *Shopping list* in the *Family* vault together
         - [ ] Click a link to a note that doesn't exist yet: [[Greenhouse]]
@@ -1358,17 +1358,17 @@ def seed(cli, url, data, server_bin):
     cli.run(a, "-q", "order", "Home", "Recipes/Weekly meal plan", "--after", "Recipes/Recipes")
 
     step("alice: a drawing of the garden beds, a note showing it, a sketch in her Drawings")
-    cli.write(a, "Home", "Garden/Garden beds.excalidraw", garden_drawing())
+    cli.write(a, "Home", "Garden/Garden beds.drawing", garden_drawing())
     cli.write(a, "Home", "Garden/Beds.md", note("""
         # Beds
 
         The beds for this year, and where the compost goes:
 
-        ![[Garden beds.excalidraw]]
+        ![[Garden beds.drawing]]
 
         Click the drawing's line to see its link; open *Garden beds* to change it.
         """))
-    cli.write(a, "Drawings", "Shed ideas.excalidraw", sketch_drawing())
+    cli.write(a, "Drawings", "Shed ideas.drawing", sketch_drawing())
 
     step("alice: the garden plan's history (eleven edits)")
     for text in GARDEN_PLAN_VERSIONS:

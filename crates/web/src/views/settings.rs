@@ -70,6 +70,12 @@ fn Account() -> impl IntoView {
         ui.vaults.track();
         step(|c| c.quick_notes().is_some())
     };
+    let drawings = RwSignal::new(true);
+    let has_drawings = move || {
+        ui.vaults.track();
+        ui.tree_rev.track();
+        !crate::drawings::in_section().is_empty()
+    };
     let busy = RwSignal::new(false);
     let chosen = move || {
         let s = skipped.get();
@@ -82,9 +88,10 @@ fn Account() -> impl IntoView {
     };
     let export = move |_| {
         let (vaults, quick) = (chosen(), quick_notes.get_untracked() && has_quick());
+        let with_drawings = drawings.get_untracked() && has_drawings();
         busy.set(true);
         leptos::task::spawn_local(async move {
-            actions::export_account(vaults, quick).await;
+            actions::export_account(vaults, quick, with_drawings).await;
             busy.set(false);
         });
     };
@@ -132,7 +139,7 @@ fn Account() -> impl IntoView {
         <p class="fp big">{fp}</p>
         <p class="muted small">"When someone shares a vault with you, they can compare this fingerprint with what their screen shows to make sure nobody is in the middle."</p>
         <h3>"Data"</h3>
-        <p class="muted small">"Export your notes as plain Markdown files in one .zip: the vaults you choose and your quick notes, with their folders and attachments. Your data is never locked into a proprietary format."</p>
+        <p class="muted small">"Export your notes as plain Markdown files in one .zip: the vaults you choose, your quick notes and your Drawings, with their folders and attachments. Your data is never locked into a proprietary format."</p>
         <div class="export-choice">
             {move || has_quick().then(|| view! {
                 <label class="check">
@@ -140,6 +147,14 @@ fn Account() -> impl IntoView {
                         on:change=move |ev| quick_notes.set(event_target_checked(&ev))/>
                     <Icon name="zap"/>
                     <span class="grow ellipsis">"Quick notes"</span>
+                </label>
+            })}
+            {move || has_drawings().then(|| view! {
+                <label class="check">
+                    <input type="checkbox" class="export-drawings" prop:checked=move || drawings.get()
+                        on:change=move |ev| drawings.set(event_target_checked(&ev))/>
+                    <Icon name="drawing"/>
+                    <span class="grow ellipsis">"Drawings"</span>
                 </label>
             })}
             {move || ui.vaults.get().into_iter().map(|v| {
@@ -163,12 +178,12 @@ fn Account() -> impl IntoView {
         </div>
         <div class="row">
             <button class="btn primary export-account"
-                disabled=move || busy.get() || (chosen().is_empty() && !(quick_notes.get() && has_quick()))
+                disabled=move || busy.get() || (chosen().is_empty() && !(quick_notes.get() && has_quick()) && !(drawings.get() && has_drawings()))
                 on:click=export><Icon name="download"/>" Export"</button>
             <button class="btn import-account" disabled=move || busy.get() on:click=import><Icon name="upload"/>" Import an export…"</button>
             <Show when=move || busy.get()><span class="spinner inline"></span></Show>
         </div>
-        <p class="muted small">"Moving to another notekpr server? Export here, sign up there and import the .zip under Settings → Account. The vaults come back named as they were, with their folders, files and icons, and your quick notes join that account's — without history, comments or the people they were shared with: the new server starts fresh. Then delete your account here, if you like."</p>
+        <p class="muted small">"Moving to another notekpr server? Export here, sign up there and import the .zip under Settings → Account. The vaults come back named as they were, with their folders, files and icons, and your quick notes and Drawings join that account's — without history, comments or the people they were shared with: the new server starts fresh. Then delete your account here, if you like."</p>
         <div class="row">
             <button class="btn danger delete-account" on:click=move |_| ui.modal.set(Some(Modal::DeleteAccount))>"Delete my account…"</button>
         </div>

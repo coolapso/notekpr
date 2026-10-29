@@ -1,8 +1,9 @@
-//! What people take from one server to another: the vaults they choose and
-//! their quick notes, as Markdown in one `.zip` — a folder per vault, one for
-//! the quick notes, and a small manifest ([`MANIFEST`]) saying which folder is
-//! which vault. Importing it creates those vaults again (named as they were,
-//! with their icon and picture) and fills the quick notes. Nothing else comes
+//! What people take from one server to another: the vaults they choose,
+//! their quick notes and their Drawings, as Markdown (and `.drawing` files)
+//! in one `.zip` — a folder per vault, one each for the quick notes and the
+//! Drawings, and a small manifest ([`MANIFEST`]) saying which folder is which
+//! vault. Importing it creates those vaults again (named as they were, with
+//! their icon and picture) and fills the quick notes and the Drawings. Nothing else comes
 //! along: no history, comments (only as readable Markdown under
 //! `_comments/`), members or shares — the new server starts fresh.
 
@@ -11,7 +12,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::{Deserialize, Serialize};
 
 use crate::engine::VaultMeta;
-use crate::{paths, quick};
+use crate::{drawings, paths, quick};
 
 /// The manifest's path in the `.zip` (hidden: imports into a single vault,
 /// and Markdown tools, pass it by).
@@ -28,6 +29,9 @@ pub struct Manifest {
     /// The folder holding the quick notes, when they were exported.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub quick_notes: Option<String>,
+    /// The folder holding the person's Drawings, when they were exported.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub drawings: Option<String>,
 }
 
 /// One vault of an export.
@@ -44,9 +48,10 @@ pub struct ExportedVault {
 
 /// Folder names for vaults with these names, in order: the names, with what
 /// some file systems can't store replaced, unique (ignoring case) and never
-/// the quick notes' own folder.
+/// the quick notes' or Drawings' own folder.
 pub fn folder_names(names: &[&str]) -> Vec<String> {
-    let mut used: BTreeSet<String> = BTreeSet::from([quick::NAME.to_lowercase()]);
+    let mut used: BTreeSet<String> =
+        BTreeSet::from([quick::NAME.to_lowercase(), drawings::NAME.to_lowercase()]);
     names
         .iter()
         .map(|name| {
@@ -89,11 +94,13 @@ pub fn unique_name(name: &str, taken: impl Fn(&str) -> bool) -> String {
 pub type Files = Vec<(String, Vec<u8>)>;
 
 /// An export read back: each vault's files (paths within the vault), the
-/// quick notes' files, and how many files belonged to neither.
+/// quick notes' and the Drawings' files, and how many files belonged to
+/// none.
 #[derive(Clone, Debug, Default)]
 pub struct Unpacked {
     pub vaults: Vec<(ExportedVault, Files)>,
     pub quick_notes: Option<Files>,
+    pub drawings: Option<Files>,
     pub other_files: usize,
 }
 
@@ -156,6 +163,9 @@ pub fn unpack(files: Files) -> Result<Unpacked, UnpackError> {
     if let Some(q) = &manifest.quick_notes {
         out.quick_notes = Some(by_folder.remove(q).unwrap_or_default());
     }
+    if let Some(d) = &manifest.drawings {
+        out.drawings = Some(by_folder.remove(d).unwrap_or_default());
+    }
     out.other_files = other_files + by_folder.values().map(Vec::len).sum::<usize>();
     Ok(out)
 }
@@ -183,6 +193,10 @@ mod tests {
     }
 
     fn manifest(vaults: &[(&str, &str)], quick: Option<&str>) -> Vec<u8> {
+        with_drawings(vaults, quick, None)
+    }
+
+    fn with_drawings(vaults: &[(&str, &str)], quick: Option<&str>, d: Option<&str>) -> Vec<u8> {
         serde_json::to_vec(&Manifest {
             format: FORMAT,
             created_at: 1,
@@ -195,6 +209,7 @@ mod tests {
                 })
                 .collect(),
             quick_notes: quick.map(str::to_string),
+            drawings: d.map(str::to_string),
         })
         .unwrap()
     }
@@ -208,7 +223,8 @@ mod tests {
                 "a/b: c?",
                 " .. ",
                 "Quick notes",
-                "Family"
+                "Family",
+                "Drawings"
             ]),
             [
                 "Family",
@@ -216,7 +232,8 @@ mod tests {
                 "a_b_ c_",
                 "Vault",
                 "Quick notes 2",
-                "Family 3"
+                "Family 3",
+                "Drawings 2"
             ]
         );
         assert_eq!(
@@ -255,6 +272,23 @@ mod tests {
         assert_eq!(u.other_files, 2);
         assert_eq!(kept_folder("Empty/.keep"), Some("Empty"));
         assert_eq!(kept_folder("Plan.md"), None);
+    }
+
+    #[test]
+    fn the_drawings_have_their_folder() {
+        let files = vec![
+            (
+                MANIFEST.to_string(),
+                with_drawings(&[("Work", "Work")], None, Some("Drawings")),
+            ),
+            file("Work/Notes.md"),
+            file("Drawings/Shed.drawing"),
+            file("Drawings/Plans/Beds.drawing"),
+        ];
+        let u = unpack(files).unwrap();
+        let d: Vec<String> = u.drawings.unwrap().into_iter().map(|(p, _)| p).collect();
+        assert_eq!(d, ["Shed.drawing", "Plans/Beds.drawing"]);
+        assert_eq!(u.other_files, 0);
     }
 
     #[test]

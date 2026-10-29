@@ -423,7 +423,7 @@ pub fn clean_icon(icon: &str) -> std::result::Result<Option<String>, String> {
 
 impl Entry {
     /// A note's or drawing's name: its file name without `.md` or
-    /// `.excalidraw`.
+    /// `.drawing`.
     pub fn title(&self) -> &str {
         match self.kind {
             EntryKind::Drawing => paths::drawing_title(&self.path),

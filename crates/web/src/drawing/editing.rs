@@ -476,6 +476,8 @@ pub struct TextBox {
 /// What a drawing can be exported as.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Export {
+    /// notekpr's own file (`.drawing`).
+    Drawing,
     /// Excalidraw's own file.
     Excalidraw,
     /// Obsidian's Excalidraw plugin's.
@@ -565,6 +567,15 @@ impl Board {
             .unwrap_or_else(|| "Drawing".into())
     }
 
+    /// Copies what shows the drawing in a note: `![[Name.drawing]]`.
+    pub fn copy_embed(&self) {
+        let Some(e) = step(|c| c.entry(&self.vault, &self.id)) else {
+            return;
+        };
+        util::copy_to_clipboard(&format!("![[{}]]", notekpr_core::paths::file_name(&e.path)));
+        crate::state::success("Link copied — paste it into a note to show the drawing there.");
+    }
+
     /// Downloads the drawing as `kind`.
     pub fn export(self: &Rc<Self>, kind: Export) {
         self.write();
@@ -572,6 +583,11 @@ impl Board {
         let name = self.export_name();
         let dark = crate::drawings::is_dark();
         match kind {
+            Export::Drawing => util::download(
+                &format!("{name}.drawing"),
+                "application/json",
+                notekpr_draw::file::write_drawing(&scene).as_bytes(),
+            ),
             Export::Excalidraw => util::download(
                 &format!("{name}.excalidraw"),
                 "application/vnd.excalidraw+json",

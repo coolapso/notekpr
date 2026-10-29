@@ -1453,7 +1453,7 @@ impl Vault {
         self.create_drawing(path, scene)
     }
 
-    /// Creates a drawing at `path` (`.excalidraw` is added if missing).
+    /// Creates a drawing at `path` (`.drawing` is added if missing).
     pub fn create_drawing(
         &mut self,
         path: &str,

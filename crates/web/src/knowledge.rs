@@ -104,19 +104,25 @@ pub fn resolve_embed(vault: &str, target: &str) -> Option<String> {
     let entries = state::step(|c| c.live_entries(vault));
     let t = target.trim().trim_start_matches("./").to_lowercase();
     let embeddable = |k: EntryKind| matches!(k, EntryKind::Attachment | EntryKind::Drawing);
-    let exact = entries
-        .iter()
-        .find(|e| embeddable(e.kind) && e.path.to_lowercase() == t);
-    let by_name = || {
-        entries
+    let find = |t: &str, ok: &dyn Fn(EntryKind) -> bool| {
+        let exact = entries
             .iter()
-            .filter(|e| {
-                embeddable(e.kind)
-                    && paths::file_name(&e.path).to_lowercase() == paths::file_name(&t)
-            })
-            .min_by_key(|e| e.path.len())
+            .find(|e| ok(e.kind) && e.path.to_lowercase() == t);
+        let by_name = || {
+            entries
+                .iter()
+                .filter(|e| {
+                    ok(e.kind) && paths::file_name(&e.path).to_lowercase() == paths::file_name(t)
+                })
+                .min_by_key(|e| e.path.len())
+        };
+        exact.or_else(by_name).map(|e| e.id.clone())
     };
-    exact.or_else(by_name).map(|e| e.id.clone())
+    // Notes from Obsidian embed `X.excalidraw`: imported, it is `X.drawing`.
+    find(&t, &embeddable).or_else(|| {
+        let ours = paths::drawing_path_for(&t).filter(|p| *p != t)?;
+        find(&ours, &|k| k == EntryKind::Drawing)
+    })
 }
 
 /// Fast existence check used while rendering the editor (cached per tree revision).

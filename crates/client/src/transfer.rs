@@ -141,7 +141,7 @@ async fn exported(
                 }
                 EntryKind::Attachment => Item::Attachment { path: p, id: e.id },
                 EntryKind::Drawing => Item::Drawing {
-                    text: notekpr_draw::file::write_excalidraw(&v.drawing(&e.id)),
+                    text: notekpr_draw::file::write_drawing(&v.drawing(&e.id)),
                     path: p,
                 },
                 EntryKind::Folder => Item::Folder { path: p },
@@ -293,12 +293,15 @@ pub struct AccountReport {
     pub vaults: Vec<String>,
     /// Quick notes exported, or imported.
     pub quick_notes: usize,
+    /// Drawings of the person's Drawings exported, or imported.
+    pub drawings: usize,
     pub totals: TransferReport,
 }
 
-/// Export the vaults open in `hub`, but those `skip` names (or ids), and with
-/// `quick_notes` the quick notes, as one export [`import_account`] reads
-/// back — here or on another server.
+/// Export the vaults open in `hub`, but those `skip` names (or ids), the
+/// Drawings (unless `skip` names them) and with `quick_notes` the quick
+/// notes, as one export [`import_account`] reads back — here or on another
+/// server.
 pub async fn export_account(
     hub: &Hub,
     out: &Path,
@@ -310,13 +313,15 @@ pub async fn export_account(
     let mut report = AccountReport::default();
     let mut chosen = Vec::new();
     let mut quick = None;
+    let mut drawings = None;
     let mut skipped = BTreeSet::new();
     for v in hub.vaults() {
-        let (is_quick, empty_drawings, id, meta) = {
+        let (is_quick, is_drawings, empty, id, meta) = {
             let g = v.lock().await;
             (
                 g.is_quick_notes(),
-                g.is_drawings() && g.paths().is_empty(),
+                g.is_drawings(),
+                g.paths().is_empty(),
                 g.id().to_string(),
                 g.replica.meta.clone(),
             )
@@ -325,9 +330,17 @@ pub async fn export_account(
             quick = Some(v);
             continue;
         }
-        // The Drawings go as a vault of their own (imported under another
-        // name: no vault may have theirs), unless there's nothing in them.
-        if empty_drawings {
+        // The Drawings have their own folder (unless left out by their name,
+        // or there's nothing in them), and go back into the Drawings.
+        if is_drawings {
+            if let Some(s) = skip
+                .iter()
+                .find(|s| notekpr_core::drawings::is_reserved_name(s))
+            {
+                skipped.insert(s.clone());
+            } else if !empty {
+                drawings = Some(v);
+            }
             continue;
         }
         if let Some(s) = skip
@@ -350,6 +363,7 @@ pub async fn export_account(
         created_at: notekpr_core::now_ms(),
         vaults: Vec::new(),
         quick_notes: None,
+        drawings: None,
     };
     let (mut files, mut dirs) = (Vec::new(), Vec::new());
     let mut add = |folder: &str, e: Exported| {
@@ -377,6 +391,13 @@ pub async fn export_account(
         add(quick::NAME, e);
         report.quick_notes = report.totals.notes - before;
         manifest.quick_notes = Some(quick::NAME.to_string());
+    }
+    if let Some(d) = drawings {
+        let before = report.totals.drawings;
+        let e = exported(hub, &d, zip, &mut report.totals).await?;
+        add(notekpr_core::drawings::NAME, e);
+        report.drawings = report.totals.drawings - before;
+        manifest.drawings = Some(notekpr_core::drawings::NAME.to_string());
     }
     let m = serde_json::to_vec_pretty(&manifest)?;
     write_out(out, force, zip, &files, &dirs, Some(&m))?;
@@ -580,7 +601,28 @@ async fn import_collected(
                 }
             };
             let existing = v.find(&norm);
-            if paths::is_note(&norm) {
+            // Drawing files (ours, Excalidraw's, Obsidian's) become drawings.
+            if let Some((path, scene)) = drawing_in(&norm, &data, &v) {
+                let drawn_over = v.find(&path);
+                if drawn_over.is_some() && skip_existing {
+                    report.unchanged += 1;
+                    continue;
+                }
+                if dry_run {
+                    match drawn_over {
+                        Some((_, e)) if e.kind != EntryKind::Drawing => report
+                            .skipped
+                            .push((path, "exists and is not a drawing".into())),
+                        _ => report.drawings += 1,
+                    }
+                    continue;
+                }
+                match v.write_drawing(&path, &scene) {
+                    Ok(r) if r.changed => report.drawings += 1,
+                    Ok(_) => report.unchanged += 1,
+                    Err(e) => report.skipped.push((path, format!("{e:#}"))),
+                }
+            } else if paths::is_note(&norm) {
                 let Ok(text) = String::from_utf8(data) else {
                     report.skipped.push((norm, "not valid UTF-8".into()));
                     continue;
@@ -601,25 +643,6 @@ async fn import_collected(
                 }
                 match v.write_note(&norm, &text) {
                     Ok(r) if r.changed => report.notes += 1,
-                    Ok(_) => report.unchanged += 1,
-                    Err(e) => report.skipped.push((norm, format!("{e:#}"))),
-                }
-            } else if let Some(scene) = drawing_in(&norm, &data, &v) {
-                if existing.is_some() && skip_existing {
-                    report.unchanged += 1;
-                    continue;
-                }
-                if dry_run {
-                    match existing {
-                        Some((_, e)) if e.kind != EntryKind::Drawing => report
-                            .skipped
-                            .push((norm, "exists and is not a drawing".into())),
-                        _ => report.drawings += 1,
-                    }
-                    continue;
-                }
-                match v.write_drawing(&norm, &scene) {
-                    Ok(r) if r.changed => report.drawings += 1,
                     Ok(_) => report.unchanged += 1,
                     Err(e) => report.skipped.push((norm, format!("{e:#}"))),
                 }
@@ -667,21 +690,20 @@ async fn import_collected(
     Ok(())
 }
 
-/// An `.excalidraw` file that is a drawing becomes one (not in the quick
-/// notes, which hold notes); anything else is a file.
+/// A drawing file that is a drawing becomes one, at its `.drawing` path:
+/// ours, Excalidraw's `.excalidraw` and Obsidian's `.excalidraw.md` (not in
+/// the quick notes, which hold notes). Anything else is a note or a file.
 fn drawing_in(
     path: &str,
     data: &[u8],
     v: &crate::vault::Vault,
-) -> Option<notekpr_draw::scene::Scene> {
-    if !paths::is_drawing(path) || v.is_quick_notes() {
-        return None;
-    }
+) -> Option<(String, notekpr_draw::scene::Scene)> {
+    let to = paths::drawing_path_for(path).filter(|_| !v.is_quick_notes())?;
     let text = std::str::from_utf8(data).ok()?;
     let mut ids = notekpr_draw::restore::Ids::new(notekpr_core::now_ms() as u64);
     notekpr_draw::file::read_drawing(text, &mut ids)
         .ok()
-        .map(|d| d.scene)
+        .map(|d| (to, d.scene))
 }
 
 /// The manifest of an export of vaults and quick notes at `src` (a `.zip` or
@@ -779,10 +801,10 @@ pub async fn import_account(hub: &Hub, src: &Path, dry_run: bool) -> Result<Opti
         if dry_run {
             report.totals.folders += c.1.len();
             for (p, _) in &c.0 {
-                if paths::is_note(p) {
-                    report.totals.notes += 1;
-                } else if paths::is_drawing(p) {
+                if paths::is_drawing(p) {
                     report.totals.drawings += 1;
+                } else if paths::is_note(p) {
+                    report.totals.notes += 1;
                 } else {
                     report.totals.attachments += 1;
                 }
@@ -887,6 +909,25 @@ pub async fn import_account(hub: &Hub, src: &Path, dry_run: bool) -> Result<Opti
             }
         }
         report.quick_notes = report.totals.notes - before;
+    }
+    // The Drawings' go into this account's Drawings.
+    if let Some(files) = unpacked.drawings.filter(|f| !f.is_empty()) {
+        let c = split(files);
+        let before = report.totals.drawings;
+        if dry_run {
+            report.totals.folders += c.1.len();
+            for (p, _) in &c.0 {
+                if paths::drawing_path_for(p).is_some() {
+                    report.totals.drawings += 1;
+                } else if !paths::is_note(p) {
+                    report.totals.attachments += 1;
+                }
+            }
+        } else {
+            let d = hub.ensure_drawings().await?;
+            import_collected(hub, &d, c, None, false, false, &mut report.totals).await?;
+        }
+        report.drawings = report.totals.drawings - before;
     }
     Ok(Some(report))
 }

@@ -160,7 +160,7 @@ directory, never deleted) and enrolls the computer as a new device.
 ## 3. Everyday commands
 
 Vaults are referred to by id or by (unique, case-insensitive) name; paths are
-vault-relative, `.md` is optional for notes (`.excalidraw` for drawings).
+vault-relative, `.md` is optional for notes (`.drawing` for drawings).
 Your quick notes answer to the name `Quick notes` and your Drawings to
 `Drawings`, which no vault may have (in any case): `vault create` and `vault
 rename` refuse them, as the web app does. A vault named so anyway (by a
@@ -177,8 +177,8 @@ by its id.
 | `vault share <v> <user> --role admin\|editor\|viewer` | owner only; for an existing member it changes their role; admins (people only) also empty the trash; see [§8](#8-sharing-members-and-keys) |
 | `vault unshare <v> <user>` / `vault rotate <v>` / `vault leave <v>` | unshare and rotate: owner only; removal always rotates the key; the owner can't leave (delete instead) |
 | `ls <v> [folder] [-r]` | folders, notes and attachments, in the sidebar's order (`-r`: each folder followed by what's in it) |
-| `cat <v> <path>` | note text (or attachment bytes; a drawing as an Excalidraw `.excalidraw` file) |
-| `write <v> <path>` | create or update a note from stdin — diff-merged, never a blind overwrite; `--append`, `--attachment`, `--if-match <hash>` (ignored with the other two). A path ending in `.excalidraw` takes a drawing file on stdin — Excalidraw's, Obsidian's `.excalidraw.md` or what Excalidraw copies — and makes or changes the drawing there, element by element. `@today`, `@tomorrow` and `@yesterday` in the text become those days' dates (`@2026-10-23`, in the local time zone), as in the web app; so do they with `quick`, `shared write` and the gateway, but not in files of the Markdown folder |
+| `cat <v> <path>` | note text (or attachment bytes; a drawing as a `.drawing` file: Excalidraw's JSON under notekpr's `type`) |
+| `write <v> <path>` | create or update a note from stdin — diff-merged, never a blind overwrite; `--append`, `--attachment`, `--if-match <hash>` (ignored with the other two). A path ending in `.drawing` takes a drawing file on stdin — a `.drawing`, Excalidraw's `.excalidraw`, Obsidian's `.excalidraw.md` or what Excalidraw copies — and makes or changes the drawing there, element by element. `@today`, `@tomorrow` and `@yesterday` in the text become those days' dates (`@2026-10-23`, in the local time zone), as in the web app; so do they with `quick`, `shared write` and the gateway, but not in files of the Markdown folder |
 | `quick [text…]` / `quick --list` / `quick --move <note> --to <v>` / `quick --delete <note>` | capture a quick note (text or stdin) / list them / move one to a vault / delete one for good; see [Quick notes](#quick-notes) |
 | `mkdir <v> <path>`, `mv <v> <from> <to> [--update-links]`, `rm <v> <path>` | `rm` moves to the trash (from the quick notes: deletes for good); `mv` into `dir/` keeps the name; `--update-links` rewrites `[[links]]` |
 | `mv <v> <note, drawing or folder> <to> --to-vault <other>` | move a note or drawing, or a folder with everything in it, to another vault: `to` is its folder there (ending in `/`, `/` alone for the top level) or its new path; a name taken there gets a number (`Projects 2`). Inside a folder everything keeps its place; attachments elsewhere its notes link to come along (beside the note, or at the folder's top level), and `[[links]]` that wouldn't find a copy there are rewritten. The originals go to the trash once the server has the copies, except attachments a note staying behind links to; their history, comments and shares stay with them. A drawing's copy replaces its original, which the server deletes for good once the copy is there — so a move needs no room under a drawings limit. Files move only with notes. `--json` prints what moved |
@@ -290,13 +290,13 @@ Only apps can tell: the server sees no links.
 
 ### Drawings
 
-Drawings (`.excalidraw` files in the Markdown folder, `cat` prints one as
-such, `write` takes one: `notekpr write Home Garden/Beds.excalidraw <
+Drawings (`.drawing` files in the Markdown folder, `cat` prints one as
+such, `write` takes one: `notekpr write Home Garden/Beds.drawing <
 beds.excalidraw`) live in any vault, and in your **Drawings**: a place of your own for
 them, never shared (no members, single-note shares, agents or comments),
 made the first time the app is online with your account like the quick
 notes, and answering to the name `Drawings` (`ls Drawings`, `mv Home
-Sketch.excalidraw / --to-vault Drawings`). It holds drawings and files only:
+Sketch.drawing / --to-vault Drawings`). It holds drawings and files only:
 `write` refuses notes there.
 
 The server may limit how many drawings you have (`drawings_per_user`, or a
@@ -388,7 +388,7 @@ are unaffected.
   Quick notes/            <- your quick notes: flat, no folders
     2026-10-19 14.32.md
   Drawings/               <- your Drawings: drawings and files
-    Garden plan.excalidraw
+    Garden plan.drawing
 ```
 
 **Quick notes** ([§3](#quick-notes)) are the folder `Quick notes/`, mirrored
@@ -691,7 +691,7 @@ notekpr import Family ~/old-obsidian-vault [--into Imported] [--skip-existing] [
 notekpr import Family ~/backup/family.zip
 ```
 
-Exports are a plain tree of `.md` files, attachments and (empty) folders — no
+Exports are a plain tree of `.md` files, drawings (`.drawing`), attachments and (empty) folders — no
 proprietary metadata — readable by any Markdown tool. Trashed documents are not
 exported. Comments are: each commented note's threads as a Markdown file at
 `_comments/<the note's path>` (who wrote what, when, on which text). A directory export leaves out (and lists) paths the mirror wouldn't
@@ -705,7 +705,11 @@ are decrypted, so they are written for the owner only (files `0600`, folders
 Import walks a directory or zip, keeping folders: `.md` files become notes
 (existing notes at the same path are diff-merged; `--skip-existing` leaves
 them, and existing attachments, alone — "the same path" ignoring case,
-exactly as `write` matches notes), other files become attachments, empty
+exactly as `write` matches notes); drawing files become drawings at their
+`.drawing` path — ours, Excalidraw's `X.excalidraw` and Obsidian's
+`X.excalidraw.md` (a Markdown file by that name that isn't a drawing stays a
+note), and notes showing `![[X.excalidraw]]` show the imported drawing; other
+files become attachments, empty
 directories become folders. Hidden files and editor leftovers are skipped, as
 are empty attachment files and files over the server's attachment limit
 (reported), and an export's `_comments/` folder (comments can't be brought
@@ -721,17 +725,18 @@ notekpr --profile new import ~/notes.zip [--dry-run]
 notekpr delete-account                                # then, if you like, on the old server
 ```
 
-Without a vault, `export` takes every vault (but those `--skip` names) and
-the quick notes (unless `--no-quick-notes`) into one `.zip` or directory: a
-folder per vault (named after it; a name some file systems can't store has
-`_` instead), one called `Quick notes`, and `.notekpr-export.json` naming
-which folder is which vault — with its name, description, icon and picture,
-and its notes', files' and folders' icons. The web app makes the same export
+Without a vault, `export` takes every vault (but those `--skip` names), the
+quick notes (unless `--no-quick-notes`) and your Drawings (unless `--skip
+Drawings`) into one `.zip` or directory: a folder per vault (named after it;
+a name some file systems can't store has `_` instead), one called `Quick
+notes`, one called `Drawings`, and `.notekpr-export.json` naming which
+folder is which vault — with its name, description, icon and picture, and
+its notes', files' and folders' icons. The web app makes the same export
 (Settings → Account → Data). `import` with only that `.zip` or directory —
 on any server, also the same one — creates the vaults again, named as they
-were (a name the account has already gets a number: `Family 2`), and adds
-the quick notes to the account's, as many as there's room for (the rest are
-reported). Nothing else comes along: no history, comments (only the
+were (a name the account has already gets a number: `Family 2`), adds the
+quick notes to the account's, as many as there's room for (the rest are
+reported), and the drawings to the account's Drawings. Nothing else comes along: no history, comments (only the
 `_comments/` files, which aren't imported), members or shares — the new
 server starts fresh.
 

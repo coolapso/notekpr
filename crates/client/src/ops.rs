@@ -866,9 +866,9 @@ pub async fn get_attachment(hub: &Hub, vref: &str, path: &str) -> OpResult<(DocI
     Ok((doc_info(&g, &p, &e), data))
 }
 
-/// Creates the drawing at `path` (`.excalidraw`), or makes the one there,
-/// from a drawing file: Excalidraw's, Obsidian's `.excalidraw.md`, or the
-/// clipboard's.
+/// Creates the drawing at `path` (`.drawing`), or makes the one there,
+/// from a drawing file: ours, Excalidraw's, Obsidian's `.excalidraw.md`, or
+/// the clipboard's.
 pub async fn put_drawing(hub: &Hub, vref: &str, path: &str, file: &str) -> OpResult<PutOutcome> {
     let v = vault(hub, vref).await?;
     let mut ids = notekpr_draw::restore::Ids::new(notekpr_core::now_ms() as u64);

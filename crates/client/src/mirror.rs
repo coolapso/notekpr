@@ -20,7 +20,7 @@
 //! for good; a delete plus a create of identical content within a short
 //! window is a rename. The quick notes' folder is flat and holds at most as
 //! many notes as they may: other new files wait on disk. The Drawings'
-//! folder holds drawings (`.excalidraw` files) and files: Markdown files put
+//! folder holds drawings (`.drawing` files) and files: Markdown files put
 //! there wait on disk. Dotfiles, editor swap/backup files and our own
 //! temporary files are ignored. Change detection compares size + mtime and
 //! falls back to content hashes, so our own writes are recognised.
@@ -834,7 +834,7 @@ fn candidate_bases(bases: &[Base]) -> &[Base] {
 /// an Excalidraw file (Excalidraw and Obsidian's Excalidraw plugin open it).
 fn file_text(v: &Vault, id: &str, kind: EntryKind) -> String {
     match kind {
-        EntryKind::Drawing => notekpr_draw::file::write_excalidraw(&v.drawing(id)),
+        EntryKind::Drawing => notekpr_draw::file::write_drawing(&v.drawing(id)),
         _ => v.note_text(id),
     }
 }
@@ -868,7 +868,7 @@ fn ingest_drawing(v: &mut Vault, id: &str, rec: &FileRecord, disk: &str) -> Resu
         .or_default()
         .encode_state();
     let Some(scene) = drawing_from_file(disk) else {
-        bail!("an Excalidraw file in the folder is not a drawing (any more); it is not synced");
+        bail!("a .drawing file in the folder is not a drawing (any more); it is not synced");
     };
     if v.drawing(id) == scene {
         return Ok(live_state);
@@ -1125,7 +1125,7 @@ fn ingest_new_file(
     };
     let hash = content_hash(&data);
     let is_note = paths::is_note(path);
-    // An Excalidraw file becomes a drawing (anything else by that name, or
+    // A .drawing file becomes a drawing (anything else by that name, or
     // one in the quick notes, which hold notes, stays a file).
     let drawing = if paths::is_drawing(path) && !v.is_quick_notes() {
         std::str::from_utf8(&data).ok().and_then(drawing_from_file)

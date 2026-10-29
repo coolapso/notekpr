@@ -1,0 +1,384 @@
+use serde_json::json;
+
+use super::*;
+
+/// Repeatable ids, seeds and time.
+struct Seq(u32);
+
+impl Random for Seq {
+    fn id(&mut self) -> String {
+        self.0 += 1;
+        format!("id{:04}", self.0)
+    }
+    fn seed(&mut self) -> i32 {
+        self.0 += 1;
+        self.0 as i32 * 7919
+    }
+    fn now(&self) -> f64 {
+        1_800_000_000_000.0
+    }
+}
+
+/// The scene with `out` written to it, as the app does.
+fn apply(scene: &mut Scene, out: &Output) {
+    for c in &out.changed {
+        match scene.elements.iter_mut().find(|e| e.id() == c.id()) {
+            Some(e) => *e = c.clone(),
+            None => scene.elements.push(c.clone()),
+        }
+    }
+    scene
+        .elements
+        .sort_by(|a, b| a.index().cmp(&b.index()).then(a.id().cmp(b.id())));
+}
+
+fn drag(
+    ed: &mut Editor,
+    scene: &mut Scene,
+    from: Point,
+    to: Point,
+    mods: Mods,
+    rng: &mut Seq,
+) -> Output {
+    let o = ed.pointer_down(scene, from, None, mods, 1.0, rng);
+    apply(scene, &o);
+    let o = ed.pointer_move(
+        scene,
+        [(from[0] + to[0]) / 2.0, (from[1] + to[1]) / 2.0],
+        None,
+        mods,
+        1.0,
+        rng,
+    );
+    apply(scene, &o);
+    let o = ed.pointer_move(scene, to, None, mods, 1.0, rng);
+    apply(scene, &o);
+    let o = ed.pointer_up(scene, to, rng);
+    apply(scene, &o);
+    o
+}
+
+#[test]
+fn drawing_a_rectangle_then_moving_it() {
+    let (mut ed, mut scene, mut rng) = (Editor::default(), Scene::default(), Seq(0));
+    ed.set_tool(Tool::Rectangle);
+    let o = drag(
+        &mut ed,
+        &mut scene,
+        [10.0, 20.0],
+        [110.0, 70.0],
+        Mods::default(),
+        &mut rng,
+    );
+    assert!(o.done && o.tool_changed);
+    assert_eq!(ed.tool, Tool::Selection);
+    let r = &scene.elements[0];
+    assert_eq!(
+        (r.kind(), r.x(), r.y(), r.width(), r.height()),
+        (ElementType::Rectangle, 10.0, 20.0, 100.0, 50.0)
+    );
+    assert_eq!(ed.selection, vec![r.id().to_string()]);
+    assert!(r.index().is_some() && r.roundness().is_some());
+    // Excalidraw's properties, all there.
+    for k in [
+        "seed",
+        "version",
+        "versionNonce",
+        "strokeColor",
+        "boundElements",
+        "groupIds",
+        "updated",
+    ] {
+        assert!(r.get(k).is_some(), "{k}");
+    }
+    // Moving it: selected, it is grabbed anywhere in its box (empty as it is).
+    let o = drag(
+        &mut ed,
+        &mut scene,
+        [50.0, 40.0],
+        [70.0, 60.0],
+        Mods::default(),
+        &mut rng,
+    );
+    assert!(o.done);
+    assert_eq!((scene.elements[0].x(), scene.elements[0].y()), (30.0, 40.0));
+    assert!(scene.elements[0].version() > 2);
+    // A click in empty space clears the selection; a click with a shape
+    // tool makes nothing.
+    drag(
+        &mut ed,
+        &mut scene,
+        [500.0, 500.0],
+        [500.0, 500.0],
+        Mods::default(),
+        &mut rng,
+    );
+    assert!(ed.selection.is_empty());
+    ed.set_tool(Tool::Ellipse);
+    drag(
+        &mut ed,
+        &mut scene,
+        [300.0, 300.0],
+        [300.0, 300.0],
+        Mods::default(),
+        &mut rng,
+    );
+    assert_eq!(scene.visible().count(), 1);
+}
+
+#[test]
+fn shift_squares_and_alt_centres() {
+    let (mut ed, mut scene, mut rng) = (Editor::default(), Scene::default(), Seq(0));
+    ed.set_tool(Tool::Ellipse);
+    drag(
+        &mut ed,
+        &mut scene,
+        [0.0, 0.0],
+        [100.0, 40.0],
+        Mods {
+            shift: true,
+            ..Mods::default()
+        },
+        &mut rng,
+    );
+    let e = &scene.elements[0];
+    assert_eq!((e.width(), e.height()), (100.0, 100.0));
+    ed.set_tool(Tool::Rectangle);
+    drag(
+        &mut ed,
+        &mut scene,
+        [500.0, 500.0],
+        [520.0, 510.0],
+        Mods {
+            alt: true,
+            ..Mods::default()
+        },
+        &mut rng,
+    );
+    let r = scene.elements.last().unwrap();
+    assert_eq!(
+        (r.x(), r.y(), r.width(), r.height()),
+        (480.0, 490.0, 40.0, 20.0)
+    );
+}
+
+#[test]
+fn box_selection_and_editing_commands() {
+    let (mut ed, mut scene, mut rng) = (Editor::default(), Scene::default(), Seq(0));
+    for (x, tool) in [
+        (0.0, Tool::Rectangle),
+        (200.0, Tool::Diamond),
+        (400.0, Tool::Ellipse),
+    ] {
+        ed.set_tool(tool);
+        drag(
+            &mut ed,
+            &mut scene,
+            [x, 0.0],
+            [x + 100.0, 100.0],
+            Mods::default(),
+            &mut rng,
+        );
+    }
+    ed.set_tool(Tool::Selection);
+    drag(
+        &mut ed,
+        &mut scene,
+        [-10.0, -10.0],
+        [310.0, 110.0],
+        Mods::default(),
+        &mut rng,
+    );
+    assert_eq!(ed.selection.len(), 2);
+    // Grouped, a click on one selects both.
+    let o = ed.group(&scene, &mut rng);
+    apply(&mut scene, &o);
+    ed.selection.clear();
+    drag(
+        &mut ed,
+        &mut scene,
+        [0.0, 50.0],
+        [0.0, 50.0],
+        Mods::default(),
+        &mut rng,
+    );
+    assert_eq!(ed.selection.len(), 2);
+    // Duplicated: two new, a little further, in a new group.
+    let o = ed.duplicate(&scene, &mut rng);
+    apply(&mut scene, &o);
+    assert_eq!(scene.visible().count(), 5);
+    let copy = scene.element(&ed.selection[0]).unwrap();
+    assert_eq!((copy.x(), copy.y()), (10.0, 10.0));
+    let originals_group = scene.elements[0].group_ids()[0].to_string();
+    assert_ne!(copy.group_ids()[0], originals_group);
+    // Deleted.
+    let o = ed.delete_selected(&scene, &mut rng);
+    apply(&mut scene, &o);
+    assert_eq!(scene.visible().count(), 3);
+    // Styled: only what is selected changes, and new elements follow.
+    ed.select_all(&scene);
+    assert_eq!(ed.selection.len(), 3);
+    let o = ed.set_property(&scene, "strokeColor", json!("#e03131"), &mut rng);
+    apply(&mut scene, &o);
+    assert!(scene.visible().all(|e| e.stroke_color() == "#e03131"));
+    assert_eq!(ed.style.stroke_color, "#e03131");
+    // Aligned left: the group as one, the ellipse to its left side.
+    let o = ed.align(&scene, "left", &mut rng);
+    apply(&mut scene, &o);
+    let lefts: Vec<f64> = scene
+        .visible()
+        .map(|e| bounds::element_bounds(e)[0])
+        .collect();
+    assert_eq!(lefts, vec![0.0, 200.0, 0.0]);
+}
+
+#[test]
+fn stacking_order() {
+    let (mut ed, mut scene, mut rng) = (Editor::default(), Scene::default(), Seq(0));
+    for x in [0.0, 50.0, 100.0] {
+        ed.set_tool(Tool::Rectangle);
+        drag(
+            &mut ed,
+            &mut scene,
+            [x, 0.0],
+            [x + 100.0, 100.0],
+            Mods::default(),
+            &mut rng,
+        );
+    }
+    let ids: Vec<String> = scene.elements.iter().map(|e| e.id().to_string()).collect();
+    ed.selection = vec![ids[0].clone()];
+    let o = ed.reorder(&scene, true, true, &mut rng);
+    apply(&mut scene, &o);
+    assert_eq!(scene.elements.last().unwrap().id(), ids[0]);
+    ed.selection = vec![ids[2].clone()];
+    let o = ed.reorder(&scene, false, false, &mut rng);
+    apply(&mut scene, &o);
+    let order: Vec<&str> = scene.elements.iter().map(Element::id).collect();
+    assert_eq!(order, [ids[2].as_str(), ids[1].as_str(), ids[0].as_str()]);
+}
+
+#[test]
+fn lines_arrows_pen_text_eraser() {
+    let (mut ed, mut scene, mut rng) = (Editor::default(), Scene::default(), Seq(0));
+    // A dragged arrow: two points, an arrowhead.
+    ed.set_tool(Tool::Arrow);
+    drag(
+        &mut ed,
+        &mut scene,
+        [0.0, 0.0],
+        [100.0, 50.0],
+        Mods::default(),
+        &mut rng,
+    );
+    let a = &scene.elements[0];
+    assert_eq!(a.points(), vec![[0.0, 0.0], [100.0, 50.0]]);
+    assert_eq!(a.end_arrowhead(), Some("arrow"));
+    // A line clicked point by point, ended with Escape.
+    ed.set_tool(Tool::Line);
+    for p in [[200.0, 0.0], [300.0, 0.0], [300.0, 100.0]] {
+        let o = ed.pointer_down(&scene, p, None, Mods::default(), 1.0, &mut rng);
+        apply(&mut scene, &o);
+        let o = ed.pointer_up(&scene, p, &mut rng);
+        apply(&mut scene, &o);
+    }
+    let o = ed.pointer_move(&scene, [250.0, 150.0], None, Mods::default(), 1.0, &mut rng);
+    apply(&mut scene, &o);
+    let o = ed.escape(&scene, &mut rng);
+    apply(&mut scene, &o);
+    let l = scene
+        .elements
+        .iter()
+        .find(|e| e.kind() == ElementType::Line)
+        .unwrap();
+    assert_eq!(l.points(), vec![[0.0, 0.0], [100.0, 0.0], [100.0, 100.0]]);
+    assert_eq!((l.x(), l.y()), (200.0, 0.0));
+    // A pen stroke.
+    ed.set_tool(Tool::Freedraw);
+    drag(
+        &mut ed,
+        &mut scene,
+        [0.0, 200.0],
+        [40.0, 230.0],
+        Mods::default(),
+        &mut rng,
+    );
+    let f = scene
+        .elements
+        .iter()
+        .find(|e| e.kind() == ElementType::Freedraw)
+        .unwrap();
+    assert_eq!(f.points().len(), 3);
+    assert!(f.simulate_pressure());
+    // A text: made, edited, measured.
+    ed.set_tool(Tool::Text);
+    let o = ed.pointer_down(&scene, [0.0, 400.0], None, Mods::default(), 1.0, &mut rng);
+    let id = o.edit_text.clone().unwrap();
+    apply(&mut scene, &o);
+    let o = ed.finish_text(
+        &scene,
+        "hello\nworld!",
+        &|_, line| line.len() as f64 * 10.0,
+        &mut rng,
+    );
+    apply(&mut scene, &o);
+    let t = scene.element(&id).unwrap();
+    assert_eq!(
+        (t.text(), t.width(), t.height()),
+        ("hello\nworld!", 60.0, 50.0)
+    );
+    // The eraser deletes what it passes over.
+    ed.set_tool(Tool::Eraser);
+    let o = drag(
+        &mut ed,
+        &mut scene,
+        [0.0, 0.0],
+        [50.0, 25.0],
+        Mods::default(),
+        &mut rng,
+    );
+    assert!(o.done);
+    assert!(scene.elements[0].is_deleted());
+}
+
+#[test]
+fn resizing_and_turning_through_handles() {
+    let (mut ed, mut scene, mut rng) = (Editor::default(), Scene::default(), Seq(0));
+    ed.set_tool(Tool::Rectangle);
+    drag(
+        &mut ed,
+        &mut scene,
+        [0.0, 0.0],
+        [100.0, 50.0],
+        Mods::default(),
+        &mut rng,
+    );
+    // The south-east corner.
+    drag(
+        &mut ed,
+        &mut scene,
+        [108.0, 58.0],
+        [208.0, 108.0],
+        Mods::default(),
+        &mut rng,
+    );
+    let r = &scene.elements[0];
+    assert_eq!((r.width(), r.height()), (200.0, 100.0));
+    // The turning handle, to the right of the centre: a quarter turn.
+    let f = ed.frame(&scene).unwrap();
+    let rot = transform::handles(&f, 1.0)
+        .into_iter()
+        .find(|h| h.0 == Handle::Rotation)
+        .unwrap()
+        .1;
+    let at = [rot[0] + rot[2] / 2.0, rot[1] + rot[3] / 2.0];
+    drag(
+        &mut ed,
+        &mut scene,
+        at,
+        [400.0, 50.0],
+        Mods::default(),
+        &mut rng,
+    );
+    assert!((scene.elements[0].angle() - std::f64::consts::FRAC_PI_2).abs() < 0.01);
+}

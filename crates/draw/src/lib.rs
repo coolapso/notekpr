@@ -7,6 +7,7 @@
 
 pub mod bounds;
 pub mod color;
+pub mod edit;
 pub mod file;
 pub mod fonts;
 pub mod freehand;

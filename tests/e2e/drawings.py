@@ -6,7 +6,7 @@ Export menu, what reaches the server.
     python3 tests/e2e/drawings.py --server target/debug/notekpr-server \
         --cli target/debug/notekpr --web dist/web
 """
-import argparse, base64, json, os, subprocess, sys, tempfile, time
+import argparse, base64, json, math, os, subprocess, sys, tempfile, time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from suite import Env, uniq, check, share, severe_logs, png_file  # noqa: E402
@@ -223,6 +223,60 @@ def main():
         frame = next((e for e in els if e["type"] == "frame"), None)
         inside = [e for e in els if e.get("frameId") == (frame or {}).get("id")]
         check(frame is not None and any(e["type"] == "rectangle" for e in inside), "a frame drawn around a box holds it")
+        # Selected on its own (a click on its name), it is exported alone:
+        # the menu says so, and the picture is what is in it, its size,
+        # cut to it, without its outline or name. (The clipboard is caught.)
+        a.click_at(CANVAS, -290, 190)
+        time.sleep(0.3)
+        a.js("""
+            window.copied = {};
+            window.clipboardWas = [Clipboard.prototype.writeText, Clipboard.prototype.write];
+            Clipboard.prototype.writeText = function (t) { window.copied.svg = t; return Promise.resolve(); };
+            Clipboard.prototype.write = function (items) {
+                items[0].getType('image/png').then(async b => {
+                    const i = await createImageBitmap(b);
+                    // How much of it isn't the background (its corner).
+                    const c = new OffscreenCanvas(i.width, i.height).getContext('2d');
+                    c.drawImage(i, 0, 0);
+                    const px = c.getImageData(0, 0, i.width, i.height).data;
+                    let inked = 0;
+                    for (let k = 0; k < px.length; k += 4) {
+                        if (Math.abs(px[k] - px[0]) + Math.abs(px[k + 1] - px[1]) + Math.abs(px[k + 2] - px[2]) > 60) inked++;
+                    }
+                    const bytes = new Uint8Array(await b.arrayBuffer());
+                    let s = '';
+                    for (let k = 0; k < bytes.length; k += 8192) s += String.fromCharCode(...bytes.subarray(k, k + 8192));
+                    window.copied.png = [i.width, i.height, inked, btoa(s)];
+                });
+                return Promise.resolve();
+            };
+        """)
+        menu_button = ".drawing-page .note-head .tb-drop .icon-btn"
+        a.click(menu_button)
+        labels = a.js("return Array.from(document.querySelectorAll('.drawing-page .note-head .menu button')).map(b => b.textContent.trim())")
+        check("PNG image of the frame" in labels and "SVG image of the frame" in labels,
+              f"with a frame selected, the Export menu exports the frame ({labels})")
+        a.click_el(a.find_text(".drawing-page .note-head .menu button", "Copy the frame as SVG", 5))
+        a.wait("return !!window.copied.svg", 15, "the frame copied as SVG")
+        svg = a.js("return window.copied.svg")
+        size = a.js("const s = new DOMParser().parseFromString(arguments[0], 'image/svg+xml').documentElement;"
+                    "return [+s.getAttribute('width'), +s.getAttribute('height')]", svg)
+        check(abs(size[0] - frame["width"]) < 0.01 and abs(size[1] - frame["height"]) < 0.01,
+              f"the frame's SVG is its size ({size} for {frame['width']} × {frame['height']})")
+        check(f'<g clip-path="url(#{frame["id"]})">' in svg and "<path" in svg
+              and 'ry="8" fill="none"' not in svg and ">Frame</text>" not in svg,
+              "what is in it, cut to it, without its outline or name")
+        a.click(menu_button)
+        a.click_el(a.find_text(".drawing-page .note-head .menu button", "Copy the frame as PNG", 5))
+        a.wait("return !!window.copied.png", 15, "the frame copied as PNG")
+        width, height, inked, data = a.js("return window.copied.png")
+        out = os.environ.get("NOTEKPR_E2E_OUT", "target/e2e")
+        os.makedirs(out, exist_ok=True)
+        with open(os.path.join(out, "drawings-frame.png"), "wb") as f:
+            f.write(base64.b64decode(data))
+        check([width, height] == [math.ceil(frame["width"] * 2), math.ceil(frame["height"] * 2)] and inked > 500,
+              f"its PNG is twice its size, the box in it ({width} × {height}, {inked} pixels drawn)")
+        a.js("[Clipboard.prototype.writeText, Clipboard.prototype.write] = window.clipboardWas")
 
         # An elbow arrow (the arrow type picker) between the top boxes.
         tool(a, "a")

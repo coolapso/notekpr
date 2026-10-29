@@ -56,6 +56,11 @@ pub struct SvgOptions {
     /// Put the drawing inside, as Excalidraw's "Embed scene" does: the
     /// image opens again as the drawing, in notekpr and in Excalidraw.
     pub embed_scene: bool,
+    /// A frame exported alone (its id; Excalidraw's `exportingFrame`, see
+    /// [`crate::export::Part`]): only what overlaps it, all of it cut to the
+    /// frame with square corners, the image the frame's size (no padding),
+    /// no frame outlined or named.
+    pub frame: Option<String>,
 }
 
 impl Default for SvgOptions {
@@ -69,6 +74,7 @@ impl Default for SvgOptions {
             time: sticky::LocalTime::default(),
             measure: crate::edit::guess_width,
             embed_scene: false,
+            frame: None,
         }
     }
 }
@@ -167,8 +173,11 @@ struct Renderer<'a> {
     elements: HashMap<&'a str, &'a Element>,
     cfg: RenderConfig,
     out: String,
-    /// Frames whose children are clipped to them.
+    /// The frames there: their children take their opacity…
     frames: HashMap<&'a str, &'a Element>,
+    /// …and are cut to them (`frameRendering.clip`), and the frames are
+    /// outlined (`frameRendering.outline`); neither for a frame alone.
+    clip_and_outline: bool,
     time: sticky::LocalTime,
     /// The pictures' `<symbol>`s for `<defs>`, in the order made; each
     /// goes first in it, so they end up last first.
@@ -202,7 +211,10 @@ impl<'a> Renderer<'a> {
 
     /// As [`Self::add`], `before` (unclipped) ahead of the markup.
     fn add_after(&mut self, e: &Element, before: String, markup: String) {
-        let clipped = match e.frame_id().filter(|f| self.frames.contains_key(f)) {
+        let clipped = match e
+            .frame_id()
+            .filter(|f| self.clip_and_outline && self.frames.contains_key(f))
+        {
             Some(f) => format!(r#"{before}<g clip-path="url(#{})">{markup}</g>"#, esc(f)),
             None => format!("{before}{markup}"),
         };
@@ -477,6 +489,9 @@ impl<'a> Renderer<'a> {
                 self.add_after(e, before, markup);
             }
             ElementType::Frame | ElementType::MagicFrame => {
+                if !self.clip_and_outline {
+                    return;
+                }
                 let markup = format!(
                     r#"<rect transform="{transform}" width="{}px" height="{}px" rx="{r}" ry="{r}" fill="none" stroke="{}" stroke-width="{}"></rect>"#,
                     n(e.width()),
@@ -508,23 +523,34 @@ impl<'a> Renderer<'a> {
 
 /// The drawing as an SVG image.
 pub fn export(scene: &Scene, opts: &SvgOptions) -> String {
-    let visible: Vec<&Element> = scene.visible().collect();
+    // A frame exported alone, if it is there.
+    let alone = opts
+        .frame
+        .as_deref()
+        .and_then(|id| scene.visible().find(|e| e.id() == id && frame::is_frame(e)));
+    let visible: Vec<&Element> = match alone {
+        Some(f) => frame::overlapping(scene, f),
+        None => scene.visible().collect(),
+    };
     let elements: HashMap<&str, &Element> = visible.iter().map(|e| (e.id(), *e)).collect();
     let frames: HashMap<&str, &Element> = visible
         .iter()
         .filter(|e| matches!(e.kind(), ElementType::Frame | ElementType::MagicFrame))
         .map(|e| (e.id(), *e))
         .collect();
-    // Frames' names are texts above them.
-    let frame_list: Vec<&Element> = visible
-        .iter()
-        .copied()
-        .filter(|e| frame::is_frame(e))
-        .collect();
-    let names = frame::name_labels(&frame_list, opts.dark, &opts.measure);
-    let [min_x, min_y, max_x, max_y] = frame::export_bounds(scene, names.values());
+    // Frames' names are texts above them (not for a frame alone, which
+    // frames the image instead).
+    let frame_list: Vec<&Element> = scene.visible().filter(|e| frame::is_frame(e)).collect();
+    let names = match alone {
+        Some(_) => HashMap::new(),
+        None => frame::name_labels(&frame_list, opts.dark, &opts.measure),
+    };
+    let [min_x, min_y, max_x, max_y] = match alone {
+        Some(f) => bounds::element_bounds(f),
+        None => frame::export_bounds(scene, names.values()),
+    };
     let (width, height) = ((min_x - max_x).abs(), (min_y - max_y).abs());
-    let pad = opts.padding;
+    let pad = if alone.is_some() { 0.0 } else { opts.padding };
     let (w, h) = (width + pad * 2.0, height + pad * 2.0);
     let (offset_x, offset_y) = (-(min_x - pad), -(min_y - pad));
     let background = scene.background().to_string();
@@ -550,13 +576,18 @@ pub fn export(scene: &Scene, opts: &SvgOptions) -> String {
     // The rest of `<defs>`: the pictures' symbols go ahead of it once the
     // elements are drawn.
     let mut defs = String::new();
+    // A frame alone cuts with square corners (all the clip paths do then).
+    let radius = match alone {
+        Some(_) => String::new(),
+        None => format!(r#" rx="{r}" ry="{r}""#, r = n(FRAME_RADIUS)),
+    };
     for f in &frame_list {
         let [x1, y1, x2, y2, _, _] = bounds::absolute_coords(f);
         let cx = (x2 - x1) / 2.0 - (f.x() - x1);
         let cy = (y2 - y1) / 2.0 - (f.y() - y1);
         let _ = write!(
             defs,
-            r#"<clipPath id="{}"><rect transform="translate({} {}) rotate({} {} {})" width="{}" height="{}" rx="{r}" ry="{r}"></rect></clipPath>"#,
+            r#"<clipPath id="{}"><rect transform="translate({} {}) rotate({} {} {})" width="{}" height="{}"{radius}></rect></clipPath>"#,
             esc(f.id()),
             n(f.x() + offset_x),
             n(f.y() + offset_y),
@@ -565,7 +596,6 @@ pub fn export(scene: &Scene, opts: &SvgOptions) -> String {
             n(cy),
             n(f.width()),
             n(f.height()),
-            r = n(FRAME_RADIUS),
         );
     }
     let _ = write!(
@@ -583,6 +613,10 @@ pub fn export(scene: &Scene, opts: &SvgOptions) -> String {
             h = n(h)
         );
     }
+    // Everything drawn is cut to a frame exported alone.
+    if let Some(f) = alone {
+        let _ = write!(body, r#"<g clip-path="url(#{})">"#, esc(f.id()));
+    }
     let mut r = Renderer {
         scene,
         elements,
@@ -593,6 +627,7 @@ pub fn export(scene: &Scene, opts: &SvgOptions) -> String {
         },
         out: body,
         frames,
+        clip_and_outline: alone.is_none(),
         time: opts.time,
         symbols: Vec::new(),
         symbol_ids: Default::default(),
@@ -616,6 +651,9 @@ pub fn export(scene: &Scene, opts: &SvgOptions) -> String {
     }
     for e in visible.iter().filter(|e| iframe_like(e)) {
         r.element(e, e.x() + offset_x, e.y() + offset_y);
+    }
+    if alone.is_some() {
+        r.out.push_str("</g>");
     }
     for symbol in r.symbols.iter().rev() {
         out.push_str(symbol);
@@ -717,6 +755,81 @@ mod tests {
         let back = crate::file::read_drawing_bytes(svg.as_bytes(), &mut Ids::new(1)).unwrap();
         let shown: Vec<&Element> = scene.visible().collect();
         assert_eq!(back.scene.elements.iter().collect::<Vec<_>>(), shown);
+    }
+
+    #[test]
+    fn a_frame_alone() {
+        // A frame at 100,100 (200 × 100, half opaque), a box in it, an
+        // ellipse across its edge, a box away from it, another frame over
+        // it with a box of its own.
+        let scene = crate::file::scene_from_json(
+            &serde_json::json!({
+                "type": "excalidraw",
+                "elements": [
+                    {"id": "inside", "type": "rectangle", "x": 120, "y": 120, "width": 40,
+                     "height": 40, "frameId": "f", "opacity": 80, "strokeColor": "#111111"},
+                    {"id": "f", "type": "frame", "x": 100, "y": 100, "width": 200, "height": 100,
+                     "name": "Plan", "opacity": 50},
+                    {"id": "across", "type": "ellipse", "x": 280, "y": 150, "width": 60,
+                     "height": 30, "strokeColor": "#222222"},
+                    {"id": "away", "type": "rectangle", "x": 500, "y": 500, "width": 20,
+                     "height": 20, "strokeColor": "#333333"},
+                    {"id": "g", "type": "frame", "x": 250, "y": 50, "width": 100, "height": 100},
+                    {"id": "other", "type": "rectangle", "x": 260, "y": 120, "width": 30,
+                     "height": 20, "frameId": "g", "strokeColor": "#444444"},
+                ],
+            }),
+            &mut Ids::new(1),
+        )
+        .unwrap();
+        let opts = SvgOptions {
+            frame: Some("f".into()),
+            ..SvgOptions::default()
+        };
+        let svg = export(&scene, &opts);
+        // The frame's size, no padding.
+        assert!(svg.starts_with(
+            r#"<svg version="1.1" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 100" width="200" height="100">"#
+        ));
+        // Every frame's clip path with square corners; the frame's own is
+        // where it is in the image.
+        assert!(svg.contains(r#"<clipPath id="f"><rect transform="translate(0 0) rotate(0 100 50)" width="200" height="100"></rect></clipPath>"#));
+        assert!(svg.contains(r#"<clipPath id="g"><rect transform="translate(150 -50) rotate(0 50 50)" width="100" height="100"></rect></clipPath>"#));
+        // The background, then everything in one group cut to the frame
+        // (nothing cut to its frame on its own).
+        let body = body(&svg);
+        assert!(body.starts_with(concat!(
+            r##"</style></defs><rect x="0" y="0" width="200" height="100" fill="#ffffff"></rect>"##,
+            r#"<g clip-path="url(#f)"><g stroke-opacity="0.4" fill-opacity="0.4" stroke-linecap="round" transform="translate(20 20) rotate(0 20 20)">"#,
+        )));
+        assert!(body.ends_with("</g></svg>"));
+        assert_eq!(body.matches("clip-path=").count(), 1);
+        // What overlaps it is drawn; not what is away or in the other frame,
+        // nor the frames' outlines or names.
+        assert!(body.contains("#111111") && body.contains("#222222"));
+        assert!(!body.contains("#333333") && !body.contains("#444444"));
+        assert!(!body.contains(FRAME_STROKE) && !body.contains("Plan"));
+        // Not there: the whole drawing.
+        let missing = export(
+            &scene,
+            &SvgOptions {
+                frame: Some("nothing".into()),
+                ..SvgOptions::default()
+            },
+        );
+        assert_eq!(missing, export(&scene, &SvgOptions::default()));
+        // What is inside the image: what it was given.
+        let part = crate::export::Part::selected(&scene, &["f".to_string()]);
+        let svg = export(
+            &part.scene,
+            &SvgOptions {
+                embed_scene: true,
+                ..opts
+            },
+        );
+        let back = crate::file::read_drawing_bytes(svg.as_bytes(), &mut Ids::new(1)).unwrap();
+        let ids: Vec<&str> = back.scene.elements.iter().map(Element::id).collect();
+        assert_eq!(ids, ["inside", "f", "across", "g"]);
     }
 
     #[test]

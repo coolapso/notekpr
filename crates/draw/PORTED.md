@@ -29,6 +29,7 @@ end.
 | frames: what is in them, their names (`edit/frame.rs`) | Excalidraw | (c) 2020 Excalidraw |
 | the library: its items, what can't go in, duplicates (`library.rs`, `edit/library.rs`) | Excalidraw | (c) 2020 Excalidraw |
 | the drawing inside PNG and SVG pictures of it (`embed.rs`: `data/image.ts`, `data/encode.ts`, `scene/export.ts`) | Excalidraw | (c) 2020 Excalidraw |
+| what a picture of a drawing shows: the selection, a frame exported alone (`export.rs`, `svg.rs`: `data/index.ts`'s `prepareElementsForExport`, `scene/export.ts`'s `exportingFrame`, `frame.ts`'s `getElementsOverlappingFrame`) | Excalidraw | (c) 2020 Excalidraw |
 | compression of Obsidian's drawings | lz-string 1.5 | (c) 2013 pieroxy |
 | `Math.sin`, `Math.cos`, `Math.tan`, `Math.acos` | fdlibm 5.3, as in V8 | (c) 1993 Sun Microsystems; the V8 project authors |
 | `Math.hypot` | V8 | the V8 project authors |

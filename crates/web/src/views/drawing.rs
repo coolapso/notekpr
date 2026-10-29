@@ -579,6 +579,14 @@ pub fn DrawingView(vault: String, id: String) -> impl IntoView {
         export_open.set(false);
         b.with_value(|b| b.export(kind));
     };
+    // A frame selected on its own: the pictures show it alone.
+    let frame_alone = move || {
+        rev.get();
+        b.with_value(|b| b.frame_alone())
+    };
+    let picture = move |whole: &'static str, frame: &'static str| {
+        move || if frame_alone() { frame } else { whole }
+    };
     let on_key_up = move |ev: web_sys::KeyboardEvent| {
         if ev.key() == " " {
             su.set(false);
@@ -630,19 +638,19 @@ pub fn DrawingView(vault: String, id: String) -> impl IntoView {
                         <div class="menu right" on:click=|ev| ev.stop_propagation()>
                             <div class="menu-label">"Download as"</div>
                             <button on:click=move |_| export(Export::Drawing)><Icon name="drawing"/>" Drawing (.drawing)"</button>
-                            <button on:click=move |_| export(Export::Svg)><Icon name="image"/>" SVG image"</button>
-                            <button on:click=move |_| export(Export::Png)><Icon name="image"/>" PNG image"</button>
+                            <button on:click=move |_| export(Export::Svg)><Icon name="image"/>{picture(" SVG image", " SVG image of the frame")}</button>
+                            <button on:click=move |_| export(Export::Png)><Icon name="image"/>{picture(" PNG image", " PNG image of the frame")}</button>
                             <button on:click=move |_| export(Export::Excalidraw)><Icon name="file"/>" Excalidraw (.excalidraw)"</button>
                             <button on:click=move |_| export(Export::Obsidian)><Icon name="file"/>" Obsidian Excalidraw (.excalidraw.md)"</button>
                             <div class="menu-sep"></div>
                             <button on:click=move |_| {
                                 export_open.set(false);
                                 b.with_value(|b| b.copy_as(true));
-                            } title="Shift+Alt+C"><Icon name="copy"/>" Copy as PNG"</button>
+                            } title="Shift+Alt+C"><Icon name="copy"/>{picture(" Copy as PNG", " Copy the frame as PNG")}</button>
                             <button on:click=move |_| {
                                 export_open.set(false);
                                 b.with_value(|b| b.copy_as(false));
-                            }><Icon name="copy"/>" Copy as SVG"</button>
+                            }><Icon name="copy"/>{picture(" Copy as SVG", " Copy the frame as SVG")}</button>
                             <button on:click=move |_| {
                                 export_open.set(false);
                                 b.with_value(|b| b.copy_embed());

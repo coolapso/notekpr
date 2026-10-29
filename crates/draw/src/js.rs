@@ -5,7 +5,7 @@
 
 mod math;
 
-pub use math::{acos, atan2, cos, sin, tan};
+pub use math::{acos, asin, atan, atan2, cos, sin, tan};
 
 /// `Math.imul`: 32-bit integer multiplication, wrapping.
 pub fn imul(a: i32, b: i32) -> i32 {

@@ -537,8 +537,8 @@ fn arc_points(
         let k = sign * (left / right).abs().sqrt();
         cx = k * r1 * y / r2 + (x1 + x2) / 2.0;
         cy = k * -r2 * x / r1 + (y1 + y2) / 2.0;
-        f1 = js::fixed((y1 - cy) / r2, 9).asin();
-        f2 = js::fixed((y2 - cy) / r2, 9).asin();
+        f1 = js::asin(js::fixed((y1 - cy) / r2, 9));
+        f2 = js::asin(js::fixed((y2 - cy) / r2, 9));
         if x1 < cx {
             f1 = PI - f1;
         }

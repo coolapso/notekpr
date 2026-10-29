@@ -108,7 +108,9 @@ read anything.
   ends that meet close a line.
 * Sticky notes whose text shrinks to fit, with the day they were made at
   their foot; frames that hold what you draw or drop in them, move and
-  clip it, renamed by double-clicking their name.
+  clip it, renamed by double-clicking their name. A frame selected on its
+  own is exported alone, as in Excalidraw: its PNG or SVG (or a copy) is
+  just what is in the frame, cut to it.
 * The grid (`Ctrl+'`, part of the drawing) and snapping to other shapes'
   edges, centres and equal gaps (`Alt+S`, your own setting; `Ctrl` while
   dragging turns it off for that drag).

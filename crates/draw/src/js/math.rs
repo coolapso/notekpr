@@ -1,5 +1,5 @@
-//! `Math.sin`, `Math.cos`, `Math.tan`, `Math.acos` and `Math.atan2`,
-//! computed the same everywhere.
+//! `Math.sin`, `Math.cos`, `Math.tan`, `Math.acos`, `Math.asin`,
+//! `Math.atan` and `Math.atan2`, computed the same everywhere.
 //!
 //! The C library's functions (what Rust's `f64::sin` calls) differ from one
 //! platform to the next in the last bit, and Rust on wasm32 brings its own;
@@ -11,8 +11,12 @@
 //!   (`src/base/ieee754.cc`). With them, perfect-freehand's test snapshots
 //!   (computed in V8) come out exactly; with glibc's, 17 of their points
 //!   end a few ulps off. Firefox uses fdlibm too; some Chrome builds use a
-//!   port of glibc's.
-//! * `atan2` is correctly rounded (see [`atan2`]).
+//!   port of glibc's, and Chromium 156 rounds all four correctly (an ulp
+//!   from fdlibm's on 3 to 8% of arguments).
+//! * `atan2`, `atan` and `asin` are correctly rounded (see [`atan2`]), as
+//!   V8 computes them in Chromium 156: `atan` and `asin` agree with it bit
+//!   for bit on 96,000 arguments (all but a few below 2^-1015, where V8 is
+//!   an ulp low); fdlibm's are an ulp off on 4% of them.
 //!
 //! The fdlibm parts carry its notice (and V8's: see `crates/draw/PORTED.md`):
 //!
@@ -796,11 +800,11 @@ fn atan_dd(t: Dd) -> Dd {
 /// `Math.atan2(y, x)`, correctly rounded: computed with about 100 bits,
 /// then rounded once.
 ///
-/// Not fdlibm's (V8's and Firefox's port), which is up to about an ulp off:
-/// the browser that exported `tests/fixtures/example.svg` computed it this
-/// accurately, and fdlibm's value turns one rounded corner of a stroke
-/// there by a different number of steps. glibc's and Apple's `atan2` agree
-/// with this one.
+/// Not fdlibm's (Firefox's port, and older V8's), which is up to about an
+/// ulp off: the browser that exported `tests/fixtures/example.svg` computed
+/// it this accurately, and fdlibm's value turns one rounded corner of a
+/// stroke there by a different number of steps. glibc's and Apple's
+/// `atan2` agree with this one, and so does V8's in Chromium 156.
 pub fn atan2(y: f64, x: f64) -> f64 {
     use std::f64::consts::{FRAC_PI_2, FRAC_PI_4, PI};
 
@@ -854,6 +858,43 @@ pub fn atan2(y: f64, x: f64) -> f64 {
     }
     let v = z.hi + z.lo;
     if y < 0.0 { -v } else { v }
+}
+
+/// `Math.atan`, correctly rounded: [`atan2`]`(x, 1)`.
+pub fn atan(x: f64) -> f64 {
+    atan2(x, 1.0)
+}
+
+/// √a for a double-double `a >= 0`.
+fn dd_sqrt(a: Dd) -> Dd {
+    if a.hi <= 0.0 {
+        return Dd::from(0.0);
+    }
+    let s = a.hi.sqrt();
+    let r = dd_sub(a, two_prod(s, s));
+    fast_two_sum(s, r.hi / (2.0 * s))
+}
+
+/// `Math.asin`, correctly rounded: atan(|x| / √(1 - x²)) with about 100
+/// bits, 1 - x² as (1 - |x|)(1 + |x|), then rounded once.
+pub fn asin(x: f64) -> f64 {
+    let a = x.abs();
+    if x.is_nan() || a > 1.0 {
+        return f64::NAN;
+    }
+    if a == 0.0 {
+        // ±0
+        return x;
+    }
+    let c = dd_sqrt(dd_mul(two_sum(1.0, -a), two_sum(1.0, a)));
+    // As atan2: the smaller over the larger, in [0, 1].
+    let z = if a <= c.hi {
+        atan_dd(dd_div(Dd::from(a), c))
+    } else {
+        dd_sub(PI_O_2_DD, atan_dd(dd_div(c, Dd::from(a))))
+    };
+    let v = z.hi + z.lo;
+    if x < 0.0 { -v } else { v }
 }
 
 #[cfg(test)]
@@ -1027,6 +1068,57 @@ mod tests {
     }
 
     #[test]
+    fn atan_and_asin_as_v8() {
+        // `Math.atan` and `Math.asin` in Chromium 156. fdlibm's (Firefox's;
+        // V8's before) rounds each of these the other way, and glibc's
+        // those marked; one per range fdlibm's `atan` and `asin` treat
+        // apart.
+        for (x, v8) in [
+            (-0.12140910334916244, -0.12081779391672332), // glibc
+            (-0.3059792004128391, -0.29693323229633845),
+            (0.6371744699820336, 0.5673061283351711),
+            (0.9557169693231335, 0.7627591692382668), // glibc
+            (1.4084775994124437, 0.9533994488666656), // glibc
+            (-1.3931691041386736, -0.9482316297959211),
+            (6.143111076980652, 1.409427771838373), // glibc
+            (-3.480384192965394, -1.2910085197261847),
+        ] {
+            assert_eq!(atan(x), v8, "atan({x:e})");
+            assert_eq!(atan(-x), -v8, "atan({:e})", -x);
+        }
+        for (x, v8) in [
+            (0.09036477333108645, 0.09048821078304195), // glibc
+            (0.3574306640214754, 0.36551536743780266),
+            (0.5282203521910387, 0.5565032912372091), // glibc
+            (0.8050036351435284, 0.9356815954880829),
+            (0.9892542055164536, 1.4240646316978454), // glibc
+            (-0.9806503395168527, -1.3737563001700093),
+        ] {
+            assert_eq!(asin(x), v8, "asin({x:e})");
+            assert_eq!(asin(-x), -v8, "asin({:e})", -x);
+        }
+        // And glibc's alone rounds these the other way.
+        assert_eq!(atan(-0.19860685306786333), -0.19605563731124334);
+        assert_eq!(atan(-7.8470212198559715), -1.4440426543826153);
+        assert_eq!(asin(-0.18375413532084728), -0.1848042653482214);
+        // Ends and edges.
+        assert_eq!(atan(1.0), PI / 4.0);
+        assert_eq!(atan(f64::INFINITY), FRAC_PI_2);
+        assert_eq!(atan(-1e300), -FRAC_PI_2);
+        assert_eq!(atan(1e-300), 1e-300);
+        assert!(atan(-0.0).is_sign_negative() && atan(f64::NAN).is_nan());
+        assert_eq!(asin(1.0), FRAC_PI_2);
+        assert_eq!(asin(-1.0), -FRAC_PI_2);
+        // 0.5235987755982989: π/6 rounded (`Math.PI / 6` is an ulp below).
+        assert_eq!(asin(0.5), std::f64::consts::FRAC_PI_6);
+        assert_eq!(asin(0.5), PI / 6.0 + 1.1102230246251565e-16);
+        assert_eq!(asin(0.9999999999999999), 1.5707963118937354);
+        assert_eq!(asin(1e-300), 1e-300);
+        assert!(asin(-0.0).is_sign_negative());
+        assert!(asin(1.0000000000000002).is_nan() && asin(f64::NAN).is_nan());
+    }
+
+    #[test]
     fn close_to_the_c_library() {
         // Not a reference (it rounds differently now and then), but a slip
         // in the port would be far more than an ulp off.
@@ -1038,12 +1130,14 @@ mod tests {
                 assert!(ulps(atan2(v, 1.3), v.atan2(1.3)) <= 1, "atan2 {v:e}");
                 assert!(ulps(atan2(-2.0, v), (-2.0f64).atan2(v)) <= 1, "atan2 {v:e}");
                 assert!(ulps(tan(v), v.tan()) <= 1, "tan {v:e}");
+                assert!(ulps(atan(v), v.atan()) <= 1, "atan {v:e}");
             }
             x *= 1.21;
         }
         let mut x = -1.0;
         while x <= 1.0 {
             assert!(ulps(acos(x), x.acos()) <= 1, "acos {x:e}");
+            assert!(ulps(asin(x), x.asin()) <= 1, "asin {x:e}");
             x += 0.00173;
         }
         for v in [

@@ -183,6 +183,22 @@ def main():
         line = next(e for e in drawing() if e["type"] == "line")
         check(len(line["points"]) == 2, "a point deleted while editing the line's points")
 
+        # A line takes a label too (Excalidraw labels arrows only): a
+        # double-click on it.
+        tool(a, KEYS["escape"])
+        tool(a, "l")
+        drag(a, (-50, -260), (150, -260))
+        el = {"element-6066-11e4-a52e-4f735466cecf": a.find(CANVAS)}
+        req("POST", a.p("/actions"), {"actions": [{"type": "pointer", "id": "mouse", "parameters": {"pointerType": "mouse"},
+            "actions": [{"type": "pointerMove", "origin": el, "x": 50, "y": -260}] + click + click}]})
+        time.sleep(0.5)
+        a.keys("path")
+        a.keys(KEYS["escape"])
+        els = drawing()
+        lines = {e["id"] for e in els if e["type"] == "line"}
+        check(any(e["type"] == "text" and e.get("containerId") in lines and e["originalText"] == "path" for e in els),
+              "a double-click labels a line")
+
         # Alt+drag: a copy of the box moves, the box stays.
         tool(a, KEYS["escape"])
         a.click_at(CANVAS, -250, -100)
@@ -618,6 +634,18 @@ def main():
         a.shot("drawings-history")
         a.chord(KEYS["escape"])
 
+        # In the graph, linked with a note that shows it.
+        r = cli("write", "Art", "Board.md", input="The plan: ![[Untitled drawing.drawing]]\n")
+        check(r.returncode == 0, "a note showing the drawing")
+        a.js("document.querySelector('.modal button[aria-label=\"Close\"]')?.click()")
+        a.wait("return !document.querySelector('.modal-back')", 5, "no dialog open")
+        a.find_text(".tree-item", "Board", 20)
+        a.click(".sb-graph")
+        a.find(".graph-page canvas", 10)
+        a.wait("return Array.from(document.querySelectorAll('.graph-page .graph-list button'))"
+               ".some(e => e.textContent === 'Untitled drawing (1 links)' || e.textContent === 'Untitled drawing (1 link)')",
+               10, "the drawing in the graph")
+        check(True, "the graph shows the drawing, linked with the note that shows it")
         a.shot("drawings")
         check(not severe_logs(a), "no browser errors")
         print("ALL PASSED")

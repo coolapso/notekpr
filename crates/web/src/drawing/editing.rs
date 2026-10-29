@@ -437,3 +437,170 @@ pub struct TextBox {
     pub text: String,
     pub angle: f64,
 }
+
+/// What a drawing can be exported as.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Export {
+    /// Excalidraw's own file.
+    Excalidraw,
+    /// Obsidian's Excalidraw plugin's.
+    Obsidian,
+    Svg,
+    Png,
+}
+
+impl Board {
+    /// Where the pointer last was, in the drawing (else the view's middle).
+    fn paste_point(&self) -> [f64; 2] {
+        let v = self.view.get();
+        v.to_scene(
+            self.last_pointer
+                .get()
+                .unwrap_or([v.width / 2.0, v.height / 2.0]),
+        )
+    }
+
+    pub fn note_pointer(&self, p: [f64; 2]) {
+        self.last_pointer.set(Some(p));
+    }
+
+    /// What is selected, for the clipboard (Excalidraw's format).
+    pub fn copy(&self) -> Option<String> {
+        let scene = self.scene();
+        self.editor.borrow().copy(&scene)
+    }
+
+    /// Pastes clipboard text: elements (Excalidraw's or ours), else a text.
+    pub fn paste(self: &Rc<Self>, text: &str) {
+        if !self.writable() || text.is_empty() {
+            return;
+        }
+        let at = self.paste_point();
+        let mut ids = notekpr_draw::restore::Ids::new(js_sys::Date::now() as u64);
+        match notekpr_draw::file::read_drawing(text, &mut ids) {
+            Ok(d) => {
+                // The pictures they show come along.
+                let files = d.scene.files.clone();
+                if !files.is_empty() {
+                    self.put_files(&files);
+                }
+                self.command(move |ed, s, r| ed.paste(s, &d.scene.elements, at, r));
+            }
+            Err(_) => {
+                let text = text.replace("\r\n", "\n");
+                self.command(move |ed, s, r| {
+                    let mut t =
+                        notekpr_draw::edit::new::text(at[0], at[1], &text, &ed.style, &measure, r);
+                    let top = s.elements.iter().filter_map(Element::index).max();
+                    t.set(
+                        "index",
+                        notekpr_draw::order::key_between(top, None)
+                            .map_or(Value::Null, Value::String),
+                    );
+                    t.set("x", notekpr_draw::scene::num(at[0] - t.width() / 2.0));
+                    t.set("y", notekpr_draw::scene::num(at[1] - t.height() / 2.0));
+                    ed.selection = vec![t.id().to_string()];
+                    Output {
+                        changed: vec![t],
+                        done: true,
+                        ..Output::default()
+                    }
+                });
+            }
+        }
+    }
+
+    /// Adds pictures to the drawing's files.
+    fn put_files(&self, files: &notekpr_draw::scene::Props) {
+        let (v, id) = (self.vault.clone(), self.id.clone());
+        step(|c| {
+            let Some(d) = c.replicas.get_mut(&v).and_then(|r| r.notes.get_mut(&id)) else {
+                return;
+            };
+            if let Some(u) = d.drawing().put_files(files) {
+                state::local_update(c, &v, &id, u);
+            }
+        });
+    }
+
+    /// The drawing's file name for exports: its title.
+    fn export_name(&self) -> String {
+        step(|c| c.entry(&self.vault, &self.id))
+            .map(|e| e.title().to_string())
+            .unwrap_or_else(|| "Drawing".into())
+    }
+
+    /// Downloads the drawing as `kind`.
+    pub fn export(self: &Rc<Self>, kind: Export) {
+        self.write();
+        let scene = self.reread();
+        let name = self.export_name();
+        let dark = crate::drawings::is_dark();
+        match kind {
+            Export::Excalidraw => util::download(
+                &format!("{name}.excalidraw"),
+                "application/vnd.excalidraw+json",
+                notekpr_draw::file::write_excalidraw(&scene).as_bytes(),
+            ),
+            Export::Obsidian => {
+                let mut ids = notekpr_draw::restore::Ids::new(js_sys::Date::now() as u64);
+                util::download(
+                    &format!("{name}.excalidraw.md"),
+                    "text/markdown",
+                    notekpr_draw::obsidian::write(&scene, true, &mut ids).as_bytes(),
+                )
+            }
+            Export::Svg => {
+                let (v, id) = (self.vault.clone(), self.id.clone());
+                leptos::task::spawn_local(async move {
+                    // The preview's fonts are inside: the file stands alone.
+                    if let Some(svg) = crate::drawings::standalone_svg(&v, &id, dark).await {
+                        util::download(&format!("{name}.svg"), "image/svg+xml", svg.as_bytes());
+                    }
+                });
+            }
+            Export::Png => {
+                let Some(png) = png_of(&scene, dark) else {
+                    crate::state::error("The picture could not be made.");
+                    return;
+                };
+                util::download(&format!("{name}.png"), "image/png", &png);
+            }
+        }
+    }
+}
+
+/// The drawing as a PNG picture, twice its size (sharp on dense screens).
+fn png_of(scene: &Scene, dark: bool) -> Option<Vec<u8>> {
+    const SCALE: f64 = 2.0;
+    const PAD: f64 = 10.0;
+    let [x1, y1, x2, y2] =
+        notekpr_draw::bounds::common_bounds(notekpr_draw::bounds::root_elements(scene));
+    let (w, h) = ((x2 - x1).abs() + PAD * 2.0, (y2 - y1).abs() + PAD * 2.0);
+    let canvas: web_sys::HtmlCanvasElement = util::document()
+        .create_element("canvas")
+        .ok()?
+        .dyn_into()
+        .ok()?;
+    canvas.set_width((w * SCALE).ceil() as u32);
+    canvas.set_height((h * SCALE).ceil() as u32);
+    let ctx: web_sys::CanvasRenderingContext2d = canvas.get_context("2d").ok()??.dyn_into().ok()?;
+    let view = notekpr_draw::viewport::Viewport {
+        scroll_x: PAD - x1,
+        scroll_y: PAD - y1,
+        zoom: 1.0,
+        width: w,
+        height: h,
+    };
+    super::canvas::draw_scene(
+        &ctx,
+        scene,
+        &view,
+        SCALE,
+        dark,
+        &mut super::canvas::ShapeCache::default(),
+    );
+    let url = canvas.to_data_url_with_type("image/png").ok()?;
+    let b64 = url.split_once(',')?.1;
+    notekpr_core::b64::decode(b64).ok()
+}

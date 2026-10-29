@@ -56,6 +56,8 @@ pub struct Board {
     /// Told the text to edit (or "" when editing ends).
     on_edit_text: RefCell<Option<Box<dyn Fn(String)>>>,
     text_draft: RefCell<String>,
+    /// Where the pointer last was on the canvas (pastes go there).
+    last_pointer: Cell<Option<[f64; 2]>>,
 }
 
 pub type Rt = Rc<Board>;
@@ -85,6 +87,7 @@ impl Board {
             on_change: RefCell::new(None),
             on_edit_text: RefCell::new(None),
             text_draft: RefCell::new(String::new()),
+            last_pointer: Cell::new(None),
         })
     }
 

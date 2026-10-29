@@ -121,6 +121,21 @@ async fn font_faces(scene: &Scene) -> String {
     rules.join("\n      ")
 }
 
+/// The drawing as an SVG file of its own, its fonts inside.
+pub async fn standalone_svg(vault: &str, id: &str, dark: bool) -> Option<String> {
+    let scene = scene(vault, id)?;
+    let font_faces = font_faces(&scene).await;
+    Some(svg::export(
+        &scene,
+        &SvgOptions {
+            dark,
+            font_faces: Some(font_faces),
+            standalone: true,
+            ..SvgOptions::default()
+        },
+    ))
+}
+
 /// Makes the drawing's preview (when it changed since the last one): its
 /// URL, or `None` if the drawing isn't loaded.
 pub async fn load_preview(vault: &str, id: &str) -> Option<String> {

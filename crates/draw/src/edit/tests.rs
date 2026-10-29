@@ -382,3 +382,60 @@ fn resizing_and_turning_through_handles() {
     );
     assert!((scene.elements[0].angle() - std::f64::consts::FRAC_PI_2).abs() < 0.01);
 }
+
+#[test]
+fn copy_and_paste_with_new_ids() {
+    let (mut ed, mut scene, mut rng) = (Editor::default(), Scene::default(), Seq(0));
+    ed.set_tool(Tool::Rectangle);
+    drag(
+        &mut ed,
+        &mut scene,
+        [0.0, 0.0],
+        [100.0, 100.0],
+        Mods::default(),
+        &mut rng,
+    );
+    ed.set_tool(Tool::Arrow);
+    drag(
+        &mut ed,
+        &mut scene,
+        [200.0, 0.0],
+        [300.0, 0.0],
+        Mods::default(),
+        &mut rng,
+    );
+    // The arrow points at the rectangle.
+    let (rect, arrow) = (
+        scene.elements[0].id().to_string(),
+        scene.elements[1].id().to_string(),
+    );
+    if let Some(a) = scene.elements.iter_mut().find(|e| e.id() == arrow) {
+        a.set("startBinding", json!({"elementId": rect, "mode": "orbit"}));
+    }
+    ed.select_all(&scene);
+    let clip = ed.copy(&scene).unwrap();
+    // Read back as any clipboard text would be.
+    let pasted = crate::file::read_drawing(&clip, &mut crate::restore::Ids::new(9))
+        .unwrap()
+        .scene
+        .elements;
+    let o = ed.paste(&scene, &pasted, [1000.0, 1000.0], &mut rng);
+    apply(&mut scene, &o);
+    assert_eq!(scene.visible().count(), 4);
+    let copies: Vec<&Element> = scene.visible().filter(|e| ed.is_selected(e.id())).collect();
+    assert_eq!(copies.len(), 2);
+    let b = bounds::common_bounds(copies.iter().copied());
+    // (A new seed wobbles the arrow a little differently.)
+    assert!(((b[0] + b[2]) / 2.0 - 1000.0).abs() < 5.0);
+    // The copied arrow points at the copied rectangle.
+    let new_arrow = copies
+        .iter()
+        .find(|e| e.kind() == ElementType::Arrow)
+        .unwrap();
+    let new_rect = copies
+        .iter()
+        .find(|e| e.kind() == ElementType::Rectangle)
+        .unwrap();
+    assert_eq!(new_arrow.start_binding().unwrap().element_id, new_rect.id());
+    assert!(copies.iter().all(|e| e.id() != rect && e.id() != arrow));
+}

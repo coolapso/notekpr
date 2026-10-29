@@ -967,14 +967,58 @@ impl Editor {
     /// Copies of what is selected, a little further (Ctrl+D), selected
     /// instead; groups and labels copied with new ids.
     pub fn duplicate(&mut self, scene: &Scene, rng: &mut dyn Random) -> Output {
-        let mut out = Output::default();
         let originals = self.moving_set(scene);
+        self.place_copies(scene, &originals, [10.0, 10.0], rng)
+    }
+
+    /// What is selected, as Excalidraw puts it on the clipboard (with labels
+    /// and the pictures it shows).
+    pub fn copy(&self, scene: &Scene) -> Option<String> {
+        let set = self.moving_set(scene);
+        if set.is_empty() {
+            return None;
+        }
+        let refs: Vec<&Element> = set.iter().collect();
+        Some(crate::file::write_clipboard(&refs, &scene.files))
+    }
+
+    /// Pastes elements (from the clipboard: Excalidraw's or ours), centred
+    /// on `at`; they get new ids and are selected.
+    pub fn paste(
+        &mut self,
+        scene: &Scene,
+        pasted: &[Element],
+        at: Point,
+        rng: &mut dyn Random,
+    ) -> Output {
+        let visible: Vec<Element> = pasted.iter().filter(|e| !e.is_deleted()).cloned().collect();
+        if visible.is_empty() {
+            return Output::default();
+        }
+        let [x1, y1, x2, y2] = bounds::common_bounds(visible.iter());
+        let offset = [at[0] - (x1 + x2) / 2.0, at[1] - (y1 + y2) / 2.0];
+        self.tool = Tool::Selection;
+        let mut out = self.place_copies(scene, &visible, offset, rng);
+        out.tool_changed = true;
+        out
+    }
+
+    /// Copies of `originals` moved by `offset`, on top, with new ids (and
+    /// what refers to them following), selected.
+    fn place_copies(
+        &mut self,
+        scene: &Scene,
+        originals: &[Element],
+        offset: Point,
+        rng: &mut dyn Random,
+    ) -> Output {
+        let mut out = Output::default();
         if originals.is_empty() {
             return out;
         }
         let mut ids: HashMap<String, String> = HashMap::new();
         let mut groups: HashMap<String, String> = HashMap::new();
-        for o in &originals {
+        for o in originals {
             ids.insert(o.id().to_string(), rng.id());
             for g in o.group_ids() {
                 if !groups.contains_key(g) {
@@ -989,21 +1033,25 @@ impl Editor {
             .max()
             .map(str::to_string);
         let mut selection = Vec::new();
-        for o in &originals {
+        let mut ordered: Vec<&Element> = originals.iter().collect();
+        ordered.sort_by(|a, b| a.index().cmp(&b.index()));
+        for o in ordered {
             let mut e = o.clone();
             let new_id = ids[o.id()].clone();
             e.set("id", json!(new_id));
-            e.set("x", num(o.x() + 10.0));
-            e.set("y", num(o.y() + 10.0));
+            e.set("x", num(o.x() + offset[0]));
+            e.set("y", num(o.y() + offset[1]));
             e.set("seed", json!(rng.seed()));
             e.set("version", json!(1));
+            e.set("isDeleted", json!(false));
             index = order::key_between(index.as_deref(), None);
             e.set("index", index.clone().map_or(Value::Null, Value::String));
             let gids: Vec<Value> = o.group_ids().iter().map(|g| json!(groups[*g])).collect();
             e.set("groupIds", Value::Array(gids));
-            // References inside the copy point at the copies.
-            if let Some(c) = o.container_id().and_then(|c| ids.get(c)) {
-                e.set("containerId", json!(c));
+            // References inside the copies point at the copies; the rest go.
+            let container = o.container_id().and_then(|c| ids.get(c)).cloned();
+            if o.container_id().is_some() {
+                e.set("containerId", container.map_or(Value::Null, Value::String));
             }
             let bound: Vec<Value> = o
                 .bound_elements()
@@ -1019,10 +1067,22 @@ impl Editor {
                 },
             );
             for k in ["startBinding", "endBinding"] {
-                e.set(k, Value::Null);
+                let rebound = o.get(k).and_then(Value::as_object).and_then(|b| {
+                    let target = ids.get(b.get("elementId")?.as_str()?)?;
+                    let mut b = b.clone();
+                    b.insert("elementId".into(), json!(target));
+                    Some(Value::Object(b))
+                });
+                if o.get(k).is_some() {
+                    e.set(k, rebound.unwrap_or(Value::Null));
+                }
+            }
+            if e.get("frameId").and_then(Value::as_str).is_some() {
+                let f = o.frame_id().and_then(|f| ids.get(f)).cloned();
+                e.set("frameId", f.map_or(Value::Null, Value::String));
             }
             bump(&mut e, rng);
-            if o.container_id().is_none() {
+            if o.container_id().is_none_or(|c| !ids.contains_key(c)) {
                 selection.push(new_id);
             }
             out.changed.push(e);

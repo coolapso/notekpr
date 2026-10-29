@@ -18,7 +18,7 @@ use wasm_bindgen::JsCast;
 
 use super::icons::Icon;
 use crate::drawing::Board;
-use crate::drawing::editing::{TextBox, mods};
+use crate::drawing::editing::{Export, TextBox, mods};
 use crate::state::{self, ui};
 
 /// A note or a drawing, by id.
@@ -197,6 +197,7 @@ pub fn DrawingView(vault: String, id: String) -> impl IntoView {
         let pressure = (ev.pointer_type() == "pen").then(|| ev.pressure() as f64);
         let m = mods(ev.shift_key(), ev.alt_key(), ev.ctrl_key() || ev.meta_key());
         b.with_value(|b| {
+            b.note_pointer(at(&ev));
             b.pointer_move(at(&ev), pressure, m);
             if let Some(c) = canvas_ref.get_untracked() {
                 let el: &web_sys::HtmlElement = c.unchecked_ref();
@@ -324,6 +325,67 @@ pub fn DrawingView(vault: String, id: String) -> impl IntoView {
             ev.stop_propagation();
         }
     };
+    // The clipboard: Excalidraw's format both ways, plain text as a text.
+    let on_copy = move |ev: web_sys::ClipboardEvent| {
+        if editing.get_untracked().is_some() {
+            return;
+        }
+        if let (Some(data), Some(text)) = (ev.clipboard_data(), b.with_value(|b| b.copy())) {
+            let _ = data.set_data("text/plain", &text);
+            ev.prevent_default();
+        }
+    };
+    let on_cut = move |ev: web_sys::ClipboardEvent| {
+        if editing.get_untracked().is_some() || !writable.get_untracked() {
+            return;
+        }
+        if let (Some(data), Some(text)) = (ev.clipboard_data(), b.with_value(|b| b.copy())) {
+            let _ = data.set_data("text/plain", &text);
+            ev.prevent_default();
+            b.with_value(|b| b.command(|ed, s, r| ed.delete_selected(s, r)));
+        }
+    };
+    let on_paste = move |ev: web_sys::ClipboardEvent| {
+        if editing.get_untracked().is_some() {
+            return;
+        }
+        let text = ev
+            .clipboard_data()
+            .and_then(|d| d.get_data("text/plain").ok())
+            .unwrap_or_default();
+        if !text.is_empty() {
+            ev.prevent_default();
+            b.with_value(|b| b.paste(&text));
+        }
+    };
+    // A drawing file dropped on the canvas: its elements come in.
+    let on_drop = move |ev: web_sys::DragEvent| {
+        let Some(files) = ev.data_transfer().and_then(|d| d.files()) else {
+            return;
+        };
+        if files.length() == 0 {
+            return;
+        }
+        ev.prevent_default();
+        for i in 0..files.length() {
+            let Some(f) = files.get(i) else { continue };
+            leptos::task::spawn_local(async move {
+                let text = wasm_bindgen_futures::JsFuture::from(f.text())
+                    .await
+                    .ok()
+                    .and_then(|t| t.as_string());
+                if let Some(text) = text {
+                    b.with_value(|b| b.paste(&text));
+                }
+            });
+        }
+    };
+    let export_open = RwSignal::new(false);
+    super::close_on_outside(export_open);
+    let export = move |kind: Export| {
+        export_open.set(false);
+        b.with_value(|b| b.export(kind));
+    };
     let on_key_up = move |ev: web_sys::KeyboardEvent| {
         if ev.key() == " " {
             su.set(false);
@@ -348,10 +410,23 @@ pub fn DrawingView(vault: String, id: String) -> impl IntoView {
             })
     };
     view! {
-        <div class="note-page drawing-page" tabindex="0" node_ref=root_ref on:keydown=on_key on:keyup=on_key_up>
+        <div class="note-page drawing-page" tabindex="0" node_ref=root_ref on:keydown=on_key on:keyup=on_key_up
+            on:copy=on_copy on:cut=on_cut on:paste=on_paste on:drop=on_drop on:dragover=|ev: web_sys::DragEvent| ev.prevent_default()>
             <header class="note-head">
                 <button class="icon-btn mobile-only" title="Menu" aria-label="Menu" on:click=move |_| ui.sidebar.set(true)><Icon name="menu"/></button>
                 <div class="crumbs ellipsis">{move || crumbs.get()}</div>
+                <div class="menu-wrap">
+                    <button class="icon-btn" title="Export" aria-label="Export" aria-expanded=move || export_open.get().to_string()
+                        on:click=move |ev| { ev.stop_propagation(); export_open.update(|o| *o = !*o); }><Icon name="download"/></button>
+                    <Show when=move || export_open.get()>
+                        <div class="menu menu-right" on:click=|ev| ev.stop_propagation()>
+                            <button on:click=move |_| export(Export::Excalidraw)><Icon name="drawing"/>" Excalidraw file (.excalidraw)"</button>
+                            <button on:click=move |_| export(Export::Obsidian)><Icon name="file"/>" Obsidian Excalidraw (.excalidraw.md)"</button>
+                            <button on:click=move |_| export(Export::Svg)><Icon name="image"/>" SVG image"</button>
+                            <button on:click=move |_| export(Export::Png)><Icon name="image"/>" PNG image"</button>
+                        </div>
+                    </Show>
+                </div>
             </header>
             <div class="drawing-stage">
                 <canvas class="drawing-canvas" node_ref=canvas_ref

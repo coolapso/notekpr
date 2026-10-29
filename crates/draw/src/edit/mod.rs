@@ -8,6 +8,7 @@
 //! a preview, at its end for good.
 
 pub mod binding;
+pub mod frame;
 pub mod hit;
 pub mod label;
 pub mod new;
@@ -222,11 +223,13 @@ pub struct Editor {
     pub measure: fn(&str, &str) -> f64,
     /// The zoom of the last pointer event (how near counts).
     zoom: f64,
+    /// The frame where what is drawn or dragged goes (shown).
+    frame_to_highlight: Option<String>,
 }
 
 /// A guess at a line's width without a browser: about half the font size a
 /// character.
-fn guess_width(font: &str, line: &str) -> f64 {
+pub fn guess_width(font: &str, line: &str) -> f64 {
     let size: f64 = font
         .split("px")
         .next()
@@ -246,6 +249,7 @@ impl Default for Editor {
             editing_text: None,
             measure: guess_width,
             zoom: 1.0,
+            frame_to_highlight: None,
         }
     }
 }
@@ -316,6 +320,7 @@ impl Editor {
     pub fn set_tool(&mut self, tool: Tool) {
         self.tool = tool;
         self.gesture = None;
+        self.frame_to_highlight = None;
         if tool != Tool::Selection {
             self.selection.clear();
         }
@@ -411,7 +416,8 @@ impl Editor {
             Tool::Hand | Tool::Laser | Tool::Image => {}
             Tool::Selection => {
                 if let Some(f) = self.frame(scene)
-                    && let Some(h) = transform::handle_at(&f, p, zoom)
+                    && let Some(h) =
+                        transform::handle_at(&f, p, zoom).filter(|h| self.can_use(scene, *h))
                 {
                     let originals = self.moving_set(scene);
                     self.gesture = Some(if h == Handle::Rotation {
@@ -472,14 +478,14 @@ impl Editor {
                         }
                         self.gesture = Some(Gesture::Moving {
                             start: p,
-                            originals: self.moving_set(scene),
+                            originals: self.dragged_set(scene),
                             moved: false,
                         });
                     }
                     _ if in_selection => {
                         self.gesture = Some(Gesture::Moving {
                             start: p,
-                            originals: self.moving_set(scene),
+                            originals: self.dragged_set(scene),
                             moved: false,
                         });
                     }
@@ -520,7 +526,7 @@ impl Editor {
                 let line =
                     self.style.font_size * crate::fonts::get(self.style.font_family).line_height;
                 t.set("y", num(p[1] - line / 2.0));
-                t.set("index", top_index(scene).map_or(Value::Null, Value::String));
+                self.place_new(scene, &mut t, [p[0], p[1] - line / 2.0]);
                 let id = t.id().to_string();
                 self.selection = vec![id.clone()];
                 self.editing_text = Some(id.clone());
@@ -529,7 +535,7 @@ impl Editor {
             }
             Tool::Freedraw => {
                 let mut e = new::freedraw(p[0], p[1], pressure, &self.style, rng);
-                e.set("index", top_index(scene).map_or(Value::Null, Value::String));
+                self.place_new(scene, &mut e, p);
                 self.gesture = Some(Gesture::Pen {
                     id: e.id().to_string(),
                     points: vec![p],
@@ -545,7 +551,7 @@ impl Editor {
                     ElementType::Line
                 };
                 let mut e = new::linear(kind, p[0], p[1], &self.style, rng);
-                e.set("index", top_index(scene).map_or(Value::Null, Value::String));
+                self.place_new(scene, &mut e, p);
                 new::normalize_points(&mut e, &[p, p]);
                 self.gesture = Some(Gesture::Linear {
                     id: e.id().to_string(),
@@ -558,7 +564,7 @@ impl Editor {
             tool => {
                 let kind = tool.shape().expect("a shape tool");
                 let mut e = new::shape(kind, p[0], p[1], &self.style, rng);
-                e.set("index", top_index(scene).map_or(Value::Null, Value::String));
+                self.place_new(scene, &mut e, p);
                 self.gesture = Some(Gesture::Creating {
                     id: e.id().to_string(),
                     origin: p,
@@ -584,6 +590,7 @@ impl Editor {
         self.zoom = zoom;
         let mut out = Output::default();
         let Some(g) = self.gesture.as_mut() else {
+            self.hover_frame(scene, p);
             return out;
         };
         match g {
@@ -726,6 +733,7 @@ impl Editor {
                     bump(&mut e, rng);
                     out.changed.push(e);
                 }
+                self.drag_frame(scene, p);
             }
             Gesture::Resizing {
                 handle,
@@ -820,6 +828,7 @@ impl Editor {
     /// The pointer went up at `p`.
     pub fn pointer_up(&mut self, scene: &Scene, p: Point, rng: &mut dyn Random) -> Output {
         let mut out = Output::default();
+        self.frame_to_highlight = None;
         let Some(g) = self.gesture.take() else {
             return out;
         };
@@ -839,6 +848,13 @@ impl Editor {
                     out.changed.push(gone);
                     out.done = true;
                     return out;
+                }
+                // A frame takes in what is wholly in it.
+                if frame::is_frame(e) {
+                    for mut c in self.frame_drawn(scene, e) {
+                        bump(&mut c, rng);
+                        out.changed.push(c);
+                    }
                 }
                 self.selection = vec![id];
                 out.done = true;
@@ -875,13 +891,32 @@ impl Editor {
             }
             Gesture::Pen { .. } => out.done = true,
             Gesture::Moving { moved, .. } => {
+                // Dropped in a frame, or out of one.
+                if moved {
+                    for mut c in self.dropped(scene, p) {
+                        bump(&mut c, rng);
+                        out.changed.push(c);
+                    }
+                }
                 out.done = moved;
             }
-            Gesture::Resizing { .. } | Gesture::Rotating { .. } => out.done = true,
+            Gesture::Resizing { .. } => {
+                for mut c in self.frames_resized(scene) {
+                    bump(&mut c, rng);
+                    out.changed.push(c);
+                }
+                out.done = true;
+            }
+            Gesture::Rotating { .. } => out.done = true,
             Gesture::BoxSelecting { .. } => {}
             Gesture::Erasing { ids } => {
                 let mut gone = Vec::new();
-                for e in scene.visible().filter(|e| ids.contains(e.id())) {
+                // A frame's children go with it.
+                let children = frame::erased_children(scene, &ids);
+                for e in scene
+                    .visible()
+                    .filter(|e| ids.contains(e.id()) || children.contains(e.id()))
+                {
                     gone.push(e.id().to_string());
                     // Labels go with what they label.
                     for b in e.bound_elements() {
@@ -1008,6 +1043,7 @@ impl Editor {
             return fin;
         }
         self.gesture = None;
+        self.frame_to_highlight = None;
         self.selection.clear();
         Output::default()
     }
@@ -1028,6 +1064,13 @@ impl Editor {
         let Some(e) = scene.element(&id) else {
             return out;
         };
+        if frame::is_frame(e) {
+            let mut f = frame::renamed(e, text);
+            bump(&mut f, rng);
+            out.changed.push(f);
+            out.done = true;
+            return out;
+        }
         let mut e = e.clone();
         let text = text.replace("\r\n", "\n");
         let container = e
@@ -1120,6 +1163,10 @@ impl Editor {
                 let id = e.id().to_string();
                 self.edit_label(scene, &id, rng)
             }
+            // On a frame's name: it is renamed.
+            Some(e) if frame::is_frame(e) && frame::on_name(e, p, zoom, &self.measure, 0.0) => {
+                self.edit_text(e.id())
+            }
             Some(_) => Output::default(),
             None if hit::container_at(scene, p, zoom).is_some() => {
                 let id = hit::container_at(scene, p, zoom)
@@ -1149,6 +1196,10 @@ impl Editor {
             [e] if label::can_hold(e) => {
                 let id = e.id().to_string();
                 self.edit_label(scene, &id, rng)
+            }
+            [e] if frame::is_frame(e) => {
+                let id = e.id().to_string();
+                self.edit_text(&id)
             }
             _ => Output::default(),
         }
@@ -1265,12 +1316,14 @@ impl Editor {
         for e in &mut changed {
             e.set("isDeleted", json!(true));
         }
+        self.selection.clear();
+        // A deleted frame's children stay, selected.
+        self.release_children(scene, &mut changed);
         binding::update_arrows(scene, &mut changed);
         for mut e in changed {
             bump(&mut e, rng);
             out.changed.push(e);
         }
-        self.selection.clear();
         out.done = !out.changed.is_empty();
         out
     }
@@ -1286,7 +1339,7 @@ impl Editor {
     /// Moves what is selected by `dx`, `dy` (arrow keys).
     pub fn nudge(&mut self, scene: &Scene, dx: f64, dy: f64, rng: &mut dyn Random) -> Output {
         let mut out = Output::default();
-        let mut changed = self.moving_set(scene);
+        let mut changed = self.dragged_set(scene);
         for e in &mut changed {
             e.set("x", num(e.x() + dx));
             e.set("y", num(e.y() + dy));
@@ -1303,14 +1356,14 @@ impl Editor {
     /// Copies of what is selected, a little further (Ctrl+D), selected
     /// instead; groups and labels copied with new ids.
     pub fn duplicate(&mut self, scene: &Scene, rng: &mut dyn Random) -> Output {
-        let originals = self.moving_set(scene);
+        let originals = self.dragged_set(scene);
         self.place_copies(scene, &originals, [10.0, 10.0], rng)
     }
 
     /// What is selected, as Excalidraw puts it on the clipboard (with labels
     /// and the pictures it shows).
     pub fn copy(&self, scene: &Scene) -> Option<String> {
-        let set = self.moving_set(scene);
+        let set = self.dragged_set(scene);
         if set.is_empty() {
             return None;
         }
@@ -1335,6 +1388,7 @@ impl Editor {
         let offset = [at[0] - (x1 + x2) / 2.0, at[1] - (y1 + y2) / 2.0];
         self.tool = Tool::Selection;
         let mut out = self.place_copies(scene, &visible, offset, rng);
+        self.paste_into_frame(scene, &mut out.changed, at);
         out.tool_changed = true;
         out
     }
@@ -1413,9 +1467,9 @@ impl Editor {
                     e.set(k, rebound.unwrap_or(Value::Null));
                 }
             }
-            if e.get("frameId").and_then(Value::as_str).is_some() {
-                let f = o.frame_id().and_then(|f| ids.get(f)).cloned();
-                e.set("frameId", f.map_or(Value::Null, Value::String));
+            // In a frame copied with it, the copy is in the frame's copy.
+            if let Some(f) = o.frame_id().and_then(|f| ids.get(f)) {
+                e.set("frameId", json!(f));
             }
             bump(&mut e, rng);
             if o.container_id().is_none_or(|c| !ids.contains_key(c)) {
@@ -1544,7 +1598,7 @@ impl Editor {
     ) -> Output {
         let mut out = Output::default();
         let moving: BTreeSet<String> = self
-            .moving_set(scene)
+            .dragged_set(scene)
             .iter()
             .map(|e| e.id().to_string())
             .collect();

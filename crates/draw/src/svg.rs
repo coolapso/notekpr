@@ -12,6 +12,7 @@ use std::fmt::Write;
 
 use crate::bounds;
 use crate::color;
+use crate::edit::frame;
 use crate::fonts;
 use crate::js;
 use crate::rough::{self, Drawable};
@@ -45,6 +46,9 @@ pub struct SvgOptions {
     pub standalone: bool,
     /// The viewer's clock: the dates on sticky notes.
     pub time: sticky::LocalTime,
+    /// Measures a line of text in a CSS font: frames' names are cut to
+    /// their width.
+    pub measure: fn(&str, &str) -> f64,
 }
 
 impl Default for SvgOptions {
@@ -56,6 +60,7 @@ impl Default for SvgOptions {
             font_faces: None,
             standalone: false,
             time: sticky::LocalTime::default(),
+            measure: crate::edit::guess_width,
         }
     }
 }
@@ -388,7 +393,14 @@ pub fn export(scene: &Scene, opts: &SvgOptions) -> String {
         .filter(|e| matches!(e.kind(), ElementType::Frame | ElementType::MagicFrame))
         .map(|e| (e.id(), *e))
         .collect();
-    let [min_x, min_y, max_x, max_y] = bounds::common_bounds(bounds::root_elements(scene));
+    // Frames' names are texts above them.
+    let frame_list: Vec<&Element> = visible
+        .iter()
+        .copied()
+        .filter(|e| frame::is_frame(e))
+        .collect();
+    let names = frame::name_labels(&frame_list, opts.dark, &opts.measure);
+    let [min_x, min_y, max_x, max_y] = frame::export_bounds(scene, names.values());
     let (width, height) = ((min_x - max_x).abs(), (min_y - max_y).abs());
     let pad = opts.padding;
     let (w, h) = (width + pad * 2.0, height + pad * 2.0);
@@ -460,6 +472,9 @@ pub fn export(scene: &Scene, opts: &SvgOptions) -> String {
             && e.container_id().is_some_and(|c| r.elements.contains_key(c))
         {
             continue;
+        }
+        if let Some(name) = names.get(e.id()) {
+            r.element(name, name.x() + offset_x, name.y() + offset_y);
         }
         r.element(e, e.x() + offset_x, e.y() + offset_y);
         if let Some(t) = r.bound_text(e) {

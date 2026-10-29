@@ -6,6 +6,7 @@
 
 pub mod canvas;
 pub mod editing;
+pub mod frames;
 pub mod sticky;
 
 use std::cell::{Cell, RefCell};
@@ -212,6 +213,7 @@ impl Board {
             self.pixel_ratio.get(),
             drawings::is_dark(),
             &mut self.cache.borrow_mut(),
+            Some(&self.editor.borrow()),
         );
         canvas::draw_overlay(
             &ctx,

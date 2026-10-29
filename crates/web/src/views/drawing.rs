@@ -358,7 +358,7 @@ pub fn DrawingView(vault: String, id: String) -> impl IntoView {
         if let (Some(data), Some(text)) = (ev.clipboard_data(), b.with_value(|b| b.copy())) {
             let _ = data.set_data("text/plain", &text);
             ev.prevent_default();
-            b.with_value(|b| b.command(|ed, s, r| ed.delete_selected(s, r)));
+            b.with_value(|b| b.command(|ed, s, r| ed.cut(s, r)));
         }
     };
     let on_paste = move |ev: web_sys::ClipboardEvent| {
@@ -480,13 +480,15 @@ pub fn DrawingView(vault: String, id: String) -> impl IntoView {
                         "left:{}px;top:{}px;min-width:{}px;min-height:{}px;font-size:{}px;line-height:{};font-family:{};color:{};text-align:{};transform:rotate({}rad);transform-origin:0 0",
                         tb.left, tb.top, tb.width.max(8.0), tb.height.max(tb.font_size * tb.line_height), tb.font_size, tb.line_height, tb.font_family, tb.color, tb.align, tb.angle
                     );
+                    let frame_name = tb.frame_name;
                     view! {
-                        <textarea class="drawing-text" node_ref=text_ref style=style spellcheck="false" wrap="off"
+                        <textarea class="drawing-text" class:drawing-frame-name=frame_name node_ref=text_ref style=style spellcheck="false" wrap="off"
                             on:input=move |ev| b.with_value(|b| b.set_text_draft(event_target_value(&ev)))
                             on:blur=move |_| finish_text()
                             on:keydown=move |ev: web_sys::KeyboardEvent| {
                                 ev.stop_propagation();
-                                if ev.key() == "Escape" || (ev.key() == "Enter" && (ev.ctrl_key() || ev.meta_key())) {
+                                // A frame's name is one line.
+                                if ev.key() == "Escape" || (ev.key() == "Enter" && (ev.ctrl_key() || ev.meta_key() || frame_name)) {
                                     ev.prevent_default();
                                     finish_text();
                                 }

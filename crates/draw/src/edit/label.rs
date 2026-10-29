@@ -249,6 +249,10 @@ pub fn new_label(
     t.set("verticalAlign", json!("middle"));
     t.set("textAlign", json!("center"));
     t.set("strokeColor", json!(container.stroke_color()));
+    t.set(
+        "frameId",
+        container.get("frameId").cloned().unwrap_or(Value::Null),
+    );
     let mut c = container.clone();
     let mut bound: Vec<Value> = container
         .bound_elements()

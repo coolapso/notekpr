@@ -145,6 +145,70 @@ def main():
         check("sunset.png" in r.stdout, "the picture is in attachments/")
         a.shot("drawings-picture")
 
+        # A sticky note (N): a click places it, its text is typed in.
+        tool(a, "n")
+        a.click_at(CANVAS, 250, -150)
+        time.sleep(0.5)
+        a.keys("Buy seeds")
+        a.chord(KEYS["escape"])
+        time.sleep(0.5)
+        els = drawing()
+        note = next((e for e in els if e["type"] == "stickynote"), None)
+        label = next((e for e in els if e["type"] == "text" and e.get("containerId") == (note or {}).get("id")), None)
+        check(note is not None and label is not None and label["originalText"] == "Buy seeds",
+              "a sticky note is placed and written on")
+
+        # A frame drawn around the lower box takes it in.
+        tool(a, KEYS["escape"])
+        tool(a, "f")
+        drag(a, (-300, 200), (-60, 320))
+        els = drawing()
+        frame = next((e for e in els if e["type"] == "frame"), None)
+        inside = [e for e in els if e.get("frameId") == (frame or {}).get("id")]
+        check(frame is not None and any(e["type"] == "rectangle" for e in inside), "a frame drawn around a box holds it")
+
+        # An elbow arrow (the arrow type picker) between the top boxes.
+        tool(a, "a")
+        a.click(".drawing-props .pick[title='Elbow arrow']")
+        drag(a, (-175, -120), (225, -60))
+        elbows = [e for e in drawing() if e["type"] == "arrow" and e.get("elbowed")]
+        check(len(elbows) == 1 and all(
+            p[0] == q[0] or p[1] == q[1] for p, q in zip(elbows[0]["points"], elbows[0]["points"][1:])),
+            "an elbow arrow is drawn with square corners")
+
+        # The grid (Ctrl+'), part of the drawing.
+        tool(a, KEYS["escape"])
+        a.chord(KEYS["ctrl"], "'")
+        time.sleep(0.5)
+        r = cli("cat", "Art", "Untitled drawing")
+        check(json.loads(r.stdout)["appState"].get("gridModeEnabled") is True, "Ctrl+' turns the drawing's grid on")
+        a.shot("drawings-more")
+
+        # Someone else opens it: their avatar, pointer and laser show.
+        b = Browser()
+        try:
+            cn = uniq("cleo")
+            signup(b, cn)
+            share(a, ".sb-bottom button:nth-child(2)", cn)
+            b.click(".vault-btn")
+            b.click_el(b.find_text(".vault-menu button", "Art", 20))
+            b.click_el(b.find_text(".tree-item", "Untitled drawing", 20))
+            b.find(CANVAS, 10)
+            time.sleep(1.5)
+            el = {"element-6066-11e4-a52e-4f735466cecf": b.find(CANVAS)}
+            req("POST", b.p("/actions"), {"actions": [{"type": "pointer", "id": "mouse", "parameters": {"pointerType": "mouse"},
+                "actions": [{"type": "pointerMove", "origin": el, "x": 100, "y": 100}, {"type": "pointerMove", "origin": el, "x": 120, "y": 110, "duration": 50}]}]})
+            a.wait("return document.querySelectorAll('.drawing-page .presence .avatar').length >= 1", 15, "the other's avatar")
+            check(True, "the other person shows on the drawing")
+            b.js("document.querySelector('.drawing-page').focus()")
+            b.keys("k")
+            drag(b, (0, 150), (200, 200), steps=12)
+            time.sleep(0.2)
+            a.shot("drawings-presence")
+            check(not severe_logs(b), "no browser errors for the other person")
+        finally:
+            b.close()
+
         # The Export menu opens inside the window, with our own file first.
         a.click(".drawing-page .note-head .tb-drop .icon-btn")
         a.find(".drawing-page .note-head .menu", 5)

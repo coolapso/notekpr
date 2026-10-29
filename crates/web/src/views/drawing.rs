@@ -67,6 +67,7 @@ fn at(ev: &web_sys::PointerEvent) -> [f64; 2] {
 #[component]
 pub fn DrawingView(vault: String, id: String) -> impl IntoView {
     let ui = ui();
+    let id_here = StoredValue::new(id.clone());
     let (v, i) = (vault.clone(), id.clone());
     state::step(|c| c.ensure_note_loaded(&v, &i));
     let (v, i) = (vault.clone(), id.clone());
@@ -478,6 +479,17 @@ pub fn DrawingView(vault: String, id: String) -> impl IntoView {
             <header class="note-head">
                 <button class="icon-btn mobile-only" title="Menu" aria-label="Menu" on:click=move |_| ui.sidebar.set(true)><Icon name="menu"/></button>
                 <div class="crumbs ellipsis">{move || crumbs.get()}</div>
+                <div class="presence">
+                    {move || {
+                        let here = id_here.get_value();
+                        ui.presence
+                            .get()
+                            .into_iter()
+                            .filter(|p| p.note.as_deref() == Some(here.as_str()))
+                            .map(|p| super::avatar(&p.name, &p.user_id))
+                            .collect_view()
+                    }}
+                </div>
                 <div class="tb-drop">
                     <button class="icon-btn" title="Export" aria-label="Export" aria-expanded=move || export_open.get().to_string()
                         on:click=move |ev| { ev.stop_propagation(); export_open.update(|o| *o = !*o); }><Icon name="download"/></button>

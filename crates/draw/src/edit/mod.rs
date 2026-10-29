@@ -8,6 +8,7 @@
 //! a preview, at its end for good.
 
 pub mod binding;
+pub mod elbow;
 pub mod hit;
 pub mod label;
 pub mod new;
@@ -196,6 +197,11 @@ enum Gesture {
     Erasing {
         ids: BTreeSet<String>,
     },
+    /// Moving a segment of an elbow arrow (it stays where it is put).
+    Segment {
+        id: String,
+        index: usize,
+    },
 }
 
 /// The editor's state for one open drawing.
@@ -371,6 +377,18 @@ impl Editor {
     ) -> Output {
         self.zoom = zoom;
         let mut out = Output::default();
+        // An elbow arrow made by clicks has only its ends: the second click
+        // ends it (hovering there may have counted as dragging).
+        if let Some(Gesture::Linear { id, points, .. }) = &self.gesture
+            && let Some(e) = scene.element(id).filter(|e| e.is_elbowed())
+        {
+            let id = id.clone();
+            let mut s2 = scene.clone();
+            if let Some(slot) = s2.elements.iter_mut().find(|x| x.id() == id) {
+                *slot = elbow::drag(e, scene, points[0], p);
+            }
+            return self.finish_linear(&s2, &id, rng);
+        }
         // A line or arrow made point by point: each click adds one.
         if let Some(Gesture::Linear {
             id,
@@ -402,6 +420,16 @@ impl Editor {
         match self.tool {
             Tool::Hand | Tool::Laser | Tool::Image => {}
             Tool::Selection => {
+                // The middle of a segment of the elbow arrow selected.
+                if let [a] = self.selected(scene).as_slice()
+                    && a.is_elbowed()
+                    && !a.is_locked()
+                    && let Some(index) = elbow::segment_at(a, p, zoom)
+                {
+                    let id = a.id().to_string();
+                    self.gesture = Some(Gesture::Segment { id, index });
+                    return out;
+                }
                 if let Some(f) = self.frame(scene)
                     && let Some(h) = transform::handle_at(&f, p, zoom)
                 {
@@ -620,6 +648,17 @@ impl Editor {
                     return out;
                 };
                 let n = points.len();
+                if e.is_elbowed() {
+                    // Routed from its start to the pointer.
+                    points[n - 1] = p;
+                    if geom::distance(points[0], p) > 4.0 / zoom {
+                        *dragged = true;
+                    }
+                    let mut e = elbow::drag(&e, scene, points[0], p);
+                    bump(&mut e, rng);
+                    out.changed.push(e);
+                    return out;
+                }
                 let anchor = points[n - 2];
                 let mut q = p;
                 if mods.shift {
@@ -695,6 +734,9 @@ impl Editor {
                 let ids: Vec<&str> = originals.iter().map(Element::id).collect();
                 let mut changed: Vec<Element> = Vec::new();
                 for o in originals.iter() {
+                    if elbow::stays(o, originals) {
+                        continue;
+                    }
                     let mut e = o.clone();
                     e.set("x", num(o.x() + dx));
                     e.set("y", num(o.y() + dy));
@@ -745,6 +787,7 @@ impl Editor {
                 );
                 let mut changed = transform::resize(&shapes, frame, *handle, target, mode);
                 self.relayout(scene, &mut changed);
+                elbow::transformed(scene, &mut changed, false);
                 binding::update_arrows(scene, &mut changed);
                 for mut e in changed {
                     bump(&mut e, rng);
@@ -757,6 +800,7 @@ impl Editor {
                 originals,
             } => {
                 let mut changed = transform::rotate(originals, frame, *start, p, mods.shift);
+                elbow::transformed(scene, &mut changed, true);
                 binding::update_arrows(scene, &mut changed);
                 for mut e in changed {
                     bump(&mut e, rng);
@@ -794,6 +838,15 @@ impl Editor {
                 if let Some(e) = hit::element_at(scene, p, zoom, false) {
                     ids.insert(e.id().to_string());
                 }
+            }
+            Gesture::Segment { id, index } => {
+                let Some(a) = scene.element(id) else {
+                    return out;
+                };
+                let (mut a, now) = elbow::move_segment(a, scene, *index, p);
+                *index = now;
+                bump(&mut a, rng);
+                out.changed.push(a);
             }
         }
         out
@@ -853,8 +906,25 @@ impl Editor {
                 });
             }
             Gesture::Pen { .. } => out.done = true,
-            Gesture::Moving { moved, .. } => {
+            Gesture::Moving {
+                moved, originals, ..
+            } => {
                 out.done = moved;
+                if moved {
+                    // Elbow arrows tidied: segments that came to line up merged.
+                    let ids: Vec<&str> = originals.iter().map(Element::id).collect();
+                    for mut a in elbow::tidy(scene, &ids) {
+                        bump(&mut a, rng);
+                        out.changed.push(a);
+                    }
+                }
+            }
+            Gesture::Segment { id, .. } => {
+                for mut a in elbow::tidy(scene, &[&id]) {
+                    bump(&mut a, rng);
+                    out.changed.push(a);
+                }
+                out.done = true;
             }
             Gesture::Resizing { .. } | Gesture::Rotating { .. } => out.done = true,
             Gesture::BoxSelecting { .. } => {}
@@ -1057,6 +1127,21 @@ impl Editor {
         rng: &mut dyn Random,
     ) -> Output {
         self.gesture = None;
+        // On a segment's handle of the elbow arrow selected: a moved segment
+        // lets go.
+        if let [a] = self.selected(scene).as_slice()
+            && a.is_elbowed()
+            && let Some(i) = elbow::segment_at(a, p, zoom)
+        {
+            let mut out = Output::default();
+            if elbow::is_fixed(a, i) && !a.is_locked() {
+                let mut c = elbow::release_segment(a, scene, i);
+                bump(&mut c, rng);
+                out.changed.push(c);
+                out.done = true;
+            }
+            return out;
+        }
         match hit::element_at(scene, p, zoom, false) {
             Some(e) if e.kind() == ElementType::Text => self.edit_text(e.id()),
             Some(e) if label::can_hold(e) => {
@@ -1229,7 +1314,12 @@ impl Editor {
     /// Moves what is selected by `dx`, `dy` (arrow keys).
     pub fn nudge(&mut self, scene: &Scene, dx: f64, dy: f64, rng: &mut dyn Random) -> Output {
         let mut out = Output::default();
-        let mut changed = self.moving_set(scene);
+        let set = self.moving_set(scene);
+        let mut changed: Vec<Element> = set
+            .iter()
+            .filter(|e| !elbow::stays(e, &set))
+            .cloned()
+            .collect();
         for e in &mut changed {
             e.set("x", num(e.x() + dx));
             e.set("y", num(e.y() + dy));
@@ -1380,6 +1470,9 @@ impl Editor {
         value: Value,
         rng: &mut dyn Random,
     ) -> Output {
+        if key == "arrowType" {
+            return self.set_arrow_type(scene, value.as_str().unwrap_or("round"), rng);
+        }
         match key {
             "strokeColor" => {
                 self.style.stroke_color = value.as_str().unwrap_or_default().to_string()
@@ -1432,9 +1525,31 @@ impl Editor {
         if matches!(key, "fontFamily" | "fontSize") {
             self.relayout(scene, &mut changed);
         }
+        // An elbow arrow makes room for its arrowheads.
+        if matches!(key, "startArrowhead" | "endArrowhead") {
+            for c in changed.iter_mut().filter(|c| c.is_elbowed()) {
+                *c = elbow::route(c, scene, &[]);
+            }
+        }
         for mut c in changed {
             bump(&mut c, rng);
             out.changed.push(c);
+        }
+        out.done = !out.changed.is_empty();
+        out
+    }
+
+    /// Sharp, curved (`round`) or elbow arrows: those selected are made so
+    /// (Excalidraw's `changeArrowType`), and new ones.
+    pub fn set_arrow_type(&mut self, scene: &Scene, kind: &str, rng: &mut dyn Random) -> Output {
+        self.style.arrow_type = kind.to_string();
+        let mut out = Output::default();
+        for e in self.selected(scene) {
+            if e.kind() == ElementType::Arrow && !e.is_locked() {
+                let mut c = elbow::set_type(e, scene, kind);
+                bump(&mut c, rng);
+                out.changed.push(c);
+            }
         }
         out.done = !out.changed.is_empty();
         out

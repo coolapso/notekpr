@@ -210,6 +210,25 @@ pub fn overlaps(e: &Element, frame: &Element) -> bool {
         || contains(bounds::element_bounds(e), bounds::element_bounds(frame))
 }
 
+/// `getElementsOverlappingFrame`: what a frame exported alone shows — the
+/// elements whose box meets the frame's (the frame among them), but those
+/// in another frame, which aren't seen there.
+pub fn overlapping<'a>(scene: &'a Scene, frame: &Element) -> Vec<&'a Element> {
+    let [fx1, fy1, fx2, fy2] = bounds::element_bounds(frame);
+    scene
+        .visible()
+        .filter(|e| {
+            e.frame_id()
+                .filter(|f| !f.is_empty())
+                .is_none_or(|f| f == frame.id())
+        })
+        .filter(|e| {
+            let [x1, y1, x2, y2] = bounds::element_bounds(e);
+            x1 < fx2 && x2 > fx1 && y1 < fy2 && y2 > fy1
+        })
+        .collect()
+}
+
 /// What of an element shows: its box, cut to its frame's while it overlaps
 /// it (as `elementsOverlappingBBox` selects).
 pub fn shown_bounds(scene: &Scene, e: &Element) -> Bounds {

@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use notekpr_draw::edit::{Editor, Mods, Output, Random, Tool};
+use notekpr_draw::export::{self, Part};
 use notekpr_draw::scene::{Element, Scene};
 use serde_json::Value;
 use wasm_bindgen::JsCast;
@@ -805,30 +806,24 @@ impl Board {
             .unwrap_or_else(|| "Drawing".into())
     }
 
-    /// What is selected (with labels), else everything: what "Copy as"
-    /// copies.
-    fn selected_part(&self, scene: &Scene) -> Scene {
-        let ed = self.editor.borrow();
-        if ed.selection.is_empty() {
-            return scene.clone();
-        }
-        let mut ids: std::collections::HashSet<String> = ed.selection.iter().cloned().collect();
-        for e in ed.selected(scene) {
-            for b in e.bound_elements() {
-                if b.kind == "text" {
-                    ids.insert(b.id);
-                }
-            }
-        }
-        Scene {
-            elements: scene
-                .elements
-                .iter()
-                .filter(|e| ids.contains(e.id()))
-                .cloned()
-                .collect(),
-            ..scene.clone()
-        }
+    /// What is selected (with labels, and what is in the frames among
+    /// it), else everything: what "Copy as" copies. A frame selected on its
+    /// own is copied alone, cut to it (Excalidraw's `exportingFrame`).
+    fn selected_part(&self, scene: &Scene) -> Part {
+        Part::selected(scene, &self.editor.borrow().selection)
+    }
+
+    /// The frame selected on its own, alone: what the image exports show
+    /// then, instead of the whole drawing.
+    fn frame_part(&self, scene: &Scene) -> Option<Part> {
+        export::selected_frame(scene, &self.editor.borrow().selection)
+            .map(|f| Part::frame(scene, f))
+    }
+
+    /// Whether a frame is selected on its own: the image exports and copies
+    /// show it alone (the Export menu says so).
+    pub fn frame_alone(&self) -> bool {
+        export::selected_frame(&self.scene(), &self.editor.borrow().selection).is_some()
     }
 
     /// Copies what is selected (else the whole drawing) as a PNG picture,
@@ -849,7 +844,10 @@ impl Board {
         }
         let v = self.vault.clone();
         leptos::task::spawn_local(async move {
-            let svg = crate::drawings::svg_of(&v, part, dark).await;
+            let svg = match part.frame {
+                Some(_) => frame_svg(&v, part, dark, false).await,
+                None => crate::drawings::svg_of(&v, part.scene, dark).await,
+            };
             util::copy_to_clipboard(&svg);
             crate::state::success("Copied as an SVG image.");
         });
@@ -995,23 +993,31 @@ impl Board {
             ),
             Export::Svg => {
                 let (v, id) = (self.vault.clone(), self.id.clone());
+                let frame = self.frame_part(&scene);
                 leptos::task::spawn_local(async move {
                     // The preview's fonts are inside: the file stands alone.
-                    if let Some(svg) = crate::drawings::standalone_svg(&v, &id, dark).await {
+                    let svg = match frame {
+                        Some(part) => Some(frame_svg(&v, part, dark, true).await),
+                        None => crate::drawings::standalone_svg(&v, &id, dark).await,
+                    };
+                    if let Some(svg) = svg {
                         util::download(&format!("{name}.svg"), "image/svg+xml", svg.as_bytes());
                     }
                 });
             }
             Export::Png => {
-                let Some(png) = png_of(&self.vault, &scene, dark) else {
+                let part = self
+                    .frame_part(&scene)
+                    .unwrap_or_else(|| Part::whole(&scene));
+                let Some(png) = png_of(&self.vault, &part, dark) else {
                     crate::state::error("The picture could not be made.");
                     return;
                 };
-                // The drawing goes inside (Excalidraw's "Embed scene"), its
-                // pictures too: the PNG opens again as the drawing.
-                let (v, scene) = (self.vault.clone(), scene.clone());
+                // What it shows goes inside (Excalidraw's "Embed scene"),
+                // its pictures too: the PNG opens again as a drawing.
+                let v = self.vault.clone();
                 leptos::task::spawn_local(async move {
-                    let full = crate::drawings::with_pictures(&v, (*scene).clone()).await;
+                    let full = crate::drawings::with_pictures(&v, part.scene).await;
                     let text = notekpr_draw::embed::scene_text(&full);
                     let png = notekpr_draw::embed::png_with(&png, &text).unwrap_or(png);
                     util::download(&format!("{name}.png"), "image/png", &png);
@@ -1021,16 +1027,45 @@ impl Board {
     }
 }
 
-/// The drawing as a PNG picture, twice its size (sharp on dense screens).
-fn png_of(vault: &str, scene: &Scene, dark: bool) -> Option<Vec<u8>> {
+/// A frame alone as an SVG file of its own: its fonts and pictures inside,
+/// and with `embed` what it shows (as the drawing's SVG export has the
+/// drawing).
+async fn frame_svg(vault: &str, part: Part, dark: bool, embed: bool) -> String {
+    let scene = crate::drawings::with_pictures(vault, part.scene).await;
+    let font_faces = crate::drawings::font_faces(&scene).await;
+    notekpr_draw::svg::export(
+        &scene,
+        &notekpr_draw::svg::SvgOptions {
+            dark,
+            font_faces: Some(font_faces),
+            time: super::sticky::local_time(),
+            measure,
+            standalone: true,
+            embed_scene: embed,
+            frame: part.frame,
+            ..Default::default()
+        },
+    )
+}
+
+/// What `part` shows as a PNG picture, twice its size (sharp on dense
+/// screens).
+fn png_of(vault: &str, part: &Part, dark: bool) -> Option<Vec<u8>> {
     const SCALE: f64 = 2.0;
     const PAD: f64 = 10.0;
-    // Frames' names above them are in the picture.
     use notekpr_draw::edit::frame;
-    let frames: Vec<&Element> = scene.visible().filter(|e| frame::is_frame(e)).collect();
-    let names = frame::name_labels(&frames, dark, &measure);
-    let [x1, y1, x2, y2] = frame::export_bounds(scene, names.values());
-    let (w, h) = ((x2 - x1).abs() + PAD * 2.0, (y2 - y1).abs() + PAD * 2.0);
+    let scene = part.drawn();
+    let ([x1, y1, x2, y2], pad) = match part.frame_bounds() {
+        // A frame alone: its box, whose edges cut what reaches beyond it.
+        Some(b) => (b, 0.0),
+        None => {
+            // Frames' names above them are in the picture.
+            let frames: Vec<&Element> = scene.visible().filter(|e| frame::is_frame(e)).collect();
+            let names = frame::name_labels(&frames, dark, &measure);
+            (frame::export_bounds(&scene, names.values()), PAD)
+        }
+    };
+    let (w, h) = ((x2 - x1).abs() + pad * 2.0, (y2 - y1).abs() + pad * 2.0);
     let canvas: web_sys::HtmlCanvasElement = util::document()
         .create_element("canvas")
         .ok()?
@@ -1040,8 +1075,8 @@ fn png_of(vault: &str, scene: &Scene, dark: bool) -> Option<Vec<u8>> {
     canvas.set_height((h * SCALE).ceil() as u32);
     let ctx: web_sys::CanvasRenderingContext2d = canvas.get_context("2d").ok()??.dyn_into().ok()?;
     let view = notekpr_draw::viewport::Viewport {
-        scroll_x: PAD - x1,
-        scroll_y: PAD - y1,
+        scroll_x: pad - x1,
+        scroll_y: pad - y1,
         zoom: 1.0,
         width: w,
         height: h,
@@ -1053,7 +1088,7 @@ fn png_of(vault: &str, scene: &Scene, dark: bool) -> Option<Vec<u8>> {
     };
     super::canvas::draw_scene(
         &ctx,
-        scene,
+        &scene,
         &view,
         &super::canvas::Look {
             pixel_ratio: SCALE,

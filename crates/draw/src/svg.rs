@@ -25,8 +25,6 @@ use crate::sticky;
 const DECIMALS: u32 = 2;
 /// `DEFAULT_EXPORT_PADDING` (px).
 pub const DEFAULT_PADDING: f64 = 10.0;
-/// `BOUND_TEXT_PADDING`: the gap cut around an arrow's label.
-const BOUND_TEXT_PADDING: f64 = 5.0;
 /// `FRAME_STYLE`.
 const FRAME_RADIUS: f64 = 8.0;
 const FRAME_STROKE: &str = "#bbb";
@@ -279,8 +277,9 @@ impl<'a> Renderer<'a> {
                     // A hole in the line where its label is.
                     let w = e.width() + 100.0 + offset_x;
                     let h = e.height() + 100.0 + offset_y;
-                    let mx = offset_x + t.x() - e.x() - BOUND_TEXT_PADDING;
-                    let my = offset_y + t.y() - e.y() - BOUND_TEXT_PADDING;
+                    let [hx, hy, hw, hh] = shape::label_hole(t);
+                    let mx = offset_x + hx - e.x();
+                    let my = offset_y + hy - e.y();
                     mask = format!(
                         r##"<mask id="mask-{id}" maskUnits="userSpaceOnUse" x="0" y="0" width="{w}" height="{h}"><rect x="0" y="0" fill="#fff" width="{w}" height="{h}"></rect><rect x="{mx}" y="{my}" fill="#000" width="{tw}" height="{th}" opacity="1"></rect></mask>"##,
                         id = esc(e.id()),
@@ -288,8 +287,8 @@ impl<'a> Renderer<'a> {
                         h = n(h),
                         mx = n(mx),
                         my = n(my),
-                        tw = n(t.width() + BOUND_TEXT_PADDING * 2.0),
-                        th = n(t.height() + BOUND_TEXT_PADDING * 2.0),
+                        tw = n(hw),
+                        th = n(hh),
                     );
                     group = format!(
                         r#"<g mask="url(#mask-{})" stroke-linecap="round">"#,

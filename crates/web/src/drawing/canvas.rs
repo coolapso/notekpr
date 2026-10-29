@@ -349,6 +349,23 @@ pub fn draw_scene(
         if let Some(f) = super::frames::clip_frame(e, &by_id, scene, editor) {
             super::frames::clip(ctx, f, view.zoom);
         }
+        // An arrow's label sits in a gap of its line (Excalidraw's hole:
+        // everything around it, even-odd, but the label's box).
+        if matches!(e.kind(), ElementType::Arrow | ElementType::Line)
+            && let Some(t) = label_of(e, &by_id)
+        {
+            let [hx, hy, hw, hh] = shape::label_hole(t);
+            let reach = (bx2 - bx1).max(by2 - by1) + pad + hw + hh;
+            ctx.begin_path();
+            ctx.rect(
+                bx1 - reach,
+                by1 - reach,
+                bx2 - bx1 + reach * 2.0,
+                by2 - by1 + reach * 2.0,
+            );
+            ctx.rect(hx, hy, hw, hh);
+            ctx.clip_with_canvas_winding_rule(CanvasWindingRule::Evenodd);
+        }
         let _ = ctx.translate(e.x(), e.y());
         if e.angle() != 0.0 {
             let _ = ctx.translate(cx, cy);
@@ -390,18 +407,21 @@ pub fn draw_scene(
             continue;
         }
         draw(e);
-        let label = e
-            .bound_elements()
-            .iter()
-            .filter(|b| b.kind == "text")
-            .find_map(|b| by_id.get(b.id.as_str()).copied());
-        if let Some(t) = label {
+        if let Some(t) = label_of(e, &by_id) {
             draw(t);
         }
     }
     for e in visible.iter().filter(|e| iframe_like(e)) {
         draw(e);
     }
+}
+
+/// The label drawn with `e` (its bound text), if it is on the drawing.
+fn label_of<'a>(e: &Element, by_id: &HashMap<&str, &'a Element>) -> Option<&'a Element> {
+    e.bound_elements()
+        .iter()
+        .filter(|b| b.kind == "text")
+        .find_map(|b| by_id.get(b.id.as_str()).copied())
 }
 
 /// Excalidraw's selection colour.

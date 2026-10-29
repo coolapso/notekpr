@@ -93,6 +93,22 @@ pub fn adjust_roughness(e: &Element) -> f64 {
 }
 
 /// `isPathALoop`: a line whose ends meet (within a few pixels) is a shape.
+/// `BOUND_TEXT_PADDING`: the gap cut around an arrow's label.
+pub const BOUND_TEXT_PADDING: f64 = 5.0;
+
+/// Where an arrow's line is cut for its label, `[x, y, width, height]` on
+/// the drawing, upright whatever the arrow's angle: the label's box and
+/// [`BOUND_TEXT_PADDING`] around it (Excalidraw's label "hole",
+/// `renderElement.ts`).
+pub fn label_hole(label: &Element) -> [f64; 4] {
+    [
+        label.x() - BOUND_TEXT_PADDING,
+        label.y() - BOUND_TEXT_PADDING,
+        label.width() + BOUND_TEXT_PADDING * 2.0,
+        label.height() + BOUND_TEXT_PADDING * 2.0,
+    ]
+}
+
 pub fn is_path_a_loop(points: &[Point]) -> bool {
     if points.len() >= 3 {
         let (first, last) = (points[0], points[points.len() - 1]);
@@ -942,5 +958,24 @@ pub fn freedraw<'a>(e: &Element, points: &'a [Point], pressures: &'a [f64]) -> F
         streamline: options
             .and_then(|o| o.get("streamline"))
             .and_then(|v| v.as_f64()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_labels_hole_is_its_box_and_some() {
+        let label = Element::from_props(
+            serde_json::json!({"id": "t", "type": "text", "x": 100, "y": 40, "width": 30, "height": 25,
+                               "angle": 0.4, "containerId": "a", "text": "go"})
+            .as_object()
+            .unwrap()
+            .clone(),
+        )
+        .unwrap();
+        // Upright, whatever the angle (Excalidraw's hole is axis-aligned).
+        assert_eq!(label_hole(&label), [95.0, 35.0, 40.0, 35.0]);
     }
 }

@@ -218,3 +218,99 @@ async fn an_item_too_large_to_sync_is_left_out() {
     drop(h);
     assert_eq!(library_ids(&srv, "alice-a").await, ["small"]);
 }
+
+/// Shapes named, removed and exported by their ids or the start of them
+/// (as `shapes ls` shows the first 8 characters).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn shapes_are_renamed_removed_and_exported_by_id() {
+    let srv = start().await;
+    two_devices(&srv).await;
+    let file = srv.path("shapes.excalidrawlib");
+    std::fs::write(
+        &file,
+        library_file(&[
+            ("bed-0001", "rectangle", "Bed"),
+            ("bench-01", "ellipse", "Bench"),
+            ("stone-01", "diamond", "Stone"),
+            ("stone-02", "diamond", "Stone 2"),
+        ]),
+    )
+    .unwrap();
+    run(
+        &srv,
+        "alice-a",
+        &["shapes", "import", file.to_str().unwrap()],
+    )
+    .await
+    .unwrap();
+
+    // Renamed, by the start of its id; "" takes the name away.
+    run(&srv, "alice-a", &["shapes", "rename", "bed", "Raised bed"])
+        .await
+        .unwrap();
+    run(&srv, "alice-a", &["shapes", "rename", "bench-01", ""])
+        .await
+        .unwrap();
+    let names = |listed: Vec<ops::LibraryEntry>| -> Vec<(String, Option<String>)> {
+        listed.into_iter().map(|i| (i.id, i.name)).collect()
+    };
+    let h = hub(&reopen(&srv, "alice-a", "alice").await).await;
+    assert_eq!(
+        names(ops::list_library(&h).await),
+        [
+            ("stone-02".into(), Some("diamond stone-02".into())),
+            ("stone-01".into(), Some("diamond stone-01".into())),
+            ("bench-01".into(), None),
+            ("bed-0001".into(), Some("Raised bed".into())),
+        ]
+    );
+    drop(h);
+    // A start of several ids, or of none, names nothing.
+    let err = run(&srv, "alice-a", &["shapes", "rename", "stone", "x"])
+        .await
+        .unwrap_err();
+    assert!(format!("{err:#}").contains("several"), "{err:#}");
+    let err = run(&srv, "alice-a", &["shapes", "rm", "nothing"])
+        .await
+        .unwrap_err();
+    assert!(format!("{err:#}").contains("no saved shape"), "{err:#}");
+
+    // Exported: those named, or all.
+    let out = srv.path("some.excalidrawlib");
+    let o = out.to_str().unwrap();
+    run(
+        &srv,
+        "alice-a",
+        &["shapes", "export", "bed", "stone-02", "--out", o],
+    )
+    .await
+    .unwrap();
+    let back = notekpr_draw::file::read_library(
+        &std::fs::read_to_string(&out).unwrap(),
+        0.0,
+        &mut notekpr_draw::restore::Ids::new(1),
+    )
+    .unwrap();
+    let ids: Vec<&str> = back.iter().map(|i| i.id.as_str()).collect();
+    assert_eq!(ids, ["stone-02", "bed-0001"], "newest first");
+    assert_eq!(back[1].name.as_deref(), Some("Raised bed"));
+    let err = run(&srv, "alice-a", &["shapes", "export", "stone"])
+        .await
+        .unwrap_err();
+    assert!(format!("{err:#}").contains("several"), "{err:#}");
+
+    // Removed, several at once.
+    run(&srv, "alice-a", &["shapes", "rm", "stone-01", "bench"])
+        .await
+        .unwrap();
+    assert_eq!(library_ids(&srv, "alice-a").await, ["stone-02", "bed-0001"]);
+    // On her other device too, with the new name.
+    let h = hub(&reopen(&srv, "alice-b", "alice").await).await;
+    assert_eq!(
+        names(ops::list_library(&h).await),
+        [
+            ("stone-02".into(), Some("diamond stone-02".into())),
+            ("bed-0001".into(), Some("Raised bed".into())),
+        ]
+    );
+}

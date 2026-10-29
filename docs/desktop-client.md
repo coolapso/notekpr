@@ -180,7 +180,7 @@ by its id.
 | `cat <v> <path>` | note text (or attachment bytes; a drawing as a `.drawing` file: Excalidraw's JSON under notekpr's `type`) |
 | `write <v> <path>` | create or update a note from stdin — diff-merged, never a blind overwrite; `--append`, `--attachment`, `--if-match <hash>` (ignored with the other two). A path ending in `.drawing` takes a drawing file on stdin — a `.drawing`, Excalidraw's `.excalidraw`, Obsidian's `.excalidraw.md`, what Excalidraw copies, or a PNG or SVG with the drawing inside (Excalidraw's "Embed scene", notekpr's exports) — and makes or changes the drawing there, element by element. `@today`, `@tomorrow` and `@yesterday` in the text become those days' dates (`@2026-10-23`, in the local time zone), as in the web app; so do they with `quick`, `shared write` and the gateway, but not in files of the Markdown folder |
 | `quick [text…]` / `quick --list` / `quick --move <note> --to <v>` / `quick --delete <note>` | capture a quick note (text or stdin) / list them / move one to a vault / delete one for good; see [Quick notes](#quick-notes) |
-| `shapes ls` / `shapes import <file.excalidrawlib>` / `shapes export [--out <file>] [--force]` | your saved shapes (Excalidraw's library): list them, newest first (id, when, name, what they are made of; `--json` for the full ids) / save the shapes of an Excalidraw library file, leaving out those saved already / write them as one (to stdout without `--out`); see [Saved shapes](#saved-shapes) |
+| `shapes ls` / `shapes import <file.excalidrawlib>` / `shapes export [<id>…] [--out <file>] [--force]` / `shapes rename <id> <name>` / `shapes rm <id>…` | your saved shapes (Excalidraw's library): list them, newest first (id, when, name, what they are made of; `--json` for the full ids) / save the shapes of an Excalidraw library file, leaving out those saved already / write them (all, or those named) as one (to stdout without `--out`) / name one (`""` takes its name away) / remove some. A shape is named by its id or the start of it, as `ls` shows; see [Saved shapes](#saved-shapes) |
 | `mkdir <v> <path>`, `mv <v> <from> <to> [--update-links]`, `rm <v> <path>` | `rm` moves to the trash (from the quick notes: deletes for good); `mv` into `dir/` keeps the name; `--update-links` rewrites `[[links]]` |
 | `mv <v> <note, drawing or folder> <to> --to-vault <other>` | move a note or drawing, or a folder with everything in it, to another vault: `to` is its folder there (ending in `/`, `/` alone for the top level) or its new path; a name taken there gets a number (`Projects 2`). Inside a folder everything keeps its place; attachments elsewhere its notes link to come along (beside the note, or at the folder's top level), and `[[links]]` that wouldn't find a copy there are rewritten. The originals go to the trash once the server has the copies, except attachments a note staying behind links to; their history, comments and shares stay with them. Drawings need room in the other vault (each vault holds so many): without it nothing is copied. Files move only with notes. `--json` prints what moved |
 | `order <v> <path> --before\|--after <other>` / `order <v> <folder> --reset` | put a note, attachment or folder just before or after another of the same folder (the order the sidebar and `ls` show; folders stay above notes; a folder only made by its notes gets an entry), or a folder's contents (`/` = the top level) back to A–Z; moving something to another folder drops its place |
@@ -212,7 +212,7 @@ queued or received changes). While `sync` or `gateway` runs, read commands
 list`, `vault list`, `quick --list`, `shapes ls`, `shapes export`,
 `note-shares`, `recover`) show that
 process's local copies read-only — it keeps them current — and commands that
-change something (`write`, `quick`, `shapes import`, `mv`, `rm`, `mkdir`, `import`,
+change something (`write`, `quick`, `shapes import`, `shapes rename`, `shapes rm`, `mv`, `rm`, `mkdir`, `import`,
 `vault …`, `share-note`, …) are handed to it right away: it runs them on its
 own copies and sends back what
 they print and whether they failed, so they work as usual (through a loopback
@@ -338,7 +338,16 @@ notekpr shapes ls                               # newest first
 notekpr shapes import shapes.excalidrawlib      # Excalidraw's library files
 notekpr shapes export --out mine.excalidrawlib  # Excalidraw imports it
 notekpr shapes export > mine.excalidrawlib      # the same, on stdout
+notekpr shapes export 3f9a2c1e b71d --out two.excalidrawlib   # just these two
+notekpr shapes rename 3f9a2c1e "Raised bed"
+notekpr shapes rm 3f9a2c1e b71d
 ```
+
+A shape is named by its id, or the start of it — the first 8 characters `ls`
+shows are enough, fewer if no other shape's id starts the same. A shape
+saved in the web app takes its name from the first text in it (cut to 40
+characters), if it has one; `rename` changes it (`""` takes it away), and
+the web app's panel shows the names under the pictures.
 
 `import` adds the shapes of an `.excalidrawlib` file (version 1 or 2) and
 leaves out those saved already (the same elements), so importing a file
@@ -426,6 +435,7 @@ are unaffected.
   Work (3f2a1c)/          <- a second vault with the same name gets its id suffix
   Quick notes/            <- your quick notes: flat, no folders
     2026-10-19 14.32.md
+  Saved shapes.excalidrawlib   <- your saved shapes, Excalidraw's library file
 ```
 
 **Quick notes** ([§3](#quick-notes)) are the folder `Quick notes/`, mirrored
@@ -443,6 +453,21 @@ once is held like a mass deletion (below).
 folder. A new one becomes a drawing while the vault has room for it; beyond
 its drawings limit it stays on disk, not synced (you are told once), and
 goes up once there's room.
+
+**Saved shapes** ([Saved shapes](#saved-shapes)) are one file at the top,
+`Saved shapes.excalidrawlib` — Excalidraw's library file, which Excalidraw
+and its Obsidian plugin open — written once you have some and whenever they
+change (no vault folder takes that name). Edit it, or make it, and the
+change is merged in shape by shape against what the file held when it was
+last written or read: shapes added there are saved (those saved already,
+the same elements, are left out, as with `shapes import`), shapes changed
+there are replaced, shapes taken out are removed — and changes made on your
+other devices meanwhile stay, unless they touched the same shape (then the
+file's change wins). Emptying its `libraryItems` removes them all. A file
+that isn't an Excalidraw library (half-saved, say) is left alone with a
+warning and changes nothing until it is one again; deleting the file removes
+no shapes — it is written again. It comes with your Personal storage: not
+there for an agent's profile, nor with `sync --vault` unless it names `"Quick notes"`.
 
 Besides the characters shown, control characters become `_`, surrounding
 spaces, leading dots and trailing dots are dropped, Windows device names get

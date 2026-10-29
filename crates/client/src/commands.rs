@@ -2130,10 +2130,30 @@ async fn shapes(ctx: &Ctx, c: ShapesCmd) -> Result<()> {
                     ));
                 }
             }
-            report_pending(r.pending_changes, false, r.read_only, r.vault_full, false);
+            report_pending(r.pending_changes, false, r.read_only, r.vault_full, true);
         }
-        ShapesCmd::Export { out, force } => {
-            let items = ops::library(&hub).await;
+        ShapesCmd::Rename { id, name } => {
+            let r = op(ops::rename_library_item(&hub, &id, &name).await)?;
+            if ctx.json {
+                ctx.print_json(&r);
+            } else if name.trim().is_empty() {
+                crate::out!("the shape has no name now");
+            } else {
+                crate::out!("renamed the shape");
+            }
+            report_pending(r.pending_changes, false, r.read_only, r.vault_full, true);
+        }
+        ShapesCmd::Rm { ids } => {
+            let r = op(ops::remove_library_items(&hub, &ids).await)?;
+            if ctx.json {
+                ctx.print_json(&r);
+            } else {
+                crate::out!("removed {} shape(s)", r.ids.len());
+            }
+            report_pending(r.pending_changes, false, r.read_only, r.vault_full, true);
+        }
+        ShapesCmd::Export { ids, out, force } => {
+            let items = op(ops::find_library(&hub, &ids).await)?;
             let file = notekpr_draw::file::write_library(&items);
             match out {
                 None => {

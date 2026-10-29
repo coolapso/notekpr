@@ -149,6 +149,17 @@ async fn agent_gateway_is_scoped_audited_and_syncs() {
     ] {
         assert_eq!(get(&p).send().await.unwrap().status().as_u16(), 404);
     }
+    // Saved shapes are a person's: an agent has none.
+    assert_eq!(get("/shapes").send().await.unwrap().status().as_u16(), 404);
+    let st = http
+        .post(format!("{base}/shapes"))
+        .bearer_auth("gw-test-token")
+        .body(r#"{"type":"excalidrawlib","version":2,"libraryItems":[]}"#)
+        .send()
+        .await
+        .unwrap()
+        .status();
+    assert_eq!(st.as_u16(), 404);
     let hits: Vec<Value> = get("/search?q=diary")
         .send()
         .await
@@ -473,8 +484,152 @@ async fn agent_gateway_is_scoped_audited_and_syncs() {
         .unwrap()
         .status();
     assert_eq!(st.as_u16(), 404);
+    // Her saved shapes (Personal storage) aren't among them either.
+    let st = http
+        .get(format!("{rbase}/shapes"))
+        .bearer_auth("r-token")
+        .send()
+        .await
+        .unwrap()
+        .status();
+    assert_eq!(st.as_u16(), 404);
 
     agent_live.stop().await;
+}
+
+/// A person's gateway reads their saved shapes as Excalidraw's library
+/// file, and adds those of one (once each).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_gateway_reads_and_adds_saved_shapes() {
+    let srv = start().await;
+    let alice = login(&srv, "alice").await;
+    let h = hub(&alice).await;
+    let base = start_gateway(h.clone(), "t").await;
+    let http = reqwest::Client::new();
+    let get = || async {
+        let r = http
+            .get(format!("{base}/shapes"))
+            .bearer_auth("t")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(r.status().as_u16(), 200);
+        assert_eq!(
+            r.headers()[reqwest::header::CONTENT_TYPE],
+            "application/vnd.excalidrawlib+json"
+        );
+        r.json::<Value>().await.unwrap()
+    };
+    let post = |body: String| {
+        http.post(format!("{base}/shapes"))
+            .bearer_auth("t")
+            .body(body)
+            .send()
+    };
+    let empty = get().await;
+    assert_eq!(empty["type"], "excalidrawlib");
+    assert_eq!(empty["libraryItems"].as_array().unwrap().len(), 0);
+
+    let library = serde_json::json!({
+        "type": "excalidrawlib", "version": 2,
+        "libraryItems": [
+            {"id": "bed", "status": "unpublished", "created": 1, "name": "Raised bed",
+             "elements": [{"id": "r", "type": "rectangle", "width": 80, "height": 40, "versionNonce": 3}]},
+            {"id": "stone", "status": "unpublished", "created": 2,
+             "elements": [{"id": "e", "type": "ellipse", "width": 20, "height": 20, "versionNonce": 4}]},
+        ],
+    })
+    .to_string();
+    let r = post(library.clone()).await.unwrap();
+    assert_eq!(r.status().as_u16(), 200);
+    let done: Value = r.json().await.unwrap();
+    assert_eq!(
+        (done["added"].as_u64(), done["already"].as_u64()),
+        (Some(2), Some(0))
+    );
+    // Again: saved already.
+    let done: Value = post(library).await.unwrap().json().await.unwrap();
+    assert_eq!(
+        (done["added"].as_u64(), done["already"].as_u64()),
+        (Some(0), Some(2))
+    );
+    let file = get().await;
+    let items = file["libraryItems"].as_array().unwrap();
+    assert_eq!(items.len(), 2);
+    assert_eq!(
+        (items[0]["id"].as_str(), items[1]["name"].as_str()),
+        (Some("stone"), Some("Raised bed"))
+    );
+    assert!(ops::library(&h).await.iter().any(|i| i.id == "bed"));
+
+    // What isn't a library is refused.
+    let r = post("# a note".into()).await.unwrap();
+    assert_eq!(r.status().as_u16(), 400);
+    let err: Value = r.json().await.unwrap();
+    assert_eq!(err["error"], "bad_request");
+
+    // Recorded in the audit log, without what they are.
+    let audit = std::fs::read_to_string(alice.data_dir().join("audit.jsonl")).unwrap();
+    assert_eq!(
+        audit
+            .lines()
+            .filter(|l| l.contains("\"add_shapes\""))
+            .count(),
+        1,
+        "{audit}"
+    );
+    assert!(!audit.contains("Raised bed") && !audit.contains("rectangle"));
+
+    // A read-only gateway reads them, and adds none.
+    let ro = Hub::start(
+        alice.clone(),
+        HubOptions {
+            read_only: true,
+            offline_ok: true,
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let rbase = start_gateway(ro, "ro").await;
+    let r = http
+        .post(format!("{rbase}/shapes"))
+        .bearer_auth("ro")
+        .body("{}")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status().as_u16(), 403);
+    let r = http
+        .get(format!("{rbase}/shapes"))
+        .bearer_auth("ro")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status().as_u16(), 200);
+
+    // Limited to her quick notes, it serves them too.
+    let quick = Hub::start(
+        alice.clone(),
+        HubOptions {
+            vaults: vec!["Quick notes".into()],
+            offline_ok: true,
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let qbase = start_gateway(quick, "q").await;
+    let file: Value = http
+        .get(format!("{qbase}/shapes"))
+        .bearer_auth("q")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(file["libraryItems"].as_array().unwrap().len(), 2);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

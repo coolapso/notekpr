@@ -1221,3 +1221,234 @@ async fn a_new_drawing_waits_on_disk_while_its_vault_is_full() {
         );
     }
 }
+
+/// An `.excalidrawlib` file with one shape per `(id, name)` (a rectangle
+/// whose element id is the shape's).
+fn shapes_file(shapes: &[(&str, Option<&str>)]) -> String {
+    let items: Vec<serde_json::Value> = shapes
+        .iter()
+        .enumerate()
+        .map(|(n, (id, name))| {
+            let mut item = serde_json::json!({
+                "id": id, "status": "unpublished", "created": 1_700_000_000_000i64 + n as i64,
+                "elements": [{"id": format!("{id}-el"), "type": "rectangle", "x": 0, "y": 0,
+                              "width": 40 + n, "height": 20, "versionNonce": 5}],
+            });
+            if let Some(name) = name {
+                item["name"] = (*name).into();
+            }
+            item
+        })
+        .collect();
+    serde_json::json!({"type": "excalidrawlib", "version": 2, "libraryItems": items}).to_string()
+}
+
+/// The saved shapes (id, name), newest first, of the library or of a file.
+async fn saved_shapes(h: &notekpr_client::hub::Hub) -> Vec<(String, Option<String>)> {
+    ops::library(h)
+        .await
+        .into_iter()
+        .map(|i| (i.id, i.name))
+        .collect()
+}
+
+fn shapes_in_file(p: &Path) -> Vec<(String, Option<String>)> {
+    let items =
+        notekpr_draw::file::read_library(&read(p), 0.0, &mut notekpr_draw::restore::Ids::new(1))
+            .unwrap();
+    items.into_iter().map(|i| (i.id, i.name)).collect()
+}
+
+/// Edits the saved shapes' file: `f` changes its items.
+fn edit_shapes(p: &Path, f: impl FnOnce(&mut Vec<serde_json::Value>)) {
+    let mut json: serde_json::Value = serde_json::from_str(&read(p)).unwrap();
+    f(json["libraryItems"].as_array_mut().unwrap());
+    // (A later mtime than what the mirror wrote.)
+    std::thread::sleep(Duration::from_millis(20));
+    write(p, &serde_json::to_string_pretty(&json).unwrap());
+}
+
+fn shape<'a>(items: &'a mut [serde_json::Value], id: &str) -> &'a mut serde_json::Value {
+    items.iter_mut().find(|i| i["id"] == id).unwrap()
+}
+
+/// The saved shapes are `Saved shapes.excalidrawlib` at the mirror's top
+/// level: written when they change, and an edit of it merged in shape by
+/// shape against what it last held.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn saved_shapes_are_a_file_merged_shape_by_shape() {
+    let srv = start().await;
+    let alice = login(&srv, "alice").await;
+    manage::create_vault(&alice, "Home").await.unwrap();
+    let h = hub(&alice).await;
+    let q = h.quick_notes().await.unwrap();
+    let qid = q.lock().await.id().to_string();
+    let root = srv.path("alice-mirror");
+    let mut m = Mirror::new(h.clone(), &root).await.unwrap();
+    m.reconcile_all(true).await.unwrap();
+    let path = root.join("Saved shapes.excalidrawlib");
+    // No shapes, no file.
+    assert!(!path.exists());
+
+    // One made here: its shapes are saved (those saved already left out).
+    ops::import_library(&h, &shapes_file(&[("bed", Some("Bed"))]))
+        .await
+        .unwrap();
+    write(
+        &path,
+        &shapes_file(&[
+            ("bed", Some("Bed")),
+            ("bench", None),
+            ("stone", Some("Stone")),
+        ]),
+    );
+    let r = m.reconcile_all(true).await.unwrap();
+    assert!(r.ingested >= 1, "{r:?}");
+    let three = [
+        ("stone".to_string(), Some("Stone".to_string())),
+        ("bench".to_string(), None),
+        ("bed".to_string(), Some("Bed".to_string())),
+    ];
+    assert_eq!(saved_shapes(&h).await, three);
+    // Beside the vault folders, not among the quick notes' files.
+    let quick_dir = m.vault_dir(&qid).unwrap().to_path_buf();
+    assert_eq!(quick_dir.parent(), Some(root.as_path()));
+    assert!(std::fs::read_dir(&quick_dir).unwrap().all(|e| {
+        !e.unwrap()
+            .file_name()
+            .to_string_lossy()
+            .ends_with(".excalidrawlib")
+    }));
+    assert_eq!(shapes_in_file(&path), three);
+    assert!(
+        q.lock().await.paths().is_empty(),
+        "nothing made of it in the quick notes"
+    );
+
+    // Elsewhere: one renamed, one added; in the file meanwhile: another
+    // renamed, one taken out, one added. Both sides' changes stay.
+    ops::rename_library_item(&h, "bed", "Raised bed")
+        .await
+        .unwrap();
+    ops::import_library(&h, &shapes_file(&[("shrub", Some("Shrub"))]))
+        .await
+        .unwrap();
+    edit_shapes(&path, |items| {
+        shape(items, "bench")["name"] = "Bench".into();
+        items.retain(|i| i["id"] != "stone");
+        let new: serde_json::Value =
+            serde_json::from_str(&shapes_file(&[("pond", Some("Pond"))])).unwrap();
+        items.push(new["libraryItems"][0].clone());
+    });
+    m.reconcile_all(true).await.unwrap();
+    let mut both = saved_shapes(&h).await;
+    both.sort();
+    let want = [
+        ("bed".to_string(), Some("Raised bed".to_string())),
+        ("bench".to_string(), Some("Bench".to_string())),
+        ("pond".to_string(), Some("Pond".to_string())),
+        ("shrub".to_string(), Some("Shrub".to_string())),
+    ];
+    assert_eq!(both, want);
+    let mut on_disk = shapes_in_file(&path);
+    on_disk.sort();
+    assert_eq!(on_disk, want, "the file has both sides' changes");
+
+    // The same shape changed on both sides: the file's change wins.
+    ops::rename_library_item(&h, "pond", "Here").await.unwrap();
+    edit_shapes(&path, |items| shape(items, "pond")["name"] = "There".into());
+    m.reconcile_all(true).await.unwrap();
+    let named = |list: Vec<(String, Option<String>)>, id: &str| {
+        list.into_iter().find(|(i, _)| i == id).and_then(|(_, n)| n)
+    };
+    assert_eq!(
+        named(saved_shapes(&h).await, "pond").as_deref(),
+        Some("There")
+    );
+    assert_eq!(
+        named(shapes_in_file(&path), "pond").as_deref(),
+        Some("There")
+    );
+
+    // A broken file is left alone and changes nothing, even when the
+    // shapes change elsewhere meanwhile…
+    let good = read(&path);
+    std::thread::sleep(Duration::from_millis(20));
+    write(&path, "{\"type\": \"excalidrawlib\", \"libraryItems\": [");
+    m.reconcile_all(true).await.unwrap();
+    ops::rename_library_item(&h, "shrub", "Big shrub")
+        .await
+        .unwrap();
+    m.reconcile_all(true).await.unwrap();
+    assert_eq!(
+        read(&path),
+        "{\"type\": \"excalidrawlib\", \"libraryItems\": ["
+    );
+    assert_eq!(saved_shapes(&h).await.len(), 4);
+    // …and once it is a library again, merged as usual.
+    std::thread::sleep(Duration::from_millis(20));
+    write(&path, &good);
+    edit_shapes(&path, |items| items.retain(|i| i["id"] != "bed"));
+    m.reconcile_all(true).await.unwrap();
+    let now = saved_shapes(&h).await;
+    assert_eq!(now.len(), 3, "{now:?}");
+    assert_eq!(named(now, "shrub").as_deref(), Some("Big shrub"));
+    assert_eq!(
+        named(shapes_in_file(&path), "shrub").as_deref(),
+        Some("Big shrub")
+    );
+
+    // Deleting the file removes no shape: it is written again.
+    std::fs::remove_file(&path).unwrap();
+    let r = m.reconcile_all(true).await.unwrap();
+    assert!(r.written >= 1, "{r:?}");
+    assert_eq!(shapes_in_file(&path).len(), 3);
+    assert_eq!(saved_shapes(&h).await.len(), 3);
+
+    // From a new start (the state reloaded), nothing changes.
+    drop(m);
+    let h = hub(&reopen(&srv, "alice", "alice").await).await;
+    let mut m = Mirror::new(h.clone(), &root).await.unwrap();
+    let r = m.reconcile_all(true).await.unwrap();
+    assert_eq!(r.local_changes(), 0, "{r:?}");
+    assert_eq!(saved_shapes(&h).await.len(), 3);
+
+    // Emptied in the file: the shapes are removed; the file stays.
+    edit_shapes(&path, |items| items.clear());
+    m.reconcile_all(true).await.unwrap();
+    assert!(saved_shapes(&h).await.is_empty());
+    assert!(shapes_in_file(&path).is_empty());
+
+    // A vault named like the file gets a folder of another name.
+    manage::create_vault(&alice, "Saved shapes.excalidrawlib")
+        .await
+        .unwrap();
+    drop(m);
+    let h = hub(&reopen(&srv, "alice", "alice").await).await;
+    let v = h.resolve("Saved shapes.excalidrawlib").await.unwrap();
+    let vid = v.lock().await.id().to_string();
+    let mut m = Mirror::new(h.clone(), &root).await.unwrap();
+    m.reconcile_all(true).await.unwrap();
+    assert_ne!(m.vault_dir(&vid).unwrap(), path.as_path());
+    assert!(path.is_file());
+
+    // Running: the file, edited, is picked up; shapes saved elsewhere are
+    // written to it.
+    let (stop, rx) = watch::channel(false);
+    let task = tokio::spawn(m.run(rx));
+    std::thread::sleep(Duration::from_millis(20));
+    write(&path, &shapes_file(&[("gate", Some("Gate"))]));
+    eventually(15, "the edited file's shape is saved", || async {
+        saved_shapes(&h).await == [("gate".to_string(), Some("Gate".to_string()))]
+    })
+    .await;
+    ops::rename_library_item(&h, "gate", "Garden gate")
+        .await
+        .unwrap();
+    eventually(15, "the renamed shape is written to the file", || async {
+        named(shapes_in_file(&path), "gate").as_deref() == Some("Garden gate")
+    })
+    .await;
+    let _ = stop.send(true);
+    task.await.unwrap().unwrap();
+}

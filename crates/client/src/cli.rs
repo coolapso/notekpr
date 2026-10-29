@@ -294,14 +294,29 @@ pub enum ShapesCmd {
     /// Save the shapes of an Excalidraw library file (.excalidrawlib); those
     /// saved already are left out.
     Import { file: PathBuf },
-    /// Write the saved shapes as an Excalidraw library file
-    /// (.excalidrawlib), to stdout without --out.
+    /// Write the saved shapes (all, or those named) as an Excalidraw library
+    /// file (.excalidrawlib), to stdout without --out.
     Export {
+        /// Only these shapes: their ids, or the start of them (as `shapes
+        /// ls` shows them).
+        ids: Vec<String>,
         #[arg(long)]
         out: Option<PathBuf>,
         /// Replace an existing file.
         #[arg(long, requires = "out")]
         force: bool,
+    },
+    /// Name a saved shape ("" takes its name away).
+    Rename {
+        /// Its id, or the start of it (as `shapes ls` shows it).
+        id: String,
+        name: String,
+    },
+    /// Remove saved shapes.
+    Rm {
+        /// Their ids, or the start of them (as `shapes ls` shows them).
+        #[arg(required = true)]
+        ids: Vec<String>,
     },
 }
 

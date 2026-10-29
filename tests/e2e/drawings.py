@@ -9,7 +9,7 @@ Export menu, the vault's Drawings page, what reaches the server.
 import argparse, base64, json, math, os, subprocess, sys, tempfile, time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from suite import Env, uniq, check, share, severe_logs, png_file  # noqa: E402
+from suite import Env, uniq, check, share, severe_logs, png_file, CAPTURE_DOWNLOADS  # noqa: E402
 from wd import Browser, KEYS, req, base_url  # noqa: E402
 
 CANVAS = ".drawing-canvas"
@@ -60,6 +60,18 @@ def drag(b, frm, to, steps=6, hold=None, pause=0):
         sources.append({"type": "key", "id": "kb", "actions": keys})
     req("POST", b.p("/actions"), {"actions": sources})
     time.sleep(0.4)
+
+
+def click_with(b, el, key):
+    """A real click on the element `el` with `key` held (Shift, Ctrl)."""
+    origin = {"element-6066-11e4-a52e-4f735466cecf": el["element-6066-11e4-a52e-4f735466cecf"]}
+    pause = {"type": "pause", "duration": 0}
+    req("POST", b.p("/actions"), {"actions": [
+        {"type": "key", "id": "kb", "actions": [{"type": "keyDown", "value": key}, pause, pause, pause, {"type": "keyUp", "value": key}]},
+        {"type": "pointer", "id": "mouse", "parameters": {"pointerType": "mouse"},
+         "actions": [pause, {"type": "pointerMove", "origin": origin, "x": 0, "y": 0},
+                     {"type": "pointerDown", "button": 0}, {"type": "pointerUp", "button": 0}, pause]}]})
+    time.sleep(0.2)
 
 
 def tool(b, key):
@@ -387,6 +399,88 @@ def main():
         exported = json.loads(r.stdout)
         check(exported["type"] == "excalidrawlib" and len(exported["libraryItems"]) == 2,
               "the saved shapes, as the server has them, export as an .excalidrawlib file")
+
+        # Their names under the pictures; one renamed in place, which the
+        # CLI then shows.
+        names = lambda: a.js(f"return [...document.querySelectorAll('{LIBRARY_ITEMS} .library-name')].map(e => e.textContent)")
+        check(names() == ["diamond", "rectangle"], f"the shapes' names show under them ({names()})")
+        a.js(f"document.querySelectorAll('{LIBRARY_ITEMS}')[1].querySelector(\"button[aria-label='Rename the shape']\").click()")
+        a.wait("return !!document.activeElement && document.activeElement.matches('.library-rename input')", 5, "the name to type")
+        a.chord(KEYS["ctrl"], "a")
+        a.keys("Garden bed")
+        a.keys(KEYS["enter"])
+        a.wait(f"return [...document.querySelectorAll('{LIBRARY_ITEMS} .library-name')].some(e => e.textContent == 'Garden bed')",
+               10, "the shape renamed")
+        check(names() == ["diamond", "Garden bed"], f"one shape renamed ({names()})")
+        for _ in range(20):
+            listed = json.loads(amy("shapes", "ls", "--json").stdout or "[]")
+            if [i.get("name") for i in listed] == ["diamond", "Garden bed"]:
+                break
+            time.sleep(0.5)
+        check([i.get("name") for i in listed] == ["diamond", "Garden bed"],
+              f"the CLI lists the new name ({[i.get('name') for i in listed]})")
+
+        # Several picked: Ctrl-click one, Shift-click another (a range).
+        unit = lambda n: a.js(f"return document.querySelectorAll('{LIBRARY_ITEMS}')[{n}]")
+        picked = lambda: a.js(f"return document.querySelectorAll('{LIBRARY_ITEMS}.picked').length")
+        click_with(a, unit(0), KEYS["ctrl"])
+        a.wait("return document.querySelectorAll('.library-unit.picked').length == 1", 5, "one shape picked")
+        click_with(a, unit(1), KEYS["shift"])
+        a.wait("return document.querySelectorAll('.library-unit.picked').length == 2", 5, "a range picked")
+        check("2 selected" in a.text(".library-head"), "the panel says how many are picked")
+        check(ellipses() == 3, "picking puts nothing in")
+        # Dragging a picked one drops them all, side by side (Excalidraw's grid).
+        before = {e["id"] for e in drawing()}
+        a.js("""
+            const unit = document.querySelector(arguments[0]);
+            const dt = new DataTransfer();
+            unit.dispatchEvent(new DragEvent('dragstart', {dataTransfer: dt, bubbles: true}));
+            const c = document.querySelector('.drawing-canvas'), r = c.getBoundingClientRect();
+            c.dispatchEvent(new DragEvent('drop', {dataTransfer: dt, bubbles: true, cancelable: true,
+                clientX: r.left + r.width / 2 - 150, clientY: r.top + r.height / 2 + 200}));
+        """, LIBRARY_ITEMS)
+        new = [e for e in drawing() if e["id"] not in before]
+        check(sorted(e["type"] for e in new) == ["diamond", "rectangle"],
+              f"dragging a picked shape puts in all those picked ({[e['type'] for e in new]})")
+        dia, rect = (next(e for e in new if e["type"] == t) for t in ("diamond", "rectangle"))
+        check(abs(dia["y"] - rect["y"]) < 0.01 and abs(rect["x"] - dia["x"] - 110) < 0.01,
+              f"side by side, 50 apart ({dia['x']},{dia['y']} and {rect['x']},{rect['y']})")
+        # (They came in selected: out again, for the steps below.)
+        tool(a, KEYS["backspace"])
+        # A click on a picked one puts them all in too.
+        a.click(LIBRARY_ITEMS)
+        new = [e for e in drawing() if e["id"] not in before]
+        check(sorted(e["type"] for e in new) == ["diamond", "rectangle"], "a click on a picked shape puts them all in")
+        tool(a, KEYS["backspace"])
+        check(all(e["id"] in before for e in drawing()), "and out again")
+        # Just those picked are exported (one let go from its checkbox).
+        a.js(CAPTURE_DOWNLOADS)
+        a.js(f"document.querySelectorAll('{LIBRARY_ITEMS}')[1].querySelector('.library-check').click()")
+        a.wait("return document.querySelectorAll('.library-unit.picked').length == 1", 5, "one let go")
+        a.click(".library-head button[aria-label='Export the selected shapes']")
+        a.wait("return !!window.__download", 10, "the picked shapes exported")
+        name, data = a.js("return window.__download")
+        lib = json.loads(base64.b64decode(data))
+        check(name == "Saved shapes.excalidrawlib" and [i["id"] for i in lib["libraryItems"]] == ["lib-diamond"],
+              f"only the picked shape is exported ({[i['id'] for i in lib['libraryItems']]})")
+        # Escape lets them go.
+        a.js(f"document.querySelector('{LIBRARY_ITEMS}').focus()")
+        a.keys(KEYS["escape"])
+        a.wait("return document.querySelectorAll('.library-unit.picked').length == 0", 5, "Escape lets the picked shapes go")
+        check(picked() == 0 and "Saved shapes" in a.text(".library-head"), "nothing picked any more")
+        # Both picked again, and removed at once.
+        click_with(a, unit(0), KEYS["ctrl"])
+        click_with(a, unit(1), KEYS["ctrl"])
+        a.wait("return document.querySelectorAll('.library-unit.picked').length == 2", 5, "both picked")
+        a.shot("drawings-library-picked")
+        a.click(".library-head button[aria-label='Remove the selected shapes']")
+        a.wait(f"return document.querySelectorAll('{LIBRARY_ITEMS}').length == 0", 10, "the picked shapes removed")
+        for _ in range(20):
+            listed = json.loads(amy("shapes", "ls", "--json").stdout or "[]")
+            if not listed:
+                break
+            time.sleep(0.5)
+        check(listed == [], f"the CLI has none left ({len(listed)})")
         a.click(".library-head button[aria-label='Close the saved shapes']")
 
         # The whole palette, and a link (Ctrl+K) on the top left box.

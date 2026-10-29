@@ -11,6 +11,7 @@ pub mod binding;
 pub mod hit;
 pub mod label;
 pub mod new;
+pub mod snap;
 pub mod transform;
 
 use std::collections::{BTreeSet, HashMap};
@@ -214,6 +215,8 @@ pub struct Editor {
     pub measure: fn(&str, &str) -> f64,
     /// The zoom of the last pointer event (how near counts).
     zoom: f64,
+    /// Snapping to the grid and to other elements, and what snaps.
+    pub snap: snap::Snapping,
 }
 
 /// A guess at a line's width without a browser: about half the font size a
@@ -238,6 +241,7 @@ impl Default for Editor {
             editing_text: None,
             measure: guess_width,
             zoom: 1.0,
+            snap: snap::Snapping::default(),
         }
     }
 }
@@ -308,6 +312,7 @@ impl Editor {
     pub fn set_tool(&mut self, tool: Tool) {
         self.tool = tool;
         self.gesture = None;
+        self.snap.clear();
         if tool != Tool::Selection {
             self.selection.clear();
         }
@@ -390,6 +395,7 @@ impl Editor {
                 return self.finish_linear(&s2, &id, rng);
             }
             // The click places the point; the next one follows the pointer.
+            let p = snap::grid_point(p, snap::grid_size(scene, mods.ctrl));
             points[n - 1] = p;
             points.push(p);
             if let Some(mut e) = scene.element(&id).cloned() {
@@ -399,6 +405,7 @@ impl Editor {
             }
             return out;
         }
+        self.snap.clear();
         match self.tool {
             Tool::Hand | Tool::Laser | Tool::Image => {}
             Tool::Selection => {
@@ -536,6 +543,7 @@ impl Editor {
                 } else {
                     ElementType::Line
                 };
+                let p = snap::grid_point(p, snap::grid_size(scene, mods.ctrl));
                 let mut e = new::linear(kind, p[0], p[1], &self.style, rng);
                 e.set("index", top_index(scene).map_or(Value::Null, Value::String));
                 new::normalize_points(&mut e, &[p, p]);
@@ -549,6 +557,8 @@ impl Editor {
             }
             tool => {
                 let kind = tool.shape().expect("a shape tool");
+                self.snap.hover(scene, p, mods.ctrl, zoom);
+                let p = snap::grid_point(p, snap::grid_size(scene, mods.ctrl));
                 let mut e = new::shape(kind, p[0], p[1], &self.style, rng);
                 e.set("index", top_index(scene).map_or(Value::Null, Value::String));
                 self.gesture = Some(Gesture::Creating {
@@ -576,6 +586,11 @@ impl Editor {
         self.zoom = zoom;
         let mut out = Output::default();
         let Some(g) = self.gesture.as_mut() else {
+            // A shape tool shows where a new shape would start, snapped.
+            match self.tool.shape() {
+                Some(_) => self.snap.hover(scene, p, mods.ctrl, zoom),
+                None => self.snap.clear(),
+            }
             return out;
         };
         match g {
@@ -583,6 +598,7 @@ impl Editor {
                 let Some(mut e) = scene.element(id).cloned() else {
                     return out;
                 };
+                let p = self.snap.new_corner(scene, id, *origin, p, mods.ctrl, zoom);
                 let (mut w, mut h) = (p[0] - origin[0], p[1] - origin[1]);
                 if mods.shift {
                     let s = w.abs().max(h.abs());
@@ -604,6 +620,9 @@ impl Editor {
                         h.abs(),
                     )
                 };
+                // Moved as its first corner was to snap.
+                let [x, y] = [x + self.snap.origin()[0], y + self.snap.origin()[1]];
+                self.snap.show_box(scene, [x, y, x + w, y + h], mods.ctrl);
                 e.set("x", num(x));
                 e.set("y", num(y));
                 e.set("width", num(w));
@@ -621,6 +640,7 @@ impl Editor {
                 };
                 let n = points.len();
                 let anchor = points[n - 2];
+                let p = snap::grid_point(p, snap::grid_size(scene, mods.ctrl));
                 let mut q = p;
                 if mods.shift {
                     // In steps of 15°.
@@ -692,6 +712,7 @@ impl Editor {
                 } else {
                     (dx, dy)
                 };
+                let [dx, dy] = self.snap.moved(scene, originals, [dx, dy], mods.ctrl, zoom);
                 let ids: Vec<&str> = originals.iter().map(Element::id).collect();
                 let mut changed: Vec<Element> = Vec::new();
                 for o in originals.iter() {
@@ -743,7 +764,12 @@ impl Editor {
                     frame.center(),
                     frame.angle,
                 );
+                let target = self
+                    .snap
+                    .resized(scene, originals, frame, *handle, target, mods.ctrl, zoom);
                 let mut changed = transform::resize(&shapes, frame, *handle, target, mode);
+                self.snap
+                    .show_box(scene, bounds::common_bounds(changed.iter()), mods.ctrl);
                 self.relayout(scene, &mut changed);
                 binding::update_arrows(scene, &mut changed);
                 for mut e in changed {
@@ -802,6 +828,7 @@ impl Editor {
     /// The pointer went up at `p`.
     pub fn pointer_up(&mut self, scene: &Scene, p: Point, rng: &mut dyn Random) -> Output {
         let mut out = Output::default();
+        self.snap.clear();
         let Some(g) = self.gesture.take() else {
             return out;
         };
@@ -951,6 +978,7 @@ impl Editor {
             return fin;
         }
         self.gesture = None;
+        self.snap.clear();
         self.selection.clear();
         Output::default()
     }
@@ -1274,8 +1302,7 @@ impl Editor {
         if visible.is_empty() {
             return Output::default();
         }
-        let [x1, y1, x2, y2] = bounds::common_bounds(visible.iter());
-        let offset = [at[0] - (x1 + x2) / 2.0, at[1] - (y1 + y2) / 2.0];
+        let offset = snap::paste_offset(scene, bounds::common_bounds(visible.iter()), at);
         self.tool = Tool::Selection;
         let mut out = self.place_copies(scene, &visible, offset, rng);
         out.tool_changed = true;

@@ -71,6 +71,59 @@ const TOOLS: [(Tool, &str, &str, &str); 14] = [
     (Tool::Laser, "laser", "Laser pointer", "K"),
 ];
 
+/// Fingers on the canvas, by pointer, and the pinch two of them make:
+/// how far apart they began, their middle then, and the view then.
+#[derive(Default)]
+struct Touches {
+    at: std::collections::HashMap<i32, [f64; 2]>,
+    pinch: Option<(f64, [f64; 2], notekpr_draw::viewport::Viewport)>,
+}
+
+impl Touches {
+    fn middle_and_spread(&self) -> Option<([f64; 2], f64)> {
+        let mut it = self.at.values();
+        let (a, b) = (it.next()?, it.next()?);
+        Some((
+            [(a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0],
+            (a[0] - b[0]).hypot(a[1] - b[1]),
+        ))
+    }
+
+    /// A finger went down; with a second, a pinch starts (true).
+    fn down(&mut self, id: i32, p: [f64; 2], view: notekpr_draw::viewport::Viewport) -> bool {
+        self.at.insert(id, p);
+        if self.at.len() == 2
+            && let Some((m, d)) = self.middle_and_spread()
+        {
+            self.pinch = Some((d.max(1.0), m, view));
+            return true;
+        }
+        false
+    }
+
+    /// A finger moved: the view the pinch makes, if one goes on
+    /// (zoomed by how far apart the fingers are, moved with their middle).
+    fn moved(&mut self, id: i32, p: [f64; 2]) -> Option<notekpr_draw::viewport::Viewport> {
+        if let Some(q) = self.at.get_mut(&id) {
+            *q = p;
+        }
+        let (d0, m0, v0) = self.pinch?;
+        let (m, d) = self.middle_and_spread()?;
+        let v = v0.zoomed_at(v0.zoom * d / d0, m0);
+        Some(v.scrolled(m[0] - m0[0], m[1] - m0[1]))
+    }
+
+    /// A finger went up; whether it was part of a pinch.
+    fn up(&mut self, id: i32) -> bool {
+        self.at.remove(&id);
+        let pinched = self.pinch.is_some();
+        if self.at.is_empty() {
+            self.pinch = None;
+        }
+        pinched
+    }
+}
+
 /// The pointer's position on the canvas.
 fn at(ev: &web_sys::PointerEvent) -> [f64; 2] {
     [ev.offset_x() as f64, ev.offset_y() as f64]
@@ -187,9 +240,25 @@ pub fn DrawingView(vault: String, id: String) -> impl IntoView {
     let space = Rc::new(Cell::new(false));
     let panning = Rc::new(Cell::new(None::<(i32, f64, f64)>));
     let (sp, pn) = (space.clone(), panning.clone());
+    // Two fingers pinch to zoom and move the view.
+    let touches = StoredValue::new_local(Touches::default());
     let on_down = move |ev: web_sys::PointerEvent| {
         if let Some(r) = root_ref.get_untracked() {
             let _ = r.focus();
+        }
+        if ev.pointer_type() == "touch" {
+            let view = b.with_value(|b| b.view.get());
+            let started = touches
+                .try_update_value(|t| t.down(ev.pointer_id(), at(&ev), view))
+                .unwrap_or(false);
+            if started {
+                // What the first finger began ends where it is.
+                b.with_value(|b| b.pointer_up(at(&ev)));
+                return;
+            }
+            if touches.with_value(|t| t.pinch.is_some()) {
+                return;
+            }
         }
         if let Some(t) = ev
             .target()
@@ -215,6 +284,17 @@ pub fn DrawingView(vault: String, id: String) -> impl IntoView {
     };
     let pm = panning.clone();
     let on_move = move |ev: web_sys::PointerEvent| {
+        if ev.pointer_type() == "touch"
+            && let Some(v) = touches
+                .try_update_value(|t| t.moved(ev.pointer_id(), at(&ev)))
+                .flatten()
+        {
+            b.with_value(|b| {
+                b.view.set(v);
+                b.schedule();
+            });
+            return;
+        }
         if let Some((pid, x, y)) = pm.get()
             && pid == ev.pointer_id()
         {
@@ -239,6 +319,13 @@ pub fn DrawingView(vault: String, id: String) -> impl IntoView {
     };
     let pu = panning.clone();
     let on_up = move |ev: web_sys::PointerEvent| {
+        if ev.pointer_type() == "touch"
+            && touches
+                .try_update_value(|t| t.up(ev.pointer_id()))
+                .unwrap_or(false)
+        {
+            return;
+        }
         if pu.take().is_some() {
             return;
         }

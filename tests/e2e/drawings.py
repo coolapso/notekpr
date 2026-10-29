@@ -226,6 +226,20 @@ def main():
               "a colour from the whole palette, and a link")
         a.shot("drawings-link")
 
+        # Two fingers pinching apart zoom in.
+        tool(a, KEYS["escape"])
+        before = a.text(".drawing-zoom .zoom-value")
+        el = {"element-6066-11e4-a52e-4f735466cecf": a.find(CANVAS)}
+        finger = lambda name, x0, x1: {"type": "pointer", "id": name, "parameters": {"pointerType": "touch"}, "actions": [
+            {"type": "pointerMove", "origin": el, "x": x0, "y": 250}, {"type": "pointerDown", "button": 0},
+            {"type": "pointerMove", "origin": el, "x": (x0 + x1) // 2, "y": 250, "duration": 100},
+            {"type": "pointerMove", "origin": el, "x": x1, "y": 250, "duration": 100}, {"type": "pointerUp", "button": 0}]}
+        req("POST", a.p("/actions"), {"actions": [finger("f1", -40, -160), finger("f2", 40, 160)]})
+        time.sleep(0.5)
+        after = a.text(".drawing-zoom .zoom-value")
+        check(int(after.rstrip("%")) > int(before.rstrip("%")), f"two fingers pinching apart zoom in ({before} → {after})")
+        check(sum(e["type"] == "rectangle" for e in drawing()) == 3, "pinching draws nothing")
+
         # The Export menu opens inside the window, with our own file first.
         a.click(".drawing-page .note-head .tb-drop .icon-btn")
         a.find(".drawing-page .note-head .menu", 5)

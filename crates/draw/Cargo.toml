@@ -11,3 +11,6 @@ serde = { version = "1", features = ["derive"] }
 # Numbers read exactly as JavaScript reads them (the default parser can be
 # off in the last bit), so drawings come out exactly as in Excalidraw.
 serde_json = { version = "1", features = ["float_roundtrip"] }
+# Deflate, pure Rust: the drawing inside Excalidraw's PNG and SVG exports
+# is compressed (as pako, a zlib port, does it).
+miniz_oxide = "0.9"

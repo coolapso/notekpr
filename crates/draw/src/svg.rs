@@ -13,6 +13,7 @@ use std::fmt::Write;
 use crate::bounds;
 use crate::color;
 use crate::edit::frame;
+use crate::embed;
 use crate::fonts;
 use crate::js;
 use crate::rough::{self, Drawable};
@@ -52,6 +53,9 @@ pub struct SvgOptions {
     /// Measures a line of text in a CSS font: frames' names are cut to
     /// their width.
     pub measure: fn(&str, &str) -> f64,
+    /// Put the drawing inside, as Excalidraw's "Embed scene" does: the
+    /// image opens again as the drawing, in notekpr and in Excalidraw.
+    pub embed_scene: bool,
 }
 
 impl Default for SvgOptions {
@@ -64,6 +68,7 @@ impl Default for SvgOptions {
             standalone: false,
             time: sticky::LocalTime::default(),
             measure: crate::edit::guess_width,
+            embed_scene: false,
         }
     }
 }
@@ -531,9 +536,14 @@ pub fn export(scene: &Scene, opts: &SvgOptions) -> String {
         out.push_str(r#"<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">"#);
         out.push('\n');
     }
+    let payload = if opts.embed_scene {
+        embed::svg_payload(&embed::scene_text(scene))
+    } else {
+        String::new()
+    };
     let _ = write!(
         out,
-        r#"<svg version="1.1" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {w} {h}" width="{w}" height="{h}"><!-- svg-source:excalidraw --><metadata></metadata><defs>"#,
+        r#"<svg version="1.1" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {w} {h}" width="{w}" height="{h}"><!-- svg-source:excalidraw --><metadata>{payload}</metadata><defs>"#,
         w = n(w),
         h = n(h)
     );
@@ -686,6 +696,27 @@ mod tests {
         );
         assert!(!bare.contains(r##"fill="#ffffff""##));
         assert!(export(&Scene::default(), &SvgOptions::default()).ends_with("</svg>"));
+    }
+
+    #[test]
+    fn the_drawing_inside() {
+        let scene = read_drawing(DRAWING, &mut Ids::new(1)).unwrap().scene;
+        let plain = export(&scene, &SvgOptions::default());
+        assert!(plain.contains("<metadata></metadata>"));
+        let svg = export(
+            &scene,
+            &SvgOptions {
+                embed_scene: true,
+                ..SvgOptions::default()
+            },
+        );
+        // Only the metadata differs.
+        let at = svg.find("<metadata><!-- payload-type:").unwrap();
+        assert_eq!(svg[..at], plain[..at]);
+        assert_eq!(body(&svg), body(&plain));
+        let back = crate::file::read_drawing_bytes(svg.as_bytes(), &mut Ids::new(1)).unwrap();
+        let shown: Vec<&Element> = scene.visible().collect();
+        assert_eq!(back.scene.elements.iter().collect::<Vec<_>>(), shown);
     }
 
     #[test]

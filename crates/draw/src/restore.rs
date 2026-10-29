@@ -440,7 +440,7 @@ pub fn restore_elements(raw: &[Value], fresh: &mut dyn Fresh) -> Vec<Element> {
 }
 
 /// JavaScript's truthiness of a property.
-fn truthy(v: Option<&Value>) -> bool {
+pub(crate) fn truthy(v: Option<&Value>) -> bool {
     match v {
         None | Some(Value::Null) => false,
         Some(Value::Bool(b)) => *b,

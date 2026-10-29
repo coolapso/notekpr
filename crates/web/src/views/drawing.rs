@@ -428,9 +428,25 @@ pub fn DrawingView(vault: String, id: String) -> impl IntoView {
         let (images, others): (Vec<web_sys::File>, Vec<web_sys::File>) = (0..files.length())
             .filter_map(|i| files.get(i))
             .partition(|f| f.type_().starts_with("image/"));
+        let at = [ev.offset_x() as f64, ev.offset_y() as f64];
+        let at = b.with_value(|b| b.view.get().to_scene(at));
+        // One PNG or SVG alone may hold a drawing (Excalidraw's "Embed
+        // scene", notekpr's exports): its elements come in instead.
+        if let [one] = images.as_slice()
+            && others.is_empty()
+            && matches!(one.type_().as_str(), "image/png" | "image/svg+xml")
+        {
+            let f = one.clone();
+            leptos::task::spawn_local(async move {
+                let bytes = crate::util::read_file(&f).await.unwrap_or_default();
+                if !b.with_value(|b| b.paste_drawing_in_picture(&bytes, at)) {
+                    b.with_value(|b| b.add_pictures(vec![f], Some(at)));
+                }
+            });
+            return;
+        }
         if !images.is_empty() {
-            let at = [ev.offset_x() as f64, ev.offset_y() as f64];
-            b.with_value(|b| b.add_pictures(images, Some(b.view.get().to_scene(at))));
+            b.with_value(|b| b.add_pictures(images, Some(at)));
         }
         for f in others {
             leptos::task::spawn_local(async move {

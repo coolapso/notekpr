@@ -1,11 +1,13 @@
 //! Drawing files: notekpr's own (`.drawing`), Excalidraw's (`.excalidraw`,
 //! and what Excalidraw puts on the clipboard) and libraries
 //! (`.excalidrawlib`). Obsidian's `.excalidraw.md` is in [`crate::obsidian`];
-//! [`read_drawing`] takes any.
+//! [`read_drawing`] takes any, [`read_drawing_bytes`] PNG and SVG pictures
+//! with the drawing inside too ([`crate::embed`]).
 
 use serde::Serialize;
 use serde_json::{Map, Value, json};
 
+use crate::embed;
 use crate::obsidian;
 use crate::restore::{self, Fresh};
 use crate::scene::{Element, Props, Scene};
@@ -19,11 +21,13 @@ pub const SOURCE: &str = "https://github.com/coolapso/notekpr";
 /// Excalidraw opens.
 pub const DRAWING_TYPE: &str = "notekpr-drawing";
 
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum FormatError {
-    /// Not JSON, or not a drawing (or library) in it.
+    /// Not JSON, or not a drawing (or library) in it; a picture without a
+    /// drawing inside.
     NotADrawing,
-    /// An Obsidian drawing whose compressed data can't be read.
+    /// A drawing whose compressed data can't be read: Obsidian's, or one
+    /// inside a picture.
     BadCompressedData,
 }
 
@@ -61,6 +65,22 @@ pub fn read_drawing(text: &str, fresh: &mut dyn Fresh) -> Result<Drawing, Format
         });
     }
     obsidian::read(text, fresh)
+}
+
+/// Reads a drawing from a file's bytes: what [`read_drawing`] reads, and
+/// PNG and SVG pictures with the drawing inside (Excalidraw's exports with
+/// "Embed scene", and notekpr's). A picture without one is
+/// [`FormatError::NotADrawing`].
+pub fn read_drawing_bytes(bytes: &[u8], fresh: &mut dyn Fresh) -> Result<Drawing, FormatError> {
+    if embed::is_png(bytes) {
+        return read_drawing(&embed::png_scene(bytes)?, fresh);
+    }
+    let text = std::str::from_utf8(bytes).map_err(|_| FormatError::NotADrawing)?;
+    let start = text.trim_start_matches('\u{feff}').trim_start();
+    if start.starts_with('<') {
+        return read_drawing(&embed::svg_scene(text)?, fresh);
+    }
+    read_drawing(text, fresh)
 }
 
 /// A drawing from the JSON of a `.drawing` or `.excalidraw` file or the
@@ -334,5 +354,28 @@ mod tests {
         let back = read_library(&v2, 9.0, &mut Ids::new(2)).unwrap();
         assert_eq!(back, items);
         assert!(read_library(EXAMPLE, 0.0, &mut Ids::new(1)).is_err());
+    }
+
+    #[test]
+    fn files_by_their_bytes() {
+        let read = |bytes: &[u8]| read_drawing_bytes(bytes, &mut Ids::new(1));
+        let png = include_bytes!("../tests/fixtures/smiley_embedded_v2.png");
+        let svg = include_str!("../tests/fixtures/smiley_embedded_v2.svg");
+        for d in [read(png), read(svg.as_bytes())] {
+            assert_eq!(d.unwrap().scene.elements[0].text(), "😀");
+        }
+        let obsidian = include_str!("../tests/fixtures/obsidian.excalidraw.md");
+        assert_eq!(
+            read(obsidian.as_bytes()).unwrap(),
+            read_drawing(obsidian, &mut Ids::new(1)).unwrap()
+        );
+        assert_eq!(read(EXAMPLE.as_bytes()).unwrap().scene.elements.len(), 73);
+        // Pictures without a drawing, and what isn't text.
+        assert_eq!(
+            read(br#"<?xml version="1.0"?><svg></svg>"#),
+            Err(FormatError::NotADrawing)
+        );
+        assert_eq!(read(&png[..33]), Err(FormatError::NotADrawing));
+        assert_eq!(read(&[0xFF, 0xD8, 0xFF]), Err(FormatError::NotADrawing));
     }
 }

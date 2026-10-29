@@ -27,13 +27,17 @@ end.
 | elbow arrows' routing (A* around the shapes they connect) | Excalidraw | (c) 2020 Excalidraw |
 | sticky notes: their paper, date and fitted text (`sticky.rs`) | Excalidraw | (c) 2020 Excalidraw |
 | frames: what is in them, their names (`edit/frame.rs`) | Excalidraw | (c) 2020 Excalidraw |
+| restore's repairs of labels, bindings and frames (`restore.rs`); pictures and their crops in the SVG export (`staticSvgScene.ts`) | Excalidraw | (c) 2020 Excalidraw |
+| the drawing inside PNG and SVG pictures of it (`embed.rs`: `data/image.ts`, `data/encode.ts`, `scene/export.ts`) | Excalidraw | (c) 2020 Excalidraw |
 | compression of Obsidian's drawings | lz-string 1.5 | (c) 2013 pieroxy |
 | `Math.sin`, `Math.cos`, `Math.tan`, `Math.acos` | fdlibm 5.3, as in V8 | (c) 1993 Sun Microsystems; the V8 project authors |
 | `Math.hypot` | V8 | the V8 project authors |
 
 The test fixture `tests/fixtures/perfect-freehand.json` holds
 perfect-freehand's own test inputs and snapshots, from its repository
-(MIT, as above).
+(MIT, as above). `tests/fixtures/smiley_embedded_v2.png`, `.svg` and
+`test_embedded_v1.png`, `.svg` are pictures Excalidraw exported with the
+drawing inside, from its repository's test fixtures (MIT, as above).
 
 ## The MIT license
 

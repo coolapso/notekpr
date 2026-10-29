@@ -234,6 +234,73 @@ pub fn is_space(c: char) -> bool {
     )
 }
 
+const BASE64: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+/// `btoa`: bytes (a byte string's characters) in base64, padded.
+pub fn btoa(data: &[u8]) -> String {
+    let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
+    for chunk in data.chunks(3) {
+        let b = [
+            chunk[0],
+            *chunk.get(1).unwrap_or(&0),
+            *chunk.get(2).unwrap_or(&0),
+        ];
+        let n = (u32::from(b[0]) << 16) | (u32::from(b[1]) << 8) | u32::from(b[2]);
+        out.push(BASE64[(n >> 18) as usize & 63] as char);
+        out.push(BASE64[(n >> 12) as usize & 63] as char);
+        out.push(if chunk.len() > 1 {
+            BASE64[(n >> 6) as usize & 63] as char
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            BASE64[n as usize & 63] as char
+        } else {
+            '='
+        });
+    }
+    out
+}
+
+/// `atob`: base64 back to bytes, as forgiving as browsers are (spaces and
+/// line breaks skipped, padding optional); `None` if it isn't base64.
+pub fn atob(text: &str) -> Option<Vec<u8>> {
+    let mut s: Vec<u8> = text
+        .bytes()
+        .filter(|b| !matches!(b, b'\t' | b'\n' | b'\x0c' | b'\r' | b' '))
+        .collect();
+    if s.len().is_multiple_of(4) {
+        for _ in 0..2 {
+            if s.last() == Some(&b'=') {
+                s.pop();
+            }
+        }
+    }
+    if s.len() % 4 == 1 {
+        return None;
+    }
+    let mut out = Vec::with_capacity(s.len() * 3 / 4);
+    let (mut acc, mut bits) = (0u32, 0);
+    for c in s {
+        let v = match c {
+            b'A'..=b'Z' => c - b'A',
+            b'a'..=b'z' => c - b'a' + 26,
+            b'0'..=b'9' => c - b'0' + 52,
+            b'+' => 62,
+            b'/' => 63,
+            _ => return None,
+        };
+        acc = (acc << 6) | u32::from(v);
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push((acc >> bits) as u8);
+            acc &= (1 << bits) - 1;
+        }
+    }
+    Some(out)
+}
+
 /// `Array.prototype.sort(compare)`: a stable sort whose comparison returns a
 /// number (negative: `a` first, positive: `b` first, 0 or NaN: keep their
 /// order). With a consistent comparison any stable sort gives JavaScript's

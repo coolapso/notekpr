@@ -211,7 +211,8 @@ fn decrypt_vault(
 
 /// One vault's files, as recovered: its notes and attachments at their
 /// paths (trashed ones under [`TRASH_DIR`]), its notes' comments (under
-/// [`comments::EXPORT_DIR`]) and its explicit folders. `attachment` gives
+/// [`comments::EXPORT_DIR`]), its explicit folders, and the saved shapes it
+/// keeps (the Personal storage) as an `.excalidrawlib` file. `attachment` gives
 /// an attachment's ciphertext, or why it isn't there. Used for exports and
 /// for a device's local copy alike.
 pub fn vault_files(
@@ -317,6 +318,17 @@ pub fn vault_files(
             }
         }
     }
+    // The saved shapes (only the Personal storage holds any), as
+    // Excalidraw's library file.
+    let shapes = crate::library::items(&replica.index);
+    if !shapes.is_empty()
+        && let Some(p) = place(crate::account_export::SAVED_SHAPES_FILE, false, &mut taken)
+    {
+        rv.files.push(RecoveredFile {
+            path: p,
+            data: notekpr_draw::file::write_library(&shapes).into_bytes(),
+        });
+    }
     for (path, title, id) in commented {
         let Some(md) = comments_file(replica, &id, &title, people) else {
             continue;
@@ -398,6 +410,43 @@ mod tests {
             created_at: 0,
             signature: None,
         }
+    }
+
+    #[test]
+    fn saved_shapes_are_recovered_as_a_library_file() {
+        let alice = AccountSecret::generate();
+        let meta = VaultMeta::named(crate::quick::NAME);
+        let (_, ring) = new_vault(&alice, "alice", &meta, 1).unwrap();
+        let vid = ring.vault_id().to_string();
+        let mut r = VaultReplica::new(&vid, Role::Owner, ring, meta);
+        let shapes = notekpr_draw::file::read_library(
+            r#"{"type":"excalidrawlib","version":2,"libraryItems":[{"id":"box","status":"unpublished",
+                "created":1,"name":"Box","elements":[{"id":"r","type":"rectangle","width":5,"height":5}]}]}"#,
+            1.0,
+            &mut notekpr_draw::restore::Ids::new(1),
+        )
+        .unwrap();
+        let u = crate::library::add(&r.index, &shapes[0], usize::MAX)
+            .unwrap()
+            .unwrap();
+        r.local_change(INDEX_OBJECT_ID, u).unwrap();
+        let people = People {
+            names: None,
+            owner: None,
+        };
+        let rv = vault_files(&r, "Quick notes", people, |_| Err("none".into()));
+        let file = rv
+            .files
+            .iter()
+            .find(|f| f.path == crate::account_export::SAVED_SHAPES_FILE)
+            .expect("the saved shapes");
+        let back = notekpr_draw::file::read_library(
+            std::str::from_utf8(&file.data).unwrap(),
+            0.0,
+            &mut notekpr_draw::restore::Ids::new(2),
+        )
+        .unwrap();
+        assert_eq!(back[0].name.as_deref(), Some("Box"));
     }
 
     #[test]

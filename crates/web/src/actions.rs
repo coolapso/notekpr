@@ -1870,8 +1870,9 @@ pub async fn move_to_vault(
             }
             EntryKind::Note => step(|c| new_note_at(c, to, &copy.path, &copy.text)),
             EntryKind::Drawing => step(|c| {
-                let id =
-                    new_drawing_at(c, to, &copy.path, &copy.drawing.clone().unwrap_or_default());
+                // Showing the copies of its pictures, made before it.
+                let scene = notekpr_core::moving::relinked(copy, |old| ids.get(old).cloned());
+                let id = new_drawing_at(c, to, &copy.path, &scene);
                 // The original goes once the copy is stored: the copy
                 // replaces it, and needs no room for another drawing.
                 if plan.trash.contains(&copy.from)
@@ -2242,6 +2243,65 @@ pub async fn upload_bytes(vault: &str, path: &str, bytes: &[u8]) -> Option<Strin
     upload_file(vault, path, bytes).await.map(|(_, path)| path)
 }
 
+/// Uploads a file to `path` (or a free name beside it): its id and path.
+pub async fn upload_attachment(vault: &str, path: &str, bytes: &[u8]) -> Option<(String, String)> {
+    upload_file(vault, path, bytes).await
+}
+
+/// Pictures a drawing's `files` hold inside (pasted, dropped, imported)
+/// become files of the vault (`attachments/`, named `name`) shown from
+/// there; those showing one of its files already stay. `known`: pictures
+/// uploaded before in the same go, by their bytes (not twice).
+pub async fn adopt_pictures(
+    vault: &str,
+    name: &str,
+    files: notekpr_draw::scene::Props,
+    known: &mut HashMap<Vec<u8>, String>,
+) -> notekpr_draw::scene::Props {
+    use notekpr_core::pictures;
+    let mut out = notekpr_draw::scene::Props::new();
+    for (file_id, f) in files {
+        let created = f
+            .get("created")
+            .and_then(serde_json::Value::as_f64)
+            .unwrap_or_else(|| now() as f64);
+        let live = pictures::attachment_of(&f).is_some_and(|a| {
+            step(|c| c.entry(vault, a)).is_some_and(|e| e.kind == EntryKind::Attachment)
+        });
+        if live {
+            out.insert(file_id, f);
+            continue;
+        }
+        let inside = f
+            .get("dataURL")
+            .and_then(serde_json::Value::as_str)
+            .and_then(pictures::decode_data_url);
+        let Some((mime, bytes)) = inside else {
+            out.insert(file_id, f);
+            continue;
+        };
+        let att = match known.get(&bytes) {
+            Some(a) => Some(a.clone()),
+            None => upload_file(
+                vault,
+                &format!("attachments/{name}.{}", pictures::extension(&mime)),
+                &bytes,
+            )
+            .await
+            .map(|(id, _)| id),
+        };
+        let Some(att) = att else {
+            continue;
+        };
+        known.insert(bytes, att.clone());
+        out.insert(
+            file_id.clone(),
+            pictures::entry(&file_id, &mime, &att, created),
+        );
+    }
+    out
+}
+
 /// Upload a file to `path` (or a free name beside it): its id and path.
 async fn upload_file(vault: &str, path: &str, bytes: &[u8]) -> Option<(String, String)> {
     // Quick notes are flat.
@@ -2336,6 +2396,8 @@ async fn vault_export(vault: &str) -> (Vec<zipfile::Entry>, BTreeMap<String, Str
                         .map(|d| d.drawing().scene())
                         .unwrap_or_default()
                 });
+                // The pictures it shows inside.
+                let scene = crate::drawings::with_pictures(vault, scene).await;
                 entries.push(zipfile::Entry {
                     name: e.path.clone(),
                     data: notekpr_draw::file::write_drawing(&scene).into_bytes(),
@@ -2699,6 +2761,10 @@ async fn import_files(vault: &str, mut files: Vec<(String, Vec<u8>)>, strip_top:
     };
     let quick = step(|c| c.is_quick_notes(vault));
     let max = state::max_update_bytes();
+    // Drawings last: the pictures they show may be among the files, made
+    // once (by their bytes).
+    files.sort_by_key(|(p, _)| paths::drawing_path_for(p).is_some());
+    let mut known: HashMap<Vec<u8>, String> = HashMap::new();
     for (i, (path, data)) in files.into_iter().enumerate() {
         // Send in pushes of bounded size as we go, and let the page breathe.
         step(|c| {
@@ -2717,7 +2783,9 @@ async fn import_files(vault: &str, mut files: Vec<(String, Vec<u8>)>, strip_top:
                 let d = notekpr_draw::file::read_drawing(text, &mut ids).ok()?;
                 Some((paths::normalize(&to).ok()?, d.scene))
             });
-        if let Some((to, scene)) = drawing {
+        if let Some((to, mut scene)) = drawing {
+            let name = paths::drawing_title(&to).to_string();
+            scene.files = adopt_pictures(vault, &name, scene.files, &mut known).await;
             step(|c| new_drawing_at(c, vault, &to, &scene));
             got.drawings += 1;
         } else if paths::is_note(&path) {
@@ -2730,7 +2798,10 @@ async fn import_files(vault: &str, mut files: Vec<(String, Vec<u8>)>, strip_top:
             {
                 got.notes += 1;
             }
-        } else if upload_bytes(vault, &path, &data).await.is_some() {
+        } else if let Some((id, _)) = upload_file(vault, &path, &data).await {
+            if util::mime_for(&path).starts_with("image/") {
+                known.insert(data, id);
+            }
             got.files += 1;
         }
     }

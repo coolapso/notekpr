@@ -161,6 +161,33 @@ pub fn copy_to_clipboard(text: &str) {
     let _ = nav.clipboard().write_text(text);
 }
 
+/// Puts a PNG picture on the clipboard (`ClipboardItem`); whether the
+/// browser took it.
+pub fn copy_png_to_clipboard(png: &[u8]) -> bool {
+    let arr = js_sys::Uint8Array::from(png);
+    let parts = js_sys::Array::of1(&arr.buffer());
+    let opts = web_sys::BlobPropertyBag::new();
+    opts.set_type("image/png");
+    let Ok(blob) = web_sys::Blob::new_with_buffer_source_sequence_and_options(&parts, &opts) else {
+        return false;
+    };
+    let record = js_sys::Object::new();
+    let _ = js_sys::Reflect::set(&record, &"image/png".into(), &blob);
+    let Ok(ctor) = js_sys::Reflect::get(&window(), &"ClipboardItem".into()) else {
+        return false;
+    };
+    let ctor: &js_sys::Function = ctor.unchecked_ref();
+    let Ok(item) = js_sys::Reflect::construct(ctor, &js_sys::Array::of1(&record)) else {
+        return false;
+    };
+    let clipboard = window().navigator().clipboard();
+    let Ok(write) = js_sys::Reflect::get(&clipboard, &"write".into()) else {
+        return false;
+    };
+    let write: &js_sys::Function = write.unchecked_ref();
+    write.call1(&clipboard, &js_sys::Array::of1(&item)).is_ok()
+}
+
 pub async fn read_file(file: &web_sys::File) -> Option<Vec<u8>> {
     let buf = wasm_bindgen_futures::JsFuture::from(file.array_buffer())
         .await

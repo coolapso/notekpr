@@ -932,3 +932,21 @@ fn an_arrows_label_slides_along_it() {
     assert!((t.f64("labelPosition").unwrap() - 0.75).abs() < 1e-9);
     assert_eq!(t.y() + t.height() / 2.0, 0.0);
 }
+
+#[test]
+fn a_picture_put_in_goes_on_top_selected() {
+    let (mut ed, mut scene, mut rng) = (Editor::default(), Scene::default(), Seq(0));
+    rect(&mut ed, &mut scene, &mut rng, [0.0, 0.0], [100.0, 100.0]);
+    ed.set_tool(Tool::Image);
+    let pic = new::image(10.0, 20.0, 300.0, 200.0, "f1", &ed.style, &mut rng);
+    let o = ed.add_on_top(&scene, pic, &mut rng);
+    assert!(o.done && o.tool_changed);
+    apply(&mut scene, &o);
+    let top = scene.elements.last().unwrap();
+    assert_eq!(
+        (top.kind(), top.file_id()),
+        (ElementType::Image, Some("f1"))
+    );
+    assert_eq!(ed.selection, [top.id().to_string()]);
+    assert_eq!(ed.tool, Tool::Selection);
+}

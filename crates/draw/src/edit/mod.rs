@@ -555,6 +555,22 @@ impl Editor {
         })
     }
 
+    /// Puts `e` on top of everything, selected (a picture put in).
+    pub fn add_on_top(&mut self, scene: &Scene, mut e: Element, rng: &mut dyn Random) -> Output {
+        e.set("index", top_index(scene).map_or(Value::Null, Value::String));
+        bump(&mut e, rng);
+        self.selection = vec![e.id().to_string()];
+        self.line_editor = None;
+        let tool_changed = self.tool != Tool::Selection;
+        self.tool = Tool::Selection;
+        Output {
+            changed: vec![e],
+            done: true,
+            tool_changed,
+            ..Output::default()
+        }
+    }
+
     /// Starts or ends editing the points of the selected line or arrow one
     /// by one (Excalidraw's line editor; not elbow arrows). Whether it did.
     pub fn toggle_line_editor(&mut self, scene: &Scene) -> bool {

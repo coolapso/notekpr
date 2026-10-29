@@ -150,6 +150,27 @@ pub fn freedraw(
     element(p)
 }
 
+/// A picture (`newImageElement`): the drawing's file `file_id`, its box at
+/// `x`, `y`, `width` by `height`.
+pub fn image(
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+    file_id: &str,
+    style: &Style,
+    rng: &mut dyn Random,
+) -> Element {
+    let mut p = base(&ElementType::Image, x, y, style, rng);
+    p.insert("width".into(), num(width));
+    p.insert("height".into(), num(height));
+    p.insert("fileId".into(), json!(file_id));
+    p.insert("status".into(), json!("saved"));
+    p.insert("scale".into(), json!([1, 1]));
+    p.insert("crop".into(), Value::Null);
+    element(p)
+}
+
 /// Measures a line of text: its width in pixels, in a CSS font (`20px
 /// Excalifont, …`). The app measures with the browser.
 pub type Measure<'a> = &'a dyn Fn(&str, &str) -> f64;

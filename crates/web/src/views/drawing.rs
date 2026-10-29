@@ -42,7 +42,7 @@ pub fn Document(vault: String, note: String) -> impl IntoView {
 }
 
 /// The tools of the toolbar: icon, name, shortcut.
-const TOOLS: [(Tool, &str, &str, &str); 12] = [
+const TOOLS: [(Tool, &str, &str, &str); 13] = [
     (Tool::Hand, "hand", "Hand (panning tool)", "H"),
     (Tool::Selection, "pointer", "Selection", "V or 1"),
     (Tool::Rectangle, "square", "Rectangle", "R or 2"),
@@ -52,6 +52,7 @@ const TOOLS: [(Tool, &str, &str, &str); 12] = [
     (Tool::Line, "line", "Line", "L or 6"),
     (Tool::Freedraw, "pen", "Draw", "P or 7"),
     (Tool::Text, "text-tool", "Text", "T or 8"),
+    (Tool::Image, "image", "Insert image", "9"),
     (Tool::Eraser, "eraser", "Eraser", "E or 0"),
     (Tool::Frame, "frame", "Frame tool", "F"),
     (Tool::Laser, "laser", "Laser pointer", "K"),
@@ -271,9 +272,15 @@ pub fn DrawingView(vault: String, id: String) -> impl IntoView {
                     b.fit();
                     true
                 }
+                // Shift+Alt+C: copied as a PNG picture (whatever the
+                // layout makes of the key).
+                (false, _) if ev.alt_key() && shift && ev.code() == "KeyC" => {
+                    b.copy_as(true);
+                    true
+                }
                 (false, k) if !ev.alt_key() && w || k == "h" || k == "v" || k == "1" => {
                     match Tool::from_key(k) {
-                        Some(t) if t != Tool::Image => {
+                        Some(t) => {
                             b.set_tool(t);
                             true
                         }
@@ -364,6 +371,21 @@ pub fn DrawingView(vault: String, id: String) -> impl IntoView {
         if editing.get_untracked().is_some() {
             return;
         }
+        // Pictures pasted: put in where the pointer is.
+        let pictures: Vec<web_sys::File> = ev
+            .clipboard_data()
+            .and_then(|d| d.files())
+            .map(|l| (0..l.length()).filter_map(|i| l.get(i)).collect())
+            .unwrap_or_default();
+        if pictures.iter().any(|f| f.type_().starts_with("image/")) {
+            ev.prevent_default();
+            let images = pictures
+                .into_iter()
+                .filter(|f| f.type_().starts_with("image/"))
+                .collect();
+            b.with_value(|b| b.add_pictures(images, Some(b.paste_point())));
+            return;
+        }
         let text = ev
             .clipboard_data()
             .and_then(|d| d.get_data("text/plain").ok())
@@ -373,7 +395,8 @@ pub fn DrawingView(vault: String, id: String) -> impl IntoView {
             b.with_value(|b| b.paste(&text));
         }
     };
-    // A drawing file dropped on the canvas: its elements come in.
+    // A drawing file dropped on the canvas: its elements come in; pictures
+    // go where they were dropped.
     let on_drop = move |ev: web_sys::DragEvent| {
         let Some(files) = ev.data_transfer().and_then(|d| d.files()) else {
             return;
@@ -382,8 +405,14 @@ pub fn DrawingView(vault: String, id: String) -> impl IntoView {
             return;
         }
         ev.prevent_default();
-        for i in 0..files.length() {
-            let Some(f) = files.get(i) else { continue };
+        let (images, others): (Vec<web_sys::File>, Vec<web_sys::File>) = (0..files.length())
+            .filter_map(|i| files.get(i))
+            .partition(|f| f.type_().starts_with("image/"));
+        if !images.is_empty() {
+            let at = [ev.offset_x() as f64, ev.offset_y() as f64];
+            b.with_value(|b| b.add_pictures(images, Some(b.view.get().to_scene(at))));
+        }
+        for f in others {
             leptos::task::spawn_local(async move {
                 let text = wasm_bindgen_futures::JsFuture::from(f.text())
                     .await
@@ -442,6 +471,14 @@ pub fn DrawingView(vault: String, id: String) -> impl IntoView {
                             <button on:click=move |_| export(Export::Excalidraw)><Icon name="file"/>" Excalidraw (.excalidraw)"</button>
                             <button on:click=move |_| export(Export::Obsidian)><Icon name="file"/>" Obsidian Excalidraw (.excalidraw.md)"</button>
                             <div class="menu-sep"></div>
+                            <button on:click=move |_| {
+                                export_open.set(false);
+                                b.with_value(|b| b.copy_as(true));
+                            } title="Shift+Alt+C"><Icon name="copy"/>" Copy as PNG"</button>
+                            <button on:click=move |_| {
+                                export_open.set(false);
+                                b.with_value(|b| b.copy_as(false));
+                            }><Icon name="copy"/>" Copy as SVG"</button>
                             <button on:click=move |_| {
                                 export_open.set(false);
                                 b.with_value(|b| b.copy_embed());

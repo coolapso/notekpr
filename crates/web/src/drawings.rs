@@ -35,6 +35,16 @@ thread_local! {
 }
 
 thread_local! {
+    /// Drawings' pictures as `data:` URLs, by the vault's file (files
+    /// never change): for previews and files written out.
+    static PICTURE_URLS: RefCell<HashMap<String, Rc<String>>> = RefCell::new(HashMap::new());
+    /// Drawings' pictures as images for the canvas, by the vault's file
+    /// (or the picture inside the drawing): `None` while loading or when
+    /// it can't be.
+    static IMAGES: RefCell<HashMap<String, Option<web_sys::HtmlImageElement>>> = RefCell::new(HashMap::new());
+}
+
+thread_local! {
     /// The Drawings section is being made (once, not by two tasks at once).
     static MAKING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
@@ -123,6 +133,124 @@ pub fn scene(vault: &str, id: &str) -> Option<Scene> {
     })
 }
 
+/// The drawing with the pictures it shows inside (fetched and decrypted
+/// once), for previews and files written out; those that can't be had
+/// are left out.
+pub async fn with_pictures(vault: &str, mut scene: Scene) -> Scene {
+    let wanted: Vec<(String, String, String)> = scene
+        .files
+        .iter()
+        .filter_map(|(id, f)| {
+            let att = notekpr_core::pictures::attachment_of(f)?;
+            let mime = f.get("mimeType")?.as_str().unwrap_or("image/png");
+            Some((id.clone(), att.to_string(), mime.to_string()))
+        })
+        .collect();
+    for (file_id, att, mime) in wanted {
+        let cached = PICTURE_URLS.with(|p| p.borrow().get(&att).cloned());
+        let url = match cached {
+            Some(u) => u,
+            None => match crate::actions::attachment_bytes(vault, &att).await {
+                Some(b) => {
+                    let u = Rc::new(notekpr_core::pictures::data_url(&mime, &b));
+                    PICTURE_URLS.with(|p| p.borrow_mut().insert(att.clone(), u.clone()));
+                    u
+                }
+                None => continue,
+            },
+        };
+        if let Some(serde_json::Value::Object(m)) = scene.files.get_mut(&file_id) {
+            m.insert("dataURL".into(), serde_json::json!(url.as_str()));
+        }
+    }
+    scene
+}
+
+/// The image to draw for a picture a drawing shows (its `files` entry),
+/// if it is loaded; otherwise it starts loading and `ready` is called
+/// once it is.
+pub fn picture(
+    vault: &str,
+    entry: &serde_json::Value,
+    ready: impl FnOnce() + 'static,
+) -> Option<web_sys::HtmlImageElement> {
+    let att = notekpr_core::pictures::attachment_of(entry).map(str::to_string);
+    let inline = entry
+        .get("dataURL")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string);
+    let key = match (&att, &inline) {
+        (Some(a), _) => a.clone(),
+        (None, Some(u)) => format!("{:x}", {
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            u.hash(&mut h);
+            h.finish()
+        }),
+        _ => return None,
+    };
+    if let Some(slot) = IMAGES.with(|i| i.borrow().get(&key).cloned()) {
+        return slot;
+    }
+    IMAGES.with(|i| i.borrow_mut().insert(key.clone(), None));
+    let mime = entry
+        .get("mimeType")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("image/png")
+        .to_string();
+    let vault = vault.to_string();
+    leptos::task::spawn_local(async move {
+        let src = match (att, inline) {
+            (Some(a), _) => crate::actions::attachment_bytes(&vault, &a)
+                .await
+                .and_then(|b| {
+                    // Kept for copies and files written out too.
+                    let url = Rc::new(notekpr_core::pictures::data_url(&mime, &b));
+                    PICTURE_URLS.with(|p| p.borrow_mut().insert(a.clone(), url));
+                    util::blob_url(&b, &mime)
+                }),
+            (None, u) => u,
+        };
+        let Some(src) = src else {
+            return;
+        };
+        let Ok(img) = web_sys::HtmlImageElement::new() else {
+            return;
+        };
+        img.set_src(&src);
+        if wasm_bindgen_futures::JsFuture::from(img.decode())
+            .await
+            .is_ok()
+        {
+            IMAGES.with(|i| i.borrow_mut().insert(key, Some(img)));
+            ready();
+        }
+    });
+    None
+}
+
+/// A picture just put in a drawing (from file `att`, as `img`): drawn
+/// without loading it again.
+pub fn remember_picture(att: &str, img: web_sys::HtmlImageElement, data_url: String) {
+    IMAGES.with(|i| i.borrow_mut().insert(att.to_string(), Some(img)));
+    PICTURE_URLS.with(|p| p.borrow_mut().insert(att.to_string(), Rc::new(data_url)));
+}
+
+/// [`with_pictures`] with only those at hand now (for the clipboard,
+/// which can't wait).
+pub fn with_pictures_at_hand(mut scene: Scene) -> Scene {
+    for f in scene.files.values_mut() {
+        let Some(att) = notekpr_core::pictures::attachment_of(f).map(str::to_string) else {
+            continue;
+        };
+        if let (Some(url), serde_json::Value::Object(m)) =
+            (PICTURE_URLS.with(|p| p.borrow().get(&att).cloned()), f)
+        {
+            m.insert("dataURL".into(), serde_json::json!(url.as_str()));
+        }
+    }
+    scene
+}
+
 /// What a preview shows: the drawing's state, and the theme.
 fn version(vault: &str, id: &str, dark: bool) -> Option<u64> {
     step(|c| {
@@ -191,9 +319,14 @@ async fn font_faces(scene: &Scene) -> String {
 
 /// The drawing as an SVG file of its own, its fonts inside.
 pub async fn standalone_svg(vault: &str, id: &str, dark: bool) -> Option<String> {
-    let scene = scene(vault, id)?;
+    Some(svg_of(vault, scene(vault, id)?, dark).await)
+}
+
+/// `scene` as an SVG file of its own: its fonts and pictures inside.
+pub async fn svg_of(vault: &str, scene: Scene, dark: bool) -> String {
+    let scene = with_pictures(vault, scene).await;
     let font_faces = font_faces(&scene).await;
-    Some(svg::export(
+    svg::export(
         &scene,
         &SvgOptions {
             dark,
@@ -201,7 +334,7 @@ pub async fn standalone_svg(vault: &str, id: &str, dark: bool) -> Option<String>
             standalone: true,
             ..SvgOptions::default()
         },
-    ))
+    )
 }
 
 /// Makes the drawing's preview (when it changed since the last one): its
@@ -212,7 +345,7 @@ pub async fn load_preview(vault: &str, id: &str) -> Option<String> {
     if let Some(url) = cached_preview(vault, id) {
         return Some(url);
     }
-    let scene = scene(vault, id)?;
+    let scene = with_pictures(vault, scene(vault, id)?).await;
     let font_faces = font_faces(&scene).await;
     let image = svg::export(
         &scene,

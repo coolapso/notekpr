@@ -264,6 +264,16 @@ impl Board {
 
     pub fn set_tool(self: &Rc<Self>, tool: Tool) {
         self.finish_text_if_open();
+        // The picture tool asks which pictures, and puts them in.
+        if tool == Tool::Image {
+            if self.writable() {
+                let me = self.clone();
+                crate::actions::pick_files(false, "image/*", move |files| {
+                    me.add_pictures(files, None)
+                });
+            }
+            return;
+        }
         self.editor.borrow_mut().set_tool(tool);
         self.schedule();
         self.changed();
@@ -527,7 +537,7 @@ pub enum Export {
 
 impl Board {
     /// Where the pointer last was, in the drawing (else the view's middle).
-    fn paste_point(&self) -> [f64; 2] {
+    pub fn paste_point(&self) -> [f64; 2] {
         let v = self.view.get();
         v.to_scene(
             self.last_pointer
@@ -542,7 +552,8 @@ impl Board {
 
     /// What is selected, for the clipboard (Excalidraw's format).
     pub fn copy(&self) -> Option<String> {
-        let scene = self.scene();
+        // With the pictures they show inside, for other apps.
+        let scene = crate::drawings::with_pictures_at_hand((*self.scene()).clone());
         self.editor.borrow().copy(&scene)
     }
 
@@ -555,10 +566,10 @@ impl Board {
         let mut ids = notekpr_draw::restore::Ids::new(js_sys::Date::now() as u64);
         match notekpr_draw::file::read_drawing(text, &mut ids) {
             Ok(d) => {
-                // The pictures they show come along.
+                // The pictures they show come along, as files of the vault.
                 let files = d.scene.files.clone();
                 if !files.is_empty() {
-                    self.put_files(&files);
+                    self.adopt_files(files);
                 }
                 self.command(move |ed, s, r| ed.paste(s, &d.scene.elements, at, r));
             }
@@ -586,6 +597,100 @@ impl Board {
         }
     }
 
+    /// Pictures that came in inside elements (pasted, dropped) become files
+    /// of the vault, which the drawing then shows.
+    fn adopt_files(self: &Rc<Self>, files: notekpr_draw::scene::Props) {
+        let me = self.clone();
+        leptos::task::spawn_local(async move {
+            let name = me.export_name();
+            let mut known = HashMap::new();
+            let files = crate::actions::adopt_pictures(&me.vault, &name, files, &mut known).await;
+            me.put_files(&files);
+            me.schedule();
+        });
+    }
+
+    /// Puts pictures (image files) in the drawing, centred at `at` (in the
+    /// drawing; else the middle of the view), side by side; each becomes a
+    /// file of the vault (`attachments/`).
+    pub fn add_pictures(self: &Rc<Self>, files: Vec<web_sys::File>, at: Option<[f64; 2]>) {
+        if !self.writable() {
+            return;
+        }
+        let me = self.clone();
+        leptos::task::spawn_local(async move {
+            let v = me.view.get();
+            let mut at = at.unwrap_or_else(|| v.to_scene([v.width / 2.0, v.height / 2.0]));
+            for f in files {
+                let mime = f.type_();
+                if !mime.starts_with("image/") {
+                    crate::state::error(format!("{} isn't a picture.", f.name()));
+                    continue;
+                }
+                let Some(bytes) = util::read_file(&f).await else {
+                    continue;
+                };
+                let Some(url) = util::blob_url(&bytes, &mime) else {
+                    continue;
+                };
+                let Ok(img) = web_sys::HtmlImageElement::new() else {
+                    continue;
+                };
+                img.set_src(&url);
+                if wasm_bindgen_futures::JsFuture::from(img.decode())
+                    .await
+                    .is_err()
+                {
+                    crate::state::error(format!("{} can't be shown.", f.name()));
+                    continue;
+                }
+                let path = format!("attachments/{}", f.name());
+                let Some((att, _)) =
+                    crate::actions::upload_attachment(&me.vault, &path, &bytes).await
+                else {
+                    continue;
+                };
+                crate::drawings::remember_picture(
+                    &att,
+                    img.clone(),
+                    notekpr_core::pictures::data_url(&mime, &bytes),
+                );
+                let file_id = crate::state::new_id();
+                let mut entry = notekpr_draw::scene::Props::new();
+                entry.insert(
+                    file_id.clone(),
+                    notekpr_core::pictures::entry(&file_id, &mime, &att, js_sys::Date::now()),
+                );
+                me.put_files(&entry);
+                // As big as it is, but no more than half the view's height
+                // (`initializeImageDimensions`).
+                let (nw, nh) = (img.natural_width() as f64, img.natural_height() as f64);
+                let v = me.view.get();
+                let max_h = (v.height - 120.0)
+                    .max(160.0)
+                    .min((v.height * 0.5).floor() / v.zoom);
+                let h = nh.min(max_h).max(1.0);
+                let w = h * nw / nh.max(1.0);
+                let place = at;
+                me.command(|ed, s, r| {
+                    let pic = notekpr_draw::edit::new::image(
+                        place[0] - w / 2.0,
+                        place[1] - h / 2.0,
+                        w,
+                        h,
+                        &file_id,
+                        &ed.style,
+                        r,
+                    );
+                    ed.add_on_top(s, pic, r)
+                });
+                at[0] += w + 20.0;
+            }
+            me.changed();
+            me.schedule();
+        });
+    }
+
     /// Adds pictures to the drawing's files.
     fn put_files(&self, files: &notekpr_draw::scene::Props) {
         let (v, id) = (self.vault.clone(), self.id.clone());
@@ -597,6 +702,7 @@ impl Board {
                 state::local_update(c, &v, &id, u);
             }
         });
+        self.reread();
     }
 
     /// The drawing's file name for exports: its title.
@@ -604,6 +710,56 @@ impl Board {
         step(|c| c.entry(&self.vault, &self.id))
             .map(|e| e.title().to_string())
             .unwrap_or_else(|| "Drawing".into())
+    }
+
+    /// What is selected (with labels), else everything: what "Copy as"
+    /// copies.
+    fn selected_part(&self, scene: &Scene) -> Scene {
+        let ed = self.editor.borrow();
+        if ed.selection.is_empty() {
+            return scene.clone();
+        }
+        let mut ids: std::collections::HashSet<String> = ed.selection.iter().cloned().collect();
+        for e in ed.selected(scene) {
+            for b in e.bound_elements() {
+                if b.kind == "text" {
+                    ids.insert(b.id);
+                }
+            }
+        }
+        Scene {
+            elements: scene
+                .elements
+                .iter()
+                .filter(|e| ids.contains(e.id()))
+                .cloned()
+                .collect(),
+            ..scene.clone()
+        }
+    }
+
+    /// Copies what is selected (else the whole drawing) as a PNG picture,
+    /// or as an SVG image (its text).
+    pub fn copy_as(self: &Rc<Self>, png: bool) {
+        self.write();
+        let scene = self.reread();
+        let part = self.selected_part(&scene);
+        let dark = crate::drawings::is_dark();
+        if png {
+            match png_of(&self.vault, &part, dark) {
+                Some(bytes) if util::copy_png_to_clipboard(&bytes) => {
+                    crate::state::success("Copied as a PNG picture.")
+                }
+                _ => crate::state::error("The picture could not be copied."),
+            }
+            return;
+        }
+        let v = self.vault.clone();
+        leptos::task::spawn_local(async move {
+            let svg = crate::drawings::svg_of(&v, part, dark).await;
+            util::copy_to_clipboard(&svg);
+            crate::state::success("Copied as an SVG image.");
+        });
     }
 
     /// Copies what shows the drawing in a note: `![[Name.drawing]]`.
@@ -621,25 +777,33 @@ impl Board {
         let scene = self.reread();
         let name = self.export_name();
         let dark = crate::drawings::is_dark();
+        // Files hold the pictures inside.
+        let file = |write: fn(&Scene) -> String, name: String, mime: &'static str| {
+            let (v, scene) = (self.vault.clone(), scene.clone());
+            leptos::task::spawn_local(async move {
+                let full = crate::drawings::with_pictures(&v, (*scene).clone()).await;
+                util::download(&name, mime, write(&full).as_bytes());
+            });
+        };
         match kind {
-            Export::Drawing => util::download(
-                &format!("{name}.drawing"),
+            Export::Drawing => file(
+                notekpr_draw::file::write_drawing,
+                format!("{name}.drawing"),
                 "application/json",
-                notekpr_draw::file::write_drawing(&scene).as_bytes(),
             ),
-            Export::Excalidraw => util::download(
-                &format!("{name}.excalidraw"),
+            Export::Excalidraw => file(
+                notekpr_draw::file::write_excalidraw,
+                format!("{name}.excalidraw"),
                 "application/vnd.excalidraw+json",
-                notekpr_draw::file::write_excalidraw(&scene).as_bytes(),
             ),
-            Export::Obsidian => {
-                let mut ids = notekpr_draw::restore::Ids::new(js_sys::Date::now() as u64);
-                util::download(
-                    &format!("{name}.excalidraw.md"),
-                    "text/markdown",
-                    notekpr_draw::obsidian::write(&scene, true, &mut ids).as_bytes(),
-                )
-            }
+            Export::Obsidian => file(
+                |s| {
+                    let mut ids = notekpr_draw::restore::Ids::new(js_sys::Date::now() as u64);
+                    notekpr_draw::obsidian::write(s, true, &mut ids)
+                },
+                format!("{name}.excalidraw.md"),
+                "text/markdown",
+            ),
             Export::Svg => {
                 let (v, id) = (self.vault.clone(), self.id.clone());
                 leptos::task::spawn_local(async move {
@@ -650,7 +814,7 @@ impl Board {
                 });
             }
             Export::Png => {
-                let Some(png) = png_of(&scene, dark) else {
+                let Some(png) = png_of(&self.vault, &scene, dark) else {
                     crate::state::error("The picture could not be made.");
                     return;
                 };
@@ -661,7 +825,7 @@ impl Board {
 }
 
 /// The drawing as a PNG picture, twice its size (sharp on dense screens).
-fn png_of(scene: &Scene, dark: bool) -> Option<Vec<u8>> {
+fn png_of(vault: &str, scene: &Scene, dark: bool) -> Option<Vec<u8>> {
     const SCALE: f64 = 2.0;
     const PAD: f64 = 10.0;
     let [x1, y1, x2, y2] =
@@ -682,6 +846,11 @@ fn png_of(scene: &Scene, dark: bool) -> Option<Vec<u8>> {
         width: w,
         height: h,
     };
+    // The pictures are the ones loaded for the canvas.
+    let pictures = |e: &Element| {
+        let entry = scene.files.get(e.file_id()?)?;
+        crate::drawings::picture(vault, entry, || {})
+    };
     super::canvas::draw_scene(
         &ctx,
         scene,
@@ -689,6 +858,7 @@ fn png_of(scene: &Scene, dark: bool) -> Option<Vec<u8>> {
         SCALE,
         dark,
         &mut super::canvas::ShapeCache::default(),
+        &pictures,
     );
     let url = canvas.to_data_url_with_type("image/png").ok()?;
     let b64 = url.split_once(',')?.1;

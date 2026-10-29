@@ -191,7 +191,7 @@ impl Board {
         }
     }
 
-    fn draw(&self) {
+    fn draw(self: &Rc<Self>) {
         if self.closed.get() {
             return;
         }
@@ -208,6 +208,11 @@ impl Board {
         };
         let scene = self.scene();
         let view = self.view.get();
+        let pictures = |e: &Element| {
+            let entry = scene.files.get(e.file_id()?)?;
+            let me = self.clone();
+            drawings::picture(&self.vault, entry, move || me.schedule())
+        };
         canvas::draw_scene(
             &ctx,
             &scene,
@@ -215,6 +220,7 @@ impl Board {
             self.pixel_ratio.get(),
             drawings::is_dark(),
             &mut self.cache.borrow_mut(),
+            &pictures,
         );
         canvas::draw_overlay(
             &ctx,

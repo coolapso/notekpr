@@ -216,7 +216,54 @@ fn draw_frame(ctx: &CanvasRenderingContext2d, e: &Element, dark: bool, zoom: f64
     let _ = ctx.fill_text(name, 0.0, -3.0 / zoom);
 }
 
-/// The canvas's pixels per CSS pixel and the view: draws the drawing.
+/// A picture (`drawImageElement`): cropped, flipped and with rounded
+/// corners as the element says; a grey box while it loads.
+fn draw_image(
+    ctx: &CanvasRenderingContext2d,
+    e: &Element,
+    img: Option<&web_sys::HtmlImageElement>,
+    dark: bool,
+) {
+    let (w, h) = (e.width(), e.height());
+    let Some(img) = img else {
+        ctx.set_fill_style_str(&color::themed("#E7E7E7", dark));
+        ctx.fill_rect(0.0, 0.0, w, h);
+        return;
+    };
+    if e.roundness().is_some() {
+        ctx.begin_path();
+        let _ = ctx.round_rect_with_f64(0.0, 0.0, w, h, shape::corner_radius(w.min(h), e));
+        ctx.clip();
+    }
+    let scale = |i: usize| {
+        e.get("scale")
+            .and_then(|s| s.get(i))
+            .and_then(Value::as_f64)
+            .unwrap_or(1.0)
+    };
+    let (sx, sy) = (scale(0), scale(1));
+    if sx != 1.0 || sy != 1.0 {
+        let _ = ctx.translate(w / 2.0, h / 2.0);
+        let _ = ctx.scale(sx, sy);
+        let _ = ctx.translate(-w / 2.0, -h / 2.0);
+    }
+    let crop = |k: &str| e.get("crop").and_then(|c| c.get(k)).and_then(Value::as_f64);
+    let (cx, cy, cw, ch) = match (crop("x"), crop("y"), crop("width"), crop("height")) {
+        (Some(x), Some(y), Some(cw), Some(ch)) => (x, y, cw, ch),
+        _ => (
+            0.0,
+            0.0,
+            img.natural_width() as f64,
+            img.natural_height() as f64,
+        ),
+    };
+    let _ = ctx.draw_image_with_html_image_element_and_sw_and_sh_and_dx_and_dy_and_dw_and_dh(
+        img, cx, cy, cw, ch, 0.0, 0.0, w, h,
+    );
+}
+
+/// The canvas's pixels per CSS pixel and the view: draws the drawing;
+/// `pictures` gives the image a picture element shows, once loaded.
 pub fn draw_scene(
     ctx: &CanvasRenderingContext2d,
     scene: &Scene,
@@ -224,6 +271,7 @@ pub fn draw_scene(
     pixel_ratio: f64,
     dark: bool,
     cache: &mut ShapeCache,
+    pictures: &dyn Fn(&Element) -> Option<web_sys::HtmlImageElement>,
 ) {
     let background = scene.background().to_string();
     ctx.set_transform(1.0, 0.0, 0.0, 1.0, 0.0, 0.0).ok();
@@ -282,6 +330,7 @@ pub fn draw_scene(
             }
             ElementShape::None => match e.kind() {
                 ElementType::Text => draw_text(ctx, e, dark),
+                ElementType::Image => draw_image(ctx, e, pictures(e).as_ref(), dark),
                 ElementType::Frame | ElementType::MagicFrame => draw_frame(ctx, e, dark, view.zoom),
                 _ => {}
             },

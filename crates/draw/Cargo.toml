@@ -11,3 +11,6 @@ serde = { version = "1", features = ["derive"] }
 # Numbers read exactly as JavaScript reads them (the default parser can be
 # off in the last bit), so drawings come out exactly as in Excalidraw.
 serde_json = { version = "1", features = ["float_roundtrip"] }
+
+[dev-dependencies]
+proptest = { version = "1", default-features = false, features = ["std"] }

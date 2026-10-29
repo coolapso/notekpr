@@ -1436,9 +1436,18 @@ impl Editor {
                         }
                     }
                 }
-                for e in scene.visible().filter(|e| gone.iter().any(|g| g == e.id())) {
-                    let mut d = e.clone();
-                    d.set("isDeleted", json!(true));
+                let mut changed: Vec<Element> = scene
+                    .visible()
+                    .filter(|e| gone.iter().any(|g| g == e.id()))
+                    .map(|e| {
+                        let mut d = e.clone();
+                        d.set("isDeleted", json!(true));
+                        d
+                    })
+                    .collect();
+                // Arrows attached to what went let go of it.
+                binding::update_arrows(scene, &mut changed);
+                for mut d in changed {
                     bump(&mut d, rng);
                     out.changed.push(d);
                 }

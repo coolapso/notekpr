@@ -7,7 +7,9 @@
 use notekpr_core::crypto::{self, Purpose};
 use notekpr_core::doc::NoteDoc;
 use notekpr_core::{markdown, paths, search, textdiff};
+use notekpr_draw::scene::{Element, Scene};
 use proptest::prelude::*;
+use serde_json::json;
 
 /// Characters that matter to the code under test, plus multibyte ones.
 const ALPHABET: &[char] = &[
@@ -159,5 +161,69 @@ proptest! {
         let key = [7u8; 32];
         let _ = crypto::sym_epoch(&bytes);
         prop_assert!(crypto::open_sym(&key, Purpose::Update, &[b"v", b"o"], &bytes).is_err());
+    }
+
+    #[test]
+    fn concurrent_drawing_edits_converge_and_keep_both(
+        edits_a in prop::collection::vec((0usize..4, 0usize..3, -500i32..500), 0..12),
+        edits_b in prop::collection::vec((0usize..4, 0usize..3, -500i32..500), 0..12),
+        added_a in 0usize..3,
+        added_b in 0usize..3,
+    ) {
+        // Four shapes, then each side changes properties and adds shapes.
+        let start = scene((0..4).map(|i| shape(&format!("s{i}"), i as f64 * 10.0)).collect());
+        let base = NoteDoc::default();
+        base.drawing().set_scene(&start);
+        let state = base.encode_state();
+        let x = NoteDoc::from_updates([state.as_slice()]).unwrap();
+        let y = NoteDoc::from_updates([state.as_slice()]).unwrap();
+        let edit = |doc: &NoteDoc, edits: &[(usize, usize, i32)], added: usize, who: &str| {
+            let mut s = doc.drawing().scene();
+            for (i, prop, v) in edits {
+                let key = ["x", "y", "strokeColor"][*prop];
+                let value = if key == "strokeColor" { json!(format!("#{:06x}", v.unsigned_abs())) } else { json!(v) };
+                s.elements[*i].set(key, value);
+            }
+            for k in 0..added {
+                s.elements.push(shape(&format!("{who}{k}"), 1000.0 + k as f64));
+            }
+            doc.drawing().set_scene(&s)
+        };
+        let ua = edit(&x, &edits_a, added_a, "a");
+        let ub = edit(&y, &edits_b, added_b, "b");
+        if let Some(u) = &ua { y.apply_update(u).unwrap(); }
+        if let Some(u) = &ub { x.apply_update(u).unwrap(); }
+        let (sx, sy) = (x.drawing().scene(), y.drawing().scene());
+        prop_assert_eq!(&sx, &sy);
+        // What each added is there; what only one side changed is its value.
+        prop_assert_eq!(sx.visible().count(), 4 + added_a + added_b);
+        for (i, prop, v) in &edits_a {
+            let key = ["x", "y", "strokeColor"][*prop];
+            let touched_by_b = edits_b.iter().any(|(j, q, _)| j == i && q == prop);
+            let last = edits_a.iter().rev().find(|(j, q, _)| j == i && q == prop).map(|e| e.2);
+            if !touched_by_b && last == Some(*v) {
+                let e = sx.element(&format!("s{i}")).unwrap();
+                let want = if key == "strokeColor" { json!(format!("#{:06x}", v.unsigned_abs())) } else { json!(v) };
+                prop_assert_eq!(e.get(key), Some(&want));
+            }
+        }
+    }
+}
+
+fn shape(id: &str, x: f64) -> Element {
+    Element::from_props(
+        json!({"id": id, "type": "rectangle", "x": x, "y": 0, "width": 10, "height": 10,
+               "index": format!("a{id}")})
+        .as_object()
+        .unwrap()
+        .clone(),
+    )
+    .unwrap()
+}
+
+fn scene(elements: Vec<Element>) -> Scene {
+    Scene {
+        elements,
+        ..Scene::default()
     }
 }

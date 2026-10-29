@@ -404,7 +404,7 @@ fn arrowhead_corner(e: &Element, points: &[Point], end: End) -> Option<Corner> {
     Some(Corner {
         length,
         prev_length,
-        turn: cos.clamp(-1.0, 1.0).acos(),
+        turn: js::acos(cos.clamp(-1.0, 1.0)),
     })
 }
 
@@ -426,7 +426,7 @@ fn cardinality_scale(marker: &str, c: &Corner, stroke_width: f64) -> f64 {
         ));
         c.length
             / (arrowhead_size("cardinality_one")
-                * (offset + js::cos(angle) + js::sin(angle) * (c.turn / 2.0).tan()))
+                * (offset + js::cos(angle) + js::sin(angle) * js::tan(c.turn / 2.0)))
     };
     let crows_foot = || c.length / arrowhead_size("cardinality_many");
     let circle = || {
@@ -472,7 +472,7 @@ fn size_beyond_last_segment(e: &Element, points: &[Point], end: End, arrowhead: 
         return 0.0;
     }
     match arrowhead {
-        "bar" => js::min(max_size, c.length / (c.turn / 2.0).tan()),
+        "bar" => js::min(max_size, c.length / js::tan(c.turn / 2.0)),
         "diamond" | "diamond_outline" => c.length / 2.0,
         "triangle" | "triangle_outline" => js::min(
             max_size,

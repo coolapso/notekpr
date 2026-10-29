@@ -1,4 +1,5 @@
-//! `Math.sin`, `Math.cos` and `Math.atan2`, computed the same everywhere.
+//! `Math.sin`, `Math.cos`, `Math.tan`, `Math.acos` and `Math.atan2`,
+//! computed the same everywhere.
 //!
 //! The C library's functions (what Rust's `f64::sin` calls) differ from one
 //! platform to the next in the last bit, and Rust on wasm32 brings its own;
@@ -6,7 +7,7 @@
 //! and then (a loop that runs once more, a number cut after two decimals),
 //! so these are fixed to what Excalidraw's own results show:
 //!
-//! * `sin` and `cos` are fdlibm 5.3's, as V8 has them
+//! * `sin`, `cos`, `tan` and `acos` are fdlibm 5.3's, as V8 has them
 //!   (`src/base/ieee754.cc`). With them, perfect-freehand's test snapshots
 //!   (computed in V8) come out exactly; with glibc's, 17 of their points
 //!   end a few ulps off. Firefox uses fdlibm too; some Chrome builds use a
@@ -477,6 +478,159 @@ pub fn cos(x: f64) -> f64 {
     }
 }
 
+/// `__kernel_tan`: tan on [-π/4, π/4] (`iy` 1), or -1/tan (`iy` -1); `y`
+/// the tail of `x`.
+fn kernel_tan(mut x: f64, mut y: f64, iy: i32) -> f64 {
+    const T: [f64; 13] = [
+        3.33333333333334091986e-01,  // 0x3FD55555, 0x55555563
+        1.33333333333201242699e-01,  // 0x3FC11111, 0x1110FE7A
+        5.39682539762260521377e-02,  // 0x3FABA1BA, 0x1BB341FE
+        2.18694882948595424599e-02,  // 0x3F9664F4, 0x8406D637
+        8.86323982359930005737e-03,  // 0x3F8226E3, 0xE96E8493
+        3.59207910759131235356e-03,  // 0x3F6D6D22, 0xC9560328
+        1.45620945432529025516e-03,  // 0x3F57DBC8, 0xFEE08315
+        5.88041240820264096874e-04,  // 0x3F4344D8, 0xF2F26501
+        2.46463134818469906812e-04,  // 0x3F3026F7, 0x1A8D1068
+        7.81794442939557092300e-05,  // 0x3F147E88, 0xA03792A6
+        7.14072491382608190305e-05,  // 0x3F12B80F, 0x32F0A7E9
+        -1.85586374855275456654e-05, // 0xBEF375CB, 0xDB605373
+        2.59073051863633712884e-05,  // 0x3EFB2A70, 0x74BF7AD4
+    ];
+    const ONE: f64 = 1.00000000000000000000e+00;
+    // 7.85398163397448278999e-01, 0x3FE921FB, 0x54442D18
+    const PIO4: f64 = std::f64::consts::FRAC_PI_4;
+    const PIO4LO: f64 = 3.06161699786838301793e-17; // 0x3C81A626, 0x33145C07
+    let hx = high_word(x);
+    let ix = hx & 0x7FFF_FFFF;
+    if ix < 0x3E30_0000 && x as i32 == 0 {
+        // |x| < 2^-28
+        if ((ix as u32 | low_word(x)) | (iy + 1) as u32) == 0 {
+            return ONE / x.abs();
+        }
+        if iy == 1 {
+            return x;
+        }
+        return minus_inverse(x, y);
+    }
+    if ix >= 0x3FE5_9428 {
+        // |x| >= 0.6744: from tan(π/4 - |x|)
+        if hx < 0 {
+            x = -x;
+            y = -y;
+        }
+        let z = PIO4 - x;
+        let w = PIO4LO - y;
+        x = z + w;
+        y = 0.0;
+    }
+    let z = x * x;
+    let w = z * z;
+    // x^5·(T[1] + x^4·T[3] + … + x^20·T[11])
+    //   + x^5·(x^2·(T[2] + x^4·T[4] + … + x^22·T[12]))
+    let r = T[1] + w * (T[3] + w * (T[5] + w * (T[7] + w * (T[9] + w * T[11]))));
+    let v = z * (T[2] + w * (T[4] + w * (T[6] + w * (T[8] + w * (T[10] + w * T[12])))));
+    let s = z * x;
+    let mut r = y + z * (s * (r + v) + y);
+    r += T[0] * s;
+    let w = x + r;
+    if ix >= 0x3FE5_9428 {
+        let v = f64::from(iy);
+        return f64::from(1 - ((hx >> 30) & 2)) * (v - 2.0 * (x - (w * w / (w + v) - r)));
+    }
+    if iy == 1 {
+        return w;
+    }
+    minus_inverse(x, r)
+}
+
+/// -1 / (x + y), worked out accurately (`__kernel_tan`'s last steps).
+fn minus_inverse(x: f64, y: f64) -> f64 {
+    let w = x + y;
+    // w and -1/w with their low words dropped
+    let z = from_words(high_word(w) as u32, 0);
+    let v = y - (z - x);
+    let a = -1.0 / w;
+    let t = from_words(high_word(a) as u32, 0);
+    let s = 1.0 + t * z;
+    t + a * (s + t * v)
+}
+
+/// `Math.tan`.
+pub fn tan(x: f64) -> f64 {
+    let ix = high_word(x) & 0x7FFF_FFFF;
+    if ix <= 0x3FE9_21FB {
+        return kernel_tan(x, 0.0, 1);
+    }
+    if ix >= 0x7FF0_0000 {
+        // inf or NaN
+        return f64::NAN;
+    }
+    let mut y = [0.0; 2];
+    let n = rem_pio2(x, &mut y);
+    // 1: n even, -1: n odd
+    kernel_tan(y[0], y[1], 1 - ((n & 1) << 1))
+}
+
+/// `Math.acos` (fdlibm's `__ieee754_acos`).
+pub fn acos(x: f64) -> f64 {
+    const ONE: f64 = 1.00000000000000000000e+00;
+    // 3.14159265358979311600e+00, 0x400921FB, 0x54442D18
+    const PI: f64 = std::f64::consts::PI;
+    // 1.57079632679489655800e+00, 0x3FF921FB, 0x54442D18
+    const PIO2_HI: f64 = std::f64::consts::FRAC_PI_2;
+    const PIO2_LO: f64 = 6.12323399573676603587e-17; // 0x3C91A626, 0x33145C07
+    const PS0: f64 = 1.66666666666666657415e-01; // 0x3FC55555, 0x55555555
+    const PS1: f64 = -3.25565818622400915405e-01; // 0xBFD4D612, 0x03EB6F7D
+    const PS2: f64 = 2.01212532134862925881e-01; // 0x3FC9C155, 0x0E884455
+    const PS3: f64 = -4.00555345006794114027e-02; // 0xBFA48228, 0xB5688F3B
+    const PS4: f64 = 7.91534994289814532176e-04; // 0x3F49EFE0, 0x7501B288
+    const PS5: f64 = 3.47933107596021167570e-05; // 0x3F023DE1, 0x0DFDF709
+    const QS1: f64 = -2.40339491173441421878e+00; // 0xC0033A27, 0x1C8A2D4B
+    const QS2: f64 = 2.02094576023350569471e+00; // 0x40002AE5, 0x9C598AC8
+    const QS3: f64 = -6.88283971605453293030e-01; // 0xBFE6066C, 0x1B8D0159
+    const QS4: f64 = 7.70381505559019352791e-02; // 0x3FB3B8C5, 0xB12E9282
+    // asin(√z)/√z - 1 ≈ p(z)/q(z), z = x² or (1 - |x|)/2
+    let ratio = |z: f64| {
+        let p = z * (PS0 + z * (PS1 + z * (PS2 + z * (PS3 + z * (PS4 + z * PS5)))));
+        let q = ONE + z * (QS1 + z * (QS2 + z * (QS3 + z * QS4)));
+        p / q
+    };
+    let hx = high_word(x);
+    let ix = hx & 0x7FFF_FFFF;
+    if ix >= 0x3FF0_0000 {
+        // |x| >= 1
+        if ((ix - 0x3FF0_0000) as u32 | low_word(x)) == 0 {
+            // |x| == 1
+            return if hx > 0 { 0.0 } else { PI + 2.0 * PIO2_LO };
+        }
+        // |x| > 1, NaN
+        return f64::NAN;
+    }
+    if ix < 0x3FE0_0000 {
+        // |x| < 0.5
+        if ix <= 0x3C60_0000 {
+            // |x| < 2^-57
+            return PIO2_HI + PIO2_LO;
+        }
+        let r = ratio(x * x);
+        return PIO2_HI - (x - (PIO2_LO - x * r));
+    }
+    if hx < 0 {
+        // x < -0.5
+        let z = (ONE + x) * 0.5;
+        let s = z.sqrt();
+        let w = ratio(z) * s - PIO2_LO;
+        return PI - 2.0 * (s + w);
+    }
+    // x > 0.5
+    let z = (ONE - x) * 0.5;
+    let s = z.sqrt();
+    let df = from_words(high_word(s) as u32, 0);
+    let c = (z - df * df) / (s + df);
+    let w = ratio(z) * s + c;
+    2.0 * (df + w)
+}
+
 /// A double-double: the unevaluated sum `hi + lo`, `|lo|` at most half an
 /// ulp of `hi`; about 106 bits of precision.
 #[derive(Clone, Copy, Debug)]
@@ -734,6 +888,36 @@ mod tests {
             (2.02226624879595063154e-21, 0x3BA3_198A_2E03_7073),
             (2.02226624871116645580e-21, 0x3BA3_198A_2E00_0000),
             (8.47842766036889956997e-32, 0x397B_839A_2520_49C1),
+            // tan
+            (3.33333333333334091986e-01, 0x3FD5_5555_5555_5563),
+            (1.33333333333201242699e-01, 0x3FC1_1111_1110_FE7A),
+            (5.39682539762260521377e-02, 0x3FAB_A1BA_1BB3_41FE),
+            (2.18694882948595424599e-02, 0x3F96_64F4_8406_D637),
+            (8.86323982359930005737e-03, 0x3F82_26E3_E96E_8493),
+            (3.59207910759131235356e-03, 0x3F6D_6D22_C956_0328),
+            (1.45620945432529025516e-03, 0x3F57_DBC8_FEE0_8315),
+            (5.88041240820264096874e-04, 0x3F43_44D8_F2F2_6501),
+            (2.46463134818469906812e-04, 0x3F30_26F7_1A8D_1068),
+            (7.81794442939557092300e-05, 0x3F14_7E88_A037_92A6),
+            (7.14072491382608190305e-05, 0x3F12_B80F_32F0_A7E9),
+            (-1.85586374855275456654e-05, 0xBEF3_75CB_DB60_5373),
+            (2.59073051863633712884e-05, 0x3EFB_2A70_74BF_7AD4),
+            (std::f64::consts::FRAC_PI_4, 0x3FE9_21FB_5444_2D18),
+            (3.06161699786838301793e-17, 0x3C81_A626_3314_5C07),
+            // acos
+            (std::f64::consts::PI, 0x4009_21FB_5444_2D18),
+            (std::f64::consts::FRAC_PI_2, 0x3FF9_21FB_5444_2D18),
+            (6.12323399573676603587e-17, 0x3C91_A626_3314_5C07),
+            (1.66666666666666657415e-01, 0x3FC5_5555_5555_5555),
+            (-3.25565818622400915405e-01, 0xBFD4_D612_03EB_6F7D),
+            (2.01212532134862925881e-01, 0x3FC9_C155_0E88_4455),
+            (-4.00555345006794114027e-02, 0xBFA4_8228_B568_8F3B),
+            (7.91534994289814532176e-04, 0x3F49_EFE0_7501_B288),
+            (3.47933107596021167570e-05, 0x3F02_3DE1_0DFD_F709),
+            (-2.40339491173441421878e+00, 0xC003_3A27_1C8A_2D4B),
+            (2.02094576023350569471e+00, 0x4000_2AE5_9C59_8AC8),
+            (-6.88283971605453293030e-01, 0xBFE6_066C_1B8D_0159),
+            (7.70381505559019352791e-02, 0x3FB3_B8C5_B12E_9282),
         ] {
             assert_eq!(f64::to_bits(value), bits, "{value:e}");
         }
@@ -767,6 +951,52 @@ mod tests {
         assert_eq!(atan2(1.0, 1.0), PI / 4.0);
         assert_eq!(atan2(f64::INFINITY, f64::NEG_INFINITY), 3.0 * PI / 4.0);
         assert!(atan2(f64::NAN, 1.0).is_nan());
+        // As MDN shows V8's.
+        assert_eq!(tan(0.0), 0.0);
+        assert!(tan(-0.0).is_sign_negative());
+        assert_eq!(tan(PI / 4.0), 0.9999999999999999);
+        assert_eq!(tan(FRAC_PI_2), 16331239353195370.0);
+        assert_eq!(tan(PI), -1.2246467991473532e-16);
+        assert!(tan(f64::INFINITY).is_nan() && tan(f64::NAN).is_nan());
+        assert_eq!(acos(1.0), 0.0);
+        assert_eq!(acos(-1.0), PI);
+        assert_eq!(acos(0.0), FRAC_PI_2);
+        // 1.0471975511965979: π/3 rounded (`Math.PI / 3` is an ulp below).
+        assert_eq!(acos(0.5), std::f64::consts::FRAC_PI_3);
+        assert_eq!(acos(0.5), PI / 3.0 + 2.220446049250313e-16);
+        assert!(acos(1.0000000000000002).is_nan() && acos(-2.0).is_nan());
+        assert!(acos(f64::NAN).is_nan());
+    }
+
+    #[test]
+    fn tan_and_acos_are_fdlibms() {
+        // Worked out with fdlibm 5.3's C source (`k_tan.c`, `s_tan.c`,
+        // `e_acos.c`); the C library rounds each of these the other way.
+        for (x, fdlibm) in [
+            (0.27908705466896894, 0.28656615039540156),
+            (-0.9010550944498701, -1.262892437044472),
+            (273.82671281966236, 0.5569349561221422),
+            (53856.98205159059, 0.7748095950879677),
+        ] {
+            assert_eq!(tan(x), fdlibm, "tan({x:e})");
+            assert_eq!(tan(-x), -fdlibm, "tan({:e})", -x);
+        }
+        for (x, fdlibm) in [
+            (-0.7, 2.34619382340565),
+            (0.203928610274005, 1.365427131967663),
+            (-0.42176030261370157, 2.0061821953452608),
+            (0.6477799084457398, 0.8661296792604285),
+            (-0.7252314783187781, 2.382166865785904),
+        ] {
+            assert_eq!(acos(x), fdlibm, "acos({x:e})");
+        }
+        // Tiny arguments, and the edges of the kernels' ranges.
+        assert_eq!(tan(1e-30), 1e-30);
+        assert_eq!(acos(1e-20), FRAC_PI_2);
+        assert_eq!(acos(0.9999999999999999), 1.4901161193847656e-08);
+        assert_eq!(tan(1.0), 1.5574077246549023);
+        assert_eq!(tan(-2.5), 0.7470222972386603);
+        assert_eq!(tan(100.0), -0.5872139151569291);
     }
 
     #[test]
@@ -807,8 +1037,14 @@ mod tests {
                 assert!(ulps(cos(v), v.cos()) <= 1, "cos {v:e}");
                 assert!(ulps(atan2(v, 1.3), v.atan2(1.3)) <= 1, "atan2 {v:e}");
                 assert!(ulps(atan2(-2.0, v), (-2.0f64).atan2(v)) <= 1, "atan2 {v:e}");
+                assert!(ulps(tan(v), v.tan()) <= 1, "tan {v:e}");
             }
             x *= 1.21;
+        }
+        let mut x = -1.0;
+        while x <= 1.0 {
+            assert!(ulps(acos(x), x.acos()) <= 1, "acos {x:e}");
+            x += 0.00173;
         }
         for v in [
             1e300,
@@ -821,6 +1057,7 @@ mod tests {
         ] {
             assert!(ulps(sin(v), v.sin()) <= 1, "sin {v:e}");
             assert!(ulps(cos(v), v.cos()) <= 1, "cos {v:e}");
+            assert!(ulps(tan(v), v.tan()) <= 1, "tan {v:e}");
         }
     }
 }

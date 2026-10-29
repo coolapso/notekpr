@@ -10,8 +10,9 @@ AGPL-3.0 like notekpr.
 No JavaScript is used or shipped.
 
 So that numbers come out exactly as in a browser, `src/js/math.rs` also
-ports fdlibm's `sin` and `cos` the way V8 has them, and `src/js.rs`
-computes `Math.hypot` the way V8 does; their notices are at the end.
+ports fdlibm's `sin`, `cos`, `tan` and `acos` the way V8 has them, and
+`src/js.rs` computes `Math.hypot` the way V8 does; their notices are at the
+end.
 
 | What | Ported from | Copyright |
 |---|---|---|
@@ -27,7 +28,7 @@ computes `Math.hypot` the way V8 does; their notices are at the end.
 | sticky notes: their paper, date and fitted text (`sticky.rs`) | Excalidraw | (c) 2020 Excalidraw |
 | frames: what is in them, their names (`edit/frame.rs`) | Excalidraw | (c) 2020 Excalidraw |
 | compression of Obsidian's drawings | lz-string 1.5 | (c) 2013 pieroxy |
-| `Math.sin`, `Math.cos` | fdlibm 5.3, as in V8 | (c) 1993 Sun Microsystems; the V8 project authors |
+| `Math.sin`, `Math.cos`, `Math.tan`, `Math.acos` | fdlibm 5.3, as in V8 | (c) 1993 Sun Microsystems; the V8 project authors |
 | `Math.hypot` | V8 | the V8 project authors |
 
 The test fixture `tests/fixtures/perfect-freehand.json` holds

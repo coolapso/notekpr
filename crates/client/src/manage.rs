@@ -22,9 +22,6 @@ pub async fn create_vault(session: &Session, name: &str) -> Result<Vault> {
     if notekpr_core::quick::is_reserved_name(name) {
         bail!(notekpr_core::quick::reserved_name_message());
     }
-    if notekpr_core::drawings::is_reserved_name(name) {
-        bail!(notekpr_core::drawings::reserved_name_message());
-    }
     if session.kind == PrincipalKind::Agent {
         bail!("agents cannot create vaults; the owner shares vaults with them");
     }
@@ -56,28 +53,14 @@ pub async fn create_quick_notes(session: &Session) -> Result<Option<Vault>> {
     if session.kind == PrincipalKind::Agent {
         bail!("agents have no quick notes");
     }
-    create_section(session, VaultKind::QuickNotes, notekpr_core::quick::NAME).await
-}
-
-/// Make the person's Drawings section: a vault of their own of that kind.
-/// `Ok(None)`: they have it already (another app made it).
-pub async fn create_drawings(session: &Session) -> Result<Option<Vault>> {
-    if session.kind == PrincipalKind::Agent {
-        bail!("agents have no Drawings of their own");
-    }
-    create_section(session, VaultKind::Drawings, notekpr_core::drawings::NAME).await
-}
-
-/// A section of the person's own (`kind`), named `name`.
-async fn create_section(session: &Session, kind: VaultKind, name: &str) -> Result<Option<Vault>> {
-    let meta = VaultMeta::named(name);
+    let meta = VaultMeta::named(notekpr_core::quick::NAME);
     let (mut req, ring) = engine::new_vault(
         session.account(),
         &session.user_id,
         &meta,
         notekpr_core::now_ms(),
     )?;
-    req.kind = kind;
+    req.kind = VaultKind::QuickNotes;
     let info: VaultInfo = match session.api.post("/vaults", &req).await {
         Ok(info) => info,
         Err(e) if e.status() == Some(409) => return Ok(None),
@@ -92,6 +75,7 @@ async fn create_section(session: &Session, kind: VaultKind, name: &str) -> Resul
     );
     v.kind = info.kind;
     v.note_limit = info.note_limit;
+    v.drawing_limit = info.drawing_limit;
     v.storage_bytes = info.storage_bytes;
     v.storage_limit_mb = info.storage_limit_mb;
     v.outbox.note_keys = true;
@@ -121,9 +105,6 @@ pub async fn rename_vault(session: &Session, vault: &SharedVault, name: &str) ->
         }
         if notekpr_core::quick::is_reserved_name(&meta.name) {
             bail!(notekpr_core::quick::reserved_name_message());
-        }
-        if notekpr_core::drawings::is_reserved_name(&meta.name) {
-            bail!(notekpr_core::drawings::reserved_name_message());
         }
         (v.id().to_string(), meta.encrypt(&v.replica.keyring)?, meta)
     };

@@ -19,9 +19,9 @@
 //! (recoverable) — in the quick notes, which keep no trash, they are deleted
 //! for good; a delete plus a create of identical content within a short
 //! window is a rename. The quick notes' folder is flat and holds at most as
-//! many notes as they may: other new files wait on disk. The Drawings'
-//! folder holds drawings (`.drawing` files) and files: Markdown files put
-//! there wait on disk. Dotfiles, editor swap/backup files and our own
+//! many notes as they may: other new files wait on disk, as do new
+//! drawings (`.drawing` files) while their vault holds as many as it may.
+//! Dotfiles, editor swap/backup files and our own
 //! temporary files are ignored. Change detection compares size + mtime and
 //! falls back to content hashes, so our own writes are recognised.
 
@@ -1177,16 +1177,6 @@ fn ingest_new_file(
             Err(e) => tracing::debug!("rename not applied: {e:#}"),
         }
     }
-    // The Drawings hold drawings and files: Markdown files there wait on
-    // disk (tried again on every pass).
-    if v.is_drawings() && is_note {
-        mv.warn_once(
-            "drawings:notes",
-            "your Drawings hold drawings and files only: Markdown files in 'Drawings' are not synced \
-             (put notes in a vault)",
-        );
-        return Ok(());
-    }
     // The quick notes are flat, hold a limited number of notes and keep
     // files only for the notes linking to them: other files wait on disk
     // (tried again on every pass).
@@ -1212,6 +1202,18 @@ fn ingest_new_file(
             );
             return Ok(());
         }
+    }
+    // A vault holds so many drawings: a new one waits on disk until there's
+    // room (tried again on every pass).
+    if drawing.is_some()
+        && !v.is_quick_notes()
+        && let Err(e) = v.require_drawing_room()
+    {
+        mv.warn_once(
+            &format!("drawings:full:{path}"),
+            &format!("{e:#} '{path}' is synced once there's room."),
+        );
+        return Ok(());
     }
     let (r, state) = if let Some(scene) = &drawing {
         let r = v.create_drawing(path, scene)?;
@@ -1695,14 +1697,11 @@ impl Mirror {
 
     /// Attach a vault; a vault that cannot be mirrored is reported (once) and
     /// skipped, it does not stop the others.
-    /// Mirror every open vault, the quick notes and Drawings first: the
-    /// folders named after them are theirs.
+    /// Mirror every open vault, the quick notes first: the folder named
+    /// after them is theirs.
     async fn attach_all(&mut self) {
-        for section in [self.hub.quick_notes().await, self.hub.drawings().await]
-            .into_iter()
-            .flatten()
-        {
-            let id = section.lock().await.id().to_string();
+        if let Some(q) = self.hub.quick_notes().await {
+            let id = q.lock().await.id().to_string();
             self.attach_or_warn(&id).await;
         }
         for id in self.hub.vault_ids() {

@@ -261,20 +261,6 @@ impl User {
         Ok(info)
     }
 
-    /// This person's Drawings section, as the apps make it.
-    pub async fn create_drawings(&mut self) -> Result<VaultInfo, (u16, String)> {
-        let meta = notekpr_core::engine::VaultMeta::named(notekpr_core::drawings::NAME);
-        let (mut req, ring) =
-            notekpr_core::engine::new_vault(&self.account, &self.id, &meta, 1).unwrap();
-        req.kind = VaultKind::Drawings;
-        let info: VaultInfo = self
-            .api
-            .call(reqwest::Method::POST, "/vaults", Some(&req))
-            .await?;
-        self.keyrings.insert(req.id.clone(), ring);
-        Ok(info)
-    }
-
     /// A new object's own key, as apps register it before its content
     /// (`kind` says what it is): its key ring and the request.
     pub fn new_key(
@@ -320,12 +306,6 @@ impl User {
             .unwrap();
         assert!(r.rejected.is_empty(), "{:?}", r.rejected);
         ring
-    }
-
-    /// How many drawings this person may have and has, as their apps learn.
-    pub async fn drawings(&self) -> (Limit, u64) {
-        let me: MeResponse = self.api.get("/me").await;
-        (me.drawing_limit, me.drawing_count)
     }
 
     /// The vault's membership log as the server has it.

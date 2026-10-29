@@ -291,15 +291,14 @@ pub struct AccountReport {
     pub vaults: Vec<String>,
     /// Quick notes exported, or imported.
     pub quick_notes: usize,
-    /// Drawings of the person's Drawings exported, or imported.
-    pub drawings: usize,
+    /// Saved shapes exported, or imported.
+    pub saved_shapes: usize,
     pub totals: TransferReport,
 }
 
-/// Export the vaults open in `hub`, but those `skip` names (or ids), the
-/// Drawings (unless `skip` names them) and with `quick_notes` the quick
-/// notes, as one export [`import_account`] reads back — here or on another
-/// server.
+/// Export the vaults open in `hub`, but those `skip` names (or ids), and
+/// with `quick_notes` the Personal storage (quick notes, saved shapes), as
+/// one export [`import_account`] reads back — here or on another server.
 pub async fn export_account(
     hub: &Hub,
     out: &Path,
@@ -311,34 +310,18 @@ pub async fn export_account(
     let mut report = AccountReport::default();
     let mut chosen = Vec::new();
     let mut quick = None;
-    let mut drawings = None;
     let mut skipped = BTreeSet::new();
     for v in hub.vaults() {
-        let (is_quick, is_drawings, empty, id, meta) = {
+        let (is_quick, id, meta) = {
             let g = v.lock().await;
             (
                 g.is_quick_notes(),
-                g.is_drawings(),
-                g.paths().is_empty(),
                 g.id().to_string(),
                 g.replica.meta.clone(),
             )
         };
         if is_quick {
             quick = Some(v);
-            continue;
-        }
-        // The Drawings have their own folder (unless left out by their name,
-        // or there's nothing in them), and go back into the Drawings.
-        if is_drawings {
-            if let Some(s) = skip
-                .iter()
-                .find(|s| notekpr_core::drawings::is_reserved_name(s))
-            {
-                skipped.insert(s.clone());
-            } else if !empty {
-                drawings = Some(v);
-            }
             continue;
         }
         if let Some(s) = skip
@@ -361,7 +344,7 @@ pub async fn export_account(
         created_at: notekpr_core::now_ms(),
         vaults: Vec::new(),
         quick_notes: None,
-        drawings: None,
+        saved_shapes: None,
     };
     let (mut files, mut dirs) = (Vec::new(), Vec::new());
     let mut add = |folder: &str, e: Exported| {
@@ -389,13 +372,16 @@ pub async fn export_account(
         add(quick::NAME, e);
         report.quick_notes = report.totals.notes - before;
         manifest.quick_notes = Some(quick::NAME.to_string());
-    }
-    if let Some(d) = drawings {
-        let before = report.totals.drawings;
-        let e = exported(hub, &d, zip, &mut report.totals).await?;
-        add(notekpr_core::drawings::NAME, e);
-        report.drawings = report.totals.drawings - before;
-        manifest.drawings = Some(notekpr_core::drawings::NAME.to_string());
+        // The saved shapes, as a file beside the folders.
+        let shapes = notekpr_core::library::items(&q.lock().await.replica.index);
+        if !shapes.is_empty() {
+            report.saved_shapes = shapes.len();
+            files.push((
+                account_export::SAVED_SHAPES_FILE.to_string(),
+                notekpr_draw::file::write_library(&shapes).into_bytes(),
+            ));
+            manifest.saved_shapes = Some(account_export::SAVED_SHAPES_FILE.to_string());
+        }
     }
     let m = serde_json::to_vec_pretty(&manifest)?;
     write_out(out, force, zip, &files, &dirs, Some(&m))?;
@@ -791,15 +777,13 @@ pub async fn import_account(hub: &Hub, src: &Path, dry_run: bool) -> Result<Opti
     let mut taken = BTreeSet::new();
     for v in hub.vaults() {
         let g = v.lock().await;
-        if !g.is_quick_notes() && !g.is_drawings() {
+        if !g.is_quick_notes() {
             taken.insert(g.name().to_lowercase());
         }
     }
     for (exported, files) in unpacked.vaults {
         let name = account_export::unique_name(exported.meta.name.trim(), |n| {
-            taken.contains(&n.to_lowercase())
-                || quick::is_reserved_name(n)
-                || notekpr_core::drawings::is_reserved_name(n)
+            taken.contains(&n.to_lowercase()) || quick::is_reserved_name(n)
         });
         taken.insert(name.to_lowercase());
         let mut c = split(files);
@@ -917,24 +901,25 @@ pub async fn import_account(hub: &Hub, src: &Path, dry_run: bool) -> Result<Opti
         }
         report.quick_notes = report.totals.notes - before;
     }
-    // The Drawings' go into this account's Drawings.
-    if let Some(files) = unpacked.drawings.filter(|f| !f.is_empty()) {
-        let c = split(files);
-        let before = report.totals.drawings;
+    // The saved shapes join this account's (those it has already stay
+    // once).
+    if let Some(file) = unpacked.saved_shapes {
+        let text = String::from_utf8_lossy(&file);
         if dry_run {
-            report.totals.folders += c.1.len();
-            for (p, _) in &c.0 {
-                if paths::drawing_path_for(p).is_some() {
-                    report.totals.drawings += 1;
-                } else if !paths::is_note(p) {
-                    report.totals.attachments += 1;
-                }
-            }
+            let now = notekpr_core::now_ms();
+            let mut ids = notekpr_draw::restore::Ids::new(now as u64);
+            report.saved_shapes = notekpr_draw::file::read_library(&text, now as f64, &mut ids)
+                .map(|items| items.len())
+                .unwrap_or_default();
         } else {
-            let d = hub.ensure_drawings().await?;
-            import_collected(hub, &d, c, None, false, false, &mut report.totals).await?;
+            match crate::ops::import_library(hub, &text).await {
+                Ok(done) => report.saved_shapes = done.added,
+                Err(e) => report
+                    .totals
+                    .skipped
+                    .push((account_export::SAVED_SHAPES_FILE.to_string(), e.to_string())),
+            }
         }
-        report.drawings = report.totals.drawings - before;
     }
     Ok(Some(report))
 }

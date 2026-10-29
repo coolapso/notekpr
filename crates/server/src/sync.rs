@@ -11,7 +11,7 @@ use notekpr_core::keys::AccountPublic;
 use notekpr_core::memberlog;
 use notekpr_core::protocol::{
     ChangesResponse, CreateSnapshotRequest, INDEX_OBJECT_ID, ObjectEventKind, ObjectKind,
-    ObjectRef, ObjectState, PurgedItem, PurgedObject, PushResult, PushUpdate, REJECT_BAD_SIGNATURE,
+    ObjectState, PurgedItem, PurgedObject, PushResult, PushUpdate, REJECT_BAD_SIGNATURE,
     REJECT_PURGED, REJECT_STALE_KEY, REJECT_TOO_LARGE, REJECT_UNSIGNED, RejectedUpdate,
     RestoredObject, Snapshot, SnapshotInfo, Update, comments_note, comments_object,
 };
@@ -398,11 +398,9 @@ fn rejected(u: &PushUpdate, code: &str, message: &str) -> RejectedUpdate {
 /// sequence number without appending again, so clients can retry safely.
 /// An update that can't be stored on its own merits (too large, for a purged
 /// object, under an outdated key, a new object without room: a note in full
-/// quick notes or in someone's Drawings, a drawing beyond its owner's limit)
-/// is refused alone and listed in `rejected`; the others are stored.
-/// Malformed requests and missing access still fail the whole push. The
-/// first update of a moved drawing deletes the original it replaces for good
-/// ([`purge`]), in the same transaction.
+/// quick notes, a drawing in a vault holding as many as it may) is refused
+/// alone and listed in `rejected`; the others are stored. Malformed requests and missing access
+/// still fail the whole push.
 pub async fn push(
     state: &AppState,
     who: &Principal,
@@ -474,13 +472,11 @@ pub async fn push(
     let vault_epoch = vault_key_epoch(&mut *tx, vault_id).await?;
     let signed_from = repo::vaults::signed_from(&mut *tx, vault_id).await?;
     // What new objects may still be made: quick notes and drawings are
-    // limited, someone's Drawings hold no notes.
+    // limited.
     let mut room = state.instance.new_objects(&mut tx, vault_id).await?;
     let mut results = Vec::with_capacity(updates.len());
     let mut duplicates = Vec::new();
     let mut fresh: Vec<(Update, String)> = Vec::new();
-    // Originals that moved copies replaced, deleted for good here.
-    let mut replaced: Vec<Purged> = Vec::new();
     // Checked before the first new update: retries of stored ones are fine.
     let mut room_checked = false;
     for u in updates {
@@ -500,16 +496,13 @@ pub async fn push(
             results.push(r);
             continue;
         }
-        let row: Option<(Option<i64>, Option<i64>, bool)> = sqlx::query_as(
-            "SELECT purged_at, key_epoch, replaces_vault IS NOT NULL FROM objects
-             WHERE vault_id = ? AND id = ?",
+        let obj: Option<(Option<i64>, Option<i64>)> = sqlx::query_as(
+            "SELECT purged_at, key_epoch FROM objects WHERE vault_id = ? AND id = ?",
         )
         .bind(vault_id)
         .bind(&u.object_id)
         .fetch_optional(&mut *tx)
         .await?;
-        let replacing = row.is_some_and(|r| r.2);
-        let obj = row.map(|(purged_at, key_epoch, _)| (purged_at, key_epoch));
         // A note's comments use the note's key.
         let key_epoch = match comments_note(&u.object_id) {
             Some(note) => sqlx::query_scalar::<_, Option<i64>>(
@@ -559,16 +552,6 @@ pub async fn push(
                     .bind(&u.object_id)
                     .execute(&mut *tx)
                     .await?;
-                // A moved drawing's first update: the original goes now.
-                if replacing
-                    && let Some(original) =
-                        repo::shares::take_replaces(&mut tx, vault_id, &u.object_id).await?
-                    && let Some(gone) =
-                        purge_replaced(state, &mut tx, who, vault_id, &original, now).await?
-                {
-                    room.drawing_gone();
-                    replaced.push(gone);
-                }
             }
             None => {
                 // The index and comments are what they are, whatever is said.
@@ -580,7 +563,7 @@ pub async fn push(
                     };
                 if let Err(no) = state
                     .instance
-                    .admit(&mut tx, &mut room, &who.user_id, &u.object_id, kind, true)
+                    .admit(&mut tx, &mut room, &u.object_id, kind)
                     .await?
                 {
                     refused.push(rejected(&u, no.code, &no.message));
@@ -655,9 +638,6 @@ pub async fn push(
     }
     if stored {
         storage_changed(state, vault_id, false).await;
-    }
-    for gone in replaced {
-        purged(state, who, gone, serde_json::json!({ "moved": true })).await;
     }
     Ok(PushOutcome {
         results,
@@ -981,93 +961,31 @@ pub async fn purge(
     let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
     // Re-checked in the transaction: the role may have changed meanwhile.
     access::require_admin(&mut *tx, vault_id, &who.user_id).await?;
-    let gone = match purge_in(state, &mut tx, vault_id, object_id, now).await? {
-        PurgeStep::Purged(gone) => gone,
-        PurgeStep::Already(seq) => return Ok(seq),
-        PurgeStep::Missing => return Err(AppError::NotFound),
-    };
-    tx.commit().await?;
-    let seq = gone.seq;
-    purged(state, who, gone, serde_json::json!({})).await;
-    Ok(seq)
-}
-
-/// What deleting an object for good did, to be told once committed.
-pub struct Purged {
-    vault_id: String,
-    object_id: String,
-    seq: i64,
-    /// Whether its vault was full before.
-    was_full: bool,
-    /// The people it was shared with: they lose it.
-    recipients: Vec<String>,
-}
-
-enum PurgeStep {
-    Purged(Purged),
-    /// Deleted for good already (the call is repeated): at this sequence.
-    Already(i64),
-    /// No such object, or its data is gone already.
-    Missing,
-}
-
-/// The original a moved copy replaces goes for good, as `DELETE
-/// …/objects/{o}` would by `who`, if it still may: a live drawing of the
-/// copy's vault's owner, in another vault where `who` can delete for good.
-/// Runs inside the push's transaction.
-async fn purge_replaced(
-    state: &AppState,
-    tx: &mut sqlx::Transaction<'static, sqlx::Sqlite>,
-    who: &Principal,
-    vault_id: &str,
-    original: &ObjectRef,
-    now: i64,
-) -> AppResult<Option<Purged>> {
-    if !access::may_replace(&mut *tx, &who.user_id, vault_id, original).await? {
-        return Ok(None);
-    }
-    Ok(
-        match purge_in(state, tx, &original.vault_id, &original.object_id, now).await? {
-            PurgeStep::Purged(gone) => Some(gone),
-            _ => None,
-        },
-    )
-}
-
-/// Delete an object for good inside the caller's transaction, once the
-/// caller checked who may. Tell it with [`purged`] after the commit.
-async fn purge_in(
-    state: &AppState,
-    tx: &mut sqlx::Transaction<'static, sqlx::Sqlite>,
-    vault_id: &str,
-    object_id: &str,
-    now: i64,
-) -> AppResult<PurgeStep> {
-    let was_full = state.instance.vault_full(&mut **tx, vault_id).await?;
+    let was_full = state.instance.vault_full(&mut *tx, vault_id).await?;
     let row: Option<(Option<i64>, Option<i64>)> =
         sqlx::query_as("SELECT purged_seq, erased_at FROM objects WHERE vault_id = ? AND id = ?")
             .bind(vault_id)
             .bind(object_id)
-            .fetch_optional(&mut **tx)
+            .fetch_optional(&mut *tx)
             .await?;
     match row {
         Some((None, None)) => {}
-        Some((Some(seq), None)) => return Ok(PurgeStep::Already(seq)),
-        _ => return Ok(PurgeStep::Missing),
+        Some((Some(seq), None)) => return Ok(seq),
+        _ => return Err(AppError::NotFound),
     }
     let seq: i64 = sqlx::query_scalar(
         "UPDATE vaults SET head_seq = head_seq + 1, updated_at = ? WHERE id = ? RETURNING head_seq",
     )
     .bind(now)
     .bind(vault_id)
-    .fetch_one(&mut **tx)
+    .fetch_one(&mut *tx)
     .await?;
     let recipients: Vec<String> = sqlx::query_scalar(
         "SELECT user_id FROM object_shares WHERE vault_id = ? AND object_id = ?",
     )
     .bind(vault_id)
     .bind(object_id)
-    .fetch_all(&mut **tx)
+    .fetch_all(&mut *tx)
     .await?;
     // Its shares end now; members keep the note's key (wrapped under the
     // vault key, user_id '') for an undo.
@@ -1078,12 +996,12 @@ async fn purge_in(
         sqlx::query(q)
             .bind(vault_id)
             .bind(object_id)
-            .execute(&mut **tx)
+            .execute(&mut *tx)
             .await?;
     }
     // They know its key, which an undo would bring back: it is rotated then.
     if !recipients.is_empty() {
-        repo::shares::set_rotation_pending(&mut **tx, vault_id, object_id).await?;
+        repo::shares::set_rotation_pending(&mut *tx, vault_id, object_id).await?;
     }
     // Its comments go with it (clients drop them with the note).
     let comments = comments_object(object_id);
@@ -1095,44 +1013,25 @@ async fn purge_in(
         .bind(seq)
         .bind(vault_id)
         .bind(o)
-        .execute(&mut **tx)
+        .execute(&mut *tx)
         .await?;
         if state.config.purge_undo_days == 0 {
-            erase(tx, vault_id, o, now).await?;
+            erase(&mut tx, vault_id, o, now).await?;
         }
     }
-    Ok(PurgeStep::Purged(Purged {
-        vault_id: vault_id.to_string(),
-        object_id: object_id.to_string(),
-        seq,
-        was_full,
-        recipients,
-    }))
-}
-
-/// Tell everyone an object was deleted for good, after the commit and under
-/// the write lock: its vault's subscribers, the people it was shared with,
-/// the audit log (`details` added).
-async fn purged(state: &AppState, who: &Principal, gone: Purged, details: serde_json::Value) {
-    let Purged {
-        vault_id,
-        object_id,
-        seq,
-        was_full,
-        recipients,
-    } = gone;
+    tx.commit().await?;
     state.hub.publish(
-        &vault_id,
+        vault_id,
         VaultEvent::Purged {
-            object_id: object_id.clone(),
+            object_id: object_id.to_string(),
             seq,
         },
     );
-    storage_changed(state, &vault_id, was_full).await;
+    storage_changed(state, vault_id, was_full).await;
     for u in recipients {
         state.hub.control(
             &u,
-            Control::RevokeObject(vault_id.clone(), object_id.clone()),
+            Control::RevokeObject(vault_id.to_string(), object_id.to_string()),
         );
         state.hub.control(
             &u,
@@ -1143,12 +1042,13 @@ async fn purged(state: &AppState, who: &Principal, gone: Purged, details: serde_
         &state.db,
         Some(&who.user_id),
         None,
-        Some(&vault_id),
+        Some(vault_id),
         "object.purge",
-        Some(&object_id),
-        details,
+        Some(object_id),
+        serde_json::json!({}),
     )
     .await;
+    Ok(seq)
 }
 
 /// Undo deleting an object for good, while the server still keeps it: it
@@ -1181,13 +1081,12 @@ pub async fn restore(
         _ => return Err(AppError::NotFound),
     };
     // It counts again: in its vault's size, and a drawing among its
-    // owner's drawings.
+    // vault's drawings.
     state.instance.require_room(&mut *tx, vault_id).await?;
     state
         .instance
-        .check_drawing_back(&mut tx, &who.user_id, vault_id, object_id)
+        .check_drawing_back(&mut tx, vault_id, object_id)
         .await?;
-
     let seq: i64 = sqlx::query_scalar(
         "UPDATE vaults SET head_seq = head_seq + 1, updated_at = ? WHERE id = ? RETURNING head_seq",
     )

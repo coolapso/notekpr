@@ -1164,7 +1164,7 @@ pub fn after_apply(vault_id: &str, applied: engine::Applied) {
                     .flatten();
                 (n.clone(), e.clone(), text, is_member(c, v))
             });
-        let library = applied.index_changed && c.is_drawings(vault_id);
+        let library = applied.index_changed && c.is_quick_notes(vault_id);
         (c.content_debounce.clone(), open, library)
     });
     if library {

@@ -100,9 +100,9 @@ pub enum Command {
     /// Capture a quick note (TEXT, or stdin); --list shows them, --move takes
     /// one to a vault, --delete deletes one for good.
     Quick(QuickArgs),
-    /// Your drawings library (Excalidraw's): items to drop into any drawing.
+    /// Your saved shapes: pieces of drawings to drop into any drawing.
     #[command(subcommand)]
-    Library(LibraryCmd),
+    Shapes(ShapesCmd),
     /// Create a folder.
     Mkdir { vault: String, path: String },
     /// Move or rename a document or folder; with --to-vault, move a note or
@@ -288,14 +288,14 @@ pub struct QuickArgs {
 }
 
 #[derive(Subcommand, Clone, Debug, Serialize, Deserialize)]
-pub enum LibraryCmd {
-    /// List the items, newest first.
+pub enum ShapesCmd {
+    /// List the saved shapes, newest first.
     Ls,
-    /// Add the items of an Excalidraw library file (.excalidrawlib); those
-    /// the library has already are left out.
+    /// Save the shapes of an Excalidraw library file (.excalidrawlib); those
+    /// saved already are left out.
     Import { file: PathBuf },
-    /// Write the library as an Excalidraw library file (.excalidrawlib), to
-    /// stdout without --out.
+    /// Write the saved shapes as an Excalidraw library file
+    /// (.excalidrawlib), to stdout without --out.
     Export {
         #[arg(long)]
         out: Option<PathBuf>,

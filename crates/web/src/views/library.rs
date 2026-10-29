@@ -1,9 +1,9 @@
-//! The library panel of a drawing's page, as Excalidraw's library sidebar
-//! (`LibraryMenu.tsx`, `LibraryMenuItems.tsx`, `LibraryUnit.tsx`): the
-//! items as small pictures, newest first, each put into the drawing with a
-//! click or by dragging it there; what is selected shown first, to add it;
-//! importing and exporting `.excalidrawlib` files. The library itself is
-//! `crate::drawing::library`.
+//! The saved shapes' panel of a drawing's page, as Excalidraw's library
+//! sidebar (`LibraryMenu.tsx`, `LibraryMenuItems.tsx`, `LibraryUnit.tsx`):
+//! the shapes as small pictures, newest first, each put into the drawing
+//! with a click or by dragging it there; what is selected shown first, to
+//! add it; importing and exporting `.excalidrawlib` files. The shapes
+//! themselves are `crate::drawing::library`.
 
 use std::hash::{Hash, Hasher};
 use std::rc::Rc;
@@ -82,16 +82,16 @@ pub fn LibraryPanel(
         )
     };
     view! {
-        <aside class="library-panel" aria-label="Library">
+        <aside class="library-panel" aria-label="Saved shapes">
             <header class="library-head">
-                <span class="library-title grow">"Library"</span>
-                <button class="icon-btn" title="Import a library (.excalidrawlib)" aria-label="Import a library" on:click=import><Icon name="upload"/></button>
-                <button class="icon-btn" title="Export the library (.excalidrawlib)" aria-label="Export the library" on:click=move |_| library::export()><Icon name="download"/></button>
-                <button class="icon-btn" title="Close" aria-label="Close the library" on:click=move |_| open.set(false)><Icon name="x"/></button>
+                <span class="library-title grow">"Saved shapes"</span>
+                <button class="icon-btn" title="Import shapes (.excalidrawlib)" aria-label="Import shapes" on:click=import><Icon name="upload"/></button>
+                <button class="icon-btn" title="Export the saved shapes (.excalidrawlib)" aria-label="Export the saved shapes" on:click=move |_| library::export()><Icon name="download"/></button>
+                <button class="icon-btn" title="Close" aria-label="Close the saved shapes" on:click=move |_| open.set(false)><Icon name="x"/></button>
             </header>
             <div class="library-items">
                 <Show when=move || selected.get().is_some() && writable.get()>
-                    <button class="library-unit library-pending" title="Add to library" aria-label="Add to library" on:click=add>
+                    <button class="library-unit library-pending" title="Add to saved shapes" aria-label="Add to saved shapes" on:click=add>
                         {move || pending.get().map(|src| view! { <img src=src alt=""/> })}
                         <span class="library-adder"><Icon name="plus"/></span>
                     </button>
@@ -100,7 +100,7 @@ pub fn LibraryPanel(
                     let list = items.get();
                     if list.is_empty() && selected.get().is_none() {
                         return view! {
-                            <p class="library-empty muted">"No items yet. Select something on the canvas to add it here, or import a library (.excalidrawlib)."</p>
+                            <p class="library-empty muted">"No saved shapes yet. Select something on the canvas to add it here, or import shapes (.excalidrawlib)."</p>
                         }
                         .into_any();
                     }
@@ -127,7 +127,7 @@ fn LibraryUnit(
     let id = item.id.clone();
     let name = item.name.clone().unwrap_or_default();
     let label = if name.is_empty() {
-        "Library item".to_string()
+        "Saved shape".to_string()
     } else {
         name.clone()
     };
@@ -160,7 +160,7 @@ fn LibraryUnit(
     };
     let remove = move |ev: web_sys::MouseEvent| {
         ev.stop_propagation();
-        if util::confirm("Remove this item from your library?") {
+        if util::confirm("Remove this shape from your saved shapes?") {
             library::remove(&id);
         }
     };
@@ -182,7 +182,7 @@ fn LibraryUnit(
             }
             on:dragstart=drag>
             {move || src.get().map(|s| view! { <img src=s alt="" draggable="false"/> })}
-            <button class="library-remove icon-btn tiny" title="Remove from library" aria-label="Remove from library" on:click=remove><Icon name="trash"/></button>
+            <button class="library-remove icon-btn tiny" title="Remove from saved shapes" aria-label="Remove from saved shapes" on:click=remove><Icon name="trash"/></button>
         </div>
     }
 }

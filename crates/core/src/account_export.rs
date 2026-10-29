@@ -1,18 +1,19 @@
-//! What people take from one server to another: the vaults they choose,
-//! their quick notes and their Drawings, as Markdown (and `.drawing` files)
-//! in one `.zip` — a folder per vault, one each for the quick notes and the
-//! Drawings, and a small manifest ([`MANIFEST`]) saying which folder is which
-//! vault. Importing it creates those vaults again (named as they were, with
-//! their icon and picture) and fills the quick notes and the Drawings. Nothing else comes
-//! along: no history, comments (only as readable Markdown under
-//! `_comments/`), members or shares — the new server starts fresh.
+//! What people take from one server to another: the vaults they choose and
+//! their Personal storage (quick notes, saved shapes), as Markdown (and
+//! `.drawing` files) in one `.zip` — a folder per vault, one for the quick
+//! notes, the saved shapes as an `.excalidrawlib` file, and a small manifest
+//! ([`MANIFEST`]) saying which folder is which vault. Importing it creates
+//! those vaults again (named as they were, with their icon and picture) and
+//! fills the Personal storage. Nothing else comes along: no history,
+//! comments (only as readable Markdown under `_comments/`), members or
+//! shares — the new server starts fresh.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
 use crate::engine::VaultMeta;
-use crate::{drawings, paths, quick};
+use crate::{paths, quick};
 
 /// The manifest's path in the `.zip` (hidden: imports into a single vault,
 /// and Markdown tools, pass it by).
@@ -29,10 +30,14 @@ pub struct Manifest {
     /// The folder holding the quick notes, when they were exported.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub quick_notes: Option<String>,
-    /// The folder holding the person's Drawings, when they were exported.
+    /// The file holding the saved shapes (an `.excalidrawlib`, beside the
+    /// folders), when they were exported.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub drawings: Option<String>,
+    pub saved_shapes: Option<String>,
 }
+
+/// What the saved shapes' file is called in an export.
+pub const SAVED_SHAPES_FILE: &str = "Saved shapes.excalidrawlib";
 
 /// One vault of an export.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -48,10 +53,9 @@ pub struct ExportedVault {
 
 /// Folder names for vaults with these names, in order: the names, with what
 /// some file systems can't store replaced, unique (ignoring case) and never
-/// the quick notes' or Drawings' own folder.
+/// the quick notes' own folder.
 pub fn folder_names(names: &[&str]) -> Vec<String> {
-    let mut used: BTreeSet<String> =
-        BTreeSet::from([quick::NAME.to_lowercase(), drawings::NAME.to_lowercase()]);
+    let mut used: BTreeSet<String> = BTreeSet::from([quick::NAME.to_lowercase()]);
     names
         .iter()
         .map(|name| {
@@ -94,13 +98,13 @@ pub fn unique_name(name: &str, taken: impl Fn(&str) -> bool) -> String {
 pub type Files = Vec<(String, Vec<u8>)>;
 
 /// An export read back: each vault's files (paths within the vault), the
-/// quick notes' and the Drawings' files, and how many files belonged to
-/// none.
+/// quick notes' files, the saved shapes' file, and how many files belonged
+/// to none.
 #[derive(Clone, Debug, Default)]
 pub struct Unpacked {
     pub vaults: Vec<(ExportedVault, Files)>,
     pub quick_notes: Option<Files>,
-    pub drawings: Option<Files>,
+    pub saved_shapes: Option<Vec<u8>>,
     pub other_files: usize,
 }
 
@@ -139,12 +143,17 @@ pub fn unpack(files: Files) -> Result<Unpacked, UnpackError> {
         serde_json::from_value(manifest).map_err(|e| UnpackError::Damaged(e.to_string()))?;
     let mut by_folder: BTreeMap<String, Files> = BTreeMap::new();
     let mut other_files = 0;
+    let mut saved_shapes = None;
     for (path, data) in files {
         let Some(rest) = path.strip_prefix(&prefix) else {
             other_files += 1;
             continue;
         };
         if rest == MANIFEST {
+            continue;
+        }
+        if manifest.saved_shapes.as_deref() == Some(rest) {
+            saved_shapes = Some(data);
             continue;
         }
         match rest.split_once('/') {
@@ -163,9 +172,7 @@ pub fn unpack(files: Files) -> Result<Unpacked, UnpackError> {
     if let Some(q) = &manifest.quick_notes {
         out.quick_notes = Some(by_folder.remove(q).unwrap_or_default());
     }
-    if let Some(d) = &manifest.drawings {
-        out.drawings = Some(by_folder.remove(d).unwrap_or_default());
-    }
+    out.saved_shapes = saved_shapes;
     out.other_files = other_files + by_folder.values().map(Vec::len).sum::<usize>();
     Ok(out)
 }
@@ -193,10 +200,10 @@ mod tests {
     }
 
     fn manifest(vaults: &[(&str, &str)], quick: Option<&str>) -> Vec<u8> {
-        with_drawings(vaults, quick, None)
+        with_shapes(vaults, quick, None)
     }
 
-    fn with_drawings(vaults: &[(&str, &str)], quick: Option<&str>, d: Option<&str>) -> Vec<u8> {
+    fn with_shapes(vaults: &[(&str, &str)], quick: Option<&str>, s: Option<&str>) -> Vec<u8> {
         serde_json::to_vec(&Manifest {
             format: FORMAT,
             created_at: 1,
@@ -209,7 +216,7 @@ mod tests {
                 })
                 .collect(),
             quick_notes: quick.map(str::to_string),
-            drawings: d.map(str::to_string),
+            saved_shapes: s.map(str::to_string),
         })
         .unwrap()
     }
@@ -233,7 +240,7 @@ mod tests {
                 "Vault",
                 "Quick notes 2",
                 "Family 3",
-                "Drawings 2"
+                "Drawings"
             ]
         );
         assert_eq!(
@@ -275,20 +282,29 @@ mod tests {
     }
 
     #[test]
-    fn the_drawings_have_their_folder() {
+    fn the_saved_shapes_are_a_file_beside_the_folders() {
         let files = vec![
             (
-                MANIFEST.to_string(),
-                with_drawings(&[("Work", "Work")], None, Some("Drawings")),
+                format!("Export/{MANIFEST}"),
+                with_shapes(
+                    &[("Work", "Work")],
+                    Some("Quick notes"),
+                    Some(SAVED_SHAPES_FILE),
+                ),
             ),
-            file("Work/Notes.md"),
-            file("Drawings/Shed.drawing"),
-            file("Drawings/Plans/Beds.drawing"),
+            file("Export/Work/Plan.drawing"),
+            file(&format!("Export/{SAVED_SHAPES_FILE}")),
         ];
         let u = unpack(files).unwrap();
-        let d: Vec<String> = u.drawings.unwrap().into_iter().map(|(p, _)| p).collect();
-        assert_eq!(d, ["Shed.drawing", "Plans/Beds.drawing"]);
-        assert_eq!(u.other_files, 0);
+        assert_eq!(
+            u.saved_shapes.as_deref(),
+            Some(format!("Export/{SAVED_SHAPES_FILE}").as_bytes())
+        );
+        assert_eq!(u.vaults[0].1[0].0, "Plan.drawing");
+        assert_eq!((u.quick_notes.unwrap().len(), u.other_files), (0, 0));
+        // Exports without them (0.6.0's) have none.
+        let u = unpack(vec![(MANIFEST.to_string(), manifest(&[], None))]).unwrap();
+        assert!(u.saved_shapes.is_none());
     }
 
     #[test]

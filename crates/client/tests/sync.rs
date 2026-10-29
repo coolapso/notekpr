@@ -28,8 +28,8 @@ async fn shared_vault_reaches_running_sync_live() {
 
     // Bob's sync is running before Alice writes anything.
     let bob_live = live(hub(&bob).await).await;
-    // Family, and his own quick notes and Drawings.
-    assert_eq!(bob_live.hub.vault_ids().len(), 3);
+    // Family, and his own quick notes.
+    assert_eq!(bob_live.hub.vault_ids().len(), 2);
 
     ops::put_document(&alice_hub, "Family", "Welcome.md", "# Hi Bob\n", None)
         .await
@@ -1014,6 +1014,7 @@ async fn a_full_vault_keeps_edits_until_it_has_room() {
         async move {
             let change = AdminUpdateVault {
                 storage_allowance: Some(a),
+                ..Default::default()
             };
             let _: serde_json::Value = api.patch(path, &change).await.unwrap();
         }

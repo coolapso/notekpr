@@ -29,7 +29,7 @@ impl Editor {
             .cloned()
             .collect();
         if elements.is_empty() {
-            return Err("Select something to add it to the library.");
+            return Err("Select something to add it to your saved shapes.");
         }
         if let Some(why) = crate::library::refusal(&elements) {
             return Err(why);

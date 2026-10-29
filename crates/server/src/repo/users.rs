@@ -444,7 +444,6 @@ pub async fn admin_list(
     let rows = sqlx::query(
         "SELECT u.id, u.display_name, u.email, u.kind, u.owner_id, u.is_admin, u.disabled, u.created_at, u.last_login_at,
                 u.vault_allowance, u.agent_allowance, u.quick_note_allowance, u.quick_notes_storage_allowance,
-                u.drawing_allowance, u.drawings_storage_allowance,
                 (SELECT COUNT(*) FROM vault_members m JOIN vaults v ON v.id = m.vault_id
                  WHERE m.user_id = u.id AND v.kind = 'regular') AS vault_count,
                 (SELECT COUNT(*) FROM devices d WHERE d.user_id = u.id AND d.status = 'active') AS device_count,
@@ -456,12 +455,7 @@ pub async fn admin_list(
                 (SELECT COALESCE(SUM(v.storage_bytes), 0) FROM vaults v
                  WHERE v.owner_id = u.id AND v.kind = 'regular') AS storage_bytes,
                 (SELECT COALESCE(SUM(v.storage_bytes), 0) FROM vaults v
-                 WHERE v.owner_id = u.id AND v.kind = 'quick_notes') AS quick_notes_storage_bytes,
-                (SELECT COUNT(*) FROM vaults v
-                 JOIN objects o ON o.vault_id = v.id AND o.kind = 'drawing' AND o.purged_at IS NULL
-                 WHERE v.owner_id = u.id) AS drawing_count,
-                (SELECT COALESCE(SUM(v.storage_bytes), 0) FROM vaults v
-                 WHERE v.owner_id = u.id AND v.kind = 'drawings') AS drawings_storage_bytes
+                 WHERE v.owner_id = u.id AND v.kind = 'quick_notes') AS quick_notes_storage_bytes
          FROM users u
          WHERE (?1 IS NULL OR lower(u.email) = lower(?1))
            AND (?2 IS NULL OR EXISTS (SELECT 1 FROM identities i
@@ -492,14 +486,10 @@ pub async fn admin_list(
             quick_note_count: r.get("quick_note_count"),
             storage_bytes: r.get::<i64, _>("storage_bytes").max(0) as u64,
             quick_notes_storage_bytes: r.get::<i64, _>("quick_notes_storage_bytes").max(0) as u64,
-            drawing_count: r.get("drawing_count"),
-            drawings_storage_bytes: r.get::<i64, _>("drawings_storage_bytes").max(0) as u64,
             vault_allowance: allowance(r.get("vault_allowance")),
             agent_allowance: allowance(r.get("agent_allowance")),
             quick_note_allowance: allowance(r.get("quick_note_allowance")),
             quick_notes_storage_allowance: allowance(r.get("quick_notes_storage_allowance")),
-            drawing_allowance: allowance(r.get("drawing_allowance")),
-            drawings_storage_allowance: allowance(r.get("drawings_storage_allowance")),
         })
         .collect())
 }
@@ -510,24 +500,20 @@ pub struct Allowances {
     pub vaults: Allowance,
     pub agents: Allowance,
     pub quick_notes: Allowance,
-    pub drawings: Allowance,
 }
 
 pub async fn allowances(db: impl SqliteExecutor<'_>, id: &str) -> AppResult<Allowances> {
-    type Row = (Option<i64>, Option<i64>, Option<i64>, Option<i64>);
-    let row: Option<Row> = sqlx::query_as(
-        "SELECT vault_allowance, agent_allowance, quick_note_allowance, drawing_allowance
-         FROM users WHERE id = ?",
+    let row: Option<(Option<i64>, Option<i64>, Option<i64>)> = sqlx::query_as(
+        "SELECT vault_allowance, agent_allowance, quick_note_allowance FROM users WHERE id = ?",
     )
     .bind(id)
     .fetch_optional(db)
     .await?;
-    let (v, a, q, d) = row.unwrap_or_default();
+    let (v, a, q) = row.unwrap_or_default();
     Ok(Allowances {
         vaults: allowance(v),
         agents: allowance(a),
         quick_notes: allowance(q),
-        drawings: allowance(d),
     })
 }
 
@@ -584,33 +570,6 @@ pub async fn set_quick_notes_storage_allowance(
     .bind(id)
     .execute(db)
     .await?;
-    Ok(())
-}
-
-pub async fn set_drawing_allowance(
-    db: impl SqliteExecutor<'_>,
-    id: &str,
-    a: Allowance,
-) -> AppResult<()> {
-    sqlx::query("UPDATE users SET drawing_allowance = ? WHERE id = ? AND kind = 'human'")
-        .bind(allowance_column(a))
-        .bind(id)
-        .execute(db)
-        .await?;
-    Ok(())
-}
-
-/// How much their Drawings section may take (MiB).
-pub async fn set_drawings_storage_allowance(
-    db: impl SqliteExecutor<'_>,
-    id: &str,
-    a: Allowance,
-) -> AppResult<()> {
-    sqlx::query("UPDATE users SET drawings_storage_allowance = ? WHERE id = ? AND kind = 'human'")
-        .bind(allowance_column(a))
-        .bind(id)
-        .execute(db)
-        .await?;
     Ok(())
 }
 

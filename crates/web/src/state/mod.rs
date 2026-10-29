@@ -70,8 +70,8 @@ pub enum Route {
     Shared(String, String),
     /// All quick notes (see `crate::quick`).
     Quick,
-    /// One's own drawings: the Drawings section (see `crate::drawings`).
-    Drawings,
+    /// A vault's drawings, as pictures (see `crate::drawings`).
+    Drawings(String),
     /// A vault's notes and links as a graph.
     Graph(String),
 }
@@ -88,7 +88,7 @@ impl Route {
             Route::Device(None) => "/device".into(),
             Route::Shared(v, n) => format!("/s/{v}/{n}"),
             Route::Quick => "/quick".into(),
-            Route::Drawings => "/drawings".into(),
+            Route::Drawings(v) => format!("/v/{v}/drawings"),
             Route::Graph(v) => format!("/v/{v}/graph"),
         }
     }
@@ -103,10 +103,10 @@ impl Route {
             ["v", v] => Route::Vault(v.to_string()),
             ["v", v, "trash"] => Route::Trash(v.to_string()),
             ["v", v, "graph"] => Route::Graph(v.to_string()),
+            ["v", v, "drawings"] => Route::Drawings(v.to_string()),
             ["v", v, n] => Route::Note(v.to_string(), n.to_string()),
             ["s", v, n] => Route::Shared(v.to_string(), n.to_string()),
             ["quick"] => Route::Quick,
-            ["drawings"] => Route::Drawings,
             ["settings"] => Route::Settings("account".into()),
             ["settings", t] => Route::Settings(t.to_string()),
             ["device"] => {
@@ -128,7 +128,11 @@ impl Route {
 
     pub fn vault(&self) -> Option<&str> {
         match self {
-            Route::Vault(v) | Route::Note(v, _) | Route::Trash(v) | Route::Graph(v) => Some(v),
+            Route::Vault(v)
+            | Route::Note(v, _)
+            | Route::Trash(v)
+            | Route::Graph(v)
+            | Route::Drawings(v) => Some(v),
             _ => None,
         }
     }
@@ -669,20 +673,13 @@ impl Core {
             .is_some_and(|i| i.is_own_quick_notes(&self.user_id))
     }
 
-    /// The person's Drawings section: their vault of that kind
-    /// (`notekpr_core::drawings`), once listed. Apps show it as such, never
-    /// as a vault.
-    pub fn drawings(&self) -> Option<String> {
-        self.vault_infos
-            .values()
-            .find(|i| i.is_own_drawings(&self.user_id))
-            .map(|i| i.id.clone())
-    }
-
-    pub fn is_drawings(&self, vault: &str) -> bool {
+    /// How many drawings `vault` may hold, as the vault list said.
+    pub fn drawing_limit(&self, vault: &str) -> notekpr_core::protocol::Limit {
         self.vault_infos
             .get(vault)
-            .is_some_and(|i| i.is_own_drawings(&self.user_id))
+            .map_or(notekpr_core::protocol::Limit::Unlimited, |i| {
+                i.drawing_limit
+            })
     }
 
     pub fn vault_name(&self, vault: &str) -> String {

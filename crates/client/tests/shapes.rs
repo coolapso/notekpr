@@ -1,5 +1,6 @@
-//! `notekpr library`: the drawings library (Excalidraw's), kept in the
-//! person's Drawings section's index and synced between their devices.
+//! `notekpr shapes`: the saved shapes (Excalidraw's library), kept in the
+//! person's Personal storage (their quick notes' index) and synced between
+//! their devices.
 
 mod common;
 
@@ -73,10 +74,11 @@ async fn library_ids(srv: &TestServer, dirs: &str) -> Vec<String> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_library_is_imported_listed_and_exported() {
-    // Drawings may not even be made here: the library takes no drawing's place.
+    // Drawings may not even be made here: saved shapes take no drawing's
+    // place.
     let srv = start().await;
     let change = InstanceSettingsUpdate {
-        drawings_per_user: Some(Limit::Max(0)),
+        drawings_per_vault: Some(Limit::Max(0)),
         ..Default::default()
     };
     srv.state
@@ -85,7 +87,7 @@ async fn a_library_is_imported_listed_and_exported() {
         .await
         .unwrap();
     two_devices(&srv).await;
-    run(&srv, "alice-a", &["library", "ls"]).await.unwrap();
+    run(&srv, "alice-a", &["shapes", "ls"]).await.unwrap();
     assert!(library_ids(&srv, "alice-a").await.is_empty());
 
     let file = srv.path("shapes.excalidrawlib");
@@ -95,13 +97,13 @@ async fn a_library_is_imported_listed_and_exported() {
     )
     .unwrap();
     let f = file.to_str().unwrap();
-    run(&srv, "alice-a", &["library", "import", f])
+    run(&srv, "alice-a", &["shapes", "import", f])
         .await
         .unwrap();
     // Newest first.
     assert_eq!(library_ids(&srv, "alice-a").await, ["blob", "box"]);
     // Twice: nothing more.
-    run(&srv, "alice-a", &["library", "import", f])
+    run(&srv, "alice-a", &["shapes", "import", f])
         .await
         .unwrap();
     let h = hub(&reopen(&srv, "alice-a", "alice").await).await;
@@ -121,7 +123,7 @@ async fn a_library_is_imported_listed_and_exported() {
     let err = run(
         &srv,
         "alice-a",
-        &["library", "import", note.to_str().unwrap()],
+        &["shapes", "import", note.to_str().unwrap()],
     )
     .await
     .unwrap_err();
@@ -133,7 +135,7 @@ async fn a_library_is_imported_listed_and_exported() {
     // Exported, Excalidraw's file holds the same items.
     let out = srv.path("mine.excalidrawlib");
     let o = out.to_str().unwrap();
-    run(&srv, "alice-a", &["library", "export", "--out", o])
+    run(&srv, "alice-a", &["shapes", "export", "--out", o])
         .await
         .unwrap();
     let text = std::fs::read_to_string(&out).unwrap();
@@ -144,14 +146,14 @@ async fn a_library_is_imported_listed_and_exported() {
     assert_eq!(back, ops::library(&h).await);
     assert!(back[1].elements.iter().any(|e| e.text() == "A box"));
     drop(h);
-    let err = run(&srv, "alice-a", &["library", "export", "--out", o])
+    let err = run(&srv, "alice-a", &["shapes", "export", "--out", o])
         .await
         .unwrap_err();
     assert!(format!("{err:#}").contains("--force"), "{err:#}");
     run(
         &srv,
         "alice-a",
-        &["library", "export", "--out", o, "--force"],
+        &["shapes", "export", "--out", o, "--force"],
     )
     .await
     .unwrap();
@@ -167,8 +169,8 @@ async fn two_devices_adding_at_once_keep_both() {
     // Both open before either adds: neither has seen the other's item.
     let a = hub(&reopen(&srv, "alice-a", "alice").await).await;
     let b = hub(&reopen(&srv, "alice-b", "alice").await).await;
-    a.ensure_drawings().await.unwrap();
-    b.ensure_drawings().await.unwrap();
+    a.ensure_quick_notes().await.unwrap();
+    b.ensure_quick_notes().await.unwrap();
     let ra = ops::import_library(&a, &library_file(&[("from-a", "rectangle", "A")]))
         .await
         .unwrap();

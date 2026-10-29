@@ -705,7 +705,6 @@ fn first_document_key(
         private,
         without: vec![],
         kind: ObjectKind::Note,
-        replaces: None,
     };
     Ok((ring, req))
 }
@@ -746,7 +745,6 @@ pub fn start_sharing_keyed(
         private: false,
         without: vec![],
         kind: ObjectKind::Note,
-        replaces: None,
     };
     Ok((next, req))
 }
@@ -782,7 +780,6 @@ pub fn start_sharing(
         private: false,
         without: vec![],
         kind: ObjectKind::Note,
-        replaces: None,
     };
     Ok((ring, req))
 }
@@ -828,7 +825,6 @@ pub fn rotate_object_key(
         private: false,
         without: vec![],
         kind: ObjectKind::Note,
-        replaces: None,
     };
     Ok((next, req))
 }

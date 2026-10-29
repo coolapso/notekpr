@@ -1,10 +1,10 @@
-//! The drawings library on the board, as Excalidraw's (`data/library.ts`,
-//! `actions/actionAddToLibrary.ts`): items kept in one's Drawings section's
-//! index (`notekpr_core::library`), the same on every device. What is
-//! selected becomes an item; an item goes into the drawing as copies of its
-//! elements, where it is dropped or in the middle of the view; libraries
-//! come and go as `.excalidrawlib` files. The panel showing it is
-//! `views::library`.
+//! Saved shapes on the board, as Excalidraw's library (`data/library.ts`,
+//! `actions/actionAddToLibrary.ts`): kept in one's Personal storage (the
+//! quick notes' index, `notekpr_core::library`), the same on every device.
+//! What is selected becomes a saved shape; a shape goes into the drawing as
+//! copies of its elements, where it is dropped or in the middle of the view;
+//! they come and go as Excalidraw's `.excalidrawlib` files. The panel
+//! showing them is `views::library`.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -35,20 +35,21 @@ thread_local! {
     static PICTURES: RefCell<HashMap<String, (u64, String)>> = RefCell::new(HashMap::new());
 }
 
-/// The library's items, newest first (none before the Drawings are made).
+/// The saved shapes, newest first (none before the Personal storage is
+/// made).
 pub fn items() -> Vec<LibraryItem> {
     step(|c| {
-        let v = c.drawings()?;
+        let v = c.quick_notes()?;
         Some(library::items(&c.replicas.get(&v)?.index))
     })
     .unwrap_or_default()
 }
 
-/// The Drawings section the library is kept in, made the first time.
+/// The Personal storage the shapes are kept in, made the first time.
 async fn section() -> Option<String> {
-    let v = crate::drawings::ensure_section().await;
+    let v = crate::quick::ensure().await;
     if v.is_none() {
-        state::error("The library can't be changed right now: try again once online.");
+        state::error("Saved shapes can't be changed right now: try again once online.");
     }
     v
 }
@@ -57,7 +58,7 @@ fn changed() {
     ui().library_rev.update(|n| *n += 1);
 }
 
-/// Adds `item` to the library; whether it was.
+/// Saves `item`; whether it was.
 pub async fn add(item: LibraryItem) -> bool {
     let Some(v) = section().await else {
         return false;
@@ -88,10 +89,10 @@ fn capitalized(s: &str) -> String {
         .unwrap_or_default()
 }
 
-/// Removes an item from the library.
+/// Removes a saved shape.
 pub fn remove(id: &str) {
     step(|c| {
-        let v = c.drawings()?;
+        let v = c.quick_notes()?;
         let u = library::remove(&c.replicas.get(&v)?.index, [id])?;
         state::local_update(c, &v, INDEX_OBJECT_ID, u);
         Some(())
@@ -99,8 +100,8 @@ pub fn remove(id: &str) {
     changed();
 }
 
-/// Adds the items of an `.excalidrawlib` file (`text`) to the library,
-/// leaving out those it has (`mergeLibraryItems`).
+/// Saves the shapes of an `.excalidrawlib` file (`text`), leaving out those
+/// saved already (`mergeLibraryItems`).
 pub async fn import(text: String) {
     let now = js_sys::Date::now();
     let mut ids = notekpr_draw::restore::Ids::new(now as u64);
@@ -109,7 +110,7 @@ pub async fn import(text: String) {
         return;
     };
     if items.is_empty() {
-        state::info("The library file holds no items.");
+        state::info("The library file holds no shapes.");
         return;
     }
     let Some(v) = section().await else {
@@ -127,20 +128,17 @@ pub async fn import(text: String) {
     let Some(done) = done else {
         return;
     };
-    let mut said = format!(
-        "Added {} to your library.",
-        util::count(done.added, "item", "items")
-    );
+    let mut said = format!("Saved {}.", util::count(done.added, "shape", "shapes"));
     if done.already > 0 {
         said.push_str(&format!(
-            " {} in it already.",
+            " {} saved already.",
             util::count(done.already, "was", "were")
         ));
     }
     if done.too_large > 0 {
         said.push_str(&format!(
             " {} too large to keep on this server.",
-            util::count(done.too_large, "item was", "items were")
+            util::count(done.too_large, "shape was", "shapes were")
         ));
         state::error(said);
     } else {
@@ -148,8 +146,9 @@ pub async fn import(text: String) {
     }
 }
 
-/// Imports the library files among `files` (`.excalidrawlib`); the others
-/// are returned. `open`: the library panel, opened when there were some.
+/// Saves the shapes of the library files among `files` (`.excalidrawlib`);
+/// the others are returned. `open`: the saved shapes' panel, opened when
+/// there were some.
 pub fn import_files(files: Vec<web_sys::File>, open: RwSignal<bool>) -> Vec<web_sys::File> {
     let (libraries, others): (Vec<_>, Vec<_>) = files
         .into_iter()
@@ -171,15 +170,15 @@ pub fn import_files(files: Vec<web_sys::File>, open: RwSignal<bool>) -> Vec<web_
     others
 }
 
-/// Downloads the library as an `.excalidrawlib` file.
+/// Downloads the saved shapes as an `.excalidrawlib` file.
 pub fn export() {
     let items = items();
     if items.is_empty() {
-        state::info("Your library is empty.");
+        state::info("No saved shapes yet.");
         return;
     }
     let file = notekpr_draw::file::write_library(&items);
-    util::download("library.excalidrawlib", FILE_TYPE, file.as_bytes());
+    util::download("Saved shapes.excalidrawlib", FILE_TYPE, file.as_bytes());
 }
 
 /// A picture of `elements` (an item's, or the selection's) as a blob URL,
@@ -234,19 +233,19 @@ pub async fn picture(key: &str, elements: &[Element]) -> Option<String> {
 }
 
 impl Board {
-    /// What is selected as a new library item, or why it can't be one.
+    /// What is selected as a new saved shape, or why it can't be one.
     pub fn library_item(&self) -> Result<LibraryItem, &'static str> {
         self.editor
             .borrow()
             .library_item(&self.scene(), &mut WebRandom)
     }
 
-    /// Adds what is selected to the library (`actionAddToLibrary`).
+    /// Saves what is selected as a shape (`actionAddToLibrary`).
     pub fn add_to_library(&self) {
         match self.library_item() {
             Ok(item) => leptos::task::spawn_local(async move {
                 if add(item).await {
-                    state::success("Added to library");
+                    state::success("Added to saved shapes");
                 }
             }),
             Err(why) => state::error(why),

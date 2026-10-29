@@ -259,23 +259,21 @@ impl Session {
         v.owner_id = info.owner_id.clone();
         v.archived = info.archived;
         v.viewers_comment = info.viewers_comment;
-        // Only one's own quick notes and Drawings are taken for them.
-        v.kind = if (info.is_quick_notes() && !info.is_own_quick_notes(&self.user_id))
-            || (info.is_drawings() && !info.is_own_drawings(&self.user_id))
-        {
-            tracing::warn!(vault = %info.id, "a vault listed as a section of yours isn't yours alone; it is shown as a vault");
+        // Only one's own quick notes are taken for them.
+        v.kind = if info.is_quick_notes() && !info.is_own_quick_notes(&self.user_id) {
+            tracing::warn!(vault = %info.id, "a vault listed as quick notes isn't yours alone; it is shown as a vault");
             VaultKind::Regular
         } else {
             info.kind
         };
-        let grew = info.note_limit != v.note_limit;
+        let changed = info.note_limit != v.note_limit || info.drawing_limit != v.drawing_limit;
         v.note_limit = info.note_limit;
+        v.drawing_limit = info.drawing_limit;
         v.storage_bytes = info.storage_bytes;
         v.storage_limit_mb = info.storage_limit_mb;
-        // A changed limit may have made room for notes waiting on this
-        // device. Drawings wait for a limit of their owner's that the list
-        // doesn't show: they try again whenever it is reloaded.
-        if grew || !v.is_quick_notes() {
+        // A changed limit may have made room for notes or drawings waiting
+        // on this device.
+        if changed {
             v.room_freed();
         }
         v.read_only = None;
@@ -1591,8 +1589,9 @@ fn warn_held(v: &crate::vault::Vault, held: &[notekpr_sync::Held], max: usize) {
     if drawings > 0 {
         ui::warn(&format!(
             "vault '{}': {drawings} new drawing(s) stay on this device until there's room for them: \
-             the vault's owner has as many drawings as they may (one deleted for good makes room)",
-            v.name()
+             {}",
+            v.name(),
+            notekpr_core::drawings::full_message(v.drawing_limit)
         ));
     }
     let no_room = no_room.len();

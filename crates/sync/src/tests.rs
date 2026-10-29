@@ -596,8 +596,7 @@ fn updates_refused_for_full_quick_notes_wait_for_room() {
 }
 
 /// What creates an object on the server says whether it is a drawing (the
-/// vault's index tells), and a moved drawing's key which original it
-/// replaces; drawings without room wait like quick notes.
+/// vault's index tells); drawings without room wait like quick notes.
 #[test]
 fn drawings_say_so_and_wait_for_room() {
     let (mut r, mut o) = (replica(), keyed());
@@ -614,25 +613,10 @@ fn drawings_say_so_and_wait_for_room() {
     o.new_document_key(&mut r, "n", "Note");
     r.index.create("n", "Note.md", EntryKind::Note, 1);
     edit(&mut r, "n", "text");
-    let original = ObjectRef {
-        vault_id: "v0".into(),
-        object_id: "d0".into(),
-    };
-    assert!(o.set_replaces("d", original.clone()));
-    assert!(!o.set_replaces("nothing", original.clone()));
     let plan = o.plan(&mut r, &Limits::default());
     let key = |id: &str| plan.register.iter().find(|k| k.object_id == id).unwrap();
     assert_eq!(key("d").update.kind, ObjectKind::Drawing);
-    assert_eq!(key("d").update.replaces, Some(original));
     assert_eq!(key("n").update.kind, ObjectKind::Note);
-    assert_eq!(key("n").update.replaces, None);
-    // Kept across restarts until registered.
-    assert!(
-        serde_json_roundtrip(&o).new_keys[0]
-            .update
-            .replaces
-            .is_some()
-    );
 
     // No room for it: the key waits, as the drawing's content.
     o.key_without_room("d");

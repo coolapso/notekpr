@@ -14,7 +14,7 @@ use notekpr_core::crypto::Purpose;
 use notekpr_core::doc;
 use notekpr_core::engine::{Pending, VaultReplica};
 use notekpr_core::protocol::{
-    ObjectKeyUpdate, ObjectRef, PushResult, PushUpdate, REJECT_DRAWINGS_FULL, REJECT_PURGED,
+    ObjectKeyUpdate, PushResult, PushUpdate, REJECT_DRAWINGS_FULL, REJECT_PURGED,
     REJECT_QUICK_NOTES_FULL, REJECT_STALE_KEY, REJECT_TOO_LARGE, RejectedUpdate, comments_note,
 };
 use notekpr_core::random_id;
@@ -94,7 +94,7 @@ pub enum HoldReason {
     /// Larger than the server accepts; goes out again once it fits.
     TooLarge,
     /// A new quick note while the quick notes are full, or a new drawing
-    /// while its vault's owner has as many as they may; goes out again once
+    /// while its vault holds as many as it may; goes out again once
     /// there's room ([`Outbox::room_freed`]).
     NoRoom,
     /// The server refused it for another reason (bad request).
@@ -234,20 +234,6 @@ impl Outbox {
         self.new_keys.retain(|k| k.object_id != object_id);
     }
 
-    /// A drawing copied here by a move replaces `original`, which the server
-    /// deletes for good once the copy is stored: its key says so, so that the
-    /// copy needs no room under the drawings limit. `false` if the object
-    /// has no key waiting to be registered.
-    pub fn set_replaces(&mut self, object_id: &str, original: ObjectRef) -> bool {
-        match self.new_keys.iter_mut().find(|k| k.object_id == object_id) {
-            Some(k) => {
-                k.update.replaces = Some(original);
-                true
-            }
-            None => false,
-        }
-    }
-
     /// The server refused a new note's key. If it was wrapped under a vault
     /// key that is no longer the current one (the vault's key rotated
     /// meanwhile; reload keys first), a new key under the current vault key
@@ -328,7 +314,7 @@ impl Outbox {
     }
 
     /// The server refused a new note's key because the quick notes are full,
-    /// or a new drawing's because its vault's owner has as many as they may:
+    /// or a new drawing's because its vault holds as many as it may:
     /// keep the key and its updates, and register it once there's room.
     pub fn key_without_room(&mut self, object_id: &str) {
         if self.waits_for_key(object_id) {

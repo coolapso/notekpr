@@ -684,20 +684,12 @@ async fn handle(
             seq,
         } => {
             if let Some(v) = hub.get(&vault_id) {
-                let (a, rescued, drawing) = {
+                let (a, rescued) = {
                     let mut g = v.lock().await;
-                    let drawing = g.is_drawing(&object_id);
-                    (g.apply_purge(&object_id, seq), g.take_rescued(), drawing)
+                    (g.apply_purge(&object_id, seq), g.take_rescued())
                 };
                 hub.emit_applied(&vault_id, &a, false);
                 upload_rescued(hub, &vault_id, rescued).await;
-                // Drawings count per person: new ones waiting in other
-                // vaults may fit now.
-                if drawing {
-                    for id in hub.room_freed_elsewhere(&vault_id).await {
-                        spawn_push(hub, &id);
-                    }
-                }
             }
         }
         ServerMessage::Ack {

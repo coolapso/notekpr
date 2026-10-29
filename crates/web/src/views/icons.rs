@@ -100,6 +100,10 @@ fn paths(name: &str) -> &'static str {
         "book" => {
             r#"<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20V3H6.5A2.5 2.5 0 0 0 4 5.5z"/><path d="M4 19.5A2.5 2.5 0 0 0 6.5 22H20v-5"/>"#
         }
+        // Saved shapes: a triangle, a circle and a square, overlapping.
+        "shapes" => {
+            r#"<path d="M8 3 3 11.5h10z"/><circle cx="16.5" cy="8.5" r="4.5"/><rect x="9" y="13" width="8" height="8" rx="1"/>"#
+        }
         "check" => r#"<path d="m5 12 5 5L20 7"/>"#,
         "x" => r#"<path d="M18 6 6 18M6 6l12 12"/>"#,
         "menu" => r#"<path d="M4 6h16M4 12h16M4 18h16"/>"#,

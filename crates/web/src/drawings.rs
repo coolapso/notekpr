@@ -44,115 +44,47 @@ thread_local! {
     static IMAGES: RefCell<HashMap<String, Option<web_sys::HtmlImageElement>>> = RefCell::new(HashMap::new());
 }
 
-thread_local! {
-    /// The Drawings section is being made (once, not by two tasks at once).
-    static MAKING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-}
-
-/// One's Drawings section (its vault), if there is one.
-pub fn section() -> Option<String> {
-    step(|c| c.drawings())
-}
-
-/// The Drawings section, made the first time (`None`: it can't be made
-/// now, e.g. offline).
-pub async fn ensure_section() -> Option<String> {
-    while MAKING.get() {
-        util::sleep(50).await;
-    }
-    if let Some(v) = section() {
-        return Some(v);
-    }
-    if step(|c| c.account.is_none()) {
-        return None;
-    }
-    MAKING.set(true);
-    let made = crate::actions::create_vault_of(
-        notekpr_core::drawings::NAME,
-        notekpr_core::protocol::VaultKind::Drawings,
-    )
-    .await;
-    let v = match made {
-        Ok(Some(v)) => Some(v),
-        // Another app made it meanwhile.
-        Ok(None) => {
-            crate::state::refresh_vaults().await;
-            section()
-        }
-        Err(e) => {
-            util::warn(&format!("the Drawings section could not be set up: {e}"));
-            None
-        }
-    };
-    MAKING.set(false);
-    v
-}
-
-/// How many drawings one has — in one's Drawings and the vaults one owns,
-/// in the trash too, as the server counts them — and may have (`/me`'s
-/// limit; the count seen here, which may be newer than `/me`'s).
-pub fn usage() -> (u64, notekpr_core::protocol::Limit) {
+/// How many drawings `vault` holds — those in the trash too, as the server
+/// counts them — and may hold (the vault list's limit).
+pub fn usage(vault: &str) -> (u64, notekpr_core::protocol::Limit) {
     step(|c| {
-        let here: u64 = c
-            .replicas
-            .iter()
-            .filter(|(v, _)| c.is_owner(v) || c.is_drawings(v))
-            .map(|(_, r)| {
-                r.index
-                    .entries()
-                    .iter()
-                    .filter(|e| {
-                        e.kind == notekpr_core::doc::EntryKind::Drawing && e.purged.is_none()
-                    })
-                    .count() as u64
-            })
-            .sum();
-        let (limit, counted) =
-            c.me.as_ref()
-                .map_or((notekpr_core::protocol::Limit::Unlimited, 0), |m| {
-                    (m.drawing_limit, m.drawing_count)
-                });
-        (here.max(counted), limit)
+        let count = c.replicas.get(vault).map_or(0, |r| {
+            r.index
+                .entries()
+                .iter()
+                .filter(|e| e.kind == notekpr_core::doc::EntryKind::Drawing && e.purged.is_none())
+                .count() as u64
+        });
+        (count, c.drawing_limit(vault))
     })
 }
 
-/// Whether a new drawing fits in `vault`: always in someone else's (their
-/// owner's limit isn't known here; the server says); otherwise one's own
-/// limit, telling why not.
+/// Whether a new drawing fits in `vault`, telling why not.
 pub fn has_room_in(vault: &str) -> bool {
-    let own = step(|c| c.is_owner(vault) || c.is_drawings(vault));
-    if !own {
-        return true;
-    }
-    let (count, limit) = usage();
+    let (count, limit) = usage(vault);
     if notekpr_core::drawings::has_room(count, limit) {
         return true;
     }
-    crate::state::error(notekpr_core::drawings::full_message(limit, true));
+    crate::state::error(notekpr_core::drawings::full_message(limit));
     false
 }
 
-/// A new drawing in the Drawings section, opened.
-pub fn new_in_section() {
-    leptos::task::spawn_local(async move {
-        match ensure_section().await {
-            Some(v) => crate::actions::new_drawing(&v, ""),
-            None => crate::state::error("Drawings can't be made right now: try again once online."),
-        }
-    });
-}
-
-/// The drawings in the section, newest first: (id, title, modified).
-pub fn in_section() -> Vec<(String, String, i64)> {
-    let Some(v) = section() else {
-        return Vec::new();
-    };
-    let mut out: Vec<(String, String, i64)> = step(|c| c.live_entries(&v))
+/// The drawings in `vault`, wherever in it, newest first: (id, title,
+/// folder, modified).
+pub fn in_vault(vault: &str) -> Vec<(String, String, String, i64)> {
+    let mut out: Vec<(String, String, String, i64)> = step(|c| c.live_entries(vault))
         .into_iter()
         .filter(|e| e.kind == notekpr_core::doc::EntryKind::Drawing)
-        .map(|e| (e.id.clone(), e.title().to_string(), e.modified))
+        .map(|e| {
+            let folder = e
+                .path
+                .rsplit_once('/')
+                .map(|(f, _)| f.to_string())
+                .unwrap_or_default();
+            (e.id.clone(), e.title().to_string(), folder, e.modified)
+        })
         .collect();
-    out.sort_by_key(|e| std::cmp::Reverse(e.2));
+    out.sort_by_key(|e| std::cmp::Reverse(e.3));
     out
 }
 

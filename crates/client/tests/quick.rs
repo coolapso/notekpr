@@ -81,13 +81,12 @@ async fn quick_notes_need_no_vault_and_stay_flat() {
     let q = ops::list_quick_notes(&h, 100).await.unwrap();
     assert_eq!(q.count, 2);
     assert_eq!(q.limit, Some(Limit::Max(DEFAULT_QUICK_NOTES_PER_USER)));
-    // Once per person, and no vault in the lists (their Drawings neither).
+    // Once per person, and no vault in the lists.
     let infos = alice.api.vaults().await.unwrap();
-    let mut kinds: Vec<VaultKind> = infos.iter().map(|i| i.kind).collect();
-    kinds.sort_by_key(|k| k.as_str());
-    assert_eq!(kinds, [VaultKind::Drawings, VaultKind::QuickNotes]);
+    assert_eq!(infos.len(), 1);
+    assert_eq!(infos[0].kind, VaultKind::QuickNotes);
     let summaries = h.summaries().await;
-    assert!(summaries.iter().all(|s| s.kind.is_section()));
+    assert_eq!(summaries[0].kind, VaultKind::QuickNotes);
     drop(h);
 
     // Nothing goes into folders.

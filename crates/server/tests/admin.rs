@@ -1428,6 +1428,8 @@ async fn administrators_see_vaults_by_size_and_give_one_more_room() {
         fields,
         [
             "created_at",
+            "drawing_allowance",
+            "drawing_count",
             "id",
             "owner_id",
             "owner_name",
@@ -1614,33 +1616,38 @@ async fn quick_notes_have_a_storage_limit_of_their_own_per_person() {
     assert!(ws.until(|m| vault_full(m, &q)).await);
 }
 
-/// How many drawings someone may have is the instance's
-/// `drawings_per_user` (unlimited by default) or their own allowance, and
-/// their Drawings section takes at most `drawings_storage_mb` or their own
-/// storage allowance — never the limit per vault. The section is no vault
-/// to the limits or the counts.
+/// How many drawings a vault may hold is the instance's
+/// `drawings_per_vault` (unlimited by default) or the vault's own allowance,
+/// whoever draws in it. Members' apps learn when it changes; quick notes
+/// have none of their own.
 #[tokio::test]
-async fn administrators_set_how_many_drawings_people_may_have() {
+async fn administrators_set_how_many_drawings_a_vault_may_hold() {
     let srv = start_with_operator().await;
     let mut alice = new_user(&srv.base, "alice").await;
-    let s = settings(
-        &srv,
-        serde_json::json!({ "drawings_per_user": 1, "vaults_per_user": 0, "max_vaults": 0 }),
-    )
-    .await;
-    assert_eq!(s.settings.drawings_per_user, Limit::Max(1));
-    assert_eq!(s.settings.drawings_storage_mb, Limit::Unlimited);
-    // No vault may be made; the Drawings still can.
-    assert_eq!(try_create_vault(&alice).await, 403);
-    let d = alice.create_drawings().await.unwrap().id;
-    alice.make_drawing(&d, "d1").await;
-    assert_eq!(alice.drawings().await, (Limit::Max(1), 1));
-    let (_, key) = alice.new_key(&d, "d2", ObjectKind::Drawing);
-    assert_eq!(alice.put_key(&d, "d2", &key).await.unwrap_err().0, 403);
+    let mut bob = new_user(&srv.base, "bob").await;
+    let v = alice.create_vault("Garden").await;
+    alice.share(&v, &bob.id, Role::Editor).await.unwrap();
+    bob.load_keys(&v).await.unwrap();
+    let other = alice.create_vault("Other").await;
+    let mut ws = subscribed(&srv, &bob, &v, None).await;
+    let s = settings(&srv, serde_json::json!({ "drawings_per_vault": 1 })).await;
+    assert_eq!(s.settings.drawings_per_vault, Limit::Max(1));
+    let changed = |m: &ServerMessage| match m {
+        ServerMessage::UserEvent {
+            event: UserEventKind::VaultsChanged,
+        } => Some(()),
+        _ => None,
+    };
+    // Members' apps reload their vaults' limits.
+    ws.until(changed).await;
+    assert_eq!(vault_info(&bob, &v).await.drawing_limit, Limit::Max(1));
+    alice.make_drawing(&v, "d1").await;
+    let (_, key) = bob.new_key(&v, "d2", ObjectKind::Drawing);
+    assert_eq!(bob.put_key(&v, "d2", &key).await.unwrap_err().0, 403);
 
-    // The person's own allowance, told to their apps.
-    let mut ws = subscribed(&srv, &alice, &d, None).await;
-    let path = format!("/admin/users/{}", alice.id);
+    // The vault's own allowance, told to its members' apps; other vaults
+    // keep the instance's.
+    let path = format!("/admin/vaults/{v}");
     let patch = |body: serde_json::Value| {
         let r = operator(&srv, Method::PATCH, &path).json(&body);
         async move { status(r).await }
@@ -1649,45 +1656,13 @@ async fn administrators_set_how_many_drawings_people_may_have() {
         patch(serde_json::json!({ "drawing_allowance": 2 })).await,
         200
     );
-    ws.until(|m| match m {
-        ServerMessage::UserEvent {
-            event: UserEventKind::VaultsChanged,
-        } => Some(()),
-        _ => None,
-    })
-    .await;
-    assert_eq!(alice.drawings().await, (Limit::Max(2), 1));
-    alice.put_key(&d, "d2", &key).await.unwrap();
-    let person = || async {
-        let users: Vec<AdminUser> = operator(&srv, Method::GET, "/admin/users")
-            .send()
-            .await
-            .unwrap()
-            .json()
-            .await
-            .unwrap();
-        users.into_iter().find(|u| u.id == alice.id).unwrap()
-    };
-    let p = person().await;
-    assert_eq!(p.drawing_allowance, Allowance::Max(2));
-    assert_eq!(p.drawing_count, 2);
+    ws.until(changed).await;
+    assert_eq!(vault_info(&bob, &v).await.drawing_limit, Limit::Max(2));
     assert_eq!(
-        p.drawings_storage_bytes,
-        vault_info(&alice, &d).await.storage_bytes
+        vault_info(&alice, &other).await.drawing_limit,
+        Limit::Max(1)
     );
-    assert!(p.drawings_storage_bytes > 0);
-    assert_eq!(
-        (p.vault_count, p.owned_vault_count, p.storage_bytes),
-        (0, 0, 0)
-    );
-    let stats: AdminStats = operator(&srv, Method::GET, "/admin/stats")
-        .send()
-        .await
-        .unwrap()
-        .json()
-        .await
-        .unwrap();
-    assert_eq!(stats.vaults, 0, "the Drawings are no vault");
+    bob.put_key(&v, "d2", &key).await.unwrap();
     let vaults: Vec<AdminVault> = operator(&srv, Method::GET, "/admin/vaults")
         .send()
         .await
@@ -1695,63 +1670,30 @@ async fn administrators_set_how_many_drawings_people_may_have() {
         .json()
         .await
         .unwrap();
-    assert!(vaults.is_empty());
-    let patch_vault = operator(&srv, Method::PATCH, &format!("/admin/vaults/{d}"))
-        .json(&serde_json::json!({ "storage_allowance": 5 }));
-    assert_eq!(status(patch_vault).await, 404);
-
-    // Their storage: not the limit per vault, the instance's for Drawings…
-    settings(&srv, serde_json::json!({ "storage_per_vault_mb": 0 })).await;
+    let garden = vaults.iter().find(|a| a.id == v).unwrap();
     assert_eq!(
-        vault_info(&alice, &d).await.storage_limit_mb,
-        Limit::Unlimited
+        (garden.drawing_count, garden.drawing_allowance),
+        (2, Allowance::Max(2))
     );
-    let s = settings(&srv, serde_json::json!({ "drawings_storage_mb": 0 })).await;
-    assert_eq!(s.settings.drawings_storage_mb, Limit::Max(0));
-    assert!(ws.until(|m| vault_full(m, &d)).await);
-    let ring = alice.ring(&d).clone();
-    assert_eq!(
-        alice
-            .push(&d, vec![content(&ring, INDEX_OBJECT_ID, ObjectKind::Note)])
-            .await
-            .unwrap_err()
-            .0,
-        507
-    );
-    // …else their own, at once.
-    assert_eq!(
-        patch(serde_json::json!({ "drawings_storage_allowance": "unlimited" })).await,
-        200
-    );
-    assert!(!ws.until(|m| vault_full(m, &d)).await);
-    assert_eq!(
-        person().await.drawings_storage_allowance,
-        Allowance::Unlimited
-    );
-    assert_eq!(
-        vault_info(&alice, &d).await.storage_limit_mb,
-        Limit::Unlimited
-    );
+    assert_eq!(garden.storage_allowance, Allowance::Default, "unchanged");
 
     // Back to the instance's limit, lowered: nothing is taken away.
     assert_eq!(
         patch(serde_json::json!({ "drawing_allowance": "default" })).await,
         200
     );
-    assert_eq!(alice.drawings().await, (Limit::Max(1), 2));
+    assert_eq!(vault_info(&alice, &v).await.drawing_limit, Limit::Max(1));
+    let (_, key) = alice.new_key(&v, "d3", ObjectKind::Drawing);
+    assert_eq!(alice.put_key(&v, "d3", &key).await.unwrap_err().0, 403);
     settings(
         &srv,
-        serde_json::json!({ "drawings_per_user": "unlimited" }),
+        serde_json::json!({ "drawings_per_vault": "unlimited" }),
     )
     .await;
-    assert_eq!(alice.drawings().await, (Limit::Unlimited, 2));
-    // Agents have no allowance.
-    let agent = create_agent(&alice).await.unwrap();
-    let r = operator(
-        &srv,
-        Method::PATCH,
-        &format!("/admin/users/{}", agent.agent.id),
-    )
-    .json(&serde_json::json!({ "drawing_allowance": 1 }));
-    assert_eq!(status(r).await, 400);
+    alice.put_key(&v, "d3", &key).await.unwrap();
+    // Quick notes have no limit of their own.
+    let q = alice.create_quick_notes().await.unwrap().id;
+    let r = operator(&srv, Method::PATCH, &format!("/admin/vaults/{q}"))
+        .json(&serde_json::json!({ "drawing_allowance": 1 }));
+    assert_eq!(status(r).await, 404);
 }

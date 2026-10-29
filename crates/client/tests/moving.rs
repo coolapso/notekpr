@@ -11,7 +11,7 @@ use notekpr_client::commands;
 use notekpr_client::hub::Hub;
 use notekpr_client::ops;
 use notekpr_core::doc::EntryKind;
-use notekpr_core::protocol::{InstanceSettingsUpdate, Limit, MeResponse};
+use notekpr_core::protocol::{InstanceSettingsUpdate, Limit};
 
 async fn run(srv: &TestServer, who: &str, args: &[&str]) -> anyhow::Result<()> {
     let mut argv = vec!["notekpr", "-q", "--profile", who];
@@ -139,24 +139,17 @@ async fn a_folder_moves_to_another_vault_with_everything_in_it() {
     assert!(g.find("Other.md").is_some());
 }
 
-/// How many drawings alice has and may have, as her apps learn.
-async fn drawings(h: &Hub) -> (Limit, u64) {
-    let me: MeResponse = h.session.api.get("/me").await.unwrap();
-    (me.drawing_limit, me.drawing_count)
-}
-
-/// A drawing moves to another vault even when its owner has as many
-/// drawings as they may: the copy replaces the original, which the server
-/// deletes for good once the copy is stored.
+/// Each vault holds so many drawings: a drawing moves to another vault only
+/// if there's room there, and nothing is copied otherwise.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_drawing_moves_to_another_vault_at_the_drawings_limit() {
+async fn a_drawing_moves_only_to_a_vault_with_room() {
     let srv = start().await;
     srv.state
         .instance
         .update(
             &srv.state.db,
             &InstanceSettingsUpdate {
-                drawings_per_user: Some(Limit::Max(1)),
+                drawings_per_vault: Some(Limit::Max(1)),
                 ..Default::default()
             },
         )
@@ -171,32 +164,57 @@ async fn a_drawing_moves_to_another_vault_at_the_drawings_limit() {
         .unwrap()
         .scene;
     let h = hub(&alice).await;
-    let original = {
+    let mut made = Vec::new();
+    for (vault, name) in [("Home", "Sketch"), ("Work", "Other")] {
+        let v = h.resolve(vault).await.unwrap();
+        let mut g = v.lock().await;
+        assert_eq!(g.drawing_limit, Limit::Max(1));
+        let id = g.create_drawing(name, &scene).unwrap().id;
+        g.save().unwrap();
+        made.push((g.id().to_string(), id));
+    }
+    for (v, id) in &made {
+        h.local_changed(v, vec![id.clone()], true).await;
+    }
+    // Full: no other one here.
+    {
         let v = h.resolve("Home").await.unwrap();
         let mut g = v.lock().await;
-        let id = g.create_drawing("Sketch", &scene).unwrap().id;
-        g.save().unwrap();
-        (g.id().to_string(), id)
-    };
-    h.local_changed(&original.0, vec![original.1.clone()], true)
-        .await;
-    assert_eq!(drawings(&h).await, (Limit::Max(1), 1));
-    // Another one waits on this device: there's no room.
-    let other = {
-        let v = h.resolve("Work").await.unwrap();
-        let mut g = v.lock().await;
-        let id = g.create_drawing("Other", &scene).unwrap().id;
-        g.save().unwrap();
-        (g.id().to_string(), id)
-    };
-    h.local_changed(&other.0, vec![other.1.clone()], true).await;
-    {
-        let v = h.resolve("Work").await.unwrap();
-        let g = v.lock().await;
-        assert!(g.outbox.waits_for_room(&other.1));
+        let e = g.create_drawing("Third", &scene).unwrap_err();
+        assert!(e.to_string().contains("1 drawing"), "{e}");
     }
     drop(h);
 
+    // Work is full too: the move is refused, nothing is copied.
+    let e = run(
+        &srv,
+        "alice",
+        &["mv", "Home", "Sketch.drawing", "/", "--to-vault", "Work"],
+    )
+    .await
+    .unwrap_err();
+    assert!(format!("{e:#}").contains("no room"), "{e:#}");
+    {
+        let h = hub(&reopen(&srv, "alice", "alice").await).await;
+        let work = h.resolve("Work").await.unwrap();
+        assert!(work.lock().await.find("Sketch.drawing").is_none());
+        let home = h.resolve("Home").await.unwrap();
+        assert!(home.lock().await.find("Sketch.drawing").is_some());
+    }
+
+    // With room there, it moves; the original goes to the trash.
+    let work = &made[1].0;
+    srv.state
+        .instance
+        .update(
+            &srv.state.db,
+            &InstanceSettingsUpdate {
+                drawings_per_vault: Some(Limit::Max(2)),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
     run(
         &srv,
         "alice",
@@ -205,29 +223,23 @@ async fn a_drawing_moves_to_another_vault_at_the_drawings_limit() {
     .await
     .unwrap();
     let h = hub(&reopen(&srv, "alice", "alice").await).await;
-    // The copy, as it was; the original deleted for good on the server.
     {
-        let work = h.resolve("Work").await.unwrap();
-        let g = work.lock().await;
+        let w = h.resolve(work).await.unwrap();
+        let g = w.lock().await;
         let (_, e) = g.find("Sketch.drawing").expect("the copy");
         assert_eq!(e.kind, EntryKind::Drawing);
         assert_eq!(g.drawing(&e.id).elements.len(), scene.elements.len());
+        assert_eq!(g.drawing_count(), 2);
     }
-    let gone: bool = sqlx::query_scalar(
-        "SELECT purged_at IS NOT NULL FROM objects WHERE vault_id = ? AND id = ?",
-    )
-    .bind(&original.0)
-    .bind(&original.1)
-    .fetch_one(&srv.state.db)
-    .await
-    .unwrap();
-    assert!(gone);
-    assert_eq!(drawings(&h).await, (Limit::Max(1), 1));
     let home = h.resolve("Home").await.unwrap();
-    assert!(home.lock().await.find("Sketch.drawing").is_none());
-    // The other one still waits for room.
-    let work = h.resolve("Work").await.unwrap();
-    assert!(work.lock().await.outbox.waits_for_room(&other.1));
+    let trashed: Vec<String> = home
+        .lock()
+        .await
+        .trashed()
+        .into_iter()
+        .map(|e| e.path)
+        .collect();
+    assert_eq!(trashed, ["Sketch.drawing"]);
 }
 
 /// A drawing moved to another vault takes its pictures along; the copy

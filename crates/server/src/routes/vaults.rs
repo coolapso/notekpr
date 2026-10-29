@@ -120,22 +120,14 @@ pub async fn create(
                     .check_new_vault(&mut tx, &who.user_id)
                     .await?;
             }
-            // Everyone may have quick notes and Drawings (they count against
-            // no vault limit), once.
+            // Everyone may have quick notes (they count against no vault
+            // limit), once.
             VaultKind::QuickNotes => {
                 if repo::vaults::quick_notes_of(&mut *tx, &who.user_id)
                     .await?
                     .is_some()
                 {
                     return Err(conflict("you have quick notes already"));
-                }
-            }
-            VaultKind::Drawings => {
-                if repo::vaults::drawings_of(&mut *tx, &who.user_id)
-                    .await?
-                    .is_some()
-                {
-                    return Err(conflict("you have your Drawings already"));
                 }
             }
             VaultKind::Other => return Err(bad("unknown vault kind")),
@@ -214,16 +206,9 @@ pub async fn update(
         return Err(bad("invalid vault metadata"));
     }
     // Their name, archive flag and comments setting are fixed.
-    match repo::vaults::kind(&state.db, &v).await? {
-        Some(VaultKind::QuickNotes) => {
-            return Err(bad("quick notes keep their name and settings"));
-        }
-        Some(VaultKind::Drawings) => {
-            return Err(bad("your Drawings keep their name and settings"));
-        }
-        _ => {}
+    if repo::vaults::is_quick_notes(&state.db, &v).await? {
+        return Err(bad("quick notes keep their name and settings"));
     }
-
     {
         let _w = state.write_lock.lock().await;
         let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;

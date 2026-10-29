@@ -14,7 +14,7 @@ use notekpr_core::engine::Applied;
 use notekpr_core::protocol::{
     INDEX_OBJECT_ID, Limit, PrincipalKind, ReadOnly, Role, VaultInfo, VaultKind,
 };
-use notekpr_core::{drawings, quick};
+use notekpr_core::quick;
 use serde::Serialize;
 use tokio::sync::{Mutex, broadcast};
 
@@ -72,13 +72,15 @@ pub struct VaultSummary {
     pub icon: Option<String>,
     pub role: Role,
     pub archived: bool,
-    /// `quick_notes` for the person's quick notes, `drawings` for their
-    /// Drawings (absent for vaults).
+    /// `quick_notes` for the person's quick notes (absent for vaults).
     #[serde(skip_serializing_if = "VaultKind::is_regular")]
     pub kind: VaultKind,
     /// For quick notes: how many they may hold.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub note_limit: Option<Limit>,
+    /// Drawings in it (the trash's too), and how many it may hold.
+    pub drawings: u64,
+    pub drawing_limit: Limit,
     /// What its content takes on the server (bytes) and may take (MiB),
     /// as the server last said.
     pub storage_bytes: u64,
@@ -87,9 +89,6 @@ pub struct VaultSummary {
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub full: bool,
     pub documents: usize,
-    /// Drawings in it.
-    #[serde(skip_serializing_if = "is_zero")]
-    pub drawings: usize,
     pub pending_changes: usize,
     /// Local changes too large for the server: kept here, not uploaded.
     #[serde(skip_serializing_if = "is_zero")]
@@ -130,34 +129,6 @@ pub struct Hub {
 
 fn lower(s: &str) -> String {
     s.to_lowercase()
-}
-
-/// Which of the person's own sections `name` means, if any: their quick
-/// notes or their Drawings, whatever else may be called so (no vault may).
-fn reserved(name: &str) -> Option<VaultKind> {
-    if quick::is_reserved_name(name) {
-        Some(VaultKind::QuickNotes)
-    } else if drawings::is_reserved_name(name) {
-        Some(VaultKind::Drawings)
-    } else {
-        None
-    }
-}
-
-/// Which of `user_id`'s own sections a listed vault is, if any.
-fn own_section(info: &VaultInfo, user_id: &str) -> Option<VaultKind> {
-    if info.is_own_quick_notes(user_id) {
-        Some(VaultKind::QuickNotes)
-    } else if info.is_own_drawings(user_id) {
-        Some(VaultKind::Drawings)
-    } else {
-        None
-    }
-}
-
-/// Which section an open vault is, if any.
-fn section_of(v: &Vault) -> Option<VaultKind> {
-    v.kind.is_section().then_some(v.kind)
 }
 
 impl Hub {
@@ -225,18 +196,6 @@ impl Hub {
                 {
                     tracing::debug!("quick notes not set up yet: {e:#}");
                 }
-                // So are the Drawings (their folder is where drawings go),
-                // and when a command names them.
-                let named = self.allow.iter().any(|r| drawings::is_reserved_name(r));
-                if (!self.restricted() || named)
-                    && !self.read_only
-                    && !list
-                        .iter()
-                        .any(|v| v.is_own_drawings(&self.session.user_id))
-                    && let Err(e) = self.ensure_drawings().await
-                {
-                    tracing::debug!("Drawings not set up yet: {e:#}");
-                }
             }
             Err(e)
                 if (e.is_offline() || e.is_unauthorized() || matches!(e, ApiError::Auth(_)))
@@ -278,8 +237,7 @@ impl Hub {
         let mut added = Vec::new();
         let listed: BTreeSet<&str> = list.iter().map(|i| i.id.as_str()).collect();
         for info in list {
-            // A kind of vault from a newer release isn't shown.
-            if !self.id_may_be_allowed(&info.id) || info.kind == VaultKind::Other {
+            if !self.id_may_be_allowed(&info.id) {
                 continue;
             }
             if let Some(existing) = self.get(&info.id) {
@@ -385,19 +343,18 @@ impl Hub {
                 ids.insert(r.clone());
                 continue;
             }
-            // The names of the person's sections are theirs.
-            let reserved = reserved(r);
+            // The name is the quick notes', whatever else may be called so.
+            let reserved = quick::is_reserved_name(r);
             let matching: Vec<&String> = names
                 .iter()
                 .zip(list)
                 .filter(|((_, n), i)| {
-                    own_section(i, &self.session.user_id) == reserved
-                        && (reserved.is_some()
-                            || n.as_deref().is_some_and(|n| lower(n) == lower(r)))
+                    i.is_own_quick_notes(&self.session.user_id) == reserved
+                        && (reserved || n.as_deref().is_some_and(|n| lower(n) == lower(r)))
                 })
                 .map(|((id, _), _)| id)
                 .collect();
-            let unknown = reserved.is_none() && names.iter().any(|(_, n)| n.is_none());
+            let unknown = !reserved && names.iter().any(|(_, n)| n.is_none());
             match matching.as_slice() {
                 [one] if !unknown => {
                     ids.insert((*one).clone());
@@ -429,27 +386,27 @@ impl Hub {
             return Ok(());
         }
         let mut ids = BTreeSet::new();
-        // (id, name, which section)
-        let open: Vec<(String, String, Option<VaultKind>)> = self
+        // (id, name, quick notes?)
+        let open: Vec<(String, String, bool)> = self
             .vaults
             .read()
             .unwrap()
             .iter()
             .map(|(id, v)| {
-                let (name, section) = v
+                let (name, quick) = v
                     .try_lock()
-                    .map(|g| (g.name().to_string(), section_of(&g)))
+                    .map(|g| (g.name().to_string(), g.is_quick_notes()))
                     .unwrap_or_default();
-                (id.clone(), name, section)
+                (id.clone(), name, quick)
             })
             .collect();
         for r in &self.allow {
             let by_id = open.iter().find(|(id, _, _)| id == r);
-            // The names of the person's sections are theirs.
-            let reserved = reserved(r);
-            let by_name: Vec<&(String, String, Option<VaultKind>)> = open
+            // The name is the quick notes', whatever else may be called so.
+            let reserved = quick::is_reserved_name(r);
+            let by_name: Vec<&(String, String, bool)> = open
                 .iter()
-                .filter(|(_, n, s)| *s == reserved && (reserved.is_some() || lower(n) == lower(r)))
+                .filter(|(_, n, q)| *q == reserved && (reserved || lower(n) == lower(r)))
                 .collect();
             match (by_id, by_name.as_slice()) {
                 (Some((id, _, _)), _) => {
@@ -578,25 +535,20 @@ impl Hub {
         if let Some(v) = self.get(reference) {
             return Ok(v);
         }
-        // The names of the person's sections are theirs, whatever else may
-        // be called so; the Drawings are made the first time.
-        match reserved(reference) {
-            Some(VaultKind::QuickNotes) => {
-                return self
-                    .quick_notes()
-                    .await
-                    .ok_or_else(|| anyhow!("there are no quick notes on this device yet"));
-            }
-            Some(_) => return self.ensure_drawings().await,
-            None => {}
+        // The name is the quick notes', whatever else may be called so.
+        if quick::is_reserved_name(reference) {
+            return self
+                .quick_notes()
+                .await
+                .ok_or_else(|| anyhow!("there are no quick notes on this device yet"));
         }
         let mut matches = Vec::new();
         for v in self.vaults() {
-            let (name, section) = {
+            let (name, is_quick) = {
                 let g = v.lock().await;
-                (g.name().to_string(), g.kind.is_section())
+                (g.name().to_string(), g.is_quick_notes())
             };
-            if section {
+            if is_quick {
                 continue;
             }
             if name == reference {
@@ -615,18 +567,8 @@ impl Hub {
 
     /// The person's quick notes, if they are open here.
     pub async fn quick_notes(&self) -> Option<SharedVault> {
-        self.section(VaultKind::QuickNotes).await
-    }
-
-    /// The person's Drawings, if they are open here.
-    pub async fn drawings(&self) -> Option<SharedVault> {
-        self.section(VaultKind::Drawings).await
-    }
-
-    /// The person's section of `kind`, if it is open here.
-    async fn section(&self, kind: VaultKind) -> Option<SharedVault> {
         for v in self.vaults() {
-            if v.lock().await.kind == kind {
+            if v.lock().await.is_quick_notes() {
                 return Some(v);
             }
         }
@@ -635,38 +577,19 @@ impl Hub {
 
     /// The person's quick notes, made the first time (online, people only).
     pub async fn ensure_quick_notes(&self) -> Result<SharedVault> {
-        self.ensure_section(VaultKind::QuickNotes).await
-    }
-
-    /// The person's Drawings, made the first time (online, people only).
-    pub async fn ensure_drawings(&self) -> Result<SharedVault> {
-        self.ensure_section(VaultKind::Drawings).await
-    }
-
-    /// The person's section of `kind` (quick notes or Drawings), made the
-    /// first time.
-    async fn ensure_section(&self, kind: VaultKind) -> Result<SharedVault> {
-        let what = match kind {
-            VaultKind::QuickNotes => "quick notes",
-            _ => "Drawings",
-        };
-        if let Some(v) = self.section(kind).await {
+        if let Some(v) = self.quick_notes().await {
             return Ok(v);
         }
         if self.session.kind == PrincipalKind::Agent {
-            bail!("agents have no {what}");
+            bail!("agents have no quick notes");
         }
         if self.read_only {
             bail!("this endpoint is read-only");
         }
         if !self.is_online() {
-            bail!("your {what} are set up the first time this device is online");
+            bail!("quick notes are set up the first time this device is online");
         }
-        let made = match kind {
-            VaultKind::QuickNotes => crate::manage::create_quick_notes(&self.session).await?,
-            _ => crate::manage::create_drawings(&self.session).await?,
-        };
-        if let Some(v) = made {
+        if let Some(v) = crate::manage::create_quick_notes(&self.session).await? {
             let id = v.id().to_string();
             if let Some(set) = self.allowed.write().unwrap().as_mut() {
                 set.insert(id.clone());
@@ -684,31 +607,14 @@ impl Hub {
         if let Some(set) = self.allowed.write().unwrap().as_mut() {
             set.extend(
                 list.iter()
-                    .filter(|i| own_section(i, &self.session.user_id) == Some(kind))
+                    .filter(|i| i.is_own_quick_notes(&self.session.user_id))
                     .map(|i| i.id.clone()),
             );
         }
         self.open_listed(&list).await?;
-        self.section(kind)
+        self.quick_notes()
             .await
-            .ok_or_else(|| anyhow!("your {what} could not be opened"))
-    }
-
-    /// A drawing was deleted for good in `vault_id`: new drawings waiting
-    /// for room in the other vaults try again (the limit is per person).
-    /// Returns the vaults with something to send now.
-    pub async fn room_freed_elsewhere(&self, vault_id: &str) -> Vec<String> {
-        let mut out = Vec::new();
-        for v in self.vaults() {
-            let mut g = v.lock().await;
-            if g.id() != vault_id && g.room_freed() {
-                if let Err(e) = g.save() {
-                    tracing::warn!(vault = %g.id(), "saving: {e:#}");
-                }
-                out.push(g.id().to_string());
-            }
-        }
-        out
+            .ok_or_else(|| anyhow!("your quick notes could not be opened"))
     }
 
     pub async fn summaries(&self) -> Vec<VaultSummary> {
@@ -920,15 +826,12 @@ pub fn summary(v: &Vault) -> VaultSummary {
         archived: v.archived,
         kind: v.kind,
         note_limit: v.is_quick_notes().then_some(v.note_limit),
+        drawings: v.drawing_count(),
+        drawing_limit: v.drawing_limit,
         storage_bytes: v.storage_bytes,
         storage_limit_mb: v.storage_limit_mb,
         full: v.full || v.storage_limit_mb.reached_mb(v.storage_bytes),
         documents: v.notes().len(),
-        drawings: v
-            .paths()
-            .values()
-            .filter(|e| e.kind == notekpr_core::doc::EntryKind::Drawing)
-            .count(),
         pending_changes: v.replica.pending.len(),
         too_large_changes: v.outbox.held_count(),
         read_only: v.read_only.clone(),

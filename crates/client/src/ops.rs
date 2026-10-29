@@ -8,9 +8,7 @@ use std::sync::Arc;
 
 use notekpr_core::doc::{Entry, EntryKind};
 use notekpr_core::moving::{self, Unmovable, What};
-use notekpr_core::protocol::{
-    INDEX_OBJECT_ID, Limit, ObjectRef, PurgedItem, Snapshot, SnapshotInfo,
-};
+use notekpr_core::protocol::{INDEX_OBJECT_ID, Limit, PurgedItem, Snapshot, SnapshotInfo};
 use notekpr_core::{markdown, paths, quick, search};
 use serde::Serialize;
 
@@ -932,7 +930,7 @@ pub async fn put_drawing(
     Ok(finish(hub, &vault_id, res, file).await)
 }
 
-/// One item of the drawings library, as `library ls` lists it.
+/// One saved shape, as `shapes ls` lists it.
 #[derive(Serialize, Clone, Debug)]
 pub struct LibraryEntry {
     pub id: String,
@@ -944,10 +942,10 @@ pub struct LibraryEntry {
     pub elements: Vec<String>,
 }
 
-/// The drawings library ([`notekpr_core::library`]), newest first: empty
-/// while there are no Drawings here.
+/// The saved shapes ([`notekpr_core::library`]), newest first: empty while
+/// the Personal storage isn't here.
 pub async fn library(hub: &Hub) -> Vec<notekpr_core::library::LibraryItem> {
-    match hub.drawings().await {
+    match hub.quick_notes().await {
         Some(v) => notekpr_core::library::items(&v.lock().await.replica.index),
         None => Vec::new(),
     }
@@ -976,13 +974,13 @@ pub async fn list_library(hub: &Hub) -> Vec<LibraryEntry> {
         .collect()
 }
 
-/// What importing a library did.
+/// What importing shapes did.
 #[derive(Serialize, Clone, Debug)]
 pub struct LibraryImport {
     pub added: usize,
-    /// Items the library had already, left out.
+    /// Shapes saved already, left out.
     pub already: usize,
-    /// Items too large to keep, left out.
+    /// Shapes too large to keep, left out.
     pub too_large: usize,
     /// Local changes not uploaded yet (offline); they sync automatically.
     pub pending_changes: usize,
@@ -992,8 +990,8 @@ pub struct LibraryImport {
     pub vault_full: bool,
 }
 
-/// Add the items of an `.excalidrawlib` file to the drawings library (made
-/// the first time, with the Drawings), leaving out those it has.
+/// Add the items of an `.excalidrawlib` file to the saved shapes (in the
+/// Personal storage, made the first time), leaving out those saved already.
 pub async fn import_library(hub: &Hub, file: &str) -> OpResult<LibraryImport> {
     let now = notekpr_core::now_ms();
     let mut ids = notekpr_draw::restore::Ids::new(now as u64);
@@ -1001,7 +999,7 @@ pub async fn import_library(hub: &Hub, file: &str) -> OpResult<LibraryImport> {
         OpError::BadRequest("not an Excalidraw library (.excalidrawlib file)".into())
     })?;
     let v = hub
-        .ensure_drawings()
+        .ensure_quick_notes()
         .await
         .map_err(|e| OpError::Unavailable(format!("{e:#}")))?;
     let (vault_id, done) = {
@@ -1616,10 +1614,21 @@ pub async fn move_to_vault(
                 "notes move from the quick notes to a vault, not into them".into(),
             ));
         }
-        if g.is_drawings() && plan.notes() > 0 {
-            return Err(OpError::BadRequest(
-                "your Drawings hold drawings and files only: move notes to a vault".into(),
-            ));
+        // The drawings need room there (each vault holds so many).
+        if let Some(max) = g.drawing_limit.max()
+            && plan.drawings() > 0
+            && g.drawing_count() + plan.drawings() as u64 > max
+        {
+            return Err(OpError::Forbidden(format!(
+                "vault '{}' has no room for {}: {}",
+                g.name(),
+                if plan.drawings() == 1 {
+                    "the drawing".to_string()
+                } else {
+                    format!("{} drawings", plan.drawings())
+                },
+                notekpr_core::drawings::full_message(g.drawing_limit)
+            )));
         }
         let placed = plan
             .place(&g.replica, folder, &name)
@@ -1636,19 +1645,7 @@ pub async fn move_to_vault(
                 EntryKind::Drawing => {
                     // Showing the copies of its pictures, made before it.
                     let scene = moving::relinked(c, |old| ids.get(old).map(|(_, id)| id.clone()));
-                    let id = g.create_drawing(&c.path, &scene).map_err(bad)?.id;
-                    // The original goes once the copy is stored: the copy
-                    // replaces it, and needs no room for another drawing.
-                    if plan.trash.contains(&c.from) {
-                        g.outbox.set_replaces(
-                            &id,
-                            ObjectRef {
-                                vault_id: from_vault.clone(),
-                                object_id: c.from.clone(),
-                            },
-                        );
-                    }
-                    id
+                    g.create_drawing(&c.path, &scene).map_err(bad)?.id
                 }
             };
             g.copy_looks(&id, c.icon.as_deref(), c.order.as_deref())

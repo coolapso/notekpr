@@ -73,10 +73,11 @@ pub struct Vault {
     /// Viewers may comment (the owner's setting).
     pub viewers_comment: bool,
     /// What the vault is for: the person's quick notes are flat, never
-    /// shared and hold at most `note_limit` notes; their Drawings hold
-    /// drawings and files only.
+    /// shared and hold at most `note_limit` notes.
     pub kind: VaultKind,
     pub note_limit: Limit,
+    /// Drawings the vault may hold, as the vault list last said.
+    pub drawing_limit: Limit,
     /// What its content takes on the server and may take (MiB), as the
     /// vault list last said.
     pub storage_bytes: u64,
@@ -233,6 +234,7 @@ impl Vault {
             viewers_comment: true,
             kind: VaultKind::Regular,
             note_limit: Limit::Unlimited,
+            drawing_limit: Limit::Unlimited,
             storage_bytes: 0,
             storage_limit_mb: Limit::Unlimited,
             full: false,
@@ -417,6 +419,7 @@ impl Vault {
             viewers_comment: s.viewers_comment,
             kind: s.kind,
             note_limit: s.note_limit,
+            drawing_limit: Limit::Unlimited,
             storage_bytes: 0,
             storage_limit_mb: Limit::Unlimited,
             full: false,
@@ -669,7 +672,7 @@ impl Vault {
         let before = self.outbox.held.len();
         self.outbox.drop_object(&mut self.replica, object_id);
         // A note deleted for good makes room in the quick notes, a drawing
-        // for another drawing (here; the hub tells the other vaults).
+        // for another drawing.
         if self.is_quick_notes() || self.is_drawing(object_id) {
             self.room_freed();
         }
@@ -709,22 +712,34 @@ impl Vault {
         self.notes().len()
     }
 
-    /// One more note fits (always, outside the quick notes and Drawings,
-    /// which hold none).
+    /// One more note fits (always, outside the quick notes).
     pub fn require_room(&self) -> Result<()> {
-        if self.is_drawings() {
-            bail!("your Drawings hold drawings and files only: put notes in a vault");
-        }
         if self.is_quick_notes() && !quick::has_room(self.note_count(), self.note_limit) {
             bail!("{}", quick::full_message(self.note_limit));
         }
         Ok(())
     }
 
-    /// Whether this is the person's Drawings section: never shared, holding
-    /// drawings and files only (`notekpr_core::drawings`).
-    pub fn is_drawings(&self) -> bool {
-        self.kind == VaultKind::Drawings
+    /// Drawings the vault holds (those in the trash too, as the server
+    /// counts them).
+    pub fn drawing_count(&self) -> u64 {
+        self.replica
+            .index
+            .entries()
+            .into_iter()
+            .filter(|e| e.kind == EntryKind::Drawing && e.purged.is_none())
+            .count() as u64
+    }
+
+    /// One more drawing fits, as far as this device knows.
+    pub fn require_drawing_room(&self) -> Result<()> {
+        if !notekpr_core::drawings::has_room(self.drawing_count(), self.drawing_limit) {
+            bail!(
+                "{}",
+                notekpr_core::drawings::full_message(self.drawing_limit)
+            );
+        }
+        Ok(())
     }
 
     /// Quick notes keep everything at their top level.
@@ -1554,8 +1569,9 @@ impl Vault {
     ) -> Result<WriteResult> {
         self.require_writable()?;
         if self.is_quick_notes() {
-            bail!("quick notes hold notes: a drawing goes in Drawings or in a vault");
+            bail!("quick notes hold notes: a drawing goes in a vault");
         }
+        self.require_drawing_room()?;
         let p = paths::normalize_drawing(path)?;
         if self.paths().contains_key(&p) {
             bail!("'{p}' already exists");

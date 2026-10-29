@@ -32,10 +32,6 @@ pub async fn create_vault(name: String) -> Option<String> {
         error(notekpr_core::quick::reserved_name_message());
         return None;
     }
-    if notekpr_core::drawings::is_reserved_name(&name) {
-        error(notekpr_core::drawings::reserved_name_message());
-        return None;
-    }
     match create_vault_of(&name, VaultKind::Regular).await {
         Ok(v) => v,
         Err(e) => {
@@ -163,9 +159,6 @@ pub async fn rename_vault(vault: &str, name: &str) -> bool {
     update_vault_meta(vault, |m| {
         if notekpr_core::quick::is_reserved_name(&name) {
             return Err(notekpr_core::quick::reserved_name_message());
-        }
-        if notekpr_core::drawings::is_reserved_name(&name) {
-            return Err(notekpr_core::drawings::reserved_name_message());
         }
         m.name = name;
         Ok(())
@@ -1879,8 +1872,22 @@ pub async fn move_to_vault(
                 .to_string()
         }
     })?;
-    if plan.notes() > 0 && step(|c| c.is_drawings(to)) {
-        return Err("Your Drawings hold drawings and files only: move notes to a vault.".into());
+    // The drawings need room there (each vault holds so many).
+    let (count, limit) = crate::drawings::usage(to);
+    if plan.drawings() > 0
+        && let Some(max) = limit.max()
+        && count + plan.drawings() as u64 > max
+    {
+        return Err(format!(
+            "{} has no room for {}: {}",
+            step(|c| c.vault_name(to)),
+            if plan.drawings() == 1 {
+                "the drawing".to_string()
+            } else {
+                format!("{} drawings", plan.drawings())
+            },
+            notekpr_core::drawings::full_message(limit)
+        ));
     }
     let placed = step(|c| match c.replicas.get(to) {
         Some(r) => plan.place(r, folder, name).map_err(|e| e.to_string()),
@@ -1913,22 +1920,7 @@ pub async fn move_to_vault(
             EntryKind::Drawing => step(|c| {
                 // Showing the copies of its pictures, made before it.
                 let scene = notekpr_core::moving::relinked(copy, |old| ids.get(old).cloned());
-                let id = new_drawing_at(c, to, &copy.path, &scene);
-                // The original goes once the copy is stored: the copy
-                // replaces it, and needs no room for another drawing.
-                if plan.trash.contains(&copy.from)
-                    && let Some(o) = c.outboxes.get_mut(to)
-                    && o.set_replaces(
-                        &id,
-                        ObjectRef {
-                            vault_id: from.to_string(),
-                            object_id: copy.from.clone(),
-                        },
-                    )
-                {
-                    state::persist_new_keys(c, to, &[]);
-                }
-                id
+                new_drawing_at(c, to, &copy.path, &scene)
             }),
         };
         step(|c| {
@@ -2477,10 +2469,10 @@ async fn vault_export(vault: &str) -> (Vec<zipfile::Entry>, BTreeMap<String, Str
     (entries, icons)
 }
 
-/// Export the vaults chosen, and the quick notes, as one `.zip` that
-/// [`import_account`] reads back — on this server or another (to move
-/// there). See `notekpr_core::account_export`.
-pub async fn export_account(vaults: Vec<String>, quick_notes: bool, drawings: bool) {
+/// Export the vaults chosen, and the Personal storage (quick notes, saved
+/// shapes), as one `.zip` that [`import_account`] reads back — on this
+/// server or another (to move there). See `notekpr_core::account_export`.
+pub async fn export_account(vaults: Vec<String>, personal: bool) {
     use notekpr_core::account_export::{self, ExportedVault, Manifest};
     info("Preparing export…");
     let names: Vec<String> = step(|c| vaults.iter().map(|v| c.vault_name(v)).collect());
@@ -2491,7 +2483,7 @@ pub async fn export_account(vaults: Vec<String>, quick_notes: bool, drawings: bo
         created_at: now(),
         vaults: Vec::new(),
         quick_notes: None,
-        drawings: None,
+        saved_shapes: None,
     };
     let mut files = Vec::new();
     let within = |folder: &str, entries: Vec<zipfile::Entry>| -> Vec<zipfile::Entry> {
@@ -2514,16 +2506,20 @@ pub async fn export_account(vaults: Vec<String>, quick_notes: bool, drawings: bo
             icons,
         });
     }
-    if quick_notes && let Some(q) = step(|c| c.quick_notes()) {
+    let mut shapes = 0;
+    if personal && let Some(q) = step(|c| c.quick_notes()) {
         let (entries, _) = vault_export(&q).await;
         files.extend(within(notekpr_core::quick::NAME, entries));
         manifest.quick_notes = Some(notekpr_core::quick::NAME.to_string());
-    }
-    if drawings && let Some(d) = crate::drawings::section() {
-        let (entries, _) = vault_export(&d).await;
-        if !entries.is_empty() {
-            files.extend(within(notekpr_core::drawings::NAME, entries));
-            manifest.drawings = Some(notekpr_core::drawings::NAME.to_string());
+        // The saved shapes, as a file beside the folders.
+        let items = crate::drawing::library::items();
+        if !items.is_empty() {
+            shapes = items.len();
+            files.push(zipfile::Entry {
+                name: account_export::SAVED_SHAPES_FILE.to_string(),
+                data: notekpr_draw::file::write_library(&items).into_bytes(),
+            });
+            manifest.saved_shapes = Some(account_export::SAVED_SHAPES_FILE.to_string());
         }
     }
     files.insert(
@@ -2552,8 +2548,8 @@ pub async fn export_account(vaults: Vec<String>, quick_notes: bool, drawings: bo
     if manifest.quick_notes.is_some() {
         what.push("your quick notes".into());
     }
-    if manifest.drawings.is_some() {
-        what.push("your Drawings".into());
+    if shapes > 0 {
+        what.push(util::count(shapes, "saved shape", "saved shapes"));
     }
     success(format!("Exported {}.", util::join_and(&what)));
 }
@@ -2577,11 +2573,9 @@ pub async fn import_account(files: Vec<(String, Vec<u8>)>) {
         .filter(|(p, _)| notekpr_core::quick::is_top_level(p))
         .collect();
     let quick_count = quick.iter().filter(|(p, _)| paths::is_note(p)).count();
-    let drawing_files = unpacked.drawings.unwrap_or_default();
-    let drawing_count = drawing_files
-        .iter()
-        .filter(|(p, _)| paths::drawing_path_for(p).is_some())
-        .count();
+    let shapes = unpacked
+        .saved_shapes
+        .map(|f| String::from_utf8_lossy(&f).into_owned());
     let mut what: Vec<String> = unpacked
         .vaults
         .iter()
@@ -2590,11 +2584,8 @@ pub async fn import_account(files: Vec<(String, Vec<u8>)>) {
     if quick_count > 0 {
         what.push(util::count(quick_count, "quick note", "quick notes"));
     }
-    if drawing_count > 0 {
-        what.push(format!(
-            "{} of your Drawings",
-            util::count(drawing_count, "drawing", "drawings")
-        ));
+    if shapes.is_some() {
+        what.push("your saved shapes".into());
     }
     if what.is_empty() {
         info("This export holds nothing to import.");
@@ -2611,14 +2602,12 @@ pub async fn import_account(files: Vec<(String, Vec<u8>)>) {
         let taken: std::collections::HashSet<String> = step(|c| {
             c.replicas
                 .keys()
-                .filter(|id| !c.is_quick_notes(id) && !c.is_drawings(id))
+                .filter(|id| !c.is_quick_notes(id))
                 .map(|id| c.vault_name(id).to_lowercase())
                 .collect()
         });
         let name = account_export::unique_name(v.meta.name.trim(), |n| {
-            taken.contains(&n.to_lowercase())
-                || notekpr_core::quick::is_reserved_name(n)
-                || notekpr_core::drawings::is_reserved_name(n)
+            taken.contains(&n.to_lowercase()) || notekpr_core::quick::is_reserved_name(n)
         });
         let id = match create_vault_of(&name, VaultKind::Regular).await {
             Ok(Some(id)) => id,
@@ -2691,17 +2680,9 @@ pub async fn import_account(files: Vec<(String, Vec<u8>)>) {
             }
         }
     }
-    // The Drawings' go into this account's Drawings.
-    let mut drawings_in = 0;
-    if drawing_count > 0 {
-        match crate::drawings::ensure_section().await {
-            Some(d) => {
-                let got = import_files(&d, drawing_files, false).await;
-                drawings_in = got.drawings;
-                atts += got.files;
-            }
-            None => error("Your Drawings can't be made right now: import again once online."),
-        }
+    // The saved shapes join this account's (said on their own).
+    if let Some(text) = shapes {
+        crate::drawing::library::import(text).await;
     }
     let mut what = vec![
         util::count(vaults, "vault", "vaults"),
@@ -2713,12 +2694,6 @@ pub async fn import_account(files: Vec<(String, Vec<u8>)>) {
     what.push(util::count(atts, "file", "files"));
     if quick_in > 0 {
         what.push(util::count(quick_in, "quick note", "quick notes"));
-    }
-    if drawings_in > 0 {
-        what.push(format!(
-            "{} of your Drawings",
-            util::count(drawings_in, "drawing", "drawings")
-        ));
     }
     success(format!("Imported {}.", util::join_and(&what)));
 }

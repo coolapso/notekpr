@@ -60,7 +60,6 @@ pub fn Shell() -> impl IntoView {
                     // The quick notes' vault is shown as the quick notes.
                     Route::Vault(v) | Route::Trash(v) if state::step(|c| c.is_quick_notes(&v)) => view! { <quick::QuickPage/> }.into_any(),
                     // The Drawings section's vault is shown as the section.
-                    Route::Vault(v) | Route::Trash(v) if state::step(|c| c.is_drawings(&v)) => view! { <drawing::DrawingsPage/> }.into_any(),
                     Route::Vault(v) => view! { <home::VaultHome vault=v/> }.into_any(),
                     Route::Note(v, n) => view! { <drawing::Document vault=v note=n/> }.into_any(),
                     Route::Trash(v) => view! { <home::Trash vault=v/> }.into_any(),
@@ -68,7 +67,7 @@ pub fn Shell() -> impl IntoView {
                     Route::Device(code) => view! { <settings::DeviceCodePage code=code/> }.into_any(),
                     Route::Shared(v, n) => view! { <note::SharedNoteView vault=v note=n/> }.into_any(),
                     Route::Quick => view! { <quick::QuickPage/> }.into_any(),
-                    Route::Drawings => view! { <drawing::DrawingsPage/> }.into_any(),
+                    Route::Drawings(v) => view! { <drawing::DrawingsPage vault=v/> }.into_any(),
                     Route::Graph(v) => view! { <graph::GraphPage vault=v/> }.into_any(),
                 }}
             </main>
@@ -146,13 +145,13 @@ fn VaultFullBanner() -> impl IntoView {
         let text = match ours.as_slice() {
             [] if full.is_empty() => return None,
             [] => "The vault of a note shared with you is full: your edits of it are kept in this browser and sent once it has room.".to_string(),
-            [(_, None)] => "Your quick notes are full: your edits there are kept in this browser and sent once they have room. Deleting a quick note makes room.".to_string(),
+            [(_, None)] => "Your personal storage is full: your quick notes and saved shapes are kept in this browser and sent once there's room. Deleting quick notes or saved shapes makes room, or ask an administrator for more.".to_string(),
             [(_, Some(name))] => format!("“{name}” is full: your edits there are kept in this browser and sent once it has room."),
             many => format!(
                 "{} vaults are full ({}): your edits there are kept in this browser and sent once they have room.",
                 many.len(),
                 many.iter()
-                    .map(|(_, n)| n.as_ref().map_or("your quick notes".into(), |n| format!("“{n}”")))
+                    .map(|(_, n)| n.as_ref().map_or("your personal storage".into(), |n| format!("“{n}”")))
                     .collect::<Vec<_>>()
                     .join(", ")
             ),

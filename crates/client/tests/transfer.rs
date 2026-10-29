@@ -370,9 +370,21 @@ async fn vaults_and_quick_notes_move_to_another_server() {
     ops::create_quick_note(&h, "Call mum").await.unwrap();
     let shed =
         r#"{"type":"excalidraw","version":2,"elements":[{"id":"s","type":"ellipse","width":5}]}"#;
-    ops::put_drawing(&h, "Drawings", "Plans/Shed.drawing", shed)
+    ops::put_drawing(&h, "Family", "Plans/Shed.drawing", shed)
         .await
         .unwrap();
+    // A saved shape, in the Personal storage.
+    let shapes = notekpr_draw::file::write_library(&[notekpr_core::library::LibraryItem {
+        id: "box".into(),
+        status: "unpublished".into(),
+        created: 1.0,
+        name: Some("Box".into()),
+        elements: notekpr_draw::file::read_drawing(shed, &mut notekpr_draw::restore::Ids::new(1))
+            .unwrap()
+            .scene
+            .elements,
+    }]);
+    ops::import_library(&h, &shapes).await.unwrap();
     for id in h.vault_ids() {
         h.push(&id).await.unwrap();
     }
@@ -449,12 +461,13 @@ async fn vaults_and_quick_notes_move_to_another_server() {
             .any(|n| q.try_lock().unwrap().note_text(&n.id) == "Call mum"),
         "the quick notes join that account's"
     );
-    // The Drawings go into that account's Drawings, not a vault.
-    let d = hb.drawings().await.unwrap();
-    let shed = d.lock().await.find("Plans/Shed").map(|(_, e)| e.kind);
+    // Drawings stay in their vaults; the saved shapes join that account's.
+    let shed = moved.lock().await.find("Plans/Shed").map(|(_, e)| e.kind);
     assert_eq!(shed, Some(EntryKind::Drawing));
-    assert!(hb.resolve("Drawings 2").await.is_err());
-    drop((hb, q, moved, d));
+    let saved = ops::library(&hb).await;
+    assert_eq!(saved.len(), 1);
+    assert_eq!(saved[0].name.as_deref(), Some("Box"));
+    drop((hb, q, moved));
 
     // The same as a directory, into a third account there.
     let dir = old.path("notes-dir");

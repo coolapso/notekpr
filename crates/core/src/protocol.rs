@@ -275,15 +275,6 @@ pub struct MeResponse {
     pub account_key: Option<PublicAccountKey>,
     pub has_recovery: bool,
     pub session: SessionInfo,
-    /// Drawings the person may have, in all the vaults they own together
-    /// (their Drawings section among them): their own allowance, else the
-    /// instance's `drawings_per_user`. Unlimited from older servers.
-    #[serde(default)]
-    pub drawing_limit: Limit,
-    /// Drawings they have now: those not deleted for good, the trash's
-    /// included, in the vaults they own.
-    #[serde(default)]
-    pub drawing_count: u64,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -470,10 +461,6 @@ pub enum VaultKind {
     /// [`VaultInfo::note_limit`] notes. Apps keep it flat and out of their
     /// vault lists.
     QuickNotes,
-    /// A person's drawings (the *Drawings* section, `crate::drawings`): one
-    /// per account, never shared like the quick notes, holding drawings and
-    /// files only. Apps show it as a section, never as a vault.
-    Drawings,
     /// A kind from a newer release: apps don't show such a vault (servers
     /// refuse to make one).
     #[serde(other)]
@@ -485,7 +472,6 @@ impl VaultKind {
         match self {
             VaultKind::Regular => "regular",
             VaultKind::QuickNotes => "quick_notes",
-            VaultKind::Drawings => "drawings",
             VaultKind::Other => "other",
         }
     }
@@ -494,7 +480,6 @@ impl VaultKind {
         match s {
             "regular" => Some(VaultKind::Regular),
             "quick_notes" => Some(VaultKind::QuickNotes),
-            "drawings" => Some(VaultKind::Drawings),
             _ => None,
         }
     }
@@ -503,11 +488,11 @@ impl VaultKind {
         *self == VaultKind::Regular
     }
 
-    /// A section of one's own (quick notes, drawings): one per person, never
-    /// shared, its name and settings fixed, counted as no vault. Apps show
-    /// it apart from their vaults.
+    /// A section of one's own (the quick notes, in Personal storage): one
+    /// per person, never shared, its name and settings fixed, counted as no
+    /// vault. Apps show it apart from their vaults.
     pub fn is_section(&self) -> bool {
-        matches!(self, VaultKind::QuickNotes | VaultKind::Drawings)
+        matches!(self, VaultKind::QuickNotes)
     }
 }
 
@@ -545,13 +530,6 @@ impl ObjectKind {
     }
 }
 
-/// An object of a vault, by ids.
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash)]
-pub struct ObjectRef {
-    pub vault_id: String,
-    pub object_id: String,
-}
-
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct VaultInfo {
     pub id: String,
@@ -577,6 +555,12 @@ pub struct VaultInfo {
     /// unlimited for other vaults.
     #[serde(default)]
     pub note_limit: Limit,
+    /// Drawings the vault may hold, whoever makes them: its own allowance,
+    /// set by an administrator, else the instance's `drawings_per_vault`;
+    /// unlimited from older servers. Those in the trash count until deleted
+    /// for good.
+    #[serde(default)]
+    pub drawing_limit: Limit,
     /// Bytes the vault's encrypted content takes on the server: its log,
     /// history and files, not what was deleted for good.
     #[serde(default)]
@@ -584,9 +568,7 @@ pub struct VaultInfo {
     /// The vault's storage limit (MiB): its own, set by an administrator,
     /// else the instance's `storage_per_vault_mb`; for quick notes, their
     /// owner's own ([`AdminUser::quick_notes_storage_allowance`]), else
-    /// `quick_notes_storage_mb`; for drawings likewise
-    /// ([`AdminUser::drawings_storage_allowance`], `drawings_storage_mb`).
-    /// At it, the vault takes no
+    /// `quick_notes_storage_mb`. At it, the vault takes no
     /// new content ([`ERROR_VAULT_FULL`]) until something is deleted for
     /// good or the limit is raised.
     #[serde(default)]
@@ -621,16 +603,6 @@ impl VaultInfo {
         self.is_quick_notes() && self.is_own(user_id)
     }
 
-    pub fn is_drawings(&self) -> bool {
-        self.kind == VaultKind::Drawings
-    }
-
-    /// Whether this is `user_id`'s own Drawings section: of that kind, and
-    /// theirs alone (as [`Self::is_own_quick_notes`]).
-    pub fn is_own_drawings(&self, user_id: &str) -> bool {
-        self.is_drawings() && self.is_own(user_id)
-    }
-
     /// Owned by `user_id` and shared with nobody.
     fn is_own(&self, user_id: &str) -> bool {
         self.owner_id == user_id && self.role == Role::Owner && self.member_count <= 1
@@ -646,8 +618,7 @@ pub struct CreateVaultRequest {
     /// The membership log's first entry (`Create`), signed by the owner.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub log_entry: Option<LogEntry>,
-    /// `quick_notes`: the account's quick-notes vault; `drawings`: its
-    /// Drawings section (at most one of each).
+    /// `quick_notes`: the account's quick-notes vault (at most one).
     #[serde(default, skip_serializing_if = "VaultKind::is_regular")]
     pub kind: VaultKind,
 }
@@ -757,13 +728,6 @@ pub struct ObjectKeyUpdate {
     /// (ignored afterwards: an object's kind never changes).
     #[serde(default, skip_serializing_if = "ObjectKind::is_note")]
     pub kind: ObjectKind,
-    /// A drawing moved here from another vault: the original this copy
-    /// replaces. Where the original is a live drawing of the same owner the
-    /// caller could delete for good, the copy needs no room under the
-    /// owner's drawings limit, and the server deletes the original for good
-    /// once the copy's first update is stored. Otherwise ignored.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub replaces: Option<ObjectRef>,
 }
 
 /// A note's key rotated together with its vault's key.
@@ -1071,8 +1035,8 @@ pub struct RejectedUpdate {
     pub object_id: String,
     /// [`REJECT_TOO_LARGE`], [`REJECT_PURGED`], [`REJECT_STALE_KEY`],
     /// [`REJECT_UNSIGNED`], [`REJECT_BAD_SIGNATURE`],
-    /// [`REJECT_QUICK_NOTES_FULL`], [`REJECT_DRAWINGS_FULL`],
-    /// [`REJECT_DRAWINGS_ONLY`] or `bad_request`.
+    /// [`REJECT_QUICK_NOTES_FULL`], [`REJECT_DRAWINGS_FULL`] or
+    /// `bad_request`.
     pub code: String,
     pub message: String,
 }
@@ -1088,12 +1052,9 @@ pub const REJECT_UNSIGNED: &str = "unsigned";
 /// A new note in the quick-notes vault while it holds as many notes as it
 /// may ([`VaultInfo::note_limit`]): kept, and sent again once there's room.
 pub const REJECT_QUICK_NOTES_FULL: &str = "quick_notes_full";
-/// A new drawing while the vault's owner has as many drawings as they may
-/// ([`MeResponse::drawing_limit`]): kept, and sent again once there's room.
+/// A new drawing in a vault holding as many drawings as it may
+/// ([`VaultInfo::drawing_limit`]): kept, and sent again once there's room.
 pub const REJECT_DRAWINGS_FULL: &str = "drawings_full";
-/// A new note in someone's Drawings section, which holds drawings and files
-/// only.
-pub const REJECT_DRAWINGS_ONLY: &str = "drawings_only";
 /// The signature doesn't match the author's account key.
 pub const REJECT_BAD_SIGNATURE: &str = "bad_signature";
 
@@ -1248,13 +1209,6 @@ pub struct AdminUser {
     /// Bytes their quick notes take.
     #[serde(default)]
     pub quick_notes_storage_bytes: u64,
-    /// Drawings this person has in the vaults they own (what their drawing
-    /// allowance counts).
-    #[serde(default)]
-    pub drawing_count: i64,
-    /// Bytes their Drawings section takes.
-    #[serde(default)]
-    pub drawings_storage_bytes: u64,
     #[serde(default)]
     pub vault_allowance: Allowance,
     #[serde(default)]
@@ -1265,14 +1219,6 @@ pub struct AdminUser {
     /// `quick_notes_storage_mb`.
     #[serde(default)]
     pub quick_notes_storage_allowance: Allowance,
-    /// How many drawings they may have, else the instance's
-    /// `drawings_per_user`.
-    #[serde(default)]
-    pub drawing_allowance: Allowance,
-    /// Their Drawings section's storage limit (MiB), else the instance's
-    /// `drawings_storage_mb`.
-    #[serde(default)]
-    pub drawings_storage_allowance: Allowance,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
@@ -1293,18 +1239,12 @@ pub struct AdminUpdateUser {
     /// How much their quick notes may take, in MiB (absent: unchanged).
     #[serde(default)]
     pub quick_notes_storage_allowance: Option<Allowance>,
-    /// How many drawings this person may have (absent: unchanged).
-    #[serde(default)]
-    pub drawing_allowance: Option<Allowance>,
-    /// How much their Drawings section may take, in MiB (absent: unchanged).
-    #[serde(default)]
-    pub drawings_storage_allowance: Option<Allowance>,
 }
 
 /// A vault as administrators see it (`GET /admin/vaults`): its id, owner and
 /// size — never its name, members or content. People find a vault's id in
-/// its settings, to ask for more room. Someone's quick notes and Drawings
-/// aren't among them: their limits are the person's ([`AdminUser`]).
+/// its settings, to ask for more room. Someone's quick notes aren't among
+/// them: their limit is the person's ([`AdminUser`]).
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct AdminVault {
     pub id: String,
@@ -1315,6 +1255,13 @@ pub struct AdminVault {
     /// Its own storage limit (MiB), else the instance's `storage_per_vault_mb`.
     #[serde(default)]
     pub storage_allowance: Allowance,
+    /// Drawings it holds (not deleted for good, the trash's too).
+    #[serde(default)]
+    pub drawing_count: u64,
+    /// How many drawings it may hold, else the instance's
+    /// `drawings_per_vault`.
+    #[serde(default)]
+    pub drawing_allowance: Allowance,
     pub created_at: i64,
 }
 
@@ -1325,6 +1272,10 @@ pub struct AdminUpdateVault {
     /// instance's).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub storage_allowance: Option<Allowance>,
+    /// How many drawings it may hold (absent: unchanged; `"default"`: the
+    /// instance's).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub drawing_allowance: Option<Allowance>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -1499,11 +1450,11 @@ pub struct InstanceSettings {
     /// Lowering it takes none away: only new ones wait for room.
     #[serde(default = "default_quick_notes_per_user")]
     pub quick_notes_per_user: Limit,
-    /// Drawings a person may have in the vaults they own, unless they have
-    /// their own allowance ([`AdminUser::drawing_allowance`]). Lowering it
-    /// takes none away: only new ones wait for room.
+    /// Drawings a vault may hold, unless it has its own allowance
+    /// ([`AdminVault::drawing_allowance`]). Lowering it takes none away:
+    /// only new ones wait for room.
     #[serde(default)]
-    pub drawings_per_user: Limit,
+    pub drawings_per_vault: Limit,
     /// The server refuses every change; clients keep theirs and send them
     /// when it's writable again.
     #[serde(default)]
@@ -1524,11 +1475,6 @@ pub struct InstanceSettings {
     /// it is the person's.
     #[serde(default)]
     pub quick_notes_storage_mb: Limit,
-    /// The size (MiB) at which someone's Drawings section takes no new
-    /// content, unless they have their own allowance
-    /// ([`AdminUser::drawings_storage_allowance`]): like the quick notes'.
-    #[serde(default)]
-    pub drawings_storage_mb: Limit,
     /// The oldest version of the apps the server accepts (`0.6.0`), above
     /// what its build accepts ([`AdminSettings::build_oldest_app_version`]);
     /// empty: only that. Older apps are told to update
@@ -1546,12 +1492,11 @@ impl Default for InstanceSettings {
             vaults_per_user: Limit::Unlimited,
             agents_per_user: default_agents_per_user(),
             quick_notes_per_user: default_quick_notes_per_user(),
-            drawings_per_user: Limit::Unlimited,
+            drawings_per_vault: Limit::Unlimited,
             read_only: false,
             max_storage_mb: Limit::Unlimited,
             storage_per_vault_mb: Limit::Unlimited,
             quick_notes_storage_mb: Limit::Unlimited,
-            drawings_storage_mb: Limit::Unlimited,
             oldest_app_version: String::new(),
         }
     }
@@ -1573,7 +1518,7 @@ pub struct InstanceSettingsUpdate {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub quick_notes_per_user: Option<Limit>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub drawings_per_user: Option<Limit>,
+    pub drawings_per_vault: Option<Limit>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub read_only: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1582,8 +1527,6 @@ pub struct InstanceSettingsUpdate {
     pub storage_per_vault_mb: Option<Limit>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub quick_notes_storage_mb: Option<Limit>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub drawings_storage_mb: Option<Limit>,
     /// `""`: only what the server's build accepts.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub oldest_app_version: Option<String>,
@@ -1591,12 +1534,11 @@ pub struct InstanceSettingsUpdate {
 
 impl InstanceSettings {
     /// The storage limit (MiB) of a vault of `kind` that has none of its own:
-    /// quick notes and Drawings have theirs.
+    /// quick notes have theirs.
     pub fn storage_default(&self, kind: VaultKind) -> Limit {
         match kind {
             VaultKind::Regular | VaultKind::Other => self.storage_per_vault_mb,
             VaultKind::QuickNotes => self.quick_notes_storage_mb,
-            VaultKind::Drawings => self.drawings_storage_mb,
         }
     }
 
@@ -1608,12 +1550,11 @@ impl InstanceSettings {
             vaults_per_user,
             agents_per_user,
             quick_notes_per_user,
-            drawings_per_user,
+            drawings_per_vault,
             read_only,
             max_storage_mb,
             storage_per_vault_mb,
             quick_notes_storage_mb,
-            drawings_storage_mb,
             oldest_app_version,
         } = u.clone();
         self.max_users = max_users.unwrap_or(self.max_users);
@@ -1622,12 +1563,11 @@ impl InstanceSettings {
         self.vaults_per_user = vaults_per_user.unwrap_or(self.vaults_per_user);
         self.agents_per_user = agents_per_user.unwrap_or(self.agents_per_user);
         self.quick_notes_per_user = quick_notes_per_user.unwrap_or(self.quick_notes_per_user);
-        self.drawings_per_user = drawings_per_user.unwrap_or(self.drawings_per_user);
+        self.drawings_per_vault = drawings_per_vault.unwrap_or(self.drawings_per_vault);
         self.read_only = read_only.unwrap_or(self.read_only);
         self.max_storage_mb = max_storage_mb.unwrap_or(self.max_storage_mb);
         self.storage_per_vault_mb = storage_per_vault_mb.unwrap_or(self.storage_per_vault_mb);
         self.quick_notes_storage_mb = quick_notes_storage_mb.unwrap_or(self.quick_notes_storage_mb);
-        self.drawings_storage_mb = drawings_storage_mb.unwrap_or(self.drawings_storage_mb);
         if let Some(v) = oldest_app_version {
             self.oldest_app_version = v.trim().to_string();
         }
@@ -2268,6 +2208,7 @@ mod tests {
             viewers_comment: false,
             kind: VaultKind::QuickNotes,
             note_limit: Limit::Max(20),
+            drawing_limit: Limit::Unlimited,
             storage_bytes: 0,
             storage_limit_mb: Limit::Unlimited,
             rotation_pending: false,
@@ -2312,15 +2253,11 @@ mod tests {
             serde_json::to_value(&quick).unwrap()["kind"],
             serde_json::json!("quick_notes")
         );
-        for k in [
-            VaultKind::Regular,
-            VaultKind::QuickNotes,
-            VaultKind::Drawings,
-        ] {
+        for k in [VaultKind::Regular, VaultKind::QuickNotes] {
             assert_eq!(VaultKind::parse(k.as_str()), Some(k));
         }
         assert_eq!(VaultKind::parse("other"), None);
-        assert!(VaultKind::QuickNotes.is_section() && VaultKind::Drawings.is_section());
+        assert!(VaultKind::QuickNotes.is_section());
         assert!(!VaultKind::Regular.is_section() && !VaultKind::Other.is_section());
     }
 
@@ -2329,15 +2266,17 @@ mod tests {
         let mut v = serde_json::json!({
             "id": "v", "owner_id": "u", "role": "owner", "encrypted_meta": "",
             "key_epoch": 1, "head_seq": 0, "archived": false, "member_count": 1,
-            "created_at": 0, "updated_at": 0, "kind": "drawings",
+            "created_at": 0, "updated_at": 0, "kind": "quick_notes",
         });
         let info: VaultInfo = serde_json::from_value(v.clone()).unwrap();
-        assert!(info.is_own_drawings("u") && !info.is_own_quick_notes("u"));
-        assert!(!info.is_own_drawings("someone else"));
+        assert!(info.is_own_quick_notes("u"));
+        assert!(!info.is_own_quick_notes("someone else"));
         v["kind"] = "boards".into();
         let info: VaultInfo = serde_json::from_value(v).unwrap();
         assert_eq!(info.kind, VaultKind::Other);
-        assert!(!info.is_own_drawings("u"));
+        assert!(!info.is_own_quick_notes("u") && !info.kind.is_section());
+        // Older servers say nothing of drawings: no limit.
+        assert_eq!(info.drawing_limit, Limit::Unlimited);
     }
 
     #[test]
@@ -2362,27 +2301,20 @@ mod tests {
             serde_json::to_value(&drawing).unwrap()["kind"],
             serde_json::json!("drawing")
         );
-        // A key says what it is for, and which original a moved copy replaces.
+        // A key says what it is for.
         let key: ObjectKeyUpdate = serde_json::from_value(serde_json::json!({
             "epoch": 1, "vault_envelope": "AA==", "envelopes": [], "encrypted_meta": "AA==",
         }))
         .unwrap();
-        assert_eq!((key.kind, key.replaces.clone()), (ObjectKind::Note, None));
+        assert_eq!(key.kind, ObjectKind::Note);
         let json = serde_json::to_value(&key).unwrap();
-        assert!(json.get("kind").is_none() && json.get("replaces").is_none());
-        let moved = ObjectKeyUpdate {
+        assert!(json.get("kind").is_none());
+        let drawing = ObjectKeyUpdate {
             kind: ObjectKind::Drawing,
-            replaces: Some(ObjectRef {
-                vault_id: "v".into(),
-                object_id: "d".into(),
-            }),
             ..key
         };
-        let json = serde_json::to_value(&moved).unwrap();
-        assert_eq!(
-            json["replaces"],
-            serde_json::json!({"vault_id": "v", "object_id": "d"})
-        );
+        let json = serde_json::to_value(&drawing).unwrap();
+        assert_eq!(json["kind"], serde_json::json!("drawing"));
         let back: ObjectKeyUpdate = serde_json::from_value(json).unwrap();
         assert_eq!(back.kind, ObjectKind::Drawing);
         for k in [ObjectKind::Note, ObjectKind::Drawing] {
@@ -2391,30 +2323,22 @@ mod tests {
     }
 
     #[test]
-    fn drawings_have_limits_of_their_own() {
+    fn drawings_are_limited_per_vault() {
         let s = InstanceSettings::default();
         // Self-hosters have no limit on drawings.
-        assert_eq!(s.drawings_per_user, Limit::Unlimited);
-        assert_eq!(s.drawings_storage_mb, Limit::Unlimited);
+        assert_eq!(s.drawings_per_vault, Limit::Unlimited);
         let mut s: InstanceSettings = serde_json::from_str("{}").unwrap();
         s.apply(
-            &serde_json::from_str(
-                r#"{"drawings_per_user": 1, "drawings_storage_mb": 5, "storage_per_vault_mb": 9}"#,
-            )
-            .unwrap(),
+            &serde_json::from_str(r#"{"drawings_per_vault": 1, "storage_per_vault_mb": 9}"#)
+                .unwrap(),
         );
-        assert_eq!(s.drawings_per_user, Limit::Max(1));
-        assert_eq!(s.storage_default(VaultKind::Drawings), Limit::Max(5));
+        assert_eq!(s.drawings_per_vault, Limit::Max(1));
         assert_eq!(s.storage_default(VaultKind::Regular), Limit::Max(9));
-        assert_eq!(s.storage_default(VaultKind::QuickNotes), Limit::Unlimited);
-        // From older servers: unlimited, none counted.
-        let me: MeResponse = serde_json::from_value(serde_json::json!({
-            "user": {"id": "u", "display_name": "U", "email": null, "kind": "human",
-                     "is_admin": false, "created_at": 0},
-            "account_key": null, "has_recovery": false,
-            "session": {"id": "s", "kind": "web", "device_id": null, "expires_at": 0},
-        }))
-        .unwrap();
-        assert_eq!((me.drawing_limit, me.drawing_count), (Limit::Unlimited, 0));
+        // A vault's own allowance changes alone.
+        let u: AdminUpdateVault = serde_json::from_str(r#"{"drawing_allowance": 3}"#).unwrap();
+        assert_eq!(
+            (u.drawing_allowance, u.storage_allowance),
+            (Some(Allowance::Max(3)), None)
+        );
     }
 }

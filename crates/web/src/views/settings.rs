@@ -70,12 +70,6 @@ fn Account() -> impl IntoView {
         ui.vaults.track();
         step(|c| c.quick_notes().is_some())
     };
-    let drawings = RwSignal::new(true);
-    let has_drawings = move || {
-        ui.vaults.track();
-        ui.tree_rev.track();
-        !crate::drawings::in_section().is_empty()
-    };
     let busy = RwSignal::new(false);
     let chosen = move || {
         let s = skipped.get();
@@ -88,10 +82,9 @@ fn Account() -> impl IntoView {
     };
     let export = move |_| {
         let (vaults, quick) = (chosen(), quick_notes.get_untracked() && has_quick());
-        let with_drawings = drawings.get_untracked() && has_drawings();
         busy.set(true);
         leptos::task::spawn_local(async move {
-            actions::export_account(vaults, quick, with_drawings).await;
+            actions::export_account(vaults, quick).await;
             busy.set(false);
         });
     };
@@ -139,22 +132,14 @@ fn Account() -> impl IntoView {
         <p class="fp big">{fp}</p>
         <p class="muted small">"When someone shares a vault with you, they can compare this fingerprint with what their screen shows to make sure nobody is in the middle."</p>
         <h3>"Data"</h3>
-        <p class="muted small">"Export your notes as plain Markdown files in one .zip: the vaults you choose, your quick notes and your Drawings, with their folders and attachments. Your data is never locked into a proprietary format."</p>
+        <p class="muted small">"Export your notes as plain Markdown files in one .zip: the vaults you choose (their drawings too) and your Personal storage — your quick notes and saved shapes —, with their folders and attachments. Your data is never locked into a proprietary format."</p>
         <div class="export-choice">
             {move || has_quick().then(|| view! {
                 <label class="check">
                     <input type="checkbox" class="export-quick" prop:checked=move || quick_notes.get()
                         on:change=move |ev| quick_notes.set(event_target_checked(&ev))/>
                     <Icon name="zap"/>
-                    <span class="grow ellipsis">"Quick notes"</span>
-                </label>
-            })}
-            {move || has_drawings().then(|| view! {
-                <label class="check">
-                    <input type="checkbox" class="export-drawings" prop:checked=move || drawings.get()
-                        on:change=move |ev| drawings.set(event_target_checked(&ev))/>
-                    <Icon name="drawing"/>
-                    <span class="grow ellipsis">"Drawings"</span>
+                    <span class="grow ellipsis">"Personal storage (quick notes, saved shapes)"</span>
                 </label>
             })}
             {move || ui.vaults.get().into_iter().map(|v| {
@@ -178,12 +163,12 @@ fn Account() -> impl IntoView {
         </div>
         <div class="row">
             <button class="btn primary export-account"
-                disabled=move || busy.get() || (chosen().is_empty() && !(quick_notes.get() && has_quick()) && !(drawings.get() && has_drawings()))
+                disabled=move || busy.get() || (chosen().is_empty() && !(quick_notes.get() && has_quick()))
                 on:click=export><Icon name="download"/>" Export"</button>
             <button class="btn import-account" disabled=move || busy.get() on:click=import><Icon name="upload"/>" Import an export…"</button>
             <Show when=move || busy.get()><span class="spinner inline"></span></Show>
         </div>
-        <p class="muted small">"Moving to another notekpr server? Export here, sign up there and import the .zip under Settings → Account. The vaults come back named as they were, with their folders, files and icons, and your quick notes and Drawings join that account's — without history, comments or the people they were shared with: the new server starts fresh. Then delete your account here, if you like."</p>
+        <p class="muted small">"Moving to another notekpr server? Export here, sign up there and import the .zip under Settings → Account. The vaults come back named as they were, with their folders, files and icons, and your quick notes and saved shapes join that account's — without history, comments or the people they were shared with: the new server starts fresh. Then delete your account here, if you like."</p>
         <div class="row">
             <button class="btn danger delete-account" on:click=move |_| ui.modal.set(Some(Modal::DeleteAccount))>"Delete my account…"</button>
         </div>
@@ -650,36 +635,25 @@ fn Admin() -> impl IntoView {
                 let (owned, agent_count, va, aa) = (u.owned_vault_count, u.agent_count, u.vault_allowance, u.agent_allowance);
                 let (quick_count, qa) = (u.quick_note_count, u.quick_note_allowance);
                 let (quick_stored, qsa) = (u.quick_notes_storage_bytes, u.quick_notes_storage_allowance);
-                let (drawing_count, da) = (u.drawing_count, u.drawing_allowance);
-                let (drawings_stored, dsa) = (u.drawings_storage_bytes, u.drawings_storage_allowance);
                 let stored = util::human_bytes(u.storage_bytes);
                 let usage = move || person.then(|| {
                     let d = defaults.get();
                     format!(
-                        "owns {} · {} · {} taking {} · {}, their Drawings taking {} · their vaults take {stored}",
+                        "owns {} · {} · {}, their Personal storage taking {} · their vaults take {stored}",
                         allowance_usage(owned, va, d.as_ref().map(|d| d.vaults_per_user), "vault"),
                         allowance_usage(agent_count, aa, d.as_ref().map(|d| d.agents_per_user), "agent"),
                         allowance_usage(quick_count, qa, d.as_ref().map(|d| d.quick_notes_per_user), "quick note"),
                         storage_usage(quick_stored, qsa, d.as_ref().map(|d| d.quick_notes_storage_mb)),
-                        allowance_usage(drawing_count, da, d.as_ref().map(|d| d.drawings_per_user), "drawing"),
-                        storage_usage(drawings_stored, dsa, d.as_ref().map(|d| d.drawings_storage_mb)),
                     )
                 });
                 let whose = (u.id.clone(), u.display_name.clone());
                 let (vaults, agents) = (RwSignal::new(u.vault_allowance), RwSignal::new(u.agent_allowance));
                 let quick_notes = RwSignal::new(u.quick_note_allowance);
                 let quick_notes_storage = RwSignal::new(qsa);
-                let drawings = RwSignal::new(da);
-                let drawings_storage = RwSignal::new(dsa);
                 let quick_notes_full = move || person && {
                     let d = defaults.get();
                     qsa.resolve(d.map(|d| d.quick_notes_storage_mb).unwrap_or_default())
                         .reached_mb(quick_stored)
-                };
-                let drawings_full = move || person && {
-                    let d = defaults.get();
-                    dsa.resolve(d.map(|d| d.drawings_storage_mb).unwrap_or_default())
-                        .reached_mb(drawings_stored)
                 };
                 view! {
                     <div class="list-row col" class:dim=disabled data-user=u.display_name.clone()>
@@ -689,8 +663,7 @@ fn Admin() -> impl IntoView {
                                 <div>{u.display_name.clone()}{admin.then(|| view! { <span class="pill">"admin"</span> })}
                                     {(u.kind == PrincipalKind::Agent).then(|| view! { <span class="tag-agent">"agent"</span> })}
                                     {disabled.then(|| view! { <span class="pill warn">"disabled"</span> })}
-                                    {move || quick_notes_full().then(|| view! { <span class="pill warn">"quick notes full"</span> })}
-                                    {move || drawings_full().then(|| view! { <span class="pill warn">"Drawings full"</span> })}</div>
+                                    {move || quick_notes_full().then(|| view! { <span class="pill warn">"Personal storage full"</span> })}</div>
                                 <div class="muted small">{format!("{} · {} vaults · {} devices · last login {}", u.email.clone().unwrap_or_default(), u.vault_count, u.device_count, u.last_login_at.map(util::relative_time).unwrap_or_else(|| "never".into()))}</div>
                                 {person.then(|| view! { <div class="muted small allowance-usage">{usage}</div> })}
                             </div>
@@ -732,9 +705,7 @@ fn Admin() -> impl IntoView {
                                     <AllowanceField label="Vaults they may own" value=vaults default=d.as_ref().map(|d| d.vaults_per_user) class="vault-allowance"/>
                                     <AllowanceField label="Agents they may have" value=agents default=d.as_ref().map(|d| d.agents_per_user) class="agent-allowance"/>
                                     <AllowanceField label="Quick notes they may keep" value=quick_notes default=d.as_ref().map(|d| d.quick_notes_per_user) class="quick-note-allowance"/>
-                                    <AllowanceField label="Quick notes storage (MiB)" value=quick_notes_storage default=d.as_ref().map(|d| d.quick_notes_storage_mb) class="quick-notes-storage-allowance"/>
-                                    <AllowanceField label="Drawings they may have" value=drawings default=d.as_ref().map(|d| d.drawings_per_user) class="drawing-allowance"/>
-                                    <AllowanceField label="Drawings storage (MiB)" value=drawings_storage default=d.as_ref().map(|d| d.drawings_storage_mb) class="drawings-storage-allowance"/>
+                                    <AllowanceField label="Personal storage (MiB)" value=quick_notes_storage default=d.as_ref().map(|d| d.quick_notes_storage_mb) class="quick-notes-storage-allowance"/>
                                     <div class="row">
                                         <button class="btn small primary save-allowances" on:click=move |_| {
                                             editing.set(None);
@@ -743,12 +714,10 @@ fn Admin() -> impl IntoView {
                                                 agent_allowance: Some(agents.get_untracked()),
                                                 quick_note_allowance: Some(quick_notes.get_untracked()),
                                                 quick_notes_storage_allowance: Some(quick_notes_storage.get_untracked()),
-                                                drawing_allowance: Some(drawings.get_untracked()),
-                                                drawings_storage_allowance: Some(drawings_storage.get_untracked()),
                                                 ..Default::default()
                                             });
                                         }>"Save"</button>
-                                        <span class="muted small">"Shared vaults don't count; drawings count in every vault they own, whoever drew them. Nothing they have is removed when you lower a limit."</span>
+                                        <span class="muted small">"Shared vaults don't count. Nothing they have is removed when you lower a limit."</span>
                                     </div>
                                 </div>
                             }
@@ -805,10 +774,11 @@ fn AdminVaults(
         owner.track();
         load();
     });
-    let save = move |id: String, a: Allowance| {
+    let save = move |id: String, storage: Allowance, drawings: Allowance| {
         leptos::task::spawn_local(async move {
             let change = AdminUpdateVault {
-                storage_allowance: Some(a),
+                storage_allowance: Some(storage),
+                drawing_allowance: Some(drawings),
             };
             match api::patch::<_, serde_json::Value>(&format!("/admin/vaults/{id}"), &change).await
             {
@@ -823,7 +793,7 @@ fn AdminVaults(
     };
     view! {
         <h3 class="admin-vaults-title">"Vaults"</h3>
-        <p class="muted small">"The largest first. You see a vault's id, owner and size — never its name or what's in it. Its members find the id in its settings, to ask you for more room. Quick notes and Drawings aren't listed: their limits are the person's (Accounts → Limits)."</p>
+        <p class="muted small">"The largest first. You see a vault's id, owner, size and how many drawings it holds — never its name or what's in it. Its members find the id in its settings, to ask you for more room. Someone's Personal storage (quick notes, saved shapes) isn't listed: its limit is the person's (Accounts → Limits)."</p>
         <form class="row vault-search" on:submit=move |ev| { ev.prevent_default(); load(); }>
             <input class="input grow vault-search-id" placeholder="A vault's id"
                 prop:value=move || search.get() on:input=move |ev| search.set(event_target_value(&ev))/>
@@ -852,7 +822,12 @@ fn AdminVaults(
                     };
                     let full = limit.reached_mb(a.storage_bytes);
                     let own = if a.storage_allowance == Allowance::Default { "" } else { " · its own limit" };
+                    let drawings = notekpr_core::drawings::count_text(
+                        a.drawing_count,
+                        a.drawing_allowance.resolve(d.as_ref().map(|d| d.drawings_per_vault).unwrap_or_default()),
+                    );
                     let value = RwSignal::new(a.storage_allowance);
+                    let drawing_value = RwSignal::new(a.drawing_allowance);
                     let open = {
                         let id = a.id.clone();
                         move || editing.get().as_deref() == Some(id.as_str())
@@ -865,7 +840,7 @@ fn AdminVaults(
                                 <div class="grow">
                                     <div><code class="vault-id">{a.id.clone()}</code>
                                         {full.then(|| view! { <span class="pill warn">"full"</span> })}</div>
-                                    <div class="muted small vault-usage">{format!("{} · {usage}{own}", a.owner_name)}</div>
+                                    <div class="muted small vault-usage">{format!("{} · {usage}{own} · {drawings}", a.owner_name)}</div>
                                 </div>
                                 <button class="btn small vault-limit-btn" on:click=move |ev| {
                                     editing.update(|e| {
@@ -880,12 +855,13 @@ fn AdminVaults(
                                 view! {
                                     <div class="allowances">
                                         <AllowanceField label="Storage (MiB)" value=value default=d.as_ref().map(|d| d.storage_per_vault_mb) class="storage-allowance"/>
+                                        <AllowanceField label="Drawings it may hold" value=drawing_value default=d.as_ref().map(|d| d.drawings_per_vault) class="vault-drawing-allowance"/>
                                         <div class="row">
                                             <button class="btn small primary save-vault-limit" on:click=move |_| {
                                                 editing.set(None);
-                                                save(id.clone(), value.get_untracked());
+                                                save(id.clone(), value.get_untracked(), drawing_value.get_untracked());
                                             }>"Save"</button>
-                                            <span class="muted small">"At its limit a vault takes no new content until something in it is deleted for good. Nothing is removed when you lower it."</span>
+                                            <span class="muted small">"At its storage limit a vault takes no new content until something in it is deleted for good; at its drawings limit, no new drawing. Nothing is removed when you lower them."</span>
                                         </div>
                                     </div>
                                 }
@@ -1093,11 +1069,10 @@ fn InstanceSettingsPanel(
         RwSignal::new(s.vaults_per_user),
         RwSignal::new(s.agents_per_user),
         RwSignal::new(s.quick_notes_per_user),
-        RwSignal::new(s.drawings_per_user),
         RwSignal::new(s.max_storage_mb),
         RwSignal::new(s.storage_per_vault_mb),
         RwSignal::new(s.quick_notes_storage_mb),
-        RwSignal::new(s.drawings_storage_mb),
+        RwSignal::new(s.drawings_per_vault),
     );
     let (
         users,
@@ -1106,11 +1081,10 @@ fn InstanceSettingsPanel(
         vaults_per_user,
         agents_per_user,
         quick_per_user,
-        drawings_per_user,
         storage,
         per_vault,
         quick_notes_storage,
-        drawings_storage,
+        drawings_per_vault,
     ) = fields;
     let oldest_app = RwSignal::new(String::new());
     let show = move |a: AdminSettings| {
@@ -1122,11 +1096,10 @@ fn InstanceSettingsPanel(
         vaults_per_user.set(s.vaults_per_user);
         agents_per_user.set(s.agents_per_user);
         quick_per_user.set(s.quick_notes_per_user);
-        drawings_per_user.set(s.drawings_per_user);
         storage.set(s.max_storage_mb);
         per_vault.set(s.storage_per_vault_mb);
         quick_notes_storage.set(s.quick_notes_storage_mb);
-        drawings_storage.set(s.drawings_storage_mb);
+        drawings_per_vault.set(s.drawings_per_vault);
         defaults.set(Some(a.settings.clone()));
         status.set(Some(a));
     };
@@ -1177,11 +1150,10 @@ fn InstanceSettingsPanel(
                     <LimitField label="Vaults per person" value=vaults_per_user class="vaults-per-user"/>
                     <LimitField label="Agents per person" value=agents_per_user class="agents-per-user"/>
                     <LimitField label="Quick notes per person" value=quick_per_user class="quick-notes-per-user"/>
-                    <LimitField label="Drawings per person" value=drawings_per_user class="drawings-per-user"/>
                     <LimitField label="Database size (MiB)" value=storage class="max-storage"/>
                     <LimitField label="Storage per vault (MiB)" value=per_vault class="storage-per-vault"/>
-                    <LimitField label="Quick notes storage (MiB)" value=quick_notes_storage class="quick-notes-storage"/>
-                    <LimitField label="Drawings storage (MiB)" value=drawings_storage class="drawings-storage"/>
+                    <LimitField label="Personal storage (MiB)" value=quick_notes_storage class="quick-notes-storage"/>
+                    <LimitField label="Drawings per vault" value=drawings_per_vault class="drawings-per-vault"/>
                 </div>
                 <div class="row">
                     <button class="btn primary save-limits" on:click=move |_| save(InstanceSettingsUpdate {
@@ -1191,15 +1163,14 @@ fn InstanceSettingsPanel(
                         vaults_per_user: Some(vaults_per_user.get_untracked()),
                         agents_per_user: Some(agents_per_user.get_untracked()),
                         quick_notes_per_user: Some(quick_per_user.get_untracked()),
-                        drawings_per_user: Some(drawings_per_user.get_untracked()),
                         max_storage_mb: Some(storage.get_untracked()),
                         storage_per_vault_mb: Some(per_vault.get_untracked()),
                         quick_notes_storage_mb: Some(quick_notes_storage.get_untracked()),
-                        drawings_storage_mb: Some(drawings_storage.get_untracked()),
+                        drawings_per_vault: Some(drawings_per_vault.get_untracked()),
                         ..Default::default()
                     })>"Save limits"</button>
                 </div>
-                <p class="muted small">"Limits apply to what is created from now on: nothing is removed when you lower one. Accounts count people who aren't disabled; a person's own limits are under Accounts. At the database size limit the server turns read-only by itself, until it is below the limit again. A vault at its storage limit takes no new content until something in it is deleted for good, or you give it more room (Vaults, below). Someone's quick notes and Drawings have their own storage limits, like how many they may keep: give one person more under Accounts → Limits. Drawings count per person, in every vault they own."</p>
+                <p class="muted small">"Limits apply to what is created from now on: nothing is removed when you lower one. Accounts count people who aren't disabled; a person's own limits are under Accounts. At the database size limit the server turns read-only by itself, until it is below the limit again. A vault at its storage limit takes no new content until something in it is deleted for good, or you give it more room (Vaults, below), and so many drawings, whoever draws them: give one vault more there too. Someone's Personal storage (quick notes, saved shapes) has its own storage limit, like how many quick notes they may keep: give one person more under Accounts → Limits."</p>
                 <div class="row oldest-app">
                     <label class="limit-field">
                         <span class="limit-label">"Oldest app version"</span>

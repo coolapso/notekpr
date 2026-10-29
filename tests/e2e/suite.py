@@ -2782,7 +2782,7 @@ def test_vault_storage(env):
         a.click(f"{person} .save-allowances")
         a.find_text(f"{person} .pill", "quick notes full", 10)
         b.find(".vault-full-banner", 10)
-        check("Your quick notes are full" in b.text(".vault-full-banner")
+        check("Your personal storage is full" in b.text(".vault-full-banner")
               and not b.js("return !!document.querySelector('.vault-full-banner .btn')"),
               "full quick notes are named as such, without vault settings")
         b.click(".sb-quick .sb-link")

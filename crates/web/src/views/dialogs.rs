@@ -1427,7 +1427,7 @@ fn DeleteAccountDialog() -> impl IntoView {
         let all = everything.clone();
         busy.set(true);
         leptos::task::spawn_local(async move {
-            actions::export_account(all, true, true).await;
+            actions::export_account(all, true).await;
             busy.set(false);
         });
     };

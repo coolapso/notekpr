@@ -66,11 +66,11 @@ pub fn read_item(
 pub fn refusal(elements: &[Element]) -> Option<&'static str> {
     let has = |k: ElementType| elements.iter().any(|e| e.kind() == k);
     if has(ElementType::Iframe) {
-        Some("IFrame elements cannot be added to the library.")
+        Some("IFrame elements cannot be saved as shapes.")
     } else if has(ElementType::Embeddable) {
-        Some("Embeddable elements cannot be added to the library.")
+        Some("Embeddable elements cannot be saved as shapes.")
     } else if has(ElementType::Image) {
-        Some("Pictures can't be added to the library yet.")
+        Some("Pictures can't be saved as shapes yet.")
     } else {
         None
     }

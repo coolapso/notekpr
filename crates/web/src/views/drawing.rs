@@ -619,8 +619,8 @@ pub fn DrawingView(vault: String, id: String) -> impl IntoView {
                             .collect_view()
                     }}
                 </div>
-                <button class="icon-btn" class:on=move || library_open.get() title="Library" aria-label="Library" aria-pressed=move || library_open.get().to_string()
-                    on:click=move |_| library_open.update(|o| *o = !*o)><Icon name="book"/></button>
+                <button class="icon-btn" class:on=move || library_open.get() title="Saved shapes" aria-label="Saved shapes" aria-pressed=move || library_open.get().to_string()
+                    on:click=move |_| library_open.update(|o| *o = !*o)><Icon name="shapes"/></button>
                 <button class="icon-btn" title="Version history" aria-label="Version history"
                     on:click={ let (v, n) = (vault.clone(), id.clone()); move |_| ui.modal.set(Some(state::Modal::History(v.clone(), n.clone()))) }><Icon name="history"/></button>
                 <div class="tb-drop">
@@ -1154,57 +1154,83 @@ fn Properties(board: StoredValue<Rc<Board>, LocalStorage>, rev: RwSignal<u64>) -
     }
 }
 
-/// The sidebar's entry for one's Drawings section.
+/// The sidebar's entry for the open vault's drawings (not in the quick
+/// notes, which hold none).
 #[component]
 pub fn DrawingsSection() -> impl IntoView {
     let ui = ui();
-    view! {
-        <div class="sb-section sb-drawings">
-            <button class="sb-link" class:active=move || {
-                    let r = ui.route.get();
-                    r == state::Route::Drawings || r.vault().is_some_and(|v| state::step(|c| c.is_drawings(v)))
-                }
-                title="Your drawings" on:click=move |_| state::navigate(state::Route::Drawings)>
-                <Icon name="drawing"/><span class="grow ellipsis">"Drawings"</span></button>
-            <button class="icon-btn tiny qn-add" title="New drawing" aria-label="New drawing"
-                on:click=move |_| crate::drawings::new_in_section()><Icon name="plus"/></button>
-        </div>
+    let vault = move || {
+        ui.route
+            .get()
+            .vault()
+            .map(str::to_string)
+            .filter(|v| !state::step(|c| c.is_quick_notes(v)))
+    };
+    move || {
+        vault().map(|v| {
+            let (v1, v2, v3) = (v.clone(), v.clone(), v.clone());
+            view! {
+                <div class="sb-section sb-drawings">
+                    <button class="sb-link" class:active=move || ui.route.get() == state::Route::Drawings(v1.clone())
+                        title="This vault's drawings" on:click=move |_| state::navigate(state::Route::Drawings(v2.clone()))>
+                        <Icon name="drawing"/><span class="grow">"Drawings"</span></button>
+                    <Show when=move || state::step(|c| c.can_write(&v3))>
+                        {
+                            let v = v.clone();
+                            view! {
+                                <button class="icon-btn tiny qn-add" title="New drawing" aria-label="New drawing"
+                                    on:click=move |_| crate::actions::new_drawing(&v, "")><Icon name="plus"/></button>
+                            }
+                        }
+                    </Show>
+                </div>
+            }
+        })
     }
 }
 
-/// `/drawings`: one's own drawings, as pictures.
+/// `/v/{vault}/drawings`: the vault's drawings, from every folder, as
+/// pictures.
 #[component]
-pub fn DrawingsPage() -> impl IntoView {
+pub fn DrawingsPage(vault: String) -> impl IntoView {
     let ui = ui();
+    let vid = StoredValue::new(vault);
     let list = Memo::new(move |_| {
         ui.tree_rev.get();
         ui.vaults.track();
-        crate::drawings::in_section()
+        crate::drawings::in_vault(&vid.get_value())
     });
+    let writable = move || state::step(|c| c.can_write(&vid.get_value()));
     view! {
         <div class="page drawings-page">
             <header class="page-head">
                 <button class="icon-btn mobile-only" title="Menu" aria-label="Menu" on:click=move |_| ui.sidebar.set(true)><Icon name="menu"/></button>
                 <h1>"Drawings"</h1>
-                // How many, of how many one may have.
+                <span class="muted ellipsis grow">{move || {
+                    ui.vaults.track();
+                    state::step(|c| c.vault_name(&vid.get_value()))
+                }}</span>
+                // How many, of how many the vault may hold.
                 <span class="muted small drawings-count">{move || {
                     list.track();
-                    let (count, limit) = crate::drawings::usage();
+                    let (count, limit) = crate::drawings::usage(&vid.get_value());
                     notekpr_core::drawings::count_text(count, limit)
                 }}</span>
-                <button class="btn primary small" on:click=move |_| crate::drawings::new_in_section()><Icon name="plus"/>" New drawing"</button>
+                <Show when=writable>
+                    <button class="btn primary small" on:click=move |_| crate::actions::new_drawing(&vid.get_value(), "")><Icon name="plus"/>" New drawing"</button>
+                </Show>
             </header>
             {move || {
                 let items = list.get();
                 if items.is_empty() {
                     return view! {
-                        <p class="muted empty">"Your own drawings live here. Drawings in vaults stay in their vaults, where you draw them with the vault's members."</p>
+                        <p class="muted empty">"No drawings in this vault yet. They live among its notes, and everyone in the vault draws on them together."</p>
                     }.into_any();
                 }
-                let vault = crate::drawings::section().unwrap_or_default();
+                let vault = vid.get_value();
                 view! {
                     <div class="drawing-cards">
-                        {items.into_iter().map(|(id, title, _)| {
+                        {items.into_iter().map(|(id, title, folder, _)| {
                             let picture = RwSignal::new(None::<String>);
                             let (v, i) = (vault.clone(), id.clone());
                             Effect::new(move |_| {
@@ -1223,6 +1249,7 @@ pub fn DrawingsPage() -> impl IntoView {
                                 <button class="drawing-card" on:click=move |_| state::navigate(state::Route::Note(v.clone(), i.clone()))>
                                     <span class="drawing-thumb">{move || picture.get().map(|src| view! { <img src=src alt=""/> })}</span>
                                     <span class="drawing-name ellipsis">{title}</span>
+                                    {(!folder.is_empty()).then(|| view! { <span class="drawing-folder muted small ellipsis">{folder}</span> })}
                                 </button>
                             }
                         }).collect_view()}

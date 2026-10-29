@@ -113,12 +113,6 @@ pub async fn me(State(state): State<AppState>, who: Principal) -> AppResult<Json
     let key = account_key(&state.db, &who.user_id).await?;
     let has_recovery = repo::users::has_recovery(&state.db, &who.user_id).await?;
     let expires_at = repo::sessions::expires_at(&state.db, &who.session_id).await?;
-    // How many drawings they may have and have, for their apps to say.
-    let drawing_limit = state
-        .instance
-        .drawings_limit(&state.db, &who.user_id)
-        .await?;
-    let drawing_count = repo::vaults::drawing_count(&state.db, &who.user_id).await?;
     Ok(Json(MeResponse {
         user,
         account_key: key,
@@ -129,8 +123,6 @@ pub async fn me(State(state): State<AppState>, who: Principal) -> AppResult<Json
             device_id: who.device_id,
             expires_at,
         },
-        drawing_limit,
-        drawing_count,
     }))
 }
 

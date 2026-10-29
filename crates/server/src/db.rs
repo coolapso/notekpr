@@ -270,8 +270,8 @@ mod migration_tests {
 
     /// A database made at the start of the data freeze, with rows in every
     /// table that refers to a vault, keeps them all through the drawings
-    /// migration (which copies `vaults`); the triggers keeping each vault's
-    /// size and the cascades deleting a vault still work.
+    /// migration; the triggers keeping each vault's size and the cascades
+    /// deleting a vault still work.
     #[tokio::test]
     async fn the_drawings_migration_keeps_everything() {
         let dir = tempfile::tempdir().unwrap();
@@ -341,7 +341,7 @@ mod migration_tests {
         assert_eq!(kinds, ["note"], "what was there is notes");
         // The old database was backed up first.
         assert!(dir.path().join("backups").read_dir().unwrap().count() > 0);
-        // Foreign keys are enforced again.
+        // Foreign keys are still enforced.
         let on: bool = sqlx::query_scalar("PRAGMA foreign_keys")
             .fetch_one(&db)
             .await
@@ -380,47 +380,22 @@ mod migration_tests {
         // The note's 3 + 5 bytes of updates and its 2-byte snapshot are out.
         assert_eq!(storage_bytes(&db, "v").await, 3);
 
-        // Drawings sections are new, one per person; other kinds are refused.
-        for (q, ok) in [
-            (
-                "INSERT INTO vaults (id, owner_id, encrypted_meta, kind, created_at, updated_at)
-                 VALUES ('d', 'alice', x'03', 'drawings', 1, 1)",
-                true,
-            ),
-            (
-                "INSERT INTO vaults (id, owner_id, encrypted_meta, kind, created_at, updated_at)
-                 VALUES ('d2', 'alice', x'03', 'drawings', 1, 1)",
-                false,
-            ),
-            (
-                "INSERT INTO vaults (id, owner_id, encrypted_meta, kind, created_at, updated_at)
-                 VALUES ('e', 'bob', x'03', 'drawings', 1, 1)",
-                true,
-            ),
-            (
-                "INSERT INTO vaults (id, owner_id, encrypted_meta, kind, created_at, updated_at)
-                 VALUES ('x', 'carol', x'03', 'boards', 1, 1)",
-                false,
-            ),
-        ] {
-            assert_eq!(run(&db, q).await.is_ok(), ok, "{q}");
-        }
-        let indexes: Vec<String> = sqlx::query_scalar(
-            "SELECT name FROM sqlite_schema WHERE type = 'index' AND tbl_name = 'vaults'
-               AND name NOT LIKE 'sqlite_%' ORDER BY name",
-        )
-        .fetch_all(&db)
-        .await
-        .unwrap();
-        assert_eq!(
-            indexes,
-            [
-                "vaults_drawings",
-                "vaults_own_storage",
-                "vaults_owner",
-                "vaults_quick_notes",
-                "vaults_storage"
-            ]
+        // Every vault takes the instance's drawings limit until an
+        // administrator gives it its own.
+        let own: Vec<Option<i64>> = sqlx::query_scalar("SELECT drawing_allowance FROM vaults")
+            .fetch_all(&db)
+            .await
+            .unwrap();
+        assert_eq!(own, [None, None]);
+        // Objects are notes or drawings, nothing else.
+        assert!(
+            run(
+                &db,
+                "INSERT INTO objects (vault_id, id, created_by, created_at, updated_at, kind)
+                 VALUES ('v', 'b', 'alice', 1, 1, 'board')"
+            )
+            .await
+            .is_err()
         );
 
         // Deleting a vault still takes everything in it.

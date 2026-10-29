@@ -4640,14 +4640,21 @@ async fn stored_kind(srv: &TestServer, v: &str, o: &str) -> String {
         .unwrap()
 }
 
+/// Drawings the server counts in a vault.
+async fn drawing_count(srv: &TestServer, v: &str) -> u64 {
+    notekpr_server::repo::vaults::drawing_count(&srv.state.db, v)
+        .await
+        .unwrap()
+}
+
 /// Set the instance's drawings limit (as `PATCH /admin/settings` does).
-async fn drawings_per_user(srv: &TestServer, limit: Limit) {
+async fn drawings_per_vault(srv: &TestServer, limit: Limit) {
     srv.state
         .instance
         .update(
             &srv.state.db,
             &InstanceSettingsUpdate {
-                drawings_per_user: Some(limit),
+                drawings_per_vault: Some(limit),
                 ..Default::default()
             },
         )
@@ -4657,8 +4664,8 @@ async fn drawings_per_user(srv: &TestServer, limit: Limit) {
 
 /// An object says once, when it is made, whether it is a drawing: with its
 /// first key, or with the update that makes it. The server counts each
-/// person's drawings across the vaults they own, whoever drew them; until
-/// deleted for good (in the trash they still count).
+/// vault's drawings, whoever drew them; until deleted for good (in the
+/// trash they still count).
 #[tokio::test]
 async fn objects_say_once_whether_they_are_drawings() {
     let srv = start().await;
@@ -4668,9 +4675,12 @@ async fn objects_say_once_whether_they_are_drawings() {
     let team = alice.create_vault("Team").await;
     alice.share(&team, &bob.id, Role::Editor).await.unwrap();
     bob.load_keys(&team).await.unwrap();
-    let mine = bob.create_vault("Bob's").await;
     // Without a limit, as self-hosters have it: unlimited, none yet.
-    assert_eq!(alice.drawings().await, (Limit::Unlimited, 0));
+    assert_eq!(
+        vault_info(&alice, &home).await.drawing_limit,
+        Limit::Unlimited
+    );
+    assert_eq!(drawing_count(&srv, &home).await, 0);
 
     // With its key, or made by a pushed update.
     alice.make_drawing(&home, "d1").await;
@@ -4731,13 +4741,12 @@ async fn objects_say_once_whether_they_are_drawings() {
     alice.put_key(&home, "d2", &adopt).await.unwrap();
     assert_eq!(stored_kind(&srv, &home, "n").await, "note");
     assert_eq!(stored_kind(&srv, &home, "d2").await, "drawing");
-    assert_eq!(alice.drawings().await, (Limit::Unlimited, 2));
+    assert_eq!(drawing_count(&srv, &home).await, 2);
 
-    // A drawing bob makes in alice's vault is hers; in his own, his.
+    // Each vault counts its own, whoever draws in it.
     bob.make_drawing(&team, "d3").await;
-    bob.make_drawing(&mine, "d4").await;
-    assert_eq!(alice.drawings().await.1, 3);
-    assert_eq!(bob.drawings().await.1, 1);
+    assert_eq!(drawing_count(&srv, &team).await, 1);
+    assert_eq!(drawing_count(&srv, &home).await, 2);
 
     // Deleted for good it no longer counts; brought back, it does again.
     let purge = format!("/vaults/{home}/objects/d1");
@@ -4745,7 +4754,7 @@ async fn objects_say_once_whether_they_are_drawings() {
         alice.api.status::<()>(Method::DELETE, &purge, None).await,
         204
     );
-    assert_eq!(alice.drawings().await.1, 2);
+    assert_eq!(drawing_count(&srv, &home).await, 1);
     assert_eq!(
         alice
             .api
@@ -4753,32 +4762,25 @@ async fn objects_say_once_whether_they_are_drawings() {
             .await,
         204
     );
-    assert_eq!(alice.drawings().await.1, 3);
-    // Her vault going takes its drawings along.
-    assert_eq!(
-        alice
-            .api
-            .status::<()>(Method::DELETE, &format!("/vaults/{team}"), None)
-            .await,
-        204
-    );
-    assert_eq!(alice.drawings().await.1, 2);
+    assert_eq!(drawing_count(&srv, &home).await, 2);
 }
 
-/// With a drawings limit, a new drawing beyond it is refused — its key with
-/// `403 limit_reached`, a pushed update alone with `drawings_full` — and the
-/// vault's owner pays, whoever draws. Lowering it takes nothing away.
+/// With a drawings limit, a new drawing in a vault holding as many as it
+/// may is refused — its key with `403 limit_reached`, a pushed update alone
+/// with `drawings_full` —, whoever draws; other vaults have their own room.
+/// Lowering it takes nothing away.
 #[tokio::test]
-async fn new_drawings_wait_for_room_under_the_owners_limit() {
+async fn new_drawings_wait_for_room_in_their_vault() {
     let srv = start().await;
     let mut alice = new_user(&srv.base, "alice").await;
     let mut bob = new_user(&srv.base, "bob").await;
     let home = alice.create_vault("Home").await;
+    let other = alice.create_vault("Other").await;
     alice.share(&home, &bob.id, Role::Editor).await.unwrap();
     bob.load_keys(&home).await.unwrap();
-    let mine = bob.create_vault("Bob's").await;
-    drawings_per_user(&srv, Limit::Max(1)).await;
-    assert_eq!(alice.drawings().await, (Limit::Max(1), 0));
+    drawings_per_vault(&srv, Limit::Max(1)).await;
+    // Members learn the vault's limit.
+    assert_eq!(vault_info(&bob, &home).await.drawing_limit, Limit::Max(1));
     let first = alice.make_drawing(&home, "d1").await;
 
     // Full: a new drawing's key is refused, and saying so.
@@ -4789,7 +4791,7 @@ async fn new_drawings_wait_for_room_under_the_owners_limit() {
     assert_eq!(err.error, ERROR_LIMIT_REACHED);
     assert!(err.message.contains("1 drawing"), "{}", err.message);
     // A pushed one alone; the rest of the push is stored, and so are edits
-    // of the one she has, and new notes.
+    // of the one there is, and new notes.
     let r = alice
         .push(
             &home,
@@ -4810,11 +4812,7 @@ async fn new_drawings_wait_for_room_under_the_owners_limit() {
         ),
         ("d2", REJECT_DRAWINGS_FULL)
     );
-    // Bob draws in her vault on her count, and is told it's hers.
-    let (_, key) = bob.new_key(&home, "d3", ObjectKind::Drawing);
-    let (status, body) = bob.put_key(&home, "d3", &key).await.unwrap_err();
-    assert_eq!(status, 403);
-    assert!(body.contains("owner"), "{body}");
+    // Bob is refused there too.
     let r = bob
         .push(
             &home,
@@ -4823,8 +4821,8 @@ async fn new_drawings_wait_for_room_under_the_owners_limit() {
         .await
         .unwrap();
     assert_eq!(r.rejected[0].code, REJECT_DRAWINGS_FULL);
-    // In his own vault on his.
-    bob.make_drawing(&mine, "d4").await;
+    // Another vault has room of its own (a drawing moved there too).
+    alice.make_drawing(&other, "d4").await;
 
     // Deleting one for good makes room; bringing it back needs room.
     let purge = format!("/vaults/{home}/objects/d1");
@@ -4841,9 +4839,8 @@ async fn new_drawings_wait_for_room_under_the_owners_limit() {
     assert_eq!(status, 403);
     assert!(body.contains(ERROR_LIMIT_REACHED), "{body}");
 
-    // Lowered to none: what she has stays and is edited, no new one.
-    drawings_per_user(&srv, Limit::Max(0)).await;
-    assert_eq!(alice.drawings().await, (Limit::Max(0), 1));
+    // Lowered to none: what there is stays and is edited, no new one.
+    drawings_per_vault(&srv, Limit::Max(0)).await;
     let r = alice
         .push(
             &home,
@@ -4856,259 +4853,7 @@ async fn new_drawings_wait_for_room_under_the_owners_limit() {
         .unwrap();
     assert_eq!(r.results.len(), 1);
     assert_eq!(r.rejected[0].object_id, "d5");
-    let info = vault_info(&alice, &home).await;
-    assert_eq!(info.member_count, 2);
-}
-
-/// Moving a drawing to another vault of its owner copies it, then the
-/// original goes: at the drawings limit the copy names the original it
-/// replaces, needs no free slot, and its first update deletes the original
-/// for good. Anything else naming an original is a new drawing like any.
-#[tokio::test]
-async fn a_drawing_moved_at_the_limit_replaces_its_original() {
-    let srv = start().await;
-    let mut alice = new_user(&srv.base, "alice").await;
-    let mut bob = new_user(&srv.base, "bob").await;
-    let from = alice.create_vault("Sketches").await;
-    let to = alice.create_vault("Projects").await;
-    alice.share(&to, &bob.id, Role::Editor).await.unwrap();
-    bob.load_keys(&to).await.unwrap();
-    let bobs = bob.create_vault("Bob's").await;
-    drawings_per_user(&srv, Limit::Max(1)).await;
-    alice.make_drawing(&from, "d").await;
-    let original = ObjectRef {
-        vault_id: from.clone(),
-        object_id: "d".into(),
-    };
-    let mut ws = Ws::connect(&srv.ws, alice.api.token.as_ref().unwrap()).await;
-    ws.send(&ClientMessage::Subscribe {
-        vault_id: from.clone(),
-        since: Some(0),
-        object_id: None,
-    })
-    .await;
-    ws.until(|m| matches!(m, ServerMessage::Synced { .. }).then_some(()))
-        .await;
-
-    // What doesn't replace a live drawing of hers that she could delete
-    // for good is a new drawing, and finds no room: a note…
-    let (note_ring, note_key) = alice.new_key(&from, "n", ObjectKind::Note);
-    alice.put_key(&from, "n", &note_key).await.unwrap();
-    alice
-        .push(&from, vec![content(&note_ring, "n", ObjectKind::Note)])
-        .await
-        .unwrap();
-    // …something in the same vault, of someone else, or nothing at all…
-    bob.make_drawing(&bobs, "b").await;
-    for (vault_id, object_id) in [
-        (from.as_str(), "n"),
-        (to.as_str(), "d"),
-        (bobs.as_str(), "b"),
-        (from.as_str(), "nothing"),
-    ] {
-        let (_, mut key) = alice.new_key(&to, "c", ObjectKind::Drawing);
-        key.replaces = Some(ObjectRef {
-            vault_id: vault_id.into(),
-            object_id: object_id.into(),
-        });
-        assert_eq!(
-            alice.put_key(&to, "c", &key).await.unwrap_err().0,
-            403,
-            "{vault_id}/{object_id}"
-        );
-    }
-    // …or bob, who can't delete it for good there (nor even see it).
-    let (_, mut key) = bob.new_key(&to, "c", ObjectKind::Drawing);
-    key.replaces = Some(original.clone());
-    assert_eq!(bob.put_key(&to, "c", &key).await.unwrap_err().0, 403);
-
-    // The copy replacing it is made at the limit; until it has content,
-    // both are there.
-    let (copy, mut key) = alice.new_key(&to, "c", ObjectKind::Drawing);
-    key.replaces = Some(original.clone());
-    alice.put_key(&to, "c", &key).await.unwrap();
-    assert_eq!(alice.drawings().await.1, 2);
-    // A second copy can't replace the same original.
-    let (_, mut again) = alice.new_key(&to, "c2", ObjectKind::Drawing);
-    again.replaces = Some(original.clone());
-    assert_eq!(alice.put_key(&to, "c2", &again).await.unwrap_err().0, 403);
-
-    // Its first update deletes the original for good, as DELETE would.
-    let size_before = vault_info(&alice, &from).await.storage_bytes;
-    let r = alice
-        .push(&to, vec![content(&copy, "c", ObjectKind::Drawing)])
-        .await
-        .unwrap();
-    assert!(r.rejected.is_empty());
-    assert_eq!(alice.drawings().await.1, 1);
-    ws.until(|m| match m {
-        ServerMessage::Purged {
-            vault_id,
-            object_id,
-            ..
-        } if *vault_id == from && object_id == "d" => Some(()),
-        _ => None,
-    })
-    .await;
-    let kept: Vec<PurgedItem> = alice.api.get(&format!("/vaults/{from}/purged")).await;
-    assert_eq!(kept.len(), 1, "it can be undone like any");
-    assert_eq!(kept[0].id, "d");
-    assert!(vault_info(&alice, &from).await.storage_bytes < size_before);
-    let gone = alice
-        .push(&from, vec![content(&copy, "d", ObjectKind::Drawing)])
-        .await
-        .unwrap();
-    assert_eq!(gone.rejected[0].code, REJECT_PURGED);
-    // Later updates of the copy change nothing more.
-    let r = alice
-        .push(&to, vec![content(&copy, "c", ObjectKind::Drawing)])
-        .await
-        .unwrap();
-    assert!(r.rejected.is_empty());
-    assert_eq!(alice.drawings().await.1, 1);
-}
-
-/// The Drawings section: one per person, never shared (no members, agents,
-/// note shares, sharing a key, comments), its name and settings fixed, and
-/// holding drawings and files only.
-#[tokio::test]
-async fn drawings_are_a_section_of_ones_own() {
-    let srv = start().await;
-    let mut alice = new_user(&srv.base, "alice").await;
-    let bob = new_user(&srv.base, "bob").await;
-    let info = alice.create_drawings().await.unwrap();
-    let d = info.id.clone();
-    assert_eq!(info.kind, VaultKind::Drawings);
-    assert!(info.is_own_drawings(&alice.id));
-    assert_eq!(alice.create_drawings().await.unwrap_err().0, 409);
-    let list: Vec<VaultInfo> = alice.api.get("/vaults").await;
-    assert_eq!(list.len(), 1);
-
-    // Drawings and the index, never notes.
-    let ring = alice.make_drawing(&d, "sketch").await;
-    let r = alice
-        .push(
-            &d,
-            vec![
-                content(alice.ring(&d), INDEX_OBJECT_ID, ObjectKind::Note),
-                content(&ring, "sketch", ObjectKind::Drawing),
-                content(alice.ring(&d), "n", ObjectKind::Note),
-            ],
-        )
-        .await
-        .unwrap();
-    assert_eq!(r.results.len(), 2);
-    assert_eq!(r.rejected[0].object_id, "n");
-    assert_eq!(r.rejected[0].code, REJECT_DRAWINGS_ONLY);
-    let (_, note) = alice.new_key(&d, "n", ObjectKind::Note);
-    assert_eq!(alice.put_key(&d, "n", &note).await.unwrap_err().0, 400);
-    assert_eq!(alice.drawings().await.1, 1);
-    // Files, as for the pictures in drawings.
-    let st = alice
-        .api
-        .req(Method::PUT, &format!("/vaults/{d}/attachments/pic"))
-        .header("content-type", "application/octet-stream")
-        .body(vec![1u8; 16])
-        .send()
-        .await
-        .unwrap()
-        .status()
-        .as_u16();
-    assert_eq!(st, 201);
-
-    // Nobody joins, no drawing is shared on its own, nobody comments.
-    let bob_key: PublicUser = alice.api.get(&format!("/users/{}", bob.id)).await;
-    let public = bob_key.account_key.as_ref().unwrap().verify().unwrap();
-    let (epoch, key) = alice.ring(&d).current().unwrap();
-    let envelope = keys::wrap_vault_key(key, &d, epoch, &bob.id, &public.enc_public).unwrap();
-    let add = AddMemberRequest {
-        user_id: bob.id.clone(),
-        role: Role::Viewer,
-        key_envelope: Some(KeyEnvelope {
-            user_id: bob.id.clone(),
-            epoch,
-            envelope: envelope.clone(),
-            signature: None,
-        }),
-        log_entry: None,
-    };
-    assert_eq!(
-        alice
-            .api
-            .status(Method::POST, &format!("/vaults/{d}/members"), Some(&add))
-            .await,
-        400
-    );
-    let share = AddObjectShareRequest {
-        user_id: bob.id.clone(),
-        role: Role::Viewer,
-        envelope: KeyEnvelope {
-            user_id: bob.id.clone(),
-            epoch,
-            envelope,
-            signature: None,
-        },
-        log_entry: None,
-    };
-    assert_eq!(
-        alice
-            .api
-            .status(
-                Method::POST,
-                &format!("/vaults/{d}/objects/sketch/shares"),
-                Some(&share)
-            )
-            .await,
-        400
-    );
-    let (_, mut start_sharing) = alice.new_key(&d, "other", ObjectKind::Drawing);
-    start_sharing.private = false;
-    assert_eq!(
-        alice
-            .put_key(&d, "other", &start_sharing)
-            .await
-            .unwrap_err()
-            .0,
-        400
-    );
-    let c = comment_update(&alice, &d, "sketch", &ring, "nice");
-    assert_eq!(alice.push(&d, vec![c]).await.unwrap_err().0, 403);
-    for change in [
-        UpdateVaultRequest {
-            archived: Some(true),
-            ..Default::default()
-        },
-        UpdateVaultRequest {
-            encrypted_meta: Some(vec![1; 64]),
-            ..Default::default()
-        },
-    ] {
-        assert_eq!(
-            alice
-                .api
-                .status(Method::PATCH, &format!("/vaults/{d}"), Some(&change))
-                .await,
-            400
-        );
-    }
-    // Nobody else learns of it.
-    assert_eq!(
-        bob.api
-            .status::<()>(Method::GET, &format!("/vaults/{d}"), None)
-            .await,
-        404
-    );
-    // A kind of vault this server doesn't know isn't made.
-    let meta = VaultMeta::named("Boards");
-    let (mut req, _) =
-        notekpr_core::engine::new_vault(&alice.account, &alice.id, &meta, 1).unwrap();
-    req.kind = VaultKind::Other;
-    let mut json = serde_json::to_value(&req).unwrap();
-    json["kind"] = "boards".into();
-    assert_eq!(
-        alice.api.status(Method::POST, "/vaults", Some(&json)).await,
-        400
-    );
+    assert_eq!(drawing_count(&srv, &home).await, 1);
 }
 
 /// An agent's token from its client credentials.

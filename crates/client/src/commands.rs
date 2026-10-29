@@ -8,9 +8,7 @@ use std::time::Duration;
 use anyhow::{Context, Result, anyhow, bail};
 use notekpr_core::doc::{Entry, EntryKind};
 use notekpr_core::engine::PinStatus;
-use notekpr_core::protocol::{
-    DeviceStatus, Limit, MIB, MeResponse, PrincipalKind, Role, VaultKind,
-};
+use notekpr_core::protocol::{DeviceStatus, Limit, MIB, PrincipalKind, Role};
 use serde::Serialize;
 use serde_json::json;
 use tokio::sync::watch;
@@ -135,7 +133,7 @@ fn access(c: &Command) -> Access {
             _ => Access::Read,
         },
         Command::Quick(q) if q.list => Access::Read,
-        Command::Library(LibraryCmd::Ls | LibraryCmd::Export { .. }) => Access::Read,
+        Command::Shapes(ShapesCmd::Ls | ShapesCmd::Export { .. }) => Access::Read,
         Command::Comments(CommentsCmd::List { .. }) | Command::Mentions(_) => Access::Read,
         Command::Sync(a) if a.no_dir => Access::Free,
         Command::Sync(a) if a.once => Access::Write,
@@ -617,7 +615,7 @@ async fn execute(ctx: Ctx, command: Command) -> Result<()> {
             if_match,
         } => write(&ctx, &vault, &path, attachment, append, if_match.as_deref()).await,
         Command::Quick(a) => quick(&ctx, a).await,
-        Command::Library(c) => library(&ctx, c).await,
+        Command::Shapes(c) => shapes(&ctx, c).await,
         Command::Comments(c) => comments(&ctx, c).await,
         Command::Mentions(a) => mentions(&ctx, a).await,
         Command::Mkdir { vault, path } => {
@@ -1018,7 +1016,7 @@ fn report_pending(
         ));
     } else if vault_full && quick_notes {
         ui::status(&format!(
-            "saved locally; your quick notes are full: {remaining} change(s) will be uploaded once they have room (delete a quick note, or ask your administrator for more room)"
+            "saved locally; your personal storage is full: {remaining} change(s) will be uploaded once it has room (delete quick notes or saved shapes, or ask your administrator for more room)"
         ));
     } else if vault_full {
         ui::status(&format!(
@@ -1045,8 +1043,8 @@ fn print_account_transfer(verb: &str, r: &transfer::AccountReport, at: &std::pat
         } else {
             String::new()
         },
-        if r.drawings > 0 {
-            format!(" and {} drawing(s) of your Drawings", r.drawings)
+        if r.saved_shapes > 0 {
+            format!(" and {} saved shape(s)", r.saved_shapes)
         } else {
             String::new()
         },
@@ -1348,7 +1346,7 @@ async fn vault(ctx: &Ctx, c: VaultCmd) -> Result<()> {
                 ctx.print_json(&list);
                 return Ok(());
             }
-            // The quick notes and Drawings are no vault: a line each.
+            // The quick notes are no vault: a line of their own.
             let (sections, list): (Vec<_>, Vec<_>) =
                 list.into_iter().partition(|s| s.kind.is_section());
             if list.is_empty() {
@@ -1359,8 +1357,17 @@ async fn vault(ctx: &Ctx, c: VaultCmd) -> Result<()> {
                     Some(i) => format!("{i} {}", s.name),
                     None => s.name.clone(),
                 };
+                // Drawings, when there are some or a limit to them.
+                let drawings = if s.drawings > 0 || s.drawing_limit != Limit::Unlimited {
+                    format!(
+                        ", {}",
+                        notekpr_core::drawings::count_text(s.drawings, s.drawing_limit)
+                    )
+                } else {
+                    String::new()
+                };
                 crate::out!(
-                    "{:<28} {:<7} {:>4} docs  {}{}{}  [{}]",
+                    "{:<28} {:<7} {:>4} docs{drawings}  {}{}{}  [{}]",
                     name,
                     s.role.as_str(),
                     s.documents,
@@ -1376,32 +1383,10 @@ async fn vault(ctx: &Ctx, c: VaultCmd) -> Result<()> {
                 crate::out!("{:<28} (waiting for its key from the owner)  [{id}]", "?");
             }
             for s in sections {
-                if s.kind == VaultKind::QuickNotes {
-                    crate::out!(
-                        "\n{}, {} (`notekpr quick --list`)",
-                        quick_count(s.documents, s.note_limit),
-                        storage_text(&s)
-                    );
-                    continue;
-                }
-                // How many drawings the person has in all their vaults, of
-                // how many they may (offline: those here).
-                let me = if hub.is_online() {
-                    hub.session.api.get::<MeResponse>("/me").await.ok()
-                } else {
-                    None
-                };
-                let count = match me {
-                    Some(me) => {
-                        notekpr_core::drawings::count_text(me.drawing_count, me.drawing_limit)
-                    }
-                    None => notekpr_core::drawings::count_text(s.drawings as u64, Limit::Unlimited),
-                };
                 crate::out!(
-                    "\n{}: {count}, {} (`notekpr ls {}`)",
-                    notekpr_core::drawings::NAME,
-                    storage_text(&s),
-                    notekpr_core::drawings::NAME
+                    "\n{}, {} (`notekpr quick --list`)",
+                    quick_count(s.documents, s.note_limit),
+                    storage_text(&s)
                 );
             }
             Ok(())
@@ -2085,16 +2070,17 @@ async fn quick(ctx: &Ctx, a: QuickArgs) -> Result<()> {
     Ok(())
 }
 
-async fn library(ctx: &Ctx, c: LibraryCmd) -> Result<()> {
-    let hub = ctx.hub(&[notekpr_core::drawings::NAME]).await?;
+async fn shapes(ctx: &Ctx, c: ShapesCmd) -> Result<()> {
+    // They are kept in the Personal storage, with the quick notes.
+    let hub = ctx.hub_with_quick_notes(&[]).await?;
     match c {
-        LibraryCmd::Ls => {
+        ShapesCmd::Ls => {
             let items = ops::list_library(&hub).await;
             if ctx.json {
                 ctx.print_json(&items);
             } else if items.is_empty() {
                 crate::out!(
-                    "your library is empty — add to it in a drawing, or with `notekpr library import <file.excalidrawlib>`"
+                    "no saved shapes yet — save some in a drawing, or with `notekpr shapes import <file.excalidrawlib>`"
                 );
             } else {
                 for i in &items {
@@ -2125,28 +2111,28 @@ async fn library(ctx: &Ctx, c: LibraryCmd) -> Result<()> {
                 }
             }
         }
-        LibraryCmd::Import { file } => {
+        ShapesCmd::Import { file } => {
             let text = std::fs::read_to_string(&file)
                 .with_context(|| format!("reading {}", file.display()))?;
             let r = op(ops::import_library(&hub, &text).await)?;
             if ctx.json {
                 ctx.print_json(&r);
             } else {
-                let mut said = vec![format!("added {} item(s) to your library", r.added)];
+                let mut said = vec![format!("saved {} shape(s)", r.added)];
                 if r.already > 0 {
-                    said.push(format!("{} already in it", r.already));
+                    said.push(format!("{} saved already", r.already));
                 }
                 crate::out!("{}", said.join("; "));
                 if r.too_large > 0 {
                     ui::warn(&format!(
-                        "{} item(s) were left out: too large for this server",
+                        "{} shape(s) were left out: too large for this server",
                         r.too_large
                     ));
                 }
             }
             report_pending(r.pending_changes, false, r.read_only, r.vault_full, false);
         }
-        LibraryCmd::Export { out, force } => {
+        ShapesCmd::Export { out, force } => {
             let items = ops::library(&hub).await;
             let file = notekpr_draw::file::write_library(&items);
             match out {
@@ -2162,7 +2148,7 @@ async fn library(ctx: &Ctx, c: LibraryCmd) -> Result<()> {
                     }
                     fsutil::write_atomic(&out, file.as_bytes(), true)
                         .with_context(|| format!("writing {}", out.display()))?;
-                    crate::out!("saved {} item(s) to {}", items.len(), out.display());
+                    crate::out!("wrote {} shape(s) to {}", items.len(), out.display());
                 }
             }
         }

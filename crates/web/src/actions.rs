@@ -1838,6 +1838,9 @@ pub async fn move_to_vault(
                 .to_string()
         }
     })?;
+    if plan.notes() > 0 && step(|c| c.is_drawings(to)) {
+        return Err("Your Drawings hold drawings and files only: move notes to a vault.".into());
+    }
     let placed = step(|c| match c.replicas.get(to) {
         Some(r) => plan.place(r, folder, name).map_err(|e| e.to_string()),
         None => Err("That vault hasn't loaded yet.".to_string()),

@@ -1452,6 +1452,11 @@ pub async fn move_to_vault(
                 "notes move from the quick notes to a vault, not into them".into(),
             ));
         }
+        if g.is_drawings() && plan.notes() > 0 {
+            return Err(OpError::BadRequest(
+                "your Drawings hold drawings and files only: move notes to a vault".into(),
+            ));
+        }
         let placed = plan
             .place(&g.replica, folder, &name)
             .map_err(|e| OpError::BadRequest(e.to_string()))?;

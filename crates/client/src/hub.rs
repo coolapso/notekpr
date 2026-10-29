@@ -320,9 +320,11 @@ impl Hub {
 
     /// Whether the person's Personal storage (their quick notes, and saved
     /// shapes) is theirs to use here: a person's, not limited to some
-    /// vaults without it. Agents have none.
-    pub fn has_personal_storage(&self) -> bool {
-        self.session.kind != PrincipalKind::Agent && (!self.restricted() || self.with_quick_notes)
+    /// vaults without it (`--vault "Quick notes"` keeps it). Agents have
+    /// none.
+    pub async fn has_personal_storage(&self) -> bool {
+        self.session.kind != PrincipalKind::Agent
+            && (!self.restricted() || self.with_quick_notes || self.quick_notes().await.is_some())
     }
 
     /// Resolve the allow-list from vault ids and the names cached in local

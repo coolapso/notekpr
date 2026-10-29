@@ -493,9 +493,10 @@ async fn put_attachment(
 }
 
 /// The saved shapes are a person's (their Personal storage): an agent has
-/// none, and a gateway limited to some vaults doesn't serve them.
-fn no_shapes_here(gw: &Gateway) -> Option<Response> {
-    (!gw.hub.has_personal_storage()).then(|| {
+/// none, and a gateway limited to some vaults (not the quick notes) doesn't
+/// serve them.
+async fn no_shapes_here(gw: &Gateway) -> Option<Response> {
+    (!gw.hub.has_personal_storage().await).then(|| {
         error(
             StatusCode::NOT_FOUND,
             "not_found",
@@ -508,7 +509,7 @@ fn no_shapes_here(gw: &Gateway) -> Option<Response> {
 /// The saved shapes, newest first, as an Excalidraw library file
 /// (`.excalidrawlib`).
 async fn get_shapes(State(gw): State<St>) -> Response {
-    if let Some(r) = no_shapes_here(&gw) {
+    if let Some(r) = no_shapes_here(&gw).await {
         return r;
     }
     let items = ops::library(&gw.hub).await;
@@ -522,7 +523,10 @@ async fn get_shapes(State(gw): State<St>) -> Response {
 /// Saves the shapes of an Excalidraw library file (the body), leaving out
 /// those saved already (`notekpr shapes import`).
 async fn add_shapes(State(gw): State<St>, body: Bytes) -> Response {
-    if let Some(r) = read_only_refusal(&gw).or_else(|| no_shapes_here(&gw)) {
+    if let Some(r) = read_only_refusal(&gw) {
+        return r;
+    }
+    if let Some(r) = no_shapes_here(&gw).await {
         return r;
     }
     let Ok(text) = std::str::from_utf8(&body) else {

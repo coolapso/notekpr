@@ -607,6 +607,29 @@ async fn the_gateway_reads_and_adds_saved_shapes() {
         .await
         .unwrap();
     assert_eq!(r.status().as_u16(), 200);
+
+    // Limited to her quick notes, it serves them too.
+    let quick = Hub::start(
+        alice.clone(),
+        HubOptions {
+            vaults: vec!["Quick notes".into()],
+            offline_ok: true,
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let qbase = start_gateway(quick, "q").await;
+    let file: Value = http
+        .get(format!("{qbase}/shapes"))
+        .bearer_auth("q")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(file["libraryItems"].as_array().unwrap().len(), 2);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

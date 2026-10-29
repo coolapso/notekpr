@@ -184,7 +184,7 @@ G=http://127.0.0.1:7878/v1
 | `GET /v1/vaults/{v}/history/{path}[?revision=ID]` | revisions `[{id, created_at, covers_seq, author_id, size}]`, or one revision's Markdown |
 | `GET /v1/vaults/{v}/attachments/{path}` | raw bytes (`Content-Disposition: attachment`, `nosniff`) |
 | `PUT /v1/vaults/{v}/attachments/{path}` | upload (`Content-Type` is stored as the MIME type); answers like a document `PUT`, without `ETag` |
-| `GET /v1/shapes` | the saved shapes (pieces of drawings to drop into any drawing, in the person's Personal storage), newest first, as an Excalidraw library file (`.excalidrawlib`, `application/vnd.excalidrawlib+json`: `{"type": "excalidrawlib", "version": 2, "libraryItems": [{id, status, created, name?, elements}]}`). Only with a person's own profile, and a gateway not limited by `--vault`: otherwise `404` |
+| `GET /v1/shapes` | the saved shapes (pieces of drawings to drop into any drawing, in the person's Personal storage), newest first, as an Excalidraw library file (`.excalidrawlib`, `application/vnd.excalidrawlib+json`: `{"type": "excalidrawlib", "version": 2, "libraryItems": [{id, status, created, name?, elements}]}`). Only with a person's own profile, and a gateway not limited by `--vault` to other vaults than `"Quick notes"`: otherwise `404` |
 | `POST /v1/shapes` | an Excalidraw library file (version 1 or 2) as the body: its shapes are saved, those saved already (the same elements) left out, as `notekpr shapes import` → `{added, already, too_large, pending_changes}` (`too_large`: left out, larger than the server takes in one piece). `400` if the body isn't one |
 | `GET /v1/events` | Server-Sent Events (below) — ids and paths only, never content |
 

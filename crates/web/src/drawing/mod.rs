@@ -58,6 +58,9 @@ pub struct Board {
     text_draft: RefCell<String>,
     /// Where the pointer last was on the canvas (pastes go there).
     last_pointer: Cell<Option<[f64; 2]>>,
+    /// Counts pointer moves: a look again after holding still (an arrow's
+    /// end over a shape) is for the last one only.
+    moves: Cell<u32>,
 }
 
 pub type Rt = Rc<Board>;
@@ -92,6 +95,7 @@ impl Board {
             on_edit_text: RefCell::new(None),
             text_draft: RefCell::new(String::new()),
             last_pointer: Cell::new(None),
+            moves: Cell::new(0),
         })
     }
 

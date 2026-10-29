@@ -74,12 +74,14 @@ pub fn linear_path(e: &Element) -> Vec<Point> {
     let Some(set) = shaft.sets.first() else {
         return e.points();
     };
-    // Each op continues from the last: Bézier curves flattened.
+    // Each op continues from the last: Bézier curves flattened. A solid
+    // line is drawn twice over: the first stroke is its path.
     let mut out: Vec<Point> = Vec::new();
     let mut at = [0.0, 0.0];
     for op in &set.ops {
         let d = &op.data;
         match op.op {
+            OpType::Move if !out.is_empty() => break,
             OpType::Move => {
                 at = [d[0], d[1]];
                 out.push(at);

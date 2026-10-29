@@ -111,7 +111,7 @@ crates/load     load test (`task load`): simulated people = real clients (the CL
                 library) against the server image with CPU/memory limits; crash,
                 check, report. load-events: what it streams; load-ui: its live
                 dashboard (wasm32, canvas; scripts/build-load-ui.sh → dist/load)
-tests/e2e       browser tests: run.sh (entry point) → suite.py, cross_client.py;
+tests/e2e       browser tests: run.sh (entry point) → suite.py, cross_client.py, drawings.py;
                 perf.py (typing latency) · wd.py (stdlib WebDriver)
 scripts/        build-web.sh, build-load-ui.sh (wasm builds) · demo.py (task demo) ·
                 logo.py (the logo and icon in docs/assets, by hand)
@@ -157,7 +157,8 @@ Without go-task, see the plain commands in the [Taskfile](Taskfile.yml) or
 ## Before you call a change done
 
 - `task fmt`, `task lint` and `task test` pass. Run the relevant browser test
-  (`task test:e2e -- -k <name>`; the browser ↔ CLI test is `cross_client`)
+  (`task test:e2e -- -k <name>`; the browser ↔ CLI tests are `cross_client`
+  and `drawings`)
   for UI changes, and the whole suite for changes to sync, keys or the
   editor.
 - New behaviour has a test at the right level:

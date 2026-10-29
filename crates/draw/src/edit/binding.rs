@@ -241,6 +241,25 @@ pub fn follow(arrow: &Element, scene: &Scene, moved: &[Element]) -> Element {
     a
 }
 
+/// What an arrow's end at `p` would attach to: the topmost bindable shape
+/// it is on, or near enough (`getHoveredElementForBinding`).
+pub fn target_at<'a>(scene: &'a Scene, p: Point, zoom: f64, arrow: &str) -> Option<&'a Element> {
+    let reach = max_distance(zoom);
+    scene
+        .elements
+        .iter()
+        .rev()
+        .filter(|e| !e.is_deleted() && !e.is_locked() && e.id() != arrow && bindable(e))
+        .find(|e| {
+            hit::hits(e, p, zoom) || {
+                // Inside it, filled or not, or near its outline.
+                let [lx, ly] = hit::local(e, p);
+                let (w, h) = (e.width(), e.height());
+                lx >= -reach && ly >= -reach && lx <= w + reach && ly <= h + reach
+            }
+        })
+}
+
 /// Attaches an arrow's end at `p` to what is there, if something bindable
 /// is (`bindOrUnbindBindingElement`): returns the arrow and the shape (with
 /// the arrow among its bound elements), or just the arrow unbound.
@@ -251,29 +270,29 @@ pub fn attach(
     scene: &Scene,
     zoom: f64,
 ) -> (Element, Option<Element>) {
+    attach_as(arrow, start, p, scene, zoom, false)
+}
+
+/// [`attach`], `inside`: the end stays at the point itself, inside the
+/// shape (Excalidraw's `inside` mode, after holding still over it).
+pub fn attach_as(
+    arrow: &Element,
+    start: bool,
+    p: Point,
+    scene: &Scene,
+    zoom: f64,
+    inside: bool,
+) -> (Element, Option<Element>) {
     let key = if start { "startBinding" } else { "endBinding" };
     let mut a = arrow.clone();
-    let reach = max_distance(zoom);
-    let target = scene
-        .elements
-        .iter()
-        .rev()
-        .filter(|e| !e.is_deleted() && !e.is_locked() && e.id() != arrow.id() && bindable(e))
-        .find(|e| {
-            hit::hits(e, p, zoom) || {
-                // Inside it, filled or not, or near its outline.
-                let [lx, ly] = hit::local(e, p);
-                let (w, h) = (e.width(), e.height());
-                lx >= -reach && ly >= -reach && lx <= w + reach && ly <= h + reach
-            }
-        });
-    let Some(t) = target else {
+    let Some(t) = target_at(scene, p, zoom, arrow.id()) else {
         a.set(key, Value::Null);
         return (a, None);
     };
     a.set(
         key,
-        json!({"elementId": t.id(), "fixedPoint": global_to_fixed(t, p).map(num), "mode": "orbit"}),
+        json!({"elementId": t.id(), "fixedPoint": global_to_fixed(t, p).map(num),
+            "mode": if inside { "inside" } else { "orbit" }}),
     );
     let mut shape = t.clone();
     let mut list: Vec<Value> = t
@@ -285,6 +304,44 @@ pub fn attach(
     list.push(json!({"id": arrow.id(), "type": "arrow"}));
     shape.set("boundElements", Value::Array(list));
     (a, Some(shape))
+}
+
+/// The shapes `before` was attached to and `after` no longer is, without
+/// the arrow among their bound elements.
+pub fn released(scene: &Scene, before: &Element, after: &Element) -> Vec<Element> {
+    let ids = |a: &Element| -> Vec<String> {
+        ["startBinding", "endBinding"]
+            .iter()
+            .filter_map(|k| bound(a, k).map(|b| b.id))
+            .collect()
+    };
+    let (was, is) = (ids(before), ids(after));
+    let mut out: Vec<Element> = Vec::new();
+    for id in was.iter().filter(|id| !is.contains(id)) {
+        if out.iter().any(|e| e.id() == id) {
+            continue;
+        }
+        let Some(shape) = scene.element(id).filter(|e| !e.is_deleted()) else {
+            continue;
+        };
+        let mut s = shape.clone();
+        let kept: Vec<Value> = shape
+            .bound_elements()
+            .iter()
+            .filter(|b| b.id != before.id())
+            .map(|b| json!({"id": b.id, "type": b.kind}))
+            .collect();
+        s.set(
+            "boundElements",
+            if kept.is_empty() {
+                Value::Null
+            } else {
+                Value::Array(kept)
+            },
+        );
+        out.push(s);
+    }
+    out
 }
 
 /// The arrows attached to any of `ids`, not among `ids` themselves.

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Build the server and browser client, then run the browser end-to-end suite
-# and the browser ↔ CLI test. `-k NAME` runs only the tests whose name
-# contains NAME (the browser ↔ CLI test is called `cross_client`).
+# and the browser ↔ CLI tests. `-k NAME` runs only the tests whose name
+# contains NAME (the browser ↔ CLI tests are called `cross_client` and
+# `drawings`).
 # Requirements: chromium (or chrome) + a matching chromedriver on PATH, python3.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
@@ -21,4 +22,7 @@ done
 python3 tests/e2e/suite.py --server target/debug/notekpr-server --web "$web" "$@"
 if [ -z "$filter" ] || [[ "cross_client" == *"$filter"* ]]; then
   python3 tests/e2e/cross_client.py --server target/debug/notekpr-server --cli target/debug/notekpr --web "$web"
+fi
+if [ -z "$filter" ] || [[ "drawings" == *"$filter"* ]]; then
+  python3 tests/e2e/drawings.py --server target/debug/notekpr-server --cli target/debug/notekpr --web "$web"
 fi

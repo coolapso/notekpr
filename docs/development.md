@@ -212,7 +212,8 @@ temporary database; screenshots land in `target/e2e/` (`NOTEKPR_E2E_OUT`
 changes that). It runs `/usr/bin/chromium`; for another browser set
 `NOTEKPR_CHROME=/path/to/chrome` (with a matching chromedriver on `PATH`).
 `-k NAME` (`task test:e2e -- -k collab`) runs only the tests whose name
-contains NAME; the browser ↔ CLI test is `cross_client`.
+contains NAME; the browser ↔ CLI tests are `cross_client` and `drawings`
+(drawing in the browser, checked with the CLI).
 
 Property tests (`proptest`) run with `cargo test`; `PROPTEST_CASES=20000`
 searches harder. Fuzz targets for everything that parses untrusted input

@@ -263,7 +263,7 @@ tasks:
       - CHROMEDRIVER="${CHROMEDRIVER:-$(command -v chromedriver)}" cargo test -p notekpr-editor --target wasm32-unknown-unknown --test browser {{.CLI_ARGS}}
 
   test:e2e:
-    desc: "Headless browser tests and browser ↔ CLI test (needs chromium + chromedriver); only some with `task test:e2e -- -k collab` (the browser ↔ CLI test is cross_client)"
+    desc: "Headless browser tests and browser ↔ CLI test (needs chromium + chromedriver); only some with `task test:e2e -- -k collab` (the browser ↔ CLI tests are cross_client and drawings)"
     deps: [rust]
     cmds:
       - tests/e2e/run.sh {{.CLI_ARGS}}

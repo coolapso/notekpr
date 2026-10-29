@@ -11,6 +11,7 @@ pub mod binding;
 pub mod hit;
 pub mod label;
 pub mod new;
+pub mod points;
 pub mod transform;
 
 use std::collections::{BTreeSet, HashMap};
@@ -151,6 +152,40 @@ pub struct Output {
     pub tool_changed: bool,
 }
 
+/// The line or arrow whose points are edited one by one (Excalidraw's
+/// line editor), and its selected points.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LineEditor {
+    pub id: String,
+    pub selected: Vec<usize>,
+}
+
+/// The shape an arrow's dragged end will attach to (shown highlighted):
+/// since when (ms) the end is over it, and whether it attaches `inside`
+/// (held there long enough).
+#[derive(Clone, Debug, PartialEq)]
+pub struct BindHover {
+    pub id: String,
+    pub since: f64,
+    pub inside: bool,
+}
+
+/// How long an arrow's end is held over a shape before it attaches inside
+/// it, at the point (`BIND_MODE_TIMEOUT`, ms).
+pub const BIND_INSIDE_AFTER: f64 = 700.0;
+
+/// The handles of the selected line or arrow, for drawing them.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PointHandles {
+    pub points: Vec<Point>,
+    pub selected: Vec<usize>,
+    pub midpoints: Vec<Point>,
+    /// Every point is being edited (bigger handles).
+    pub editing: bool,
+    /// Only the ends are handles (elbow arrows).
+    pub ends_only: bool,
+}
+
 /// A drag in progress.
 #[derive(Clone, Debug)]
 enum Gesture {
@@ -175,6 +210,30 @@ enum Gesture {
     Moving {
         start: Point,
         originals: Vec<Element>,
+        moved: bool,
+        /// Alt was held: copies are made and moved (Excalidraw's
+        /// Alt+drag), once it really moves.
+        copy: bool,
+    },
+    /// Points of a line or arrow dragged (`indices`; the one grabbed,
+    /// `grabbed`) from where they were in `original`; `insert`: a point
+    /// added there first (a handle halfway along a segment was grabbed);
+    /// `keep`: the points selected stay so after a click (Shift).
+    Points {
+        original: Element,
+        indices: Vec<usize>,
+        grabbed: usize,
+        offset: Point,
+        origin: Point,
+        moved: bool,
+        insert: Option<(usize, Point)>,
+        keep: bool,
+    },
+    /// An arrow's label dragged along it.
+    Label {
+        id: String,
+        arrow: Element,
+        offset: Point,
         moved: bool,
     },
     Resizing {
@@ -214,6 +273,10 @@ pub struct Editor {
     pub measure: fn(&str, &str) -> f64,
     /// The zoom of the last pointer event (how near counts).
     zoom: f64,
+    /// Editing the points of a line or arrow.
+    pub line_editor: Option<LineEditor>,
+    /// Where an arrow's dragged end will attach.
+    pub bind_hover: Option<BindHover>,
 }
 
 /// A guess at a line's width without a browser: about half the font size a
@@ -238,6 +301,8 @@ impl Default for Editor {
             editing_text: None,
             measure: guess_width,
             zoom: 1.0,
+            line_editor: None,
+            bind_hover: None,
         }
     }
 }
@@ -308,6 +373,7 @@ impl Editor {
     pub fn set_tool(&mut self, tool: Tool) {
         self.tool = tool;
         self.gesture = None;
+        self.line_editor = None;
         if tool != Tool::Selection {
             self.selection.clear();
         }
@@ -350,13 +416,167 @@ impl Editor {
             .collect()
     }
 
-    /// The selection's frame, unless it is locked.
+    /// The selection's frame, unless it is locked. A line or arrow of two
+    /// points (or an elbow arrow, or one whose points are edited) has none
+    /// of its own: its points are its handles (`hasBoundingBox`).
     pub fn frame(&self, scene: &Scene) -> Option<Frame> {
         let selected = self.selected(scene);
         if selected.iter().any(|e| e.is_locked()) {
             return None;
         }
+        if let [e] = selected.as_slice()
+            && points::is_linear(e)
+            && (e.points().len() <= 2 || points::is_elbow(e) || self.editing_line(e.id()))
+        {
+            return None;
+        }
         transform::frame(&selected)
+    }
+
+    /// The selected line or arrow, when it is selected alone and not
+    /// locked.
+    pub fn single_linear<'a>(&self, scene: &'a Scene) -> Option<&'a Element> {
+        match self.selected(scene).as_slice() {
+            [e] if points::is_linear(e) && !e.is_locked() => Some(*e),
+            _ => None,
+        }
+    }
+
+    /// Whether the points of `id` are being edited.
+    pub fn editing_line(&self, id: &str) -> bool {
+        self.line_editor.as_ref().is_some_and(|l| l.id == id)
+    }
+
+    /// The selected line's or arrow's handles, for drawing them.
+    pub fn point_handles(&self, scene: &Scene, zoom: f64) -> Option<PointHandles> {
+        let line = self.single_linear(scene)?;
+        if matches!(
+            self.gesture,
+            Some(Gesture::Moving { .. } | Gesture::Resizing { .. } | Gesture::Rotating { .. })
+        ) {
+            return None;
+        }
+        let editing = self.editing_line(line.id());
+        let labelled = label_of(scene, line).is_some();
+        Some(PointHandles {
+            points: points::global(line),
+            selected: self
+                .line_editor
+                .as_ref()
+                .filter(|_| editing)
+                .map(|l| l.selected.clone())
+                .unwrap_or_default(),
+            midpoints: points::midpoints(line, editing, labelled, zoom)
+                .into_iter()
+                .flatten()
+                .collect(),
+            editing,
+            ends_only: points::is_elbow(line),
+        })
+    }
+
+    /// A press on the selected line's or arrow's handles or label: the drag
+    /// it starts (`LinearElementEditor.handlePointerDown`).
+    fn line_pointer_down(
+        &mut self,
+        scene: &Scene,
+        line: &Element,
+        p: Point,
+        mods: Mods,
+        zoom: f64,
+    ) -> Option<Gesture> {
+        let editing = self.editing_line(line.id());
+        let reach = (points::HANDLE + 1.0) / zoom;
+        let point = points::point_at(line, p, zoom);
+        if point.is_none() {
+            // Halfway along a segment: a new point there, once dragged.
+            let labelled = label_of(scene, line).is_some();
+            let mid = points::midpoints(line, editing, labelled, zoom)
+                .into_iter()
+                .enumerate()
+                .find_map(|(i, m)| m.filter(|m| geom::distance(*m, p) <= reach).map(|m| (i, m)));
+            if let Some((i, m)) = mid {
+                return Some(Gesture::Points {
+                    original: line.clone(),
+                    indices: vec![i + 1],
+                    grabbed: i + 1,
+                    offset: [p[0] - m[0], p[1] - m[1]],
+                    origin: p,
+                    moved: false,
+                    insert: Some((i + 1, points::local(line, m))),
+                    keep: false,
+                });
+            }
+            // An arrow's label slides along it.
+            if let Some(t) = label_of(scene, line).filter(|_| line.kind() == ElementType::Arrow)
+                && p[0] >= t.x()
+                && p[0] <= t.x() + t.width()
+                && p[1] >= t.y()
+                && p[1] <= t.y() + t.height()
+            {
+                return Some(Gesture::Label {
+                    id: t.id().to_string(),
+                    arrow: line.clone(),
+                    offset: [
+                        p[0] - (t.x() + t.width() / 2.0),
+                        p[1] - (t.y() + t.height() / 2.0),
+                    ],
+                    moved: false,
+                });
+            }
+        }
+        let i = point?;
+        let mut indices = vec![i];
+        if let Some(le) = self.line_editor.as_mut().filter(|_| editing) {
+            // Shift adds the point to those selected (or takes it away);
+            // a selected point drags the others along.
+            if mods.shift {
+                if le.selected.contains(&i) {
+                    le.selected.retain(|x| *x != i);
+                    return None;
+                }
+                le.selected.push(i);
+                le.selected.sort_unstable();
+            } else if !le.selected.contains(&i) {
+                le.selected = vec![i];
+            }
+            indices = le.selected.clone();
+        }
+        let g = points::global(line)[i];
+        Some(Gesture::Points {
+            original: line.clone(),
+            indices,
+            grabbed: i,
+            offset: [p[0] - g[0], p[1] - g[1]],
+            origin: p,
+            moved: false,
+            insert: None,
+            keep: mods.shift,
+        })
+    }
+
+    /// Starts or ends editing the points of the selected line or arrow one
+    /// by one (Excalidraw's line editor; not elbow arrows). Whether it did.
+    pub fn toggle_line_editor(&mut self, scene: &Scene) -> bool {
+        if self.line_editor.take().is_some() {
+            return true;
+        }
+        match self.single_linear(scene) {
+            Some(e) if !points::is_elbow(e) => {
+                self.line_editor = Some(LineEditor {
+                    id: e.id().to_string(),
+                    selected: Vec::new(),
+                });
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// The shape an arrow's dragged end will attach to, and whether inside
+    /// it (for the highlight).
+    pub fn binding_target(&self) -> Option<&BindHover> {
+        self.bind_hover.as_ref().filter(|_| self.gesture.is_some())
     }
 
     /// The pointer went down at `p` (drawing coordinates).
@@ -402,6 +622,23 @@ impl Editor {
         match self.tool {
             Tool::Hand | Tool::Laser | Tool::Image => {}
             Tool::Selection => {
+                // The selected line's or arrow's points, and its label.
+                if let Some(line) = self.single_linear(scene).cloned() {
+                    if let Some(g) = self.line_pointer_down(scene, &line, p, mods, zoom) {
+                        self.gesture = Some(g);
+                        return out;
+                    }
+                    if let Some(le) = self.line_editor.as_mut() {
+                        if hit::hits(&line, p, zoom) {
+                            if !mods.shift {
+                                le.selected.clear();
+                            }
+                        } else {
+                            // A click off the line ends editing it.
+                            self.line_editor = None;
+                        }
+                    }
+                }
                 if let Some(f) = self.frame(scene)
                     && let Some(h) = transform::handle_at(&f, p, zoom)
                 {
@@ -466,6 +703,7 @@ impl Editor {
                             start: p,
                             originals: self.moving_set(scene),
                             moved: false,
+                            copy: mods.alt,
                         });
                     }
                     _ if in_selection => {
@@ -473,9 +711,11 @@ impl Editor {
                             start: p,
                             originals: self.moving_set(scene),
                             moved: false,
+                            copy: mods.alt,
                         });
                     }
                     _ => {
+                        self.line_editor = None;
                         let before = if mods.shift {
                             self.selection.clone()
                         } else {
@@ -575,6 +815,29 @@ impl Editor {
     ) -> Output {
         self.zoom = zoom;
         let mut out = Output::default();
+        // Alt+drag: copies of what is dragged are made in place and moved,
+        // once it really moves.
+        if let Some(Gesture::Moving {
+            start,
+            originals,
+            copy: true,
+            ..
+        }) = &self.gesture
+            && geom::distance(p, *start) * zoom >= 2.0
+        {
+            let set = originals.clone();
+            let made = self.place_copies(scene, &set, [0.0, 0.0], rng).changed;
+            if let Some(Gesture::Moving {
+                originals, copy, ..
+            }) = self.gesture.as_mut()
+            {
+                *originals = made.clone();
+                *copy = false;
+            }
+            let mut s2 = scene.clone();
+            s2.elements.extend(made);
+            return self.pointer_move(&s2, p, pressure, mods, zoom, rng);
+        }
         let Some(g) = self.gesture.as_mut() else {
             return out;
         };
@@ -676,6 +939,7 @@ impl Editor {
                 start,
                 originals,
                 moved,
+                ..
             } => {
                 let (dx, dy) = (p[0] - start[0], p[1] - start[1]);
                 if !*moved && dx.hypot(dy) * zoom < 2.0 {
@@ -761,6 +1025,81 @@ impl Editor {
                 for mut e in changed {
                     bump(&mut e, rng);
                     out.changed.push(e);
+                }
+            }
+            Gesture::Points {
+                original,
+                indices,
+                grabbed,
+                offset,
+                origin,
+                moved,
+                insert,
+                ..
+            } => {
+                // A handle halfway along takes a real drag to add a point.
+                let threshold = if insert.is_some() { 10.0 } else { 0.5 };
+                if !*moved && geom::distance(p, *origin) * zoom < threshold {
+                    return out;
+                }
+                *moved = true;
+                let base = match insert {
+                    Some((at, m)) => points::insert_point(original, *at, *m),
+                    None => original.clone(),
+                };
+                let pts = base.points();
+                if pts.len() < 2 || *grabbed >= pts.len() {
+                    return out;
+                }
+                let mut to = points::local(&base, [p[0] - offset[0], p[1] - offset[1]]);
+                if mods.shift && indices.len() == 1 {
+                    let pivot = pts[if *grabbed == 0 { 1 } else { *grabbed - 1 }];
+                    to = points::locked_angle(pivot, to);
+                }
+                let from = pts[*grabbed];
+                let (dx, dy) = (to[0] - from[0], to[1] - from[1]);
+                let moves: Vec<(usize, Point)> = indices
+                    .iter()
+                    .filter_map(|&i| pts.get(i).map(|q| (i, [q[0] + dx, q[1] + dy])))
+                    .collect();
+                let mut e = points::move_points(&base, &moves);
+                let mut changed = Vec::new();
+                if e.kind() == ElementType::Arrow {
+                    let (a, shapes, hover) = bind_dragged_ends(
+                        scene,
+                        original,
+                        &e,
+                        indices,
+                        zoom,
+                        rng.now(),
+                        self.bind_hover.take(),
+                    );
+                    e = a;
+                    changed = shapes;
+                    self.bind_hover = hover;
+                }
+                changed.insert(0, e);
+                relayout_labels(self.measure, scene, &mut changed);
+                for mut e in changed {
+                    bump(&mut e, rng);
+                    out.changed.push(e);
+                }
+            }
+            Gesture::Label {
+                id,
+                arrow,
+                offset,
+                moved,
+            } => {
+                *moved = true;
+                let at = [p[0] - offset[0], p[1] - offset[1]];
+                if let (Some(t), Some(text)) = (points::parameter_at(arrow, at), scene.element(id))
+                {
+                    let mut text = text.clone();
+                    text.set("labelPosition", num(t));
+                    let (mut laid, _) = label::layout(arrow, &text, &self.measure);
+                    bump(&mut laid, rng);
+                    out.changed.push(laid);
                 }
             }
             Gesture::BoxSelecting {
@@ -856,6 +1195,39 @@ impl Editor {
             Gesture::Moving { moved, .. } => {
                 out.done = moved;
             }
+            Gesture::Points {
+                original,
+                indices,
+                grabbed,
+                moved,
+                keep,
+                ..
+            } => {
+                self.bind_hover = None;
+                // A click (no drag) on one of the selected points selects
+                // just it.
+                if !moved
+                    && !keep
+                    && let Some(le) = self.line_editor.as_mut()
+                {
+                    le.selected = vec![grabbed];
+                }
+                if moved {
+                    // A line whose ends meet closes.
+                    if let Some(mut closed) = scene
+                        .element(original.id())
+                        .and_then(|e| points::close_if_loop(e, &indices, self.zoom))
+                    {
+                        bump(&mut closed, rng);
+                        out.changed.push(closed);
+                    }
+                    if let Some(le) = self.line_editor.as_mut() {
+                        le.selected = indices;
+                    }
+                    out.done = true;
+                }
+            }
+            Gesture::Label { moved, .. } => out.done = moved,
             Gesture::Resizing { .. } | Gesture::Rotating { .. } => out.done = true,
             Gesture::BoxSelecting { .. } => {}
             Gesture::Erasing { ids } => {
@@ -951,7 +1323,11 @@ impl Editor {
             return fin;
         }
         self.gesture = None;
-        self.selection.clear();
+        self.bind_hover = None;
+        // Editing a line's points ends first; the line stays selected.
+        if self.line_editor.take().is_none() {
+            self.selection.clear();
+        }
         Output::default()
     }
 
@@ -1047,16 +1423,28 @@ impl Editor {
         out
     }
 
-    /// A double click: edits the text or label there (a shape's label is
-    /// made if it has none), or starts a new text.
+    /// A double click: edits the points of the selected line (an arrow's
+    /// with Ctrl), the text or label there (a shape's label is made if it
+    /// has none), or starts a new text.
     pub fn double_click(
         &mut self,
         scene: &Scene,
         p: Point,
+        mods: Mods,
         zoom: f64,
         rng: &mut dyn Random,
     ) -> Output {
         self.gesture = None;
+        if let Some(line) = self.single_linear(scene)
+            && (line.kind() == ElementType::Line || mods.ctrl)
+            && !points::is_elbow(line)
+            && (hit::hits(line, p, zoom) || points::point_at(line, p, zoom).is_some())
+        {
+            if !self.editing_line(line.id()) {
+                self.toggle_line_editor(scene);
+            }
+            return Output::default();
+        }
         match hit::element_at(scene, p, zoom, false) {
             Some(e) if e.kind() == ElementType::Text => self.edit_text(e.id()),
             Some(e) if label::can_hold(e) => {
@@ -1081,8 +1469,19 @@ impl Editor {
         }
     }
 
-    /// Enter: edits the selected text, or the selected shape's label.
-    pub fn enter(&mut self, scene: &Scene, rng: &mut dyn Random) -> Output {
+    /// Enter: edits the selected text, or the selected shape's label; the
+    /// points of the selected line (an arrow's with Ctrl), or ends editing
+    /// them.
+    pub fn enter(&mut self, scene: &Scene, ctrl: bool, rng: &mut dyn Random) -> Output {
+        if self.line_editor.take().is_some() {
+            return Output::default();
+        }
+        if let Some(line) = self.single_linear(scene)
+            && (line.kind() == ElementType::Line || ctrl)
+        {
+            self.toggle_line_editor(scene);
+            return Output::default();
+        }
         let selected = self.selected(scene);
         match selected.as_slice() {
             [e] if e.kind() == ElementType::Text => {
@@ -1151,59 +1550,31 @@ impl Editor {
     /// Lays out again the labels of containers among `changed` (they
     /// changed size), and labels among them (their font changed).
     fn relayout(&self, scene: &Scene, changed: &mut Vec<Element>) {
-        let containers: Vec<Element> = changed
-            .iter()
-            .filter(|e| label::can_hold(e))
-            .cloned()
-            .collect();
-        for c in containers {
-            for b in c.bound_elements().iter().filter(|b| b.kind == "text") {
-                let current = changed
-                    .iter()
-                    .find(|e| e.id() == b.id)
-                    .cloned()
-                    .or_else(|| scene.element(&b.id).cloned());
-                let Some(t) = current.filter(|t| !t.is_deleted()) else {
-                    continue;
-                };
-                let (t, _) = label::layout(&c, &t, &self.measure);
-                match changed.iter_mut().find(|e| e.id() == t.id()) {
-                    Some(slot) => *slot = t,
-                    None => changed.push(t),
-                }
-            }
-        }
-        let labels: Vec<Element> = changed
-            .iter()
-            .filter(|e| e.kind() == ElementType::Text && e.container_id().is_some())
-            .cloned()
-            .collect();
-        for t in labels {
-            let Some(c) = t.container_id().and_then(|c| {
-                changed
-                    .iter()
-                    .find(|e| e.id() == c)
-                    .cloned()
-                    .or_else(|| scene.element(c).cloned())
-            }) else {
-                continue;
-            };
-            let (t, grown) = label::layout(&c, &t, &self.measure);
-            if let Some(slot) = changed.iter_mut().find(|e| e.id() == t.id()) {
-                *slot = t;
-            }
-            if let Some(g) = grown {
-                match changed.iter_mut().find(|e| e.id() == g.id()) {
-                    Some(slot) => *slot = g,
-                    None => changed.push(g),
-                }
-            }
-        }
+        relayout_labels(self.measure, scene, changed);
     }
-
-    /// Deletes what is selected (with labels).
+    /// Deletes what is selected (with labels); while editing a line's
+    /// points, the selected points (the line, if fewer than two are left).
     pub fn delete_selected(&mut self, scene: &Scene, rng: &mut dyn Random) -> Output {
         let mut out = Output::default();
+        if let Some(le) = self.line_editor.as_mut().filter(|l| !l.selected.is_empty())
+            && let Some(line) = scene.element(&le.id).filter(|e| !e.is_deleted())
+            && line.points().len() >= le.selected.len() + 2
+        {
+            let mut e = points::delete_points(line, &le.selected);
+            le.selected.clear();
+            if e.kind() == ElementType::Arrow {
+                e = binding::follow(&e, scene, &[]);
+            }
+            let mut changed = vec![e];
+            relayout_labels(self.measure, scene, &mut changed);
+            for mut e in changed {
+                bump(&mut e, rng);
+                out.changed.push(e);
+            }
+            out.done = true;
+            return out;
+        }
+        self.line_editor = None;
         let mut changed = self.moving_set(scene);
         for e in &mut changed {
             e.set("isDeleted", json!(true));
@@ -1219,6 +1590,7 @@ impl Editor {
     }
 
     pub fn select_all(&mut self, scene: &Scene) {
+        self.line_editor = None;
         self.selection = scene
             .visible()
             .filter(|e| e.container_id().is_none() && !e.is_locked())
@@ -1731,6 +2103,113 @@ impl Editor {
             }
         }
         units.into_iter().map(|u| u.1).collect()
+    }
+}
+
+/// The label of a shape or arrow, if it has one.
+fn label_of<'a>(scene: &'a Scene, e: &Element) -> Option<&'a Element> {
+    e.bound_elements()
+        .iter()
+        .filter(|b| b.kind == "text")
+        .find_map(|b| scene.element(&b.id))
+        .filter(|t| !t.is_deleted())
+}
+
+/// An arrow whose dragged ends (among `indices`) attach to what they are
+/// over, landing on its outline (`inside` once held there
+/// [`BIND_INSIDE_AFTER`]); returns it, the shapes that gain or lose it, and
+/// what its end is over now.
+fn bind_dragged_ends(
+    scene: &Scene,
+    original: &Element,
+    moved: &Element,
+    indices: &[usize],
+    zoom: f64,
+    now: f64,
+    hover: Option<BindHover>,
+) -> (Element, Vec<Element>, Option<BindHover>) {
+    let n = moved.points().len();
+    let mut a = moved.clone();
+    let mut shapes: Vec<Element> = Vec::new();
+    let mut over = None;
+    for (start, i) in [(true, 0), (false, n.saturating_sub(1))] {
+        if !indices.contains(&i) {
+            continue;
+        }
+        let end = points::global(&a)[i];
+        let target = binding::target_at(scene, end, zoom, a.id()).map(|t| t.id().to_string());
+        let same = hover.as_ref().filter(|h| Some(&h.id) == target.as_ref());
+        let since = same.map_or(now, |h| h.since);
+        let inside = target.is_some() && now - since >= BIND_INSIDE_AFTER;
+        over = target.map(|id| BindHover { id, since, inside });
+        let (b, shape) = binding::attach_as(&a, start, end, scene, zoom, inside);
+        a = b;
+        if let Some(sh) = shape {
+            match shapes.iter_mut().find(|s| s.id() == sh.id()) {
+                Some(slot) => *slot = sh,
+                None => shapes.push(sh),
+            }
+        }
+    }
+    // The ends land on the shapes' outlines (the other end too re-aims).
+    a = binding::follow(&a, scene, &shapes);
+    for r in binding::released(scene, original, &a) {
+        if !shapes.iter().any(|s| s.id() == r.id()) {
+            shapes.push(r);
+        }
+    }
+    (a, shapes, over)
+}
+
+/// [`Editor::relayout`], measuring with `measure`.
+fn relayout_labels(measure: fn(&str, &str) -> f64, scene: &Scene, changed: &mut Vec<Element>) {
+    let containers: Vec<Element> = changed
+        .iter()
+        .filter(|e| label::can_hold(e))
+        .cloned()
+        .collect();
+    for c in containers {
+        for b in c.bound_elements().iter().filter(|b| b.kind == "text") {
+            let current = changed
+                .iter()
+                .find(|e| e.id() == b.id)
+                .cloned()
+                .or_else(|| scene.element(&b.id).cloned());
+            let Some(t) = current.filter(|t| !t.is_deleted()) else {
+                continue;
+            };
+            let (t, _) = label::layout(&c, &t, &measure);
+            match changed.iter_mut().find(|e| e.id() == t.id()) {
+                Some(slot) => *slot = t,
+                None => changed.push(t),
+            }
+        }
+    }
+    let labels: Vec<Element> = changed
+        .iter()
+        .filter(|e| e.kind() == ElementType::Text && e.container_id().is_some())
+        .cloned()
+        .collect();
+    for t in labels {
+        let Some(c) = t.container_id().and_then(|c| {
+            changed
+                .iter()
+                .find(|e| e.id() == c)
+                .cloned()
+                .or_else(|| scene.element(c).cloned())
+        }) else {
+            continue;
+        };
+        let (t, grown) = label::layout(&c, &t, &measure);
+        if let Some(slot) = changed.iter_mut().find(|e| e.id() == t.id()) {
+            *slot = t;
+        }
+        if let Some(g) = grown {
+            match changed.iter_mut().find(|e| e.id() == g.id()) {
+                Some(slot) => *slot = g,
+                None => changed.push(g),
+            }
+        }
     }
 }
 

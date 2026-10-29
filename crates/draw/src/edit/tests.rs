@@ -455,7 +455,7 @@ fn labels_in_shapes() {
     );
     let rect = scene.elements[0].id().to_string();
     // A double click inside makes its label.
-    let o = ed.double_click(&scene, [100.0, 30.0], 1.0, &mut rng);
+    let o = ed.double_click(&scene, [100.0, 30.0], Mods::default(), 1.0, &mut rng);
     let label = o.edit_text.clone().unwrap();
     apply(&mut scene, &o);
     assert_eq!(scene.element(&rect).unwrap().bound_elements()[0].id, label);
@@ -483,7 +483,7 @@ fn labels_in_shapes() {
     assert_eq!((t.x(), t.font_size()), (175.0, 20.0));
     // Long text wraps and the shape grows to hold it.
     ed.selection = vec![rect.clone()];
-    let o = ed.enter(&scene, &mut rng);
+    let o = ed.enter(&scene, false, &mut rng);
     assert_eq!(o.edit_text.as_deref(), Some(label.as_str()));
     let long = "a long line of words that will not fit in one line of this box at all, not even in two lines of it";
     let o = ed.finish_text(
@@ -500,7 +500,7 @@ fn labels_in_shapes() {
     assert!(t.text().contains('\n'));
     assert!(r.height() > 60.0);
     // Emptied, the label goes and the shape forgets it.
-    ed.enter(&scene, &mut rng);
+    ed.enter(&scene, false, &mut rng);
     let o = ed.finish_text(
         &scene,
         "  ",
@@ -580,9 +580,12 @@ fn arrows_attach_and_follow() {
         moved.y() + moved.points()[1][1],
     ];
     assert!(end[1] > 150.0, "{end:?}");
-    // Dragged on its own, it lets go.
+    // Dragged on its own (not by its middle: that bends it), it lets go.
     ed.selection = vec![arrow.id().to_string()];
-    let mid = [(moved.x() + end[0]) / 2.0, (moved.y() + end[1]) / 2.0];
+    let mid = [
+        moved.x() + (end[0] - moved.x()) * 0.25,
+        moved.y() + (end[1] - moved.y()) * 0.25,
+    ];
     drag(
         &mut ed,
         &mut scene,
@@ -593,4 +596,339 @@ fn arrows_attach_and_follow() {
     );
     let loose = scene.element(arrow.id()).unwrap();
     assert!(loose.start_binding().is_none() && loose.end_binding().is_none());
+}
+
+/// [`Seq`] with a clock that can be moved on.
+struct Timed(Seq, f64);
+
+impl Random for Timed {
+    fn id(&mut self) -> String {
+        self.0.id()
+    }
+    fn seed(&mut self) -> i32 {
+        self.0.seed()
+    }
+    fn now(&self) -> f64 {
+        self.1
+    }
+}
+
+fn rect(ed: &mut Editor, scene: &mut Scene, rng: &mut Seq, from: Point, to: Point) -> String {
+    ed.set_tool(Tool::Rectangle);
+    drag(ed, scene, from, to, Mods::default(), rng);
+    ed.selection[0].clone()
+}
+
+fn line(
+    ed: &mut Editor,
+    scene: &mut Scene,
+    rng: &mut Seq,
+    tool: Tool,
+    from: Point,
+    to: Point,
+) -> String {
+    ed.set_tool(tool);
+    drag(ed, scene, from, to, Mods::default(), rng);
+    ed.selection[0].clone()
+}
+
+fn ends(e: &Element) -> (Point, Point) {
+    let g = points::global(e);
+    (g[0], g[g.len() - 1])
+}
+
+#[test]
+fn a_selected_lines_points_are_its_handles() {
+    let (mut ed, mut scene, mut rng) = (Editor::default(), Scene::default(), Seq(0));
+    let id = line(
+        &mut ed,
+        &mut scene,
+        &mut rng,
+        Tool::Line,
+        [0.0, 0.0],
+        [200.0, 0.0],
+    );
+    // Two points: no box around it, its ends are what's dragged.
+    assert!(ed.frame(&scene).is_none());
+    let h = ed.point_handles(&scene, 1.0).unwrap();
+    assert_eq!(h.points, [[0.0, 0.0], [200.0, 0.0]]);
+    assert_eq!(h.midpoints, [[100.0, 0.0]]);
+    drag(
+        &mut ed,
+        &mut scene,
+        [200.0, 0.0],
+        [200.0, 80.0],
+        Mods::default(),
+        &mut rng,
+    );
+    let l = scene.element(&id).unwrap();
+    assert_eq!(ends(l), ([0.0, 0.0], [200.0, 80.0]));
+    // The handle halfway adds a point where it is dropped.
+    drag(
+        &mut ed,
+        &mut scene,
+        [100.0, 40.0],
+        [100.0, -60.0],
+        Mods::default(),
+        &mut rng,
+    );
+    let l = scene.element(&id).unwrap();
+    assert_eq!(
+        points::global(l),
+        [[0.0, 0.0], [100.0, -60.0], [200.0, 80.0]]
+    );
+    // Three points: it has its box again.
+    assert!(ed.frame(&scene).is_some());
+}
+
+#[test]
+fn editing_a_lines_points() {
+    let (mut ed, mut scene, mut rng) = (Editor::default(), Scene::default(), Seq(0));
+    let id = line(
+        &mut ed,
+        &mut scene,
+        &mut rng,
+        Tool::Line,
+        [0.0, 0.0],
+        [200.0, 0.0],
+    );
+    drag(
+        &mut ed,
+        &mut scene,
+        [100.0, 0.0],
+        [100.0, 100.0],
+        Mods::default(),
+        &mut rng,
+    );
+    // A double click edits its points; Enter does too.
+    ed.double_click(&scene, [200.0, 0.0], Mods::default(), 1.0, &mut rng);
+    assert!(ed.editing_line(&id));
+    assert!(ed.frame(&scene).is_none());
+    // Shift picks two points; dragging one moves both.
+    let shift = Mods {
+        shift: true,
+        ..Mods::default()
+    };
+    let o = ed.pointer_down(&scene, [0.0, 0.0], None, Mods::default(), 1.0, &mut rng);
+    apply(&mut scene, &o);
+    ed.pointer_up(&scene, [0.0, 0.0], &mut rng);
+    let o = ed.pointer_down(&scene, [100.0, 100.0], None, shift, 1.0, &mut rng);
+    apply(&mut scene, &o);
+    ed.pointer_up(&scene, [100.0, 100.0], &mut rng);
+    assert_eq!(ed.line_editor.as_ref().unwrap().selected, [0, 1]);
+    drag(
+        &mut ed,
+        &mut scene,
+        [100.0, 100.0],
+        [110.0, 120.0],
+        Mods::default(),
+        &mut rng,
+    );
+    let l = scene.element(&id).unwrap();
+    assert_eq!(
+        points::global(l),
+        [[10.0, 20.0], [110.0, 120.0], [200.0, 0.0]]
+    );
+    // Delete takes the selected points away while two are left.
+    let o = ed.pointer_down(&scene, [110.0, 120.0], None, Mods::default(), 1.0, &mut rng);
+    apply(&mut scene, &o);
+    ed.pointer_up(&scene, [110.0, 120.0], &mut rng);
+    let o = ed.delete_selected(&scene, &mut rng);
+    apply(&mut scene, &o);
+    let l = scene.element(&id).unwrap();
+    assert!(!l.is_deleted());
+    assert_eq!(points::global(l), [[10.0, 20.0], [200.0, 0.0]]);
+    // Escape ends editing; the line stays selected.
+    ed.escape(&scene, &mut rng);
+    assert!(!ed.editing_line(&id));
+    assert_eq!(ed.selection, std::slice::from_ref(&id));
+    // Enter edits again, and ends it.
+    ed.enter(&scene, false, &mut rng);
+    assert!(ed.editing_line(&id));
+    ed.enter(&scene, false, &mut rng);
+    assert!(!ed.editing_line(&id));
+}
+
+#[test]
+fn a_line_whose_ends_meet_closes() {
+    let (mut ed, mut scene, mut rng) = (Editor::default(), Scene::default(), Seq(0));
+    ed.set_tool(Tool::Line);
+    // Point by point: three clicks, then Escape.
+    for p in [[0.0, 0.0], [100.0, 0.0], [100.0, 100.0]] {
+        let o = ed.pointer_down(&scene, p, None, Mods::default(), 1.0, &mut rng);
+        apply(&mut scene, &o);
+        let o = ed.pointer_up(&scene, p, &mut rng);
+        apply(&mut scene, &o);
+    }
+    let o = ed.escape(&scene, &mut rng);
+    apply(&mut scene, &o);
+    let id = ed.selection[0].clone();
+    ed.enter(&scene, false, &mut rng);
+    drag(
+        &mut ed,
+        &mut scene,
+        [100.0, 100.0],
+        [3.0, 2.0],
+        Mods::default(),
+        &mut rng,
+    );
+    let l = scene.element(&id).unwrap();
+    assert!(points::is_polygon(l), "{:?}", l.points());
+    let (a, b) = ends(l);
+    assert_eq!(a, b);
+}
+
+#[test]
+fn an_arrows_end_dragged_onto_a_shape_attaches() {
+    let (mut ed, mut scene, mut rng) = (Editor::default(), Scene::default(), Seq(0));
+    let a = rect(&mut ed, &mut scene, &mut rng, [0.0, 0.0], [100.0, 100.0]);
+    let b = rect(&mut ed, &mut scene, &mut rng, [300.0, 0.0], [400.0, 100.0]);
+    let arrow = line(
+        &mut ed,
+        &mut scene,
+        &mut rng,
+        Tool::Arrow,
+        [150.0, 300.0],
+        [250.0, 300.0],
+    );
+    assert!(scene.element(&arrow).unwrap().end_binding().is_none());
+    // Its end, dragged over the right box: highlighted while dragged, then
+    // attached and stopping at the outline.
+    let o = ed.pointer_down(&scene, [250.0, 300.0], None, Mods::default(), 1.0, &mut rng);
+    apply(&mut scene, &o);
+    let o = ed.pointer_move(&scene, [350.0, 50.0], None, Mods::default(), 1.0, &mut rng);
+    apply(&mut scene, &o);
+    assert_eq!(ed.binding_target().map(|h| h.id.as_str()), Some(b.as_str()));
+    let o = ed.pointer_up(&scene, [350.0, 50.0], &mut rng);
+    apply(&mut scene, &o);
+    assert!(ed.binding_target().is_none());
+    let e = scene.element(&arrow).unwrap();
+    assert_eq!(e.end_binding().unwrap().element_id, b);
+    assert!(
+        scene
+            .element(&b)
+            .unwrap()
+            .bound_elements()
+            .iter()
+            .any(|x| x.id == arrow)
+    );
+    let (_, end) = ends(e);
+    let inside = end[0] > 300.0 && end[0] < 400.0 && end[1] > 0.0 && end[1] < 100.0;
+    let near = end[0] >= 293.0 && end[0] <= 407.0 && end[1] >= -7.0 && end[1] <= 107.0;
+    assert!(!inside && near, "on the outline: {end:?}");
+    // Then onto the left box: the right one lets it go.
+    let o = ed.pointer_down(&scene, end, None, Mods::default(), 1.0, &mut rng);
+    apply(&mut scene, &o);
+    let o = ed.pointer_move(&scene, [50.0, 50.0], None, Mods::default(), 1.0, &mut rng);
+    apply(&mut scene, &o);
+    let o = ed.pointer_up(&scene, [50.0, 50.0], &mut rng);
+    apply(&mut scene, &o);
+    let e = scene.element(&arrow).unwrap();
+    assert_eq!(e.end_binding().unwrap().element_id, a);
+    assert!(scene.element(&b).unwrap().bound_elements().is_empty());
+}
+
+#[test]
+fn held_over_a_shape_an_arrows_end_attaches_inside() {
+    let (mut ed, mut scene, mut seq) = (Editor::default(), Scene::default(), Seq(0));
+    let b = rect(&mut ed, &mut scene, &mut seq, [300.0, 0.0], [400.0, 100.0]);
+    let arrow = line(
+        &mut ed,
+        &mut scene,
+        &mut seq,
+        Tool::Arrow,
+        [150.0, 300.0],
+        [250.0, 300.0],
+    );
+    let mut rng = Timed(seq, 1000.0);
+    let o = ed.pointer_down(&scene, [250.0, 300.0], None, Mods::default(), 1.0, &mut rng);
+    apply(&mut scene, &o);
+    let o = ed.pointer_move(&scene, [330.0, 40.0], None, Mods::default(), 1.0, &mut rng);
+    apply(&mut scene, &o);
+    assert!(!ed.binding_target().unwrap().inside);
+    // 0.7 s later, still there (the app moves the pointer again in place).
+    rng.1 += BIND_INSIDE_AFTER;
+    let o = ed.pointer_move(&scene, [330.0, 40.0], None, Mods::default(), 1.0, &mut rng);
+    apply(&mut scene, &o);
+    assert!(ed.binding_target().unwrap().inside);
+    let o = ed.pointer_up(&scene, [330.0, 40.0], &mut rng);
+    apply(&mut scene, &o);
+    let e = scene.element(&arrow).unwrap();
+    let bind = e.end_binding().unwrap();
+    assert_eq!(bind.element_id, b);
+    assert_eq!(e.get("endBinding").unwrap()["mode"], "inside");
+    // It ends at the point itself.
+    let (_, end) = ends(e);
+    assert!(geom::distance(end, [330.0, 40.0]) < 1e-6, "{end:?}");
+}
+
+#[test]
+fn alt_drag_moves_copies() {
+    let (mut ed, mut scene, mut rng) = (Editor::default(), Scene::default(), Seq(0));
+    let a = rect(&mut ed, &mut scene, &mut rng, [0.0, 0.0], [100.0, 100.0]);
+    let alt = Mods {
+        alt: true,
+        ..Mods::default()
+    };
+    let o = drag(
+        &mut ed,
+        &mut scene,
+        [50.0, 50.0],
+        [250.0, 50.0],
+        alt,
+        &mut rng,
+    );
+    assert!(o.done);
+    let visible: Vec<&Element> = scene.visible().collect();
+    assert_eq!(visible.len(), 2);
+    assert_eq!(scene.element(&a).unwrap().x(), 0.0, "the original stays");
+    let copy = visible.iter().find(|e| e.id() != a).unwrap();
+    assert_eq!(copy.x(), 200.0);
+    assert_eq!(ed.selection, [copy.id().to_string()]);
+    // A click with Alt copies nothing.
+    let o = ed.pointer_down(&scene, [250.0, 50.0], None, alt, 1.0, &mut rng);
+    apply(&mut scene, &o);
+    let o = ed.pointer_up(&scene, [250.0, 50.0], &mut rng);
+    apply(&mut scene, &o);
+    assert_eq!(scene.visible().count(), 2);
+}
+
+#[test]
+fn an_arrows_label_slides_along_it() {
+    let (mut ed, mut scene, mut rng) = (Editor::default(), Scene::default(), Seq(0));
+    let arrow = line(
+        &mut ed,
+        &mut scene,
+        &mut rng,
+        Tool::Arrow,
+        [0.0, 0.0],
+        [400.0, 0.0],
+    );
+    let o = ed.edit_label(&scene, &arrow, &mut rng);
+    let label = o.edit_text.clone().unwrap();
+    apply(&mut scene, &o);
+    let o = ed.finish_text(
+        &scene,
+        "go",
+        &|_, s| s.chars().count() as f64 * 10.0,
+        &mut rng,
+    );
+    apply(&mut scene, &o);
+    let t = scene.element(&label).unwrap();
+    assert_eq!(t.x() + t.width() / 2.0, 200.0);
+    // Grabbed beside its middle (the middle bends the arrow), dragged on.
+    ed.selection = vec![arrow.clone()];
+    let at = [t.x() + 2.0, t.y() + 2.0];
+    drag(
+        &mut ed,
+        &mut scene,
+        at,
+        [at[0] + 100.0, at[1] + 30.0],
+        Mods::default(),
+        &mut rng,
+    );
+    let t = scene.element(&label).unwrap();
+    assert!((t.x() + t.width() / 2.0 - 300.0).abs() < 1e-6, "{}", t.x());
+    assert!((t.f64("labelPosition").unwrap() - 0.75).abs() < 1e-9);
+    assert_eq!(t.y() + t.height() / 2.0, 0.0);
 }

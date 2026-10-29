@@ -1070,6 +1070,7 @@ label.btn.disabled { opacity: .6; pointer-events: none; }
 
 /* Drawings: the page of one, and previews where notes embed them. */
 .drawing-page { height: 100%; }
+.drawing-page .note-head .menu button { white-space: nowrap; }
 .drawing-stage { flex: 1; position: relative; min-height: 0; overflow: hidden; }
 .drawing-canvas { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: none; display: block; cursor: grab; }
 .drawing-zoom { position: absolute; left: 12px; bottom: 12px; display: flex; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg); overflow: hidden; }

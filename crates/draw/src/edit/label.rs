@@ -197,7 +197,11 @@ pub fn layout(
         }
     }
     let (x, y) = if c.kind() == ElementType::Arrow {
-        let [mx, my] = arrow_middle(&c);
+        // Where it was slid along the arrow (`labelPosition`), else halfway.
+        let [mx, my] = t
+            .f64("labelPosition")
+            .and_then(|at| super::points::point_along(&c, at))
+            .unwrap_or_else(|| arrow_middle(&c));
         (mx - width / 2.0, my - height / 2.0)
     } else {
         let [ox, oy] = inner_origin(&c);

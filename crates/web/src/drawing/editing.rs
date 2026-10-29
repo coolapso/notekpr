@@ -269,8 +269,9 @@ impl Board {
         self.changed();
     }
 
-    /// A double click on the canvas: edits a text or a shape's label.
-    pub fn double_click(self: &Rc<Self>, p: [f64; 2]) {
+    /// A double click on the canvas: edits a text or a shape's label, or
+    /// the points of a line (an arrow's with Ctrl).
+    pub fn double_click(self: &Rc<Self>, p: [f64; 2], ctrl: bool) {
         if !self.writable() {
             return;
         }
@@ -280,15 +281,24 @@ impl Board {
         let out = self.editor.borrow_mut().double_click(
             &scene,
             view.to_scene(p),
+            Mods {
+                ctrl,
+                ..Mods::default()
+            },
             view.zoom,
             &mut WebRandom,
         );
         self.apply(out);
+        self.schedule();
+        self.changed();
     }
 
-    /// Enter: edits the selected text or shape's label.
-    pub fn enter(self: &Rc<Self>) {
-        self.command(|ed, s, r| ed.enter(s, r));
+    /// Enter: edits the selected text or shape's label, or the points of
+    /// the selected line (an arrow's with Ctrl).
+    pub fn enter(self: &Rc<Self>, ctrl: bool) {
+        self.command(|ed, s, r| ed.enter(s, ctrl, r));
+        self.schedule();
+        self.changed();
     }
 
     /// The pointer went down on the canvas (`p` relative to it).
@@ -324,6 +334,24 @@ impl Board {
             self.apply(out);
             self.schedule();
         }
+        // An arrow's end held still over a shape attaches inside it: look
+        // again then, unless the pointer moved meanwhile.
+        let n = self.moves.get().wrapping_add(1);
+        self.moves.set(n);
+        let held = self
+            .editor
+            .borrow()
+            .binding_target()
+            .is_some_and(|h| !h.inside);
+        if held {
+            let me = self.clone();
+            leptos::task::spawn_local(async move {
+                util::sleep(notekpr_draw::edit::BIND_INSIDE_AFTER as i32 + 20).await;
+                if me.moves.get() == n && me.editor.borrow().busy() {
+                    me.pointer_move(p, None, m);
+                }
+            });
+        }
     }
 
     pub fn pointer_up(self: &Rc<Self>, p: [f64; 2]) {
@@ -349,6 +377,17 @@ impl Board {
         let scene = self.scene();
         let view = self.view.get();
         let q = view.to_scene(p);
+        if let Some(line) = ed.single_linear(&scene)
+            && let Some(h) = ed.point_handles(&scene, view.zoom)
+        {
+            let reach = (notekpr_draw::edit::points::HANDLE + 1.0) / view.zoom;
+            let near = |p: &[f64; 2]| notekpr_draw::geom::distance(*p, q) <= reach;
+            if notekpr_draw::edit::points::point_at(line, q, view.zoom).is_some()
+                || h.midpoints.iter().any(near)
+            {
+                return "pointer";
+            }
+        }
         if let Some(f) = ed.frame(&scene)
             && let Some(h) = notekpr_draw::edit::transform::handle_at(&f, q, view.zoom)
         {

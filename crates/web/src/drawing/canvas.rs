@@ -316,6 +316,97 @@ const SELECTION: &str = "#6965db";
 
 /// What editing shows over the drawing: the selection's outlines and
 /// handles, the box being drawn to select.
+/// The handles on a selected line's or arrow's points, and halfway along
+/// its segments (`renderLinearPointHandles`).
+fn point_handles(ctx: &CanvasRenderingContext2d, h: &notekpr_draw::edit::PointHandles, z: f64) {
+    let size = notekpr_draw::edit::points::HANDLE;
+    let radius = if h.editing { size } else { size / 2.0 };
+    let _ = ctx.set_line_dash(&js_sys::Array::new());
+    ctx.set_line_width(1.0 / z);
+    ctx.set_stroke_style_str("#5e5ad8");
+    let circle = |[x, y]: [f64; 2], r: f64, fill: &str, stroke: bool| {
+        ctx.set_fill_style_str(fill);
+        ctx.begin_path();
+        let _ = ctx.arc(x, y, r / z, 0.0, std::f64::consts::TAU);
+        ctx.fill();
+        if stroke {
+            ctx.stroke();
+        }
+    };
+    let n = h.points.len();
+    for (i, p) in h.points.iter().enumerate() {
+        if h.ends_only && i != 0 && i + 1 != n {
+            continue;
+        }
+        let fill = if h.selected.contains(&i) {
+            "rgba(134, 131, 226, 0.9)"
+        } else {
+            "rgba(255, 255, 255, 0.9)"
+        };
+        circle(*p, radius, fill, true);
+    }
+    for m in &h.midpoints {
+        circle(*m, size / 2.0, "rgba(177, 151, 252, 0.7)", false);
+    }
+}
+
+/// The shape an arrow's dragged end will attach to, outlined
+/// (`renderBindingHighlightForBindableElement`): faint while it attaches to
+/// the outline, strong once it attaches inside.
+fn binding_highlight(ctx: &CanvasRenderingContext2d, e: &Element, inside: bool, z: f64) {
+    let offset = e.stroke_width() / 2.0;
+    let (x, y, w, h) = (
+        e.x() - offset,
+        e.y() - offset,
+        e.width() + offset * 2.0,
+        e.height() + offset * 2.0,
+    );
+    ctx.save();
+    let (cx, cy) = (e.x() + e.width() / 2.0, e.y() + e.height() / 2.0);
+    let _ = ctx.translate(cx, cy);
+    let _ = ctx.rotate(e.angle());
+    let _ = ctx.translate(-cx, -cy);
+    let _ = ctx.set_line_dash(&js_sys::Array::new());
+    ctx.set_line_width((e.stroke_width() * 1.75).clamp(2.5, 4.0) / z.max(0.25));
+    ctx.set_stroke_style_str(if inside {
+        "rgba(106, 189, 252, 1)"
+    } else {
+        "rgba(106, 189, 252, 0.5)"
+    });
+    ctx.begin_path();
+    match e.kind() {
+        ElementType::Ellipse => {
+            let _ = ctx.ellipse(
+                x + w / 2.0,
+                y + h / 2.0,
+                w / 2.0,
+                h / 2.0,
+                0.0,
+                0.0,
+                std::f64::consts::TAU,
+            );
+        }
+        ElementType::Diamond => {
+            let [t, r, b, l] = shape::diamond_points(e);
+            ctx.move_to(e.x() + t[0], e.y() + t[1] - offset);
+            ctx.line_to(e.x() + r[0] + offset, e.y() + r[1]);
+            ctx.line_to(e.x() + b[0], e.y() + b[1] + offset);
+            ctx.line_to(e.x() + l[0] - offset, e.y() + l[1]);
+            ctx.close_path();
+        }
+        _ => {
+            let radius = if e.roundness().is_some() {
+                shape::corner_radius(w.min(h), e)
+            } else {
+                0.0
+            };
+            let _ = ctx.round_rect_with_f64(x, y, w, h, radius);
+        }
+    }
+    ctx.stroke();
+    ctx.restore();
+}
+
 pub fn draw_overlay(
     ctx: &CanvasRenderingContext2d,
     scene: &Scene,
@@ -355,8 +446,11 @@ pub fn draw_overlay(
     };
     let selected = ed.selected(scene);
     let editing = ed.editing_text.as_deref();
+    // A line or arrow without a box of its own shows its points instead.
+    let points_only =
+        selected.len() == 1 && selected[0].kind().is_linear() && ed.frame(scene).is_none();
     for e in &selected {
-        if Some(e.id()) == editing {
+        if Some(e.id()) == editing || points_only {
             continue;
         }
         let [x1, y1, x2, y2, _, _] = bounds::absolute_coords(e);
@@ -399,6 +493,16 @@ pub fn draw_overlay(
                 ctx.restore();
             }
         }
+    }
+    if let Some(h) = ed.binding_target()
+        && let Some(e) = scene.element(&h.id)
+    {
+        binding_highlight(ctx, e, h.inside, z);
+    }
+    if editing.is_none()
+        && let Some(h) = ed.point_handles(scene, z)
+    {
+        point_handles(ctx, &h, z);
     }
     if let Some([x1, y1, x2, y2]) = ed.selection_box() {
         dashed(false);

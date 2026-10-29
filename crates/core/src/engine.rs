@@ -1709,6 +1709,12 @@ impl VaultReplica {
         Ok(NoteDoc::from_updates([plain.as_slice()])?.text())
     }
 
+    /// A drawing as a stored version (snapshot) has it.
+    pub fn decrypt_drawing_revision(&self, s: &Snapshot) -> Result<notekpr_draw::scene::Scene> {
+        let plain = self.decrypt_object(Purpose::Snapshot, &s.object_id, &s.payload)?;
+        Ok(NoteDoc::from_updates([plain.as_slice()])?.drawing().scene())
+    }
+
     pub fn encrypt_attachment(&self, attachment_id: &str, data: &[u8]) -> Result<Vec<u8>> {
         Ok(self
             .keyring

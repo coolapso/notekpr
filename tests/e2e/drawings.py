@@ -249,6 +249,22 @@ def main():
         check(".drawing" in first, "the first export is a .drawing file")
         a.chord(KEYS["escape"])
 
+        # Leaving it stores a version; its versions show as pictures.
+        a.click_el(a.find_text(".sb-link", "Drawings", 10))
+        time.sleep(4)
+        a.click_el(a.find_text(".tree-item", "Untitled drawing", 10))
+        a.find(CANVAS, 10)
+        time.sleep(1)
+        a.click(".drawing-page .note-head button[aria-label='Version history']")
+        a.find(".history", 10)
+        time.sleep(1.5)
+        a.wait("return document.querySelectorAll('.history .h-item').length > 0", 15, "a stored version")
+        a.click(".history .h-item")
+        a.wait("const i = document.querySelector('.history .h-drawing'); return !!i && i.complete && i.naturalWidth > 0", 15, "the version's picture")
+        check(True, "leaving a drawing stores a version, shown as a picture")
+        a.shot("drawings-history")
+        a.chord(KEYS["escape"])
+
         a.shot("drawings")
         check(not severe_logs(a), "no browser errors")
         print("ALL PASSED")

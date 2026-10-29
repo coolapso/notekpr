@@ -1083,6 +1083,9 @@ fn History(vault: String, note: String) -> impl IntoView {
     let list = RwSignal::new(Vec::<SnapshotInfo>::new());
     let loading = RwSignal::new(true);
     let preview = RwSignal::new(None::<(String, String)>);
+    // A drawing's versions are shown as pictures.
+    let drawing = actions::is_drawing(&vault, &note);
+    let drawn = RwSignal::new_local(None::<(String, notekpr_draw::scene::Scene, String)>);
     let (v, n) = (vault.clone(), note.clone());
     leptos::task::spawn_local(async move {
         step(state::flush_now);
@@ -1098,6 +1101,21 @@ fn History(vault: String, note: String) -> impl IntoView {
         let (v, n) = (vp.clone(), np.clone());
         leptos::task::spawn_local(async move {
             match api::get::<Snapshot>(&format!("/vaults/{v}/objects/{n}/snapshots/{id}")).await {
+                Ok(s) if drawing => {
+                    let scene =
+                        step(|c| c.replicas.get(&v).map(|r| r.decrypt_drawing_revision(&s)));
+                    let Some(Ok(scene)) = scene else {
+                        state::error("This version could not be decrypted.");
+                        return;
+                    };
+                    if let Some(url) = crate::drawings::picture_url(&v, scene.clone()).await {
+                        if let Some((_, _, old)) = drawn.get_untracked() {
+                            let _ = web_sys::Url::revoke_object_url(&old);
+                        }
+                        preview.set(Some((s.id.clone(), String::new())));
+                        drawn.set(Some((s.id, scene, url)));
+                    }
+                }
                 Ok(s) => {
                     let text = step(|c| c.replicas.get(&v).map(|r| r.decrypt_revision(&s)));
                     match text {
@@ -1141,9 +1159,24 @@ fn History(vault: String, note: String) -> impl IntoView {
                     }).collect_view()}
                 </div>
                 <div class="h-preview">
-                    {move || match preview.get() {
-                        None => view! { <p class="muted">"Select a version to preview it."</p> }.into_any(),
-                        Some((_, text)) => {
+                    {move || match (preview.get(), drawn.get()) {
+                        (None, _) => view! { <p class="muted">"Select a version to preview it."</p> }.into_any(),
+                        (Some(_), Some((_, scene, url))) if drawing => {
+                            let (v, n) = (vr.clone(), nr.clone());
+                            let (s1, s2) = (scene.clone(), scene);
+                            let name = step(|c| c.entry(&v, &n)).map(|e| e.title().to_string()).unwrap_or_default();
+                            view! {
+                                <div class="h-actions">
+                                    {writable.then(|| view! {
+                                        <button class="btn primary small" on:click=move |_| { actions::restore_drawing_revision(&v, &n, &s1); ui.modal.set(None); }>"Restore this version"</button>
+                                    })}
+                                    <button class="btn small" on:click=move |_| util::download(&format!("{name}.drawing"), "application/json", notekpr_draw::file::write_drawing(&s2).as_bytes())>"Download (.drawing)"</button>
+                                </div>
+                                <img class="h-drawing" src=url alt="This version of the drawing"/>
+                            }.into_any()
+                        }
+                        (Some(_), _) if drawing => view! { <div class="spinner"></div> }.into_any(),
+                        (Some((_, text)), _) => {
                             let vv = vv.clone();
                             let note = move |t: &str| knowledge::resolve_target(&vv, t, "");
                             let none = |_: &str| None;

@@ -383,6 +383,23 @@ pub async fn svg_of(vault: &str, scene: Scene, dark: bool) -> String {
     )
 }
 
+/// A picture of `scene` (a version of a drawing, say), as a blob URL; the
+/// caller revokes it.
+pub async fn picture_url(vault: &str, scene: Scene) -> Option<String> {
+    let dark = is_dark();
+    let scene = with_pictures(vault, scene).await;
+    let font_faces = font_faces(&scene).await;
+    let image = svg::export(
+        &scene,
+        &SvgOptions {
+            dark,
+            font_faces: Some(font_faces),
+            ..SvgOptions::default()
+        },
+    );
+    util::blob_url(image.as_bytes(), "image/svg+xml")
+}
+
 /// Makes the drawing's preview (when it changed since the last one): its
 /// URL, or `None` if the drawing isn't loaded.
 pub async fn load_preview(vault: &str, id: &str) -> Option<String> {

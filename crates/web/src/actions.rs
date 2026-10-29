@@ -2838,6 +2838,15 @@ pub async fn files_to_import(files: Vec<web_sys::File>) -> Vec<(String, Vec<u8>)
 
 // ------------------------------------------------------------------ history
 
+/// A drawing made as it was in a stored version (its elements and
+/// settings as they were; changed element by element, so a version stays
+/// a step back from what is there now).
+pub fn restore_drawing_revision(vault: &str, id: &str, scene: &notekpr_draw::scene::Scene) {
+    step(|c| state::set_drawing(c, vault, id, scene));
+    state::ui().content_rev.update(|r| *r += 1);
+    success("Restored this version. The drawing as it was remains in history.");
+}
+
 pub fn restore_revision(vault: &str, note: &str, text: &str) {
     if step(|c| state::set_note_text(c, vault, note, text)) > 0 {
         refresh_open_editor(vault);

@@ -175,8 +175,11 @@ pub fn DrawingView(vault: String, id: String) -> impl IntoView {
         ui.vaults.track();
         b.with_value(|b| b.reload());
     });
+    let (vc, ic) = (vault.clone(), id.clone());
     on_cleanup(move || {
         b.try_with_value(|b| b.close());
+        // Edited: a version of it is stored, as for notes.
+        state::step(|c| state::note_closed(c, &vc, &ic));
     });
     // The panels follow the editor.
     let rev = RwSignal::new(0u64);
@@ -593,6 +596,8 @@ pub fn DrawingView(vault: String, id: String) -> impl IntoView {
                             .collect_view()
                     }}
                 </div>
+                <button class="icon-btn" title="Version history" aria-label="Version history"
+                    on:click={ let (v, n) = (vault.clone(), id.clone()); move |_| ui.modal.set(Some(state::Modal::History(v.clone(), n.clone()))) }><Icon name="history"/></button>
                 <div class="tb-drop">
                     <button class="icon-btn" title="Export" aria-label="Export" aria-expanded=move || export_open.get().to_string()
                         on:click=move |ev| { ev.stop_propagation(); export_open.update(|o| *o = !*o); }><Icon name="download"/></button>

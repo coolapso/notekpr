@@ -839,6 +839,7 @@ button.list-row:hover:not(:disabled) { background: var(--bg-2); }
 .h-item:hover { background: var(--bg-2); }
 .h-item.sel { background: var(--accent-bg); }
 .h-preview { overflow: auto; max-height: 60vh; }
+.h-preview .h-drawing { display: block; max-width: 100%; height: auto; margin-top: 8px; border: 1px solid var(--border); border-radius: var(--radius); }
 .h-actions { display: flex; gap: 8px; position: sticky; top: 0; background: var(--bg); padding-bottom: 8px; }
 table.keys { border-collapse: collapse; width: 100%; }
 table.keys td { padding: 5px 4px; border-bottom: 1px solid var(--border); font-size: 14px; }

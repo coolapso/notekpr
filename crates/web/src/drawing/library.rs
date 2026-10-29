@@ -1,10 +1,11 @@
 //! Saved shapes on the board, as Excalidraw's library (`data/library.ts`,
 //! `actions/actionAddToLibrary.ts`): kept in one's Personal storage (the
 //! quick notes' index, `notekpr_core::library`), the same on every device.
-//! What is selected becomes a saved shape; a shape goes into the drawing as
-//! copies of its elements, where it is dropped or in the middle of the view;
-//! they come and go as Excalidraw's `.excalidrawlib` files. The panel
-//! showing them is `views::library`.
+//! What is selected becomes a saved shape, named after its first text;
+//! shapes go into the drawing as copies of their elements — several side by
+//! side —, where they are dropped or in the middle of the view; they are
+//! renamed and removed, and come and go as Excalidraw's `.excalidrawlib`
+//! files. The panel showing them is `views::library`.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -89,15 +90,32 @@ fn capitalized(s: &str) -> String {
         .unwrap_or_default()
 }
 
-/// Removes a saved shape.
-pub fn remove(id: &str) {
+/// Removes saved shapes.
+pub fn remove(ids: &[String]) {
     step(|c| {
         let v = c.quick_notes()?;
-        let u = library::remove(&c.replicas.get(&v)?.index, [id])?;
+        let u = library::remove(&c.replicas.get(&v)?.index, ids.iter().map(String::as_str))?;
         state::local_update(c, &v, INDEX_OBJECT_ID, u);
         Some(())
     });
     changed();
+}
+
+/// Names a saved shape (blank: no name).
+pub fn rename(id: &str, name: &str) {
+    let done = step(|c| {
+        let v = c.quick_notes()?;
+        let budget = state::limits().edit_budget();
+        let r = library::rename(&c.replicas.get(&v)?.index, id, Some(name), budget);
+        if let Ok(Some(u)) = &r {
+            state::local_update(c, &v, INDEX_OBJECT_ID, u.clone());
+        }
+        Some(r)
+    });
+    changed();
+    if let Some(Err(e)) = done {
+        state::error(format!("{}.", capitalized(&e.to_string())));
+    }
 }
 
 /// Saves the shapes of an `.excalidrawlib` file (`text`), leaving out those
@@ -170,9 +188,13 @@ pub fn import_files(files: Vec<web_sys::File>, open: RwSignal<bool>) -> Vec<web_
     others
 }
 
-/// Downloads the saved shapes as an `.excalidrawlib` file.
-pub fn export() {
-    let items = items();
+/// Downloads the saved shapes as an `.excalidrawlib` file: those of `ids`
+/// (the panel's selection), or all of them when it is empty.
+pub fn export(ids: &[String]) {
+    let mut items = items();
+    if !ids.is_empty() {
+        items.retain(|i| ids.contains(&i.id));
+    }
     if items.is_empty() {
         state::info("No saved shapes yet.");
         return;
@@ -252,22 +274,22 @@ impl Board {
         }
     }
 
-    /// Puts a library item in the drawing: copies of its elements with new
-    /// ids, centred at `at` on the canvas (else in the middle of the
-    /// view), selected.
-    pub fn insert_library_item(self: &Rc<Self>, item: &LibraryItem, at: Option<[f64; 2]>) {
-        if !self.writable() {
+    /// Puts library items in the drawing: copies of their elements with
+    /// new ids — several side by side on a grid
+    /// (`distributeLibraryItemsOnSquareGrid`) —, centred at `at` on the
+    /// canvas (else in the middle of the view), selected.
+    pub fn insert_library_items(self: &Rc<Self>, items: Vec<LibraryItem>, at: Option<[f64; 2]>) {
+        if !self.writable() || items.is_empty() {
             return;
         }
         let v = self.view.get();
         let at = v.to_scene(at.unwrap_or([v.width / 2.0, v.height / 2.0]));
-        let elements = item.elements.clone();
-        self.command(move |ed, s, r| ed.paste(s, &elements, at, r));
+        self.command(move |ed, s, r| ed.insert_library_items(s, &items, at, r));
     }
 
-    /// A library item dragged from the panel and dropped: put in where it
-    /// was dropped on the canvas (dropped elsewhere, nothing happens).
-    /// Whether it was one.
+    /// Library items dragged from the panel (one, or those selected there)
+    /// and dropped: put in where they were dropped on the canvas (dropped
+    /// elsewhere, nothing happens). Whether it was some.
     pub fn drop_library_item(self: &Rc<Self>, ev: &web_sys::DragEvent) -> bool {
         let Some(data) = ev
             .data_transfer()
@@ -300,9 +322,10 @@ impl Board {
                 ev.client_x() as f64 - r.left(),
                 ev.client_y() as f64 - r.top(),
             ];
-            if let Some(item) = items().into_iter().find(|i| wanted.contains(&i.id)) {
-                self.insert_library_item(&item, Some(at));
-            }
+            // In the library's order (Excalidraw's).
+            let mut dropped = items();
+            dropped.retain(|i| wanted.contains(&i.id));
+            self.insert_library_items(dropped, Some(at));
         }
         true
     }

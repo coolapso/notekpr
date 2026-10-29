@@ -29,6 +29,7 @@ end.
 | frames: what is in them, their names (`edit/frame.rs`) | Excalidraw | (c) 2020 Excalidraw |
 | the library: its items, what can't go in, duplicates (`library.rs`, `edit/library.rs`) | Excalidraw | (c) 2020 Excalidraw |
 | several library items put in at once: each copied apart, then laid out on a square grid (`library.rs`, `edit/library.rs`: `data/library.ts`'s `distributeLibraryItemsOnSquareGrid` and its test, `duplicateElements` per item) | Excalidraw | (c) 2020 Excalidraw |
+| the web app's saved shapes panel: picking shapes (Shift-click ranges, `onItemSelectToggle`), putting in or dragging those picked, exporting and removing just them, Escape letting them go (`crates/web/src/views/library.rs`: `LibraryMenu.tsx`, `LibraryMenuItems.tsx`, `LibraryUnit.tsx`, `LibraryMenuHeaderContent.tsx`) | Excalidraw | (c) 2020 Excalidraw |
 | the drawing inside PNG and SVG pictures of it (`embed.rs`: `data/image.ts`, `data/encode.ts`, `scene/export.ts`) | Excalidraw | (c) 2020 Excalidraw |
 | what a picture of a drawing shows: the selection, a frame exported alone (`export.rs`, `svg.rs`: `data/index.ts`'s `prepareElementsForExport`, `scene/export.ts`'s `exportingFrame`, `frame.ts`'s `getElementsOverlappingFrame`) | Excalidraw | (c) 2020 Excalidraw |
 | compression of Obsidian's drawings | lz-string 1.5 | (c) 2013 pieroxy |

@@ -1110,17 +1110,29 @@ label.btn.disabled { opacity: .6; pointer-events: none; }
 .library-head { display: flex; align-items: center; gap: 2px; padding: 6px 6px 6px 12px; border-bottom: 1px solid var(--border); }
 .library-title { font-weight: 600; }
 .library-items { flex: 1; overflow-y: auto; padding: 10px; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; align-content: start; }
-.library-unit { position: relative; aspect-ratio: 1; display: flex; align-items: center; justify-content: center; padding: 6px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg); color: var(--text); cursor: pointer; overflow: hidden; font: inherit; }
+.library-count { font-variant-numeric: tabular-nums; }
+.library-unit { position: relative; display: flex; flex-direction: column; align-items: stretch; gap: 2px; padding: 6px 6px 4px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg); color: var(--text); cursor: pointer; overflow: hidden; font: inherit; min-width: 0; }
 .library-unit:hover, .library-unit:focus-visible { border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
+.library-unit.picked { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); background: color-mix(in srgb, var(--accent) 8%, var(--bg)); }
+.library-pic { aspect-ratio: 1; display: flex; align-items: center; justify-content: center; min-width: 0; }
 .library-unit img { max-width: 100%; max-height: 100%; pointer-events: none; }
+/* The name under the picture (a line kept for shapes without one). */
+.library-name { display: block; min-height: 1.35em; font-size: 11px; line-height: 1.35; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--fg-2); }
+.library-rename { display: block; min-width: 0; }
+.library-rename .input { width: 100%; padding: 1px 4px; font-size: 11px; }
 .library-pending { border-style: dashed; }
 .library-adder { position: absolute; right: 4px; bottom: 4px; display: inline-flex; width: 20px; height: 20px; align-items: center; justify-content: center; border-radius: 50%; background: var(--accent); color: #fff; }
 .library-adder .ic { width: 14px; height: 14px; }
-.library-remove { position: absolute; top: 2px; right: 2px; display: none; background: var(--bg); }
-.library-unit:hover .library-remove, .library-unit:focus-within .library-remove { display: inline-flex; }
+/* Excalidraw's checkbox (on hover, or while picked), and the shape's own actions. */
+.library-check { position: absolute; top: 2px; left: 2px; display: none; background: var(--bg); border: 1px solid var(--border); }
+.library-unit.picked .library-check { display: inline-flex; background: var(--accent); border-color: var(--accent); color: #fff; }
+.library-actions { position: absolute; top: 2px; right: 2px; display: none; gap: 1px; }
+.library-actions .icon-btn { background: var(--bg); }
+.library-unit:hover .library-check, .library-unit:focus-within .library-check,
+.library-unit:hover .library-actions, .library-unit:focus-within .library-actions { display: inline-flex; }
 .library-empty { grid-column: 1 / -1; margin: 4px 2px; font-size: 13px; }
 @media (hover: none) {
-  .library-remove { display: inline-flex; }
+  .library-check, .library-actions { display: inline-flex; }
 }
 @media (max-width: 700px) {
   .drawing-props { top: auto; bottom: 60px; width: auto; right: 12px; max-height: 40%; }

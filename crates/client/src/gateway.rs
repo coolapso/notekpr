@@ -196,15 +196,20 @@ async fn get_document(
         Ok(doc) if q.format.as_deref() == Some("json") => axum::Json(doc).into_response(),
         Ok(doc) => {
             let etag = format!("\"{}\"", doc.hash);
+            // A drawing: its file, or its words (`?format=text`).
+            let (mime, body) = match doc.text {
+                Some(text) if q.format.as_deref() == Some("text") => {
+                    ("text/plain; charset=utf-8", text)
+                }
+                Some(_) => ("application/json", doc.content),
+                None => ("text/markdown; charset=utf-8", doc.content),
+            };
             (
                 [
-                    (
-                        header::CONTENT_TYPE,
-                        "text/markdown; charset=utf-8".to_string(),
-                    ),
+                    (header::CONTENT_TYPE, mime.to_string()),
                     (header::ETAG, etag),
                 ],
-                doc.content,
+                body,
             )
                 .into_response()
         }
@@ -236,7 +241,11 @@ async fn put_document(
         .get(header::IF_NONE_MATCH)
         .and_then(|h| h.to_str().ok())
         == Some("*");
-    let res = if create_only {
+    // A drawing file (ours, Excalidraw's or Obsidian's) to a `.drawing`
+    // path makes or changes the drawing, element by element.
+    let res = if notekpr_core::paths::is_drawing(&path) {
+        ops::put_drawing(&gw.hub, &v, &path, &text).await
+    } else if create_only {
         ops::create_document(&gw.hub, &v, &path, &text).await
     } else {
         ops::put_document(&gw.hub, &v, &path, &text, if_match.as_deref()).await

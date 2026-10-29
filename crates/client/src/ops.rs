@@ -71,7 +71,11 @@ pub struct Document {
     pub info: DocInfo,
     pub hash: String,
     pub links: Vec<String>,
+    /// A note's Markdown; a drawing's `.drawing` file (Excalidraw's JSON).
     pub content: String,
+    /// A drawing's words (its texts, labels and notes, one a line).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -118,7 +122,12 @@ fn info(vault_id: &str, path: &str, e: &Entry, tags: Vec<String>) -> DocInfo {
         vault: vault_id.to_string(),
         path: path.to_string(),
         id: e.id.clone(),
-        title: paths::title(path).to_string(),
+        title: if e.kind == EntryKind::Drawing {
+            paths::drawing_title(path)
+        } else {
+            paths::title(path)
+        }
+        .to_string(),
         kind: e.kind,
         tags,
         created: e.created,
@@ -180,7 +189,10 @@ pub async fn list_documents(
     Ok(listing
         .into_iter()
         .filter_map(|l| l.entry.map(|e| (l.path, e)))
-        .filter(|(_, e)| e.kind == EntryKind::Note || (all && e.kind == EntryKind::Attachment))
+        .filter(|(_, e)| {
+            matches!(e.kind, EntryKind::Note | EntryKind::Drawing)
+                || (all && e.kind == EntryKind::Attachment)
+        })
         .map(|(p, e)| doc_info(&g, &p, &e))
         .collect())
 }
@@ -191,6 +203,18 @@ pub async fn read_document(hub: &Hub, vref: &str, path: &str) -> OpResult<Docume
     let (p, e) = g
         .find(path)
         .ok_or_else(|| OpError::NotFound(format!("no document '{path}'")))?;
+    if e.kind == EntryKind::Drawing {
+        // Its file, and its words for those who read rather than draw.
+        let scene = g.drawing(&e.id);
+        let content = notekpr_draw::file::write_drawing(&scene);
+        return Ok(Document {
+            info: doc_info(&g, &p, &e),
+            hash: content_hash(content.as_bytes()),
+            links: Vec::new(),
+            text: Some(scene.texts().collect::<Vec<_>>().join("\n")),
+            content,
+        });
+    }
     if e.kind != EntryKind::Note {
         return Err(OpError::BadRequest(format!(
             "'{p}' is an attachment; use the attachments endpoint"
@@ -207,6 +231,7 @@ pub async fn read_document(hub: &Hub, vref: &str, path: &str) -> OpResult<Docume
         hash: content_hash(content.as_bytes()),
         links,
         content,
+        text: None,
     })
 }
 

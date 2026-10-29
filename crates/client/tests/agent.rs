@@ -549,3 +549,73 @@ async fn a_rotated_secret_that_cannot_be_saved_revokes_nothing() {
         vec![new.client_id]
     );
 }
+
+/// Agents read a drawing's words and file, and draw: Excalidraw's JSON
+/// sent to a `.drawing` path makes a drawing.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn agents_read_and_make_drawings() {
+    let srv = start().await;
+    let alice = login(&srv, "alice").await;
+    manage::create_vault(&alice, "Board").await.unwrap();
+    let h = hub(&alice).await;
+    let base = start_gateway(h.clone(), "t").await;
+    let http = reqwest::Client::new();
+    let drawing = serde_json::json!({
+        "type": "excalidraw", "version": 2,
+        "elements": [
+            {"id": "r", "type": "rectangle", "x": 0, "y": 0, "width": 100, "height": 60,
+             "boundElements": [{"id": "l", "type": "text"}]},
+            {"id": "l", "type": "text", "x": 10, "y": 20, "width": 80, "height": 20,
+             "text": "Kitchen", "originalText": "Kitchen", "containerId": "r"},
+            {"id": "t", "type": "text", "x": 0, "y": 100, "width": 80, "height": 20,
+             "text": "Plan for the house", "originalText": "Plan for the house"},
+        ],
+    });
+    let r = http
+        .put(format!("{base}/vaults/Board/documents/House.drawing"))
+        .bearer_auth("t")
+        .body(drawing.to_string())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status().as_u16(), 201, "{}", r.text().await.unwrap());
+    // Listed with the notes, as a drawing.
+    let docs: Vec<Value> = http
+        .get(format!("{base}/vaults/Board/documents"))
+        .bearer_auth("t")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(
+        (docs[0]["kind"].as_str(), docs[0]["title"].as_str()),
+        (Some("drawing"), Some("House"))
+    );
+    // Its words, and its file.
+    let words = http
+        .get(format!("{base}/vaults/Board/documents/House?format=text"))
+        .bearer_auth("t")
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert!(
+        words.contains("Kitchen") && words.contains("Plan for the house"),
+        "{words}"
+    );
+    let file: Value = http
+        .get(format!("{base}/vaults/Board/documents/House.drawing"))
+        .bearer_auth("t")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(file["type"], "notekpr-drawing");
+    assert_eq!(file["elements"].as_array().unwrap().len(), 3);
+}

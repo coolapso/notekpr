@@ -1681,7 +1681,12 @@ async fn cat(ctx: &Ctx, vault: &str, path: &str) -> Result<()> {
             doc.content.into_bytes()
         }
         EntryKind::Attachment => hub.session.attachment(&v, &e.id).await?,
-        // As a .drawing file, its pictures inside.
+        // As a .drawing file, its pictures inside (with `--json`: its
+        // details, file and words).
+        EntryKind::Drawing if ctx.json => {
+            ctx.print_json(&op(ops::read_document(&hub, vault, path).await)?);
+            return Ok(());
+        }
         EntryKind::Drawing => ops::drawing_file(&hub, &v, &e.id).await.into_bytes(),
         EntryKind::Folder => bail!("'{path}' is a folder; use `ls`"),
     };

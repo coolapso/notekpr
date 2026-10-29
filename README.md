@@ -86,30 +86,56 @@ read anything.
 * A drawing editor with Excalidraw's hand-drawn look, written in Rust: the
   same drawing looks the same as on excalidraw.com, wobbles and all.
   Rectangles, diamonds, ellipses, arrows and lines (dragged or point by
-  point), the pen, texts, the eraser, frames; colours, fills (hachure,
+  point), the pen, texts, pictures (`9`, or pasted or dropped), sticky
+  notes (`N`), frames (`F`), the eraser and the laser pointer (`K`);
+  colours (picks and Excalidraw's whole palette), fills (hachure,
   cross-hatch, solid, zigzag), stroke width and style, sloppiness, rounded
-  edges, arrowheads, fonts (Excalifont, Nunito, Comic Shanns, Lilita One),
-  opacity; select, move, resize, turn, group, lock, align, distribute,
-  layers, duplicate; undo and redo of your own changes; Excalidraw's
-  keyboard shortcuts (`R`, `O`, `A`, `T`, `Q` to keep a tool, …).
+  edges, arrowheads, arrow types (sharp, curved, elbow), every font
+  Excalidraw has, opacity; select, move, resize, turn, group, lock, align,
+  distribute, layers, duplicate (`Alt`+drag copies); undo and redo of your
+  own changes; Excalidraw's keyboard shortcuts (`R`, `O`, `A`, `T`, `Q` to
+  keep a tool, …). Two fingers pinch to zoom on touch screens.
 * Text inside shapes and on arrows (double-click or Enter), wrapped and
-  centred, the shape growing to hold it; arrows that stay attached to
-  shapes and follow them.
-* Drawn together, live, with the vault's members, and merged when
-  someone drew offline.
-* Your own drawings in *Drawings*, under Quick notes; drawings in any vault,
-  in its file tree. `![[Board.drawing]]` in a note shows the drawing,
-  live, and the link while the cursor is on it (the drawing's ⤓ menu copies
-  it); notes from Obsidian that show `![[Board.excalidraw]]` find the
-  imported drawing.
+  centred, the shape growing to hold it; an arrow's label slides along it.
+  Arrows stay attached to shapes and follow them — dropped near a shape
+  they attach to its outline (highlighted while dragged), held still over
+  it for a moment they point inside; elbow arrows route themselves at right
+  angles around what they connect (drag a segment to hold it, double-click
+  to let go).
+* A selected line or arrow shows its points: drag them, or the handle
+  halfway along to bend it; double-click (Ctrl+double-click for arrows) or
+  Enter edits every point — Shift selects several, Delete removes them;
+  ends that meet close a line.
+* Sticky notes whose text shrinks to fit, with the day they were made at
+  their foot; frames that hold what you draw or drop in them, move and
+  clip it, renamed by double-clicking their name.
+* The grid (`Ctrl+'`, part of the drawing) and snapping to other shapes'
+  edges, centres and equal gaps (`Alt+S`, your own setting; `Ctrl` while
+  dragging turns it off for that drag).
+* Pictures are files of the vault (`attachments/`), stored and synced once,
+  encrypted; drawing files written out hold them inside, as Excalidraw's do.
+* Links on elements (`Ctrl+K`): a web address, or `[[a note]]` of the
+  vault, opened from a button by the element.
+* Drawn together, live, with the vault's members: their pointers with
+  their names, what they selected, their laser, and who is on the drawing
+  in its header; merged when someone drew offline. A drawing's history
+  keeps versions, shown as pictures, to restore or download.
+* Your own drawings in *Drawings*, under Quick notes ("3 of 10 drawings"
+  when the server limits them); drawings in any vault, in its file tree.
+  `![[Board.drawing]]` in a note shows the drawing, live, and the link
+  while the cursor is on it (the drawing's ⤓ menu copies it); notes from
+  Obsidian that show `![[Board.excalidraw]]` find the imported drawing.
 * Works with Excalidraw's files: copy and paste between notekpr and
   excalidraw.com or Obsidian; importing a folder or Obsidian vault turns
-  `.excalidraw` and Obsidian's `.excalidraw.md` drawings into drawings (and
-  files dropped on a drawing come in); export a drawing as a `.drawing` file,
-  for Excalidraw (`.excalidraw`), for Obsidian (`.excalidraw.md`), SVG or
-  PNG. The Markdown folder keeps drawings as `.drawing` files (Excalidraw's
+  `.excalidraw` and Obsidian's `.excalidraw.md` drawings into drawings
+  (those already in a vault: "Make it a drawing" in the file tree), and
+  files dropped on a drawing come in; export a drawing as a `.drawing`
+  file, for Excalidraw (`.excalidraw`), for Obsidian (`.excalidraw.md`),
+  SVG or PNG, or copy it (or what is selected) as a PNG (`Shift+Alt+C`) or
+  SVG. The Markdown folder keeps drawings as `.drawing` files (Excalidraw's
   JSON inside), merged element by element when edited there.
-* The text in drawings is found by search.
+* The text in drawings is found by search, and agents read it (and draw:
+  Excalidraw's JSON sent to a `.drawing` path makes a drawing).
 * Each note's menu downloads it as Markdown or copies a `[[link]]` to it.
 
 **Organizing and finding**

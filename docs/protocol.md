@@ -389,6 +389,20 @@ says `kind: "drawing"` (`note`, the default, is left out). It is kept from
 then on and never changes; the index and comments are never drawings. Apps
 take it from the object's index entry.
 
+**Content.** The drawing's document holds Excalidraw's elements (root map
+`elements`: id → the element's properties), its settings (`settings`:
+`appState` keys such as `gridModeEnabled`) and its pictures (`files`: file
+id → `{mimeType, id, created, attachment}`). A picture is a file of the
+vault — an attachment like any, named by `attachment` — rather than
+Excalidraw's `dataURL` inside the drawing; drawing files written out
+(`.drawing`, Excalidraw's JSON under the `type` `notekpr-drawing`) hold
+pictures as `dataURL`s, and apps make the pictures of a file that comes in
+files of the vault. Moving a drawing to another vault copies the pictures
+it shows (§5.3) and names the copies. On a drawing, apps add to their
+presence (`awareness`, §7, encrypted) `pointer: {x, y, laser, down}` (in the drawing's
+coordinates) and `selected` (element ids), sent at most every 50 ms; both
+are left out elsewhere.
+
 **How many.** Each person may have `drawing_limit` drawings — their own
 `drawing_allowance`, else the instance's `drawings_per_user` (unlimited by
 default, §9) — in all the vaults they own together, their Drawings among

@@ -646,3 +646,31 @@ async fn src_id_of(hub: &Hub, vault: &str) -> String {
         .id()
         .to_string()
 }
+
+/// `ls` lists a drawing as one, with its size, not as a folder.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn drawings_are_listed_as_drawings() {
+    let srv = start().await;
+    let alice = login(&srv, "alice").await;
+    manage::create_vault(&alice, "Art").await.unwrap();
+    let h = hub(&alice).await;
+    let file =
+        r#"{"type":"excalidraw","version":2,"elements":[{"id":"a","type":"ellipse","width":5}]}"#;
+    ops::put_drawing(&h, "Art", "Plans/Sketch", file)
+        .await
+        .unwrap();
+    let v = h.resolve("Art").await.unwrap();
+    let list = v.lock().await.list("", true).unwrap();
+    let kinds: Vec<(String, notekpr_client::vault::ListKind)> =
+        list.into_iter().map(|l| (l.path, l.kind)).collect();
+    assert_eq!(
+        kinds,
+        [
+            ("Plans".to_string(), notekpr_client::vault::ListKind::Folder),
+            (
+                "Plans/Sketch.drawing".to_string(),
+                notekpr_client::vault::ListKind::Drawing
+            )
+        ]
+    );
+}

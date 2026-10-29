@@ -26,6 +26,7 @@ docs/operations.md §10):
 """
 
 import argparse
+import base64
 import json
 import os
 import random
@@ -100,7 +101,8 @@ def png(width, height, pixel):
 
 def garden_drawing():
     """Excalidraw's JSON for a plan of the garden beds: labelled beds, a
-    compost heap with arrows to them, a title."""
+    compost heap with arrows to them (it links to the Beds note), a title, a
+    sticky note, the layout picture in a frame with an elbow arrow to it."""
     elements, n = [], [0]
 
     def base(kind, x, y, w, h, **more):
@@ -147,8 +149,31 @@ def garden_drawing():
                      elbowed=False)
         compost["boundElements"].append({"id": arrow["id"], "type": "arrow"})
         bed["boundElements"].append({"id": arrow["id"], "type": "arrow"})
+    compost["link"] = "[[Beds]]"
+    # A sticky note, and the layout picture in a frame (the picture becomes a
+    # file of the vault when the drawing is written).
+    note = base("stickynote", 720, 20, 220, 220, backgroundColor="#ffdf6b", fillStyle="solid",
+                roughness=1, roundness=None)
+    label(note, "Water the\nbeans on\nSunday")
+    frame = base("frame", 700, 300, 300, 230, strokeColor="#bbb", roughness=0, roundness=None,
+                 name="This year's layout")
+    picture = base("image", 720, 330, 260, 180, fileId="layout", status="saved", scale=[1, 1],
+                   crop=None, frameId=frame["id"])
+    sx, sy = compost["x"] + compost["width"] + 6, compost["y"] + 45
+    ex, ey = picture["x"] - 6, picture["y"] + 90
+    elbow = base("arrow", sx, sy, ex - sx, abs(ey - sy), roundness=None, elbowed=True,
+                 points=[[0, 0], [(ex - sx) / 2, 0], [(ex - sx) / 2, ey - sy], [ex - sx, ey - sy]],
+                 startArrowhead=None, endArrowhead="arrow", fixedSegments=None,
+                 startIsSpecial=None, endIsSpecial=None,
+                 startBinding={"elementId": compost["id"], "fixedPoint": [1.04, 0.5], "mode": "orbit"},
+                 endBinding={"elementId": picture["id"], "fixedPoint": [-0.03, 0.5], "mode": "orbit"})
+    compost["boundElements"].append({"id": elbow["id"], "type": "arrow"})
+    picture["boundElements"].append({"id": elbow["id"], "type": "arrow"})
+    layout = "data:image/png;base64," + base64.b64encode(garden_layout()).decode()
+    files = {"layout": {"id": "layout", "mimeType": "image/png", "dataURL": layout, "created": 1}}
     return json.dumps({"type": "excalidraw", "version": 2, "source": "notekpr demo",
-                       "elements": elements, "appState": {"viewBackgroundColor": "#ffffff"}})
+                       "elements": elements, "appState": {"viewBackgroundColor": "#ffffff"},
+                       "files": files})
 
 
 def sketch_drawing():
@@ -164,6 +189,47 @@ def sketch_drawing():
         el(2, "text", 190, 40, 210, 35, text="Ideas for the shed", originalText="Ideas for the shed",
            fontSize=24, fontFamily=5, textAlign="left", verticalAlign="top", lineHeight=1.25),
     ]
+    # Drawn on the grid (Ctrl+' turns it off).
+    return json.dumps({"type": "excalidraw", "version": 2, "elements": elements,
+                       "appState": {"gridModeEnabled": True, "gridSize": 20, "gridStep": 5}})
+
+
+def holiday_drawing():
+    """A family plan drawn together: steps joined by elbow arrows, notes."""
+    elements = []
+
+    def el(i, kind, x, y, w, h, **more):
+        e = {"id": f"ho{i}", "type": kind, "x": x, "y": y, "width": w, "height": h, "seed": 300 + i,
+             "index": f"a{i:02d}", "strokeColor": "#1e1e1e", "backgroundColor": "transparent",
+             "roughness": 1, "strokeWidth": 2, "boundElements": [], "roundness": {"type": 3}}
+        e.update(more)
+        elements.append(e)
+        return e
+
+    steps = []
+    for i, (text, color) in enumerate([("Pick dates", "#a5d8ff"), ("Book flights", "#b2f2bb"),
+                                       ("Pack", "#ffec99")]):
+        box = el(i * 2 + 1, "rectangle", i * 260, 0, 180, 80, backgroundColor=color, fillStyle="solid")
+        t = el(i * 2 + 2, "text", box["x"] + 30, 28, 120, 25, text=text, originalText=text,
+               fontSize=20, fontFamily=5, textAlign="center", verticalAlign="middle",
+               containerId=box["id"], lineHeight=1.25, roundness=None)
+        box["boundElements"].append({"id": t["id"], "type": "text"})
+        steps.append(box)
+    for i, (a, b) in enumerate(zip(steps, steps[1:])):
+        sx, ex = a["x"] + 186, b["x"] - 6
+        arrow = el(10 + i, "arrow", sx, 40, ex - sx, 0, roundness=None, elbowed=True,
+                   points=[[0, 0], [ex - sx, 0]], startArrowhead=None, endArrowhead="arrow",
+                   fixedSegments=None, startIsSpecial=None, endIsSpecial=None,
+                   startBinding={"elementId": a["id"], "fixedPoint": [1.0333, 0.5], "mode": "orbit"},
+                   endBinding={"elementId": b["id"], "fixedPoint": [-0.0333, 0.5], "mode": "orbit"})
+        a["boundElements"].append({"id": arrow["id"], "type": "arrow"})
+        b["boundElements"].append({"id": arrow["id"], "type": "arrow"})
+    note = el(20, "stickynote", 0, 140, 200, 200, backgroundColor="#ffdf6b", fillStyle="solid",
+              roundness=None)
+    t = el(21, "text", 20, 210, 160, 50, text="Somewhere\nwarm!", originalText="Somewhere\nwarm!",
+           fontSize=20, fontFamily=5, textAlign="center", verticalAlign="middle",
+           containerId=note["id"], lineHeight=1.25, roundness=None)
+    note["boundElements"].append({"id": t["id"], "type": "text"})
     return json.dumps({"type": "excalidraw", "version": 2, "elements": elements, "appState": {}})
 
 
@@ -245,6 +311,8 @@ HOME = [
         - [ ] Switch to the reading view with `Ctrl+E`; `Ctrl+/` lists every shortcut
         - [ ] Capture a quick note with `Alt+Q`
         - [ ] Drawings: open [[Beds]] — its drawing shows in the note — then *Garden beds* itself, and draw with Excalidraw's keys (`R` rectangle, `O` ellipse, `A` arrow, `T` text, `Q` keeps the tool); double-click a bed to label it, drag one and its arrow follows. *Drawings* in the sidebar holds your own; export one for Excalidraw (the ⤓ at the top) and open it on excalidraw.com, or paste between the two
+        - [ ] In *Garden beds*: select an arrow and drag its end onto another bed (it attaches; hold still over a bed for a moment and it points inside); drag the handle halfway along a line to bend it; double-click a line (Ctrl+double-click an arrow) to edit every point. `Alt`+drag copies, `Alt+S` snaps to the other beds' edges and gaps, `Ctrl+'` shows the grid
+        - [ ] Also in *Garden beds*: `N` makes a sticky note, `F` a frame (drag it around beds to hold them), `9` puts in a picture (or paste one), `K` is the laser pointer — open *Holiday steps* in Family as alice and as bob (another window): you see each other's pointer, selection and laser. The compost heap links to [[Beds]] (the button by it; `Ctrl+K` sets a link); the 🕘 at the top shows the drawing's versions
         - [ ] Open [[Garden plan]] and its history (the clock button at the top) to compare versions
         - [ ] Sign in as **bob** in another tab and edit *Shopping list* in the *Family* vault together
         - [ ] Click a link to a note that doesn't exist yet: [[Greenhouse]]
@@ -1436,6 +1504,7 @@ def seed(cli, url, data, server_bin):
     for who, text in HOLIDAY_VERSIONS:
         cli.write(who, "Family", "Holiday plans.md", text)
     cli.icon(b, "Family", "Holiday plans.md", "🎄")
+    cli.write(b, "Family", "Holiday steps.drawing", holiday_drawing())
 
     step("carol, bob and alice: comments on the holiday plans (carol only views the vault)")
     tent = cli.comment(c, "Family", "Holiday plans", "Camping in August?",

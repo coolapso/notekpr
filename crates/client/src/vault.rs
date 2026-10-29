@@ -37,6 +37,7 @@ pub struct WriteResult {
 pub enum ListKind {
     Folder,
     Note,
+    Drawing,
     Attachment,
 }
 
@@ -1106,6 +1107,7 @@ impl Vault {
             for c in tree.get(folder).into_iter().flatten() {
                 let kind = match c.entry.as_ref().map(|e| e.kind) {
                     Some(EntryKind::Note) => ListKind::Note,
+                    Some(EntryKind::Drawing) => ListKind::Drawing,
                     Some(EntryKind::Attachment) => ListKind::Attachment,
                     _ => ListKind::Folder,
                 };

@@ -1162,20 +1162,13 @@ fn Properties(board: StoredValue<Rc<Board>, LocalStorage>, rev: RwSignal<u64>) -
     }
 }
 
-/// The sidebar's entry for the open vault's drawings (not in the quick
-/// notes, which hold none).
+/// The sidebar's entry for the drawings of the vault it shows (`vault`:
+/// also on pages of no vault, such as the quick notes).
 #[component]
-pub fn DrawingsSection() -> impl IntoView {
+pub fn DrawingsSection(vault: Memo<Option<String>>) -> impl IntoView {
     let ui = ui();
-    let vault = move || {
-        ui.route
-            .get()
-            .vault()
-            .map(str::to_string)
-            .filter(|v| !state::step(|c| c.is_quick_notes(v)))
-    };
     move || {
-        vault().map(|v| {
+        vault.get().map(|v| {
             let (v1, v2, v3) = (v.clone(), v.clone(), v.clone());
             view! {
                 <div class="sb-section sb-drawings">

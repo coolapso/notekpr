@@ -1626,6 +1626,8 @@ def test_quick_notes(env):
         b.click(".sb-quick .sb-link")
         b.find(".quick-capture textarea", 10)
         check(b.js("return location.pathname") == "/quick", "the Quick notes entry opens /quick")
+        check(b.js("return !!document.querySelector('.sb-drawings .sb-link')"),
+              "the sidebar keeps the vault's Drawings entry on the Quick notes page")
         check(b.js("return document.querySelector('.qn-head .qn-count').textContent") == "1 of 20", "the list's heading counts them against the limit")
         b.click(".quick-capture textarea")
         b.keys("Garden plan" + KEYS["enter"] + "tomatoes and beans")

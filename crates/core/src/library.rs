@@ -1,12 +1,12 @@
-//! The drawings library, as Excalidraw's: items (groups of elements) saved
+//! Saved shapes — Excalidraw's library: items (groups of elements) saved
 //! from one drawing to drop into any other, the same in every app.
 //!
-//! It is the person's own and lives in their Drawings section
-//! ([`crate::drawings`]), in the section's index document: a root map
+//! They are the person's own and live in their Personal storage (the quick
+//! notes' vault, [`crate::quick`]), in its index document: a root map
 //! `library` beside the entries' `files`, item id → the item as JSON, as
 //! Excalidraw has it without the id (`status`, `created`, `name`,
-//! `elements`; [`notekpr_draw::library`]). So it is encrypted with the
-//! section's key, synced and merged like the index — two devices adding
+//! `elements`; [`notekpr_draw::library`]). So they are encrypted with that
+//! vault's key, synced and merged like the index — two devices adding
 //! items at once keep both —, takes no drawing's place, and the server
 //! learns nothing it didn't (index updates are opaque to it). Releases
 //! before it keep the map in what they encode without reading it.

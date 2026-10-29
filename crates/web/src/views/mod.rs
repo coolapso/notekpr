@@ -59,7 +59,6 @@ pub fn Shell() -> impl IntoView {
                     Route::Home => view! { <home::Home/> }.into_any(),
                     // The quick notes' vault is shown as the quick notes.
                     Route::Vault(v) | Route::Trash(v) if state::step(|c| c.is_quick_notes(&v)) => view! { <quick::QuickPage/> }.into_any(),
-                    // The Drawings section's vault is shown as the section.
                     Route::Vault(v) => view! { <home::VaultHome vault=v/> }.into_any(),
                     Route::Note(v, n) => view! { <drawing::Document vault=v note=n/> }.into_any(),
                     Route::Trash(v) => view! { <home::Trash vault=v/> }.into_any(),

@@ -9,8 +9,8 @@
 //!   single `Y.Text`. Markdown stays the canonical representation.
 //!
 //! Attachments are entries in the index whose bytes live in encrypted blobs.
-//! The Drawings section's index also holds the drawings library (another
-//! root map, [`crate::library`]); a release that doesn't know a root map
+//! The Personal storage's index (the quick notes' vault) also holds the
+//! person's saved shapes (another root map, [`crate::library`]); a release that doesn't know a root map
 //! leaves it alone and keeps it in what it encodes.
 //!
 //! [`INDEX_OBJECT_ID`]: crate::protocol::INDEX_OBJECT_ID
@@ -449,8 +449,8 @@ impl Entry {
 pub struct IndexDoc {
     doc: Doc,
     files: MapRef,
-    /// The drawings library (only the Drawings section's holds items): item
-    /// id → the item as JSON ([`crate::library`]).
+    /// The saved shapes (only the Personal storage's holds any): item id →
+    /// the item as JSON ([`crate::library`]).
     library: MapRef,
     local: LocalUpdates,
 }
@@ -871,7 +871,7 @@ impl IndexDoc {
         })
     }
 
-    /// The drawings library as kept: (item id, the item's JSON); values
+    /// The saved shapes as kept: (item id, the item's JSON); values
     /// that aren't text are skipped. [`crate::library`] reads them.
     pub fn library_entries(&self) -> Vec<(String, String)> {
         let txn = self.doc.transact();

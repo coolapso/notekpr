@@ -316,7 +316,7 @@ pub struct Ui {
     pub mentions_rev: RwSignal<u64>,
     /// A thread to open once its note is shown: (vault, note, thread).
     pub thread_to_open: RwSignal<Option<(String, String, String)>>,
-    /// Bumped when the drawings library may have changed (here or on
+    /// Bumped when the saved shapes may have changed (here or on
     /// another device: `crate::drawing::library`).
     pub library_rev: RwSignal<u64>,
 }

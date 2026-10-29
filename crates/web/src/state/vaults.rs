@@ -35,8 +35,8 @@ pub async fn refresh_vaults() {
     futures::future::join_all(infos.into_iter().map(load_vault)).await;
     step(|c| {
         publish_vaults(c);
-        // Drawings wait for a limit per person the list doesn't show (it
-        // may have changed): those waiting try again.
+        // A vault's limits may have changed: drawings and quick notes
+        // waiting for room try again.
         room_freed(c);
     });
     // Quick notes are there from the start (once per person); ones deleted

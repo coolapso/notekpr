@@ -28,7 +28,7 @@ pub fn LibraryPanel(
     let ui = ui();
     let items = Memo::new(move |_| {
         ui.library_rev.track();
-        // The Drawings section may load (or be made) after the page.
+        // The Personal storage may load (or be made) after the page.
         ui.vaults.track();
         library::items()
     });

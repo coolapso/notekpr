@@ -195,11 +195,11 @@ fn QuickStorage(vault: String) -> impl IntoView {
         let is_full = full.get() || pct >= 100.0;
         Some(view! {
             <div class="qn-storage">
-                <p class="muted small storage-use">{format!("They take {} of {}.", util::human_bytes(i.storage_bytes), util::human_bytes(limit))}</p>
+                <p class="muted small storage-use">{format!("Your personal storage (quick notes, saved shapes) takes {} of {}.", util::human_bytes(i.storage_bytes), util::human_bytes(limit))}</p>
                 <div class="meter" class:full=is_full>
                     <div class="meter-fill" style=format!("width: {pct:.1}%")></div></div>
                 {is_full.then(|| view! {
-                    <p class="muted small storage-help">"They are full: edits wait in this browser until there's room. Deleting a quick note makes room, or ask your server's administrator for more."</p>
+                    <p class="muted small storage-help">"It is full: edits wait in this browser until there's room. Deleting quick notes or saved shapes makes room, or ask your server's administrator for more."</p>
                 })}
             </div>
         })

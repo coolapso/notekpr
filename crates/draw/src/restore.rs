@@ -1,12 +1,19 @@
 //! Making a drawing from a file safe to use, as Excalidraw's `restore` does:
 //! missing properties get their defaults, old drawings' properties are
 //! brought up to date, malformed points are repaired, and every element
-//! gets a unique id and a stacking index. Properties this code doesn't know
-//! are kept as they are.
+//! gets a unique id and a stacking index. What elements say about each
+//! other is made to agree, as when Excalidraw opens a file: labels and
+//! their shapes, arrows and what they are attached to, frames and their
+//! children. Properties this code doesn't know are kept as they are.
 //!
 //! Follows Excalidraw's `data/restore.ts` (MIT, see `PORTED.md`). Unlike
 //! Excalidraw, elements of a kind it doesn't know are kept (not drawn), so a
-//! newer Excalidraw's drawing loses nothing passing through.
+//! newer Excalidraw's drawing loses nothing passing through. Not ported:
+//! moving old arrows' bindings (`focus` and `gap`) to fixed points, the
+//! sticky notes' pairing of ink and font size with their labels
+//! (`restoreStickyNotes`), and the stopgap for broken elbow arrows.
+
+use std::collections::{HashMap, HashSet};
 
 use serde_json::{Map, Value, json};
 
@@ -408,10 +415,11 @@ pub fn restore_element(props: Props, fresh: &mut dyn Fresh) -> Option<Element> {
     Element::from_props(e)
 }
 
-/// Restores every element: unique ids, valid stacking indices, and arrows
-/// and labels pointing only at elements that are there.
+/// Restores every element: unique ids, valid stacking indices, and what
+/// they say about each other made to agree, as Excalidraw does opening a
+/// file (`restoreElements` with `repairBindings`).
 pub fn restore_elements(raw: &[Value], fresh: &mut dyn Fresh) -> Vec<Element> {
-    let mut seen = std::collections::HashSet::new();
+    let mut seen = HashSet::new();
     let mut out: Vec<Element> = Vec::new();
     for v in raw {
         let Some(props) = v.as_object().cloned() else {
@@ -427,26 +435,203 @@ pub fn restore_elements(raw: &[Value], fresh: &mut dyn Fresh) -> Vec<Element> {
         out.push(e);
     }
     order::sync_invalid_indices(&mut out);
-    // Bindings and labels to elements that aren't there are dropped.
-    let ids: std::collections::HashSet<String> = out.iter().map(|e| e.id().to_string()).collect();
-    for e in &mut out {
-        if e.kind().is_linear() {
+    repair_bindings(&mut out);
+    repair_bound_text_order(out)
+}
+
+/// JavaScript's truthiness of a property.
+fn truthy(v: Option<&Value>) -> bool {
+    match v {
+        None | Some(Value::Null) => false,
+        Some(Value::Bool(b)) => *b,
+        Some(Value::Number(n)) => n.as_f64().is_some_and(|x| x != 0.0 && !x.is_nan()),
+        Some(Value::String(s)) => !s.is_empty(),
+        Some(_) => true,
+    }
+}
+
+/// What elements say about each other, made to agree (the loop of
+/// `restoreElements` with `repairBindings`): children of a frame that isn't
+/// there leave it (`repairFrameMembership`); labels are repaired with their
+/// shape (`repairBoundElement`), shapes with what they list as attached
+/// (`repairContainerElement`); lines and arrows let go of what isn't there,
+/// lines of anything.
+fn repair_bindings(els: &mut [Element]) {
+    let at: HashMap<String, usize> = els
+        .iter()
+        .enumerate()
+        .map(|(i, e)| (e.id().to_string(), i))
+        .collect();
+    for i in 0..els.len() {
+        let frame_gone =
+            truthy(els[i].get("frameId")) && !els[i].frame_id().is_some_and(|f| at.contains_key(f));
+        if frame_gone {
+            els[i].set("frameId", Value::Null);
+        }
+        let kind = els[i].kind();
+        let container = truthy_str(els[i].get("containerId")).map(str::to_string);
+        match container {
+            Some(c) if kind == ElementType::Text => repair_bound_element(els, &at, i, &c),
+            _ if truthy(els[i].get("boundElements")) => repair_container_element(els, &at, i),
+            _ => {}
+        }
+        if kind.is_linear() {
             for k in ["startBinding", "endBinding"] {
-                let gone = e
+                let to = els[i]
                     .get(k)
                     .and_then(|b| b.get("elementId"))
-                    .and_then(Value::as_str)
-                    .is_some_and(|id| !ids.contains(id));
-                if gone {
-                    e.set(k, Value::Null);
+                    .and_then(Value::as_str);
+                let there = to.is_some_and(|id| at.contains_key(id));
+                if truthy(els[i].get(k)) && (!there || kind != ElementType::Arrow) {
+                    els[i].set(k, Value::Null);
                 }
             }
         }
-        if e.kind() == ElementType::Text && e.container_id().is_some_and(|c| !ids.contains(c)) {
-            e.set("containerId", Value::Null);
+    }
+}
+
+/// `repairBoundElement`: a label turns with its shape (an arrow's stays
+/// level) and lets go of a shape that isn't there; a shape that is there
+/// lists it.
+fn repair_bound_element(els: &mut [Element], at: &HashMap<String, usize>, i: usize, c: &str) {
+    let container = at.get(c).copied();
+    let angle = match container {
+        Some(j) if els[j].kind() != ElementType::Arrow => els[j]
+            .get("angle")
+            .filter(|a| !a.is_null())
+            .cloned()
+            .unwrap_or(json!(0)),
+        _ => json!(0),
+    };
+    els[i].set("angle", angle);
+    let Some(j) = container else {
+        els[i].set("containerId", Value::Null);
+        return;
+    };
+    if els[i].is_deleted() {
+        return;
+    }
+    let id = els[i].id().to_string();
+    if let Some(Value::Array(list)) = els[j].get("boundElements")
+        && !list
+            .iter()
+            .any(|b| b.get("id").and_then(Value::as_str) == Some(&id))
+    {
+        let mut list = list.clone();
+        list.push(json!({"type": "text", "id": id}));
+        els[j].set("boundElements", Value::Array(list));
+    }
+}
+
+/// `repairContainerElement`: what a shape lists as attached, without what
+/// isn't there, is deleted or is listed twice; a text listed that has no
+/// shape becomes its label.
+fn repair_container_element(els: &mut [Element], at: &HashMap<String, usize>, i: usize) {
+    let Some(Value::Array(list)) = els[i].get("boundElements").cloned() else {
+        return;
+    };
+    let mut seen = HashSet::new();
+    let mut kept = Vec::new();
+    for b in list {
+        let Some(&j) = b
+            .get("id")
+            .and_then(Value::as_str)
+            .and_then(|id| at.get(id))
+        else {
+            continue;
+        };
+        if !seen.insert(j) || els[j].is_deleted() {
+            continue;
+        }
+        kept.push(b);
+        if els[j].kind() == ElementType::Text && !truthy(els[j].get("containerId")) {
+            let id = els[i].id().to_string();
+            els[j].set("containerId", Value::String(id));
         }
     }
-    out
+    els[i].set("boundElements", Value::Array(kept));
+}
+
+/// `repairBoundTextElementOrder`: labels right after their shapes
+/// (`normalizeBoundElementsOrder`), those that moved given indices there.
+fn repair_bound_text_order(els: Vec<Element>) -> Vec<Element> {
+    let before: HashMap<String, usize> = els
+        .iter()
+        .enumerate()
+        .map(|(i, e)| (e.id().to_string(), i))
+        .collect();
+    let mut els = normalize_bound_elements_order(els);
+    let moved: HashSet<String> = els
+        .iter()
+        .enumerate()
+        .filter(|(i, e)| {
+            e.kind() == ElementType::Text
+                && truthy(e.get("containerId"))
+                && before.get(e.id()) != Some(i)
+        })
+        .map(|(_, e)| e.id().to_string())
+        .collect();
+    if !moved.is_empty() {
+        order::sync_moved_indices(&mut els, &moved);
+    }
+    els
+}
+
+/// `normalizeBoundElementsOrder`: each shape's labels right after it, the
+/// rest as it was; unchanged if that would lose an element.
+fn normalize_bound_elements_order(els: Vec<Element>) -> Vec<Element> {
+    let at: HashMap<&str, usize> = els.iter().enumerate().map(|(i, e)| (e.id(), i)).collect();
+    let lists = |e: &Element, id: &str| {
+        e.get("boundElements")
+            .and_then(Value::as_array)
+            .is_some_and(|l| {
+                l.iter()
+                    .any(|b| b.get("id").and_then(Value::as_str) == Some(id))
+            })
+    };
+    let mut placed = vec![false; els.len()];
+    let mut order = Vec::with_capacity(els.len());
+    for (i, e) in els.iter().enumerate() {
+        if placed[i] {
+            continue;
+        }
+        if let Some(list) = e
+            .get("boundElements")
+            .and_then(Value::as_array)
+            .filter(|l| !l.is_empty())
+        {
+            placed[i] = true;
+            order.push(i);
+            for b in list {
+                let child = b
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .and_then(|id| at.get(id));
+                if let Some(&j) = child
+                    && b.get("type").and_then(Value::as_str) == Some("text")
+                    && !placed[j]
+                {
+                    placed[j] = true;
+                    order.push(j);
+                }
+            }
+            continue;
+        }
+        // A label its shape lists comes with the shape.
+        let listed = e.kind() == ElementType::Text
+            && truthy_str(e.get("containerId"))
+                .and_then(|c| at.get(c))
+                .is_some_and(|&c| lists(&els[c], e.id()));
+        if !listed {
+            placed[i] = true;
+            order.push(i);
+        }
+    }
+    if order.len() != els.len() {
+        return els;
+    }
+    let mut slots: Vec<Option<Element>> = els.into_iter().map(Some).collect();
+    order.into_iter().filter_map(|i| slots[i].take()).collect()
 }
 
 /// The drawing's settings from a file's `appState`: the saved keys only.
@@ -610,5 +795,107 @@ mod tests {
         assert_eq!(els[2].container_id(), None);
         assert!(els[3].start_binding().is_some());
         assert!(els[3].end_binding().is_none());
+    }
+
+    fn repaired(raw: Value) -> Vec<Element> {
+        restore_elements(raw.as_array().unwrap(), &mut Ids::new(1))
+    }
+
+    fn by_id<'a>(els: &'a [Element], id: &str) -> &'a Element {
+        els.iter().find(|e| e.id() == id).unwrap()
+    }
+
+    fn bound_ids(e: &Element) -> Vec<String> {
+        e.bound_elements().into_iter().map(|b| b.id).collect()
+    }
+
+    #[test]
+    fn lists_of_what_is_attached_repaired() {
+        let els = repaired(json!([
+            {"id": "box", "type": "rectangle", "index": "a0", "boundElements": [
+                {"type": "arrow", "id": "gone"},
+                {"type": "arrow", "id": "deleted"},
+                {"type": "arrow", "id": "ar"},
+                {"type": "arrow", "id": "ar"},
+                {"type": "text", "id": "label"},
+            ]},
+            {"id": "label", "type": "text", "index": "a1", "text": "hi"},
+            {"id": "deleted", "type": "arrow", "index": "a2", "isDeleted": true,
+             "points": [[0, 0], [1, 1]]},
+            {"id": "ar", "type": "arrow", "index": "a3", "points": [[0, 0], [1, 1]],
+             "startBinding": {"elementId": "box", "mode": "orbit", "fixedPoint": [0.5, 0.5]},
+             "endBinding": {"elementId": "deleted", "mode": "orbit", "fixedPoint": [0, 0]}},
+        ]));
+        let b = by_id(&els, "box");
+        assert_eq!(bound_ids(b), ["ar", "label"]);
+        // A text listed without a shape of its own becomes the label.
+        assert_eq!(by_id(&els, "label").container_id(), Some("box"));
+        // A deleted shape is still there: the binding stays.
+        assert!(by_id(&els, "ar").end_binding().is_some());
+    }
+
+    #[test]
+    fn labels_repaired_with_their_shapes() {
+        let els = repaired(json!([
+            {"id": "box", "type": "rectangle", "index": "a0", "angle": 0.5},
+            {"id": "label", "type": "text", "index": "a1", "text": "hi", "containerId": "box"},
+            {"id": "orphan", "type": "text", "index": "a2", "text": "x", "containerId": "gone",
+             "angle": 1.2},
+            {"id": "ar", "type": "arrow", "index": "a3", "angle": 2, "points": [[0, 0], [9, 9]]},
+            {"id": "on-arrow", "type": "text", "index": "a4", "text": "y", "containerId": "ar",
+             "angle": 2},
+            {"id": "old", "type": "text", "index": "a5", "text": "z", "containerId": "box",
+             "isDeleted": true, "angle": 0},
+        ]));
+        // The shape lists its label; the label turns with it.
+        assert_eq!(bound_ids(by_id(&els, "box")), ["label"]);
+        assert_eq!(by_id(&els, "label").angle(), 0.5);
+        // A deleted label isn't listed (but still turns).
+        assert_eq!(by_id(&els, "old").angle(), 0.5);
+        // A shape that isn't there: let go of, and level.
+        let orphan = by_id(&els, "orphan");
+        assert_eq!(orphan.container_id(), None);
+        assert_eq!(orphan.angle(), 0.0);
+        // An arrow's label stays level.
+        assert_eq!(by_id(&els, "on-arrow").angle(), 0.0);
+        assert_eq!(bound_ids(by_id(&els, "ar")), ["on-arrow"]);
+    }
+
+    #[test]
+    fn arrows_and_frames_let_go_of_what_isnt_there() {
+        let els = repaired(json!([
+            {"id": "frame", "type": "frame", "index": "a0", "isDeleted": true},
+            {"id": "in-deleted", "type": "rectangle", "index": "a1", "frameId": "frame"},
+            {"id": "in-gone", "type": "ellipse", "index": "a2", "frameId": "gone"},
+            {"id": "ar", "type": "arrow", "index": "a3", "points": [[0, 0], [1, 1]],
+             "startBinding": {"elementId": "gone", "mode": "orbit", "fixedPoint": [0, 0]},
+             "endBinding": {"elementId": "in-gone", "mode": "inside", "fixedPoint": [1, 1]}},
+        ]));
+        assert_eq!(by_id(&els, "in-deleted").frame_id(), Some("frame"));
+        assert_eq!(by_id(&els, "in-gone").frame_id(), None);
+        assert!(by_id(&els, "ar").start_binding().is_none());
+        assert_eq!(
+            by_id(&els, "ar").end_binding().map(|b| b.element_id),
+            Some("in-gone".to_string())
+        );
+    }
+
+    #[test]
+    fn labels_come_right_after_their_shapes() {
+        let els = repaired(json!([
+            {"id": "label", "type": "text", "index": "a0", "text": "hi", "containerId": "box"},
+            {"id": "other", "type": "ellipse", "index": "a1"},
+            {"id": "box", "type": "rectangle", "index": "a2", "version": 3,
+             "boundElements": [{"type": "text", "id": "label"}]},
+            {"id": "top", "type": "diamond", "index": "a3"},
+        ]));
+        let ids: Vec<&str> = els.iter().map(Element::id).collect();
+        assert_eq!(ids, ["other", "box", "label", "top"]);
+        // Only the label moved: its index now sits between its neighbours'.
+        assert!(els.windows(2).all(|w| w[0].index() < w[1].index()));
+        assert_eq!(els[1].index(), Some("a2"));
+        assert_eq!(els[1].version(), 3);
+        assert_eq!(els[2].version(), 2);
+        assert_eq!(els[3].index(), Some("a3"));
     }
 }

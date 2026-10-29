@@ -6,6 +6,8 @@
 //! Ported from fractional-indexing 3.3.0 as Excalidraw vendors it (CC0),
 //! keys in base 62 like Excalidraw's.
 
+use std::collections::HashSet;
+
 use crate::scene::{Element, num};
 use serde_json::Value;
 
@@ -288,6 +290,50 @@ pub fn sync_invalid_indices(elements: &mut [Element]) -> usize {
     changed
 }
 
+/// Gives the elements in `moved` (by id) new indices between those of the
+/// neighbours that stayed (`syncMovedIndices`), their `version` up. If that
+/// can't keep the whole list in order (the neighbours' indices aren't), it
+/// repairs every index out of place instead ([`sync_invalid_indices`]).
+/// Returns how many changed.
+pub fn sync_moved_indices(elements: &mut [Element], moved: &HashSet<String>) -> usize {
+    let n = elements.len();
+    let mut fresh: Vec<Option<String>> = vec![None; n];
+    let mut i = 0;
+    while i < n {
+        if !moved.contains(elements[i].id()) {
+            i += 1;
+            continue;
+        }
+        let start = i;
+        while i < n && moved.contains(elements[i].id()) {
+            i += 1;
+        }
+        let lower = start.checked_sub(1).and_then(|p| elements[p].index());
+        let upper = elements.get(i).and_then(Element::index);
+        let Some(keys) = keys_between(lower, upper, i - start) else {
+            return sync_invalid_indices(elements);
+        };
+        for (slot, key) in fresh[start..i].iter_mut().zip(keys) {
+            *slot = Some(key);
+        }
+    }
+    let index = |k: usize| fresh[k].as_deref().or(elements[k].index());
+    let in_order =
+        (0..n).all(|k| index(k).is_some_and(is_valid)) && (1..n).all(|k| index(k - 1) < index(k));
+    if !in_order {
+        return sync_invalid_indices(elements);
+    }
+    let mut changed = 0;
+    for (e, key) in elements.iter_mut().zip(fresh) {
+        if let Some(key) = key {
+            e.set("index", Value::String(key));
+            e.set("version", num(e.version() as f64 + 1.0));
+            changed += 1;
+        }
+    }
+    changed
+}
+
 /// Which of `indices` form a longest strictly increasing subsequence
 /// (patience sorting: O(n log n)); missing ones never do.
 fn longest_increasing(indices: &[Option<String>]) -> Vec<bool> {
@@ -422,6 +468,26 @@ mod tests {
         // Duplicates.
         let mut e = els(&[Some("a1"), Some("a1"), Some("a1")]);
         sync_invalid_indices(&mut e);
+        assert!(sorted(&e));
+    }
+
+    #[test]
+    fn moved_ones_fit_between_their_neighbours() {
+        let moved = |ids: &[&str]| ids.iter().map(|s| s.to_string()).collect::<HashSet<_>>();
+        // e1 moved down from the top: only it changes.
+        let mut e = els(&[Some("a0"), Some("a5"), Some("a1"), Some("a3")]);
+        assert_eq!(sync_moved_indices(&mut e, &moved(&["e1"])), 1);
+        assert!(sorted(&e));
+        assert_eq!(e[1].index().map(|i| i > "a0" && i < "a1"), Some(true));
+        assert_eq!(e[1].version(), 2);
+        assert_eq!(e[2].version(), 1);
+        // At the ends, several together.
+        let mut e = els(&[Some("a5"), Some("a6"), Some("a0"), Some("a1")]);
+        assert_eq!(sync_moved_indices(&mut e, &moved(&["e0", "e1"])), 2);
+        assert!(sorted(&e));
+        // Neighbours out of order: everything out of place is repaired.
+        let mut e = els(&[Some("a3"), Some("a9"), Some("a1"), Some("a2")]);
+        sync_moved_indices(&mut e, &moved(&["e1"]));
         assert!(sorted(&e));
     }
 }

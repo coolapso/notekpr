@@ -32,6 +32,10 @@ pub async fn create_vault(name: String) -> Option<String> {
         error(notekpr_core::quick::reserved_name_message());
         return None;
     }
+    if notekpr_core::drawings::is_reserved_name(&name) {
+        error(notekpr_core::drawings::reserved_name_message());
+        return None;
+    }
     match create_vault_of(&name, VaultKind::Regular).await {
         Ok(v) => v,
         Err(e) => {
@@ -159,6 +163,9 @@ pub async fn rename_vault(vault: &str, name: &str) -> bool {
     update_vault_meta(vault, |m| {
         if notekpr_core::quick::is_reserved_name(&name) {
             return Err(notekpr_core::quick::reserved_name_message());
+        }
+        if notekpr_core::drawings::is_reserved_name(&name) {
+            return Err(notekpr_core::drawings::reserved_name_message());
         }
         m.name = name;
         Ok(())
@@ -2480,12 +2487,14 @@ pub async fn import_account(files: Vec<(String, Vec<u8>)>) {
         let taken: std::collections::HashSet<String> = step(|c| {
             c.replicas
                 .keys()
-                .filter(|id| !c.is_quick_notes(id))
+                .filter(|id| !c.is_quick_notes(id) && !c.is_drawings(id))
                 .map(|id| c.vault_name(id).to_lowercase())
                 .collect()
         });
         let name = account_export::unique_name(v.meta.name.trim(), |n| {
-            taken.contains(&n.to_lowercase()) || notekpr_core::quick::is_reserved_name(n)
+            taken.contains(&n.to_lowercase())
+                || notekpr_core::quick::is_reserved_name(n)
+                || notekpr_core::drawings::is_reserved_name(n)
         });
         let id = match create_vault_of(&name, VaultKind::Regular).await {
             Ok(Some(id)) => id,

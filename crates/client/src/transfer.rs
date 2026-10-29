@@ -312,16 +312,22 @@ pub async fn export_account(
     let mut quick = None;
     let mut skipped = BTreeSet::new();
     for v in hub.vaults() {
-        let (is_quick, id, meta) = {
+        let (is_quick, empty_drawings, id, meta) = {
             let g = v.lock().await;
             (
                 g.is_quick_notes(),
+                g.is_drawings() && g.paths().is_empty(),
                 g.id().to_string(),
                 g.replica.meta.clone(),
             )
         };
         if is_quick {
             quick = Some(v);
+            continue;
+        }
+        // The Drawings go as a vault of their own (imported under another
+        // name: no vault may have theirs), unless there's nothing in them.
+        if empty_drawings {
             continue;
         }
         if let Some(s) = skip
@@ -756,13 +762,15 @@ pub async fn import_account(hub: &Hub, src: &Path, dry_run: bool) -> Result<Opti
     let mut taken = BTreeSet::new();
     for v in hub.vaults() {
         let g = v.lock().await;
-        if !g.is_quick_notes() {
+        if !g.is_quick_notes() && !g.is_drawings() {
             taken.insert(g.name().to_lowercase());
         }
     }
     for (exported, files) in unpacked.vaults {
         let name = account_export::unique_name(exported.meta.name.trim(), |n| {
-            taken.contains(&n.to_lowercase()) || quick::is_reserved_name(n)
+            taken.contains(&n.to_lowercase())
+                || quick::is_reserved_name(n)
+                || notekpr_core::drawings::is_reserved_name(n)
         });
         taken.insert(name.to_lowercase());
         let mut c = split(files);

@@ -653,6 +653,22 @@ impl Core {
             .is_some_and(|i| i.is_own_quick_notes(&self.user_id))
     }
 
+    /// The person's Drawings section: their vault of that kind
+    /// (`notekpr_core::drawings`), once listed. Apps show it as such, never
+    /// as a vault.
+    pub fn drawings(&self) -> Option<String> {
+        self.vault_infos
+            .values()
+            .find(|i| i.is_own_drawings(&self.user_id))
+            .map(|i| i.id.clone())
+    }
+
+    pub fn is_drawings(&self, vault: &str) -> bool {
+        self.vault_infos
+            .get(vault)
+            .is_some_and(|i| i.is_own_drawings(&self.user_id))
+    }
+
     pub fn vault_name(&self, vault: &str) -> String {
         self.replicas
             .get(vault)

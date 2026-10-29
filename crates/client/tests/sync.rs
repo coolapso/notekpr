@@ -28,8 +28,8 @@ async fn shared_vault_reaches_running_sync_live() {
 
     // Bob's sync is running before Alice writes anything.
     let bob_live = live(hub(&bob).await).await;
-    // Family, and his own quick notes.
-    assert_eq!(bob_live.hub.vault_ids().len(), 2);
+    // Family, and his own quick notes and Drawings.
+    assert_eq!(bob_live.hub.vault_ids().len(), 3);
 
     ops::put_document(&alice_hub, "Family", "Welcome.md", "# Hi Bob\n", None)
         .await

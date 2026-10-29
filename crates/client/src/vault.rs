@@ -708,12 +708,22 @@ impl Vault {
         self.notes().len()
     }
 
-    /// One more note fits (always, outside the quick notes).
+    /// One more note fits (always, outside the quick notes and Drawings,
+    /// which hold none).
     pub fn require_room(&self) -> Result<()> {
+        if self.is_drawings() {
+            bail!("your Drawings hold drawings and files only: put notes in a vault");
+        }
         if self.is_quick_notes() && !quick::has_room(self.note_count(), self.note_limit) {
             bail!("{}", quick::full_message(self.note_limit));
         }
         Ok(())
+    }
+
+    /// Whether this is the person's Drawings section: never shared, holding
+    /// drawings and files only (`notekpr_core::drawings`).
+    pub fn is_drawings(&self) -> bool {
+        self.kind == VaultKind::Drawings
     }
 
     /// Quick notes keep everything at their top level.

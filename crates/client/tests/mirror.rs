@@ -662,7 +662,10 @@ async fn case_insensitive_file_systems_keep_case_variants_apart() {
     let mut ids = Vec::new();
     for v in h.vaults() {
         let g = v.lock().await;
-        ids.push((g.name().to_string(), g.id().to_string()));
+        // (Not the quick notes and Drawings, which are there too.)
+        if !g.kind.is_section() {
+            ids.push((g.name().to_string(), g.id().to_string()));
+        }
     }
     ids.sort();
     let (upper, lower) = (ids[0].1.clone(), ids[1].1.clone());
@@ -1149,4 +1152,68 @@ async fn drawings_are_excalidraw_files_merged_element_by_element() {
     assert_eq!(kind("Broken.excalidraw"), Some(EntryKind::Attachment));
     let (_, sketch) = g.find("Sketch").unwrap();
     assert_eq!(g.drawing(&sketch.id).elements[0].width(), 5.0);
+}
+
+/// The person's Drawings are the `Drawings/` folder, theirs whatever a vault
+/// may be called: Excalidraw files become drawings, files stay files,
+/// Markdown files wait on disk. The command line finds it by its name.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_drawings_are_a_folder_of_drawings_and_files() {
+    use notekpr_core::doc::EntryKind;
+    use notekpr_core::protocol::VaultKind;
+    let srv = start().await;
+    let alice = login(&srv, "alice").await;
+    // No vault takes the name.
+    let err = manage::create_vault(&alice, "drawings")
+        .await
+        .err()
+        .expect("refused");
+    assert!(err.to_string().contains("your drawings"), "{err}");
+    let h = hub(&alice).await;
+    // Made the first time, once.
+    let d = h.drawings().await.expect("made at the start");
+    let did = d.lock().await.id().to_string();
+    assert!(std::sync::Arc::ptr_eq(
+        &h.resolve("Drawings").await.unwrap(),
+        &d
+    ));
+    assert!(std::sync::Arc::ptr_eq(
+        &h.resolve(" drawings ").await.unwrap(),
+        &d
+    ));
+    let summaries = h.summaries().await;
+    let mine: Vec<_> = summaries
+        .iter()
+        .filter(|s| s.kind == VaultKind::Drawings)
+        .collect();
+    assert_eq!(mine.len(), 1);
+    drop(h);
+    let h = hub(&reopen(&srv, "alice", "alice").await).await;
+    assert_eq!(h.drawings().await.unwrap().lock().await.id(), did);
+
+    let mut m = Mirror::new(h.clone(), &srv.path("mirror")).await.unwrap();
+    m.reconcile_all(true).await.unwrap();
+    let dir = m.vault_dir(&did).unwrap().to_path_buf();
+    assert_eq!(dir.file_name().unwrap(), "Drawings");
+    write(
+        &dir.join("Plans/Sketch.excalidraw"),
+        r#"{"type":"excalidraw","version":2,"elements":[{"id":"a","type":"ellipse","width":5}]}"#,
+    );
+    write(&dir.join("photo.png"), "not really a png");
+    write(&dir.join("Idea.md"), "a note\n");
+    m.reconcile_all(true).await.unwrap();
+    let d = h.drawings().await.unwrap();
+    {
+        let g = d.lock().await;
+        let kind = |p: &str| g.find(p).map(|(_, e)| e.kind);
+        assert_eq!(kind("Plans/Sketch.excalidraw"), Some(EntryKind::Drawing));
+        assert_eq!(kind("photo.png"), Some(EntryKind::Attachment));
+        assert_eq!(kind("Idea.md"), None, "notes aren't synced there");
+        assert!(g.require_room().is_err(), "nor made there");
+    }
+    assert_eq!(read(&dir.join("Idea.md")), "a note\n", "it waits on disk");
+    // Uploaded, the drawing counts as one of alice's.
+    h.local_changed(&did, vec![], true).await;
+    let me: notekpr_core::protocol::MeResponse = h.session.api.get("/me").await.unwrap();
+    assert_eq!(me.drawing_count, 1);
 }

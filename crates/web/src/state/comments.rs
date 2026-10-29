@@ -81,8 +81,9 @@ fn owner_of(c: &Core, vault: &str, note: &str) -> Option<String> {
 /// while the vault's owner lets them.
 pub fn can_comment(c: &Core, vault: &str, note: &str) -> bool {
     match c.vault_infos.get(vault) {
-        // Quick notes have no comments: moved to a vault, they can.
-        Some(i) if i.is_quick_notes() => false,
+        // Quick notes and Drawings have no comments: moved to a vault,
+        // they can.
+        Some(i) if i.kind.is_section() => false,
         Some(i) => i.role.can_write() || i.viewers_comment,
         None => c
             .shares

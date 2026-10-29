@@ -8,7 +8,9 @@ use std::time::Duration;
 use anyhow::{Context, Result, anyhow, bail};
 use notekpr_core::doc::{Entry, EntryKind};
 use notekpr_core::engine::PinStatus;
-use notekpr_core::protocol::{DeviceStatus, MIB, PrincipalKind, Role};
+use notekpr_core::protocol::{
+    DeviceStatus, Limit, MIB, MeResponse, PrincipalKind, Role, VaultKind,
+};
 use serde::Serialize;
 use serde_json::json;
 use tokio::sync::watch;
@@ -1339,10 +1341,9 @@ async fn vault(ctx: &Ctx, c: VaultCmd) -> Result<()> {
                 ctx.print_json(&list);
                 return Ok(());
             }
-            // The quick notes are no vault: a line of their own.
-            let (quick, list): (Vec<_>, Vec<_>) = list
-                .into_iter()
-                .partition(|s| s.kind == notekpr_core::protocol::VaultKind::QuickNotes);
+            // The quick notes and Drawings are no vault: a line each.
+            let (sections, list): (Vec<_>, Vec<_>) =
+                list.into_iter().partition(|s| s.kind.is_section());
             if list.is_empty() {
                 crate::out!("no vaults yet — create one with `notekpr vault create <name>`");
             }
@@ -1367,11 +1368,33 @@ async fn vault(ctx: &Ctx, c: VaultCmd) -> Result<()> {
             for id in hub.waiting_for_keys() {
                 crate::out!("{:<28} (waiting for its key from the owner)  [{id}]", "?");
             }
-            for q in quick {
+            for s in sections {
+                if s.kind == VaultKind::QuickNotes {
+                    crate::out!(
+                        "\n{}, {} (`notekpr quick --list`)",
+                        quick_count(s.documents, s.note_limit),
+                        storage_text(&s)
+                    );
+                    continue;
+                }
+                // How many drawings the person has in all their vaults, of
+                // how many they may (offline: those here).
+                let me = if hub.is_online() {
+                    hub.session.api.get::<MeResponse>("/me").await.ok()
+                } else {
+                    None
+                };
+                let count = match me {
+                    Some(me) => {
+                        notekpr_core::drawings::count_text(me.drawing_count, me.drawing_limit)
+                    }
+                    None => notekpr_core::drawings::count_text(s.drawings as u64, Limit::Unlimited),
+                };
                 crate::out!(
-                    "\n{}, {} (`notekpr quick --list`)",
-                    quick_count(q.documents, q.note_limit),
-                    storage_text(&q)
+                    "\n{}: {count}, {} (`notekpr ls {}`)",
+                    notekpr_core::drawings::NAME,
+                    storage_text(&s),
+                    notekpr_core::drawings::NAME
                 );
             }
             Ok(())

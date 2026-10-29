@@ -349,11 +349,16 @@ pub(super) fn drop_vault(c: &mut Core, v: &str) {
 
 pub fn publish_vaults(c: &Core) {
     let views = {
-        // The quick notes are no vault to the person (`crate::quick`).
+        // The quick notes and Drawings are no vault to the person
+        // (`crate::quick`); kinds from newer releases aren't shown.
         let mut v: Vec<VaultView> = c
             .vault_infos
             .values()
-            .filter(|i| !i.is_own_quick_notes(&c.user_id))
+            .filter(|i| {
+                !i.is_own_quick_notes(&c.user_id)
+                    && !i.is_own_drawings(&c.user_id)
+                    && i.kind != VaultKind::Other
+            })
             .map(|i| {
                 let r = c.replicas.get(&i.id);
                 let meta = r.map(|r| &r.meta);

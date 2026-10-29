@@ -299,6 +299,19 @@ notes, and answering to the name `Drawings` (`ls Drawings`, `mv Home
 Sketch.drawing / --to-vault Drawings`). It holds drawings and files only:
 `write` refuses notes there.
 
+A drawing file is Excalidraw's JSON under notekpr's own `type`
+(`notekpr-drawing`); `write` and imports also take Excalidraw's
+`.excalidraw` files, what Excalidraw copies and Obsidian's
+`.excalidraw.md`. `cat --json` prints a drawing's details, its file and
+its words (texts, labels, sticky notes) — what agents read too
+([agents.md](agents.md)).
+Pictures in a drawing are files of its vault: a drawing file that comes in
+has its pictures made files in `attachments/` (or shown from a file with
+the same bytes already there), and every drawing file written out — `cat`,
+exports, the Markdown folder, `recover` — holds them inside, as
+Excalidraw's files do. Moving a drawing to another vault takes its pictures
+along (unless a drawing staying behind shows them too).
+
 The server may limit how many drawings you have (`drawings_per_user`, or a
 limit of your own; by default there is none): all of them together, in
 every vault you own — a drawing someone makes in a vault of yours counts as

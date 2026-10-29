@@ -30,6 +30,9 @@ const BOUND_TEXT_PADDING: f64 = 5.0;
 const FRAME_RADIUS: f64 = 8.0;
 const FRAME_STROKE: &str = "#bbb";
 const FRAME_STROKE_WIDTH: f64 = 2.0;
+/// `DARK_THEME_FILTER`: SVG pictures in dark mode.
+const DARK_THEME_FILTER: &str = "invert(93%) hue-rotate(180deg)";
+const SVG_MIME: &str = "image/svg+xml";
 
 /// How to export.
 #[derive(Clone, Debug)]
@@ -114,6 +117,46 @@ fn rough_paths(d: &Drawable) -> String {
     rough::svg::draw(&d)
 }
 
+/// The part of its picture an image shows (`crop`), in the picture's own
+/// pixels.
+#[derive(Clone, Copy)]
+struct Crop {
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+    natural_width: f64,
+    natural_height: f64,
+}
+
+impl Crop {
+    fn of(e: &Element) -> Option<Self> {
+        let c = e.get("crop")?.as_object()?;
+        let get = |k: &str| c.get(k).and_then(|v| v.as_f64());
+        Some(Self {
+            x: get("x")?,
+            y: get("y")?,
+            width: get("width")?,
+            height: get("height")?,
+            natural_width: get("naturalWidth")?,
+            natural_height: get("naturalHeight")?,
+        })
+    }
+}
+
+/// `hashString`: djb2 over the UTF-16 code units, as an unsigned 32-bit
+/// number.
+fn hash_string(s: &str) -> u32 {
+    s.encode_utf16().fold(5381u32, |h, c| {
+        h.wrapping_mul(33).wrapping_add(u32::from(c))
+    })
+}
+
+/// An element's link, if it has one.
+fn link_of(e: &Element) -> Option<&str> {
+    e.link().filter(|l| !l.trim().is_empty())
+}
+
 struct Renderer<'a> {
     scene: &'a Scene,
     elements: HashMap<&'a str, &'a Element>,
@@ -122,6 +165,11 @@ struct Renderer<'a> {
     /// Frames whose children are clipped to them.
     frames: HashMap<&'a str, &'a Element>,
     time: sticky::LocalTime,
+    /// The pictures' `<symbol>`s for `<defs>`, in the order made; each
+    /// goes first in it, so they end up last first.
+    symbols: Vec<String>,
+    /// The ids of the `<symbol>`s there are, in `<defs>` or a link.
+    symbol_ids: std::collections::HashSet<String>,
 }
 
 impl<'a> Renderer<'a> {
@@ -153,7 +201,7 @@ impl<'a> Renderer<'a> {
             Some(f) => format!(r#"{before}<g clip-path="url(#{})">{markup}</g>"#, esc(f)),
             None => format!("{before}{markup}"),
         };
-        match e.link().filter(|l| !l.trim().is_empty()) {
+        match link_of(e) {
             Some(link) => {
                 let _ = write!(
                     self.out,
@@ -308,15 +356,54 @@ impl<'a> Renderer<'a> {
                 self.add(e, markup);
             }
             ElementType::Image => {
-                let Some(data_url) = e
-                    .file_id()
-                    .and_then(|id| self.scene.files.get(id))
-                    .and_then(|f| f.get("dataURL"))
-                    .and_then(|d| d.as_str())
-                else {
+                let Some(file) = e.file_id().and_then(|id| self.scene.files.get(id)) else {
                     return;
                 };
+                let Some(data_url) = file.get("dataURL").and_then(|d| d.as_str()) else {
+                    return;
+                };
+                let file_id = file
+                    .get("id")
+                    .and_then(|i| i.as_str())
+                    .or(e.file_id())
+                    .unwrap_or_default();
                 let (w, h) = (js::round(e.width()), js::round(e.height()));
+                // The picture is a `<symbol>` each image showing it uses;
+                // a cropped one is the whole picture, scaled, shifted and
+                // masked to the part shown.
+                let crop = Crop::of(e);
+                let (mut symbol, mut uncropped) = (format!("image-{file_id}"), None);
+                if let Some(c) = crop {
+                    let uw = e.width() / (c.width / c.natural_width);
+                    let uh = e.height() / (c.height / c.natural_height);
+                    let size = hash_string(&format!("{}x{}", n(uw), n(uh)));
+                    symbol = format!("image-crop-{file_id}-{size}");
+                    uncropped = Some((uw, uh));
+                }
+                let mut before = String::new();
+                if self.symbol_ids.insert(symbol.clone()) {
+                    let (sw, sh) =
+                        uncropped.map_or(("100%".into(), "100%".into()), |(w, h)| (n(w), n(h)));
+                    let markup = format!(
+                        r#"<symbol id="{}"><image href="{}" preserveAspectRatio="none" width="{sw}" height="{sh}"></image></symbol>"#,
+                        esc(&symbol),
+                        esc(data_url),
+                    );
+                    // Excalidraw puts it first in what holds the image: the
+                    // link, if it has one, else `<defs>`.
+                    if link_of(e).is_some() {
+                        before.push_str(&markup);
+                    } else {
+                        self.symbols.push(markup);
+                    }
+                }
+                let (crop_x, crop_y) = match (crop, uncropped) {
+                    (Some(c), Some((uw, uh))) => {
+                        (c.x / (c.natural_width / uw), c.y / (c.natural_height / uh))
+                    }
+                    _ => (0.0, 0.0),
+                };
+                let (ax, ay) = (cx + crop_x, cy + crop_y);
                 let scale = e.get("scale").and_then(|s| s.as_array()).map(|s| {
                     (
                         s.first().and_then(|v| v.as_f64()).unwrap_or(1.0),
@@ -325,34 +412,64 @@ impl<'a> Renderer<'a> {
                 });
                 let flip = match scale {
                     Some((sx, sy)) if sx != 1.0 || sy != 1.0 => format!(
-                        r#" transform="translate({cx} {cy}) scale({} {}) translate({} {})""#,
+                        r#" transform="translate({} {}) scale({} {}) translate({} {})""#,
+                        n(ax),
+                        n(ay),
                         n(sx),
                         n(sy),
-                        n(-cx),
-                        n(-cy),
-                        cx = n(cx),
-                        cy = n(cy),
+                        n(-ax),
+                        n(-ay),
                     ),
                     _ => String::new(),
                 };
-                let mut markup = format!(
-                    r#"<g transform="{transform}"><image href="{}" preserveAspectRatio="none" width="{}" height="{}" opacity="{}"{flip}></image></g>"#,
-                    esc(data_url),
-                    n(w),
-                    n(h),
-                    n(opacity)
+                let mut g = String::new();
+                let svg_picture = file.get("mimeType").and_then(|m| m.as_str()) == Some(SVG_MIME);
+                if dark && svg_picture {
+                    let _ = write!(g, r#" filter="{DARK_THEME_FILTER}""#);
+                }
+                if crop.is_some() {
+                    let id = esc(&format!("mask-image-crop-{}", e.id()));
+                    let _ = write!(
+                        before,
+                        r##"<mask id="{id}" fill="#fff"><rect x="{}" y="{}" width="{}" height="{}"></rect></mask>"##,
+                        n(crop_x),
+                        n(crop_y),
+                        n(w),
+                        n(h),
+                    );
+                    let _ = write!(g, r#" mask="url(#{id})""#);
+                }
+                let _ = write!(
+                    g,
+                    r#" transform="translate({} {}) rotate({} {} {})""#,
+                    n(offset_x - crop_x),
+                    n(offset_y - crop_y),
+                    n(degree),
+                    n(ax),
+                    n(ay),
                 );
                 if e.roundness().is_some() {
                     let r = shape::corner_radius(js::min(e.width(), e.height()), e);
-                    let id = format!("image-clipPath-{}", esc(e.id()));
-                    markup = format!(
-                        r#"<clipPath id="{id}" clipPathUnits="userSpaceOnUse"><rect x="0" y="0" width="{}" height="{}" rx="{r}" ry="{r}"></rect></clipPath><g clip-path="url(#{id})">{markup}</g>"#,
+                    let id = esc(&format!("image-clipPath-{}", e.id()));
+                    let _ = write!(
+                        before,
+                        r#"<clipPath id="{id}" clipPathUnits="userSpaceOnUse"><rect x="{}" y="{}" width="{}" height="{}" rx="{r}" ry="{r}"></rect></clipPath>"#,
+                        n(crop_x),
+                        n(crop_y),
                         n(e.width()),
                         n(e.height()),
                         r = n(r),
                     );
+                    let _ = write!(g, r#" clip-path="url(#{id})""#);
                 }
-                self.add(e, markup);
+                let markup = format!(
+                    r##"<g{g}><use href="#{}" width="{}" height="{}" opacity="{}"{flip}></use></g>"##,
+                    esc(&symbol),
+                    n(w + crop_x),
+                    n(h + crop_y),
+                    n(opacity),
+                );
+                self.add_after(e, before, markup);
             }
             ElementType::Frame | ElementType::MagicFrame => {
                 let markup = format!(
@@ -420,12 +537,15 @@ pub fn export(scene: &Scene, opts: &SvgOptions) -> String {
         w = n(w),
         h = n(h)
     );
-    for f in frames.values() {
+    // The rest of `<defs>`: the pictures' symbols go ahead of it once the
+    // elements are drawn.
+    let mut defs = String::new();
+    for f in &frame_list {
         let [x1, y1, x2, y2, _, _] = bounds::absolute_coords(f);
         let cx = (x2 - x1) / 2.0 - (f.x() - x1);
         let cy = (y2 - y1) / 2.0 - (f.y() - y1);
         let _ = write!(
-            out,
+            defs,
             r#"<clipPath id="{}"><rect transform="translate({} {}) rotate({} {} {})" width="{}" height="{}" rx="{r}" ry="{r}"></rect></clipPath>"#,
             esc(f.id()),
             n(f.x() + offset_x),
@@ -439,13 +559,14 @@ pub fn export(scene: &Scene, opts: &SvgOptions) -> String {
         );
     }
     let _ = write!(
-        out,
+        defs,
         "<style class=\"style-fonts\">\n      {}</style></defs>",
         opts.font_faces.as_deref().unwrap_or_default()
     );
+    let mut body = String::new();
     if opts.background && background != "transparent" {
         let _ = write!(
-            out,
+            body,
             r#"<rect x="0" y="0" width="{w}" height="{h}" fill="{}"></rect>"#,
             esc(&color::themed(&background, opts.dark)),
             w = n(w),
@@ -460,9 +581,11 @@ pub fn export(scene: &Scene, opts: &SvgOptions) -> String {
             exporting: true,
             canvas_background: background.clone(),
         },
-        out,
+        out: body,
         frames,
         time: opts.time,
+        symbols: Vec::new(),
+        symbol_ids: Default::default(),
     };
     let iframe_like =
         |e: &Element| matches!(e.kind(), ElementType::Iframe | ElementType::Embeddable);
@@ -484,8 +607,13 @@ pub fn export(scene: &Scene, opts: &SvgOptions) -> String {
     for e in visible.iter().filter(|e| iframe_like(e)) {
         r.element(e, e.x() + offset_x, e.y() + offset_y);
     }
-    r.out.push_str("</svg>");
-    r.out
+    for symbol in r.symbols.iter().rev() {
+        out.push_str(symbol);
+    }
+    out.push_str(&defs);
+    out.push_str(&r.out);
+    out.push_str("</svg>");
+    out
 }
 
 #[cfg(test)]
@@ -558,5 +686,73 @@ mod tests {
         );
         assert!(!bare.contains(r##"fill="#ffffff""##));
         assert!(export(&Scene::default(), &SvgOptions::default()).ends_with("</svg>"));
+    }
+
+    #[test]
+    fn pictures_cropped_flipped_and_shared() {
+        let scene = crate::file::scene_from_json(
+            &serde_json::json!({
+                "type": "excalidraw",
+                "elements": [
+                    // The middle of a 400×200 picture, mirrored, round.
+                    {"id": "a", "type": "image", "x": 10, "y": 20, "width": 100, "height": 50,
+                     "fileId": "pic", "status": "saved", "scale": [-1, 1],
+                     "roundness": {"type": 3},
+                     "crop": {"x": 40, "y": 10, "width": 200, "height": 100,
+                              "naturalWidth": 400, "naturalHeight": 200}},
+                    // The same picture, whole.
+                    {"id": "b", "type": "image", "x": 200, "y": 20, "width": 60, "height": 30,
+                     "fileId": "pic", "status": "saved"},
+                    // Another, with a link: its symbol goes in the link.
+                    {"id": "c", "type": "image", "x": 300, "y": 20, "width": 10, "height": 10,
+                     "fileId": "svg", "status": "saved", "link": "https://x.y"},
+                ],
+                "files": {
+                    "pic": {"id": "pic", "mimeType": "image/png", "dataURL": "data:image/png;base64,AAAA"},
+                    "svg": {"id": "svg", "mimeType": "image/svg+xml", "dataURL": "data:image/svg+xml;base64,BBBB"},
+                },
+            }),
+            &mut Ids::new(1),
+        )
+        .unwrap();
+        let svg = export(&scene, &SvgOptions::default());
+        // The symbols made last come first.
+        let defs = &svg[svg.find("<defs>").unwrap()..svg.find("<style").unwrap()];
+        assert_eq!(
+            defs,
+            concat!(
+                r#"<defs><symbol id="image-pic"><image href="data:image/png;base64,AAAA" preserveAspectRatio="none" width="100%" height="100%"></image></symbol>"#,
+                // djb2("200x100"): the size of the whole picture.
+                r#"<symbol id="image-crop-pic-2151568832"><image href="data:image/png;base64,AAAA" preserveAspectRatio="none" width="200" height="100"></image></symbol>"#,
+            )
+        );
+        // The crop's offset in the picture as drawn: 40 px of 400 is 20 of
+        // 200, 10 of 200 is 5 of 100.
+        assert_eq!(
+            body(&svg),
+            concat!(
+                r##"</style></defs><rect x="0" y="0" width="320" height="70" fill="#ffffff"></rect>"##,
+                r##"<mask id="mask-image-crop-a" fill="#fff"><rect x="20" y="5" width="100" height="50"></rect></mask>"##,
+                r#"<clipPath id="image-clipPath-a" clipPathUnits="userSpaceOnUse"><rect x="20" y="5" width="100" height="50" rx="12.5" ry="12.5"></rect></clipPath>"#,
+                r#"<g mask="url(#mask-image-crop-a)" transform="translate(-10 5) rotate(0 70 30)" clip-path="url(#image-clipPath-a)">"#,
+                r##"<use href="#image-crop-pic-2151568832" width="120" height="55" opacity="1" transform="translate(70 30) scale(-1 1) translate(-70 -30)"></use></g>"##,
+                r##"<g transform="translate(200 10) rotate(0 30 15)"><use href="#image-pic" width="60" height="30" opacity="1"></use></g>"##,
+                r#"<a href="https://x.y"><symbol id="image-svg"><image href="data:image/svg+xml;base64,BBBB" preserveAspectRatio="none" width="100%" height="100%"></image></symbol>"#,
+                r##"<g transform="translate(300 10) rotate(0 5 5)"><use href="#image-svg" width="10" height="10" opacity="1"></use></g></a>"##,
+                "</svg>",
+            )
+        );
+        // In dark mode SVG pictures are inverted, as the canvas shows them.
+        let dark = export(
+            &scene,
+            &SvgOptions {
+                dark: true,
+                ..SvgOptions::default()
+            },
+        );
+        assert!(dark.contains(
+            r#"<g filter="invert(93%) hue-rotate(180deg)" transform="translate(300 10)"#
+        ));
+        assert_eq!(dark.matches("filter=").count(), 1);
     }
 }

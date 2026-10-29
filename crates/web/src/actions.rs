@@ -1269,6 +1269,44 @@ fn new_drawing_at(
     id
 }
 
+/// An Excalidraw or Obsidian drawing file of the vault (a file, or a note
+/// `X.excalidraw.md`) made a drawing beside it (`X.drawing`), its
+/// pictures files of the vault; the file goes to the trash and the
+/// drawing opens.
+pub async fn make_drawing_of(vault: &str, id: &str) {
+    let Some(e) = step(|c| c.entry(vault, id)) else {
+        return;
+    };
+    let Some(to) = paths::drawing_path_for(&e.path) else {
+        return;
+    };
+    let text = match e.kind {
+        EntryKind::Note => step(|c| c.replicas.get(vault).map(|r| r.note_text(id))),
+        _ => attachment_bytes(vault, id)
+            .await
+            .and_then(|b| String::from_utf8(b).ok()),
+    };
+    let mut ids = notekpr_draw::restore::Ids::new(js_sys::Date::now() as u64);
+    let Some(d) = text.and_then(|t| notekpr_draw::file::read_drawing(&t, &mut ids).ok()) else {
+        error("This file isn't a drawing Excalidraw or Obsidian made.");
+        return;
+    };
+    if !crate::drawings::has_room_in(vault) {
+        return;
+    }
+    let mut scene = d.scene;
+    let name = paths::drawing_title(&to).to_string();
+    scene.files = adopt_pictures(vault, &name, scene.files, &mut HashMap::new()).await;
+    let new = step(|c| {
+        let new = new_drawing_at(c, vault, &to, &scene);
+        change_index(c, vault, |ix| ix.trash(id, now()));
+        new
+    });
+    state::ui().tree_rev.update(|v| *v += 1);
+    success("Made a drawing of it; the file went to the trash.");
+    navigate(Route::Note(vault.to_string(), new));
+}
+
 /// A new, empty drawing in `folder`, opened.
 pub fn new_drawing(vault: &str, folder: &str) {
     if !state::step(|c| c.can_write(vault)) {

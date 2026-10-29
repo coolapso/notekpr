@@ -51,7 +51,7 @@ def main():
     env = Env(args.server, args.web)
     home = tempfile.mkdtemp(prefix="notekpr-cli-")
     cenv = dict(os.environ, NOTEKPR_CONFIG_DIR=f"{home}/config", NOTEKPR_DATA_DIR=f"{home}/data")
-    cli = lambda *a: subprocess.run([os.path.abspath(args.cli), "-p", "bob", *a], env=cenv, capture_output=True, text=True, timeout=60)
+    cli = lambda *a, **kw: subprocess.run([os.path.abspath(args.cli), "-p", "bob", *a], env=cenv, capture_output=True, text=True, timeout=60, **kw)
     a = Browser()
 
     def drawing():
@@ -248,6 +248,23 @@ def main():
         first = a.text(".drawing-page .note-head .menu button")
         check(".drawing" in first, "the first export is a .drawing file")
         a.chord(KEYS["escape"])
+
+        # An Excalidraw file synced before (a file of the vault) is made a
+        # drawing from the tree's menu.
+        old = '{"type":"excalidraw","version":2,"elements":[{"id":"e","type":"ellipse","x":0,"y":0,"width":80,"height":50}]}'
+        r = cli("write", "Art", "Old sketch.excalidraw", "--attachment", input=old)
+        check(r.returncode == 0, "an .excalidraw file uploaded as a file")
+        row = "Array.from(document.querySelectorAll('.tree-row')).find(r => r.textContent.trim() === arguments[0])"
+        a.wait("return !!" + row, 20, "the file in the tree", "Old sketch.excalidraw")
+        a.js(row + ".querySelector('.tree-more').click()", "Old sketch.excalidraw")
+        a.click_el(a.find_text(".menu button", "Make it a drawing", 5))
+        a.find(CANVAS, 10)
+        time.sleep(1.5)
+        r = cli("cat", "Art", "Old sketch.drawing")
+        check(r.returncode == 0 and json.loads(r.stdout)["elements"][0]["type"] == "ellipse",
+              "made a drawing of it, which opens")
+        a.click_el(a.find_text(".tree-item", "Untitled drawing", 10))
+        a.find(CANVAS, 10)
 
         # Leaving it stores a version; its versions show as pictures.
         a.click_el(a.find_text(".sb-link", "Drawings", 10))

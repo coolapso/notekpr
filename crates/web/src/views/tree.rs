@@ -429,6 +429,17 @@ fn RowMenu(
                 view! { <button on:click=move |_| { close(); let (v, id) = (v.clone(), id.clone()); leptos::task::spawn_local(async move { actions::download_attachment(&v, &id).await }); }>
                     <Icon name="download"/>" Download"</button> }
             })}
+            // Excalidraw's and Obsidian's drawing files (synced before
+            // notekpr had drawings) become drawings.
+            {(writable && matches!(kind, EntryKind::Attachment | EntryKind::Note)
+                && notekpr_core::paths::drawing_path_for(&path).is_some()).then(|| {
+                let (v, id) = (vault.clone(), row_id.clone().unwrap_or_default());
+                view! { <button on:click=move |_| {
+                    close();
+                    let (v, id) = (v.clone(), id.clone());
+                    leptos::task::spawn_local(async move { actions::make_drawing_of(&v, &id).await });
+                }><Icon name="drawing"/>" Make it a drawing"</button> }
+            })}
             {(writable && kind != EntryKind::Attachment).then(|| {
                 let (v, id, p) = (vault.clone(), row_id.clone(), path.clone());
                 view! { <button on:click=move |_| {

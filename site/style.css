@@ -515,7 +515,11 @@ td:first-child { font-weight: 600; }
 .foot-grid li { list-style: none; font-size: 0.94rem; }
 .foot-grid a { color: var(--fg-2); text-decoration: none; }
 .foot-grid a:hover { color: var(--fg); text-decoration: underline; }
-.foot-base { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 0.5rem 2rem; padding-block: 1.2rem 2rem; border-top: 1px solid var(--border); font: 400 0.8rem/1.4 var(--mono); color: var(--muted); }
+.foot-base { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 0.5rem 2rem; padding-block: 1.2rem 2rem; border-top: 1px solid var(--border); font: 400 0.8rem/1.4 var(--mono); color: var(--muted); }
+/* Who makes it: coolapso.sh, as on searchbase.md. */
+.footer-credit { display: inline-flex; align-items: center; gap: 9px; font: 500 0.82rem/1 var(--mono); color: var(--muted); text-decoration: none; }
+.footer-credit img { width: 22px; height: 22px; border-radius: 5px; }
+.footer-credit:hover { color: var(--accent-ink); }
 
 /* ---------------------------------------------------------------- motion */
 

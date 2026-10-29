@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="coolapso.sh favicon">
+  <rect width="64" height="64" rx="10" fill="#050505"/>
+  <path d="M10 10h44v44H10z" fill="none" stroke="#00ffcc" stroke-width="2" opacity="0.35"/>
+  <text x="11" y="43" fill="#ff00ea" font-family="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace" font-size="34" font-weight="800" opacity="0.7">c_</text>
+  <text x="9" y="41" fill="#00ffcc" font-family="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace" font-size="34" font-weight="800">c_</text>
+</svg>

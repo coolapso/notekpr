@@ -24,6 +24,12 @@
 //! Dotfiles, editor swap/backup files and our own
 //! temporary files are ignored. Change detection compares size + mtime and
 //! falls back to content hashes, so our own writes are recognised.
+//!
+//! **Saved shapes.** With the Personal storage comes [`SHAPES_FILE`] at the
+//! top level, Excalidraw's library file: written when the shapes change,
+//! and an edit of it merged in shape by shape against what it last held
+//! ([`sync_shapes`]). A file that isn't a library is left alone, and one
+//! deleted is written again: neither removes any shape.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -33,6 +39,7 @@ use std::time::{Duration, Instant, UNIX_EPOCH};
 use anyhow::{Context, Result, bail};
 use notekpr_core::b64;
 use notekpr_core::doc::{EntryKind, NoteDoc};
+use notekpr_core::protocol::INDEX_OBJECT_ID;
 use notekpr_core::{paths, textdiff};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, mpsc, watch};
@@ -102,6 +109,35 @@ struct MirrorState {
     /// Explicit folder entries materialised as directories: id -> path.
     #[serde(default)]
     folders: BTreeMap<String, String>,
+    /// The saved shapes' file ([`SHAPES_FILE`]), kept with the Personal
+    /// storage's state.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    shapes: Option<ShapesRecord>,
+}
+
+/// The saved shapes' file, at the mirror's top level beside the vault
+/// folders (not in `Quick notes/`, whose files must be linked by a note):
+/// Excalidraw's library file, as account exports have it.
+pub const SHAPES_FILE: &str = notekpr_core::account_export::SAVED_SHAPES_FILE;
+
+/// What the mirror knows of the saved shapes' file.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+struct ShapesRecord {
+    /// Hash of the content last written or read.
+    hash: String,
+    size: u64,
+    mtime_ns: i64,
+    checked_ns: i64,
+    /// The library's entries when the file was last written
+    /// ([`shapes_fingerprint`]): while they stay so, there's nothing to
+    /// write. Empty: check.
+    #[serde(default)]
+    entries: String,
+    /// The shapes as the file held them when last written or read, by id
+    /// (each one's JSON, without its id): what an edit of the file is
+    /// merged against.
+    #[serde(default)]
+    base: BTreeMap<String, serde_json::Value>,
 }
 
 struct MirrorVault {
@@ -615,15 +651,43 @@ enum DiskState {
     Modified(Vec<u8>, Stat),
 }
 
+/// What a record remembers of its file, for [`disk_state`].
+trait Seen {
+    /// Hash, size, mtime and when it was checked.
+    fn seen(&self) -> (&str, u64, i64, i64);
+    fn set_stat(&mut self, st: Stat);
+}
+
+impl Seen for FileRecord {
+    fn seen(&self) -> (&str, u64, i64, i64) {
+        (&self.hash, self.size, self.mtime_ns, self.checked_ns)
+    }
+    fn set_stat(&mut self, st: Stat) {
+        FileRecord::set_stat(self, st)
+    }
+}
+
+impl Seen for ShapesRecord {
+    fn seen(&self) -> (&str, u64, i64, i64) {
+        (&self.hash, self.size, self.mtime_ns, self.checked_ns)
+    }
+    fn set_stat(&mut self, st: Stat) {
+        self.size = st.size;
+        self.mtime_ns = st.mtime_ns;
+        self.checked_ns = now_ns();
+    }
+}
+
 /// Compare the file with its record (cheap stat first, then content).
-fn disk_state(path: &Path, rec: &mut FileRecord) -> std::io::Result<DiskState> {
+fn disk_state(path: &Path, rec: &mut impl Seen) -> std::io::Result<DiskState> {
     let st = match stat(path)? {
         Node::File(st) => st,
         Node::Missing => return Ok(DiskState::Missing),
         Node::Other => return Ok(DiskState::NotAFile),
     };
-    let racy = rec.checked_ns - rec.mtime_ns < RACY_NS;
-    if st.size == rec.size && st.mtime_ns == rec.mtime_ns && !racy {
+    let (hash, size, mtime_ns, checked_ns) = rec.seen();
+    let racy = checked_ns - mtime_ns < RACY_NS;
+    if st.size == size && st.mtime_ns == mtime_ns && !racy {
         return Ok(DiskState::Unchanged(st));
     }
     let data = match std::fs::read(path) {
@@ -631,10 +695,8 @@ fn disk_state(path: &Path, rec: &mut FileRecord) -> std::io::Result<DiskState> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(DiskState::Missing),
         Err(e) => return Err(e),
     };
-    if content_hash(&data) == rec.hash {
-        rec.size = st.size;
-        rec.mtime_ns = st.mtime_ns;
-        rec.checked_ns = now_ns();
+    if content_hash(&data) == hash {
+        rec.set_stat(st);
         return Ok(DiskState::Unchanged(st));
     }
     Ok(DiskState::Modified(data, st))
@@ -964,6 +1026,229 @@ fn remove_if_unchanged(path: &Path, hash: &str) -> Result<bool> {
         }
     }
     Ok(false)
+}
+
+// ---------------------------------------------------------------- saved shapes
+
+/// The saved shapes as kept, in short: whether they changed since the file
+/// was written.
+fn shapes_fingerprint(v: &Vault) -> String {
+    let mut entries = v.replica.index.library_entries();
+    entries.sort();
+    let mut all = Vec::new();
+    for (id, json) in entries {
+        all.extend_from_slice(id.as_bytes());
+        all.push(0);
+        all.extend_from_slice(json.as_bytes());
+        all.push(0);
+    }
+    content_hash(&all)
+}
+
+/// The shapes of a library file; `None` if it isn't one (yet: an editor
+/// may be halfway through saving).
+fn shapes_from_file(data: &[u8]) -> Option<Vec<notekpr_core::library::LibraryItem>> {
+    let text = std::str::from_utf8(data).ok()?;
+    let mut ids = notekpr_draw::restore::Ids::new(now_ns() as u64);
+    notekpr_draw::file::read_library(text, notekpr_core::now_ms() as f64, &mut ids).ok()
+}
+
+/// Shapes by id, as a [`ShapesRecord`] keeps them.
+fn shapes_base(
+    items: &[notekpr_core::library::LibraryItem],
+) -> BTreeMap<String, serde_json::Value> {
+    items
+        .iter()
+        .map(|i| (i.id.clone(), notekpr_draw::library::item_json(i)))
+        .collect()
+}
+
+/// [`shapes_base`] read back.
+fn base_shapes(
+    base: &BTreeMap<String, serde_json::Value>,
+) -> Vec<notekpr_core::library::LibraryItem> {
+    let mut ids = notekpr_draw::restore::Ids::new(now_ns() as u64);
+    base.iter()
+        .filter_map(|(id, v)| notekpr_draw::library::read_item(v, Some(id), 0.0, &mut ids))
+        .collect()
+}
+
+/// What [`sync_shapes`] did.
+#[derive(Debug, Default, Clone, Copy)]
+struct ShapesDone {
+    /// An edit of the file was merged into the saved shapes.
+    ingested: bool,
+    /// The file was written.
+    written: bool,
+}
+
+/// The saved shapes' file at the mirror's top level (`root`), kept with the
+/// Personal storage (`v`, mirrored by `mv`). An edit of the file is merged
+/// in shape by shape against what it last held (`notekpr_core::library::
+/// merge`): shapes added, changed or taken out there are added, changed or
+/// removed, and changes made elsewhere meanwhile to other shapes stay. A
+/// file that isn't a library (any more) is left alone with a warning and
+/// changes nothing. With `write`, the file is then written when the shapes
+/// changed — unless it was edited meanwhile (the next pass reads it) — or
+/// written again when it is gone: deleting it removes no shapes. With no
+/// shapes and no file, there's none.
+fn sync_shapes(
+    mv: &mut MirrorVault,
+    root: &Path,
+    v: &mut Vault,
+    writable: bool,
+    write: bool,
+) -> Result<ShapesDone> {
+    let mut done = ShapesDone::default();
+    let path = root.join(SHAPES_FILE);
+    // 1. An edit on disk, merged in.
+    let on_disk = match stat(&path)? {
+        Node::Other => {
+            mv.warn_once(
+                "shapes:other",
+                &format!(
+                    "mirror: {SHAPES_FILE} is not a file; the saved shapes are not mirrored until it is"
+                ),
+            );
+            return Ok(done);
+        }
+        Node::Missing => None,
+        Node::File(st) => {
+            let edited = match mv.state.shapes.as_mut() {
+                Some(rec) => match disk_state(&path, rec)? {
+                    DiskState::Modified(data, st) => Some((data, st)),
+                    DiskState::Unchanged(_) => None,
+                    // (Gone or replaced this very moment: the next pass.)
+                    DiskState::Missing | DiskState::NotAFile => return Ok(done),
+                },
+                // Not ours yet: one made here, or kept from before.
+                None => Some((std::fs::read(&path)?, st)),
+            };
+            match edited {
+                None => Some(st),
+                // Left alone: neither read nor written over.
+                Some(_) if !writable => return Ok(done),
+                Some((data, st)) => {
+                    let Some(file) = shapes_from_file(&data) else {
+                        mv.warn_once(
+                            "shapes:broken",
+                            &format!(
+                                "mirror: {SHAPES_FILE} is not an Excalidraw library (any more); it is left \
+                                 alone, and your saved shapes stay as they are until it is one again"
+                            ),
+                        );
+                        return Ok(done);
+                    };
+                    mv.warned.remove("shapes:broken");
+                    let base = mv
+                        .state
+                        .shapes
+                        .as_ref()
+                        .map(|r| base_shapes(&r.base))
+                        .unwrap_or_default();
+                    let merged = notekpr_core::library::merge(
+                        &v.replica.index,
+                        &base,
+                        &file,
+                        v.update_budget(),
+                    );
+                    for u in &merged.updates {
+                        v.record(INDEX_OBJECT_ID, u.clone())?;
+                    }
+                    if merged.too_large > 0 {
+                        ui::warn(&format!(
+                            "mirror: {} shape(s) in {SHAPES_FILE} are too large for this server and were not saved",
+                            merged.too_large
+                        ));
+                    }
+                    done.ingested = merged.any();
+                    mv.state.shapes = Some(ShapesRecord {
+                        hash: content_hash(&data),
+                        size: st.size,
+                        mtime_ns: st.mtime_ns,
+                        checked_ns: now_ns(),
+                        entries: String::new(),
+                        base: shapes_base(&file),
+                    });
+                    mv.dirty = true;
+                    Some(st)
+                }
+            }
+        }
+    };
+    if !write {
+        return Ok(done);
+    }
+    // 2. The shapes, written when they changed. (Twice at most: what an
+    // editor saved at the very last moment is merged in, and written.)
+    let mut expected = on_disk;
+    for _ in 0..2 {
+        let fingerprint = shapes_fingerprint(v);
+        if expected.is_some()
+            && mv
+                .state
+                .shapes
+                .as_ref()
+                .is_some_and(|r| r.entries == fingerprint)
+        {
+            break;
+        }
+        let items = notekpr_core::library::items(&v.replica.index);
+        if expected.is_none() && items.is_empty() {
+            // No shapes, no file.
+            if mv.state.shapes.take().is_some() {
+                mv.dirty = true;
+            }
+            break;
+        }
+        let text = notekpr_draw::file::write_library(&items);
+        let hash = content_hash(text.as_bytes());
+        if let (Some(rec), Some(_)) = (mv.state.shapes.as_mut(), expected)
+            && rec.hash == hash
+        {
+            rec.entries = fingerprint;
+            mv.dirty = true;
+            break;
+        }
+        let before = mv.state.shapes.as_ref().map(|r| base_shapes(&r.base));
+        let replaced = replace_if_unchanged(&path, text.as_bytes(), expected)?;
+        if replaced == Replaced::Changed {
+            // Edited meanwhile: the next pass reads it.
+            break;
+        }
+        let st = match stat(&path)? {
+            Node::File(st) => st,
+            _ => break,
+        };
+        done.written = true;
+        mv.state.shapes = Some(ShapesRecord {
+            hash,
+            size: st.size,
+            mtime_ns: st.mtime_ns,
+            checked_ns: now_ns(),
+            entries: fingerprint,
+            base: shapes_base(&items),
+        });
+        mv.dirty = true;
+        let Replaced::Recovered(saved) = replaced else {
+            break;
+        };
+        // What the editor saved, against what the file held before.
+        if writable && let Some(file) = shapes_from_file(&saved) {
+            let merged = notekpr_core::library::merge(
+                &v.replica.index,
+                &before.unwrap_or_default(),
+                &file,
+                v.update_budget(),
+            );
+            for u in &merged.updates {
+                v.record(INDEX_OBJECT_ID, u.clone())?;
+            }
+            done.ingested |= merged.any();
+        }
+        expected = Some(st);
+    }
+    Ok(done)
 }
 
 impl FileRecord {
@@ -1657,6 +1942,8 @@ impl Mirror {
         let root = root
             .canonicalize()
             .with_context(|| format!("resolving {}", root.display()))?;
+        // (Left over from writing the saved shapes' file.)
+        fsutil::remove_stale_temp_files(&root, 1, STALE_TEMP_AGE);
         let fold = Fold {
             case: match opts.case_insensitive {
                 Some(f) => f,
@@ -1730,11 +2017,13 @@ impl Mirror {
         let stored = stored_state(&v).await?;
         let name = v.lock().await.name().to_string();
         // Vault folders must differ even ignoring case where the file system
-        // does ("Notes" and "notes" would share one folder).
+        // does ("Notes" and "notes" would share one folder), and from the
+        // saved shapes' file.
         let taken: BTreeSet<String> = self
             .vaults
             .values()
             .map(|m| fold_key(self.fold, &m.state.dir_name))
+            .chain([fold_key(self.fold, SHAPES_FILE)])
             .collect();
         let state = match stored {
             Some(s)
@@ -1747,8 +2036,7 @@ impl Mirror {
                 MirrorState {
                     root: self.root.clone(),
                     dir_name,
-                    files: BTreeMap::new(),
-                    folders: BTreeMap::new(),
+                    ..MirrorState::default()
                 }
             }
         };
@@ -1896,6 +2184,7 @@ impl Mirror {
             return Ok(report);
         };
         let opts = self.opts;
+        let root = self.root.clone();
         // Never ask the network while holding the vault lock.
         let max_attachment = self.hub.limits().await.max_attachment_bytes;
         let Some(mv) = self.vaults.get_mut(vault_id) else {
@@ -2070,7 +2359,19 @@ impl Mirror {
             }
         }
 
-        let changed = !touched.is_empty();
+        // 5. With the Personal storage: the saved shapes' file, edited here.
+        let mut shapes_changed = false;
+        if v.is_quick_notes() {
+            match sync_shapes(mv, &root, &mut v, writable, false) {
+                Ok(done) => {
+                    shapes_changed = done.ingested;
+                    report.ingested += usize::from(done.ingested);
+                }
+                Err(e) => mv.entry_failed(&name, SHAPES_FILE, &e),
+            }
+        }
+
+        let changed = !touched.is_empty() || shapes_changed;
         if changed {
             v.save()?;
         }
@@ -2118,6 +2419,7 @@ impl Mirror {
             return Ok(report);
         };
         let restore = self.opts.restore_missing;
+        let root = self.root.clone();
         let Some(mv) = self.vaults.get_mut(vault_id) else {
             return Ok(report);
         };
@@ -2132,6 +2434,7 @@ impl Mirror {
         let mut downloads: Vec<(String, String, String)> = Vec::new();
         let mut touched: BTreeSet<String> = BTreeSet::new();
         let name;
+        let mut shapes_changed = false;
         {
             let mut v = shared.lock().await;
             if v.read_only.is_some() {
@@ -2250,7 +2553,19 @@ impl Mirror {
                     report.removed += 1;
                 }
             }
-            if !touched.is_empty() {
+
+            // e. With the Personal storage: the saved shapes' file.
+            if v.is_quick_notes() {
+                match sync_shapes(mv, &root, &mut v, writable, true) {
+                    Ok(done) => {
+                        shapes_changed = done.ingested;
+                        report.ingested += usize::from(done.ingested);
+                        report.written += usize::from(done.written);
+                    }
+                    Err(e) => mv.entry_failed(&name, SHAPES_FILE, &e),
+                }
+            }
+            if !touched.is_empty() || shapes_changed {
                 v.save()?;
             }
         }
@@ -2269,7 +2584,7 @@ impl Mirror {
             }
         }
 
-        if !touched.is_empty() {
+        if !touched.is_empty() || shapes_changed {
             self.hub
                 .local_changed(vault_id, touched.into_iter().collect(), true)
                 .await;

@@ -435,6 +435,7 @@ are unaffected.
   Work (3f2a1c)/          <- a second vault with the same name gets its id suffix
   Quick notes/            <- your quick notes: flat, no folders
     2026-10-19 14.32.md
+  Saved shapes.excalidrawlib   <- your saved shapes, Excalidraw's library file
 ```
 
 **Quick notes** ([§3](#quick-notes)) are the folder `Quick notes/`, mirrored
@@ -452,6 +453,21 @@ once is held like a mass deletion (below).
 folder. A new one becomes a drawing while the vault has room for it; beyond
 its drawings limit it stays on disk, not synced (you are told once), and
 goes up once there's room.
+
+**Saved shapes** ([Saved shapes](#saved-shapes)) are one file at the top,
+`Saved shapes.excalidrawlib` — Excalidraw's library file, which Excalidraw
+and its Obsidian plugin open — written once you have some and whenever they
+change (no vault folder takes that name). Edit it, or make it, and the
+change is merged in shape by shape against what the file held when it was
+last written or read: shapes added there are saved (those saved already,
+the same elements, are left out, as with `shapes import`), shapes changed
+there are replaced, shapes taken out are removed — and changes made on your
+other devices meanwhile stay, unless they touched the same shape (then the
+file's change wins). Emptying its `libraryItems` removes them all. A file
+that isn't an Excalidraw library (half-saved, say) is left alone with a
+warning and changes nothing until it is one again; deleting the file removes
+no shapes — it is written again. It comes with your Personal storage: not
+there for an agent's profile, nor with `sync --vault` unless it names `"Quick notes"`.
 
 Besides the characters shown, control characters become `_`, surrounding
 spaces, leading dots and trailing dots are dropped, Windows device names get

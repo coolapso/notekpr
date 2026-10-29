@@ -312,6 +312,9 @@ pub struct Ui {
     pub mentions_rev: RwSignal<u64>,
     /// A thread to open once its note is shown: (vault, note, thread).
     pub thread_to_open: RwSignal<Option<(String, String, String)>>,
+    /// Bumped when the drawings library may have changed (here or on
+    /// another device: `crate::drawing::library`).
+    pub library_rev: RwSignal<u64>,
 }
 
 thread_local! {
@@ -362,6 +365,7 @@ pub fn init_ui() -> Ui {
         comment_ui: RwSignal::new(CommentUi::Closed),
         mentions_rev: RwSignal::new(0),
         thread_to_open: RwSignal::new(None),
+        library_rev: RwSignal::new(0),
     };
     UI.with(|u| u.set(Some(ui)));
     ui

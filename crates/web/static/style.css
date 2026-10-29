@@ -1101,9 +1101,27 @@ label.btn.disabled { opacity: .6; pointer-events: none; }
 .drawing-snap button.on { background: color-mix(in srgb, var(--accent) 22%, transparent); color: var(--accent); }
 .drawing-text { position: absolute; z-index: 3; margin: 0; padding: 0; border: 0; outline: none; resize: none; overflow: hidden; background: transparent; white-space: pre; field-sizing: content; }
 .drawing-text.drawing-frame-name { padding: 6px; border-radius: 4px; box-shadow: inset 0 0 0 1px var(--accent); }
+/* The library panel (Excalidraw's library sidebar). */
+.library-panel { position: absolute; top: 64px; right: 12px; bottom: 12px; width: 264px; display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: calc(var(--radius) + 2px); background: var(--bg); box-shadow: 0 1px 6px rgba(0, 0, 0, 0.08); z-index: 3; overflow: hidden; }
+.library-head { display: flex; align-items: center; gap: 2px; padding: 6px 6px 6px 12px; border-bottom: 1px solid var(--border); }
+.library-title { font-weight: 600; }
+.library-items { flex: 1; overflow-y: auto; padding: 10px; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; align-content: start; }
+.library-unit { position: relative; aspect-ratio: 1; display: flex; align-items: center; justify-content: center; padding: 6px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg); color: var(--text); cursor: pointer; overflow: hidden; font: inherit; }
+.library-unit:hover, .library-unit:focus-visible { border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
+.library-unit img { max-width: 100%; max-height: 100%; pointer-events: none; }
+.library-pending { border-style: dashed; }
+.library-adder { position: absolute; right: 4px; bottom: 4px; display: inline-flex; width: 20px; height: 20px; align-items: center; justify-content: center; border-radius: 50%; background: var(--accent); color: #fff; }
+.library-adder .ic { width: 14px; height: 14px; }
+.library-remove { position: absolute; top: 2px; right: 2px; display: none; background: var(--bg); }
+.library-unit:hover .library-remove, .library-unit:focus-within .library-remove { display: inline-flex; }
+.library-empty { grid-column: 1 / -1; margin: 4px 2px; font-size: 13px; }
+@media (hover: none) {
+  .library-remove { display: inline-flex; }
+}
 @media (max-width: 700px) {
   .drawing-props { top: auto; bottom: 60px; width: auto; right: 12px; max-height: 40%; }
   .drawing-tools { top: 8px; }
+  .library-panel { left: 12px; width: auto; bottom: auto; max-height: 55%; }
 }
 .drawings-page .page-head { display: flex; align-items: center; gap: 12px; }
 .drawings-page .page-head h1 { flex: 1; }

@@ -415,9 +415,15 @@ pub fn DrawingView(vault: String, id: String) -> impl IntoView {
             b.with_value(|b| b.paste(&text));
         }
     };
+    // The library panel (`views::library`).
+    let library_open = RwSignal::new(false);
     // A drawing file dropped on the canvas: its elements come in; pictures
-    // go where they were dropped.
+    // go where they were dropped; library files go to the library, items
+    // dragged from it where they were dropped.
     let on_drop = move |ev: web_sys::DragEvent| {
+        if b.with_value(|b| b.drop_library_item(&ev)) {
+            return;
+        }
         let Some(files) = ev.data_transfer().and_then(|d| d.files()) else {
             return;
         };
@@ -428,6 +434,7 @@ pub fn DrawingView(vault: String, id: String) -> impl IntoView {
         let (images, others): (Vec<web_sys::File>, Vec<web_sys::File>) = (0..files.length())
             .filter_map(|i| files.get(i))
             .partition(|f| f.type_().starts_with("image/"));
+        let others = crate::drawing::library::import_files(others, library_open);
         if !images.is_empty() {
             let at = [ev.offset_x() as f64, ev.offset_y() as f64];
             b.with_value(|b| b.add_pictures(images, Some(b.view.get().to_scene(at))));
@@ -490,6 +497,8 @@ pub fn DrawingView(vault: String, id: String) -> impl IntoView {
                             .collect_view()
                     }}
                 </div>
+                <button class="icon-btn" class:on=move || library_open.get() title="Library" aria-label="Library" aria-pressed=move || library_open.get().to_string()
+                    on:click=move |_| library_open.update(|o| *o = !*o)><Icon name="book"/></button>
                 <div class="tb-drop">
                     <button class="icon-btn" title="Export" aria-label="Export" aria-expanded=move || export_open.get().to_string()
                         on:click=move |ev| { ev.stop_propagation(); export_open.update(|o| *o = !*o); }><Icon name="download"/></button>
@@ -542,6 +551,9 @@ pub fn DrawingView(vault: String, id: String) -> impl IntoView {
                 </Show>
                 <Show when=panel>
                     <Properties board=b rev=rev/>
+                </Show>
+                <Show when=move || library_open.get()>
+                    <super::library::LibraryPanel board=b rev=rev open=library_open/>
                 </Show>
                 {move || editing.get().map(|tb| {
                     let style = format!(

@@ -1150,7 +1150,7 @@ pub fn after_apply(vault_id: &str, applied: engine::Applied) {
         leptos::task::spawn_local(fetch_restored(vault_id.to_string(), o.clone()));
     }
     let ui = ui();
-    let (content, open) = step(|c| {
+    let (content, open, library) = step(|c| {
         crate::cache::note_applied(c, vault_id, &applied);
         let open = c
             .editor
@@ -1164,8 +1164,12 @@ pub fn after_apply(vault_id: &str, applied: engine::Applied) {
                     .flatten();
                 (n.clone(), e.clone(), text, is_member(c, v))
             });
-        (c.content_debounce.clone(), open)
+        let library = applied.index_changed && c.is_drawings(vault_id);
+        (c.content_debounce.clone(), open, library)
     });
+    if library {
+        ui.library_rev.update(|n| *n += 1);
+    }
     let current = ui.route.get_untracked();
     if current.vault() == Some(vault_id) || current.shared().is_some_and(|(v, _)| v == vault_id) {
         if applied.index_changed || !applied.purged.is_empty() {

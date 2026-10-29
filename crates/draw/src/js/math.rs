@@ -7,16 +7,16 @@
 //! and then (a loop that runs once more, a number cut after two decimals),
 //! so these are fixed to what Excalidraw's own results show:
 //!
-//! * `sin`, `cos`, `tan` and `acos` are fdlibm 5.3's, as V8 has them
-//!   (`src/base/ieee754.cc`). With them, perfect-freehand's test snapshots
-//!   (computed in V8) come out exactly; with glibc's, 17 of their points
-//!   end a few ulps off. Firefox uses fdlibm too; some Chrome builds use a
-//!   port of glibc's, and Chromium 156 rounds all four correctly (an ulp
-//!   from fdlibm's on 3 to 8% of arguments).
-//! * `atan2`, `atan` and `asin` are correctly rounded (see [`atan2`]), as
-//!   V8 computes them in Chromium 156: `atan` and `asin` agree with it bit
-//!   for bit on 96,000 arguments (all but a few below 2^-1015, where V8 is
-//!   an ulp low); fdlibm's are an ulp off on 4% of them.
+//! * `sin`, `cos`, `tan`, `acos`, `asin` and `atan` are fdlibm 5.3's, as
+//!   V8 has them (`src/base/ieee754.cc`). With them, perfect-freehand's
+//!   test snapshots (computed in V8) come out exactly; with glibc's, 17 of
+//!   their points end a few ulps off. Firefox uses fdlibm too. Browsers
+//!   differ here (some Chrome builds use a port of glibc's, and Chromium 156
+//!   rounds them all correctly: an ulp from fdlibm's on 3 to 8% of
+//!   arguments), and notekpr draws the same in all of them: fdlibm is the
+//!   rule, kept unless a real Excalidraw export shows otherwise.
+//! * `atan2` is that exception: correctly rounded (see [`atan2`]), as the
+//!   browser that made Excalidraw's export of the test drawing computed it.
 //!
 //! The fdlibm parts carry its notice (and V8's: see `crates/draw/PORTED.md`):
 //!
@@ -575,14 +575,14 @@ pub fn tan(x: f64) -> f64 {
     kernel_tan(y[0], y[1], 1 - ((n & 1) << 1))
 }
 
-/// `Math.acos` (fdlibm's `__ieee754_acos`).
-pub fn acos(x: f64) -> f64 {
-    const ONE: f64 = 1.00000000000000000000e+00;
-    // 3.14159265358979311600e+00, 0x400921FB, 0x54442D18
-    const PI: f64 = std::f64::consts::PI;
-    // 1.57079632679489655800e+00, 0x3FF921FB, 0x54442D18
-    const PIO2_HI: f64 = std::f64::consts::FRAC_PI_2;
-    const PIO2_LO: f64 = 6.12323399573676603587e-17; // 0x3C91A626, 0x33145C07
+const ONE: f64 = 1.00000000000000000000e+00;
+// 1.57079632679489655800e+00, 0x3FF921FB, 0x54442D18
+const PIO2_HI: f64 = std::f64::consts::FRAC_PI_2;
+const PIO2_LO: f64 = 6.12323399573676603587e-17; // 0x3C91A626, 0x33145C07
+
+/// asin(√z)/√z - 1 ≈ p(z)/q(z), z = x² or (1 - |x|)/2: `e_asin.c`'s and
+/// `e_acos.c`'s rational approximation, as two parts.
+fn asin_pq(z: f64) -> (f64, f64) {
     const PS0: f64 = 1.66666666666666657415e-01; // 0x3FC55555, 0x55555555
     const PS1: f64 = -3.25565818622400915405e-01; // 0xBFD4D612, 0x03EB6F7D
     const PS2: f64 = 2.01212532134862925881e-01; // 0x3FC9C155, 0x0E884455
@@ -593,10 +593,17 @@ pub fn acos(x: f64) -> f64 {
     const QS2: f64 = 2.02094576023350569471e+00; // 0x40002AE5, 0x9C598AC8
     const QS3: f64 = -6.88283971605453293030e-01; // 0xBFE6066C, 0x1B8D0159
     const QS4: f64 = 7.70381505559019352791e-02; // 0x3FB3B8C5, 0xB12E9282
-    // asin(√z)/√z - 1 ≈ p(z)/q(z), z = x² or (1 - |x|)/2
+    let p = z * (PS0 + z * (PS1 + z * (PS2 + z * (PS3 + z * (PS4 + z * PS5)))));
+    let q = ONE + z * (QS1 + z * (QS2 + z * (QS3 + z * QS4)));
+    (p, q)
+}
+
+/// `Math.acos` (fdlibm's `__ieee754_acos`).
+pub fn acos(x: f64) -> f64 {
+    // 3.14159265358979311600e+00, 0x400921FB, 0x54442D18
+    const PI: f64 = std::f64::consts::PI;
     let ratio = |z: f64| {
-        let p = z * (PS0 + z * (PS1 + z * (PS2 + z * (PS3 + z * (PS4 + z * PS5)))));
-        let q = ONE + z * (QS1 + z * (QS2 + z * (QS3 + z * QS4)));
+        let (p, q) = asin_pq(z);
         p / q
     };
     let hx = high_word(x);
@@ -860,41 +867,128 @@ pub fn atan2(y: f64, x: f64) -> f64 {
     if y < 0.0 { -v } else { v }
 }
 
-/// `Math.atan`, correctly rounded: [`atan2`]`(x, 1)`.
+/// `Math.atan` (fdlibm's `s_atan.c`).
 pub fn atan(x: f64) -> f64 {
-    atan2(x, 1.0)
-}
-
-/// √a for a double-double `a >= 0`.
-fn dd_sqrt(a: Dd) -> Dd {
-    if a.hi <= 0.0 {
-        return Dd::from(0.0);
+    const ATANHI: [f64; 4] = [
+        4.63647609000806093515e-01,  // atan(0.5)hi 0x3FDDAC67, 0x0561BB4F
+        std::f64::consts::FRAC_PI_4, // atan(1.0)hi 0x3FE921FB, 0x54442D18
+        9.82793723247329054082e-01,  // atan(1.5)hi 0x3FEF730B, 0xD281F69B
+        PIO2_HI,                     // atan(inf)hi 0x3FF921FB, 0x54442D18
+    ];
+    const ATANLO: [f64; 4] = [
+        2.26987774529616870924e-17, // atan(0.5)lo 0x3C7A2B7F, 0x222F65E2
+        3.06161699786838301793e-17, // atan(1.0)lo 0x3C81A626, 0x33145C07
+        1.39033110312309984516e-17, // atan(1.5)lo 0x3C700788, 0x7AF0CBBD
+        6.12323399573676603587e-17, // atan(inf)lo 0x3C91A626, 0x33145C07
+    ];
+    const AT: [f64; 11] = [
+        3.33333333333329318027e-01,  // 0x3FD55555, 0x5555550D
+        -1.99999999998764832476e-01, // 0xBFC99999, 0x9998EBC4
+        1.42857142725034663711e-01,  // 0x3FC24924, 0x920083FF
+        -1.11111104054623557880e-01, // 0xBFBC71C6, 0xFE231671
+        9.09088713343650656196e-02,  // 0x3FB745CD, 0xC54C206E
+        -7.69187620504482999495e-02, // 0xBFB3B0F2, 0xAF749A6D
+        6.66107313738753120669e-02,  // 0x3FB10D66, 0xA0D03D51
+        -5.83357013379057348645e-02, // 0xBFADDE2D, 0x52DEFD9A
+        4.97687799461593236017e-02,  // 0x3FA97B4B, 0x24760DEB
+        -3.65315727442169155270e-02, // 0xBFA2B444, 0x2C6A6C2F
+        1.62858201153657823623e-02,  // 0x3F90AD3A, 0xE322DA11
+    ];
+    let hx = high_word(x);
+    let ix = hx & 0x7FFF_FFFF;
+    if ix >= 0x4410_0000 {
+        // |x| >= 2^66
+        if x.is_nan() {
+            return x + x;
+        }
+        return if hx > 0 {
+            ATANHI[3] + ATANLO[3]
+        } else {
+            -ATANHI[3] - ATANLO[3]
+        };
     }
-    let s = a.hi.sqrt();
-    let r = dd_sub(a, two_prod(s, s));
-    fast_two_sum(s, r.hi / (2.0 * s))
+    let (x, id) = if ix < 0x3FDC_0000 {
+        // |x| < 0.4375
+        if ix < 0x3E40_0000 {
+            // |x| < 2^-27
+            return x;
+        }
+        (x, None)
+    } else {
+        let x = x.abs();
+        if ix < 0x3FF3_0000 {
+            // |x| < 1.1875
+            if ix < 0x3FE6_0000 {
+                // 7/16 <= |x| < 11/16
+                ((2.0 * x - ONE) / (2.0 + x), Some(0))
+            } else {
+                // 11/16 <= |x| < 19/16
+                ((x - ONE) / (x + ONE), Some(1))
+            }
+        } else if ix < 0x4003_8000 {
+            // |x| < 2.4375
+            ((x - 1.5) / (ONE + 1.5 * x), Some(2))
+        } else {
+            // 2.4375 <= |x| < 2^66
+            (-1.0 / x, Some(3))
+        }
+    };
+    let z = x * x;
+    let w = z * z;
+    // The sum of AT[i]·z^(i+1), as odd and even polynomials.
+    let s1 = z * (AT[0] + w * (AT[2] + w * (AT[4] + w * (AT[6] + w * (AT[8] + w * AT[10])))));
+    let s2 = w * (AT[1] + w * (AT[3] + w * (AT[5] + w * (AT[7] + w * AT[9]))));
+    match id {
+        None => x - x * (s1 + s2),
+        Some(id) => {
+            let z = ATANHI[id] - ((x * (s1 + s2) - ATANLO[id]) - x);
+            if hx < 0 { -z } else { z }
+        }
+    }
 }
 
-/// `Math.asin`, correctly rounded: atan(|x| / √(1 - x²)) with about 100
-/// bits, 1 - x² as (1 - |x|)(1 + |x|), then rounded once.
+/// `Math.asin` (fdlibm's `__ieee754_asin`).
 pub fn asin(x: f64) -> f64 {
-    let a = x.abs();
-    if x.is_nan() || a > 1.0 {
+    // 7.85398163397448278999e-01, 0x3FE921FB, 0x54442D18
+    const PIO4_HI: f64 = std::f64::consts::FRAC_PI_4;
+    let hx = high_word(x);
+    let ix = hx & 0x7FFF_FFFF;
+    if ix >= 0x3FF0_0000 {
+        // |x| >= 1
+        if ((ix - 0x3FF0_0000) as u32 | low_word(x)) == 0 {
+            // asin(±1) = ±π/2
+            return x * PIO2_HI + x * PIO2_LO;
+        }
+        // |x| > 1, NaN
         return f64::NAN;
     }
-    if a == 0.0 {
-        // ±0
-        return x;
+    if ix < 0x3FE0_0000 {
+        // |x| < 0.5
+        if ix < 0x3E40_0000 {
+            // |x| < 2^-27
+            return x;
+        }
+        let t = x * x;
+        let (p, q) = asin_pq(t);
+        return x + x * (p / q);
     }
-    let c = dd_sqrt(dd_mul(two_sum(1.0, -a), two_sum(1.0, a)));
-    // As atan2: the smaller over the larger, in [0, 1].
-    let z = if a <= c.hi {
-        atan_dd(dd_div(Dd::from(a), c))
+    // 0.5 <= |x| < 1
+    let t = (ONE - x.abs()) * 0.5;
+    let (p, q) = asin_pq(t);
+    let s = t.sqrt();
+    let t = if ix >= 0x3FEF_3333 {
+        // |x| > 0.975
+        let w = p / q;
+        PIO2_HI - (2.0 * (s + s * w) - PIO2_LO)
     } else {
-        dd_sub(PI_O_2_DD, atan_dd(dd_div(c, Dd::from(a))))
+        let w = from_words(high_word(s) as u32, 0);
+        let c = (t - w * w) / (s + w);
+        let r = p / q;
+        let p = 2.0 * s * r - (PIO2_LO - 2.0 * c);
+        let q = PIO4_HI - 2.0 * w;
+        PIO4_HI - (p - q)
     };
-    let v = z.hi + z.lo;
-    if x < 0.0 { -v } else { v }
+    if hx > 0 { t } else { -t }
 }
 
 #[cfg(test)]
@@ -945,7 +1039,23 @@ mod tests {
             (2.59073051863633712884e-05, 0x3EFB_2A70_74BF_7AD4),
             (std::f64::consts::FRAC_PI_4, 0x3FE9_21FB_5444_2D18),
             (3.06161699786838301793e-17, 0x3C81_A626_3314_5C07),
-            // acos
+            // atan
+            (4.63647609000806093515e-01, 0x3FDD_AC67_0561_BB4F),
+            (9.82793723247329054082e-01, 0x3FEF_730B_D281_F69B),
+            (2.26987774529616870924e-17, 0x3C7A_2B7F_222F_65E2),
+            (1.39033110312309984516e-17, 0x3C70_0788_7AF0_CBBD),
+            (3.33333333333329318027e-01, 0x3FD5_5555_5555_550D),
+            (-1.99999999998764832476e-01, 0xBFC9_9999_9998_EBC4),
+            (1.42857142725034663711e-01, 0x3FC2_4924_9200_83FF),
+            (-1.11111104054623557880e-01, 0xBFBC_71C6_FE23_1671),
+            (9.09088713343650656196e-02, 0x3FB7_45CD_C54C_206E),
+            (-7.69187620504482999495e-02, 0xBFB3_B0F2_AF74_9A6D),
+            (6.66107313738753120669e-02, 0x3FB1_0D66_A0D0_3D51),
+            (-5.83357013379057348645e-02, 0xBFAD_DE2D_52DE_FD9A),
+            (4.97687799461593236017e-02, 0x3FA9_7B4B_2476_0DEB),
+            (-3.65315727442169155270e-02, 0xBFA2_B444_2C6A_6C2F),
+            (1.62858201153657823623e-02, 0x3F90_AD3A_E322_DA11),
+            // acos, asin
             (std::f64::consts::PI, 0x4009_21FB_5444_2D18),
             (std::f64::consts::FRAC_PI_2, 0x3FF9_21FB_5444_2D18),
             (6.12323399573676603587e-17, 0x3C91_A626_3314_5C07),
@@ -1068,39 +1178,35 @@ mod tests {
     }
 
     #[test]
-    fn atan_and_asin_as_v8() {
-        // `Math.atan` and `Math.asin` in Chromium 156. fdlibm's (Firefox's;
-        // V8's before) rounds each of these the other way, and glibc's
-        // those marked; one per range fdlibm's `atan` and `asin` treat
-        // apart.
-        for (x, v8) in [
-            (-0.12140910334916244, -0.12081779391672332), // glibc
-            (-0.3059792004128391, -0.29693323229633845),
-            (0.6371744699820336, 0.5673061283351711),
-            (0.9557169693231335, 0.7627591692382668), // glibc
-            (1.4084775994124437, 0.9533994488666656), // glibc
-            (-1.3931691041386736, -0.9482316297959211),
-            (6.143111076980652, 1.409427771838373), // glibc
-            (-3.480384192965394, -1.2910085197261847),
+    fn atan_and_asin_are_fdlibms() {
+        // fdlibm's values (musl's port, an independent one, agrees bit for
+        // bit on 3 million arguments); Chromium 156 rounds each of these
+        // the other way, and so does glibc on those marked. One per range
+        // fdlibm's `atan` and `asin` treat apart.
+        for (x, fdlibm) in [
+            (-0.12140910334916244, -0.1208177939167233),
+            (-0.3059792004128391, -0.2969332322963384), // glibc
+            (0.6371744699820336, 0.5673061283351712),   // glibc
+            (0.9557169693231335, 0.7627591692382667),
+            (1.4084775994124437, 0.9533994488666657),
+            (-1.3931691041386736, -0.9482316297959212), // glibc
+            (6.143111076980652, 1.4094277718383728),
+            (-3.480384192965394, -1.291008519726185), // glibc
         ] {
-            assert_eq!(atan(x), v8, "atan({x:e})");
-            assert_eq!(atan(-x), -v8, "atan({:e})", -x);
+            assert_eq!(atan(x), fdlibm, "atan({x:e})");
+            assert_eq!(atan(-x), -fdlibm, "atan({:e})", -x);
         }
-        for (x, v8) in [
-            (0.09036477333108645, 0.09048821078304195), // glibc
-            (0.3574306640214754, 0.36551536743780266),
-            (0.5282203521910387, 0.5565032912372091), // glibc
-            (0.8050036351435284, 0.9356815954880829),
-            (0.9892542055164536, 1.4240646316978454), // glibc
-            (-0.9806503395168527, -1.3737563001700093),
+        for (x, fdlibm) in [
+            (0.09036477333108645, 0.09048821078304194),
+            (0.3574306640214754, 0.3655153674378027), // glibc
+            (0.5282203521910387, 0.556503291237209),
+            (0.8050036351435284, 0.9356815954880828), // glibc
+            (0.9892542055164536, 1.4240646316978456),
+            (-0.9806503395168527, -1.373756300170009), // glibc
         ] {
-            assert_eq!(asin(x), v8, "asin({x:e})");
-            assert_eq!(asin(-x), -v8, "asin({:e})", -x);
+            assert_eq!(asin(x), fdlibm, "asin({x:e})");
+            assert_eq!(asin(-x), -fdlibm, "asin({:e})", -x);
         }
-        // And glibc's alone rounds these the other way.
-        assert_eq!(atan(-0.19860685306786333), -0.19605563731124334);
-        assert_eq!(atan(-7.8470212198559715), -1.4440426543826153);
-        assert_eq!(asin(-0.18375413532084728), -0.1848042653482214);
         // Ends and edges.
         assert_eq!(atan(1.0), PI / 4.0);
         assert_eq!(atan(f64::INFINITY), FRAC_PI_2);
@@ -1111,7 +1217,6 @@ mod tests {
         assert_eq!(asin(-1.0), -FRAC_PI_2);
         // 0.5235987755982989: π/6 rounded (`Math.PI / 6` is an ulp below).
         assert_eq!(asin(0.5), std::f64::consts::FRAC_PI_6);
-        assert_eq!(asin(0.5), PI / 6.0 + 1.1102230246251565e-16);
         assert_eq!(asin(0.9999999999999999), 1.5707963118937354);
         assert_eq!(asin(1e-300), 1e-300);
         assert!(asin(-0.0).is_sign_negative());

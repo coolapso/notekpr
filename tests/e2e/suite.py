@@ -2780,7 +2780,7 @@ def test_vault_storage(env):
         a.find(f"{person} .quick-notes-storage-allowance .limit-num", 5)
         a.js(number, f"{person} .quick-notes-storage-allowance .limit-num", "0")
         a.click(f"{person} .save-allowances")
-        a.find_text(f"{person} .pill", "quick notes full", 10)
+        a.find_text(f"{person} .pill", "Personal storage full", 10)
         b.find(".vault-full-banner", 10)
         check("Your personal storage is full" in b.text(".vault-full-banner")
               and not b.js("return !!document.querySelector('.vault-full-banner .btn')"),

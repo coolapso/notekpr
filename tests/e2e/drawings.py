@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Drawings in the browser, checked from the CLI: drawing with the tools,
-arrows attaching to shapes, a line's points edited, the library, the
-Export menu, what reaches the server.
+arrows attaching to shapes, a line's points edited, saved shapes, the
+Export menu, the vault's Drawings page, what reaches the server.
 
     python3 tests/e2e/drawings.py --server target/debug/notekpr-server \
         --cli target/debug/notekpr --web dist/web
@@ -320,10 +320,10 @@ def main():
         finally:
             b.close()
 
-        # The library: a new ellipse added to it, put back in with a click
-        # and by dragging it; a library imported on another device of
-        # amy's (the CLI) shows up; a library file dropped on the canvas is
-        # imported; an item taken out.
+        # Saved shapes: a new ellipse saved, put back in with a click and by
+        # dragging it; shapes imported on another device of amy's (the CLI)
+        # show up; a library file dropped on the canvas is imported; a shape
+        # taken out.
         keyfile = os.path.join(home, "amy.key")
         with open(keyfile, "w") as f:
             f.write(amy_key + "\n")
@@ -335,16 +335,21 @@ def main():
         tool(a, "o")
         drag(a, (100, 230), (220, 310))
         check(ellipses() == 1, "an ellipse drawn")
-        a.click(".drawing-page .note-head button[aria-label='Library']")
+        a.click(".drawing-page .note-head button[aria-label='Saved shapes']")
         a.find(".library-panel", 5)
         a.click(".library-pending", 5)
-        a.wait(f"return document.querySelectorAll('{LIBRARY_ITEMS}').length == 1", 10, "the item in the library")
+        a.wait(f"return document.querySelectorAll('{LIBRARY_ITEMS}').length == 1", 10, "the shape saved")
         a.wait(f"return !!document.querySelector('{LIBRARY_ITEMS} img')", 10, "the item's picture")
-        r = amy("library", "ls", "--json")
-        listed = json.loads(r.stdout or "[]")
-        check(len(listed) == 1 and listed[0]["elements"] == ["ellipse"], f"the CLI lists amy's item ({[i['elements'] for i in listed]})")
+        # (Once the web app has sent it.)
+        for _ in range(20):
+            r = amy("shapes", "ls", "--json")
+            listed = json.loads(r.stdout or "[]")
+            if listed:
+                break
+            time.sleep(0.5)
+        check(len(listed) == 1 and listed[0]["elements"] == ["ellipse"], f"the CLI lists amy's saved shape ({[i['elements'] for i in listed]})")
         a.click(LIBRARY_ITEMS)
-        check(ellipses() == 2, "a click puts the item in")
+        check(ellipses() == 2, "a click puts the shape in")
         a.js("""
             const dt = new DataTransfer();
             dt.setData('application/vnd.excalidrawlib.ids+json', JSON.stringify({itemIds: [arguments[0]]}));
@@ -352,12 +357,12 @@ def main():
             c.dispatchEvent(new DragEvent('drop', {dataTransfer: dt, bubbles: true, cancelable: true,
                 clientX: r.left + r.width / 2 - 100, clientY: r.top + r.height / 2 + 250}));
         """, listed[0]["id"])
-        check(ellipses() == 3, "an item dragged onto the canvas is put in")
+        check(ellipses() == 3, "a shape dragged onto the canvas is put in")
         lib = os.path.join(home, "shapes.excalidrawlib")
         library_file(lib, "diamond")
-        r = amy("library", "import", lib)
-        check(r.returncode == 0, "the CLI imports a library")
-        a.wait(f"return document.querySelectorAll('{LIBRARY_ITEMS}').length == 2", 15, "the imported item, synced")
+        r = amy("shapes", "import", lib)
+        check(r.returncode == 0, "the CLI imports shapes")
+        a.wait(f"return document.querySelectorAll('{LIBRARY_ITEMS}').length == 2", 15, "the imported shape, synced")
         library_file(lib, "rectangle", "diamond")
         data = base64.b64encode(open(lib, "rb").read()).decode()
         a.js("""
@@ -372,17 +377,17 @@ def main():
         time.sleep(0.4)
         a.click(".library-pending", 5)
         a.find_text(".toast", "Pictures", 5)
-        check(True, "a picture isn't added to the library")
+        check(True, "a picture isn't saved as a shape")
         a.js("window.confirm = () => true")
         a.js(f"document.querySelector('{LIBRARY_ITEMS} .library-remove').click()")
-        a.wait(f"return document.querySelectorAll('{LIBRARY_ITEMS}').length == 2", 10, "an item removed")
+        a.wait(f"return document.querySelectorAll('{LIBRARY_ITEMS}').length == 2", 10, "a shape removed")
         a.shot("drawings-library")
         time.sleep(1.5)
-        r = amy("library", "export")
+        r = amy("shapes", "export")
         exported = json.loads(r.stdout)
         check(exported["type"] == "excalidrawlib" and len(exported["libraryItems"]) == 2,
-              "the library, as the server has it, exports as an .excalidrawlib file")
-        a.click(".library-head button[aria-label='Close the library']")
+              "the saved shapes, as the server has them, export as an .excalidrawlib file")
+        a.click(".library-head button[aria-label='Close the saved shapes']")
 
         # The whole palette, and a link (Ctrl+K) on the top left box.
         tool(a, KEYS["escape"])
@@ -441,9 +446,17 @@ def main():
         a.click_el(a.find_text(".tree-item", "Untitled drawing", 10))
         a.find(CANVAS, 10)
 
-        # Leaving it stores a version; its versions show as pictures.
+        # Leaving it for the vault's Drawings page (its drawings from every
+        # folder, as pictures) stores a version; its versions show as
+        # pictures.
         a.click_el(a.find_text(".sb-link", "Drawings", 10))
-        time.sleep(4)
+        a.wait("return document.querySelectorAll('.drawings-page .drawing-card').length == 2", 10,
+               "the vault's drawings on its Drawings page")
+        names = a.js("return Array.from(document.querySelectorAll('.drawings-page .drawing-name')).map(n => n.textContent).sort()")
+        check(names == ["Old sketch", "Untitled drawing"], f"the Drawings page shows the vault's drawings ({names})")
+        check(a.text(".drawings-page .drawings-count") == "2 drawings", "and how many there are")
+        a.wait("return !!document.querySelector('.drawings-page .drawing-thumb img')", 15, "a drawing's picture")
+        time.sleep(3)
         a.click_el(a.find_text(".tree-item", "Untitled drawing", 10))
         a.find(CANVAS, 10)
         time.sleep(1)

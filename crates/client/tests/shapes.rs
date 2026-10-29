@@ -102,6 +102,15 @@ async fn a_library_is_imported_listed_and_exported() {
         .unwrap();
     // Newest first.
     assert_eq!(library_ids(&srv, "alice-a").await, ["blob", "box"]);
+    // As the command lists them, on her other device too.
+    for device in ["alice-a", "alice-b"] {
+        let (r, out) =
+            notekpr_client::ui::capture(None, true, run(&srv, device, &["shapes", "ls", "--json"]))
+                .await;
+        r.unwrap();
+        let listed: Vec<serde_json::Value> = serde_json::from_str(&out.stdout).unwrap();
+        assert_eq!(listed.len(), 2, "{device}: {}", out.stdout);
+    }
     // Twice: nothing more.
     run(&srv, "alice-a", &["shapes", "import", f])
         .await

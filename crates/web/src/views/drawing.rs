@@ -1159,7 +1159,7 @@ fn Properties(board: StoredValue<Rc<Board>, LocalStorage>, rev: RwSignal<u64>) -
 pub fn DrawingsSection() -> impl IntoView {
     let ui = ui();
     view! {
-        <div class="sb-section sb-quick">
+        <div class="sb-section sb-drawings">
             <button class="sb-link" class:active=move || {
                     let r = ui.route.get();
                     r == state::Route::Drawings || r.vault().is_some_and(|v| state::step(|c| c.is_drawings(v)))

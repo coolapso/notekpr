@@ -172,6 +172,17 @@ def main():
         r = cli("ls", "Art", "attachments")
         check("sunset.png" in r.stdout, "the picture is in attachments/")
         a.shot("drawings-picture")
+        # Enter crops it: its right side dragged in shows less of it.
+        tool(a, KEYS["escape"])
+        a.click_at(CANVAS, 200, 150)
+        time.sleep(0.3)
+        tool(a, KEYS["enter"])
+        drag(a, (262, 150), (230, 150))
+        tool(a, KEYS["enter"])
+        image = next(e for e in drawing() if e["type"] == "image")
+        crop = image.get("crop") or {}
+        check(image["width"] < 120 and crop.get("naturalWidth") == 120 and crop.get("width", 120) < 120,
+              f"a picture cropped ({image['width']:.0f} wide, crop {crop})")
 
         # A PNG Excalidraw exported with the drawing inside: its elements
         # come in, not the picture.

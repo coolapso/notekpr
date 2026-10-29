@@ -361,13 +361,18 @@ pub async fn font_faces(scene: &Scene) -> String {
     rules.join("\n      ")
 }
 
-/// The drawing as an SVG file of its own, its fonts inside.
+/// The drawing as an SVG file of its own, its fonts inside, and the drawing
+/// too (as Excalidraw's "Embed scene"): it opens again as the drawing.
 pub async fn standalone_svg(vault: &str, id: &str, dark: bool) -> Option<String> {
-    Some(svg_of(vault, scene(vault, id)?, dark).await)
+    Some(svg_file(vault, scene(vault, id)?, dark, true).await)
 }
 
 /// `scene` as an SVG file of its own: its fonts and pictures inside.
 pub async fn svg_of(vault: &str, scene: Scene, dark: bool) -> String {
+    svg_file(vault, scene, dark, false).await
+}
+
+async fn svg_file(vault: &str, scene: Scene, dark: bool, embed_scene: bool) -> String {
     let scene = with_pictures(vault, scene).await;
     let font_faces = font_faces(&scene).await;
     svg::export(
@@ -378,6 +383,7 @@ pub async fn svg_of(vault: &str, scene: Scene, dark: bool) -> String {
             time: crate::drawing::sticky::local_time(),
             measure: crate::drawing::editing::measure,
             standalone: true,
+            embed_scene,
             ..SvgOptions::default()
         },
     )

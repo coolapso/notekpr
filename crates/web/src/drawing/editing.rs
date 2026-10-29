@@ -642,14 +642,7 @@ impl Board {
         let at = self.paste_point();
         let mut ids = notekpr_draw::restore::Ids::new(js_sys::Date::now() as u64);
         match notekpr_draw::file::read_drawing(text, &mut ids) {
-            Ok(d) => {
-                // The pictures they show come along, as files of the vault.
-                let files = d.scene.files.clone();
-                if !files.is_empty() {
-                    self.adopt_files(files);
-                }
-                self.command(move |ed, s, r| ed.paste(s, &d.scene.elements, at, r));
-            }
+            Ok(d) => self.paste_drawing(d, at),
             Err(_) => {
                 let text = text.replace("\r\n", "\n");
                 self.command(move |ed, s, r| {
@@ -671,6 +664,29 @@ impl Board {
                     }
                 });
             }
+        }
+    }
+
+    /// Puts in a drawing's elements, centred at `at`.
+    fn paste_drawing(self: &Rc<Self>, d: notekpr_draw::file::Drawing, at: [f64; 2]) {
+        // The pictures they show come along, as files of the vault.
+        let files = d.scene.files.clone();
+        if !files.is_empty() {
+            self.adopt_files(files);
+        }
+        self.command(move |ed, s, r| ed.paste(s, &d.scene.elements, at, r));
+    }
+
+    /// Puts in the drawing a PNG or SVG picture holds (Excalidraw's "Embed
+    /// scene", notekpr's exports), centred at `at`; false if it holds none.
+    pub fn paste_drawing_in_picture(self: &Rc<Self>, bytes: &[u8], at: [f64; 2]) -> bool {
+        let mut ids = notekpr_draw::restore::Ids::new(js_sys::Date::now() as u64);
+        match notekpr_draw::file::read_drawing_bytes(bytes, &mut ids) {
+            Ok(d) if self.writable() => {
+                self.paste_drawing(d, at);
+                true
+            }
+            _ => false,
         }
     }
 
@@ -991,7 +1007,15 @@ impl Board {
                     crate::state::error("The picture could not be made.");
                     return;
                 };
-                util::download(&format!("{name}.png"), "image/png", &png);
+                // The drawing goes inside (Excalidraw's "Embed scene"), its
+                // pictures too: the PNG opens again as the drawing.
+                let (v, scene) = (self.vault.clone(), scene.clone());
+                leptos::task::spawn_local(async move {
+                    let full = crate::drawings::with_pictures(&v, (*scene).clone()).await;
+                    let text = notekpr_draw::embed::scene_text(&full);
+                    let png = notekpr_draw::embed::png_with(&png, &text).unwrap_or(png);
+                    util::download(&format!("{name}.png"), "image/png", &png);
+                });
             }
         }
     }

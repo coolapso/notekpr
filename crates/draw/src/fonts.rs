@@ -238,7 +238,7 @@ pub fn embedded_face(face: &FontFace, woff2: &[u8]) -> String {
     let mut rule = format!(
         "@font-face {{ font-family: {}; src: url(data:font/woff2;base64,{}); ",
         face.family,
-        base64(woff2)
+        crate::js::btoa(woff2)
     );
     if !face.ranges.is_empty() {
         let ranges: Vec<String> = face
@@ -256,32 +256,6 @@ pub fn embedded_face(face: &FontFace, woff2: &[u8]) -> String {
     }
     rule.push('}');
     rule
-}
-
-fn base64(data: &[u8]) -> String {
-    const A: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
-    for chunk in data.chunks(3) {
-        let b = [
-            chunk[0],
-            *chunk.get(1).unwrap_or(&0),
-            *chunk.get(2).unwrap_or(&0),
-        ];
-        let n = (u32::from(b[0]) << 16) | (u32::from(b[1]) << 8) | u32::from(b[2]);
-        out.push(A[(n >> 18) as usize & 63] as char);
-        out.push(A[(n >> 12) as usize & 63] as char);
-        out.push(if chunk.len() > 1 {
-            A[(n >> 6) as usize & 63] as char
-        } else {
-            '='
-        });
-        out.push(if chunk.len() > 2 {
-            A[n as usize & 63] as char
-        } else {
-            '='
-        });
-    }
-    out
 }
 
 #[cfg(test)]

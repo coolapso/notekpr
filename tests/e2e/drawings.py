@@ -173,6 +173,24 @@ def main():
         check("sunset.png" in r.stdout, "the picture is in attachments/")
         a.shot("drawings-picture")
 
+        # A PNG Excalidraw exported with the drawing inside: its elements
+        # come in, not the picture.
+        here = os.path.dirname(os.path.abspath(__file__))
+        smiley = open(os.path.join(here, "../../crates/draw/tests/fixtures/smiley_embedded_v2.png"), "rb").read()
+        a.js("""
+            const bytes = Uint8Array.from(atob(arguments[0]), c => c.charCodeAt(0));
+            const dt = new DataTransfer();
+            dt.items.add(new File([bytes], 'smiley.excalidraw.png', {type: 'image/png'}));
+            const c = document.querySelector('.drawing-canvas'), r = c.getBoundingClientRect();
+            c.dispatchEvent(new DragEvent('drop', {dataTransfer: dt, bubbles: true, cancelable: true,
+                clientX: r.left + r.width / 2 - 200, clientY: r.top + r.height / 2 + 150}));
+        """, base64.b64encode(smiley).decode())
+        time.sleep(2)
+        els = drawing()
+        check(any(e["type"] == "text" and e["text"] == "😀" for e in els),
+              "a PNG with a drawing inside brings its elements")
+        check(sum(e["type"] == "image" for e in els) == 1, "and not the picture")
+
         # A sticky note (N): a click places it, its text is typed in.
         tool(a, "n")
         a.click_at(CANVAS, 250, -150)

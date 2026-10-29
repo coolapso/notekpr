@@ -535,6 +535,29 @@ async fn writing_a_drawing_file_makes_a_drawing() {
             .await
             .is_err()
     );
+    // Pictures Excalidraw exported with the drawing inside (`write` takes
+    // them on stdin); one without a drawing is refused.
+    for (path, picture) in [
+        (
+            "Smiley.drawing",
+            &include_bytes!("../../draw/tests/fixtures/smiley_embedded_v2.png")[..],
+        ),
+        (
+            "Smiley 2.drawing",
+            include_bytes!("../../draw/tests/fixtures/smiley_embedded_v2.svg"),
+        ),
+    ] {
+        let out = ops::put_drawing(&h, "Art", path, picture).await.unwrap();
+        assert!(out.created);
+        let (_, e) = v.lock().await.find(path).unwrap();
+        let scene = v.lock().await.drawing(&e.id);
+        assert_eq!(scene.elements[0].text(), "😀");
+    }
+    let svg = "<svg xmlns=\"http://www.w3.org/2000/svg\"></svg>";
+    let e = ops::put_drawing(&h, "Art", "Plain.drawing", svg)
+        .await
+        .unwrap_err();
+    assert!(e.to_string().contains("not a drawing"), "{e}");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

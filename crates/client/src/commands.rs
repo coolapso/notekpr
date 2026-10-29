@@ -1711,9 +1711,9 @@ async fn write(
     let out = if attachment {
         op(ops::put_attachment(&hub, vault, path, &data, None).await)?
     } else if notekpr_core::paths::is_drawing(path) && !append {
-        // A drawing: its file (ours, Excalidraw's or Obsidian's) on stdin.
-        let file = String::from_utf8(data).map_err(|_| anyhow!("stdin is not a drawing file"))?;
-        op(ops::put_drawing(&hub, vault, path, &file).await)?
+        // A drawing: its file (ours, Excalidraw's or Obsidian's) on stdin,
+        // or a PNG or SVG with the drawing inside.
+        op(ops::put_drawing(&hub, vault, path, &data).await)?
     } else {
         let text = String::from_utf8(data)
             .map_err(|_| anyhow!("stdin is not UTF-8 text; use --attachment for binary files"))?;

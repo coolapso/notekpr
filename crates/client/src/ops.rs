@@ -907,12 +907,19 @@ pub async fn drawing_file(hub: &Hub, v: &SharedVault, id: &str) -> String {
 }
 
 /// Creates the drawing at `path` (`.drawing`), or makes the one there,
-/// from a drawing file: ours, Excalidraw's, Obsidian's `.excalidraw.md`, or
-/// the clipboard's.
-pub async fn put_drawing(hub: &Hub, vref: &str, path: &str, file: &str) -> OpResult<PutOutcome> {
+/// from a drawing file: ours, Excalidraw's, Obsidian's `.excalidraw.md`,
+/// the clipboard's, or a PNG or SVG picture with the drawing inside
+/// (Excalidraw's "Embed scene", notekpr's exports).
+pub async fn put_drawing(
+    hub: &Hub,
+    vref: &str,
+    path: &str,
+    file: impl AsRef<[u8]>,
+) -> OpResult<PutOutcome> {
+    let file = file.as_ref();
     let v = vault(hub, vref).await?;
     let mut ids = notekpr_draw::restore::Ids::new(notekpr_core::now_ms() as u64);
-    let scene = notekpr_draw::file::read_drawing(file, &mut ids)
+    let scene = notekpr_draw::file::read_drawing_bytes(file, &mut ids)
         .map_err(|e| OpError::BadRequest(format!("not a drawing: {e}")))?
         .scene;
     let (vault_id, res) = {
@@ -922,7 +929,7 @@ pub async fn put_drawing(hub: &Hub, vref: &str, path: &str, file: &str) -> OpRes
         g.save()?;
         (g.id().to_string(), res)
     };
-    Ok(finish(hub, &vault_id, res, file.as_bytes()).await)
+    Ok(finish(hub, &vault_id, res, file).await)
 }
 
 /// One item of the drawings library, as `library ls` lists it.

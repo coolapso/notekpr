@@ -590,7 +590,7 @@ fn arc_points(
     let s1 = js::sin(f1);
     let c2 = js::cos(f2);
     let s2 = js::sin(f2);
-    let t = (df / 4.0).tan();
+    let t = js::tan(df / 4.0);
     let hx = 4.0 / 3.0 * r1 * t;
     let hy = 4.0 / 3.0 * r2 * t;
     let m1 = [x1, y1];

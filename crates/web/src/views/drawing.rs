@@ -3,13 +3,14 @@
 //! [`Document`] picks the view then (the note view never opens an editor on
 //! anything but a note).
 
+use leptos::html;
 use leptos::prelude::*;
-use leptos::task::spawn_local;
 use notekpr_core::doc::EntryKind;
 use notekpr_core::paths;
+use wasm_bindgen::JsCast;
 
 use super::icons::Icon;
-use crate::drawings;
+use crate::drawing::Board;
 use crate::state::{self, ui};
 
 /// A note or a drawing, by id.
@@ -50,21 +51,60 @@ pub fn DrawingView(vault: String, id: String) -> impl IntoView {
         }
         crumbs.join(" / ")
     });
-    // The drawing as a picture, made again when it changes elsewhere or the
-    // theme does.
-    let picture = RwSignal::new(None::<String>);
-    let (v, i) = (vault.clone(), id.clone());
+    let board = Board::new(&vault, &id);
+    let canvas_ref = NodeRef::<html::Canvas>::new();
+    let b = board.clone();
+    Effect::new(move |_| {
+        if let Some(c) = canvas_ref.get() {
+            b.attach(c.unchecked_into());
+        }
+    });
+    // Drawn again when it changes elsewhere, or the theme does.
+    let b = board.clone();
     Effect::new(move |_| {
         ui.content_rev.get();
         ui.ui_prefs.track();
         ui.vaults.track();
-        let (v, i) = (v.clone(), i.clone());
-        spawn_local(async move {
-            if let Some(url) = drawings::load_preview(&v, &i).await {
-                picture.set(Some(url));
-            }
-        });
+        b.reload();
     });
+    let kept = StoredValue::new_local(board.clone());
+    on_cleanup(move || {
+        kept.try_with_value(|b| b.close());
+    });
+    let zoom = RwSignal::new(1.0);
+    board.on_zoom(move |z| {
+        if zoom.get_untracked() != z {
+            zoom.set(z);
+        }
+    });
+    let shown_zoom = move || format!("{}%", (zoom.get() * 100.0).round());
+    // Dragging scrolls the view (the editor's tools come next).
+    let (bd, bm, bu) = (board.clone(), board.clone(), board.clone());
+    let on_down = move |ev: web_sys::PointerEvent| {
+        if let Some(t) = ev
+            .target()
+            .and_then(|t| t.dyn_into::<web_sys::Element>().ok())
+        {
+            let _ = t.set_pointer_capture(ev.pointer_id());
+        }
+        bd.pan.set(Some((
+            ev.pointer_id(),
+            ev.client_x() as f64,
+            ev.client_y() as f64,
+        )));
+    };
+    let on_move = move |ev: web_sys::PointerEvent| {
+        if let Some((pid, x, y)) = bm.pan.get()
+            && pid == ev.pointer_id()
+        {
+            let (nx, ny) = (ev.client_x() as f64, ev.client_y() as f64);
+            bm.view.set(bm.view.get().scrolled(nx - x, ny - y));
+            bm.pan.set(Some((pid, nx, ny)));
+            bm.schedule();
+        }
+    };
+    let on_up = move |_: web_sys::PointerEvent| bu.pan.set(None);
+    let (bi, bo, bf) = (board.clone(), board.clone(), board.clone());
     view! {
         <div class="note-page drawing-page">
             <header class="note-head">
@@ -72,7 +112,13 @@ pub fn DrawingView(vault: String, id: String) -> impl IntoView {
                 <div class="crumbs ellipsis">{move || crumbs.get()}</div>
             </header>
             <div class="drawing-stage">
-                {move || picture.get().map(|src| view! { <img class="drawing-picture" src=src alt=move || crumbs.get()/> })}
+                <canvas class="drawing-canvas" node_ref=canvas_ref
+                    on:pointerdown=on_down on:pointermove=on_move on:pointerup=on_up.clone() on:pointercancel=on_up></canvas>
+                <div class="drawing-zoom" role="group" aria-label="Zoom">
+                    <button title="Zoom out" aria-label="Zoom out" on:click=move |_| { bo.zoom_by(1.0 / 1.1) }>"−"</button>
+                    <button class="zoom-value" title="Show all of the drawing" on:click=move |_| { bf.fit() }>{shown_zoom}</button>
+                    <button title="Zoom in" aria-label="Zoom in" on:click=move |_| { bi.zoom_by(1.1) }>"+"</button>
+                </div>
             </div>
         </div>
     }

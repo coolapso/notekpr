@@ -5,12 +5,16 @@
 //! changes.
 
 pub mod canvas;
+pub mod editing;
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
+use std::collections::HashMap;
+
 use notekpr_draw::bounds;
-use notekpr_draw::scene::Scene;
+use notekpr_draw::edit::Editor;
+use notekpr_draw::scene::{Element, Scene};
 use notekpr_draw::viewport::Viewport;
 use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::Closure;
@@ -41,6 +45,17 @@ pub struct Board {
     on_zoom: RefCell<Option<Box<dyn Fn(f64)>>>,
     /// Fonts asked for (they load in the background, then it's drawn again).
     fonts_asked: RefCell<std::collections::HashSet<String>>,
+    /// Tools, selection, the style of new elements, the gesture going on.
+    pub editor: RefCell<Editor>,
+    /// Changes shown but not written to the drawing yet, by element.
+    unwritten: RefCell<HashMap<String, Element>>,
+    last_write: Cell<f64>,
+    write_soon: Cell<bool>,
+    /// Told when the tool, selection or style changed (the page's panels).
+    on_change: RefCell<Option<Box<dyn Fn()>>>,
+    /// Told the text to edit (or "" when editing ends).
+    on_edit_text: RefCell<Option<Box<dyn Fn(String)>>>,
+    text_draft: RefCell<String>,
 }
 
 pub type Rt = Rc<Board>;
@@ -63,7 +78,24 @@ impl Board {
             pan: Cell::new(None),
             on_zoom: RefCell::new(None),
             fonts_asked: RefCell::new(std::collections::HashSet::new()),
+            editor: RefCell::new(Editor::default()),
+            unwritten: RefCell::new(HashMap::new()),
+            last_write: Cell::new(0.0),
+            write_soon: Cell::new(false),
+            on_change: RefCell::new(None),
+            on_edit_text: RefCell::new(None),
+            text_draft: RefCell::new(String::new()),
         })
+    }
+
+    /// Calls `f` when the tool, selection or style changed.
+    pub fn on_change(&self, f: impl Fn() + 'static) {
+        *self.on_change.borrow_mut() = Some(Box::new(f));
+    }
+
+    /// Calls `f` with a text to edit (or "" when editing ends).
+    pub fn on_edit_text(&self, f: impl Fn(String) + 'static) {
+        *self.on_edit_text.borrow_mut() = Some(Box::new(f));
     }
 
     /// Asks the browser for the fonts the drawing's texts use: a canvas
@@ -112,9 +144,7 @@ impl Board {
 
     /// Reads the drawing again (it changed) and draws it.
     pub fn reload(self: &Rc<Self>) {
-        if let Some(s) = drawings::scene(&self.vault, &self.id) {
-            *self.scene.borrow_mut() = Rc::new(s);
-        }
+        self.reread();
         self.load_fonts();
         self.fit_once();
         self.schedule();
@@ -166,13 +196,21 @@ impl Board {
             return;
         };
         let scene = self.scene();
+        let view = self.view.get();
         canvas::draw_scene(
             &ctx,
             &scene,
-            &self.view.get(),
+            &view,
             self.pixel_ratio.get(),
             drawings::is_dark(),
             &mut self.cache.borrow_mut(),
+        );
+        canvas::draw_overlay(
+            &ctx,
+            &scene,
+            &self.editor.borrow(),
+            &view,
+            self.pixel_ratio.get(),
         );
         if let Some(f) = self.on_zoom.borrow().as_ref() {
             f(self.view.get().zoom);
@@ -233,6 +271,7 @@ impl Board {
             &opts,
         );
         *self.wheel.borrow_mut() = Some(on_wheel);
+        self.enable_undo();
         self.reload();
     }
 
@@ -257,6 +296,7 @@ impl Board {
 
     /// Lets the canvas go (the page closed).
     pub fn close(&self) {
+        self.write();
         self.closed.set(true);
         if let Some((observer, _)) = self.resize.borrow_mut().take() {
             observer.disconnect();

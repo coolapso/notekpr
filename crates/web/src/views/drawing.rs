@@ -3,14 +3,22 @@
 //! [`Document`] picks the view then (the note view never opens an editor on
 //! anything but a note).
 
+use std::cell::Cell;
+use std::rc::Rc;
+
 use leptos::html;
 use leptos::prelude::*;
 use notekpr_core::doc::EntryKind;
 use notekpr_core::paths;
+use notekpr_draw::color::palette;
+use notekpr_draw::edit::Tool;
+use notekpr_draw::scene::ElementType;
+use serde_json::{Value, json};
 use wasm_bindgen::JsCast;
 
 use super::icons::Icon;
 use crate::drawing::Board;
+use crate::drawing::editing::{TextBox, mods};
 use crate::state::{self, ui};
 
 /// A note or a drawing, by id.
@@ -33,6 +41,27 @@ pub fn Document(vault: String, note: String) -> impl IntoView {
     }
 }
 
+/// The tools of the toolbar: icon, name, shortcut.
+const TOOLS: [(Tool, &str, &str, &str); 12] = [
+    (Tool::Hand, "hand", "Hand (panning tool)", "H"),
+    (Tool::Selection, "pointer", "Selection", "V or 1"),
+    (Tool::Rectangle, "square", "Rectangle", "R or 2"),
+    (Tool::Diamond, "diamond", "Diamond", "D or 3"),
+    (Tool::Ellipse, "circle", "Ellipse", "O or 4"),
+    (Tool::Arrow, "arrow", "Arrow", "A or 5"),
+    (Tool::Line, "line", "Line", "L or 6"),
+    (Tool::Freedraw, "pen", "Draw", "P or 7"),
+    (Tool::Text, "text-tool", "Text", "T or 8"),
+    (Tool::Eraser, "eraser", "Eraser", "E or 0"),
+    (Tool::Frame, "frame", "Frame tool", "F"),
+    (Tool::Laser, "laser", "Laser pointer", "K"),
+];
+
+/// The pointer's position on the canvas.
+fn at(ev: &web_sys::PointerEvent) -> [f64; 2] {
+    [ev.offset_x() as f64, ev.offset_y() as f64]
+}
+
 #[component]
 pub fn DrawingView(vault: String, id: String) -> impl IntoView {
     let ui = ui();
@@ -52,25 +81,27 @@ pub fn DrawingView(vault: String, id: String) -> impl IntoView {
         crumbs.join(" / ")
     });
     let board = Board::new(&vault, &id);
+    let b = StoredValue::new_local(board.clone());
     let canvas_ref = NodeRef::<html::Canvas>::new();
-    let b = board.clone();
+    let root_ref = NodeRef::<html::Div>::new();
     Effect::new(move |_| {
         if let Some(c) = canvas_ref.get() {
-            b.attach(c.unchecked_into());
+            b.with_value(|b| b.attach(c.unchecked_into()));
         }
     });
     // Drawn again when it changes elsewhere, or the theme does.
-    let b = board.clone();
     Effect::new(move |_| {
         ui.content_rev.get();
         ui.ui_prefs.track();
         ui.vaults.track();
-        b.reload();
+        b.with_value(|b| b.reload());
     });
-    let kept = StoredValue::new_local(board.clone());
     on_cleanup(move || {
-        kept.try_with_value(|b| b.close());
+        b.try_with_value(|b| b.close());
     });
+    // The panels follow the editor.
+    let rev = RwSignal::new(0u64);
+    board.on_change(move || rev.update(|r| *r += 1));
     let zoom = RwSignal::new(1.0);
     board.on_zoom(move |z| {
         if zoom.get_untracked() != z {
@@ -78,35 +109,246 @@ pub fn DrawingView(vault: String, id: String) -> impl IntoView {
         }
     });
     let shown_zoom = move || format!("{}%", (zoom.get() * 100.0).round());
-    // Dragging scrolls the view (the editor's tools come next).
-    let (bd, bm, bu) = (board.clone(), board.clone(), board.clone());
+    let writable = Memo::new(move |_| {
+        ui.vaults.track();
+        b.with_value(|b| b.writable())
+    });
+    let tool = move || {
+        rev.get();
+        b.with_value(|b| b.editor.borrow().tool)
+    };
+    // Text being edited: its box over the canvas.
+    let editing = RwSignal::new(None::<TextBox>);
+    let text_ref = NodeRef::<html::Textarea>::new();
+    board.on_edit_text(move |id| {
+        let tb = if id.is_empty() {
+            None
+        } else {
+            b.with_value(|b| b.text_box(&id))
+        };
+        editing.set(tb.clone());
+        if let Some(tb) = tb {
+            b.with_value(|b| b.set_text_draft(tb.text.clone()));
+            crate::util::set_timeout(0, move || {
+                if let Some(t) = text_ref.get_untracked() {
+                    t.set_value(&tb.text);
+                    let _ = t.focus();
+                    t.select();
+                }
+            });
+        }
+    });
+    let finish_text = move || {
+        if editing.get_untracked().is_none() {
+            return;
+        }
+        let text = text_ref
+            .get_untracked()
+            .map(|t| t.value())
+            .unwrap_or_default();
+        b.with_value(|b| b.finish_text(&text));
+        if let Some(r) = root_ref.get_untracked() {
+            let _ = r.focus();
+        }
+    };
+    // Space held: the hand, for as long.
+    let space = Rc::new(Cell::new(false));
+    let panning = Rc::new(Cell::new(None::<(i32, f64, f64)>));
+    let (sp, pn) = (space.clone(), panning.clone());
     let on_down = move |ev: web_sys::PointerEvent| {
+        if let Some(r) = root_ref.get_untracked() {
+            let _ = r.focus();
+        }
         if let Some(t) = ev
             .target()
             .and_then(|t| t.dyn_into::<web_sys::Element>().ok())
         {
             let _ = t.set_pointer_capture(ev.pointer_id());
         }
-        bd.pan.set(Some((
-            ev.pointer_id(),
-            ev.client_x() as f64,
-            ev.client_y() as f64,
-        )));
+        let hand = b.with_value(|b| b.editor.borrow().tool == Tool::Hand);
+        if ev.button() == 1 || hand || sp.get() || !writable.get_untracked() {
+            pn.set(Some((
+                ev.pointer_id(),
+                ev.client_x() as f64,
+                ev.client_y() as f64,
+            )));
+            return;
+        }
+        if ev.button() != 0 {
+            return;
+        }
+        let pressure = (ev.pointer_type() == "pen").then(|| ev.pressure() as f64);
+        let m = mods(ev.shift_key(), ev.alt_key(), ev.ctrl_key() || ev.meta_key());
+        b.with_value(|b| b.pointer_down(at(&ev), pressure, m));
     };
+    let pm = panning.clone();
     let on_move = move |ev: web_sys::PointerEvent| {
-        if let Some((pid, x, y)) = bm.pan.get()
+        if let Some((pid, x, y)) = pm.get()
             && pid == ev.pointer_id()
         {
             let (nx, ny) = (ev.client_x() as f64, ev.client_y() as f64);
-            bm.view.set(bm.view.get().scrolled(nx - x, ny - y));
-            bm.pan.set(Some((pid, nx, ny)));
-            bm.schedule();
+            b.with_value(|b| {
+                b.view.set(b.view.get().scrolled(nx - x, ny - y));
+                b.schedule();
+            });
+            pm.set(Some((pid, nx, ny)));
+            return;
+        }
+        let pressure = (ev.pointer_type() == "pen").then(|| ev.pressure() as f64);
+        let m = mods(ev.shift_key(), ev.alt_key(), ev.ctrl_key() || ev.meta_key());
+        b.with_value(|b| {
+            b.pointer_move(at(&ev), pressure, m);
+            if let Some(c) = canvas_ref.get_untracked() {
+                let el: &web_sys::HtmlElement = c.unchecked_ref();
+                let _ = el.style().set_property("cursor", b.cursor_at(at(&ev)));
+            }
+        });
+    };
+    let pu = panning.clone();
+    let on_up = move |ev: web_sys::PointerEvent| {
+        if pu.take().is_some() {
+            return;
+        }
+        b.with_value(|b| b.pointer_up(at(&ev)));
+    };
+    let (sd, su) = (space.clone(), space.clone());
+    let on_key = move |ev: web_sys::KeyboardEvent| {
+        if editing.get_untracked().is_some() {
+            return;
+        }
+        let key = ev.key();
+        let ctrl = ev.ctrl_key() || ev.meta_key();
+        let shift = ev.shift_key();
+        let handled = b.with_value(|b| -> bool {
+            let w = writable.get_untracked();
+            match (ctrl, key.as_str()) {
+                (false, " ") => {
+                    sd.set(true);
+                    true
+                }
+                (false, "Escape") => {
+                    b.command(|ed, s, r| ed.escape(s, r));
+                    true
+                }
+                (false, "Delete" | "Backspace") if w => {
+                    b.command(|ed, s, r| ed.delete_selected(s, r));
+                    true
+                }
+                (false, "ArrowLeft" | "ArrowRight" | "ArrowUp" | "ArrowDown") if w => {
+                    let step = if shift { 5.0 } else { 1.0 };
+                    let (dx, dy) = match key.as_str() {
+                        "ArrowLeft" => (-step, 0.0),
+                        "ArrowRight" => (step, 0.0),
+                        "ArrowUp" => (0.0, -step),
+                        _ => (0.0, step),
+                    };
+                    b.command(move |ed, s, r| ed.nudge(s, dx, dy, r));
+                    true
+                }
+                (false, "q" | "Q") => {
+                    let locked = !b.editor.borrow().tool_locked;
+                    b.editor.borrow_mut().tool_locked = locked;
+                    b.changed();
+                    true
+                }
+                (false, "!") => {
+                    b.fit();
+                    true
+                }
+                (false, k) if !ev.alt_key() && w || k == "h" || k == "v" || k == "1" => {
+                    match Tool::from_key(k) {
+                        Some(t) if t != Tool::Image => {
+                            b.set_tool(t);
+                            true
+                        }
+                        _ => false,
+                    }
+                }
+                (true, "a") => {
+                    let s = b.scene();
+                    b.editor.borrow_mut().select_all(&s);
+                    b.schedule();
+                    b.changed();
+                    true
+                }
+                (true, "z" | "Z") if w => {
+                    b.undo(shift);
+                    true
+                }
+                (true, "y") if w => {
+                    b.undo(true);
+                    true
+                }
+                (true, "d") if w => {
+                    b.command(|ed, s, r| ed.duplicate(s, r));
+                    true
+                }
+                (true, "g" | "G") if w => {
+                    if shift {
+                        b.command(|ed, s, r| ed.ungroup(s, r));
+                    } else {
+                        b.command(|ed, s, r| ed.group(s, r));
+                    }
+                    true
+                }
+                (true, "l" | "L") if shift && w => {
+                    b.command(|ed, s, r| ed.toggle_lock(s, r));
+                    true
+                }
+                (true, "]" | "}") if w => {
+                    b.command(move |ed, s, r| ed.reorder(s, true, shift, r));
+                    true
+                }
+                (true, "[" | "{") if w => {
+                    b.command(move |ed, s, r| ed.reorder(s, false, shift, r));
+                    true
+                }
+                (true, "=" | "+") => {
+                    b.zoom_by(1.1);
+                    true
+                }
+                (true, "-") => {
+                    b.zoom_by(1.0 / 1.1);
+                    true
+                }
+                (true, "0") => {
+                    let z = b.view.get().zoom;
+                    b.zoom_by(1.0 / z);
+                    true
+                }
+                _ => false,
+            }
+        });
+        if handled {
+            ev.prevent_default();
+            ev.stop_propagation();
         }
     };
-    let on_up = move |_: web_sys::PointerEvent| bu.pan.set(None);
-    let (bi, bo, bf) = (board.clone(), board.clone(), board.clone());
+    let on_key_up = move |ev: web_sys::KeyboardEvent| {
+        if ev.key() == " " {
+            su.set(false);
+        }
+    };
+    let set_tool = move |t: Tool| b.with_value(|b| b.set_tool(t));
+    let tool_lock = move || {
+        rev.get();
+        b.with_value(|b| b.editor.borrow().tool_locked)
+    };
+    // Shows the properties panel: something selected, or a drawing tool.
+    let panel = move || {
+        rev.get();
+        writable.get()
+            && b.with_value(|b| {
+                let ed = b.editor.borrow();
+                !ed.selection.is_empty()
+                    || !matches!(
+                        ed.tool,
+                        Tool::Selection | Tool::Hand | Tool::Eraser | Tool::Laser
+                    )
+            })
+    };
     view! {
-        <div class="note-page drawing-page">
+        <div class="note-page drawing-page" tabindex="0" node_ref=root_ref on:keydown=on_key on:keyup=on_key_up>
             <header class="note-head">
                 <button class="icon-btn mobile-only" title="Menu" aria-label="Menu" on:click=move |_| ui.sidebar.set(true)><Icon name="menu"/></button>
                 <div class="crumbs ellipsis">{move || crumbs.get()}</div>
@@ -114,12 +356,391 @@ pub fn DrawingView(vault: String, id: String) -> impl IntoView {
             <div class="drawing-stage">
                 <canvas class="drawing-canvas" node_ref=canvas_ref
                     on:pointerdown=on_down on:pointermove=on_move on:pointerup=on_up.clone() on:pointercancel=on_up></canvas>
+                <Show when=move || writable.get()>
+                    <div class="drawing-tools" role="toolbar" aria-label="Drawing tools">
+                        <button class="dt" class:on=tool_lock title="Keep selected tool active after drawing — Q" aria-pressed=move || tool_lock().to_string()
+                            on:click=move |_| b.with_value(|b| { let l = !b.editor.borrow().tool_locked; b.editor.borrow_mut().tool_locked = l; b.changed(); })>
+                            <Icon name=if tool_lock() { "lock" } else { "unlock" }/>
+                        </button>
+                        <span class="dt-sep"></span>
+                        {TOOLS.iter().map(|(t, icon, name, keys)| {
+                            let t = *t;
+                            let title = format!("{name} — {keys}");
+                            view! {
+                                <button class="dt" class:on=move || tool() == t title=title.clone() aria-label=*name aria-pressed=move || (tool() == t).to_string()
+                                    on:click=move |_| set_tool(t)><Icon name=*icon/></button>
+                            }
+                        }).collect_view()}
+                    </div>
+                </Show>
+                <Show when=panel>
+                    <Properties board=b rev=rev/>
+                </Show>
+                {move || editing.get().map(|tb| {
+                    let style = format!(
+                        "left:{}px;top:{}px;min-width:{}px;min-height:{}px;font-size:{}px;line-height:{};font-family:{};color:{};text-align:{};transform:rotate({}rad);transform-origin:0 0",
+                        tb.left, tb.top, tb.width.max(8.0), tb.height.max(tb.font_size * tb.line_height), tb.font_size, tb.line_height, tb.font_family, tb.color, tb.align, tb.angle
+                    );
+                    view! {
+                        <textarea class="drawing-text" node_ref=text_ref style=style spellcheck="false" wrap="off"
+                            on:input=move |ev| b.with_value(|b| b.set_text_draft(event_target_value(&ev)))
+                            on:blur=move |_| finish_text()
+                            on:keydown=move |ev: web_sys::KeyboardEvent| {
+                                ev.stop_propagation();
+                                if ev.key() == "Escape" || (ev.key() == "Enter" && (ev.ctrl_key() || ev.meta_key())) {
+                                    ev.prevent_default();
+                                    finish_text();
+                                }
+                            }></textarea>
+                    }
+                })}
                 <div class="drawing-zoom" role="group" aria-label="Zoom">
-                    <button title="Zoom out" aria-label="Zoom out" on:click=move |_| { bo.zoom_by(1.0 / 1.1) }>"−"</button>
-                    <button class="zoom-value" title="Show all of the drawing" on:click=move |_| { bf.fit() }>{shown_zoom}</button>
-                    <button title="Zoom in" aria-label="Zoom in" on:click=move |_| { bi.zoom_by(1.1) }>"+"</button>
+                    <button title="Zoom out" aria-label="Zoom out" on:click=move |_| b.with_value(|b| b.zoom_by(1.0 / 1.1))>"−"</button>
+                    <button class="zoom-value" title="Show all of the drawing — Shift+1" on:click=move |_| b.with_value(|b| b.fit())>{shown_zoom}</button>
+                    <button title="Zoom in" aria-label="Zoom in" on:click=move |_| b.with_value(|b| b.zoom_by(1.1))>"+"</button>
+                </div>
+                <div class="drawing-history" role="group" aria-label="History">
+                    <button title="Undo — Ctrl+Z" aria-label="Undo" on:click=move |_| b.with_value(|b| b.undo(false))><Icon name="undo"/></button>
+                    <button title="Redo — Ctrl+Shift+Z" aria-label="Redo" on:click=move |_| b.with_value(|b| b.undo(true))><Icon name="redo"/></button>
                 </div>
             </div>
+        </div>
+    }
+}
+
+/// One row of choices in the properties panel.
+fn choices(
+    board: StoredValue<Rc<Board>, LocalStorage>,
+    rev: RwSignal<u64>,
+    key: &'static str,
+    current: impl Fn(&Board) -> Value + Copy + Send + Sync + 'static,
+    options: Vec<(Value, AnyView, String)>,
+) -> impl IntoView {
+    options
+        .into_iter()
+        .map(|(value, label, title)| {
+            let v2 = value.clone();
+            let on = move || {
+                rev.get();
+                board.with_value(|b| current(b)) == v2
+            };
+            view! {
+                <button class="pick" class:on=on title=title.clone() aria-label=title
+                    on:click=move |_| board.with_value(|b| b.set_property(key, value.clone()))>{label}</button>
+            }
+        })
+        .collect_view()
+}
+
+/// A property's value shown: the first selected element's, else the
+/// style's.
+fn prop(b: &Board, key: &str, fallback: Value) -> Value {
+    let s = b.scene();
+    let ed = b.editor.borrow();
+    ed.selected(&s)
+        .first()
+        .and_then(|e| e.get(key).cloned())
+        .unwrap_or(fallback)
+}
+
+fn swatch(color: &str) -> AnyView {
+    let style = if color == "transparent" {
+        "background: repeating-conic-gradient(#ccc 0 25%, #fff 0 50%) 0 0 / 8px 8px".to_string()
+    } else {
+        format!("background:{color}")
+    };
+    view! { <span class="swatch" style=style></span> }.into_any()
+}
+
+fn label(text: &str) -> AnyView {
+    view! { <span class="pick-text">{text.to_string()}</span> }.into_any()
+}
+
+/// The properties of what is selected (or of what the tool makes).
+#[component]
+fn Properties(board: StoredValue<Rc<Board>, LocalStorage>, rev: RwSignal<u64>) -> impl IntoView {
+    // What is selected decides what shows: kinds of elements.
+    let kinds = move || {
+        rev.get();
+        board.with_value(|b| {
+            let ed = b.editor.borrow();
+            let mut k: Vec<ElementType> = b.selection_kinds().into_values().collect();
+            if k.is_empty() {
+                k.push(match ed.tool {
+                    Tool::Rectangle => ElementType::Rectangle,
+                    Tool::Diamond => ElementType::Diamond,
+                    Tool::Ellipse => ElementType::Ellipse,
+                    Tool::Arrow => ElementType::Arrow,
+                    Tool::Line => ElementType::Line,
+                    Tool::Freedraw => ElementType::Freedraw,
+                    Tool::Text => ElementType::Text,
+                    Tool::Frame => ElementType::Frame,
+                    _ => ElementType::Rectangle,
+                });
+            }
+            k
+        })
+    };
+    let has = move |f: fn(&ElementType) -> bool| kinds().iter().any(f);
+    let stroke = move |b: &Board| {
+        prop(
+            b,
+            "strokeColor",
+            json!(b.editor.borrow().style.stroke_color),
+        )
+    };
+    let background = move |b: &Board| {
+        prop(
+            b,
+            "backgroundColor",
+            json!(b.editor.borrow().style.background_color),
+        )
+    };
+    let fill = move |b: &Board| prop(b, "fillStyle", json!(b.editor.borrow().style.fill_style));
+    let width = move |b: &Board| {
+        prop(
+            b,
+            "strokeWidth",
+            json!(b.editor.borrow().style.stroke_width),
+        )
+    };
+    let style = move |b: &Board| {
+        prop(
+            b,
+            "strokeStyle",
+            json!(b.editor.borrow().style.stroke_style),
+        )
+    };
+    let rough = move |b: &Board| prop(b, "roughness", json!(b.editor.borrow().style.roughness));
+    let font = move |b: &Board| prop(b, "fontFamily", json!(b.editor.borrow().style.font_family));
+    let size = move |b: &Board| prop(b, "fontSize", json!(b.editor.borrow().style.font_size));
+    let align = move |b: &Board| prop(b, "textAlign", json!(b.editor.borrow().style.text_align));
+    let start = move |b: &Board| {
+        prop(
+            b,
+            "startArrowhead",
+            json!(b.editor.borrow().style.start_arrowhead),
+        )
+    };
+    let end = move |b: &Board| {
+        prop(
+            b,
+            "endArrowhead",
+            json!(b.editor.borrow().style.end_arrowhead),
+        )
+    };
+    let opacity = move || {
+        rev.get();
+        board.with_value(|b| {
+            prop(b, "opacity", json!(b.editor.borrow().style.opacity))
+                .as_f64()
+                .unwrap_or(100.0)
+        })
+    };
+    let num = |x: f64| json!(x as i64);
+    let colors = |picks: [&str; 5]| -> Vec<(Value, AnyView, String)> {
+        picks
+            .iter()
+            .map(|c| (json!(c), swatch(c), (*c).to_string()))
+            .collect()
+    };
+    let custom_color = move |key: &'static str, current: fn(&Board) -> Value| {
+        let value = move || {
+            rev.get();
+            board.with_value(|b| current(b).as_str().unwrap_or_default().to_string())
+        };
+        view! {
+            <input class="pick-hex" type="text" spellcheck="false" aria-label="Colour (hex)" prop:value=value
+                on:change=move |ev| {
+                    let v = event_target_value(&ev);
+                    if notekpr_draw::color::parse(&v).is_some() {
+                        board.with_value(|b| b.set_property(key, json!(v.trim())));
+                    }
+                }/>
+        }
+    };
+    let not_text = |k: &ElementType| *k != ElementType::Text;
+    let fillable = |k: &ElementType| {
+        matches!(
+            k,
+            ElementType::Rectangle
+                | ElementType::Diamond
+                | ElementType::Ellipse
+                | ElementType::Line
+                | ElementType::Freedraw
+                | ElementType::Embeddable
+        )
+    };
+    let strokes = |k: &ElementType| {
+        !matches!(
+            k,
+            ElementType::Text | ElementType::Image | ElementType::Frame
+        )
+    };
+    let rough_kinds = |k: &ElementType| {
+        matches!(
+            k,
+            ElementType::Rectangle
+                | ElementType::Diamond
+                | ElementType::Ellipse
+                | ElementType::Line
+                | ElementType::Arrow
+        )
+    };
+    let roundable =
+        |k: &ElementType| notekpr_draw::shape::can_change_roundness(k) && *k != ElementType::Line;
+    let texts = |k: &ElementType| *k == ElementType::Text;
+    let arrows = |k: &ElementType| *k == ElementType::Arrow;
+    let round_now = move || {
+        rev.get();
+        board.with_value(|b| {
+            let s = b.scene();
+            let ed = b.editor.borrow();
+            ed.selected(&s)
+                .first()
+                .map_or(ed.style.round_edges, |e| e.roundness().is_some())
+        })
+    };
+    let heads = |end: bool| -> Vec<(Value, AnyView, String)> {
+        let mut v = vec![(Value::Null, label("—"), "None".to_string())];
+        for (h, l) in [
+            ("arrow", "→"),
+            ("triangle", "▶"),
+            ("triangle_outline", "▷"),
+            ("circle", "●"),
+            ("circle_outline", "○"),
+            ("diamond", "◆"),
+            ("diamond_outline", "◇"),
+            ("bar", "|"),
+        ] {
+            let shown = if end {
+                l.to_string()
+            } else {
+                l.chars()
+                    .rev()
+                    .collect::<String>()
+                    .replace('→', "←")
+                    .replace('▶', "◀")
+                    .replace('▷', "◁")
+            };
+            v.push((json!(h), label(&shown), h.replace('_', " ")));
+        }
+        v
+    };
+    let action = move |name: &'static str, icon: &'static str, f: fn(&Rc<Board>)| {
+        view! { <button class="pick" title=name aria-label=name on:click=move |_| board.with_value(f)><Icon name=icon/></button> }
+    };
+    view! {
+        <div class="drawing-props" aria-label="Properties">
+            <Show when=move || has(strokes) || has(texts)>
+                <div class="prop"><span class="prop-name">"Stroke"</span>
+                    <div class="picks">{choices(board, rev, "strokeColor", stroke, colors(palette::STROKE_PICKS))}{custom_color("strokeColor", |b| prop(b, "strokeColor", json!(b.editor.borrow().style.stroke_color)))}</div></div>
+            </Show>
+            <Show when=move || has(fillable)>
+                <div class="prop"><span class="prop-name">"Background"</span>
+                    <div class="picks">{choices(board, rev, "backgroundColor", background, colors(palette::BACKGROUND_PICKS))}{custom_color("backgroundColor", |b| prop(b, "backgroundColor", json!(b.editor.borrow().style.background_color)))}</div></div>
+                <div class="prop"><span class="prop-name">"Fill"</span>
+                    <div class="picks">{choices(board, rev, "fillStyle", fill, vec![
+                        (json!("hachure"), label("▤"), "Hachure".into()),
+                        (json!("cross-hatch"), label("▦"), "Cross-hatch".into()),
+                        (json!("solid"), label("■"), "Solid".into()),
+                        (json!("zigzag"), label("≋"), "Zigzag".into()),
+                    ])}</div></div>
+            </Show>
+            <Show when=move || has(strokes)>
+                <div class="prop"><span class="prop-name">"Stroke width"</span>
+                    <div class="picks">{choices(board, rev, "strokeWidth", width, vec![
+                        (num(1.0), label("—"), "Thin".into()),
+                        (num(2.0), label("━"), "Bold".into()),
+                        (num(4.0), label("▬"), "Extra bold".into()),
+                    ])}</div></div>
+                <div class="prop"><span class="prop-name">"Stroke style"</span>
+                    <div class="picks">{choices(board, rev, "strokeStyle", style, vec![
+                        (json!("solid"), label("──"), "Solid".into()),
+                        (json!("dashed"), label("- -"), "Dashed".into()),
+                        (json!("dotted"), label("···"), "Dotted".into()),
+                    ])}</div></div>
+            </Show>
+            <Show when=move || has(rough_kinds)>
+                <div class="prop"><span class="prop-name">"Sloppiness"</span>
+                    <div class="picks">{choices(board, rev, "roughness", rough, vec![
+                        (num(0.0), label("Architect"), "Architect".into()),
+                        (num(1.0), label("Artist"), "Artist".into()),
+                        (num(2.0), label("Cartoonist"), "Cartoonist".into()),
+                    ])}</div></div>
+            </Show>
+            <Show when=move || has(roundable)>
+                <div class="prop"><span class="prop-name">"Edges"</span>
+                    <div class="picks">
+                        <button class="pick" class:on=move || !round_now() title="Sharp" on:click=move |_| board.with_value(|b| b.command(|ed, s, r| ed.set_round_edges(s, false, r)))><span class="pick-text">"┌"</span></button>
+                        <button class="pick" class:on=round_now title="Round" on:click=move |_| board.with_value(|b| b.command(|ed, s, r| ed.set_round_edges(s, true, r)))><span class="pick-text">"╭"</span></button>
+                    </div></div>
+            </Show>
+            <Show when=move || has(arrows)>
+                <div class="prop"><span class="prop-name">"Arrowheads"</span>
+                    <div class="picks">{choices(board, rev, "startArrowhead", start, heads(false))}</div>
+                    <div class="picks">{choices(board, rev, "endArrowhead", end, heads(true))}</div></div>
+            </Show>
+            <Show when=move || has(texts)>
+                <div class="prop"><span class="prop-name">"Font family"</span>
+                    <div class="picks">{choices(board, rev, "fontFamily", font, vec![
+                        (json!(notekpr_draw::fonts::EXCALIFONT), label("Hand-drawn"), "Excalifont".into()),
+                        (json!(notekpr_draw::fonts::NUNITO), label("Normal"), "Nunito".into()),
+                        (json!(notekpr_draw::fonts::COMIC_SHANNS), label("Code"), "Comic Shanns".into()),
+                        (json!(notekpr_draw::fonts::LILITA_ONE), label("Headline"), "Lilita One".into()),
+                    ])}</div></div>
+                <div class="prop"><span class="prop-name">"Font size"</span>
+                    <div class="picks">{choices(board, rev, "fontSize", size, vec![
+                        (num(16.0), label("S"), "Small".into()),
+                        (num(20.0), label("M"), "Medium".into()),
+                        (num(28.0), label("L"), "Large".into()),
+                        (num(36.0), label("XL"), "Very large".into()),
+                    ])}</div></div>
+                <div class="prop"><span class="prop-name">"Text align"</span>
+                    <div class="picks">{choices(board, rev, "textAlign", align, vec![
+                        (json!("left"), label("⇤"), "Left".into()),
+                        (json!("center"), label("↔"), "Center".into()),
+                        (json!("right"), label("⇥"), "Right".into()),
+                    ])}</div></div>
+            </Show>
+            <Show when=move || has(not_text) || has(texts)>
+                <div class="prop"><span class="prop-name">"Opacity"</span>
+                    <input type="range" min="0" max="100" step="10" prop:value=move || opacity().to_string() aria-label="Opacity"
+                        on:change=move |ev| {
+                            let v: f64 = event_target_value(&ev).parse().unwrap_or(100.0);
+                            board.with_value(|b| b.set_property("opacity", json!(v as i64)));
+                        }/></div>
+            </Show>
+            <Show when=move || { rev.get(); board.with_value(|b| !b.selection().is_empty()) }>
+                <div class="prop"><span class="prop-name">"Layers"</span>
+                    <div class="picks">
+                        {action("Send to back — Ctrl+Shift+[", "back", |b| b.command(|ed, s, r| ed.reorder(s, false, true, r)))}
+                        {action("Send backward — Ctrl+[", "chevron-down", |b| b.command(|ed, s, r| ed.reorder(s, false, false, r)))}
+                        {action("Bring forward — Ctrl+]", "chevron-right", |b| b.command(|ed, s, r| ed.reorder(s, true, false, r)))}
+                        {action("Bring to front — Ctrl+Shift+]", "front", |b| b.command(|ed, s, r| ed.reorder(s, true, true, r)))}
+                    </div></div>
+                <Show when=move || { rev.get(); board.with_value(|b| b.selection().len() > 1) }>
+                    <div class="prop"><span class="prop-name">"Align"</span>
+                        <div class="picks">
+                            {action("Align left", "chevron-right", |b| b.command(|ed, s, r| ed.align(s, "left", r)))}
+                            {action("Center horizontally", "minus", |b| b.command(|ed, s, r| ed.align(s, "center", r)))}
+                            {action("Align right", "chevron-right", |b| b.command(|ed, s, r| ed.align(s, "right", r)))}
+                            {action("Align top", "chevron-down", |b| b.command(|ed, s, r| ed.align(s, "top", r)))}
+                            {action("Center vertically", "minus", |b| b.command(|ed, s, r| ed.align(s, "middle", r)))}
+                            {action("Align bottom", "chevron-down", |b| b.command(|ed, s, r| ed.align(s, "bottom", r)))}
+                            {action("Distribute horizontally", "more", |b| b.command(|ed, s, r| ed.distribute(s, true, r)))}
+                            {action("Distribute vertically", "more", |b| b.command(|ed, s, r| ed.distribute(s, false, r)))}
+                        </div></div>
+                </Show>
+                <div class="prop"><span class="prop-name">"Actions"</span>
+                    <div class="picks">
+                        {action("Duplicate — Ctrl+D", "copy", |b| b.command(|ed, s, r| ed.duplicate(s, r)))}
+                        {action("Delete — Delete", "trash", |b| b.command(|ed, s, r| ed.delete_selected(s, r)))}
+                        {action("Group — Ctrl+G", "group", |b| b.command(|ed, s, r| ed.group(s, r)))}
+                        {action("Ungroup — Ctrl+Shift+G", "group", |b| b.command(|ed, s, r| ed.ungroup(s, r)))}
+                        {action("Lock or unlock — Ctrl+Shift+L", "lock", |b| b.command(|ed, s, r| ed.toggle_lock(s, r)))}
+                    </div></div>
+            </Show>
         </div>
     }
 }

@@ -310,3 +310,110 @@ pub fn draw_scene(
         draw(e);
     }
 }
+
+/// Excalidraw's selection colour.
+const SELECTION: &str = "#6965db";
+
+/// What editing shows over the drawing: the selection's outlines and
+/// handles, the box being drawn to select.
+pub fn draw_overlay(
+    ctx: &CanvasRenderingContext2d,
+    scene: &Scene,
+    ed: &notekpr_draw::edit::Editor,
+    view: &Viewport,
+    pixel_ratio: f64,
+) {
+    use notekpr_draw::edit::transform;
+    let z = view.zoom;
+    let s = pixel_ratio * z;
+    ctx.set_transform(s, 0.0, 0.0, s, view.scroll_x * s, view.scroll_y * s)
+        .ok();
+    ctx.save();
+    ctx.set_stroke_style_str(SELECTION);
+    ctx.set_line_width(1.0 / z);
+    let dashed = |on: bool| {
+        let arr = js_sys::Array::new();
+        if on {
+            arr.push(&JsValue::from_f64(8.0 / z));
+            arr.push(&JsValue::from_f64(4.0 / z));
+        }
+        let _ = ctx.set_line_dash(&arr);
+    };
+    let outline = |[x1, y1, x2, y2]: [f64; 4], angle: f64| {
+        let pad = 4.0 / z;
+        let (cx, cy) = ((x1 + x2) / 2.0, (y1 + y2) / 2.0);
+        ctx.save();
+        let _ = ctx.translate(cx, cy);
+        let _ = ctx.rotate(angle);
+        ctx.stroke_rect(
+            x1 - cx - pad,
+            y1 - cy - pad,
+            x2 - x1 + pad * 2.0,
+            y2 - y1 + pad * 2.0,
+        );
+        ctx.restore();
+    };
+    let selected = ed.selected(scene);
+    let editing = ed.editing_text.as_deref();
+    for e in &selected {
+        if Some(e.id()) == editing {
+            continue;
+        }
+        let [x1, y1, x2, y2, _, _] = bounds::absolute_coords(e);
+        dashed(selected.len() > 1);
+        outline([x1, y1, x2, y2], e.angle());
+    }
+    if let Some(f) = ed.frame(scene)
+        && editing.is_none()
+    {
+        if selected.len() > 1 {
+            dashed(true);
+            outline(f.bounds, f.angle);
+        }
+        let linear_two_points = selected.len() == 1
+            && selected[0].kind().is_linear()
+            && selected[0].points().len() <= 2;
+        if !ed.busy() && !linear_two_points {
+            dashed(false);
+            let c = f.center();
+            for (h, [x, y, w, hh]) in transform::handles(&f, z) {
+                ctx.save();
+                let _ = ctx.translate(c[0], c[1]);
+                let _ = ctx.rotate(f.angle);
+                let _ = ctx.translate(-c[0], -c[1]);
+                ctx.set_fill_style_str("#ffffff");
+                ctx.begin_path();
+                if h == transform::Handle::Rotation {
+                    let _ = ctx.arc(
+                        x + w / 2.0,
+                        y + hh / 2.0,
+                        w / 2.0,
+                        0.0,
+                        std::f64::consts::TAU,
+                    );
+                } else {
+                    let _ = ctx.round_rect_with_f64(x, y, w, hh, 2.0 / z);
+                }
+                ctx.fill();
+                ctx.stroke();
+                ctx.restore();
+            }
+        }
+    }
+    if let Some([x1, y1, x2, y2]) = ed.selection_box() {
+        dashed(false);
+        ctx.set_fill_style_str("rgba(105, 101, 219, 0.1)");
+        let (x, y, w, h) = (x1.min(x2), y1.min(y2), (x2 - x1).abs(), (y2 - y1).abs());
+        ctx.fill_rect(x, y, w, h);
+        ctx.stroke_rect(x, y, w, h);
+    }
+    // What the eraser will take: shown faded over.
+    for id in ed.erasing() {
+        if let Some(e) = scene.element(&id) {
+            let [x1, y1, x2, y2, _, _] = bounds::absolute_coords(e);
+            ctx.set_fill_style_str("rgba(255, 255, 255, 0.6)");
+            ctx.fill_rect(x1, y1, x2 - x1, y2 - y1);
+        }
+    }
+    ctx.restore();
+}

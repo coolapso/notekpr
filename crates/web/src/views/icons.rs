@@ -21,6 +21,38 @@ fn paths(name: &str) -> &'static str {
         "drawing" => {
             r#"<rect x="3" y="3" width="8" height="8" rx="1.5"/><circle cx="17" cy="7" r="4"/><path d="M3 18c2.5-3 5 3 7.5 0s5 3 7.5 0 2.5 1.5 3 1"/>"#
         }
+        "hand" => {
+            r#"<path d="M18 11V6a2 2 0 0 0-4 0v5M14 10V4a2 2 0 0 0-4 0v6M10 10.5V6a2 2 0 0 0-4 0v8"/><path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15"/>"#
+        }
+        "pointer" => r#"<path d="M5 3l6.5 17 2.3-6.7L20.5 11z"/>"#,
+        "square" => r#"<rect x="4" y="4" width="16" height="16" rx="2.5"/>"#,
+        "diamond" => r#"<path d="M12 2.5 21.5 12 12 21.5 2.5 12z"/>"#,
+        "circle" => r#"<circle cx="12" cy="12" r="8.5"/>"#,
+        "arrow" => r#"<path d="M5 19 19 5M10 5h9v9"/>"#,
+        "line" => r#"<path d="M5 19 19 5"/>"#,
+        "pen" => {
+            r#"<path d="M3 21c3-1 4-4 7-7l7-7a2.1 2.1 0 0 0-3-3l-7 7c-3 3-6 4-7 7z"/><path d="M14 6l4 4"/>"#
+        }
+        "text-tool" => r#"<path d="M5 6V4h14v2M12 4v16M9 20h6"/>"#,
+        "eraser" => {
+            r#"<path d="M7 21h12M3.5 14.5l9-9a2 2 0 0 1 3 0l3 3a2 2 0 0 1 0 3l-8 8H8.5z"/><path d="M8 10l6 6"/>"#
+        }
+        "frame" => r#"<path d="M7 3v18M17 3v18M3 7h18M3 17h18"/>"#,
+        "laser" => {
+            r#"<path d="M4 20l6-6M12 12l4-4"/><circle cx="18" cy="6" r="2.5"/><path d="M18 1.5v1M22.5 6h-1M21.2 2.8l-.7.7"/>"#
+        }
+        "unlock" => {
+            r#"<rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 7.5-2"/>"#
+        }
+        "group" => {
+            r#"<rect x="3" y="3" width="8" height="8" rx="1"/><rect x="13" y="13" width="8" height="8" rx="1"/><path d="M3 15v4a2 2 0 0 0 2 2h4M21 9V5a2 2 0 0 0-2-2h-4"/>"#
+        }
+        "front" => {
+            r#"<rect x="8" y="8" width="13" height="13" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/>"#
+        }
+        "back" => {
+            r#"<rect x="3" y="3" width="13" height="13" rx="2"/><path d="M8 16v3a2 2 0 0 0 2 2h9a2 2 0 0 0 2-2v-9a2 2 0 0 0-2-2h-3"/>"#
+        }
         "paperclip" => {
             r#"<path d="m21 11-8.5 8.5a5 5 0 0 1-7-7L14 4a3.5 3.5 0 0 1 5 5l-8.5 8.5a2 2 0 0 1-3-3L15 7"/>"#
         }

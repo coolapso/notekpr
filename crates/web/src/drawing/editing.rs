@@ -1,0 +1,439 @@
+//! Editing on the board: pointer gestures and commands go through the
+//! editor's model (`notekpr_draw::edit`); what changes is shown at once and
+//! written to the drawing's CRDT — during a drag at most every
+//! [`WRITE_EVERY_MS`] (so others see it move), at its end at once, as one
+//! undo step.
+
+use std::collections::HashMap;
+use std::rc::Rc;
+
+use notekpr_draw::edit::{Editor, Mods, Output, Random, Tool};
+use notekpr_draw::scene::{Element, Scene};
+use serde_json::Value;
+use wasm_bindgen::JsCast;
+
+use super::Board;
+use crate::state::{self, step};
+use crate::util;
+
+/// How often a drag's changes are written while it goes on.
+const WRITE_EVERY_MS: f64 = 100.0;
+
+/// Ids, seeds and the time, from the browser.
+pub struct WebRandom;
+
+impl Random for WebRandom {
+    fn id(&mut self) -> String {
+        // As Excalidraw's (nanoid's alphabet, 21 characters).
+        const ALPHABET: &[u8] = b"useandom-26T198340PX75pxJACKVERYMINDBUSHWOLF_GQZbfghjklqvwyzrict";
+        let bytes = notekpr_core::crypto::random_bytes::<21>();
+        bytes
+            .iter()
+            .map(|b| ALPHABET[(*b & 63) as usize] as char)
+            .collect()
+    }
+
+    fn seed(&mut self) -> i32 {
+        (js_sys::Math::random() * 2f64.powi(31)) as i32
+    }
+
+    fn now(&self) -> f64 {
+        js_sys::Date::now()
+    }
+}
+
+/// Puts changed elements into a scene (new ones in their stacking place).
+pub fn patch(scene: &mut Scene, changed: &[Element]) {
+    let mut added = false;
+    for c in changed {
+        match scene.elements.iter_mut().find(|e| e.id() == c.id()) {
+            Some(e) => *e = c.clone(),
+            None => {
+                scene.elements.push(c.clone());
+                added = true;
+            }
+        }
+    }
+    if added {
+        scene.elements.sort_by(|a, b| {
+            match (a.index(), b.index()) {
+                (Some(x), Some(y)) => x.cmp(y),
+                (Some(_), None) => std::cmp::Ordering::Less,
+                (None, Some(_)) => std::cmp::Ordering::Greater,
+                (None, None) => std::cmp::Ordering::Equal,
+            }
+            .then_with(|| a.id().cmp(b.id()))
+        });
+    }
+}
+
+/// Measures text with the browser (a canvas of its own).
+pub fn measure(font: &str, line: &str) -> f64 {
+    thread_local! {
+        static CTX: Option<web_sys::CanvasRenderingContext2d> = util::document()
+            .create_element("canvas")
+            .ok()
+            .and_then(|c| c.dyn_into::<web_sys::HtmlCanvasElement>().ok())
+            .and_then(|c| c.get_context("2d").ok().flatten())
+            .and_then(|c| c.dyn_into().ok());
+    }
+    CTX.with(|ctx| {
+        let Some(ctx) = ctx else {
+            return line.chars().count() as f64 * 10.0;
+        };
+        ctx.set_font(font);
+        ctx.measure_text(line).map_or(0.0, |m| m.width())
+    })
+}
+
+/// Modifier keys of a pointer or keyboard event.
+pub fn mods(shift: bool, alt: bool, ctrl: bool) -> Mods {
+    Mods { shift, alt, ctrl }
+}
+
+impl Board {
+    /// Whether the drawing can be changed here.
+    pub fn writable(&self) -> bool {
+        step(|c| c.can_write(&self.vault))
+    }
+
+    /// Starts undo tracking of the drawing (once).
+    pub(super) fn enable_undo(&self) {
+        step(|c| {
+            if let Some(d) = c
+                .replicas
+                .get_mut(&self.vault)
+                .and_then(|r| r.notes.get_mut(&self.id))
+                && !d.undo_enabled()
+            {
+                d.enable_drawing_undo_with_clock(|| js_sys::Date::now() as u64);
+            }
+        });
+    }
+
+    fn boundary(&self) {
+        step(|c| {
+            if let Some(d) = c
+                .replicas
+                .get_mut(&self.vault)
+                .and_then(|r| r.notes.get_mut(&self.id))
+            {
+                d.undo_boundary();
+            }
+        });
+    }
+
+    /// Shows what an editor event changed, and writes it.
+    pub fn apply(self: &Rc<Self>, out: Output) {
+        let edit_text = out.edit_text.clone();
+        if out.changed.is_empty() || !self.writable() {
+            if let Some(id) = &edit_text {
+                self.open_text(id);
+            }
+            self.schedule();
+            self.changed();
+            return;
+        }
+        {
+            let mut s = self.scene.borrow_mut();
+            super::editing::patch(Rc::make_mut(&mut s), &out.changed);
+        }
+        {
+            let mut u = self.unwritten.borrow_mut();
+            for e in out.changed {
+                u.insert(e.id().to_string(), e);
+            }
+        }
+        let now = js_sys::Date::now();
+        if out.done || now - self.last_write.get() >= WRITE_EVERY_MS {
+            self.write();
+        } else if !self.write_soon.get() {
+            self.write_soon.set(true);
+            let me = self.clone();
+            util::set_timeout(WRITE_EVERY_MS as i32, move || {
+                me.write_soon.set(false);
+                me.write();
+            });
+        }
+        if out.done {
+            self.boundary();
+        }
+        // After the scene has it: a new text's box opens on it.
+        if let Some(id) = &edit_text {
+            self.open_text(id);
+        }
+        self.schedule();
+        self.changed();
+    }
+
+    /// Writes what is shown but not yet written.
+    pub fn write(&self) {
+        let els: Vec<Element> = self
+            .unwritten
+            .borrow_mut()
+            .drain()
+            .map(|(_, e)| e)
+            .collect();
+        if els.is_empty() {
+            return;
+        }
+        self.last_write.set(js_sys::Date::now());
+        let (v, id) = (self.vault.clone(), self.id.clone());
+        step(|c| {
+            let budget = crate::state::limits().edit_budget();
+            let Some(d) = c.replicas.get_mut(&v).and_then(|r| r.notes.get_mut(&id)) else {
+                return;
+            };
+            // A lot at once (a paste) goes in several updates.
+            let mut updates = Vec::new();
+            let mut batch: Vec<Element> = Vec::new();
+            let mut size = 0;
+            for e in els {
+                let len =
+                    serde_json::to_string(e.props()).map_or(0, |s| s.len()) + 12 * e.props().len();
+                if !batch.is_empty() && size + len > budget {
+                    updates.extend(d.drawing().put(&batch));
+                    batch.clear();
+                    size = 0;
+                }
+                size += len;
+                batch.push(e);
+            }
+            updates.extend(d.drawing().put(&batch));
+            let total = d.drawing().size() as usize;
+            for u in updates {
+                state::local_update(c, &v, &id, u);
+            }
+            state::touch(c, &v, &id, total);
+        });
+    }
+
+    /// Undoes (or redoes) the last own change.
+    pub fn undo(self: &Rc<Self>, redo: bool) {
+        self.write();
+        let (v, id) = (self.vault.clone(), self.id.clone());
+        let done = step(|c| {
+            let Some(d) = c.replicas.get_mut(&v).and_then(|r| r.notes.get_mut(&id)) else {
+                return false;
+            };
+            let u = if redo { d.redo() } else { d.undo() };
+            match u {
+                Some(u) => {
+                    state::local_update(c, &v, &id, u);
+                    true
+                }
+                None => false,
+            }
+        });
+        if done {
+            // What was selected may be gone.
+            let scene = self.reread();
+            self.editor
+                .borrow_mut()
+                .selection
+                .retain(|s| scene.element(s).is_some_and(|e| !e.is_deleted()));
+            self.schedule();
+            self.changed();
+        }
+    }
+
+    /// The drawing read again, with what isn't written yet on top.
+    pub(super) fn reread(&self) -> Rc<Scene> {
+        if let Some(mut s) = crate::drawings::scene(&self.vault, &self.id) {
+            let pending: Vec<Element> = self.unwritten.borrow().values().cloned().collect();
+            patch(&mut s, &pending);
+            *self.scene.borrow_mut() = Rc::new(s);
+        }
+        self.scene()
+    }
+
+    /// Calls the page's listener: the tool, selection or style changed.
+    pub fn changed(&self) {
+        if let Some(f) = self.on_change.borrow().as_ref() {
+            f();
+        }
+    }
+
+    /// Runs an editor command (Delete, Ctrl+D, a style, …).
+    pub fn command(self: &Rc<Self>, f: impl FnOnce(&mut Editor, &Scene, &mut WebRandom) -> Output) {
+        self.boundary();
+        let scene = self.scene();
+        let out = f(&mut self.editor.borrow_mut(), &scene, &mut WebRandom);
+        self.apply(out);
+    }
+
+    pub fn set_tool(self: &Rc<Self>, tool: Tool) {
+        self.finish_text_if_open();
+        self.editor.borrow_mut().set_tool(tool);
+        self.schedule();
+        self.changed();
+    }
+
+    /// The pointer went down on the canvas (`p` relative to it).
+    pub fn pointer_down(self: &Rc<Self>, p: [f64; 2], pressure: Option<f64>, m: Mods) {
+        self.finish_text_if_open();
+        self.boundary();
+        let scene = self.scene();
+        let view = self.view.get();
+        let out = self.editor.borrow_mut().pointer_down(
+            &scene,
+            view.to_scene(p),
+            pressure,
+            m,
+            view.zoom,
+            &mut WebRandom,
+        );
+        self.apply(out);
+    }
+
+    pub fn pointer_move(self: &Rc<Self>, p: [f64; 2], pressure: Option<f64>, m: Mods) {
+        let scene = self.scene();
+        let view = self.view.get();
+        let out = self.editor.borrow_mut().pointer_move(
+            &scene,
+            view.to_scene(p),
+            pressure,
+            m,
+            view.zoom,
+            &mut WebRandom,
+        );
+        let busy = self.editor.borrow().busy();
+        if busy {
+            self.apply(out);
+            self.schedule();
+        }
+    }
+
+    pub fn pointer_up(self: &Rc<Self>, p: [f64; 2]) {
+        let scene = self.scene();
+        let view = self.view.get();
+        let out = self
+            .editor
+            .borrow_mut()
+            .pointer_up(&scene, view.to_scene(p), &mut WebRandom);
+        self.apply(out);
+    }
+
+    /// The CSS cursor for the pointer at `p` (on the canvas).
+    pub fn cursor_at(&self, p: [f64; 2]) -> &'static str {
+        let ed = self.editor.borrow();
+        match ed.tool {
+            Tool::Hand => return "grab",
+            Tool::Selection => {}
+            Tool::Text => return "text",
+            Tool::Eraser => return "cell",
+            _ => return "crosshair",
+        }
+        let scene = self.scene();
+        let view = self.view.get();
+        let q = view.to_scene(p);
+        if let Some(f) = ed.frame(&scene)
+            && let Some(h) = notekpr_draw::edit::transform::handle_at(&f, q, view.zoom)
+        {
+            return h.cursor(f.angle);
+        }
+        if notekpr_draw::edit::hit::element_at(&scene, q, view.zoom, false).is_some() {
+            "move"
+        } else {
+            "default"
+        }
+    }
+
+    /// Asks the page to edit a text (it puts a text box over it).
+    fn open_text(&self, id: &str) {
+        if let Some(f) = self.on_edit_text.borrow().as_ref() {
+            f(id.to_string());
+        }
+    }
+
+    /// Where a text being edited is on screen, and how it looks:
+    /// `(left, top, width, height, font, colour, align, text, zoom)`.
+    pub fn text_box(&self, id: &str) -> Option<TextBox> {
+        let scene = self.scene();
+        let e = scene.element(id)?;
+        let view = self.view.get();
+        let [left, top] = view.to_screen([e.x(), e.y()]);
+        Some(TextBox {
+            left,
+            top,
+            width: e.width() * view.zoom,
+            height: e.height() * view.zoom,
+            font_size: e.font_size() * view.zoom,
+            line_height: e.line_height(),
+            font_family: notekpr_draw::fonts::css_family(e.font_family()),
+            color: notekpr_draw::color::themed(e.stroke_color(), crate::drawings::is_dark()),
+            align: e.text_align().to_string(),
+            text: e.original_text().to_string(),
+            angle: e.angle(),
+        })
+    }
+
+    /// Ends text editing with `text`.
+    pub fn finish_text(self: &Rc<Self>, text: &str) {
+        let scene = self.scene();
+        let out = self
+            .editor
+            .borrow_mut()
+            .finish_text(&scene, text, &measure, &mut WebRandom);
+        self.apply(out);
+        if let Some(f) = self.on_edit_text.borrow().as_ref() {
+            f(String::new());
+        }
+    }
+
+    /// Text editing ends when anything else starts.
+    fn finish_text_if_open(self: &Rc<Self>) {
+        if self.editor.borrow().editing_text.is_none() {
+            return;
+        }
+        let text = self.text_draft.borrow().clone();
+        self.finish_text(&text);
+    }
+
+    /// The text being typed (the page keeps it here as it changes).
+    pub fn set_text_draft(&self, text: String) {
+        *self.text_draft.borrow_mut() = text;
+    }
+
+    /// Sets a style property on the selection and on what comes next.
+    pub fn set_property(self: &Rc<Self>, key: &str, value: Value) {
+        let key = key.to_string();
+        self.command(move |ed, scene, rng| ed.set_property(scene, &key, value, rng));
+    }
+
+    /// A text box for editing a text on the canvas.
+    pub fn editing(&self) -> Option<String> {
+        self.editor.borrow().editing_text.clone()
+    }
+
+    /// Ids of what is selected.
+    pub fn selection(&self) -> Vec<String> {
+        self.editor.borrow().selection.clone()
+    }
+
+    pub fn selection_kinds(&self) -> HashMap<String, notekpr_draw::scene::ElementType> {
+        let scene = self.scene();
+        self.editor
+            .borrow()
+            .selected(&scene)
+            .into_iter()
+            .map(|e| (e.id().to_string(), e.kind()))
+            .collect()
+    }
+}
+
+/// A text being edited: where and how to show its text box.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TextBox {
+    pub left: f64,
+    pub top: f64,
+    pub width: f64,
+    pub height: f64,
+    pub font_size: f64,
+    pub line_height: f64,
+    pub font_family: String,
+    pub color: String,
+    pub align: String,
+    pub text: String,
+    pub angle: f64,
+}

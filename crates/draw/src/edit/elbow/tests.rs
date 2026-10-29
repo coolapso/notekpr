@@ -264,6 +264,24 @@ fn fixed_segments_stay_where_they_were_put() {
 }
 
 #[test]
+fn dragging_an_end_keeps_the_held_segment() {
+    let (e, scene) = with_fixed_segment();
+    // The end dragged off the box, right of it.
+    let r = drag(&e, &scene, [70.0, 16.0], [272.0, 186.0]);
+    assert_eq!(
+        global(&r),
+        vec![
+            [70.0, 16.0],
+            [100.0, 16.0],
+            [100.0, 100.0],
+            [272.0, 100.0],
+            [272.0, 186.0]
+        ]
+    );
+    assert_eq!(fixed_segments(&r).unwrap()[0].index, 3);
+}
+
+#[test]
 fn moving_a_segment_holds_it_and_letting_go_routes_anew() {
     let (e, scene) = with_fixed_segment();
     // The held segment dragged down by 30.

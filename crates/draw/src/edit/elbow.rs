@@ -2330,17 +2330,16 @@ fn with_moved(scene: &Scene, moved: &[Element]) -> Scene {
     s
 }
 
-/// A new elbow arrow being drawn from `start` to `end`: routed between the
-/// shapes there, its ends snapped onto their outlines.
+/// An elbow arrow whose ends are being dragged to `start` and `end` (a new
+/// one being drawn, or an end of one moved): routed between the shapes
+/// there, its ends snapped onto their outlines, its fixed segments kept.
 pub fn drag(arrow: &Element, scene: &Scene, start: Point, end: Point) -> Element {
-    let mut a = arrow.clone();
-    a.set("x", num(start[0]));
-    a.set("y", num(start[1]));
+    let (x, y) = (arrow.x(), arrow.y());
     let changes = Changes {
-        points: Some(vec![[0.0, 0.0], [end[0] - start[0], end[1] - start[1]]]),
+        points: Some(vec![[start[0] - x, start[1] - y], [end[0] - x, end[1] - y]]),
         ..Changes::default()
     };
-    update(&a, scene, &changes, true)
+    update(arrow, scene, &changes, true)
 }
 
 /// The arrow tidied where it is (`mutateElement(arrow, {})`): moved segments

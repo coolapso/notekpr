@@ -80,7 +80,11 @@ impl Board {
             pan: Cell::new(None),
             on_zoom: RefCell::new(None),
             fonts_asked: RefCell::new(std::collections::HashSet::new()),
-            editor: RefCell::new(Editor::default()),
+            editor: RefCell::new({
+                let mut ed = Editor::default();
+                ed.measure = editing::measure;
+                ed
+            }),
             unwritten: RefCell::new(HashMap::new()),
             last_write: Cell::new(0.0),
             write_soon: Cell::new(false),

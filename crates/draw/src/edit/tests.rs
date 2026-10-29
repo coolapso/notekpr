@@ -439,3 +439,75 @@ fn copy_and_paste_with_new_ids() {
     assert_eq!(new_arrow.start_binding().unwrap().element_id, new_rect.id());
     assert!(copies.iter().all(|e| e.id() != rect && e.id() != arrow));
 }
+
+#[test]
+fn labels_in_shapes() {
+    let (mut ed, mut scene, mut rng) = (Editor::default(), Scene::default(), Seq(0));
+    ed.measure = |_, s| s.chars().count() as f64 * 10.0;
+    ed.set_tool(Tool::Rectangle);
+    drag(
+        &mut ed,
+        &mut scene,
+        [0.0, 0.0],
+        [200.0, 60.0],
+        Mods::default(),
+        &mut rng,
+    );
+    let rect = scene.elements[0].id().to_string();
+    // A double click inside makes its label.
+    let o = ed.double_click(&scene, [100.0, 30.0], 1.0, &mut rng);
+    let label = o.edit_text.clone().unwrap();
+    apply(&mut scene, &o);
+    assert_eq!(scene.element(&rect).unwrap().bound_elements()[0].id, label);
+    let o = ed.finish_text(
+        &scene,
+        "hello",
+        &|_, s| s.chars().count() as f64 * 10.0,
+        &mut rng,
+    );
+    apply(&mut scene, &o);
+    let t = scene.element(&label).unwrap();
+    assert_eq!(t.container_id(), Some(rect.as_str()));
+    assert_eq!((t.x(), t.width()), (75.0, 50.0));
+    // A click on the label selects the shape; resizing it lays the label out again.
+    ed.selection = vec![rect.clone()];
+    drag(
+        &mut ed,
+        &mut scene,
+        [208.0, 68.0],
+        [408.0, 68.0],
+        Mods::default(),
+        &mut rng,
+    );
+    let t = scene.element(&label).unwrap();
+    assert_eq!((t.x(), t.font_size()), (175.0, 20.0));
+    // Long text wraps and the shape grows to hold it.
+    ed.selection = vec![rect.clone()];
+    let o = ed.enter(&scene, &mut rng);
+    assert_eq!(o.edit_text.as_deref(), Some(label.as_str()));
+    let long = "a long line of words that will not fit in one line of this box at all, not even in two lines of it";
+    let o = ed.finish_text(
+        &scene,
+        long,
+        &|_, s| s.chars().count() as f64 * 10.0,
+        &mut rng,
+    );
+    apply(&mut scene, &o);
+    let (t, r) = (
+        scene.element(&label).unwrap(),
+        scene.element(&rect).unwrap(),
+    );
+    assert!(t.text().contains('\n'));
+    assert!(r.height() > 60.0);
+    // Emptied, the label goes and the shape forgets it.
+    ed.enter(&scene, &mut rng);
+    let o = ed.finish_text(
+        &scene,
+        "  ",
+        &|_, s| s.chars().count() as f64 * 10.0,
+        &mut rng,
+    );
+    apply(&mut scene, &o);
+    assert!(scene.element(&label).unwrap().is_deleted());
+    assert!(scene.element(&rect).unwrap().bound_elements().is_empty());
+}

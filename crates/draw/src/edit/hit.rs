@@ -175,6 +175,36 @@ pub fn element_at(scene: &Scene, p: Point, zoom: f64, locked_too: bool) -> Optio
     }
 }
 
+/// The topmost shape or arrow whose area holds `p`, filled or not: where a
+/// double click puts a label (`getTextBindableContainerAtPosition`).
+pub fn container_at(scene: &Scene, p: Point, zoom: f64) -> Option<&Element> {
+    scene
+        .elements
+        .iter()
+        .rev()
+        .filter(|e| !e.is_deleted() && !e.is_locked() && super::label::can_hold(e))
+        .find(|e| {
+            if e.kind() == ElementType::Arrow {
+                return hits(e, p, zoom);
+            }
+            let [lx, ly] = local(e, p);
+            let (w, h) = (e.width(), e.height());
+            match e.kind() {
+                ElementType::Ellipse => {
+                    let (rx, ry) = (w / 2.0, h / 2.0);
+                    rx > 0.0
+                        && ry > 0.0
+                        && ((lx - rx) / rx).powi(2) + ((ly - ry) / ry).powi(2) <= 1.0
+                }
+                ElementType::Diamond => {
+                    let [t, r, b, l] = crate::shape::diamond_points(e);
+                    inside_polygon([lx, ly], &[t, r, b, l])
+                }
+                _ => lx >= 0.0 && ly >= 0.0 && lx <= w && ly <= h,
+            }
+        })
+}
+
 /// The elements wholly inside a box (scene coordinates), labels left out.
 pub fn elements_in(scene: &Scene, [x1, y1, x2, y2]: [f64; 4]) -> Vec<&Element> {
     let (ax, bx) = (x1.min(x2), x1.max(x2));

@@ -227,6 +227,10 @@ pub fn DrawingView(vault: String, id: String) -> impl IntoView {
                     sd.set(true);
                     true
                 }
+                (false, "Enter") if w => {
+                    b.enter();
+                    true
+                }
                 (false, "Escape") => {
                     b.command(|ed, s, r| ed.escape(s, r));
                     true
@@ -430,7 +434,8 @@ pub fn DrawingView(vault: String, id: String) -> impl IntoView {
             </header>
             <div class="drawing-stage">
                 <canvas class="drawing-canvas" node_ref=canvas_ref
-                    on:pointerdown=on_down on:pointermove=on_move on:pointerup=on_up.clone() on:pointercancel=on_up></canvas>
+                    on:pointerdown=on_down on:pointermove=on_move on:pointerup=on_up.clone() on:pointercancel=on_up
+                    on:dblclick=move |ev: web_sys::MouseEvent| b.with_value(|b| b.double_click([ev.offset_x() as f64, ev.offset_y() as f64]))></canvas>
                 <Show when=move || writable.get()>
                     <div class="drawing-tools" role="toolbar" aria-label="Drawing tools">
                         <button class="dt" class:on=tool_lock title="Keep selected tool active after drawing — Q" aria-pressed=move || tool_lock().to_string()

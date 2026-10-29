@@ -8,6 +8,7 @@
 //! a preview, at its end for good.
 
 pub mod hit;
+pub mod label;
 pub mod new;
 pub mod transform;
 
@@ -208,6 +209,19 @@ pub struct Editor {
     gesture: Option<Gesture>,
     /// The text being edited.
     pub editing_text: Option<String>,
+    /// Measures a line of text in a CSS font (the app's, with the browser).
+    pub measure: fn(&str, &str) -> f64,
+}
+
+/// A guess at a line's width without a browser: about half the font size a
+/// character.
+fn guess_width(font: &str, line: &str) -> f64 {
+    let size: f64 = font
+        .split("px")
+        .next()
+        .and_then(|s| s.trim().parse().ok())
+        .unwrap_or(20.0);
+    line.chars().count() as f64 * size * 0.55
 }
 
 impl Default for Editor {
@@ -219,6 +233,7 @@ impl Default for Editor {
             selection: Vec::new(),
             gesture: None,
             editing_text: None,
+            measure: guess_width,
         }
     }
 }
@@ -676,9 +691,16 @@ impl Editor {
                 originals,
                 offset,
             } => {
+                // Labels aren't scaled: they are laid out in their shapes again.
+                let ids: Vec<&str> = originals.iter().map(Element::id).collect();
+                let shapes: Vec<Element> = originals
+                    .iter()
+                    .filter(|e| e.container_id().is_none_or(|c| !ids.contains(&c)))
+                    .cloned()
+                    .collect();
+                // A text keeps its proportions.
                 let mode = ResizeMode {
-                    keep_ratio: mods.shift
-                        || originals.iter().any(|e| e.kind() == ElementType::Text),
+                    keep_ratio: mods.shift || shapes.iter().any(|e| e.kind() == ElementType::Text),
                     from_center: mods.alt,
                 };
                 // The pointer in the frame's space, plus the offset, turned back.
@@ -688,7 +710,9 @@ impl Editor {
                     frame.center(),
                     frame.angle,
                 );
-                for mut e in transform::resize(originals, frame, *handle, target, mode) {
+                let mut changed = transform::resize(&shapes, frame, *handle, target, mode);
+                self.relayout(scene, &mut changed);
+                for mut e in changed {
                     bump(&mut e, rng);
                     out.changed.push(e);
                 }
@@ -895,6 +919,45 @@ impl Editor {
         };
         let mut e = e.clone();
         let text = text.replace("\r\n", "\n");
+        let container = e
+            .container_id()
+            .and_then(|c| scene.element(c))
+            .filter(|c| !c.is_deleted());
+        if let Some(c) = container {
+            if text.trim().is_empty() {
+                // An empty label goes, and its container forgets it.
+                e.set("isDeleted", json!(true));
+                let mut c = c.clone();
+                let kept: Vec<Value> = c
+                    .bound_elements()
+                    .iter()
+                    .filter(|b| b.id != id)
+                    .map(|b| json!({"id": b.id, "type": b.kind}))
+                    .collect();
+                c.set(
+                    "boundElements",
+                    if kept.is_empty() {
+                        Value::Null
+                    } else {
+                        Value::Array(kept)
+                    },
+                );
+                bump(&mut c, rng);
+                out.changed.push(c);
+            } else {
+                e.set("originalText", json!(text));
+                let (t, grown) = label::layout(c, &e, &self.measure);
+                e = t;
+                if let Some(mut g) = grown {
+                    bump(&mut g, rng);
+                    out.changed.push(g);
+                }
+            }
+            bump(&mut e, rng);
+            out.changed.push(e);
+            out.done = true;
+            return out;
+        }
         if text.trim().is_empty() {
             e.set("isDeleted", json!(true));
             self.selection.retain(|s| *s != id);
@@ -928,6 +991,160 @@ impl Editor {
             out.tool_changed = true;
         }
         out
+    }
+
+    /// A double click: edits the text or label there (a shape's label is
+    /// made if it has none), or starts a new text.
+    pub fn double_click(
+        &mut self,
+        scene: &Scene,
+        p: Point,
+        zoom: f64,
+        rng: &mut dyn Random,
+    ) -> Output {
+        self.gesture = None;
+        match hit::element_at(scene, p, zoom, false) {
+            Some(e) if e.kind() == ElementType::Text => self.edit_text(e.id()),
+            Some(e) if label::can_hold(e) => {
+                let id = e.id().to_string();
+                self.edit_label(scene, &id, rng)
+            }
+            Some(_) => Output::default(),
+            None if hit::container_at(scene, p, zoom).is_some() => {
+                let id = hit::container_at(scene, p, zoom)
+                    .expect("checked")
+                    .id()
+                    .to_string();
+                self.edit_label(scene, &id, rng)
+            }
+            None => {
+                let tool = self.tool;
+                self.tool = Tool::Text;
+                let out = self.pointer_down(scene, p, None, Mods::default(), zoom, rng);
+                self.tool = tool;
+                out
+            }
+        }
+    }
+
+    /// Enter: edits the selected text, or the selected shape's label.
+    pub fn enter(&mut self, scene: &Scene, rng: &mut dyn Random) -> Output {
+        let selected = self.selected(scene);
+        match selected.as_slice() {
+            [e] if e.kind() == ElementType::Text => {
+                let id = e.id().to_string();
+                self.edit_text(&id)
+            }
+            [e] if label::can_hold(e) => {
+                let id = e.id().to_string();
+                self.edit_label(scene, &id, rng)
+            }
+            _ => Output::default(),
+        }
+    }
+
+    fn edit_text(&mut self, id: &str) -> Output {
+        self.selection = vec![id.to_string()];
+        self.editing_text = Some(id.to_string());
+        Output {
+            edit_text: Some(id.to_string()),
+            ..Output::default()
+        }
+    }
+
+    /// Edits a shape's or arrow's label, making it if there's none.
+    pub fn edit_label(&mut self, scene: &Scene, container: &str, rng: &mut dyn Random) -> Output {
+        let Some(c) = scene.element(container) else {
+            return Output::default();
+        };
+        let existing = c
+            .bound_elements()
+            .iter()
+            .filter(|b| b.kind == "text")
+            .find_map(|b| scene.element(&b.id))
+            .filter(|t| !t.is_deleted())
+            .map(|t| t.id().to_string());
+        if let Some(id) = existing {
+            let out = self.edit_text(&id);
+            self.selection = vec![c.id().to_string()];
+            return out;
+        }
+        let (t, mut c2) = label::new_label(c, &self.style, rng);
+        let (mut t, _) = label::layout(&c2, &t, &self.measure);
+        // Just above its container in the stacking order.
+        let next = scene
+            .elements
+            .iter()
+            .filter_map(Element::index)
+            .filter(|i| Some(*i) > c.index())
+            .min();
+        t.set(
+            "index",
+            order::key_between(c.index(), next).map_or(Value::Null, Value::String),
+        );
+        bump(&mut c2, rng);
+        let id = t.id().to_string();
+        self.selection = vec![c.id().to_string()];
+        self.editing_text = Some(id.clone());
+        Output {
+            changed: vec![c2, t],
+            done: false,
+            edit_text: Some(id),
+            tool_changed: false,
+        }
+    }
+
+    /// Lays out again the labels of containers among `changed` (they
+    /// changed size), and labels among them (their font changed).
+    fn relayout(&self, scene: &Scene, changed: &mut Vec<Element>) {
+        let containers: Vec<Element> = changed
+            .iter()
+            .filter(|e| label::can_hold(e))
+            .cloned()
+            .collect();
+        for c in containers {
+            for b in c.bound_elements().iter().filter(|b| b.kind == "text") {
+                let current = changed
+                    .iter()
+                    .find(|e| e.id() == b.id)
+                    .cloned()
+                    .or_else(|| scene.element(&b.id).cloned());
+                let Some(t) = current.filter(|t| !t.is_deleted()) else {
+                    continue;
+                };
+                let (t, _) = label::layout(&c, &t, &self.measure);
+                match changed.iter_mut().find(|e| e.id() == t.id()) {
+                    Some(slot) => *slot = t,
+                    None => changed.push(t),
+                }
+            }
+        }
+        let labels: Vec<Element> = changed
+            .iter()
+            .filter(|e| e.kind() == ElementType::Text && e.container_id().is_some())
+            .cloned()
+            .collect();
+        for t in labels {
+            let Some(c) = t.container_id().and_then(|c| {
+                changed
+                    .iter()
+                    .find(|e| e.id() == c)
+                    .cloned()
+                    .or_else(|| scene.element(c).cloned())
+            }) else {
+                continue;
+            };
+            let (t, grown) = label::layout(&c, &t, &self.measure);
+            if let Some(slot) = changed.iter_mut().find(|e| e.id() == t.id()) {
+                *slot = t;
+            }
+            if let Some(g) = grown {
+                match changed.iter_mut().find(|e| e.id() == g.id()) {
+                    Some(slot) => *slot = g,
+                    None => changed.push(g),
+                }
+            }
+        }
     }
 
     /// Deletes what is selected (with labels).
@@ -1124,6 +1341,7 @@ impl Editor {
         }
         let mut out = Output::default();
         let selected: Vec<String> = self.selection.clone();
+        let mut changed = Vec::new();
         for e in scene.visible() {
             // A shape's label takes its text properties.
             let label_of_selected = e
@@ -1147,6 +1365,12 @@ impl Editor {
                 let lh = crate::fonts::get(value.as_f64().unwrap_or(5.0) as u32).line_height;
                 c.set("lineHeight", num(lh));
             }
+            changed.push(c);
+        }
+        if matches!(key, "fontFamily" | "fontSize") {
+            self.relayout(scene, &mut changed);
+        }
+        for mut c in changed {
             bump(&mut c, rng);
             out.changed.push(c);
         }

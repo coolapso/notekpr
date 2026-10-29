@@ -269,6 +269,28 @@ impl Board {
         self.changed();
     }
 
+    /// A double click on the canvas: edits a text or a shape's label.
+    pub fn double_click(self: &Rc<Self>, p: [f64; 2]) {
+        if !self.writable() {
+            return;
+        }
+        self.boundary();
+        let scene = self.scene();
+        let view = self.view.get();
+        let out = self.editor.borrow_mut().double_click(
+            &scene,
+            view.to_scene(p),
+            view.zoom,
+            &mut WebRandom,
+        );
+        self.apply(out);
+    }
+
+    /// Enter: edits the selected text or shape's label.
+    pub fn enter(self: &Rc<Self>) {
+        self.command(|ed, s, r| ed.enter(s, r));
+    }
+
     /// The pointer went down on the canvas (`p` relative to it).
     pub fn pointer_down(self: &Rc<Self>, p: [f64; 2], pressure: Option<f64>, m: Mods) {
         self.finish_text_if_open();
@@ -352,11 +374,24 @@ impl Board {
         let scene = self.scene();
         let e = scene.element(id)?;
         let view = self.view.get();
-        let [left, top] = view.to_screen([e.x(), e.y()]);
+        // A label is typed across the room in its shape, centred.
+        let container = e.container_id().and_then(|c| scene.element(c));
+        let (x, width) = match container {
+            Some(c) if c.kind() == notekpr_draw::scene::ElementType::Arrow => {
+                let w = notekpr_draw::edit::label::max_width(c, e.font_size());
+                (notekpr_draw::edit::label::arrow_middle(c)[0] - w / 2.0, w)
+            }
+            Some(c) => (
+                notekpr_draw::edit::label::inner_origin(c)[0],
+                notekpr_draw::edit::label::max_width(c, e.font_size()),
+            ),
+            None => (e.x(), e.width()),
+        };
+        let [left, top] = view.to_screen([x, e.y()]);
         Some(TextBox {
             left,
             top,
-            width: e.width() * view.zoom,
+            width: width * view.zoom,
             height: e.height() * view.zoom,
             font_size: e.font_size() * view.zoom,
             line_height: e.line_height(),

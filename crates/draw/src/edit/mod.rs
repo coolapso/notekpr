@@ -7,6 +7,7 @@
 //! which the app writes to the drawing's CRDT — while a gesture goes on as
 //! a preview, at its end for good.
 
+pub mod binding;
 pub mod hit;
 pub mod label;
 pub mod new;
@@ -211,6 +212,8 @@ pub struct Editor {
     pub editing_text: Option<String>,
     /// Measures a line of text in a CSS font (the app's, with the browser).
     pub measure: fn(&str, &str) -> f64,
+    /// The zoom of the last pointer event (how near counts).
+    zoom: f64,
 }
 
 /// A guess at a line's width without a browser: about half the font size a
@@ -234,6 +237,7 @@ impl Default for Editor {
             gesture: None,
             editing_text: None,
             measure: guess_width,
+            zoom: 1.0,
         }
     }
 }
@@ -243,6 +247,15 @@ pub fn bump(e: &mut Element, rng: &mut dyn Random) {
     e.set("version", num(e.version() as f64 + 1.0));
     e.set("versionNonce", json!(rng.seed()));
     e.set("updated", num(rng.now()));
+}
+
+/// Arrows attached to what `out` changed follow it (they are added).
+fn arrows_follow(scene: &Scene, out: &mut Output, rng: &mut dyn Random) {
+    let n = out.changed.len();
+    binding::update_arrows(scene, &mut out.changed);
+    for e in &mut out.changed[n..] {
+        bump(e, rng);
+    }
 }
 
 /// A stacking index above every element.
@@ -356,6 +369,7 @@ impl Editor {
         zoom: f64,
         rng: &mut dyn Random,
     ) -> Output {
+        self.zoom = zoom;
         let mut out = Output::default();
         // A line or arrow made point by point: each click adds one.
         if let Some(Gesture::Linear {
@@ -559,6 +573,7 @@ impl Editor {
         zoom: f64,
         rng: &mut dyn Random,
     ) -> Output {
+        self.zoom = zoom;
         let mut out = Output::default();
         let Some(g) = self.gesture.as_mut() else {
             return out;
@@ -677,10 +692,28 @@ impl Editor {
                 } else {
                     (dx, dy)
                 };
+                let ids: Vec<&str> = originals.iter().map(Element::id).collect();
+                let mut changed: Vec<Element> = Vec::new();
                 for o in originals.iter() {
                     let mut e = o.clone();
                     e.set("x", num(o.x() + dx));
                     e.set("y", num(o.y() + dy));
+                    // An arrow dragged without what it is attached to lets go.
+                    if o.kind() == ElementType::Arrow {
+                        for k in ["startBinding", "endBinding"] {
+                            let attached_to = o
+                                .get(k)
+                                .and_then(|b| b.get("elementId"))
+                                .and_then(Value::as_str);
+                            if attached_to.is_some_and(|t| !ids.contains(&t)) {
+                                e.set(k, Value::Null);
+                            }
+                        }
+                    }
+                    changed.push(e);
+                }
+                binding::update_arrows(scene, &mut changed);
+                for mut e in changed {
                     bump(&mut e, rng);
                     out.changed.push(e);
                 }
@@ -712,6 +745,7 @@ impl Editor {
                 );
                 let mut changed = transform::resize(&shapes, frame, *handle, target, mode);
                 self.relayout(scene, &mut changed);
+                binding::update_arrows(scene, &mut changed);
                 for mut e in changed {
                     bump(&mut e, rng);
                     out.changed.push(e);
@@ -722,7 +756,9 @@ impl Editor {
                 frame,
                 originals,
             } => {
-                for mut e in transform::rotate(originals, frame, *start, p, mods.shift) {
+                let mut changed = transform::rotate(originals, frame, *start, p, mods.shift);
+                binding::update_arrows(scene, &mut changed);
+                for mut e in changed {
                     bump(&mut e, rng);
                     out.changed.push(e);
                 }
@@ -865,6 +901,24 @@ impl Editor {
         } else {
             new::normalize_points(&mut e, &pts);
             self.selection = vec![id.to_string()];
+            // An arrow's ends attach to the shapes they are on.
+            if e.kind() == ElementType::Arrow {
+                let (a, start) = binding::attach(&e, true, pts[0], scene, self.zoom);
+                let (a, end) = binding::attach(&a, false, pts[pts.len() - 1], scene, self.zoom);
+                let mut shapes: Vec<Element> = start.into_iter().collect();
+                if let Some(end) = end {
+                    match shapes.iter_mut().find(|s| s.id() == end.id()) {
+                        // Both ends on one shape: one list with it.
+                        Some(s) => *s = end,
+                        None => shapes.push(end),
+                    }
+                }
+                e = binding::follow(&a, scene, &shapes);
+                for mut s in shapes {
+                    bump(&mut s, rng);
+                    out.changed.push(s);
+                }
+            }
         }
         bump(&mut e, rng);
         out.changed.push(e);
@@ -1150,8 +1204,12 @@ impl Editor {
     /// Deletes what is selected (with labels).
     pub fn delete_selected(&mut self, scene: &Scene, rng: &mut dyn Random) -> Output {
         let mut out = Output::default();
-        for mut e in self.moving_set(scene) {
+        let mut changed = self.moving_set(scene);
+        for e in &mut changed {
             e.set("isDeleted", json!(true));
+        }
+        binding::update_arrows(scene, &mut changed);
+        for mut e in changed {
             bump(&mut e, rng);
             out.changed.push(e);
         }
@@ -1171,9 +1229,13 @@ impl Editor {
     /// Moves what is selected by `dx`, `dy` (arrow keys).
     pub fn nudge(&mut self, scene: &Scene, dx: f64, dy: f64, rng: &mut dyn Random) -> Output {
         let mut out = Output::default();
-        for mut e in self.moving_set(scene) {
+        let mut changed = self.moving_set(scene);
+        for e in &mut changed {
             e.set("x", num(e.x() + dx));
             e.set("y", num(e.y() + dy));
+        }
+        binding::update_arrows(scene, &mut changed);
+        for mut e in changed {
             bump(&mut e, rng);
             out.changed.push(e);
         }
@@ -1591,6 +1653,7 @@ impl Editor {
                 out.changed.push(c);
             }
         }
+        arrows_follow(scene, &mut out, rng);
         out.done = !out.changed.is_empty();
         out
     }
@@ -1636,6 +1699,7 @@ impl Editor {
                 out.changed.push(c);
             }
         }
+        arrows_follow(scene, &mut out, rng);
         out.done = !out.changed.is_empty();
         out
     }

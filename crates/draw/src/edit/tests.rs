@@ -511,3 +511,86 @@ fn labels_in_shapes() {
     assert!(scene.element(&label).unwrap().is_deleted());
     assert!(scene.element(&rect).unwrap().bound_elements().is_empty());
 }
+
+#[test]
+fn arrows_attach_and_follow() {
+    let (mut ed, mut scene, mut rng) = (Editor::default(), Scene::default(), Seq(0));
+    ed.set_tool(Tool::Rectangle);
+    drag(
+        &mut ed,
+        &mut scene,
+        [0.0, 0.0],
+        [100.0, 100.0],
+        Mods::default(),
+        &mut rng,
+    );
+    ed.set_tool(Tool::Rectangle);
+    drag(
+        &mut ed,
+        &mut scene,
+        [300.0, 0.0],
+        [400.0, 100.0],
+        Mods::default(),
+        &mut rng,
+    );
+    let (a, b) = (
+        scene.elements[0].id().to_string(),
+        scene.elements[1].id().to_string(),
+    );
+    ed.set_tool(Tool::Arrow);
+    drag(
+        &mut ed,
+        &mut scene,
+        [50.0, 50.0],
+        [350.0, 50.0],
+        Mods::default(),
+        &mut rng,
+    );
+    let arrow = scene
+        .elements
+        .iter()
+        .find(|e| e.kind() == ElementType::Arrow)
+        .unwrap()
+        .clone();
+    assert_eq!(arrow.start_binding().unwrap().element_id, a);
+    assert_eq!(arrow.end_binding().unwrap().element_id, b);
+    assert!(
+        scene
+            .element(&a)
+            .unwrap()
+            .bound_elements()
+            .iter()
+            .any(|x| x.id == arrow.id())
+    );
+    // It stops at the outlines, not in the middles.
+    assert!((arrow.x() - 106.0).abs() < 1e-6, "{}", arrow.x());
+    // The right box moves down: the arrow's end follows.
+    ed.selection = vec![b.clone()];
+    drag(
+        &mut ed,
+        &mut scene,
+        [350.0, 50.0],
+        [350.0, 250.0],
+        Mods::default(),
+        &mut rng,
+    );
+    let moved = scene.element(arrow.id()).unwrap();
+    let end = [
+        moved.x() + moved.points()[1][0],
+        moved.y() + moved.points()[1][1],
+    ];
+    assert!(end[1] > 150.0, "{end:?}");
+    // Dragged on its own, it lets go.
+    ed.selection = vec![arrow.id().to_string()];
+    let mid = [(moved.x() + end[0]) / 2.0, (moved.y() + end[1]) / 2.0];
+    drag(
+        &mut ed,
+        &mut scene,
+        mid,
+        [mid[0], mid[1] + 300.0],
+        Mods::default(),
+        &mut rng,
+    );
+    let loose = scene.element(arrow.id()).unwrap();
+    assert!(loose.start_binding().is_none() && loose.end_binding().is_none());
+}

@@ -177,8 +177,9 @@ pub fn element_at(scene: &Scene, p: Point, zoom: f64, locked_too: bool) -> Optio
     }
 }
 
-/// The topmost shape or arrow whose area holds `p`, filled or not: where a
-/// double click puts a label (`getTextBindableContainerAtPosition`).
+/// The topmost shape or arrow (or line) whose area holds `p`, filled or
+/// not — an arrow's or line's is the line itself: where a double click
+/// puts a label (`getTextBindableContainerAtPosition`).
 pub fn container_at(scene: &Scene, p: Point, zoom: f64) -> Option<&Element> {
     scene
         .elements
@@ -186,7 +187,7 @@ pub fn container_at(scene: &Scene, p: Point, zoom: f64) -> Option<&Element> {
         .rev()
         .filter(|e| !e.is_deleted() && !e.is_locked() && super::label::can_hold(e))
         .find(|e| {
-            if e.kind() == ElementType::Arrow {
+            if super::label::on_path(e) {
                 return hits(e, p, zoom);
             }
             let [lx, ly] = local(e, p);

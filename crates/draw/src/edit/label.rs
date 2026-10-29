@@ -16,7 +16,9 @@ pub const PADDING: f64 = 5.0;
 const ARROW_LABEL_WIDTH_FRACTION: f64 = 0.7;
 const ARROW_LABEL_FONT_SIZE_TO_MIN_WIDTH_RATIO: f64 = 11.0;
 
-/// Whether an element can hold a label.
+/// Whether an element can hold a label. Lines too, laid out as arrows'
+/// labels are — Excalidraw labels arrows only; it keeps a line's label
+/// where it is, but draws the line through it.
 pub fn can_hold(e: &Element) -> bool {
     matches!(
         e.kind(),
@@ -24,15 +26,22 @@ pub fn can_hold(e: &Element) -> bool {
             | ElementType::Diamond
             | ElementType::Ellipse
             | ElementType::Arrow
+            | ElementType::Line
             | ElementType::StickyNote
     )
+}
+
+/// Whether a label of `c` sits on it, along its path, level and without
+/// growing it (an arrow's or a line's), rather than inside.
+pub fn on_path(c: &Element) -> bool {
+    matches!(c.kind(), ElementType::Arrow | ElementType::Line)
 }
 
 /// `getBoundTextMaxWidth`: how wide its label may be.
 pub fn max_width(container: &Element, font_size: f64) -> f64 {
     let w = container.width();
     match container.kind() {
-        ElementType::Arrow => (ARROW_LABEL_WIDTH_FRACTION * w)
+        ElementType::Arrow | ElementType::Line => (ARROW_LABEL_WIDTH_FRACTION * w)
             .max(font_size * ARROW_LABEL_FONT_SIZE_TO_MIN_WIDTH_RATIO),
         ElementType::Ellipse => {
             crate::js::round((w / 2.0) * std::f64::consts::SQRT_2) - PADDING * 2.0
@@ -47,7 +56,7 @@ pub fn max_width(container: &Element, font_size: f64) -> f64 {
 pub fn max_height(container: &Element, label_height: f64) -> f64 {
     let h = container.height();
     match container.kind() {
-        ElementType::Arrow => {
+        ElementType::Arrow | ElementType::Line => {
             if h - PADDING * 8.0 * 2.0 <= 0.0 {
                 label_height
             } else {
@@ -93,7 +102,7 @@ fn needed(size: f64, kind: &ElementType) -> f64 {
     let pad = PADDING * 2.0;
     match kind {
         ElementType::Ellipse => crate::js::round(((size + pad) / std::f64::consts::SQRT_2) * 2.0),
-        ElementType::Arrow => size + pad * 8.0,
+        ElementType::Arrow | ElementType::Line => size + pad * 8.0,
         ElementType::Diamond => 2.0 * (size + pad),
         _ => size + pad,
     }
@@ -196,14 +205,14 @@ pub fn layout(
     t.set("height", num(height));
     t.set(
         "angle",
-        if c.kind() == ElementType::Arrow {
+        if on_path(&c) {
             json!(0)
         } else {
             num(c.angle())
         },
     );
     let mut grew = false;
-    if c.kind() != ElementType::Arrow {
+    if !on_path(&c) {
         if height > max_height(&c, height) {
             c.set("height", num(needed(height, &c.kind())));
             grew = true;
@@ -213,8 +222,8 @@ pub fn layout(
             grew = true;
         }
     }
-    let (x, y) = if c.kind() == ElementType::Arrow {
-        // Where it was slid along the arrow (`labelPosition`), else halfway.
+    let (x, y) = if on_path(&c) {
+        // Where it was slid along it (`labelPosition`), else halfway.
         let [mx, my] = t
             .f64("labelPosition")
             .and_then(|at| super::points::point_along(&c, at))

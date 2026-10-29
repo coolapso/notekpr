@@ -501,7 +501,7 @@ impl Board {
         // A label is typed across the room in its shape, centred.
         let container = e.container_id().and_then(|c| scene.element(c));
         let (x, width) = match container {
-            Some(c) if c.kind() == notekpr_draw::scene::ElementType::Arrow => {
+            Some(c) if notekpr_draw::edit::label::on_path(c) => {
                 let w = notekpr_draw::edit::label::max_width(c, e.font_size());
                 (notekpr_draw::edit::label::arrow_middle(c)[0] - w / 2.0, w)
             }

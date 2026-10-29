@@ -550,8 +550,8 @@ impl Editor {
                     keep: false,
                 });
             }
-            // An arrow's label slides along it.
-            if let Some(t) = label_of(scene, line).filter(|_| line.kind() == ElementType::Arrow)
+            // An arrow's (or line's) label slides along it.
+            if let Some(t) = label_of(scene, line).filter(|_| label::on_path(line))
                 && p[0] >= t.x()
                 && p[0] <= t.x() + t.width()
                 && p[1] >= t.y()
@@ -1779,8 +1779,9 @@ impl Editor {
             }
             return out;
         }
+        // Ctrl edits a line's or arrow's points; without, they take a label.
         if let Some(line) = self.single_linear(scene)
-            && (line.kind() == ElementType::Line || mods.ctrl)
+            && mods.ctrl
             && !points::is_elbow(line)
             && (hit::hits(line, p, zoom) || points::point_at(line, p, zoom).is_some())
         {

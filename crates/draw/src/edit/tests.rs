@@ -700,8 +700,13 @@ fn editing_a_lines_points() {
         Mods::default(),
         &mut rng,
     );
-    // A double click edits its points; Enter does too.
-    ed.double_click(&scene, [200.0, 0.0], Mods::default(), 1.0, &mut rng);
+    // A Ctrl+double click edits its points (Enter does too); a double
+    // click alone gives it a label, as an arrow's.
+    let ctrl = Mods {
+        ctrl: true,
+        ..Mods::default()
+    };
+    ed.double_click(&scene, [200.0, 0.0], ctrl, 1.0, &mut rng);
     assert!(ed.editing_line(&id));
     assert!(ed.frame(&scene).is_none());
     // Shift picks two points; dragging one moves both.
@@ -931,6 +936,61 @@ fn an_arrows_label_slides_along_it() {
     assert!((t.x() + t.width() / 2.0 - 300.0).abs() < 1e-6, "{}", t.x());
     assert!((t.f64("labelPosition").unwrap() - 0.75).abs() < 1e-9);
     assert_eq!(t.y() + t.height() / 2.0, 0.0);
+}
+
+#[test]
+fn a_line_takes_a_label_as_an_arrow_does() {
+    let (mut ed, mut scene, mut rng) = (Editor::default(), Scene::default(), Seq(0));
+    let id = line(
+        &mut ed,
+        &mut scene,
+        &mut rng,
+        Tool::Line,
+        [0.0, 0.0],
+        [400.0, 0.0],
+    );
+    // Beside the line, within its box: a text of its own, no label.
+    let o = ed.double_click(&scene, [100.0, 40.0], Mods::default(), 1.0, &mut rng);
+    assert!(o.changed.iter().all(|e| e.container_id().is_none()));
+    ed.finish_text(
+        &scene,
+        "",
+        &|_, s| s.chars().count() as f64 * 10.0,
+        &mut rng,
+    );
+    let o = ed.double_click(&scene, [100.0, 0.0], Mods::default(), 1.0, &mut rng);
+    let label = o.edit_text.clone().expect("a label being written");
+    assert!(!ed.editing_line(&id));
+    apply(&mut scene, &o);
+    let o = ed.finish_text(
+        &scene,
+        "a path",
+        &|_, s| s.chars().count() as f64 * 10.0,
+        &mut rng,
+    );
+    apply(&mut scene, &o);
+    let t = scene.element(&label).unwrap();
+    assert_eq!(t.container_id(), Some(id.as_str()));
+    // Halfway along, level, the line kept as it was.
+    assert_eq!(
+        (t.x() + t.width() / 2.0, t.y() + t.height() / 2.0),
+        (200.0, 0.0)
+    );
+    assert_eq!(t.angle(), 0.0);
+    let l = scene.element(&id).unwrap();
+    assert_eq!((l.width(), l.height()), (400.0, 0.0));
+    // Moving the line moves its label.
+    ed.selection = vec![id.clone()];
+    drag(
+        &mut ed,
+        &mut scene,
+        [50.0, 0.0],
+        [50.0, 100.0],
+        Mods::default(),
+        &mut rng,
+    );
+    let t = scene.element(&label).unwrap();
+    assert_eq!(t.y() + t.height() / 2.0, 100.0);
 }
 
 #[test]

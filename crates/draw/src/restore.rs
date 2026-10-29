@@ -490,13 +490,13 @@ fn repair_bindings(els: &mut [Element]) {
     }
 }
 
-/// `repairBoundElement`: a label turns with its shape (an arrow's stays
-/// level) and lets go of a shape that isn't there; a shape that is there
-/// lists it.
+/// `repairBoundElement`: a label turns with its shape (an arrow's, or a
+/// line's, stays level) and lets go of a shape that isn't there; a shape
+/// that is there lists it.
 fn repair_bound_element(els: &mut [Element], at: &HashMap<String, usize>, i: usize, c: &str) {
     let container = at.get(c).copied();
     let angle = match container {
-        Some(j) if els[j].kind() != ElementType::Arrow => els[j]
+        Some(j) if !els[j].kind().is_linear() => els[j]
             .get("angle")
             .filter(|a| !a.is_null())
             .cloned()

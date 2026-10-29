@@ -82,7 +82,8 @@ pub enum Command {
     },
     /// Print a note (or an attachment's bytes).
     Cat { vault: String, path: String },
-    /// Create or update a note from stdin (diff-merged, never a blind overwrite).
+    /// Create or update a note from stdin (diff-merged, never a blind overwrite); a path
+    /// ending in `.excalidraw` takes a drawing file (Excalidraw's or Obsidian's) instead.
     Write {
         vault: String,
         path: String,

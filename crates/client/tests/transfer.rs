@@ -496,3 +496,33 @@ async fn vaults_and_quick_notes_move_to_another_server() {
         .unwrap_err();
     assert!(e.to_string().contains("notekpr import <vault>"), "{e:#}");
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn writing_a_drawing_file_makes_a_drawing() {
+    let srv = start().await;
+    let alice = login(&srv, "alice").await;
+    manage::create_vault(&alice, "Art").await.unwrap();
+    let h = hub(&alice).await;
+    let file = include_str!("../../draw/tests/fixtures/obsidian.excalidraw.md");
+    let out = ops::put_drawing(&h, "Art", "Plans/Board", file)
+        .await
+        .unwrap();
+    assert!(out.created);
+    assert_eq!(out.path, "Plans/Board.excalidraw");
+    let v = h.resolve("Art").await.unwrap();
+    let (_, e) = v.lock().await.find("Plans/Board").unwrap();
+    assert_eq!(e.kind, EntryKind::Drawing);
+    assert_eq!(v.lock().await.drawing(&e.id).elements.len(), 24);
+    // The same again changes nothing; not a drawing is refused.
+    assert!(
+        !ops::put_drawing(&h, "Art", "Plans/Board.excalidraw", file)
+            .await
+            .unwrap()
+            .changed
+    );
+    assert!(
+        ops::put_drawing(&h, "Art", "Other.excalidraw", "no")
+            .await
+            .is_err()
+    );
+}

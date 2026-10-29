@@ -80,6 +80,33 @@ read anything.
   (`notekpr write`, the gateway).
 * Wiki links (`[[Note]]`, `[[Note#Heading]]`, `[[Note|alias]]`) that create
   the note if it's missing; renaming a note updates every link to it.
+
+**Drawings**
+
+* A drawing editor with Excalidraw's hand-drawn look, written in Rust: the
+  same drawing looks the same as on excalidraw.com, wobbles and all.
+  Rectangles, diamonds, ellipses, arrows and lines (dragged or point by
+  point), the pen, texts, the eraser, frames; colours, fills (hachure,
+  cross-hatch, solid, zigzag), stroke width and style, sloppiness, rounded
+  edges, arrowheads, fonts (Excalifont, Nunito, Comic Shanns, Lilita One),
+  opacity; select, move, resize, turn, group, lock, align, distribute,
+  layers, duplicate; undo and redo of your own changes; Excalidraw's
+  keyboard shortcuts (`R`, `O`, `A`, `T`, `Q` to keep a tool, …).
+* Text inside shapes and on arrows (double-click or Enter), wrapped and
+  centred, the shape growing to hold it; arrows that stay attached to
+  shapes and follow them.
+* Drawn together, live, with the vault's members, and merged when
+  someone drew offline.
+* Your own drawings in *Drawings*, under Quick notes; drawings in any vault,
+  in its file tree. `![[Board.excalidraw]]` in a note shows the drawing,
+  live, and the link while the cursor is on it — as Obsidian's Excalidraw
+  plugin writes it.
+* Excalidraw's files both ways: copy and paste between notekpr and
+  excalidraw.com or Obsidian; import `.excalidraw` files (also dropped on a
+  drawing), export a drawing as `.excalidraw`, Obsidian's `.excalidraw.md`,
+  SVG or PNG. The Markdown folder keeps drawings as `.excalidraw` files,
+  edited in Obsidian's Excalidraw plugin and merged element by element.
+* The text in drawings is found by search.
 * Each note's menu downloads it as Markdown or copies a `[[link]]` to it.
 
 **Organizing and finding**

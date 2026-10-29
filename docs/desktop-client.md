@@ -177,8 +177,8 @@ by its id.
 | `vault share <v> <user> --role admin\|editor\|viewer` | owner only; for an existing member it changes their role; admins (people only) also empty the trash; see [§8](#8-sharing-members-and-keys) |
 | `vault unshare <v> <user>` / `vault rotate <v>` / `vault leave <v>` | unshare and rotate: owner only; removal always rotates the key; the owner can't leave (delete instead) |
 | `ls <v> [folder] [-r]` | folders, notes and attachments, in the sidebar's order (`-r`: each folder followed by what's in it) |
-| `cat <v> <path>` | note text (or attachment bytes) |
-| `write <v> <path>` | create or update a note from stdin — diff-merged, never a blind overwrite; `--append`, `--attachment`, `--if-match <hash>` (ignored with the other two). `@today`, `@tomorrow` and `@yesterday` in the text become those days' dates (`@2026-10-23`, in the local time zone), as in the web app; so do they with `quick`, `shared write` and the gateway, but not in files of the Markdown folder |
+| `cat <v> <path>` | note text (or attachment bytes; a drawing as an Excalidraw `.excalidraw` file) |
+| `write <v> <path>` | create or update a note from stdin — diff-merged, never a blind overwrite; `--append`, `--attachment`, `--if-match <hash>` (ignored with the other two). A path ending in `.excalidraw` takes a drawing file on stdin — Excalidraw's, Obsidian's `.excalidraw.md` or what Excalidraw copies — and makes or changes the drawing there, element by element. `@today`, `@tomorrow` and `@yesterday` in the text become those days' dates (`@2026-10-23`, in the local time zone), as in the web app; so do they with `quick`, `shared write` and the gateway, but not in files of the Markdown folder |
 | `quick [text…]` / `quick --list` / `quick --move <note> --to <v>` / `quick --delete <note>` | capture a quick note (text or stdin) / list them / move one to a vault / delete one for good; see [Quick notes](#quick-notes) |
 | `mkdir <v> <path>`, `mv <v> <from> <to> [--update-links]`, `rm <v> <path>` | `rm` moves to the trash (from the quick notes: deletes for good); `mv` into `dir/` keeps the name; `--update-links` rewrites `[[links]]` |
 | `mv <v> <note, drawing or folder> <to> --to-vault <other>` | move a note or drawing, or a folder with everything in it, to another vault: `to` is its folder there (ending in `/`, `/` alone for the top level) or its new path; a name taken there gets a number (`Projects 2`). Inside a folder everything keeps its place; attachments elsewhere its notes link to come along (beside the note, or at the folder's top level), and `[[links]]` that wouldn't find a copy there are rewritten. The originals go to the trash once the server has the copies, except attachments a note staying behind links to; their history, comments and shares stay with them. A drawing's copy replaces its original, which the server deletes for good once the copy is there — so a move needs no room under a drawings limit. Files move only with notes. `--json` prints what moved |
@@ -291,7 +291,8 @@ Only apps can tell: the server sees no links.
 ### Drawings
 
 Drawings (`.excalidraw` files in the Markdown folder, `cat` prints one as
-such) live in any vault, and in your **Drawings**: a place of your own for
+such, `write` takes one: `notekpr write Home Garden/Beds.excalidraw <
+beds.excalidraw`) live in any vault, and in your **Drawings**: a place of your own for
 them, never shared (no members, single-note shares, agents or comments),
 made the first time the app is online with your account like the quick
 notes, and answering to the name `Drawings` (`ls Drawings`, `mv Home

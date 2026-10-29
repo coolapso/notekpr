@@ -98,6 +98,75 @@ def png(width, height, pixel):
     )
 
 
+def garden_drawing():
+    """Excalidraw's JSON for a plan of the garden beds: labelled beds, a
+    compost heap with arrows to them, a title."""
+    elements, n = [], [0]
+
+    def base(kind, x, y, w, h, **more):
+        n[0] += 1
+        e = {"id": f"bed{n[0]:02d}", "type": kind, "x": x, "y": y, "width": w, "height": h,
+             "angle": 0, "strokeColor": "#1e1e1e", "backgroundColor": "transparent",
+             "fillStyle": "hachure", "strokeWidth": 2, "strokeStyle": "solid", "roughness": 1,
+             "opacity": 100, "groupIds": [], "frameId": None, "index": f"a{n[0]:02d}",
+             "roundness": {"type": 3}, "seed": 1000 + n[0] * 37, "version": 1,
+             "versionNonce": n[0], "isDeleted": False, "boundElements": [], "updated": 1,
+             "link": None, "locked": False}
+        e.update(more)
+        elements.append(e)
+        return e
+
+    def label(container, text):
+        lines = text.split("\n")
+        w, h = max(len(l) for l in lines) * 10.5, len(lines) * 25
+        t = base("text", container["x"] + (container["width"] - w) / 2,
+                 container["y"] + (container["height"] - h) / 2, w, h,
+                 text=text, originalText=text, fontSize=20, fontFamily=5, textAlign="center",
+                 verticalAlign="middle", containerId=container["id"], lineHeight=1.25,
+                 autoResize=True, roundness=None)
+        container["boundElements"].append({"id": t["id"], "type": "text"})
+
+    base("text", 40, -60, 190, 35, text="Garden beds", originalText="Garden beds", fontSize=28,
+         fontFamily=5, textAlign="left", verticalAlign="top", containerId=None, lineHeight=1.25,
+         autoResize=True, roundness=None)
+    beds = []
+    for i, (name, color) in enumerate([("Tomatoes", "#ffc9c9"), ("Herbs", "#b2f2bb"), ("Beans", "#a5d8ff")]):
+        bed = base("rectangle", 40 + i * 220, 20, 180, 100, backgroundColor=color)
+        label(bed, name)
+        beds.append(bed)
+    compost = base("ellipse", 260, 260, 140, 90, backgroundColor="#eaddd7", fillStyle="cross-hatch",
+                   roundness={"type": 2})
+    label(compost, "Compost")
+    for bed in beds:
+        sx, sy = compost["x"] + 70, compost["y"]
+        ex, ey = bed["x"] + 90, bed["y"] + bed["height"] + 6
+        arrow = base("arrow", sx, sy, abs(ex - sx), abs(ey - sy), roundness={"type": 2},
+                     points=[[0, 0], [ex - sx, ey - sy]], startArrowhead=None, endArrowhead="arrow",
+                     startBinding={"elementId": compost["id"], "fixedPoint": [0.5, 0.5], "mode": "orbit"},
+                     endBinding={"elementId": bed["id"], "fixedPoint": [0.5, 0.5], "mode": "orbit"},
+                     elbowed=False)
+        compost["boundElements"].append({"id": arrow["id"], "type": "arrow"})
+        bed["boundElements"].append({"id": arrow["id"], "type": "arrow"})
+    return json.dumps({"type": "excalidraw", "version": 2, "source": "notekpr demo",
+                       "elements": elements, "appState": {"viewBackgroundColor": "#ffffff"}})
+
+
+def sketch_drawing():
+    """A small sketch for alice's own Drawings."""
+    def el(i, kind, x, y, w, h, **more):
+        e = {"id": f"sk{i}", "type": kind, "x": x, "y": y, "width": w, "height": h, "seed": 77 + i,
+             "index": f"a{i}", "strokeColor": "#1971c2", "backgroundColor": "transparent",
+             "roughness": 2, "strokeWidth": 2}
+        e.update(more)
+        return e
+    elements = [
+        el(1, "diamond", 0, 0, 160, 120, backgroundColor="#d0bfff", fillStyle="zigzag"),
+        el(2, "text", 190, 40, 210, 35, text="Ideas for the shed", originalText="Ideas for the shed",
+           fontSize=24, fontFamily=5, textAlign="left", verticalAlign="top", lineHeight=1.25),
+    ]
+    return json.dumps({"type": "excalidraw", "version": 2, "elements": elements, "appState": {}})
+
+
 def garden_layout():
     """Four raised beds with plants, a path and a compost corner."""
     beds = [(30, 30, 190, 120), (250, 30, 450, 120), (30, 170, 190, 270), (250, 170, 450, 270)]
@@ -175,6 +244,7 @@ HOME = [
         - [ ] Search everything with `Ctrl+Shift+F`: try `tag:recipe` or `"tomato sauce"`
         - [ ] Switch to the reading view with `Ctrl+E`; `Ctrl+/` lists every shortcut
         - [ ] Capture a quick note with `Alt+Q`
+        - [ ] Drawings: open [[Beds]] — its drawing shows in the note — then *Garden beds* itself, and draw with Excalidraw's keys (`R` rectangle, `O` ellipse, `A` arrow, `T` text, `Q` keeps the tool); double-click a bed to label it, drag one and its arrow follows. *Drawings* in the sidebar holds your own; export one as `.excalidraw` (the ⤓ at the top) and open it on excalidraw.com, or paste between the two
         - [ ] Open [[Garden plan]] and its history (the clock button at the top) to compare versions
         - [ ] Sign in as **bob** in another tab and edit *Shopping list* in the *Family* vault together
         - [ ] Click a link to a note that doesn't exist yet: [[Greenhouse]]
@@ -1286,6 +1356,19 @@ def seed(cli, url, data, server_bin):
     cli.run(a, "-q", "order", "Home", "Start here", "--before", "Random thoughts")
     cli.run(a, "-q", "order", "Home", "Recipes/Recipes", "--before", "Recipes/Apple pie")
     cli.run(a, "-q", "order", "Home", "Recipes/Weekly meal plan", "--after", "Recipes/Recipes")
+
+    step("alice: a drawing of the garden beds, a note showing it, a sketch in her Drawings")
+    cli.write(a, "Home", "Garden/Garden beds.excalidraw", garden_drawing())
+    cli.write(a, "Home", "Garden/Beds.md", note("""
+        # Beds
+
+        The beds for this year, and where the compost goes:
+
+        ![[Garden beds.excalidraw]]
+
+        Click the drawing's line to see its link; open *Garden beds* to change it.
+        """))
+    cli.write(a, "Drawings", "Shed ideas.excalidraw", sketch_drawing())
 
     step("alice: the garden plan's history (eleven edits)")
     for text in GARDEN_PLAN_VERSIONS:

@@ -95,17 +95,17 @@ read anything.
   distribute, layers, duplicate (`Alt`+drag copies); undo and redo of your
   own changes; Excalidraw's keyboard shortcuts (`R`, `O`, `A`, `T`, `Q` to
   keep a tool, …). Two fingers pinch to zoom on touch screens.
-* Text inside shapes and on arrows (double-click or Enter), wrapped and
-  centred, the shape growing to hold it; an arrow's label slides along it,
-  in a gap of its line.
+* Text inside shapes and on arrows and lines (double-click; Enter in a
+  shape), wrapped and centred, the shape growing to hold it; an arrow's or
+  line's label slides along it, in a gap of its line (Excalidraw labels
+  arrows only: it shows a line's label where it is, the line through it).
   Arrows stay attached to shapes and follow them — dropped near a shape
   they attach to its outline (highlighted while dragged), held still over
   it for a moment they point inside; elbow arrows route themselves at right
   angles around what they connect (drag a segment to hold it, double-click
   to let go).
 * A selected line or arrow shows its points: drag them, or the handle
-  halfway along to bend it; double-click (Ctrl+double-click for arrows) or
-  Enter edits every point — Shift selects several, Delete removes them;
+  halfway along to bend it; Ctrl+double-click or Enter edits every point — Shift selects several, Delete removes them;
   ends that meet close a line.
 * Sticky notes whose text shrinks to fit, with the day they were made at
   their foot; frames that hold what you draw or drop in them, move and
@@ -172,8 +172,9 @@ read anything.
 * A side panel beside each note (`Ctrl+\`): backlinks, outgoing links,
   unresolved links you click to create, the outline and tags.
 * A graph of how your notes link, like Obsidian's (`Ctrl+G`): the whole vault
-  with a filter, or the open note and its neighbours beside it. Drag, zoom,
-  click a note to open it.
+  with a filter, or the open note and its neighbours beside it. Drawings are
+  in it too (squares), linked with the notes that show or link them and the
+  notes their elements link to. Drag, zoom, click a note to open it.
 * Quick notes: capture a thought in a second (`Alt+Q`, a capture page
   that works on phones, `notekpr quick …`, or a file dropped into the
   Markdown folder's `Quick notes/`). They are yours alone, in no vault, the

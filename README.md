@@ -122,8 +122,13 @@ read anything.
 * Saved shapes, as Excalidraw's library: keep shapes from a drawing (the
   button with the overlapping shapes) and drop them into any other; yours,
   in your Personal storage, synced and encrypted between your devices;
-  `.excalidrawlib` files imported (also dropped on a drawing) and exported
-  (`notekpr shapes ls|import|export`).
+  named after their first text, renamed from the pencil; Shift-click (a
+  range) or Ctrl-click picks several, to put in side by side, export or
+  remove at once (`Esc` lets them go); `.excalidrawlib` files imported
+  (also dropped on a drawing) and exported (`notekpr shapes
+  ls|import|export|rename|rm`); in the Markdown folder as
+  `Saved shapes.excalidrawlib`, edits merged shape by shape; agents' gateway
+  reads and adds them.
 * Drawn together, live, with the vault's members: their pointers with
   their names, what they selected, their laser, and who is on the drawing
   in its header; merged when someone drew offline. A drawing's history

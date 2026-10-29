@@ -38,6 +38,7 @@ fn paths(name: &str) -> &'static str {
             r#"<path d="M7 21h12M3.5 14.5l9-9a2 2 0 0 1 3 0l3 3a2 2 0 0 1 0 3l-8 8H8.5z"/><path d="M8 10l6 6"/>"#
         }
         "frame" => r#"<path d="M7 3v18M17 3v18M3 7h18M3 17h18"/>"#,
+        "sticky-note" => r#"<path d="M4 4h16v10l-6 6H4z"/><path d="M14 20v-6h6"/>"#,
         "laser" => {
             r#"<path d="M4 20l6-6M12 12l4-4"/><circle cx="18" cy="6" r="2.5"/><path d="M18 1.5v1M22.5 6h-1M21.2 2.8l-.7.7"/>"#
         }

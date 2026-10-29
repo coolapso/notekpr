@@ -9,6 +9,7 @@ use super::new::Measure;
 use crate::fonts;
 use crate::geom::{self, Point};
 use crate::scene::{Element, ElementType, num};
+use crate::sticky;
 
 /// `BOUND_TEXT_PADDING`.
 pub const PADDING: f64 = 5.0;
@@ -19,7 +20,11 @@ const ARROW_LABEL_FONT_SIZE_TO_MIN_WIDTH_RATIO: f64 = 11.0;
 pub fn can_hold(e: &Element) -> bool {
     matches!(
         e.kind(),
-        ElementType::Rectangle | ElementType::Diamond | ElementType::Ellipse | ElementType::Arrow
+        ElementType::Rectangle
+            | ElementType::Diamond
+            | ElementType::Ellipse
+            | ElementType::Arrow
+            | ElementType::StickyNote
     )
 }
 
@@ -33,6 +38,7 @@ pub fn max_width(container: &Element, font_size: f64) -> f64 {
             crate::js::round((w / 2.0) * std::f64::consts::SQRT_2) - PADDING * 2.0
         }
         ElementType::Diamond => crate::js::round(w / 2.0) - PADDING * 2.0,
+        ElementType::StickyNote => w - sticky::PADDING * 2.0,
         _ => w - PADDING * 2.0,
     }
 }
@@ -52,13 +58,20 @@ pub fn max_height(container: &Element, label_height: f64) -> f64 {
             crate::js::round((h / 2.0) * std::f64::consts::SQRT_2) - PADDING * 2.0
         }
         ElementType::Diamond => crate::js::round(h / 2.0) - PADDING * 2.0,
+        // Above the date in the footer.
+        ElementType::StickyNote => (h - sticky::BODY_INSET_Y).max(0.0),
         _ => h - PADDING * 2.0,
     }
 }
 
 /// `getContainerCoords`: the top left of the room inside.
 pub fn inner_origin(c: &Element) -> Point {
-    let (mut ox, mut oy) = (PADDING, PADDING);
+    let pad = if sticky::is_note(c) {
+        sticky::PADDING
+    } else {
+        PADDING
+    };
+    let (mut ox, mut oy) = (pad, pad);
     match c.kind() {
         ElementType::Ellipse => {
             ox += (c.width() / 2.0) * (1.0 - std::f64::consts::SQRT_2 / 2.0);
@@ -162,6 +175,10 @@ pub fn layout(
     label: &Element,
     measure: Measure,
 ) -> (Element, Option<Element>) {
+    // A note fits its text by shrinking the font first.
+    if sticky::is_note(container) {
+        return sticky::layout_label(container, label, measure);
+    }
     let mut t = label.clone();
     let mut c = container.clone();
     let size = t.font_size();

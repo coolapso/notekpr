@@ -247,6 +247,7 @@ pub fn draw_scene(
     cache.keep(&ids);
     let by_id: HashMap<&str, &Element> = visible.iter().map(|e| (e.id(), *e)).collect();
     let [vx1, vy1, vx2, vy2] = view.visible();
+    let time = super::sticky::local_time();
     let mut draw = |e: &Element| {
         let c = cache.get(e, &cfg);
         let [bx1, by1, bx2, by2] = c.bounds;
@@ -283,6 +284,7 @@ pub fn draw_scene(
             ElementShape::None => match e.kind() {
                 ElementType::Text => draw_text(ctx, e, dark),
                 ElementType::Frame | ElementType::MagicFrame => draw_frame(ctx, e, dark, view.zoom),
+                ElementType::StickyNote => super::sticky::draw(ctx, e, dark, &time),
                 _ => {}
             },
         }

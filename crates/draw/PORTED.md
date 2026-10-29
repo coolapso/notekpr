@@ -22,6 +22,7 @@ computes `Math.hypot` the way V8 does; their notices are at the end.
 | SVG path data | path-data-parser 0.1.0 | (c) 2020 Preet Shihn |
 | pen strokes | perfect-freehand 1.2.0 | (c) 2021 Stephen Ruiz Ltd |
 | element shapes, file formats, constant-width strokes (laser-pointer) | Excalidraw | (c) 2020 Excalidraw |
+| sticky notes: their paper, date and fitted text (`sticky.rs`) | Excalidraw | (c) 2020 Excalidraw |
 | compression of Obsidian's drawings | lz-string 1.5 | (c) 2013 pieroxy |
 | `Math.sin`, `Math.cos` | fdlibm 5.3, as in V8 | (c) 1993 Sun Microsystems; the V8 project authors |
 | `Math.hypot` | V8 | the V8 project authors |

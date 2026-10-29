@@ -45,6 +45,9 @@ pub struct Style {
     pub arrow_type: String,
     /// Pen strokes: `variable` (with pressure) or `constant`.
     pub stroke_variability: String,
+    /// Sticky notes' own colours: their ink and their paper.
+    pub sticky_stroke_color: String,
+    pub sticky_background_color: String,
 }
 
 impl Default for Style {
@@ -65,6 +68,8 @@ impl Default for Style {
             end_arrowhead: Some("arrow".into()),
             arrow_type: "round".into(),
             stroke_variability: "variable".into(),
+            sticky_stroke_color: crate::sticky::INK.into(),
+            sticky_background_color: crate::sticky::BACKGROUND.into(),
         }
     }
 }
@@ -81,6 +86,7 @@ pub enum Tool {
     Line,
     Freedraw,
     Text,
+    StickyNote,
     Image,
     Eraser,
     Frame,
@@ -100,6 +106,7 @@ impl Tool {
             "l" | "6" => Tool::Line,
             "p" | "7" => Tool::Freedraw,
             "t" | "8" => Tool::Text,
+            "n" => Tool::StickyNote,
             "9" => Tool::Image,
             "e" | "0" => Tool::Eraser,
             "f" => Tool::Frame,
@@ -114,6 +121,7 @@ impl Tool {
             Tool::Diamond => ElementType::Diamond,
             Tool::Ellipse => ElementType::Ellipse,
             Tool::Frame => ElementType::Frame,
+            Tool::StickyNote => ElementType::StickyNote,
             _ => return None,
         })
     }
@@ -584,7 +592,8 @@ impl Editor {
                     return out;
                 };
                 let (mut w, mut h) = (p[0] - origin[0], p[1] - origin[1]);
-                if mods.shift {
+                // Notes are drawn square; Shift frees them.
+                if mods.shift != crate::sticky::is_note(&e) {
                     let s = w.abs().max(h.abs());
                     w = s * w.signum();
                     h = s * h.signum();
@@ -731,9 +740,11 @@ impl Editor {
                     .filter(|e| e.container_id().is_none_or(|c| !ids.contains(&c)))
                     .cloned()
                     .collect();
-                // A text keeps its proportions.
+                // A text keeps its proportions, a note's corner too unless Shift.
                 let mode = ResizeMode {
-                    keep_ratio: mods.shift || shapes.iter().any(|e| e.kind() == ElementType::Text),
+                    keep_ratio: (mods.shift
+                        != crate::sticky::proportional_by_default(&shapes, *handle))
+                        || shapes.iter().any(|e| e.kind() == ElementType::Text),
                     from_center: mods.alt,
                 };
                 // The pointer in the frame's space, plus the offset, turned back.
@@ -743,7 +754,14 @@ impl Editor {
                     frame.center(),
                     frame.angle,
                 );
-                let mut changed = transform::resize(&shapes, frame, *handle, target, mode);
+                let measure = &self.measure;
+                let mut changed =
+                    crate::sticky::resize_alone(originals, frame, *handle, target, mode, measure)
+                        .unwrap_or_else(|| {
+                            let mut c = transform::resize(&shapes, frame, *handle, target, mode);
+                            crate::sticky::after_resize(originals, &mut c, *handle, mode, measure);
+                            c
+                        });
                 self.relayout(scene, &mut changed);
                 binding::update_arrows(scene, &mut changed);
                 for mut e in changed {
@@ -806,10 +824,13 @@ impl Editor {
             return out;
         };
         match g {
-            Gesture::Creating { id, .. } => {
+            Gesture::Creating { id, origin } => {
                 let Some(e) = scene.element(&id) else {
                     return out;
                 };
+                if crate::sticky::is_note(e) {
+                    return self.finish_sticky_note(scene, e, origin, rng);
+                }
                 if e.width() < 1.0 || e.height() < 1.0 {
                     // A click, not a drag: nothing made.
                     let mut gone = e.clone();
@@ -927,6 +948,42 @@ impl Editor {
             self.tool = Tool::Selection;
             out.tool_changed = true;
         }
+        out
+    }
+
+    /// Ends drawing a sticky note: sized as the click or drag made it, then
+    /// its text is typed at once (unless the tool stays).
+    fn finish_sticky_note(
+        &mut self,
+        scene: &Scene,
+        e: &Element,
+        origin: Point,
+        rng: &mut dyn Random,
+    ) -> Output {
+        let font = (self.style.font_size, self.style.font_family);
+        let mut note = crate::sticky::finish_drawn(e, origin, self.zoom, font);
+        bump(&mut note, rng);
+        let id = note.id().to_string();
+        let mut out = Output {
+            changed: vec![note.clone()],
+            done: true,
+            ..Output::default()
+        };
+        if self.tool_locked {
+            self.selection.clear();
+            return out;
+        }
+        self.tool = Tool::Selection;
+        out.tool_changed = true;
+        let mut s2 = scene.clone();
+        if let Some(slot) = s2.elements.iter_mut().find(|x| x.id() == id) {
+            *slot = note;
+        }
+        let label = self.edit_label(&s2, &id, rng);
+        for c in label.changed {
+            crate::sticky::upsert(&mut out.changed, c);
+        }
+        out.edit_text = label.edit_text;
         out
     }
 
@@ -1381,11 +1438,16 @@ impl Editor {
         rng: &mut dyn Random,
     ) -> Output {
         match key {
-            "strokeColor" => {
-                self.style.stroke_color = value.as_str().unwrap_or_default().to_string()
-            }
-            "backgroundColor" => {
-                self.style.background_color = value.as_str().unwrap_or_default().to_string()
+            "strokeColor" | "backgroundColor" => {
+                let selected = self.selected(scene);
+                crate::sticky::pick_color(
+                    &mut self.style,
+                    self.tool,
+                    &selected,
+                    scene,
+                    key,
+                    &value,
+                );
             }
             "fillStyle" => self.style.fill_style = value.as_str().unwrap_or_default().to_string(),
             "strokeWidth" => self.style.stroke_width = value.as_f64().unwrap_or(2.0),
@@ -1418,7 +1480,7 @@ impl Editor {
                 "backgroundColor" | "fillStyle" => e.kind() != ElementType::Text,
                 _ => !label_of_selected || key == "strokeColor" || key == "opacity",
             };
-            if !applies || e.get(key) == Some(&value) {
+            if !applies {
                 continue;
             }
             let mut c = e.clone();
@@ -1426,6 +1488,10 @@ impl Editor {
             if key == "fontFamily" {
                 let lh = crate::fonts::get(value.as_f64().unwrap_or(5.0) as u32).line_height;
                 c.set("lineHeight", num(lh));
+            }
+            crate::sticky::keep_property(e, &mut c, scene, key);
+            if c == *e {
+                continue;
             }
             changed.push(c);
         }

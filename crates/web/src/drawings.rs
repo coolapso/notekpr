@@ -198,6 +198,7 @@ pub async fn standalone_svg(vault: &str, id: &str, dark: bool) -> Option<String>
         &SvgOptions {
             dark,
             font_faces: Some(font_faces),
+            time: crate::drawing::sticky::local_time(),
             standalone: true,
             ..SvgOptions::default()
         },
@@ -219,6 +220,7 @@ pub async fn load_preview(vault: &str, id: &str) -> Option<String> {
         &SvgOptions {
             dark,
             font_faces: Some(font_faces),
+            time: crate::drawing::sticky::local_time(),
             ..SvgOptions::default()
         },
     );

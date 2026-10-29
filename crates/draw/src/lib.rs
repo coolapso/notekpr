@@ -20,5 +20,6 @@ pub mod restore;
 pub mod rough;
 pub mod scene;
 pub mod shape;
+pub mod sticky;
 pub mod svg;
 pub mod viewport;

@@ -6,6 +6,7 @@
 
 pub mod canvas;
 pub mod editing;
+pub mod sticky;
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;

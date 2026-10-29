@@ -136,18 +136,24 @@ pub fn DrawingView(vault: String, id: String) -> impl IntoView {
     let (v, i) = (vault.clone(), id.clone());
     state::step(|c| c.ensure_note_loaded(&v, &i));
     let (v, i) = (vault.clone(), id.clone());
-    let crumbs = Memo::new(move |_| {
+    let path = Memo::new(move |_| {
         ui.tree_rev.get();
-        let path = state::step(|c| c.entry(&v, &i))
+        state::step(|c| c.entry(&v, &i))
             .map(|e| e.path)
-            .unwrap_or_default();
-        let mut crumbs = vec![paths::drawing_title(&path).to_string()];
-        let folder = paths::parent(&path);
-        if !folder.is_empty() {
-            crumbs.extend(folder.split('/').map(str::to_string));
-        }
-        crumbs.join(" / ")
+            .unwrap_or_default()
     });
+    // Its name (renamed in place, as a note's title is), then its folders.
+    let name = Memo::new(move |_| paths::drawing_title(&path.get()).to_string());
+    let folders = Memo::new(move |_| {
+        let path = path.get();
+        let folder = paths::parent(&path);
+        folder
+            .split('/')
+            .filter(|f| !f.is_empty())
+            .map(|f| format!(" / {f}"))
+            .collect::<String>()
+    });
+    let name_ref = NodeRef::<html::Input>::new();
     let board = Board::new(&vault, &id);
     let b = StoredValue::new_local(board.clone());
     let canvas_ref = NodeRef::<html::Canvas>::new();
@@ -610,12 +616,66 @@ pub fn DrawingView(vault: String, id: String) -> impl IntoView {
                     )
             })
     };
+    // The name typed in its field, made the drawing's (renamed as in the
+    // file tree); refused, the field shows the name again.
+    let (vr, ir) = (
+        StoredValue::new(vault.clone()),
+        StoredValue::new(id.clone()),
+    );
+    let rename_to_field = move || {
+        let Some(field) = name_ref.get_untracked() else {
+            return;
+        };
+        let (new, current) = (field.value(), name.get_untracked());
+        if new.trim() == current || !writable.get_untracked() {
+            field.set_value(&current);
+            return;
+        }
+        if let Err(e) = crate::actions::rename_entry(&vr.get_value(), &ir.get_value(), &new) {
+            state::error(e);
+            field.set_value(&current);
+        }
+    };
+    let back_to_drawing = move || {
+        if let Some(r) = root_ref.get_untracked() {
+            let _ = r.focus();
+        }
+    };
     view! {
         <div class="note-page drawing-page" tabindex="0" node_ref=root_ref on:keydown=on_key on:keyup=on_key_up
             on:copy=on_copy on:cut=on_cut on:paste=on_paste on:drop=on_drop on:dragover=|ev: web_sys::DragEvent| ev.prevent_default()>
             <header class="note-head">
                 <button class="icon-btn mobile-only" title="Menu" aria-label="Menu" on:click=move |_| ui.sidebar.set(true)><Icon name="menu"/></button>
-                <div class="crumbs ellipsis">{move || crumbs.get()}</div>
+                <div class="crumbs ellipsis">
+                    <input class="drawing-name-field" node_ref=name_ref aria-label="Drawing name" title="Rename the drawing"
+                        readonly=move || !writable.get()
+                        size=move || name.get().chars().count().max(4)
+                        prop:value=move || name.get()
+                        on:blur=move |_| rename_to_field()
+                        // Typing a name isn't drawing: the page's shortcuts,
+                        // copy and paste stay out of it.
+                        on:keydown=move |ev: web_sys::KeyboardEvent| {
+                            ev.stop_propagation();
+                            match ev.key().as_str() {
+                                "Enter" => {
+                                    ev.prevent_default();
+                                    rename_to_field();
+                                    back_to_drawing();
+                                }
+                                "Escape" => {
+                                    ev.prevent_default();
+                                    if let Some(f) = name_ref.get_untracked() { f.set_value(&name.get_untracked()); }
+                                    back_to_drawing();
+                                }
+                                _ => {}
+                            }
+                        }
+                        on:keyup=|ev: web_sys::KeyboardEvent| ev.stop_propagation()
+                        on:copy=|ev: web_sys::ClipboardEvent| ev.stop_propagation()
+                        on:cut=|ev: web_sys::ClipboardEvent| ev.stop_propagation()
+                        on:paste=|ev: web_sys::ClipboardEvent| ev.stop_propagation()/>
+                    {move || folders.get()}
+                </div>
                 <div class="presence">
                     {move || {
                         let here = id_here.get_value();

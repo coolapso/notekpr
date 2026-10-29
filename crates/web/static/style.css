@@ -388,6 +388,10 @@ button.list-row:hover:not(:disabled) { background: var(--bg-2); }
    page, so it would leave once the page scrolls past one window. */
 .note-page { display: flex; flex-direction: column; min-height: 100%; flex: none; }
 .crumbs { flex: 1; font-size: 13.5px; color: var(--muted); }
+/* A drawing's name in its header: text until hovered or edited. */
+.drawing-name-field { font: inherit; color: var(--fg); background: transparent; border: 1px solid transparent; border-radius: var(--radius); padding: 1px 4px; margin-left: -5px; max-width: 60%; field-sizing: content; min-width: 4ch; }
+.drawing-name-field:not([readonly]):hover { border-color: var(--border); }
+.drawing-name-field:focus { outline: none; border-color: var(--accent); background: var(--bg); }
 .presence { display: flex; gap: 2px; }
 .presence .avatar { width: 24px; height: 24px; border: 2px solid var(--bg); box-shadow: 0 0 0 1.5px var(--c); }
 .note-body { flex: 1; display: flex; min-height: 0; --aside: 0px; }

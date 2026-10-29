@@ -9,6 +9,9 @@
 //!   single `Y.Text`. Markdown stays the canonical representation.
 //!
 //! Attachments are entries in the index whose bytes live in encrypted blobs.
+//! The Drawings section's index also holds the drawings library (another
+//! root map, [`crate::library`]); a release that doesn't know a root map
+//! leaves it alone and keeps it in what it encodes.
 //!
 //! [`INDEX_OBJECT_ID`]: crate::protocol::INDEX_OBJECT_ID
 
@@ -31,6 +34,7 @@ pub const LOCAL_ORIGIN: &str = "local";
 pub const REMOTE_ORIGIN: &str = "remote";
 const NOTE_TEXT: &str = "content";
 const INDEX_FILES: &str = "files";
+const INDEX_LIBRARY: &str = "library";
 
 #[derive(Debug, thiserror::Error)]
 pub enum DocError {
@@ -445,6 +449,9 @@ impl Entry {
 pub struct IndexDoc {
     doc: Doc,
     files: MapRef,
+    /// The drawings library (only the Drawings section's holds items): item
+    /// id → the item as JSON ([`crate::library`]).
+    library: MapRef,
     local: LocalUpdates,
 }
 
@@ -473,9 +480,15 @@ impl IndexDoc {
     pub fn new() -> Self {
         let doc = Doc::new();
         let files = doc.get_or_insert_map(INDEX_FILES);
+        let library = doc.get_or_insert_map(INDEX_LIBRARY);
         let local = LocalUpdates::default();
         local.attach(&doc);
-        IndexDoc { doc, files, local }
+        IndexDoc {
+            doc,
+            files,
+            library,
+            local,
+        }
     }
 
     pub fn from_updates<'a>(updates: impl IntoIterator<Item = &'a [u8]>) -> Result<Self> {
@@ -855,6 +868,39 @@ impl IndexDoc {
     pub fn remove(&self, id: &str) -> Option<Vec<u8>> {
         self.mutate(|txn| {
             self.files.remove(txn, id);
+        })
+    }
+
+    /// The drawings library as kept: (item id, the item's JSON); values
+    /// that aren't text are skipped. [`crate::library`] reads them.
+    pub fn library_entries(&self) -> Vec<(String, String)> {
+        let txn = self.doc.transact();
+        self.library
+            .iter(&txn)
+            .filter_map(|(id, v)| match v {
+                Out::Any(Any::String(s)) => Some((id.to_string(), s.to_string())),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Add a library item (its JSON), or replace the one kept under `id`.
+    /// One value: concurrent changes of the same item keep one of them.
+    pub fn put_library_entry(&self, id: &str, json: &str) -> Option<Vec<u8>> {
+        self.mutate(|txn| {
+            self.library.insert(txn, id, json);
+        })
+    }
+
+    /// Remove library items (those not there are skipped).
+    pub fn remove_library_entries<'a>(
+        &self,
+        ids: impl IntoIterator<Item = &'a str>,
+    ) -> Option<Vec<u8>> {
+        self.mutate(|txn| {
+            for id in ids {
+                self.library.remove(txn, id);
+            }
         })
     }
 

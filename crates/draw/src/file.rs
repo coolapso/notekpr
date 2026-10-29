@@ -177,42 +177,16 @@ pub fn read_library(
     }
     let mut out = Vec::new();
     if let Some(items) = v.get("libraryItems").and_then(Value::as_array) {
-        for item in items {
-            let Some(els) = item.get("elements").and_then(Value::as_array) else {
-                continue;
-            };
-            let elements = restore::restore_elements(els, fresh);
-            if elements.is_empty() {
-                continue;
-            }
-            out.push(LibraryItem {
-                id: item
-                    .get("id")
-                    .and_then(Value::as_str)
-                    .map_or_else(|| fresh.id(), str::to_string),
-                status: item
-                    .get("status")
-                    .and_then(Value::as_str)
-                    .unwrap_or("unpublished")
-                    .to_string(),
-                created: item.get("created").and_then(Value::as_f64).unwrap_or(now),
-                name: item.get("name").and_then(Value::as_str).map(str::to_string),
-                elements,
-            });
-        }
+        out.extend(
+            items
+                .iter()
+                .filter_map(|item| crate::library::read_item(item, None, now, fresh)),
+        );
     } else if let Some(items) = v.get("library").and_then(Value::as_array) {
         // Version 1: just lists of elements.
-        for els in items.iter().filter_map(Value::as_array) {
-            let elements = restore::restore_elements(els, fresh);
-            if !elements.is_empty() {
-                out.push(LibraryItem {
-                    id: fresh.id(),
-                    status: "unpublished".into(),
-                    created: now,
-                    name: None,
-                    elements,
-                });
-            }
+        for els in items.iter().filter(|i| i.is_array()) {
+            let item = json!({"elements": els, "status": "unpublished"});
+            out.extend(crate::library::read_item(&item, None, now, fresh));
         }
     }
     Ok(out)
@@ -223,15 +197,8 @@ pub fn write_library(items: &[LibraryItem]) -> String {
     let items: Vec<Value> = items
         .iter()
         .map(|i| {
-            let mut item = json!({
-                "status": i.status,
-                "elements": i.elements.iter().map(Element::props).collect::<Vec<_>>(),
-                "id": i.id,
-                "created": crate::scene::num(i.created),
-            });
-            if let Some(name) = &i.name {
-                item["name"] = json!(name);
-            }
+            let mut item = crate::library::item_json(i);
+            item["id"] = json!(i.id);
             item
         })
         .collect();

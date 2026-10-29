@@ -61,6 +61,25 @@ note is its own object holding a CRDT text with the Markdown source. Both are
 [Yjs/yrs](https://github.com/y-crdt/y-crdt) documents; payloads are yrs **update
 v1** encodings, encrypted.
 
+The entries are the index document's root map `files`. Other root maps hold
+other things and are left alone by apps that don't know them, which keep
+them in the snapshots they make (a root map is only ever added, never
+renamed or reused):
+
+* `library` — in a person's Drawings (§5.5) only: their drawings library,
+  as Excalidraw's. Item id → the item as a JSON string, Excalidraw's
+  `LibraryItem` without its id: `{status: "unpublished"|"published",
+  created: ms, name?, elements: [Excalidraw elements]}`. Each item is one
+  value: adding, replacing (same id) and removing items merge like the
+  entries do — two devices adding items at once keep both —, but two
+  changes of the same item at once keep one of them. Items hold elements
+  only, no pictures (`image`, `embeddable` and `iframe` elements are
+  refused, as in Excalidraw). An item is never split over updates, so apps
+  refuse one whose JSON is larger than half of `max_update_bytes` (what one
+  local change may carry) rather than queue an update the server would
+  refuse. `.excalidrawlib` files are read and written by
+  `crates/draw/src/file.rs`; the map's rules are `crates/core/src/library.rs`.
+
 ## 2. Encryption formats
 
 Defined in `crates/core/src/crypto.rs` and `keys.rs`.
@@ -428,6 +447,9 @@ is refused — `400` for its key, `drawings_only` for an update in a push. They
 take at most `storage_limit_mb`: the owner's `drawings_storage_allowance`,
 else the instance's `drawings_storage_mb` (§9). No vault may be named
 "Drawings" (in any case and spacing): in apps the name always means them.
+Their index also holds the person's drawings library (§1, root map
+`library`): to the server an index update like any, so it takes no
+drawing's place and needs nothing of the server.
 
 ## 6. The encrypted log
 

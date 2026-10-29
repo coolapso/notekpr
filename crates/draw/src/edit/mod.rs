@@ -12,6 +12,7 @@ pub mod elbow;
 pub mod frame;
 pub mod hit;
 pub mod label;
+mod library;
 pub mod new;
 pub mod points;
 pub mod snap;

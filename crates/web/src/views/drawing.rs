@@ -89,6 +89,17 @@ pub fn DrawingView(vault: String, id: String) -> impl IntoView {
             b.with_value(|b| b.attach(c.unchecked_into()));
         }
     });
+    // Opened: the keyboard's shortcuts work at once.
+    Effect::new(move |_| {
+        if let Some(r) = root_ref.get() {
+            let busy = crate::util::document()
+                .active_element()
+                .is_some_and(|a| matches!(a.tag_name().as_str(), "INPUT" | "TEXTAREA"));
+            if !busy {
+                let _ = r.focus();
+            }
+        }
+    });
     // Drawn again when it changes elsewhere, or the theme does.
     Effect::new(move |_| {
         ui.content_rev.get();
@@ -821,6 +832,79 @@ fn Properties(board: StoredValue<Rc<Board>, LocalStorage>, rev: RwSignal<u64>) -
                         {action("Lock or unlock — Ctrl+Shift+L", "lock", |b| b.command(|ed, s, r| ed.toggle_lock(s, r)))}
                     </div></div>
             </Show>
+        </div>
+    }
+}
+
+/// The sidebar's entry for one's Drawings section.
+#[component]
+pub fn DrawingsSection() -> impl IntoView {
+    let ui = ui();
+    view! {
+        <div class="sb-section sb-quick">
+            <button class="sb-link" class:active=move || {
+                    let r = ui.route.get();
+                    r == state::Route::Drawings || r.vault().is_some_and(|v| state::step(|c| c.is_drawings(v)))
+                }
+                title="Your drawings" on:click=move |_| state::navigate(state::Route::Drawings)>
+                <Icon name="drawing"/><span class="grow ellipsis">"Drawings"</span></button>
+            <button class="icon-btn tiny qn-add" title="New drawing" aria-label="New drawing"
+                on:click=move |_| crate::drawings::new_in_section()><Icon name="plus"/></button>
+        </div>
+    }
+}
+
+/// `/drawings`: one's own drawings, as pictures.
+#[component]
+pub fn DrawingsPage() -> impl IntoView {
+    let ui = ui();
+    let list = Memo::new(move |_| {
+        ui.tree_rev.get();
+        ui.vaults.track();
+        crate::drawings::in_section()
+    });
+    view! {
+        <div class="page drawings-page">
+            <header class="page-head">
+                <button class="icon-btn mobile-only" title="Menu" aria-label="Menu" on:click=move |_| ui.sidebar.set(true)><Icon name="menu"/></button>
+                <h1>"Drawings"</h1>
+                <button class="btn primary small" on:click=move |_| crate::drawings::new_in_section()><Icon name="plus"/>" New drawing"</button>
+            </header>
+            {move || {
+                let items = list.get();
+                if items.is_empty() {
+                    return view! {
+                        <p class="muted empty">"Your own drawings live here. Drawings in vaults stay in their vaults, where you draw them with the vault's members."</p>
+                    }.into_any();
+                }
+                let vault = crate::drawings::section().unwrap_or_default();
+                view! {
+                    <div class="drawing-cards">
+                        {items.into_iter().map(|(id, title, _)| {
+                            let picture = RwSignal::new(None::<String>);
+                            let (v, i) = (vault.clone(), id.clone());
+                            Effect::new(move |_| {
+                                ui.content_rev.get();
+                                ui.ui_prefs.track();
+                                let (v, i) = (v.clone(), i.clone());
+                                leptos::task::spawn_local(async move {
+                                    state::step(|c| c.ensure_note_loaded(&v, &i));
+                                    if let Some(u) = crate::drawings::load_preview(&v, &i).await {
+                                        picture.set(Some(u));
+                                    }
+                                });
+                            });
+                            let (v, i) = (vault.clone(), id.clone());
+                            view! {
+                                <button class="drawing-card" on:click=move |_| state::navigate(state::Route::Note(v.clone(), i.clone()))>
+                                    <span class="drawing-thumb">{move || picture.get().map(|src| view! { <img src=src alt=""/> })}</span>
+                                    <span class="drawing-name ellipsis">{title}</span>
+                                </button>
+                            }
+                        }).collect_view()}
+                    </div>
+                }.into_any()
+            }}
         </div>
     }
 }

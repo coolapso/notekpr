@@ -70,6 +70,8 @@ pub enum Route {
     Shared(String, String),
     /// All quick notes (see `crate::quick`).
     Quick,
+    /// One's own drawings: the Drawings section (see `crate::drawings`).
+    Drawings,
     /// A vault's notes and links as a graph.
     Graph(String),
 }
@@ -86,6 +88,7 @@ impl Route {
             Route::Device(None) => "/device".into(),
             Route::Shared(v, n) => format!("/s/{v}/{n}"),
             Route::Quick => "/quick".into(),
+            Route::Drawings => "/drawings".into(),
             Route::Graph(v) => format!("/v/{v}/graph"),
         }
     }
@@ -103,6 +106,7 @@ impl Route {
             ["v", v, n] => Route::Note(v.to_string(), n.to_string()),
             ["s", v, n] => Route::Shared(v.to_string(), n.to_string()),
             ["quick"] => Route::Quick,
+            ["drawings"] => Route::Drawings,
             ["settings"] => Route::Settings("account".into()),
             ["settings", t] => Route::Settings(t.to_string()),
             ["device"] => {

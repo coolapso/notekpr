@@ -34,6 +34,74 @@ thread_local! {
     static FONT_FILES: RefCell<HashMap<String, Rc<Vec<u8>>>> = RefCell::new(HashMap::new());
 }
 
+thread_local! {
+    /// The Drawings section is being made (once, not by two tasks at once).
+    static MAKING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// One's Drawings section (its vault), if there is one.
+pub fn section() -> Option<String> {
+    step(|c| c.drawings())
+}
+
+/// The Drawings section, made the first time (`None`: it can't be made
+/// now, e.g. offline).
+pub async fn ensure_section() -> Option<String> {
+    while MAKING.get() {
+        util::sleep(50).await;
+    }
+    if let Some(v) = section() {
+        return Some(v);
+    }
+    if step(|c| c.account.is_none()) {
+        return None;
+    }
+    MAKING.set(true);
+    let made = crate::actions::create_vault_of(
+        notekpr_core::drawings::NAME,
+        notekpr_core::protocol::VaultKind::Drawings,
+    )
+    .await;
+    let v = match made {
+        Ok(Some(v)) => Some(v),
+        // Another app made it meanwhile.
+        Ok(None) => {
+            crate::state::refresh_vaults().await;
+            section()
+        }
+        Err(e) => {
+            util::warn(&format!("the Drawings section could not be set up: {e}"));
+            None
+        }
+    };
+    MAKING.set(false);
+    v
+}
+
+/// A new drawing in the Drawings section, opened.
+pub fn new_in_section() {
+    leptos::task::spawn_local(async move {
+        match ensure_section().await {
+            Some(v) => crate::actions::new_drawing(&v, ""),
+            None => crate::state::error("Drawings can't be made right now: try again once online."),
+        }
+    });
+}
+
+/// The drawings in the section, newest first: (id, title, modified).
+pub fn in_section() -> Vec<(String, String, i64)> {
+    let Some(v) = section() else {
+        return Vec::new();
+    };
+    let mut out: Vec<(String, String, i64)> = step(|c| c.live_entries(&v))
+        .into_iter()
+        .filter(|e| e.kind == notekpr_core::doc::EntryKind::Drawing)
+        .map(|e| (e.id.clone(), e.title().to_string(), e.modified))
+        .collect();
+    out.sort_by_key(|e| std::cmp::Reverse(e.2));
+    out
+}
+
 /// Whether the app shows dark: chosen, or the system's when automatic.
 pub fn is_dark() -> bool {
     match ui().ui_prefs.get_untracked().theme.as_str() {

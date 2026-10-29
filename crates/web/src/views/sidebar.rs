@@ -155,6 +155,7 @@ pub fn Sidebar() -> impl IntoView {
             </div>
             <nav class="sb-scroll">
                 <QuickSection/>
+                <crate::views::drawing::DrawingsSection/>
                 <Favorites/>
                 <Recent vault=shown/>
                 <SharedWithMe/>

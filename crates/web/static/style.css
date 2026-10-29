@@ -1099,3 +1099,12 @@ label.btn.disabled { opacity: .6; pointer-events: none; }
   .drawing-props { top: auto; bottom: 60px; width: auto; right: 12px; max-height: 40%; }
   .drawing-tools { top: 8px; }
 }
+.drawings-page .page-head { display: flex; align-items: center; gap: 12px; }
+.drawings-page .page-head h1 { flex: 1; }
+.drawing-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 14px; padding: 4px 16px 24px; }
+.drawings-page .empty { padding: 0 16px; }
+.drawing-card { display: flex; flex-direction: column; gap: 6px; padding: 8px; border: 1px solid var(--border); border-radius: calc(var(--radius) + 2px); background: var(--bg); color: var(--text); cursor: pointer; text-align: left; font: inherit; }
+.drawing-card:hover { border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
+.drawing-thumb { display: flex; align-items: center; justify-content: center; height: 140px; overflow: hidden; border-radius: var(--radius); background: var(--bg-soft, transparent); }
+.drawing-thumb img { max-width: 100%; max-height: 100%; }
+.drawing-name { font-weight: 500; }

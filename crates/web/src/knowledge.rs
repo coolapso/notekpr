@@ -187,7 +187,8 @@ pub fn clear_caches() {
     LINKS.with(|l| *l.borrow_mut() = None);
 }
 
-/// The vault's notes and the links between them, for the graph view.
+/// The vault's notes and drawings and the links between them, for the
+/// graph view.
 pub fn graph(vault: &str) -> crate::graph::Graph {
     let (notes, entries) = step(|c| {
         let Some(r) = c.replicas.get(vault) else {
@@ -196,14 +197,21 @@ pub fn graph(vault: &str) -> crate::graph::Graph {
         let live = c.live_entries(vault);
         let notes: Vec<_> = live
             .iter()
-            .filter(|e| e.kind == EntryKind::Note)
+            .filter(|e| matches!(e.kind, EntryKind::Note | EntryKind::Drawing))
             .map(|e| {
-                (
-                    e.id.clone(),
-                    e.path.clone(),
-                    e.icon.clone(),
-                    r.note_text(&e.id),
-                )
+                // A note's text; a drawing's links, as text (`[[…]]` each).
+                let links = (e.kind == EntryKind::Drawing).then(|| {
+                    r.notes
+                        .get(&e.id)
+                        .map(|d| crate::graph::drawing_links(&d.drawing().scene()))
+                        .unwrap_or_default()
+                });
+                let text = if links.is_some() {
+                    String::new()
+                } else {
+                    r.note_text(&e.id)
+                };
+                (e.id.clone(), e.path.clone(), e.icon.clone(), text, links)
             })
             .collect();
         let entries = live.into_iter().map(|e| (e.id, e.path)).collect::<Vec<_>>();
@@ -211,8 +219,9 @@ pub fn graph(vault: &str) -> crate::graph::Graph {
     });
     let notes = notes
         .into_iter()
-        .map(|(id, path, icon, text)| crate::graph::NoteLinks {
-            links: analysis(vault, &id, &text).links.clone(),
+        .map(|(id, path, icon, text, links)| crate::graph::NoteLinks {
+            drawing: links.is_some(),
+            links: links.unwrap_or_else(|| analysis(vault, &id, &text).links.clone()),
             id,
             path,
             icon,

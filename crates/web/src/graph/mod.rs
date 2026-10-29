@@ -1,4 +1,5 @@
-//! The graph view's data: a vault's notes and the links between them.
+//! The graph view's data: a vault's notes and drawings and the links
+//! between them — a note's links and embeds, a drawing's elements' links.
 //! Built from decrypted notes in the browser; pure, so tested natively.
 
 pub mod layout;
@@ -7,18 +8,24 @@ use std::collections::{BTreeSet, HashMap, VecDeque};
 
 use notekpr_core::markdown::{self, Link};
 use notekpr_core::paths;
+use notekpr_draw::scene::Scene;
 
-/// One note in the graph.
+/// One note (or drawing) in the graph.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Node {
     pub id: String,
     pub path: String,
     pub icon: Option<String>,
+    pub drawing: bool,
 }
 
 impl Node {
     pub fn title(&self) -> &str {
-        paths::title(&self.path)
+        if self.drawing {
+            paths::drawing_title(&self.path)
+        } else {
+            paths::title(&self.path)
+        }
     }
 
     /// Top-level folder ("" for notes at the vault's root): their colour.
@@ -27,25 +34,40 @@ impl Node {
     }
 }
 
-/// Notes and the links between them, each pair once whichever way it links.
+/// Notes (and drawings) and the links between them, each pair once whichever
+/// way it links.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Graph {
     pub nodes: Vec<Node>,
     pub edges: Vec<(usize, usize)>,
 }
 
-/// A note as it goes into [`Graph::build`].
+/// A note or drawing as it goes into [`Graph::build`].
 pub struct NoteLinks {
     pub id: String,
     pub path: String,
     pub icon: Option<String>,
+    pub drawing: bool,
     pub links: Vec<Link>,
 }
 
+/// A drawing's links to notes: its elements' `[[a note]]` links (web
+/// addresses aren't for the graph).
+pub fn drawing_links(scene: &Scene) -> Vec<Link> {
+    let links: Vec<&str> = scene
+        .visible()
+        .filter_map(|e| e.link())
+        .filter(|l| l.trim_start().starts_with("[["))
+        .collect();
+    markdown::analyze(&links.join("\n")).links
+}
+
 impl Graph {
-    /// From the notes and the vault's entries (`(id, path)`, attachments
-    /// included, for resolving links). Links to attachments, to missing
-    /// notes and to the note itself are left out.
+    /// From the notes and drawings and the vault's entries (`(id, path)`,
+    /// attachments included, for resolving links). Links to attachments, to
+    /// missing notes and to the note itself are left out. A link to another
+    /// app's drawing file (`X.excalidraw`) finds the drawing made of it
+    /// (`X.drawing`), as embeds do.
     pub fn build(notes: Vec<NoteLinks>, entries: &[(String, String)]) -> Graph {
         let index: HashMap<&str, usize> = notes
             .iter()
@@ -55,7 +77,15 @@ impl Graph {
         let mut edges = BTreeSet::new();
         for (i, n) in notes.iter().enumerate() {
             for l in &n.links {
-                if let Some(&j) = markdown::resolve(l, &n.path, entries).and_then(|t| index.get(t))
+                let target = markdown::resolve(l, &n.path, entries).or_else(|| {
+                    let ours = paths::drawing_path_for(&l.target).filter(|t| *t != l.target)?;
+                    let l = Link {
+                        target: ours,
+                        ..l.clone()
+                    };
+                    markdown::resolve(&l, &n.path, entries)
+                });
+                if let Some(&j) = target.and_then(|t| index.get(t))
                     && j != i
                 {
                     edges.insert((i.min(j), i.max(j)));
@@ -69,6 +99,7 @@ impl Graph {
                     id: n.id,
                     path: n.path,
                     icon: n.icon,
+                    drawing: n.drawing,
                 })
                 .collect(),
             edges: edges.into_iter().collect(),
@@ -156,6 +187,7 @@ mod tests {
             id: id.into(),
             path: path.into(),
             icon: None,
+            drawing: false,
             links: markdown::analyze(text).links,
         }
     }
@@ -193,6 +225,57 @@ mod tests {
         assert_eq!(g.degrees(), vec![1, 2, 1, 0]);
         assert_eq!(g.nodes[1].title(), "B");
         assert_eq!((g.nodes[1].folder(), g.nodes[0].folder()), ("Travel", ""));
+    }
+
+    #[test]
+    fn drawings_link_with_notes_both_ways() {
+        let scene: Scene = notekpr_draw::file::read_drawing(
+            r#"{"type":"excalidraw","version":2,"elements":[
+                {"id":"b","type":"rectangle","x":0,"y":0,"width":9,"height":9,"link":"[[Plan]]"},
+                {"id":"w","type":"rectangle","x":0,"y":0,"width":9,"height":9,"link":"https://example.org"},
+                {"id":"g","type":"rectangle","x":0,"y":0,"width":9,"height":9,"link":"[[Gone]]","isDeleted":true}]}"#,
+            &mut notekpr_draw::restore::Ids::new(1),
+        )
+        .unwrap()
+        .scene;
+        let links = drawing_links(&scene);
+        assert_eq!(
+            links.len(),
+            1,
+            "a note's link, not the web or a deleted element's"
+        );
+        let notes = vec![
+            note("p", "Plan.md", "![[Garden/Beds.drawing]]"),
+            note(
+                "o",
+                "Old.md",
+                "the sketch from Obsidian: ![[Shed.excalidraw]]",
+            ),
+            NoteLinks {
+                id: "d".into(),
+                path: "Garden/Beds.drawing".into(),
+                icon: None,
+                drawing: true,
+                links,
+            },
+            NoteLinks {
+                id: "s".into(),
+                path: "Shed.drawing".into(),
+                icon: None,
+                drawing: true,
+                links: vec![],
+            },
+        ];
+        let entries: Vec<(String, String)> = notes
+            .iter()
+            .map(|n| (n.id.clone(), n.path.clone()))
+            .collect();
+        let g = Graph::build(notes, &entries);
+        // Plan–Beds (embedded one way, linked back the other: once),
+        // Old–Shed (an Excalidraw file's name finds the drawing).
+        assert_eq!(g.edges, vec![(0, 2), (1, 3)]);
+        assert_eq!(g.nodes[2].title(), "Beds");
+        assert!(g.nodes[2].drawing && !g.nodes[0].drawing);
     }
 
     #[test]

@@ -1,8 +1,8 @@
-//! The graph view (like Obsidian's): notes as dots, links as lines, drawn on
-//! a canvas from `knowledge::graph` and laid out by `graph::layout`. The
-//! layout moves until it settles, then nothing runs until you interact.
-//! Everything happens on decrypted notes in the browser: the server learns
-//! nothing new.
+//! The graph view (like Obsidian's): notes as dots, drawings as squares,
+//! links as lines, drawn on a canvas from `knowledge::graph` and laid out by
+//! `graph::layout`. The layout moves until it settles, then nothing runs
+//! until you interact. Everything happens on decrypted notes in the
+//! browser: the server learns nothing new.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -303,7 +303,13 @@ fn draw(rt: &Rt) {
             s.colors[i].map_or(theme.muted.as_str(), |k| PALETTE[k])
         };
         ctx.begin_path();
-        let _ = ctx.arc(x, y, r, 0.0, std::f64::consts::TAU);
+        if n.drawing {
+            // Drawings are squares, notes round.
+            let h = r * 0.9;
+            ctx.rect(x - h, y - h, h * 2.0, h * 2.0);
+        } else {
+            let _ = ctx.arc(x, y, r, 0.0, std::f64::consts::TAU);
+        }
         ctx.set_fill_style_str(fill);
         ctx.fill();
         if let Some(icon) = &n.icon
@@ -596,7 +602,7 @@ pub fn GraphCanvas(
                 on:pointerdown=on_down on:pointermove=on_move on:pointerup=on_up.clone()
                 on:pointercancel=on_up on:pointerleave=on_leave></canvas>
             {move || data.get().nodes.is_empty().then(|| view! {
-                <p class="graph-empty muted small">{if focus_id.get_value().is_some() { "Not in the graph." } else { "No notes to show." }}</p>
+                <p class="graph-empty muted small">{if focus_id.get_value().is_some() { "Not in the graph." } else { "No notes or drawings to show." }}</p>
             })}
             <div class="graph-tools">
                 <button class="icon-btn tiny" title="Zoom in" aria-label="Zoom in" on:click=move |_| zoom(&zin, 1.3)><Icon name="plus"/></button>
@@ -611,7 +617,7 @@ pub fn GraphCanvas(
                 }><Icon name="maximize"/></button>
             </div>
             // The same notes for screen readers (and to reach them by keyboard).
-            <ul class="sr-only graph-list" aria-label="Notes in the graph">
+            <ul class="sr-only graph-list" aria-label="Notes and drawings in the graph">
                 {move || {
                     let g = data.get();
                     let degrees = g.degrees();

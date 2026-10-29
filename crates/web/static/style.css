@@ -597,6 +597,8 @@ button.list-row:hover:not(:disabled) { background: var(--bg-2); }
 .ed.live .ln.hr:not(.active) { background: linear-gradient(var(--border-strong), var(--border-strong)) center / 100% 1px no-repeat; }
 .ed .w { display: block; }
 .ed .w img { display: block; max-width: 100%; max-height: 520px; border-radius: 8px; margin: 6px 0; }
+.ed .w video { display: block; max-width: 100%; max-height: 520px; border-radius: 8px; margin: 6px 0; background: #000; }
+.ed .w audio { display: block; width: min(100%, 480px); margin: 6px 0; }
 .ed.source { font-family: var(--mono); font-size: 14.5px; line-height: 1.65; }
 .ed.source .ln.h1, .ed.source .ln.h2, .ed.source .ln.h3 { font-size: 1em; margin-top: 0; }
 .ed.source .ln.code, .ed.source .ln.fence, .ed.source .ln.fm, .ed.source .ln.table, .ed.source .ln.pipes { font-size: 1em; }
@@ -673,6 +675,8 @@ button.list-row:hover:not(:disabled) { background: var(--bg-2); }
 :is(.reading, .ed .hw) th { background: var(--bg-2); }
 :is(.reading, .ed .hw) hr { border: none; border-top: 1px solid var(--border-strong); margin: 1.6em 0; }
 .reading img.att { max-width: 100%; border-radius: 8px; }
+.reading video.att { display: block; max-width: 100%; max-height: 520px; border-radius: 8px; background: #000; }
+.reading audio.att { display: block; width: min(100%, 480px); }
 .reading a.wl { color: var(--link); text-decoration: none; }
 .reading a.wl:hover { text-decoration: underline; }
 .reading a.wlb { color: var(--broken); text-decoration: underline dashed; }

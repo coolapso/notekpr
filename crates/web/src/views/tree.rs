@@ -243,7 +243,12 @@ pub fn Tree(vault: String) -> impl IntoView {
                         EntryKind::Folder => "folder",
                         EntryKind::Note => "file",
                         EntryKind::Drawing => "drawing",
-                        EntryKind::Attachment => if crate::util::is_image(&row.name) { "image" } else { "paperclip" },
+                        EntryKind::Attachment => match paths::media(&row.name) {
+                            Some(paths::Media::Video) => "video",
+                            Some(paths::Media::Audio) => "audio",
+                            None if crate::util::is_image(&row.name) => "image",
+                            None => "paperclip",
+                        },
                     };
                     let indent = 8 + row.depth * 14;
                     let indent = format!("padding-left:{indent}px;--indent:{indent}px");

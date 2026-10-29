@@ -34,7 +34,7 @@ features = [
   "Location", "History", "Storage", "Headers", "Request", "RequestInit", "RequestMode", "Response",
   "WebSocket", "MessageEvent", "CloseEvent", "ErrorEvent", "Event", "EventTarget", "KeyboardEvent",
   "MouseEvent", "InputEvent", "FocusEvent", "ClipboardEvent", "DataTransfer", "DragEvent",
-  "HtmlInputElement", "HtmlTextAreaElement", "HtmlAnchorElement", "HtmlImageElement", "HtmlDivElement",
+  "HtmlInputElement", "HtmlTextAreaElement", "HtmlAnchorElement", "HtmlImageElement", "HtmlDivElement", "HtmlMediaElement",
   "HtmlCanvasElement", "CanvasRenderingContext2d", "CanvasWindingRule", "Path2d", "TextMetrics", "FontFaceSet", "PointerEvent", "WheelEvent", "AddEventListenerOptions",
   "Blob", "BlobPropertyBag", "Url", "File", "FileList", "FileReader", "DomRect", "DomRectList",
   "CssStyleDeclaration", "ScrollIntoViewOptions", "ScrollBehavior", "ScrollLogicalPosition",

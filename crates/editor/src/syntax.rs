@@ -1000,7 +1000,8 @@ pub struct Styled {
     pub flags: Vec<Flags>,
     /// Clickable ranges (byte offsets in the line).
     pub links: Vec<(usize, usize, Target)>,
-    /// An image embed that fills the whole line (rendered as a preview widget).
+    /// An embed that fills the whole line (rendered as a preview widget: the
+    /// picture, or a player for a video or audio).
     pub image: Option<String>,
     /// Table cells: byte range and CSS class (with the column's alignment).
     pub cells: Vec<(usize, usize, &'static str)>,
@@ -1168,7 +1169,7 @@ pub fn style_line(line: &str, block: &Block, resolves: &dyn Fn(&str) -> bool) ->
     }
     s.inline_from = inline_ok.then_some(start);
     inline(line, start, &mut s, resolves);
-    // A line that is only an image embed gets a preview widget.
+    // A line that is only an embed gets a preview widget.
     let body = line[start..].trim();
     if let Some(t) = body.strip_prefix("![[").and_then(|r| r.strip_suffix("]]")) {
         let t = t.split('|').next().unwrap_or(t);

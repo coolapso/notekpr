@@ -80,8 +80,8 @@ pub trait Host {
     fn boundary(&self);
     fn link_exists(&self, target: &str) -> bool;
     fn open_link(&self, target: &Target, new_tab: bool);
-    /// Blob URL for an embedded image, if already loaded (the host loads it
-    /// otherwise and calls [`Editor::refresh`]).
+    /// Blob URL for an embedded image (or video, audio), if already loaded
+    /// (the host loads it otherwise and calls [`Editor::refresh`]).
     fn image_url(&self, target: &str) -> Option<String>;
     fn selection_changed(&self, anchor: usize, head: usize);
     /// Files pasted or dropped at offset `at` (see [`Editor::anchor`] to keep
@@ -1943,6 +1943,14 @@ impl Editor {
             // 229: a key the IME handles (Safari sends the key that ends a
             // composition after `compositionend`, not marked as composing).
             if ev.is_composing() || ev.key_code() == 229 {
+                return;
+            }
+            // A player in a line has the focus: the keys are its own.
+            let in_widget = ev
+                .target()
+                .and_then(|t| t.dyn_into::<Element>().ok())
+                .is_some_and(|t| t.closest("[data-w]").ok().flatten().is_some());
+            if in_widget {
                 return;
             }
             ed.run_now(|ed| ed.on_keydown(&ev));

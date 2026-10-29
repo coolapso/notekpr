@@ -288,6 +288,63 @@ fn mount_editor(
     Some(ed)
 }
 
+/// Put `html` in the reading view `art`. A player of a file the new HTML
+/// shows too stays, and plays on if it was playing: a new rendering (a
+/// comment opened, the text changed elsewhere) doesn't start it over.
+fn show_reading(art: &web_sys::Element, html: &str) {
+    const PLAYERS: &str = ":is(video, audio)[data-att]";
+    let players = |root: &web_sys::Element| {
+        let mut out = Vec::new();
+        if let Ok(list) = root.query_selector_all(PLAYERS) {
+            for i in 0..list.length() {
+                if let Some(el) = list
+                    .item(i)
+                    .and_then(|n| n.dyn_into::<web_sys::HtmlMediaElement>().ok())
+                    && let Some(id) = el.get_attribute("data-att")
+                {
+                    out.push((id, el));
+                }
+            }
+        }
+        out
+    };
+    let mut old: Vec<_> = players(art)
+        .into_iter()
+        .map(|(id, el)| {
+            let playing = !el.paused();
+            (id, el, playing)
+        })
+        .collect();
+    art.set_inner_html(html);
+    // A player stays only for one the same but for the source we gave it
+    // (not, say, one given another size).
+    let attrs = |el: &web_sys::HtmlMediaElement| {
+        let mut out: Vec<_> = el
+            .get_attribute_names()
+            .iter()
+            .filter_map(|n| n.as_string())
+            .filter(|n| n != "src")
+            .map(|n| {
+                let v = el.get_attribute(&n);
+                (n, v)
+            })
+            .collect();
+        out.sort();
+        out
+    };
+    let same =
+        |el: &web_sys::HtmlMediaElement, new: &web_sys::HtmlMediaElement| attrs(el) == attrs(new);
+    for (id, new) in players(art) {
+        let Some(k) = old.iter().position(|(o, el, _)| *o == id && same(el, &new)) else {
+            continue;
+        };
+        let (_, el, playing) = old.remove(k);
+        if new.replace_with_with_node_1(&el).is_ok() && playing && el.paused() {
+            let _ = el.play();
+        }
+    }
+}
+
 /// Toggle the checkbox of a task line (clicked in the reading view).
 fn toggle_task(vault: &str, note: &str, line: usize) {
     let text = step(|c| c.replicas.get(vault).map(|r| r.note_text(note))).unwrap_or_default();
@@ -472,34 +529,42 @@ pub fn NoteView(vault: String, note: String) -> impl IntoView {
             },
         )
     });
-    // Load images after each render of the reading view.
+    // Show the reading view's HTML, then load the files it embeds. `shown`:
+    // the element and the HTML put in it last time.
     let va = vault.clone();
-    Effect::new(move |_| {
-        let _ = reading_html.get();
+    Effect::new(move |shown: Option<Option<(web_sys::Element, String)>>| {
+        let html = reading_html.get();
         // Embedded drawings change with them, and with the theme.
         ui.content_rev.get();
         ui.ui_prefs.track();
-        let Some(art) = reading_ref.get() else { return };
-        let Ok(imgs) = art.query_selector_all("img[data-att]") else {
-            return;
+        let art: web_sys::Element = reading_ref.get()?.into();
+        if shown.flatten() != Some((art.clone(), html.clone())) {
+            show_reading(&art, &html);
+        }
+        let Ok(embeds) = art.query_selector_all("[data-att]") else {
+            return Some((art, html));
         };
-        for i in 0..imgs.length() {
-            let Some(img) = imgs
+        for i in 0..embeds.length() {
+            let Some(el) = embeds
                 .item(i)
-                .and_then(|n| n.dyn_into::<web_sys::HtmlImageElement>().ok())
+                .and_then(|n| n.dyn_into::<web_sys::Element>().ok())
             else {
                 continue;
             };
-            let Some(id) = img.get_attribute("data-att") else {
+            let Some(id) = el.get_attribute("data-att") else {
                 continue;
             };
             let v = va.clone();
             leptos::task::spawn_local(async move {
-                if let Some(url) = actions::load_embed(&v, &id).await {
-                    img.set_src(&url);
+                // (A player given its source again would start over.)
+                if let Some(url) = actions::load_embed(&v, &id).await
+                    && el.get_attribute("src").as_deref() != Some(url.as_str())
+                {
+                    let _ = el.set_attribute("src", &url);
                 }
             });
         }
+        Some((art, html))
     });
 
     let (vr, nr) = (vault.clone(), note.clone());
@@ -776,7 +841,7 @@ pub fn NoteView(vault: String, note: String) -> impl IntoView {
                                     <div class="editor-host" node_ref=host_ref></div>
                                 </div>
                                 <article class="reading" node_ref=reading_ref class:hidden=move || ui.mode.get() != ViewMode::Reading
-                                    inner_html=move || reading_html.get() on:click=on_reading_click></article>
+                                    on:click=on_reading_click></article>
                                 <CommentLayer vault=vcm.clone() note=ncm.clone()/>
                             </div>
                         }.into_any()

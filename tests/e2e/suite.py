@@ -9,7 +9,7 @@ independent headless Chromium profiles as different users.
 
 Screenshots are written to $NOTEKPR_E2E_OUT (default target/e2e).
 """
-import argparse, json, os, shutil, socket, subprocess, sys, tempfile, time, traceback
+import argparse, base64, json, os, shutil, socket, subprocess, sys, tempfile, time, traceback
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -497,9 +497,46 @@ def test_attachments(env):
         b.click_el(b.find_text(".tree-item", "pic.svg", 10))
         b.wait("return window.__downloads.includes('pic.svg')", 15, "svg downloaded")
         check(b.js("return window.__opened.length") == 1, "an SVG attachment is downloaded, not opened as a page")
+        # A video, pasted on a line of its own, is embedded and plays where it is.
+        with open(os.path.join(HERE, "../../scripts/demo-files/lisbon-sunset.webm"), "rb") as f:
+            clip = base64.b64encode(f.read()).decode()
+        to_end = "const ed = document.querySelector('.ed'); ed.focus(); const s = getSelection(); s.selectAllChildren(ed); s.collapseToEnd();"
+        b.js(to_end)
+        b.keys(KEYS["enter"])
+        b.js("""
+            const clip = Uint8Array.from(atob(arguments[0]), c => c.charCodeAt(0));
+            const dt = new DataTransfer();
+            dt.items.add(new File([clip], 'sunset.webm', {type: 'video/webm'}));
+            document.querySelector('.ed').dispatchEvent(new ClipboardEvent('paste', {clipboardData: dt, bubbles: true, cancelable: true}));
+        """, clip)
+        b.wait("return document.querySelector('.ed').textContent.includes('![[sunset.webm]]')", 15, "video embed inserted")
+        check(True, "a pasted video is uploaded and embedded")
+        b.js(to_end)
+        b.keys(KEYS["enter"] + "- [ ] seen it")
+        b.js("document.querySelector('.note-title').focus()")
+        b.wait("const v = document.querySelector('.ed .w video[src^=\"blob:\"]'); return !!v && v.readyState >= 1 && Math.round(v.duration) == 6", 15, "editor player")
+        check(b.js("return document.querySelector('.ed .w video').controls"), "the editor shows a player for the decrypted video")
+        # The player's keys are its own: Ctrl+B there doesn't make the note bold.
+        before = editor_text(b)
+        check(b.js("const v = document.querySelector('.ed .w video'); v.focus(); return document.activeElement === v"), "a player takes the focus")
+        b.chord(KEYS["ctrl"], "b")
+        time.sleep(0.3)
+        check(editor_text(b) == before, "keys pressed in a player don't edit the note")
+        b.click_el(b.find_text(".tree-item", "sunset.webm", 10))
+        b.wait("return window.__opened.length == 2", 15, "video opened")
+        check(b.js("return window.__opened[1][0]").startswith("blob:"), "a video attachment opens in a new tab, to play")
         b.click(".seg button[title^='Reading']")
         b.wait("return !!document.querySelector('.reading img.att[src^=\"blob:\"]')", 15, "reading view image")
         check(True, "reading view shows the decrypted image")
+        b.wait("const v = document.querySelector('.reading video.att[src^=\"blob:\"]'); return !!v && v.readyState >= 1", 15, "reading view player")
+        # A new rendering (a task ticked) keeps the player, playing.
+        b.js("window.__v = document.querySelector('.reading video.att'); __v.muted = true; __v.playbackRate = 0.5; __v.play();")
+        b.wait("return !__v.paused && __v.currentTime > 0.3", 10, "video playing")
+        b.click(".reading input.task")
+        b.wait("return document.querySelector('.reading input.task').checked", 10, "task ticked")
+        time.sleep(0.5)
+        check(b.js("return document.querySelector('.reading video.att') === __v && !__v.paused && __v.currentTime > 0.3"),
+              "the reading view's player keeps playing through a new rendering")
         check(not severe_logs(b), "no browser errors")
         # Signing out revokes the decrypted attachments' blob URLs.
         blob = b.js("return document.querySelector('.reading img.att').src")

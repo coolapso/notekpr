@@ -6,6 +6,7 @@ use std::borrow::Cow;
 use std::hash::{Hash, Hasher};
 
 use notekpr_core::dates::Date;
+use notekpr_core::paths::{self, Media};
 
 use wasm_bindgen::JsCast;
 use web_sys::{Document, Element, HtmlElement, Node};
@@ -84,9 +85,10 @@ pub struct Rendered {
 }
 
 /// The HTML of one line: its source text with syntax spans, plus a widget
-/// (`contenteditable=false`, `data-w`, after the text): an image preview for
-/// an embed line, the header (title, language, copy button) of a code block
-/// on its opening fence, the type of a callout without a title on its first
+/// (`contenteditable=false`, `data-w`, after the text): an image preview (or
+/// a player, for a video or audio) for an embed line, the header (title,
+/// language, copy button) of a code block on its opening fence, the type of
+/// a callout without a title on its first
 /// line (as its title), the indentation guides of a line of code (no text),
 /// each date's label (after the date, inline: Today, Tomorrow, … or the
 /// date),
@@ -102,9 +104,9 @@ pub fn render_line(
     if let Some(t) = &styled.image
         && let Some(url) = image_url(t)
     {
-        html.push_str("<span class=\"w\" contenteditable=\"false\" data-w=\"1\"><img src=\"");
-        syntax::escape(&url, &mut html);
-        html.push_str("\" alt=\"\" draggable=\"false\"></span>");
+        html.push_str("<span class=\"w\" contenteditable=\"false\" data-w=\"1\">");
+        embed_html(t, &url, &mut html);
+        html.push_str("</span>");
     }
     if let Block::Code { guides, .. } = &job.block {
         // Inside the part that scrolls, so the guides move with the text.
@@ -155,6 +157,28 @@ pub fn render_line(
         html,
         widget,
     }
+}
+
+/// What an embed line shows of `target` (at `url`): a player for a video or
+/// audio, a picture otherwise.
+fn embed_html(target: &str, url: &str, o: &mut String) {
+    let tag = match paths::media(target) {
+        Some(Media::Video) => "video",
+        Some(Media::Audio) => "audio",
+        None => {
+            o.push_str("<img src=\"");
+            syntax::escape(url, o);
+            o.push_str("\" alt=\"\" draggable=\"false\">");
+            return;
+        }
+    };
+    o.push('<');
+    o.push_str(tag);
+    o.push_str(" src=\"");
+    syntax::escape(url, o);
+    o.push_str("\" controls preload=\"metadata\"></");
+    o.push_str(tag);
+    o.push('>');
 }
 
 /// The preview of an HTML block: what [`html::sanitize`] keeps of it, with

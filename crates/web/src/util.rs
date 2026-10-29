@@ -6,6 +6,8 @@ use std::rc::Rc;
 use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
 
+use notekpr_core::paths;
+
 pub fn window() -> web_sys::Window {
     web_sys::window().expect("no window")
 }
@@ -210,8 +212,16 @@ pub fn mime_for(name: &str) -> &'static str {
         "txt" => "text/plain",
         "json" => "application/json",
         "mp3" => "audio/mpeg",
-        "mp4" => "video/mp4",
+        "m4a" => "audio/mp4",
+        "aac" => "audio/aac",
+        "wav" => "audio/wav",
+        "ogg" | "oga" | "opus" => "audio/ogg",
+        "flac" => "audio/flac",
+        "mp4" | "m4v" => "video/mp4",
         "webm" => "video/webm",
+        "ogv" => "video/ogg",
+        "mov" => "video/quicktime",
+        "mkv" => "video/x-matroska",
         "zip" => "application/zip",
         _ => "application/octet-stream",
     }
@@ -221,12 +231,19 @@ pub fn is_image(name: &str) -> bool {
     mime_for(name).starts_with("image/") && !name.to_ascii_lowercase().ends_with(".svg")
 }
 
-/// Whether an attachment may be opened in a browser tab: raster images and
-/// PDFs only. A `blob:` URL belongs to this app's origin, so anything that
-/// can carry scripts (SVG, HTML, …) would run as the app; those are
-/// downloaded instead.
+/// Whether a file shows in the note it is added to (a picture, a player):
+/// linked as `![[name]]`, not `[[name]]`.
+pub fn shows_in_note(name: &str) -> bool {
+    is_image(name) || paths::media(name).is_some()
+}
+
+/// Whether an attachment may be opened in a browser tab: raster images,
+/// PDFs, videos and audio only (a video or audio opens in the browser's
+/// player, which runs no scripts). A `blob:` URL belongs to this app's
+/// origin, so anything that can carry scripts (SVG, HTML, …) would run as
+/// the app; those are downloaded instead.
 pub fn opens_inline(name: &str) -> bool {
-    is_image(name) || mime_for(name) == "application/pdf"
+    shows_in_note(name) || mime_for(name) == "application/pdf"
 }
 
 /// Stable, pleasant colour for a user id (presence cursors, avatars).
@@ -345,7 +362,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn only_raster_images_and_pdfs_open_inline() {
+    fn only_raster_images_pdfs_and_media_open_inline() {
         for ok in [
             "a.png",
             "b.JPG",
@@ -355,13 +372,33 @@ mod tests {
             "f.avif",
             "g.pdf",
             "dir/h.PDF",
+            "i.mp4",
+            "j.webm",
+            "k.MOV",
+            "l.mp3",
+            "m.m4a",
         ] {
             assert!(opens_inline(ok), "{ok}");
         }
         for bad in [
-            "a.svg", "b.SVG", "c.html", "d.htm", "e.xhtml", "f.xml", "g.md", "h", "i.js", "j.mp4",
+            "a.svg", "b.SVG", "c.html", "d.htm", "e.xhtml", "f.xml", "g.md", "h", "i.js",
         ] {
             assert!(!opens_inline(bad), "{bad}");
+        }
+    }
+
+    #[test]
+    fn media_have_their_types() {
+        for name in [
+            "a.mp4", "b.m4v", "c.webm", "d.ogv", "e.mov", "f.mkv", "g.mp3", "h.m4a", "i.aac",
+            "j.wav", "k.ogg", "l.oga", "m.opus", "n.flac",
+        ] {
+            let want = match paths::media(name) {
+                Some(paths::Media::Video) => "video/",
+                Some(paths::Media::Audio) => "audio/",
+                None => panic!("{name} plays"),
+            };
+            assert!(mime_for(name).starts_with(want), "{name}");
         }
     }
 }

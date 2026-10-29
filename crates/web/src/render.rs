@@ -25,6 +25,7 @@ use pulldown_cmark::{
 };
 
 use notekpr_core::dates::{self, Date};
+use notekpr_core::paths::{self, Media};
 
 use crate::editor::code::{self, Carry, FenceInfo, Indent};
 use crate::editor::{callout, html, syntax};
@@ -773,9 +774,10 @@ fn link_open(dest: &str, wiki: bool, attrs: &str, ctx: &Ctx) -> String {
     }
 }
 
-/// An embedded image: an attachment, a note (as a link), an external image
-/// (as a link: not loaded) or a missing one. `attrs`: more attributes of an
-/// attachment's `img` (escaped, each after a space).
+/// An embedded image: an attachment (a player for a video or audio), a note
+/// (as a link), an external image (as a link: not loaded) or a missing one.
+/// `attrs`: more attributes of an attachment's `img` (escaped, each after a
+/// space).
 fn image_html(target: &str, alt: &str, wiki: bool, attrs: &str, ctx: &Ctx) -> String {
     let target = notekpr_core::markdown::percent_decode(target);
     if !wiki && safe_external(&target) {
@@ -791,10 +793,20 @@ fn image_html(target: &str, alt: &str, wiki: bool, attrs: &str, ctx: &Ctx) -> St
         );
     }
     if let Some(id) = (ctx.attachment)(&target) {
+        let tag = match paths::media(&target) {
+            Some(Media::Video) => "video",
+            Some(Media::Audio) => "audio",
+            None => {
+                return format!(
+                    "<img class=\"att\" data-att=\"{}\" alt=\"{}\"{attrs}>",
+                    esc(&id),
+                    esc(alt)
+                );
+            }
+        };
         return format!(
-            "<img class=\"att\" data-att=\"{}\" alt=\"{}\"{attrs}>",
-            esc(&id),
-            esc(alt)
+            "<{tag} class=\"att\" data-att=\"{}\" controls preload=\"metadata\"{attrs}></{tag}>",
+            esc(&id)
         );
     }
     if let Some(id) = (ctx.note)(&target) {
@@ -970,6 +982,37 @@ mod tests {
         assert!(h.contains("data-create=\"Missing\""));
         assert!(h.contains("data-att=\"a1\""));
         assert!(h.contains("class=\"kw\""));
+    }
+
+    #[test]
+    fn videos_and_audio_play() {
+        let note = |_: &str| None;
+        let att = |t: &str| match t {
+            "Trips/Tram.MP4" => Some("v1".to_string()),
+            "memo.m4a" => Some("a1".to_string()),
+            _ => None,
+        };
+        let h = to_html(
+            "![[Trips/Tram.MP4]]\n\n![memo](memo.m4a)\n\n![](https://e.org/x.mp4)\n",
+            &Ctx::new(&note, &att),
+        );
+        assert!(
+            h.contains(
+                "<video class=\"att\" data-att=\"v1\" controls preload=\"metadata\"></video>"
+            ),
+            "{h}"
+        );
+        assert!(
+            h.contains(
+                "<audio class=\"att\" data-att=\"a1\" controls preload=\"metadata\"></audio>"
+            ),
+            "{h}"
+        );
+        // A video elsewhere on the web is a link, as an image there is: not loaded.
+        assert!(
+            h.contains("class=\"extimg\" href=\"https://e.org/x.mp4\""),
+            "{h}"
+        );
     }
 
     /// The text of a block's `code` element (tags removed, entities decoded).

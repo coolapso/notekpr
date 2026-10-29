@@ -2262,7 +2262,7 @@ pub async fn upload_files(vault: &str, files: Vec<web_sys::File>, folder: &str) 
         };
         if let Some(path) = upload_bytes(vault, &paths::join(folder, &name), &bytes).await {
             let fname = paths::file_name(&path).to_string();
-            embeds.push(if util::is_image(&fname) {
+            embeds.push(if util::shows_in_note(&fname) {
                 format!("![[{fname}]]")
             } else {
                 format!("[[{fname}]]")

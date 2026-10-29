@@ -114,6 +114,30 @@ pub fn drawing_title(path: &str) -> &str {
     }
 }
 
+/// A file that plays: a note embedding it (`![[clip.mp4]]`) shows a player.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Media {
+    Video,
+    Audio,
+}
+
+/// Videos and audio browsers play, by their file names' extensions.
+const VIDEO_EXTS: [&str; 6] = ["mp4", "m4v", "webm", "ogv", "mov", "mkv"];
+const AUDIO_EXTS: [&str; 8] = ["mp3", "m4a", "aac", "wav", "ogg", "oga", "opus", "flac"];
+
+/// Whether the file at `path` is a video or audio, by its name.
+pub fn media(path: &str) -> Option<Media> {
+    let (_, ext) = file_name(path).rsplit_once('.')?;
+    let ext = ext.to_ascii_lowercase();
+    if VIDEO_EXTS.contains(&ext.as_str()) {
+        Some(Media::Video)
+    } else if AUDIO_EXTS.contains(&ext.as_str()) {
+        Some(Media::Audio)
+    } else {
+        None
+    }
+}
+
 /// Final path segment.
 pub fn file_name(path: &str) -> &str {
     path.rsplit('/').next().unwrap_or(path)
@@ -192,6 +216,17 @@ mod tests {
         assert_eq!(drawing_path_for("B.md"), None);
         assert_eq!(drawing_path_for(".excalidraw"), None);
         assert_eq!(drawing_title("x/Board.drawing"), "Board");
+    }
+
+    #[test]
+    fn videos_and_audio_play() {
+        assert_eq!(media("Trips/Lisbon tram.MP4"), Some(Media::Video));
+        assert_eq!(media("clip.webm"), Some(Media::Video));
+        assert_eq!(media("a/Voice memo.m4a"), Some(Media::Audio));
+        assert_eq!(media("song.ogg"), Some(Media::Audio));
+        assert_eq!(media("pic.png"), None);
+        assert_eq!(media("mp4"), None);
+        assert_eq!(media("a.mp4/notes.md"), None);
     }
 
     #[test]

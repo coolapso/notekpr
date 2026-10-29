@@ -96,7 +96,8 @@ read anything.
   own changes; Excalidraw's keyboard shortcuts (`R`, `O`, `A`, `T`, `Q` to
   keep a tool, …). Two fingers pinch to zoom on touch screens.
 * Text inside shapes and on arrows (double-click or Enter), wrapped and
-  centred, the shape growing to hold it; an arrow's label slides along it.
+  centred, the shape growing to hold it; an arrow's label slides along it,
+  in a gap of its line.
   Arrows stay attached to shapes and follow them — dropped near a shape
   they attach to its outline (highlighted while dragged), held still over
   it for a moment they point inside; elbow arrows route themselves at right
@@ -133,7 +134,8 @@ read anything.
   their names, what they selected, their laser, and who is on the drawing
   in its header; merged when someone drew offline. A drawing's history
   keeps versions, shown as pictures, to restore or download.
-* Drawings live in vaults, among the notes, in the file tree; the vault's
+* Drawings live in vaults, among the notes, in the file tree, and are
+  renamed there or by their name at the top of the drawing; the vault's
   *Drawings* page shows them all as pictures ("3 of 10 drawings" when the
   server limits how many a vault holds). `![[Board.drawing]]` in a note shows the drawing, live, and the link
   while the cursor is on it (the drawing's ⤓ menu copies it); notes from

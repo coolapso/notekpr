@@ -409,15 +409,16 @@ Administration → Instance in the web app, or the admin API (`GET`/`PATCH
 They are kept in the database, so they survive restarts and backups.
 
 * **Limits**: accounts (people who aren't disabled), agents and vaults on
-  the server; vaults, agents, quick notes and drawings per person, by default
-  and for one person (their own allowance, under Accounts → Limits). Each is
-  a number or no limit; `0` means none at all (defaults: no limit, but 50
-  agents and 20 quick notes per person). A limit only stops new ones:
+  the server; vaults, agents and quick notes per person, by default and for
+  one person (their own allowance, under Accounts → Limits); drawings per
+  vault, by default and for one vault (Administration → Vaults → Limit).
+  Each is a number or no limit; `0` means none at all (defaults: no limit,
+  but 50 agents and 20 quick notes per person). A limit only stops new ones:
   lowering it takes nothing away, and nothing stops working. Everyone's
-  quick notes and Drawings (one place each per person) count as no vault.
-  Drawings count per person in all the vaults they own, whoever drew them;
-  moving one to another vault needs no room. The server learns which objects
-  are drawings to count them — nothing else of them.
+  Personal storage (their quick notes and saved shapes) counts as no vault.
+  Drawings count in their vault, whoever drew them; moving one to a full
+  vault is refused. The server learns which objects are drawings to count
+  them — nothing else of them.
 * **Read-only**: the server keeps everything and serves it, but accepts no
   changes. The apps keep people's edits (in the browser, in the CLI's local
   copies) and send them the moment you switch it off; signing in and out,
@@ -439,13 +440,13 @@ They are kept in the database, so they survive restarts and backups.
   personal vault doesn't stop someone's team vaults; with *vaults per
   person*, a person's total stays bounded. To hear of full vaults, alert on
   `notekpr_vaults_full > 0` (§8).
-* **Quick notes storage**: the same for someone's quick notes, which don't
-  follow *Storage per vault* and aren't in the Vaults list: like how many
-  quick notes someone may keep, it is the person's — give one person more
-  under Accounts → Limits. A quick note can link any number of files, so
-  their number alone doesn't bound what they take.
-* **Drawings storage**: the same for someone's Drawings (the place of their
-  own for drawings), the person's like their quick notes'.
+* **Personal storage**: the same for someone's Personal storage — their
+  quick notes and saved shapes —, which doesn't follow *Storage per vault*
+  and isn't in the Vaults list: like how many quick notes someone may keep,
+  it is the person's — give one person more under Accounts → Limits. A quick
+  note can link any number of files, so their number alone doesn't bound
+  what they take. (In the API it keeps its first name:
+  `quick_notes_storage_mb`, `quick_notes_storage_allowance`.)
 * **Oldest app version**: apps older than this (`0.6.0`) are told to update
   instead of syncing; they keep their unsent edits, and browsers get the
   current app with a reload. Each server version accepts apps from some
@@ -480,15 +481,16 @@ t=notekpr_a_…            # the client's token
 url=https://notes.example.com/api/v1
 curl -H "Authorization: Bearer $t" $url/admin/settings
 curl -H "Authorization: Bearer $t" -X PATCH $url/admin/settings -H 'Content-Type: application/json' \
-     -d '{"vaults_per_user": 1, "quick_notes_per_user": 30, "quick_notes_storage_mb": 100, "drawings_per_user": 1, "max_storage_mb": 20480}'
+     -d '{"vaults_per_user": 1, "quick_notes_per_user": 30, "quick_notes_storage_mb": 100, "drawings_per_vault": 1, "max_storage_mb": 20480}'
 # one person, by e-mail or by their sign-in identity (issuer|subject)
 curl -H "Authorization: Bearer $t" "$url/admin/users?email=ana@example.com"
 curl -H "Authorization: Bearer $t" -X PATCH $url/admin/users/<id> -H 'Content-Type: application/json' \
-     -d '{"vault_allowance": 3, "quick_note_allowance": 50, "quick_notes_storage_allowance": 500, "drawing_allowance": 10}'   # each a number, "unlimited" or "default"
+     -d '{"vault_allowance": 3, "quick_note_allowance": 50, "quick_notes_storage_allowance": 500}'   # each a number, "unlimited" or "default"
 # vaults by size (or the one with an id someone gave you, or someone's), and more room for one (MiB)
+# or more drawings
 curl -H "Authorization: Bearer $t" "$url/admin/vaults?id=<vault id>"
 curl -H "Authorization: Bearer $t" -X PATCH $url/admin/vaults/<vault id> -H 'Content-Type: application/json' \
-     -d '{"storage_allowance": 2048}'   # a number, "unlimited" or "default" (storage_per_vault_mb)
+     -d '{"storage_allowance": 2048, "drawing_allowance": 10}'   # a number, "unlimited" or "default" (the instance's)
 ```
 
 **From the server's command line** — for the first client on an instance

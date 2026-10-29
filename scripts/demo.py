@@ -178,7 +178,7 @@ def garden_drawing():
 
 
 def sketch_drawing():
-    """A small sketch for alice's own Drawings."""
+    """A small sketch, in a folder of alice's Home."""
     def el(i, kind, x, y, w, h, **more):
         e = {"id": f"sk{i}", "type": kind, "x": x, "y": y, "width": w, "height": h, "seed": 77 + i,
              "index": f"a{i}", "strokeColor": "#1971c2", "backgroundColor": "transparent",
@@ -235,7 +235,7 @@ def holiday_drawing():
 
 
 def garden_library():
-    """An .excalidrawlib of garden things for alice's library."""
+    """An .excalidrawlib of garden things for alice's saved shapes."""
     def item(i, name, elements):
         return {"id": f"garden-{i}", "status": "unpublished", "created": 1_790_000_000_000 + i,
                 "name": name, "elements": elements}
@@ -334,11 +334,12 @@ HOME = [
         - [ ] Search everything with `Ctrl+Shift+F`: try `tag:recipe` or `"tomato sauce"`
         - [ ] Switch to the reading view with `Ctrl+E`; `Ctrl+/` lists every shortcut
         - [ ] Capture a quick note with `Alt+Q`
-        - [ ] Drawings: open [[Beds]] — its drawing shows in the note — then *Garden beds* itself, and draw with Excalidraw's keys (`R` rectangle, `O` ellipse, `A` arrow, `T` text, `Q` keeps the tool); double-click a bed to label it, drag one and its arrow follows. *Drawings* in the sidebar holds your own; export one for Excalidraw (the ⤓ at the top) and open it on excalidraw.com, or paste between the two
+        - [ ] Drawings: open [[Beds]] — its drawing shows in the note — then *Garden beds* itself, and draw with Excalidraw's keys (`R` rectangle, `O` ellipse, `A` arrow, `T` text, `Q` keeps the tool); double-click a bed to label it, drag one and its arrow follows. *Drawings* in the sidebar shows all of Home's drawings as pictures, from every folder; export one for Excalidraw (the ⤓ at the top) and open it on excalidraw.com, or paste between the two
         - [ ] In *Garden beds*: select an arrow and drag its end onto another bed (it attaches; hold still over a bed for a moment and it points inside); drag the handle halfway along a line to bend it; double-click a line (Ctrl+double-click an arrow) to edit every point. `Alt`+drag copies, `Alt+S` snaps to the other beds' edges and gaps, `Ctrl+'` shows the grid
         - [ ] Export a frame alone: in *Garden beds*, click the name of the frame *This year's layout*, then ⤓ → *PNG image of the frame* (or *SVG*, or a copy) — the picture is just the frame, the elbow arrow cut off at its edge
         - [ ] Also in *Garden beds*: `N` makes a sticky note, `F` a frame (drag it around beds to hold them), `9` puts in a picture (or paste one), `K` is the laser pointer — open *Holiday steps* in Family as alice and as bob (another window): you see each other's pointer, selection and laser. The compost heap links to [[Beds]] (the button by it; `Ctrl+K` sets a link); the 🕘 at the top shows the drawing's versions
-        - [ ] Your drawings library: open a drawing and click the book button at the top — a raised bed, a shrub and a path stone are in it; click one or drag it onto the drawing. Select something and click **+** to keep it there; it's on your other devices too (`notekpr library ls`)
+        - [ ] Your saved shapes: open a drawing and click the button with the overlapping shapes at the top — a raised bed, a shrub and a path stone are there; click one or drag it onto the drawing. Select something and click **+** to save it; it's on your other devices too (`notekpr shapes ls`), kept in your Personal storage with your quick notes
+        - [ ] Each vault holds so many drawings (the billing script's limits): Home may hold 20 (*Drawings* says "2 of 20 drawings"), Family only 1 — open Family's *Drawings*: "Drawings are full (1 of 1)", and a new drawing there is refused
         - [ ] Open [[Garden plan]] and its history (the clock button at the top) to compare versions
         - [ ] Sign in as **bob** in another tab and edit *Shopping list* in the *Family* vault together
         - [ ] Click a link to a note that doesn't exist yet: [[Greenhouse]]
@@ -1451,7 +1452,7 @@ def seed(cli, url, data, server_bin):
     cli.run(a, "-q", "order", "Home", "Recipes/Recipes", "--before", "Recipes/Apple pie")
     cli.run(a, "-q", "order", "Home", "Recipes/Weekly meal plan", "--after", "Recipes/Recipes")
 
-    step("alice: a drawing of the garden beds, a note showing it, a sketch in her Drawings")
+    step("alice: a drawing of the garden beds, a note showing it, a sketch, saved shapes")
     cli.write(a, "Home", "Garden/Garden beds.drawing", garden_drawing())
     cli.write(a, "Home", "Garden/Beds.md", note("""
         # Beds
@@ -1462,11 +1463,11 @@ def seed(cli, url, data, server_bin):
 
         Click the drawing's line to see its link; open *Garden beds* to change it.
         """))
-    cli.write(a, "Drawings", "Shed ideas.drawing", sketch_drawing())
-    # Her library: shapes to drop into drawings (synced in her Drawings).
+    cli.write(a, "Home", "Sketches/Shed ideas.drawing", sketch_drawing())
+    # Her saved shapes, to drop into drawings (synced in her Personal storage).
     with tempfile.NamedTemporaryFile("w", suffix=".excalidrawlib", delete=False) as f:
         f.write(garden_library())
-    cli.run(a, "-q", "library", "import", f.name)
+    cli.run(a, "-q", "shapes", "import", f.name)
     os.unlink(f.name)
 
     step("alice: the garden plan's history (eleven edits)")
@@ -1651,16 +1652,19 @@ def seed(cli, url, data, server_bin):
     for i, (name, _) in enumerate(letters):
         cli.attach(a, "Scans", f"{name}-letter.png", scan(i + 1))
 
-    step("a billing script (an admin client): 100 MiB per vault, 1 MiB for Scans (now full), "
-         "20 MiB of quick notes (alice: 50)")
+    step("a billing script (an admin client): 100 MiB and 20 drawings per vault, 1 MiB for Scans "
+         "(now full), 1 drawing for Family (full), 20 MiB of personal storage (alice: 50)")
     token = subprocess.run(
         [str(server_bin), "--data-dir", str(data / "server"), "admin-client", "create",
          "--name", "billing", "--scopes", "settings,accounts"],
         check=True, capture_output=True, text=True).stdout.strip()
     vaults = json.loads(cli.run(a, "--json", "vault", "list")[0])
     scans = next(v["id"] for v in vaults if v["name"] == "Scans")
-    admin_api(url, token, "/admin/settings", {"storage_per_vault_mb": 100, "quick_notes_storage_mb": 20})
+    family = next(v["id"] for v in vaults if v["name"] == "Family")
+    admin_api(url, token, "/admin/settings",
+              {"storage_per_vault_mb": 100, "drawings_per_vault": 20, "quick_notes_storage_mb": 20})
     admin_api(url, token, f"/admin/vaults/{scans}", {"storage_allowance": 1})
+    admin_api(url, token, f"/admin/vaults/{family}", {"drawing_allowance": 1})
     alice = admin_api(url, token, "/admin/users?identity=dev:alice")[0]["id"]
     admin_api(url, token, f"/admin/users/{alice}", {"quick_notes_storage_allowance": 50})
     return keys

@@ -161,15 +161,15 @@ directory, never deleted) and enrolls the computer as a new device.
 
 Vaults are referred to by id or by (unique, case-insensitive) name; paths are
 vault-relative, `.md` is optional for notes (`.drawing` for drawings).
-Your quick notes answer to the name `Quick notes` and your Drawings to
-`Drawings`, which no vault may have (in any case): `vault create` and `vault
-rename` refuse them, as the web app does. A vault named so anyway (by a
+Your quick notes answer to the name `Quick notes`, which no vault may have
+(in any case): `vault create` and `vault rename` refuse it, as the web app
+does. A vault named so anyway (by a
 client that doesn't check: the server can't, names are encrypted) is reached
 by its id.
 
 | Command | |
 |---|---|
-| `vault list` / `vault create <name>` | list (with role, document count, what each takes on the server of its storage limit — `FULL` at it —, its id, how many quick notes there are, and how many drawings you have of how many you may — see [Drawings](#drawings)) / create |
+| `vault list` / `vault create <name>` | list (with role, document count, how many drawings each holds of how many it may — see [Drawings](#drawings) —, what each takes on the server of its storage limit — `FULL` at it —, its id, and how many quick notes there are) / create |
 | `vault rename <v> <name>` / `vault archive <v> [--undo]` / `vault delete <v>` | owner only; delete asks you to type the name (`--yes` skips that; without a terminal it is required) |
 | `vault icon <v> <emoji>` / `vault icon <v> --remove` | owner only; the vault's icon (replaces a picture set in the browser) |
 | `vault viewers-comment <v> on\|off` | owner only; whether viewers (and people its notes are shared with read-only) may comment (on by default) |
@@ -180,9 +180,9 @@ by its id.
 | `cat <v> <path>` | note text (or attachment bytes; a drawing as a `.drawing` file: Excalidraw's JSON under notekpr's `type`) |
 | `write <v> <path>` | create or update a note from stdin — diff-merged, never a blind overwrite; `--append`, `--attachment`, `--if-match <hash>` (ignored with the other two). A path ending in `.drawing` takes a drawing file on stdin — a `.drawing`, Excalidraw's `.excalidraw`, Obsidian's `.excalidraw.md`, what Excalidraw copies, or a PNG or SVG with the drawing inside (Excalidraw's "Embed scene", notekpr's exports) — and makes or changes the drawing there, element by element. `@today`, `@tomorrow` and `@yesterday` in the text become those days' dates (`@2026-10-23`, in the local time zone), as in the web app; so do they with `quick`, `shared write` and the gateway, but not in files of the Markdown folder |
 | `quick [text…]` / `quick --list` / `quick --move <note> --to <v>` / `quick --delete <note>` | capture a quick note (text or stdin) / list them / move one to a vault / delete one for good; see [Quick notes](#quick-notes) |
-| `library ls` / `library import <file.excalidrawlib>` / `library export [--out <file>] [--force]` | your drawings library (Excalidraw's): list its items, newest first (id, when, name, what they are made of; `--json` for the full ids) / add the items of an Excalidraw library file, leaving out those it has / write it as one (to stdout without `--out`); see [The library](#the-library) |
+| `shapes ls` / `shapes import <file.excalidrawlib>` / `shapes export [--out <file>] [--force]` | your saved shapes (Excalidraw's library): list them, newest first (id, when, name, what they are made of; `--json` for the full ids) / save the shapes of an Excalidraw library file, leaving out those saved already / write them as one (to stdout without `--out`); see [Saved shapes](#saved-shapes) |
 | `mkdir <v> <path>`, `mv <v> <from> <to> [--update-links]`, `rm <v> <path>` | `rm` moves to the trash (from the quick notes: deletes for good); `mv` into `dir/` keeps the name; `--update-links` rewrites `[[links]]` |
-| `mv <v> <note, drawing or folder> <to> --to-vault <other>` | move a note or drawing, or a folder with everything in it, to another vault: `to` is its folder there (ending in `/`, `/` alone for the top level) or its new path; a name taken there gets a number (`Projects 2`). Inside a folder everything keeps its place; attachments elsewhere its notes link to come along (beside the note, or at the folder's top level), and `[[links]]` that wouldn't find a copy there are rewritten. The originals go to the trash once the server has the copies, except attachments a note staying behind links to; their history, comments and shares stay with them. A drawing's copy replaces its original, which the server deletes for good once the copy is there — so a move needs no room under a drawings limit. Files move only with notes. `--json` prints what moved |
+| `mv <v> <note, drawing or folder> <to> --to-vault <other>` | move a note or drawing, or a folder with everything in it, to another vault: `to` is its folder there (ending in `/`, `/` alone for the top level) or its new path; a name taken there gets a number (`Projects 2`). Inside a folder everything keeps its place; attachments elsewhere its notes link to come along (beside the note, or at the folder's top level), and `[[links]]` that wouldn't find a copy there are rewritten. The originals go to the trash once the server has the copies, except attachments a note staying behind links to; their history, comments and shares stay with them. Drawings need room in the other vault (each vault holds so many): without it nothing is copied. Files move only with notes. `--json` prints what moved |
 | `order <v> <path> --before\|--after <other>` / `order <v> <folder> --reset` | put a note, attachment or folder just before or after another of the same folder (the order the sidebar and `ls` show; folders stay above notes; a folder only made by its notes gets an entry), or a folder's contents (`/` = the top level) back to A–Z; moving something to another folder drops its place |
 | `comments list <v> <note> [--all]` | a note's comment threads: the text each is about, the comments and replies with their authors, ids (first 8 characters) and whether unverified, not sent yet or edited; `--all` adds resolved ones; `--json` for the full ids |
 | `comments add <v> <note> --on <quote> [text…]` | comment on the quoted text (it must appear once in the note); the comment is the words or stdin. Viewers can comment too, unless the vault's owner turned it off |
@@ -195,7 +195,7 @@ by its id.
 | `backlinks <v> <path>` | notes linking to a note |
 | `history <v> <path>`, `history show\|restore <v> <path> <rev>` | encrypted revisions stored on the server |
 | `export <v> --out <dir\|file.zip>`, `import <v> <dir\|file.zip>` | see [§9](#9-export-and-import) |
-| `export --out <dir\|file.zip> [--skip <v>]… [--no-quick-notes]`, `import <dir\|file.zip>` | every vault and the quick notes at once, to move to another server: see [§9](#moving-to-another-server) |
+| `export --out <dir\|file.zip> [--skip <v>]… [--no-quick-notes]`, `import <dir\|file.zip>` | every vault and your Personal storage (quick notes, saved shapes) at once, to move to another server: see [§9](#moving-to-another-server) |
 | `delete-account [--yes] [--remove-mirror]` | delete your account on the server for good — the vaults you own go, also for the people you share them with; you leave the others — and this profile with its local data (asks first; `--remove-mirror` deletes its Markdown folders too, asked otherwise) |
 | `agent …`, `gateway …` | AI agents and the local HTTP API: see [agents.md §2](agents.md#2-setting-up-an-agent) and [§4](agents.md#4-the-gateway-local-http-api) |
 
@@ -209,10 +209,10 @@ limit: commands then wait as long as the server says and retry (for up to
 a profile's local copies (two would overwrite each other's files and lose
 queued or received changes). While `sync` or `gateway` runs, read commands
 (`ls`, `cat`, `search`, `backlinks`, `status`, `export`, `history`, `trash
-list`, `vault list`, `quick --list`, `library ls`, `library export`,
+list`, `vault list`, `quick --list`, `shapes ls`, `shapes export`,
 `note-shares`, `recover`) show that
 process's local copies read-only — it keeps them current — and commands that
-change something (`write`, `quick`, `library import`, `mv`, `rm`, `mkdir`, `import`,
+change something (`write`, `quick`, `shapes import`, `mv`, `rm`, `mkdir`, `import`,
 `vault …`, `share-note`, …) are handed to it right away: it runs them on its
 own copies and sends back what
 they print and whether they failed, so they work as usual (through a loopback
@@ -262,19 +262,21 @@ notekpr quick --delete "2026-10-19 14.32"     # for good
 
 A new quick note is named by the local time, e.g. `2026-10-19 14.32` (a
 second one in the same minute gets ` 2`, ` 3`, …; there is no `:` because
-Windows doesn't allow it in file names). Behind the scenes they are a vault
-of their own of a special kind, made the first time an app is online with
-your account; `vault list` shows how many there are, not the vault.
+Windows doesn't allow it in file names). Behind the scenes they live in your
+**Personal storage**: a vault of your own of a special kind, made the first
+time an app is online with your account, which also keeps your saved shapes
+([Saved shapes](#saved-shapes)) and whatever else is yours alone rather than
+a vault's; `vault list` shows how many quick notes there are, not the vault.
 
 When they are full, a new one is refused ("Quick notes are full (20 of 20):
 move some to a vault or delete them first"). One made on a device that
 didn't know yet (offline, say, while another device filled them) is kept on
 that device — `quick --list` marks it — and uploaded once there's room.
-They also have a storage limit of their own, the server's for quick notes
-or one an administrator gave you (`vault list` shows how much they take):
-when that is reached, changes to them stay queued ("your quick notes are
-full") until a quick note is deleted or an administrator gives them more
-room.
+Your Personal storage also has a storage limit of its own, the server's
+or one an administrator gave you (`vault list` shows how much it takes):
+when that is reached, changes to quick notes and saved shapes stay queued
+("your personal storage is full") until something there is deleted or an
+administrator gives it more room.
 
 Moving one takes the attachments it links to along (renamed if the name is
 taken there, with its links following) and needs the server: the quick note
@@ -294,12 +296,8 @@ Only apps can tell: the server sees no links.
 
 Drawings (`.drawing` files in the Markdown folder, `cat` prints one as
 such, `write` takes one: `notekpr write Home Garden/Beds.drawing <
-beds.excalidraw`) live in any vault, and in your **Drawings**: a place of your own for
-them, never shared (no members, single-note shares, agents or comments),
-made the first time the app is online with your account like the quick
-notes, and answering to the name `Drawings` (`ls Drawings`, `mv Home
-Sketch.drawing / --to-vault Drawings`). It holds drawings and files only:
-`write` refuses notes there.
+beds.excalidraw`) live in vaults, among the notes, and everyone in the
+vault draws on them together.
 
 A drawing file is Excalidraw's JSON under notekpr's own `type`
 (`notekpr-drawing`); `write` and imports also take Excalidraw's
@@ -314,42 +312,43 @@ exports, the Markdown folder, `recover` — holds them inside, as
 Excalidraw's files do. Moving a drawing to another vault takes its pictures
 along (unless a drawing staying behind shows them too).
 
-The server may limit how many drawings you have (`drawings_per_user`, or a
-limit of your own; by default there is none): all of them together, in
-every vault you own — a drawing someone makes in a vault of yours counts as
-yours, one you make in someone else's as theirs. Drawings in the trash
-count until it is emptied. `vault list` shows how many you have of how many
-you may ("Drawings are full (1 of 1)"). A new drawing beyond the limit is
-refused — "You can have 1 drawing on this server: delete it for good to make
+The server may limit how many drawings a vault holds (`drawings_per_vault`,
+or the vault's own limit set by an administrator; by default there is
+none), whoever draws in it. Drawings in the trash count until it is
+emptied. `vault list` shows how many each vault holds of how many it may
+("Drawings are full (1 of 1)"). A new drawing beyond the limit is refused —
+"This vault may hold 1 drawing on this server: delete it for good to make
 another" — and stays on your device, uploaded once there's room (one
-deleted for good, or a larger limit). Moving a drawing to another vault
-needs no room. Your Drawings also have a storage limit of their own, like
-the quick notes'.
+deleted for good, or a larger limit); in the Markdown folder a new
+`.drawing` file waits on disk. Moving a drawing to another vault needs room
+there: `mv --to-vault` says so before copying anything.
 
-### The library
+### Saved shapes
 
-Your **library** holds items — groups of elements — to drop into any
-drawing, as Excalidraw's does: in the web app you add what is selected to it
-and put items in from its panel. It is yours alone and the same on all your
-devices: it is kept, encrypted, in your Drawings (their index, so it takes
-no drawing's place; see [protocol.md §1](protocol.md#1-data-model-the-server-sees)),
-made the first time it's needed.
+Your **saved shapes** — groups of elements to drop into any drawing, what
+Excalidraw calls its library — are yours alone and the same on all your
+devices: in the web app you save what is selected and put shapes in from
+their panel. They are kept, encrypted, in your Personal storage (the quick
+notes' vault: its index, so they take no drawing's place; see
+[protocol.md §1](protocol.md#1-data-model-the-server-sees)), and count
+towards its storage limit.
 
 ```sh
-notekpr library ls                               # newest first
-notekpr library import shapes.excalidrawlib      # Excalidraw's library files
-notekpr library export --out mine.excalidrawlib  # Excalidraw imports it
-notekpr library export > mine.excalidrawlib      # the same, on stdout
+notekpr shapes ls                               # newest first
+notekpr shapes import shapes.excalidrawlib      # Excalidraw's library files
+notekpr shapes export --out mine.excalidrawlib  # Excalidraw imports it
+notekpr shapes export > mine.excalidrawlib      # the same, on stdout
 ```
 
-`import` adds the items of an `.excalidrawlib` file (version 1 or 2) and
-leaves out those the library has already (the same elements), so importing
-a file twice adds nothing. An item is stored as one piece, so one larger
-than an update may carry on the server (half its `max_update_bytes`) is
-left out with a warning instead of being queued for a server that would
-refuse it. Items hold elements only: no pictures (Excalidraw's rule). The
-library isn't part of the Markdown folder, `export` / `import` of vaults or
-`recover`: keep a copy with `library export`.
+`import` adds the shapes of an `.excalidrawlib` file (version 1 or 2) and
+leaves out those saved already (the same elements), so importing a file
+twice adds nothing. A shape is stored as one piece, so one larger than an
+update may carry on the server (half its `max_update_bytes`) is left out
+with a warning instead of being queued for a server that would refuse it.
+Shapes hold elements only: no pictures (Excalidraw's rule). Account exports
+(`export` of everything, with the quick notes) carry them as a
+`Saved shapes.excalidrawlib` file, and `import` brings them back; `recover`
+writes that file in the quick notes' folder.
 
 ## 4. Sync and the Markdown mirror
 
@@ -427,8 +426,6 @@ are unaffected.
   Work (3f2a1c)/          <- a second vault with the same name gets its id suffix
   Quick notes/            <- your quick notes: flat, no folders
     2026-10-19 14.32.md
-  Drawings/               <- your Drawings: drawings and files
-    Garden plan.drawing
 ```
 
 **Quick notes** ([§3](#quick-notes)) are the folder `Quick notes/`, mirrored
@@ -442,11 +439,10 @@ into a vault's folder moves the note there. Deleting a file deletes the note
 **for good** — quick notes have no trash — so more than 3 of them vanishing at
 once is held like a mass deletion (below).
 
-**Your Drawings** ([Drawings](#drawings)) are the folder `Drawings/`, mirrored
-right after the quick notes, so the name is theirs too. An Excalidraw file
-put there (or in a folder inside it) becomes a drawing, any other file stays
-a file; a Markdown file stays on disk, not synced (you are told once). As in
-a vault, deleting a file moves the drawing to the trash.
+**Drawings** ([Drawings](#drawings)) are `.drawing` files in their vault's
+folder. A new one becomes a drawing while the vault has room for it; beyond
+its drawings limit it stays on disk, not synced (you are told once), and
+goes up once there's room.
 
 Besides the characters shown, control characters become `_`, surrounding
 spaces, leading dots and trailing dots are dropped, Windows device names get
@@ -765,18 +761,19 @@ notekpr --profile new import ~/notes.zip [--dry-run]
 notekpr delete-account                                # then, if you like, on the old server
 ```
 
-Without a vault, `export` takes every vault (but those `--skip` names), the
-quick notes (unless `--no-quick-notes`) and your Drawings (unless `--skip
-Drawings`) into one `.zip` or directory: a folder per vault (named after it;
-a name some file systems can't store has `_` instead), one called `Quick
-notes`, one called `Drawings`, and `.notekpr-export.json` naming which
-folder is which vault — with its name, description, icon and picture, and
+Without a vault, `export` takes every vault (but those `--skip` names), with
+their drawings, and your Personal storage — the quick notes and saved shapes
+(unless `--no-quick-notes`) — into one `.zip` or directory: a folder per
+vault (named after it; a name some file systems can't store has `_`
+instead), one called `Quick notes`, the saved shapes as `Saved
+shapes.excalidrawlib`, and `.notekpr-export.json` naming which folder is
+which vault — with its name, description, icon and picture, and
 its notes', files' and folders' icons. The web app makes the same export
 (Settings → Account → Data). `import` with only that `.zip` or directory —
 on any server, also the same one — creates the vaults again, named as they
 were (a name the account has already gets a number: `Family 2`), adds the
 quick notes to the account's, as many as there's room for (the rest are
-reported), and the drawings to the account's Drawings. Nothing else comes along: no history, comments (only the
+reported), and the saved shapes to the account's. Nothing else comes along: no history, comments (only the
 `_comments/` files, which aren't imported), members or shares — the new
 server starts fresh.
 

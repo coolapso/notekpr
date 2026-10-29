@@ -119,17 +119,18 @@ read anything.
   Enter or a double click crops a picture.
 * Links on elements (`Ctrl+K`): a web address, or `[[a note]]` of the
   vault, opened from a button by the element.
-* A library, as in Excalidraw: keep shapes from a drawing (the book button)
-  and drop them into any other; synced, encrypted, between your devices;
+* Saved shapes, as Excalidraw's library: keep shapes from a drawing (the
+  button with the overlapping shapes) and drop them into any other; yours,
+  in your Personal storage, synced and encrypted between your devices;
   `.excalidrawlib` files imported (also dropped on a drawing) and exported
-  (`notekpr library ls|import|export`).
+  (`notekpr shapes ls|import|export`).
 * Drawn together, live, with the vault's members: their pointers with
   their names, what they selected, their laser, and who is on the drawing
   in its header; merged when someone drew offline. A drawing's history
   keeps versions, shown as pictures, to restore or download.
-* Your own drawings in *Drawings*, under Quick notes ("3 of 10 drawings"
-  when the server limits them); drawings in any vault, in its file tree.
-  `![[Board.drawing]]` in a note shows the drawing, live, and the link
+* Drawings live in vaults, among the notes, in the file tree; the vault's
+  *Drawings* page shows them all as pictures ("3 of 10 drawings" when the
+  server limits how many a vault holds). `![[Board.drawing]]` in a note shows the drawing, live, and the link
   while the cursor is on it (the drawing's ⤓ menu copies it); notes from
   Obsidian that show `![[Board.excalidraw]]` find the imported drawing.
 * Works with Excalidraw's files: copy and paste between notekpr and
@@ -269,9 +270,9 @@ read anything.
   version — never content;
   size limits for changes, snapshots and attachments.
 * Instance settings that change without a restart: limits on accounts,
-  agents and vaults, vaults, agents and drawings per person (with each
-  person's own allowance; drawings count in every vault someone owns, and
-  moving one needs no room), a read-only mode the apps ride out — edits are kept and sent
+  agents and vaults, vaults, agents and quick notes per person (with each
+  person's own allowance), drawings per vault (with a vault's own), a
+  read-only mode the apps ride out — edits are kept and sent
   when it ends — that also starts by itself at a database size you choose,
   and the oldest app version it accepts: older apps are told to update and
   keep their unsent edits.
@@ -281,8 +282,8 @@ read anything.
   on; emptying its trash makes room at once. Members see a vault's id and
   how much of its room it uses in its settings, and give the id to ask for
   more; the admin page lists vaults by size with their ids and owners, never
-  their names. Quick notes and each person's Drawings have a size of their
-  own, by default and for one person.
+  their names. Each person's Personal storage (quick notes, saved shapes)
+  has a size of its own, by default and for one person.
   From the admin page, or from scripts (a billing system, say) as admin
   clients: each with its own scopes and tokens, rotated and revoked without
   a restart, and never reaching a vault. An instance can leave everything to

@@ -25,8 +25,8 @@
 | Presence (which note, cursor; on a drawing the pointer, what is selected, the laser) | encrypted awareness messages | that a user is connected to a vault; on individually shared notes also which of them someone has open, and when (clients announce themselves on the note too, under its id); while someone moves their pointer on a drawing, that they do (messages come up to 20 a second) |
 | Favorites, recent notes, key pins, synced settings (note widths, which mentions were read) | account-key encryption | no |
 | Quick notes (text, names, attachments) | a vault of their own, encrypted like any other | which vault holds someone's quick notes, how many notes are in it, and — from a new note in a vault at about the time one leaves the quick notes — roughly when one moved where |
-| Drawings (what they show, their names, their pictures) | encrypted like notes, in any vault or in someone's Drawings (a vault of their own) | which objects are drawings — never what they show or what they're called —, so how many each person has in the vaults they own (it counts them against their limit); which vault is someone's Drawings; for a drawing moved to another vault of its owner, which original its copy replaced |
-| A person's drawings library (the shapes kept to drop into drawings) | in their Drawings' encrypted index | that it changed (the size and time of the index update), never what it holds |
+| Drawings (what they show, their names, their pictures) | encrypted like notes, in their vault | which objects are drawings — never what they show or what they're called —, so how many each vault holds (it counts them against the vault's limit) |
+| A person's saved shapes (kept to drop into drawings) | in their Personal storage's encrypted index (their quick notes' vault) | that it changed (the size and time of the index update), never what it holds |
 | Vault keys | HPKE to each member's account key | no |
 | Document keys (every note has its own) | wrapped under the vault key for members, HPKE to each person a note is shared with | no; it learns which notes are shared, with whom, and when sharing started |
 | Account secrets | HPKE to each device, and to the recovery key | no |
@@ -53,10 +53,11 @@ Nothing in the app or the logs shows it:
 * **Administrators** (Settings → Administration, and admin clients over
   `/admin/*`) see each account's name, e-mail, kind (person or agent),
   role, whether it is disabled, when it was created and last signed in, how
-  many vaults it is in and owns, how many devices, agents, quick notes and
-  drawings it has, what the vaults it owns, its quick notes and its Drawings
-  take, and its own limits;
-  each vault's id, owner, size and storage limit (to give one more room;
+  many vaults it is in and owns, how many devices, agents and quick notes it
+  has, what the vaults it owns and its Personal storage take, and its own
+  limits;
+  each vault's id, owner, size, storage limit and how many drawings it
+  holds and may hold (to give one more room;
   members read the id in its settings); plus
   totals for the instance (accounts, vaults, objects, updates, storage), the
   server's version and the instance settings. Not a vault's name, not who
@@ -70,10 +71,10 @@ What the database holds, besides ciphertext and public keys:
 
 | Table | What it tells |
 |---|---|
-| `users`, `identities` | accounts: display name, e-mail, OIDC issuer and subject, administrator, disabled, created and last sign-in; an agent's owner; a person's own limits (vaults, agents, quick notes, drawings, and the storage of their quick notes and Drawings) |
+| `users`, `identities` | accounts: display name, e-mail, OIDC issuer and subject, administrator, disabled, created and last sign-in; an agent's owner; a person's own limits (vaults, agents, quick notes and the storage of their Personal storage) |
 | `devices`, `sessions`, `agent_credentials` | each account's devices and their names (the browser and system, or `notekpr CLI on <host name>`), sessions, and when each was created, last used (to the minute; only the latest time is kept), revoked |
-| `vaults`, `vault_members`, `member_log` | who owns each vault, who is in it with which role, who added them and when; which vault is someone's quick notes or Drawings; how much its content takes, and its own storage limit; the membership log's entries (user ids, roles, public keys, key commitments, times) |
-| `objects`, `updates`, `snapshots` | how many notes and other objects a vault has, which of them are drawings (said by the app that made each, never changed), when each was created and changed, and for every change (notes, drawings, the file tree, comments): who wrote it, from which device, when, and its size. Comment threads are objects named after their note (`c_<note id>`), so it also tells which notes have comments. When a note was deleted for good, and whether that was undone; for a drawing's copy made by a move, until its first change arrives, which original it replaces |
+| `vaults`, `vault_members`, `member_log` | who owns each vault, who is in it with which role, who added them and when; which vault is someone's quick notes (their Personal storage); how much its content takes, and its own storage and drawings limits; the membership log's entries (user ids, roles, public keys, key commitments, times) |
+| `objects`, `updates`, `snapshots` | how many notes and other objects a vault has, which of them are drawings (said by the app that made each, never changed), when each was created and changed, and for every change (notes, drawings, the file tree, comments): who wrote it, from which device, when, and its size. Comment threads are objects named after their note (`c_<note id>`), so it also tells which notes have comments. When a note was deleted for good, and whether that was undone |
 | `attachments` | each attachment's size, who uploaded it, when; when it was deleted for good |
 | `device_grants` | device sign-ins waiting for approval: the client's name, when it asked, and the address it asked from — the address only until the code is approved, denied or expires (it is shown to whoever approves the code, so one asked for by someone else stands out) |
 | `object_shares`, `object_keys` | which notes are shared individually, with whom, with which role, by whom and since when |
@@ -100,7 +101,7 @@ are kept.
 
 Deleting one's account (Settings → Account, `notekpr delete-account`)
 deletes at once what is the person's: the vaults they own with everything
-in them, their quick notes and Drawings, agents, devices, sessions, keys, sign-in
+in them, their Personal storage (quick notes, saved shapes), agents, devices, sessions, keys, sign-in
 identities and preferences. What stays is in vaults that aren't theirs:
 what they wrote there (encrypted, with their user id as its author) and
 their user id in membership logs and audit entries — not their name or
@@ -153,20 +154,18 @@ primitives. Formats:
   make an older app accept anyone's writing. A log entry of a kind an older
   app doesn't know stops it from opening the vault (it says to update), so
   a server can't slip a change past it that way.
-* **Shares someone's quick notes or Drawings?** The server refuses members
-  and note shares there, and as with every vault it can't add anyone on its
-  own: their owner's apps never sign anyone into them. Nor can it make a
-  vault someone else owns or shares pass for one's quick notes or Drawings:
-  apps take for them only a vault of that kind the person owns alone.
+* **Shares someone's Personal storage (quick notes, saved shapes)?** The
+  server refuses members and note shares there, and as with every vault it
+  can't add anyone on its own: their owner's apps never sign anyone into
+  them. Nor can it make a vault someone else owns or shares pass for one's
+  quick notes: apps take for them only a vault of that kind the person owns
+  alone.
 * **Says which objects are drawings, and counts them?** It has to, to hold
-  each person to a number of drawings: apps say an object is a drawing when
-  they make it, and the server counts them per owner. That's all it learns
+  each vault to a number of drawings: apps say an object is a drawing when
+  they make it, and the server counts them per vault. That's all it learns
   of them — not what they show or what they're called. A lying app only
-  miscounts its own person's drawings; a lying server can refuse or allow
-  drawings, as it can refuse or allow anything, but learns nothing more. A
-  copy made by a move names the drawing it replaces, so the server deletes
-  that one for good when the copy arrives — only a drawing of the same owner
-  the person making the copy could delete for good anyway.
+  miscounts its own vault's drawings; a lying server can refuse or allow
+  drawings, as it can refuse or allow anything, but learns nothing more.
 * **Hands a member a vault key it made itself** (so it could read what they
   write next)? The owner commits to every epoch's key in the log; clients
   check each key they receive against the commitment and refuse a vault

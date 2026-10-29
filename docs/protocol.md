@@ -66,8 +66,8 @@ other things and are left alone by apps that don't know them, which keep
 them in the snapshots they make (a root map is only ever added, never
 renamed or reused):
 
-* `library` — in a person's Drawings (§5.5) only: their drawings library,
-  as Excalidraw's. Item id → the item as a JSON string, Excalidraw's
+* `library` — in a person's quick notes (their Personal storage, §5.3)
+  only: their saved shapes, as Excalidraw's library. Item id → the item as a JSON string, Excalidraw's
   `LibraryItem` without its id: `{status: "unpublished"|"published",
   created: ms, name?, elements: [Excalidraw elements]}`. Each item is one
   value: adding, replacing (same id) and removing items merge like the
@@ -161,7 +161,7 @@ unless noted), not the `{error, message}` shape above; an unknown
 
 | Endpoint | Notes |
 |---|---|
-| `GET /me` | `MeResponse {user, account_key?, has_recovery, session, drawing_limit, drawing_count}`: how many drawings the caller may have and has (§5.5; `"unlimited"` and 0 from older servers) |
+| `GET /me` | `MeResponse {user, account_key?, has_recovery, session}` |
 | `DELETE /me` | people (agents `403`): delete one's account for good, at once — the vaults one owns, with everything in them (their members get `deleted`), one's quick notes, agents, devices, sessions, keys, sign-in identities and preferences; one leaves the other vaults (`members_changed`) and notes shared with one (`shares_changed`), whose owners' apps renew the keys one held (§5.4). Signing in again makes a new account. `204` |
 | `PUT /me/account-key` | one-time `AccountSetupRequest`. Humans must include `recovery_envelope` and `device` (first device with its account envelope and an approval signature). Agents send only `key`. |
 | `GET /me/recovery` | the recovery envelope (encrypted under the recovery key) |
@@ -198,12 +198,12 @@ refuses roles it doesn't know (`400`).
 
 | Endpoint | Role |
 |---|---|
-| `GET /vaults` | caller's vaults with role, `encrypted_meta`, `key_epoch`, `head_seq`, `viewers_comment` (§6.1), `kind` (`regular`, `quick_notes`, §5.3, or `drawings`, §5.5; absent on older servers; apps don't show a vault of a kind they don't know, §11), `note_limit` (quick notes: how many notes they may hold; `"unlimited"` for every other vault), `storage_bytes` (what its encrypted content takes, §9) and `storage_limit_mb` (its storage limit: its own, else `storage_per_vault_mb`; for quick notes the owner's `quick_notes_storage_allowance`, else `quick_notes_storage_mb`; for Drawings the owner's `drawings_storage_allowance`, else `drawings_storage_mb`; `"unlimited"` by default). `GET /vaults/{v}` answers the same for one vault (the apps show its id and size in its settings: people ask an administrator for more room by the id). For the owner also the keys to renew (§5.4): `rotation_pending` (the vault key) and `notes_rotation_pending` (note ids); absent when there are none |
-| `POST /vaults {id, encrypted_meta, key_envelope, log_entry?, kind?}` | human; the client picks the id and wraps epoch 1 to itself; `log_entry` starts the membership log (§5.2); `kind: "quick_notes"` makes the caller's quick notes (§5.3), `kind: "drawings"` their Drawings (§5.5; `409` if they have them); a kind the server doesn't know is refused (`400`) |
-| `GET/PATCH/DELETE /vaults/{v}` | read: member; update (`encrypted_meta`, `archived`, `viewers_comment`): owner (never quick notes or Drawings: `400`); delete: owner |
+| `GET /vaults` | caller's vaults with role, `encrypted_meta`, `key_epoch`, `head_seq`, `viewers_comment` (§6.1), `kind` (`regular` or `quick_notes`, §5.3; absent on older servers; apps don't show a vault of a kind they don't know, §11), `note_limit` (quick notes: how many notes they may hold; `"unlimited"` for every other vault), `drawing_limit` (how many drawings it may hold: its own `drawing_allowance`, else `drawings_per_vault`, §5.5; `"unlimited"` by default and from older servers), `storage_bytes` (what its encrypted content takes, §9) and `storage_limit_mb` (its storage limit: its own, else `storage_per_vault_mb`; for quick notes the owner's `quick_notes_storage_allowance`, else `quick_notes_storage_mb`; `"unlimited"` by default). `GET /vaults/{v}` answers the same for one vault (the apps show its id and size in its settings: people ask an administrator for more room by the id). For the owner also the keys to renew (§5.4): `rotation_pending` (the vault key) and `notes_rotation_pending` (note ids); absent when there are none |
+| `POST /vaults {id, encrypted_meta, key_envelope, log_entry?, kind?}` | human; the client picks the id and wraps epoch 1 to itself; `log_entry` starts the membership log (§5.2); `kind: "quick_notes"` makes the caller's quick notes (§5.3; `409` if they have them); a kind the server doesn't know is refused (`400`) |
+| `GET/PATCH/DELETE /vaults/{v}` | read: member; update (`encrypted_meta`, `archived`, `viewers_comment`): owner (never quick notes: `400`); delete: owner |
 | `GET /vaults/{v}/keys` | member: own envelopes for every epoch granted + full key chain; the notes' document keys (`objects`, `object_chain`), which notes are shared individually (`shared`; absent on servers from before notes had their own keys) and for those where sharing started (`share_from`: note → first shared epoch) |
 | `GET /vaults/{v}/members` | member: `MemberInfo {user (with account key), role, has_current_key}` |
-| `POST /vaults/{v}/members {user_id, role, key_envelope?, log_entry?}` | owner; never in quick notes or Drawings (`400`, §5.3, §5.5). Without an envelope the member is "pending keys" until the owner's client grants them. Role `owner` is refused (`400`), and `admin` for an agent (`400`); an agent can be added only by its owner (`404` otherwise). Membership supersedes single-note shares: adding someone removes their shares of notes in that vault and those notes' keys |
+| `POST /vaults/{v}/members {user_id, role, key_envelope?, log_entry?}` | owner; never in quick notes (`400`, §5.3). Without an envelope the member is "pending keys" until the owner's client grants them. Role `owner` is refused (`400`), and `admin` for an agent (`400`); an agent can be added only by its owner (`404` otherwise). Membership supersedes single-note shares: adding someone removes their shares of notes in that vault and those notes' keys |
 | `PATCH /vaults/{v}/members/{u} {role, log_entry?}` | owner; never to `owner`, nor `admin` for an agent (`400`) |
 | `DELETE /vaults/{v}/members/{u}` `RemoveMemberRequest {log_entry?, rotation?}` | owner removes, with `rotation`: the vault's new key for everyone else (`RotateKeysRequest`, checked as `keys/rotate` once the person is gone), stored in the same transaction — without it `400`, and nothing changes if it is refused. The person removed gets `access_revoked`, never the new key's `key_rotated`. Any non-owner can remove themselves (no `rotation`, `400` otherwise; the body is optional); if they had the vault key it is to be renewed (§5.4) |
 | `GET /vaults/{v}/log?since=` | member: the membership log, `MemberLogResponse {entries}` (§5.2) |
@@ -235,12 +235,12 @@ member list, vault key, or the note's history from before it was shared.
 
 | Endpoint | Role |
 |---|---|
-| `PUT /vaults/{v}/objects/{o}/key` `ObjectKeyUpdate {epoch, vault_envelope, chain_link?, envelopes, encrypted_meta, snapshot?, private?, without?, kind?, replaces?}` | See the three kinds below. `vault_envelope` must be wrapped under the vault's *current* epoch (else `412 stale_key`). A `snapshot` must be under the new key and its `covers_seq` must cover every stored update of the note (else `412 stale_key`). When the key is the first thing stored of an object, `kind` says what it is (`note`, the default, or `drawing`) and `replaces` (`{vault_id, object_id}`) which drawing a moved copy replaces (§5.5); both are ignored otherwise. |
+| `PUT /vaults/{v}/objects/{o}/key` `ObjectKeyUpdate {epoch, vault_envelope, chain_link?, envelopes, encrypted_meta, snapshot?, private?, without?, kind?}` | See the three kinds below. `vault_envelope` must be wrapped under the vault's *current* epoch (else `412 stale_key`). A `snapshot` must be under the new key and its `covers_seq` must cover every stored update of the note (else `412 stale_key`). When the key is the first thing stored of an object, `kind` says what it is (`note`, the default, or `drawing`, §5.5); it is ignored otherwise. |
 | `GET /vaults/{v}/objects/{o}/keys` | member or recipient: `ObjectKeysResponse {object_id, role, current_epoch, envelopes (own), chain, encrypted_meta, member_envelopes?, shared?}`. Recipients: the chain only from `share_from` on; their envelopes carry the owner's grant `signature` (below). Members: the note's key at every epoch wrapped under the vault key (`member_envelopes`), every chain link, and whether it is `shared` — so after a note's `key_rotated` / `shared` event they reload that note's keys alone, not the vault's |
 | `PUT /vaults/{v}/objects/{o}/keys/signatures {grants: [{user_id, epoch, signature}]}` | owner: grant signatures for keys given before grants were signed |
 | `PUT /vaults/{v}/objects/{o}/meta {encrypted_meta}` | writer: the title recipients see, under the current document key (else `412 stale_key`) |
 | `GET /vaults/{v}/objects/{o}/shares` | member: `ObjectShareInfo {user, role, added_at, added_by, has_current_key, key_signed}` |
-| `POST /vaults/{v}/objects/{o}/shares {user_id, role, envelope, log_entry?}` | owner; never in quick notes or Drawings (`400`, §5.3, §5.5); `role` is `editor` or `viewer`; the envelope wraps the current document key to the person (else `412 stale_key`). Vault members are refused (`409`), and so is a note whose sharing has not started (`409`: give it a fresh key first). Someone it is shared with already is refused too (`409`), unless they lack the current key (left out of a rotation, `without`): then they get it, with this role. |
+| `POST /vaults/{v}/objects/{o}/shares {user_id, role, envelope, log_entry?}` | owner; never in quick notes (`400`, §5.3); `role` is `editor` or `viewer`; the envelope wraps the current document key to the person (else `412 stale_key`). Vault members are refused (`409`), and so is a note whose sharing has not started (`409`: give it a fresh key first). Someone it is shared with already is refused too (`409`), unless they lack the current key (left out of a rotation, `without`): then they get it, with this role. |
 | `PATCH /vaults/{v}/objects/{o}/shares/{u} {role, log_entry?}` | owner |
 | `DELETE …/shares/{u}` `RemoveShareRequest {log_entry?, rotation?}` | owner, with `rotation`: the note's new key for the people it stays shared with (an `ObjectKeyUpdate` rotation, below), stored in the same transaction — without it `400`, and nothing changes if it is refused. The person removed gets `access_revoked`, never the note's `key_rotated`. Recipients may remove the note from their list (no `rotation`, `400` otherwise; the body is optional); its key is then to be renewed (§5.4) |
 | `GET /shares` | notes shared with the caller: `SharedNote {vault_id, object_id, role, owner, shared_by, key_epoch, encrypted_meta, added_at}` |
@@ -346,12 +346,15 @@ shares (`POST`/`PATCH`/`DELETE …/objects/{o}/shares…`) carry their `share`
 or `unshare` entry (a recipient removing a note from their own list doesn't
 need one).
 
-### 5.3 Quick notes
+### 5.3 Quick notes (Personal storage)
 
-Each person may have one vault of the kind `quick_notes`: their quick notes,
-which apps show as such, never as a vault (they are flat and keep no trash —
-both up to the apps, as the server sees no paths). The server makes sure
-they stay the person's own and few:
+Each person may have one vault of the kind `quick_notes`: their **Personal
+storage**, for what is theirs alone rather than a vault's — their quick
+notes, and in its index their saved shapes (§1, root map `library`). Apps
+show the quick notes as such, never as a vault (they are flat and keep no
+trash — both up to the apps, as the server sees no paths). The wire keeps the
+names `quick_notes` (the kind, the settings and allowances below). The
+server makes sure it stays the person's own and the notes few:
 
 * Nobody else is ever added: members (people or agents) and single-note
   shares are refused (`400`), and so is starting to share a note's key
@@ -360,7 +363,8 @@ they stay the person's own and few:
 * They hold at most `note_limit` notes — the owner's `quick_note_allowance`,
   else the instance's `quick_notes_per_user` (default 20, §9) — and take at
   most `storage_limit_mb` — the owner's `quick_notes_storage_allowance`, else
-  `quick_notes_storage_mb` (§9), not the limit per vault. Notes are the
+  `quick_notes_storage_mb` (§9), not the limit per vault: the Personal
+  storage's limit, saved shapes included. Notes are the
   objects other than the index and comments that aren't deleted for good;
   the first write of a new one (its own key, `PUT …/objects/{o}/key`, or a
   pushed update) beyond the limit is refused: `403 limit_reached` for the key,
@@ -422,48 +426,18 @@ presence (`awareness`, §7, encrypted) `pointer: {x, y, laser, down}` (in the dr
 coordinates) and `selected` (element ids), sent at most every 50 ms; both
 are left out elsewhere.
 
-**How many.** Each person may have `drawing_limit` drawings — their own
-`drawing_allowance`, else the instance's `drawings_per_user` (unlimited by
-default, §9) — in all the vaults they own together, their Drawings among
-them: the owner pays, also for a drawing someone else makes in their vault.
-Drawings count until deleted for good (in the trash they still count). A
-new one beyond the limit is refused: `403 limit_reached` for its key
-(saying how many the person may have, or that the vault's owner has as many
-as they may), `drawings_full` for the update making it in a push; bringing
-one back (`…/restore`) needs room too. Apps keep the drawing and send it
-again once there may be room (one deleted for good, the vault list
-reloaded — a limit may have changed —, a new connection). Lowering the limit
-takes nothing away. `GET /me` says the caller's `drawing_limit` and
-`drawing_count`.
-
-**Moving one** to another vault copies it (as for notes, §5.3), and needs
-no free slot: the copy's key names the original it replaces, `replaces:
-{vault_id, object_id}`. Where that original is a live drawing in another
-vault with the same owner, which the caller could delete for good there
-(owner or admin, as `DELETE …/objects/{o}`), and no other copy replaces it
-already, the copy is made at the limit too; when its first update is stored,
-the original is deleted for good in the same transaction, exactly as
-`DELETE …/objects/{o}` would (`purged` to its subscribers, it can be undone
-for a while — needing room then). Otherwise `replaces` is ignored and the
-copy is a new drawing like any. A copy of a drawing that stays (a note left
-behind links to it) names no original.
-
-**The Drawings section.** Each person may have one vault of the kind
-`drawings`: their Drawings, which apps show as such, never as a vault, and
-make the first time they're needed (`409` if they exist). Like the quick
-notes (§5.3) they are never shared — no members, agents or single-note
-shares (`400`), no sharing a key (`PUT …/objects/{o}/key` other than
-`private`: `400`), no comments (`403`) —, keep their name and settings
-(`PATCH /vaults/{v}`: `400`), count against no vault limit (`max_vaults`,
-`vaults_per_user`) and the admin API's counts leave them out. They hold
-drawings and files only: a new object that isn't a drawing (but the index)
-is refused — `400` for its key, `drawings_only` for an update in a push. They
-take at most `storage_limit_mb`: the owner's `drawings_storage_allowance`,
-else the instance's `drawings_storage_mb` (§9). No vault may be named
-"Drawings" (in any case and spacing): in apps the name always means them.
-Their index also holds the person's drawings library (§1, root map
-`library`): to the server an index update like any, so it takes no
-drawing's place and needs nothing of the server.
+**How many.** Drawings belong to vaults, and each vault may hold
+`drawing_limit` of them (`GET /vaults`) — its own `drawing_allowance`, set
+by administrators like its storage limit (`PATCH /admin/vaults/{id}`), else
+the instance's `drawings_per_vault` (unlimited by default, §9) —, whoever
+makes them. Drawings count until deleted for good (in the trash they still
+count). A new one beyond the limit is refused: `403 limit_reached` for its
+key, `drawings_full` for the update making it in a push; bringing one back
+(`…/restore`) needs room too. Apps keep the drawing and send it again once
+there may be room (one deleted for good in that vault, the vault list
+reloaded — a limit may have changed —, a new connection). Lowering the
+limit takes nothing away. Moving a drawing to another vault copies it (as
+for notes, §5.3): apps check there's room there before copying anything.
 
 ## 6. The encrypted log
 
@@ -474,13 +448,13 @@ vault's events in strictly increasing order without gaps.**
 
 | Endpoint | Notes |
 |---|---|
-| `POST /vaults/{v}/updates {updates: [{object_id, client_update_id, payload, signature?, kind?}]}` → `{results, head_seq, rejected?}` | editor/owner. Idempotent per `client_update_id`: a retry returns the original `seq`. Objects are created on first write. An update that can't be stored on its own merits is refused alone and listed in `rejected: [{client_update_id, object_id, code, message}]` with `code` `too_large` (over `max_update_bytes`), `purged` (the object was permanently deleted), `stale_key` (encrypted with an outdated key: reload keys, re-encrypt, send again), `unsigned` (the vault requires signed content, §5.2), `bad_signature` (not signed with the author's account key), `quick_notes_full` (a new note in quick notes holding as many as they may, §5.3: kept by the client and sent again once there's room), `drawings_full` (a new drawing while the vault's owner has as many as they may, §5.5: kept likewise) or `drawings_only` (a new note in someone's Drawings, §5.5); the rest of the batch is stored. An update that makes an object says what it is (`kind`, §5.5); the first update of a moved drawing's copy deletes the original it replaces for good (§5.5). Malformed requests, a batch over 500 updates and missing write access still fail the whole push, and so does a vault at its storage limit (`507 vault_full`, §9), unless the batch would store nothing (retries of updates it has are answered as usual). (Servers before this answered `413` / `409` / `412` for the whole batch; clients handle both.) |
+| `POST /vaults/{v}/updates {updates: [{object_id, client_update_id, payload, signature?, kind?}]}` → `{results, head_seq, rejected?}` | editor/owner. Idempotent per `client_update_id`: a retry returns the original `seq`. Objects are created on first write. An update that can't be stored on its own merits is refused alone and listed in `rejected: [{client_update_id, object_id, code, message}]` with `code` `too_large` (over `max_update_bytes`), `purged` (the object was permanently deleted), `stale_key` (encrypted with an outdated key: reload keys, re-encrypt, send again), `unsigned` (the vault requires signed content, §5.2), `bad_signature` (not signed with the author's account key), `quick_notes_full` (a new note in quick notes holding as many as they may, §5.3: kept by the client and sent again once there's room), or `drawings_full` (a new drawing in a vault holding as many as it may, §5.5: kept likewise); the rest of the batch is stored. An update that makes an object says what it is (`kind`, §5.5). Malformed requests, a batch over 500 updates and missing write access still fail the whole push, and so does a vault at its storage limit (`507 vault_full`, §9), unless the batch would store nothing (retries of updates it has are answered as usual). (Servers before this answered `413` / `409` / `412` for the whole batch; clients handle both.) |
 | `GET /vaults/{v}/changes?since=S&limit=N&snapshots=true` | `ChangesResponse {updates, snapshots, purged, restored?, head_seq, has_more, next_since}`. `purged` / `restored`: `{object_id, seq}` of objects deleted for good, and of those whose deletion was undone (below), in `(S, page end]`; apply them in `seq` order. For any object whose latest snapshot covers part of `(S, head]`, the snapshot is returned **instead of** the updates it covers. Request further pages with `since=next_since&snapshots=false`. Every page also holds the snapshots *carrying* changes (below) stored while the head was within it, so each catch-up passes them once. |
 | `GET /vaults/{v}/objects/{o}` | `ObjectState`: latest snapshot + updates after it |
 | `POST /vaults/{v}/objects/{o}/snapshots {snapshot_id, covers_seq, payload, signature?, carries?}` | editor/owner (`409` unsigned where signatures are required, `400` for a bad signature). `404` if the object doesn't exist yet or was purged (a snapshot never creates an object), `409` for a `snapshot_id` already used, `413` over `max_snapshot_bytes`. Store a compaction (`payload` = encrypted full state). Updates covered by the *previous* snapshot are pruned — one generation is always kept so a bad snapshot is recoverable. One snapshot per person and note per `--snapshot-cooldown-secs` (default 30 s; `429` otherwise); none in a full vault (`507 vault_full`). `carries: true`: the state holds changes the log doesn't have — an update too large to push (`too_large`), which a client sends this way instead; the server sends the snapshot to everyone subscribed (`snapshot`) and with catch-ups (above), and its retention keeps the newest such snapshot of each note. |
 | `GET /vaults/{v}/objects/{o}/snapshots[/{id}]` | revision history (newest first); default retention 100 per object, never fewer than 2 |
 | `DELETE /vaults/{v}/objects/{o}` | owner and admins (editors get `403`: they move things to the trash, in the index): delete for good (emptying the trash), with its comments. Not allowed for `index`. It is gone for everyone at once (`purged`: nothing of it is served, pushes to it are refused as `purged`, the people it was shared with lose it), but the server keeps its data for `--purge-undo-days` (default 30), so it can be undone; repeating the call meanwhile changes nothing (`204`). After that the data is deleted, and the call answers `404`. |
-| `POST /vaults/{v}/objects/{o}/restore` | owner and admins: undo deleting it for good while the server keeps it (`404` otherwise; `507 vault_full` in a full vault, as it counts again; `403 limit_reached` for a drawing while the vault's owner has as many as they may, §5.5). It is back for everyone with its history and comments, though shared with nobody: subscribers get `restored`, catch-ups list it in `restored`. Clients that dropped it fetch its changes again from the start (`GET …/objects/{o}/changes?since=0`, every page) and don't move their `vault_seq` past the undo before they have (§6, client rules). While it was kept, its document key moved on with every rotation of the vault key (§5.1), so no key a removed member knew comes back with it. |
+| `POST /vaults/{v}/objects/{o}/restore` | owner and admins: undo deleting it for good while the server keeps it (`404` otherwise; `507 vault_full` in a full vault, as it counts again; `403 limit_reached` for a drawing while its vault holds as many as it may, §5.5). It is back for everyone with its history and comments, though shared with nobody: subscribers get `restored`, catch-ups list it in `restored`. Clients that dropped it fetch its changes again from the start (`GET …/objects/{o}/changes?since=0`, every page) and don't move their `vault_seq` past the undo before they have (§6, client rules). While it was kept, its document key moved on with every rotation of the vault key (§5.1), so no key a removed member knew comes back with it. |
 | `GET /vaults/{v}/purged` | owner and admins: what was deleted for good and can still be undone, newest first: `[{id, attachment, purged_at, kept_until}]` (ids only; clients name them from the entries they keep in the index, marked `purged`, until the server let go of the data). |
 | `PUT/GET/DELETE /vaults/{v}/attachments/{id}` | raw encrypted bytes (`application/octet-stream`). Upload: editor/owner; immutable: `201` when stored, `200` for a retry (same id and size), `409` for the same id with another size, `507 vault_full` in a full vault. Download: vault members only, never people a single note is shared with. Delete (for good, emptying the trash): owner and admins; kept for the undo period like notes. |
 | `POST /vaults/{v}/attachments/{id}/restore` | owner and admins: undo deleting an attachment for good, while it is kept (`404` otherwise; `507 vault_full` in a full vault). |
@@ -668,10 +642,10 @@ role can't be given: `400`): only admin clients administer it.
 
 | Endpoint | Notes |
 |---|---|
-| `GET /admin/users?email=&identity=` | `read`: accounts with kind, e-mail, owner (agents), admin and disabled flags, last sign-in, vault (member of; quick notes and Drawings not counted) and device counts, `owned_vault_count`, `agent_count`, `quick_note_count`, `drawing_count` (in the vaults they own, §5.5), `storage_bytes` (what the vaults they own take), `quick_notes_storage_bytes` (what their quick notes take), `drawings_storage_bytes` (what their Drawings take), `vault_allowance`, `agent_allowance`, `quick_note_allowance`, `quick_notes_storage_allowance` (MiB), `drawing_allowance`, `drawings_storage_allowance` (MiB) — no content. `email` (any case) or `identity` (`issuer\|subject`, or `dev:<name>` in development mode) finds one person |
-| `PATCH /admin/users/{id} {disabled?, is_admin?, vault_allowance?, agent_allowance?, quick_note_allowance?, quick_notes_storage_allowance?, drawing_allowance?, drawings_storage_allowance?}` | `accounts` (`admins` for `is_admin`): disable (ends the person's sessions and their agents') or enable (counts against `max_users`), (un)make administrator, set a person's own limits: `"default"` (the instance's), `"unlimited"` or a number. Agents have no allowance (`400`). A new quick-note or drawing allowance is announced to the person's apps (`vaults_changed`); their quick notes' or Drawings' subscribers get `vault_full` if a new storage allowance fills them or makes room |
-| `GET /admin/vaults?id=&owner=` | `read`: vaults by size, the largest first (at most 200): `AdminVault {id, owner_id, owner_name, storage_bytes, storage_allowance, created_at}` — never a name, member or anything in them; not quick notes or Drawings (their limits are the person's, above). `id` finds the one with that id (its members read it in its settings), `owner` (an account id) those someone owns |
-| `PATCH /admin/vaults/{id} {storage_allowance?}` | `accounts`: give a vault its own storage limit in MiB: `"default"` (the instance's `storage_per_vault_mb`), `"unlimited"` or a number (`404`: no such vault, or someone's quick notes or Drawings). Its subscribers get `vault_full` if that fills it or makes room |
+| `GET /admin/users?email=&identity=` | `read`: accounts with kind, e-mail, owner (agents), admin and disabled flags, last sign-in, vault (member of; quick notes not counted) and device counts, `owned_vault_count`, `agent_count`, `quick_note_count`, `storage_bytes` (what the vaults they own take), `quick_notes_storage_bytes` (what their Personal storage takes), `vault_allowance`, `agent_allowance`, `quick_note_allowance`, `quick_notes_storage_allowance` (MiB, their Personal storage's) — no content. `email` (any case) or `identity` (`issuer\|subject`, or `dev:<name>` in development mode) finds one person |
+| `PATCH /admin/users/{id} {disabled?, is_admin?, vault_allowance?, agent_allowance?, quick_note_allowance?, quick_notes_storage_allowance?}` | `accounts` (`admins` for `is_admin`): disable (ends the person's sessions and their agents') or enable (counts against `max_users`), (un)make administrator, set a person's own limits: `"default"` (the instance's), `"unlimited"` or a number. Agents have no allowance (`400`). A new quick-note allowance is announced to the person's apps (`vaults_changed`); their quick notes' subscribers get `vault_full` if a new storage allowance fills them or makes room |
+| `GET /admin/vaults?id=&owner=` | `read`: vaults by size, the largest first (at most 200): `AdminVault {id, owner_id, owner_name, storage_bytes, storage_allowance, drawing_count, drawing_allowance, created_at}` — never a name, member or anything in them; not quick notes (their limits are the person's, above). `id` finds the one with that id (its members read it in its settings), `owner` (an account id) those someone owns |
+| `PATCH /admin/vaults/{id} {storage_allowance?, drawing_allowance?}` | `accounts`: give a vault its own storage limit in MiB, or its own drawings limit: `"default"` (the instance's `storage_per_vault_mb`, `drawings_per_vault`), `"unlimited"` or a number (`404`: no such vault, or someone's quick notes). Its subscribers get `vault_full` if a storage limit fills it or makes room; a drawings limit is announced to its members' apps (`vaults_changed`) |
 | `GET /admin/stats` | `read`: the server's `version` (as in `GET /info`), counts of users, agents, vaults, objects, updates, snapshots and attachments, and the database's size (`storage_bytes`: pages in use) |
 | `GET /admin/settings` | `read`: `{settings, read_only?, storage_bytes}`: the instance settings below, whether (and why) the server refuses changes now, and the database's size |
 | `PATCH /admin/settings {…}` | `settings`: change any of the settings; the rest stay. Answers like `GET`. Takes effect at once (no restart) and is kept in the database |
@@ -697,16 +671,15 @@ whenever it runs.
 |---|---|
 | `max_users` | accounts of people that aren't disabled; a new person's first sign-in (or enabling an account) beyond it is refused |
 | `max_agents` | agents on the server |
-| `max_vaults` | vaults on the server (quick notes and Drawings don't count) |
-| `vaults_per_user` | vaults a person may own unless they have their own `vault_allowance`; vaults shared with them, their quick notes and their Drawings don't count |
+| `max_vaults` | vaults on the server (quick notes don't count) |
+| `vaults_per_user` | vaults a person may own unless they have their own `vault_allowance`; vaults shared with them and their quick notes don't count |
 | `agents_per_user` | agents a person may have unless they have their own `agent_allowance` (default 50) |
 | `quick_notes_per_user` | quick notes a person may keep unless they have their own `quick_note_allowance` (default 20, §5.3); a change is announced to everyone's apps (`vaults_changed`) |
-| `drawings_per_user` | drawings a person may have in the vaults they own unless they have their own `drawing_allowance` (default unlimited, §5.5); a change is announced to the apps of everyone with drawings (`vaults_changed`) |
+| `drawings_per_vault` | drawings a vault may hold, whoever makes them, unless it has its own `drawing_allowance` (default unlimited, §5.5); a change is announced to the apps of every vault's members (`vaults_changed`) |
 | `read_only` | `true`: the server refuses changes (below) |
 | `max_storage_mb` | at this database size (MiB, pages in use) the server turns read-only by itself (`storage_full`), until it is below it again — e.g. the limit was raised. Measured every 10 s and after every settings change |
 | `storage_per_vault_mb` | at this size (MiB) a vault takes no new content, unless it has its own `storage_allowance` (below); not quick notes |
-| `quick_notes_storage_mb` | at this size (MiB) someone's quick notes take no new content, unless the person has their own `quick_notes_storage_allowance` |
-| `drawings_storage_mb` | the same for someone's Drawings (§5.5), unless the person has their own `drawings_storage_allowance` |
+| `quick_notes_storage_mb` | at this size (MiB) someone's Personal storage (quick notes, saved shapes) takes no new content, unless the person has their own `quick_notes_storage_allowance` |
 | `oldest_app_version` | the oldest version of the apps the server accepts (`"0.6.0"`), above its build's (`build_oldest_app_version` in `GET /admin/settings`); `""`: only the build's (§11) |
 
 Limits are checked when something new would be created, in the transaction
@@ -737,8 +710,8 @@ bounded. Someone's quick notes count the same way, against a limit of
 their own like how many they may keep: the person's
 `quick_notes_storage_allowance`, else `quick_notes_storage_mb` — how many
 they may keep doesn't bound their size, since a quick note can link any
-number of files. Their Drawings likewise: the person's
-`drawings_storage_allowance`, else `drawings_storage_mb`. Subscribers —
+number of files; the saved shapes in their Personal storage count too.
+Subscribers —
 members, and people a single note of it is shared with, whose edits are
 refused too — get `vault_full` (§7) whenever it turns
 full or has room again, also when an administrator changes a limit.
@@ -771,9 +744,9 @@ it the least it could mean, rather than fail on the message that carries it:
 * **WebSocket messages** of a `type` an app doesn't know are skipped.
 * **Vault kinds** (`kind` in `GET /vaults`, §5): a vault of a kind an app
   doesn't know isn't shown (the server refuses to make one, `400`). Apps
-  from before the Drawings (§5.5) didn't have this rule yet: they can't read
-  a vault list that holds the person's Drawings, and need updating
-  (*Apps too old for the server*, below).
+  from before this rule can't read a vault list holding a kind they don't
+  know, and need updating once a new kind exists (*Apps too old for the
+  server*, below).
 * **Items in the vault index** (`kind`: `note`, `attachment`, `folder`): an
   unknown kind isn't shown, but its folder holds it — it moves when the
   folder is renamed or moved and goes to the trash with it (in the CRDT,

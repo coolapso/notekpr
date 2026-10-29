@@ -76,6 +76,10 @@ isn't changed (the tool works on a copy).
     assets/photo.jpg
     _trash/Old note.md      what was in the trash
     _comments/Plans/Trip.md the comments on Plans/Trip.md
+    Garden.drawing          drawings, as notekpr's .drawing files (pictures inside)
+  Quick notes/              your Personal storage
+    2026-10-19 14.32.md
+    Saved shapes.excalidrawlib   your saved shapes, as Excalidraw's library file
   Shared with me/           notes shared with you individually
     Weekend trip.md
     _comments/Weekend trip.md

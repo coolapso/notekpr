@@ -73,6 +73,7 @@ pub fn router(gw: St) -> Router {
         )
         .route("/v1/mentions", get(list_mentions))
         .route("/v1/mentions/read", post(read_mentions))
+        .route("/v1/shapes", get(get_shapes).post(add_shapes))
         .route("/v1/search", get(search))
         .route("/v1/events", get(events))
         .fallback(|| async { error(StatusCode::NOT_FOUND, "not_found", "no such endpoint") })
@@ -486,6 +487,61 @@ async fn put_attachment(
                 StatusCode::OK
             };
             (status, axum::Json(out)).into_response()
+        }
+        Err(e) => op_error(e),
+    }
+}
+
+/// The saved shapes are a person's (their Personal storage): an agent has
+/// none, and a gateway limited to some vaults doesn't serve them.
+fn no_shapes_here(gw: &Gateway) -> Option<Response> {
+    (!gw.hub.has_personal_storage()).then(|| {
+        error(
+            StatusCode::NOT_FOUND,
+            "not_found",
+            "no saved shapes here: they are a person's own (not an agent's), and a gateway limited \
+             to some vaults doesn't serve them",
+        )
+    })
+}
+
+/// The saved shapes, newest first, as an Excalidraw library file
+/// (`.excalidrawlib`).
+async fn get_shapes(State(gw): State<St>) -> Response {
+    if let Some(r) = no_shapes_here(&gw) {
+        return r;
+    }
+    let items = ops::library(&gw.hub).await;
+    (
+        [(header::CONTENT_TYPE, "application/vnd.excalidrawlib+json")],
+        notekpr_draw::file::write_library(&items),
+    )
+        .into_response()
+}
+
+/// Saves the shapes of an Excalidraw library file (the body), leaving out
+/// those saved already (`notekpr shapes import`).
+async fn add_shapes(State(gw): State<St>, body: Bytes) -> Response {
+    if let Some(r) = read_only_refusal(&gw).or_else(|| no_shapes_here(&gw)) {
+        return r;
+    }
+    let Ok(text) = std::str::from_utf8(&body) else {
+        return error(
+            StatusCode::BAD_REQUEST,
+            "bad_request",
+            "expected an Excalidraw library file (.excalidrawlib)",
+        );
+    };
+    match ops::import_library(&gw.hub, text).await {
+        Ok(out) => {
+            if out.added > 0
+                && let Some(v) = gw.hub.quick_notes().await
+            {
+                let id = v.lock().await.id().to_string();
+                gw.audit
+                    .record("gateway", "add_shapes", &id, None, body.len());
+            }
+            axum::Json(out).into_response()
         }
         Err(e) => op_error(e),
     }

@@ -148,11 +148,11 @@ encode spaces as `%20`; `.md` is optional). Errors are JSON
 
 | Status | `error` | When |
 |---|---|---|
-| `400` | `bad_request` | a body that isn't UTF-8 (documents) or the expected JSON (move), an invalid path, an attachment read through the documents endpoint, an empty attachment, one over the server's limit or a `.md` path on the attachments endpoint, an empty search |
+| `400` | `bad_request` | a body that isn't UTF-8 (documents) or the expected JSON (move), an invalid path, an attachment read through the documents endpoint, an empty attachment, one over the server's limit or a `.md` path on the attachments endpoint, an empty search, a body that isn't an Excalidraw library file (shapes) |
 | `401` | `unauthorized` | missing or wrong token |
 | `403` | `read_only` | the gateway runs with `--read-only` |
 | `403` | `forbidden` | the agent can't write to the vault (viewer, or a read-only local copy) |
-| `404` | `not_found` | no such vault, document, revision or endpoint |
+| `404` | `not_found` | no such vault, document, revision or endpoint; saved shapes where there are none (an agent, or a gateway limited by `--vault`) |
 | `409` | `conflict` | already exists, or exists as another kind |
 | `412` | `precondition_failed` | `If-Match` failed |
 | `500` | `internal` | anything else (e.g. the local copy could not be saved) |
@@ -184,6 +184,8 @@ G=http://127.0.0.1:7878/v1
 | `GET /v1/vaults/{v}/history/{path}[?revision=ID]` | revisions `[{id, created_at, covers_seq, author_id, size}]`, or one revision's Markdown |
 | `GET /v1/vaults/{v}/attachments/{path}` | raw bytes (`Content-Disposition: attachment`, `nosniff`) |
 | `PUT /v1/vaults/{v}/attachments/{path}` | upload (`Content-Type` is stored as the MIME type); answers like a document `PUT`, without `ETag` |
+| `GET /v1/shapes` | the saved shapes (pieces of drawings to drop into any drawing, in the person's Personal storage), newest first, as an Excalidraw library file (`.excalidrawlib`, `application/vnd.excalidrawlib+json`: `{"type": "excalidrawlib", "version": 2, "libraryItems": [{id, status, created, name?, elements}]}`). Only with a person's own profile, and a gateway not limited by `--vault`: otherwise `404` |
+| `POST /v1/shapes` | an Excalidraw library file (version 1 or 2) as the body: its shapes are saved, those saved already (the same elements) left out, as `notekpr shapes import` → `{added, already, too_large, pending_changes}` (`too_large`: left out, larger than the server takes in one piece). `400` if the body isn't one |
 | `GET /v1/events` | Server-Sent Events (below) — ids and paths only, never content |
 
 Each event is named after its `type` and carries it as JSON, e.g.
@@ -218,6 +220,10 @@ curl -H "Authorization: Bearer $T" "$G/search?q=tag:project%20deadline"
 curl -X PUT -H "Authorization: Bearer $T" -H 'content-type: image/png' \
      --data-binary @chart.png "$G/vaults/Agent%20memory/attachments/img/chart.png"
 curl -N -H "Authorization: Bearer $T" $G/events
+
+# a person's own gateway: their saved shapes, as Excalidraw's library file
+curl -H "Authorization: Bearer $T" $G/shapes > mine.excalidrawlib
+curl -X POST -H "Authorization: Bearer $T" --data-binary @garden.excalidrawlib $G/shapes
 ```
 
 A `PUT` with full content is applied as a **diff** to the current CRDT text, so
@@ -260,7 +266,8 @@ Every write through the gateway is appended to
 
 Operations are named after the call: `put_document` and `put_attachment`
 (only when the content changed), `trash_document` (one line per trashed
-entry) and `move_document`. Entries contain time, channel, vault id, document
+entry), `move_document`, and `add_shapes` (only when shapes were saved; its
+vault is the Personal storage, its size the body's). Entries contain time, channel, vault id, document
 id (left out when there is none, e.g. a folder without an entry of its own)
 and size — never content, titles or paths. CLI commands handed to a running
 gateway (§3) are logged too, once they succeeded: `"via":"cli"`, the command

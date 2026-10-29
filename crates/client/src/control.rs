@@ -20,7 +20,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
 use crate::audit::AuditLog;
-use crate::cli::{Cli, Command, QuickArgs};
+use crate::cli::{Cli, Command, LibraryCmd, QuickArgs};
 use crate::fsutil;
 use crate::hub::Hub;
 use crate::profile::Dirs;
@@ -248,6 +248,9 @@ pub async fn forward(dirs: &Dirs, mut cli: Cli) -> Result<bool> {
         }
         _ => None,
     };
+    if let Command::Library(LibraryCmd::Import { file }) = &mut cli.command {
+        *file = absolute(file)?;
+    }
     if let Command::Import { vault, source, .. } = &mut cli.command {
         match source {
             Some(s) => *s = absolute(s)?,

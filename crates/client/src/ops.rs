@@ -900,6 +900,104 @@ pub async fn put_drawing(hub: &Hub, vref: &str, path: &str, file: &str) -> OpRes
     Ok(finish(hub, &vault_id, res, file.as_bytes()).await)
 }
 
+/// One item of the drawings library, as `library ls` lists it.
+#[derive(Serialize, Clone, Debug)]
+pub struct LibraryEntry {
+    pub id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// Milliseconds since 1970.
+    pub created: i64,
+    /// Its elements' kinds, in stacking order (`rectangle`, `text`, …).
+    pub elements: Vec<String>,
+}
+
+/// The drawings library ([`notekpr_core::library`]), newest first: empty
+/// while there are no Drawings here.
+pub async fn library(hub: &Hub) -> Vec<notekpr_core::library::LibraryItem> {
+    match hub.drawings().await {
+        Some(v) => notekpr_core::library::items(&v.lock().await.replica.index),
+        None => Vec::new(),
+    }
+}
+
+/// [`library`] as listed.
+pub async fn list_library(hub: &Hub) -> Vec<LibraryEntry> {
+    library(hub)
+        .await
+        .into_iter()
+        .map(|i| LibraryEntry {
+            elements: i
+                .elements
+                .iter()
+                .map(|e| {
+                    e.get("type")
+                        .and_then(|t| t.as_str())
+                        .unwrap_or_default()
+                        .to_string()
+                })
+                .collect(),
+            id: i.id,
+            name: i.name,
+            created: i.created as i64,
+        })
+        .collect()
+}
+
+/// What importing a library did.
+#[derive(Serialize, Clone, Debug)]
+pub struct LibraryImport {
+    pub added: usize,
+    /// Items the library had already, left out.
+    pub already: usize,
+    /// Items too large to keep, left out.
+    pub too_large: usize,
+    /// Local changes not uploaded yet (offline); they sync automatically.
+    pub pending_changes: usize,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub read_only: bool,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub vault_full: bool,
+}
+
+/// Add the items of an `.excalidrawlib` file to the drawings library (made
+/// the first time, with the Drawings), leaving out those it has.
+pub async fn import_library(hub: &Hub, file: &str) -> OpResult<LibraryImport> {
+    let now = notekpr_core::now_ms();
+    let mut ids = notekpr_draw::restore::Ids::new(now as u64);
+    let items = notekpr_draw::file::read_library(file, now as f64, &mut ids).map_err(|_| {
+        OpError::BadRequest("not an Excalidraw library (.excalidrawlib file)".into())
+    })?;
+    let v = hub
+        .ensure_drawings()
+        .await
+        .map_err(|e| OpError::Unavailable(format!("{e:#}")))?;
+    let (vault_id, done) = {
+        let mut g = v.lock().await;
+        check_write(hub, &g)?;
+        let done = notekpr_core::library::import(&g.replica.index, items, g.update_budget());
+        // One update per item: the outbox merges them as far as they fit.
+        for u in &done.updates {
+            g.record(INDEX_OBJECT_ID, u.clone())?;
+        }
+        g.save()?;
+        (g.id().to_string(), done)
+    };
+    let push = if done.updates.is_empty() {
+        Default::default()
+    } else {
+        hub.local_changed(&vault_id, vec![], true).await
+    };
+    Ok(LibraryImport {
+        added: done.added,
+        already: done.already,
+        too_large: done.too_large,
+        pending_changes: push.remaining,
+        read_only: push.read_only,
+        vault_full: push.vault_full,
+    })
+}
+
 pub async fn put_attachment(
     hub: &Hub,
     vref: &str,

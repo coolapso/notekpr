@@ -135,6 +135,7 @@ fn access(c: &Command) -> Access {
             _ => Access::Read,
         },
         Command::Quick(q) if q.list => Access::Read,
+        Command::Library(LibraryCmd::Ls | LibraryCmd::Export { .. }) => Access::Read,
         Command::Comments(CommentsCmd::List { .. }) | Command::Mentions(_) => Access::Read,
         Command::Sync(a) if a.no_dir => Access::Free,
         Command::Sync(a) if a.once => Access::Write,
@@ -616,6 +617,7 @@ async fn execute(ctx: Ctx, command: Command) -> Result<()> {
             if_match,
         } => write(&ctx, &vault, &path, attachment, append, if_match.as_deref()).await,
         Command::Quick(a) => quick(&ctx, a).await,
+        Command::Library(c) => library(&ctx, c).await,
         Command::Comments(c) => comments(&ctx, c).await,
         Command::Mentions(a) => mentions(&ctx, a).await,
         Command::Mkdir { vault, path } => {
@@ -2075,6 +2077,91 @@ async fn quick(ctx: &Ctx, a: QuickArgs) -> Result<()> {
         out.vault_full,
         true,
     );
+    Ok(())
+}
+
+async fn library(ctx: &Ctx, c: LibraryCmd) -> Result<()> {
+    let hub = ctx.hub(&[notekpr_core::drawings::NAME]).await?;
+    match c {
+        LibraryCmd::Ls => {
+            let items = ops::list_library(&hub).await;
+            if ctx.json {
+                ctx.print_json(&items);
+            } else if items.is_empty() {
+                crate::out!(
+                    "your library is empty — add to it in a drawing, or with `notekpr library import <file.excalidrawlib>`"
+                );
+            } else {
+                for i in &items {
+                    let mut kinds: Vec<(&str, usize)> = Vec::new();
+                    for k in &i.elements {
+                        match kinds.iter_mut().find(|(n, _)| n == k) {
+                            Some((_, c)) => *c += 1,
+                            None => kinds.push((k, 1)),
+                        }
+                    }
+                    let kinds: Vec<String> = kinds
+                        .into_iter()
+                        .map(|(k, c)| {
+                            if c == 1 {
+                                k.to_string()
+                            } else {
+                                format!("{c} × {k}")
+                            }
+                        })
+                        .collect();
+                    crate::out!(
+                        "{:<8}  {:<20}  {:<24}  {}",
+                        i.id.chars().take(8).collect::<String>(),
+                        ui::fmt_time(i.created),
+                        i.name.as_deref().unwrap_or("(no name)"),
+                        kinds.join(", ")
+                    );
+                }
+            }
+        }
+        LibraryCmd::Import { file } => {
+            let text = std::fs::read_to_string(&file)
+                .with_context(|| format!("reading {}", file.display()))?;
+            let r = op(ops::import_library(&hub, &text).await)?;
+            if ctx.json {
+                ctx.print_json(&r);
+            } else {
+                let mut said = vec![format!("added {} item(s) to your library", r.added)];
+                if r.already > 0 {
+                    said.push(format!("{} already in it", r.already));
+                }
+                crate::out!("{}", said.join("; "));
+                if r.too_large > 0 {
+                    ui::warn(&format!(
+                        "{} item(s) were left out: too large for this server",
+                        r.too_large
+                    ));
+                }
+            }
+            report_pending(r.pending_changes, false, r.read_only, r.vault_full, false);
+        }
+        LibraryCmd::Export { out, force } => {
+            let items = ops::library(&hub).await;
+            let file = notekpr_draw::file::write_library(&items);
+            match out {
+                None => {
+                    let mut o = std::io::stdout().lock();
+                    o.write_all(file.as_bytes())?;
+                    o.write_all(b"\n")?;
+                    o.flush()?;
+                }
+                Some(out) => {
+                    if out.exists() && !force {
+                        bail!("{} exists (use --force to replace it)", out.display());
+                    }
+                    fsutil::write_atomic(&out, file.as_bytes(), true)
+                        .with_context(|| format!("writing {}", out.display()))?;
+                    crate::out!("saved {} item(s) to {}", items.len(), out.display());
+                }
+            }
+        }
+    }
     Ok(())
 }
 

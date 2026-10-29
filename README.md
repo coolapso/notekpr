@@ -114,6 +114,7 @@ read anything.
   dragging turns it off for that drag).
 * Pictures are files of the vault (`attachments/`), stored and synced once,
   encrypted; drawing files written out hold them inside, as Excalidraw's do.
+  Enter or a double click crops a picture.
 * Links on elements (`Ctrl+K`): a web address, or `[[a note]]` of the
   vault, opened from a button by the element.
 * A library, as in Excalidraw: keep shapes from a drawing (the book button)
@@ -135,8 +136,10 @@ read anything.
   (those already in a vault: "Make it a drawing" in the file tree), and
   files dropped on a drawing come in; export a drawing as a `.drawing`
   file, for Excalidraw (`.excalidraw`), for Obsidian (`.excalidraw.md`),
-  SVG or PNG, or copy it (or what is selected) as a PNG (`Shift+Alt+C`) or
-  SVG. The Markdown folder keeps drawings as `.drawing` files (Excalidraw's
+  SVG or PNG — the drawing kept inside, so they open again in notekpr and
+  Excalidraw, whose own PNG and SVG exports with the scene inside open as
+  drawings too (dropped on one, or `notekpr write`) — or copy it (or what
+  is selected) as a PNG (`Shift+Alt+C`) or SVG. The Markdown folder keeps drawings as `.drawing` files (Excalidraw's
   JSON inside), merged element by element when edited there.
 * The text in drawings is found by search, and agents read it (and draw:
   Excalidraw's JSON sent to a `.drawing` path makes a drawing).

@@ -38,7 +38,7 @@ fn dashed_line(lines: &[[Point; 2]], o: &mut Options) -> Vec<Op> {
         if p1[0] > p2[0] {
             (p1, p2) = (line[1], line[0]);
         }
-        let alpha = ((p2[1] - p1[1]) / (p2[0] - p1[0])).atan();
+        let alpha = js::atan((p2[1] - p1[1]) / (p2[0] - p1[0]));
         let mut i = 0.0;
         while i < count {
             let lstart = i * (offset + gap);

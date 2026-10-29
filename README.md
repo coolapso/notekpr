@@ -54,7 +54,8 @@ read anything.
   Markdown. A new block from the toolbar or `` Ctrl+Shift+` ``; Enter (or
   pasting) after an opening `` ``` `` closes the block.
 * Images and other files: paste or drop them into a note — they are encrypted,
-  uploaded and shown inline.
+  uploaded and shown inline; videos and audio (`![[clip.mp4]]`) play there,
+  in the editor and the reading view.
 * Callouts as GitHub and Obsidian write them: `> [!tip]`, `> [!warning] A
   title`, `> [!faq]-` for one that folds (`+` open). Types are
   case-insensitive — note, abstract, info, todo, tip, important, success,

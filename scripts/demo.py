@@ -39,12 +39,17 @@ import subprocess
 import sys
 import tempfile
 import textwrap
+import io
+import math
 import time
 import urllib.request
+import wave
 import zlib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+# Files Python can't make (a video), beside this script (demo-files/README.md).
+FILES = Path(__file__).resolve().parent / "demo-files"
 USERS = ["alice", "bob", "carol", "dave", "eve"]
 AGENT_PROFILE = "assistant"
 
@@ -279,6 +284,36 @@ def garden_layout():
     return png(480, 300, pixel)
 
 
+def blackbird():
+    """A blackbird's song (WAV): fluty glides, then a twitter, twice."""
+    rate = 22050
+    # (start, length in seconds, from Hz, to Hz, loudness)
+    calls = [
+        (0.10, 0.22, 1900, 2300, 0.8), (0.36, 0.18, 2300, 1750, 0.8),
+        (0.58, 0.30, 1650, 2050, 0.9), (0.95, 0.07, 4200, 3600, 0.4),
+        (1.04, 0.07, 4300, 3500, 0.4), (1.13, 0.07, 4400, 3600, 0.4),
+        (1.90, 0.25, 2100, 2500, 0.8), (2.20, 0.20, 2400, 1900, 0.8),
+        (2.45, 0.35, 1800, 2200, 0.9), (2.85, 0.06, 4500, 3800, 0.35),
+        (2.93, 0.06, 4600, 3900, 0.35),
+    ]
+    samples = [0.0] * int(rate * 3.3)
+    for start, length, f0, f1, loud in calls:
+        n, at, phase = int(rate * length), int(rate * start), 0.0
+        for i in range(n):
+            t = i / n
+            phase += 2 * math.pi * (f0 + (f1 - f0) * t) / rate
+            warble = 0.3 * math.sin(2 * math.pi * 30 * i / rate)
+            samples[at + i] += loud * math.sin(math.pi * t) ** 2 * math.sin(phase + warble)
+    out = io.BytesIO()
+    with wave.open(out, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(rate)
+        w.writeframes(b"".join(
+            struct.pack("<h", int(max(-1.0, min(1.0, v * 0.5)) * 32767)) for v in samples))
+    return out.getvalue()
+
+
 def sunset():
     """Sky, sun and sea."""
 
@@ -357,7 +392,7 @@ HOME = [
         - [ ] Callouts, written as GitHub and Obsidian write them (`> [!tip]`, `> [!warning] A title`): a tip and a warning in [[Sourdough bread]], one that folds in [[Japan ideas]] (`[!faq]-`), GitHub's `[!CAUTION]` in *Deploy script* in *Work*, one inside another in *Emergency contacts* in *Family*. The toolbar's callout button starts one, or gives the one the caret is in another type
         - [ ] Colors: select some text and pick a text or background color with the toolbar's **A** button. They are saved as HTML that Obsidian, Typora and VS Code show too ([[Tomatoes]]), and colors written there show here ([[Packing list]] has a highlight from Obsidian's Highlightr and a `<font color>`)
         - [ ] Code blocks in *Snippets*: a file name and highlighted lines (`title=… hl=…` after the language), line numbers, indentation guides, a copy button, `wrap=false` for long lines; Settings → Editor turns the numbers, guides and wrapping off
-        - [ ] Drop or paste a picture into a note
+        - [ ] Drop or paste a picture into a note — or a video or a recording: it plays where it is, as the sunset in [[Lisbon 2026]] and the blackbird in [[Pests]] do
         - [ ] Give a note or folder an icon: *Set icon…* in its ⋯ menu in the sidebar
         - [ ] *Quick notes* in the sidebar: yours alone, in no vault — the same whichever vault you're in. Move one to a vault (*Move to vault…*: it takes its first line as the name) or delete it for good; there's room for 20
         - [ ] Move a note, or a folder with everything in it, to another vault: *Move to vault…* in its menu in the file tree (a note's also in its ⋯ menu at the top); the originals go to the trash
@@ -456,6 +491,10 @@ HOME = [
         - [x] Aphids on the beans: soapy water
         - [ ] Whiteflies on the [[Tomatoes]]: try more marigolds
         - [ ] Find out what eats the squash leaves at night
+
+        The blackbird that eats the slugs, at dawn:
+
+        ![[blackbird.wav]]
 
         #garden #todo
         """)),
@@ -612,6 +651,10 @@ HOME = [
         <figcaption>The view from the <b>Miradouro</b> we want to find again</figcaption>
         </figure>
         </div>
+
+        And the sun going down, from the same spot:
+
+        ![[lisbon-sunset.webm]]
 
         ## Plan
 
@@ -1442,6 +1485,8 @@ def seed(cli, url, data, server_bin):
             cli.icon(a, "Home", path, icon)
     cli.attach(a, "Home", "Garden/garden-layout.png", garden_layout())
     cli.attach(a, "Home", "Travel/lisbon-sunset.png", sunset())
+    cli.attach(a, "Home", "Travel/lisbon-sunset.webm", (FILES / "lisbon-sunset.webm").read_bytes())
+    cli.attach(a, "Home", "Garden/blackbird.wav", blackbird())
     for folder, icon in [("Garden", "🌱"), ("Recipes", "🍳"), ("Travel", "✈️"),
                          ("Reading", "📚"), ("Journal", "📓"), ("Ideas", "💡")]:
         cli.icon(a, "Home", folder, icon)

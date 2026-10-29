@@ -71,6 +71,7 @@ FROM python:3.13-slim-trixie AS demo
 COPY --from=build /out/bin/ /usr/local/bin/
 COPY --from=web /out/web /usr/share/notekpr/web
 COPY scripts/demo.py /usr/share/notekpr/demo.py
+COPY scripts/demo-files /usr/share/notekpr/demo-files
 COPY --from=build --chown=65532:65532 /out/data /data
 # The release version (`task docker:push:demo`); `dev` for local builds.
 ARG VERSION=dev

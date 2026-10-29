@@ -113,8 +113,9 @@ crates/load     load test (`task load`): simulated people = real clients (the CL
                 dashboard (wasm32, canvas; scripts/build-load-ui.sh → dist/load)
 tests/e2e       browser tests: run.sh (entry point) → suite.py, cross_client.py, drawings.py;
                 perf.py (typing latency) · wd.py (stdlib WebDriver)
-scripts/        build-web.sh, build-load-ui.sh (wasm builds) · demo.py (task demo) ·
-                logo.py (the logo and icon in docs/assets, by hand)
+scripts/        build-web.sh, build-load-ui.sh (wasm builds) · demo.py (task demo),
+                demo-files/ (what it can't make, e.g. a video) · logo.py (the logo
+                and icon in docs/assets, by hand)
 fuzz/           fuzz targets, a separate workspace (fuzz/run.sh, task fuzz)
 vendor/yrs      yrs 0.28 with fixes for panics found by fuzzing, via [patch.crates-io];
                 the changes are in vendor/yrs/NOTEKPR.md — re-apply on upgrade

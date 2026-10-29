@@ -773,6 +773,8 @@ pub async fn import_account(hub: &Hub, src: &Path, dry_run: bool) -> Result<Opti
             for (p, _) in &c.0 {
                 if paths::is_note(p) {
                     report.totals.notes += 1;
+                } else if paths::is_drawing(p) {
+                    report.totals.drawings += 1;
                 } else {
                     report.totals.attachments += 1;
                 }

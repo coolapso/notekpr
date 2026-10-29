@@ -1048,8 +1048,13 @@ fn print_account_transfer(verb: &str, r: &transfer::AccountReport, at: &std::pat
 
 fn print_transfer(verb: &str, r: &transfer::TransferReport) {
     crate::out!(
-        "{verb} {} note(s), {} attachment(s), {} folder(s){}{}",
+        "{verb} {} note(s), {}{} attachment(s), {} folder(s){}{}",
         r.notes,
+        if r.drawings > 0 {
+            format!("{} drawing(s), ", r.drawings)
+        } else {
+            String::new()
+        },
         r.attachments,
         r.folders,
         if r.comments > 0 {

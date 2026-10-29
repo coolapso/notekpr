@@ -116,6 +116,10 @@ read anything.
   encrypted; drawing files written out hold them inside, as Excalidraw's do.
 * Links on elements (`Ctrl+K`): a web address, or `[[a note]]` of the
   vault, opened from a button by the element.
+* A library, as in Excalidraw: keep shapes from a drawing (the book button)
+  and drop them into any other; synced, encrypted, between your devices;
+  `.excalidrawlib` files imported (also dropped on a drawing) and exported
+  (`notekpr library ls|import|export`).
 * Drawn together, live, with the vault's members: their pointers with
   their names, what they selected, their laser, and who is on the drawing
   in its header; merged when someone drew offline. A drawing's history

@@ -26,6 +26,7 @@
 | Favorites, recent notes, key pins, synced settings (note widths, which mentions were read) | account-key encryption | no |
 | Quick notes (text, names, attachments) | a vault of their own, encrypted like any other | which vault holds someone's quick notes, how many notes are in it, and — from a new note in a vault at about the time one leaves the quick notes — roughly when one moved where |
 | Drawings (what they show, their names, their pictures) | encrypted like notes, in any vault or in someone's Drawings (a vault of their own) | which objects are drawings — never what they show or what they're called —, so how many each person has in the vaults they own (it counts them against their limit); which vault is someone's Drawings; for a drawing moved to another vault of its owner, which original its copy replaced |
+| A person's drawings library (the shapes kept to drop into drawings) | in their Drawings' encrypted index | that it changed (the size and time of the index update), never what it holds |
 | Vault keys | HPKE to each member's account key | no |
 | Document keys (every note has its own) | wrapped under the vault key for members, HPKE to each person a note is shared with | no; it learns which notes are shared, with whom, and when sharing started |
 | Account secrets | HPKE to each device, and to the recovery key | no |

@@ -37,6 +37,7 @@ import socket
 import struct
 import subprocess
 import sys
+import tempfile
 import textwrap
 import time
 import urllib.request
@@ -233,6 +234,29 @@ def holiday_drawing():
     return json.dumps({"type": "excalidraw", "version": 2, "elements": elements, "appState": {}})
 
 
+def garden_library():
+    """An .excalidrawlib of garden things for alice's library."""
+    def item(i, name, elements):
+        return {"id": f"garden-{i}", "status": "unpublished", "created": 1_790_000_000_000 + i,
+                "name": name, "elements": elements}
+
+    def el(eid, kind, x, y, w, h, **more):
+        e = {"id": eid, "type": kind, "x": x, "y": y, "width": w, "height": h, "seed": 500 + len(eid),
+             "strokeColor": "#2f9e44", "backgroundColor": "#b2f2bb", "fillStyle": "hachure",
+             "roughness": 1, "strokeWidth": 2, "groupIds": [], "roundness": {"type": 3}}
+        e.update(more)
+        return e
+    items = [
+        item(1, "Raised bed", [el("lib-bed", "rectangle", 0, 0, 160, 80, strokeColor="#846358",
+                                  backgroundColor="#eaddd7")]),
+        item(2, "Shrub", [el("lib-shrub", "ellipse", 0, 0, 70, 70, roundness={"type": 2})]),
+        item(3, "Path stone", [el("lib-stone", "diamond", 0, 0, 40, 40, strokeColor="#868e96",
+                                  backgroundColor="#e9ecef", fillStyle="solid")]),
+    ]
+    return json.dumps({"type": "excalidrawlib", "version": 2, "source": "notekpr demo",
+                       "libraryItems": items})
+
+
 def garden_layout():
     """Four raised beds with plants, a path and a compost corner."""
     beds = [(30, 30, 190, 120), (250, 30, 450, 120), (30, 170, 190, 270), (250, 170, 450, 270)]
@@ -313,6 +337,7 @@ HOME = [
         - [ ] Drawings: open [[Beds]] — its drawing shows in the note — then *Garden beds* itself, and draw with Excalidraw's keys (`R` rectangle, `O` ellipse, `A` arrow, `T` text, `Q` keeps the tool); double-click a bed to label it, drag one and its arrow follows. *Drawings* in the sidebar holds your own; export one for Excalidraw (the ⤓ at the top) and open it on excalidraw.com, or paste between the two
         - [ ] In *Garden beds*: select an arrow and drag its end onto another bed (it attaches; hold still over a bed for a moment and it points inside); drag the handle halfway along a line to bend it; double-click a line (Ctrl+double-click an arrow) to edit every point. `Alt`+drag copies, `Alt+S` snaps to the other beds' edges and gaps, `Ctrl+'` shows the grid
         - [ ] Also in *Garden beds*: `N` makes a sticky note, `F` a frame (drag it around beds to hold them), `9` puts in a picture (or paste one), `K` is the laser pointer — open *Holiday steps* in Family as alice and as bob (another window): you see each other's pointer, selection and laser. The compost heap links to [[Beds]] (the button by it; `Ctrl+K` sets a link); the 🕘 at the top shows the drawing's versions
+        - [ ] Your drawings library: open a drawing and click the book button at the top — a raised bed, a shrub and a path stone are in it; click one or drag it onto the drawing. Select something and click **+** to keep it there; it's on your other devices too (`notekpr library ls`)
         - [ ] Open [[Garden plan]] and its history (the clock button at the top) to compare versions
         - [ ] Sign in as **bob** in another tab and edit *Shopping list* in the *Family* vault together
         - [ ] Click a link to a note that doesn't exist yet: [[Greenhouse]]
@@ -1437,6 +1462,11 @@ def seed(cli, url, data, server_bin):
         Click the drawing's line to see its link; open *Garden beds* to change it.
         """))
     cli.write(a, "Drawings", "Shed ideas.drawing", sketch_drawing())
+    # Her library: shapes to drop into drawings (synced in her Drawings).
+    with tempfile.NamedTemporaryFile("w", suffix=".excalidrawlib", delete=False) as f:
+        f.write(garden_library())
+    cli.run(a, "-q", "library", "import", f.name)
+    os.unlink(f.name)
 
     step("alice: the garden plan's history (eleven edits)")
     for text in GARDEN_PLAN_VERSIONS:

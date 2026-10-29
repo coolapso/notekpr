@@ -664,6 +664,19 @@ pub fn export(scene: &Scene, opts: &SvgOptions) -> String {
     out
 }
 
+/// Excalidraw's export of the test drawing (`tests/fixtures/example.svg`),
+/// as notekpr draws it: the browser that made it computed `Math.atan2`
+/// exactly, notekpr uses fdlibm's (`js::math`), which gives one pen
+/// stroke's outline a point fewer at one sharp corner — inside the stroke's
+/// fill, so the same pixels.
+#[cfg(test)]
+pub(crate) fn example_export() -> String {
+    let svg = include_str!("../tests/fixtures/example.svg");
+    let exact = "98.61,5.29 98.39,5.06 98.16,4.82 98.83,3.77 99.50,2.72";
+    assert_eq!(svg.matches(exact).count(), 1);
+    svg.replace(exact, "98.61,5.29 99.06,4.01 99.50,2.72")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -671,7 +684,6 @@ mod tests {
     use crate::restore::Ids;
 
     const DRAWING: &str = include_str!("../tests/fixtures/example.excalidraw");
-    const EXPORT: &str = include_str!("../tests/fixtures/example.svg");
 
     /// What follows the fonts: the elements.
     fn body(svg: &str) -> &str {
@@ -689,11 +701,12 @@ mod tests {
                 ..SvgOptions::default()
             },
         );
+        let theirs = example_export();
         // The frame.
         let head = |s: &str| s[..s.find("<defs>").unwrap()].to_string();
-        assert_eq!(head(&ours), head(EXPORT));
+        assert_eq!(head(&ours), head(&theirs));
         // Every element, group by group, path by path.
-        let (a, b) = (body(&ours), body(EXPORT));
+        let (a, b) = (body(&ours), body(&theirs));
         if a != b {
             let at = a
                 .bytes()

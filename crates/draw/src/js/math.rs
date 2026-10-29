@@ -7,16 +7,16 @@
 //! and then (a loop that runs once more, a number cut after two decimals),
 //! so these are fixed to what Excalidraw's own results show:
 //!
-//! * `sin`, `cos`, `tan`, `acos`, `asin` and `atan` are fdlibm 5.3's, as
-//!   V8 has them (`src/base/ieee754.cc`). With them, perfect-freehand's
-//!   test snapshots (computed in V8) come out exactly; with glibc's, 17 of
-//!   their points end a few ulps off. Firefox uses fdlibm too. Browsers
-//!   differ here (some Chrome builds use a port of glibc's, and Chromium 156
-//!   rounds them all correctly: an ulp from fdlibm's on 3 to 8% of
-//!   arguments), and notekpr draws the same in all of them: fdlibm is the
-//!   rule, kept unless a real Excalidraw export shows otherwise.
-//! * `atan2` is that exception: correctly rounded (see [`atan2`]), as the
-//!   browser that made Excalidraw's export of the test drawing computed it.
+//! They are all fdlibm 5.3's, as V8 has them (`src/base/ieee754.cc`).
+//! With them, perfect-freehand's test snapshots (computed in V8) come out
+//! exactly; with glibc's, 17 of their points end a few ulps off. Firefox
+//! uses fdlibm too. Browsers differ here — some Chrome builds use a port of
+//! glibc's, and Chromium 156 rounds them correctly, an ulp from fdlibm's on
+//! 3 to 8% of arguments — and notekpr draws the same in all of them, so one
+//! rule is enough. (The browser that made Excalidraw's export of the test
+//! drawing computed `atan2` exactly: fdlibm's draws one stroke's outline
+//! with a point fewer at one corner, the same pixels: see
+//! `svg::tests::same_as_excalidraws_export`.)
 //!
 //! The fdlibm parts carry its notice (and V8's: see `crates/draw/PORTED.md`):
 //!
@@ -642,229 +642,76 @@ pub fn acos(x: f64) -> f64 {
     2.0 * (df + w)
 }
 
-/// A double-double: the unevaluated sum `hi + lo`, `|lo|` at most half an
-/// ulp of `hi`; about 106 bits of precision.
-#[derive(Clone, Copy, Debug)]
-struct Dd {
-    hi: f64,
-    lo: f64,
-}
-
-impl Dd {
-    const fn new(hi: f64, lo: f64) -> Self {
-        Dd { hi, lo }
-    }
-
-    const fn from(x: f64) -> Self {
-        Dd { hi: x, lo: 0.0 }
-    }
-}
-
-/// `a + b` exactly.
-fn two_sum(a: f64, b: f64) -> Dd {
-    let s = a + b;
-    let bb = s - a;
-    Dd::new(s, (a - (s - bb)) + (b - bb))
-}
-
-/// `a + b` exactly, given `|a| >= |b|`.
-fn fast_two_sum(a: f64, b: f64) -> Dd {
-    let s = a + b;
-    Dd::new(s, b - (s - a))
-}
-
-/// `a × b` exactly (`mul_add` rounds once, on every platform).
-fn two_prod(a: f64, b: f64) -> Dd {
-    let p = a * b;
-    Dd::new(p, a.mul_add(b, -p))
-}
-
-fn dd_add(a: Dd, b: Dd) -> Dd {
-    let s = two_sum(a.hi, b.hi);
-    let t = two_sum(a.lo, b.lo);
-    let s = fast_two_sum(s.hi, s.lo + t.hi);
-    fast_two_sum(s.hi, s.lo + t.lo)
-}
-
-fn dd_sub(a: Dd, b: Dd) -> Dd {
-    dd_add(a, Dd::new(-b.hi, -b.lo))
-}
-
-fn dd_mul(a: Dd, b: Dd) -> Dd {
-    let p = two_prod(a.hi, b.hi);
-    fast_two_sum(p.hi, p.lo + (a.hi * b.lo + a.lo * b.hi))
-}
-
-fn dd_div(a: Dd, b: Dd) -> Dd {
-    let q1 = a.hi / b.hi;
-    let r = dd_sub(a, dd_mul(b, Dd::from(q1)));
-    let q2 = r.hi / b.hi;
-    let r = dd_sub(r, dd_mul(b, Dd::from(q2)));
-    let q3 = r.hi / b.hi;
-    dd_add(fast_two_sum(q1, q2), Dd::from(q3))
-}
-
-/// atan(k/64) for k = 0…64, as double-doubles.
-const ATAN_K64: [(f64, f64); 65] = [
-    (0.0, 0.0),
-    (0.015623728620476831, -4.913600136566304e-19),
-    (0.031239833430268277, -1.188442711587748e-18),
-    (0.046840712915969654, -1.655677442254952e-19),
-    (0.06241880999595735, -1.5490756308295046e-18),
-    (0.0779666338315423, 5.804551873143357e-18),
-    (0.09347678115858947, -6.2844725995420954e-18),
-    (0.10894195698986579, 6.8267122072409585e-18),
-    (0.12435499454676144, -3.1253241424539383e-18),
-    (0.13970887428916365, -2.9579864247315813e-18),
-    (0.15499674192394097, 9.585415594114324e-18),
-    (0.1702119252854744, -3.541164079802125e-18),
-    (0.18534794999569476, 4.180692268843079e-18),
-    (0.2003985538258785, 3.1399542871844493e-18),
-    (0.21535769969773805, 4.738160130078733e-19),
-    (0.23021958727684372, 1.2313404529142703e-17),
-    (0.24497866312686414, 1.0698755618734451e-17),
-    (0.2596296294082575, 1.9238754924615304e-17),
-    (0.2741674511196588, 8.261353575163773e-18),
-    (0.2885873618940774, -1.428369957377257e-17),
-    (0.3028848683749714, -1.1010827903001369e-17),
-    (0.31705575320914703, -1.893928924292642e-17),
-    (0.3310960767041321, -7.952610375793799e-18),
-    (0.34500217720710513, -2.2938804755578304e-17),
-    (0.35877067027057225, -2.4623815582638635e-17),
-    (0.3723984466767542, 1.9612311504845653e-17),
-    (0.38588266939807375, 2.378822732491941e-17),
-    (0.39922076957525254, 2.246598105617042e-17),
-    (0.4124104415973873, -1.587652227770689e-17),
-    (0.42544963737004227, 2.3315530741892885e-17),
-    (0.43833655985795783, -2.494277030626541e-17),
-    (0.4510696559885235, -2.2703795229420475e-17),
-    (0.4636476090008061, 2.2698777452961687e-17),
-    (0.4760693303227612, 1.4654487332256713e-17),
-    (0.48833395105640554, -1.1373236189329585e-17),
-    (0.5004408131472942, -4.7181675085518756e-17),
-    (0.5123894603107377, -2.5462781472855804e-17),
-    (0.5241796287829132, 5.520094119641666e-18),
-    (0.5358112379604637, -4.0637956834825575e-18),
-    (0.5472843809874369, 4.923709671396255e-17),
-    (0.5585993153435624, -5.4556305485916264e-18),
-    (0.5697564534829784, 1.2255062085054184e-17),
-    (0.5807563535676704, -1.441464378193067e-17),
-    (0.5915997103351114, 4.920495453686772e-17),
-    (0.6022873461349642, 2.950430737228402e-17),
-    (0.6128202021652414, -3.1552061848586226e-17),
-    (0.6231993299340659, 2.672403885140095e-17),
-    (0.6334258829691446, -2.7290767436015276e-17),
-    (0.6435011087932844, 1.5834785051444286e-17),
-    (0.6534263411807619, 3.5800634857340095e-17),
-    (0.6632029927060933, -3.076054864429649e-17),
-    (0.6728325475937632, -1.899315009714705e-17),
-    (0.6823165548747481, 6.943223671560008e-18),
-    (0.6916566218531999, -8.117151192285796e-18),
-    (0.7008544078844502, -1.987626234335816e-17),
-    (0.7099116184635249, -4.597166450584887e-17),
-    (0.7188299996216245, -2.1478388444456983e-17),
-    (0.7276113326265107, 2.569325697391839e-18),
-    (0.7362574289814281, 3.473937648299457e-17),
-    (0.7447701257160751, 3.708315849135547e-17),
-    (0.7531512809621944, -2.4256934659182068e-17),
-    (0.7614027698055784, 9.850030332752822e-18),
-    (0.7695264804056583, -3.704991905602721e-17),
-    (0.7775243103733478, -2.6676490951944502e-17),
-    (std::f64::consts::FRAC_PI_4, 3.061616997868383e-17),
-];
-
-/// (-1)^i / (2i + 1) for i = 0…7: atan's Taylor coefficients.
-const ATAN_SERIES: [(f64, f64); 8] = [
-    (1.0, 0.0),
-    (-0.3333333333333333, -1.850371707708594e-17),
-    (0.2, -1.1102230246251566e-17),
-    (-0.14285714285714285, -7.93016446160826e-18),
-    (0.1111111111111111, 6.1679056923619804e-18),
-    (-0.09090909090909091, 2.523234146875356e-18),
-    (0.07692307692307693, -4.270088556250602e-18),
-    (-0.06666666666666667, -9.251858538542971e-19),
-];
-
-const PI_DD: Dd = Dd::new(std::f64::consts::PI, 1.2246467991473532e-16);
-const PI_O_2_DD: Dd = Dd::new(std::f64::consts::FRAC_PI_2, 6.123233995736766e-17);
-
-/// atan(t) for 0 <= t <= 1, as a double-double: atan(c) from the table for
-/// the nearest c = k/64, plus the Taylor series of atan(d) for
-/// d = (t - c) / (1 + t·c), which is below 2^-7.
-fn atan_dd(t: Dd) -> Dd {
-    let k = (t.hi * 64.0 + 0.5).floor() as usize;
-    let c = Dd::from(k as f64 / 64.0);
-    let d = dd_div(dd_sub(t, c), dd_add(Dd::from(1.0), dd_mul(t, c)));
-    let u = dd_mul(d, d);
-    let mut s = Dd::new(ATAN_SERIES[7].0, ATAN_SERIES[7].1);
-    for &(hi, lo) in ATAN_SERIES[..7].iter().rev() {
-        s = dd_add(Dd::new(hi, lo), dd_mul(u, s));
-    }
-    let (hi, lo) = ATAN_K64[k];
-    dd_add(Dd::new(hi, lo), dd_mul(d, s))
-}
-
-/// `Math.atan2(y, x)`, correctly rounded: computed with about 100 bits,
-/// then rounded once.
-///
-/// Not fdlibm's (Firefox's port, and older V8's), which is up to about an
-/// ulp off: the browser that exported `tests/fixtures/example.svg` computed
-/// it this accurately, and fdlibm's value turns one rounded corner of a
-/// stroke there by a different number of steps. glibc's and Apple's
-/// `atan2` agree with this one, and so does V8's in Chromium 156.
+/// `Math.atan2(y, x)` (fdlibm's `__ieee754_atan2`).
 pub fn atan2(y: f64, x: f64) -> f64 {
-    use std::f64::consts::{FRAC_PI_2, FRAC_PI_4, PI};
-
-    // The special cases, as fdlibm has them.
+    // 7.8539816339744827900E-01, 0x3FE921FB, 0x54442D18
+    const PI_O_4: f64 = std::f64::consts::FRAC_PI_4;
+    // 3.1415926535897931160E+00, 0x400921FB, 0x54442D18
+    const PI: f64 = std::f64::consts::PI;
+    const PI_LO: f64 = 1.2246467991473531772E-16; // 0x3CA1A626, 0x33145C07
     if x.is_nan() || y.is_nan() {
         return x + y;
     }
-    if y == 0.0 {
-        return match (x.is_sign_negative(), y.is_sign_negative()) {
-            (false, _) => y,
-            (true, false) => PI,
-            (true, true) => -PI,
+    let (hx, lx) = (high_word(x), low_word(x));
+    let (hy, ly) = (high_word(y), low_word(y));
+    let (ix, iy) = (hx & 0x7FFF_FFFF, hy & 0x7FFF_FFFF);
+    if ((hx.wrapping_sub(0x3FF0_0000)) as u32 | lx) == 0 {
+        // x = 1
+        return atan(y);
+    }
+    // 2·sign(x) + sign(y)
+    let m = ((hy >> 31) & 1) | ((hx >> 30) & 2);
+    if (iy as u32 | ly) == 0 {
+        // y = ±0
+        return match m {
+            0 | 1 => y,
+            2 => PI,
+            _ => -PI,
         };
     }
-    if x == 0.0 {
-        return if y < 0.0 { -FRAC_PI_2 } else { FRAC_PI_2 };
+    if (ix as u32 | lx) == 0 {
+        // x = ±0
+        return if hy < 0 { -PIO2_HI } else { PIO2_HI };
     }
-    if x.is_infinite() {
-        let a = match (x > 0.0, y.is_infinite()) {
-            (true, true) => FRAC_PI_4,
-            (true, false) => 0.0,
-            (false, true) => 3.0 * FRAC_PI_4,
-            (false, false) => PI,
+    if ix == 0x7FF0_0000 {
+        // x = ±∞
+        return if iy == 0x7FF0_0000 {
+            match m {
+                0 => PI_O_4,
+                1 => -PI_O_4,
+                2 => 3.0 * PI_O_4,
+                _ => -3.0 * PI_O_4,
+            }
+        } else {
+            match m {
+                0 => 0.0,
+                1 => -0.0,
+                2 => PI,
+                _ => -PI,
+            }
         };
-        return if y < 0.0 { -a } else { a };
     }
-    if y.is_infinite() {
-        return if y < 0.0 { -FRAC_PI_2 } else { FRAC_PI_2 };
+    if iy == 0x7FF0_0000 {
+        // y = ±∞
+        return if hy < 0 { -PIO2_HI } else { PIO2_HI };
     }
-
-    // atan(t) of the smaller over the larger, t in [0, 1], then the octant.
-    let (ax, ay) = (x.abs(), y.abs());
-    let swap = ay > ax;
-    let (mut num, mut den) = if swap { (ax, ay) } else { (ay, ax) };
-    if den < f64::from_bits(0x07B0_0000_0000_0000) {
-        // Below 2^-900: scaled up (exactly) so the products below don't
-        // lose bits to underflow.
-        let up = f64::from_bits(0x6570_0000_0000_0000); // 2^600
-        num *= up;
-        den *= up;
+    // y/x
+    let k = (iy - ix) >> 20;
+    let (z, m) = if k > 60 {
+        // |y/x| > 2^60
+        (PIO2_HI + 0.5 * PI_LO, m & 1)
+    } else if hx < 0 && k < -60 {
+        // 0 > |y|/x > -2^-60
+        (0.0, m)
+    } else {
+        (atan((y / x).abs()), m)
+    };
+    match m {
+        0 => z,
+        1 => -z,
+        2 => PI - (z - PI_LO),
+        _ => (z - PI_LO) - PI,
     }
-    let q = num / den;
-    let p = two_prod(q, den);
-    let t = fast_two_sum(q, ((num - p.hi) - p.lo) / den);
-    let mut z = atan_dd(t);
-    if swap {
-        z = dd_sub(PI_O_2_DD, z);
-    }
-    if x < 0.0 {
-        z = dd_sub(PI_DD, z);
-    }
-    let v = z.hi + z.lo;
-    if y < 0.0 { -v } else { v }
 }
 
 /// `Math.atan` (fdlibm's `s_atan.c`).
@@ -1151,26 +998,29 @@ mod tests {
     }
 
     #[test]
-    fn atan2_is_correctly_rounded() {
-        // Exact values worked out with 80-digit arithmetic; glibc's atan2
-        // is an ulp off on the first four, fdlibm's on the last.
-        for (y, x, exact) in [
-            (0.2870264492269732, 0.6714116337052669, 0.4039837138610048),
-            (0.5807738711410155, -0.054412278729259134, 1.664212904516187),
-            (-0.535885372210624, 0.5330440111812271, -0.7880562944035837),
-            (
-                f64::from_bits(4596822084905820872),
-                f64::from_bits(4606927151761674122),
-                0.2152520329351953,
-            ),
-            // From the stroke the fdlibm value would draw differently.
-            (0.9452345942148451, -0.32639173074619554, 1.9032800467589621),
+    fn atan2_is_fdlibms() {
+        // fdlibm's values (musl's port agrees bit for bit on 6 million
+        // pairs, but for |y/x| above 2^60 with x < 0: below); glibc's
+        // rounds those marked the other way, and so does a correctly
+        // rounded atan2 (Chromium 156's) on all but the third.
+        for (y, x, fdlibm) in [
+            (0.2870264492269732, 0.6714116337052669, 0.4039837138610048), // glibc
+            (0.5807738711410155, -0.054412278729259134, 1.664212904516187), // glibc
+            (-0.535885372210624, 0.5330440111812271, -0.7880562944035836),
+            (0.21244296919646488, 0.9716596656603411, 0.21525203293519526),
+            // The stroke corner of the test drawing.
+            (0.9452345942148451, -0.32639173074619554, 1.9032800467589623), // glibc
         ] {
-            assert_eq!(atan2(y, x), exact, "atan2({y:e}, {x:e})");
-            assert_eq!(atan2(-y, x), -exact);
+            assert_eq!(atan2(y, x), fdlibm, "atan2({y:e}, {x:e})");
+            assert_eq!(atan2(-y, x), -fdlibm);
         }
-        // Swapped octants, tiny and huge ratios, subnormals.
+        // Swapped octants, tiny and huge ratios, subnormals. Beyond 2^60,
+        // fdlibm (and V8) take π/2 as it is; musl works it out an ulp above.
         assert_eq!(atan2(1.0, 1e-300), FRAC_PI_2);
+        assert_eq!(
+            atan2(4.51085626303698e170, -1.0969263086111712e152),
+            FRAC_PI_2
+        );
         assert_eq!(atan2(1e-300, 1.0), 1e-300);
         assert_eq!(atan2(1e-300, -1.0), PI);
         assert_eq!(atan2(5e-324, 5e-324), PI / 4.0);

@@ -10,8 +10,8 @@ AGPL-3.0 like notekpr.
 No JavaScript is used or shipped.
 
 So that numbers come out exactly as in a browser, `src/js/math.rs` also
-ports fdlibm's `sin`, `cos`, `tan`, `acos`, `asin` and `atan` the way V8
-has them, and `src/js.rs` computes `Math.hypot` the way V8 does; their
+ports fdlibm's `sin`, `cos`, `tan`, `acos`, `asin`, `atan` and `atan2`
+the way V8 has them, and `src/js.rs` computes `Math.hypot` the way V8 does; their
 notices are at the end.
 
 | What | Ported from | Copyright |
@@ -33,7 +33,7 @@ notices are at the end.
 | the drawing inside PNG and SVG pictures of it (`embed.rs`: `data/image.ts`, `data/encode.ts`, `scene/export.ts`) | Excalidraw | (c) 2020 Excalidraw |
 | what a picture of a drawing shows: the selection, a frame exported alone (`export.rs`, `svg.rs`: `data/index.ts`'s `prepareElementsForExport`, `scene/export.ts`'s `exportingFrame`, `frame.ts`'s `getElementsOverlappingFrame`) | Excalidraw | (c) 2020 Excalidraw |
 | compression of Obsidian's drawings | lz-string 1.5 | (c) 2013 pieroxy |
-| `Math.sin`, `Math.cos`, `Math.tan`, `Math.acos`, `Math.asin`, `Math.atan` | fdlibm 5.3, as in V8 | (c) 1993 Sun Microsystems; the V8 project authors |
+| `Math.sin`, `Math.cos`, `Math.tan`, `Math.acos`, `Math.asin`, `Math.atan`, `Math.atan2` | fdlibm 5.3, as in V8 | (c) 1993 Sun Microsystems; the V8 project authors |
 | `Math.hypot` | V8 | the V8 project authors |
 
 The test fixture `tests/fixtures/perfect-freehand.json` holds

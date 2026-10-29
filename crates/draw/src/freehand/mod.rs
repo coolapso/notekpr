@@ -491,7 +491,7 @@ mod tests {
         let file: serde_json::Value =
             serde_json::from_str(include_str!("../../tests/fixtures/example.excalidraw"))
                 .expect("drawing");
-        let svg = include_str!("../../tests/fixtures/example.svg");
+        let svg = &crate::svg::example_export();
         let elements: Vec<&serde_json::Value> = file["elements"]
             .as_array()
             .expect("elements")

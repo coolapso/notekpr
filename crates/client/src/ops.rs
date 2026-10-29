@@ -974,6 +974,116 @@ pub async fn list_library(hub: &Hub) -> Vec<LibraryEntry> {
         .collect()
 }
 
+fn library_error(e: notekpr_core::library::LibraryError) -> OpError {
+    use notekpr_core::library::LibraryError;
+    match e {
+        LibraryError::NotFound(_) => OpError::NotFound(e.to_string()),
+        LibraryError::Ambiguous(_) | LibraryError::TooLarge { .. } => {
+            OpError::BadRequest(e.to_string())
+        }
+    }
+}
+
+/// The saved shapes `refs` name (ids, or the start of one, as `shapes ls`
+/// shows the first 8 characters), newest first; all of them without
+/// `refs`.
+pub async fn find_library(
+    hub: &Hub,
+    refs: &[String],
+) -> OpResult<Vec<notekpr_core::library::LibraryItem>> {
+    let items = library(hub).await;
+    if refs.is_empty() {
+        return Ok(items);
+    }
+    let found = notekpr_core::library::find(&items, refs).map_err(library_error)?;
+    Ok(found.into_iter().cloned().collect())
+}
+
+/// What renaming or removing saved shapes did.
+#[derive(Serialize, Clone, Debug)]
+pub struct LibraryChange {
+    /// The shapes' whole ids.
+    pub ids: Vec<String>,
+    /// Local changes not uploaded yet (offline); they sync automatically.
+    pub pending_changes: usize,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub read_only: bool,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub vault_full: bool,
+}
+
+/// Change the saved shapes, in the Personal storage, with `change` (given
+/// the index, the shapes and the update budget; it returns the update, if
+/// it made one, and the ids it changed).
+async fn change_library(
+    hub: &Hub,
+    change: impl FnOnce(
+        &notekpr_core::doc::IndexDoc,
+        &[notekpr_core::library::LibraryItem],
+        usize,
+    ) -> OpResult<(Option<Vec<u8>>, Vec<String>)>,
+) -> OpResult<LibraryChange> {
+    let Some(v) = hub.quick_notes().await else {
+        return Err(OpError::NotFound("no saved shapes yet".into()));
+    };
+    let (vault_id, update, ids) = {
+        let mut g = v.lock().await;
+        check_write(hub, &g)?;
+        let items = notekpr_core::library::items(&g.replica.index);
+        let (update, ids) = change(&g.replica.index, &items, g.update_budget())?;
+        if let Some(u) = &update {
+            g.record(INDEX_OBJECT_ID, u.clone())?;
+            g.save()?;
+        }
+        (g.id().to_string(), update, ids)
+    };
+    let push = if update.is_some() {
+        hub.local_changed(&vault_id, vec![], true).await
+    } else {
+        Default::default()
+    };
+    Ok(LibraryChange {
+        ids,
+        pending_changes: push.remaining,
+        read_only: push.read_only,
+        vault_full: push.vault_full,
+    })
+}
+
+/// Name a saved shape (`reference`: its id or the start of it); an empty
+/// `name` takes its name away.
+pub async fn rename_library_item(
+    hub: &Hub,
+    reference: &str,
+    name: &str,
+) -> OpResult<LibraryChange> {
+    change_library(hub, |index, items, budget| {
+        let id = notekpr_core::library::find(items, &[reference])
+            .map_err(library_error)?
+            .remove(0)
+            .id
+            .clone();
+        let u =
+            notekpr_core::library::rename(index, &id, Some(name), budget).map_err(library_error)?;
+        Ok((u, vec![id]))
+    })
+    .await
+}
+
+/// Remove saved shapes (`refs`: their ids or the start of them).
+pub async fn remove_library_items(hub: &Hub, refs: &[String]) -> OpResult<LibraryChange> {
+    change_library(hub, |index, items, _| {
+        let ids: Vec<String> = notekpr_core::library::find(items, refs)
+            .map_err(library_error)?
+            .into_iter()
+            .map(|i| i.id.clone())
+            .collect();
+        let u = notekpr_core::library::remove(index, ids.iter().map(String::as_str));
+        Ok((u, ids))
+    })
+    .await
+}
+
 /// What importing shapes did.
 #[derive(Serialize, Clone, Debug)]
 pub struct LibraryImport {

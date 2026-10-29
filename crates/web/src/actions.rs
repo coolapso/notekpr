@@ -1262,6 +1262,29 @@ fn new_drawing_at(
     id
 }
 
+/// A new, empty drawing in `folder`, opened.
+pub fn new_drawing(vault: &str, folder: &str) {
+    if !state::step(|c| c.can_write(vault)) {
+        error("You can only read this vault.");
+        return;
+    }
+    if state::step(|c| c.is_quick_notes(vault)) {
+        error("Quick notes hold notes: a drawing goes in a vault.");
+        return;
+    }
+    let path = match paths::normalize_drawing(&paths::join(folder, "Untitled drawing")) {
+        Ok(p) => p,
+        Err(e) => {
+            error(e.to_string());
+            return;
+        }
+    };
+    let (v, scene) = (vault.to_string(), notekpr_draw::scene::Scene::default());
+    let id = step(|c| new_drawing_at(c, &v, &path, &scene));
+    state::ui().tree_rev.update(|v| *v += 1);
+    navigate(Route::Note(v, id));
+}
+
 pub fn new_note(vault: &str, folder: &str) {
     let (v, f) = (vault.to_string(), folder.to_string());
     leptos::task::spawn_local(async move {
@@ -1333,8 +1356,8 @@ fn new_folder_at(c: &mut Core, vault: &str, path: &str) -> String {
     id
 }
 
-/// Rename a note, attachment or explicit folder. Wiki links pointing to a
-/// renamed note are updated in every note of the vault.
+/// Rename a note, drawing, attachment or explicit folder. Wiki links
+/// pointing to a renamed note are updated in every note of the vault.
 pub fn rename_entry(vault: &str, id: &str, new_name: &str) -> Result<(), String> {
     let e = state::step(|c| c.entry(vault, id)).ok_or("not found")?;
     let new_name = new_name.trim();
@@ -1345,6 +1368,8 @@ pub fn rename_entry(vault: &str, id: &str, new_name: &str) -> Result<(), String>
     let mut new_path = paths::join(&parent, new_name);
     if e.kind == EntryKind::Note {
         new_path = paths::normalize_note(&new_path).map_err(|e| e.to_string())?;
+    } else if e.kind == EntryKind::Drawing {
+        new_path = paths::normalize_drawing(&new_path).map_err(|e| e.to_string())?;
     } else {
         new_path = paths::normalize(&new_path).map_err(|e| e.to_string())?;
     }
@@ -1371,6 +1396,12 @@ pub fn rename_entry(vault: &str, id: &str, new_name: &str) -> Result<(), String>
         }
         if e.kind == EntryKind::Note && paths::title(&new_path) != old_title {
             update_links_after_rename(vault, id, &old_path, paths::title(&new_path));
+        }
+        // Notes embed a drawing by its file name.
+        if e.kind == EntryKind::Drawing
+            && paths::file_name(&new_path) != paths::file_name(&old_path)
+        {
+            update_links_after_rename(vault, id, &old_path, paths::file_name(&new_path));
         }
     }
     state::ui().tree_rev.update(|v| *v += 1);

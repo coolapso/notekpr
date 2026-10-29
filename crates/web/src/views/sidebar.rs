@@ -137,6 +137,8 @@ pub fn Sidebar() -> impl IntoView {
                     <div class="sb-actions">
                         <button class="btn primary small grow" on:click=move |_| if let Some(v) = vault() { actions::new_note(&v, &current_folder()); }>
                             <Icon name="plus"/>" New note"</button>
+                        <button class="icon-btn" title="New drawing" aria-label="New drawing" on:click=move |_| if let Some(v) = vault() { actions::new_drawing(&v, &current_folder()); }>
+                            <Icon name="drawing"/></button>
                         <button class="icon-btn" title="New folder" aria-label="New folder" on:click=move |_| if let Some(v) = vault() {
                             ui.modal.set(Some(Modal::NewFolder { vault: v, parent: String::new() }));
                         }><Icon name="folder-plus"/></button>

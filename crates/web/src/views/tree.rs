@@ -381,11 +381,13 @@ fn RowMenu(
     let close = move || menu.set(None);
     let is_folder = kind == EntryKind::Folder;
     let v1 = vault.clone();
+    let vd = vault.clone();
     let v2 = vault.clone();
     let v3 = vault.clone();
     let v4 = vault.clone();
     let v5 = vault.clone();
     let p1 = path.clone();
+    let pd = path.clone();
     let p2 = path.clone();
     let p3 = path.clone();
     let id1 = row_id.clone();
@@ -397,6 +399,8 @@ fn RowMenu(
             {(is_folder && writable).then(|| view! {
                 <button on:click=move |_| { close(); actions::new_note(&v1, &p1); expanded.update(|s| { s.insert(p1.clone()); }); }>
                     <Icon name="file-plus"/>" New note here"</button>
+                <button on:click=move |_| { close(); actions::new_drawing(&vd, &pd); expanded.update(|s| { s.insert(pd.clone()); }); }>
+                    <Icon name="drawing"/>" New drawing here"</button>
                 <button on:click=move |_| { close(); ui.modal.set(Some(Modal::NewFolder { vault: v2.clone(), parent: p2.clone() })); }>
                     <Icon name="folder-plus"/>" New folder here"</button>
             })}

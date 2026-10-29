@@ -529,7 +529,8 @@ pub struct Core {
     pub editor: Option<(String, String, Rc<Editor>)>,
     pub presence: BTreeMap<u64, PresenceEntry>,
     pub attachment_urls: HashMap<String, String>,
-    pub attachment_loading: HashSet<String>,
+    /// Attachments being loaded, and who else waits for each (its URL).
+    pub attachment_loading: HashMap<String, Vec<futures::channel::oneshot::Sender<Option<String>>>>,
     pub dirty: BTreeSet<(String, String)>,
     pub last_touch: HashMap<(String, String), i64>,
     pub snapshotting: HashSet<(String, String)>,

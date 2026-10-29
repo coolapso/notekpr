@@ -2162,31 +2162,44 @@ pub async fn load_embed(vault: &str, id: &str) -> Option<String> {
     }
 }
 
-/// Load, decrypt and cache an attachment as a blob URL.
+/// Load, decrypt and cache an attachment as a blob URL. Asked again while
+/// it loads (the editor and the reading view both show it), it waits for
+/// that load.
 pub async fn load_attachment(vault: &str, id: &str) -> Option<String> {
+    enum Start {
+        Cached(String),
+        Wait(futures::channel::oneshot::Receiver<Option<String>>),
+        Load(String),
+    }
     let key = format!("{vault}:{id}");
     let start = step(|c| {
         if let Some(u) = c.attachment_urls.get(&key) {
-            return Err(Some(u.clone()));
+            return Start::Cached(u.clone());
         }
-        // Being loaded already.
-        if !c.attachment_loading.insert(key.clone()) {
-            return Err(None);
+        if let Some(waiting) = c.attachment_loading.get_mut(&key) {
+            let (tx, rx) = futures::channel::oneshot::channel();
+            waiting.push(tx);
+            return Start::Wait(rx);
         }
-        Ok(c.entry(vault, id).map(|e| e.path).unwrap_or_default())
+        c.attachment_loading.insert(key.clone(), Vec::new());
+        Start::Load(c.entry(vault, id).map(|e| e.path).unwrap_or_default())
     });
     let name = match start {
-        Ok(name) => name,
-        Err(done) => return done,
+        Start::Cached(url) => return Some(url),
+        Start::Wait(rx) => return rx.await.ok().flatten(),
+        Start::Load(name) => name,
     };
     let bytes = attachment_bytes(vault, id).await;
     let url = bytes.and_then(|b| util::blob_url(&b, util::mime_for(&name)));
-    step(|c| {
-        c.attachment_loading.remove(&key);
+    let waiting = step(|c| {
         if let Some(u) = &url {
             c.attachment_urls.insert(key.clone(), u.clone());
         }
+        c.attachment_loading.remove(&key).unwrap_or_default()
     });
+    for tx in waiting {
+        let _ = tx.send(url.clone());
+    }
     url
 }
 

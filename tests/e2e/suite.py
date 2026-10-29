@@ -476,11 +476,13 @@ def test_attachments(env):
         check("attachments" in b.js("return Array.from(document.querySelectorAll('.tree-item .name')).map(e=>e.textContent).join(' ')"), "attachment is filed under attachments/ in the tree")
         # Opening attachments: raster images open in a new tab (noopener); anything that
         # could run as a page of this origin (SVG, HTML) is downloaded instead.
-        b.js("""
+        catch_opening = """
             window.__opened = []; window.__downloads = [];
             window.open = (u, t, f) => { window.__opened.push([String(u), String(f)]); return null; };
             const click = HTMLAnchorElement.prototype.click;
             HTMLAnchorElement.prototype.click = function () { if (this.download) { window.__downloads.push(this.download); } else { click.call(this); } };
+        """
+        b.js(catch_opening + """
             const ed = document.querySelector('.ed'); ed.focus(); const s = getSelection(); s.selectAllChildren(ed); s.collapseToEnd();
             const dt = new DataTransfer();
             dt.items.add(new File(['<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>'], 'pic.svg', {type: 'image/svg+xml'}));
@@ -537,6 +539,15 @@ def test_attachments(env):
         time.sleep(0.5)
         check(b.js("return document.querySelector('.reading video.att') === __v && !__v.paused && __v.currentTime > 0.3"),
               "the reading view's player keeps playing through a new rendering")
+        # Opened in the reading view, the note's files are asked for by the (hidden) editor
+        # too, at the same time: the reading view gets them from that load.
+        b.go(b.js("return location.href").rsplit("/", 1)[0])
+        b.find(".tree-item", 20)
+        time.sleep(1.5)
+        b.click_el(b.find_text(".tree-item", "Photos", 10))
+        b.wait("const i = document.querySelector('.reading img.att'), v = document.querySelector('.reading video.att'); return !!i && i.naturalWidth > 0 && !!v && v.readyState >= 1", 20, "reading view after a reload")
+        check(True, "a note opened in the reading view shows its picture and video")
+        b.js(catch_opening)
         check(not severe_logs(b), "no browser errors")
         # Signing out revokes the decrypted attachments' blob URLs.
         blob = b.js("return document.querySelector('.reading img.att').src")

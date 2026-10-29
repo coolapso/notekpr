@@ -164,8 +164,9 @@ pub struct ResizeMode {
     pub from_center: bool,
 }
 
-/// The new box (in the frame's own space) when `handle` is dragged to `p`.
-fn resized_box(f: &Frame, handle: Handle, p: Point, mode: ResizeMode) -> [f64; 4] {
+/// The new box (in the frame's own space) when `handle` is dragged to `p`;
+/// past its other side it is flipped (`x2 < x1`, or `y2 < y1`).
+pub fn resized_box(f: &Frame, handle: Handle, p: Point, mode: ResizeMode) -> [f64; 4] {
     let center = f.center();
     let [px, py] = geom::rotate(p, center, -f.angle);
     let [mut x1, mut y1, mut x2, mut y2] = f.bounds;

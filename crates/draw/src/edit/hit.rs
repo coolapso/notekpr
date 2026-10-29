@@ -153,10 +153,10 @@ pub fn hits(e: &Element, p: Point, zoom: f64) -> bool {
         }
         ElementType::Text => lx >= -t && ly >= -t && lx <= w + t && ly <= h + t,
         ElementType::Frame | ElementType::MagicFrame => {
-            // Its border, or its name above it.
+            // Its border, or its name above it (its width guessed).
             let outline = [[0.0, 0.0], [w, 0.0], [w, h], [0.0, h], [0.0, 0.0]];
             polyline_distance([lx, ly], &outline) <= t
-                || (lx >= 0.0 && lx <= w.min(200.0) && ly < 0.0 && ly >= -24.0 / zoom)
+                || super::frame::on_name(e, p, zoom, &super::guess_width, t)
         }
         _ => false,
     }
@@ -170,7 +170,7 @@ pub fn element_at(scene: &Scene, p: Point, zoom: f64, locked_too: bool) -> Optio
         .iter()
         .rev()
         .filter(|e| !e.is_deleted() && (locked_too || !e.is_locked()))
-        .find(|e| hits(e, p, zoom))?;
+        .find(|e| hits(e, p, zoom) && !super::frame::clipped_away(scene, e, p))?;
     match hit.container_id().and_then(|c| scene.element(c)) {
         Some(container) if !container.is_deleted() => Some(container),
         _ => Some(hit),
@@ -207,7 +207,8 @@ pub fn container_at(scene: &Scene, p: Point, zoom: f64) -> Option<&Element> {
         })
 }
 
-/// The elements wholly inside a box (scene coordinates), labels left out.
+/// The elements wholly inside a box (scene coordinates), labels left out;
+/// what is in a frame by what of it shows.
 pub fn elements_in(scene: &Scene, [x1, y1, x2, y2]: [f64; 4]) -> Vec<&Element> {
     let (ax, bx) = (x1.min(x2), x1.max(x2));
     let (ay, by) = (y1.min(y2), y1.max(y2));
@@ -215,7 +216,7 @@ pub fn elements_in(scene: &Scene, [x1, y1, x2, y2]: [f64; 4]) -> Vec<&Element> {
         .visible()
         .filter(|e| !e.is_locked() && e.container_id().is_none())
         .filter(|e| {
-            let [ex1, ey1, ex2, ey2] = bounds::element_bounds(e);
+            let [ex1, ey1, ex2, ey2] = super::frame::shown_bounds(scene, e);
             ex1 >= ax && ey1 >= ay && ex2 <= bx && ey2 <= by
         })
         .collect()

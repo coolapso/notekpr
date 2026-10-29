@@ -21,7 +21,6 @@ use web_sys::{CanvasRenderingContext2d, CanvasWindingRule, Path2d};
 /// `FRAME_STYLE`.
 const FRAME_STROKE: &str = "#bbb";
 const FRAME_RADIUS: f64 = 8.0;
-const FRAME_NAME_SIZE: f64 = 14.0;
 
 fn hash_value(v: &Value, h: &mut impl Hasher) {
     match v {
@@ -193,27 +192,16 @@ fn js_number(x: f64) -> String {
     notekpr_draw::js::number_to_string(x)
 }
 
-fn draw_frame(ctx: &CanvasRenderingContext2d, e: &Element, dark: bool, zoom: f64) {
+/// A frame, and its name above it unless that is being typed.
+fn draw_frame(ctx: &CanvasRenderingContext2d, e: &Element, dark: bool, zoom: f64, named: bool) {
     ctx.set_stroke_style_str(&color::themed(FRAME_STROKE, dark));
     ctx.set_line_width(2.0 / zoom);
     ctx.begin_path();
     let _ = ctx.round_rect_with_f64(0.0, 0.0, e.width(), e.height(), FRAME_RADIUS / zoom);
     ctx.stroke();
-    // Its name above it, the same size whatever the zoom.
-    let name = e.name().unwrap_or(if e.kind() == ElementType::MagicFrame {
-        "AI Frame"
-    } else {
-        "Frame"
-    });
-    ctx.set_font(&format!(
-        "{}px {}",
-        js_number(FRAME_NAME_SIZE / zoom),
-        fonts::css_family(fonts::ASSISTANT)
-    ));
-    ctx.set_fill_style_str(if dark { "#7a7a7a" } else { "#999999" });
-    ctx.set_text_align("left");
-    ctx.set_text_baseline("bottom");
-    let _ = ctx.fill_text(name, 0.0, -3.0 / zoom);
+    if named {
+        super::frames::draw_name(ctx, e, dark, zoom);
+    }
 }
 
 /// A picture (`drawImageElement`): cropped, flipped and with rounded
@@ -273,13 +261,15 @@ pub struct Look<'a> {
     pub pictures: &'a dyn Fn(&Element) -> Option<web_sys::HtmlImageElement>,
 }
 
-/// Draws the drawing in the view, as `look` says.
+/// Draws the drawing in the view, as `look` says (as the editor shows
+/// it, if one: frames' names being typed, what is dragged into frames).
 pub fn draw_scene(
     ctx: &CanvasRenderingContext2d,
     scene: &Scene,
     view: &Viewport,
     look: &Look,
     cache: &mut ShapeCache,
+    editor: Option<&notekpr_draw::edit::Editor>,
 ) {
     let (pixel_ratio, dark, grid, pictures) =
         (look.pixel_ratio, look.dark, look.grid, look.pictures);
@@ -308,6 +298,8 @@ pub fn draw_scene(
     cache.keep(&ids);
     let by_id: HashMap<&str, &Element> = visible.iter().map(|e| (e.id(), *e)).collect();
     let [vx1, vy1, vx2, vy2] = view.visible();
+    let time = super::sticky::local_time();
+    let renaming = editor.and_then(|ed| ed.editing_text.as_deref());
     let mut draw = |e: &Element| {
         let c = cache.get(e, &cfg);
         let [bx1, by1, bx2, by2] = c.bounds;
@@ -321,13 +313,17 @@ pub fn draw_scene(
         let cy = (y2 - y1) / 2.0 - (e.y() - y1);
         let shape = c.shape.clone();
         ctx.save();
+        // What is in a frame is seen only in it.
+        if let Some(f) = super::frames::clip_frame(e, &by_id, scene, editor) {
+            super::frames::clip(ctx, f, view.zoom);
+        }
         let _ = ctx.translate(e.x(), e.y());
         if e.angle() != 0.0 {
             let _ = ctx.translate(cx, cy);
             let _ = ctx.rotate(e.angle());
             let _ = ctx.translate(-cx, -cy);
         }
-        ctx.set_global_alpha(e.opacity() / 100.0);
+        ctx.set_global_alpha(super::frames::opacity(e, &by_id));
         ctx.set_line_join("round");
         ctx.set_line_cap("round");
         match &*shape {
@@ -344,7 +340,10 @@ pub fn draw_scene(
             ElementShape::None => match e.kind() {
                 ElementType::Text => draw_text(ctx, e, dark),
                 ElementType::Image => draw_image(ctx, e, pictures(e).as_ref(), dark),
-                ElementType::Frame | ElementType::MagicFrame => draw_frame(ctx, e, dark, view.zoom),
+                ElementType::Frame | ElementType::MagicFrame => {
+                    draw_frame(ctx, e, dark, view.zoom, renaming != Some(e.id()))
+                }
+                ElementType::StickyNote => super::sticky::draw(ctx, e, dark, &time),
                 _ => {}
             },
         }
@@ -532,7 +531,10 @@ pub fn draw_overlay(
         if !ed.busy() && !linear_two_points {
             dashed(false);
             let c = f.center();
-            for (h, [x, y, w, hh]) in transform::handles(&f, z) {
+            let handles = transform::handles(&f, z)
+                .into_iter()
+                .filter(|(h, _)| ed.can_use(scene, *h));
+            for (h, [x, y, w, hh]) in handles {
                 ctx.save();
                 let _ = ctx.translate(c[0], c[1]);
                 let _ = ctx.rotate(f.angle);
@@ -586,6 +588,7 @@ pub fn draw_overlay(
         ctx.fill_rect(x, y, w, h);
         ctx.stroke_rect(x, y, w, h);
     }
+    super::frames::draw_highlights(ctx, scene, ed, z);
     // What the eraser will take: shown faded over.
     for id in ed.erasing() {
         if let Some(e) = scene.element(&id) {

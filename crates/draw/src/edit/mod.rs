@@ -9,6 +9,7 @@
 
 pub mod binding;
 pub mod elbow;
+pub mod frame;
 pub mod hit;
 pub mod label;
 pub mod new;
@@ -48,6 +49,9 @@ pub struct Style {
     pub arrow_type: String,
     /// Pen strokes: `variable` (with pressure) or `constant`.
     pub stroke_variability: String,
+    /// Sticky notes' own colours: their ink and their paper.
+    pub sticky_stroke_color: String,
+    pub sticky_background_color: String,
 }
 
 impl Default for Style {
@@ -68,6 +72,8 @@ impl Default for Style {
             end_arrowhead: Some("arrow".into()),
             arrow_type: "round".into(),
             stroke_variability: "variable".into(),
+            sticky_stroke_color: crate::sticky::INK.into(),
+            sticky_background_color: crate::sticky::BACKGROUND.into(),
         }
     }
 }
@@ -84,6 +90,7 @@ pub enum Tool {
     Line,
     Freedraw,
     Text,
+    StickyNote,
     Image,
     Eraser,
     Frame,
@@ -103,6 +110,7 @@ impl Tool {
             "l" | "6" => Tool::Line,
             "p" | "7" => Tool::Freedraw,
             "t" | "8" => Tool::Text,
+            "n" => Tool::StickyNote,
             "9" => Tool::Image,
             "e" | "0" => Tool::Eraser,
             "f" => Tool::Frame,
@@ -117,6 +125,7 @@ impl Tool {
             Tool::Diamond => ElementType::Diamond,
             Tool::Ellipse => ElementType::Ellipse,
             Tool::Frame => ElementType::Frame,
+            Tool::StickyNote => ElementType::StickyNote,
             _ => return None,
         })
     }
@@ -289,11 +298,13 @@ pub struct Editor {
     pub bind_hover: Option<BindHover>,
     /// Snapping to the grid and to other elements, and what snaps.
     pub snap: snap::Snapping,
+    /// The frame where what is drawn or dragged goes (shown).
+    frame_to_highlight: Option<String>,
 }
 
 /// A guess at a line's width without a browser: about half the font size a
 /// character.
-fn guess_width(font: &str, line: &str) -> f64 {
+pub fn guess_width(font: &str, line: &str) -> f64 {
     let size: f64 = font
         .split("px")
         .next()
@@ -316,6 +327,7 @@ impl Default for Editor {
             line_editor: None,
             bind_hover: None,
             snap: snap::Snapping::default(),
+            frame_to_highlight: None,
         }
     }
 }
@@ -388,6 +400,7 @@ impl Editor {
         self.gesture = None;
         self.line_editor = None;
         self.snap.clear();
+        self.frame_to_highlight = None;
         if tool != Tool::Selection {
             self.selection.clear();
         }
@@ -695,7 +708,8 @@ impl Editor {
                     }
                 }
                 if let Some(f) = self.frame(scene)
-                    && let Some(h) = transform::handle_at(&f, p, zoom)
+                    && let Some(h) =
+                        transform::handle_at(&f, p, zoom).filter(|h| self.can_use(scene, *h))
                 {
                     let originals = self.moving_set(scene);
                     self.gesture = Some(if h == Handle::Rotation {
@@ -756,7 +770,7 @@ impl Editor {
                         }
                         self.gesture = Some(Gesture::Moving {
                             start: p,
-                            originals: self.moving_set(scene),
+                            originals: self.dragged_set(scene),
                             moved: false,
                             copy: mods.alt,
                         });
@@ -764,7 +778,7 @@ impl Editor {
                     _ if in_selection => {
                         self.gesture = Some(Gesture::Moving {
                             start: p,
-                            originals: self.moving_set(scene),
+                            originals: self.dragged_set(scene),
                             moved: false,
                             copy: mods.alt,
                         });
@@ -807,7 +821,7 @@ impl Editor {
                 let line =
                     self.style.font_size * crate::fonts::get(self.style.font_family).line_height;
                 t.set("y", num(p[1] - line / 2.0));
-                t.set("index", top_index(scene).map_or(Value::Null, Value::String));
+                self.place_new(scene, &mut t, [p[0], p[1] - line / 2.0]);
                 let id = t.id().to_string();
                 self.selection = vec![id.clone()];
                 self.editing_text = Some(id.clone());
@@ -816,7 +830,7 @@ impl Editor {
             }
             Tool::Freedraw => {
                 let mut e = new::freedraw(p[0], p[1], pressure, &self.style, rng);
-                e.set("index", top_index(scene).map_or(Value::Null, Value::String));
+                self.place_new(scene, &mut e, p);
                 self.gesture = Some(Gesture::Pen {
                     id: e.id().to_string(),
                     points: vec![p],
@@ -833,7 +847,7 @@ impl Editor {
                 };
                 let p = snap::grid_point(p, snap::grid_size(scene, mods.ctrl));
                 let mut e = new::linear(kind, p[0], p[1], &self.style, rng);
-                e.set("index", top_index(scene).map_or(Value::Null, Value::String));
+                self.place_new(scene, &mut e, p);
                 new::normalize_points(&mut e, &[p, p]);
                 self.gesture = Some(Gesture::Linear {
                     id: e.id().to_string(),
@@ -849,7 +863,7 @@ impl Editor {
                 self.snap.hover(scene, p, mods.ctrl, zoom);
                 let p = snap::grid_point(p, snap::grid_size(scene, mods.ctrl));
                 let mut e = new::shape(kind, p[0], p[1], &self.style, rng);
-                e.set("index", top_index(scene).map_or(Value::Null, Value::String));
+                self.place_new(scene, &mut e, p);
                 self.gesture = Some(Gesture::Creating {
                     id: e.id().to_string(),
                     origin: p,
@@ -903,6 +917,7 @@ impl Editor {
                 Some(_) => self.snap.hover(scene, p, mods.ctrl, zoom),
                 None => self.snap.clear(),
             }
+            self.hover_frame(scene, p);
             return out;
         };
         match g {
@@ -912,7 +927,8 @@ impl Editor {
                 };
                 let p = self.snap.new_corner(scene, id, *origin, p, mods.ctrl, zoom);
                 let (mut w, mut h) = (p[0] - origin[0], p[1] - origin[1]);
-                if mods.shift {
+                // Notes are drawn square; Shift frees them.
+                if mods.shift != crate::sticky::is_note(&e) {
                     let s = w.abs().max(h.abs());
                     w = s * w.signum();
                     h = s * h.signum();
@@ -1066,6 +1082,7 @@ impl Editor {
                     bump(&mut e, rng);
                     out.changed.push(e);
                 }
+                self.drag_frame(scene, p);
             }
             Gesture::Resizing {
                 handle,
@@ -1080,9 +1097,11 @@ impl Editor {
                     .filter(|e| e.container_id().is_none_or(|c| !ids.contains(&c)))
                     .cloned()
                     .collect();
-                // A text keeps its proportions.
+                // A text keeps its proportions, a note's corner too unless Shift.
                 let mode = ResizeMode {
-                    keep_ratio: mods.shift || shapes.iter().any(|e| e.kind() == ElementType::Text),
+                    keep_ratio: (mods.shift
+                        != crate::sticky::proportional_by_default(&shapes, *handle))
+                        || shapes.iter().any(|e| e.kind() == ElementType::Text),
                     from_center: mods.alt,
                 };
                 // The pointer in the frame's space, plus the offset, turned back.
@@ -1095,7 +1114,14 @@ impl Editor {
                 let target = self
                     .snap
                     .resized(scene, originals, frame, *handle, target, mods.ctrl, zoom);
-                let mut changed = transform::resize(&shapes, frame, *handle, target, mode);
+                let measure = &self.measure;
+                let mut changed =
+                    crate::sticky::resize_alone(originals, frame, *handle, target, mode, measure)
+                        .unwrap_or_else(|| {
+                            let mut c = transform::resize(&shapes, frame, *handle, target, mode);
+                            crate::sticky::after_resize(originals, &mut c, *handle, mode, measure);
+                            c
+                        });
                 self.snap
                     .show_box(scene, bounds::common_bounds(changed.iter()), mods.ctrl);
                 self.relayout(scene, &mut changed);
@@ -1260,14 +1286,18 @@ impl Editor {
     pub fn pointer_up(&mut self, scene: &Scene, p: Point, rng: &mut dyn Random) -> Output {
         let mut out = Output::default();
         self.snap.clear();
+        self.frame_to_highlight = None;
         let Some(g) = self.gesture.take() else {
             return out;
         };
         match g {
-            Gesture::Creating { id, .. } => {
+            Gesture::Creating { id, origin } => {
                 let Some(e) = scene.element(&id) else {
                     return out;
                 };
+                if crate::sticky::is_note(e) {
+                    return self.finish_sticky_note(scene, e, origin, rng);
+                }
                 if e.width() < 1.0 || e.height() < 1.0 {
                     // A click, not a drag: nothing made.
                     let mut gone = e.clone();
@@ -1276,6 +1306,13 @@ impl Editor {
                     out.changed.push(gone);
                     out.done = true;
                     return out;
+                }
+                // A frame takes in what is wholly in it.
+                if frame::is_frame(e) {
+                    for mut c in self.frame_drawn(scene, e) {
+                        bump(&mut c, rng);
+                        out.changed.push(c);
+                    }
                 }
                 self.selection = vec![id];
                 out.done = true;
@@ -1317,6 +1354,13 @@ impl Editor {
             Gesture::Moving {
                 moved, originals, ..
             } => {
+                // Dropped in a frame, or out of one.
+                if moved {
+                    for mut c in self.dropped(scene, p) {
+                        bump(&mut c, rng);
+                        out.changed.push(c);
+                    }
+                }
                 out.done = moved;
                 if moved {
                     // Elbow arrows tidied: segments that came to line up merged.
@@ -1367,11 +1411,23 @@ impl Editor {
                 }
             }
             Gesture::Label { moved, .. } => out.done = moved,
-            Gesture::Resizing { .. } | Gesture::Rotating { .. } => out.done = true,
+            Gesture::Resizing { .. } => {
+                for mut c in self.frames_resized(scene) {
+                    bump(&mut c, rng);
+                    out.changed.push(c);
+                }
+                out.done = true;
+            }
+            Gesture::Rotating { .. } => out.done = true,
             Gesture::BoxSelecting { .. } => {}
             Gesture::Erasing { ids } => {
                 let mut gone = Vec::new();
-                for e in scene.visible().filter(|e| ids.contains(e.id())) {
+                // A frame's children go with it.
+                let children = frame::erased_children(scene, &ids);
+                for e in scene
+                    .visible()
+                    .filter(|e| ids.contains(e.id()) || children.contains(e.id()))
+                {
                     gone.push(e.id().to_string());
                     // Labels go with what they label.
                     for b in e.bound_elements() {
@@ -1441,6 +1497,42 @@ impl Editor {
         out
     }
 
+    /// Ends drawing a sticky note: sized as the click or drag made it, then
+    /// its text is typed at once (unless the tool stays).
+    fn finish_sticky_note(
+        &mut self,
+        scene: &Scene,
+        e: &Element,
+        origin: Point,
+        rng: &mut dyn Random,
+    ) -> Output {
+        let font = (self.style.font_size, self.style.font_family);
+        let mut note = crate::sticky::finish_drawn(e, origin, self.zoom, font);
+        bump(&mut note, rng);
+        let id = note.id().to_string();
+        let mut out = Output {
+            changed: vec![note.clone()],
+            done: true,
+            ..Output::default()
+        };
+        if self.tool_locked {
+            self.selection.clear();
+            return out;
+        }
+        self.tool = Tool::Selection;
+        out.tool_changed = true;
+        let mut s2 = scene.clone();
+        if let Some(slot) = s2.elements.iter_mut().find(|x| x.id() == id) {
+            *slot = note;
+        }
+        let label = self.edit_label(&s2, &id, rng);
+        for c in label.changed {
+            crate::sticky::upsert(&mut out.changed, c);
+        }
+        out.edit_text = label.edit_text;
+        out
+    }
+
     /// Escape: a line made point by point ends; else the selection clears.
     pub fn escape(&mut self, scene: &Scene, rng: &mut dyn Random) -> Output {
         if let Some(Gesture::Linear { id, mut points, .. }) = self.gesture.take() {
@@ -1464,6 +1556,7 @@ impl Editor {
         self.gesture = None;
         self.bind_hover = None;
         self.snap.clear();
+        self.frame_to_highlight = None;
         // Editing a line's points ends first; the line stays selected.
         if self.line_editor.take().is_none() {
             self.selection.clear();
@@ -1487,6 +1580,13 @@ impl Editor {
         let Some(e) = scene.element(&id) else {
             return out;
         };
+        if frame::is_frame(e) {
+            let mut f = frame::renamed(e, text);
+            bump(&mut f, rng);
+            out.changed.push(f);
+            out.done = true;
+            return out;
+        }
         let mut e = e.clone();
         let text = text.replace("\r\n", "\n");
         let container = e
@@ -1606,6 +1706,10 @@ impl Editor {
                 let id = e.id().to_string();
                 self.edit_label(scene, &id, rng)
             }
+            // On a frame's name: it is renamed.
+            Some(e) if frame::is_frame(e) && frame::on_name(e, p, zoom, &self.measure, 0.0) => {
+                self.edit_text(e.id())
+            }
             Some(_) => Output::default(),
             None if hit::container_at(scene, p, zoom).is_some() => {
                 let id = hit::container_at(scene, p, zoom)
@@ -1646,6 +1750,10 @@ impl Editor {
             [e] if label::can_hold(e) => {
                 let id = e.id().to_string();
                 self.edit_label(scene, &id, rng)
+            }
+            [e] if frame::is_frame(e) => {
+                let id = e.id().to_string();
+                self.edit_text(&id)
             }
             _ => Output::default(),
         }
@@ -1734,12 +1842,14 @@ impl Editor {
         for e in &mut changed {
             e.set("isDeleted", json!(true));
         }
+        self.selection.clear();
+        // A deleted frame's children stay, selected.
+        self.release_children(scene, &mut changed);
         binding::update_arrows(scene, &mut changed);
         for mut e in changed {
             bump(&mut e, rng);
             out.changed.push(e);
         }
-        self.selection.clear();
         out.done = !out.changed.is_empty();
         out
     }
@@ -1756,7 +1866,7 @@ impl Editor {
     /// Moves what is selected by `dx`, `dy` (arrow keys).
     pub fn nudge(&mut self, scene: &Scene, dx: f64, dy: f64, rng: &mut dyn Random) -> Output {
         let mut out = Output::default();
-        let set = self.moving_set(scene);
+        let set = self.dragged_set(scene);
         let mut changed: Vec<Element> = set
             .iter()
             .filter(|e| !elbow::stays(e, &set))
@@ -1778,14 +1888,14 @@ impl Editor {
     /// Copies of what is selected, a little further (Ctrl+D), selected
     /// instead; groups and labels copied with new ids.
     pub fn duplicate(&mut self, scene: &Scene, rng: &mut dyn Random) -> Output {
-        let originals = self.moving_set(scene);
+        let originals = self.dragged_set(scene);
         self.place_copies(scene, &originals, [10.0, 10.0], rng)
     }
 
     /// What is selected, as Excalidraw puts it on the clipboard (with labels
     /// and the pictures it shows).
     pub fn copy(&self, scene: &Scene) -> Option<String> {
-        let set = self.moving_set(scene);
+        let set = self.dragged_set(scene);
         if set.is_empty() {
             return None;
         }
@@ -1809,6 +1919,7 @@ impl Editor {
         let offset = snap::paste_offset(scene, bounds::common_bounds(visible.iter()), at);
         self.tool = Tool::Selection;
         let mut out = self.place_copies(scene, &visible, offset, rng);
+        self.paste_into_frame(scene, &mut out.changed, at);
         out.tool_changed = true;
         out
     }
@@ -1887,9 +1998,9 @@ impl Editor {
                     e.set(k, rebound.unwrap_or(Value::Null));
                 }
             }
-            if e.get("frameId").and_then(Value::as_str).is_some() {
-                let f = o.frame_id().and_then(|f| ids.get(f)).cloned();
-                e.set("frameId", f.map_or(Value::Null, Value::String));
+            // In a frame copied with it, the copy is in the frame's copy.
+            if let Some(f) = o.frame_id().and_then(|f| ids.get(f)) {
+                e.set("frameId", json!(f));
             }
             bump(&mut e, rng);
             if o.container_id().is_none_or(|c| !ids.contains_key(c)) {
@@ -1915,11 +2026,16 @@ impl Editor {
             return self.set_arrow_type(scene, value.as_str().unwrap_or("round"), rng);
         }
         match key {
-            "strokeColor" => {
-                self.style.stroke_color = value.as_str().unwrap_or_default().to_string()
-            }
-            "backgroundColor" => {
-                self.style.background_color = value.as_str().unwrap_or_default().to_string()
+            "strokeColor" | "backgroundColor" => {
+                let selected = self.selected(scene);
+                crate::sticky::pick_color(
+                    &mut self.style,
+                    self.tool,
+                    &selected,
+                    scene,
+                    key,
+                    &value,
+                );
             }
             "fillStyle" => self.style.fill_style = value.as_str().unwrap_or_default().to_string(),
             "strokeWidth" => self.style.stroke_width = value.as_f64().unwrap_or(2.0),
@@ -1952,7 +2068,7 @@ impl Editor {
                 "backgroundColor" | "fillStyle" => e.kind() != ElementType::Text,
                 _ => !label_of_selected || key == "strokeColor" || key == "opacity",
             };
-            if !applies || e.get(key) == Some(&value) {
+            if !applies {
                 continue;
             }
             let mut c = e.clone();
@@ -1960,6 +2076,10 @@ impl Editor {
             if key == "fontFamily" {
                 let lh = crate::fonts::get(value.as_f64().unwrap_or(5.0) as u32).line_height;
                 c.set("lineHeight", num(lh));
+            }
+            crate::sticky::keep_property(e, &mut c, scene, key);
+            if c == *e {
+                continue;
             }
             changed.push(c);
         }
@@ -2034,7 +2154,7 @@ impl Editor {
     ) -> Output {
         let mut out = Output::default();
         let moving: BTreeSet<String> = self
-            .moving_set(scene)
+            .dragged_set(scene)
             .iter()
             .map(|e| e.id().to_string())
             .collect();

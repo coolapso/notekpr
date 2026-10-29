@@ -6,8 +6,10 @@
 
 pub mod canvas;
 pub mod editing;
+pub mod frames;
 pub mod others;
 pub mod snapping;
+pub mod sticky;
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -240,6 +242,7 @@ impl Board {
                 pictures: &pictures,
             },
             &mut self.cache.borrow_mut(),
+            Some(&self.editor.borrow()),
         );
         canvas::draw_overlay(
             &ctx,

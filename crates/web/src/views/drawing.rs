@@ -42,7 +42,7 @@ pub fn Document(vault: String, note: String) -> impl IntoView {
 }
 
 /// The tools of the toolbar: icon, name, shortcut.
-const TOOLS: [(Tool, &str, &str, &str); 13] = [
+const TOOLS: [(Tool, &str, &str, &str); 14] = [
     (Tool::Hand, "hand", "Hand (panning tool)", "H"),
     (Tool::Selection, "pointer", "Selection", "V or 1"),
     (Tool::Rectangle, "square", "Rectangle", "R or 2"),
@@ -53,6 +53,7 @@ const TOOLS: [(Tool, &str, &str, &str); 13] = [
     (Tool::Freedraw, "pen", "Draw", "P or 7"),
     (Tool::Text, "text-tool", "Text", "T or 8"),
     (Tool::Image, "image", "Insert image", "9"),
+    (Tool::StickyNote, "sticky-note", "Sticky note", "N"),
     (Tool::Eraser, "eraser", "Eraser", "E or 0"),
     (Tool::Frame, "frame", "Frame tool", "F"),
     (Tool::Laser, "laser", "Laser pointer", "K"),
@@ -382,7 +383,7 @@ pub fn DrawingView(vault: String, id: String) -> impl IntoView {
         if let (Some(data), Some(text)) = (ev.clipboard_data(), b.with_value(|b| b.copy())) {
             let _ = data.set_data("text/plain", &text);
             ev.prevent_default();
-            b.with_value(|b| b.command(|ed, s, r| ed.delete_selected(s, r)));
+            b.with_value(|b| b.command(|ed, s, r| ed.cut(s, r)));
         }
     };
     let on_paste = move |ev: web_sys::ClipboardEvent| {
@@ -535,13 +536,15 @@ pub fn DrawingView(vault: String, id: String) -> impl IntoView {
                         "left:{}px;top:{}px;min-width:{}px;min-height:{}px;font-size:{}px;line-height:{};font-family:{};color:{};text-align:{};transform:rotate({}rad);transform-origin:0 0",
                         tb.left, tb.top, tb.width.max(8.0), tb.height.max(tb.font_size * tb.line_height), tb.font_size, tb.line_height, tb.font_family, tb.color, tb.align, tb.angle
                     );
+                    let frame_name = tb.frame_name;
                     view! {
-                        <textarea class="drawing-text" node_ref=text_ref style=style spellcheck="false" wrap="off"
+                        <textarea class="drawing-text" class:drawing-frame-name=frame_name node_ref=text_ref style=style spellcheck="false" wrap="off"
                             on:input=move |ev| b.with_value(|b| b.set_text_draft(event_target_value(&ev)))
                             on:blur=move |_| finish_text()
                             on:keydown=move |ev: web_sys::KeyboardEvent| {
                                 ev.stop_propagation();
-                                if ev.key() == "Escape" || (ev.key() == "Enter" && (ev.ctrl_key() || ev.meta_key())) {
+                                // A frame's name is one line.
+                                if ev.key() == "Escape" || (ev.key() == "Enter" && (ev.ctrl_key() || ev.meta_key() || frame_name)) {
                                     ev.prevent_default();
                                     finish_text();
                                 }
@@ -653,6 +656,7 @@ fn Properties(board: StoredValue<Rc<Board>, LocalStorage>, rev: RwSignal<u64>) -
                     Tool::Freedraw => ElementType::Freedraw,
                     Tool::Text => ElementType::Text,
                     Tool::Frame => ElementType::Frame,
+                    Tool::StickyNote => ElementType::StickyNote,
                     _ => ElementType::Rectangle,
                 });
             }
@@ -661,10 +665,19 @@ fn Properties(board: StoredValue<Rc<Board>, LocalStorage>, rev: RwSignal<u64>) -
     };
     let has = move |f: fn(&ElementType) -> bool| kinds().iter().any(f);
     let stroke = move |b: &Board| {
+        let ed = b.editor.borrow();
+        let style = if ed.tool == Tool::StickyNote {
+            &ed.style.sticky_stroke_color
+        } else {
+            &ed.style.stroke_color
+        };
+        prop(b, "strokeColor", json!(style))
+    };
+    let paper = move |b: &Board| {
         prop(
             b,
-            "strokeColor",
-            json!(b.editor.borrow().style.stroke_color),
+            "backgroundColor",
+            json!(b.editor.borrow().style.sticky_background_color),
         )
     };
     let background = move |b: &Board| {
@@ -773,6 +786,14 @@ fn Properties(board: StoredValue<Rc<Board>, LocalStorage>, rev: RwSignal<u64>) -
             ElementType::Text | ElementType::Image | ElementType::Frame
         )
     };
+    // A note's stroke is its ink: no width or style.
+    let lines = |k: &ElementType| {
+        !matches!(
+            k,
+            ElementType::Text | ElementType::Image | ElementType::Frame | ElementType::StickyNote
+        )
+    };
+    let notes = |k: &ElementType| *k == ElementType::StickyNote;
     let rough_kinds = |k: &ElementType| {
         matches!(
             k,
@@ -781,11 +802,13 @@ fn Properties(board: StoredValue<Rc<Board>, LocalStorage>, rev: RwSignal<u64>) -
                 | ElementType::Ellipse
                 | ElementType::Line
                 | ElementType::Arrow
+                | ElementType::StickyNote
         )
     };
     let roundable =
         |k: &ElementType| notekpr_draw::shape::can_change_roundness(k) && *k != ElementType::Line;
-    let texts = |k: &ElementType| *k == ElementType::Text;
+    // A note's text is styled with it.
+    let texts = |k: &ElementType| matches!(k, ElementType::Text | ElementType::StickyNote);
     let arrows = |k: &ElementType| *k == ElementType::Arrow;
     let round_now = move || {
         rev.get();
@@ -830,7 +853,7 @@ fn Properties(board: StoredValue<Rc<Board>, LocalStorage>, rev: RwSignal<u64>) -
         <div class="drawing-props" aria-label="Properties">
             <Show when=move || has(strokes) || has(texts)>
                 <div class="prop"><span class="prop-name">"Stroke"</span>
-                    <div class="picks">{choices(board, rev, "strokeColor", stroke, colors(palette::STROKE_PICKS))}{custom_color("strokeColor", |b| prop(b, "strokeColor", json!(b.editor.borrow().style.stroke_color)))}</div></div>
+                    <div class="picks">{choices(board, rev, "strokeColor", stroke, colors(palette::STROKE_PICKS))}{custom_color("strokeColor", stroke)}</div></div>
             </Show>
             <Show when=move || has(fillable)>
                 <div class="prop"><span class="prop-name">"Background"</span>
@@ -843,7 +866,11 @@ fn Properties(board: StoredValue<Rc<Board>, LocalStorage>, rev: RwSignal<u64>) -
                         (json!("zigzag"), label("≋"), "Zigzag".into()),
                     ])}</div></div>
             </Show>
-            <Show when=move || has(strokes)>
+            <Show when=move || has(notes)>
+                <div class="prop"><span class="prop-name">"Background"</span>
+                    <div class="picks">{choices(board, rev, "backgroundColor", paper, colors(palette::STICKY_NOTE_PICKS))}{custom_color("backgroundColor", |b| prop(b, "backgroundColor", json!(b.editor.borrow().style.sticky_background_color)))}</div></div>
+            </Show>
+            <Show when=move || has(lines)>
                 <div class="prop"><span class="prop-name">"Stroke width"</span>
                     <div class="picks">{choices(board, rev, "strokeWidth", width, vec![
                         (num(1.0), label("—"), "Thin".into()),

@@ -24,6 +24,8 @@ computes `Math.hypot` the way V8 does; their notices are at the end.
 | element shapes, file formats, constant-width strokes (laser-pointer), the editor (`src/edit/`: selecting, transforming, labels, binding, the line editor) | Excalidraw | (c) 2020 Excalidraw |
 | the grid, snapping to other elements (`snapping.ts`), and how the web app draws them (`staticScene.ts`, `renderSnaps.ts`) | Excalidraw | (c) 2020 Excalidraw |
 | elbow arrows' routing (A* around the shapes they connect) | Excalidraw | (c) 2020 Excalidraw |
+| sticky notes: their paper, date and fitted text (`sticky.rs`) | Excalidraw | (c) 2020 Excalidraw |
+| frames: what is in them, their names (`edit/frame.rs`) | Excalidraw | (c) 2020 Excalidraw |
 | compression of Obsidian's drawings | lz-string 1.5 | (c) 2013 pieroxy |
 | `Math.sin`, `Math.cos` | fdlibm 5.3, as in V8 | (c) 1993 Sun Microsystems; the V8 project authors |
 | `Math.hypot` | V8 | the V8 project authors |

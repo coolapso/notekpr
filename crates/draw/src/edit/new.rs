@@ -67,7 +67,8 @@ fn element(p: Props) -> Element {
     Element::from_props(p).expect("has an id and a type")
 }
 
-/// A rectangle, diamond, ellipse, frame or embed at `x`, `y`, no size yet.
+/// A rectangle, diamond, ellipse, sticky note, frame or embed at `x`, `y`,
+/// no size yet.
 pub fn shape(kind: ElementType, x: f64, y: f64, style: &Style, rng: &mut dyn Random) -> Element {
     let mut p = base(&kind, x, y, style, rng);
     if matches!(kind, ElementType::Frame | ElementType::MagicFrame) {
@@ -80,6 +81,25 @@ pub fn shape(kind: ElementType, x: f64, y: f64, style: &Style, rng: &mut dyn Ran
         p.insert("roughness".into(), json!(0));
         p.insert("roundness".into(), Value::Null);
         p.insert("name".into(), Value::Null);
+    }
+    if kind == ElementType::StickyNote {
+        // Notes have their own colours, always filled, and grow from a
+        // base height (`newStickyNoteElement`).
+        p.insert("strokeColor".into(), json!(style.sticky_stroke_color));
+        p.insert(
+            "backgroundColor".into(),
+            json!(style.sticky_background_color),
+        );
+        p.insert("fillStyle".into(), json!("solid"));
+        p.insert(
+            "roundness".into(),
+            if style.round_edges {
+                json!({"type": roundness::PROPORTIONAL_RADIUS})
+            } else {
+                Value::Null
+            },
+        );
+        p.insert("baseHeight".into(), json!(0));
     }
     element(p)
 }

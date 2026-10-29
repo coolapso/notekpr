@@ -363,6 +363,11 @@ impl Board {
         let scene = self.scene();
         let snapped = !self.editor.borrow().snap.lines().is_empty();
         self.editor.borrow_mut().snap.view = Some(view.visible());
+        let shown = self
+            .editor
+            .borrow()
+            .frame_to_highlight()
+            .map(str::to_string);
         let out = self.editor.borrow_mut().pointer_move(
             &scene,
             view.to_scene(p),
@@ -375,8 +380,12 @@ impl Board {
         if busy {
             self.apply(out);
             self.schedule();
-        } else if snapped || !self.editor.borrow().snap.lines().is_empty() {
-            // A shape tool over the canvas: the lines it snaps to.
+        } else if snapped
+            || !self.editor.borrow().snap.lines().is_empty()
+            || self.editor.borrow().frame_to_highlight() != shown.as_deref()
+        {
+            // A shape tool over the canvas: the lines it snaps to, the
+            // frame it would draw in.
             self.schedule();
         }
         // An arrow's end held still over a shape attaches inside it: look
@@ -438,6 +447,7 @@ impl Board {
         }
         if let Some(f) = ed.frame(&scene)
             && let Some(h) = notekpr_draw::edit::transform::handle_at(&f, q, view.zoom)
+                .filter(|h| ed.can_use(&scene, *h))
         {
             return h.cursor(f.angle);
         }
@@ -461,6 +471,13 @@ impl Board {
         let scene = self.scene();
         let e = scene.element(id)?;
         let view = self.view.get();
+        if notekpr_draw::edit::frame::is_frame(e) {
+            return Some(super::frames::name_box(
+                e,
+                &view,
+                crate::drawings::is_dark(),
+            ));
+        }
         // A label is typed across the room in its shape, centred.
         let container = e.container_id().and_then(|c| scene.element(c));
         let (x, width) = match container {
@@ -487,6 +504,7 @@ impl Board {
             align: e.text_align().to_string(),
             text: e.original_text().to_string(),
             angle: e.angle(),
+            frame_name: false,
         })
     }
 
@@ -558,6 +576,8 @@ pub struct TextBox {
     pub align: String,
     pub text: String,
     pub angle: f64,
+    /// A frame's name: one line, Enter ends it.
+    pub frame_name: bool,
 }
 
 /// What a drawing can be exported as.
@@ -866,8 +886,11 @@ impl Board {
 fn png_of(vault: &str, scene: &Scene, dark: bool) -> Option<Vec<u8>> {
     const SCALE: f64 = 2.0;
     const PAD: f64 = 10.0;
-    let [x1, y1, x2, y2] =
-        notekpr_draw::bounds::common_bounds(notekpr_draw::bounds::root_elements(scene));
+    // Frames' names above them are in the picture.
+    use notekpr_draw::edit::frame;
+    let frames: Vec<&Element> = scene.visible().filter(|e| frame::is_frame(e)).collect();
+    let names = frame::name_labels(&frames, dark, &measure);
+    let [x1, y1, x2, y2] = frame::export_bounds(scene, names.values());
     let (w, h) = ((x2 - x1).abs() + PAD * 2.0, (y2 - y1).abs() + PAD * 2.0);
     let canvas: web_sys::HtmlCanvasElement = util::document()
         .create_element("canvas")
@@ -900,6 +923,7 @@ fn png_of(vault: &str, scene: &Scene, dark: bool) -> Option<Vec<u8>> {
             pictures: &pictures,
         },
         &mut super::canvas::ShapeCache::default(),
+        None,
     );
     let url = canvas.to_data_url_with_type("image/png").ok()?;
     let b64 = url.split_once(',')?.1;

@@ -12,11 +12,13 @@ use std::fmt::Write;
 
 use crate::bounds;
 use crate::color;
+use crate::edit::frame;
 use crate::fonts;
 use crate::js;
 use crate::rough::{self, Drawable};
 use crate::scene::{Element, ElementType, Scene};
 use crate::shape::{self, ElementShape, RenderConfig};
+use crate::sticky;
 
 /// `MAX_DECIMALS_FOR_SVG_EXPORT`.
 const DECIMALS: u32 = 2;
@@ -42,6 +44,11 @@ pub struct SvgOptions {
     pub font_faces: Option<String>,
     /// Start with `<?xml …?>` and a doctype, as a file does.
     pub standalone: bool,
+    /// The viewer's clock: the dates on sticky notes.
+    pub time: sticky::LocalTime,
+    /// Measures a line of text in a CSS font: frames' names are cut to
+    /// their width.
+    pub measure: fn(&str, &str) -> f64,
 }
 
 impl Default for SvgOptions {
@@ -52,6 +59,8 @@ impl Default for SvgOptions {
             padding: DEFAULT_PADDING,
             font_faces: None,
             standalone: false,
+            time: sticky::LocalTime::default(),
+            measure: crate::edit::guess_width,
         }
     }
 }
@@ -112,6 +121,7 @@ struct Renderer<'a> {
     out: String,
     /// Frames whose children are clipped to them.
     frames: HashMap<&'a str, &'a Element>,
+    time: sticky::LocalTime,
 }
 
 impl<'a> Renderer<'a> {
@@ -134,9 +144,14 @@ impl<'a> Renderer<'a> {
 
     /// Wraps an element's markup in its frame's clipping and its link.
     fn add(&mut self, e: &Element, markup: String) {
+        self.add_after(e, String::new(), markup);
+    }
+
+    /// As [`Self::add`], `before` (unclipped) ahead of the markup.
+    fn add_after(&mut self, e: &Element, before: String, markup: String) {
         let clipped = match e.frame_id().filter(|f| self.frames.contains_key(f)) {
-            Some(f) => format!(r#"<g clip-path="url(#{})">{markup}</g>"#, esc(f)),
-            None => markup,
+            Some(f) => format!(r#"{before}<g clip-path="url(#{})">{markup}</g>"#, esc(f)),
+            None => format!("{before}{markup}"),
         };
         match e.link().filter(|l| !l.trim().is_empty()) {
             Some(link) => {
@@ -350,8 +365,11 @@ impl<'a> Renderer<'a> {
                 );
                 self.add(e, markup);
             }
-            // Sticky notes are drawn by the editor's own code (to come);
-            // newer kinds aren't drawn.
+            ElementType::StickyNote => {
+                let (clip, note) = sticky::svg(e, &transform, opacity, dark, &self.time);
+                self.add_after(e, clip, note);
+            }
+            // Newer kinds aren't drawn.
             _ => {}
         }
     }
@@ -375,7 +393,14 @@ pub fn export(scene: &Scene, opts: &SvgOptions) -> String {
         .filter(|e| matches!(e.kind(), ElementType::Frame | ElementType::MagicFrame))
         .map(|e| (e.id(), *e))
         .collect();
-    let [min_x, min_y, max_x, max_y] = bounds::common_bounds(bounds::root_elements(scene));
+    // Frames' names are texts above them.
+    let frame_list: Vec<&Element> = visible
+        .iter()
+        .copied()
+        .filter(|e| frame::is_frame(e))
+        .collect();
+    let names = frame::name_labels(&frame_list, opts.dark, &opts.measure);
+    let [min_x, min_y, max_x, max_y] = frame::export_bounds(scene, names.values());
     let (width, height) = ((min_x - max_x).abs(), (min_y - max_y).abs());
     let pad = opts.padding;
     let (w, h) = (width + pad * 2.0, height + pad * 2.0);
@@ -437,6 +462,7 @@ pub fn export(scene: &Scene, opts: &SvgOptions) -> String {
         },
         out,
         frames,
+        time: opts.time,
     };
     let iframe_like =
         |e: &Element| matches!(e.kind(), ElementType::Iframe | ElementType::Embeddable);
@@ -446,6 +472,9 @@ pub fn export(scene: &Scene, opts: &SvgOptions) -> String {
             && e.container_id().is_some_and(|c| r.elements.contains_key(c))
         {
             continue;
+        }
+        if let Some(name) = names.get(e.id()) {
+            r.element(name, name.x() + offset_x, name.y() + offset_y);
         }
         r.element(e, e.x() + offset_x, e.y() + offset_y);
         if let Some(t) = r.bound_text(e) {

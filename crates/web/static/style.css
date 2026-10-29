@@ -1095,6 +1095,10 @@ label.btn.disabled { opacity: .6; pointer-events: none; }
 .drawing-history { position: absolute; left: 196px; bottom: 12px; display: flex; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg); overflow: hidden; }
 .drawing-history button { border: 0; background: none; color: var(--text); padding: 6px 8px; cursor: pointer; display: inline-flex; }
 .drawing-history button:hover { background: var(--accent-bg); }
+.drawing-snap { position: absolute; left: 274px; bottom: 12px; display: flex; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg); overflow: hidden; }
+.drawing-snap button { border: 0; background: none; color: var(--text); padding: 6px 8px; cursor: pointer; display: inline-flex; }
+.drawing-snap button:hover { background: var(--accent-bg); }
+.drawing-snap button.on { background: color-mix(in srgb, var(--accent) 22%, transparent); color: var(--accent); }
 .drawing-text { position: absolute; z-index: 3; margin: 0; padding: 0; border: 0; outline: none; resize: none; overflow: hidden; background: transparent; white-space: pre; field-sizing: content; }
 @media (max-width: 700px) {
   .drawing-props { top: auto; bottom: 60px; width: auto; right: 12px; max-height: 40%; }

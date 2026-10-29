@@ -317,6 +317,7 @@ impl Board {
         self.boundary();
         let scene = self.scene();
         let view = self.view.get();
+        self.editor.borrow_mut().snap.view = Some(view.visible());
         let out = self.editor.borrow_mut().pointer_down(
             &scene,
             view.to_scene(p),
@@ -331,6 +332,8 @@ impl Board {
     pub fn pointer_move(self: &Rc<Self>, p: [f64; 2], pressure: Option<f64>, m: Mods) {
         let scene = self.scene();
         let view = self.view.get();
+        let snapped = !self.editor.borrow().snap.lines().is_empty();
+        self.editor.borrow_mut().snap.view = Some(view.visible());
         let out = self.editor.borrow_mut().pointer_move(
             &scene,
             view.to_scene(p),
@@ -342,6 +345,9 @@ impl Board {
         let busy = self.editor.borrow().busy();
         if busy {
             self.apply(out);
+            self.schedule();
+        } else if snapped || !self.editor.borrow().snap.lines().is_empty() {
+            // A shape tool over the canvas: the lines it snaps to.
             self.schedule();
         }
         // An arrow's end held still over a shape attaches inside it: look
@@ -855,10 +861,13 @@ fn png_of(vault: &str, scene: &Scene, dark: bool) -> Option<Vec<u8>> {
         &ctx,
         scene,
         &view,
-        SCALE,
-        dark,
+        &super::canvas::Look {
+            pixel_ratio: SCALE,
+            dark,
+            grid: None,
+            pictures: &pictures,
+        },
         &mut super::canvas::ShapeCache::default(),
-        &pictures,
     );
     let url = canvas.to_data_url_with_type("image/png").ok()?;
     let b64 = url.split_once(',')?.1;

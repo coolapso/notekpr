@@ -262,17 +262,27 @@ fn draw_image(
     );
 }
 
-/// The canvas's pixels per CSS pixel and the view: draws the drawing;
-/// `pictures` gives the image a picture element shows, once loaded.
+/// How a drawing is drawn on a canvas.
+pub struct Look<'a> {
+    /// The canvas's pixels per CSS pixel.
+    pub pixel_ratio: f64,
+    pub dark: bool,
+    /// The grid under it (not in exports).
+    pub grid: Option<notekpr_draw::edit::snap::Grid>,
+    /// The image a picture element shows, once loaded.
+    pub pictures: &'a dyn Fn(&Element) -> Option<web_sys::HtmlImageElement>,
+}
+
+/// Draws the drawing in the view, as `look` says.
 pub fn draw_scene(
     ctx: &CanvasRenderingContext2d,
     scene: &Scene,
     view: &Viewport,
-    pixel_ratio: f64,
-    dark: bool,
+    look: &Look,
     cache: &mut ShapeCache,
-    pictures: &dyn Fn(&Element) -> Option<web_sys::HtmlImageElement>,
 ) {
+    let (pixel_ratio, dark, grid, pictures) =
+        (look.pixel_ratio, look.dark, look.grid, look.pictures);
     let background = scene.background().to_string();
     ctx.set_transform(1.0, 0.0, 0.0, 1.0, 0.0, 0.0).ok();
     let (w, h) = (view.width * pixel_ratio, view.height * pixel_ratio);
@@ -281,6 +291,9 @@ pub fn draw_scene(
     } else {
         ctx.set_fill_style_str(&color::themed(&background, dark));
         ctx.fill_rect(0.0, 0.0, w, h);
+    }
+    if let Some(g) = grid {
+        super::snapping::draw_grid(ctx, g, view, pixel_ratio, dark);
     }
     let s = pixel_ratio * view.zoom;
     ctx.set_transform(s, 0.0, 0.0, s, view.scroll_x * s, view.scroll_y * s)
@@ -568,5 +581,6 @@ pub fn draw_overlay(
             ctx.fill_rect(x1, y1, x2 - x1, y2 - y1);
         }
     }
+    super::snapping::draw_snaps(ctx, ed.snap.lines(), z, crate::drawings::is_dark());
     ctx.restore();
 }

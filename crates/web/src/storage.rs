@@ -437,6 +437,10 @@ pub struct UiPrefs {
     /// isn't in front (this browser only: the permission is the browser's).
     #[serde(default)]
     pub mention_notifications: bool,
+    /// Drawings: snap to other elements (Alt+S), as Excalidraw keeps it
+    /// for each browser.
+    #[serde(default)]
+    pub drawing_snap: bool,
 }
 
 fn default_mode() -> String {
@@ -460,6 +464,7 @@ impl Default for UiPrefs {
             code_guides: true,
             code_wrap: true,
             mention_notifications: false,
+            drawing_snap: false,
         }
     }
 }

@@ -13,8 +13,8 @@ use notekpr_core::doc::{self, Entry, EntryKind, NoteDoc};
 use notekpr_core::engine::{Applied, Pending, VaultMeta, VaultReplica};
 use notekpr_core::keys::{AccountSecret, VaultKey, VaultKeyring};
 use notekpr_core::protocol::{
-    ChangesResponse, INDEX_OBJECT_ID, Limit, PushResult, REJECT_PURGED, RejectedUpdate, Role,
-    Snapshot, Update, VaultKind, comments_note, comments_object,
+    ChangesResponse, INDEX_OBJECT_ID, Limit, ObjectKind, PushResult, REJECT_PURGED, RejectedUpdate,
+    Role, Snapshot, Update, VaultKind, comments_note, comments_object,
 };
 use notekpr_core::textdiff::{self, Edit};
 use notekpr_core::{comments, markdown, now_ms, order, paths, quick, random_id, search};
@@ -72,7 +72,8 @@ pub struct Vault {
     /// Viewers may comment (the owner's setting).
     pub viewers_comment: bool,
     /// What the vault is for: the person's quick notes are flat, never
-    /// shared and hold at most `note_limit` notes.
+    /// shared and hold at most `note_limit` notes; their Drawings hold
+    /// drawings and files only.
     pub kind: VaultKind,
     pub note_limit: Limit,
     /// What its content takes on the server and may take (MiB), as the
@@ -666,8 +667,9 @@ impl Vault {
         self.rescue(object_id);
         let before = self.outbox.held.len();
         self.outbox.drop_object(&mut self.replica, object_id);
-        // A note deleted for good makes room in the quick notes.
-        if self.is_quick_notes() {
+        // A note deleted for good makes room in the quick notes, a drawing
+        // for another drawing (here; the hub tells the other vaults).
+        if self.is_quick_notes() || self.is_drawing(object_id) {
             self.room_freed();
         }
         self.dirty_quarantine |= self.outbox.held.len() != before;
@@ -676,12 +678,20 @@ impl Vault {
         a
     }
 
-    /// New quick notes that waited for room are sent again.
-    pub fn room_freed(&mut self) {
-        if self.outbox.room_freed(&mut self.replica) > 0 {
+    /// Whether `id` is a drawing (as the vault's index says).
+    pub fn is_drawing(&self, id: &str) -> bool {
+        self.replica.object_kind(id) == ObjectKind::Drawing
+    }
+
+    /// New quick notes and drawings that waited for room are sent again.
+    /// Returns whether there are any.
+    pub fn room_freed(&mut self) -> bool {
+        let released = self.outbox.room_freed(&mut self.replica) > 0;
+        if released {
             self.dirty_quarantine = true;
             self.dirty_pending = true;
         }
+        released
     }
 
     // ------------------------------------------------------------ quick notes

@@ -33,7 +33,12 @@ pub async fn refresh_vaults() {
     });
     // In parallel: each needs its own key request (and local copy read).
     futures::future::join_all(infos.into_iter().map(load_vault)).await;
-    step(|c| publish_vaults(c));
+    step(|c| {
+        publish_vaults(c);
+        // Drawings wait for a limit per person the list doesn't show (it
+        // may have changed): those waiting try again.
+        room_freed(c);
+    });
     // Quick notes are there from the start (once per person); ones deleted
     // offline go for good now.
     leptos::task::spawn_local(async {

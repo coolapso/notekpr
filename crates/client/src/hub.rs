@@ -614,6 +614,23 @@ impl Hub {
             .ok_or_else(|| anyhow!("your quick notes could not be opened"))
     }
 
+    /// A drawing was deleted for good in `vault_id`: new drawings waiting
+    /// for room in the other vaults try again (the limit is per person).
+    /// Returns the vaults with something to send now.
+    pub async fn room_freed_elsewhere(&self, vault_id: &str) -> Vec<String> {
+        let mut out = Vec::new();
+        for v in self.vaults() {
+            let mut g = v.lock().await;
+            if g.id() != vault_id && g.room_freed() {
+                if let Err(e) = g.save() {
+                    tracing::warn!(vault = %g.id(), "saving: {e:#}");
+                }
+                out.push(g.id().to_string());
+            }
+        }
+        out
+    }
+
     pub async fn summaries(&self) -> Vec<VaultSummary> {
         let mut out = Vec::new();
         for v in self.vaults() {

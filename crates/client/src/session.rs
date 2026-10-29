@@ -259,9 +259,11 @@ impl Session {
         v.owner_id = info.owner_id.clone();
         v.archived = info.archived;
         v.viewers_comment = info.viewers_comment;
-        // Only one's own quick notes are taken for them.
-        v.kind = if info.is_quick_notes() && !info.is_own_quick_notes(&self.user_id) {
-            tracing::warn!(vault = %info.id, "a vault listed as quick notes isn't yours alone; it is shown as a vault");
+        // Only one's own quick notes and Drawings are taken for them.
+        v.kind = if (info.is_quick_notes() && !info.is_own_quick_notes(&self.user_id))
+            || (info.is_drawings() && !info.is_own_drawings(&self.user_id))
+        {
+            tracing::warn!(vault = %info.id, "a vault listed as a section of yours isn't yours alone; it is shown as a vault");
             VaultKind::Regular
         } else {
             info.kind
@@ -270,8 +272,10 @@ impl Session {
         v.note_limit = info.note_limit;
         v.storage_bytes = info.storage_bytes;
         v.storage_limit_mb = info.storage_limit_mb;
-        // A changed limit may have made room for notes waiting on this device.
-        if grew && v.is_quick_notes() {
+        // A changed limit may have made room for notes waiting on this
+        // device. Drawings wait for a limit of their owner's that the list
+        // doesn't show: they try again whenever it is reloaded.
+        if grew || !v.is_quick_notes() {
             v.room_freed();
         }
         v.read_only = None;
@@ -805,14 +809,20 @@ impl Session {
                         out.offline = true;
                         break 'rounds;
                     }
-                    // No room in the quick notes: the note waits on this
-                    // device until there is.
+                    // No room in the quick notes, or for another drawing:
+                    // it waits on this device until there is.
                     Err(e) if e.is_limit_reached() => {
                         let mut v = vault.lock().await;
                         if v.is_quick_notes() {
                             v.outbox.key_without_room(&k.object_id);
                             ui::warn(&format!(
                                 "{} A new quick note stays on this device until then.",
+                                e.message()
+                            ));
+                        } else if k.update.kind == ObjectKind::Drawing {
+                            v.outbox.key_without_room(&k.object_id);
+                            ui::warn(&format!(
+                                "{} The new drawing stays on this device until then.",
                                 e.message()
                             ));
                         } else {
@@ -1560,18 +1570,32 @@ struct Rotation {
     not_given: Vec<String>,
 }
 
-/// Tell why changes were kept back: too large, or no room in the quick notes.
+/// Tell why changes were kept back: too large, or no room in the quick notes
+/// or for more drawings.
 fn warn_held(v: &crate::vault::Vault, held: &[notekpr_sync::Held], max: usize) {
-    let no_room = held
+    let no_room: Vec<&notekpr_sync::Held> = held
         .iter()
         .filter(|h| h.reason == notekpr_sync::HoldReason::NoRoom)
+        .collect();
+    let drawings = no_room
+        .iter()
+        .filter(|h| v.replica.object_kind(&h.object_id) == ObjectKind::Drawing)
         .count();
-    if no_room > 0 {
+    let quick = no_room.len() - drawings;
+    if quick > 0 {
         ui::warn(&format!(
-            "{} {no_room} new quick note(s) stay on this device until then.",
+            "{} {quick} new quick note(s) stay on this device until then.",
             notekpr_core::quick::full_message(v.note_limit)
         ));
     }
+    if drawings > 0 {
+        ui::warn(&format!(
+            "vault '{}': {drawings} new drawing(s) stay on this device until there's room for them: \
+             the vault's owner has as many drawings as they may (one deleted for good makes room)",
+            v.name()
+        ));
+    }
+    let no_room = no_room.len();
     if held.len() > no_room {
         warn_too_large(v.name(), held.len() - no_room, max);
     }

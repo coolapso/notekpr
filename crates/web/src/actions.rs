@@ -1782,11 +1782,13 @@ pub fn linked_attachments(c: &Core, vault: &str, id: &str) -> Vec<(String, Strin
         .collect()
 }
 
-/// Move a note, or a folder with everything in it, to another vault
-/// ([`moving`]): the copies there first, then — once the server has them —
-/// the originals go: deleted for good from the quick notes, to the trash of
-/// a vault. History, comments and shares stay with the originals. Returns
-/// the copies' ids by the originals'.
+/// Move a note or drawing, or a folder with everything in it, to another
+/// vault ([`moving`]): the copies there first, then — once the server has
+/// them — the originals go: deleted for good from the quick notes, to the
+/// trash of a vault. A drawing's copy replaces its original, which the
+/// server deletes for good once the copy is stored (so the copy needs no
+/// room under a drawings limit). History, comments and shares stay with the
+/// originals. Returns the copies' ids by the originals'.
 pub async fn move_to_vault(
     from: &str,
     what: &What,
@@ -1858,7 +1860,23 @@ pub async fn move_to_vault(
             }
             EntryKind::Note => step(|c| new_note_at(c, to, &copy.path, &copy.text)),
             EntryKind::Drawing => step(|c| {
-                new_drawing_at(c, to, &copy.path, &copy.drawing.clone().unwrap_or_default())
+                let id =
+                    new_drawing_at(c, to, &copy.path, &copy.drawing.clone().unwrap_or_default());
+                // The original goes once the copy is stored: the copy
+                // replaces it, and needs no room for another drawing.
+                if plan.trash.contains(&copy.from)
+                    && let Some(o) = c.outboxes.get_mut(to)
+                    && o.set_replaces(
+                        &id,
+                        ObjectRef {
+                            vault_id: from.to_string(),
+                            object_id: copy.from.clone(),
+                        },
+                    )
+                {
+                    state::persist_new_keys(c, to, &[]);
+                }
+                id
             }),
         };
         step(|c| {
@@ -1879,7 +1897,7 @@ pub async fn move_to_vault(
     let notes: Vec<&String> = placed
         .copies
         .iter()
-        .filter(|c| c.kind == EntryKind::Note)
+        .filter(|c| matches!(c.kind, EntryKind::Note | EntryKind::Drawing))
         .filter_map(|c| ids.get(&c.from))
         .collect();
     let mut stored = false;

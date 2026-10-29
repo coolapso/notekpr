@@ -8,7 +8,9 @@ use std::sync::Arc;
 
 use notekpr_core::doc::{Entry, EntryKind};
 use notekpr_core::moving::{self, Unmovable, What};
-use notekpr_core::protocol::{INDEX_OBJECT_ID, Limit, PurgedItem, Snapshot, SnapshotInfo};
+use notekpr_core::protocol::{
+    INDEX_OBJECT_ID, Limit, ObjectRef, PurgedItem, Snapshot, SnapshotInfo,
+};
 use notekpr_core::{markdown, paths, quick, search};
 use serde::Serialize;
 
@@ -1335,7 +1337,7 @@ pub struct Moved {
     pub from_path: String,
     pub vault: String,
     pub path: String,
-    /// A note or a folder.
+    /// A note, a drawing or a folder.
     pub kind: EntryKind,
     /// The note's or folder's id there (`None`: a folder that only exists
     /// as the parent of what is in it).
@@ -1351,13 +1353,15 @@ pub struct Moved {
     pub removed: bool,
 }
 
-/// Move a note, or a folder with everything in it, to another vault
-/// ([`moving`]): the copies there, then — once the server has them — the
-/// originals go: deleted for good from the quick notes, to the trash of a
-/// vault. History, comments and shares stay with the originals. `from`
-/// `None`: the quick notes. The copy is `folder/name` (`name` `None`: the
-/// note's title or the folder's name, for a quick note a title from its
-/// first line).
+/// Move a note or drawing, or a folder with everything in it, to another
+/// vault ([`moving`]): the copies there, then — once the server has them —
+/// the originals go: deleted for good from the quick notes, to the trash of
+/// a vault. A drawing's copy replaces its original, which the server
+/// deletes for good once the copy is stored (so the copy needs no room under
+/// a drawings limit). History, comments and shares stay with the
+/// originals. `from` `None`: the quick notes. The copy is `folder/name`
+/// (`name` `None`: the note's title or the folder's name, for a quick note a
+/// title from its first line).
 pub async fn move_to_vault(
     hub: &Hub,
     from: Option<&str>,
@@ -1389,7 +1393,9 @@ pub async fn move_to_vault(
         let g = src.lock().await;
         check_write(hub, &g)?;
         let what = match g.find(reference) {
-            Some((_, e)) if e.kind == EntryKind::Note => What::Note(e.id),
+            Some((_, e)) if matches!(e.kind, EntryKind::Note | EntryKind::Drawing) => {
+                What::Note(e.id)
+            }
             Some((p, e)) if e.kind == EntryKind::Folder => What::Folder(p),
             Some((p, _)) => {
                 return Err(OpError::BadRequest(format!(
@@ -1460,7 +1466,19 @@ pub async fn move_to_vault(
                 EntryKind::Note => g.create_note(&c.path, &c.text).map_err(bad)?.id,
                 EntryKind::Drawing => {
                     let scene = c.drawing.clone().unwrap_or_default();
-                    g.create_drawing(&c.path, &scene).map_err(bad)?.id
+                    let id = g.create_drawing(&c.path, &scene).map_err(bad)?.id;
+                    // The original goes once the copy is stored: the copy
+                    // replaces it, and needs no room for another drawing.
+                    if plan.trash.contains(&c.from) {
+                        g.outbox.set_replaces(
+                            &id,
+                            ObjectRef {
+                                vault_id: from_vault.clone(),
+                                object_id: c.from.clone(),
+                            },
+                        );
+                    }
+                    id
                 }
             };
             g.copy_looks(&id, c.icon.as_deref(), c.order.as_deref())
@@ -1504,6 +1522,8 @@ pub async fn move_to_vault(
         path: placed.path.clone(),
         kind: if plan.is_folder() {
             EntryKind::Folder
+        } else if plan.is_drawing() {
+            EntryKind::Drawing
         } else {
             EntryKind::Note
         },

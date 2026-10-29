@@ -219,6 +219,7 @@ pub(super) fn on_server_message(m: ServerMessage) {
                     rescue(c, &vault_id, &object_id);
                 }
                 let quick = c.is_quick_notes(&vault_id);
+                let drawing = is_drawing(c, &vault_id, &object_id);
                 let r = c.replicas.get_mut(&vault_id)?;
                 let o = c.outboxes.entry(vault_id.clone()).or_default();
                 o.drop_object(r, &object_id);
@@ -226,6 +227,11 @@ pub(super) fn on_server_message(m: ServerMessage) {
                 if quick && o.room_freed(r) > 0 {
                     persist_pending(c, &vault_id);
                     send_planned(c, &vault_id);
+                }
+                // A drawing for another drawing, in any vault (the limit is
+                // per person).
+                if drawing {
+                    room_freed(c);
                 }
                 let r = c.replicas.get_mut(&vault_id)?;
                 let applied = r.apply_purge(&object_id, seq);
@@ -846,6 +852,34 @@ fn carry(c: &mut Core, vault_id: &str) {
     }
 }
 
+/// Whether `object_id` is a drawing (as its vault's index says).
+fn is_drawing(c: &Core, vault_id: &str, object_id: &str) -> bool {
+    c.replicas
+        .get(vault_id)
+        .is_some_and(|r| r.object_kind(object_id) == ObjectKind::Drawing)
+}
+
+/// There may be room for new drawings again (one was deleted for good, or a
+/// limit changed): those waiting in any vault are sent again. Quick notes
+/// wait for their own (`crate::quick`).
+pub(super) fn room_freed(c: &mut Core) {
+    let vaults: Vec<String> = c
+        .outboxes
+        .keys()
+        .filter(|v| !c.is_quick_notes(v))
+        .cloned()
+        .collect();
+    for v in vaults {
+        let (Some(r), Some(o)) = (c.replicas.get_mut(&v), c.outboxes.get_mut(&v)) else {
+            continue;
+        };
+        if o.room_freed(r) > 0 {
+            persist_pending(c, &v);
+            send_planned(c, &v);
+        }
+    }
+}
+
 /// Give a note created here its own key, registered before any of its
 /// content is sent (so none of it is ever under the vault key).
 pub fn new_note_key(c: &mut Core, vault_id: &str, object_id: &str, title: &str) {
@@ -904,16 +938,25 @@ async fn register_keys(vault_id: String, keys: Vec<notekpr_sync::NewKey>) {
             // Offline or a server problem: tried again with a later plan
             // (the next edit or reconnect).
             Err(e) if e.status == 0 || e.status >= 500 => {}
-            // The quick notes are full: the note stays on this device until
-            // there's room.
-            Err(e) if e.code == ERROR_LIMIT_REACHED && step(|c| c.is_quick_notes(&vault_id)) => {
+            // The quick notes are full, or the drawings: the note or
+            // drawing stays on this device until there's room.
+            Err(e)
+                if e.code == ERROR_LIMIT_REACHED
+                    && (k.update.kind == ObjectKind::Drawing
+                        || step(|c| c.is_quick_notes(&vault_id))) =>
+            {
                 step(|c| {
                     if let Some(o) = c.outboxes.get_mut(&vault_id) {
                         o.key_without_room(&k.object_id);
                     }
                 });
+                let what = if k.update.kind == ObjectKind::Drawing {
+                    "drawing"
+                } else {
+                    "quick note"
+                };
                 error(format!(
-                    "{} The new quick note stays on this device until then.",
+                    "{} The new {what} stays on this device until then.",
                     e.message
                 ));
             }
@@ -968,12 +1011,20 @@ pub fn limits() -> notekpr_sync::Limits {
 }
 
 /// Tell the user (once per update) about changes held back: too large, or
-/// new quick notes without room.
+/// new quick notes or drawings without room.
 pub(super) fn report_held(c: &Core, vault_id: &str, held: &[notekpr_sync::Held]) {
     let (no_room, held): (Vec<&notekpr_sync::Held>, Vec<&notekpr_sync::Held>) = held
         .iter()
         .partition(|h| h.reason == notekpr_sync::HoldReason::NoRoom);
-    if !no_room.is_empty() {
+    let drawings = no_room
+        .iter()
+        .any(|h| is_drawing(c, vault_id, &h.object_id));
+    if drawings {
+        error(
+            "The vault's owner has as many drawings as they may: new drawings stay on this \
+             device until one is deleted for good.",
+        );
+    } else if !no_room.is_empty() {
         let limit = c
             .vault_infos
             .get(vault_id)

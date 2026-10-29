@@ -13,7 +13,7 @@ crates/load     load test runner (task load)           → notekpr-load
 crates/load-events  what the load runner streams to its live view
 crates/load-ui  the load test's live view (wasm32)     → dist/load
 scripts/        build-web.sh, build-load-ui.sh, demo.py (task demo), logo.py (the logo)
-site/           project website: static HTML + CSS, no build step (task site)
+site/           project website: static HTML + CSS and a little JS, no build step (task site)
 tests/e2e       browser end-to-end tests (Python stdlib + chromedriver)
 fuzz/           fuzz targets, a separate workspace (fuzz/run.sh, task fuzz)
 vendor/yrs      yrs 0.28 with fixes, via [patch.crates-io] (see its NOTEKPR.md)

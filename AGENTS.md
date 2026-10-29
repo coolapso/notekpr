@@ -120,8 +120,9 @@ vendor/yrs      yrs 0.28 with fixes for panics found by fuzzing, via [patch.crat
                 the changes are in vendor/yrs/NOTEKPR.md — re-apply on upgrade
 vendor/openidconnect  openidconnect 4.0.1 on p256/p384 0.14 (a crypto-bigint advisory),
                 via [patch.crates-io]; drop it once upstream moves (its NOTEKPR.md)
-site/           project website: static HTML + CSS, no build step, no third-party
-                requests (fonts, scripts, analytics) — keep it that way
+site/           project website: static HTML + CSS and a little hand-written JS
+                (site.js, optional), no build step, no third-party requests
+                (fonts, scripts, analytics) — keep it that way; screenshots in img/
 deploy/         Kubernetes manifests, Dex (dev OIDC), examples/ (optional reverse
                 proxies: Caddy, Traefik — never required, TLS is the operator's choice)
 (root)          Dockerfile, docker-compose.yml, docker-compose.dev.yml, Taskfile.yml

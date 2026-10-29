@@ -6,6 +6,7 @@
 
 pub mod canvas;
 pub mod editing;
+pub mod snapping;
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -83,6 +84,7 @@ impl Board {
             editor: RefCell::new({
                 let mut ed = Editor::default();
                 ed.measure = editing::measure;
+                ed.snap.to_objects = snapping::remembered();
                 ed
             }),
             unwritten: RefCell::new(HashMap::new()),
@@ -211,6 +213,7 @@ impl Board {
             self.pixel_ratio.get(),
             drawings::is_dark(),
             &mut self.cache.borrow_mut(),
+            notekpr_draw::edit::snap::Grid::of(&scene),
         );
         canvas::draw_overlay(
             &ctx,

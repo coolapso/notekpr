@@ -11,7 +11,7 @@ use leptos::prelude::*;
 use notekpr_core::doc::EntryKind;
 use notekpr_core::paths;
 use notekpr_draw::color::palette;
-use notekpr_draw::edit::Tool;
+use notekpr_draw::edit::{Tool, snap};
 use notekpr_draw::scene::ElementType;
 use serde_json::{Value, json};
 use wasm_bindgen::JsCast;
@@ -114,9 +114,15 @@ pub fn DrawingView(vault: String, id: String) -> impl IntoView {
     let rev = RwSignal::new(0u64);
     board.on_change(move || rev.update(|r| *r += 1));
     let zoom = RwSignal::new(1.0);
+    let grid = RwSignal::new(false);
     board.on_zoom(move |z| {
         if zoom.get_untracked() != z {
             zoom.set(z);
+        }
+        // The grid is the drawing's: anyone drawing it turns it on or off.
+        let on = b.with_value(|b| b.grid_on());
+        if grid.get_untracked() != on {
+            grid.set(on);
         }
     });
     let shown_zoom = move || format!("{}%", (zoom.get() * 100.0).round());
@@ -251,7 +257,8 @@ pub fn DrawingView(vault: String, id: String) -> impl IntoView {
                     true
                 }
                 (false, "ArrowLeft" | "ArrowRight" | "ArrowUp" | "ArrowDown") if w => {
-                    let step = if shift { 5.0 } else { 1.0 };
+                    let grid = snap::grid_size(&b.scene(), false);
+                    let step = snap::nudge_step(grid, shift);
                     let (dx, dy) = match key.as_str() {
                         "ArrowLeft" => (-step, 0.0),
                         "ArrowRight" => (step, 0.0),
@@ -330,6 +337,17 @@ pub fn DrawingView(vault: String, id: String) -> impl IntoView {
                 (true, "0") => {
                     let z = b.view.get().zoom;
                     b.zoom_by(1.0 / z);
+                    true
+                }
+                (true, k) if w && (k == "'" || ev.code() == "Quote") => {
+                    b.toggle_grid();
+                    true
+                }
+                (false, k)
+                    if w && ev.alt_key()
+                        && (k.eq_ignore_ascii_case("s") || ev.code() == "KeyS") =>
+                {
+                    b.set_snapping(!b.snapping());
                     true
                 }
                 _ => false,
@@ -501,7 +519,31 @@ pub fn DrawingView(vault: String, id: String) -> impl IntoView {
                     <button title="Undo — Ctrl+Z" aria-label="Undo" on:click=move |_| b.with_value(|b| b.undo(false))><Icon name="undo"/></button>
                     <button title="Redo — Ctrl+Shift+Z" aria-label="Redo" on:click=move |_| b.with_value(|b| b.undo(true))><Icon name="redo"/></button>
                 </div>
+                <Show when=move || writable.get()>
+                    <SnapToggles board=b rev=rev grid=grid/>
+                </Show>
             </div>
+        </div>
+    }
+}
+
+/// The grid (the drawing's) and snapping to elements (one's own), on or off.
+#[component]
+fn SnapToggles(
+    board: StoredValue<Rc<Board>, LocalStorage>,
+    rev: RwSignal<u64>,
+    grid: RwSignal<bool>,
+) -> impl IntoView {
+    let snapping = move || {
+        rev.get();
+        board.with_value(|b| b.snapping())
+    };
+    view! {
+        <div class="drawing-snap" role="group" aria-label="Snapping">
+            <button class:on=move || grid.get() title="Grid — Ctrl+'" aria-label="Grid" aria-pressed=move || grid.get().to_string()
+                on:click=move |_| board.with_value(|b| b.toggle_grid())><Icon name="grid"/></button>
+            <button class:on=snapping title="Snap to objects — Alt+S" aria-label="Snap to objects" aria-pressed=move || snapping().to_string()
+                on:click=move |_| board.with_value(|b| b.set_snapping(!b.snapping()))><Icon name="magnet"/></button>
         </div>
     }
 }

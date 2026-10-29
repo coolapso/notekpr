@@ -185,6 +185,12 @@ fn paths(name: &str) -> &'static str {
         "maximize" => r#"<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>"#,
         "sort" => r#"<path d="M7 4v16M3.5 16.5 7 20l3.5-3.5M13 6h8M13 11h6M13 16h4"/>"#,
         "comment" => r#"<path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1.2-4.1A8 8 0 1 1 21 12z"/>"#,
+        "grid" => {
+            r#"<rect x="3.5" y="3.5" width="17" height="17" rx="2"/><path d="M3.5 9.17h17M3.5 14.83h17M9.17 3.5v17M14.83 3.5v17"/>"#
+        }
+        "magnet" => {
+            r#"<path d="M5 3.5h4.5V12a2.5 2.5 0 0 0 5 0V3.5H19V12a7 7 0 0 1-14 0z"/><path d="M5 8h4.5M14.5 8H19"/>"#
+        }
         "smile" => {
             r#"<circle cx="12" cy="12" r="9"/><path d="M8.5 14.5a4.5 4.5 0 0 0 7 0M9 9.5h.01M15 9.5h.01"/>"#
         }

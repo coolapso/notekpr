@@ -216,7 +216,8 @@ fn draw_frame(ctx: &CanvasRenderingContext2d, e: &Element, dark: bool, zoom: f64
     let _ = ctx.fill_text(name, 0.0, -3.0 / zoom);
 }
 
-/// The canvas's pixels per CSS pixel and the view: draws the drawing.
+/// The canvas's pixels per CSS pixel and the view: draws the drawing, on
+/// `grid` if given (not in exports).
 pub fn draw_scene(
     ctx: &CanvasRenderingContext2d,
     scene: &Scene,
@@ -224,6 +225,7 @@ pub fn draw_scene(
     pixel_ratio: f64,
     dark: bool,
     cache: &mut ShapeCache,
+    grid: Option<notekpr_draw::edit::snap::Grid>,
 ) {
     let background = scene.background().to_string();
     ctx.set_transform(1.0, 0.0, 0.0, 1.0, 0.0, 0.0).ok();
@@ -233,6 +235,9 @@ pub fn draw_scene(
     } else {
         ctx.set_fill_style_str(&color::themed(&background, dark));
         ctx.fill_rect(0.0, 0.0, w, h);
+    }
+    if let Some(g) = grid {
+        super::snapping::draw_grid(ctx, g, view, pixel_ratio, dark);
     }
     let s = pixel_ratio * view.zoom;
     ctx.set_transform(s, 0.0, 0.0, s, view.scroll_x * s, view.scroll_y * s)
@@ -415,5 +420,6 @@ pub fn draw_overlay(
             ctx.fill_rect(x1, y1, x2 - x1, y2 - y1);
         }
     }
+    super::snapping::draw_snaps(ctx, ed.snap.lines(), z, crate::drawings::is_dark());
     ctx.restore();
 }

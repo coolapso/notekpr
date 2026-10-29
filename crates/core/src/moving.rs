@@ -2,8 +2,9 @@
 //! vault.
 //!
 //! Each vault has its own keys, so a move copies: the note or drawing, or
-//! the folder's notes, drawings, folders and files, and the files and
-//! drawings elsewhere its notes link to.
+//! the folder's notes, drawings, folders and files, the files and drawings
+//! elsewhere its notes link to, and the pictures its drawings show (the
+//! copies show the copies: [`relinked`]).
 //! Once the other vault has every copy, the originals go to the trash
 //! (deleted for good from the quick notes), except files a note staying
 //! behind still links to. History, comments and note shares stay with the
@@ -19,6 +20,7 @@ use crate::doc::{Entry, EntryKind};
 use crate::engine::VaultReplica;
 use crate::markdown;
 use crate::paths::{self, PathError};
+use crate::pictures;
 
 /// What moves.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -93,12 +95,20 @@ pub struct Copy {
     pub order: Option<String>,
 }
 
+/// A copy's drawing, showing the copies of its pictures: `copy_of(id)`
+/// is the id of the copy of the original file `id`.
+pub fn relinked(c: &Copy, copy_of: impl Fn(&str) -> Option<String>) -> Scene {
+    let mut scene = c.drawing.clone().unwrap_or_default();
+    pictures::relink(&mut scene, copy_of);
+    scene
+}
+
 /// Where a move puts everything, from [`Plan::place`].
 #[derive(Clone, Debug, PartialEq)]
 pub struct Placed {
     /// The path of the note or folder in the other vault.
     pub path: String,
-    /// In the order to make them: folders (parents first), files, notes.
+    /// In the order to make them: folders (parents first), files, drawings, notes.
     pub copies: Vec<Copy>,
 }
 
@@ -199,20 +209,53 @@ pub fn plan(r: &VaultReplica, what: &What) -> Result<Plan, Unmovable> {
             });
         }
     }
-    let trash = items
-        .iter()
-        .filter(|i| {
-            let file = matches!(i.entry.kind, EntryKind::Attachment | EntryKind::Drawing);
-            !file || !kept.contains(&i.entry.id)
-        })
-        .map(|i| i.entry.id.clone())
-        .collect();
     let mut drawings = BTreeMap::new();
     for e in items.iter().map(|i| &i.entry) {
         if e.kind == EntryKind::Drawing {
             drawings.insert(e.id.clone(), content(&e.id)?);
         }
     }
+    // The pictures the drawings show come along…
+    let going: BTreeSet<String> = items.iter().map(|i| i.entry.id.clone()).collect();
+    let shown: BTreeSet<String> = drawings
+        .values()
+        .flat_map(pictures::attachments)
+        .map(|(_, att)| att)
+        .collect();
+    for e in &entries {
+        if e.kind == EntryKind::Attachment && shown.contains(&e.id) && !going.contains(&e.id) {
+            items.push(Item {
+                entry: e.clone(),
+                place: Place::Beside,
+            });
+        }
+    }
+    // …but those a drawing staying behind shows stay too (all of them, if
+    // one of those isn't at hand to tell).
+    let mut kept = kept;
+    let mut unsure = false;
+    for e in entries
+        .iter()
+        .filter(|e| e.kind == EntryKind::Drawing && !going.contains(&e.id))
+    {
+        match r.notes.get(&e.id).filter(|_| r.is_complete(&e.id)) {
+            Some(doc) => kept.extend(
+                pictures::attachments(&doc.drawing().scene())
+                    .into_iter()
+                    .map(|(_, att)| att),
+            ),
+            None => unsure = true,
+        }
+    }
+    let trash = items
+        .iter()
+        .filter(|i| {
+            let file = matches!(i.entry.kind, EntryKind::Attachment | EntryKind::Drawing);
+            let picture = i.entry.kind == EntryKind::Attachment && shown.contains(&i.entry.id);
+            !file || !(kept.contains(&i.entry.id) || (picture && unsure))
+        })
+        .map(|i| i.entry.id.clone())
+        .collect();
     Ok(Plan {
         what: what.clone(),
         root,
@@ -383,10 +426,12 @@ impl Plan {
             })
             .unwrap_or_else(|| text.clone())
         };
+        // Files before the drawings showing them.
         let rank = |k: EntryKind| match k {
             EntryKind::Folder => 0,
-            EntryKind::Attachment | EntryKind::Drawing => 1,
-            EntryKind::Note => 2,
+            EntryKind::Attachment => 1,
+            EntryKind::Drawing => 2,
+            EntryKind::Note => 3,
         };
         placed.sort_by(|(a, pa), (b, pb)| (rank(a.entry.kind), pa).cmp(&(rank(b.entry.kind), pb)));
         let copies = placed
@@ -498,6 +543,58 @@ mod tests {
         assert_eq!(placed.copies[0].order, None);
         let n1 = placed.copies.iter().find(|c| c.from == "n1").unwrap();
         assert_eq!(n1.text, "![[photo.png]] ![[plan.pdf]]");
+    }
+
+    #[test]
+    fn a_drawings_pictures_come_along_unless_another_shows_them() {
+        use serde_json::json;
+        let mut from = vault(&[
+            ("d1", "Plans/Garden.drawing", EntryKind::Drawing, ""),
+            ("d2", "Other.drawing", EntryKind::Drawing, ""),
+            ("pa", "attachments/beds.png", A, ""),
+            ("pb", "attachments/shed.png", A, ""),
+        ]);
+        let shows = |files: serde_json::Value| Scene {
+            files: files.as_object().unwrap().clone(),
+            ..Scene::default()
+        };
+        let d1 = shows(json!({
+            "f1": {"id": "f1", "mimeType": "image/png", "attachment": "pa"},
+            "f2": {"id": "f2", "mimeType": "image/png", "attachment": "pb"},
+        }));
+        let d2 = shows(json!({"f3": {"id": "f3", "mimeType": "image/png", "attachment": "pb"}}));
+        from.notes
+            .entry("d1".into())
+            .or_default()
+            .drawing()
+            .set_scene(&d1);
+        from.notes
+            .entry("d2".into())
+            .or_default()
+            .drawing()
+            .set_scene(&d2);
+        let p = plan(&from, &What::Note("d1".into())).unwrap();
+        let mut files = p.files();
+        files.sort();
+        assert_eq!(files, ["pa", "pb"]);
+        // The other drawing still shows one: it stays (and is copied).
+        let mut trash = p.trash.clone();
+        trash.sort();
+        assert_eq!(trash, ["d1", "pa"]);
+        let placed = p.place(&vault(&[]), "", "Garden").unwrap();
+        // The pictures are made before the drawing showing them.
+        assert_eq!(
+            paths_of(&placed),
+            [
+                ("pa", "beds.png"),
+                ("pb", "shed.png"),
+                ("d1", "Garden.drawing")
+            ]
+        );
+        let copy = placed.copies.iter().find(|c| c.from == "d1").unwrap();
+        let there = relinked(copy, |old| Some(format!("{old}-copy")));
+        assert_eq!(there.files["f1"]["attachment"], "pa-copy");
+        assert_eq!(there.files["f2"]["attachment"], "pb-copy");
     }
 
     #[test]

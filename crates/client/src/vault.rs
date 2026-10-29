@@ -17,7 +17,7 @@ use notekpr_core::protocol::{
     Role, Snapshot, Update, VaultKind, comments_note, comments_object,
 };
 use notekpr_core::textdiff::{self, Edit};
-use notekpr_core::{comments, markdown, now_ms, order, paths, quick, random_id, search};
+use notekpr_core::{comments, markdown, now_ms, order, paths, pictures, quick, random_id, search};
 use notekpr_sync::members::MemberLog;
 use notekpr_sync::{Limits, Outbox, Plan, Reaction};
 
@@ -1442,7 +1442,9 @@ impl Vault {
             if e.kind != EntryKind::Drawing {
                 bail!("'{p}' exists and is not a drawing");
             }
-            let changed = self.set_drawing(&e.id, scene)?;
+            let current = self.drawing(&e.id);
+            let scene = self.adopt_pictures(&p, scene, Some(&current))?;
+            let changed = self.set_drawing(&e.id, &scene)?;
             return Ok(WriteResult {
                 id: e.id,
                 path: p,
@@ -1451,6 +1453,95 @@ impl Vault {
             });
         }
         self.create_drawing(path, scene)
+    }
+
+    /// The pictures a drawing file holds inside become files of the vault
+    /// (in `attachments/`, named after the drawing) that the drawing shows
+    /// (`pictures`); those it shows from the vault already stay, and so do
+    /// those `current` (the drawing before) showed from it. A picture the
+    /// vault has a file of already (the same bytes: an export brought both
+    /// back) shows that file.
+    pub fn adopt_pictures(
+        &mut self,
+        drawing_path: &str,
+        scene: &notekpr_draw::scene::Scene,
+        current: Option<&notekpr_draw::scene::Scene>,
+    ) -> Result<notekpr_draw::scene::Scene> {
+        let entries = self.paths();
+        let live = |id: &str| {
+            entries
+                .values()
+                .any(|e| e.id == id && e.kind == EntryKind::Attachment)
+        };
+        let mut taken: BTreeSet<String> = entries.keys().map(|p| p.to_lowercase()).collect();
+        let title = paths::drawing_title(drawing_path).to_string();
+        let mut out = scene.clone();
+        for (file_id, f) in &scene.files {
+            let mime = f
+                .get("mimeType")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("image/png");
+            let created = f
+                .get("created")
+                .and_then(serde_json::Value::as_f64)
+                .unwrap_or(now_ms() as f64);
+            let shown = pictures::attachment_of(f)
+                .filter(|a| live(a))
+                .or_else(|| {
+                    current
+                        .and_then(|c| c.files.get(file_id))
+                        .and_then(pictures::attachment_of)
+                        .filter(|a| live(a))
+                })
+                .map(str::to_string);
+            if let Some(att) = shown {
+                out.files.insert(
+                    file_id.clone(),
+                    pictures::entry(file_id, mime, &att, created),
+                );
+                continue;
+            }
+            let Some((mime, bytes)) = f
+                .get("dataURL")
+                .and_then(serde_json::Value::as_str)
+                .and_then(pictures::decode_data_url)
+            else {
+                continue;
+            };
+            let hash = content_hash(&bytes);
+            let same = entries.values().find(|e| {
+                e.kind == EntryKind::Attachment
+                    && e.size == Some(bytes.len() as u64)
+                    && self.attachment_hash(&e.id).as_deref() == Some(hash.as_str())
+            });
+            if let Some(e) = same {
+                out.files.insert(
+                    file_id.clone(),
+                    pictures::entry(file_id, &mime, &e.id, created),
+                );
+                continue;
+            }
+            let path = paths::unique(
+                &format!("attachments/{title}.{}", pictures::extension(&mime)),
+                |p| taken.contains(&p.to_lowercase()),
+            );
+            taken.insert(path.to_lowercase());
+            let r = self.add_attachment(&path, &bytes, Some(&mime))?;
+            out.files.insert(
+                file_id.clone(),
+                pictures::entry(file_id, &mime, &r.id, created),
+            );
+        }
+        Ok(out)
+    }
+
+    /// A drawing as a `.drawing` file, with the pictures it shows that are
+    /// at hand on this device inside.
+    pub fn drawing_file(&self, id: &str) -> String {
+        let scene = pictures::embed(&self.drawing(id), |att| {
+            self.cached_attachment(att).ok().flatten()
+        });
+        notekpr_draw::file::write_drawing(&scene)
     }
 
     /// Creates a drawing at `path` (`.drawing` is added if missing).
@@ -1467,6 +1558,7 @@ impl Vault {
         if self.paths().contains_key(&p) {
             bail!("'{p}' already exists");
         }
+        let scene = &self.adopt_pictures(&p, scene, None)?;
         let id = random_id();
         let budget = self.update_budget();
         let doc = self.replica.notes.entry(id.clone()).or_default();

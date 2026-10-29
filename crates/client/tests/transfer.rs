@@ -570,3 +570,79 @@ async fn importing_other_apps_drawings_makes_drawings() {
     assert_eq!(kind("Just a name.excalidraw.md"), Some(EntryKind::Note));
     assert_eq!(kind("Board.excalidraw"), None);
 }
+
+/// A picture in a drawing file becomes a file of the vault that the drawing
+/// shows; written out (`cat`, exports), the drawing holds it inside again,
+/// and an import makes it a file of that vault too.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn pictures_in_drawings_are_files_of_the_vault() {
+    let srv = start().await;
+    let alice = login(&srv, "alice").await;
+    manage::create_vault(&alice, "Art").await.unwrap();
+    manage::create_vault(&alice, "Copy").await.unwrap();
+    let h = hub(&alice).await;
+    let png = notekpr_core::pictures::data_url("image/png", b"\x89PNG picture");
+    let file = serde_json::json!({
+        "type": "excalidraw", "version": 2,
+        "elements": [{"id": "i", "type": "image", "x": 0, "y": 0, "width": 50, "height": 40,
+            "fileId": "f1", "status": "saved", "scale": [1, 1]}],
+        "files": {"f1": {"id": "f1", "mimeType": "image/png", "dataURL": png, "created": 5}},
+    })
+    .to_string();
+    ops::put_drawing(&h, "Art", "Plans/Board", &file)
+        .await
+        .unwrap();
+    let v = h.resolve("Art").await.unwrap();
+    let (att, drawing) = {
+        let g = v.lock().await;
+        let (_, a) = g
+            .find("attachments/Board.png")
+            .expect("the picture, a file");
+        assert_eq!(a.kind, EntryKind::Attachment);
+        let (_, d) = g.find("Plans/Board").unwrap();
+        let scene = g.drawing(&d.id);
+        assert_eq!(scene.files["f1"]["attachment"], a.id.as_str());
+        assert!(
+            scene.files["f1"].get("dataURL").is_none(),
+            "not in the drawing"
+        );
+        (a.id, d.id)
+    };
+    assert_eq!(
+        h.session.attachment(&v, &att).await.unwrap(),
+        b"\x89PNG picture"
+    );
+    // The same file again: no second copy of the picture.
+    ops::put_drawing(&h, "Art", "Plans/Board", &file)
+        .await
+        .unwrap();
+    assert!(v.lock().await.find("attachments/Board 2.png").is_none());
+    // Written out, it's inside.
+    let out = ops::drawing_file(&h, &v, &drawing).await;
+    let json: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(json["files"]["f1"]["dataURL"], png.as_str());
+    // Exported and imported elsewhere: a file there, shown from there.
+    h.local_changed(&src_id_of(&h, "Art").await, vec![], true)
+        .await;
+    let dir = srv.path("art-export");
+    transfer::export(&h, &v, &dir, false).await.unwrap();
+    let to = h.resolve("Copy").await.unwrap();
+    transfer::import(&h, &to, &dir, None, false, false)
+        .await
+        .unwrap();
+    let g = to.lock().await;
+    let (_, copy) = g.find("attachments/Board.png").expect("the picture there");
+    let (_, d) = g.find("Plans/Board").unwrap();
+    assert_eq!(g.drawing(&d.id).files["f1"]["attachment"], copy.id.as_str());
+    assert_ne!(copy.id, att);
+}
+
+async fn src_id_of(hub: &Hub, vault: &str) -> String {
+    hub.resolve(vault)
+        .await
+        .unwrap()
+        .lock()
+        .await
+        .id()
+        .to_string()
+}

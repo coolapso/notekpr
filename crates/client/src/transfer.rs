@@ -41,10 +41,10 @@ enum Item {
         path: String,
         text: String,
     },
-    /// A drawing, as an Excalidraw file.
+    /// A drawing, as a `.drawing` file with its pictures inside.
     Drawing {
         path: String,
-        text: String,
+        id: String,
     },
     /// A note's comments, as a Markdown file.
     Comments {
@@ -140,10 +140,7 @@ async fn exported(
                     }
                 }
                 EntryKind::Attachment => Item::Attachment { path: p, id: e.id },
-                EntryKind::Drawing => Item::Drawing {
-                    text: notekpr_draw::file::write_drawing(&v.drawing(&e.id)),
-                    path: p,
-                },
+                EntryKind::Drawing => Item::Drawing { path: p, id: e.id },
                 EntryKind::Folder => Item::Folder { path: p },
             });
         }
@@ -174,7 +171,8 @@ async fn exported(
                 files.push((path, text.into_bytes()));
                 report.notes += 1;
             }
-            Item::Drawing { path, text } => {
+            Item::Drawing { path, id } => {
+                let text = crate::ops::drawing_file(hub, vault, &id).await;
                 files.push((path, text.into_bytes()));
                 report.drawings += 1;
             }
@@ -561,7 +559,16 @@ async fn import_collected(
 ) -> Result<()> {
     let (mut files, dirs) = collected;
     // Notes first: a file in the quick notes needs a note linking to it.
-    files.sort_by_key(|(rel, _)| !paths::is_note(rel));
+    // Drawings last: the pictures they show may be among the files.
+    files.sort_by_key(|(rel, _)| {
+        if paths::drawing_path_for(rel).is_some() {
+            2
+        } else if paths::is_note(rel) {
+            0
+        } else {
+            1
+        }
+    });
     let prefix = match into {
         Some(f) if !f.trim_matches('/').is_empty() => paths::normalize(f)?,
         _ => String::new(),

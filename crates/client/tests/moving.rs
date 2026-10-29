@@ -229,3 +229,56 @@ async fn a_drawing_moves_to_another_vault_at_the_drawings_limit() {
     let work = h.resolve("Work").await.unwrap();
     assert!(work.lock().await.outbox.waits_for_room(&other.1));
 }
+
+/// A drawing moved to another vault takes its pictures along; the copy
+/// shows the copies.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_drawing_moves_with_its_pictures() {
+    let srv = start().await;
+    let alice = login(&srv, "alice").await;
+    notekpr_client::manage::create_vault(&alice, "Home")
+        .await
+        .unwrap();
+    notekpr_client::manage::create_vault(&alice, "Work")
+        .await
+        .unwrap();
+    let h = hub(&alice).await;
+    let png = notekpr_core::pictures::data_url("image/png", b"pixels");
+    let board = serde_json::json!({
+        "type": "excalidraw", "version": 2,
+        "elements": [{"id": "i", "type": "image", "x": 0, "y": 0, "width": 5, "height": 5,
+            "fileId": "f1", "status": "saved"}],
+        "files": {"f1": {"id": "f1", "mimeType": "image/png", "dataURL": png}},
+    })
+    .to_string();
+    ops::put_drawing(&h, "Home", "Board", &board).await.unwrap();
+    for id in h.vault_ids() {
+        h.push(&id).await.unwrap();
+    }
+    drop(h);
+    run(
+        &srv,
+        "alice",
+        &["mv", "Home", "Board.drawing", "/", "--to-vault", "Work"],
+    )
+    .await
+    .unwrap();
+    let h = hub(&reopen(&srv, "alice", "alice").await).await;
+    let work = h.resolve("Work").await.unwrap();
+    let (pic, scene) = {
+        let g = work.lock().await;
+        let (_, pic) = g.find("Board.png").expect("the picture came along");
+        let (_, d) = g.find("Board.drawing").expect("the copy");
+        (pic.id, g.drawing(&d.id))
+    };
+    assert_eq!(scene.files["f1"]["attachment"], pic.as_str());
+    assert_eq!(
+        file(&h, "Work", "Board.png").await.unwrap_or_else(Vec::new),
+        b"pixels"
+    );
+    let home = h.resolve("Home").await.unwrap();
+    assert!(
+        home.lock().await.find("attachments/Board.png").is_none(),
+        "moved, not copied"
+    );
+}

@@ -18,6 +18,7 @@ pub mod memberlog;
 pub mod moving;
 pub mod order;
 pub mod paths;
+pub mod pictures;
 pub mod protocol;
 pub mod quick;
 pub mod recover;

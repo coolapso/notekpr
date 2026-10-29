@@ -831,10 +831,10 @@ fn candidate_bases(bases: &[Base]) -> &[Base] {
 }
 
 /// What the folder holds for a note or drawing: its text, or the drawing as
-/// an Excalidraw file (Excalidraw and Obsidian's Excalidraw plugin open it).
+/// a `.drawing` file (Excalidraw's JSON, the pictures inside).
 fn file_text(v: &Vault, id: &str, kind: EntryKind) -> String {
     match kind {
-        EntryKind::Drawing => notekpr_draw::file::write_drawing(&v.drawing(id)),
+        EntryKind::Drawing => v.drawing_file(id),
         _ => v.note_text(id),
     }
 }
@@ -870,7 +870,15 @@ fn ingest_drawing(v: &mut Vault, id: &str, rec: &FileRecord, disk: &str) -> Resu
     let Some(scene) = drawing_from_file(disk) else {
         bail!("a .drawing file in the folder is not a drawing (any more); it is not synced");
     };
-    if v.drawing(id) == scene {
+    // Pictures new in the file become files of the vault.
+    let current = v.drawing(id);
+    let path = v
+        .paths()
+        .into_iter()
+        .find(|(_, e)| e.id == id)
+        .map_or_else(String::new, |(p, _)| p);
+    let scene = v.adopt_pictures(&path, &scene, Some(&current))?;
+    if current == scene {
         return Ok(live_state);
     }
     // The base sharing the most elements with the file is the one the

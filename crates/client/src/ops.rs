@@ -866,6 +866,21 @@ pub async fn get_attachment(hub: &Hub, vref: &str, path: &str) -> OpResult<(DocI
     Ok((doc_info(&g, &p, &e), data))
 }
 
+/// A drawing as a `.drawing` file with the pictures it shows inside
+/// (fetched from the server when this device doesn't have them yet; those
+/// that can't be are left out).
+pub async fn drawing_file(hub: &Hub, v: &SharedVault, id: &str) -> String {
+    let scene = v.lock().await.drawing(id);
+    let mut bytes = BTreeMap::new();
+    for (_, att) in notekpr_core::pictures::attachments(&scene) {
+        if let Ok(b) = hub.session.attachment(v, &att).await {
+            bytes.insert(att, b);
+        }
+    }
+    let scene = notekpr_core::pictures::embed(&scene, |att| bytes.get(att).cloned());
+    notekpr_draw::file::write_drawing(&scene)
+}
+
 /// Creates the drawing at `path` (`.drawing`), or makes the one there,
 /// from a drawing file: ours, Excalidraw's, Obsidian's `.excalidraw.md`, or
 /// the clipboard's.
@@ -1479,7 +1494,7 @@ pub async fn move_to_vault(
         let placed = plan
             .place(&g.replica, folder, &name)
             .map_err(|e| OpError::BadRequest(e.to_string()))?;
-        let mut ids = BTreeMap::new();
+        let mut ids: BTreeMap<String, (EntryKind, String)> = BTreeMap::new();
         for c in &placed.copies {
             let id = match c.kind {
                 EntryKind::Folder => g.create_folder(&c.path).map_err(bad)?,
@@ -1489,7 +1504,8 @@ pub async fn move_to_vault(
                 }
                 EntryKind::Note => g.create_note(&c.path, &c.text).map_err(bad)?.id,
                 EntryKind::Drawing => {
-                    let scene = c.drawing.clone().unwrap_or_default();
+                    // Showing the copies of its pictures, made before it.
+                    let scene = moving::relinked(c, |old| ids.get(old).map(|(_, id)| id.clone()));
                     let id = g.create_drawing(&c.path, &scene).map_err(bad)?.id;
                     // The original goes once the copy is stored: the copy
                     // replaces it, and needs no room for another drawing.

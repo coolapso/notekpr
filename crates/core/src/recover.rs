@@ -277,12 +277,18 @@ pub fn vault_files(
                     ));
                     continue;
                 };
-                // As a .drawing file (Excalidraw's JSON, under our name).
+                // As a .drawing file (Excalidraw's JSON, under our name),
+                // the pictures it shows inside.
                 let scene = replica
                     .notes
                     .get(&e.id)
                     .map(|d| d.drawing().scene())
                     .unwrap_or_default();
+                let scene = crate::pictures::embed(&scene, |att| {
+                    attachment(att)
+                        .ok()
+                        .and_then(|ct| replica.decrypt_attachment(att, &ct).ok())
+                });
                 rv.files.push(RecoveredFile {
                     path: p,
                     data: notekpr_draw::file::write_drawing(&scene).into_bytes(),

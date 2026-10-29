@@ -400,6 +400,16 @@ pub fn NoteView(vault: String, note: String) -> impl IntoView {
 
     mode_effects();
     comment_effects(vault.clone(), note.clone());
+    // Embedded drawings: their previews follow changes and the theme.
+    Effect::new(move |prev: Option<()>| {
+        ui.content_rev.get();
+        ui.ui_prefs.track();
+        if prev.is_some()
+            && let Some(ed) = editor()
+        {
+            ed.refresh();
+        }
+    });
     let v = vault.clone();
     Effect::new(move |_| {
         ui.vaults.get();
@@ -451,7 +461,7 @@ pub fn NoteView(vault: String, note: String) -> impl IntoView {
         let vv = v.clone();
         let note = move |t: &str| knowledge::resolve_target(&vv, t, &from);
         let va = v.clone();
-        let att = move |t: &str| knowledge::resolve_attachment(&va, t);
+        let att = move |t: &str| knowledge::resolve_embed(&va, t);
         render::to_html(
             &text,
             &render::Ctx {
@@ -466,6 +476,9 @@ pub fn NoteView(vault: String, note: String) -> impl IntoView {
     let va = vault.clone();
     Effect::new(move |_| {
         let _ = reading_html.get();
+        // Embedded drawings change with them, and with the theme.
+        ui.content_rev.get();
+        ui.ui_prefs.track();
         let Some(art) = reading_ref.get() else { return };
         let Ok(imgs) = art.query_selector_all("img[data-att]") else {
             return;
@@ -482,7 +495,7 @@ pub fn NoteView(vault: String, note: String) -> impl IntoView {
             };
             let v = va.clone();
             leptos::task::spawn_local(async move {
-                if let Some(url) = actions::load_attachment(&v, &id).await {
+                if let Some(url) = actions::load_embed(&v, &id).await {
                     img.set_src(&url);
                 }
             });

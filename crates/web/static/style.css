@@ -1067,3 +1067,7 @@ label.btn.disabled { opacity: .6; pointer-events: none; }
 .export-choice .check:has(input:disabled) { opacity: 0.55; cursor: default; }
 .export-choice .check .grow { min-width: 0; }
 .export-choice .check .pill { margin-left: 0; flex: none; }
+
+/* Drawings: the page of one, and previews where notes embed them. */
+.drawing-stage { flex: 1; display: flex; align-items: flex-start; justify-content: center; overflow: auto; padding: 16px; }
+.drawing-picture { max-width: 100%; height: auto; border-radius: var(--radius); }

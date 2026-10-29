@@ -227,6 +227,26 @@ pub async fn get_bytes(path: &str) -> Result<Vec<u8>> {
     Ok(js_sys::Uint8Array::new(&buf).to_vec())
 }
 
+/// One of the app's own files (`/fonts/…`), not the API: no credentials.
+pub async fn app_file(path: &str) -> Result<Vec<u8>> {
+    let resp: Response = JsFuture::from(window().fetch_with_str(path))
+        .await
+        .map_err(Error::network)?
+        .dyn_into()
+        .map_err(Error::network)?;
+    if !resp.ok() {
+        return Err(Error {
+            status: resp.status(),
+            code: "http".into(),
+            message: format!("{path}: {}", resp.status()),
+        });
+    }
+    let buf = JsFuture::from(resp.array_buffer().map_err(Error::network)?)
+        .await
+        .map_err(Error::network)?;
+    Ok(js_sys::Uint8Array::new(&buf).to_vec())
+}
+
 pub async fn put_bytes(path: &str, data: &[u8]) -> Result<()> {
     let arr = js_sys::Uint8Array::from(data);
     send(

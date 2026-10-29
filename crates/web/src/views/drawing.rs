@@ -4,10 +4,12 @@
 //! anything but a note).
 
 use leptos::prelude::*;
+use leptos::task::spawn_local;
 use notekpr_core::doc::EntryKind;
 use notekpr_core::paths;
 
 use super::icons::Icon;
+use crate::drawings;
 use crate::state::{self, ui};
 
 /// A note or a drawing, by id.
@@ -48,13 +50,30 @@ pub fn DrawingView(vault: String, id: String) -> impl IntoView {
         }
         crumbs.join(" / ")
     });
+    // The drawing as a picture, made again when it changes elsewhere or the
+    // theme does.
+    let picture = RwSignal::new(None::<String>);
+    let (v, i) = (vault.clone(), id.clone());
+    Effect::new(move |_| {
+        ui.content_rev.get();
+        ui.ui_prefs.track();
+        ui.vaults.track();
+        let (v, i) = (v.clone(), i.clone());
+        spawn_local(async move {
+            if let Some(url) = drawings::load_preview(&v, &i).await {
+                picture.set(Some(url));
+            }
+        });
+    });
     view! {
         <div class="note-page drawing-page">
             <header class="note-head">
                 <button class="icon-btn mobile-only" title="Menu" aria-label="Menu" on:click=move |_| ui.sidebar.set(true)><Icon name="menu"/></button>
                 <div class="crumbs ellipsis">{move || crumbs.get()}</div>
             </header>
-            <div class="drawing-stage"></div>
+            <div class="drawing-stage">
+                {move || picture.get().map(|src| view! { <img class="drawing-picture" src=src alt=move || crumbs.get()/> })}
+            </div>
         </div>
     }
 }

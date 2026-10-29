@@ -75,6 +75,21 @@ fn esc(s: &str) -> String {
     out
 }
 
+/// A link fit to put in the image (`sanitizeUrl`): web and mail addresses
+/// and relative ones; anything else (`javascript:`, `data:`, …) goes nowhere.
+fn safe_link(link: &str) -> &str {
+    let l = link.trim();
+    let lower = l.to_ascii_lowercase();
+    let scheme = lower
+        .split_once(':')
+        .map(|(s, _)| s)
+        .filter(|s| !s.contains(['/', '?', '#']));
+    match scheme {
+        None | Some("http" | "https" | "mailto") => l,
+        Some(_) => "about:blank",
+    }
+}
+
 /// `isRTL`: whether a text has letters written right to left.
 fn is_rtl(text: &str) -> bool {
     text.chars().any(|c| {
@@ -125,7 +140,11 @@ impl<'a> Renderer<'a> {
         };
         match e.link().filter(|l| !l.trim().is_empty()) {
             Some(link) => {
-                let _ = write!(self.out, r#"<a href="{}">{clipped}</a>"#, esc(link.trim()));
+                let _ = write!(
+                    self.out,
+                    r#"<a href="{}">{clipped}</a>"#,
+                    esc(safe_link(link))
+                );
             }
             None => self.out.push_str(&clipped),
         }
@@ -483,6 +502,15 @@ mod tests {
                 &b[from..(at + 200).min(b.len())]
             );
         }
+    }
+
+    #[test]
+    fn links_only_to_safe_places() {
+        assert_eq!(safe_link(" https://x.y/z "), "https://x.y/z");
+        assert_eq!(safe_link("mailto:a@b.c"), "mailto:a@b.c");
+        assert_eq!(safe_link("Notes/Plan.md#x"), "Notes/Plan.md#x");
+        assert_eq!(safe_link("JavaScript:alert(1)"), "about:blank");
+        assert_eq!(safe_link("data:text/html,x"), "about:blank");
     }
 
     #[test]

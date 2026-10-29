@@ -125,6 +125,165 @@ pub fn baseline_offset(id: u32, size: f64, line_height_px: f64) -> f64 {
     em * f.ascender + line_gap
 }
 
+/// One `@font-face` of the drawing fonts' stylesheet (the web app's
+/// `fonts/drawing-fonts.css`): a file holding some characters of a font.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FontFace {
+    pub family: String,
+    /// As written in the stylesheet (relative to it).
+    pub url: String,
+    /// The characters it has (`unicode-range`); empty: all.
+    pub ranges: Vec<(u32, u32)>,
+    pub weight: Option<String>,
+}
+
+/// `U+20-7e, U+a0, U+4??` as ranges of characters.
+fn unicode_ranges(s: &str) -> Vec<(u32, u32)> {
+    s.split(',')
+        .filter_map(|part| {
+            let part = part
+                .trim()
+                .trim_start_matches(['U', 'u'])
+                .trim_start_matches('+');
+            let hex = |h: &str, fill: char| {
+                u32::from_str_radix(&h.replace('?', &fill.to_string()), 16).ok()
+            };
+            match part.split_once('-') {
+                Some((a, b)) => Some((hex(a, '0')?, hex(b, 'f')?)),
+                None => Some((hex(part, '0')?, hex(part, 'f')?)),
+            }
+        })
+        .collect()
+}
+
+/// The `@font-face` rules of a stylesheet.
+pub fn parse_font_faces(css: &str) -> Vec<FontFace> {
+    let mut out = Vec::new();
+    for block in css.split("@font-face").skip(1) {
+        let Some(body) = block
+            .split_once('{')
+            .and_then(|(_, b)| b.split_once('}'))
+            .map(|(b, _)| b)
+        else {
+            continue;
+        };
+        let mut family = None;
+        let mut url = None;
+        let mut ranges = Vec::new();
+        let mut weight = None;
+        for decl in body.split(';') {
+            let Some((k, v)) = decl.split_once(':') else {
+                continue;
+            };
+            let v = v.trim();
+            match k.trim() {
+                "font-family" => family = Some(v.trim_matches(['"', '\'']).to_string()),
+                "src" => {
+                    url = v
+                        .split_once("url(")
+                        .and_then(|(_, r)| r.split_once(')'))
+                        .map(|(u, _)| u.trim_matches(['"', '\'']).to_string())
+                }
+                "unicode-range" => ranges = unicode_ranges(v),
+                "font-weight" => weight = Some(v.to_string()),
+                _ => {}
+            }
+        }
+        if let (Some(family), Some(url)) = (family, url) {
+            out.push(FontFace {
+                family,
+                url,
+                ranges,
+                weight,
+            });
+        }
+    }
+    out
+}
+
+/// The font files a drawing's texts need: the faces of the fonts it uses
+/// that hold characters of its texts.
+pub fn faces_needed(faces: &[FontFace], scene: &crate::scene::Scene) -> Vec<FontFace> {
+    use std::collections::{BTreeMap, BTreeSet};
+    let mut chars: BTreeMap<&str, BTreeSet<u32>> = BTreeMap::new();
+    for e in scene.visible() {
+        if e.kind() != crate::scene::ElementType::Text {
+            continue;
+        }
+        let Some(f) = ALL.iter().find(|f| f.id == e.font_family()) else {
+            continue;
+        };
+        chars
+            .entry(f.name)
+            .or_default()
+            .extend(e.text().chars().map(|c| c as u32));
+    }
+    faces
+        .iter()
+        .filter(|face| {
+            chars.get(face.family.as_str()).is_some_and(|cs| {
+                face.ranges.is_empty()
+                    || cs
+                        .iter()
+                        .any(|c| face.ranges.iter().any(|(a, b)| a <= c && c <= b))
+            })
+        })
+        .cloned()
+        .collect()
+}
+
+/// A face as an `@font-face` rule with its file inside (`data:` URL), for
+/// an SVG image, which can't load fonts.
+pub fn embedded_face(face: &FontFace, woff2: &[u8]) -> String {
+    let mut rule = format!(
+        "@font-face {{ font-family: {}; src: url(data:font/woff2;base64,{}); ",
+        face.family,
+        base64(woff2)
+    );
+    if !face.ranges.is_empty() {
+        let ranges: Vec<String> = face
+            .ranges
+            .iter()
+            .map(|(a, b)| {
+                if a == b {
+                    format!("U+{a:x}")
+                } else {
+                    format!("U+{a:x}-{b:x}")
+                }
+            })
+            .collect();
+        rule.push_str(&format!("unicode-range: {}; ", ranges.join(", ")));
+    }
+    rule.push('}');
+    rule
+}
+
+fn base64(data: &[u8]) -> String {
+    const A: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
+    for chunk in data.chunks(3) {
+        let b = [
+            chunk[0],
+            *chunk.get(1).unwrap_or(&0),
+            *chunk.get(2).unwrap_or(&0),
+        ];
+        let n = (u32::from(b[0]) << 16) | (u32::from(b[1]) << 8) | u32::from(b[2]);
+        out.push(A[(n >> 18) as usize & 63] as char);
+        out.push(A[(n >> 12) as usize & 63] as char);
+        out.push(if chunk.len() > 1 {
+            A[(n >> 6) as usize & 63] as char
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            A[n as usize & 63] as char
+        } else {
+            '='
+        });
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -144,6 +303,35 @@ mod tests {
         assert_eq!(get(4).id, EXCALIFONT);
         assert_eq!(by_name("Cascadia"), CASCADIA);
         assert_eq!(by_name("Comic Sans"), EXCALIFONT);
+    }
+
+    #[test]
+    fn faces_for_a_drawing() {
+        let css = include_str!("../../web/static/fonts/drawing-fonts.css");
+        let faces = parse_font_faces(css);
+        assert_eq!(faces.len(), 22);
+        assert!(faces.iter().all(|f| f.url.ends_with(".woff2")));
+        let excalifont: Vec<_> = faces.iter().filter(|f| f.family == "Excalifont").collect();
+        assert_eq!(excalifont.len(), 7);
+        assert!(excalifont[0].ranges.contains(&(0x20, 0x7e)));
+        let nunito = faces.iter().find(|f| f.family == "Nunito").unwrap();
+        assert_eq!(nunito.weight.as_deref(), Some("500"));
+        // The example's texts are Latin, in Excalifont: one file.
+        let scene = crate::file::read_drawing(
+            include_str!("../tests/fixtures/example.excalidraw"),
+            &mut crate::restore::Ids::new(1),
+        )
+        .unwrap()
+        .scene;
+        let needed = faces_needed(&faces, &scene);
+        assert_eq!(needed.len(), 1, "{needed:?}");
+        assert_eq!(needed[0].family, "Excalifont");
+        let rule = embedded_face(&needed[0], b"abcd");
+        assert!(
+            rule.contains("url(data:font/woff2;base64,YWJjZA==)"),
+            "{rule}"
+        );
+        assert!(rule.contains("unicode-range: U+20-7e"), "{rule}");
     }
 
     #[test]

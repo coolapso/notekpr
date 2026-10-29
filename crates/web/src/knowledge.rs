@@ -98,18 +98,20 @@ pub fn resolve_target(vault: &str, target: &str, from_path: &str) -> Option<Stri
     markdown::resolve(&link, from_path, &c).map(str::to_string)
 }
 
-/// Like [`resolve_target`] but for an embed: also matches attachment file names.
-pub fn resolve_attachment(vault: &str, target: &str) -> Option<String> {
+/// What an embed shows (`![[…]]`): a file or a drawing, by path or by file
+/// name (the shortest path wins).
+pub fn resolve_embed(vault: &str, target: &str) -> Option<String> {
     let entries = state::step(|c| c.live_entries(vault));
     let t = target.trim().trim_start_matches("./").to_lowercase();
+    let embeddable = |k: EntryKind| matches!(k, EntryKind::Attachment | EntryKind::Drawing);
     let exact = entries
         .iter()
-        .find(|e| e.kind == EntryKind::Attachment && e.path.to_lowercase() == t);
+        .find(|e| embeddable(e.kind) && e.path.to_lowercase() == t);
     let by_name = || {
         entries
             .iter()
             .filter(|e| {
-                e.kind == EntryKind::Attachment
+                embeddable(e.kind)
                     && paths::file_name(&e.path).to_lowercase() == paths::file_name(&t)
             })
             .min_by_key(|e| e.path.len())

@@ -2054,6 +2054,21 @@ pub async fn attachment_bytes(vault: &str, id: &str) -> Option<Vec<u8>> {
     step(|c| c.replicas.get(vault)?.decrypt_attachment(id, &ct).ok())
 }
 
+/// Whether an entry is a drawing.
+pub fn is_drawing(vault: &str, id: &str) -> bool {
+    step(|c| c.entry(vault, id)).is_some_and(|e| e.kind == EntryKind::Drawing)
+}
+
+/// What an embed shows, as a URL: an attachment, or a drawing's preview.
+pub async fn load_embed(vault: &str, id: &str) -> Option<String> {
+    if is_drawing(vault, id) {
+        step(|c| c.ensure_note_loaded(vault, id));
+        crate::drawings::load_preview(vault, id).await
+    } else {
+        load_attachment(vault, id).await
+    }
+}
+
 /// Load, decrypt and cache an attachment as a blob URL.
 pub async fn load_attachment(vault: &str, id: &str) -> Option<String> {
     let key = format!("{vault}:{id}");
@@ -2805,13 +2820,18 @@ impl Host for NoteHost {
         if self.shared {
             return None;
         }
-        let id = knowledge::resolve_attachment(&self.vault, target)?;
-        if let Some(u) = cached_attachment_url(&self.vault, &id) {
+        let id = knowledge::resolve_embed(&self.vault, target)?;
+        let cached = if is_drawing(&self.vault, &id) {
+            crate::drawings::cached_preview(&self.vault, &id)
+        } else {
+            cached_attachment_url(&self.vault, &id)
+        };
+        if let Some(u) = cached {
             return Some(u);
         }
         let v = self.vault.clone();
         leptos::task::spawn_local(async move {
-            if load_attachment(&v, &id).await.is_some() {
+            if load_embed(&v, &id).await.is_some() {
                 let ed = step(|c| {
                     c.editor
                         .as_ref()

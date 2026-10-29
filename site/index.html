@@ -3,10 +3,12 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>notekpr</title>
-<meta name="description" content="Self-hosted Markdown notes with live collaboration and end-to-end encryption. Use the web app or your own editor; the server only stores ciphertext.">
+<title>notekpr · Notes only you can read</title>
+<meta name="description" content="Markdown notes, drawings and live collaboration, end-to-end encrypted. Use it on our servers or host it yourself: either way the server only stores ciphertext.">
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="style.css">
+<script>document.documentElement.classList.add("js")</script>
+<script src="site.js" defer></script>
 </head>
 <body>
 <header class="site-head">
@@ -16,183 +18,393 @@
       notekpr
     </a>
     <nav class="site-nav" aria-label="Main">
-      <a href="./" aria-current="page">Home</a>
       <a href="features.html">Features</a>
+      <a href="#pricing">Pricing</a>
       <a href="security.html">Security</a>
-      <a href="self-host.html">Self-host</a>
-      <a href="https://github.com/coolapso/notekpr">Source</a>
+      <a class="opt" href="self-host.html">Self-host</a>
+      <a class="opt" href="https://github.com/coolapso/notekpr">GitHub</a>
+      <a class="btn primary" href="#pricing">Start free</a>
     </nav>
   </div>
 </header>
 
-<main class="md">
+<main>
+  <!-- ============================================================ hero -->
   <section class="hero">
-    <div class="wrap hero-grid">
-      <div class="hero-copy">
-        <p class="eyebrow">Self-hosted · end-to-end encrypted · plain Markdown</p>
-        <h1>Write in Markdown. Your server only sees noise.</h1>
-        <p class="lede">notekpr is a notes app you run yourself. Notes are encrypted on your devices before they sync, so the server stores ciphertext and nothing else. Write in the browser with live collaboration, or keep your vaults as a folder of Markdown files and use your own editor.</p>
-        <div class="btns">
-          <a class="btn primary" href="self-host.html">Run it yourself</a>
-          <a class="btn" href="security.html">How the encryption works</a>
-        </div>
+    <div class="wrap hero-head">
+      <a class="pill reveal" href="#pricing"><b>Soon</b> Hosted plans, starting free · self-host it today <span aria-hidden="true">→</span></a>
+      <h1 class="reveal">Write anything. <br>The server only sees&nbsp;<span class="noise" id="noise"><span class="w">noise</span><svg class="scribble draw-in" viewBox="0 0 120 14" preserveAspectRatio="none" aria-hidden="true"><path d="M3 9 C 22 3, 38 13, 58 7 S 96 3, 117 9" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round"/></svg></span>.</h1>
+      <p class="lede reveal">Markdown notes, drawings and live collaboration, end-to-end encrypted. Your devices hold the keys, so the server, ours or yours, stores ciphertext and nothing else.</p>
+      <div class="btns center reveal">
+        <a class="btn primary big" href="#pricing">Start free <span class="arrow" aria-hidden="true">→</span></a>
+        <a class="btn big" href="self-host.html">Host it yourself</a>
+      </div>
+      <ul class="trust reveal"><li>Open source, AGPL</li><li>Plain Markdown files</li><li>Works offline</li><li>No trackers, no ads</li></ul>
+    </div>
+
+    <div class="wrap hero-stage reveal">
+      <div class="margin-note flip-hint" aria-hidden="true">flip it: this is all<br>the server ever gets
+        <svg viewBox="0 0 80 52" class="draw-in"><path d="M14 4 C 6 18, 10 34, 30 42 C 40 46, 52 46, 62 44" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/><path d="M62 44 L 51 38 M62 44 L 52 51" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></svg>
       </div>
 
-      <figure class="views" aria-label="The same note on your device and on the server">
-        <div class="view">
-          <div class="view-label"><b>On your device</b><span>Family / Weekend trip.md</span></div>
-          <div class="note">
-            <div class="t"><span class="mk"># </span>Weekend trip</div>
-            <div><span class="box on"></span><span class="done">Book the cabin</span></div>
-            <div><span class="box"></span>Pack <strong>sunscreen</strong> and the <span class="hl">good</span> kettle</div>
-            <div><span class="box"></span>Ask <span class="wl">Alice</span> if we can borrow the car</div>
-            <div>Leaving Friday at 17:00 #travel</div>
-          </div>
+      <figure class="app" id="app" data-view="you" aria-label="A shared note in notekpr, and what the server stores of it">
+        <div class="app-bar">
+          <span class="dots" aria-hidden="true"><i></i><i></i><i></i></span>
+          <span class="crumb">👨‍👩‍👧 Family / <b>Weekend trip.md</b></span>
+          <span class="who" aria-hidden="true"><span class="a">A</span><span class="b">B</span><span class="c">C</span></span>
+          <span class="seg2" role="group" aria-label="View">
+            <button type="button" class="you" aria-pressed="true">✎ What you see</button>
+            <button type="button" class="srv" aria-pressed="false">⧉ What the server sees</button>
+          </span>
         </div>
-        <div class="view">
-          <div class="view-label"><b>On the server</b><span>one encrypted update, as stored</span></div>
-          <p class="cipher" id="cipher"><span class="v">01</span> <span class="e">00000002</span> <span class="n">a4c123b1612dd272d1371c17149d439536b3216fdaeeb975</span> <span class="seg scramble" id="ct">729fae923d5a4fd12aabfe228f219e9cb0eb53f16947ccf25ec84d8dbc74254770f58904dba41ecccc3fc1626e53a13043b026c48bbf33feff9243a8f506b40928b5b7a767c76fb008f86bebb2737f6a6f0fb23c6f5da2cec255404e</span> <span class="tg">4fb440034d6608697a8d41bed440e504</span></p>
-          <div class="legend" aria-label="Envelope format">
-            <span style="--c: var(--accent-ink)">version</span>
-            <span style="--c: var(--ok)">key epoch</span>
-            <span style="--c: var(--muted)">nonce (24 bytes)</span>
-            <span style="--c: var(--cipher)">ciphertext</span>
-            <span style="--c: var(--fg-2)">tag</span>
+        <div class="app-body">
+          <div class="app-side" aria-hidden="true">
+            <div class="vault">👨‍👩‍👧 Family</div>
+            <a>⚡ Quick notes</a>
+            <a>✏️ Drawings</a>
+            <div class="lbl">Notes</div>
+            <a>🏡 House</a>
+            <a>🎂 Birthdays</a>
+            <a>🌲 Holiday plans</a>
+            <a>🛒 Shopping list</a>
+            <a class="on">🏕️ Weekend trip</a>
+            <a>📋 Chores</a>
+          </div>
+          <div class="app-note" id="note">
+            <div class="title"><span aria-hidden="true">🏕️</span> Weekend trip</div>
+            <div class="line task done"><span class="txt">Book the cabin by the lake</span></div>
+            <div class="line task"><span class="txt">Pack <strong>sunscreen</strong> and the good kettle</span></div>
+            <div class="line task"><span class="txt">Ask <span class="wl">Alice</span> if we can borrow the car</span></div>
+            <div class="line">Leaving <span class="hl">Friday at 17:00</span>, back on Sunday <span class="tag">#travel</span></div>
+            <div class="callout"><b>💡 Tip</b> The water is warm until September: bring swimsuits.</div>
+          </div>
+          <aside class="app-panel" aria-hidden="true">
+            <div class="lbl">Comments</div>
+            <div class="comment"><div class="by"><i></i>Carol</div><p>Count me in, I have a spare tent! <span class="at">@Bob</span> can you bring the stove?</p></div>
+            <div class="lbl">Graph</div>
+            <div class="mini-graph">
+              <svg viewBox="0 0 200 110">
+                <g stroke="currentColor" stroke-opacity=".25" stroke-width="1.2" style="color: var(--fg)"><line x1="100" y1="55" x2="40" y2="28"/><line x1="100" y1="55" x2="162" y2="30"/><line x1="100" y1="55" x2="60" y2="88"/><line x1="100" y1="55" x2="150" y2="86"/><line x1="40" y1="28" x2="60" y2="88"/></g>
+                <circle cx="100" cy="55" r="8" fill="#5b5bd6"/><circle cx="40" cy="28" r="5.5" fill="#1098ad"/><circle cx="162" cy="30" r="5.5" fill="#e8590c"/><circle cx="60" cy="88" r="5" fill="#d6336c"/><rect x="145" y="81" width="10" height="10" rx="2" fill="#2f9e5a"/>
+              </svg>
+            </div>
+            <div class="lbl">Backlinks</div>
+            <div class="backlinks"><a>🌲 Holiday plans</a><a>🛒 Shopping list</a></div>
+          </aside>
+          <div class="app-server">
+            <div class="head">notekpr.db · updates <span id="count">2,481 rows · 0 readable</span></div>
+            <div class="rows" id="rows">
+              <div><span class="v">01</span> <span class="e">00000002</span> <span class="n">a4c123b1612dd272d1371c17149d439536b3216fdaeeb975</span> 729fae923d5a4fd12aabfe228f219e9cb0eb53f16947ccf25ec84d8dbc74254770f58904dba41ecccc3fc1626e53a13043b026c48bbf33feff9243a8f506b40928b5b7a767c76fb008f86bebb2737f6a6f0fb23c6f5da2cec255404e <span class="t">4fb440034d6608697a8d41bed440e504</span></div>
+              <div><span class="v">01</span> <span class="e">00000002</span> <span class="n">0f3c9e51d8a27b46c1e09d3f8a6b2c7e54d1a90f3b6e8c27</span> 5e1c0b8f2a9d47e63c18b5f07a2d9e46c3b81f5a07e2d69c48b3a1f06e9d2c57b84a3f1e60d9c2b75a48e3f16d0c9b2a57e48f3a1d06c9b <span class="t">c8d3e7a91b02f46e5d8c3b7a1f09e2d4</span></div>
+              <div><span class="v">01</span> <span class="e">00000002</span> <span class="n">7d2e9c41b8a05f63e1d97c2b4a8f06e3d51c9b27a4f8e0d6</span> 93b1e5c7a0d2f84b6e19c3a75d0f28b4e6c91a3d5f07b82e4c69a1d3f50e7b2c84a96d1e3f5b07c28a4e6d9 <span class="t">1e9c3b7a5d2f08e4c6b1a9d3f7e05c2b</span></div>
+            </div>
+            <div class="legend"><span style="--c: #a9aaff">version</span><span style="--c: #4cc27a">key epoch</span><span style="--c: #6f6f99">nonce</span><span style="--c: #9e9ec8">ciphertext</span><span style="--c: #c7c7e6">tag</span></div>
           </div>
         </div>
       </figure>
     </div>
-  </section>
 
-  <section class="section">
-    <div class="wrap stack-lg">
-      <h2>What it is for</h2>
-      <div class="pillars">
-        <div class="pillar">
-          <span class="k">Private by design</span>
-          <p>Note text, titles, folder names, attachments and history are encrypted with keys that only your devices hold. Whoever runs the server, or breaks into it, gets ciphertext.</p>
-        </div>
-        <div class="pillar">
-          <span class="k">Made for working together</span>
-          <p>Share a vault with family or a team as editor or viewer, or share a single note. Everyone edits the same note at once, with live cursors and no lost changes, also after working offline.</p>
-        </div>
-        <div class="pillar">
-          <span class="k">Plain Markdown, your files</span>
-          <p>Notes are Markdown with wiki links, tags and embeds. Export a vault as <code>.md</code> files at any time, or keep it synced as a folder on your disk.</p>
-        </div>
-      </div>
+    <div class="wrap strip reveal">
+      <p>Plays well with what you already use</p>
+      <ul><li>Markdown</li><li>Obsidian</li><li>Excalidraw</li><li>Neovim</li><li>VS Code</li><li>OpenID Connect</li></ul>
     </div>
   </section>
 
-  <section class="section">
-    <div class="wrap split">
-      <div class="stack">
-        <h2>Use your own editor</h2>
-        <p>The desktop client keeps your vaults as an ordinary folder of Markdown files, always up to date. Edit them in Obsidian, Neovim, VS Code or anything else. Changes sync both ways and merge with what others write in the web app at the same time.</p>
-        <p>The files are plain text on your machine. The server still only ever sees them encrypted, so notekpr works as an end-to-end encrypted sync server for an Obsidian vault, with a web app and collaboration on top.</p>
-        <div class="editors" aria-label="Works with"><span>Obsidian</span><span>Neovim</span><span>VS Code</span><span>Emacs</span><span>grep &amp; sed</span></div>
-        <p><a href="https://github.com/coolapso/notekpr/blob/dev/docs/own-editor.md">Set it up in a few minutes</a></p>
+  <!-- ============================================================ write -->
+  <section class="section feature" id="write">
+    <div class="wrap feature-grid">
+      <div class="feature-copy reveal">
+        <p class="kicker"><span>##</span> Write</p>
+        <h2>Writes like a doc. Stays plain Markdown.</h2>
+        <p>Formatting shows as you type and the syntax steps aside, so anyone can write. Underneath, every note is still a Markdown file you can open anywhere. A toolbar for the mouse, shortcuts for the keyboard, Vim keys if that's you.</p>
+        <ul class="chips"><li>Live preview</li><li>Tables with Tab</li><li>Callouts</li><li>Code in 35 languages</li><li>@today dates</li><li>Colors</li><li>Images &amp; files</li><li>Light &amp; dark</li></ul>
       </div>
-      <div class="stack">
+      <figure class="shot reveal">
+        <div class="window">
+          <div class="app-bar"><span class="dots" aria-hidden="true"><i></i><i></i><i></i></span><span class="crumb">🏡 Home / <b>Weekend in the garden.md</b></span></div>
+          <img src="img/editor-dark.webp" width="1600" height="860" loading="lazy" alt="The editor in the dark theme: a heading, checklists, a table, a callout, a date that reads Tomorrow and a highlighted code block.">
+        </div>
+        <figcaption class="sticky tr float">Ctrl+/ shows every shortcut</figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <!-- ============================================================ draw -->
+  <section class="section feature flip canvas" id="draw">
+    <div class="wrap feature-grid">
+      <div class="feature-copy reveal">
+        <p class="kicker"><span>##</span> Draw</p>
+        <h2>Sketch it out, right next to your notes.</h2>
+        <p>A whiteboard with Excalidraw's hand-drawn look, written in Rust and built in: shapes, arrows that stay attached, sticky notes, frames and the laser pointer. Put a drawing in any note and it stays live. Draw together and see everyone's pointer.</p>
+        <p>It opens and saves Excalidraw's and Obsidian's files, so your drawings go wherever you do.</p>
+        <ul class="chips"><li>Attached &amp; elbow arrows</li><li>Sticky notes</li><li>Frames</li><li>Saved shapes</li><li>Draw together</li><li>PNG &amp; SVG</li><li>Versions</li></ul>
+      </div>
+      <figure class="shot reveal">
+        <div class="window">
+          <div class="app-bar"><span class="dots" aria-hidden="true"><i></i><i></i><i></i></span><span class="crumb">🏡 Home / <b>Weekend plan.drawing</b></span></div>
+          <img src="img/drawing.webp" width="1600" height="860" loading="lazy" alt="A drawing: Pack, Drive and Hike boxes joined by arrows, a sun drawn with the pen, and a sticky note saying Bring snacks, inside a frame.">
+        </div>
+        <div class="inset">
+          <div class="window">
+            <div class="app-bar"><span class="dots" aria-hidden="true"><i></i><i></i><i></i></span><span class="crumb"><b>Beds.md</b></span></div>
+            <img src="img/drawing-in-note.webp" width="1600" height="860" loading="lazy" alt="A note with a drawing of garden beds shown inside it.">
+          </div>
+        </div>
+        <figcaption class="sticky tl float" style="--r: -5deg">opens in Excalidraw too!</figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <!-- ============================================================ together -->
+  <section class="section feature wide" id="together">
+    <div class="wrap">
+      <div class="feature-copy reveal">
+        <p class="kicker"><span>##</span> Together</p>
+        <h2>Two laptops, one note, zero conflicts.</h2>
+        <p>Share a vault with your family or your team, or a single note with anyone. Everyone edits at once with live cursors, and changes merge cleanly, even after a day offline. Comment on any passage and @mention people: their devices find the mention, the server never learns who it was.</p>
+        <ul class="chips" style="justify-content: center"><li>Live cursors</li><li>Comments &amp; @mentions</li><li>Admin, editor, viewer</li><li>Share one note</li><li>Activity log</li><li>Offline first</li></ul>
+      </div>
+      <figure class="shot bare reveal" style="margin-top: clamp(2rem, 4vw, 3rem)">
+        <img src="img/together.webp" width="1600" height="634" loading="lazy" alt="Alice's and Bob's browsers side by side on the same shopping list: Bob's cursor shows in Alice's window while both add items.">
+        <figcaption class="sticky br float">Alice + Bob, live. The server? Still noise.</figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <!-- ============================================================ connect -->
+  <section class="section feature tint" id="connect">
+    <div class="wrap feature-grid">
+      <div class="feature-copy reveal">
+        <p class="kicker"><span>##</span> Connect</p>
+        <h2>Every note, a link away.</h2>
+        <p><code>[[Wiki links]]</code> that create the note you're missing, backlinks and an outline beside every note, and a graph of everything, drawings included. Jump anywhere with <kbd>Ctrl</kbd> <kbd>P</kbd>, search with <code>tag:</code>, <code>folder:</code> and <code>title:</code>, and catch a thought in a second with a quick note (<kbd>Alt</kbd> <kbd>Q</kbd>).</p>
+        <ul class="chips"><li>Backlinks</li><li>Graph</li><li>Quick switcher</li><li>Full-text search</li><li>Quick notes</li><li>Tags</li><li>History &amp; trash</li></ul>
+      </div>
+      <figure class="shot reveal">
+        <div class="window">
+          <div class="app-bar"><span class="dots" aria-hidden="true"><i></i><i></i><i></i></span><span class="crumb">🏡 Home / <b>Graph</b></span></div>
+          <img src="img/graph.webp" width="1600" height="860" loading="lazy" alt="The graph of a vault: notes as coloured dots and drawings as squares, joined by their links.">
+        </div>
+        <figcaption class="sticky bl float">worked out on your device, not ours</figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <!-- ============================================================ your tools -->
+  <section class="section feature flip" id="files">
+    <div class="wrap feature-grid">
+      <div class="feature-copy reveal">
+        <p class="kicker"><span>##</span> Your files, your tools</p>
+        <h2>Your notes are a folder on your disk.</h2>
+        <p>The desktop client keeps your vaults as plain Markdown files, synced both ways. Edit them in Obsidian, Neovim or VS Code while others type in the browser, and it all merges. A command line that does everything, and AI agents with their own keys that see only the vaults you share with them.</p>
+        <ul class="chips"><li>Obsidian</li><li>Neovim</li><li>VS Code</li><li>Emacs</li><li>grep &amp; sed</li><li>AI agents</li></ul>
+        <p><a href="https://github.com/coolapso/notekpr/blob/dev/docs/own-editor.md">Use your own editor →</a></p>
+      </div>
+      <div class="tools reveal">
+        <div class="term">
+          <div class="app-bar"><span class="dots" aria-hidden="true"><i></i><i></i><i></i></span><span class="crumb">alice@laptop: ~</span></div>
 <pre><span class="p">$ </span>notekpr login --server https://notes.example.com
+<span class="ok">Signed in as Alice: device approved.</span>
 <span class="p">$ </span>notekpr sync --dir ~/Notes
-<span class="c">syncing 2 vaults, watching ~/Notes</span></pre>
+<span class="c">mirroring 3 vaults into ~/Notes</span>
+<span class="p">$ </span>nvim ~/Notes/Family/Weekend\ trip.md
+<span class="c"># :w, and Bob sees it a second later</span>
+<span class="p">$ </span>notekpr --profile assistant \
+    write --append Assistant Digest.md &lt; news.md
+<span class="y">updated Digest.md</span></pre>
+        </div>
 <div class="tree" aria-label="Example folder"><span class="d">~/Notes/</span>
   <span class="d">Family/</span>
     Weekend trip.md
-    Groceries.md
-    Recipes/Pancakes.md
-    assets/cabin.jpg
+    Shopping list.md
+    Holiday steps.drawing
+    attachments/cabin.jpg
   <span class="d">Work/</span>
-    Roadmap.md      <span class="c">← open in your editor</span></div>
+    Roadmap.md  <span class="c">← any editor</span></div>
       </div>
     </div>
   </section>
 
-  <section class="section">
-    <div class="wrap stack-lg">
-      <h2>How it works</h2>
-      <ol class="flow">
-        <li><h3>Encrypt on your device</h3><p>Every change is encrypted in the browser or desktop client, with the note's own key or, for names and folders, the vault's key, before it leaves your device.</p></li>
-        <li><h3>Sync ciphertext</h3><p>The server orders and stores encrypted changes and passes them on live. It knows who is a member of a vault, not what anyone wrote.</p></li>
-        <li><h3>Decrypt for members</h3><p>Members' devices hold the vault key, wrapped to each person's own key, and through it every note's key. They decrypt and merge the changes locally.</p></li>
-      </ol>
-    </div>
-  </section>
-
-  <section class="section">
-    <div class="wrap stack-lg">
-      <h2>In the box</h2>
-      <ul class="grid-list">
-        <li><b>Live-preview editor</b><span>Markdown that formats as you type, with a toolbar, tables, task lists and optional Vim keys.</span></li>
-        <li><b>Drawings</b><span>Excalidraw's hand-drawn look, drawn together and shown in your notes. Opens and saves Excalidraw's files.</span></li>
-        <li><b>Links, backlinks and a graph</b><span><code>[[Wiki links]]</code>, embeds, tags, an outline and a graph view of how notes link, all worked out on your device.</span></li>
-        <li><b>Search everywhere</b><span>Full-text search with <code>tag:</code>, <code>folder:</code> and <code>title:</code> filters, and a quick switcher.</span></li>
-        <li><b>History and trash</b><span>Earlier versions of every note to preview and restore, and a trash for deleted notes — even emptying it can be undone for a while.</span></li>
-        <li><b>Works offline</b><span>Keep writing without a connection. Changes upload and merge when you are back online.</span></li>
-        <li><b>Comments on the text</b><span>Highlight a passage and comment, like in Notion; reply, resolve, @mention someone. Viewers can comment too — still end-to-end encrypted.</span></li>
-        <li><b>Sign in with what you have</b><span>Any OpenID Connect provider: Authelia, Keycloak, Authentik, Google and others.</span></li>
-        <li><b>AI agents, scoped</b><span>Give an assistant its own identity and only the vaults it needs. It uses the CLI or a folder of files.</span></li>
-        <li><b>One small server</b><span>A single Rust binary and a SQLite file. Docker, Compose and Kubernetes examples included.</span></li>
-      </ul>
-      <p><a href="features.html">All features</a></p>
-    </div>
-  </section>
-
-  <section class="section">
-    <div class="wrap split">
-      <div class="stack">
-        <h2>Run it yourself</h2>
-        <p>notekpr is open source under the AGPL. You need a machine with Docker or a Kubernetes cluster, a domain name, a reverse proxy for HTTPS (yours, or one of the examples) and an OpenID Connect provider for sign-in.</p>
-        <p>Want to look around first? Development mode runs without a sign-in provider: open two browser tabs, sign in as two people and share a vault between them. Or run <code>task demo</code> for a server with users, shared vaults and linked notes already in it.</p>
-        <div class="btns"><a class="btn primary" href="self-host.html">Self-hosting guide</a></div>
-      </div>
-<pre><span class="p">$ </span>git clone https://github.com/coolapso/notekpr
-<span class="p">$ </span>cd notekpr
-<span class="p">$ </span>export NOTEKPR_PUBLIC_URL=… NOTEKPR_OIDC_ISSUER=…  <span class="c"># domain, sign-in</span>
-<span class="p">$ </span>docker compose up -d</pre>
-    </div>
-  </section>
-
-  <section class="section">
+  <!-- ============================================================ private -->
+  <section class="section night" id="private">
     <div class="wrap">
-      <div class="callout">
-        <span class="eyebrow">Early release · 0.1</span>
-        <p>notekpr is young. It works, it is tested, and known issues are tracked in the open. Keep backups, and read the <a href="security.html">security notes</a> before you rely on it for important data.</p>
+      <div class="night-grid">
+        <div class="feature-copy reveal">
+          <p class="kicker"><span>##</span> Private by design</p>
+          <h2>Even we can't read your notes.</h2>
+          <p>Everything is encrypted on your devices before it leaves them: note text, titles, file names, attachments, vault names, even who is looking at which note. The server, ours or yours, orders and stores ciphertext. Removing someone renews the keys, and every change is signed by the person who made it.</p>
+          <p><a href="security.html">How the encryption works →</a></p>
+        </div>
+        <div class="reveal">
+          <span class="hand-note">↓ a note, as the server stores it</span>
+          <p class="envelope"><span class="v">01</span> <span class="e">00000002</span> <span class="n">a4c123b1612dd272d1371c17149d439536b3216fdaeeb975</span> 729fae923d5a4fd12aabfe228f219e9cb0eb53f16947ccf25ec84d8dbc74254770f58904dba41ecccc3fc1626e53a13043b026c48bbf33feff9243a8f506b40928b5b7a767c76fb008f86bebb2737f6a6f0fb23c6f5da2cec255404e <span class="tg">4fb440034d6608697a8d41bed440e504</span>
+            <span class="legend" aria-label="Envelope format"><span style="--c: #a9aaff">version</span><span style="--c: #4cc27a">key epoch</span><span style="--c: #6f6f99">nonce (24 bytes)</span><span style="--c: #9d9dd0">ciphertext</span><span style="--c: #e7e7f2">tag</span></span></p>
+        </div>
+      </div>
+      <ul class="points">
+        <li class="reveal"><span class="ico" aria-hidden="true">🔑</span><h3>Keys stay on your devices</h3><p>Your account key never leaves them. A new device is approved from one you already use, with a code to compare, or unlocked with your recovery key.</p></li>
+        <li class="reveal"><span class="ico" aria-hidden="true">✍️</span><h3>Signed, not just encrypted</h3><p>The vault's owner signs who belongs to it, and every edit is signed by its author: a server can't add people or forge changes.</p></li>
+        <li class="reveal"><span class="ico" aria-hidden="true">🧭</span><h3>Honest about the rest</h3><p>The server still learns sizes, timing and who shares with whom. The security page lists all of it, so you can judge for yourself.</p></li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- ============================================================ in the box -->
+  <section class="section" id="box">
+    <div class="wrap">
+      <div class="section-head center reveal">
+        <p class="kicker"><span>##</span> In the box</p>
+        <h2>Everything you'd expect. Nothing that can read it.</h2>
+      </div>
+      <ul class="box-grid">
+        <li class="reveal"><span class="ico" aria-hidden="true">✍️</span><b>Live-preview editor</b><span>Markdown that formats as you type, with a toolbar, tables, task lists and optional Vim keys.</span></li>
+        <li class="reveal"><span class="ico" aria-hidden="true">🎨</span><b>Drawings</b><span>Excalidraw's hand-drawn look, drawn together and shown in your notes. Opens and saves Excalidraw's files.</span></li>
+        <li class="reveal"><span class="ico" aria-hidden="true">🕸️</span><b>Links, backlinks and a graph</b><span><code>[[Wiki links]]</code>, embeds, tags, an outline and a graph view of how notes link, all worked out on your device.</span></li>
+        <li class="reveal"><span class="ico" aria-hidden="true">🔎</span><b>Search everywhere</b><span>Full-text search with <code>tag:</code>, <code>folder:</code> and <code>title:</code> filters, and a quick switcher.</span></li>
+        <li class="reveal"><span class="ico" aria-hidden="true">🕘</span><b>History and trash</b><span>Earlier versions of every note to preview and restore, and a trash for deleted notes — even emptying it can be undone for a while.</span></li>
+        <li class="reveal"><span class="ico" aria-hidden="true">📴</span><b>Works offline</b><span>Keep writing without a connection. Changes upload and merge when you are back online.</span></li>
+        <li class="reveal"><span class="ico" aria-hidden="true">💬</span><b>Comments on the text</b><span>Highlight a passage and comment, like in Notion; reply, resolve, @mention someone. Viewers can comment too — still end-to-end encrypted.</span></li>
+        <li class="reveal"><span class="ico" aria-hidden="true">🔐</span><b>Sign in with what you have</b><span>Any OpenID Connect provider: Authelia, Keycloak, Authentik, Google and others.</span></li>
+        <li class="reveal"><span class="ico" aria-hidden="true">🤖</span><b>AI agents, scoped</b><span>Give an assistant its own identity and only the vaults it needs. It uses the CLI or a folder of files.</span></li>
+        <li class="reveal"><span class="ico" aria-hidden="true">📁</span><b>A folder of Markdown</b><span>Keep your vaults as plain files on your disk, synced both ways, for Obsidian, Neovim, VS Code or anything else.</span></li>
+        <li class="reveal"><span class="ico" aria-hidden="true">🧳</span><b>Never locked in</b><span>Export a vault as Markdown any time, or everything as one <code>.zip</code> to move to another server.</span></li>
+        <li class="reveal"><span class="ico" aria-hidden="true">🦀</span><b>One small server</b><span>A single Rust binary and a SQLite file. Docker, Compose and Kubernetes examples included.</span></li>
+      </ul>
+      <p class="center" style="margin-top: 2rem; text-align: center"><a class="btn" href="features.html">See every feature <span class="arrow" aria-hidden="true">→</span></a></p>
+    </div>
+  </section>
+
+  <!-- ============================================================ switching -->
+  <section class="section tint feature" id="switch">
+    <div class="wrap">
+      <div class="section-head center reveal">
+        <p class="kicker"><span>##</span> Moving in</p>
+        <h2>Coming from somewhere else?</h2>
+        <p class="lede">Bring your notes. Keep your habits. Lose the worry about who can read them.</p>
+      </div>
+      <div class="cards3">
+        <article class="from reveal" style="--c: color-mix(in srgb, #8b5cf6 30%, transparent)">
+          <span class="k">from Obsidian</span>
+          <h3>Keep your vault as files.</h3>
+          <p>Import your vault with its attachments, and its Excalidraw drawings become drawings. Wiki links, callouts and tags work as you know them, and you can keep using Obsidian on the synced folder.</p>
+        </article>
+        <article class="from reveal" style="--c: color-mix(in srgb, #868e96 30%, transparent)">
+          <span class="k">from Notion</span>
+          <h3>The ease you're used to.</h3>
+          <p>A toolbar, comments with @mentions, editing together live, shared spaces with roles. All of it end-to-end encrypted, and every page a Markdown file you own.</p>
+        </article>
+        <article class="from reveal" style="--c: color-mix(in srgb, #1098ad 30%, transparent)">
+          <span class="k">from Capacities</span>
+          <h3>Capture, then connect.</h3>
+          <p>Quick notes in a second, backlinks, a graph and full-text search, all worked out on your devices. Bring any folder or <code>.zip</code> of Markdown along.</p>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================ pricing -->
+  <!-- A mock: the plans, limits and add-ons are a draft, not decided yet. -->
+  <section class="section" id="pricing">
+    <div class="wrap">
+      <div class="section-head center reveal">
+        <p class="kicker"><span>##</span> Pricing</p>
+        <h2>Your server or ours.</h2>
+        <p class="lede">Use notekpr on our servers or run it on your own: the same app, the same encryption, and nobody but you can read your notes. Start free and add only what you need.</p>
+      </div>
+      <div class="plans">
+        <article class="plan reveal">
+          <div class="name">Free</div>
+          <div class="for">For your own notes, and trying it out</div>
+          <div class="price">€0</div>
+          <ul><li><b>3</b> vaults</li><li><b>1 GB</b> of storage</li><li><b>10</b> drawings per vault</li><li>Every feature, end-to-end encrypted</li><li>Share with anyone</li></ul>
+          <a class="btn" aria-disabled="true">Coming soon</a>
+        </article>
+        <article class="plan hot reveal">
+          <span class="ribbon">For households</span>
+          <div class="name">Family</div>
+          <div class="for">Everyone at home, one plan</div>
+          <div class="price soon">Price soon</div>
+          <ul><li>Up to <b>6</b> people</li><li><b>10</b> vaults each</li><li><b>20 GB</b> of storage</li><li><b>50</b> drawings per vault</li><li>Shared family vaults</li></ul>
+          <a class="btn primary" aria-disabled="true">Coming soon</a>
+        </article>
+        <article class="plan reveal">
+          <div class="name">Unlimited</div>
+          <div class="for">For people who never stop writing</div>
+          <div class="price soon">Price soon</div>
+          <ul><li><b>Unlimited</b> vaults</li><li><b>Unlimited</b> drawings</li><li><b>100 GB</b> of storage</li><li>AI agents with their own keys</li><li>Everything in Family</li></ul>
+          <a class="btn" aria-disabled="true">Coming soon</a>
+        </article>
+        <article class="plan reveal">
+          <div class="name">Personalized</div>
+          <div class="for">For teams, schools and companies</div>
+          <div class="price soon">Let's talk</div>
+          <ul><li>Limits set for you</li><li>Your own instance</li><li>Moving in is an export and an import</li><li>Help to get started</li></ul>
+          <a class="btn" aria-disabled="true">Coming soon</a>
+        </article>
+      </div>
+      <div class="addons reveal">
+        <div class="copy"><b>Add just what you need</b><p>Any plan, Free included, can grow one piece at a time: buy one more vault, more room or more drawings, without changing plans.</p></div>
+        <ul><li><b>+1 vault</b><span>price soon</span></li><li><b>+10 GB</b><span>of storage</span></li><li><b>+25 drawings</b><span>for a vault</span></li></ul>
+      </div>
+      <div class="selfhost reveal">
+        <div class="big">€0</div>
+        <p><b>Rather run it yourself?</b> Every feature, no limits but your hardware: one Rust binary and a SQLite file, open source under the AGPL.</p>
+        <a class="btn" href="self-host.html">Self-hosting guide <span class="arrow" aria-hidden="true">→</span></a>
+      </div>
+      <p class="fine">Hosted plans aren't open yet: these plans, limits and prices are a draft and will change before launch.</p>
+    </div>
+  </section>
+
+  <!-- ============================================================ faq -->
+  <section class="section tint feature" id="faq">
+    <div class="wrap">
+      <div class="section-head center reveal">
+        <p class="kicker"><span>##</span> Questions</p>
+        <h2>Fair questions.</h2>
+      </div>
+      <div class="faq reveal">
+        <details open><summary>Can you read my notes?</summary><p>No. Note text, titles, file and folder names, attachments and vault names are encrypted on your devices with keys the server never gets, on our servers and on yours alike. The server does learn some metadata, such as sizes, timing and who shares with whom; the <a href="security.html">security page</a> lists exactly what.</p></details>
+        <details><summary>What if I lose my phone and my laptop?</summary><p>Your recovery key, shown once when you set up, unlocks your account on a new device. Otherwise, new devices are approved from one you already use.</p></details>
+        <details><summary>Can I take my notes and leave?</summary><p>Any time. Export a vault as Markdown, keep a synced folder of files on your disk, or export everything as one <code>.zip</code> and import it on another server: ours to yours, or back.</p></details>
+        <details><summary>Is it really open source?</summary><p>Yes, all of it, the server, the web app and the desktop client, under the AGPL. Read it, run it, check it.</p></details>
+        <details><summary>Does it work with Obsidian?</summary><p>Yes. The desktop client keeps your vaults as a folder of Markdown that Obsidian opens as a vault, synced both ways. Importing an Obsidian vault brings its attachments and turns its Excalidraw drawings into drawings.</p></details>
+        <details><summary>Does it work offline?</summary><p>Yes. The browser keeps an encrypted copy of your vaults, and what you write offline syncs and merges when you are back.</p></details>
+        <details><summary>Is it ready?</summary><p>It's young, and it works: it is tested end to end, and known issues are tracked in the open. Keep backups of what matters, as with any new tool.</p></details>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================ cta -->
+  <section class="section cta">
+    <div class="wrap">
+      <div class="cta-box reveal">
+        <span class="hand">go on, write something</span>
+        <h2>Your notes. Your keys.</h2>
+        <p>On your server or ours.</p>
+        <div class="btns center">
+          <a class="btn big" href="#pricing">Start free <span class="arrow" aria-hidden="true">→</span></a>
+          <a class="btn big ghost" href="self-host.html">Host it yourself</a>
+        </div>
       </div>
     </div>
   </section>
 </main>
 
 <footer class="site-foot">
-  <div class="wrap">
-    <span>notekpr · AGPL-3.0-or-later</span>
-    <nav aria-label="Footer">
-      <a href="features.html">Features</a>
-      <a href="security.html">Security</a>
-      <a href="self-host.html">Self-host</a>
-      <a href="https://github.com/coolapso/notekpr">Source code</a>
-      <a href="https://github.com/coolapso/notekpr/tree/dev/docs">Documentation</a>
-    </nav>
+  <div class="wrap foot-grid">
+    <div class="about">
+      <a class="brand" href="./" aria-label="notekpr home">
+        <svg viewBox="0 0 64 64" aria-hidden="true"><rect width="64" height="64" rx="14" style="fill: var(--accent)"/><path d="M32 12 50 32 32 52 14 32Z" style="fill: var(--bg)"/><path d="M32 22 42 32 32 42 22 32Z" style="fill: var(--accent)"/></svg>
+        notekpr
+      </a>
+      <p>Markdown notes, drawings and collaboration, end-to-end encrypted. On your server or ours.</p>
+      <span class="hand">made with care, and Rust</span>
+    </div>
+    <div><h4>Product</h4><ul><li><a href="features.html">Features</a></li><li><a href="./#pricing">Pricing</a></li><li><a href="security.html">Security</a></li><li><a href="self-host.html">Self-host</a></li></ul></div>
+    <div><h4>Use it with</h4><ul><li><a href="https://github.com/coolapso/notekpr/blob/dev/docs/own-editor.md">Your own editor</a></li><li><a href="https://github.com/coolapso/notekpr/blob/dev/docs/desktop-client.md">The command line</a></li><li><a href="https://github.com/coolapso/notekpr/blob/dev/docs/agents.md">AI agents</a></li></ul></div>
+    <div><h4>Project</h4><ul><li><a href="https://github.com/coolapso/notekpr">Source code</a></li><li><a href="https://github.com/coolapso/notekpr/tree/dev/docs">Documentation</a></li><li><a href="https://github.com/sponsors/coolapso">Sponsor</a></li></ul></div>
   </div>
+  <div class="wrap foot-base"><span>notekpr · AGPL-3.0-or-later</span><span>No trackers, no third-party requests. Just this page.</span></div>
 </footer>
-
-<script>
-  // Settle the ciphertext from random hex once on load: a hint that every
-  // change is fresh ciphertext. Static text without motion preferences or JS.
-  (function () {
-    var el = document.getElementById("ct");
-    if (!el || !window.matchMedia || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
-    var target = el.textContent, hex = "0123456789abcdef", frame = 0, frames = 26;
-    function tick() {
-      frame++;
-      var keep = Math.floor(target.length * frame / frames), out = target.slice(0, keep);
-      for (var i = keep; i < target.length; i++) out += hex[(Math.random() * 16) | 0];
-      el.textContent = out;
-      if (frame < frames) requestAnimationFrame(tick);
-    }
-    requestAnimationFrame(tick);
-  })();
-</script>
 </body>
 </html>

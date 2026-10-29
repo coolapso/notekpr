@@ -7,6 +7,8 @@
 <meta name="description" content="Everything notekpr does: a live-preview Markdown editor, links and backlinks, search, sharing and live collaboration, your own editor, AI agents.">
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="style.css">
+<script>document.documentElement.classList.add("js")</script>
+<script src="site.js" defer></script>
 </head>
 <body>
 <header class="site-head">
@@ -16,11 +18,12 @@
       notekpr
     </a>
     <nav class="site-nav" aria-label="Main">
-      <a href="./">Home</a>
       <a href="features.html" aria-current="page">Features</a>
+      <a href="./#pricing">Pricing</a>
       <a href="security.html">Security</a>
-      <a href="self-host.html">Self-host</a>
-      <a href="https://github.com/coolapso/notekpr">Source</a>
+      <a class="opt" href="self-host.html">Self-host</a>
+      <a class="opt" href="https://github.com/coolapso/notekpr">GitHub</a>
+      <a class="btn primary" href="./#pricing">Start free</a>
     </nav>
   </div>
 </header>
@@ -173,16 +176,20 @@
 </main>
 
 <footer class="site-foot">
-  <div class="wrap">
-    <span>notekpr · AGPL-3.0-or-later</span>
-    <nav aria-label="Footer">
-      <a href="features.html">Features</a>
-      <a href="security.html">Security</a>
-      <a href="self-host.html">Self-host</a>
-      <a href="https://github.com/coolapso/notekpr">Source code</a>
-      <a href="https://github.com/coolapso/notekpr/tree/dev/docs">Documentation</a>
-    </nav>
+  <div class="wrap foot-grid">
+    <div class="about">
+      <a class="brand" href="./" aria-label="notekpr home">
+        <svg viewBox="0 0 64 64" aria-hidden="true"><rect width="64" height="64" rx="14" style="fill: var(--accent)"/><path d="M32 12 50 32 32 52 14 32Z" style="fill: var(--bg)"/><path d="M32 22 42 32 32 42 22 32Z" style="fill: var(--accent)"/></svg>
+        notekpr
+      </a>
+      <p>Markdown notes, drawings and collaboration, end-to-end encrypted. On your server or ours.</p>
+      <span class="hand">made with care, and Rust</span>
+    </div>
+    <div><h4>Product</h4><ul><li><a href="features.html">Features</a></li><li><a href="./#pricing">Pricing</a></li><li><a href="security.html">Security</a></li><li><a href="self-host.html">Self-host</a></li></ul></div>
+    <div><h4>Use it with</h4><ul><li><a href="https://github.com/coolapso/notekpr/blob/dev/docs/own-editor.md">Your own editor</a></li><li><a href="https://github.com/coolapso/notekpr/blob/dev/docs/desktop-client.md">The command line</a></li><li><a href="https://github.com/coolapso/notekpr/blob/dev/docs/agents.md">AI agents</a></li></ul></div>
+    <div><h4>Project</h4><ul><li><a href="https://github.com/coolapso/notekpr">Source code</a></li><li><a href="https://github.com/coolapso/notekpr/tree/dev/docs">Documentation</a></li><li><a href="https://github.com/sponsors/coolapso">Sponsor</a></li></ul></div>
   </div>
+  <div class="wrap foot-base"><span>notekpr · AGPL-3.0-or-later</span><span>No trackers, no third-party requests. Just this page.</span></div>
 </footer>
 
 </body>

@@ -1,7 +1,9 @@
 //! Repository tests against a real, migrated SQLite database (a temporary
 //! file with the production settings: WAL, foreign keys).
 
-use notekpr_core::protocol::{InstanceSettings, Limit, MIB, PublicAccountKey, Role, VaultKind};
+use notekpr_core::protocol::{
+    InstanceSettings, Limit, MIB, ObjectKind, PublicAccountKey, Role, VaultKind,
+};
 
 use super::*;
 use crate::access;
@@ -69,7 +71,9 @@ async fn vault(db: &Db, id: &str, owner: &str, members: &[(&str, Role)]) {
 
 /// Share note `o` of vault `v` with `user`.
 async fn share(db: &Db, v: &str, o: &str, user: &str, role: Role) {
-    shares::ensure_object(db, v, o, "owner", NOW).await.unwrap();
+    shares::ensure_object(db, v, o, "owner", ObjectKind::Note, NOW)
+        .await
+        .unwrap();
     assert!(
         shares::insert(db, v, o, user, &role, "owner", NOW)
             .await
@@ -244,7 +248,7 @@ async fn quick_notes_are_once_per_person_and_count_their_notes() {
 
     // Notes are the objects other than the index and comments, until purged.
     for o in ["index", "n1", "n2", "c_n1"] {
-        shares::ensure_object(db, "q", o, "alice", NOW)
+        shares::ensure_object(db, "q", o, "alice", ObjectKind::Note, NOW)
             .await
             .unwrap();
     }
@@ -255,6 +259,98 @@ async fn quick_notes_are_once_per_person_and_count_their_notes() {
         .unwrap();
     assert_eq!(vaults::note_count(db, "q").await.unwrap(), 1);
     assert_eq!(vaults::note_count(db, "qb").await.unwrap(), 0);
+}
+
+#[tokio::test]
+async fn drawings_count_per_owner_and_moved_copies_know_their_original() {
+    use notekpr_core::protocol::ObjectRef;
+    let t = test_db().await;
+    let db = &t.db;
+    human(db, "alice").await;
+    human(db, "bob").await;
+    vault(db, "home", "alice", &[("bob", Role::Editor)]).await;
+    vault(db, "bobs", "bob", &[]).await;
+    assert!(
+        vaults::insert(db, "d", "alice", b"m", VaultKind::Drawings, NOW)
+            .await
+            .unwrap()
+    );
+    // One Drawings section per person.
+    assert!(
+        !vaults::insert(db, "d2", "alice", b"m", VaultKind::Drawings, NOW)
+            .await
+            .unwrap()
+    );
+    assert_eq!(
+        vaults::drawings_of(db, "alice").await.unwrap().as_deref(),
+        Some("d")
+    );
+    assert_eq!(
+        vaults::kind(db, "d").await.unwrap(),
+        Some(VaultKind::Drawings)
+    );
+    assert_eq!(users::owned_vaults(db, "alice").await.unwrap(), 1);
+    assert_eq!(settings::vaults(db).await.unwrap(), 2);
+
+    // Hers wherever she owns them, whoever made them, until deleted for good.
+    for (v, o, by, kind) in [
+        ("home", "a", "alice", ObjectKind::Drawing),
+        ("home", "b", "bob", ObjectKind::Drawing),
+        ("d", "c", "alice", ObjectKind::Drawing),
+        ("home", "n", "alice", ObjectKind::Note),
+        ("bobs", "e", "bob", ObjectKind::Drawing),
+    ] {
+        shares::ensure_object(db, v, o, by, kind, NOW)
+            .await
+            .unwrap();
+    }
+    // Made once: a later kind changes nothing.
+    shares::ensure_object(db, "home", "n", "alice", ObjectKind::Drawing, NOW)
+        .await
+        .unwrap();
+    assert_eq!(
+        shares::kind(db, "home", "n").await.unwrap(),
+        Some(ObjectKind::Note)
+    );
+    assert_eq!(vaults::drawing_count(db, "alice").await.unwrap(), 3);
+    assert_eq!(vaults::drawing_count(db, "bob").await.unwrap(), 1);
+    sqlx::query("UPDATE objects SET purged_at = 1 WHERE vault_id = 'home' AND id = 'a'")
+        .execute(db)
+        .await
+        .unwrap();
+    assert_eq!(vaults::drawing_count(db, "alice").await.unwrap(), 2);
+    assert_eq!(shares::live_kind(db, "home", "a").await.unwrap(), None);
+    assert_eq!(
+        shares::kind(db, "home", "a").await.unwrap(),
+        Some(ObjectKind::Drawing)
+    );
+    let mut owners = vaults::drawing_owners(db).await.unwrap();
+    owners.sort();
+    assert_eq!(owners, ["alice", "bob"]);
+
+    // A copy replacing an original remembers it until it is taken.
+    let original = ObjectRef {
+        vault_id: "home".into(),
+        object_id: "b".into(),
+    };
+    shares::ensure_object(db, "d", "copy", "alice", ObjectKind::Drawing, NOW)
+        .await
+        .unwrap();
+    assert!(!shares::is_being_replaced(db, &original).await.unwrap());
+    shares::set_replaces(db, "d", "copy", &original)
+        .await
+        .unwrap();
+    assert!(shares::is_being_replaced(db, &original).await.unwrap());
+    let mut conn = db.acquire().await.unwrap();
+    assert_eq!(
+        shares::take_replaces(&mut conn, "d", "copy").await.unwrap(),
+        Some(original.clone())
+    );
+    assert_eq!(
+        shares::take_replaces(&mut conn, "d", "copy").await.unwrap(),
+        None
+    );
+    assert!(!shares::is_being_replaced(db, &original).await.unwrap());
 }
 
 /// What a vault's content takes, counted from scratch: payloads and sizes
@@ -295,7 +391,7 @@ async fn vault_storage_counts_what_the_vault_holds() {
     assert_eq!(used("v").await, 0);
 
     for o in ["a", "b"] {
-        shares::ensure_object(db, "v", o, "alice", NOW)
+        shares::ensure_object(db, "v", o, "alice", ObjectKind::Note, NOW)
             .await
             .unwrap();
     }

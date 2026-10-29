@@ -1613,3 +1613,145 @@ async fn quick_notes_have_a_storage_limit_of_their_own_per_person() {
     assert_eq!(set(serde_json::json!("default")).await, 200);
     assert!(ws.until(|m| vault_full(m, &q)).await);
 }
+
+/// How many drawings someone may have is the instance's
+/// `drawings_per_user` (unlimited by default) or their own allowance, and
+/// their Drawings section takes at most `drawings_storage_mb` or their own
+/// storage allowance — never the limit per vault. The section is no vault
+/// to the limits or the counts.
+#[tokio::test]
+async fn administrators_set_how_many_drawings_people_may_have() {
+    let srv = start_with_operator().await;
+    let mut alice = new_user(&srv.base, "alice").await;
+    let s = settings(
+        &srv,
+        serde_json::json!({ "drawings_per_user": 1, "vaults_per_user": 0, "max_vaults": 0 }),
+    )
+    .await;
+    assert_eq!(s.settings.drawings_per_user, Limit::Max(1));
+    assert_eq!(s.settings.drawings_storage_mb, Limit::Unlimited);
+    // No vault may be made; the Drawings still can.
+    assert_eq!(try_create_vault(&alice).await, 403);
+    let d = alice.create_drawings().await.unwrap().id;
+    alice.make_drawing(&d, "d1").await;
+    assert_eq!(alice.drawings().await, (Limit::Max(1), 1));
+    let (_, key) = alice.new_key(&d, "d2", ObjectKind::Drawing);
+    assert_eq!(alice.put_key(&d, "d2", &key).await.unwrap_err().0, 403);
+
+    // The person's own allowance, told to their apps.
+    let mut ws = subscribed(&srv, &alice, &d, None).await;
+    let path = format!("/admin/users/{}", alice.id);
+    let patch = |body: serde_json::Value| {
+        let r = operator(&srv, Method::PATCH, &path).json(&body);
+        async move { status(r).await }
+    };
+    assert_eq!(
+        patch(serde_json::json!({ "drawing_allowance": 2 })).await,
+        200
+    );
+    ws.until(|m| match m {
+        ServerMessage::UserEvent {
+            event: UserEventKind::VaultsChanged,
+        } => Some(()),
+        _ => None,
+    })
+    .await;
+    assert_eq!(alice.drawings().await, (Limit::Max(2), 1));
+    alice.put_key(&d, "d2", &key).await.unwrap();
+    let person = || async {
+        let users: Vec<AdminUser> = operator(&srv, Method::GET, "/admin/users")
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        users.into_iter().find(|u| u.id == alice.id).unwrap()
+    };
+    let p = person().await;
+    assert_eq!(p.drawing_allowance, Allowance::Max(2));
+    assert_eq!(p.drawing_count, 2);
+    assert_eq!(
+        p.drawings_storage_bytes,
+        vault_info(&alice, &d).await.storage_bytes
+    );
+    assert!(p.drawings_storage_bytes > 0);
+    assert_eq!(
+        (p.vault_count, p.owned_vault_count, p.storage_bytes),
+        (0, 0, 0)
+    );
+    let stats: AdminStats = operator(&srv, Method::GET, "/admin/stats")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(stats.vaults, 0, "the Drawings are no vault");
+    let vaults: Vec<AdminVault> = operator(&srv, Method::GET, "/admin/vaults")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(vaults.is_empty());
+    let patch_vault = operator(&srv, Method::PATCH, &format!("/admin/vaults/{d}"))
+        .json(&serde_json::json!({ "storage_allowance": 5 }));
+    assert_eq!(status(patch_vault).await, 404);
+
+    // Their storage: not the limit per vault, the instance's for Drawings…
+    settings(&srv, serde_json::json!({ "storage_per_vault_mb": 0 })).await;
+    assert_eq!(
+        vault_info(&alice, &d).await.storage_limit_mb,
+        Limit::Unlimited
+    );
+    let s = settings(&srv, serde_json::json!({ "drawings_storage_mb": 0 })).await;
+    assert_eq!(s.settings.drawings_storage_mb, Limit::Max(0));
+    assert!(ws.until(|m| vault_full(m, &d)).await);
+    let ring = alice.ring(&d).clone();
+    assert_eq!(
+        alice
+            .push(&d, vec![content(&ring, INDEX_OBJECT_ID, ObjectKind::Note)])
+            .await
+            .unwrap_err()
+            .0,
+        507
+    );
+    // …else their own, at once.
+    assert_eq!(
+        patch(serde_json::json!({ "drawings_storage_allowance": "unlimited" })).await,
+        200
+    );
+    assert!(!ws.until(|m| vault_full(m, &d)).await);
+    assert_eq!(
+        person().await.drawings_storage_allowance,
+        Allowance::Unlimited
+    );
+    assert_eq!(
+        vault_info(&alice, &d).await.storage_limit_mb,
+        Limit::Unlimited
+    );
+
+    // Back to the instance's limit, lowered: nothing is taken away.
+    assert_eq!(
+        patch(serde_json::json!({ "drawing_allowance": "default" })).await,
+        200
+    );
+    assert_eq!(alice.drawings().await, (Limit::Max(1), 2));
+    settings(
+        &srv,
+        serde_json::json!({ "drawings_per_user": "unlimited" }),
+    )
+    .await;
+    assert_eq!(alice.drawings().await, (Limit::Unlimited, 2));
+    // Agents have no allowance.
+    let agent = create_agent(&alice).await.unwrap();
+    let r = operator(
+        &srv,
+        Method::PATCH,
+        &format!("/admin/users/{}", agent.agent.id),
+    )
+    .json(&serde_json::json!({ "drawing_allowance": 1 }));
+    assert_eq!(status(r).await, 400);
+}

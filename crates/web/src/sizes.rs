@@ -126,6 +126,7 @@ mod tests {
             client_update_id: id.to_string(),
             payload: vec![0; len],
             signature: None,
+            kind: Default::default(),
         }
     }
 

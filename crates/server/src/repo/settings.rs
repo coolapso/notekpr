@@ -55,7 +55,7 @@ pub async fn agents(db: impl SqliteExecutor<'_>) -> AppResult<i64> {
 }
 
 pub async fn vaults(db: impl SqliteExecutor<'_>) -> AppResult<i64> {
-    // Quick notes don't count: everyone may have them.
+    // Quick notes and Drawings don't count: everyone may have them.
     Ok(
         sqlx::query_scalar("SELECT COUNT(*) FROM vaults WHERE kind = 'regular'")
             .fetch_one(db)

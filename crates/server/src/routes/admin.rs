@@ -88,7 +88,9 @@ pub async fn update_user(
     let allowances = req.vault_allowance.is_some()
         || req.agent_allowance.is_some()
         || req.quick_note_allowance.is_some()
-        || req.quick_notes_storage_allowance.is_some();
+        || req.quick_notes_storage_allowance.is_some()
+        || req.drawing_allowance.is_some()
+        || req.drawings_storage_allowance.is_some();
     if req.disabled.is_some() || allowances {
         admin.require(AdminScope::Accounts)?;
     }
@@ -137,21 +139,31 @@ pub async fn update_user(
         if let Some(a) = req.quick_note_allowance {
             repo::users::set_quick_note_allowance(&mut *tx, &id, a).await?;
         }
-        // Their quick notes may fill up or have room again.
-        let mut quick_notes = None;
+        if let Some(a) = req.drawing_allowance {
+            repo::users::set_drawing_allowance(&mut *tx, &id, a).await?;
+        }
+        // Their quick notes and Drawings may fill up or have room again.
+        let mut sections = Vec::new();
         if let Some(a) = req.quick_notes_storage_allowance {
             if let Some(q) = repo::vaults::quick_notes_of(&mut *tx, &id).await? {
-                quick_notes = Some((state.instance.vault_full(&mut *tx, &q).await?, q));
+                sections.push((state.instance.vault_full(&mut *tx, &q).await?, q));
             }
             repo::users::set_quick_notes_storage_allowance(&mut *tx, &id, a).await?;
         }
+        if let Some(a) = req.drawings_storage_allowance {
+            if let Some(d) = repo::vaults::drawings_of(&mut *tx, &id).await? {
+                sections.push((state.instance.vault_full(&mut *tx, &d).await?, d));
+            }
+            repo::users::set_drawings_storage_allowance(&mut *tx, &id, a).await?;
+        }
         tx.commit().await?;
-        if let Some((was_full, q)) = quick_notes {
-            storage_changed(&state, &q, was_full).await;
+        for (was_full, v) in sections {
+            storage_changed(&state, &v, was_full).await;
         }
     }
-    // Their apps reload their quick notes' limit.
-    if req.quick_note_allowance.is_some() {
+    // Their apps reload their quick notes' limit, and may have room for
+    // drawings waiting on them.
+    if req.quick_note_allowance.is_some() || req.drawing_allowance.is_some() {
         notify_user(&state, &id, UserEventKind::VaultsChanged);
     }
     if req.disabled == Some(true) {
@@ -179,6 +191,8 @@ pub async fn update_user(
             "agent_allowance": req.agent_allowance,
             "quick_note_allowance": req.quick_note_allowance,
             "quick_notes_storage_allowance": req.quick_notes_storage_allowance,
+            "drawing_allowance": req.drawing_allowance,
+            "drawings_storage_allowance": req.drawings_storage_allowance,
         }),
     )
     .await;
@@ -213,7 +227,8 @@ fn given(s: &Option<String>) -> Option<&str> {
 
 /// Give a vault its own storage limit (or the instance's again). Its
 /// subscribers learn at once if that fills it or makes room. Not someone's
-/// quick notes (`404`): their limit is the person's (`update_user`).
+/// quick notes or Drawings (`404`): their limits are the person's
+/// (`update_user`).
 pub async fn update_vault(
     State(state): State<AppState>,
     admin: Admin,
@@ -290,6 +305,13 @@ pub async fn update_settings(
             notify_user(&state, &owner, UserEventKind::VaultsChanged);
         }
     }
+    // Drawings waiting for room may have it now.
+    if req.drawings_per_user.is_some() {
+        for owner in repo::vaults::drawing_owners(&state.db).await? {
+            notify_user(&state, &owner, UserEventKind::VaultsChanged);
+        }
+    }
+
     audit(
         &state,
         &admin,

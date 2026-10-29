@@ -20,7 +20,9 @@
 //!   change above holds the same lock); with several processes writing one
 //!   database those checks must move into the transaction too.
 
-use notekpr_core::protocol::{INDEX_OBJECT_ID, Role, comments_note};
+use notekpr_core::protocol::{
+    INDEX_OBJECT_ID, ObjectKind, ObjectRef, Role, VaultKind, comments_note,
+};
 use sqlx::SqliteExecutor;
 
 use crate::db::Db;
@@ -112,8 +114,10 @@ pub async fn comment_access(
     if note_id == INDEX_OBJECT_ID || comments_note(note_id).is_some() || !live {
         return Err(AppError::NotFound);
     }
-    if repo::vaults::is_quick_notes(db, vault_id).await? {
-        return Err(forbidden("quick notes have no comments"));
+    match repo::vaults::kind(db, vault_id).await? {
+        Some(VaultKind::QuickNotes) => return Err(forbidden("quick notes have no comments")),
+        Some(VaultKind::Drawings) => return Err(forbidden("your drawings have no comments")),
+        _ => {}
     }
     if !role.can_write() && !repo::vaults::viewers_comment(db, vault_id).await? {
         return Err(forbidden("the vault's owner doesn't let viewers comment"));
@@ -147,17 +151,51 @@ pub async fn require_admin(
     }
 }
 
-/// Quick notes are never shared: no members (people or agents), no note
-/// shares. Checked after the caller's own access, so nobody else learns
-/// what a vault is.
+/// Quick notes and Drawings are never shared: no members (people or
+/// agents), no note shares. Checked after the caller's own access, so
+/// nobody else learns what a vault is.
 pub async fn require_shareable(db: impl SqliteExecutor<'_>, vault_id: &str) -> AppResult<()> {
-    if repo::vaults::is_quick_notes(db, vault_id).await? {
-        Err(bad(
+    match repo::vaults::kind(db, vault_id).await? {
+        Some(VaultKind::QuickNotes) => Err(bad(
             "quick notes are never shared: move the note to a vault first",
-        ))
-    } else {
-        Ok(())
+        )),
+        Some(VaultKind::Drawings) => Err(bad(
+            "your drawings are never shared: move the drawing to a vault first",
+        )),
+        _ => Ok(()),
     }
+}
+
+/// May a new drawing in `vault_id`, made by `user_id`, replace `original`
+/// (a move), so that it needs no room under the drawings limit? Only if the
+/// original is a live drawing in another vault of the same owner, which
+/// the caller could delete for good there (as `DELETE …/objects/{o}`), and
+/// no other copy replaces it already. Runs inside the creating transaction.
+pub async fn may_replace(
+    tx: &mut sqlx::SqliteConnection,
+    user_id: &str,
+    vault_id: &str,
+    original: &ObjectRef,
+) -> AppResult<bool> {
+    let o = &original.object_id;
+    if original.vault_id == vault_id
+        || o == INDEX_OBJECT_ID
+        || comments_note(o).is_some()
+        || repo::shares::live_kind(&mut *tx, &original.vault_id, o).await?
+            != Some(ObjectKind::Drawing)
+    {
+        return Ok(false);
+    }
+    let from = repo::vaults::kind_and_owner(&mut *tx, &original.vault_id).await?;
+    let to = repo::vaults::kind_and_owner(&mut *tx, vault_id).await?;
+    let (Some((_, from)), Some((_, to))) = (from, to) else {
+        return Ok(false);
+    };
+    Ok(from == to
+        && member_role_opt(&mut *tx, &original.vault_id, user_id)
+            .await?
+            .is_some_and(|r| r.can_administer())
+        && !repo::shares::is_being_replaced(&mut *tx, original).await?)
 }
 
 pub async fn require_writer(

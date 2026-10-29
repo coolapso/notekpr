@@ -1,7 +1,9 @@
 //! Individually shared notes: the note's document-key state and encrypted
 //! title (columns of `objects`), and who it is shared with (`object_shares`).
+//! Also what an object is (a drawing?) and which original a moved copy
+//! replaces.
 
-use notekpr_core::protocol::Role;
+use notekpr_core::protocol::{ObjectKind, ObjectRef, Role};
 use sqlx::{Row, SqliteExecutor};
 
 use crate::error::AppResult;
@@ -21,17 +23,19 @@ pub async fn object_state(
     )
 }
 
-/// Create the object row if it doesn't exist yet (sharing a note nobody
-/// wrote to).
+/// Create the object row if it doesn't exist yet (its first key, or
+/// sharing a note nobody wrote to). `kind` counts only then: an object's
+/// kind never changes.
 pub async fn ensure_object(
     db: impl SqliteExecutor<'_>,
     vault_id: &str,
     object_id: &str,
     created_by: &str,
+    kind: ObjectKind,
     now: i64,
 ) -> AppResult<()> {
     sqlx::query(
-        "INSERT INTO objects (vault_id, id, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?)
+        "INSERT INTO objects (vault_id, id, created_by, created_at, updated_at, kind) VALUES (?, ?, ?, ?, ?, ?)
          ON CONFLICT(vault_id, id) DO NOTHING",
     )
     .bind(vault_id)
@@ -39,9 +43,108 @@ pub async fn ensure_object(
     .bind(created_by)
     .bind(now)
     .bind(now)
+    .bind(kind.as_str())
     .execute(db)
     .await?;
     Ok(())
+}
+
+/// What an object is, also one deleted for good; `None` if there's none.
+pub async fn kind(
+    db: impl SqliteExecutor<'_>,
+    vault_id: &str,
+    object_id: &str,
+) -> AppResult<Option<ObjectKind>> {
+    let kind: Option<String> =
+        sqlx::query_scalar("SELECT kind FROM objects WHERE vault_id = ? AND id = ?")
+            .bind(vault_id)
+            .bind(object_id)
+            .fetch_optional(db)
+            .await?;
+    Ok(kind.map(|k| ObjectKind::parse(&k).unwrap_or_default()))
+}
+
+/// What a live object (not deleted for good) is; `None` if there's none.
+pub async fn live_kind(
+    db: impl SqliteExecutor<'_>,
+    vault_id: &str,
+    object_id: &str,
+) -> AppResult<Option<ObjectKind>> {
+    let kind: Option<String> = sqlx::query_scalar(
+        "SELECT kind FROM objects WHERE vault_id = ? AND id = ? AND purged_at IS NULL",
+    )
+    .bind(vault_id)
+    .bind(object_id)
+    .fetch_optional(db)
+    .await?;
+    Ok(kind.map(|k| ObjectKind::parse(&k).unwrap_or_default()))
+}
+
+/// Remember that the new object `object_id` (a moved copy) replaces
+/// `original`, which goes once the copy's first update is stored.
+pub async fn set_replaces(
+    db: impl SqliteExecutor<'_>,
+    vault_id: &str,
+    object_id: &str,
+    original: &ObjectRef,
+) -> AppResult<()> {
+    sqlx::query(
+        "UPDATE objects SET replaces_vault = ?, replaces_object = ? WHERE vault_id = ? AND id = ?",
+    )
+    .bind(&original.vault_id)
+    .bind(&original.object_id)
+    .bind(vault_id)
+    .bind(object_id)
+    .execute(db)
+    .await?;
+    Ok(())
+}
+
+/// Whether a live copy waits to replace `original` already (a move tried
+/// twice).
+pub async fn is_being_replaced(
+    db: impl SqliteExecutor<'_>,
+    original: &ObjectRef,
+) -> AppResult<bool> {
+    let row: Option<i64> = sqlx::query_scalar(
+        "SELECT 1 FROM objects
+         WHERE replaces_vault = ? AND replaces_object = ? AND purged_at IS NULL LIMIT 1",
+    )
+    .bind(&original.vault_id)
+    .bind(&original.object_id)
+    .fetch_optional(db)
+    .await?;
+    Ok(row.is_some())
+}
+
+/// The original a copy replaces, forgotten as it is read (it goes now).
+pub async fn take_replaces(
+    tx: &mut sqlx::SqliteConnection,
+    vault_id: &str,
+    object_id: &str,
+) -> AppResult<Option<ObjectRef>> {
+    let row: Option<(String, String)> = sqlx::query_as(
+        "SELECT replaces_vault, replaces_object FROM objects
+         WHERE vault_id = ? AND id = ? AND replaces_vault IS NOT NULL AND replaces_object IS NOT NULL",
+    )
+    .bind(vault_id)
+    .bind(object_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    if row.is_some() {
+        sqlx::query(
+            "UPDATE objects SET replaces_vault = NULL, replaces_object = NULL
+             WHERE vault_id = ? AND id = ?",
+        )
+        .bind(vault_id)
+        .bind(object_id)
+        .execute(&mut *tx)
+        .await?;
+    }
+    Ok(row.map(|(vault_id, object_id)| ObjectRef {
+        vault_id,
+        object_id,
+    }))
 }
 
 /// Move a note to a document key epoch, with its title under that key. No

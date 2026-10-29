@@ -704,6 +704,8 @@ fn first_document_key(
         snapshot,
         private,
         without: vec![],
+        kind: ObjectKind::Note,
+        replaces: None,
     };
     Ok((ring, req))
 }
@@ -743,6 +745,8 @@ pub fn start_sharing_keyed(
         }),
         private: false,
         without: vec![],
+        kind: ObjectKind::Note,
+        replaces: None,
     };
     Ok((next, req))
 }
@@ -777,6 +781,8 @@ pub fn start_sharing(
         }),
         private: false,
         without: vec![],
+        kind: ObjectKind::Note,
+        replaces: None,
     };
     Ok((ring, req))
 }
@@ -821,6 +827,8 @@ pub fn rotate_object_key(
         snapshot: None,
         private: false,
         without: vec![],
+        kind: ObjectKind::Note,
+        replaces: None,
     };
     Ok((next, req))
 }
@@ -1021,6 +1029,16 @@ impl VaultReplica {
     pub fn ring_for(&self, object_id: &str) -> &VaultKeyring {
         let keyed = comments_note(object_id).unwrap_or(object_id);
         self.doc_keys.get(keyed).unwrap_or(&self.keyring)
+    }
+
+    /// What an object is to the server: a drawing if its index entry says
+    /// so, else a note (the index and comments too). Sent with what creates
+    /// the object ([`ObjectKeyUpdate::kind`], [`PushUpdate::kind`]).
+    pub fn object_kind(&self, object_id: &str) -> ObjectKind {
+        match self.index.get(object_id) {
+            Some(e) if e.kind == crate::doc::EntryKind::Drawing => ObjectKind::Drawing,
+            _ => ObjectKind::Note,
+        }
     }
 
     /// Encrypt content of an object with the right key (document key if shared).
@@ -1416,6 +1434,7 @@ impl VaultReplica {
             client_update_id,
             payload,
             signature: None,
+            kind: self.object_kind(object_id),
         })
     }
 
@@ -1429,6 +1448,7 @@ impl VaultReplica {
                     client_update_id: p.client_update_id.clone(),
                     payload: self.encrypt_object(Purpose::Update, &p.object_id, &p.update)?,
                     signature: None,
+                    kind: self.object_kind(&p.object_id),
                 })
             })
             .collect()

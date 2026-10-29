@@ -10,6 +10,7 @@ pub mod crypto;
 pub mod dates;
 pub mod doc;
 pub mod drawing;
+pub mod drawings;
 pub mod engine;
 pub mod keys;
 pub mod markdown;

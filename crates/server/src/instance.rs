@@ -17,15 +17,18 @@
 //! their changes and send them the moment the server is writable again.
 //!
 //! Limits never take anything away: they are checked when something new
-//! would be created (an account, a vault, an agent, a quick note), inside
-//! the transaction that creates it, so two requests at once can't both slip
-//! past them.
+//! would be created (an account, a vault, an agent, a quick note, a
+//! drawing), inside the transaction that creates it, so two requests at once
+//! can't both slip past them. Drawings count per account: those in every
+//! vault someone owns, whoever made them ([`Instance::admit`]).
 //!
 //! Each vault has a storage limit too: its own, set by administrators, else
 //! `storage_per_vault_mb`. Someone's quick notes have the person's instead
 //! (`users.quick_notes_storage_allowance`, else `quick_notes_storage_mb`),
-//! like how many they may keep. The database keeps each vault's size
-//! (`vaults.storage_bytes`, see the triggers in the first migration). A
+//! like how many they may keep, and so has their Drawings section
+//! (`drawings_storage_allowance`, `drawings_storage_mb`). The database
+//! keeps each vault's size (`vaults.storage_bytes`, see the triggers in the
+//! first migration). A
 //! vault at its limit takes no new content — updates, snapshots, files,
 //! undoing a deletion — ([`Instance::require_room`], [`AppError::VaultFull`])
 //! until something in it is deleted for good or the limit is raised; the
@@ -38,16 +41,62 @@ use std::sync::RwLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use notekpr_core::protocol::{
-    InstanceSettings, InstanceSettingsUpdate, Limit, MIB, ReadOnly, VaultKind,
+    INDEX_OBJECT_ID, InstanceSettings, InstanceSettingsUpdate, Limit, MIB, ObjectKind, ObjectRef,
+    REJECT_DRAWINGS_FULL, REJECT_DRAWINGS_ONLY, REJECT_QUICK_NOTES_FULL, ReadOnly, VaultKind,
+    comments_note,
 };
 use notekpr_core::version::Version;
 use sqlx::{SqliteConnection, SqliteExecutor};
 use tokio::sync::watch;
 
+use crate::access;
 use crate::apps::OLDEST_APP_VERSION;
 use crate::db::{self, Db};
 use crate::error::{AppError, AppResult};
 use crate::repo;
+
+/// What a write may still add to a vault, counted once for the whole write
+/// (a push may make several objects) inside its transaction
+/// ([`Instance::new_objects`], [`Instance::admit`]).
+pub struct NewObjects {
+    kind: VaultKind,
+    owner: String,
+    /// Quick notes: how many notes they may hold, and hold now.
+    quick: Option<(Limit, u64)>,
+    /// How many drawings the vault's owner may have, and has now: read at
+    /// the first new drawing.
+    drawings: Option<(Limit, u64)>,
+}
+
+impl NewObjects {
+    /// A drawing of the vault's owner was deleted for good meanwhile (an
+    /// original a moved copy replaced): one more fits.
+    pub fn drawing_gone(&mut self) {
+        if let Some((_, n)) = &mut self.drawings {
+            *n = n.saturating_sub(1);
+        }
+    }
+}
+
+/// Why there's no room for a new object: the code a push lists it with
+/// (`REJECT_…`), and what is said.
+#[derive(Debug)]
+pub struct NoRoom {
+    pub code: &'static str,
+    pub message: String,
+}
+
+impl From<NoRoom> for AppError {
+    /// For a request making one object (its key): `400` for a note in
+    /// someone's Drawings, `403 limit_reached` otherwise.
+    fn from(n: NoRoom) -> AppError {
+        if n.code == REJECT_DRAWINGS_ONLY {
+            AppError::BadRequest(n.message)
+        } else {
+            AppError::LimitReached(n.message)
+        }
+    }
+}
 
 pub struct Instance {
     settings: RwLock<InstanceSettings>,
@@ -235,6 +284,17 @@ impl Instance {
         Ok(allowance.resolve(self.settings().quick_notes_per_user))
     }
 
+    /// The drawings `owner` may have: their own allowance, else the
+    /// instance's default.
+    pub async fn drawings_limit(
+        &self,
+        db: impl SqliteExecutor<'_>,
+        owner: &str,
+    ) -> AppResult<Limit> {
+        let allowance = repo::users::allowances(db, owner).await?.drawings;
+        Ok(allowance.resolve(self.settings().drawings_per_user))
+    }
+
     /// Whether a vault reached its storage limit (`false` for no such vault):
     /// its own, else the instance's for its kind.
     pub async fn vault_full(&self, db: impl SqliteExecutor<'_>, vault_id: &str) -> AppResult<bool> {
@@ -265,7 +325,11 @@ impl Instance {
     ) -> AppResult<Vec<(String, bool)>> {
         let current = self.settings();
         let mut flips = Vec::new();
-        for kind in [VaultKind::Regular, VaultKind::QuickNotes] {
+        for kind in [
+            VaultKind::Regular,
+            VaultKind::QuickNotes,
+            VaultKind::Drawings,
+        ] {
             let (old, new) = (old.storage_default(kind), current.storage_default(kind));
             if old == new {
                 continue;
@@ -286,43 +350,139 @@ impl Instance {
         Ok(flips)
     }
 
-    /// For someone's quick notes: how many notes they may hold and how many
-    /// they hold now. `None` for every other vault (no limit on notes).
-    /// Runs inside the transaction that would add a note.
-    pub async fn quick_note_room(
+    /// Before a write adds objects to a vault: what its kind allows, and the
+    /// quick notes' room (`NotFound`: no such vault). Runs inside the
+    /// writing transaction.
+    pub async fn new_objects(
         &self,
         tx: &mut SqliteConnection,
         vault_id: &str,
-    ) -> AppResult<Option<(Limit, u64)>> {
-        let Some((VaultKind::QuickNotes, owner)) =
-            repo::vaults::kind_and_owner(&mut *tx, vault_id).await?
-        else {
-            return Ok(None);
+    ) -> AppResult<NewObjects> {
+        let (kind, owner) = repo::vaults::kind_and_owner(&mut *tx, vault_id)
+            .await?
+            .ok_or(AppError::NotFound)?;
+        let quick = match kind {
+            VaultKind::QuickNotes => Some((
+                self.quick_notes_limit(&mut *tx, &owner).await?,
+                repo::vaults::note_count(&mut *tx, vault_id).await?,
+            )),
+            _ => None,
         };
-        let limit = self.quick_notes_limit(&mut *tx, &owner).await?;
-        let count = repo::vaults::note_count(&mut *tx, vault_id).await?;
-        Ok(Some((limit, count)))
+        Ok(NewObjects {
+            kind,
+            owner,
+            quick,
+            drawings: None,
+        })
     }
 
-    /// Refuse a new note (`object_id` not stored yet) in quick notes that
-    /// hold as many as they may. Runs inside the creating transaction.
-    pub async fn check_new_note(
+    /// Admit one new object of `kind` (`object_id`, not stored yet) made by
+    /// `who`, counting it, or say why there's no room: a note in full quick
+    /// notes, a note in someone's Drawings (drawings and files only), a
+    /// drawing beyond its vault owner's drawings limit (the owner pays).
+    /// `needs_room`: false for a drawing replacing one that goes (a move).
+    pub async fn admit(
         &self,
         tx: &mut SqliteConnection,
+        room: &mut NewObjects,
+        who: &str,
+        object_id: &str,
+        kind: ObjectKind,
+        needs_room: bool,
+    ) -> AppResult<Result<(), NoRoom>> {
+        // The index and comments go with what they are of.
+        if object_id == INDEX_OBJECT_ID || comments_note(object_id).is_some() {
+            return Ok(Ok(()));
+        }
+        if room.kind == VaultKind::Drawings && kind == ObjectKind::Note {
+            return Ok(Err(NoRoom {
+                code: REJECT_DRAWINGS_ONLY,
+                message: "your drawings hold drawings and files only: put notes in a vault".into(),
+            }));
+        }
+        if let Some((limit, count)) = &mut room.quick {
+            if !limit.allows_one_more(*count) {
+                return Ok(Err(NoRoom {
+                    code: REJECT_QUICK_NOTES_FULL,
+                    message: notekpr_core::quick::full_message(*limit),
+                }));
+            }
+            *count += 1;
+        }
+        if kind == ObjectKind::Drawing && needs_room {
+            if room.drawings.is_none() {
+                room.drawings = Some((
+                    self.drawings_limit(&mut *tx, &room.owner).await?,
+                    repo::vaults::drawing_count(&mut *tx, &room.owner).await?,
+                ));
+            }
+            if let Some((limit, count)) = &mut room.drawings {
+                if !notekpr_core::drawings::has_room(*count, *limit) {
+                    return Ok(Err(NoRoom {
+                        code: REJECT_DRAWINGS_FULL,
+                        message: notekpr_core::drawings::full_message(*limit, who == room.owner),
+                    }));
+                }
+                *count += 1;
+            }
+        }
+        Ok(Ok(()))
+    }
+
+    /// Refuse a new object (`object_id` not stored yet) there's no room for
+    /// ([`Self::admit`]). A drawing whose `replaces` names an original that
+    /// may go ([`access::may_replace`]) needs no room: that original is
+    /// returned, to be recorded with it. Runs inside the creating
+    /// transaction.
+    pub async fn check_new_object(
+        &self,
+        tx: &mut SqliteConnection,
+        who: &str,
         vault_id: &str,
         object_id: &str,
-    ) -> AppResult<()> {
+        kind: ObjectKind,
+        replaces: Option<&ObjectRef>,
+    ) -> AppResult<Option<ObjectRef>> {
         if repo::shares::object_state(&mut *tx, vault_id, object_id)
             .await?
             .is_some()
         {
+            return Ok(None);
+        }
+        let original = match replaces {
+            Some(r)
+                if kind == ObjectKind::Drawing
+                    && access::may_replace(&mut *tx, who, vault_id, r).await? =>
+            {
+                Some(r.clone())
+            }
+            _ => None,
+        };
+        let mut room = self.new_objects(tx, vault_id).await?;
+        self.admit(tx, &mut room, who, object_id, kind, original.is_none())
+            .await??;
+        Ok(original)
+    }
+
+    /// Refuse bringing back a drawing deleted for good (`object_id`) while
+    /// its vault's owner has as many as they may: it would count again.
+    /// Runs inside the restoring transaction.
+    pub async fn check_drawing_back(
+        &self,
+        tx: &mut SqliteConnection,
+        who: &str,
+        vault_id: &str,
+        object_id: &str,
+    ) -> AppResult<()> {
+        if repo::shares::kind(&mut *tx, vault_id, object_id).await? != Some(ObjectKind::Drawing) {
             return Ok(());
         }
-        match self.quick_note_room(tx, vault_id).await? {
-            Some((limit, count)) if !limit.allows_one_more(count) => Err(AppError::LimitReached(
-                notekpr_core::quick::full_message(limit),
-            )),
-            _ => Ok(()),
-        }
+        let mut room = self.new_objects(tx, vault_id).await?;
+        // Its vault holds it already: only the owner's count matters.
+        room.kind = VaultKind::Regular;
+        room.quick = None;
+        self.admit(tx, &mut room, who, object_id, ObjectKind::Drawing, true)
+            .await??;
+        Ok(())
     }
 }

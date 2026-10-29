@@ -86,7 +86,7 @@ pub enum SnapshotAction {
     /// the note's keyring once the server accepted it.
     AdoptKey {
         ring: VaultKeyring,
-        update: ObjectKeyUpdate,
+        update: Box<ObjectKeyUpdate>,
     },
 }
 
@@ -120,5 +120,8 @@ pub fn snapshot_action(
         req.covers_seq,
     )
     .ok()?;
-    Some(SnapshotAction::AdoptKey { ring, update })
+    Some(SnapshotAction::AdoptKey {
+        ring,
+        update: Box::new(update),
+    })
 }

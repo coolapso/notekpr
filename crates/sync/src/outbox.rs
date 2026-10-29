@@ -14,8 +14,8 @@ use notekpr_core::crypto::Purpose;
 use notekpr_core::doc;
 use notekpr_core::engine::{Pending, VaultReplica};
 use notekpr_core::protocol::{
-    ObjectKeyUpdate, PushResult, PushUpdate, REJECT_PURGED, REJECT_QUICK_NOTES_FULL,
-    REJECT_STALE_KEY, REJECT_TOO_LARGE, RejectedUpdate, comments_note,
+    ObjectKeyUpdate, ObjectRef, PushResult, PushUpdate, REJECT_DRAWINGS_FULL, REJECT_PURGED,
+    REJECT_QUICK_NOTES_FULL, REJECT_STALE_KEY, REJECT_TOO_LARGE, RejectedUpdate, comments_note,
 };
 use notekpr_core::random_id;
 use serde::{Deserialize, Serialize};
@@ -74,8 +74,9 @@ impl Default for Limits {
     }
 }
 
-/// What [`Outbox`]'s `held_under` notes for updates waiting for room in the
-/// quick notes rather than for a larger size limit.
+/// What [`Outbox`]'s `held_under` notes for updates waiting for room (in
+/// the quick notes, or under the drawings limit) rather than for a larger
+/// size limit.
 const NO_ROOM: usize = usize::MAX;
 
 /// An update kept back from uploading.
@@ -92,8 +93,9 @@ pub struct Held {
 pub enum HoldReason {
     /// Larger than the server accepts; goes out again once it fits.
     TooLarge,
-    /// A new quick note while the quick notes are full; goes out again
-    /// once there's room ([`Outbox::room_freed`]).
+    /// A new quick note while the quick notes are full, or a new drawing
+    /// while its vault's owner has as many as they may; goes out again once
+    /// there's room ([`Outbox::room_freed`]).
     NoRoom,
     /// The server refused it for another reason (bad request).
     Refused(String),
@@ -137,8 +139,8 @@ pub struct Outbox {
     /// thought fits must not make us resend it forever).
     #[serde(skip)]
     held_under: std::collections::HashMap<String, usize>,
-    /// New quick notes the server has no room for: their keys aren't
-    /// registered and their held updates aren't sent until
+    /// New quick notes or drawings the server has no room for: their keys
+    /// aren't registered and their held updates aren't sent until
     /// [`Outbox::room_freed`] (tried again on each connection).
     #[serde(skip)]
     no_room: BTreeSet<String>,
@@ -232,6 +234,20 @@ impl Outbox {
         self.new_keys.retain(|k| k.object_id != object_id);
     }
 
+    /// A drawing copied here by a move replaces `original`, which the server
+    /// deletes for good once the copy is stored: its key says so, so that the
+    /// copy needs no room under the drawings limit. `false` if the object
+    /// has no key waiting to be registered.
+    pub fn set_replaces(&mut self, object_id: &str, original: ObjectRef) -> bool {
+        match self.new_keys.iter_mut().find(|k| k.object_id == object_id) {
+            Some(k) => {
+                k.update.replaces = Some(original);
+                true
+            }
+            None => false,
+        }
+    }
+
     /// The server refused a new note's key. If it was wrapped under a vault
     /// key that is no longer the current one (the vault's key rotated
     /// meanwhile; reload keys first), a new key under the current vault key
@@ -311,17 +327,17 @@ impl Outbox {
         });
     }
 
-    /// The server refused a new note's key because the quick notes are full:
-    /// keep the key and the note's updates, and register it once there's
-    /// room.
+    /// The server refused a new note's key because the quick notes are full,
+    /// or a new drawing's because its vault's owner has as many as they may:
+    /// keep the key and its updates, and register it once there's room.
     pub fn key_without_room(&mut self, object_id: &str) {
         if self.waits_for_key(object_id) {
             self.no_room.insert(object_id.to_string());
         }
     }
 
-    /// There may be room in the quick notes again (a note was deleted for
-    /// good or moved away, the limit grew, a new connection): register the
+    /// There may be room again (a quick note or a drawing was deleted for
+    /// good or moved away, a limit grew, a new connection): register the
     /// keys and send the updates that waited for it. Returns how many
     /// updates were queued again.
     pub fn room_freed(&mut self, r: &mut VaultReplica) -> usize {
@@ -344,7 +360,7 @@ impl Outbox {
         n
     }
 
-    /// Whether a new quick note waits for room in the quick notes.
+    /// Whether a new quick note or drawing waits for room.
     pub fn waits_for_room(&self, object_id: &str) -> bool {
         self.no_room.contains(object_id)
             || self.held.iter().any(|p| {
@@ -497,11 +513,16 @@ impl Outbox {
         if writer {
             plan.released = self.release_fitting(r, limits);
             self.merge_unsent(r, limits);
+            // Each says what it is for (the vault's index tells by now).
             plan.register = self
                 .new_keys
                 .iter()
                 .filter(|k| !self.no_room.contains(&k.object_id))
                 .cloned()
+                .map(|mut k| {
+                    k.update.kind = r.object_kind(&k.object_id);
+                    k
+                })
                 .collect();
         }
         let max = limits.max_update_bytes;
@@ -544,6 +565,7 @@ impl Outbox {
                     client_update_id: p.client_update_id.clone(),
                     payload,
                     signature: None,
+                    kind: r.object_kind(&p.object_id),
                 }),
                 Err(_) => plan.waiting_for_keys += 1,
             }
@@ -617,7 +639,7 @@ impl Outbox {
                 REJECT_STALE_KEY => {
                     out.reload_keys = true;
                 }
-                REJECT_QUICK_NOTES_FULL => {
+                REJECT_QUICK_NOTES_FULL | REJECT_DRAWINGS_FULL => {
                     no_room_ids.push(x.client_update_id.clone());
                     if self.reported.insert(x.client_update_id.clone()) {
                         out.held.push(Held {
@@ -748,8 +770,8 @@ impl Outbox {
     }
 
     /// Queue held updates that fit within `limits` again (the administrator
-    /// raised the limit). Returns how many. Those waiting for room in the
-    /// quick notes stay (see [`Outbox::room_freed`]).
+    /// raised the limit). Returns how many. Those waiting for room stay (see
+    /// [`Outbox::room_freed`]).
     pub fn release_fitting(&mut self, r: &mut VaultReplica, limits: &Limits) -> usize {
         if self.held.is_empty() {
             return 0;
@@ -829,6 +851,7 @@ pub fn stored_copies(
                     client_update_id: p.client_update_id.clone(),
                     payload,
                     signature: None,
+                    kind: r.object_kind(&p.object_id),
                 })
                 .or_else(|| {
                     previous

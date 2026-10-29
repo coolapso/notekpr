@@ -52,6 +52,7 @@ pub async fn list_for_member(
                 v.created_at, v.updated_at, v.viewers_comment, v.kind, v.rotation_pending,
                 v.storage_bytes,
                 CASE v.kind WHEN 'quick_notes' THEN o.quick_notes_storage_allowance
+                            WHEN 'drawings' THEN o.drawings_storage_allowance
                             ELSE v.storage_allowance END AS storage_allowance,
                 (SELECT COUNT(*) FROM vault_members m2 WHERE m2.vault_id = v.id) AS member_count
          FROM vaults v JOIN vault_members m ON m.vault_id = v.id AND m.user_id = ?
@@ -76,6 +77,7 @@ pub async fn get_for_member(
                 v.created_at, v.updated_at, v.viewers_comment, v.kind, v.rotation_pending,
                 v.storage_bytes,
                 CASE v.kind WHEN 'quick_notes' THEN o.quick_notes_storage_allowance
+                            WHEN 'drawings' THEN o.drawings_storage_allowance
                             ELSE v.storage_allowance END AS storage_allowance,
                 (SELECT COUNT(*) FROM vault_members m2 WHERE m2.vault_id = v.id) AS member_count
          FROM vaults v JOIN vault_members m ON m.vault_id = v.id AND m.user_id = ?
@@ -97,7 +99,7 @@ pub struct Storage {
     /// Bytes (`vaults.storage_bytes`, kept by the schema's triggers).
     pub bytes: u64,
     /// MiB: the instance's default for its kind unless an administrator set
-    /// its own (quick notes: their owner's).
+    /// its own (quick notes, Drawings: their owner's).
     pub allowance: Allowance,
 }
 
@@ -106,6 +108,7 @@ pub async fn storage(db: impl SqliteExecutor<'_>, vault_id: &str) -> AppResult<O
     let row: Option<(String, i64, Option<i64>)> = sqlx::query_as(
         "SELECT v.kind, v.storage_bytes,
                 CASE v.kind WHEN 'quick_notes' THEN o.quick_notes_storage_allowance
+                            WHEN 'drawings' THEN o.drawings_storage_allowance
                             ELSE v.storage_allowance END
          FROM vaults v JOIN users o ON o.id = v.owner_id WHERE v.id = ?",
     )
@@ -120,7 +123,7 @@ pub async fn storage(db: impl SqliteExecutor<'_>, vault_id: &str) -> AppResult<O
 }
 
 /// Set a vault's own storage limit (MiB). Rows affected: none for quick
-/// notes, whose limit is their owner's.
+/// notes and Drawings, whose limits are their owner's.
 pub async fn set_storage_allowance(
     db: impl SqliteExecutor<'_>,
     vault_id: &str,
@@ -145,13 +148,18 @@ pub async fn on_default_storage_from(
     bytes: u64,
 ) -> AppResult<Vec<(String, u64)>> {
     let query = match kind {
-        VaultKind::Regular => sqlx::query_as(
+        VaultKind::Regular | VaultKind::Other => sqlx::query_as(
             "SELECT id, storage_bytes FROM vaults
              WHERE kind = 'regular' AND storage_allowance IS NULL AND storage_bytes >= ?",
         ),
         VaultKind::QuickNotes => sqlx::query_as(
             "SELECT v.id, v.storage_bytes FROM vaults v JOIN users o ON o.id = v.owner_id
              WHERE v.kind = 'quick_notes' AND o.quick_notes_storage_allowance IS NULL
+               AND v.storage_bytes >= ?",
+        ),
+        VaultKind::Drawings => sqlx::query_as(
+            "SELECT v.id, v.storage_bytes FROM vaults v JOIN users o ON o.id = v.owner_id
+             WHERE v.kind = 'drawings' AND o.drawings_storage_allowance IS NULL
                AND v.storage_bytes >= ?",
         ),
     };
@@ -167,7 +175,7 @@ pub async fn on_default_storage_from(
 
 /// How many vaults reached their storage limit: their own, else the
 /// instance's for their kind (quick notes: their owner's, else
-/// `quick_notes_storage_mb`). `bytes >= mb * MIB` is written
+/// `quick_notes_storage_mb`; Drawings likewise). `bytes >= mb * MIB` is written
 /// `bytes / MIB >= mb`, the same for whole numbers, so a large limit can't
 /// overflow. Each part reads only what may be full, through an index (`CROSS
 /// JOIN` keeps SQLite starting from the few people with their own limit).
@@ -187,11 +195,18 @@ pub async fn full_count(db: impl SqliteExecutor<'_>, limits: &InstanceSettings) 
               AND v.storage_bytes >= ?2)
          + (SELECT COUNT(*) FROM users o CROSS JOIN vaults v ON v.owner_id = o.id AND v.kind = 'quick_notes'
             WHERE o.quick_notes_storage_allowance >= 0
-              AND v.storage_bytes / ?3 >= o.quick_notes_storage_allowance)",
+              AND v.storage_bytes / ?3 >= o.quick_notes_storage_allowance)
+         + (SELECT COUNT(*) FROM vaults v JOIN users o ON o.id = v.owner_id
+            WHERE v.kind = 'drawings' AND o.drawings_storage_allowance IS NULL
+              AND v.storage_bytes >= ?4)
+         + (SELECT COUNT(*) FROM users o CROSS JOIN vaults v ON v.owner_id = o.id AND v.kind = 'drawings'
+            WHERE o.drawings_storage_allowance >= 0
+              AND v.storage_bytes / ?3 >= o.drawings_storage_allowance)",
     )
     .bind(bytes(limits.storage_per_vault_mb))
     .bind(bytes(limits.quick_notes_storage_mb))
     .bind(MIB as i64)
+    .bind(bytes(limits.drawings_storage_mb))
     .fetch_one(db)
     .await?;
     Ok(n.max(0) as u64)
@@ -201,8 +216,8 @@ pub async fn full_count(db: impl SqliteExecutor<'_>, limits: &InstanceSettings) 
 pub const ADMIN_LIST_MAX: i64 = 200;
 
 /// Vaults as administrators see them (id, owner, size), the largest first:
-/// all, the one with this id, or those of this owner. Not quick notes:
-/// their limit is their owner's.
+/// all, the one with this id, or those of this owner. Not quick notes or
+/// Drawings: their limits are their owner's.
 pub async fn admin_list(
     db: impl SqliteExecutor<'_>,
     id: Option<&str>,
@@ -235,7 +250,7 @@ pub async fn admin_list(
 }
 
 /// New vault at key epoch 1; `Ok(false)` if the id is taken (or, for
-/// quick notes, the owner has them already).
+/// quick notes and Drawings, the owner has them already).
 pub async fn insert(
     db: impl SqliteExecutor<'_>,
     id: &str,
@@ -273,11 +288,14 @@ pub async fn kind_and_owner(
     Ok(row.map(|(k, o)| (VaultKind::parse(&k).unwrap_or_default(), o)))
 }
 
+/// A vault's kind (`None`: no such vault).
+pub async fn kind(db: impl SqliteExecutor<'_>, vault_id: &str) -> AppResult<Option<VaultKind>> {
+    Ok(kind_and_owner(db, vault_id).await?.map(|(k, _)| k))
+}
+
 /// Whether `vault_id` is someone's quick notes.
 pub async fn is_quick_notes(db: impl SqliteExecutor<'_>, vault_id: &str) -> AppResult<bool> {
-    Ok(kind_and_owner(db, vault_id)
-        .await?
-        .is_some_and(|(k, _)| k == VaultKind::QuickNotes))
+    Ok(kind(db, vault_id).await? == Some(VaultKind::QuickNotes))
 }
 
 /// The id of `owner_id`'s quick-notes vault, if they have one.
@@ -291,6 +309,43 @@ pub async fn quick_notes_of(
             .fetch_optional(db)
             .await?,
     )
+}
+
+/// The id of `owner_id`'s Drawings section, if they have one.
+pub async fn drawings_of(db: impl SqliteExecutor<'_>, owner_id: &str) -> AppResult<Option<String>> {
+    Ok(
+        sqlx::query_scalar("SELECT id FROM vaults WHERE owner_id = ? AND kind = 'drawings'")
+            .bind(owner_id)
+            .fetch_optional(db)
+            .await?,
+    )
+}
+
+/// Drawings `owner_id` has: the drawings not deleted for good (those in the
+/// trash too) in every vault they own, their Drawings section among them.
+pub async fn drawing_count(db: impl SqliteExecutor<'_>, owner_id: &str) -> AppResult<u64> {
+    let n: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM vaults v
+         JOIN objects o ON o.vault_id = v.id AND o.kind = 'drawing' AND o.purged_at IS NULL
+         WHERE v.owner_id = ?",
+    )
+    .bind(owner_id)
+    .fetch_one(db)
+    .await?;
+    Ok(n.max(0) as u64)
+}
+
+/// People who have a Drawings section or a drawing: those whose apps learn
+/// of a change of the instance's drawings limit.
+pub async fn drawing_owners(db: impl SqliteExecutor<'_>) -> AppResult<Vec<String>> {
+    Ok(sqlx::query_scalar(
+        "SELECT DISTINCT v.owner_id FROM vaults v
+         WHERE v.kind = 'drawings'
+            OR EXISTS (SELECT 1 FROM objects o
+                       WHERE o.vault_id = v.id AND o.kind = 'drawing' AND o.purged_at IS NULL)",
+    )
+    .fetch_all(db)
+    .await?)
 }
 
 /// People who have quick notes.

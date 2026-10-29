@@ -594,3 +594,80 @@ fn updates_refused_for_full_quick_notes_wait_for_room() {
     assert_eq!(o.held_count(), 0);
     drop(plan);
 }
+
+/// What creates an object on the server says whether it is a drawing (the
+/// vault's index tells), and a moved drawing's key which original it
+/// replaces; drawings without room wait like quick notes.
+#[test]
+fn drawings_say_so_and_wait_for_room() {
+    let (mut r, mut o) = (replica(), keyed());
+    // As the apps make one: its key may come before its index entry.
+    assert!(o.new_document_key(&mut r, "d", "Sketch"));
+    r.index
+        .create("d", "Sketch.excalidraw", EntryKind::Drawing, 1);
+    let u = r
+        .notes
+        .entry("d".into())
+        .or_default()
+        .set_text("x")
+        .unwrap();
+    r.local_change("d", u).unwrap();
+    o.new_document_key(&mut r, "n", "Note");
+    r.index.create("n", "Note.md", EntryKind::Note, 1);
+    edit(&mut r, "n", "text");
+    let original = ObjectRef {
+        vault_id: "v0".into(),
+        object_id: "d0".into(),
+    };
+    assert!(o.set_replaces("d", original.clone()));
+    assert!(!o.set_replaces("nothing", original.clone()));
+    let plan = o.plan(&mut r, &Limits::default());
+    let key = |id: &str| plan.register.iter().find(|k| k.object_id == id).unwrap();
+    assert_eq!(key("d").update.kind, ObjectKind::Drawing);
+    assert_eq!(key("d").update.replaces, Some(original));
+    assert_eq!(key("n").update.kind, ObjectKind::Note);
+    assert_eq!(key("n").update.replaces, None);
+    // Kept across restarts until registered.
+    assert!(
+        serde_json_roundtrip(&o).new_keys[0]
+            .update
+            .replaces
+            .is_some()
+    );
+
+    // No room for it: the key waits, as the drawing's content.
+    o.key_without_room("d");
+    o.key_registered("n");
+    let plan = o.plan(&mut r, &Limits::default());
+    assert!(plan.register.is_empty());
+    let ids = plan.ids();
+    assert_eq!(ids.len(), 1);
+    assert!(o.waits_for_room("d"));
+    // Registered after all, its pushes say what it is; refused for want of
+    // room, it waits like a quick note.
+    o.room_freed(&mut r);
+    o.key_registered("d");
+    o.connection_reset();
+    let plan = o.plan(&mut r, &Limits::default());
+    let push = plan.pushes.concat();
+    let d = push.iter().find(|u| u.object_id == "d").unwrap();
+    assert_eq!(d.kind, ObjectKind::Drawing);
+    assert!(
+        push.iter()
+            .filter(|u| u.object_id != "d")
+            .all(|u| u.kind == ObjectKind::Note)
+    );
+    let reaction = o.on_rejected(
+        &mut r,
+        &[RejectedUpdate {
+            client_update_id: d.client_update_id.clone(),
+            object_id: "d".into(),
+            code: REJECT_DRAWINGS_FULL.into(),
+            message: "full".into(),
+        }],
+        &Limits::default(),
+    );
+    assert_eq!(reaction.held[0].reason, HoldReason::NoRoom);
+    assert!(o.waits_for_room("d"));
+    assert_eq!(o.room_freed(&mut r), 1);
+}

@@ -261,6 +261,73 @@ impl User {
         Ok(info)
     }
 
+    /// This person's Drawings section, as the apps make it.
+    pub async fn create_drawings(&mut self) -> Result<VaultInfo, (u16, String)> {
+        let meta = notekpr_core::engine::VaultMeta::named(notekpr_core::drawings::NAME);
+        let (mut req, ring) =
+            notekpr_core::engine::new_vault(&self.account, &self.id, &meta, 1).unwrap();
+        req.kind = VaultKind::Drawings;
+        let info: VaultInfo = self
+            .api
+            .call(reqwest::Method::POST, "/vaults", Some(&req))
+            .await?;
+        self.keyrings.insert(req.id.clone(), ring);
+        Ok(info)
+    }
+
+    /// A new object's own key, as apps register it before its content
+    /// (`kind` says what it is): its key ring and the request.
+    pub fn new_key(
+        &self,
+        vault_id: &str,
+        object_id: &str,
+        kind: ObjectKind,
+    ) -> (VaultKeyring, ObjectKeyUpdate) {
+        let (ring, mut req) =
+            notekpr_core::engine::new_document_key(self.ring(vault_id), object_id, "Sketch")
+                .unwrap();
+        req.kind = kind;
+        (ring, req)
+    }
+
+    /// `PUT /vaults/{v}/objects/{o}/key`; the status and body when refused.
+    pub async fn put_key(
+        &self,
+        vault_id: &str,
+        object_id: &str,
+        req: &ObjectKeyUpdate,
+    ) -> Result<(), (u16, String)> {
+        self.api
+            .call::<_, ()>(
+                reqwest::Method::PUT,
+                &format!("/vaults/{vault_id}/objects/{object_id}/key"),
+                Some(req),
+            )
+            .await
+    }
+
+    /// A drawing of its own, as apps make one: its key first, then its
+    /// first content. Returns its key ring.
+    pub async fn make_drawing(&self, vault_id: &str, object_id: &str) -> VaultKeyring {
+        let (ring, req) = self.new_key(vault_id, object_id, ObjectKind::Drawing);
+        self.put_key(vault_id, object_id, &req).await.unwrap();
+        let r = self
+            .push(
+                vault_id,
+                vec![content(&ring, object_id, ObjectKind::Drawing)],
+            )
+            .await
+            .unwrap();
+        assert!(r.rejected.is_empty(), "{:?}", r.rejected);
+        ring
+    }
+
+    /// How many drawings this person may have and has, as their apps learn.
+    pub async fn drawings(&self) -> (Limit, u64) {
+        let me: MeResponse = self.api.get("/me").await;
+        (me.drawing_limit, me.drawing_count)
+    }
+
     /// The vault's membership log as the server has it.
     pub async fn member_log(&self, vault_id: &str) -> Vec<LogEntry> {
         let r: MemberLogResponse = self.api.get(&format!("/vaults/{vault_id}/log")).await;
@@ -315,6 +382,7 @@ impl User {
                 .encrypt(Purpose::Update, object_id, update)
                 .unwrap(),
             signature: None,
+            kind: Default::default(),
         }
     }
 
@@ -518,6 +586,18 @@ impl User {
             .get(&format!("/vaults/{vault_id}/changes?since=0"))
             .await;
         decode_changes(self.ring(vault_id), &[ch])
+    }
+}
+
+/// Some content of an object (`kind` said along), encrypted under `ring`.
+pub fn content(ring: &VaultKeyring, object_id: &str, kind: ObjectKind) -> PushUpdate {
+    let update = NoteDoc::new().set_text("lines and boxes").unwrap();
+    PushUpdate {
+        object_id: object_id.into(),
+        client_update_id: random_id(),
+        payload: ring.encrypt(Purpose::Update, object_id, &update).unwrap(),
+        signature: None,
+        kind,
     }
 }
 

@@ -269,9 +269,16 @@ pub(crate) async fn apply_key_change(
         return Err(bad("invalid envelope"));
     }
     let epoch = req.epoch as i64;
-    // A new note's key is the first thing stored of it.
-    state.instance.check_new_note(tx, v, o).await?;
-    repo::shares::ensure_object(&mut **tx, v, o, &who.user_id, now).await?;
+    // A new note's or drawing's key is the first thing stored of it: it
+    // says what the object is, and a moved copy which original it replaces.
+    let replaces = state
+        .instance
+        .check_new_object(tx, &who.user_id, v, o, req.kind, req.replaces.as_ref())
+        .await?;
+    repo::shares::ensure_object(&mut **tx, v, o, &who.user_id, req.kind, now).await?;
+    if let Some(original) = &replaces {
+        repo::shares::set_replaces(&mut **tx, v, o, original).await?;
+    }
     repo::keys::insert_document_key(
         &mut **tx,
         v,

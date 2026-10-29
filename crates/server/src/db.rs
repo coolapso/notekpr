@@ -198,3 +198,241 @@ mod user_code_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod migration_tests {
+    use super::*;
+
+    /// Every table that refers to `vaults`, directly or through `objects`.
+    const TABLES: [&str; 11] = [
+        "vault_members",
+        "vault_keys",
+        "vault_key_chain",
+        "member_log",
+        "objects",
+        "object_shares",
+        "object_keys",
+        "object_key_chain",
+        "updates",
+        "snapshots",
+        "attachments",
+    ];
+
+    async fn count(db: &Db, table: &str, vault: &str) -> i64 {
+        let q = format!("SELECT COUNT(*) FROM {table} WHERE vault_id = ?");
+        sqlx::query_scalar(sqlx::AssertSqlSafe(q))
+            .bind(vault)
+            .fetch_one(db)
+            .await
+            .unwrap()
+    }
+
+    async fn storage_bytes(db: &Db, vault: &str) -> i64 {
+        sqlx::query_scalar("SELECT storage_bytes FROM vaults WHERE id = ?")
+            .bind(vault)
+            .fetch_one(db)
+            .await
+            .unwrap()
+    }
+
+    async fn run(db: &Db, q: &'static str) -> Result<(), sqlx::Error> {
+        sqlx::query(q).execute(db).await.map(|_| ())
+    }
+
+    #[derive(sqlx::FromRow, Debug, PartialEq)]
+    struct VaultRow {
+        owner_id: String,
+        encrypted_meta: Vec<u8>,
+        key_epoch: i64,
+        head_seq: i64,
+        archived: bool,
+        viewers_comment: bool,
+        kind: String,
+        rotation_pending: bool,
+        storage_bytes: i64,
+        storage_allowance: Option<i64>,
+        signed_from: Option<i64>,
+        created_at: i64,
+        updated_at: i64,
+    }
+
+    async fn vault_rows(db: &Db) -> Vec<VaultRow> {
+        sqlx::query_as(
+            "SELECT owner_id, encrypted_meta, key_epoch, head_seq, archived, viewers_comment, kind,
+                    rotation_pending, storage_bytes, storage_allowance, signed_from, created_at,
+                    updated_at
+             FROM vaults ORDER BY id",
+        )
+        .fetch_all(db)
+        .await
+        .unwrap()
+    }
+
+    /// A database made at the start of the data freeze, with rows in every
+    /// table that refers to a vault, keeps them all through the drawings
+    /// migration (which copies `vaults`); the triggers keeping each vault's
+    /// size and the cascades deleting a vault still work.
+    #[tokio::test]
+    async fn the_drawings_migration_keeps_everything() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("old.db");
+        let db = connect(&path).await.unwrap();
+        MIGRATOR.run_to(1, &db).await.unwrap();
+        for q in [
+            "INSERT INTO users (id, kind, display_name, created_at, quick_note_allowance)
+             VALUES ('alice', 'human', 'Alice', 1, 5), ('bob', 'human', 'Bob', 1, NULL),
+                    ('carol', 'human', 'Carol', 1, NULL)",
+            "INSERT INTO vaults (id, owner_id, encrypted_meta, key_epoch, head_seq, archived,
+                                 viewers_comment, kind, rotation_pending, storage_allowance,
+                                 signed_from, created_at, updated_at)
+             VALUES ('v', 'alice', x'01', 2, 3, 1, 0, 'regular', 1, 7, 2, 10, 11),
+                    ('q', 'alice', x'02', 1, 1, 0, 1, 'quick_notes', 0, NULL, NULL, 12, 13)",
+            "INSERT INTO vault_members (vault_id, user_id, role, added_by, added_at)
+             VALUES ('v', 'alice', 'owner', 'alice', 1), ('v', 'bob', 'editor', 'alice', 2),
+                    ('q', 'alice', 'owner', 'alice', 1)",
+            "INSERT INTO vault_keys (vault_id, epoch, user_id, envelope, created_at)
+             VALUES ('v', 1, 'alice', x'aa', 1), ('v', 2, 'alice', x'ab', 2),
+                    ('v', 2, 'bob', x'ac', 2), ('q', 1, 'alice', x'ad', 1)",
+            "INSERT INTO vault_key_chain (vault_id, epoch, link) VALUES ('v', 2, x'bb')",
+            "INSERT INTO member_log (vault_id, seq, entry, hash, created_at)
+             VALUES ('v', 0, '{}', x'cc', 1), ('v', 1, '{}', x'cd', 2)",
+            "INSERT INTO objects (vault_id, id, created_by, created_at, updated_at, key_epoch, share_from)
+             VALUES ('v', 'index', 'alice', 1, 1, NULL, NULL),
+                    ('v', 'n', 'alice', 1, 1, 2147483649, x'80000001'),
+                    ('v', 'c_n', 'bob', 1, 1, NULL, NULL), ('q', 'm', 'alice', 1, 1, NULL, NULL)",
+            "INSERT INTO object_shares (vault_id, object_id, user_id, role, added_at)
+             VALUES ('v', 'n', 'carol', 'viewer', 3)",
+            "INSERT INTO object_keys (vault_id, object_id, epoch, user_id, envelope, created_at)
+             VALUES ('v', 'n', 2147483649, '', x'dd', 3), ('v', 'n', 2147483649, 'carol', x'de', 3)",
+            "INSERT INTO object_key_chain (vault_id, object_id, epoch, link)
+             VALUES ('v', 'n', 2147483650, x'ee')",
+            "INSERT INTO updates (vault_id, seq, object_id, client_update_id, author_id, payload, created_at)
+             VALUES ('v', 1, 'index', 'u1', 'alice', x'0102', 1),
+                    ('v', 2, 'n', 'u2', 'alice', x'010203', 2),
+                    ('v', 3, 'c_n', 'u3', 'bob', x'01', 3), ('q', 1, 'm', 'u4', 'alice', x'0102', 4)",
+            "INSERT INTO snapshots (id, vault_id, object_id, covers_seq, author_id, payload, size, created_at)
+             VALUES ('s', 'v', 'n', 2, 'alice', x'0405', 2, 5)",
+            "INSERT INTO attachments (vault_id, id, size, author_id, data, created_at)
+             VALUES ('v', 'a', 4, 'alice', x'05060708', 6)",
+        ] {
+            run(&db, q).await.unwrap();
+        }
+        let mut before = Vec::new();
+        for t in TABLES {
+            let n = count(&db, t, "v").await;
+            assert!(n > 0, "no rows in {t}");
+            before.push(n);
+        }
+        // 2 + 3 + 1 bytes of updates, a 2-byte snapshot, a 4-byte file.
+        assert_eq!(storage_bytes(&db, "v").await, 12);
+        let vaults_before = vault_rows(&db).await;
+
+        migrate(&db, &path).await.unwrap();
+
+        // Everything is still there, as it was.
+        for (t, n) in TABLES.iter().zip(before) {
+            assert_eq!(count(&db, t, "v").await, n, "{t}");
+        }
+        assert_eq!(vault_rows(&db).await, vaults_before);
+        let kinds: Vec<String> = sqlx::query_scalar("SELECT DISTINCT kind FROM objects")
+            .fetch_all(&db)
+            .await
+            .unwrap();
+        assert_eq!(kinds, ["note"], "what was there is notes");
+        // The old database was backed up first.
+        assert!(dir.path().join("backups").read_dir().unwrap().count() > 0);
+        // Foreign keys are enforced again.
+        let on: bool = sqlx::query_scalar("PRAGMA foreign_keys")
+            .fetch_one(&db)
+            .await
+            .unwrap();
+        assert!(on);
+        let dangling = run(
+            &db,
+            "INSERT INTO vault_members (vault_id, user_id, role, added_at)
+             VALUES ('nowhere', 'bob', 'editor', 1)",
+        )
+        .await;
+        assert!(dangling.is_err(), "a member of no vault");
+
+        // The triggers still keep the vault's size.
+        run(
+            &db,
+            "INSERT INTO updates (vault_id, seq, object_id, client_update_id, author_id, payload, created_at)
+             VALUES ('v', 4, 'n', 'u5', 'alice', x'0102030405', 7)",
+        )
+        .await
+        .unwrap();
+        assert_eq!(storage_bytes(&db, "v").await, 17);
+        run(
+            &db,
+            "UPDATE attachments SET purged_at = 8 WHERE vault_id = 'v' AND id = 'a'",
+        )
+        .await
+        .unwrap();
+        assert_eq!(storage_bytes(&db, "v").await, 13);
+        run(
+            &db,
+            "UPDATE objects SET purged_at = 9 WHERE vault_id = 'v' AND id = 'n'",
+        )
+        .await
+        .unwrap();
+        // The note's 3 + 5 bytes of updates and its 2-byte snapshot are out.
+        assert_eq!(storage_bytes(&db, "v").await, 3);
+
+        // Drawings sections are new, one per person; other kinds are refused.
+        for (q, ok) in [
+            (
+                "INSERT INTO vaults (id, owner_id, encrypted_meta, kind, created_at, updated_at)
+                 VALUES ('d', 'alice', x'03', 'drawings', 1, 1)",
+                true,
+            ),
+            (
+                "INSERT INTO vaults (id, owner_id, encrypted_meta, kind, created_at, updated_at)
+                 VALUES ('d2', 'alice', x'03', 'drawings', 1, 1)",
+                false,
+            ),
+            (
+                "INSERT INTO vaults (id, owner_id, encrypted_meta, kind, created_at, updated_at)
+                 VALUES ('e', 'bob', x'03', 'drawings', 1, 1)",
+                true,
+            ),
+            (
+                "INSERT INTO vaults (id, owner_id, encrypted_meta, kind, created_at, updated_at)
+                 VALUES ('x', 'carol', x'03', 'boards', 1, 1)",
+                false,
+            ),
+        ] {
+            assert_eq!(run(&db, q).await.is_ok(), ok, "{q}");
+        }
+        let indexes: Vec<String> = sqlx::query_scalar(
+            "SELECT name FROM sqlite_schema WHERE type = 'index' AND tbl_name = 'vaults'
+               AND name NOT LIKE 'sqlite_%' ORDER BY name",
+        )
+        .fetch_all(&db)
+        .await
+        .unwrap();
+        assert_eq!(
+            indexes,
+            [
+                "vaults_drawings",
+                "vaults_own_storage",
+                "vaults_owner",
+                "vaults_quick_notes",
+                "vaults_storage"
+            ]
+        );
+
+        // Deleting a vault still takes everything in it.
+        run(&db, "DELETE FROM vaults WHERE id = 'v'").await.unwrap();
+        for t in TABLES {
+            assert_eq!(count(&db, t, "v").await, 0, "{t}");
+        }
+        assert_eq!(count(&db, "objects", "q").await, 1, "other vaults stay");
+        let check: String = sqlx::query_scalar("PRAGMA integrity_check")
+            .fetch_one(&db)
+            .await
+            .unwrap();
+        assert_eq!(check, "ok");
+    }
+}

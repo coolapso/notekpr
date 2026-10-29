@@ -134,6 +134,36 @@ def main():
               and arrow["startBinding"]["elementId"] != arrow["endBinding"]["elementId"],
               "an arrow drawn from one box to another attaches to both")
 
+        # A label on the arrow (double-click it) sits in a gap of its line,
+        # as in Excalidraw: the line is cut around it.
+        el = {"element-6066-11e4-a52e-4f735466cecf": a.find(CANVAS)}
+        click = [{"type": "pointerDown", "button": 0}, {"type": "pointerUp", "button": 0}]
+        req("POST", a.p("/actions"), {"actions": [{"type": "pointer", "id": "mouse", "parameters": {"pointerType": "mouse"},
+            "actions": [{"type": "pointerMove", "origin": el, "x": 25, "y": -100}] + click + click}]})
+        time.sleep(0.5)
+        a.keys("go")
+        a.keys(KEYS["escape"])
+        els = drawing()
+        label = next((e for e in els if e["type"] == "text" and e.get("containerId") == arrow["id"]), None)
+        check(label is not None and label["originalText"] == "go", "a double-click labels the arrow")
+        # Screen = drawing + offset (100% zoom): the first box was dragged
+        # from (-250, -150).
+        box = min((e for e in els if e["type"] == "rectangle"), key=lambda e: e["x"])
+        ox, oy = -250 - box["x"], -150 - box["y"]
+        lx, ly = label["x"] + label["width"] / 2 + ox, label["y"] + label["height"] / 2 + oy
+        pixels = a.js("""
+            const c = document.querySelector('.drawing-canvas'), r = c.getBoundingClientRect(), k = c.width / r.width;
+            const g = c.getContext('2d');
+            return arguments[0].map(([x, y]) => Array.from(g.getImageData(
+                Math.round((r.width / 2 + x) * k), Math.round((r.height / 2 + y) * k), 1, 1).data));
+        """, [[lx, ly - 40]] + [[lx + side * (label["width"] / 2 + d), ly + dy]
+                                 for side in (-1, 1) for d in (2.5, 12) for dy in range(-4, 5)])
+        empty, rest = pixels[0], pixels[1:]
+        gap = [p for i, p in enumerate(rest) if (i // 9) % 2 == 0]
+        beyond = [p for i, p in enumerate(rest) if (i // 9) % 2 == 1]
+        check(all(p == empty for p in gap) and any(p != empty for p in beyond),
+              "the arrow's line is cut around its label, and drawn beyond it")
+
         # A line: its end dragged, then the handle halfway along it bends it.
         tool(a, "l")
         drag(a, (-250, 100), (-50, 100))
@@ -482,6 +512,30 @@ def main():
             time.sleep(0.5)
         check(listed == [], f"the CLI has none left ({len(listed)})")
         a.click(".library-head button[aria-label='Close the saved shapes']")
+
+        # Renamed by its name in the header, as a note by its title: the
+        # letters typed (r, o, t are tools) don't reach the drawing.
+        before = len(drawing())
+        a.click(".drawing-page .drawing-name-field")
+        a.js("document.querySelector('.drawing-page .drawing-name-field').select()")
+        a.keys("Garden sketch" + KEYS["enter"])
+        a.find_text(".tree-item", "Garden sketch", 10)
+        time.sleep(1.5)
+        r = cli("cat", "Art", "Garden sketch")
+        check(r.returncode == 0 and len([e for e in json.loads(r.stdout)["elements"] if not e.get("isDeleted")]) == before,
+              "the drawing is renamed from its header, and typing its name draws nothing")
+        check(a.js("return document.activeElement.classList.contains('drawing-page')"),
+              "Enter hands the keyboard back to the drawing")
+        # (Back to its name, for the steps below; Escape keeps it.)
+        a.click(".drawing-page .drawing-name-field")
+        a.js("document.querySelector('.drawing-page .drawing-name-field').select()")
+        a.keys("Doodle" + KEYS["escape"])
+        check(a.js("return document.querySelector('.drawing-page .drawing-name-field').value") == "Garden sketch",
+              "Escape puts the name back")
+        a.click(".drawing-page .drawing-name-field")
+        a.js("document.querySelector('.drawing-page .drawing-name-field').select()")
+        a.keys("Untitled drawing" + KEYS["enter"])
+        a.find_text(".tree-item", "Untitled drawing", 10)
 
         # The whole palette, and a link (Ctrl+K) on the top left box.
         tool(a, KEYS["escape"])

@@ -169,13 +169,18 @@ impl Board {
         if self.fitted.get() || v.width <= 0.0 {
             return;
         }
+        // Loaded and empty: nothing to fit, and the view stays as it is
+        // once drawing starts.
+        if drawings::scene(&self.vault, &self.id).is_none() {
+            return;
+        }
+        self.fitted.set(true);
         let scene = self.scene();
         if scene.visible().next().is_none() {
             return;
         }
         let content = bounds::common_bounds(scene.visible());
         self.view.set(v.fitted(content, 1.0));
-        self.fitted.set(true);
     }
 
     /// Draws on the next frame.

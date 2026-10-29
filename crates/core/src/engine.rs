@@ -1731,7 +1731,7 @@ impl VaultReplica {
 }
 
 /// Plaintext presence record, encrypted with purpose `Awareness`.
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
 pub struct Presence {
     pub name: String,
     pub color: String,
@@ -1740,6 +1740,25 @@ pub struct Presence {
     /// Cursor as (anchor, head) UTF-8 byte offsets.
     pub cursor: Option<(usize, usize)>,
     pub at: i64,
+    /// On a drawing: where the pointer is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pointer: Option<DrawingPointer>,
+    /// On a drawing: the elements selected.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub selected: Vec<String>,
+}
+
+/// Someone's pointer on a drawing, in the drawing's coordinates.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Default)]
+pub struct DrawingPointer {
+    pub x: f64,
+    pub y: f64,
+    /// They point with the laser…
+    #[serde(default)]
+    pub laser: bool,
+    /// …held down (it draws a trail).
+    #[serde(default)]
+    pub down: bool,
 }
 
 #[cfg(test)]

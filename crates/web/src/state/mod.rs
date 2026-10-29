@@ -556,6 +556,14 @@ pub struct Core {
     pub presence_debounce: util::Debounce,
     pub content_debounce: util::Debounce,
     pub cursor: Option<(usize, usize)>,
+    /// On the drawing open here: our pointer and what we selected, for the
+    /// others drawing along.
+    pub drawing_pointer: Option<engine::DrawingPointer>,
+    pub drawing_selection: Vec<String>,
+    /// When our pointer was last sent (ms), and whether a newer position
+    /// waits to be.
+    pub pointer_sent: i64,
+    pub pointer_waiting: bool,
     /// When we last told the user that local storage is full.
     pub storage_warned_at: i64,
     /// Keys of a first-device setup whose upload failed, reused on retry.

@@ -252,6 +252,28 @@ impl Board {
         if let Some(f) = self.on_change.borrow().as_ref() {
             f();
         }
+        self.share_selection();
+    }
+
+    /// The laser: a trail while the pointer is down (`down`: it went down;
+    /// `up`: it went up), shown to the others too. Whether it is the tool.
+    fn laser(self: &Rc<Self>, q: [f64; 2], down: bool, up: bool) -> bool {
+        if self.editor.borrow().tool != Tool::Laser {
+            return false;
+        }
+        let mut trails = self.trails.borrow_mut();
+        if down {
+            trails.own.start(q);
+        } else if up {
+            trails.own.end();
+        } else if trails.own.drawing() {
+            trails.own.add(q);
+        }
+        let drawing = trails.own.drawing();
+        drop(trails);
+        self.share_pointer(Some(q), true, drawing);
+        self.schedule();
+        true
     }
 
     /// Runs an editor command (Delete, Ctrl+D, a style, …).
@@ -314,6 +336,9 @@ impl Board {
     /// The pointer went down on the canvas (`p` relative to it).
     pub fn pointer_down(self: &Rc<Self>, p: [f64; 2], pressure: Option<f64>, m: Mods) {
         self.finish_text_if_open();
+        if self.laser(self.view.get().to_scene(p), true, false) {
+            return;
+        }
         self.boundary();
         let scene = self.scene();
         let view = self.view.get();
@@ -330,8 +355,12 @@ impl Board {
     }
 
     pub fn pointer_move(self: &Rc<Self>, p: [f64; 2], pressure: Option<f64>, m: Mods) {
-        let scene = self.scene();
         let view = self.view.get();
+        if self.laser(view.to_scene(p), false, false) {
+            return;
+        }
+        self.share_pointer(Some(view.to_scene(p)), false, false);
+        let scene = self.scene();
         let snapped = !self.editor.borrow().snap.lines().is_empty();
         self.editor.borrow_mut().snap.view = Some(view.visible());
         let out = self.editor.borrow_mut().pointer_move(
@@ -371,6 +400,9 @@ impl Board {
     }
 
     pub fn pointer_up(self: &Rc<Self>, p: [f64; 2]) {
+        if self.laser(self.view.get().to_scene(p), false, true) {
+            return;
+        }
         let scene = self.scene();
         let view = self.view.get();
         let out = self

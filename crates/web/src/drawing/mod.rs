@@ -6,6 +6,7 @@
 
 pub mod canvas;
 pub mod editing;
+pub mod others;
 pub mod snapping;
 
 use std::cell::{Cell, RefCell};
@@ -62,6 +63,11 @@ pub struct Board {
     /// Counts pointer moves: a look again after holding still (an arrow's
     /// end over a shape) is for the last one only.
     moves: Cell<u32>,
+    /// The others on the drawing (presence), and the lasers' trails.
+    others: RefCell<Vec<others::Other>>,
+    trails: RefCell<others::Trails>,
+    /// What we last told the others we selected.
+    shared_selection: RefCell<Vec<String>>,
 }
 
 pub type Rt = Rc<Board>;
@@ -98,6 +104,9 @@ impl Board {
             text_draft: RefCell::new(String::new()),
             last_pointer: Cell::new(None),
             moves: Cell::new(0),
+            others: RefCell::new(Vec::new()),
+            trails: RefCell::new(others::Trails::default()),
+            shared_selection: RefCell::new(Vec::new()),
         })
     }
 
@@ -239,6 +248,22 @@ impl Board {
             &view,
             self.pixel_ratio.get(),
         );
+        // The others: what they selected, the lasers, their pointers.
+        {
+            let s = self.pixel_ratio.get() * view.zoom;
+            ctx.set_transform(s, 0.0, 0.0, s, view.scroll_x * s, view.scroll_y * s)
+                .ok();
+            let list = self.others.borrow();
+            others::draw_selections(&ctx, &scene, &list, view.zoom);
+            let mut trails = self.trails.borrow_mut();
+            others::draw_trails(&ctx, &mut trails, view.zoom);
+            others::draw_pointers(&ctx, &list, &view, self.pixel_ratio.get());
+            // Lasers fade: frames go on while one does.
+            if trails.active() {
+                drop(trails);
+                self.schedule();
+            }
+        }
         if let Some(f) = self.on_zoom.borrow().as_ref() {
             f(self.view.get().zoom);
         }
@@ -299,7 +324,40 @@ impl Board {
         );
         *self.wheel.borrow_mut() = Some(on_wheel);
         self.enable_undo();
+        others::register(self);
         self.reload();
+    }
+
+    /// Who else is on the drawing now (from presence).
+    pub fn set_others(self: &Rc<Self>, list: Vec<others::Other>) {
+        self.trails.borrow_mut().follow(&list);
+        *self.others.borrow_mut() = list;
+        self.schedule();
+    }
+
+    /// Tells the others where our pointer is on the drawing (`None`: off
+    /// it), whether with the laser and held down, and what we selected.
+    pub fn share_pointer(&self, at: Option<[f64; 2]>, laser: bool, down: bool) {
+        let pointer = at.map(|[x, y]| notekpr_core::engine::DrawingPointer { x, y, laser, down });
+        let selected = self.editor.borrow().selection.clone();
+        crate::state::step(|c| {
+            c.drawing_pointer = pointer;
+            c.drawing_selection = selected;
+            crate::state::send_pointer(c);
+        });
+    }
+
+    /// Tells the others what we selected, when it changed.
+    pub fn share_selection(&self) {
+        let selected = self.editor.borrow().selection.clone();
+        if *self.shared_selection.borrow() == selected {
+            return;
+        }
+        *self.shared_selection.borrow_mut() = selected.clone();
+        crate::state::step(|c| {
+            c.drawing_selection = selected;
+            crate::state::send_pointer(c);
+        });
     }
 
     /// Zooms by `factor` around the middle of the view.
@@ -325,6 +383,14 @@ impl Board {
     pub fn close(&self) {
         self.write();
         self.closed.set(true);
+        // Not on the drawing any more, for the others (at an edge: closing
+        // may happen while the state is taken).
+        leptos::task::spawn_local(async {
+            crate::state::step(|c| {
+                c.drawing_pointer = None;
+                c.drawing_selection.clear();
+            });
+        });
         if let Some((observer, _)) = self.resize.borrow_mut().take() {
             observer.disconnect();
         }

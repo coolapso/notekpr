@@ -706,6 +706,24 @@ fn Properties(board: StoredValue<Rc<Board>, LocalStorage>, rev: RwSignal<u64>) -
             json!(b.editor.borrow().style.end_arrowhead),
         )
     };
+    let arrow_type = move |b: &Board| {
+        let s = b.scene();
+        let ed = b.editor.borrow();
+        let first = ed
+            .selected(&s)
+            .into_iter()
+            .find(|e| e.kind() == ElementType::Arrow);
+        json!(first.map_or(ed.style.arrow_type.as_str(), |e| {
+            if e.is_elbowed() {
+                "elbow"
+            } else if e.roundness().is_some() {
+                "round"
+            } else {
+                "sharp"
+            }
+        }))
+    };
+    let icon = |name: &'static str| view! { <Icon name=name/> }.into_any();
     let opacity = move || {
         rev.get();
         board.with_value(|b| {
@@ -854,6 +872,12 @@ fn Properties(board: StoredValue<Rc<Board>, LocalStorage>, rev: RwSignal<u64>) -
                     </div></div>
             </Show>
             <Show when=move || has(arrows)>
+                <div class="prop"><span class="prop-name">"Arrow type"</span>
+                    <div class="picks">{choices(board, rev, "arrowType", arrow_type, vec![
+                        (json!("sharp"), icon("arrow-sharp"), "Sharp arrow".into()),
+                        (json!("round"), icon("arrow-curved"), "Curved arrow".into()),
+                        (json!("elbow"), icon("arrow-elbow"), "Elbow arrow".into()),
+                    ])}</div></div>
                 <div class="prop"><span class="prop-name">"Arrowheads"</span>
                     <div class="picks">{choices(board, rev, "startArrowhead", start, heads(false))}</div>
                     <div class="picks">{choices(board, rev, "endArrowhead", end, heads(true))}</div></div>

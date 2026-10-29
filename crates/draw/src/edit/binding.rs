@@ -74,7 +74,7 @@ pub fn global_to_fixed(e: &Element, p: Point) -> [f64; 2] {
 }
 
 /// The shape's outline grown by `grow`, in its own (unturned) frame.
-fn outline(e: &Element, grow: f64) -> Vec<Point> {
+pub(super) fn outline(e: &Element, grow: f64) -> Vec<Point> {
     let (x, y, w, h) = (e.x(), e.y(), e.width(), e.height());
     match e.kind() {
         ElementType::Ellipse => {
@@ -111,7 +111,7 @@ fn outline(e: &Element, grow: f64) -> Vec<Point> {
     }
 }
 
-fn segment_intersection(a: Point, b: Point, c: Point, d: Point) -> Option<Point> {
+pub(super) fn segment_intersection(a: Point, b: Point, c: Point, d: Point) -> Option<Point> {
     let r = [b[0] - a[0], b[1] - a[1]];
     let s = [d[0] - c[0], d[1] - c[1]];
     let denom = r[0] * s[1] - r[1] * s[0];
@@ -197,8 +197,12 @@ fn bound_end(
     }
 }
 
-/// The arrow with its ends where their bindings put them.
+/// The arrow with its ends where their bindings put them (an elbow arrow
+/// routed again).
 pub fn follow(arrow: &Element, scene: &Scene, moved: &[Element]) -> Element {
+    if arrow.is_elbowed() {
+        return super::elbow::route(arrow, scene, moved);
+    }
     let find = |id: &str| -> Option<Element> {
         moved
             .iter()
@@ -289,10 +293,16 @@ pub fn attach_as(
         a.set(key, Value::Null);
         return (a, None);
     };
+    // An elbow arrow's end snaps onto the outline.
+    let fixed = if arrow.is_elbowed() {
+        super::elbow::fixed_point(arrow, start, t)
+    } else {
+        global_to_fixed(t, p)
+    };
     a.set(
         key,
-        json!({"elementId": t.id(), "fixedPoint": global_to_fixed(t, p).map(num),
-            "mode": if inside { "inside" } else { "orbit" }}),
+        json!({"elementId": t.id(), "fixedPoint": fixed.map(num),
+            "mode": if inside && !arrow.is_elbowed() { "inside" } else { "orbit" }}),
     );
     let mut shape = t.clone();
     let mut list: Vec<Value> = t

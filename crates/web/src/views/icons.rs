@@ -30,6 +30,9 @@ fn paths(name: &str) -> &'static str {
         "circle" => r#"<circle cx="12" cy="12" r="8.5"/>"#,
         "arrow" => r#"<path d="M5 19 19 5M10 5h9v9"/>"#,
         "line" => r#"<path d="M5 19 19 5"/>"#,
+        "arrow-sharp" => r#"<path d="M5 19 19 5M12 5h7v7"/>"#,
+        "arrow-curved" => r#"<path d="M5 19c0-7 5-12 13-12"/><path d="m15 4 3.5 3-3.5 3"/>"#,
+        "arrow-elbow" => r#"<path d="M4 19h6V7h9"/><path d="m16 4 3 3-3 3"/>"#,
         "pen" => {
             r#"<path d="M3 21c3-1 4-4 7-7l7-7a2.1 2.1 0 0 0-3-3l-7 7c-3 3-6 4-7 7z"/><path d="M14 6l4 4"/>"#
         }

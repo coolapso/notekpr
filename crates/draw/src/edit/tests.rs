@@ -950,3 +950,273 @@ fn a_picture_put_in_goes_on_top_selected() {
     assert_eq!(ed.selection, [top.id().to_string()]);
     assert_eq!(ed.tool, Tool::Selection);
 }
+
+/// Two boxes, and an elbow arrow drawn from the right side of the first to
+/// the top of the second (its id).
+fn elbow_between_boxes(ed: &mut Editor, scene: &mut Scene, rng: &mut Seq) -> String {
+    for [x, y] in [[0.0, 0.0], [192.0, 192.0]] {
+        ed.set_tool(Tool::Rectangle);
+        drag(
+            ed,
+            scene,
+            [x, y],
+            [x + 64.0, y + 64.0],
+            Mods::default(),
+            rng,
+        );
+    }
+    ed.style.arrow_type = "elbow".into();
+    ed.set_tool(Tool::Arrow);
+    drag(
+        ed,
+        scene,
+        [63.0, 16.0],
+        [208.0, 193.0],
+        Mods::default(),
+        rng,
+    );
+    scene
+        .elements
+        .iter()
+        .find(|e| e.kind() == ElementType::Arrow)
+        .unwrap()
+        .id()
+        .to_string()
+}
+
+fn route_of(scene: &Scene, id: &str) -> Vec<Point> {
+    let a = scene.element(id).unwrap();
+    a.points()
+        .iter()
+        .map(|p| [a.x() + p[0], a.y() + p[1]])
+        .collect()
+}
+
+#[test]
+fn elbow_arrows_are_routed_and_follow() {
+    let (mut ed, mut scene, mut rng) = (Editor::default(), Scene::default(), Seq(0));
+    let id = elbow_between_boxes(&mut ed, &mut scene, &mut rng);
+    let (a, b) = (
+        scene.elements[0].id().to_string(),
+        scene.elements[1].id().to_string(),
+    );
+    let arrow = scene.element(&id).unwrap();
+    assert!(arrow.is_elbowed());
+    // Attached at the outlines, a gap away; out to the right, down onto it.
+    let start = arrow.start_binding().unwrap();
+    assert_eq!(
+        (start.element_id.as_str(), start.fixed_point),
+        (a.as_str(), Some([1.09375, 0.25]))
+    );
+    assert_eq!(arrow.end_binding().unwrap().element_id, b);
+    assert_eq!(
+        route_of(&scene, &id),
+        vec![[70.0, 16.0], [208.0, 16.0], [208.0, 186.0]]
+    );
+    // The second box moves right: routed again.
+    ed.selection = vec![b.clone()];
+    drag(
+        &mut ed,
+        &mut scene,
+        [224.0, 224.0],
+        [288.0, 224.0],
+        Mods::default(),
+        &mut rng,
+    );
+    assert_eq!(
+        route_of(&scene, &id),
+        vec![[70.0, 16.0], [272.0, 16.0], [272.0, 186.0]]
+    );
+    // Dragged on its own, attached as it is, it stays put.
+    ed.selection = vec![id.clone()];
+    let before = scene.element(&id).unwrap().clone();
+    drag(
+        &mut ed,
+        &mut scene,
+        [100.0, 16.0],
+        [100.0, 300.0],
+        Mods::default(),
+        &mut rng,
+    );
+    let after = scene.element(&id).unwrap();
+    assert_eq!((after.x(), after.y()), (before.x(), before.y()));
+    assert!(after.start_binding().is_some() && after.end_binding().is_some());
+    // Nor do the arrow keys move it.
+    let o = ed.nudge(&scene, 10.0, 0.0, &mut rng);
+    assert!(o.changed.is_empty());
+}
+
+#[test]
+fn elbow_arrows_by_two_clicks() {
+    let (mut ed, mut scene, mut rng) = (Editor::default(), Scene::default(), Seq(0));
+    for [x, y] in [[0.0, 0.0], [192.0, 192.0]] {
+        ed.set_tool(Tool::Rectangle);
+        drag(
+            &mut ed,
+            &mut scene,
+            [x, y],
+            [x + 64.0, y + 64.0],
+            Mods::default(),
+            &mut rng,
+        );
+    }
+    ed.style.arrow_type = "elbow".into();
+    ed.set_tool(Tool::Arrow);
+    let m = Mods::default();
+    let o = ed.pointer_down(&scene, [63.0, 16.0], None, m, 1.0, &mut rng);
+    apply(&mut scene, &o);
+    let o = ed.pointer_up(&scene, [63.0, 16.0], &mut rng);
+    apply(&mut scene, &o);
+    let o = ed.pointer_move(&scene, [150.0, 150.0], None, m, 1.0, &mut rng);
+    apply(&mut scene, &o);
+    // The second click ends it there: no points in between.
+    let o = ed.pointer_down(&scene, [208.0, 193.0], None, m, 1.0, &mut rng);
+    apply(&mut scene, &o);
+    assert!(o.done && !ed.busy());
+    let id = ed.selection[0].clone();
+    assert_eq!(
+        route_of(&scene, &id),
+        vec![[70.0, 16.0], [208.0, 16.0], [208.0, 186.0]]
+    );
+    assert!(scene.element(&id).unwrap().end_binding().is_some());
+}
+
+#[test]
+fn elbow_arrow_segments_are_moved_and_let_go() {
+    let (mut ed, mut scene, mut rng) = (Editor::default(), Scene::default(), Seq(0));
+    let id = elbow_between_boxes(&mut ed, &mut scene, &mut rng);
+    ed.selection = vec![id.clone()];
+    // The upright segment's handle, dragged left: it stays there, clear of
+    // the box it enters.
+    drag(
+        &mut ed,
+        &mut scene,
+        [208.0, 101.0],
+        [180.0, 101.0],
+        Mods::default(),
+        &mut rng,
+    );
+    let arrow = scene.element(&id).unwrap();
+    assert_eq!(
+        route_of(&scene, &id),
+        vec![
+            [70.0, 16.0],
+            [180.0, 16.0],
+            [180.0, 146.0],
+            [208.0, 146.0],
+            [208.0, 186.0]
+        ]
+    );
+    assert!(elbow::is_fixed(arrow, 2));
+    // A double click on its handle lets it go.
+    let o = ed.double_click(&scene, [180.0, 81.0], Mods::default(), 1.0, &mut rng);
+    apply(&mut scene, &o);
+    assert!(o.done && o.edit_text.is_none());
+    assert_eq!(
+        route_of(&scene, &id),
+        vec![[70.0, 16.0], [208.0, 16.0], [208.0, 186.0]]
+    );
+    assert_eq!(
+        scene.element(&id).unwrap().get("fixedSegments"),
+        Some(&Value::Null)
+    );
+}
+
+#[test]
+fn arrow_types_change() {
+    let (mut ed, mut scene, mut rng) = (Editor::default(), Scene::default(), Seq(0));
+    let id = elbow_between_boxes(&mut ed, &mut scene, &mut rng);
+    ed.selection = vec![id.clone()];
+    let o = ed.set_property(&scene, "arrowType", json!("sharp"), &mut rng);
+    apply(&mut scene, &o);
+    let a = scene.element(&id).unwrap();
+    assert!(!a.is_elbowed() && a.roundness().is_none() && a.get("arrowType").is_none());
+    assert_eq!(route_of(&scene, &id), vec![[70.0, 16.0], [208.0, 186.0]]);
+    let o = ed.set_property(&scene, "arrowType", json!("elbow"), &mut rng);
+    apply(&mut scene, &o);
+    assert_eq!(
+        route_of(&scene, &id),
+        vec![[70.0, 16.0], [208.0, 16.0], [208.0, 186.0]]
+    );
+    assert_eq!(ed.style.arrow_type, "elbow");
+    // An arrowhead changed: routed again to make room for it.
+    let o = ed.set_property(&scene, "endArrowhead", json!("triangle"), &mut rng);
+    assert!(o.changed[0].is_elbowed() && o.changed[0].points().len() == 3);
+}
+
+#[test]
+fn an_elbow_arrows_end_dragged_onto_a_shape_is_routed_there() {
+    let (mut ed, mut scene, mut rng) = (Editor::default(), Scene::default(), Seq(0));
+    rect(&mut ed, &mut scene, &mut rng, [0.0, 0.0], [100.0, 100.0]);
+    let b = rect(
+        &mut ed,
+        &mut scene,
+        &mut rng,
+        [300.0, 300.0],
+        [400.0, 400.0],
+    );
+    ed.style.arrow_type = "elbow".into();
+    let arrow = line(
+        &mut ed,
+        &mut scene,
+        &mut rng,
+        Tool::Arrow,
+        [50.0, 50.0],
+        [300.0, 50.0],
+    );
+    assert!(scene.element(&arrow).unwrap().end_binding().is_none());
+    let (_, end) = ends(scene.element(&arrow).unwrap());
+    drag(
+        &mut ed,
+        &mut scene,
+        end,
+        [390.0, 340.0],
+        Mods::default(),
+        &mut rng,
+    );
+    let a = scene.element(&arrow).unwrap();
+    assert_eq!(a.end_binding().unwrap().element_id, b);
+    // Square corners all along, ending on the box's outline.
+    let g = points::global(a);
+    for w in g.windows(2) {
+        assert!(
+            (w[0][0] - w[1][0]).abs() < 1e-6 || (w[0][1] - w[1][1]).abs() < 1e-6,
+            "{g:?}"
+        );
+    }
+    let last = g[g.len() - 1];
+    let inside = last[0] > 300.0 && last[0] < 400.0 && last[1] > 300.0 && last[1] < 400.0;
+    assert!(!inside, "{last:?}");
+}
+
+#[test]
+fn a_line_made_by_clicks_follows_the_pointer_between_them() {
+    let (mut ed, mut scene, mut rng) = (Editor::default(), Scene::default(), Seq(0));
+    ed.set_tool(Tool::Line);
+    let mut click = |ed: &mut Editor, scene: &mut Scene, p: Point| {
+        let o = ed.pointer_down(scene, p, None, Mods::default(), 1.0, &mut rng);
+        apply(scene, &o);
+        let o = ed.pointer_up(scene, p, &mut rng);
+        apply(scene, &o);
+    };
+    click(&mut ed, &mut scene, [0.0, 0.0]);
+    // Moving without the button: the next point follows, nothing ends.
+    let mut seq = Seq(100);
+    for p in [[50.0, 20.0], [100.0, 50.0]] {
+        let o = ed.pointer_move(&scene, p, None, Mods::default(), 1.0, &mut seq);
+        apply(&mut scene, &o);
+    }
+    click(&mut ed, &mut scene, [100.0, 50.0]);
+    click(&mut ed, &mut scene, [200.0, 0.0]);
+    let o = ed.escape(&scene, &mut seq);
+    apply(&mut scene, &o);
+    let lines: Vec<&Element> = scene
+        .visible()
+        .filter(|e| e.kind() == ElementType::Line)
+        .collect();
+    assert_eq!(lines.len(), 1);
+    assert_eq!(
+        points::global(lines[0]),
+        [[0.0, 0.0], [100.0, 50.0], [200.0, 0.0]]
+    );
+}

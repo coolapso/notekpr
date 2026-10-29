@@ -566,6 +566,19 @@ pub fn draw_overlay(
     {
         point_handles(ctx, &h, z);
     }
+    // An elbow arrow's segments are moved by the handles at their middles.
+    if let [a] = selected.as_slice()
+        && a.is_elbowed()
+    {
+        dashed(false);
+        ctx.set_fill_style_str("#ffffff");
+        for (_, [x, y]) in notekpr_draw::edit::elbow::segment_handles(a, z) {
+            ctx.begin_path();
+            let _ = ctx.arc(x, y, 4.0 / z, 0.0, std::f64::consts::TAU);
+            ctx.fill();
+            ctx.stroke();
+        }
+    }
     if let Some([x1, y1, x2, y2]) = ed.selection_box() {
         dashed(false);
         ctx.set_fill_style_str("rgba(105, 101, 219, 0.1)");

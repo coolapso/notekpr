@@ -339,7 +339,7 @@ async fn faces() -> Rc<Vec<FontFace>> {
 }
 
 /// The `@font-face` rules a drawing needs, its fonts inside.
-async fn font_faces(scene: &Scene) -> String {
+pub async fn font_faces(scene: &Scene) -> String {
     let faces = faces().await;
     let mut rules = Vec::new();
     for face in fonts::faces_needed(&faces, scene) {

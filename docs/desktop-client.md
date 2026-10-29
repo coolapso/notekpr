@@ -180,6 +180,7 @@ by its id.
 | `cat <v> <path>` | note text (or attachment bytes; a drawing as a `.drawing` file: Excalidraw's JSON under notekpr's `type`) |
 | `write <v> <path>` | create or update a note from stdin — diff-merged, never a blind overwrite; `--append`, `--attachment`, `--if-match <hash>` (ignored with the other two). A path ending in `.drawing` takes a drawing file on stdin — a `.drawing`, Excalidraw's `.excalidraw`, Obsidian's `.excalidraw.md` or what Excalidraw copies — and makes or changes the drawing there, element by element. `@today`, `@tomorrow` and `@yesterday` in the text become those days' dates (`@2026-10-23`, in the local time zone), as in the web app; so do they with `quick`, `shared write` and the gateway, but not in files of the Markdown folder |
 | `quick [text…]` / `quick --list` / `quick --move <note> --to <v>` / `quick --delete <note>` | capture a quick note (text or stdin) / list them / move one to a vault / delete one for good; see [Quick notes](#quick-notes) |
+| `library ls` / `library import <file.excalidrawlib>` / `library export [--out <file>] [--force]` | your drawings library (Excalidraw's): list its items, newest first (id, when, name, what they are made of; `--json` for the full ids) / add the items of an Excalidraw library file, leaving out those it has / write it as one (to stdout without `--out`); see [The library](#the-library) |
 | `mkdir <v> <path>`, `mv <v> <from> <to> [--update-links]`, `rm <v> <path>` | `rm` moves to the trash (from the quick notes: deletes for good); `mv` into `dir/` keeps the name; `--update-links` rewrites `[[links]]` |
 | `mv <v> <note, drawing or folder> <to> --to-vault <other>` | move a note or drawing, or a folder with everything in it, to another vault: `to` is its folder there (ending in `/`, `/` alone for the top level) or its new path; a name taken there gets a number (`Projects 2`). Inside a folder everything keeps its place; attachments elsewhere its notes link to come along (beside the note, or at the folder's top level), and `[[links]]` that wouldn't find a copy there are rewritten. The originals go to the trash once the server has the copies, except attachments a note staying behind links to; their history, comments and shares stay with them. A drawing's copy replaces its original, which the server deletes for good once the copy is there — so a move needs no room under a drawings limit. Files move only with notes. `--json` prints what moved |
 | `order <v> <path> --before\|--after <other>` / `order <v> <folder> --reset` | put a note, attachment or folder just before or after another of the same folder (the order the sidebar and `ls` show; folders stay above notes; a folder only made by its notes gets an entry), or a folder's contents (`/` = the top level) back to A–Z; moving something to another folder drops its place |
@@ -208,9 +209,10 @@ limit: commands then wait as long as the server says and retry (for up to
 a profile's local copies (two would overwrite each other's files and lose
 queued or received changes). While `sync` or `gateway` runs, read commands
 (`ls`, `cat`, `search`, `backlinks`, `status`, `export`, `history`, `trash
-list`, `vault list`, `quick --list`, `note-shares`, `recover`) show that
+list`, `vault list`, `quick --list`, `library ls`, `library export`,
+`note-shares`, `recover`) show that
 process's local copies read-only — it keeps them current — and commands that
-change something (`write`, `quick`, `mv`, `rm`, `mkdir`, `import`,
+change something (`write`, `quick`, `library import`, `mv`, `rm`, `mkdir`, `import`,
 `vault …`, `share-note`, …) are handed to it right away: it runs them on its
 own copies and sends back what
 they print and whether they failed, so they work as usual (through a loopback
@@ -323,6 +325,31 @@ another" — and stays on your device, uploaded once there's room (one
 deleted for good, or a larger limit). Moving a drawing to another vault
 needs no room. Your Drawings also have a storage limit of their own, like
 the quick notes'.
+
+### The library
+
+Your **library** holds items — groups of elements — to drop into any
+drawing, as Excalidraw's does: in the web app you add what is selected to it
+and put items in from its panel. It is yours alone and the same on all your
+devices: it is kept, encrypted, in your Drawings (their index, so it takes
+no drawing's place; see [protocol.md §1](protocol.md#1-data-model-the-server-sees)),
+made the first time it's needed.
+
+```sh
+notekpr library ls                               # newest first
+notekpr library import shapes.excalidrawlib      # Excalidraw's library files
+notekpr library export --out mine.excalidrawlib  # Excalidraw imports it
+notekpr library export > mine.excalidrawlib      # the same, on stdout
+```
+
+`import` adds the items of an `.excalidrawlib` file (version 1 or 2) and
+leaves out those the library has already (the same elements), so importing
+a file twice adds nothing. An item is stored as one piece, so one larger
+than an update may carry on the server (half its `max_update_bytes`) is
+left out with a warning instead of being queued for a server that would
+refuse it. Items hold elements only: no pictures (Excalidraw's rule). The
+library isn't part of the Markdown folder, `export` / `import` of vaults or
+`recover`: keep a copy with `library export`.
 
 ## 4. Sync and the Markdown mirror
 

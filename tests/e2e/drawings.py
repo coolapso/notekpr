@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Drawings in the browser, checked from the CLI: drawing with the tools,
-arrows attaching to shapes, a line's points edited, the Export menu, what
-reaches the server.
+arrows attaching to shapes, a line's points edited, the library, the
+Export menu, what reaches the server.
 
     python3 tests/e2e/drawings.py --server target/debug/notekpr-server \
         --cli target/debug/notekpr --web dist/web
@@ -10,9 +10,35 @@ import argparse, base64, json, os, subprocess, sys, tempfile, time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from suite import Env, uniq, check, share, severe_logs, png_file  # noqa: E402
-from wd import Browser, KEYS, req, signup  # noqa: E402
+from wd import Browser, KEYS, req, base_url  # noqa: E402
 
 CANVAS = ".drawing-canvas"
+LIBRARY_ITEMS = ".library-items .library-unit:not(.library-pending)"
+
+
+def signup(b, name):
+    """`wd.signup`, keeping the recovery key it shows (the CLI signs in
+    with it as the same person)."""
+    b.go(base_url())
+    b.find(".dev-box input", 20)
+    b.type(".dev-box input", name)
+    b.click(".dev-box button[type=submit]")
+    b.click_el(b.find_text(".auth-card button", "Create my keys", 15))
+    b.find(".recovery-key", 15)
+    key = b.text(".recovery-key")
+    b.click(".check input")
+    b.click_el(b.find_text(".auth-card button", "Continue"))
+    b.find(".ed .ln", 20)
+    return key
+
+
+def library_file(path, *shapes):
+    """An .excalidrawlib file with one item per shape."""
+    items = [{"id": f"lib-{s}", "status": "unpublished", "created": 1700000000000 + i, "name": s,
+              "elements": [{"id": f"lib-{s}-el", "type": s, "x": 0, "y": 0, "width": 60, "height": 40}]}
+             for i, s in enumerate(shapes)]
+    with open(path, "w") as f:
+        json.dump({"type": "excalidrawlib", "version": 2, "source": "test", "libraryItems": items}, f)
 
 
 def drag(b, frm, to, steps=6, hold=None, pause=0):
@@ -52,6 +78,8 @@ def main():
     home = tempfile.mkdtemp(prefix="notekpr-cli-")
     cenv = dict(os.environ, NOTEKPR_CONFIG_DIR=f"{home}/config", NOTEKPR_DATA_DIR=f"{home}/data")
     cli = lambda *a, **kw: subprocess.run([os.path.abspath(args.cli), "-p", "bob", *a], env=cenv, capture_output=True, text=True, timeout=60, **kw)
+    # Amy's own CLI (her library).
+    amy = lambda *a: subprocess.run([os.path.abspath(args.cli), "-p", "amy", *a], env=cenv, capture_output=True, text=True, timeout=60)
     a = Browser()
 
     def drawing():
@@ -64,7 +92,7 @@ def main():
 
     try:
         an, bn = uniq("amy"), uniq("bert")
-        signup(a, an)
+        amy_key = signup(a, an)
         r = cli("login", "--server", env.url.rstrip("/"), "--dev-user", bn, "--device-name", "laptop")
         check(r.returncode == 0, "CLI login")
         a.click(".vault-btn")
@@ -208,6 +236,70 @@ def main():
             check(not severe_logs(b), "no browser errors for the other person")
         finally:
             b.close()
+
+        # The library: a new ellipse added to it, put back in with a click
+        # and by dragging it; a library imported on another device of
+        # amy's (the CLI) shows up; a library file dropped on the canvas is
+        # imported; an item taken out.
+        keyfile = os.path.join(home, "amy.key")
+        with open(keyfile, "w") as f:
+            f.write(amy_key + "\n")
+        r = amy("login", "--server", env.url.rstrip("/"), "--dev-user", an, "--device-name", "amy's laptop",
+                "--recovery-key-file", keyfile)
+        check(r.returncode == 0, "amy's CLI signs in with her recovery key")
+        ellipses = lambda: sum(e["type"] == "ellipse" for e in drawing())
+        tool(a, KEYS["escape"])
+        tool(a, "o")
+        drag(a, (100, 230), (220, 310))
+        check(ellipses() == 1, "an ellipse drawn")
+        a.click(".drawing-page .note-head button[aria-label='Library']")
+        a.find(".library-panel", 5)
+        a.click(".library-pending", 5)
+        a.wait(f"return document.querySelectorAll('{LIBRARY_ITEMS}').length == 1", 10, "the item in the library")
+        a.wait(f"return !!document.querySelector('{LIBRARY_ITEMS} img')", 10, "the item's picture")
+        r = amy("library", "ls", "--json")
+        listed = json.loads(r.stdout or "[]")
+        check(len(listed) == 1 and listed[0]["elements"] == ["ellipse"], f"the CLI lists amy's item ({[i['elements'] for i in listed]})")
+        a.click(LIBRARY_ITEMS)
+        check(ellipses() == 2, "a click puts the item in")
+        a.js("""
+            const dt = new DataTransfer();
+            dt.setData('application/vnd.excalidrawlib.ids+json', JSON.stringify({itemIds: [arguments[0]]}));
+            const c = document.querySelector('.drawing-canvas'), r = c.getBoundingClientRect();
+            c.dispatchEvent(new DragEvent('drop', {dataTransfer: dt, bubbles: true, cancelable: true,
+                clientX: r.left + r.width / 2 - 100, clientY: r.top + r.height / 2 + 250}));
+        """, listed[0]["id"])
+        check(ellipses() == 3, "an item dragged onto the canvas is put in")
+        lib = os.path.join(home, "shapes.excalidrawlib")
+        library_file(lib, "diamond")
+        r = amy("library", "import", lib)
+        check(r.returncode == 0, "the CLI imports a library")
+        a.wait(f"return document.querySelectorAll('{LIBRARY_ITEMS}').length == 2", 15, "the imported item, synced")
+        library_file(lib, "rectangle", "diamond")
+        data = base64.b64encode(open(lib, "rb").read()).decode()
+        a.js("""
+            const bytes = Uint8Array.from(atob(arguments[0]), c => c.charCodeAt(0));
+            const dt = new DataTransfer();
+            dt.items.add(new File([bytes], 'shapes.excalidrawlib', {type: 'application/json'}));
+            document.querySelector('.drawing-canvas').dispatchEvent(new DragEvent('drop', {dataTransfer: dt, bubbles: true, cancelable: true}));
+        """, data)
+        a.wait(f"return document.querySelectorAll('{LIBRARY_ITEMS}').length == 3", 10, "a dropped library file is imported (once)")
+        # Pictures can't go in (Excalidraw's rule).
+        a.click_at(CANVAS, 200, 150)
+        time.sleep(0.4)
+        a.click(".library-pending", 5)
+        a.find_text(".toast", "Pictures", 5)
+        check(True, "a picture isn't added to the library")
+        a.js("window.confirm = () => true")
+        a.js(f"document.querySelector('{LIBRARY_ITEMS} .library-remove').click()")
+        a.wait(f"return document.querySelectorAll('{LIBRARY_ITEMS}').length == 2", 10, "an item removed")
+        a.shot("drawings-library")
+        time.sleep(1.5)
+        r = amy("library", "export")
+        exported = json.loads(r.stdout)
+        check(exported["type"] == "excalidrawlib" and len(exported["libraryItems"]) == 2,
+              "the library, as the server has it, exports as an .excalidrawlib file")
+        a.click(".library-head button[aria-label='Close the library']")
 
         # The whole palette, and a link (Ctrl+K) on the top left box.
         tool(a, KEYS["escape"])

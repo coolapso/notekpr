@@ -100,6 +100,9 @@ pub enum Command {
     /// Capture a quick note (TEXT, or stdin); --list shows them, --move takes
     /// one to a vault, --delete deletes one for good.
     Quick(QuickArgs),
+    /// Your drawings library (Excalidraw's): items to drop into any drawing.
+    #[command(subcommand)]
+    Library(LibraryCmd),
     /// Create a folder.
     Mkdir { vault: String, path: String },
     /// Move or rename a document or folder; with --to-vault, move a note or
@@ -282,6 +285,24 @@ pub struct QuickArgs {
     /// With --move: the note's name there (default: its first line).
     #[arg(long, requires = "move_note")]
     pub name: Option<String>,
+}
+
+#[derive(Subcommand, Clone, Debug, Serialize, Deserialize)]
+pub enum LibraryCmd {
+    /// List the items, newest first.
+    Ls,
+    /// Add the items of an Excalidraw library file (.excalidrawlib); those
+    /// the library has already are left out.
+    Import { file: PathBuf },
+    /// Write the library as an Excalidraw library file (.excalidrawlib), to
+    /// stdout without --out.
+    Export {
+        #[arg(long)]
+        out: Option<PathBuf>,
+        /// Replace an existing file.
+        #[arg(long, requires = "out")]
+        force: bool,
+    },
 }
 
 #[derive(Args, Clone, Debug, Serialize, Deserialize)]

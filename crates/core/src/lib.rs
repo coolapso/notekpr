@@ -13,6 +13,7 @@ pub mod drawing;
 pub mod drawings;
 pub mod engine;
 pub mod keys;
+pub mod library;
 pub mod markdown;
 pub mod memberlog;
 pub mod moving;

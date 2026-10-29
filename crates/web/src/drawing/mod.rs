@@ -7,6 +7,7 @@
 pub mod canvas;
 pub mod editing;
 pub mod frames;
+pub mod library;
 pub mod others;
 pub mod snapping;
 pub mod sticky;

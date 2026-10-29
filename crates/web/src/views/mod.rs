@@ -5,6 +5,7 @@ pub mod drawing;
 pub mod graph;
 pub mod home;
 pub mod icons;
+pub mod library;
 pub mod mentions;
 pub mod note;
 pub mod panels;

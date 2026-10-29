@@ -13,6 +13,7 @@ pub mod fonts;
 pub mod freehand;
 pub mod geom;
 pub mod js;
+pub mod library;
 pub mod lzstring;
 pub mod obsidian;
 pub mod order;

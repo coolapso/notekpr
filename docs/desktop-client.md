@@ -160,15 +160,16 @@ directory, never deleted) and enrolls the computer as a new device.
 ## 3. Everyday commands
 
 Vaults are referred to by id or by (unique, case-insensitive) name; paths are
-vault-relative, `.md` is optional for notes. Your quick notes answer to the
-name `Quick notes`, which no vault may have (in any case): `vault create` and
-`vault rename` refuse it, as the web app does. A vault named so anyway (by a
+vault-relative, `.md` is optional for notes (`.excalidraw` for drawings).
+Your quick notes answer to the name `Quick notes` and your Drawings to
+`Drawings`, which no vault may have (in any case): `vault create` and `vault
+rename` refuse them, as the web app does. A vault named so anyway (by a
 client that doesn't check: the server can't, names are encrypted) is reached
 by its id.
 
 | Command | |
 |---|---|
-| `vault list` / `vault create <name>` | list (with role, document count, what each takes on the server of its storage limit — `FULL` at it —, its id, and how many quick notes there are) / create |
+| `vault list` / `vault create <name>` | list (with role, document count, what each takes on the server of its storage limit — `FULL` at it —, its id, how many quick notes there are, and how many drawings you have of how many you may — see [Drawings](#drawings)) / create |
 | `vault rename <v> <name>` / `vault archive <v> [--undo]` / `vault delete <v>` | owner only; delete asks you to type the name (`--yes` skips that; without a terminal it is required) |
 | `vault icon <v> <emoji>` / `vault icon <v> --remove` | owner only; the vault's icon (replaces a picture set in the browser) |
 | `vault viewers-comment <v> on\|off` | owner only; whether viewers (and people its notes are shared with read-only) may comment (on by default) |
@@ -180,7 +181,7 @@ by its id.
 | `write <v> <path>` | create or update a note from stdin — diff-merged, never a blind overwrite; `--append`, `--attachment`, `--if-match <hash>` (ignored with the other two). `@today`, `@tomorrow` and `@yesterday` in the text become those days' dates (`@2026-10-23`, in the local time zone), as in the web app; so do they with `quick`, `shared write` and the gateway, but not in files of the Markdown folder |
 | `quick [text…]` / `quick --list` / `quick --move <note> --to <v>` / `quick --delete <note>` | capture a quick note (text or stdin) / list them / move one to a vault / delete one for good; see [Quick notes](#quick-notes) |
 | `mkdir <v> <path>`, `mv <v> <from> <to> [--update-links]`, `rm <v> <path>` | `rm` moves to the trash (from the quick notes: deletes for good); `mv` into `dir/` keeps the name; `--update-links` rewrites `[[links]]` |
-| `mv <v> <note or folder> <to> --to-vault <other>` | move a note, or a folder with everything in it, to another vault: `to` is its folder there (ending in `/`, `/` alone for the top level) or its new path; a name taken there gets a number (`Projects 2`). Inside a folder everything keeps its place; attachments elsewhere its notes link to come along (beside the note, or at the folder's top level), and `[[links]]` that wouldn't find a copy there are rewritten. The originals go to the trash once the server has the copies, except attachments a note staying behind links to; their history, comments and shares stay with them. Files move only with notes. `--json` prints what moved |
+| `mv <v> <note, drawing or folder> <to> --to-vault <other>` | move a note or drawing, or a folder with everything in it, to another vault: `to` is its folder there (ending in `/`, `/` alone for the top level) or its new path; a name taken there gets a number (`Projects 2`). Inside a folder everything keeps its place; attachments elsewhere its notes link to come along (beside the note, or at the folder's top level), and `[[links]]` that wouldn't find a copy there are rewritten. The originals go to the trash once the server has the copies, except attachments a note staying behind links to; their history, comments and shares stay with them. A drawing's copy replaces its original, which the server deletes for good once the copy is there — so a move needs no room under a drawings limit. Files move only with notes. `--json` prints what moved |
 | `order <v> <path> --before\|--after <other>` / `order <v> <folder> --reset` | put a note, attachment or folder just before or after another of the same folder (the order the sidebar and `ls` show; folders stay above notes; a folder only made by its notes gets an entry), or a folder's contents (`/` = the top level) back to A–Z; moving something to another folder drops its place |
 | `comments list <v> <note> [--all]` | a note's comment threads: the text each is about, the comments and replies with their authors, ids (first 8 characters) and whether unverified, not sent yet or edited; `--all` adds resolved ones; `--json` for the full ids |
 | `comments add <v> <note> --on <quote> [text…]` | comment on the quoted text (it must appear once in the note); the comment is the words or stdin. Viewers can comment too, unless the vault's owner turned it off |
@@ -287,6 +288,28 @@ good the next time an app catches up with the server, once it has been in the
 quick notes for an hour (time for a link made on another device to arrive).
 Only apps can tell: the server sees no links.
 
+### Drawings
+
+Drawings (`.excalidraw` files in the Markdown folder, `cat` prints one as
+such) live in any vault, and in your **Drawings**: a place of your own for
+them, never shared (no members, single-note shares, agents or comments),
+made the first time the app is online with your account like the quick
+notes, and answering to the name `Drawings` (`ls Drawings`, `mv Home
+Sketch.excalidraw / --to-vault Drawings`). It holds drawings and files only:
+`write` refuses notes there.
+
+The server may limit how many drawings you have (`drawings_per_user`, or a
+limit of your own; by default there is none): all of them together, in
+every vault you own — a drawing someone makes in a vault of yours counts as
+yours, one you make in someone else's as theirs. Drawings in the trash
+count until it is emptied. `vault list` shows how many you have of how many
+you may ("Drawings are full (1 of 1)"). A new drawing beyond the limit is
+refused — "You can have 1 drawing on this server: delete it for good to make
+another" — and stays on your device, uploaded once there's room (one
+deleted for good, or a larger limit). Moving a drawing to another vault
+needs no room. Your Drawings also have a storage limit of their own, like
+the quick notes'.
+
 ## 4. Sync and the Markdown mirror
 
 For a step-by-step guide to working in Obsidian, Neovim or any other editor
@@ -363,6 +386,8 @@ are unaffected.
   Work (3f2a1c)/          <- a second vault with the same name gets its id suffix
   Quick notes/            <- your quick notes: flat, no folders
     2026-10-19 14.32.md
+  Drawings/               <- your Drawings: drawings and files
+    Garden plan.excalidraw
 ```
 
 **Quick notes** ([§3](#quick-notes)) are the folder `Quick notes/`, mirrored
@@ -375,6 +400,12 @@ disk the same way until a quick note links to it. Moving a file from there
 into a vault's folder moves the note there. Deleting a file deletes the note
 **for good** — quick notes have no trash — so more than 3 of them vanishing at
 once is held like a mass deletion (below).
+
+**Your Drawings** ([Drawings](#drawings)) are the folder `Drawings/`, mirrored
+right after the quick notes, so the name is theirs too. An Excalidraw file
+put there (or in a folder inside it) becomes a drawing, any other file stays
+a file; a Markdown file stays on disk, not synced (you are told once). As in
+a vault, deleting a file moves the drawing to the trash.
 
 Besides the characters shown, control characters become `_`, surrounding
 spaces, leading dots and trailing dots are dropped, Windows device names get

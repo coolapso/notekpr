@@ -409,12 +409,15 @@ Administration → Instance in the web app, or the admin API (`GET`/`PATCH
 They are kept in the database, so they survive restarts and backups.
 
 * **Limits**: accounts (people who aren't disabled), agents and vaults on
-  the server; vaults, agents and quick notes per person, by default and for
-  one person (their own allowance, under Accounts → Limits). Each is a number
-  or no limit; `0` means none at all (defaults: no limit, but 50 agents and
-  20 quick notes per person). A limit only stops new ones: lowering it takes
-  nothing away, and nothing stops working. Everyone's quick notes (one place
-  per person) count as no vault.
+  the server; vaults, agents, quick notes and drawings per person, by default
+  and for one person (their own allowance, under Accounts → Limits). Each is
+  a number or no limit; `0` means none at all (defaults: no limit, but 50
+  agents and 20 quick notes per person). A limit only stops new ones:
+  lowering it takes nothing away, and nothing stops working. Everyone's
+  quick notes and Drawings (one place each per person) count as no vault.
+  Drawings count per person in all the vaults they own, whoever drew them;
+  moving one to another vault needs no room. The server learns which objects
+  are drawings to count them — nothing else of them.
 * **Read-only**: the server keeps everything and serves it, but accepts no
   changes. The apps keep people's edits (in the browser, in the CLI's local
   copies) and send them the moment you switch it off; signing in and out,
@@ -441,6 +444,8 @@ They are kept in the database, so they survive restarts and backups.
   quick notes someone may keep, it is the person's — give one person more
   under Accounts → Limits. A quick note can link any number of files, so
   their number alone doesn't bound what they take.
+* **Drawings storage**: the same for someone's Drawings (the place of their
+  own for drawings), the person's like their quick notes'.
 * **Oldest app version**: apps older than this (`0.6.0`) are told to update
   instead of syncing; they keep their unsent edits, and browsers get the
   current app with a reload. Each server version accepts apps from some
@@ -475,11 +480,11 @@ t=notekpr_a_…            # the client's token
 url=https://notes.example.com/api/v1
 curl -H "Authorization: Bearer $t" $url/admin/settings
 curl -H "Authorization: Bearer $t" -X PATCH $url/admin/settings -H 'Content-Type: application/json' \
-     -d '{"vaults_per_user": 1, "quick_notes_per_user": 30, "quick_notes_storage_mb": 100, "max_storage_mb": 20480}'
+     -d '{"vaults_per_user": 1, "quick_notes_per_user": 30, "quick_notes_storage_mb": 100, "drawings_per_user": 1, "max_storage_mb": 20480}'
 # one person, by e-mail or by their sign-in identity (issuer|subject)
 curl -H "Authorization: Bearer $t" "$url/admin/users?email=ana@example.com"
 curl -H "Authorization: Bearer $t" -X PATCH $url/admin/users/<id> -H 'Content-Type: application/json' \
-     -d '{"vault_allowance": 3, "quick_note_allowance": 50, "quick_notes_storage_allowance": 500}'   # each a number, "unlimited" or "default"
+     -d '{"vault_allowance": 3, "quick_note_allowance": 50, "quick_notes_storage_allowance": 500, "drawing_allowance": 10}'   # each a number, "unlimited" or "default"
 # vaults by size (or the one with an id someone gave you, or someone's), and more room for one (MiB)
 curl -H "Authorization: Bearer $t" "$url/admin/vaults?id=<vault id>"
 curl -H "Authorization: Bearer $t" -X PATCH $url/admin/vaults/<vault id> -H 'Content-Type: application/json' \

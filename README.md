@@ -204,8 +204,9 @@ read anything.
   version — never content;
   size limits for changes, snapshots and attachments.
 * Instance settings that change without a restart: limits on accounts,
-  agents and vaults, vaults and agents per person (with each person's own
-  allowance), a read-only mode the apps ride out — edits are kept and sent
+  agents and vaults, vaults, agents and drawings per person (with each
+  person's own allowance; drawings count in every vault someone owns, and
+  moving one needs no room), a read-only mode the apps ride out — edits are kept and sent
   when it ends — that also starts by itself at a database size you choose,
   and the oldest app version it accepts: older apps are told to update and
   keep their unsent edits.
@@ -215,8 +216,8 @@ read anything.
   on; emptying its trash makes room at once. Members see a vault's id and
   how much of its room it uses in its settings, and give the id to ask for
   more; the admin page lists vaults by size with their ids and owners, never
-  their names. Quick notes have a size of their own, by default and for one
-  person.
+  their names. Quick notes and each person's Drawings have a size of their
+  own, by default and for one person.
   From the admin page, or from scripts (a billing system, say) as admin
   clients: each with its own scopes and tokens, rotated and revoked without
   a restart, and never reaching a vault. An instance can leave everything to

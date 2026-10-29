@@ -29,6 +29,15 @@ const ELEMENTS: &str = "elements";
 const SETTINGS: &str = "settings";
 const FILES: &str = "files";
 
+/// A drawing's root maps (elements, settings, pictures).
+pub(crate) fn roots(doc: &yrs::Doc) -> [MapRef; 3] {
+    [
+        doc.get_or_insert_map(ELEMENTS),
+        doc.get_or_insert_map(SETTINGS),
+        doc.get_or_insert_map(FILES),
+    ]
+}
+
 /// A JSON value as yrs keeps it.
 pub fn to_any(v: &Value) -> Any {
     match v {
@@ -494,6 +503,33 @@ mod tests {
         }
         assert_eq!(other.drawing().scene(), scene);
         assert!(doc.drawing().set_scene_split(&scene, 8_000).is_empty());
+    }
+
+    #[test]
+    fn undo_takes_back_own_changes_only() {
+        let mut a = NoteDoc::new();
+        a.enable_drawing_undo_with_clock(|| 0);
+        a.drawing()
+            .put(&[el(
+                json!({"id": "r", "type": "rectangle", "x": 0, "index": "a0"}),
+            )])
+            .unwrap();
+        a.undo_boundary();
+        a.drawing().set(&[("r", props(json!({"x": 50})))]).unwrap();
+        a.undo_boundary();
+        // Someone else recolours it meanwhile.
+        let b = NoteDoc::from_updates([a.encode_state().as_slice()]).unwrap();
+        let theirs = b
+            .drawing()
+            .set(&[("r", props(json!({"strokeColor": "#e03131"})))])
+            .unwrap();
+        a.apply_update(&theirs).unwrap();
+        // Undo: the move is taken back, their colour stays.
+        assert!(a.undo().is_some());
+        let r = a.drawing().element("r").unwrap();
+        assert_eq!((r.x(), r.stroke_color()), (0.0, "#e03131"));
+        assert!(a.redo().is_some());
+        assert_eq!(a.drawing().element("r").unwrap().x(), 50.0);
     }
 
     #[test]

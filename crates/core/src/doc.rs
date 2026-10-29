@@ -281,6 +281,29 @@ impl NoteDoc {
         self.undo = Some(mgr);
     }
 
+    /// Track local edits of a drawing (its elements, settings and pictures)
+    /// for undo/redo, instead of a note's text.
+    pub fn enable_drawing_undo_with_clock(
+        &mut self,
+        now_ms: impl Fn() -> u64 + Send + Sync + 'static,
+    ) {
+        let opts = yrs::undo::Options {
+            // A gesture is one step: the app ends each with a boundary.
+            capture_timeout_millis: 300,
+            tracked_origins: Default::default(),
+            capture_transaction: None,
+            timestamp: Arc::new(now_ms),
+            init_undo_stack: Vec::new(),
+            init_redo_stack: Vec::new(),
+        };
+        let mut mgr = yrs::UndoManager::with_options(opts);
+        for root in crate::drawing::roots(&self.doc) {
+            mgr.expand_scope(&self.doc, &root);
+        }
+        mgr.include_origin(LOCAL_ORIGIN);
+        self.undo = Some(mgr);
+    }
+
     pub fn undo_enabled(&self) -> bool {
         self.undo.is_some()
     }

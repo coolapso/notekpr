@@ -1279,6 +1279,9 @@ pub fn new_drawing(vault: &str, folder: &str) {
         error("Quick notes hold notes: a drawing goes in a vault.");
         return;
     }
+    if !crate::drawings::has_room_in(vault) {
+        return;
+    }
     let path = match paths::normalize_drawing(&paths::join(folder, "Untitled drawing")) {
         Ok(p) => p,
         Err(e) => {

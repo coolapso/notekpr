@@ -88,6 +88,50 @@ pub async fn ensure_section() -> Option<String> {
     v
 }
 
+/// How many drawings one has — in one's Drawings and the vaults one owns,
+/// in the trash too, as the server counts them — and may have (`/me`'s
+/// limit; the count seen here, which may be newer than `/me`'s).
+pub fn usage() -> (u64, notekpr_core::protocol::Limit) {
+    step(|c| {
+        let here: u64 = c
+            .replicas
+            .iter()
+            .filter(|(v, _)| c.is_owner(v) || c.is_drawings(v))
+            .map(|(_, r)| {
+                r.index
+                    .entries()
+                    .iter()
+                    .filter(|e| {
+                        e.kind == notekpr_core::doc::EntryKind::Drawing && e.purged.is_none()
+                    })
+                    .count() as u64
+            })
+            .sum();
+        let (limit, counted) =
+            c.me.as_ref()
+                .map_or((notekpr_core::protocol::Limit::Unlimited, 0), |m| {
+                    (m.drawing_limit, m.drawing_count)
+                });
+        (here.max(counted), limit)
+    })
+}
+
+/// Whether a new drawing fits in `vault`: always in someone else's (their
+/// owner's limit isn't known here; the server says); otherwise one's own
+/// limit, telling why not.
+pub fn has_room_in(vault: &str) -> bool {
+    let own = step(|c| c.is_owner(vault) || c.is_drawings(vault));
+    if !own {
+        return true;
+    }
+    let (count, limit) = usage();
+    if notekpr_core::drawings::has_room(count, limit) {
+        return true;
+    }
+    crate::state::error(notekpr_core::drawings::full_message(limit, true));
+    false
+}
+
 /// A new drawing in the Drawings section, opened.
 pub fn new_in_section() {
     leptos::task::spawn_local(async move {

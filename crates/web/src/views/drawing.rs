@@ -1153,6 +1153,12 @@ pub fn DrawingsPage() -> impl IntoView {
             <header class="page-head">
                 <button class="icon-btn mobile-only" title="Menu" aria-label="Menu" on:click=move |_| ui.sidebar.set(true)><Icon name="menu"/></button>
                 <h1>"Drawings"</h1>
+                // How many, of how many one may have.
+                <span class="muted small drawings-count">{move || {
+                    list.track();
+                    let (count, limit) = crate::drawings::usage();
+                    notekpr_core::drawings::count_text(count, limit)
+                }}</span>
                 <button class="btn primary small" on:click=move |_| crate::drawings::new_in_section()><Icon name="plus"/>" New drawing"</button>
             </header>
             {move || {

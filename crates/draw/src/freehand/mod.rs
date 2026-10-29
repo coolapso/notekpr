@@ -357,7 +357,7 @@ mod tests {
     #[test]
     fn strokes_stay_within_their_max_radius() {
         let points: Vec<[f64; 2]> = (0..40)
-            .map(|i| [f64::from(i) * 3.0, (f64::from(i) * 0.4).sin() * 20.0])
+            .map(|i| [f64::from(i) * 3.0, js::sin(f64::from(i) * 0.4) * 20.0])
             .collect();
         for variability in [Variability::Constant, Variability::Variable] {
             let element = stroke(&points, variability);

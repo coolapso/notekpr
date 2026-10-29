@@ -48,11 +48,17 @@ fn zigzag_lines(lines: &[[Point; 2]], zo: f64, o: &mut Options) -> Vec<Op> {
             let lstart = i * 2.0 * zo;
             let lend = (i + 1.0) * 2.0 * zo;
             let dz = (2.0 * (zo * zo)).sqrt();
-            let start = [p1[0] + (lstart * alpha.cos()), p1[1] + lstart * alpha.sin()];
-            let end = [p1[0] + (lend * alpha.cos()), p1[1] + (lend * alpha.sin())];
+            let start = [
+                p1[0] + (lstart * js::cos(alpha)),
+                p1[1] + lstart * js::sin(alpha),
+            ];
+            let end = [
+                p1[0] + (lend * js::cos(alpha)),
+                p1[1] + (lend * js::sin(alpha)),
+            ];
             let middle = [
-                start[0] + dz * (alpha + PI / 4.0).cos(),
-                start[1] + dz * (alpha + PI / 4.0).sin(),
+                start[0] + dz * js::cos(alpha + PI / 4.0),
+                start[1] + dz * js::sin(alpha + PI / 4.0),
             ];
             let up = double_line_fill_ops(start[0], start[1], middle[0], middle[1], o);
             let down = double_line_fill_ops(middle[0], middle[1], end[0], end[1], o);

@@ -336,7 +336,7 @@ pub fn dark(color: &str) -> String {
     let (r, g, b) = (invert(r), invert(g), invert(b));
     // …then `hue-rotate(180deg)`.
     let a = DARK_HUE_ROTATE_DEG * std::f64::consts::PI / 180.0;
-    let (cos, sin) = (a.cos(), a.sin());
+    let (cos, sin) = (js::cos(a), js::sin(a));
     let m = [
         0.213 + cos * 0.787 - sin * 0.213,
         0.715 - cos * 0.715 - sin * 0.715,

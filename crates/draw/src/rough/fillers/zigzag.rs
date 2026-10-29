@@ -24,8 +24,8 @@ pub fn fill_polygons(polygons: &mut [Vec<Point>], o: &mut Options) -> OpSet {
     );
     let zig_zag_angle = (PI / 180.0) * o.hachure_angle;
     let mut zigzag_lines = Vec::new();
-    let dgx = gap * 0.5 * zig_zag_angle.cos();
-    let dgy = gap * 0.5 * zig_zag_angle.sin();
+    let dgx = gap * 0.5 * js::cos(zig_zag_angle);
+    let dgy = gap * 0.5 * js::sin(zig_zag_angle);
     for [p1, p2] in &lines {
         if js::truthy(line_length(&[*p1, *p2])) {
             zigzag_lines.push([[p1[0] - dgx, p1[1] + dgy], *p2]);

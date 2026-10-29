@@ -3,6 +3,7 @@
 
 use super::hachure::polygon_hachure_lines;
 use super::{gap_or_default, line_length};
+use crate::js;
 use crate::rough::renderer::double_line_fill_ops;
 use crate::rough::{Op, OpSet, OpSetType, Options, Point};
 
@@ -43,12 +44,12 @@ fn dashed_line(lines: &[[Point; 2]], o: &mut Options) -> Vec<Op> {
             let lstart = i * (offset + gap);
             let lend = lstart + offset;
             let start = [
-                p1[0] + (lstart * alpha.cos()) + (start_offset * alpha.cos()),
-                p1[1] + lstart * alpha.sin() + (start_offset * alpha.sin()),
+                p1[0] + (lstart * js::cos(alpha)) + (start_offset * js::cos(alpha)),
+                p1[1] + lstart * js::sin(alpha) + (start_offset * js::sin(alpha)),
             ];
             let end = [
-                p1[0] + (lend * alpha.cos()) + (start_offset * alpha.cos()),
-                p1[1] + (lend * alpha.sin()) + (start_offset * alpha.sin()),
+                p1[0] + (lend * js::cos(alpha)) + (start_offset * js::cos(alpha)),
+                p1[1] + (lend * js::sin(alpha)) + (start_offset * js::sin(alpha)),
             ];
             ops.extend(double_line_fill_ops(start[0], start[1], end[0], end[1], o));
             i += 1.0;

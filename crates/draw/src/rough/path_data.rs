@@ -447,8 +447,8 @@ fn deg_to_rad(degrees: f64) -> f64 {
 }
 
 fn rotate(x: f64, y: f64, angle_rad: f64) -> Point {
-    let big_x = x * angle_rad.cos() - y * angle_rad.sin();
-    let big_y = x * angle_rad.sin() + y * angle_rad.cos();
+    let big_x = x * js::cos(angle_rad) - y * js::sin(angle_rad);
+    let big_y = x * js::sin(angle_rad) + y * js::cos(angle_rad);
     [big_x, big_y]
 }
 
@@ -570,8 +570,8 @@ fn arc_points(
         } else {
             f2 = f1 - max_df;
         }
-        x2 = cx + r1 * f2.cos();
-        y2 = cy + r2 * f2.sin();
+        x2 = cx + r1 * js::cos(f2);
+        y2 = cy + r2 * js::sin(f2);
         params = arc_points(
             x2,
             y2,
@@ -586,10 +586,10 @@ fn arc_points(
         );
     }
     df = f2 - f1;
-    let c1 = f1.cos();
-    let s1 = f1.sin();
-    let c2 = f2.cos();
-    let s2 = f2.sin();
+    let c1 = js::cos(f1);
+    let s1 = js::sin(f1);
+    let c2 = js::cos(f2);
+    let s2 = js::sin(f2);
     let t = (df / 4.0).tan();
     let hx = 4.0 / 3.0 * r1 * t;
     let hy = 4.0 / 3.0 * r2 * t;

@@ -1,0 +1,505 @@
+//! A drawing as an SVG image, as Excalidraw exports it (`export.ts`,
+//! `staticSvgScene.ts`; MIT, see `PORTED.md`): the same frame, the same
+//! groups and transforms, the same path data at two decimals. Used for
+//! previews of drawings in notes, and for exporting them.
+//!
+//! Fonts aren't fetched: [`SvgOptions::font_faces`] takes the `@font-face`
+//! rules to put in the image (an image file needs its fonts inside it); an
+//! SVG shown in the page uses the page's fonts.
+
+use std::collections::HashMap;
+use std::fmt::Write;
+
+use crate::bounds;
+use crate::color;
+use crate::fonts;
+use crate::js;
+use crate::rough::{self, Drawable};
+use crate::scene::{Element, ElementType, Scene};
+use crate::shape::{self, ElementShape, RenderConfig};
+
+/// `MAX_DECIMALS_FOR_SVG_EXPORT`.
+const DECIMALS: u32 = 2;
+/// `DEFAULT_EXPORT_PADDING` (px).
+pub const DEFAULT_PADDING: f64 = 10.0;
+/// `BOUND_TEXT_PADDING`: the gap cut around an arrow's label.
+const BOUND_TEXT_PADDING: f64 = 5.0;
+/// `FRAME_STYLE`.
+const FRAME_RADIUS: f64 = 8.0;
+const FRAME_STROKE: &str = "#bbb";
+const FRAME_STROKE_WIDTH: f64 = 2.0;
+
+/// How to export.
+#[derive(Clone, Debug)]
+pub struct SvgOptions {
+    /// Excalidraw's dark mode: colours inverted and turned.
+    pub dark: bool,
+    /// Paint the drawing's canvas colour behind it.
+    pub background: bool,
+    /// Space around the drawing (px).
+    pub padding: f64,
+    /// `@font-face` rules to put in the image.
+    pub font_faces: Option<String>,
+    /// Start with `<?xml …?>` and a doctype, as a file does.
+    pub standalone: bool,
+}
+
+impl Default for SvgOptions {
+    fn default() -> Self {
+        Self {
+            dark: false,
+            background: true,
+            padding: DEFAULT_PADDING,
+            font_faces: None,
+            standalone: false,
+        }
+    }
+}
+
+fn n(x: f64) -> String {
+    js::number_to_string(x)
+}
+
+/// Text for XML: `&`, `<`, `>` (and quotes in attributes) escaped.
+fn esc(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+/// `isRTL`: whether a text has letters written right to left.
+fn is_rtl(text: &str) -> bool {
+    text.chars().any(|c| {
+        matches!(c as u32,
+            0x0591..=0x07FF | 0xFB1D..=0xFDFD | 0xFE70..=0xFEFC)
+    })
+}
+
+/// A rough shape as `<path>`s at the export's precision.
+fn rough_paths(d: &Drawable) -> String {
+    let mut d = d.clone();
+    d.options.fixed_decimal_place_digits = Some(DECIMALS);
+    rough::svg::draw(&d)
+}
+
+struct Renderer<'a> {
+    scene: &'a Scene,
+    elements: HashMap<&'a str, &'a Element>,
+    cfg: RenderConfig,
+    out: String,
+    /// Frames whose children are clipped to them.
+    frames: HashMap<&'a str, &'a Element>,
+}
+
+impl<'a> Renderer<'a> {
+    /// The opacity an element is drawn with (its frame's too).
+    fn opacity(&self, e: &Element) -> f64 {
+        let frame = e
+            .frame_id()
+            .and_then(|f| self.frames.get(f))
+            .map_or(100.0, |f| f.opacity());
+        (frame * e.opacity()) / 10000.0
+    }
+
+    fn opacity_attrs(o: f64) -> String {
+        if o != 1.0 {
+            format!(r#" stroke-opacity="{0}" fill-opacity="{0}""#, n(o))
+        } else {
+            String::new()
+        }
+    }
+
+    /// Wraps an element's markup in its frame's clipping and its link.
+    fn add(&mut self, e: &Element, markup: String) {
+        let clipped = match e.frame_id().filter(|f| self.frames.contains_key(f)) {
+            Some(f) => format!(r#"<g clip-path="url(#{})">{markup}</g>"#, esc(f)),
+            None => markup,
+        };
+        match e.link().filter(|l| !l.trim().is_empty()) {
+            Some(link) => {
+                let _ = write!(self.out, r#"<a href="{}">{clipped}</a>"#, esc(link.trim()));
+            }
+            None => self.out.push_str(&clipped),
+        }
+    }
+
+    fn element(&mut self, e: &Element, offset_x: f64, offset_y: f64) {
+        let [x1, y1, x2, y2, _, _] = bounds::absolute_coords(e);
+        let cx = (x2 - x1) / 2.0 - (e.x() - x1);
+        let cy = (y2 - y1) / 2.0 - (e.y() - y1);
+        let degree = (180.0 * e.angle()) / std::f64::consts::PI;
+        let transform = format!(
+            "translate({} {}) rotate({} {} {})",
+            n(offset_x),
+            n(offset_y),
+            n(degree),
+            n(cx),
+            n(cy)
+        );
+        let opacity = self.opacity(e);
+        let dark = self.cfg.dark;
+        match e.kind() {
+            ElementType::Rectangle | ElementType::Diamond | ElementType::Ellipse => {
+                if let ElementShape::Rough(shapes) = shape::element_shape(e, &self.cfg) {
+                    let paths: String = shapes.iter().map(rough_paths).collect();
+                    let markup = format!(
+                        r#"<g{} stroke-linecap="round" transform="{transform}">{paths}</g>"#,
+                        Self::opacity_attrs(opacity)
+                    );
+                    self.add(e, markup);
+                }
+            }
+            ElementType::Iframe | ElementType::Embeddable => {
+                // Only the placeholder: notekpr never loads what's embedded.
+                if let ElementShape::Rough(shapes) = shape::element_shape(e, &self.cfg) {
+                    let paths: String = shapes.iter().map(rough_paths).collect();
+                    let o = e.opacity() / 100.0;
+                    let markup = format!(
+                        r#"<g{} stroke-linecap="round" transform="{transform}">{paths}</g>"#,
+                        Self::opacity_attrs(o)
+                    );
+                    self.add(e, markup);
+                }
+            }
+            ElementType::Line | ElementType::Arrow => {
+                let ElementShape::Rough(shapes) = shape::element_shape(e, &self.cfg) else {
+                    return;
+                };
+                let label = self.bound_text(e);
+                let mut mask = String::from("<mask></mask>");
+                let mut group = String::from(r#"<g stroke-linecap="round">"#);
+                if let Some(t) = label {
+                    // A hole in the line where its label is.
+                    let w = e.width() + 100.0 + offset_x;
+                    let h = e.height() + 100.0 + offset_y;
+                    let mx = offset_x + t.x() - e.x() - BOUND_TEXT_PADDING;
+                    let my = offset_y + t.y() - e.y() - BOUND_TEXT_PADDING;
+                    mask = format!(
+                        r##"<mask id="mask-{id}" maskUnits="userSpaceOnUse" x="0" y="0" width="{w}" height="{h}"><rect x="0" y="0" fill="#fff" width="{w}" height="{h}"></rect><rect x="{mx}" y="{my}" fill="#000" width="{tw}" height="{th}" opacity="1"></rect></mask>"##,
+                        id = esc(e.id()),
+                        w = n(w),
+                        h = n(h),
+                        mx = n(mx),
+                        my = n(my),
+                        tw = n(t.width() + BOUND_TEXT_PADDING * 2.0),
+                        th = n(t.height() + BOUND_TEXT_PADDING * 2.0),
+                    );
+                    group = format!(
+                        r#"<g mask="url(#mask-{})" stroke-linecap="round">"#,
+                        esc(e.id())
+                    );
+                }
+                let filled_loop = e.kind() == ElementType::Line
+                    && shape::is_path_a_loop(&e.points())
+                    && e.background_color() != "transparent";
+                for s in &shapes {
+                    let _ = write!(
+                        group,
+                        r#"<g{} transform="{transform}"{}>{}</g>"#,
+                        Self::opacity_attrs(opacity),
+                        if filled_loop {
+                            r#" fill-rule="evenodd""#
+                        } else {
+                            ""
+                        },
+                        rough_paths(s)
+                    );
+                }
+                group.push_str("</g>");
+                self.add(e, group);
+                self.out.push_str(&mask);
+            }
+            ElementType::Freedraw => {
+                let ElementShape::Freedraw { fill, outline } = shape::element_shape(e, &self.cfg)
+                else {
+                    return;
+                };
+                let mut inner = String::new();
+                if let Some(fill) = fill {
+                    inner.push_str(&rough_paths(&fill));
+                }
+                let _ = write!(
+                    inner,
+                    r#"<path fill="{}" d="{}"></path>"#,
+                    esc(&color::themed(e.stroke_color(), dark)),
+                    outline
+                );
+                let markup = format!(
+                    r#"<g{} transform="{transform}" stroke="none">{inner}</g>"#,
+                    Self::opacity_attrs(opacity)
+                );
+                self.add(e, markup);
+            }
+            ElementType::Text => {
+                let text = e.text().replace("\r\n", "\n").replace('\r', "\n");
+                let line_height = e.font_size() * e.line_height();
+                let h_offset = match e.text_align() {
+                    "center" => e.width() / 2.0,
+                    "right" => e.width(),
+                    _ => 0.0,
+                };
+                let v_offset = fonts::baseline_offset(e.font_family(), e.font_size(), line_height);
+                let direction = if is_rtl(&text) { "rtl" } else { "ltr" };
+                let anchor = match e.text_align() {
+                    "center" => "middle",
+                    "right" => "end",
+                    _ if direction == "rtl" => "end",
+                    _ => "start",
+                };
+                let family = esc(&fonts::css_family(e.font_family()));
+                let fill = esc(&color::themed(e.stroke_color(), dark));
+                let mut markup = format!(
+                    r#"<g{} transform="{transform}">"#,
+                    Self::opacity_attrs(opacity)
+                );
+                for (i, line) in text.split('\n').enumerate() {
+                    let _ = write!(
+                        markup,
+                        r#"<text x="{}" y="{}" font-family="{family}" font-size="{}px" fill="{fill}" text-anchor="{anchor}" style="white-space: pre;" direction="{direction}" dominant-baseline="alphabetic">{}</text>"#,
+                        n(h_offset),
+                        n(i as f64 * line_height + v_offset),
+                        n(e.font_size()),
+                        esc(line)
+                    );
+                }
+                markup.push_str("</g>");
+                self.add(e, markup);
+            }
+            ElementType::Image => {
+                let Some(data_url) = e
+                    .file_id()
+                    .and_then(|id| self.scene.files.get(id))
+                    .and_then(|f| f.get("dataURL"))
+                    .and_then(|d| d.as_str())
+                else {
+                    return;
+                };
+                let (w, h) = (js::round(e.width()), js::round(e.height()));
+                let scale = e.get("scale").and_then(|s| s.as_array()).map(|s| {
+                    (
+                        s.first().and_then(|v| v.as_f64()).unwrap_or(1.0),
+                        s.get(1).and_then(|v| v.as_f64()).unwrap_or(1.0),
+                    )
+                });
+                let flip = match scale {
+                    Some((sx, sy)) if sx != 1.0 || sy != 1.0 => format!(
+                        r#" transform="translate({cx} {cy}) scale({} {}) translate({} {})""#,
+                        n(sx),
+                        n(sy),
+                        n(-cx),
+                        n(-cy),
+                        cx = n(cx),
+                        cy = n(cy),
+                    ),
+                    _ => String::new(),
+                };
+                let mut markup = format!(
+                    r#"<g transform="{transform}"><image href="{}" preserveAspectRatio="none" width="{}" height="{}" opacity="{}"{flip}></image></g>"#,
+                    esc(data_url),
+                    n(w),
+                    n(h),
+                    n(opacity)
+                );
+                if e.roundness().is_some() {
+                    let r = shape::corner_radius(js::min(e.width(), e.height()), e);
+                    let id = format!("image-clipPath-{}", esc(e.id()));
+                    markup = format!(
+                        r#"<clipPath id="{id}" clipPathUnits="userSpaceOnUse"><rect x="0" y="0" width="{}" height="{}" rx="{r}" ry="{r}"></rect></clipPath><g clip-path="url(#{id})">{markup}</g>"#,
+                        n(e.width()),
+                        n(e.height()),
+                        r = n(r),
+                    );
+                }
+                self.add(e, markup);
+            }
+            ElementType::Frame | ElementType::MagicFrame => {
+                let markup = format!(
+                    r#"<rect transform="{transform}" width="{}px" height="{}px" rx="{r}" ry="{r}" fill="none" stroke="{}" stroke-width="{}"></rect>"#,
+                    n(e.width()),
+                    n(e.height()),
+                    esc(&color::themed(FRAME_STROKE, dark)),
+                    n(FRAME_STROKE_WIDTH),
+                    r = n(FRAME_RADIUS),
+                );
+                self.add(e, markup);
+            }
+            // Sticky notes are drawn by the editor's own code (to come);
+            // newer kinds aren't drawn.
+            _ => {}
+        }
+    }
+
+    /// The label of a shape or arrow, if it has one there.
+    fn bound_text(&self, e: &Element) -> Option<&'a Element> {
+        e.bound_elements()
+            .iter()
+            .filter(|b| b.kind == "text")
+            .find_map(|b| self.elements.get(b.id.as_str()).copied())
+            .filter(|t| !t.is_deleted())
+    }
+}
+
+/// The drawing as an SVG image.
+pub fn export(scene: &Scene, opts: &SvgOptions) -> String {
+    let visible: Vec<&Element> = scene.visible().collect();
+    let elements: HashMap<&str, &Element> = visible.iter().map(|e| (e.id(), *e)).collect();
+    let frames: HashMap<&str, &Element> = visible
+        .iter()
+        .filter(|e| matches!(e.kind(), ElementType::Frame | ElementType::MagicFrame))
+        .map(|e| (e.id(), *e))
+        .collect();
+    let [min_x, min_y, max_x, max_y] = bounds::common_bounds(bounds::root_elements(scene));
+    let (width, height) = ((min_x - max_x).abs(), (min_y - max_y).abs());
+    let pad = opts.padding;
+    let (w, h) = (width + pad * 2.0, height + pad * 2.0);
+    let (offset_x, offset_y) = (-(min_x - pad), -(min_y - pad));
+    let background = scene.background().to_string();
+
+    let mut out = String::new();
+    if opts.standalone {
+        out.push_str(r#"<?xml version="1.0" standalone="no"?>"#);
+        out.push('\n');
+        out.push_str(r#"<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">"#);
+        out.push('\n');
+    }
+    let _ = write!(
+        out,
+        r#"<svg version="1.1" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {w} {h}" width="{w}" height="{h}"><!-- svg-source:excalidraw --><metadata></metadata><defs>"#,
+        w = n(w),
+        h = n(h)
+    );
+    for f in frames.values() {
+        let [x1, y1, x2, y2, _, _] = bounds::absolute_coords(f);
+        let cx = (x2 - x1) / 2.0 - (f.x() - x1);
+        let cy = (y2 - y1) / 2.0 - (f.y() - y1);
+        let _ = write!(
+            out,
+            r#"<clipPath id="{}"><rect transform="translate({} {}) rotate({} {} {})" width="{}" height="{}" rx="{r}" ry="{r}"></rect></clipPath>"#,
+            esc(f.id()),
+            n(f.x() + offset_x),
+            n(f.y() + offset_y),
+            n(f.angle()),
+            n(cx),
+            n(cy),
+            n(f.width()),
+            n(f.height()),
+            r = n(FRAME_RADIUS),
+        );
+    }
+    let _ = write!(
+        out,
+        "<style class=\"style-fonts\">\n      {}</style></defs>",
+        opts.font_faces.as_deref().unwrap_or_default()
+    );
+    if opts.background && background != "transparent" {
+        let _ = write!(
+            out,
+            r#"<rect x="0" y="0" width="{w}" height="{h}" fill="{}"></rect>"#,
+            esc(&color::themed(&background, opts.dark)),
+            w = n(w),
+            h = n(h)
+        );
+    }
+    let mut r = Renderer {
+        scene,
+        elements,
+        cfg: RenderConfig {
+            dark: opts.dark,
+            exporting: true,
+            canvas_background: background.clone(),
+        },
+        out,
+        frames,
+    };
+    let iframe_like =
+        |e: &Element| matches!(e.kind(), ElementType::Iframe | ElementType::Embeddable);
+    for e in visible.iter().filter(|e| !iframe_like(e)) {
+        // A label is drawn with what it labels.
+        if e.kind() == ElementType::Text
+            && e.container_id().is_some_and(|c| r.elements.contains_key(c))
+        {
+            continue;
+        }
+        r.element(e, e.x() + offset_x, e.y() + offset_y);
+        if let Some(t) = r.bound_text(e) {
+            r.element(t, t.x() + offset_x, t.y() + offset_y);
+        }
+    }
+    for e in visible.iter().filter(|e| iframe_like(e)) {
+        r.element(e, e.x() + offset_x, e.y() + offset_y);
+    }
+    r.out.push_str("</svg>");
+    r.out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::file::read_drawing;
+    use crate::restore::Ids;
+
+    const DRAWING: &str = include_str!("../tests/fixtures/example.excalidraw");
+    const EXPORT: &str = include_str!("../tests/fixtures/example.svg");
+
+    /// What follows the fonts: the elements.
+    fn body(svg: &str) -> &str {
+        &svg[svg.find("</style></defs>").unwrap()..]
+    }
+
+    #[test]
+    fn same_as_excalidraws_export() {
+        let scene = read_drawing(DRAWING, &mut Ids::new(1)).unwrap().scene;
+        let ours = export(
+            &scene,
+            &SvgOptions {
+                dark: true,
+                standalone: true,
+                ..SvgOptions::default()
+            },
+        );
+        // The frame.
+        let head = |s: &str| s[..s.find("<defs>").unwrap()].to_string();
+        assert_eq!(head(&ours), head(EXPORT));
+        // Every element, group by group, path by path.
+        let (a, b) = (body(&ours), body(EXPORT));
+        if a != b {
+            let at = a
+                .bytes()
+                .zip(b.bytes())
+                .position(|(x, y)| x != y)
+                .unwrap_or(a.len().min(b.len()));
+            let from = at.saturating_sub(300);
+            panic!(
+                "differs at byte {at}:\nours:  {}\ntheirs: {}",
+                &a[from..(at + 200).min(a.len())],
+                &b[from..(at + 200).min(b.len())]
+            );
+        }
+    }
+
+    #[test]
+    fn light_and_without_background() {
+        let scene = read_drawing(DRAWING, &mut Ids::new(1)).unwrap().scene;
+        let light = export(&scene, &SvgOptions::default());
+        assert!(light.starts_with("<svg"));
+        assert!(light.contains(r##"fill="#ffffff""##));
+        assert!(light.contains(r##"stroke="#1e1e1e""##));
+        let bare = export(
+            &scene,
+            &SvgOptions {
+                background: false,
+                ..SvgOptions::default()
+            },
+        );
+        assert!(!bare.contains(r##"fill="#ffffff""##));
+        assert!(export(&Scene::default(), &SvgOptions::default()).ends_with("</svg>"));
+    }
+}

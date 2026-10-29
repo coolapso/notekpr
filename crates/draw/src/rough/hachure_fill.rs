@@ -13,8 +13,8 @@ fn rotate_points(points: &mut [Point], center: Point, degrees: f64) {
     }
     let [cx, cy] = center;
     let angle = (PI / 180.0) * degrees;
-    let cos = angle.cos();
-    let sin = angle.sin();
+    let cos = js::cos(angle);
+    let sin = js::sin(angle);
     for p in points {
         let [x, y] = *p;
         p[0] = ((x - cx) * cos) - ((y - cy) * sin) + cx;

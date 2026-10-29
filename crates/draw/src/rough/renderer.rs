@@ -220,16 +220,29 @@ pub fn arc(
     }
     if closed {
         if rough_closure {
-            let to_start =
-                double_line(cx, cy, cx + rx * strt.cos(), cy + ry * strt.sin(), o, false);
-            let to_stop = double_line(cx, cy, cx + rx * stp.cos(), cy + ry * stp.sin(), o, false);
+            let to_start = double_line(
+                cx,
+                cy,
+                cx + rx * js::cos(strt),
+                cy + ry * js::sin(strt),
+                o,
+                false,
+            );
+            let to_stop = double_line(
+                cx,
+                cy,
+                cx + rx * js::cos(stp),
+                cy + ry * js::sin(stp),
+                o,
+                false,
+            );
             ops.extend(to_start);
             ops.extend(to_stop);
         } else {
             ops.push(Op::new(OpType::LineTo, vec![cx, cy]));
             ops.push(Op::new(
                 OpType::LineTo,
-                vec![cx + rx * strt.cos(), cy + ry * strt.sin()],
+                vec![cx + rx * js::cos(strt), cy + ry * js::sin(strt)],
             ));
         }
     }
@@ -347,14 +360,14 @@ pub fn pattern_fill_arc(
     let mut points = Vec::new();
     let mut angle = strt;
     while angle <= stp {
-        points.push([cx + rx * angle.cos(), cy + ry * angle.sin()]);
+        points.push([cx + rx * js::cos(angle), cy + ry * js::sin(angle)]);
         if increment.is_nan() || increment <= 0.0 {
             // rough would loop forever on a step that doesn't move.
             break;
         }
         angle += increment;
     }
-    points.push([cx + rx * stp.cos(), cy + ry * stp.sin()]);
+    points.push([cx + rx * js::cos(stp), cy + ry * js::sin(stp)]);
     points.push([cx, cy]);
     pattern_fill_polygons(&mut [points], o)
 }
@@ -617,7 +630,7 @@ fn compute_ellipse_points(
     let mut all_points = Vec::new();
     if core_only {
         let increment = increment / 4.0;
-        all_points.push([cx + rx * (-increment).cos(), cy + ry * (-increment).sin()]);
+        all_points.push([cx + rx * js::cos(-increment), cy + ry * js::sin(-increment)]);
         let mut angle = 0.0;
         while angle <= PI * 2.0 {
             let p = [cx + rx * f64::cos(angle), cy + ry * f64::sin(angle)];
@@ -630,17 +643,17 @@ fn compute_ellipse_points(
             angle += increment;
         }
         all_points.push([cx + rx * f64::cos(0.0), cy + ry * f64::sin(0.0)]);
-        all_points.push([cx + rx * increment.cos(), cy + ry * increment.sin()]);
+        all_points.push([cx + rx * js::cos(increment), cy + ry * js::sin(increment)]);
     } else {
         let rad_offset = offset_opt(0.5, o, 1.0) - (PI / 2.0);
-        let x = offset_opt(offset, o, 1.0) + cx + 0.9 * rx * (rad_offset - increment).cos();
-        let y = offset_opt(offset, o, 1.0) + cy + 0.9 * ry * (rad_offset - increment).sin();
+        let x = offset_opt(offset, o, 1.0) + cx + 0.9 * rx * js::cos(rad_offset - increment);
+        let y = offset_opt(offset, o, 1.0) + cy + 0.9 * ry * js::sin(rad_offset - increment);
         all_points.push([x, y]);
         let end_angle = PI * 2.0 + rad_offset - 0.01;
         let mut angle = rad_offset;
         while angle < end_angle {
-            let x = offset_opt(offset, o, 1.0) + cx + rx * angle.cos();
-            let y = offset_opt(offset, o, 1.0) + cy + ry * angle.sin();
+            let x = offset_opt(offset, o, 1.0) + cx + rx * js::cos(angle);
+            let y = offset_opt(offset, o, 1.0) + cy + ry * js::sin(angle);
             core_points.push([x, y]);
             all_points.push([x, y]);
             if increment.is_nan() || increment <= 0.0 {
@@ -649,15 +662,15 @@ fn compute_ellipse_points(
             angle += increment;
         }
         let x =
-            offset_opt(offset, o, 1.0) + cx + rx * (rad_offset + PI * 2.0 + overlap * 0.5).cos();
+            offset_opt(offset, o, 1.0) + cx + rx * js::cos(rad_offset + PI * 2.0 + overlap * 0.5);
         let y =
-            offset_opt(offset, o, 1.0) + cy + ry * (rad_offset + PI * 2.0 + overlap * 0.5).sin();
+            offset_opt(offset, o, 1.0) + cy + ry * js::sin(rad_offset + PI * 2.0 + overlap * 0.5);
         all_points.push([x, y]);
-        let x = offset_opt(offset, o, 1.0) + cx + 0.98 * rx * (rad_offset + overlap).cos();
-        let y = offset_opt(offset, o, 1.0) + cy + 0.98 * ry * (rad_offset + overlap).sin();
+        let x = offset_opt(offset, o, 1.0) + cx + 0.98 * rx * js::cos(rad_offset + overlap);
+        let y = offset_opt(offset, o, 1.0) + cy + 0.98 * ry * js::sin(rad_offset + overlap);
         all_points.push([x, y]);
-        let x = offset_opt(offset, o, 1.0) + cx + 0.9 * rx * (rad_offset + overlap * 0.5).cos();
-        let y = offset_opt(offset, o, 1.0) + cy + 0.9 * ry * (rad_offset + overlap * 0.5).sin();
+        let x = offset_opt(offset, o, 1.0) + cx + 0.9 * rx * js::cos(rad_offset + overlap * 0.5);
+        let y = offset_opt(offset, o, 1.0) + cy + 0.9 * ry * js::sin(rad_offset + overlap * 0.5);
         all_points.push([x, y]);
     }
     (all_points, core_points)
@@ -678,13 +691,13 @@ fn arc_ops(
 ) -> Vec<Op> {
     let rad_offset = strt + offset_opt(0.1, o, 1.0);
     let mut points = Vec::new();
-    let x = offset_opt(offset, o, 1.0) + cx + 0.9 * rx * (rad_offset - increment).cos();
-    let y = offset_opt(offset, o, 1.0) + cy + 0.9 * ry * (rad_offset - increment).sin();
+    let x = offset_opt(offset, o, 1.0) + cx + 0.9 * rx * js::cos(rad_offset - increment);
+    let y = offset_opt(offset, o, 1.0) + cy + 0.9 * ry * js::sin(rad_offset - increment);
     points.push([x, y]);
     let mut angle = rad_offset;
     while angle <= stp {
-        let x = offset_opt(offset, o, 1.0) + cx + rx * angle.cos();
-        let y = offset_opt(offset, o, 1.0) + cy + ry * angle.sin();
+        let x = offset_opt(offset, o, 1.0) + cx + rx * js::cos(angle);
+        let y = offset_opt(offset, o, 1.0) + cy + ry * js::sin(angle);
         points.push([x, y]);
         if increment.is_nan() || increment <= 0.0 {
             // rough would loop forever on a step that doesn't move.
@@ -692,8 +705,8 @@ fn arc_ops(
         }
         angle += increment;
     }
-    points.push([cx + rx * stp.cos(), cy + ry * stp.sin()]);
-    points.push([cx + rx * stp.cos(), cy + ry * stp.sin()]);
+    points.push([cx + rx * js::cos(stp), cy + ry * js::sin(stp)]);
+    points.push([cx + rx * js::cos(stp), cy + ry * js::sin(stp)]);
     curve_ops(&points, o)
 }
 

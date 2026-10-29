@@ -288,7 +288,8 @@ see membership and key events in the vault audit
   the same profile directory, so a copy of that directory can be decrypted
   (moving it to the OS keyring is planned).
 * **Anyone with the gateway token** (or able to run programs as the gateway's
-  user) can read and, unless `--read-only`, change the exposed vaults. Keep the
+  user) can read and, unless `--read-only`, change the exposed vaults (and, on
+  a person's own gateway, read and add to their saved shapes). Keep the
   default loopback address; restrict with `--vault` and `--read-only`.
 * **Prompt injection**: an agent reading notes may encounter instructions
   written by other members. Share only what the agent needs, prefer viewer

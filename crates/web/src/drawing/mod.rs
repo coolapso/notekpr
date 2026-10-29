@@ -245,6 +245,23 @@ impl Board {
             &mut self.cache.borrow_mut(),
             Some(&self.editor.borrow()),
         );
+        // A picture being cropped: all of it shows, faded, around the crop.
+        if let Some((id, _)) = self.editor.borrow().cropping.clone()
+            && let Some(e) = scene.element(&id)
+            && let Some(img) = e
+                .file_id()
+                .and_then(|f| scene.files.get(f))
+                .and_then(|entry| drawings::picture(&self.vault, entry, || {}))
+        {
+            canvas::draw_cropping(
+                &ctx,
+                e,
+                &img,
+                &view,
+                self.pixel_ratio.get(),
+                drawings::is_dark(),
+            );
+        }
         canvas::draw_overlay(
             &ctx,
             &scene,

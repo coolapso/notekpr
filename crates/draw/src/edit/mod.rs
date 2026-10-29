@@ -8,6 +8,7 @@
 //! a preview, at its end for good.
 
 pub mod binding;
+pub mod crop;
 pub mod elbow;
 pub mod frame;
 pub mod hit;
@@ -244,6 +245,16 @@ enum Gesture {
         insert: Option<(usize, Point)>,
         keep: bool,
     },
+    /// A picture being cropped: a handle dragged (`crop::crop`).
+    Crop {
+        original: Element,
+        handle: Handle,
+    },
+    /// A picture being cropped: moved within its crop.
+    CropPan {
+        original: Element,
+        start: Point,
+    },
     /// An arrow's label dragged along it.
     Label {
         id: String,
@@ -295,6 +306,8 @@ pub struct Editor {
     zoom: f64,
     /// Editing the points of a line or arrow.
     pub line_editor: Option<LineEditor>,
+    /// The picture being cropped, and its own size in pixels.
+    pub cropping: Option<(String, (f64, f64))>,
     /// Where an arrow's dragged end will attach.
     pub bind_hover: Option<BindHover>,
     /// Snapping to the grid and to other elements, and what snaps.
@@ -326,6 +339,7 @@ impl Default for Editor {
             measure: guess_width,
             zoom: 1.0,
             line_editor: None,
+            cropping: None,
             bind_hover: None,
             snap: snap::Snapping::default(),
             frame_to_highlight: None,
@@ -400,6 +414,7 @@ impl Editor {
         self.tool = tool;
         self.gesture = None;
         self.line_editor = None;
+        self.cropping = None;
         self.snap.clear();
         self.frame_to_highlight = None;
         if tool != Tool::Selection {
@@ -599,6 +614,28 @@ impl Editor {
         }
     }
 
+    /// The selected picture, alone and not locked (Enter or a double click
+    /// crops it: the app knows its size, `start_crop`).
+    pub fn single_picture<'a>(&self, scene: &'a Scene) -> Option<&'a Element> {
+        match self.selected(scene).as_slice() {
+            [e] if e.kind() == ElementType::Image && !e.is_locked() => Some(*e),
+            _ => None,
+        }
+    }
+
+    /// Crops the selected picture, whose own size is `natural` (pixels),
+    /// until Enter, Escape or a click elsewhere. Whether it does.
+    pub fn start_crop(&mut self, scene: &Scene, natural: (f64, f64)) -> bool {
+        let Some(e) = self.single_picture(scene) else {
+            return false;
+        };
+        // A picture cropped before knows its size.
+        let natural = crop::crop_of(e).map_or(natural, |c| (c.natural_width, c.natural_height));
+        self.cropping = Some((e.id().to_string(), natural));
+        self.line_editor = None;
+        true
+    }
+
     /// Starts or ends editing the points of the selected line or arrow one
     /// by one (Excalidraw's line editor; not elbow arrows). Whether it did.
     pub fn toggle_line_editor(&mut self, scene: &Scene) -> bool {
@@ -681,6 +718,32 @@ impl Editor {
         match self.tool {
             Tool::Hand | Tool::Laser | Tool::Image => {}
             Tool::Selection => {
+                // A picture being cropped: its handles crop it, dragging
+                // inside moves it within its crop; elsewhere ends it.
+                if let Some((id, _)) = self.cropping.clone() {
+                    if let Some(e) = scene.element(&id).filter(|e| !e.is_deleted()).cloned() {
+                        let f = transform::frame(&[&e]);
+                        if let Some(h) = f
+                            .and_then(|f| transform::handle_at(&f, p, zoom))
+                            .filter(|h| *h != Handle::Rotation)
+                        {
+                            self.gesture = Some(Gesture::Crop {
+                                original: e,
+                                handle: h,
+                            });
+                            return out;
+                        }
+                        let [lx, ly] = hit::local(&e, p);
+                        if lx >= 0.0 && ly >= 0.0 && lx <= e.width() && ly <= e.height() {
+                            self.gesture = Some(Gesture::CropPan {
+                                original: e,
+                                start: p,
+                            });
+                            return out;
+                        }
+                    }
+                    self.cropping = None;
+                }
                 // The middle of a segment of the elbow arrow selected.
                 if let [a] = self.selected(scene).as_slice()
                     && a.is_elbowed()
@@ -1221,6 +1284,20 @@ impl Editor {
                     out.changed.push(e);
                 }
             }
+            Gesture::Crop { original, handle } => {
+                let natural = self
+                    .cropping
+                    .as_ref()
+                    .map_or((original.width(), original.height()), |(_, n)| *n);
+                let mut c = crop::crop(original, *handle, natural, p, mods.shift, mods.alt);
+                bump(&mut c, rng);
+                out.changed.push(c);
+            }
+            Gesture::CropPan { original, start } => {
+                let mut c = crop::pan(original, [p[0] - start[0], p[1] - start[1]]);
+                bump(&mut c, rng);
+                out.changed.push(c);
+            }
             Gesture::Label {
                 id,
                 arrow,
@@ -1412,6 +1489,7 @@ impl Editor {
                 }
             }
             Gesture::Label { moved, .. } => out.done = moved,
+            Gesture::Crop { .. } | Gesture::CropPan { .. } => out.done = true,
             Gesture::Resizing { .. } => {
                 for mut c in self.frames_resized(scene) {
                     bump(&mut c, rng);
@@ -1567,8 +1645,9 @@ impl Editor {
         self.bind_hover = None;
         self.snap.clear();
         self.frame_to_highlight = None;
-        // Editing a line's points ends first; the line stays selected.
-        if self.line_editor.take().is_none() {
+        // Cropping or editing a line's points ends first; what was being
+        // changed stays selected.
+        if self.cropping.take().is_none() && self.line_editor.take().is_none() {
             self.selection.clear();
         }
         Output::default()
@@ -1742,7 +1821,7 @@ impl Editor {
     /// points of the selected line (an arrow's with Ctrl), or ends editing
     /// them.
     pub fn enter(&mut self, scene: &Scene, ctrl: bool, rng: &mut dyn Random) -> Output {
-        if self.line_editor.take().is_some() {
+        if self.line_editor.take().is_some() || self.cropping.take().is_some() {
             return Output::default();
         }
         if let Some(line) = self.single_linear(scene)
@@ -1866,6 +1945,7 @@ impl Editor {
 
     pub fn select_all(&mut self, scene: &Scene) {
         self.line_editor = None;
+        self.cropping = None;
         self.selection = scene
             .visible()
             .filter(|e| e.container_id().is_none() && !e.is_locked())

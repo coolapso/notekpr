@@ -250,6 +250,38 @@ fn draw_image(
     );
 }
 
+/// A picture being cropped: the whole of it faded, then the part the crop
+/// keeps over it (`renderElement`'s cropping).
+pub fn draw_cropping(
+    ctx: &CanvasRenderingContext2d,
+    e: &Element,
+    img: &web_sys::HtmlImageElement,
+    view: &Viewport,
+    pixel_ratio: f64,
+    dark: bool,
+) {
+    let s = pixel_ratio * view.zoom;
+    let at = |e: &Element| {
+        ctx.set_transform(s, 0.0, 0.0, s, view.scroll_x * s, view.scroll_y * s)
+            .ok();
+        let (cx, cy) = (e.x() + e.width() / 2.0, e.y() + e.height() / 2.0);
+        let _ = ctx.translate(cx, cy);
+        let _ = ctx.rotate(e.angle());
+        let _ = ctx.translate(-cx, -cy);
+        let _ = ctx.translate(e.x(), e.y());
+    };
+    let whole = notekpr_draw::edit::crop::uncropped(e);
+    ctx.save();
+    at(&whole);
+    ctx.set_global_alpha(0.3);
+    draw_image(ctx, &whole, Some(img), dark);
+    ctx.restore();
+    ctx.save();
+    at(e);
+    draw_image(ctx, e, Some(img), dark);
+    ctx.restore();
+}
+
 /// How a drawing is drawn on a canvas.
 pub struct Look<'a> {
     /// The canvas's pixels per CSS pixel.

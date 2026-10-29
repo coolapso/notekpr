@@ -1220,3 +1220,40 @@ fn a_line_made_by_clicks_follows_the_pointer_between_them() {
         [[0.0, 0.0], [100.0, 50.0], [200.0, 0.0]]
     );
 }
+
+#[test]
+fn a_picture_is_cropped_by_its_handles_and_moved_within() {
+    let (mut ed, mut scene, mut rng) = (Editor::default(), Scene::default(), Seq(0));
+    let pic = new::image(0.0, 0.0, 200.0, 100.0, "f1", &ed.style, &mut rng);
+    let o = ed.add_on_top(&scene, pic, &mut rng);
+    apply(&mut scene, &o);
+    let id = ed.selection[0].clone();
+    // A 400 × 200 picture shown at half its size.
+    assert!(ed.start_crop(&scene, (400.0, 200.0)));
+    drag(
+        &mut ed,
+        &mut scene,
+        [200.0, 50.0],
+        [120.0, 50.0],
+        Mods::default(),
+        &mut rng,
+    );
+    let e = scene.element(&id).unwrap();
+    assert_eq!((e.x(), e.width()), (0.0, 120.0));
+    assert_eq!(crop::crop_of(e).unwrap().width, 240.0);
+    // Dragged inside: the picture moves within the crop.
+    drag(
+        &mut ed,
+        &mut scene,
+        [60.0, 50.0],
+        [20.0, 50.0],
+        Mods::default(),
+        &mut rng,
+    );
+    let e = scene.element(&id).unwrap();
+    assert_eq!((e.x(), crop::crop_of(e).unwrap().x), (0.0, 80.0));
+    // Enter ends it: the handles resize again.
+    ed.enter(&scene, false, &mut rng);
+    assert!(ed.cropping.is_none());
+    assert_eq!(ed.selection, std::slice::from_ref(&id));
+}

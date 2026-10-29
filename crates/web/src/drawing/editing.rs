@@ -307,6 +307,18 @@ impl Board {
         if !self.writable() {
             return;
         }
+        // A double click on the selected picture crops it.
+        let on_picture = {
+            let scene = self.scene();
+            let q = self.view.get().to_scene(p);
+            self.editor
+                .borrow()
+                .single_picture(&scene)
+                .is_some_and(|e| notekpr_draw::edit::hit::hits(e, q, self.view.get().zoom))
+        };
+        if on_picture && self.crop_picture() {
+            return;
+        }
         self.boundary();
         let scene = self.scene();
         let view = self.view.get();
@@ -328,6 +340,9 @@ impl Board {
     /// Enter: edits the selected text or shape's label, or the points of
     /// the selected line (an arrow's with Ctrl).
     pub fn enter(self: &Rc<Self>, ctrl: bool) {
+        if self.crop_picture() {
+            return;
+        }
         self.command(|ed, s, r| ed.enter(s, ctrl, r));
         self.schedule();
         self.changed();
@@ -822,6 +837,33 @@ impl Board {
             util::copy_to_clipboard(&svg);
             crate::state::success("Copied as an SVG image.");
         });
+    }
+
+    /// Crops the selected picture (Excalidraw's Enter or double click on
+    /// it), once its own size is known; whether it does.
+    fn crop_picture(self: &Rc<Self>) -> bool {
+        let scene = self.scene();
+        let natural = {
+            let ed = self.editor.borrow();
+            if ed.cropping.is_some() {
+                return false;
+            }
+            let Some(e) = ed.single_picture(&scene) else {
+                return false;
+            };
+            let Some(img) = e
+                .file_id()
+                .and_then(|f| scene.files.get(f))
+                .and_then(|entry| crate::drawings::picture(&self.vault, entry, || {}))
+            else {
+                return false;
+            };
+            (img.natural_width() as f64, img.natural_height() as f64)
+        };
+        let started = self.editor.borrow_mut().start_crop(&scene, natural);
+        self.schedule();
+        self.changed();
+        started
     }
 
     /// The link whose button is at `p` (on the canvas), if one is.

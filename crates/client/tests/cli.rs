@@ -8,6 +8,7 @@ use common::*;
 use notekpr_client::cli::Cli;
 use notekpr_client::commands;
 use notekpr_client::profile::ProfileStore;
+use notekpr_client::ui;
 
 /// Run a command line for the test client `who` (its own config/data dirs).
 async fn run(srv: &TestServer, who: &str, args: &[&str]) -> anyhow::Result<()> {
@@ -425,7 +426,6 @@ async fn changing_commands_are_handed_to_the_running_daemon() {
 /// `ls` lines names up when only some entries have an icon.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn ls_lines_names_up_with_and_without_icons() {
-    use notekpr_client::ui;
     let srv = start().await;
     login(&srv, "alice").await;
     run(&srv, "alice", &["vault", "create", "Home"])
@@ -467,4 +467,39 @@ async fn ls_lines_names_up_with_and_without_icons() {
         "{cols:?}\n{}",
         out.stdout
     );
+}
+
+/// `notekpr login` for the dev user `who`, with what it said.
+async fn login_cmd(srv: &TestServer, who: &str) -> ui::Captured {
+    let args = ["login", "--server", &srv.url, "--dev-user", who];
+    let (r, out) = ui::capture(None, false, run(srv, who, &args)).await;
+    r.unwrap();
+    out
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn login_without_a_vault_says_how_to_start() {
+    let srv = start().await;
+    let out = login_cmd(&srv, "alice").await;
+    assert!(out.stderr.contains("No vaults yet"), "{}", out.stderr);
+    // The commands as this profile runs them.
+    assert!(
+        out.stderr
+            .contains("notekpr --profile alice vault create <name>"),
+        "{}",
+        out.stderr
+    );
+
+    // The quick notes are no vault.
+    run(&srv, "alice", &["quick", "Call the dentist"])
+        .await
+        .unwrap();
+    let out = login_cmd(&srv, "alice").await;
+    assert!(out.stderr.contains("No vaults yet"), "{}", out.stderr);
+
+    run(&srv, "alice", &["vault", "create", "Home"])
+        .await
+        .unwrap();
+    let out = login_cmd(&srv, "alice").await;
+    assert!(!out.stderr.contains("No vaults yet"), "{}", out.stderr);
 }

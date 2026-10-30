@@ -1139,6 +1139,24 @@ async fn login(ctx: &Ctx, a: LoginArgs) -> Result<()> {
         ctx.profile
     );
     crate::out!("Account key fingerprint: {}", out.fingerprint);
+    // Nothing to sync yet (the quick notes are no vault): how to start. The
+    // vault is theirs to name, so none is made here.
+    if let Ok(s) = ctx.session()
+        && let Ok(vaults) = s.api.vaults().await
+        && vaults.iter().all(|v| v.kind.is_section())
+    {
+        let p = if ctx.profile == crate::profile::DEFAULT_PROFILE {
+            String::new()
+        } else {
+            format!("--profile {} ", ctx.profile)
+        };
+        ui::status(&format!(
+            "No vaults yet: create one, then sync it with a folder of Markdown files, or import notes into it:\n  \
+             notekpr {p}vault create <name>\n  \
+             notekpr {p}sync --dir <folder>               each vault a folder in it, synced both ways\n  \
+             notekpr {p}import <name> <folder or .zip>"
+        ));
+    }
     Ok(())
 }
 

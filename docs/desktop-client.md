@@ -107,6 +107,10 @@ the setup is interrupted — the network fails, the process is killed — run
 `login` again: it uploads the same keys and shows the recovery key again, as
 long as it was never displayed.
 
+The command line makes no vault for you (the web app makes *My notes* when it
+sets an account up): while the account has none — its quick notes don't count
+— `login` says how to start, with `vault create`, `sync --dir` and `import`.
+
 ### Additional devices
 
 If your account already has keys (you use the web app or another computer),

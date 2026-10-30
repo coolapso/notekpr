@@ -474,7 +474,8 @@ pub async fn finish_setup() {
     }
 }
 
-pub(super) const WELCOME: &str = "# Welcome to notekpr 👋\n\nThis is your private vault. Everything you write is **encrypted on this device** before it is synced — the server never sees your notes.\n\n## Getting started\n\n- [ ] Write something here — just start typing\n- [ ] Create a new note with the **+** button (or Ctrl+Alt+N)\n- [ ] Link notes by typing `[[` and a note name, like [[Ideas]]\n- [ ] Add #tags anywhere\n- [ ] Share a vault with family from the vault menu\n\nUse the toolbar for formatting, or Markdown if you know it: `**bold**`, `*italic*`, `# Heading`, `- list`.\n\nPress **Ctrl+P** (⌘P on a Mac) to jump to any note, and **Ctrl+/** for all keyboard shortcuts.\n";
+// Things to try that work in an empty account (crates/web/src/welcome.md).
+pub(super) const WELCOME: &str = include_str!("../welcome.md");
 
 /// Register this browser as a new (pending) device and wait for approval.
 pub async fn request_approval() {

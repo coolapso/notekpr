@@ -381,6 +381,7 @@ HOME = [
 
         ## More to try
 
+        - [ ] Sign in as someone new (any name, in another tab): their first vault, *My notes*, starts with a *Welcome* note of things to try
         - [ ] Star a note (☆ at the top, it turns gold): it shows under *Favorites* in the sidebar
         - [ ] Rename a note, or drag it to another folder in the sidebar: links to it follow
         - [ ] Comment on a note: select some text and click *Comment* (or press `Alt+M`), in the editor or the reading view; click highlighted text to read and answer its thread. *Holiday plans* in *Family* has comments — even Carol's, who only views that vault

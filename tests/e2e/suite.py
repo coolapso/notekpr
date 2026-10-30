@@ -301,7 +301,7 @@ def test_devices_and_recovery(env):
         b2.find_text(".card", "My notes", 20)
         b2.click_el(b2.find_text(".card", "My notes"))
         b2.click_el(b2.find_text(".note-card", "Welcome", 15))
-        b2.wait("return document.querySelector('.ed') && document.querySelector('.ed').textContent.includes('Getting started')", 15, "device 2 decrypts")
+        b2.wait("return document.querySelector('.ed') && document.querySelector('.ed').textContent.includes('Work together')", 15, "device 2 decrypts")
         check(True, "approved device decrypts existing notes")
         a.go(env.url + "settings/security")
         a.find_text(".settings-body button", "Create a new recovery key", 15)

@@ -6,7 +6,7 @@ schemaVersion: 1
 tagPrefix: v
 
 branches:
-  - name: dev
+  - name: main
 
 rules:
   - type: feat

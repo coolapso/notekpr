@@ -483,7 +483,7 @@ tasks:
         fi
 
   release:
-    desc: "Release from dev: CI's checks, then tag the next version, create the GitHub Release and push both images with it (VERSION=x.y.z to choose the version; the first one: task release VERSION=0.1.0)"
+    desc: "Release from main: CI's checks, then tag the next version, create the GitHub Release and push both images with it (VERSION=x.y.z to choose the version; the first one: task release VERSION=0.1.0)"
     deps: [release:check, release:prepare]
     cmds:
       - task: release:run

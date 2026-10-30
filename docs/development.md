@@ -282,7 +282,7 @@ doesn't hold the test builds and the image build together.
 
 ## Releases
 
-Releases are made from this machine, from `dev`, with
+Releases are made from this machine, from `main`, with
 [semrel](https://www.semrel.io) (`.semrel.yaml`). It computes the next
 version from the commit messages since the last release, so they follow
 [Conventional Commits](https://www.conventionalcommits.org): `feat:` bumps
@@ -303,7 +303,7 @@ task release            # the same, then the release
 the GitHub Release with the notes, then pushes both images for amd64 and
 arm64, `ghcr.io/coolapso/notekpr` and `ghcr.io/coolapso/notekpr-demo`,
 tagged `0.2.0` and `latest`. Without commits that make a release it does
-nothing. It doesn't push `dev`: push it as usual.
+nothing. It doesn't push `main`: push it as usual.
 
 Between releases, `task docker:push` and `task docker:push:demo` push an
 image tagged `latest` and with the version `git describe` gives after

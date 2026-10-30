@@ -287,7 +287,7 @@ Without go-task, see the plain commands in the [Taskfile](Taskfile.yml) or
 
 ## Git
 
-- Default branch is `dev`; releases are made from it (`task release`).
+- Default branch is `main`; releases are made from it (`task release`).
 - Commit messages follow [Conventional Commits](https://www.conventionalcommits.org),
   in the imperative: `feat: add …`, `fix: …`, `docs: …`, `refactor: …`,
   `test: …`, `build: …`, `ci: …`, `chore: …`; `!` after the type for a

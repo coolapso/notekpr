@@ -151,8 +151,12 @@ def test_onboarding(env):
         check(not b.js("return !!document.querySelector('.recovery-key')"), "once confirmed it isn't shown again")
         b.close()
         b = Browser()
+        # As on a deployed server: the quick notes, made at the same time,
+        # don't keep the first vault from being made.
+        b.latency(80)
         signup(b, uniq("ada"))
         check(b.js("return document.querySelector('.note-title').value") == "Welcome", "welcome note is created and opened")
+        check(b.find_text(".sb-drawings", "Drawings", 5), "the first vault is there, with its drawings")
         check(b.js("return document.querySelectorAll('.ed .ln').length") > 5, "live editor renders the note")
         time.sleep(1)
         b.go(env.url)

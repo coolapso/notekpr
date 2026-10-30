@@ -462,7 +462,9 @@ pub async fn setup_keys() {
 pub async fn finish_setup() {
     storage::clear_pending_recovery(&step(|c| c.user_id.clone()));
     enter_ready().await;
-    if step(|c| c.replicas.is_empty())
+    // The quick notes are no vault to the person, and may be made meanwhile
+    // (`refresh_vaults` starts that): the first vault is still to come.
+    if step(|c| c.replicas.keys().all(|v| c.is_quick_notes(v)))
         && let Some(v) = crate::actions::create_vault("My notes".into()).await
     {
         let id = crate::actions::create_note_with(&v, "", "Welcome", WELCOME).await;

@@ -134,6 +134,12 @@ class Browser:
         """Close the current tab; switch to another one afterwards."""
         return req("DELETE", self.p("/window"))
 
+    def latency(self, ms):
+        """Answer every request `ms` later, as a server across a network does
+        (a local one answers at once, which hides races)."""
+        req("POST", self.p("/chromium/network_conditions"), {"network_conditions": {
+            "offline": False, "latency": ms, "download_throughput": -1, "upload_throughput": -1}})
+
     def logs(self):
         try:
             return req("POST", self.p("/se/log"), {"type": "browser"})

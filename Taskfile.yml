@@ -331,6 +331,7 @@ tasks:
       - task: docker:build
       # Shares the build stage: only checks the demo's own layer still builds.
       - task: docker:build:demo
+      - task: docker:test:demo
 
   # ------------------------------------------------------------------ website
 
@@ -364,6 +365,15 @@ tasks:
     desc: "Build the public demo image (notekpr-demo:latest): seeds the demo, serves it an hour, exits to start over — docs/operations.md §10"
     cmds:
       - docker build --target demo -t notekpr-demo:latest .
+
+  docker:test:demo:
+    desc: "Seed the demo in notekpr-demo:latest the way Kubernetes runs it (deploy/kubernetes/demo.yaml), then stop"
+    cmds:
+      # As the manifest: not root, no capabilities, nothing writable but /data.
+      - >-
+        docker run --rm --read-only --user 65532:65532 --cap-drop ALL
+        --security-opt no-new-privileges --tmpfs /data:size=1g,uid=65532,gid=65532
+        notekpr-demo:latest --seed-only
 
   docker:push:
     desc: "Build the image for amd64 and arm64 and push it to ghcr.io/coolapso/notekpr, tagged with the version and latest (the version: the latest release tag, -dev with uncommitted changes; or VERSION=x.y.z)"

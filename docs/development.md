@@ -278,7 +278,9 @@ only install the tooling and then run tasks — `task setup`, then `task ci`
 here; a check that should run in CI goes into a task first. CI runs `task ci`'s
 two halves, `task ci:check` and `task ci:image`, as separate jobs (the image
 job starts once the checks pass): one GitHub runner's disk (14 GB guaranteed)
-doesn't hold the test builds and the image build together.
+doesn't hold the test builds and the image build together. `task ci:image`
+also seeds the demo in its image the way Kubernetes runs it, with nothing
+writable but `/data` (`task docker:test:demo`).
 
 ## Releases
 

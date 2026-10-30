@@ -294,6 +294,8 @@ Without go-task, see the plain commands in the [Taskfile](Taskfile.yml) or
   breaking change. The next version is computed from them
   ([docs/development.md](docs/development.md#releases)). Keep commits small
   and focused.
+- Merge commits too (`chore: merge …`): `task release` checks every commit
+  since the last release, merges included, and stops at one that isn't.
 - Formatting-only or other mechanical changes go in their own commit (`style: …`).
 - Never commit `target*/`, `dist/`, `data/`, `.env` or databases
   (`.gitignore` covers them). `Cargo.lock` is committed; release builds use

@@ -750,8 +750,9 @@ the corner of every page (the server's `--demo-resets-at`, which only works
 in development mode).
 
 On Kubernetes: [`deploy/kubernetes/demo.yaml`](../deploy/kubernetes/demo.yaml)
-(its own namespace; the data on an `emptyDir`; ready once the data is seeded,
-so the ingress waits during the reset). Set `--public-url` to
+(its own namespace; the data on an `emptyDir`, the only place the demo
+writes to — the root file system can stay read-only; ready once the data is
+seeded, so the ingress waits during the reset). Set `--public-url` to
 your host name and route to the `notekpr-demo` Service with TLS as for
 the real server (§4). Elsewhere, any restart policy works the same, e.g.
 `docker run --restart always -p 127.0.0.1:8096:8080 ghcr.io/coolapso/notekpr-demo --public-url https://demo.example.com`

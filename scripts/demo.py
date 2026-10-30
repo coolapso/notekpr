@@ -37,7 +37,6 @@ import socket
 import struct
 import subprocess
 import sys
-import tempfile
 import textwrap
 import io
 import math
@@ -1395,7 +1394,8 @@ class Cli:
 
 
 # What a demo's data directory holds; --fresh deletes only these.
-DEMO_FILES = ("demo.json", "server", "cli", "server.log", "recovery-keys.txt", "assistant.secret")
+DEMO_FILES = ("demo.json", "server", "cli", "server.log", "recovery-keys.txt", "assistant.secret",
+              "shapes.excalidrawlib")
 
 
 def duration(text):
@@ -1510,10 +1510,12 @@ def seed(cli, url, data, server_bin):
         """))
     cli.write(a, "Home", "Sketches/Shed ideas.drawing", sketch_drawing())
     # Her saved shapes, to drop into drawings (synced in her Personal storage).
-    with tempfile.NamedTemporaryFile("w", suffix=".excalidrawlib", delete=False) as f:
-        f.write(garden_library())
-    cli.run(a, "-q", "shapes", "import", f.name)
-    os.unlink(f.name)
+    # The file goes next to the demo's data, not in /tmp: the demo image's
+    # only writable place is its data directory.
+    library = data / "shapes.excalidrawlib"
+    library.write_text(garden_library())
+    cli.run(a, "-q", "shapes", "import", str(library))
+    library.unlink()
 
     step("alice: the garden plan's history (eleven edits)")
     for text in GARDEN_PLAN_VERSIONS:

@@ -198,8 +198,8 @@ read anything.
   while others use the vault, so it never goes with one person — and a vault
   others use suggests a second owner (a hint you can hide). Editors move
   notes to the trash; only owners and the vault's admins delete for good,
-  and see the vault's activity log. Leave a vault shared with you, or remove
-  a shared note from your list.
+  and see the vault's activity log ([who can do what](docs/roles.md)).
+  Leave a vault shared with you, or remove a shared note from your list.
 * Edit the same note at the same time with live cursors, and see who else is
   on the note you're on. Edits merge without conflicts (CRDTs), also after
   working offline.
@@ -216,8 +216,8 @@ read anything.
   in the sidebar's mentions inbox, with a message when it arrives and, if
   they like, a system notification. Read on one device, read on all;
   `notekpr mentions` lists them.
-* You're told when a note is shared with you; owners have an activity log
-  per vault.
+* You're told when a note is shared with you; owners and admins have an
+  activity log per vault.
 
 **Privacy and security**
 
@@ -420,6 +420,7 @@ provider setup, reverse proxies, Kubernetes, backups, upgrades and monitoring.
 
 ## Documentation
 
+* [Who can do what in a vault (owners, admins, editors, viewers)](docs/roles.md)
 * [Use your own editor (Obsidian, Neovim, …)](docs/own-editor.md)
 * [Getting your notes out, whatever happens (encrypted export, offline recovery)](docs/recovery.md)
 * [Architecture and technology decisions](docs/architecture.md)

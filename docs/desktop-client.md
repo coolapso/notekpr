@@ -688,7 +688,8 @@ once you share with them again with `--accept-new-key`.
   vault is better off with two (`vault members` says so); `editor` writes and moves things to the trash; `admin` also empties
   the trash (deleting for good, which editors can't, and undoing that for a
   while: `trash undo`) and sees the vault's activity log — people only, never agents; `viewer` reads (and comments,
-  unless the owner turns it off).
+  unless the owner turns it off). All of it in one table:
+  [roles.md](roles.md).
 * People who have not set up encryption yet are added without a key; your
   client wraps the vault key for them automatically once they have (during
   `sync`, `vault members`, or any sync of that vault).

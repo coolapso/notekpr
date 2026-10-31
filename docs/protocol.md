@@ -195,6 +195,7 @@ deleting notes and attachments for good — and the activity log; people
 only, never agents), `editor` (writes, moves things to the trash) and
 `viewer` (reads; comments unless the owner turns it off, §6.1). Single notes
 are shared as `editor` or `viewer`. "editor/owner" below includes admins.
+The whole picture, for people: [roles.md](roles.md).
 Apps keep roles from newer releases they don't know (§11); the server
 refuses roles it doesn't know (`400`).
 

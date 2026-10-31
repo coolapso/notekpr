@@ -193,6 +193,11 @@ pub(super) fn merge_prefs(theirs: &mut Prefs, mine: Prefs, unsaved: &Unsaved) {
     }
     // Read here or there: read.
     theirs.mentions.merge(&mine.mentions);
+    for v in mine.owner_hints_hidden {
+        if !theirs.owner_hints_hidden.contains(&v) {
+            theirs.owner_hints_hidden.push(v);
+        }
+    }
     theirs.counter = theirs.counter.max(mine.counter);
     let mut recent = mine.recent;
     for r in theirs.recent.drain(..) {
@@ -211,6 +216,14 @@ pub(super) fn merge_prefs(theirs: &mut Prefs, mine: Prefs, unsaved: &Unsaved) {
     let ours = mine.note_widths.into_iter().filter(|(n, _)| changed(n));
     theirs.note_widths.splice(0..0, ours);
     theirs.note_widths.truncate(crate::width::MAX_OWN);
+}
+
+/// Stop suggesting another owner for `vault` (on every device).
+pub fn hide_owner_hint(c: &mut Core, vault: &str) {
+    if !c.prefs.owner_hints_hidden.iter().any(|v| v == vault) {
+        c.prefs.owner_hints_hidden.push(vault.to_string());
+        save_prefs(c);
+    }
 }
 
 pub fn set_ui_prefs(f: impl FnOnce(&mut UiPrefs)) {

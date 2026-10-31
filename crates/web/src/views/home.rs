@@ -2,7 +2,7 @@
 
 use leptos::prelude::*;
 use notekpr_core::doc::{Entry, EntryKind};
-use notekpr_core::protocol::{PurgedItem, Role};
+use notekpr_core::protocol::{MemberInfo, PrincipalKind, PurgedItem, Role};
 
 use crate::actions;
 use crate::api;
@@ -144,6 +144,7 @@ pub fn VaultHome(vault: String) -> impl IntoView {
                                 <button class="qa" on:click=move |_| state::navigate(Route::Graph(vid.get_value()))><Icon name="graph"/><span>"Graph"</span></button>
                             </div>
                         })}
+                        <OwnerHint vault=vid.get_value()/>
                         <h2>"Recently edited"</h2>
                         {move || {
                             let items = recent.get();
@@ -173,6 +174,76 @@ pub fn VaultHome(vault: String) -> impl IntoView {
                 }}
             </div>
         </div>
+    }
+}
+
+/// A vault other people use with only us as its owner depends on our account
+/// alone: suggest another owner, until we add one or hide the hint, having
+/// said we know what that means.
+#[component]
+fn OwnerHint(vault: String) -> impl IntoView {
+    let ui = ui();
+    let vid = StoredValue::new(vault);
+    // Whether anyone besides us — a person, not one of our agents — is in it.
+    let others = RwSignal::new(false);
+    let alone = Memo::new(move |_| {
+        // Once our settings are in: they say whether it was hidden.
+        if ui.prefs_rev.get() == 0 {
+            return false;
+        }
+        ui.vaults.with(|vs| {
+            vs.iter().any(|v| {
+                v.id == vid.get_value() && v.role == Role::Owner && v.owners == 1 && v.shared
+            })
+        }) && !step(|c| c.prefs.owner_hints_hidden.contains(&vid.get_value()))
+    });
+    Effect::new(move |_| {
+        if !alone.get() {
+            return;
+        }
+        let v = vid.get_value();
+        leptos::task::spawn_local(async move {
+            if let Ok(m) = api::get::<Vec<MemberInfo>>(&format!("/vaults/{v}/members")).await {
+                let me = step(|c| c.user_id.clone());
+                others.set(
+                    m.iter()
+                        .any(|m| m.user.id != me && m.user.kind == PrincipalKind::Human),
+                );
+            }
+        });
+    });
+    let asking = RwSignal::new(false);
+    let understood = RwSignal::new(false);
+    let hidden = RwSignal::new(false);
+    move || {
+        (alone.get() && others.get() && !hidden.get()).then(|| view! {
+            <div class="owner-hint">
+                <Icon name="shield"/>
+                <div class="grow">
+                    <p><b>"You're the only owner of this vault, and others use it."</b>" If you lost your account — every device and your recovery key — nobody could manage its people or keys any more. Make someone you trust an owner too: owners are equal."</p>
+                    {move || asking.get().then(|| view! {
+                        <label class="check small">
+                            <input type="checkbox" class="owner-hint-ack" prop:checked=move || understood.get()
+                                on:change=move |ev| understood.set(event_target_checked(&ev))/>
+                            <span>"I understand: if I lose my account, nobody else can take over this vault. (Its members can still export it, and import it into a vault they own.)"</span>
+                        </label>
+                    })}
+                    <div class="row">
+                        <button class="btn small primary" on:click=move |_| ui.modal.set(Some(Modal::Share(vid.get_value())))><Icon name="users"/>" Add an owner"</button>
+                        {move || if asking.get() {
+                            view! {
+                                <button class="btn small ghost owner-hint-hide" disabled=move || !understood.get() on:click=move |_| {
+                                    step(|c| state::hide_owner_hint(c, &vid.get_value()));
+                                    hidden.set(true);
+                                }>"Don't show this again"</button>
+                            }.into_any()
+                        } else {
+                            view! { <button class="btn small ghost owner-hint-dismiss" on:click=move |_| asking.set(true)>"Dismiss"</button> }.into_any()
+                        }}
+                    </div>
+                </div>
+            </div>
+        })
     }
 }
 

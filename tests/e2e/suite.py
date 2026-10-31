@@ -2946,10 +2946,26 @@ def test_owners(env):
         vid = path.split("/")[2]
         share(a, ".sb-bottom button:nth-child(2)", bn)
 
+        # Shared, with one owner: its home page suggests another owner, until
+        # she says she knows what not having one means — on every device.
+        a.go(f"{env.url.rstrip('/')}/v/{vid}")
+        a.find(".owner-hint", 20)
+        a.shot("owner-hint")
+        a.click(".owner-hint-dismiss")
+        a.find(".owner-hint-hide", 5)
+        check(a.js("return document.querySelector('.owner-hint-hide').disabled"), "hiding the hint asks to acknowledge what it means first")
+        a.click(".owner-hint-ack")
+        a.click(".owner-hint-hide")
+        a.wait("return !document.querySelector('.owner-hint')", 5, "the hint goes")
+        time.sleep(2.5)  # settings are saved 1.5 s after a change
+        a.js("location.reload()")
+        a.find(".quick-actions", 20)
+        time.sleep(1.5)
+        check(not a.js("return !!document.querySelector('.owner-hint')"), "and stays hidden")
         a.js("window.confirm = () => true")
 
-        # Shared, with one owner: her account can't go before the vault is
-        # someone else's too, or deleted.
+        # Her account can't go before the vault is someone else's too, or
+        # deleted.
         a.js(TO_ACCOUNT_SETTINGS)
         a.click(".delete-account")
         a.find(".last-owner .last-owner-vault", 10)

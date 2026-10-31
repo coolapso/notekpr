@@ -483,6 +483,10 @@ pub struct Prefs {
     /// the CLI marks them read too).
     #[serde(flatten)]
     pub mentions: notekpr_core::comments::MentionsRead,
+    /// Shared vaults we alone own whose hint to add another owner we hid,
+    /// knowing that nobody could take them over if we lost our account.
+    #[serde(default)]
+    pub owner_hints_hidden: Vec<String>,
     /// Goes up with every save. Inside the encryption, so the server can't
     /// change it: an older copy it hands out (e.g. one without a pin) is
     /// noticed and not used [W-M10].

@@ -503,3 +503,49 @@ async fn login_without_a_vault_says_how_to_start() {
     let out = login_cmd(&srv, "alice").await;
     assert!(!out.stderr.contains("No vaults yet"), "{}", out.stderr);
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_only_owner_of_a_shared_vault_is_told_to_add_another() {
+    let srv = start().await;
+    login(&srv, "alice").await;
+    login(&srv, "bob").await;
+    run(&srv, "alice", &["vault", "create", "Family"])
+        .await
+        .unwrap();
+    let members = || async {
+        let (r, out) = ui::capture(
+            None,
+            false,
+            run(&srv, "alice", &["vault", "members", "Family"]),
+        )
+        .await;
+        r.unwrap();
+        out
+    };
+    // Alone in it: nobody else depends on it.
+    assert!(!members().await.stderr.contains("only owner"));
+    run(
+        &srv,
+        "alice",
+        &["vault", "share", "Family", "bob", "--role", "editor"],
+    )
+    .await
+    .unwrap();
+    let out = members().await;
+    assert!(
+        out.stderr.contains("only owner of 'Family'"),
+        "{}",
+        out.stderr
+    );
+    assert!(out.stderr.contains("--role owner"), "{}", out.stderr);
+    run(
+        &srv,
+        "alice",
+        &["vault", "share", "Family", "bob", "--role", "owner"],
+    )
+    .await
+    .unwrap();
+    let out = members().await;
+    assert!(!out.stderr.contains("only owner"), "{}", out.stderr);
+    assert!(out.stdout.matches("owner").count() >= 2, "{}", out.stdout);
+}

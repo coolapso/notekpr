@@ -281,7 +281,9 @@ primitives. Formats:
   in the vault — they make someone else an owner, or delete it, first. A
   vault with one owner depends on that person's account: if they lose every
   device and their recovery key, nobody can change its members or keys any
-  more (its members still read and write it, and can export it).
+  more (its members still read and write it, and can export it). The apps
+  suggest a second owner for a vault others use; hiding that hint asks to
+  acknowledge this first.
 * **Admins** are editors the owner trusts with the vault's tasks: emptying
   the trash (deleting for good, recorded in the vault's activity log, and
   undoing that while the server keeps it) and reading that log. They don't manage members, keys or the vault's settings.

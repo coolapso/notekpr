@@ -1496,6 +1496,17 @@ async fn vault(ctx: &Ctx, c: VaultCmd) -> Result<()> {
                 ctx.print_json(&j);
                 return Ok(());
             }
+            // A vault others use with us as its only owner depends on our
+            // account alone.
+            let me = &hub.session.user_id;
+            let owners = list.iter().filter(|m| m.member.role == Role::Owner).count();
+            let alone = owners == 1
+                && list
+                    .iter()
+                    .any(|m| m.member.user.id == *me && m.member.role == Role::Owner)
+                && list
+                    .iter()
+                    .any(|m| m.member.user.id != *me && m.member.user.kind == PrincipalKind::Human);
             for m in list {
                 let fp = match (&m.key, &m.key_error) {
                     (Some(k), _) => format!("{}  ({})", k.fingerprint, manage::pin_label(k.pin)),
@@ -1515,6 +1526,13 @@ async fn vault(ctx: &Ctx, c: VaultCmd) -> Result<()> {
                     m.member.user.kind.as_str(),
                     m.member.role.as_str()
                 );
+            }
+            if alone {
+                ui::status(&format!(
+                    "you're the only owner of '{vault}', and others use it: if you lost your account, nobody could \
+                     manage its people or keys any more. Make someone you trust an owner too: notekpr vault share \
+                     '{vault}' <person> --role owner"
+                ));
             }
             Ok(())
         }

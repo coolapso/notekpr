@@ -685,7 +685,7 @@ once you share with them again with `--accept-new-key`.
   last owner of a vault other people are in — make someone else an owner
   of it, or delete it, first. A vault whose only owner loses every device
   and their recovery key can't change its members any more, so a shared
-  vault is better off with two; `editor` writes and moves things to the trash; `admin` also empties
+  vault is better off with two (`vault members` says so); `editor` writes and moves things to the trash; `admin` also empties
   the trash (deleting for good, which editors can't, and undoing that for a
   while: `trash undo`) and sees the vault's activity log — people only, never agents; `viewer` reads (and comments,
   unless the owner turns it off).

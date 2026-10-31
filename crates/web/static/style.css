@@ -318,6 +318,12 @@ textarea.input { resize: vertical; }
 .card-meta .ic { width: 14px; height: 14px; }
 .quick-actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 12px; }
 .qa { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-radius: 10px; border: 1px solid var(--border); background: var(--bg-2); cursor: pointer; }
+/* A vault others use with one owner: suggest another (views/home.rs). */
+.owner-hint { display: flex; gap: 12px; align-items: flex-start; margin-top: 16px; padding: 12px 14px; border-radius: var(--radius); border: 1px solid var(--border); background: var(--bg-2); }
+.owner-hint > svg { flex: none; margin-top: 2px; color: var(--accent); }
+.owner-hint p { margin: 0 0 8px; }
+.owner-hint .check { align-items: flex-start; margin: 8px 0; }
+.owner-hint .row { gap: 8px; flex-wrap: wrap; }
 .qa:hover { border-color: var(--accent); }
 .note-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 10px; }
 .note-card { text-align: left; padding: 12px 14px; border-radius: 10px; border: 1px solid var(--border); background: var(--bg); cursor: pointer; display: flex; flex-direction: column; gap: 4px; min-height: 96px; }

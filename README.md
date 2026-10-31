@@ -195,7 +195,8 @@ read anything.
 * Share a vault as owner, admin, editor or viewer, or a single note with
   someone outside the vault. A vault can have several owners, all equal, and
   always keeps one: the last owner can't leave, nor delete their account
-  while others use the vault, so it never goes with one person. Editors move
+  while others use the vault, so it never goes with one person — and a vault
+  others use suggests a second owner (a hint you can hide). Editors move
   notes to the trash; only owners and the vault's admins delete for good,
   and see the vault's activity log. Leave a vault shared with you, or remove
   a shared note from your list.

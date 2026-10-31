@@ -1137,6 +1137,7 @@ fn InstanceSettingsPanel(
                     let used = util::human_bytes(s.storage_bytes);
                     let of = s.settings.max_storage_mb.max().map(|mb| format!(" of {}", util::human_bytes(mb.saturating_mul(1024 * 1024)))).unwrap_or_default();
                     match s.read_only {
+                        None if s.storage_full => format!("Full: the database reached its size limit ({used}{of}). Every vault takes no new content until something is deleted for good or you raise the limit."),
                         None => format!("Accepting changes. Database: {used}{of}."),
                         Some(ReadOnly::Manual) => format!("Read-only, switched on by an administrator. Database: {used}{of}."),
                         Some(ReadOnly::StorageFull) => format!("Read-only: the database reached its size limit ({used}{of}). Raise the limit to accept changes again."),

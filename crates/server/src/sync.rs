@@ -1145,6 +1145,32 @@ pub async fn storage_changed(state: &AppState, vault_id: &str, was_full: bool) {
     }
 }
 
+/// Measure the database ([`Instance::refresh_storage`]) and, when that
+/// fills the server or makes room on it, tell every vault's subscribers.
+/// Takes the write lock, so that these messages keep the order of the
+/// writes. Returns the bytes in use.
+///
+/// [`Instance::refresh_storage`]: crate::instance::Instance::refresh_storage
+pub async fn check_storage(state: &AppState) -> AppResult<u64> {
+    let _w = state.write_lock.lock().await;
+    let was_full = state.instance.storage_full();
+    let used = state.instance.refresh_storage(&state.db).await?;
+    if state.instance.storage_full() != was_full {
+        server_storage_changed(state).await?;
+    }
+    Ok(used)
+}
+
+/// After the server's storage filled or has room again: how each vault is
+/// now (full while the server is, else by its own limit). Under the write
+/// lock.
+pub async fn server_storage_changed(state: &AppState) -> AppResult<()> {
+    for (vault_id, full) in state.instance.every_vault_full(&state.db).await? {
+        state.hub.publish(&vault_id, VaultEvent::Storage { full });
+    }
+    Ok(())
+}
+
 /// What of a vault was deleted for good and can still be undone (notes and
 /// attachments), newest first.
 pub async fn purged_items(state: &AppState, vault_id: &str) -> AppResult<Vec<PurgedItem>> {

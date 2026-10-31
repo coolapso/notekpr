@@ -199,7 +199,7 @@ Each event is named after its `type` and carries it as JSON, e.g.
 | `vault_added` | `vault` | a vault became available (newly shared) |
 | `vault_closed` | `vault, reason` | the vault was deleted or access revoked; its local copy stays read-only |
 | `connection` | `online` | the connection to the server went down or came back |
-| `server_mode` | `read_only` | the server stopped (`manual`, `storage_full`) or started again (`null`) accepting changes; writes keep working locally and are uploaded when it accepts them |
+| `server_mode` | `read_only` | the server stopped (`manual`; older servers also `storage_full`) or started again (`null`) accepting changes; writes keep working locally and are uploaded when it accepts them |
 | `lagged` | `missed` | the client read too slowly and missed that many events; re-read what it keeps track of |
 
 Examples:

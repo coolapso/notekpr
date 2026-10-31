@@ -65,15 +65,15 @@ async fn end_dev_sessions(state: &AppState) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Measure the database every few seconds, so a full one turns the server
-/// read-only soon after it reaches its limit (and writable again after), and
+/// Measure the database every few seconds, so that every vault is full
+/// soon after it reaches the server's limit (and has room again after), and
 /// count the full vaults for `/metrics`.
 fn spawn_storage_check(state: AppState) {
     tokio::spawn(async move {
         let mut tick = tokio::time::interval(Duration::from_secs(10));
         loop {
             tick.tick().await;
-            if let Err(e) = state.instance.refresh_storage(&state.db).await {
+            if let Err(e) = sync::check_storage(&state).await {
                 tracing::warn!(error = %e, "could not measure the database");
             }
         }

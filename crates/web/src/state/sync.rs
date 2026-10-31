@@ -372,7 +372,14 @@ pub(super) fn on_server_message(m: ServerMessage) {
         }
         ServerMessage::Pong { .. } => {}
         ServerMessage::Mode { read_only } => step(|c| set_read_only(c, read_only)),
-        ServerMessage::VaultFull { vault_id, full } => step(|c| set_vault_full(c, &vault_id, full)),
+        ServerMessage::VaultFull {
+            vault_id,
+            full,
+            server,
+        } => {
+            ui().server_full.set(full && server);
+            step(|c| set_vault_full(c, &vault_id, full))
+        }
     }
 }
 

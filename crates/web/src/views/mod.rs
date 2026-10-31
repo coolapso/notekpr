@@ -143,6 +143,7 @@ fn VaultFullBanner() -> impl IntoView {
         });
         let text = match ours.as_slice() {
             [] if full.is_empty() => return None,
+            _ if ui.server_full.get() => "The server's storage is full: your edits are kept in this browser and sent once there's room. Deleting things for good makes room, or ask an administrator for more.".to_string(),
             [] => "The vault of a note shared with you is full: your edits of it are kept in this browser and sent once it has room.".to_string(),
             [(_, None)] => "Your personal storage is full: your quick notes and saved shapes are kept in this browser and sent once there's room. Deleting quick notes or saved shapes makes room, or ask an administrator for more.".to_string(),
             [(_, Some(name))] => format!("“{name}” is full: your edits there are kept in this browser and sent once it has room."),
@@ -155,9 +156,11 @@ fn VaultFullBanner() -> impl IntoView {
                     .join(", ")
             ),
         };
+        // Where a vault's limit shows (none to show for the server's).
         let first = ours
             .iter()
-            .find_map(|(v, n)| n.is_some().then(|| v.clone()));
+            .find_map(|(v, n)| n.is_some().then(|| v.clone()))
+            .filter(|_| !ui.server_full.get());
         Some(view! {
             <div class="banner warn vault-full-banner"><Icon name="cloud-off"/>
                 <span>{text}</span>

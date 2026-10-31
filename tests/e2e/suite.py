@@ -2847,8 +2847,22 @@ def test_vault_storage(env):
         a.js(choose, f"{person} .quick-notes-storage-allowance .limit-kind", "default")
         a.click(f"{person} .save-allowances")
         b.wait("return !document.querySelector('.vault-full-banner')", 10, "the banner goes")
+
+        # The server's storage (a family's or a team's room): every vault is
+        # full, and that is said once, without a vault's settings to show.
+        api_patch(a, "/admin/settings", {"max_storage_mb": 0})
+        b.find_text(".vault-full-banner", "The server's storage is full", 10)
+        check(not b.js("return !!document.querySelector('.vault-full-banner .btn')"),
+              "a full server is said once, not vault by vault")
+        a.go(env.url + "settings/admin")
+        a.wait("return (document.querySelector('.instance-status')?.textContent || '').startsWith('Full')", 15, "the instance status")
+        check(True, "administrators see the server is full")
+        api_patch(a, "/admin/settings", {"max_storage_mb": "unlimited"})
+        b.wait("return !document.querySelector('.vault-full-banner')", 10, "the banner goes")
         check(not severe_logs(a, b), "no browser errors")
     finally:
+        # Other tests share this server.
+        api_patch(a, "/admin/settings", {"max_storage_mb": "unlimited"})
         a.close()
         b.close()
 

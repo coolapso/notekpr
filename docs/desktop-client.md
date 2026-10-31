@@ -535,7 +535,7 @@ a reverse proxy's `502` while the server restarts): changes stay queued and
 reads use the local copies.
 
 A server can also be **read-only** for a while (its administrators switched
-it, or its storage is full): it serves everything but refuses changes.
+it): it serves everything but refuses changes.
 Changes made meanwhile stay queued like offline ones and commands say so
 ("the server is read-only right now: N change(s) will be uploaded when it
 accepts changes again"). A running `notekpr sync` hears it over the live
@@ -548,7 +548,10 @@ uploaded once it has room"), other vaults keep uploading, and `notekpr sync`
 uploads them the moment the server says it has room — after something in it
 was deleted for good (`trash empty`), or an administrator raised its limit.
 To ask for more room, give the administrator the vault's id (`vault list`
-or `status` show it); they see ids, owners and sizes, never names.
+or `status` show it); they see ids, owners and sizes, never names. When the
+server's storage is full, every vault is, and `notekpr sync` says so once
+("the server's storage is full") rather than for each vault; deleting
+something for good still works, and makes room.
 
 Everything works offline against the encrypted replica: `ls`, `cat`, `search`,
 `backlinks`, `write`, `mv`, `rm`, imports and mirror edits. Changes are queued

@@ -275,11 +275,12 @@ pub async fn settings(
     admin: Admin,
 ) -> AppResult<Json<AdminSettings>> {
     admin.require(AdminScope::Read)?;
-    let storage_bytes = state.instance.refresh_storage(&state.db).await?;
+    let storage_bytes = crate::sync::check_storage(&state).await?;
     Ok(Json(AdminSettings {
         settings: state.instance.settings(),
         read_only: state.instance.read_only(),
         storage_bytes,
+        storage_full: state.instance.storage_full(),
         build_oldest_app_version: OLDEST_APP_VERSION.to_string(),
     }))
 }
@@ -295,10 +296,15 @@ pub async fn update_settings(
     let settings = {
         let _w = state.write_lock.lock().await;
         let old = state.instance.settings();
+        let was_full = state.instance.storage_full();
         let settings = state.instance.update(&state.db, &req).await?;
-        // Vaults on a default limit it fills or frees.
-        for (vault_id, full) in state.instance.storage_flips(&state.db, &old).await? {
-            state.hub.publish(&vault_id, VaultEvent::Storage { full });
+        if state.instance.storage_full() != was_full {
+            crate::sync::server_storage_changed(&state).await?;
+        } else if !was_full {
+            // Vaults on a default limit it fills or frees.
+            for (vault_id, full) in state.instance.storage_flips(&state.db, &old).await? {
+                state.hub.publish(&vault_id, VaultEvent::Storage { full });
+            }
         }
         settings
     };
@@ -329,6 +335,7 @@ pub async fn update_settings(
         settings,
         read_only: state.instance.read_only(),
         storage_bytes: repo::settings::used_bytes(&state.db).await?,
+        storage_full: state.instance.storage_full(),
         build_oldest_app_version: OLDEST_APP_VERSION.to_string(),
     }))
 }

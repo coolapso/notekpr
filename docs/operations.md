@@ -424,10 +424,14 @@ They are kept in the database, so they survive restarts and backups.
   copies) and send them the moment you switch it off; signing in and out,
   removing devices and revoking access keep working, but nobody new can
   sign up.
-* **Database size**: at this size the server turns read-only by itself
-  (checked every 10 seconds), until it is below it again — raise the limit,
-  or make room. It counts the pages in use, which is less than the file
-  once data was deleted.
+* **Database size**: at this size every vault is full, as below (checked
+  every 10 seconds), until it is below it again — raise the limit, or make
+  room: deleting things for good keeps working. It counts the pages in use
+  (files too: they are in the database), which is less than the file once
+  data was deleted. On an instance of its own, this is the room a family or
+  a team shares however they like (with *Vaults per person* and *Storage
+  per vault* left unlimited). The apps say the server's storage is full,
+  not each vault.
 * **Storage per vault**: at this size (MiB) a vault takes no new content —
   its members' apps keep their edits and send them once it has room — while
   every other vault goes on. The size is what its encrypted notes, history
@@ -679,7 +683,8 @@ proxy answers then (§4, "Holding requests during an update").
   connections) and `notekpr_ws_connected_users` (people with at least
   one), `notekpr_rate_limited_total{scope}`, `notekpr_read_only` (1 while
   the server refuses changes), `notekpr_storage_used_bytes` (what
-  `max_storage_mb` is compared with) and `notekpr_vaults_full` (how many
+  `max_storage_mb` is compared with), `notekpr_storage_full` (1 while it is
+  reached: every vault is full) and `notekpr_vaults_full` (how many
   vaults are at their storage limit, counted every 10 seconds;
   Administration → Vaults shows which — the metrics never name a vault),
   and on Linux the process's own `process_cpu_seconds_total` (a gauge) and
@@ -692,8 +697,8 @@ proxy answers then (§4, "Holding requests during an update").
 * Administrators see accounts, storage statistics and the server's version
   in Settings → Administration (never content or vault membership); admin
   clients get the statistics and version from `GET /api/v1/admin/stats`. The
-  server logs when the storage limit turns it read-only and when it is below
-  it again.
+  server logs when it reaches the storage limit and when it is below it
+  again.
 
 ## 9. Development mode
 

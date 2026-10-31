@@ -115,7 +115,7 @@ Defined in `crates/core/src/crypto.rs` and `keys.rs`.
 
 | Endpoint | Purpose |
 |---|---|
-| `GET /info` | server name, `version` (the release it was built as; `dev` for builds not made for a release), `dev_mode`, `oidc_enabled`, `oidc_display_name` (the login button's label; null without OIDC), size limits (`max_attachment_bytes`, `max_update_bytes`, `max_snapshot_bytes`; older servers omit the last: it is `max(16 × max_update_bytes, 32 MiB)`), `note_keys` (notes can have their own keys, §5.1), `read_only` (`manual` or `storage_full` while the server refuses changes, §9; absent otherwise), `purge_undo_days` (how long deleting something for good can be undone, §6; 0 or absent: not at all) (no auth) |
+| `GET /info` | server name, `version` (the release it was built as; `dev` for builds not made for a release), `dev_mode`, `oidc_enabled`, `oidc_display_name` (the login button's label; null without OIDC), size limits (`max_attachment_bytes`, `max_update_bytes`, `max_snapshot_bytes`; older servers omit the last: it is `max(16 × max_update_bytes, 32 MiB)`), `note_keys` (notes can have their own keys, §5.1), `read_only` (`manual` while the server refuses changes, §9; absent otherwise; older servers also said `storage_full`), `purge_undo_days` (how long deleting something for good can be undone, §6; 0 or absent: not at all) (no auth) |
 | `GET /auth/oidc/start?return_to=/path` | 303 to the identity provider (authorization code + PKCE + nonce); sets an HttpOnly, SameSite=Lax `notekpr_login` cookie that binds the login to this browser |
 | `GET /auth/oidc/callback` | provider redirect target; requires the `notekpr_login` cookie of the browser that started the login (otherwise `#error=login_failed`, which closes login CSRF); redirects to `/auth/complete#code=…&return_to=…` |
 | `POST /auth/exchange {code}` | one-time code (120 s) → `SessionResponse {token, expires_at, user}` |
@@ -532,8 +532,8 @@ closes — the only way a browser learns why, so clients sign out on it),
 `ping {nonce}`.
 
 Server → client: `ready {user_id, session_id, conn_id}`,
-`mode {read_only?}` (right after `ready`, and whenever it changes: `manual` or `storage_full` while the server refuses changes, absent when it accepts them),
-`vault_full {vault_id, full}` (the vault reached its storage limit, or has room again; after `subscribe` to a full vault before `synced`, then whenever that changes — also on single-note subscriptions, §9),
+`mode {read_only?}` (right after `ready`, and whenever it changes: `manual` while the server refuses changes, absent when it accepts them; older servers also said `storage_full`),
+`vault_full {vault_id, full, server?}` (the vault reached its storage limit, or has room again; `server: true`: full because the server's storage is, so every vault is; after `subscribe` to a full vault before `synced`, then whenever that changes — also on single-note subscriptions, §9),
 `changes {vault_id, changes}` (catch-up pages after `subscribe` with `since`, and after falling behind: below),
 `synced {vault_id, head_seq, object_id?}`, `update {vault_id, update}`,
 `ack {vault_id, results, rejected?}` (your own pushes, delivered in log order; `rejected` as for the REST push),
@@ -568,7 +568,8 @@ true}` arrives before `synced` when subscribing, and when a write fills it;
 pushes to it get `error {code: "vault_full", vault_id}`. Clients keep its
 edits and don't store revisions there, and send everything when `vault_full
 {full: false}` arrives — when something in it was deleted for good, or its
-limit was raised. They forget what they knew when they subscribe again (a
+limit was raised. While the server's storage is full, every vault is
+(`server: true`); apps say so once rather than for each vault. They forget what they knew when they subscribe again (a
 new connection), as the server says it afresh. Other vaults go on as
 usual.
 
@@ -647,7 +648,7 @@ role can't be given: `400`): only admin clients administer it.
 | `GET /admin/vaults?id=&owner=` | `read`: vaults by size, the largest first (at most 200): `AdminVault {id, owner_id, owner_name, storage_bytes, storage_allowance, drawing_count, drawing_allowance, created_at}` — never a name, member or anything in them; not quick notes (their limits are the person's, above). `id` finds the one with that id (its members read it in its settings), `owner` (an account id) those someone owns |
 | `PATCH /admin/vaults/{id} {storage_allowance?, drawing_allowance?}` | `accounts`: give a vault its own storage limit in MiB, or its own drawings limit: `"default"` (the instance's `storage_per_vault_mb`, `drawings_per_vault`), `"unlimited"` or a number (`404`: no such vault, or someone's quick notes). Its subscribers get `vault_full` if a storage limit fills it or makes room; a drawings limit is announced to its members' apps (`vaults_changed`) |
 | `GET /admin/stats` | `read`: the server's `version` (as in `GET /info`), counts of users, agents, vaults, objects, updates, snapshots and attachments, and the database's size (`storage_bytes`: pages in use) |
-| `GET /admin/settings` | `read`: `{settings, read_only?, storage_bytes}`: the instance settings below, whether (and why) the server refuses changes now, and the database's size |
+| `GET /admin/settings` | `read`: `{settings, read_only?, storage_bytes, storage_full}`: the instance settings below, whether (and why) the server refuses changes now, the database's size, and whether it reached `max_storage_mb` |
 | `PATCH /admin/settings {…}` | `settings`: change any of the settings; the rest stay. Answers like `GET`. Takes effect at once (no restart) and is kept in the database |
 | `GET /admin/clients` | the admin clients: `id`, `name`, `scopes`, `created_at`, `managed`, `tokens` (`id`, `hint` — the last characters —, `created_at`, `last_used_at`; never the tokens) |
 | `POST /admin/clients {name, scopes}` | `clients`: a new client (name: 1–64 of `a-z 0-9 . _ -`, unique, else `409`) and its first token: `CreatedAdminToken {client, token}`, the only time the token is shown |
@@ -677,7 +678,7 @@ whenever it runs.
 | `quick_notes_per_user` | quick notes a person may keep unless they have their own `quick_note_allowance` (default 20, §5.3); a change is announced to everyone's apps (`vaults_changed`) |
 | `drawings_per_vault` | drawings a vault may hold, whoever makes them, unless it has its own `drawing_allowance` (default unlimited, §5.5); a change is announced to the apps of every vault's members (`vaults_changed`) |
 | `read_only` | `true`: the server refuses changes (below) |
-| `max_storage_mb` | at this database size (MiB, pages in use) the server turns read-only by itself (`storage_full`), until it is below it again — e.g. the limit was raised. Measured every 10 s and after every settings change |
+| `max_storage_mb` | at this database size (MiB, pages in use) every vault is full (below) until it is below it again — something was deleted for good, or the limit was raised. Measured every 10 s and after every settings change. The room a family or a team gets on its own instance |
 | `storage_per_vault_mb` | at this size (MiB) a vault takes no new content, unless it has its own `storage_allowance` (below); not quick notes |
 | `quick_notes_storage_mb` | at this size (MiB) someone's Personal storage (quick notes, saved shapes) takes no new content, unless the person has their own `quick_notes_storage_allowance` |
 | `oldest_app_version` | the oldest version of the apps the server accepts (`"0.6.0"`), above its build's (`build_oldest_app_version` in `GET /admin/settings`); `""`: only the build's (§11) |
@@ -690,9 +691,9 @@ read_only` — pushes (REST and WebSocket), snapshots, attachments, keys,
 vaults, members, shares, agents. What keeps working: reading and syncing
 down, signing in and out (but no new accounts), devices (register, approve,
 rename, remove), revoking sessions and agents, account key and recovery
-setup, preferences, and administration (which switches it off). Manual
-read-only (`read_only: true`) and `storage_full` are separate: lifting one
-doesn't lift the other; `GET /info` and `mode` report `manual` first.
+setup, preferences, and administration (which switches it off). It is
+separate from a full server (`max_storage_mb`): switching it off leaves the
+vaults full.
 
 **Storage per vault.** The server counts what each vault's encrypted
 content takes: the payloads of its log, its snapshots (history) and its
@@ -715,6 +716,12 @@ Subscribers —
 members, and people a single note of it is shared with, whose edits are
 refused too — get `vault_full` (§7) whenever it turns
 full or has room again, also when an administrator changes a limit.
+
+The server's storage limit (`max_storage_mb`) works the same way for every
+vault at once: while the database is at it, every vault is full
+(`vault_full` with `server: true`), whatever its own limit; deleting for
+good and the rest go on. (Older servers turned read-only instead, which
+also refused deleting.)
 
 ## 10. Operations endpoints
 

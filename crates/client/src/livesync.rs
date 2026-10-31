@@ -9,6 +9,7 @@
 //! update and are merged idempotently.
 
 use std::collections::BTreeSet;
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -875,16 +876,37 @@ async fn handle(
                 }
             }
         }
-        ServerMessage::VaultFull { vault_id, full } => {
+        ServerMessage::VaultFull {
+            vault_id,
+            full,
+            server,
+        } => {
             let Some(v) = hub.get(&vault_id) else {
                 return Ok(None);
             };
-            let (was, name, quick_notes) = {
+            let (was, by_server, name, quick_notes) = {
                 let mut g = v.lock().await;
                 let was = std::mem::replace(&mut g.full, full);
-                (was, g.name().to_string(), g.is_quick_notes())
+                let by_server = std::mem::replace(&mut g.full_by_server, full && server);
+                (was, by_server, g.name().to_string(), g.is_quick_notes())
             };
-            if full && !was {
+            // The server's storage: said once for all its vaults.
+            if full && server {
+                if !was && !hub.server_full.swap(true, Ordering::Relaxed) {
+                    ui::status(
+                        "the server's storage is full: local changes are kept and uploaded once there's room (delete something for good, or ask your administrator for more room)",
+                    );
+                }
+            } else if by_server {
+                // The server has room again (this vault may be at its own
+                // limit still).
+                if hub.server_full.swap(false, Ordering::Relaxed) {
+                    ui::status("the server has room again: uploading local changes");
+                }
+                if !full && conn.synced.contains(&vault_id) {
+                    spawn_push(hub, &vault_id);
+                }
+            } else if full && !was {
                 ui::status(&if quick_notes {
                     "your quick notes are full: local changes are kept and uploaded once they have room (delete a quick note, or ask your administrator for more room)".to_string()
                 } else {

@@ -871,31 +871,60 @@ async fn read_only_mode_keeps_everything_but_refuses_changes() {
 }
 
 #[tokio::test]
-async fn a_full_database_turns_the_server_read_only_until_there_is_room() {
+async fn a_full_database_fills_every_vault_until_there_is_room() {
     let srv = start_with_operator().await;
     let mut alice = new_user(&srv.base, "alice").await;
     let v = alice.create_vault("Notes").await;
-
-    let s = settings(&srv, serde_json::json!({ "max_storage_mb": 0 })).await;
-    assert_eq!(s.read_only, Some(ReadOnly::StorageFull));
-    let note = NoteDoc::new();
-    let u = note.set_text("no room").unwrap();
-    let err = alice
-        .push(&v, vec![alice.encrypt_update(&v, "n", &u)])
+    let work = alice.create_vault("Work").await;
+    let text = |t: &str| NoteDoc::new().set_text(t).unwrap();
+    alice
+        .push(&v, vec![alice.encrypt_update(&v, "old", &text("old"))])
         .await
-        .unwrap_err();
-    assert_eq!(err.0, 503);
-    assert!(err.1.contains("storage is full"), "{}", err.1);
+        .unwrap();
+    let mut ws = subscribed(&srv, &alice, &v, None).await;
+    let server_full = |m: &ServerMessage| match m {
+        ServerMessage::VaultFull {
+            vault_id,
+            full,
+            server,
+        } if *vault_id == v => Some((*full, *server)),
+        _ => None,
+    };
 
-    // The two reasons are separate: lifting one leaves the other.
+    // Every vault is full, because the server is: its subscribers hear so.
+    let s = settings(&srv, serde_json::json!({ "max_storage_mb": 0 })).await;
+    assert!(s.storage_full);
+    assert_eq!(s.read_only, None);
+    assert_eq!(ws.until(server_full).await, (true, true));
+    for vault in [&v, &work] {
+        let u = alice.encrypt_update(vault, "n", &text("no room"));
+        let err = alice.push(vault, vec![u]).await.unwrap_err();
+        assert_eq!(err.0, 507, "{}", err.1);
+    }
+    // All but new content goes on: deleting for good (which makes room),
+    // keys.
+    assert_eq!(
+        alice
+            .api
+            .status::<()>(Method::DELETE, &format!("/vaults/{v}/objects/old"), None)
+            .await,
+        204
+    );
+    alice.rotate(&v).await;
+
+    // It is separate from read-only mode: switching that on and off leaves
+    // the server full.
     let s = settings(&srv, serde_json::json!({ "read_only": true })).await;
     assert_eq!(s.read_only, Some(ReadOnly::Manual));
     let s = settings(&srv, serde_json::json!({ "read_only": false })).await;
-    assert_eq!(s.read_only, Some(ReadOnly::StorageFull));
-    let s = settings(&srv, serde_json::json!({ "max_storage_mb": 1024 })).await;
     assert_eq!(s.read_only, None);
+    assert!(s.storage_full);
+
+    let s = settings(&srv, serde_json::json!({ "max_storage_mb": 1024 })).await;
+    assert!(!s.storage_full);
+    assert_eq!(ws.until(server_full).await, (false, false));
     alice
-        .push(&v, vec![alice.encrypt_update(&v, "n", &u)])
+        .push(&v, vec![alice.encrypt_update(&v, "n", &text("room again"))])
         .await
         .unwrap();
     // Settings outlive a restart (they are in the database).
@@ -1186,7 +1215,7 @@ async fn vault_info(u: &User, v: &str) -> VaultInfo {
 /// What a `vault_full` message says of vault `v`.
 fn vault_full(m: &ServerMessage, v: &str) -> Option<bool> {
     match m {
-        ServerMessage::VaultFull { vault_id, full } if vault_id == v => Some(*full),
+        ServerMessage::VaultFull { vault_id, full, .. } if vault_id == v => Some(*full),
         _ => None,
     }
 }

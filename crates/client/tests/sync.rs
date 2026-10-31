@@ -998,6 +998,50 @@ async fn new_vaults_know_their_storage_limit_at_once() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_full_server_keeps_edits_in_every_vault_until_there_is_room() {
+    use notekpr_core::protocol::{InstanceSettingsUpdate, Limit};
+    let srv = start().await;
+    // The first person in administers the server too.
+    let alice = login(&srv, "alice").await;
+    manage::create_vault(&alice, "Photos").await.unwrap();
+    manage::create_vault(&alice, "Notes").await.unwrap();
+    let live = live(hub(&alice).await).await;
+    let photos = live.hub.resolve("Photos").await.unwrap();
+    let notes = live.hub.resolve("Notes").await.unwrap();
+    let limit = |mb: Limit| {
+        let api = &alice.api;
+        async move {
+            let change = InstanceSettingsUpdate {
+                max_storage_mb: Some(mb),
+                ..Default::default()
+            };
+            let _: serde_json::Value = api.patch("/admin/settings", &change).await.unwrap();
+        }
+    };
+
+    limit(Limit::Max(0)).await;
+    for v in [&photos, &notes] {
+        eventually(10, "every vault is full, by the server", || async {
+            let g = v.lock().await;
+            g.full && g.full_by_server
+        })
+        .await;
+    }
+    ops::put_document(&live.hub, "Notes", "Kept.md", "written meanwhile\n", None)
+        .await
+        .unwrap();
+    assert!(!notes.lock().await.replica.pending.is_empty());
+
+    limit(Limit::Unlimited).await;
+    eventually(5, "the kept edit is uploaded", || async {
+        notes.lock().await.replica.pending.is_empty()
+    })
+    .await;
+    assert!(!photos.lock().await.full && !photos.lock().await.full_by_server);
+    live.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_full_vault_keeps_edits_until_it_has_room() {
     use notekpr_core::protocol::{AdminUpdateVault, Allowance};
     let srv = start().await;

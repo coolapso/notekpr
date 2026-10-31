@@ -291,6 +291,9 @@ pub struct Ui {
     pub read_only: RwSignal<Option<ReadOnly>>,
     /// Vaults at their storage limit (`Core::full`).
     pub full: RwSignal<BTreeSet<String>>,
+    /// Whether they are full because the server's storage is (every vault
+    /// is then).
+    pub server_full: RwSignal<bool>,
     /// The server needs a newer version of this page: nothing syncs until
     /// it is reloaded (`sync::outdated`).
     pub outdated: RwSignal<bool>,
@@ -352,6 +355,7 @@ pub fn init_ui() -> Ui {
         conn: RwSignal::new(ConnState::Connecting),
         read_only: RwSignal::new(None),
         full: RwSignal::new(BTreeSet::new()),
+        server_full: RwSignal::new(false),
         outdated: RwSignal::new(false),
         pending: RwSignal::new(0),
         presence: RwSignal::new(vec![]),

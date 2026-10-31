@@ -115,6 +115,9 @@ pub struct Hub {
     online: AtomicBool,
     /// Whether the server refuses changes, as the live connection last said.
     server_read_only: std::sync::Mutex<Option<ReadOnly>>,
+    /// Whether "the server's storage is full" was said (once for all its
+    /// vaults).
+    pub(crate) server_full: AtomicBool,
     /// When true, local edits are pushed immediately (no live loop, or connected).
     push_now: AtomicBool,
     /// Notes edited on this machine and when, for "editing session ended"
@@ -145,6 +148,7 @@ impl Hub {
             push_locks: Default::default(),
             online: AtomicBool::new(false),
             server_read_only: std::sync::Mutex::new(None),
+            server_full: AtomicBool::new(false),
             push_now: AtomicBool::new(true),
             waiting_for_keys: Default::default(),
             edited: Default::default(),

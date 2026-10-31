@@ -501,12 +501,7 @@ async fn forward(
     match state.instance.vault_full(&state.db, &vault_id).await {
         Ok(false) => {}
         Ok(true) => {
-            if !send(ServerMessage::VaultFull {
-                vault_id: vault_id.clone(),
-                full: true,
-            })
-            .await
-            {
+            if !send(vault_full(&state, &vault_id, true)).await {
                 return;
             }
         }
@@ -534,11 +529,7 @@ async fn forward(
                         last = h;
                         // A `vault_full` missed in the gap: how it is now.
                         if let Ok(full) = state.instance.vault_full(&state.db, &vault_id).await
-                            && !send(ServerMessage::VaultFull {
-                                vault_id: vault_id.clone(),
-                                full,
-                            })
-                            .await
+                            && !send(vault_full(&state, &vault_id, full)).await
                         {
                             return;
                         }
@@ -656,14 +647,21 @@ async fn forward(
                 object_id: object_id.clone(),
                 event: *event,
             },
-            VaultEvent::Storage { full } => ServerMessage::VaultFull {
-                vault_id: v,
-                full: *full,
-            },
+            VaultEvent::Storage { full } => vault_full(&state, &v, *full),
         };
         if !send(msg).await {
             return;
         }
+    }
+}
+
+/// Whether a vault is full, and whether that's because the server's storage
+/// is.
+fn vault_full(state: &AppState, vault_id: &str, full: bool) -> ServerMessage {
+    ServerMessage::VaultFull {
+        vault_id: vault_id.to_string(),
+        full,
+        server: full && state.instance.storage_full(),
     }
 }
 

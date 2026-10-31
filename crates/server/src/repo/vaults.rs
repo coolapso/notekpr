@@ -113,11 +113,31 @@ pub async fn storage(db: impl SqliteExecutor<'_>, vault_id: &str) -> AppResult<O
     .bind(vault_id)
     .fetch_optional(db)
     .await?;
-    Ok(row.map(|(kind, bytes, a)| Storage {
-        kind: VaultKind::parse(&kind).unwrap_or_default(),
+    Ok(row.map(|(kind, bytes, a)| storage_row(&kind, bytes, a)))
+}
+
+fn storage_row(kind: &str, bytes: i64, a: Option<i64>) -> Storage {
+    Storage {
+        kind: VaultKind::parse(kind).unwrap_or_default(),
         bytes: bytes.max(0) as u64,
         allowance: allowance(a),
-    }))
+    }
+}
+
+/// Every vault's [`storage`].
+pub async fn every_storage(db: impl SqliteExecutor<'_>) -> AppResult<Vec<(String, Storage)>> {
+    let rows: Vec<(String, String, i64, Option<i64>)> = sqlx::query_as(
+        "SELECT v.id, v.kind, v.storage_bytes,
+                CASE v.kind WHEN 'quick_notes' THEN o.quick_notes_storage_allowance
+                            ELSE v.storage_allowance END
+         FROM vaults v JOIN users o ON o.id = v.owner_id",
+    )
+    .fetch_all(db)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|(id, kind, bytes, a)| (id, storage_row(&kind, bytes, a)))
+        .collect())
 }
 
 /// Set a vault's own storage limit (MiB). Rows affected: none for quick

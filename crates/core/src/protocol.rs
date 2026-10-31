@@ -1580,7 +1580,9 @@ impl InstanceSettings {
 pub enum ReadOnly {
     /// An administrator switched read-only mode on.
     Manual,
-    /// The database reached the size limit (`max_storage_mb`).
+    /// The database reached the size limit (`max_storage_mb`), from older
+    /// servers: servers now take no new content then instead
+    /// ([`ServerMessage::VaultFull`]), and stay writable.
     StorageFull,
     /// A reason from a newer release: read-only all the same.
     #[serde(other)]
@@ -1597,6 +1599,10 @@ pub struct AdminSettings {
     /// Bytes the database uses now.
     #[serde(default)]
     pub storage_bytes: u64,
+    /// Whether the database reached `max_storage_mb`: every vault is full
+    /// until there's room.
+    #[serde(default)]
+    pub storage_full: bool,
     /// The oldest version of the apps the server's build accepts (`0.0.0`:
     /// any); [`InstanceSettings::oldest_app_version`] can only raise it.
     #[serde(default)]
@@ -1907,6 +1913,10 @@ pub enum ServerMessage {
     VaultFull {
         vault_id: String,
         full: bool,
+        /// Full because the server's storage is (`max_storage_mb`): every
+        /// vault is, whatever its own limit.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        server: bool,
     },
 }
 

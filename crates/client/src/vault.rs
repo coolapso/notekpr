@@ -88,6 +88,8 @@ pub struct Vault {
     ///
     /// [`ServerMessage::VaultFull`]: notekpr_core::protocol::ServerMessage::VaultFull
     pub full: bool,
+    /// It is full because the server's storage is.
+    pub full_by_server: bool,
     /// Why the vault became read-only locally (access revoked, deleted).
     pub read_only: Option<String>,
     pub pending_blobs: BTreeSet<String>,
@@ -238,6 +240,7 @@ impl Vault {
             storage_bytes: 0,
             storage_limit_mb: Limit::Unlimited,
             full: false,
+            full_by_server: false,
             read_only: None,
             pending_blobs: BTreeSet::new(),
             last_sync: None,
@@ -423,6 +426,7 @@ impl Vault {
             storage_bytes: 0,
             storage_limit_mb: Limit::Unlimited,
             full: false,
+            full_by_server: false,
             read_only: s.read_only,
             pending_blobs: s.pending_blobs,
             last_sync: s.last_sync,

@@ -7,14 +7,12 @@
 //! instance) and admin clients with the `settings` scope
 //! (`admin_clients.rs`).
 //!
-//! Read-only mode has two causes, kept apart so that lifting one doesn't
-//! lift the other: the administrators' switch (`InstanceSettings::read_only`)
-//! and a full database (`max_storage_mb` reached; [`Instance::refresh_storage`]
-//! measures it periodically and after each settings change). While either
-//! holds, the routes that change something are refused with
-//! [`AppError::ReadOnly`] (`routes::read_only_guard`, `sync::push`), and live
-//! connections are told ([`Instance::subscribe`], `ws.rs`) so clients keep
-//! their changes and send them the moment the server is writable again.
+//! Read-only mode is the administrators' switch
+//! (`InstanceSettings::read_only`). While it is on, the routes that change
+//! something are refused with [`AppError::ReadOnly`]
+//! (`routes::read_only_guard`, `sync::push`), and live connections are told
+//! ([`Instance::subscribe`], `ws.rs`) so clients keep their changes and send
+//! them the moment the server is writable again.
 //!
 //! Limits never take anything away: they are checked when something new
 //! would be created (an account, a vault, an agent, a quick note, a
@@ -24,7 +22,10 @@
 //! else `drawings_per_vault`.
 //!
 //! Each vault has a storage limit too: its own, set by administrators, else
-//! `storage_per_vault_mb`. Someone's quick notes have the person's instead
+//! `storage_per_vault_mb`; and while the database is at the server's limit
+//! (`max_storage_mb`, [`Instance::refresh_storage`] measures it periodically
+//! and after each settings change), every vault is full. That is the room a
+//! family or a team gets on its own instance, shared however they like. Someone's quick notes have the person's instead
 //! (`users.quick_notes_storage_allowance`, else `quick_notes_storage_mb`),
 //! like how many they may keep. The database keeps each vault's size
 //! (`vaults.storage_bytes`, see the triggers in the first migration). A
@@ -149,9 +150,9 @@ impl Instance {
         Ok(next)
     }
 
-    /// Measure the database and turn read-only on or off by its limit, and
-    /// count the vaults at their own limits (for monitoring). Returns the
-    /// bytes in use.
+    /// Measure the database and fill every vault or make room by its limit
+    /// (`sync::check_storage` tells the vaults' subscribers), and count the
+    /// vaults at their own limits (for monitoring). Returns the bytes in use.
     pub async fn refresh_storage(&self, db: &Db) -> AppResult<u64> {
         let used = repo::settings::used_bytes(db).await?;
         let full = self.settings().max_storage_mb.reached_mb(used);
@@ -159,27 +160,32 @@ impl Instance {
             if full {
                 tracing::warn!(
                     used_bytes = used,
-                    "storage limit reached: the server is read-only"
+                    "storage limit reached: no new content until there is room"
                 );
             } else {
                 tracing::info!(used_bytes = used, "below the storage limit again");
             }
         }
-        self.update_mode();
         metrics::gauge!("notekpr_storage_used_bytes").set(used as f64);
+        metrics::gauge!("notekpr_storage_full").set(if full { 1.0 } else { 0.0 });
         let full_vaults = repo::vaults::full_count(db, &self.settings()).await?;
         metrics::gauge!("notekpr_vaults_full").set(full_vaults as f64);
         Ok(used)
     }
 
+    /// Whether the database reached the server's storage limit: every vault
+    /// is full while it is.
+    pub fn storage_full(&self) -> bool {
+        self.storage_full.load(Ordering::Relaxed)
+    }
+
     fn update_mode(&self) {
-        let mode = if self.settings.read().unwrap().read_only {
-            Some(ReadOnly::Manual)
-        } else if self.storage_full.load(Ordering::Relaxed) {
-            Some(ReadOnly::StorageFull)
-        } else {
-            None
-        };
+        let mode = self
+            .settings
+            .read()
+            .unwrap()
+            .read_only
+            .then_some(ReadOnly::Manual);
         self.mode.send_if_modified(|m| {
             let changed = *m != mode;
             *m = mode;
@@ -276,15 +282,28 @@ impl Instance {
         Ok(allowance.resolve(self.settings().drawings_per_vault))
     }
 
-    /// Whether a vault reached its storage limit (`false` for no such vault):
-    /// its own, else the instance's for its kind.
+    /// Whether a vault is full (`false` for no such vault): the server's
+    /// storage is, or the vault reached its own limit, else the instance's
+    /// for its kind.
     pub async fn vault_full(&self, db: impl SqliteExecutor<'_>, vault_id: &str) -> AppResult<bool> {
         let settings = self.settings();
-        Ok(repo::vaults::storage(db, vault_id).await?.is_some_and(|s| {
-            s.allowance
-                .resolve(settings.storage_default(s.kind))
-                .reached_mb(s.bytes)
-        }))
+        Ok(repo::vaults::storage(db, vault_id)
+            .await?
+            .is_some_and(|s| self.storage_full() || at_limit(&settings, &s)))
+    }
+
+    /// Whether each vault is full, as [`Instance::vault_full`] says.
+    pub async fn every_vault_full(
+        &self,
+        db: impl SqliteExecutor<'_>,
+    ) -> AppResult<Vec<(String, bool)>> {
+        let settings = self.settings();
+        let full = self.storage_full();
+        Ok(repo::vaults::every_storage(db)
+            .await?
+            .into_iter()
+            .map(|(id, s)| (id, full || at_limit(&settings, &s)))
+            .collect())
     }
 
     /// Refuse new content in a vault at its storage limit. Runs inside the
@@ -434,4 +453,12 @@ impl Instance {
             .await??;
         Ok(())
     }
+}
+
+/// Whether a vault reached its own storage limit, else the instance's for
+/// its kind.
+fn at_limit(settings: &InstanceSettings, s: &repo::vaults::Storage) -> bool {
+    s.allowance
+        .resolve(settings.storage_default(s.kind))
+        .reached_mb(s.bytes)
 }

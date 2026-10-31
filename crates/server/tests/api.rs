@@ -3387,13 +3387,15 @@ async fn owners_are_equal_and_a_vault_keeps_one() {
 
 #[tokio::test]
 async fn note_keys_say_which_owner_signed_them() {
+    use notekpr_core::engine;
+    use notekpr_core::memberlog::{self, LogBody, LogMember};
     let srv = start().await;
     let mut alice = new_user(&srv.base, "alice").await;
     let mut bob = new_user(&srv.base, "bob").await;
     let dave = new_user(&srv.base, "dave").await;
-    let v = alice.create_vault("Family").await;
-    alice.share(&v, &bob.id, Role::Editor).await.unwrap();
-    // (A vault from before the log: changes need no entries.)
+    let v = alice.create_signed_vault("Family").await;
+    assert_eq!(add_signed(&alice, &v, &bob, Role::Editor).await, 201);
+    // Owners are made in the log only.
     let st = alice
         .api
         .status(
@@ -3405,29 +3407,66 @@ async fn note_keys_say_which_owner_signed_them() {
             }),
         )
         .await;
-    assert_eq!(st, 204);
+    assert_eq!(st, 409);
+    assert_eq!(set_role(&alice, &v, &bob, Role::Owner).await, 204);
     bob.load_keys(&v).await.unwrap();
-    let ring = share_note(&bob, &v, "n1", &dave).await;
-    let (epoch, key) = ring.current().unwrap();
-    let grant =
-        notekpr_core::memberlog::sign_note_grant(&bob.account, &v, "n1", &dave.id, epoch, key);
-    let _: serde_json::Value = bob
+
+    // Bob shares a note, signing Dave's key for it.
+    let note = NoteDoc::new();
+    let u = note.set_text("shared").unwrap();
+    let head = bob
+        .push(&v, vec![bob.encrypt_update(&v, "n1", &u)])
+        .await
+        .unwrap()
+        .head_seq;
+    let (ring, req) = engine::start_sharing(
+        bob.ring(&v),
+        "n1",
+        &engine::ObjectMeta::titled("Shared"),
+        &note.encode_state(),
+        head,
+    )
+    .unwrap();
+    let _: () = bob
         .api
-        .put(
-            &format!("/vaults/{v}/objects/n1/keys/signatures"),
-            &SignGrantsRequest {
-                grants: vec![GrantSignature {
-                    user_id: dave.id.clone(),
-                    epoch,
-                    signature: grant,
-                }],
+        .put(&format!("/vaults/{v}/objects/n1/key"), &req)
+        .await;
+    let public: PublicUser = bob.api.get(&format!("/users/{}", dave.id)).await;
+    let mut envelope = engine::object_share_envelope(&ring, "n1", &public).unwrap();
+    let (epoch, key) = ring.current().unwrap();
+    envelope.signature = Some(memberlog::sign_note_grant(
+        &bob.account,
+        &v,
+        "n1",
+        &dave.id,
+        epoch,
+        key,
+    ));
+    let entry = bob
+        .sign_next(
+            &v,
+            LogBody::Share {
+                object_id: "n1".into(),
+                member: LogMember::new(&dave.id, Role::Editor, &dave.account.public()),
+            },
+        )
+        .await;
+    let _: ObjectShareInfo = bob
+        .api
+        .post(
+            &format!("/vaults/{v}/objects/n1/shares"),
+            &AddObjectShareRequest {
+                user_id: dave.id.clone(),
+                role: Role::Editor,
+                envelope,
+                log_entry: Some(entry),
             },
         )
         .await;
     let keys: ObjectKeysResponse = dave.api.get(&format!("/vaults/{v}/objects/n1/keys")).await;
     let mine = keys.envelopes.last().unwrap();
     assert_eq!(mine.signed_by.as_deref(), Some(bob.id.as_str()));
-    assert!(notekpr_core::memberlog::verify_note_grant(
+    assert!(memberlog::verify_note_grant(
         &bob.account.public(),
         &v,
         "n1",
@@ -4794,8 +4833,8 @@ async fn deleting_ones_account_takes_what_one_has_and_leaves_the_rest() {
     let mut alice = new_user(&srv.base, "alice").await;
     let mut bob = new_user(&srv.base, "bob").await;
     let mut carol = new_user(&srv.base, "carol").await;
-    let team = alice.create_vault("Team").await;
-    alice.share(&team, &bob.id, Role::Editor).await.unwrap();
+    let team = alice.create_signed_vault("Team").await;
+    assert_eq!(add_signed(&alice, &team, &bob, Role::Editor).await, 201);
     let own = alice.create_vault("Own").await;
     let club = carol.create_vault("Club").await;
     carol.share(&club, &alice.id, Role::Editor).await.unwrap();
@@ -4840,18 +4879,7 @@ async fn deleting_ones_account_takes_what_one_has_and_leaves_the_rest() {
         (409, true),
         "{msg}"
     );
-    let st = alice
-        .api
-        .status(
-            Method::PATCH,
-            &format!("/vaults/{team}/members/{}", bob.id),
-            Some(&UpdateMemberRequest {
-                role: Role::Owner,
-                log_entry: None,
-            }),
-        )
-        .await;
-    assert_eq!(st, 204);
+    assert_eq!(set_role(&alice, &team, &bob, Role::Owner).await, 204);
     assert_eq!(
         alice.api.status::<()>(Method::DELETE, "/me", None).await,
         204

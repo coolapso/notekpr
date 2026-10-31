@@ -446,6 +446,13 @@ pub async fn update_member(
     if !req.role.is_known() {
         return Err(bad(UNKNOWN_ROLE));
     }
+    // Owners are made in the membership log (a vault from before it starts
+    // its log first, with its one owner).
+    if req.role == Role::Owner && req.log_entry.is_none() {
+        return Err(conflict(
+            "owners are made in the membership log: update the app",
+        ));
+    }
     {
         // Under the write lock like every membership change, so a push or
         // snapshot checked under it can't land after a demotion.

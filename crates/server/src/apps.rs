@@ -15,7 +15,12 @@ use crate::state::AppState;
 /// stops working with older apps raises it (docs/development.md §Releases):
 /// those are then told to update. Administrators can raise it further
 /// (`oldest_app_version`, [`crate::instance::Instance::oldest_app`]).
-pub const OLDEST_APP_VERSION: Version = Version(0, 0, 0);
+///
+/// 0.8.0: vaults have several owners. Older apps check a vault's log against
+/// the key of the owner the server names, which is no longer its creator once
+/// they have gone — they would cry tampering — and check the keys of shared
+/// notes against that one owner only.
+pub const OLDEST_APP_VERSION: Version = Version(0, 8, 0);
 
 /// Refuse an app older than `oldest`. Development builds, and requests that
 /// don't say which app they are (scripts, apps from before the header), are

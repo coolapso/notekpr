@@ -1112,14 +1112,22 @@ async fn apps_older_than_the_server_accepts_are_told_to_update() {
         .json()
         .await
         .unwrap();
-    assert_eq!(s.build_oldest_app_version, "0.0.0");
+    assert_eq!(
+        s.build_oldest_app_version,
+        notekpr_server::apps::OLDEST_APP_VERSION.to_string()
+    );
     let get = |path: &str| {
         reqwest::Client::new()
             .get(format!("{}{path}", srv.base))
             .bearer_auth(&token)
     };
+    // What this build needs, and no more.
     assert_eq!(
-        status(get("/vaults").header(APP_HEADER, "cli/0.1.0")).await,
+        status(get("/vaults").header(APP_HEADER, "cli/0.7.9")).await,
+        426
+    );
+    assert_eq!(
+        status(get("/vaults").header(APP_HEADER, "cli/0.8.0")).await,
         200
     );
 
@@ -1129,19 +1137,19 @@ async fn apps_older_than_the_server_accepts_are_told_to_update() {
         .await
         .unwrap();
     assert_eq!(r.status().as_u16(), 400);
-    let s = settings(&srv, serde_json::json!({ "oldest_app_version": "0.6.0" })).await;
-    assert_eq!(s.settings.oldest_app_version, "0.6.0");
+    let s = settings(&srv, serde_json::json!({ "oldest_app_version": "0.9.0" })).await;
+    assert_eq!(s.settings.oldest_app_version, "0.9.0");
 
     let r = get("/vaults")
-        .header(APP_HEADER, "cli/0.5.9")
+        .header(APP_HEADER, "cli/0.8.9")
         .send()
         .await
         .unwrap();
     assert_eq!(r.status().as_u16(), 426);
     let body: ApiError = r.json().await.unwrap();
     assert_eq!(body.error, ERROR_UPDATE_REQUIRED);
-    assert_eq!(body.oldest_version.as_deref(), Some("0.6.0"));
-    for fine in ["cli/0.6.0", "web/0.7.1-2-gabc1234", "cli/dev"] {
+    assert_eq!(body.oldest_version.as_deref(), Some("0.9.0"));
+    for fine in ["cli/0.9.0", "web/0.9.1-2-gabc1234", "cli/dev"] {
         assert_eq!(
             status(get("/vaults").header(APP_HEADER, fine)).await,
             200,
@@ -1183,7 +1191,7 @@ async fn apps_older_than_the_server_accepts_are_told_to_update() {
     let s = settings(&srv, serde_json::json!({ "oldest_app_version": "" })).await;
     assert_eq!(s.settings.oldest_app_version, "");
     assert_eq!(
-        status(get("/vaults").header(APP_HEADER, "cli/0.5.9")).await,
+        status(get("/vaults").header(APP_HEADER, "cli/0.8.9")).await,
         200
     );
 }

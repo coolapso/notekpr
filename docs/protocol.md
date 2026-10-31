@@ -162,7 +162,7 @@ unless noted), not the `{error, message}` shape above; an unknown
 | Endpoint | Notes |
 |---|---|
 | `GET /me` | `MeResponse {user, account_key?, has_recovery, session}` |
-| `DELETE /me` | people (agents `403`): delete one's account for good, at once — the vaults one owns, with everything in them (their members get `deleted`), one's quick notes, agents, devices, sessions, keys, sign-in identities and preferences; one leaves the other vaults (`members_changed`) and notes shared with one (`shares_changed`), whose owners' apps renew the keys one held (§5.4). Signing in again makes a new account. `204` |
+| `DELETE /me` | people (agents `403`): delete one's account for good, at once — refused (`409`) while one is the last owner of a vault other people are in (one's own agents aside): someone else is made an owner of it first, or it is deleted. The vaults only one owns go, with everything in them (members — one's agents — get `deleted`); one leaves those one owns with others, which stay theirs; then one's quick notes, agents, devices, sessions, keys, sign-in identities and preferences; one leaves the other vaults (`members_changed`) and notes shared with one (`shares_changed`), whose owners' apps renew the keys one held (§5.4). Signing in again makes a new account. `204` |
 | `PUT /me/account-key` | one-time `AccountSetupRequest`. Humans must include `recovery_envelope` and `device` (first device with its account envelope and an approval signature). Agents send only `key`. |
 | `GET /me/recovery` | the recovery envelope (encrypted under the recovery key) |
 | `PUT /me/recovery {recovery_envelope, signature, version?}` | rotate the recovery key; signature by the account key. With a `version` (clients use the time in ms) the signature covers it and the server accepts only a higher one than the last (`409` otherwise); once one is stored, unversioned updates are refused too, so older updates can't be replayed |
@@ -187,7 +187,9 @@ device's public key, but the code would differ.
 
 ## 5. Vaults, members, keys
 
-Roles: `owner` (one per vault: members, keys, settings, deleting the vault),
+Roles: `owner` (members, keys, settings, deleting the vault; a vault starts
+with one, its creator, and may have several, all equal — any may demote or
+remove another — and always keeps one),
 `admin` (an editor who also runs the vault's tasks: emptying the trash —
 deleting notes and attachments for good — and the activity log; people
 only, never agents), `editor` (writes, moves things to the trash) and
@@ -203,9 +205,9 @@ refuses roles it doesn't know (`400`).
 | `GET/PATCH/DELETE /vaults/{v}` | read: member; update (`encrypted_meta`, `archived`, `viewers_comment`): owner (never quick notes: `400`); delete: owner |
 | `GET /vaults/{v}/keys` | member: own envelopes for every epoch granted + full key chain; the notes' document keys (`objects`, `object_chain`), which notes are shared individually (`shared`; absent on servers from before notes had their own keys) and for those where sharing started (`share_from`: note → first shared epoch) |
 | `GET /vaults/{v}/members` | member: `MemberInfo {user (with account key), role, has_current_key}` |
-| `POST /vaults/{v}/members {user_id, role, key_envelope?, log_entry?}` | owner; never in quick notes (`400`, §5.3). Without an envelope the member is "pending keys" until the owner's client grants them. Role `owner` is refused (`400`), and `admin` for an agent (`400`); an agent can be added only by its owner (`404` otherwise). Membership supersedes single-note shares: adding someone removes their shares of notes in that vault and those notes' keys |
-| `PATCH /vaults/{v}/members/{u} {role, log_entry?}` | owner; never to `owner`, nor `admin` for an agent (`400`) |
-| `DELETE /vaults/{v}/members/{u}` `RemoveMemberRequest {log_entry?, rotation?}` | owner removes, with `rotation`: the vault's new key for everyone else (`RotateKeysRequest`, checked as `keys/rotate` once the person is gone), stored in the same transaction — without it `400`, and nothing changes if it is refused. The person removed gets `access_revoked`, never the new key's `key_rotated`. Any non-owner can remove themselves (no `rotation`, `400` otherwise; the body is optional); if they had the vault key it is to be renewed (§5.4) |
+| `POST /vaults/{v}/members {user_id, role, key_envelope?, log_entry?}` | owner; never in quick notes (`400`, §5.3). Without an envelope the member is "pending keys" until an owner's client grants them. Role `owner` is refused (`400`: owners are made from members, below), and `admin` for an agent (`400`); an agent can be added only by its owner (`404` otherwise). Membership supersedes single-note shares: adding someone removes their shares of notes in that vault and those notes' keys |
+| `PATCH /vaults/{v}/members/{u} {role, log_entry?}` | owner; to `owner` with a `make_owner` entry (§5.2): people with account keys only (agents `400`, no keys yet `409`, an owner already `409`). An owner's role changes too, also one's own, while another owner stays (`400` otherwise); never `admin` for an agent (`400`) |
+| `DELETE /vaults/{v}/members/{u}` `RemoveMemberRequest {log_entry?, rotation?}` | an owner removes anyone, other owners too while one stays (`400` otherwise), with `rotation`: the vault's new key for everyone else (`RotateKeysRequest`, checked as `keys/rotate` once the person is gone), stored in the same transaction — without it `400`, and nothing changes if it is refused. The person removed gets `access_revoked`, never the new key's `key_rotated`. Anyone can remove themselves, an owner while another stays (no `rotation`, `400` otherwise; the body is optional); if they had the vault key it is to be renewed (§5.4). When the member whose vault it is (`owner_id`) stops being an owner, it becomes the other owner's who has been a member longest |
 | `GET /vaults/{v}/log?since=` | member: the membership log, `MemberLogResponse {entries}` (§5.2) |
 | `POST /vaults/{v}/log {entry}` | owner: a `checkpoint` (vaults without a log), a `rekey`, a `share` of a note already shared, `require_signed`, or a `remove` of someone who already left (§5.2) |
 | `POST /vaults/{v}/keys/grant {envelopes}` | owner fills missing envelopes for the current epoch |
@@ -254,16 +256,18 @@ The kinds of `PUT …/key`:
 | **Sharing starts** | `private: false` and either the first key (`0x8000_0001`) or `current + 1` **without** a chain link; a covering `snapshot` is required; no envelopes (people are added afterwards); refused (`409`) while the note has recipients | owner |
 | **Rotation** | `epoch = current + 1` with a `chain_link`, and `envelopes` for exactly the current recipients (else `409`), apart from those listed in `without` (their key changed; sharing the note with them again gives them the key) | owner |
 
-**Grant signatures.** Every note key the owner gives someone it is shared
+**Grant signatures.** Every note key an owner gives someone it is shared
 with (`envelopes` of a share, a rotation or a vault rotation) carries
-`signature`: Ed25519 by the owner over `statement("notekpr/v1/sig/note-key",
+`signature`: Ed25519 by that owner over `statement("notekpr/v1/sig/note-key",
 [vault_id, object_id, user_id, epoch:u32be, commitment])`, the commitment
 being BLAKE3 (context `notekpr v1 note key commitment`) over
 `statement("note-key", [vault_id, object_id, epoch:u32be, key])`. Recipients
 use only their newest envelope, and only if the signature verifies with the
-owner's pinned key; older keys follow from the chain. So a server can't hand
-them a key of its own. Owners' clients sign the grants of keys given before
-this when they open the vault (`key_signed` says which).
+pinned key of the owner who signed it — `signed_by` on the envelope (older
+servers leave it out: the vault's owner then); older keys follow from the
+chain. So a server can't hand them a key of its own. Owners' clients sign the
+grants of keys given before this when they open the vault (`key_signed` says
+which).
 
 A repeated private first key for a note that has one is refused (`409`;
 clients reload keys and see it registered). Recipients use
@@ -281,10 +285,12 @@ renews every note's key in the same request (removed members knew them).
 ### 5.2 The membership log
 
 Every vault has a **membership log** (`crates/core/src/memberlog.rs`): a
-hash chain of entries signed by the vault's owner (a `leave` is signed by the
-member who leaves). Clients verify it against the owner's key — their own, or
-the one they pinned for the owner — so the server can neither add members nor
-hand out vault keys the owner didn't make.
+hash chain of entries, each signed by someone who is an owner at that point
+(a `leave` is signed by the member who leaves). Clients verify it from its
+first entry, against the key of whoever signed that — the vault's creator:
+their own, or the one they pinned for that person (the entry names them and
+the key it pins, `memberlog::creator`), also once the creator has gone — so
+the server can neither add members nor hand out vault keys no owner made.
 
 `LogEntry {seq, prev, signer, signed_at, body, signature}`; `seq` counts from
 0, `prev` is the previous entry's hash (32 zero bytes for the first). Bodies
@@ -295,9 +301,10 @@ hand out vault keys the owner didn't make.
 | `create` | `owner` (member), `key_commit` | first entry of a new vault; commits to epoch 1's key |
 | `checkpoint` | `members`, `epoch`, `key_commit` | first entry of a vault from before the log: its members as the owner's client saw them, trusted from here on |
 | `add` | `member` | someone joins (keys pinned; empty keys: "pending keys") |
-| `role` | `user_id`, `role` | a role changes (never to or from owner) |
-| `rekey` | `member` | the owner pins a member's (new) account keys |
-| `remove` / `leave` | `user_id` | someone is removed by the owner / leaves |
+| `role` | `user_id`, `role` | a role changes (never to owner; from owner while another stays) |
+| `make_owner` | `user_id` | a member with account keys becomes an owner, equal to the others |
+| `rekey` | `member` | an owner pins a member's (new) account keys (another owner, for an owner) |
+| `remove` / `leave` | `user_id` | someone is removed by an owner / leaves (an owner, while another stays) |
 | `rotate` | `epoch`, `key_commit` | the vault key moves to `epoch` (current + 1) |
 | `share` | `object_id`, `member` | a note is shared with someone who isn't a member (or their role on it changes) |
 | `unshare` | `object_id`, `user_id` | a note is no longer shared with them |
@@ -318,7 +325,7 @@ the same transaction, after checking that it continues the log, is signed by
 the caller with their stored account key, and says exactly what the request
 does (`400` otherwise, `409` if the log moved on meanwhile). Once a vault has
 a log, changes without an entry are refused with `409` (leaving excepted).
-The owner's removal carries two entries, signed one after the other: the
+An owner's removal carries two entries, signed one after the other: the
 `remove` (`RemoveMemberRequest.log_entry`) and, continuing it, the new key's
 `rotate` (in its `rotation`). Clients:
 
@@ -326,10 +333,10 @@ The owner's removal carries two entries, signed one after the other: the
   before (no rollback, no rewritten history);
 * check every vault key they hold against its epoch's commitment (epochs from
   before a checkpoint have none) and don't use a key that fails;
-* as the owner, wrap vault keys only for members the log lists with that role
+* as an owner, wrap vault keys only for members the log lists with that role
   and key, and pin a pending member's keys (`rekey`) before granting them;
 * as the owner of a vault without a log, sign a `checkpoint` when they open it;
-  as the owner of a log without `require_signed`, sign a `share` for every
+  as an owner of a log without `require_signed`, sign a `share` for every
   note already shared (keys checked against pins), then `require_signed` with
   the vault's current head. New vaults get it right after `create`;
 * sign every update and snapshot (§6), and check what they receive: content
@@ -381,25 +388,26 @@ acknowledged the copy — or by being deleted for good.
 
 ### 5.4 Keys someone who left still knows
 
-When the owner removes someone, the new keys come in the same request
-(§5, §5.1). Everyone else who loses access can't renew a key — only the
-owner can — so the server marks the key, and the owner's apps rotate it as
+When an owner removes someone, the new keys come in the same request
+(§5, §5.1). Everyone else who loses access can't renew a key — only an
+owner can — so the server marks the key, and the owners' apps rotate it as
 soon as they see the mark:
 
 | What happens | Marked |
 |---|---|
-| A member who had the vault key leaves | the vault key |
+| A member who had the vault key leaves (an owner too), or deletes their account | the vault key |
 | An agent is deleted | the key of every vault and note it held |
 | Someone removes a note shared with them from their list | that note's key |
 | A shared note is deleted for good (its shares end) | that note's key, listed once the note is brought back |
 
-The owner sees the marks in `GET /vaults` / `GET /vaults/{v}`:
+Owners see the marks in `GET /vaults` / `GET /vaults/{v}`:
 `rotation_pending` and `notes_rotation_pending`. Their apps look when they
 open a vault, on `members_changed`, and on a note's `shares_changed` (which
 the server also sends when a marked note is brought back), and rotate:
 `POST …/keys/rotate` for the vault key (every note's key moves with it), or
 `PUT …/objects/{o}/key` (a rotation) for a note. Any new epoch of that key
-clears its mark. Until then, writes go on under the marked key: a removed
+clears its mark; when several owners' apps rotate at once, one wins and the
+others get `409` and find the mark gone. Until then, writes go on under the marked key: a removed
 person could read them only if the server handed them the ciphertext.
 
 ### 5.5 Drawings

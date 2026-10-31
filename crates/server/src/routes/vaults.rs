@@ -30,6 +30,9 @@ const MAX_META_BYTES: usize = 16 * 1024;
 const MAX_ENVELOPE_BYTES: usize = 1024;
 /// Vault admins delete things for good: people only, never an agent.
 const AGENT_NOT_ADMIN: &str = "agents can't be vault admins";
+const AGENT_NOT_OWNER: &str = "agents can't be vault owners";
+const LAST_OWNER: &str =
+    "a vault keeps an owner: make someone else an owner first, or delete the vault";
 /// A role this server doesn't know: apps keep roles from newer releases
 /// as written ([`Role::Other`]), but nothing may give one.
 const UNKNOWN_ROLE: &str = "unknown role";
@@ -337,7 +340,7 @@ pub async fn add_member(
         return Err(bad(UNKNOWN_ROLE));
     }
     if req.role == Role::Owner {
-        return Err(bad("a vault has exactly one owner"));
+        return Err(bad("add them first, then make them an owner"));
     }
     let target = repo::users::principal(&state.db, &req.user_id)
         .await?
@@ -443,26 +446,42 @@ pub async fn update_member(
     if !req.role.is_known() {
         return Err(bad(UNKNOWN_ROLE));
     }
-    if u == who.user_id || req.role == Role::Owner {
-        return Err(bad("the owner's role cannot be changed"));
-    }
     {
         // Under the write lock like every membership change, so a push or
         // snapshot checked under it can't land after a demotion.
         let _w = state.write_lock.lock().await;
         let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
         access::require_owner(&mut *tx, &v, &who.user_id).await?;
-        if repo::vaults::set_member_role(&mut *tx, &v, &u, &req.role).await? == 0 {
-            return Err(AppError::NotFound);
+        let was = access::member_role_opt(&mut *tx, &v, &u)
+            .await?
+            .ok_or(AppError::NotFound)?;
+        if was == Role::Owner && req.role == Role::Owner {
+            return Err(conflict("they are an owner already"));
+        }
+        // Owners are equal: any may demote another (themselves too), while
+        // one stays.
+        if was == Role::Owner && repo::vaults::other_owners(&mut *tx, &v, &u).await? == 0 {
+            return Err(bad(LAST_OWNER));
         }
         // Only for members (anyone else is 404 above), so whether an id is
         // an agent's doesn't show.
-        if req.role == Role::Admin
-            && repo::users::principal(&mut *tx, &u)
-                .await?
-                .is_some_and(|p| p.is_agent())
-        {
-            return Err(bad(AGENT_NOT_ADMIN));
+        let target = repo::users::principal(&mut *tx, &u).await?;
+        if target.as_ref().is_some_and(|p| p.is_agent()) {
+            match req.role {
+                Role::Admin => return Err(bad(AGENT_NOT_ADMIN)),
+                Role::Owner => return Err(bad(AGENT_NOT_OWNER)),
+                _ => {}
+            }
+        }
+        // Owners sign the membership log.
+        if req.role == Role::Owner && repo::users::account_key(&mut *tx, &u).await?.is_none() {
+            return Err(conflict(
+                "they need encryption keys first: they set them up when they next sign in",
+            ));
+        }
+        repo::vaults::set_member_role(&mut *tx, &v, &u, &req.role).await?;
+        if was == Role::Owner {
+            repo::vaults::hand_over(&mut *tx, &v, &u).await?;
         }
         member_log::check_and_append(
             &mut tx,
@@ -494,11 +513,11 @@ pub async fn update_member(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// Remove a member (owner), or leave a vault (any non-owner member). The
-/// owner's removal carries the vault's new key, stored in the same
-/// transaction, so nothing is ever written under a key the removed member
-/// knows. Someone leaving can't renew the key: the vault is marked for its
-/// owner's apps to rotate it.
+/// Remove a member (an owner), or leave a vault (any member; an owner while
+/// another stays). An owner's removal carries the vault's new key, stored in
+/// the same transaction, so nothing is ever written under a key the removed
+/// member knows. Someone leaving can't renew the key: the vault is marked
+/// for its owners' apps to rotate it.
 pub async fn remove_member(
     State(state): State<AppState>,
     who: Principal,
@@ -507,20 +526,16 @@ pub async fn remove_member(
 ) -> AppResult<StatusCode> {
     let req = req.map(|Json(r)| r).unwrap_or_default();
     let leaving = u == who.user_id;
-    // Owners remove others; anyone but the owner may leave.
+    // Owners remove others; anyone may leave (the last owner aside, below).
     let may_remove = |role: Role| {
-        if leaving {
-            if role == Role::Owner {
-                return Err(bad("the owner cannot leave; delete the vault instead"));
-            }
-        } else if !role.can_manage() {
-            return Err(forbidden("only the vault owner can remove members"));
+        if !leaving && !role.can_manage() {
+            return Err(forbidden("only the vault's owners can remove members"));
         }
         Ok(())
     };
     may_remove(access::member_role(&state.db, &v, &who.user_id).await?)?;
     match (&req.rotation, leaving) {
-        (Some(_), true) => return Err(bad("only the vault's owner rotates its key")),
+        (Some(_), true) => return Err(bad("someone leaving doesn't rotate the vault's key")),
         (None, false) => {
             return Err(bad(
                 "send the vault's new key with the removal (update the app)",
@@ -537,6 +552,15 @@ pub async fn remove_member(
         let _w = state.write_lock.lock().await;
         let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
         may_remove(access::member_role(&mut *tx, &v, &who.user_id).await?)?;
+        let role = access::member_role_opt(&mut *tx, &v, &u)
+            .await?
+            .ok_or(AppError::NotFound)?;
+        if role == Role::Owner {
+            if repo::vaults::other_owners(&mut *tx, &v, &u).await? == 0 {
+                return Err(bad(LAST_OWNER));
+            }
+            repo::vaults::hand_over(&mut *tx, &v, &u).await?;
+        }
         if repo::vaults::delete_member(&mut *tx, &v, &u).await? == 0 {
             return Err(AppError::NotFound);
         }

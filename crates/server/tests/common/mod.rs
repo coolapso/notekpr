@@ -227,6 +227,7 @@ impl User {
                         epoch: 1,
                         envelope: env,
                         signature: None,
+                        signed_by: None,
                     },
                     log_entry: None,
                     kind: Default::default(),
@@ -403,6 +404,7 @@ impl User {
                         epoch,
                         envelope: env,
                         signature: None,
+                        signed_by: None,
                     }),
                     log_entry: None,
                 }),
@@ -414,6 +416,28 @@ impl User {
     pub async fn rotate(&mut self, vault_id: &str) {
         let status = self.rotate_leaving_out(vault_id, &[], true).await;
         assert!((200..300).contains(&status), "rotation refused: {status}");
+    }
+
+    /// Rotate a signed vault's key, with the entry committing to the new one.
+    pub async fn rotate_signed(&mut self, vault_id: &str) {
+        use notekpr_core::memberlog::{LogBody, key_commitment};
+        let (mut req, ring) = self.rotation(vault_id, None, &[], true).await;
+        let (epoch, key) = ring.current().unwrap();
+        let body = LogBody::Rotate {
+            epoch,
+            key_commit: key_commitment(vault_id, epoch, key),
+        };
+        req.log_entry = Some(self.sign_next(vault_id, body).await);
+        let status = self
+            .api
+            .status(
+                reqwest::Method::POST,
+                &format!("/vaults/{vault_id}/keys/rotate"),
+                Some(&req),
+            )
+            .await;
+        assert!((200..300).contains(&status), "rotation refused: {status}");
+        self.keyrings.insert(vault_id.to_string(), ring);
     }
 
     /// Rotate the vault key (and every note's) without giving it to `out`,
@@ -501,6 +525,7 @@ impl User {
                 )
                 .unwrap(),
                 signature: None,
+                signed_by: None,
             })
             .collect();
         let without = |ids: Vec<String>| if declare { ids } else { vec![] };

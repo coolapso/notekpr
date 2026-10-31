@@ -297,7 +297,8 @@ pub(crate) async fn apply_key_change(
         )
         .await?;
         if let Some(sig) = &e.signature {
-            repo::keys::set_grant_signature(&mut **tx, v, o, &e.user_id, epoch, sig).await?;
+            repo::keys::set_grant_signature(&mut **tx, v, o, &e.user_id, epoch, sig, &who.user_id)
+                .await?;
         }
     }
     if let Some(link) = &req.chain_link {
@@ -417,6 +418,7 @@ pub async fn sign_grants(
             &g.user_id,
             g.epoch as i64,
             &g.signature,
+            &who.user_id,
         )
         .await?
         {
@@ -577,7 +579,8 @@ pub async fn add(
     )
     .await?;
     if let Some(sig) = &env.signature {
-        repo::keys::set_grant_signature(&mut *tx, &v, &o, &req.user_id, cur, sig).await?;
+        repo::keys::set_grant_signature(&mut *tx, &v, &o, &req.user_id, cur, sig, &who.user_id)
+            .await?;
     }
     member_log::check_and_append(
         &mut tx,

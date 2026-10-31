@@ -145,7 +145,13 @@ primitives. Formats:
   only detected by comparing fingerprints.
 * **Adds a member on its own, or changes someone's role?** Every membership
   and key change is an entry in the vault's owner-signed, hash-chained
-  membership log (protocol.md §5.2). The owner's client gives vault keys only
+  membership log (protocol.md §5.2). Each entry must be signed by someone who
+  is an owner at that point, checked from the vault's creator's key — the
+  first entry's signer, pinned like any key — so the log still verifies after
+  they leave. Owners are equal: whoever is made one can do all an owner does,
+  remove the others included, so it is a role for people one trusts with the
+  vault; the server can't make anyone an owner, only owners can. Owners'
+  clients give vault keys only
   to members the verified log lists with that role and key, members see
   anyone the log doesn't list flagged in the member list, and rotation stops
   with a security warning if the server lists an unknown member with keys.
@@ -170,8 +176,10 @@ primitives. Formats:
   write next)? The owner commits to every epoch's key in the log; clients
   check each key they receive against the commitment and refuse a vault
   whose key doesn't match or was never announced. People a single note is
-  shared with use only a note key the owner signed giving them (checked
-  against the owner's pinned key).
+  shared with use only a note key an owner signed giving them (checked
+  against that owner's pinned key; which owner signed it is the server's
+  word, as who owns the vault always was for them, and pinned on first use
+  like every key).
 * **Rolls back or rewrites the membership log?** Clients remember the last
   entry they verified; a log that no longer contains it is a security error.
   Vaults from before the log are trusted as their owner's client saw them
@@ -268,6 +276,12 @@ primitives. Formats:
   Members' local replicas, Markdown exports and server backups are the
   recovery path. Deleting for good is not theirs, and the owner and admins
   can undo it for a while (above).
+* **Owners** are equal, and a vault always keeps one: the last owner can't
+  leave or be demoted, and can't delete their account while other people are
+  in the vault — they make someone else an owner, or delete it, first. A
+  vault with one owner depends on that person's account: if they lose every
+  device and their recovery key, nobody can change its members or keys any
+  more (its members still read and write it, and can export it).
 * **Admins** are editors the owner trusts with the vault's tasks: emptying
   the trash (deleting for good, recorded in the vault's activity log, and
   undoing that while the server keeps it) and reading that log. They don't manage members, keys or the vault's settings.
@@ -284,7 +298,7 @@ primitives. Formats:
   notes deleted for good that can still be undone, so undoing it brings back
   no key they knew.
 * **People who leave on their own** (or an agent that is deleted) can't renew
-  the key: only the owner can. The server marks it, and the owner's apps
+  the key: only an owner can. The server marks it, and the owners' apps
   rotate it the next time they're online (protocol.md §5.4). Until then new
   content is written under a key the person still knows; they could read it
   only if the server — or a leak of its data — handed them the ciphertext.
@@ -432,12 +446,12 @@ reported, never applied partially. Duplicate deliveries are no-ops.
    the server's help, add backdated content under an old key epoch. Content
    from before a vault required signatures is accepted unsigned. Recipients
    of single notes don't see the vault's log, so their clients don't check
-   authors (their note keys are signed by the owner, so the keys themselves
+   authors (their note keys are signed by an owner, so the keys themselves
    can't be swapped).
 3. Metadata visible to the server (sizes, timing, social graph).
 4. Browser key storage relies on the browser profile's security.
 5. Post-quantum: key wrapping uses X25519 today; the format is versioned for a
    move to hybrid ML-KEM (X-Wing).
-6. Someone who leaves on their own still knows the key until the owner's
+6. Someone who leaves on their own still knows the key until the owners'
    apps renew it (above): content written in between is readable to them
    with the server's help.

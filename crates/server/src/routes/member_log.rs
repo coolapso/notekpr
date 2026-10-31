@@ -126,7 +126,10 @@ pub(crate) async fn check_and_append(
                 user_id: u,
                 role: r,
             },
-        ) => u == user_id && r == *role,
+        ) => u == user_id && r == *role && **role != Role::Owner,
+        (Expect::Role { user_id, role }, LogBody::MakeOwner { user_id: u }) => {
+            u == user_id && **role == Role::Owner
+        }
         (Expect::Remove { user_id }, LogBody::Remove { user_id: u }) => {
             u == user_id && *user_id != who.user_id
         }
@@ -154,8 +157,10 @@ pub(crate) async fn check_and_append(
                 && checkpoint_matches(tx, vault_id, members).await?
         }
         (Expect::Standalone, LogBody::Rekey { member }) => {
-            access::member_role_opt(&mut **tx, vault_id, &member.user_id).await?
-                == Some(member.role.clone())
+            // Another owner pins an owner's new key.
+            (member.role != Role::Owner || member.user_id != who.user_id)
+                && access::member_role_opt(&mut **tx, vault_id, &member.user_id).await?
+                    == Some(member.role.clone())
                 && !member.enc_public.is_empty()
                 && keys_match(tx, member).await?
         }

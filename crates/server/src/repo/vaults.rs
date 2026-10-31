@@ -617,14 +617,89 @@ pub async fn delete_member(
     vault_id: &str,
     user_id: &str,
 ) -> AppResult<u64> {
+    // A vault keeps an owner.
     Ok(sqlx::query(
-        "DELETE FROM vault_members WHERE vault_id = ? AND user_id = ? AND role != 'owner'",
+        "DELETE FROM vault_members WHERE vault_id = ?1 AND user_id = ?2
+           AND (role != 'owner' OR EXISTS (SELECT 1 FROM vault_members o
+                WHERE o.vault_id = ?1 AND o.role = 'owner' AND o.user_id != ?2))",
     )
     .bind(vault_id)
     .bind(user_id)
     .execute(db)
     .await?
     .rows_affected())
+}
+
+/// How many owners a vault has besides `user_id`.
+pub async fn other_owners(
+    db: impl SqliteExecutor<'_>,
+    vault_id: &str,
+    user_id: &str,
+) -> AppResult<i64> {
+    Ok(sqlx::query_scalar(
+        "SELECT COUNT(*) FROM vault_members WHERE vault_id = ? AND role = 'owner' AND user_id != ?",
+    )
+    .bind(vault_id)
+    .bind(user_id)
+    .fetch_one(db)
+    .await?)
+}
+
+/// Once `from` is no longer an owner of `vault_id` (or is about to go): the
+/// vault is another owner's (`owner_id`: whose vault limit it counts
+/// against, and whose deletion would take it along), the one who has been a
+/// member longest. Nothing changes if it wasn't `from`'s.
+pub async fn hand_over(db: impl SqliteExecutor<'_>, vault_id: &str, from: &str) -> AppResult<()> {
+    sqlx::query(
+        "UPDATE vaults SET owner_id = (SELECT o.user_id FROM vault_members o
+             WHERE o.vault_id = vaults.id AND o.role = 'owner' AND o.user_id != ?2
+             ORDER BY o.added_at, o.user_id LIMIT 1)
+         WHERE id = ?1 AND owner_id = ?2 AND EXISTS (SELECT 1 FROM vault_members o
+             WHERE o.vault_id = vaults.id AND o.role = 'owner' AND o.user_id != ?2)",
+    )
+    .bind(vault_id)
+    .bind(from)
+    .execute(db)
+    .await?;
+    Ok(())
+}
+
+/// [`hand_over`] every vault of `from` that has another owner (before
+/// their account is deleted, which deletes the vaults still theirs).
+pub async fn hand_over_all(db: impl SqliteExecutor<'_>, from: &str) -> AppResult<()> {
+    sqlx::query(
+        "UPDATE vaults SET owner_id = (SELECT o.user_id FROM vault_members o
+             WHERE o.vault_id = vaults.id AND o.role = 'owner' AND o.user_id != ?1
+             ORDER BY o.added_at, o.user_id LIMIT 1)
+         WHERE owner_id = ?1 AND EXISTS (SELECT 1 FROM vault_members o
+             WHERE o.vault_id = vaults.id AND o.role = 'owner' AND o.user_id != ?1)",
+    )
+    .bind(from)
+    .execute(db)
+    .await?;
+    Ok(())
+}
+
+/// The vaults `user_id` is the last owner of while other people are in
+/// them (their own agents aside, which go with them): their account isn't
+/// deleted before those are someone else's too, or deleted.
+pub async fn last_owner_of_shared(
+    db: impl SqliteExecutor<'_>,
+    user_id: &str,
+) -> AppResult<Vec<String>> {
+    Ok(sqlx::query_scalar(
+        "SELECT m.vault_id FROM vault_members m
+         WHERE m.user_id = ?1 AND m.role = 'owner'
+           AND NOT EXISTS (SELECT 1 FROM vault_members o
+                WHERE o.vault_id = m.vault_id AND o.role = 'owner' AND o.user_id != ?1)
+           AND EXISTS (SELECT 1 FROM vault_members x JOIN users u ON u.id = x.user_id
+                WHERE x.vault_id = m.vault_id AND x.user_id != ?1
+                  AND (u.owner_id IS NULL OR u.owner_id != ?1))
+         ORDER BY m.vault_id",
+    )
+    .bind(user_id)
+    .fetch_all(db)
+    .await?)
 }
 
 pub async fn member_ids(db: impl SqliteExecutor<'_>, vault_id: &str) -> AppResult<Vec<String>> {

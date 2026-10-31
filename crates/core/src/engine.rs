@@ -336,6 +336,7 @@ pub fn new_vault(
             epoch: 1,
             envelope,
             signature: None,
+            signed_by: None,
         },
         log_entry: Some(log_entry),
         kind: Default::default(),
@@ -387,6 +388,7 @@ pub fn share_envelope(ring: &VaultKeyring, user: &PublicUser) -> Result<KeyEnvel
         epoch,
         envelope: wrap_vault_key(vk, ring.vault_id(), epoch, &user.id, &public.enc_public)?,
         signature: None,
+        signed_by: None,
     })
 }
 
@@ -429,6 +431,7 @@ pub fn rotate(
                 &public.enc_public,
             )?,
             signature: None,
+            signed_by: None,
         });
     }
     let chain_link = keys::encrypt_chain_link(&new, new_epoch, &old, ring.vault_id());
@@ -811,6 +814,7 @@ pub fn rotate_object_key(
             epoch: new_epoch,
             envelope: wrap_vault_key(&nk, &scope, new_epoch, &u.id, &public.enc_public)?,
             signature: None,
+            signed_by: None,
         });
     }
     let mut next = doc_ring.clone();
@@ -852,6 +856,7 @@ pub fn object_share_envelope(
         epoch,
         envelope: wrap_vault_key(dk, &scope, epoch, &user.id, &public.enc_public)?,
         signature: None,
+        signed_by: None,
     })
 }
 

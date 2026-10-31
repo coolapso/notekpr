@@ -421,13 +421,17 @@ pub struct KeyEnvelope {
     pub epoch: u32,
     #[serde(with = "b64")]
     pub envelope: Vec<u8>,
-    /// A note's key for someone it is shared with: the vault owner's grant
+    /// A note's key for someone it is shared with: an owner's grant
     /// signature (`memberlog::sign_note_grant`), which they check.
     #[serde(default, with = "b64::opt", skip_serializing_if = "Option::is_none")]
     pub signature: Option<Vec<u8>>,
+    /// Which owner signed it (from servers; older ones leave it out: the
+    /// vault's owner then).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signed_by: Option<String>,
 }
 
-/// The owner's grant signature for a key someone already holds.
+/// An owner's grant signature for a key someone already holds.
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct GrantSignature {
     pub user_id: String,

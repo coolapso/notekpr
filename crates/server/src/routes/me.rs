@@ -31,9 +31,11 @@ pub async fn export(
 }
 
 /// Delete one's own account (people; agents are deleted by their owner):
-/// the vaults they own go for everyone, with everything in them; they
-/// leave the others, whose owners' apps then renew the keys they held, as
-/// for notes shared with them. Their agents go too. Signing in again makes
+/// the vaults only they own go for everyone, with everything in them —
+/// refused while other people are in one of those (`409`): it is made
+/// someone else's too, or deleted, first. They leave the others, whose
+/// owners' apps then renew the keys they held, as for notes shared with
+/// them. Their agents go too. Signing in again makes
 /// a new account.
 pub async fn delete_account(
     State(state): State<AppState>,
@@ -44,6 +46,15 @@ pub async fn delete_account(
     let (owned, joined, notes, connections) = {
         let _w = state.write_lock.lock().await;
         let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
+        let kept = repo::vaults::last_owner_of_shared(&mut *tx, &who.user_id).await?;
+        if !kept.is_empty() {
+            return Err(conflict(format!(
+                "you are the last owner of {} vault(s) other people are in: make someone else an owner of each, or delete them, first",
+                kept.len()
+            )));
+        }
+        // Vaults they share ownership of stay, with the other owners.
+        repo::vaults::hand_over_all(&mut *tx, &who.user_id).await?;
         let mut owned = Vec::new();
         for v in repo::vaults::ids_owned(&mut *tx, &who.user_id).await? {
             let members = repo::vaults::member_ids(&mut *tx, &v).await?;

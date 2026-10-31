@@ -2230,6 +2230,7 @@ async fn role_dependent_writes_follow_role_changes() {
             )
             .unwrap(),
             signature: None,
+            signed_by: None,
         }],
     };
     assert_eq!(
@@ -2481,6 +2482,7 @@ async fn only_the_owner_and_admins_delete_for_good() {
                 epoch: 1,
                 envelope: vec![1; 60],
                 signature: None,
+                signed_by: None,
             },
             log_entry: None,
         };
@@ -3206,6 +3208,236 @@ async fn membership_changes_carry_owner_signed_log_entries() {
     drop(dana_api);
 }
 
+/// Add `who` to a signed vault as `owner` does: their key and a signed entry.
+async fn add_signed(owner: &User, v: &str, who: &User, role: Role) -> u16 {
+    use notekpr_core::memberlog::{LogBody, LogMember};
+    let (epoch, key) = owner.ring(v).current().unwrap();
+    let envelope =
+        keys::wrap_vault_key(key, v, epoch, &who.id, &who.account.public().enc_public).unwrap();
+    let entry = owner
+        .sign_next(
+            v,
+            LogBody::Add {
+                member: LogMember::new(&who.id, role.clone(), &who.account.public()),
+            },
+        )
+        .await;
+    owner
+        .api
+        .status(
+            Method::POST,
+            &format!("/vaults/{v}/members"),
+            Some(&AddMemberRequest {
+                user_id: who.id.clone(),
+                role,
+                key_envelope: Some(KeyEnvelope {
+                    user_id: who.id.clone(),
+                    epoch,
+                    envelope,
+                    signature: None,
+                    signed_by: None,
+                }),
+                log_entry: Some(entry),
+            }),
+        )
+        .await
+}
+
+/// `by` gives `who` a role in a signed vault, with the entry that says so.
+async fn set_role(by: &User, v: &str, who: &User, role: Role) -> u16 {
+    use notekpr_core::memberlog::LogBody;
+    let body = match role {
+        Role::Owner => LogBody::MakeOwner {
+            user_id: who.id.clone(),
+        },
+        _ => LogBody::Role {
+            user_id: who.id.clone(),
+            role: role.clone(),
+        },
+    };
+    let entry = by.sign_next(v, body).await;
+    by.api
+        .status(
+            Method::PATCH,
+            &format!("/vaults/{v}/members/{}", who.id),
+            Some(&UpdateMemberRequest {
+                role,
+                log_entry: Some(entry),
+            }),
+        )
+        .await
+}
+
+#[tokio::test]
+async fn owners_are_equal_and_a_vault_keeps_one() {
+    use notekpr_core::memberlog::{LogBody, LogState};
+    let srv = start().await;
+    let mut alice = new_user(&srv.base, "alice").await;
+    let mut bob = new_user(&srv.base, "bob").await;
+    let carol = new_user(&srv.base, "carol").await;
+    let v = alice.create_signed_vault("Family").await;
+    for u in [&bob, &carol] {
+        assert_eq!(add_signed(&alice, &v, u, Role::Editor).await, 201);
+    }
+    let owner_of = |u: &User| {
+        let (api, v) = (u.api.clone(), v.clone());
+        async move { api.get::<VaultInfo>(&format!("/vaults/{v}")).await.owner_id }
+    };
+
+    // Owners are made from members, with their own entry, by an owner.
+    let bob_path = format!("/vaults/{v}/members/{}", bob.id);
+    let wrong = alice
+        .sign_next(
+            &v,
+            LogBody::Role {
+                user_id: bob.id.clone(),
+                role: Role::Owner,
+            },
+        )
+        .await;
+    let req = UpdateMemberRequest {
+        role: Role::Owner,
+        log_entry: Some(wrong),
+    };
+    assert_eq!(
+        alice.api.status(Method::PATCH, &bob_path, Some(&req)).await,
+        400
+    );
+    assert_eq!(set_role(&carol, &v, &bob, Role::Owner).await, 403);
+    assert_eq!(set_role(&alice, &v, &bob, Role::Owner).await, 204);
+    assert_eq!(
+        set_role(&alice, &v, &bob, Role::Owner).await,
+        409,
+        "one already"
+    );
+    bob.load_keys(&v).await.unwrap();
+
+    // Bob signs as an owner: he changes roles, rotates keys, demotes Alice
+    // (owners are equal) — and the vault is his then.
+    assert_eq!(set_role(&bob, &v, &carol, Role::Viewer).await, 204);
+    bob.rotate_signed(&v).await;
+    assert_eq!(owner_of(&carol).await, alice.id);
+    assert_eq!(set_role(&bob, &v, &alice, Role::Editor).await, 204);
+    assert_eq!(owner_of(&carol).await, bob.id);
+    assert_eq!(set_role(&alice, &v, &carol, Role::Editor).await, 403);
+
+    // The last owner neither leaves, nor demotes themselves, nor goes with
+    // their account while others are in the vault.
+    let leave = bob
+        .sign_next(
+            &v,
+            LogBody::Leave {
+                user_id: bob.id.clone(),
+            },
+        )
+        .await;
+    let st = bob
+        .api
+        .status(
+            Method::DELETE,
+            &bob_path,
+            Some(&RemoveMemberRequest {
+                log_entry: Some(leave),
+                ..Default::default()
+            }),
+        )
+        .await;
+    assert_eq!(st, 400);
+    assert_eq!(set_role(&bob, &v, &bob, Role::Editor).await, 400);
+    let (st, msg) = bob
+        .api
+        .call::<(), serde_json::Value>(Method::DELETE, "/me", None)
+        .await
+        .unwrap_err();
+    assert_eq!(st, 409);
+    assert!(msg.contains("last owner of 1 vault"), "{msg}");
+
+    // With Alice an owner again, Bob's account goes and the vault stays,
+    // Alice's; her app then signs that he is gone. The log still verifies
+    // from her, its creator.
+    assert_eq!(set_role(&bob, &v, &alice, Role::Owner).await, 204);
+    assert_eq!(bob.api.status::<()>(Method::DELETE, "/me", None).await, 204);
+    assert_eq!(owner_of(&alice).await, alice.id);
+    let gone = alice
+        .sign_next(
+            &v,
+            LogBody::Remove {
+                user_id: bob.id.clone(),
+            },
+        )
+        .await;
+    assert_eq!(
+        alice
+            .api
+            .status(
+                Method::POST,
+                &format!("/vaults/{v}/log"),
+                Some(&AppendLogRequest { entry: gone })
+            )
+            .await,
+        204
+    );
+    let s = LogState::verify(&v, &alice.account.public(), &alice.member_log(&v).await).unwrap();
+    assert_eq!(
+        s.owners().map(|m| m.user_id.clone()).collect::<Vec<_>>(),
+        vec![alice.id.clone()]
+    );
+    assert!(s.member(&carol.id).is_some() && s.member(&bob.id).is_none());
+}
+
+#[tokio::test]
+async fn note_keys_say_which_owner_signed_them() {
+    let srv = start().await;
+    let mut alice = new_user(&srv.base, "alice").await;
+    let mut bob = new_user(&srv.base, "bob").await;
+    let dave = new_user(&srv.base, "dave").await;
+    let v = alice.create_vault("Family").await;
+    alice.share(&v, &bob.id, Role::Editor).await.unwrap();
+    // (A vault from before the log: changes need no entries.)
+    let st = alice
+        .api
+        .status(
+            Method::PATCH,
+            &format!("/vaults/{v}/members/{}", bob.id),
+            Some(&UpdateMemberRequest {
+                role: Role::Owner,
+                log_entry: None,
+            }),
+        )
+        .await;
+    assert_eq!(st, 204);
+    bob.load_keys(&v).await.unwrap();
+    let ring = share_note(&bob, &v, "n1", &dave).await;
+    let (epoch, key) = ring.current().unwrap();
+    let grant =
+        notekpr_core::memberlog::sign_note_grant(&bob.account, &v, "n1", &dave.id, epoch, key);
+    let _: serde_json::Value = bob
+        .api
+        .put(
+            &format!("/vaults/{v}/objects/n1/keys/signatures"),
+            &SignGrantsRequest {
+                grants: vec![GrantSignature {
+                    user_id: dave.id.clone(),
+                    epoch,
+                    signature: grant,
+                }],
+            },
+        )
+        .await;
+    let keys: ObjectKeysResponse = dave.api.get(&format!("/vaults/{v}/objects/n1/keys")).await;
+    let mine = keys.envelopes.last().unwrap();
+    assert_eq!(mine.signed_by.as_deref(), Some(bob.id.as_str()));
+    assert!(notekpr_core::memberlog::verify_note_grant(
+        &bob.account.public(),
+        &v,
+        "n1",
+        &dave.id,
+        mine.epoch,
+        key,
+        mine.signature.as_deref().unwrap(),
+    ));
+}
+
 #[tokio::test]
 async fn an_existing_vault_starts_its_log_with_a_checkpoint() {
     use notekpr_core::memberlog::{LogBody, LogEntry, LogMember, LogState, key_commitment};
@@ -3770,6 +4002,7 @@ async fn a_rotation_can_leave_out_people_whose_key_changed_on_purpose() {
                     envelope: keys::wrap_vault_key(key, &v, epoch, &carol.id, &pk.enc_public)
                         .unwrap(),
                     signature: None,
+                    signed_by: None,
                 }],
             },
         )
@@ -4107,6 +4340,7 @@ async fn quick_notes_are_one_per_person_and_never_shared() {
             epoch,
             envelope: envelope.clone(),
             signature: None,
+            signed_by: None,
         }),
         log_entry: None,
     };
@@ -4126,6 +4360,7 @@ async fn quick_notes_are_one_per_person_and_never_shared() {
             epoch,
             envelope,
             signature: None,
+            signed_by: None,
         },
         log_entry: None,
     };
@@ -4561,6 +4796,7 @@ async fn deleting_ones_account_takes_what_one_has_and_leaves_the_rest() {
     let mut carol = new_user(&srv.base, "carol").await;
     let team = alice.create_vault("Team").await;
     alice.share(&team, &bob.id, Role::Editor).await.unwrap();
+    let own = alice.create_vault("Own").await;
     let club = carol.create_vault("Club").await;
     carol.share(&club, &alice.id, Role::Editor).await.unwrap();
     let diary = carol.create_vault("Diary").await;
@@ -4586,33 +4822,59 @@ async fn deleting_ones_account_takes_what_one_has_and_leaves_the_rest() {
     ws.until(|m| matches!(m, ServerMessage::Synced { .. }).then_some(()))
         .await;
 
-    // Agents can't; people can.
+    // Agents can't; people can, but not as the last owner of a vault
+    // others are in: someone else is made an owner of it first.
     let mut agent_api = Api::new(&srv.base);
     agent_api.token = Some(agent_token);
     assert_eq!(
         agent_api.status::<()>(Method::DELETE, "/me", None).await,
         403
     );
+    let (st, msg) = alice
+        .api
+        .call::<(), serde_json::Value>(Method::DELETE, "/me", None)
+        .await
+        .unwrap_err();
+    assert_eq!(
+        (st, msg.contains("last owner of 1 vault")),
+        (409, true),
+        "{msg}"
+    );
+    let st = alice
+        .api
+        .status(
+            Method::PATCH,
+            &format!("/vaults/{team}/members/{}", bob.id),
+            Some(&UpdateMemberRequest {
+                role: Role::Owner,
+                log_entry: None,
+            }),
+        )
+        .await;
+    assert_eq!(st, 204);
     assert_eq!(
         alice.api.status::<()>(Method::DELETE, "/me", None).await,
         204
     );
 
-    // Their vault is gone for its members, at once.
+    // The vault they shared stays, the other owner's, and they are gone from
+    // it at once; the one only they had goes.
     ws.until(|m| match m {
         ServerMessage::VaultEvent {
-            event: VaultEventKind::Deleted,
+            event: VaultEventKind::MembersChanged,
             ..
         } => Some(()),
         _ => None,
     })
     .await;
-    assert_eq!(
-        bob.api
-            .status::<()>(Method::GET, &format!("/vaults/{team}"), None)
-            .await,
-        404
-    );
+    let info = vault_info(&bob, &team).await;
+    assert_eq!((info.owner_id, info.role), (bob.id.clone(), Role::Owner));
+    let left: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM vaults WHERE id = ?")
+        .bind(&own)
+        .fetch_one(&srv.state.db)
+        .await
+        .unwrap();
+    assert_eq!(left, 0);
     // The vault and the note they were in renew their keys.
     let club_info = vault_info(&carol, &club).await;
     assert!(club_info.rotation_pending);

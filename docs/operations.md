@@ -424,7 +424,7 @@ They are kept in the database, so they survive restarts and backups.
   copies) and send them the moment you switch it off; signing in and out,
   removing devices and revoking access keep working, but nobody new can
   sign up.
-* **Database size**: at this size every vault is full, as below (checked
+* **Instance storage**: at this database size every vault is full, as below (checked
   every 10 seconds), until it is below it again — raise the limit, or make
   room: deleting things for good keeps working. It counts the pages in use
   (files too: they are in the database), which is less than the file once

@@ -1137,11 +1137,11 @@ fn InstanceSettingsPanel(
                     let used = util::human_bytes(s.storage_bytes);
                     let of = s.settings.max_storage_mb.max().map(|mb| format!(" of {}", util::human_bytes(mb.saturating_mul(1024 * 1024)))).unwrap_or_default();
                     match s.read_only {
-                        None if s.storage_full => format!("Full: the database reached its size limit ({used}{of}). Every vault takes no new content until something is deleted for good or you raise the limit."),
-                        None => format!("Accepting changes. Database: {used}{of}."),
-                        Some(ReadOnly::Manual) => format!("Read-only, switched on by an administrator. Database: {used}{of}."),
+                        None if s.storage_full => format!("Full: the instance reached its storage limit ({used}{of}). Every vault takes no new content until something is deleted for good or you raise the limit."),
+                        None => format!("Accepting changes. Storage: {used}{of}."),
+                        Some(ReadOnly::Manual) => format!("Read-only, switched on by an administrator. Storage: {used}{of}."),
                         Some(ReadOnly::StorageFull) => format!("Read-only: the database reached its size limit ({used}{of}). Raise the limit to accept changes again."),
-                        Some(ReadOnly::Other) => format!("Read-only. Database: {used}{of}."),
+                        Some(ReadOnly::Other) => format!("Read-only. Storage: {used}{of}."),
                     }
                 })}</p>
                 <div class="limits">
@@ -1151,7 +1151,7 @@ fn InstanceSettingsPanel(
                     <LimitField label="Vaults per person" value=vaults_per_user class="vaults-per-user"/>
                     <LimitField label="Agents per person" value=agents_per_user class="agents-per-user"/>
                     <LimitField label="Quick notes per person" value=quick_per_user class="quick-notes-per-user"/>
-                    <LimitField label="Database size (MiB)" value=storage class="max-storage"/>
+                    <LimitField label="Instance storage (MiB)" value=storage class="max-storage"/>
                     <LimitField label="Storage per vault (MiB)" value=per_vault class="storage-per-vault"/>
                     <LimitField label="Personal storage (MiB)" value=quick_notes_storage class="quick-notes-storage"/>
                     <LimitField label="Drawings per vault" value=drawings_per_vault class="drawings-per-vault"/>
@@ -1171,7 +1171,7 @@ fn InstanceSettingsPanel(
                         ..Default::default()
                     })>"Save limits"</button>
                 </div>
-                <p class="muted small">"Limits apply to what is created from now on: nothing is removed when you lower one. Accounts count people who aren't disabled; a person's own limits are under Accounts. At the database size limit the server turns read-only by itself, until it is below the limit again. A vault at its storage limit takes no new content until something in it is deleted for good, or you give it more room (Vaults, below), and so many drawings, whoever draws them: give one vault more there too. Someone's Personal storage (quick notes, saved shapes) has its own storage limit, like how many quick notes they may keep: give one person more under Accounts → Limits."</p>
+                <p class="muted small">"Limits apply to what is created from now on: nothing is removed when you lower one. Accounts count people who aren't disabled; a person's own limits are under Accounts. At the instance storage limit every vault is full until there is room again (deleting for good keeps working): on an instance of its own, the room a family or a team shares however they like. A vault at its storage limit takes no new content until something in it is deleted for good, or you give it more room (Vaults, below), and so many drawings, whoever draws them: give one vault more there too. Someone's Personal storage (quick notes, saved shapes) has its own storage limit, like how many quick notes they may keep: give one person more under Accounts → Limits."</p>
                 <div class="row oldest-app">
                     <label class="limit-field">
                         <span class="limit-label">"Oldest app version"</span>

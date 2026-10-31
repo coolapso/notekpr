@@ -687,7 +687,7 @@ whenever it runs.
 | `quick_notes_per_user` | quick notes a person may keep unless they have their own `quick_note_allowance` (default 20, §5.3); a change is announced to everyone's apps (`vaults_changed`) |
 | `drawings_per_vault` | drawings a vault may hold, whoever makes them, unless it has its own `drawing_allowance` (default unlimited, §5.5); a change is announced to the apps of every vault's members (`vaults_changed`) |
 | `read_only` | `true`: the server refuses changes (below) |
-| `max_storage_mb` | at this database size (MiB, pages in use) every vault is full (below) until it is below it again — something was deleted for good, or the limit was raised. Measured every 10 s and after every settings change. The room a family or a team gets on its own instance |
+| `max_storage_mb` | the instance's storage: at this database size (MiB, pages in use) every vault is full (below) until it is below it again — something was deleted for good, or the limit was raised. Measured every 10 s and after every settings change. The room a family or a team gets on its own instance |
 | `storage_per_vault_mb` | at this size (MiB) a vault takes no new content, unless it has its own `storage_allowance` (below); not quick notes |
 | `quick_notes_storage_mb` | at this size (MiB) someone's Personal storage (quick notes, saved shapes) takes no new content, unless the person has their own `quick_notes_storage_allowance` |
 | `oldest_app_version` | the oldest version of the apps the server accepts (`"0.6.0"`), above its build's (`build_oldest_app_version` in `GET /admin/settings`); `""`: only the build's (§11) |

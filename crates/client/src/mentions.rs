@@ -121,9 +121,7 @@ pub async fn list(hub: &Hub, vref: Option<&str>) -> OpResult<(Vec<MentionItem>, 
             else {
                 continue;
             };
-            let threads = g
-                .replica
-                .comment_threads(note, |_| None, |u| u == g.owner_id);
+            let threads = g.replica.comment_threads(note, |_| None, |u| g.owns(u));
             for m in comments::mentions_of(log, &threads, &me) {
                 items.push(MentionItem {
                     vault_id: vault_id.clone(),

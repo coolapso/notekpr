@@ -457,19 +457,34 @@ fn Share(vault: String) -> impl IntoView {
                                 <div class="muted small">{m.user.email.clone().unwrap_or_default()}{(!m.has_current_key).then_some(" · waiting for keys")}</div>
                                 {fp.map(|f| view! { <div class="fp">{f}</div> })}
                                 {(!vouched && changed).then(|| view! { <div class="alert error small key-changed">"Their encryption key changed since they were added — for example, they reset their account, or someone is intercepting. Until you've compared fingerprints with them, they don't get the vault's new key."</div> })}
-                                {(!vouched && !changed).then(|| view! { <div class="alert error small unvouched">"Not added by the vault's owner: the server lists this person, but the owner's signed member list doesn't. They don't get the vault key; tell your administrator."</div> })}
+                                {(!vouched && !changed).then(|| view! { <div class="alert error small unvouched">"Not added by the vault's owners: the server lists this person, but the owners' signed member list doesn't. They don't get the vault key; tell your administrator."</div> })}
                             </div>
                             {verify.map(|f| view! { <button class="btn small verify-key" on:click=f>"I verified it"</button> })}
-                            {if m.role == Role::Owner {
-                                view! { <span class="muted small">"Owner"</span> }.into_any()
-                            } else {
+                            {
+                                // People with keys can be owners; the last one stays.
+                                let can_own = m.user.kind != PrincipalKind::Agent && m.user.account_key.is_some();
+                                let was_owner = m.role == Role::Owner;
+                                let name = m.user.display_name.clone();
                                 view! {
                                     <select class="input small member-role" on:change=move |ev| {
                                         let r = member_role(&event_target_value(&ev));
+                                        let ok = match (&r, was_owner, is_me) {
+                                            (Role::Owner, _, _) => util::confirm(&format!("Make {name} an owner? Owners are equal: they manage people, keys and settings, can remove other owners — you too — and can delete the vault.")),
+                                            (_, true, true) => util::confirm("Stop being an owner? You won't manage people or the vault's settings any more."),
+                                            _ => true,
+                                        };
                                         let (v, u) = (v.clone(), uid.clone());
                                         let reload = reload.clone();
+                                        if !ok {
+                                            // Shows what it was again.
+                                            reload();
+                                            return;
+                                        }
                                         leptos::task::spawn_local(async move { actions::set_role(&v, &u, r).await; reload(); });
                                     }>
+                                        {(can_own || was_owner).then(|| view! {
+                                            <option value="owner" title=OWNER_HINT selected=was_owner>"Owner"</option>
+                                        })}
                                         {(m.user.kind != PrincipalKind::Agent).then(|| view! {
                                             <option value="admin" title=ADMIN_HINT selected=m.role == Role::Admin>"Admin"</option>
                                         })}
@@ -477,26 +492,29 @@ fn Share(vault: String) -> impl IntoView {
                                         <option value="viewer" selected=m.role == Role::Viewer>"Can view"</option>
                                         {other_role(&m.role)}
                                     </select>
-                                    <button class="icon-btn" title="Remove access (rotates the vault key)" aria-label="Remove access (rotates the vault key)" on:click=move |_| {
-                                        if !util::confirm("Remove this person? They keep anything they already downloaded, but can't read anything new.") { return; }
-                                        let (v, u) = (v2.clone(), uid2.clone());
-                                        let reload = reload_b.clone();
-                                        leptos::task::spawn_local(async move { actions::remove_member(&v, &u).await; reload(); });
-                                    }><Icon name="x"/></button>
-                                }.into_any()
-                            }}
+                                    {(!is_me).then(|| view! {
+                                        <button class="icon-btn remove-member" title="Remove access (rotates the vault key)" aria-label="Remove access (rotates the vault key)" on:click=move |_| {
+                                            if !util::confirm("Remove this person? They keep anything they already downloaded, but can't read anything new.") { return; }
+                                            let (v, u) = (v2.clone(), uid2.clone());
+                                            let reload = reload_b.clone();
+                                            leptos::task::spawn_local(async move { actions::remove_member(&v, &u).await; reload(); });
+                                        }><Icon name="x"/></button>
+                                    })}
+                                }
+                            }
                         </div>
                     }
                 }).collect_view()}
             </div>
-            <p class="muted small">"Admins can also edit, empty the trash and see the activity log. Only the owner manages people and the vault's settings."</p>
-            <p class="muted small"><Icon name="shield"/>" Sharing sends the vault key encrypted to each person's own key. The server can't read it, and every change to who has access is signed by the vault's owner. Removing someone rotates the key."</p>
+            <p class="muted small">"Owners manage people and the vault's settings, and can delete it; a vault can have several, all equal. Admins can also edit, empty the trash and see the activity log."</p>
+            <p class="muted small"><Icon name="shield"/>" Sharing sends the vault key encrypted to each person's own key. The server can't read it, and every change to who has access is signed by an owner. Removing someone rotates the key."</p>
             {let _ = ui;}
         </Dialog>
     }
 }
 
 const ADMIN_HINT: &str = "Can edit, empty the trash and see the activity log";
+const OWNER_HINT: &str = "Manages people, keys and settings, and can delete the vault — like you";
 
 /// A role from a newer version, shown as its name until the page is
 /// reloaded (it can't be chosen).
@@ -511,6 +529,7 @@ fn other_role(role: &Role) -> Option<impl IntoView + use<>> {
 /// A vault member's role as chosen in a role `<select>`.
 fn member_role(value: &str) -> Role {
     match value {
+        "owner" => Role::Owner,
         "admin" => Role::Admin,
         "viewer" => Role::Viewer,
         _ => Role::Editor,
@@ -932,10 +951,11 @@ fn VaultStorage(vault: String, admin: bool) -> impl IntoView {
 #[component]
 fn VaultSettings(vault: String) -> impl IntoView {
     let ui = ui();
-    let (name, owner, admin, archived, epoch) = step(|c| {
+    let (name, owner, owners, admin, archived, epoch) = step(|c| {
         (
             c.vault_name(&vault),
             c.is_owner(&vault),
+            c.owner_count(&vault),
             c.can_administer(&vault),
             c.vault_infos.get(&vault).is_some_and(|i| i.archived),
             c.replicas
@@ -1045,11 +1065,11 @@ fn VaultSettings(vault: String) -> impl IntoView {
                 </div>
             </Show>
             <div class="danger-zone">
-                {if owner {
+                {owner.then(|| {
                     let v = v8.clone();
                     let vname = state::step(|c| c.vault_name(&v8));
                     view! {
-                        <button class="btn danger" on:click=move |_| {
+                        <button class="btn danger delete-vault" on:click=move |_| {
                             let typed = util::window().prompt_with_message(&format!("This permanently deletes “{vname}” for everyone. Type the vault name to confirm:")).ok().flatten();
                             if typed.as_deref() == Some(vname.as_str()) {
                                 ui.modal.set(None);
@@ -1057,19 +1077,21 @@ fn VaultSettings(vault: String) -> impl IntoView {
                                 leptos::task::spawn_local(async move { actions::delete_vault(&v).await });
                             }
                         }><Icon name="trash"/>" Delete vault"</button>
-                    }.into_any()
-                } else {
+                    }
+                })}
+                // Anyone may leave; the last owner deletes the vault instead.
+                {(!owner || owners > 1).then(|| {
                     let v = v8.clone();
                     view! {
-                        <button class="btn danger" on:click=move |_| {
+                        <button class="btn danger leave-vault" on:click=move |_| {
                             if util::confirm("Leave this vault? You'll lose access until someone shares it again.") {
                                 ui.modal.set(None);
                                 let v = v.clone();
                                 leptos::task::spawn_local(async move { actions::leave_vault(&v).await });
                             }
                         }><Icon name="logout"/>" Leave vault"</button>
-                    }.into_any()
-                }}
+                    }
+                })}
             </div>
         </Dialog>
     }
@@ -1392,32 +1414,71 @@ fn MoveDialog(vault: String, id: String) -> impl IntoView {
 }
 
 /// Delete one's account: what goes and what stays, an export first if
-/// wanted, and "delete" typed to be sure.
+/// wanted, and "delete" typed to be sure. Shared vaults one is the last
+/// owner of are made someone else's too, or deleted, first.
 #[component]
 fn DeleteAccountDialog() -> impl IntoView {
     let ui = ui();
     let typed = RwSignal::new(String::new());
     let busy = RwSignal::new(false);
     let err = RwSignal::new(None::<String>);
+    // Our agents go with us: a vault only they share with us is ours alone.
+    let agents = RwSignal::new(Vec::<String>::new());
+    leptos::task::spawn_local(async move {
+        if let Ok(a) = api::get::<Vec<AgentInfo>>("/agents").await {
+            agents.set(a.into_iter().map(|a| a.id).collect());
+        }
+    });
     let vaults = ui.vaults.get_untracked();
-    let (owned, joined): (Vec<_>, Vec<_>) = vaults.iter().partition(|v| v.role == Role::Owner);
-    // ("" when there are none; the count, for "vault" or "vaults").
-    let owned_names = |shared: bool| {
-        let names: Vec<String> = owned
+    // Our vaults: whether someone else (no agent of ours) is in each, as its
+    // log says (else the server's member count).
+    let owned: Vec<(state::VaultView, Option<Vec<String>>)> = step(|c| {
+        vaults
             .iter()
-            .filter(|v| v.shared == shared)
+            .filter(|v| v.role == Role::Owner)
+            .map(|v| {
+                let others = c
+                    .member_logs
+                    .get(&v.id)
+                    .and_then(|l| l.state.as_ref())
+                    .map(|s| {
+                        s.members
+                            .keys()
+                            .filter(|u| **u != c.user_id)
+                            .cloned()
+                            .collect()
+                    });
+                (v.clone(), others)
+            })
+            .collect()
+    });
+    let names = |vs: Vec<&state::VaultView>| {
+        vs.iter()
             .map(|v| format!("“{}”", v.name))
-            .collect();
-        (names.join(", "), names.len())
+            .collect::<Vec<_>>()
+            .join(", ")
     };
     let vaults_word = |n: usize| if n == 1 { "vault" } else { "vaults" };
-    let ((shared_owned, n_shared), (private_owned, n_private)) =
-        (owned_names(true), owned_names(false));
-    let joined = joined
-        .iter()
-        .map(|v| format!("“{}”", v.name))
-        .collect::<Vec<_>>()
-        .join(", ");
+    // (Ours alone, the last owner of shared ones, owned with others.)
+    let split = Memo::new(move |_| {
+        let agents = agents.get();
+        let mut out = (Vec::new(), Vec::new(), Vec::new());
+        for (v, others) in &owned {
+            let shared = match others {
+                Some(o) => o.iter().any(|u| !agents.contains(u)),
+                None => v.shared,
+            };
+            if v.owners > 1 {
+                out.2.push(v.clone());
+            } else if shared {
+                out.1.push(v.clone());
+            } else {
+                out.0.push(v.clone());
+            }
+        }
+        out
+    });
+    let joined = names(vaults.iter().filter(|v| v.role != Role::Owner).collect());
     let everything: Vec<String> = vaults
         .iter()
         .filter(|v| v.loaded)
@@ -1443,14 +1504,32 @@ fn DeleteAccountDialog() -> impl IntoView {
             }
         });
     };
+    let blocked = move || !split.with(|s| s.1.is_empty());
     view! {
         <Dialog title="Delete your account">
             {move || err.get().map(|e| view! { <div class="alert error">{e}</div> })}
             <div class="stack">
+                {move || split.with(|s| (!s.1.is_empty()).then(|| view! {
+                    <div class="alert last-owner">
+                        <p>{format!("You're the only owner of {} other people use. First, for each: make someone else an owner (they keep it, and you leave it with your account), or delete it.", if s.1.len() == 1 { "a vault" } else { "vaults" })}</p>
+                        <div class="stack">
+                            {s.1.iter().map(|v| {
+                                let (a, b) = (v.id.clone(), v.id.clone());
+                                view! {
+                                    <div class="row last-owner-vault">
+                                        <span class="grow">{format!("“{}”", v.name)}</span>
+                                        <button class="btn small" on:click=move |_| ui.modal.set(Some(Modal::Share(a.clone())))><Icon name="users"/>" Make someone owner"</button>
+                                        <button class="btn small ghost" on:click=move |_| ui.modal.set(Some(Modal::VaultSettings(b.clone())))>"Delete it…"</button>
+                                    </div>
+                                }
+                            }).collect_view()}
+                        </div>
+                    </div>
+                }))}
                 <p>"Your account on this server is deleted for good, with everything that is yours here:"</p>
                 <ul class="small delete-what">
-                    {(n_private > 0).then(|| view! { <li>{format!("your {} {private_owned};", vaults_word(n_private))}</li> })}
-                    {(n_shared > 0).then(|| view! { <li><b>{format!("the {} you share with others, {shared_owned} — gone for them too;", vaults_word(n_shared))}</b></li> })}
+                    {move || split.with(|s| (!s.0.is_empty()).then(|| view! { <li>{format!("your {} {};", vaults_word(s.0.len()), names(s.0.iter().collect()))}</li> }))}
+                    {move || split.with(|s| (!s.2.is_empty()).then(|| view! { <li>{format!("you leave the {} you own with others, {}; they keep {};", vaults_word(s.2.len()), names(s.2.iter().collect()), if s.2.len() == 1 { "it" } else { "them" })}</li> }))}
                     {(!joined.is_empty()).then(|| view! { <li>{format!("you leave what is shared with you ({joined}); its owners keep it;")}</li> })}
                     <li>"your quick notes, AI agents, devices and sessions."</li>
                 </ul>
@@ -1465,7 +1544,7 @@ fn DeleteAccountDialog() -> impl IntoView {
                 </label>
                 <div class="row">
                     <button class="btn danger delete-account-now"
-                        disabled=move || busy.get() || !typed.get().trim().eq_ignore_ascii_case("delete")
+                        disabled=move || busy.get() || blocked() || !typed.get().trim().eq_ignore_ascii_case("delete")
                         on:click=delete>"Delete my account"</button>
                     <button class="btn ghost" on:click=move |_| ui.modal.set(None)>"Cancel"</button>
                 </div>

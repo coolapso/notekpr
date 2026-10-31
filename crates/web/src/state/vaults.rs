@@ -139,9 +139,12 @@ pub(super) async fn load_vault_with(info: VaultInfo, force: bool, keys: Option<V
         match ring {
             Some(Ok(ring)) => {
                 // The owner's signed membership log, and our keys against it.
-                match super::members::load_log(&id, &info.owner_id, &ring).await {
+                match super::members::load_log(&id, &ring).await {
                     Ok(Some(log)) => {
-                        step(|c| c.member_logs.insert(id.clone(), log));
+                        step(|c| {
+                            c.member_logs.insert(id.clone(), log);
+                            publish_vaults(c);
+                        });
                     }
                     Ok(None) => {}
                     Err(msg) => {
@@ -376,6 +379,7 @@ pub fn publish_vaults(c: &Core) {
                         }),
                     role: i.role.clone(),
                     shared: i.member_count > 1,
+                    owners: c.owner_count(&i.id),
                     archived: i.archived,
                     owner_id: i.owner_id.clone(),
                     loaded: c.loaded.contains(&i.id),

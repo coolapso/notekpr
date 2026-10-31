@@ -195,6 +195,8 @@ pub struct VaultView {
     pub picture: Option<String>,
     pub role: Role,
     pub shared: bool,
+    /// How many owners it has (as its membership log says; 1 until loaded).
+    pub owners: usize,
     pub archived: bool,
     pub owner_id: String,
     pub loaded: bool,
@@ -704,6 +706,15 @@ impl Core {
 
     pub fn is_owner(&self, vault: &str) -> bool {
         self.role(vault) == Some(Role::Owner)
+    }
+
+    /// How many owners the vault has, as its membership log says (1 without
+    /// one).
+    pub fn owner_count(&self, vault: &str) -> usize {
+        self.member_logs
+            .get(vault)
+            .and_then(|l| l.state.as_ref())
+            .map_or(1, |s| s.owners().count())
     }
 
     /// The vault's tasks (emptying the trash, the activity log): its owner

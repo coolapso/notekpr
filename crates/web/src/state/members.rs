@@ -1,52 +1,40 @@
 //! The vault membership log in the browser (R3; rules in
 //! `notekpr_sync::members`): verified whenever a vault's keys load,
-//! with the vault keys checked against the owner's commitments. Owners sign
+//! with the vault keys checked against the owners' commitments. Owners sign
 //! every membership change and give vault keys only to members the log
 //! vouches for.
 
 use notekpr_core::keys::{AccountPublic, VaultKeyring};
-use notekpr_core::memberlog::{KeyCheckError, LogBody, LogEntry, LogError};
+use notekpr_core::memberlog::{self, KeyCheckError, LogBody, LogEntry, LogError};
 use notekpr_sync::members::{self as rules, MemberLog};
 
 use super::*;
 
-/// The key a vault's log must be signed with: ours, or the owner's as
-/// pinned in this account (trust on first use). `Ok(None)`: the server
-/// can't be reached; `Err`: a security problem.
-async fn owner_key(owner_id: &str) -> Result<Option<AccountPublic>, String> {
-    let known = step(|c| {
-        let own = (c.user_id == owner_id)
-            .then(|| c.account.as_ref().map(|a| a.public()))
-            .flatten();
-        own.or_else(|| c.owner_keys.get(owner_id).cloned())
-    });
-    if let Some(k) = known {
-        return Ok(Some(k));
+/// The key a vault's log is checked against: its creator's, who signed its
+/// first entry — ours if we made it, else the key that entry pins for them,
+/// checked against our pin for that person (trust on first use). `Ok(None)`:
+/// no log yet; `Err`: a security problem.
+fn creator_key(entries: &[LogEntry]) -> Result<Option<AccountPublic>, String> {
+    if entries.is_empty() {
+        return Ok(None);
     }
-    let owner: PublicUser = match api::get(&format!("/users/{owner_id}")).await {
-        Ok(u) => u,
-        Err(e) if e.status == 0 || e.status >= 500 => return Ok(None),
-        Err(e) => return Err(e.message),
-    };
-    let key = owner
-        .account_key
-        .as_ref()
-        .ok_or("the vault's owner has no encryption key")?
-        .verify()
-        .map_err(|e| format!("the vault owner's key is invalid: {e}"))?;
+    let (creator, key) = memberlog::creator(entries).ok_or(
+        "Security warning: this vault's membership history doesn't start as it should. The server may have been tampered with; tell the vault's owners and your administrator.",
+    )?;
     step(|c| {
-        match engine::check_pin(&mut c.prefs.pins, owner_id, &key.fingerprint()) {
-            engine::PinStatus::Changed => {
-                return Err(format!(
-                    "Security warning: the encryption key of {}, who owns this vault, changed since you last saw it. Membership changes can't be trusted until you compare fingerprints with them.",
-                    owner.display_name
-                ));
-            }
-            engine::PinStatus::New => save_prefs(c),
-            engine::PinStatus::Match => {}
+        if creator == c.user_id {
+            return Ok(c.account.as_ref().map(|a| a.public()));
         }
-        c.owner_keys.insert(owner_id.to_string(), key.clone());
-        Ok(Some(key))
+        match engine::check_pin(&mut c.prefs.pins, &creator, &key.fingerprint()) {
+            engine::PinStatus::Changed => Err(
+                "Security warning: the encryption key of the person who created this vault changed since you last saw it. Membership changes can't be trusted until you compare fingerprints with them.".to_string(),
+            ),
+            engine::PinStatus::New => {
+                save_prefs(c);
+                Ok(Some(key))
+            }
+            engine::PinStatus::Match => Ok(Some(key)),
+        }
     })
 }
 
@@ -55,12 +43,8 @@ async fn owner_key(owner_id: &str) -> Result<Option<AccountPublic>, String> {
 /// `Err`: a security problem, to show instead of the vault.
 pub(super) async fn load_log(
     vault_id: &str,
-    owner_id: &str,
     ring: &VaultKeyring,
 ) -> Result<Option<MemberLog>, String> {
-    let Some(anchor) = owner_key(owner_id).await? else {
-        return Ok(None);
-    };
     let uid = step(|c| c.user_id.clone());
     let mut attempt = 0;
     loop {
@@ -70,6 +54,12 @@ pub(super) async fn load_log(
             Ok(r) => r.entries,
             Err(e) if e.status == 0 || e.status >= 500 => return Ok(None),
             Err(e) => return Err(e.message),
+        };
+        // Without entries there's nothing the key checks.
+        let anchor = match creator_key(&entries)? {
+            Some(k) => k,
+            None => step(|c| c.account.as_ref().map(|a| a.public()))
+                .ok_or("no account keys on this device")?,
         };
         let seen = storage::log_seen(&uid, vault_id);
         let log = MemberLog::verify(
@@ -81,7 +71,7 @@ pub(super) async fn load_log(
         .map_err(|e| match e {
             LogError::Newer(_) => "Who is in this vault was changed by a newer version of notekpr: reload the page to open it.".to_string(),
             e => format!(
-                "Security warning: this vault's membership history doesn't check out ({e}). The server may have been tampered with; tell the vault's owner and your administrator."
+                "Security warning: this vault's membership history doesn't check out ({e}). The server may have been tampered with; tell the vault's owners and your administrator."
             ),
         })?;
         match log.check_keyring(ring) {
@@ -93,7 +83,7 @@ pub(super) async fn load_log(
             Err(KeyCheckError::Unannounced(_)) if attempt == 1 => continue,
             Err(e) => {
                 return Err(format!(
-                    "Security warning: {e}. The server may be trying to read new notes, so this vault isn't opened. Tell the vault's owner and your administrator."
+                    "Security warning: {e}. The server may be trying to read new notes, so this vault isn't opened. Tell the vault's owners and your administrator."
                 ));
             }
         }
@@ -102,18 +92,14 @@ pub(super) async fn load_log(
 
 /// Reload the vault's log after a change (keeps the old one if offline).
 pub async fn reload_log(vault_id: &str) {
-    let Some((owner, ring)) = step(|c| {
-        Some((
-            c.vault_infos.get(vault_id)?.owner_id.clone(),
-            c.replicas.get(vault_id)?.keyring.clone(),
-        ))
-    }) else {
+    let Some(ring) = step(|c| Some(c.replicas.get(vault_id)?.keyring.clone())) else {
         return;
     };
-    match load_log(vault_id, &owner, &ring).await {
+    match load_log(vault_id, &ring).await {
         Ok(Some(log)) => {
             let applied = step(|c| {
                 c.member_logs.insert(vault_id.to_string(), log);
+                super::vaults::publish_vaults(c);
                 apply_authors(c, vault_id)
             });
             after_apply(vault_id, applied);

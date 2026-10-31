@@ -9,7 +9,7 @@ use std::time::Duration;
 use anyhow::{Context, Result, anyhow, bail};
 use notekpr_core::engine::{self, Applied, PinStatus, VaultMeta, VaultReplica};
 use notekpr_core::keys::{AccountPublic, AccountSecret, VaultKeyring};
-use notekpr_core::memberlog::{KeyCheckError, LogBody, LogEntry, LogError};
+use notekpr_core::memberlog::{self, KeyCheckError, LogBody, LogEntry, LogError};
 use notekpr_core::protocol::*;
 use notekpr_sync::SnapshotAction;
 use notekpr_sync::members::{self, MemberLog};
@@ -288,29 +288,34 @@ impl Session {
 
     // ------------------------------------------------------------ membership log
 
-    /// The key a vault's membership log must be signed with: ours, or the
-    /// owner's as pinned on this device (trust on first use).
-    async fn owner_key(&self, owner_id: &str) -> Result<AccountPublic> {
-        if owner_id == self.user_id {
-            return Ok(self.account.public());
+    /// The key a vault's membership log is checked against: its creator's,
+    /// who signed its first entry — ours if we made it, else the key that
+    /// entry pins for them, checked against our pin for that person (trust
+    /// on first use). `None`: no log yet.
+    fn creator_key(&self, entries: &[LogEntry]) -> Result<Option<AccountPublic>> {
+        if entries.is_empty() {
+            return Ok(None);
         }
-        let owner = self.api.user(owner_id).await?;
-        let vu = self
-            .verify_user(&owner)?
-            .ok_or_else(|| anyhow!("the vault's owner has no account key"))?;
-        if vu.pin == PinStatus::Changed {
+        let (creator, key) = memberlog::creator(entries).ok_or_else(|| {
+            anyhow!(
+                "SECURITY: a vault's membership history doesn't start as it should. The server may have \
+                 been tampered with; tell the vault's owners and your administrator"
+            )
+        })?;
+        if creator == self.user_id {
+            return Ok(Some(self.account.public()));
+        }
+        let pin = self
+            .profiles
+            .update(|p| engine::check_pin(&mut p.pins, &creator, &key.fingerprint()))?;
+        if pin == PinStatus::Changed {
             bail!(
-                "SECURITY: the account key of {}, who owns this vault, changed since it was pinned (now {}). \
-                 Their membership changes can't be trusted until you verify the new key with them",
-                owner.display_name,
-                vu.fingerprint
+                "SECURITY: the account key of the person who created a vault changed since it was pinned \
+                 (now {}). Its membership changes can't be trusted until you verify the new key with them",
+                key.fingerprint()
             );
         }
-        Ok(owner
-            .account_key
-            .as_ref()
-            .expect("verified above")
-            .verify()?)
+        Ok(Some(key))
     }
 
     /// Fetch and verify a vault's membership log, and check the vault keys
@@ -342,13 +347,16 @@ impl Session {
     /// Fetch the vault's log, verify it, and check our vault keys against it.
     async fn verify_member_log(&self, v: &mut Vault) -> Result<()> {
         let id = v.id().to_string();
-        let anchor = self.owner_key(&v.owner_id).await?;
         for attempt in 0..2 {
             let entries = self
                 .api
                 .get::<MemberLogResponse>(&format!("/vaults/{id}/log"))
                 .await?
                 .entries;
+            // Without entries there's nothing the key checks.
+            let anchor = self
+                .creator_key(&entries)?
+                .unwrap_or_else(|| self.account.public());
             let seen = v.log_seen.clone();
             let log = MemberLog::verify(
                 &id,

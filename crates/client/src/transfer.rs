@@ -146,9 +146,7 @@ async fn exported(
         }
         // Comments after: the vault's own files keep their paths.
         for (path, id) in notes {
-            let threads = v
-                .replica
-                .comment_threads(&id, |_| None, |u| u == v.owner_id);
+            let threads = v.replica.comment_threads(&id, |_| None, |u| v.owns(u));
             let name = |u: &str| names.get(u).cloned().unwrap_or_else(|| u.to_string());
             let Some(text) =
                 comments::to_markdown(paths::title(&path), v.replica.note(&id), &threads, name)

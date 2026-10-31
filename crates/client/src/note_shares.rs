@@ -413,41 +413,42 @@ pub async fn shared_with_me(session: &Session) -> Result<Vec<SharedNoteView>> {
     Ok(out)
 }
 
-/// The keys of a note shared with us, confirmed by the vault's owner (their
-/// key as pinned here): a server can't hand us a key of its own.
+/// The keys of a note shared with us, confirmed by an owner of its vault
+/// (their key as pinned here): a server can't hand us a key of its own.
 async fn recipient_ring(
     session: &Session,
     info: &SharedNote,
 ) -> Result<(notekpr_core::keys::VaultKeyring, Role)> {
     let (vault_id, note_id) = (&info.vault_id, &info.object_id);
-    let owner = session
-        .verify_user(&info.owner)?
-        .ok_or_else(|| anyhow!("the note's owner has no encryption key"))?;
-    if owner.pin == PinStatus::Changed {
-        bail!(
-            "SECURITY: the account key of {}, who shared this note, changed since it was pinned (now {}); \
-             verify it with them before using the note",
-            info.owner.display_name,
-            owner.fingerprint
-        );
-    }
-    let owner_key = info
-        .owner
-        .account_key
-        .as_ref()
-        .expect("verified")
-        .verify()?;
     let keys: ObjectKeysResponse = session
         .api
         .get(&format!("/vaults/{vault_id}/objects/{note_id}/keys"))
         .await?;
+    // Who signed giving us its newest key: the vault's owner we know, or
+    // another owner, looked up.
+    let signer = match engine::grant_signer(&keys, &session.user_id) {
+        Some(id) if id != info.owner.id => session.api.user(id).await?,
+        _ => info.owner.clone(),
+    };
+    let verified = session
+        .verify_user(&signer)?
+        .ok_or_else(|| anyhow!("the note's owner has no encryption key"))?;
+    if verified.pin == PinStatus::Changed {
+        bail!(
+            "SECURITY: the account key of {}, who shared this note, changed since it was pinned (now {}); \
+             verify it with them before using the note",
+            signer.display_name,
+            verified.fingerprint
+        );
+    }
+    let signer_key = signer.account_key.as_ref().expect("verified").verify()?;
     Ok((
         engine::object_keyring_for_recipient(
             &session.account,
             &session.user_id,
             vault_id,
             &keys,
-            Some(&owner_key),
+            Some(&signer_key),
         )?,
         keys.role,
     ))

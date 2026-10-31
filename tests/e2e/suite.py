@@ -116,6 +116,14 @@ def new_note(b, title, body):
     time.sleep(0.6)
 
 
+# In the open sharing dialog: give the member named arguments[0] the role
+# arguments[1].
+SET_MEMBER_ROLE = """
+const r = Array.from(document.querySelectorAll('.people .person')).find(r => r.textContent.includes(arguments[0]));
+const s = r.querySelector('.member-role'); s.value = arguments[1]; s.dispatchEvent(new Event('change'));
+"""
+
+
 def share(owner, vault_btn_css, user, role="editor"):
     owner.click(vault_btn_css)
     owner.type(".share-add input", user)
@@ -2898,7 +2906,7 @@ def test_vault_admins(env):
         a.click(".sb-bottom button:nth-child(2)")
         a.find_text(".people .person", bn.capitalize(), 10)
         check("Admin" in a.js(buttons, ".share-add select option"), "people can be added as admins")
-        a.js("const s=document.querySelector('.people .member-role'); s.value='admin'; s.dispatchEvent(new Event('change'))")
+        a.js(SET_MEMBER_ROLE, bn.capitalize(), "admin")
         time.sleep(1)
         a.chord(KEYS["escape"])
         b.wait("return Array.from(document.querySelectorAll('.list-row .btn')).some(e => e.textContent === 'Delete forever')", 15,
@@ -2919,6 +2927,77 @@ def test_vault_admins(env):
         check(not b.js("return Array.from(document.querySelectorAll('.modal .settings-grid .btn')).some(e => e.textContent.includes('People'))"),
               "an admin sees the activity log, but people and settings stay the owner's")
         b.shot("vault-admin-settings")
+        check(not severe_logs(a, b), "no browser errors")
+    finally:
+        a.close()
+        b.close()
+
+
+def test_owners(env):
+    """A vault can have several owners, all equal; the last one stays, also
+    when deleting their account."""
+    a, b = Browser(), Browser()
+    try:
+        an, bn = uniq("nora"), uniq("omar")
+        signup(a, an)
+        signup(b, bn)
+        new_note(a, "Groceries", "milk")
+        path = a.js("return location.pathname")
+        vid = path.split("/")[2]
+        share(a, ".sb-bottom button:nth-child(2)", bn)
+
+        a.js("window.confirm = () => true")
+
+        # Shared, with one owner: her account can't go before the vault is
+        # someone else's too, or deleted.
+        a.js(TO_ACCOUNT_SETTINGS)
+        a.click(".delete-account")
+        a.find(".last-owner .last-owner-vault", 10)
+        a.type(".delete-confirm", "delete")
+        check(a.js("return document.querySelector('.delete-account-now').disabled"),
+              "the last owner of a shared vault can't delete her account")
+        a.shot("delete-account-last-owner")
+        # From there: make someone owner.
+        a.click(".last-owner-vault .btn")
+        a.find_text(".people .person", bn.capitalize(), 10)
+        a.js(SET_MEMBER_ROLE, bn.capitalize(), "owner")
+        end = time.time() + 10
+        while api_get(a, f"/vaults/{vid}/log")["entries"][-1]["body"]["kind"] != "make_owner" and time.time() < end:
+            time.sleep(0.3)
+        check(api_get(a, f"/vaults/{vid}/log")["entries"][-1]["body"]["kind"] == "make_owner", "making an owner is signed in the log")
+        a.chord(KEYS["escape"])
+
+        # Owners are equal: Omar may leave or delete it, and so may Nora.
+        b.go(env.url.rstrip("/") + path)
+        b.wait("return document.querySelector('.ed') && document.querySelector('.ed').textContent.includes('milk')", 20, "omar opens the note")
+        b.js("window.confirm = () => true")
+        b.click(".sb-label button[title='Vault settings']")
+        b.find(".modal .leave-vault", 10)
+        check(b.js("return !!document.querySelector('.modal .delete-vault')"), "a second owner may leave or delete the vault")
+        b.chord(KEYS["escape"])
+        a.js(TO_ACCOUNT_SETTINGS)
+        a.click(".delete-account")
+        a.find(".delete-what", 10)
+        # (textContent: WebDriver's text is empty while the dialog fades in)
+        check(not a.js("return !!document.querySelector('.last-owner')")
+              and "you own with others" in a.js("return document.querySelector('.delete-what').textContent"),
+              "with another owner, deleting her account would leave the vault to him")
+        a.chord(KEYS["escape"])
+
+        # Nora leaves: the vault is Omar's, and still checks out for him —
+        # its membership history starts with her.
+        a.go(env.url.rstrip("/") + path)
+        a.find(".sb-label button[title='Vault settings']", 20)
+        a.js("window.confirm = () => true")
+        a.click(".sb-label button[title='Vault settings']")
+        a.click(".modal .leave-vault")
+        a.wait("return !Array.from(document.querySelectorAll('.sb-tree, .page-body')).some(e => e.textContent.includes('Groceries'))", 15, "nora left")
+        b.js("location.reload()")
+        b.wait("return document.querySelector('.ed') && document.querySelector('.ed').textContent.includes('milk')", 20, "omar's vault still opens")
+        check(not b.js("return document.body.innerText.includes('Security warning')"), "its log verifies after its creator left")
+        b.click(".sb-label button[title='Vault settings']")
+        b.find(".modal .delete-vault", 10)
+        check(not b.js("return !!document.querySelector('.modal .leave-vault')"), "the last owner can't leave")
         check(not severe_logs(a, b), "no browser errors")
     finally:
         a.close()
@@ -2987,7 +3066,7 @@ def test_device_code(env):
         a.close()
 
 
-TESTS = [test_onboarding, test_collab, test_devices_and_recovery, test_features, test_attachments, test_export_import, test_delete_account, test_move_to_vault, test_note_sharing, test_tables, test_code_blocks, test_html, test_callouts, test_colors, test_code_wrapping, test_editor_mouse, test_editor_safety, test_local_copy, test_ui_basics, test_offline_tabs, test_offline_start, test_mobile, test_quick_notes, test_vault_icons, test_entry_icons, test_tree_order, test_session_ended_while_away, test_outdated, test_comments, test_mentions, test_dates, test_graph, test_recovered_copy, test_note_width, test_admin, test_vault_storage, test_vault_admins, test_undo_purge, test_device_code]
+TESTS = [test_onboarding, test_collab, test_devices_and_recovery, test_features, test_attachments, test_export_import, test_delete_account, test_move_to_vault, test_note_sharing, test_tables, test_code_blocks, test_html, test_callouts, test_colors, test_code_wrapping, test_editor_mouse, test_editor_safety, test_local_copy, test_ui_basics, test_offline_tabs, test_offline_start, test_mobile, test_quick_notes, test_vault_icons, test_entry_icons, test_tree_order, test_session_ended_while_away, test_outdated, test_comments, test_mentions, test_dates, test_graph, test_recovered_copy, test_note_width, test_admin, test_vault_storage, test_vault_admins, test_owners, test_undo_purge, test_device_code]
 
 
 def main():

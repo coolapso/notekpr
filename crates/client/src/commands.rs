@@ -404,10 +404,11 @@ async fn execute(ctx: Ctx, command: Command) -> Result<()> {
             confirm_or_flag(
                 yes,
                 &format!(
-                    "Delete your account on {server} for good? The vaults you own go — also for the people you \
-                     share them with —, you leave the others, and your quick notes, agents and devices go too; \
-                     this profile's local data is deleted. Signing in again starts a new, empty account. \
-                     (To keep your notes, first: notekpr export --out notes.zip)"
+                    "Delete your account on {server} for good? The vaults only you own go — the server refuses while \
+                     other people are in one: make someone else an owner of it (vault share <vault> <person> \
+                     --role owner) or delete it first —, you leave the others, and your quick notes, agents and \
+                     devices go too; this profile's local data is deleted. Signing in again starts a new, empty \
+                     account. (To keep your notes, first: notekpr export --out notes.zip)"
                 ),
             )?;
             let ids = local_vault_ids(&ctx.store()?.data_dir());
@@ -1526,6 +1527,7 @@ async fn vault(ctx: &Ctx, c: VaultCmd) -> Result<()> {
             let hub = ctx.hub(&[&vault]).await?;
             let v = hub.resolve(&vault).await?;
             let role = match role {
+                MemberRole::Owner => Role::Owner,
                 MemberRole::Admin => Role::Admin,
                 MemberRole::Editor => Role::Editor,
                 MemberRole::Viewer => Role::Viewer,

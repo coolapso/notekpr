@@ -218,37 +218,53 @@ pub async fn delete_vault(session: &Session, vault: &SharedVault) -> Result<()> 
     store.wipe()
 }
 
-/// Leave a vault shared with you; the local copy is removed.
+/// Leave a vault (an owner while another stays); the local copy is removed.
 pub async fn leave_vault(session: &Session, vault: &SharedVault) -> Result<()> {
-    let (id, store, role) = {
+    let (id, store, last_owner) = {
         let v = vault.lock().await;
-        (v.id().to_string(), v.store().clone(), v.role())
+        let owners = v.log.state.as_ref().map_or(1, |s| s.owners().count());
+        (
+            v.id().to_string(),
+            v.store().clone(),
+            v.role() == Role::Owner && owners == 1,
+        )
     };
-    if role == Role::Owner {
-        bail!("the owner cannot leave a vault; delete it instead");
+    if last_owner {
+        bail!(
+            "you are this vault's only owner: make someone else an owner first (vault share <vault> \
+             <person> --role owner), or delete it"
+        );
     }
-    let log_entry = session
-        .log_entry(
-            vault,
-            LogBody::Leave {
-                user_id: session.user_id.clone(),
-            },
-        )
-        .await;
-    match session
-        .api
-        .delete_with(
-            &format!("/vaults/{id}/members/{}", session.user_id),
-            &RemoveMemberRequest {
-                log_entry,
-                ..Default::default()
-            },
-        )
-        .await
-    {
-        Ok(()) => {}
-        Err(e) if e.is_not_found() => {}
-        Err(e) => return Err(e.into()),
+    let mut attempt = 0;
+    loop {
+        let log_entry = session
+            .log_entry(
+                vault,
+                LogBody::Leave {
+                    user_id: session.user_id.clone(),
+                },
+            )
+            .await;
+        match session
+            .api
+            .delete_with(
+                &format!("/vaults/{id}/members/{}", session.user_id),
+                &RemoveMemberRequest {
+                    log_entry,
+                    ..Default::default()
+                },
+            )
+            .await
+        {
+            Ok(()) => break,
+            Err(e) if e.is_not_found() => break,
+            // Someone else changed who is in it since we last looked.
+            Err(e) if is_log_race(&e) && attempt < 3 => {
+                attempt += 1;
+                session.reload_member_log(vault).await?;
+            }
+            Err(e) => return Err(e.into()),
+        }
     }
     store.wipe()
 }
@@ -355,9 +371,6 @@ pub async fn share(
     role: Role,
     accept_new_key: bool,
 ) -> Result<ShareOutcome> {
-    if role == Role::Owner {
-        bail!("a vault has exactly one owner; share as admin, editor or viewer");
-    }
     let (id, ring) = {
         let v = vault.lock().await;
         require_owner(&v)?;
@@ -365,10 +378,20 @@ pub async fn share(
     };
     let user = find_user(session, user_ref).await?;
     if user.id == session.user_id {
-        bail!("you already own this vault");
+        bail!("you are an owner of this vault already");
     }
-    if role == Role::Admin && user.kind == PrincipalKind::Agent {
-        bail!("agents can't be vault admins; share as editor or viewer");
+    if user.kind == PrincipalKind::Agent {
+        match role {
+            Role::Admin => bail!("agents can't be vault admins; share as editor or viewer"),
+            Role::Owner => bail!("agents can't be vault owners; share as editor or viewer"),
+            _ => {}
+        }
+    }
+    if role == Role::Owner && user.account_key.is_none() {
+        bail!(
+            "{} hasn't set up encryption yet: share as editor now, and make them an owner once they have",
+            user.display_name
+        );
     }
     let verified = session.verify_user(&user)?;
     if let Some(vu) = &verified
@@ -396,13 +419,19 @@ pub async fn share(
         _ => None,
     };
     // The owner vouches for them, with their key pinned, in the vault's log.
-    let member = members::log_member(&user.id, role.clone(), public.as_ref());
+    // Owners are made from members: added as editors first.
+    let joins_as = if role == Role::Owner {
+        Role::Editor
+    } else {
+        role.clone()
+    };
+    let member = members::log_member(&user.id, joins_as.clone(), public.as_ref());
     let mut updated_role = false;
     let mut attempt = 0;
     let added = loop {
         let req = AddMemberRequest {
             user_id: user.id.clone(),
-            role: role.clone(),
+            role: joins_as.clone(),
             key_envelope: envelope.clone(),
             log_entry: session
                 .log_entry(
@@ -429,29 +458,14 @@ pub async fn share(
         }
     };
     match added {
+        Ok(_) if role == Role::Owner => {
+            session.reload_member_log(vault).await?;
+            set_role(session, vault, &id, &user.id, &role).await?;
+        }
         Ok(_) => {}
         Err(e) if e.status() == Some(409) && e.to_string().contains("already a member") => {
             // Already a member: update the role and make sure they have the key.
-            let log_entry = session
-                .log_entry(
-                    vault,
-                    LogBody::Role {
-                        user_id: user.id.clone(),
-                        role: role.clone(),
-                    },
-                )
-                .await;
-            session
-                .api
-                .patch::<_, ()>(
-                    &format!("/vaults/{id}/members/{}", user.id),
-                    &UpdateMemberRequest {
-                        role: role.clone(),
-                        log_entry,
-                    },
-                )
-                .await?;
-            session.reload_member_log(vault).await?;
+            set_role(session, vault, &id, &user.id, &role).await?;
             // A new key they have now (accepted above) is pinned in the log.
             if let Some(k) = &public {
                 let pinned = {
@@ -491,6 +505,50 @@ pub async fn share(
         key_shared,
         updated_role,
     })
+}
+
+/// Give member `user_id` a role, signed in the log (`make_owner` for an
+/// owner).
+async fn set_role(
+    session: &Session,
+    vault: &SharedVault,
+    id: &str,
+    user_id: &str,
+    role: &Role,
+) -> Result<()> {
+    let body = match role {
+        Role::Owner => LogBody::MakeOwner {
+            user_id: user_id.to_string(),
+        },
+        _ => LogBody::Role {
+            user_id: user_id.to_string(),
+            role: role.clone(),
+        },
+    };
+    let mut attempt = 0;
+    loop {
+        let log_entry = session.log_entry(vault, body.clone()).await;
+        let r = session
+            .api
+            .patch::<_, ()>(
+                &format!("/vaults/{id}/members/{user_id}"),
+                &UpdateMemberRequest {
+                    role: role.clone(),
+                    log_entry,
+                },
+            )
+            .await;
+        match r {
+            Err(e) if is_log_race(&e) && attempt < 3 => attempt += 1,
+            r => {
+                r?;
+                break;
+            }
+        }
+        session.reload_member_log(vault).await?;
+    }
+    session.reload_member_log(vault).await?;
+    Ok(())
 }
 
 /// The server refused a membership log entry because the log moved on since

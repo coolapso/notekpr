@@ -77,6 +77,16 @@ fn owner_of(c: &Core, vault: &str, note: &str) -> Option<String> {
         })
 }
 
+/// Whether `user` owns the vault: one of its owners in its membership log,
+/// or (people a note is shared with, who don't see that) its owner.
+fn owns(c: &Core, vault: &str, owner: Option<&str>, user: &str) -> bool {
+    owner == Some(user)
+        || c.member_logs
+            .get(vault)
+            .and_then(|l| l.state.as_ref())
+            .is_some_and(|s| s.is_owner(user))
+}
+
 /// Whether we may comment on the note: anyone who can read it, viewers only
 /// while the vault's owner lets them.
 pub fn can_comment(c: &Core, vault: &str, note: &str) -> bool {
@@ -197,7 +207,7 @@ pub(super) fn folded(c: &Core, vault: &str, note: &str) -> Vec<comments::Thread>
                 .flatten()
         })
     };
-    r.comment_threads(note, known, |u| owner.as_deref() == Some(u))
+    r.comment_threads(note, known, |u| owns(c, vault, owner.as_deref(), u))
 }
 
 /// The note's comment threads, oldest first.
@@ -205,7 +215,7 @@ pub fn comment_threads(c: &Core, vault: &str, note: &str) -> Vec<ThreadView> {
     let Some(r) = c.replicas.get(vault) else {
         return Vec::new();
     };
-    let i_own = owner_of(c, vault, note).as_deref() == Some(c.user_id.as_str());
+    let i_own = owns(c, vault, owner_of(c, vault, note).as_deref(), &c.user_id);
     let doc = r.notes.get(note);
     folded(c, vault, note)
         .into_iter()

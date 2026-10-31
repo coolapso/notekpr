@@ -398,7 +398,8 @@ HOME = [
         - [ ] Move a note, or a folder with everything in it, to another vault: *Move to vault…* in its menu in the file tree (a note's also in its ⋯ menu at the top); the originals go to the trash
         - [ ] *Vault settings* (⚙ next to a vault): its icon or a picture, *Export as Markdown (.zip)*, *Import notes*, the *Activity log*
         - [ ] Settings → Account → *Data*: export the vaults you tick and your quick notes as one .zip, then sign in as someone new (any name works here, or on another server) and *Import an export…*: the vaults come back with their folders, files and icons, and the quick notes join that account's. *Delete my account…* there says what goes before anything does
-        - [ ] *Share vault* at the bottom of the sidebar: members, roles (*Admin*, *Can edit*, *Can view*) and key fingerprints
+        - [ ] *Share vault* at the bottom of the sidebar: members, roles (*Owner*, *Admin*, *Can edit*, *Can view*) and key fingerprints
+        - [ ] *Family* has two owners, you and Bob, equal: either manages its people and settings, and either may leave it to the other (*Vault settings*). *Work* has only you: you can't leave it, and Settings → Account → *Delete my account…* asks you first to make someone else an owner of it (Dave), or to delete it — while *Family* would simply stay Bob's
         - [ ] You're an admin of Bob's *Book club*: its *Trash* has a draft Carol threw away — as an editor she can restore it but not delete it for good; you can (*Empty trash*), and you see the vault's *Activity log* in *Vault settings*. Sign in as **carol** to see her side
         - [ ] Share a single note with **dave** (the share button at the top of a note)
         - [ ] Settings → Editor: the theme, Vim keybindings, and how wide notes are (a slider from narrow to wide). A note's ⋯ menu gives it a width of its own, only for you: try *Wide* on *Server checks* in *Work*, whose log lines don't wrap
@@ -420,10 +421,10 @@ HOME = [
 
         ## Other vaults
 
-        | Vault | Owner | Who else |
+        | Vault | Owners | Who else |
         |---|---|---|
         | Work | Alice | Dave (editor) |
-        | Family | Alice | Bob (editor), Carol (viewer) |
+        | Family | Alice, Bob | Carol (viewer) |
         | Book club | Bob | Alice (admin), Carol (editor) |
         | Garden club | Eve | Alice (editor) |
         | Assistant | Alice | the *Home assistant* agent |
@@ -1567,7 +1568,7 @@ def seed(cli, url, data, server_bin):
               kickoff.replace("- [ ] Alice: list the pages to migrate",
                               "- [ ] Alice: list the pages to migrate\n- [x] Dave: set up the repository"))
 
-    step("alice: vault Family, shared with bob (editor) and carol (viewer)")
+    step("alice: vault Family, owned with bob, shared with carol (viewer)")
     cli.run(a, "-q", "vault", "create", "Family")
     cli.run(a, "-q", "vault", "icon", "Family", "👨‍👩‍👧")
     for path, icon, text in FAMILY:
@@ -1575,7 +1576,7 @@ def seed(cli, url, data, server_bin):
         if icon:
             cli.icon(a, "Family", path, icon)
     cli.icon(a, "Family", "House", "🏡")
-    cli.run(a, "-q", "vault", "share", "Family", b, "--role", "editor")
+    cli.run(a, "-q", "vault", "share", "Family", b, "--role", "owner")
     cli.run(a, "-q", "vault", "share", "Family", c, "--role", "viewer")
     step("alice and bob: editing the shopping list and holiday plans together")
     for who, text in SHOPPING_VERSIONS:

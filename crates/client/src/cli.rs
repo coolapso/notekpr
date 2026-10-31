@@ -525,6 +525,9 @@ pub enum ShareRole {
 /// A vault member's role.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum, Serialize, Deserialize)]
 pub enum MemberRole {
+    /// Like you: manages people, keys and settings, and may delete the vault
+    /// (people with encryption keys; owners are equal).
+    Owner,
     /// Can edit, empty the trash and see the activity log (people only).
     Admin,
     Editor,
@@ -561,7 +564,7 @@ pub enum VaultCmd {
     /// List members with their key fingerprints.
     Members { vault: String },
     /// Share with a person or one of your agents (verifies and pins their key),
-    /// or change a member's role.
+    /// or change a member's role (owners too, while one stays).
     Share {
         vault: String,
         /// User id, exact e-mail or display name.
@@ -584,7 +587,7 @@ pub enum VaultCmd {
     Unshare { vault: String, user: String },
     /// Rotate the vault key (owner).
     Rotate { vault: String },
-    /// Leave a vault shared with you (removes the local copy).
+    /// Leave a vault (removes the local copy); an owner while another stays.
     Leave {
         vault: String,
         #[arg(long)]

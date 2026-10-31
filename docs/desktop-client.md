@@ -178,8 +178,8 @@ by its id.
 | `vault icon <v> <emoji>` / `vault icon <v> --remove` | owner only; the vault's icon (replaces a picture set in the browser) |
 | `vault viewers-comment <v> on\|off` | owner only; whether viewers (and people its notes are shared with read-only) may comment (on by default) |
 | `vault members <v>` | members, roles, key fingerprints and pin status |
-| `vault share <v> <user> --role admin\|editor\|viewer` | owner only; for an existing member it changes their role; admins (people only) also empty the trash; see [§8](#8-sharing-members-and-keys) |
-| `vault unshare <v> <user>` / `vault rotate <v>` / `vault leave <v>` | unshare and rotate: owner only; removal always rotates the key; the owner can't leave (delete instead) |
+| `vault share <v> <user> --role owner\|admin\|editor\|viewer` | owner only; for an existing member it changes their role; owners are equal, admins (people only) also empty the trash; see [§8](#8-sharing-members-and-keys) |
+| `vault unshare <v> <user>` / `vault rotate <v>` / `vault leave <v>` | unshare and rotate: owner only; removal always rotates the key; an owner leaves only while another stays (the last one deletes the vault instead) |
 | `ls <v> [folder] [-r]` | folders, notes and attachments, in the sidebar's order (`-r`: each folder followed by what's in it) |
 | `cat <v> <path>` | note text (or attachment bytes; a drawing as a `.drawing` file: Excalidraw's JSON under notekpr's `type`) |
 | `write <v> <path>` | create or update a note from stdin — diff-merged, never a blind overwrite; `--append`, `--attachment`, `--if-match <hash>` (ignored with the other two). A path ending in `.drawing` takes a drawing file on stdin — a `.drawing`, Excalidraw's `.excalidraw`, Obsidian's `.excalidraw.md`, what Excalidraw copies, or a PNG or SVG with the drawing inside (Excalidraw's "Embed scene", notekpr's exports) — and makes or changes the drawing there, element by element. `@today`, `@tomorrow` and `@yesterday` in the text become those days' dates (`@2026-10-23`, in the local time zone), as in the web app; so do they with `quick`, `shared write` and the gateway, but not in files of the Markdown folder |
@@ -190,7 +190,7 @@ by its id.
 | `order <v> <path> --before\|--after <other>` / `order <v> <folder> --reset` | put a note, attachment or folder just before or after another of the same folder (the order the sidebar and `ls` show; folders stay above notes; a folder only made by its notes gets an entry), or a folder's contents (`/` = the top level) back to A–Z; moving something to another folder drops its place |
 | `comments list <v> <note> [--all]` | a note's comment threads: the text each is about, the comments and replies with their authors, ids (first 8 characters) and whether unverified, not sent yet or edited; `--all` adds resolved ones; `--json` for the full ids |
 | `comments add <v> <note> --on <quote> [text…]` | comment on the quoted text (it must appear once in the note); the comment is the words or stdin. Viewers can comment too, unless the vault's owner turned it off |
-| `comments reply\|edit\|delete\|resolve\|reopen <v> <note> <id> [text…]` | `id`: a comment's id or the start of it that only it has. Only its author edits a comment; its author or the vault's owner deletes it (a comment takes its replies with it) |
+| `comments reply\|edit\|delete\|resolve\|reopen <v> <note> <id> [text…]` | `id`: a comment's id or the start of it that only it has. Only its author edits a comment; its author or an owner of the vault deletes it (a comment takes its replies with it) |
 | `@Name` in a comment's text | mentions that member of the vault (any case; longer names win: `@Ann Lee` over `@Ann`). Only the vault's members can be mentioned: other `@words` stay text, with a warning. The output says whom it mentioned |
 | `mentions [--vault v] [--unread] [--mark-read] [--limit n]` | comments that mention you, newest first (`*`: not read on any device yet), with the note, who and when; `--mark-read` marks them read everywhere (the web app's inbox too), with everything before them |
 | `icon <v> <path> <emoji>` / `icon <v> <path> --remove` | a note's, attachment's or folder's icon; `ls` and `vault list` show icons, and people a note is shared with see its icon and new name |
@@ -674,10 +674,18 @@ a loud warning until you verify the new key and pass `--accept-new-key`; key
 rotations go ahead without that person (and say so), who gets the new key
 once you share with them again with `--accept-new-key`.
 
-* Only the owner can share, unshare and rotate. Running `vault share` again
+* Only owners can share, unshare and rotate. Running `vault share` again
   for someone who is already a member changes their role to the given
   `--role`.
-* Roles: `editor` writes and moves things to the trash; `admin` also empties
+* Roles: `owner` does all an owner does — people, keys, settings, deleting
+  the vault — and a vault can have several, all equal (any may remove or
+  demote another); someone made an owner joins as an editor first, and
+  needs encryption keys set up. A vault keeps one owner: the last can't
+  leave (`vault leave`), and `delete-account` is refused while you are the
+  last owner of a vault other people are in — make someone else an owner
+  of it, or delete it, first. A vault whose only owner loses every device
+  and their recovery key can't change its members any more, so a shared
+  vault is better off with two; `editor` writes and moves things to the trash; `admin` also empties
   the trash (deleting for good, which editors can't, and undoing that for a
   while: `trash undo`) and sees the vault's activity log — people only, never agents; `viewer` reads (and comments,
   unless the owner turns it off).
@@ -712,7 +720,7 @@ again under the note's key, for everyone the note is shared with
 fingerprints are checked and pinned exactly as for vault sharing. Vault members
 keep working on the note as usual (their clients pick up the note's key
 automatically). Rotating the vault key also renews the keys of shared notes.
-Only the vault's owner can share a note, stop sharing it or renew its key;
+Only the vault's owners can share a note, stop sharing it or renew its key;
 running `share-note` again for someone who already has the note changes
 their role.
 

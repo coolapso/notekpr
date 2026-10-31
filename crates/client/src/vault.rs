@@ -462,6 +462,12 @@ impl Vault {
         self.replica.role.clone()
     }
 
+    /// Whether `user_id` owns the vault: one of the owners in its membership
+    /// log, or the one the server names (vaults from before the log).
+    pub fn owns(&self, user_id: &str) -> bool {
+        user_id == self.owner_id || self.log.state.as_ref().is_some_and(|s| s.is_owner(user_id))
+    }
+
     pub fn is_dirty(&self) -> bool {
         self.dirty_state
             || self.dirty_pending

@@ -178,9 +178,25 @@ pub(super) async fn reload_share_keys_once(vault: &str, note: &str) {
             return;
         }
     };
+    // Who signed giving us its newest key: the vault's owner we know, or
+    // another owner, looked up.
+    let known = step(|c| {
+        let owner = c.shares.get(&key)?.info.owner.clone();
+        Some(match engine::grant_signer(&keys, &c.user_id) {
+            Some(id) if id != owner.id => Err(id.to_string()),
+            _ => Ok(owner),
+        })
+    });
+    let signer = match known {
+        None => return,
+        Some(Ok(owner)) => Ok(owner),
+        Some(Err(id)) => api::get::<PublicUser>(&format!("/users/{id}"))
+            .await
+            .map_err(|e| e.message),
+    };
     let applied = step(|c| {
-        // Only a key the note's owner (as pinned) signed giving us.
-        let ring = match share_keyring(c, vault, note, &keys)? {
+        // Only a key an owner (as pinned) signed giving us.
+        let ring = match signer.and_then(|s| share_keyring(c, vault, note, &s, &keys)) {
             Ok(r) => r,
             Err(e) => {
                 if let Some(s) = c.shares.get_mut(&key) {
@@ -231,38 +247,38 @@ pub(super) async fn reload_share_keys_once(vault: &str, note: &str) {
     }
 }
 
-/// The keyring of a note shared with us, if its owner (as pinned) signed
-/// giving us its newest key; `Err` says why not (`None`: not a share).
+/// The keyring of a note shared with us, if `signer` — an owner of its
+/// vault, their key as pinned — signed giving us its newest key; `Err` says
+/// why not.
 fn share_keyring(
     c: &mut Core,
     vault: &str,
     note: &str,
+    signer: &PublicUser,
     keys: &ObjectKeysResponse,
-) -> Option<Result<notekpr_core::keys::VaultKeyring, String>> {
-    let owner = c
+) -> Result<notekpr_core::keys::VaultKeyring, String> {
+    if !c
         .shares
-        .get(&(vault.to_string(), note.to_string()))?
-        .info
-        .owner
-        .clone();
-    let Some(owner_key) = owner.account_key.as_ref().and_then(|k| k.verify().ok()) else {
-        return Some(Err("the note's owner has no valid encryption key".into()));
+        .contains_key(&(vault.to_string(), note.to_string()))
+    {
+        return Err("the note is no longer shared with you".into());
+    }
+    let Some(key) = signer.account_key.as_ref().and_then(|k| k.verify().ok()) else {
+        return Err("the note's owner has no valid encryption key".into());
     };
-    match engine::check_pin(&mut c.prefs.pins, &owner.id, &owner_key.fingerprint()) {
+    match engine::check_pin(&mut c.prefs.pins, &signer.id, &key.fingerprint()) {
         engine::PinStatus::Changed => {
-            return Some(Err(format!(
+            return Err(format!(
                 "Security warning: the encryption key of {}, who shared this note, changed since you last saw it. Compare fingerprints with them.",
-                owner.display_name
-            )));
+                signer.display_name
+            ));
         }
         engine::PinStatus::New => save_prefs(c),
         engine::PinStatus::Match => {}
     }
-    let account = c.account.as_ref()?;
-    Some(
-        engine::object_keyring_for_recipient(account, &c.user_id, vault, keys, Some(&owner_key))
-            .map_err(|e| e.to_string()),
-    )
+    let account = c.account.as_ref().ok_or("no account keys on this device")?;
+    engine::object_keyring_for_recipient(account, &c.user_id, vault, keys, Some(&key))
+        .map_err(|e| e.to_string())
 }
 
 pub(super) fn drop_share(c: &mut Core, vault: &str, note: &str) {

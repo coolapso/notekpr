@@ -192,17 +192,20 @@ read anything.
 
 **Working together**
 
-* Share a vault as admin, editor or viewer, or a single note with someone
-  outside the vault. Editors move notes to the trash; only the owner and the
-  vault's admins delete for good, and see the vault's activity log. Leave a
-  vault shared with you, or remove a shared note from your list.
+* Share a vault as owner, admin, editor or viewer, or a single note with
+  someone outside the vault. A vault can have several owners, all equal, and
+  always keeps one: the last owner can't leave, nor delete their account
+  while others use the vault, so it never goes with one person. Editors move
+  notes to the trash; only owners and the vault's admins delete for good,
+  and see the vault's activity log. Leave a vault shared with you, or remove
+  a shared note from your list.
 * Edit the same note at the same time with live cursors, and see who else is
   on the note you're on. Edits merge without conflicts (CRDTs), also after
   working offline.
 * Comments on the text, like in Notion: select some text and comment
   (`Alt+M`), in the editor or the reading view; the text gets a highlight,
   and clicking it opens the thread to reply, resolve, edit or delete.
-  Viewers can comment too (the vault's owner can turn that off), comments
+  Viewers can comment too (the vault's owners can turn that off), comments
   follow the text through edits — also edits from your own editor — and a
   note can be shared with its comments. Also from the command line
   (`notekpr comments`, `notekpr shared comments`) and for AI agents, and in
@@ -221,10 +224,10 @@ read anything.
   attachments, vault names and icons, presence and your settings. The server
   only stores ciphertext and can't read any of it.
 * Every note has its own key; removing someone renews the keys in the same
-  step, and when someone leaves on their own the owner's apps renew them
+  step, and when someone leaves on their own the owners' apps renew them
   next time they're online. Sharing a note never gives away its earlier
   history. Owners can also renew a vault's key by hand.
-* The vault's owner signs who belongs to it, and every change is signed by
+* The vault's owners sign who belongs to it, and every change is signed by
   its author, so even a compromised server can't add people or forge edits.
 * Key fingerprints to check who you share with, and a loud warning when
   someone's key changes.
@@ -282,9 +285,11 @@ read anything.
   agents and vaults, vaults, agents and quick notes per person (with each
   person's own allowance), drawings per vault (with a vault's own), a
   read-only mode the apps ride out — edits are kept and sent
-  when it ends — that also starts by itself at a database size you choose,
-  and the oldest app version it accepts: older apps are told to update and
-  keep their unsent edits.
+  when it ends —, a size for the whole database (at it, every vault takes
+  no new content until something is deleted for good or the size is
+  raised: the room a family or a team shares on its own server), and the
+  oldest app version it accepts: older apps are told to update and keep
+  their unsent edits.
 * Storage per vault: a size each vault may take, by default and for one
   vault. A full vault takes no new content — its members' edits wait in
   their apps and go out once it has room — while every other vault goes

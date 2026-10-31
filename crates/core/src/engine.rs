@@ -593,6 +593,18 @@ pub fn object_keyring_for_member(
 /// given to us is used, and only if the owner signed giving it to us; older
 /// ones follow from the key chain. So a server can't hand us a key of its
 /// own. Without: every envelope as is (tests, older owners).
+/// Who signed giving `user_id` the newest key of a note shared with them:
+/// an owner of its vault, as the server says (older servers don't: then
+/// `None`, and it was the vault's owner).
+pub fn grant_signer<'a>(r: &'a ObjectKeysResponse, user_id: &str) -> Option<&'a str> {
+    r.envelopes
+        .iter()
+        .filter(|e| e.user_id == user_id)
+        .max_by_key(|e| e.epoch)?
+        .signed_by
+        .as_deref()
+}
+
 pub fn object_keyring_for_recipient(
     account: &AccountSecret,
     user_id: &str,

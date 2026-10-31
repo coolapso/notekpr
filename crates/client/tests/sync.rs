@@ -62,6 +62,59 @@ async fn shared_vault_reaches_running_sync_live() {
     bob_live.stop().await;
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn owners_share_a_vault_and_it_outlives_its_creator() {
+    let srv = start().await;
+    let alice = login(&srv, "alice").await;
+    let bob = login(&srv, "bob").await;
+    let carol = login(&srv, "carol").await;
+    manage::create_vault(&alice, "Family").await.unwrap();
+    let alice_hub = hub(&alice).await;
+    let fam = alice_hub.resolve("Family").await.unwrap();
+    ops::put_document(&alice_hub, "Family", "Plans.md", "# Plans\n", None)
+        .await
+        .unwrap();
+
+    // Alice, the only owner, can't just go.
+    let err = manage::leave_vault(&alice, &fam).await.unwrap_err();
+    assert!(err.to_string().contains("only owner"), "{err}");
+
+    // Bob joins as an owner (an editor first, then owner), and as one
+    // shares the vault with Carol.
+    manage::share(&alice, &fam, "bob", Role::Owner, false)
+        .await
+        .unwrap();
+    let bob_hub = hub(&bob).await;
+    let bfam = bob_hub.resolve("Family").await.unwrap();
+    assert_eq!(bfam.lock().await.role(), Role::Owner);
+    manage::share(&bob, &bfam, "carol", Role::Viewer, false)
+        .await
+        .unwrap();
+
+    // Alice leaves; the vault stays, Bob's, and still checks out for
+    // everyone — its log starts with Alice, who is gone.
+    manage::leave_vault(&alice, &fam).await.unwrap();
+    bob_hub.session.reload_member_log(&bfam).await.unwrap();
+    let owners: Vec<String> = bfam
+        .lock()
+        .await
+        .log
+        .state
+        .as_ref()
+        .unwrap()
+        .owners()
+        .map(|m| m.user_id.clone())
+        .collect();
+    assert_eq!(owners, vec![bob.user_id.clone()]);
+    let carol_hub = hub(&carol).await;
+    assert_eq!(
+        note(&carol_hub, "Family", "Plans.md").await.as_deref(),
+        Some("# Plans\n")
+    );
+    // And Bob, its last owner, can't just go either.
+    assert!(manage::leave_vault(&bob, &bfam).await.is_err());
+}
+
 /// A URL nothing listens on (connection refused).
 async fn dead_url() -> String {
     let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

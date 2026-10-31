@@ -274,21 +274,32 @@ pub async fn delete_vault(vault: &str) {
 }
 
 pub async fn leave_vault(vault: &str) {
-    let (uid, log_entry) = step(|c| {
-        let body = LogBody::Leave {
-            user_id: c.user_id.clone(),
-        };
-        (c.user_id.clone(), state::log_entry(c, vault, body))
-    });
-    match api::delete_with(
-        &format!("/vaults/{vault}/members/{uid}"),
-        &RemoveMemberRequest {
-            log_entry,
-            ..Default::default()
-        },
-    )
-    .await
-    {
+    let mut attempt = 0;
+    let left = loop {
+        let (uid, log_entry) = step(|c| {
+            let body = LogBody::Leave {
+                user_id: c.user_id.clone(),
+            };
+            (c.user_id.clone(), state::log_entry(c, vault, body))
+        });
+        let r = api::delete_with(
+            &format!("/vaults/{vault}/members/{uid}"),
+            &RemoveMemberRequest {
+                log_entry,
+                ..Default::default()
+            },
+        )
+        .await;
+        match r {
+            // Someone else changed who is in it since we last looked.
+            Err(e) if e.status == 409 && e.message.contains("changed meanwhile") && attempt < 3 => {
+                attempt += 1;
+                state::reload_log(vault).await;
+            }
+            r => break r,
+        }
+    };
+    match left {
         Ok(()) => {
             step(|c| {
                 c.replicas.remove(vault);
@@ -397,23 +408,32 @@ pub async fn share(vault: &str, user: &PublicUser, role: Role) -> Result<(), Str
 }
 
 pub async fn set_role(vault: &str, user_id: &str, role: Role) {
-    let log_entry = step(|c| {
-        state::log_entry(
-            c,
-            vault,
-            LogBody::Role {
-                user_id: user_id.to_string(),
-                role: role.clone(),
-            },
-        )
-    });
-    if let Err(e) = api::patch::<_, ()>(
-        &format!("/vaults/{vault}/members/{user_id}"),
-        &UpdateMemberRequest { role, log_entry },
-    )
-    .await
-    {
-        error(e.message);
+    let body = match role {
+        Role::Owner => LogBody::MakeOwner {
+            user_id: user_id.to_string(),
+        },
+        _ => LogBody::Role {
+            user_id: user_id.to_string(),
+            role: role.clone(),
+        },
+    };
+    for attempt in 0.. {
+        let log_entry = step(|c| state::log_entry(c, vault, body.clone()));
+        let req = UpdateMemberRequest {
+            role: role.clone(),
+            log_entry,
+        };
+        match api::patch::<_, ()>(&format!("/vaults/{vault}/members/{user_id}"), &req).await {
+            // Someone else changed who is in it since we last looked.
+            Err(e) if e.status == 409 && e.message.contains("changed meanwhile") && attempt < 3 => {
+                state::reload_log(vault).await;
+            }
+            Err(e) => {
+                error(e.message);
+                break;
+            }
+            Ok(()) => break,
+        }
     }
     state::reload_log(vault).await;
 }

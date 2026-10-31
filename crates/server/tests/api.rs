@@ -1206,7 +1206,20 @@ async fn backup_and_restore_roundtrip() {
             .unwrap()
             .is_none()
     );
+    // The backup is the database; its files are in the store, which the
+    // restored server must use: one without them is refused.
     let cfg2 = notekpr_server::config::Config::for_tests(restored.clone());
+    let refused = notekpr_server::build(cfg2.clone(), None)
+        .await
+        .err()
+        .unwrap();
+    assert!(
+        refused
+            .to_string()
+            .contains("holds none of this server's newest attachments")
+    );
+    let mut cfg2 = cfg2;
+    cfg2.file_store = Some(data.join("files").display().to_string());
     let (app2, _s2) = notekpr_server::build(cfg2, None).await.unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr2 = listener.local_addr().unwrap();

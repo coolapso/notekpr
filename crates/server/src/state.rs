@@ -41,7 +41,7 @@ impl AppState {
     ) -> anyhow::Result<Self> {
         let oidc = Oidc::from_config(&config)?;
         let limiters = Limiters::new(&config);
-        let blobs = crate::blobs::Blobs::Sqlite(db.clone());
+        let blobs = crate::blobs::Blobs::open(&config, db.clone()).await?;
         let instance = Instance::load(&db).await?;
         Ok(AppState(Arc::new(Inner {
             db,

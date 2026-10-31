@@ -99,6 +99,17 @@ fn spawn_maintenance(state: AppState) {
                 Ok(n) => tracing::info!(n, "erased what was deleted for good and no longer kept"),
                 Err(e) => tracing::warn!(error = %e, "could not erase what was deleted for good"),
             }
+            // Attachments kept in the database before a file store was set
+            // up (the first tick is at once), and files the store is to
+            // delete.
+            if let Err(e) = state.blobs.move_out().await {
+                tracing::warn!(error = %e, "could not move attachments to the file store");
+            }
+            match state.blobs.delete_due(db::now()).await {
+                Ok(0) => {}
+                Ok(n) => tracing::info!(n, "deleted files from the file store"),
+                Err(e) => tracing::warn!(error = %e, "could not delete files from the file store"),
+            }
             let _ = repo::sessions::delete_ended_before(db, now - month).await;
         }
     });

@@ -122,6 +122,14 @@ pub enum UserDirectory {
     ExactEmail,
 }
 
+/// Where attachments are kept ([`Config::file_store`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum FileStore {
+    Database,
+    Directory(PathBuf),
+    S3 { bucket: String, prefix: String },
+}
+
 #[derive(Args, Debug, Clone)]
 pub struct Config {
     /// Address to listen on.
@@ -340,6 +348,25 @@ pub struct Config {
     )]
     pub purge_undo_days: u32,
 
+    /// Where attachments are kept: a directory (default: `files` in the
+    /// data directory), `s3://bucket/prefix` (S3 or anything compatible;
+    /// credentials, region and endpoint from the usual `AWS_*` variables),
+    /// or `database` (inside it, so a backup is one file). Attachments
+    /// kept elsewhere before move there by themselves.
+    #[arg(long, env = "NOTEKPR_FILE_STORE", global = true)]
+    pub file_store: Option<String>,
+
+    /// Days a file stays in the file store after the database let go of it
+    /// (deleted for good and no longer undoable, or its vault deleted), so
+    /// that restoring a database backup that recent finds its files.
+    #[arg(
+        long,
+        env = "NOTEKPR_KEEP_DELETED_FILES_DAYS",
+        default_value_t = 14,
+        global = true
+    )]
+    pub keep_deleted_files_days: u32,
+
     /// Trust X-Forwarded-For / X-Real-IP (only behind a reverse proxy you control).
     #[arg(
         long,
@@ -422,6 +449,30 @@ impl Config {
     /// How long something deleted for good is kept, in milliseconds.
     pub fn purge_undo_ms(&self) -> i64 {
         self.purge_undo_days as i64 * 24 * 3600 * 1000
+    }
+
+    /// Where attachments are kept (`--file-store`).
+    pub fn file_store(&self) -> FileStore {
+        match self.file_store.as_deref().map(str::trim) {
+            None | Some("") => FileStore::Directory(self.data_dir.join("files")),
+            Some("database") => FileStore::Database,
+            Some(s) => match s.strip_prefix("s3://") {
+                Some(rest) => {
+                    let (bucket, prefix) = rest.split_once('/').unwrap_or((rest, ""));
+                    FileStore::S3 {
+                        bucket: bucket.to_string(),
+                        prefix: prefix.trim_matches('/').to_string(),
+                    }
+                }
+                None => FileStore::Directory(PathBuf::from(s)),
+            },
+        }
+    }
+
+    /// How long a file stays in the store after the database let go of it,
+    /// in milliseconds.
+    pub fn keep_deleted_files_ms(&self) -> i64 {
+        self.keep_deleted_files_days as i64 * 24 * 3600 * 1000
     }
 
     pub fn is_admin_identity(&self, issuer: &str, subject: &str) -> bool {

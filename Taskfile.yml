@@ -239,6 +239,15 @@ tasks:
     cmds:
       - cargo test -p notekpr-web
 
+  test:s3:
+    desc: "Attachments in S3-compatible storage, against a local Garage in Docker (started and removed by scripts/test-s3.sh)"
+    deps: [rust]
+    preconditions:
+      - sh: docker info >/dev/null 2>&1
+        msg: "Docker is needed (it runs Garage, an S3-compatible server)"
+    cmds:
+      - scripts/test-s3.sh {{.CLI_ARGS}}
+
   fuzz:
     desc: "Fuzz the parsers (stable toolchain, libFuzzer): `task fuzz` (every target, SECS=60 each) or `task fuzz -- zip 300`"
     deps: [rust]
@@ -320,6 +329,7 @@ tasks:
       - task: fmt:check
       - task: lint
       - task: test
+      - task: test:s3
       - task: check:wasm
       - task: test:editor
       - task: test:e2e

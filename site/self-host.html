@@ -79,7 +79,7 @@
     <div class="wrap split">
       <div class="stack">
         <h2>Back it up</h2>
-        <p>Everything lives in one SQLite database: encrypted notes, attachments and keys wrapped for members. A backup is a consistent copy of that file, made while the server runs. Backups are encrypted data too; they need people's own keys to read.</p>
+        <p>Encrypted notes, their history and keys wrapped for members live in one SQLite database; a backup is a consistent copy of that file, made while the server runs. Attachments are files in a folder next to it, or in S3-compatible storage, never changed once written: copy them after the database. Backups are encrypted data too; they need people's own keys to read.</p>
       </div>
 <pre><span class="p">$ </span>docker compose exec notekpr \
     notekpr-server backup --out-dir /data/backups --keep 14</pre>
@@ -110,6 +110,7 @@
         <li><b>Admin page</b><span>Accounts, who is an administrator, disabling an account, and server statistics. Administrators can't read anyone's notes or vault names.</span></li>
         <li><b>Limits and read-only mode</b><span>Change them while the server runs: how many accounts, agents and vaults, how many vaults and agents each person may have (and one person more), how much the whole instance may store (the room a family or a team shares), and a read-only mode. People's edits wait on their devices while it is on.</span></li>
         <li><b>Admin clients</b><span>For scripts and services such as a billing system: each gets its own scopes and tokens for the admin API, never reaches a vault, and can be set up from the server's command line or your deployment's configuration. An instance can leave everything to them and have no administrators among its people.</span></li>
+        <li><b>Where files go</b><span>Attachments in a folder (the default), in S3 or anything compatible — several servers can share a bucket, each under its own prefix — or inside the database, for one-file backups. Existing ones move by themselves.</span></li>
         <li><b>Size limits</b><span>Set how large a single change, a snapshot and an attachment may be.</span></li>
         <li><b>How big a server?</b><span>A load test you can watch, <code>task load</code>: a crowd of simulated people with real encryption against the server image with CPU and memory limits.</span></li>
       </ul>

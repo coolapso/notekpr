@@ -751,3 +751,36 @@ pub async fn share_note(owner: &User, v: &str, o: &str, with: &User) -> VaultKey
         .await;
     ring
 }
+
+pub async fn upload(u: &User, v: &str, id: &str, plain: &[u8]) -> u16 {
+    let blob = u.ring(v).encrypt(Purpose::Attachment, id, plain).unwrap();
+    u.api
+        .raw()
+        .put(format!("{}/vaults/{v}/attachments/{id}", u.api.base))
+        .bearer_auth(u.api.token.clone().unwrap())
+        .body(blob)
+        .send()
+        .await
+        .unwrap()
+        .status()
+        .as_u16()
+}
+
+/// An attachment, decrypted, and the size the response announced.
+pub async fn download(u: &User, v: &str, id: &str) -> (Vec<u8>, Option<u64>) {
+    let resp = u
+        .api
+        .raw()
+        .get(format!("{}/vaults/{v}/attachments/{id}", u.api.base))
+        .bearer_auth(u.api.token.clone().unwrap())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 200);
+    let len = resp.content_length();
+    let bytes = resp.bytes().await.unwrap();
+    (
+        u.ring(v).decrypt(Purpose::Attachment, id, &bytes).unwrap(),
+        len,
+    )
+}

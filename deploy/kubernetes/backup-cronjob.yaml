@@ -1,6 +1,8 @@
 # Nightly consistent backup of the notekpr database into the same volume
-# (copy /data/backups somewhere else with your usual backup tooling).
-# Everything in the backup that relates to notes is already end-to-end encrypted.
+# (copy /data/backups somewhere else with your usual backup tooling, and
+# the attachments in /data/files after it: they never change once written;
+# with S3, use the bucket's versioning). Everything in the backup that
+# relates to notes is already end-to-end encrypted.
 apiVersion: batch/v1
 kind: CronJob
 metadata:

@@ -75,7 +75,7 @@ What the database holds, besides ciphertext and public keys:
 | `devices`, `sessions`, `agent_credentials` | each account's devices and their names (the browser and system, or `notekpr CLI on <host name>`), sessions, and when each was created, last used (to the minute; only the latest time is kept), revoked |
 | `vaults`, `vault_members`, `member_log` | who owns each vault, who is in it with which role, who added them and when; which vault is someone's quick notes (their Personal storage); how much its content takes, and its own storage and drawings limits; the membership log's entries (user ids, roles, public keys, key commitments, times) |
 | `objects`, `updates`, `snapshots` | how many notes and other objects a vault has, which of them are drawings (said by the app that made each, never changed), when each was created and changed, and for every change (notes, drawings, the file tree, comments): who wrote it, from which device, when, and its size. Comment threads are objects named after their note (`c_<note id>`), so it also tells which notes have comments. When a note was deleted for good, and whether that was undone |
-| `attachments` | each attachment's size, who uploaded it, when; when it was deleted for good |
+| `attachments`, `file_deletions` | each attachment's size, who uploaded it, when; when it was deleted for good; the name of its file in the file store (vault and attachment ids and a random part); files to delete from the store, and since when |
 | `device_grants` | device sign-ins waiting for approval: the client's name, when it asked, and the address it asked from — the address only until the code is approved, denied or expires (it is shown to whoever approves the code, so one asked for by someone else stands out) |
 | `object_shares`, `object_keys` | which notes are shared individually, with whom, with which role, by whom and since when |
 | `user_prefs` | when someone's encrypted preferences last changed, and their size |
@@ -98,6 +98,18 @@ at once, but the server keeps its ciphertext for `--purge-undo-days`
 (default 30; 0 deletes at once), so that the vault's owner and admins can
 undo it; then it is deleted. Database backups keep it for as long as they
 are kept.
+
+**Attachments in a file store** (a folder, or S3-compatible storage run by
+the operator or a provider: `--file-store`) are the same ciphertext the
+database would hold, under names made of the vault's and the attachment's
+random ids. Whoever runs the store learns their sizes, when they were
+written and read, and how many a vault has — what the server's operator
+knows anyway — never names, types or content. Files are served through the
+server only (no links to the bucket), so the store never sees who reads
+them. Its credentials come from the server's environment and are never
+logged. A file stays in the store for `--keep-deleted-files-days` (default
+14) after the database let go of it, so restoring a recent backup finds it,
+and for as long as the store's own backups or versions keep it.
 
 Deleting one's account (Settings → Account, `notekpr delete-account`)
 deletes at once what is the person's: the vaults they own with everything

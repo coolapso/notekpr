@@ -63,8 +63,9 @@ pub async fn vaults(db: impl SqliteExecutor<'_>) -> AppResult<i64> {
     )
 }
 
-/// Bytes the database uses: its pages minus the free ones (deleting data
-/// frees pages without shrinking the file).
+/// Bytes the instance stores: the database's pages minus the free ones
+/// (deleting data frees pages without shrinking the file), plus the
+/// attachments in the file store.
 pub async fn used_bytes(db: &crate::db::Db) -> AppResult<u64> {
     let pages: i64 = sqlx::query_scalar("PRAGMA page_count")
         .fetch_one(db)
@@ -73,5 +74,6 @@ pub async fn used_bytes(db: &crate::db::Db) -> AppResult<u64> {
         .fetch_one(db)
         .await?;
     let size: i64 = sqlx::query_scalar("PRAGMA page_size").fetch_one(db).await?;
-    Ok((pages - free).max(0) as u64 * size.max(0) as u64)
+    let files = super::attachments::file_bytes(db).await?;
+    Ok((pages - free).max(0) as u64 * size.max(0) as u64 + files)
 }

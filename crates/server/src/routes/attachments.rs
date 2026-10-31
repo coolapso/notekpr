@@ -30,16 +30,32 @@ pub async fn put(
         return Err(AppError::TooLarge);
     }
     access::require_writer(&state.db, &v, &who.user_id).await?;
-    let _w = state.write_lock.lock().await;
-    // The blob store may live outside the database, so the role is re-checked
-    // under the write lock (which every membership change takes) rather than
-    // in a transaction.
-    access::require_writer(&state.db, &v, &who.user_id).await?;
     state.instance.require_room(&state.db, &v).await?;
-    match state.blobs.put(&v, &id, &who.user_id, &body).await? {
+    let size = body.len() as u64;
+    // A file store's file is written before the write lock, so a slow
+    // upload holds nobody up; the row claims it under the lock.
+    let staged = state.blobs.stage(&v, &id, body).await?;
+    let stored = {
+        let _w = state.write_lock.lock().await;
+        // The bytes may live outside the database, so the role is re-checked
+        // under the write lock (which every membership change takes) rather
+        // than in a transaction.
+        let checked = async {
+            access::require_writer(&state.db, &v, &who.user_id).await?;
+            state.instance.require_room(&state.db, &v).await
+        };
+        match checked.await {
+            Ok(()) => state.blobs.commit(&staged, &who.user_id).await,
+            Err(e) => Err(e),
+        }
+    };
+    if !matches!(stored, Ok(Stored::Created)) {
+        state.blobs.discard(staged).await;
+    }
+    match stored? {
         Stored::AlreadyThere => Ok(StatusCode::OK),
         Stored::Created => {
-            metrics::counter!("notekpr_attachment_bytes_total").increment(body.len() as u64);
+            metrics::counter!("notekpr_attachment_bytes_total").increment(size);
             storage_changed(&state, &v, false).await;
             Ok(StatusCode::CREATED)
         }
@@ -52,9 +68,10 @@ pub async fn get(
     Path((v, id)): Path<(String, String)>,
 ) -> AppResult<Response> {
     access::member_role(&state.db, &v, &who.user_id).await?;
-    let data = state.blobs.get(&v, &id).await?;
-    let mut resp = data.into_response();
+    let (size, body) = state.blobs.get(&v, &id).await?;
+    let mut resp = body.into_response();
     let h = resp.headers_mut();
+    h.insert(header::CONTENT_LENGTH, HeaderValue::from(size));
     h.insert(
         header::CONTENT_TYPE,
         HeaderValue::from_static("application/octet-stream"),

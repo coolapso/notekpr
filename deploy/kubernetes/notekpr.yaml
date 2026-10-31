@@ -20,6 +20,12 @@ data:
   NOTEKPR_OIDC_CLIENT_ID: "notekpr"
   NOTEKPR_TRUST_PROXY: "true"
   NOTEKPR_LOG_FORMAT: "json"
+  # Attachments are files in /data/files by default; to keep them in S3 or
+  # anything compatible instead (docs/operations.md, "Where attachments are
+  # kept"), with the AWS_* credentials in the Secret below:
+  # NOTEKPR_FILE_STORE: "s3://notekpr/notes"
+  # AWS_REGION: "eu-central-1"
+  # AWS_ENDPOINT: "https://s3.example.com"
 ---
 apiVersion: v1
 kind: Secret
@@ -32,6 +38,9 @@ stringData:
   # Optional bearer token protecting /metrics (recommended if your ingress
   # routes every path, /metrics included).
   # NOTEKPR_METRICS_TOKEN: change-me
+  # For an S3 file store (NOTEKPR_FILE_STORE above):
+  # AWS_ACCESS_KEY_ID: change-me
+  # AWS_SECRET_ACCESS_KEY: change-me
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim

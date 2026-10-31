@@ -189,7 +189,7 @@ async fn export_user(
         let id = find_user(&pool, user).await?;
         let export = notekpr_server::export::user_export(
             &pool,
-            &notekpr_server::blobs::Blobs::Sqlite(pool.clone()),
+            &notekpr_server::blobs::Blobs::open(config, pool.clone()).await?,
             &id,
         )
         .await

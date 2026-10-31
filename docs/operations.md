@@ -171,7 +171,7 @@ env file) counts as not set.
 | Flag / variable | Default | Meaning |
 |---|---|---|
 | `--listen` / `NOTEKPR_LISTEN` | `127.0.0.1:8080` | bind address (container image: `0.0.0.0:8080`) |
-| `--data-dir` / `NOTEKPR_DATA_DIR` | `./data` | holds `notekpr.db` and automatic pre-migration backups (container image: `/data`) |
+| `--data-dir` / `NOTEKPR_DATA_DIR` | `./data` | holds `notekpr.db`, the attachments (`files/`, unless `--file-store` says otherwise) and automatic pre-migration backups (container image: `/data`) |
 | `--public-url` / `NOTEKPR_PUBLIC_URL` | `http://localhost:8080` | external URL; used for the OIDC redirect URI and device-login links |
 | `--web-dir` / `NOTEKPR_WEB_DIR` | unset | built browser client; unset = API only (container image: `/usr/share/notekpr/web`) |
 | `--oidc-issuer` / `NOTEKPR_OIDC_ISSUER` | unset | issuer URL (discovery at `/.well-known/openid-configuration`) |
@@ -196,7 +196,9 @@ env file) counts as not set.
 | `--max-snapshot-kb` / `NOTEKPR_MAX_SNAPSHOT_KB` | 16 × the update limit, at least 32 MiB | maximum size of one snapshot (a note's full state; also how a change too large for one update still reaches others) |
 | `--snapshot-retention` / `NOTEKPR_SNAPSHOT_RETENTION` | `100` | revisions kept per document (never fewer than 2) |
 | `--snapshot-cooldown-secs` / `NOTEKPR_SNAPSHOT_COOLDOWN_SECS` | `30` | minimum time between two snapshots of one note by one person |
-| `--purge-undo-days` / `NOTEKPR_PURGE_UNDO_DAYS` | `30` | how long something deleted for good (emptying the trash) is kept so the vault's owner and admins can undo it; then it is deleted. `0`: deleted at once. It takes room in the database meanwhile |
+| `--purge-undo-days` / `NOTEKPR_PURGE_UNDO_DAYS` | `30` | how long something deleted for good (emptying the trash) is kept so the vault's owner and admins can undo it; then it is deleted. `0`: deleted at once. It takes room meanwhile |
+| `--file-store` / `NOTEKPR_FILE_STORE` | `<data dir>/files` | where attachments are kept: a directory, `s3://bucket/prefix` (S3 or anything compatible), or `database` (inside `notekpr.db`, so a backup is one file); see [Where attachments are kept](#where-attachments-are-kept) |
+| `--keep-deleted-files-days` / `NOTEKPR_KEEP_DELETED_FILES_DAYS` | `14` | how long the file store keeps a file after the database let go of it (deleted for good and no longer undoable, or its vault deleted), so that restoring a database backup that recent finds its files: at least as long as you keep backups |
 | `--trust-proxy` / `NOTEKPR_TRUST_PROXY` | `false` | use `X-Forwarded-For` (or, without a usable one, `X-Real-IP`) for rate limiting (only behind your proxy, §4) |
 | `--rate-limit-rps` / `NOTEKPR_RATE_LIMIT_RPS` | `50` | API requests per second per IP (burst ×4) |
 | `--auth-rate-limit-per-min` / `NOTEKPR_AUTH_RATE_LIMIT_PER_MIN` | `30` | login/token requests per minute per IP |
@@ -205,6 +207,62 @@ env file) counts as not set.
 | `--log-format` / `NOTEKPR_LOG_FORMAT` | `pretty` | `json` for structured logs (container image: `json`); level via `NOTEKPR_LOG` (e.g. `info,sqlx=warn`) |
 
 The server refuses to start without a login method (OIDC or dev mode).
+
+### Where attachments are kept
+
+Attachments (files and pictures in notes) are end-to-end encrypted like
+everything else; the server keeps their bytes in a **file store**, and
+everything about them (size, who added them, when, deleted for good) in the
+database. `--file-store` says which store:
+
+* **A folder** (the default: `files/` in the data directory). Files are
+  named by vault and attachment ids plus a random part, and synced to disk
+  before an upload is answered.
+* **S3 or anything compatible** (Garage, Ceph, MinIO, Cloudflare R2,
+  Backblaze B2, Hetzner, …): `--file-store s3://bucket/prefix`, with the
+  usual variables for the rest:
+
+  ```sh
+  NOTEKPR_FILE_STORE=s3://notekpr/family
+  AWS_ACCESS_KEY_ID=…  AWS_SECRET_ACCESS_KEY=…   # from your secret store
+  AWS_REGION=eu-central-1
+  AWS_ENDPOINT=https://s3.example.com          # not for AWS itself
+  AWS_ALLOW_HTTP=true                          # only for a plain-HTTP endpoint
+  ```
+
+  Requests use path-style addressing (`AWS_VIRTUAL_HOSTED_STYLE_REQUEST=true`
+  for the other). Several servers can share a bucket, each under its own
+  prefix: a server only ever deletes files it wrote, and never lists the
+  bucket. Never point two servers at the same prefix.
+* **The database** (`--file-store database`): inside `notekpr.db`, where
+  every attachment used to be. A backup is then one file, at the cost of a
+  larger database.
+
+The store holds only ciphertext under random names; it learns sizes and
+times, which the database holds anyway
+([security.md](security.md#where-the-metadata-is-and-who-can-see-it)).
+Downloads always go through the server, never straight from the bucket.
+
+**Moving.** Attachments kept in the database move to a configured folder or
+bucket by themselves when the server starts: in the background, one at a
+time, while it serves (the log says when it starts and ends; stopping
+midway is fine, it carries on next time). The database file doesn't shrink
+by itself: its free pages are used again, and a `backup` (§6) is compact.
+To move between folders and buckets, stop the server, copy the files
+keeping their names (e.g. `rclone copy /data/files s3:notekpr/family`), and
+start it with the new `--file-store`. Moving back into the database isn't
+supported.
+
+**Safety checks at start.** The server refuses to start with a store that
+holds none of its newest attachments (another folder or bucket, or an empty
+one), and with `--file-store database` while attachments are in a file
+store — it says which, rather than serving notes whose files seem lost.
+
+**Deleting.** Files of attachments deleted for good (once the undo period,
+`--purge-undo-days`, is over) or of deleted vaults and accounts are deleted
+from the store `--keep-deleted-files-days` later. An upload that never
+became an attachment (refused, a retry, or a crash halfway) is deleted
+after an hour.
 
 ## 3. Identity provider setup
 
@@ -424,11 +482,12 @@ They are kept in the database, so they survive restarts and backups.
   copies) and send them the moment you switch it off; signing in and out,
   removing devices and revoking access keep working, but nobody new can
   sign up.
-* **Instance storage**: at this database size every vault is full, as below (checked
+* **Instance storage**: at this size every vault is full, as below (checked
   every 10 seconds), until it is below it again — raise the limit, or make
-  room: deleting things for good keeps working. It counts the pages in use
-  (files too: they are in the database), which is less than the file once
-  data was deleted. On an instance of its own, this is the room a family or
+  room: deleting things for good keeps working. It counts the database's
+  pages in use (less than the file once data was deleted) and every
+  attachment in the file store, those deleted for good but still undoable
+  too. On an instance of its own, this is the room a family or
   a team shares however they like (with *Vaults per person* and *Storage
   per vault* left unlimited). The apps say the server's storage is full,
   not each vault.
@@ -553,9 +612,11 @@ accounts through its admin clients.
 
 ## 6. Backup and restore
 
-Everything — accounts, memberships, encrypted notes, history, attachments and
-key envelopes — is in `notekpr.db`. Note content in it is end-to-end
-encrypted, but the file still contains metadata — accounts, who is in which
+Everything — accounts, memberships, encrypted notes, history and key
+envelopes — is in `notekpr.db`; so are attachments with `--file-store
+database`, otherwise their bytes are in the file store
+([Where attachments are kept](#where-attachments-are-kept)). Note content in
+it is end-to-end encrypted, but the file still contains metadata — accounts, who is in which
 vault and who shares notes with whom, and who changed something when —
 readable by anyone with the file or a backup; store backups securely.
 [security.md](security.md#where-the-metadata-is-and-who-can-see-it) lists
@@ -568,18 +629,27 @@ notekpr-server backup --data-dir /var/lib/notekpr --out /backups/notekpr-$(date 
 notekpr-server backup --data-dir /var/lib/notekpr --out-dir /backups --keep 14
 ```
 
+**Attachments in a file store** are backed up with your usual tools,
+after the database: files are never changed once written, so a copy of the
+folder (restic, rsync, a volume snapshot) taken after a database backup has
+every file that backup names. For S3, turn on the bucket's versioning or
+your provider's replication. Deleted files stay in the store for
+`--keep-deleted-files-days` (14), so a database backup that recent finds its
+files even without a copy; keep it at least as long as you keep backups.
+
 `--out` needs an existing directory and a file name that doesn't exist yet.
 `--out-dir` names files `notekpr-YYYYMMDD-HHMMSS.db` (UTC); `--keep`
 prunes only files named `notekpr-*.db` there, so the automatic
 `pre-migration-*.db` backups (§7), which land in `<data dir>/backups`, stay
 until you delete them.
 
-**Docker Compose**: backups land in the data volume; copy them off the
-machine.
+**Docker Compose**: backups land in the data volume, next to the
+attachments (`/data/files`); copy both off the machine.
 
 ```sh
 docker compose exec notekpr notekpr-server backup --out-dir /data/backups --keep 14
 docker compose cp notekpr:/data/backups ./backups      # then store ./backups elsewhere
+docker compose cp notekpr:/data/files ./files          # attachments, after the database
 ```
 
 Schedule it with cron or a systemd timer on the host, for example daily:
@@ -606,7 +676,9 @@ docker compose start notekpr
 The backup file and its directory must be writable by the server's user
 during the restore. `restore` checks integrity, moves the current database
 aside (`notekpr.db.pre-restore-<timestamp>`), installs the backup and
-applies migrations for the current version.
+applies migrations for the current version. The restored server uses the
+same file store; restored somewhere else, give it a copy of the files (or
+the same bucket and prefix) — it refuses to start without them.
 
 What a restore means for people: notes come back as they were in the backup,
 and clients that still have newer edits re-upload them automatically (they

@@ -88,7 +88,7 @@ crates/sync     the client sync engine both clients use (sans-IO): outbox (merge
 crates/server   axum + SQLite. routes/ (REST) · ws.rs (WebSocket, subscriptions) ·
                 sync.rs (encrypted log, snapshots, key checks) · access.rs (who may
                 do what) · repo/ (all other SQL) · hub.rs (EventBus: live events) ·
-                blobs.rs (attachment store) · instance.rs (runtime settings: limits,
+                blobs.rs (attachments: a folder, S3 or the database) · instance.rs (runtime settings: limits,
                 read-only mode) · apps.rs (apps too old for the server:
                 OLDEST_APP_VERSION) · admin_clients.rs (scripts administering the
                 instance: scopes, tokens) · auth.rs (sessions; Admin: admins and
@@ -115,7 +115,8 @@ tests/e2e       browser tests: run.sh (entry point) → suite.py, cross_client.p
                 perf.py (typing latency) · wd.py (stdlib WebDriver)
 scripts/        build-web.sh, build-load-ui.sh (wasm builds) · demo.py (task demo),
                 demo-files/ (what it can't make, e.g. a video) · logo.py (the logo
-                and icon in docs/assets, by hand)
+                and icon in docs/assets, by hand) · test-s3.sh (task test:s3: the
+                S3 file store against Garage in Docker)
 fuzz/           fuzz targets, a separate workspace (fuzz/run.sh, task fuzz)
 vendor/yrs      yrs 0.28 with fixes for panics found by fuzzing, via [patch.crates-io];
                 the changes are in vendor/yrs/NOTEKPR.md — re-apply on upgrade
@@ -147,6 +148,7 @@ task web:watch                   # rebuild the web client on change (then reload
 task cli -- --profile alice ls Family   # run the CLI;  task cli:login DEV_USER=alice
 task fmt / task lint             # rustfmt; clippy with warnings as errors
 task test                        # all Rust tests
+task test:s3                     # attachments in S3-compatible storage (Garage in Docker)
 task test:e2e -- -k sharing      # browser tests (chromium + chromedriver + python3)
 task test:editor                 # the editor's DOM view in headless Chromium (wasm-bindgen-test)
 task ci                          # exactly what CI runs: ci:check (incl. audit) + ci:image

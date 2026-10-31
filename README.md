@@ -276,6 +276,9 @@ read anything.
 * One Rust server with SQLite; Docker Compose or Kubernetes, behind the
   reverse proxy you choose for TLS (optional examples for Caddy, Traefik and
   nginx).
+* Attachments in a folder, in S3 or anything compatible (several servers can
+  share a bucket, each under its own prefix), or inside the database for
+  one-file backups; existing ones move there by themselves.
 * Updates without fuss: the server tells connected apps it's restarting;
   they keep working and are back about a second after it is.
 * Backups, upgrades, Prometheus metrics, and an admin page for accounts
@@ -286,9 +289,10 @@ read anything.
   agents and vaults, vaults, agents and quick notes per person (with each
   person's own allowance), drawings per vault (with a vault's own), a
   read-only mode the apps ride out — edits are kept and sent
-  when it ends —, a size for the whole database (at it, every vault takes
-  no new content until something is deleted for good or the size is
-  raised: the room a family or a team shares on its own server), and the
+  when it ends —, a size for the whole server, database and files (at it,
+  every vault takes no new content until something is deleted for good or
+  the size is raised: the room a family or a team shares on its own
+  server), and the
   oldest app version it accepts: older apps are told to update and keep
   their unsent edits.
 * Storage per vault: a size each vault may take, by default and for one

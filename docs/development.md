@@ -37,7 +37,7 @@ get it.
 | `wasm-opt` | smaller release web builds (optional) | `binaryen` | binaryen releases |
 | Chromium + chromedriver, Python 3 | browser tests (`task test:e2e`) | `chromium` (includes chromedriver), `python` | matching Chrome/Chromium + chromedriver |
 | cargo-deny | supply-chain checks (`task audit`) | `cargo-deny` | `cargo install cargo-deny --locked` |
-| Docker + Compose | container image, Docker dev stack, local Dex for OIDC, the load test (`task load`) | `docker`, `docker-compose`, `docker-buildx` | Docker docs |
+| Docker + Compose | container image, Docker dev stack, local Dex for OIDC, the load test (`task load`), the S3 file store's test (`task test:s3`, with Garage) | `docker`, `docker-compose`, `docker-buildx` | Docker docs |
 
 The `wasm-bindgen` CLI must match the `wasm-bindgen` crate pinned
 (`=0.2.128`) in `crates/web/Cargo.toml`, `crates/editor/Cargo.toml` and
@@ -69,6 +69,7 @@ task cli:login DEV_USER=bob   # sign the CLI in as a test user (profile "bob")
 task cli -- --profile bob ls Family   # run any CLI command
 task test                     # all Rust tests;  task test:e2e -- -k collab  for browser tests
 task test:editor              # the editor's DOM view in headless Chromium (wasm-bindgen-test)
+task test:s3                  # attachments in S3-compatible storage (Garage in Docker)
 task fmt                      # rustfmt (default style); CI checks it with task fmt:check
 task lint                     # clippy, warnings are errors
 task ci                       # exactly what CI runs: checks, every test, audit, the images

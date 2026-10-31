@@ -1,17 +1,21 @@
 //! The vault membership log (R3).
 //!
-//! The owner signs every membership and key change of a vault into a
+//! The owners sign every membership and key change of a vault into a
 //! hash-chained log that every client verifies. The server stores the log and
-//! enforces it, but cannot write it: it can neither add a member the owner
-//! didn't add (the owner's client gives vault keys only to members in the
-//! verified log) nor hand out a vault key the owner didn't make (each epoch's
-//! key is committed to in the log, and members check the key they receive).
+//! enforces it, but cannot write it: it can neither add a member no owner
+//! added (owners' clients give vault keys only to members in the verified
+//! log) nor hand out a vault key no owner made (each epoch's key is committed
+//! to in the log, and members check the key they receive).
 //!
 //! Entry `n` carries the hash of entry `n - 1`; the first entry (`Create`, or
 //! `Checkpoint` for a vault that existed before the log) has `seq = 0` and an
-//! all-zero `prev`. Everything is signed by the vault owner, except `Leave`,
-//! which the leaving member signs. The owner's key is the trust anchor:
-//! clients verify against the key they pinned for the owner (or their own).
+//! all-zero `prev`. Every entry is signed by someone who is an owner at that
+//! point, except `Leave`, which the leaving member signs. A vault starts with
+//! one owner, its creator; `MakeOwner` makes a member another one, and owners
+//! are equal from then on: any of them may remove or demote another, as long
+//! as one stays. The creator's key is the trust anchor, also once they have
+//! gone: clients verify against the key they pinned for the creator (or their
+//! own), as [`creator`] names them.
 //!
 //! The signed bytes are a length-prefixed encoding (`crypto::statement`), not
 //! JSON, so they never depend on a serializer.
@@ -112,9 +116,14 @@ pub enum LogBody {
         user_id: String,
         role: Role,
     },
-    /// A member's account key changed and the owner accepted the new one.
+    /// A member's account key changed and an owner accepted the new one
+    /// (another owner's, for an owner).
     Rekey {
         member: LogMember,
+    },
+    /// A member becomes an owner, equal to the others.
+    MakeOwner {
+        user_id: String,
     },
     Remove {
         user_id: String,
@@ -188,6 +197,10 @@ impl LogBody {
                 parts.push(b"rekey".to_vec());
                 member.encode(&mut parts);
             }
+            LogBody::MakeOwner { user_id } => {
+                parts.push(b"make-owner".to_vec());
+                parts.push(user_id.as_bytes().to_vec());
+            }
             LogBody::Remove { user_id } => {
                 parts.push(b"remove".to_vec());
                 parts.push(user_id.as_bytes().to_vec());
@@ -227,6 +240,7 @@ impl LogBody {
         match self {
             LogBody::Add { member } | LogBody::Rekey { member } => Some(&member.user_id),
             LogBody::Role { user_id, .. }
+            | LogBody::MakeOwner { user_id }
             | LogBody::Remove { user_id }
             | LogBody::Leave { user_id }
             | LogBody::Unshare { user_id, .. } => Some(user_id),
@@ -354,11 +368,26 @@ impl From<CryptoError> for LogError {
     }
 }
 
+/// Who started a log, and the account key its first entry pins for them:
+/// what [`LogState::verify`] is anchored to. Apps check that key against
+/// their own (their vault) or the one they pinned for that person before
+/// verifying with it. `None`: no first entry, or one without their keys.
+pub fn creator(entries: &[LogEntry]) -> Option<(String, AccountPublic)> {
+    let first = entries.first()?;
+    let pinned = match &first.body {
+        LogBody::Create { owner, .. } => owner,
+        LogBody::Checkpoint { members, .. } => {
+            members.iter().find(|m| m.user_id == first.signer)?
+        }
+        _ => return None,
+    };
+    Some((first.signer.clone(), pinned.public().ok()??))
+}
+
 /// What a verified log says.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LogState {
     pub vault_id: String,
-    pub owner: String,
     pub members: BTreeMap<String, LogMember>,
     /// The vault key epoch as of the log, and each epoch's key commitment
     /// (epochs from before a `Checkpoint` have none).
@@ -389,7 +418,7 @@ fn remember(keys: &mut Vec<AccountPublic>, k: AccountPublic) {
 
 impl LogState {
     /// Verify a complete log, starting from its first entry, against the
-    /// owner's public key (pinned, or our own if we own the vault).
+    /// creator's public key (pinned, or our own if we created the vault).
     pub fn verify(
         vault_id: &str,
         owner_key: &AccountPublic,
@@ -406,19 +435,18 @@ impl LogState {
             return Err(LogError::Newer(0));
         }
         first.verify_signature(vault_id, owner_key)?;
-        let owner = first.signer.clone();
+        let owner = &first.signer;
         let mut state = match &first.body {
             LogBody::Create {
                 owner: o,
                 key_commit,
             } => {
-                if o.user_id != owner || o.role != Role::Owner || o.keys(0)? != *owner_key {
+                if o.user_id != *owner || o.role != Role::Owner || o.keys(0)? != *owner_key {
                     return Err(LogError::Invalid(0, "the creator must be the owner"));
                 }
                 check_commit(0, key_commit)?;
                 LogState {
                     vault_id: vault_id.to_string(),
-                    owner: owner.clone(),
                     members: BTreeMap::from([(owner.clone(), o.clone())]),
                     epoch: 1,
                     key_commits: BTreeMap::from([(1, key_commit.clone())]),
@@ -446,7 +474,7 @@ impl LogState {
                     }
                 }
                 let me = map
-                    .get(&owner)
+                    .get(owner)
                     .ok_or(LogError::Invalid(0, "the owner must be a member"))?;
                 if me.role != Role::Owner || me.keys(0)? != *owner_key {
                     return Err(LogError::Invalid(0, "the signer must be the owner"));
@@ -459,7 +487,6 @@ impl LogState {
                 }
                 LogState {
                     vault_id: vault_id.to_string(),
-                    owner: owner.clone(),
                     members: map,
                     epoch: *epoch,
                     key_commits: BTreeMap::from([(*epoch, key_commit.clone())]),
@@ -530,12 +557,12 @@ impl LogState {
                     .ok_or(LogError::Invalid(e.seq, "not a member"))?
                     .keys(e.seq)?
             }
-            _ => {
-                if e.signer != self.owner {
-                    return Err(LogError::Signer(e.seq));
-                }
-                self.members[&self.owner].keys(e.seq)?
-            }
+            _ => self
+                .members
+                .get(&e.signer)
+                .filter(|m| m.role == Role::Owner)
+                .ok_or(LogError::Signer(e.seq))?
+                .keys(e.seq)?,
         };
         e.verify_signature(&self.vault_id, &signer_key)?;
         let n = e.seq;
@@ -546,7 +573,7 @@ impl LogState {
             LogBody::Add { member } => {
                 member.public()?;
                 if member.role == Role::Owner {
-                    return Err(LogError::Invalid(n, "a vault has one owner"));
+                    return Err(LogError::Invalid(n, "owners are made from members"));
                 }
                 if self.members.contains_key(&member.user_id) {
                     return Err(LogError::Invalid(n, "already a member"));
@@ -557,13 +584,13 @@ impl LogState {
                 self.note_writer(member);
             }
             LogBody::Role { user_id, role } => {
-                if *role == Role::Owner || *user_id == self.owner {
-                    return Err(LogError::Invalid(n, "the owner's role doesn't change"));
+                if *role == Role::Owner {
+                    return Err(LogError::Invalid(n, "owners are made with make_owner"));
                 }
-                let m = self
-                    .members
-                    .get_mut(user_id)
-                    .ok_or(LogError::Invalid(n, "not a member"))?;
+                if !self.another_owner(n, user_id)? {
+                    return Err(LogError::Invalid(n, "a vault keeps an owner"));
+                }
+                let m = self.members.get_mut(user_id).expect("a member, checked");
                 m.role = role.clone();
                 let m = m.clone();
                 self.note_writer(&m);
@@ -574,19 +601,37 @@ impl LogState {
                     .members
                     .get_mut(&member.user_id)
                     .ok_or(LogError::Invalid(n, "not a member"))?;
-                if member.role != m.role || member.user_id == self.owner {
+                if member.role != m.role {
                     return Err(LogError::Invalid(n, "a new key keeps the role"));
+                }
+                if m.role == Role::Owner && member.user_id == e.signer {
+                    return Err(LogError::Invalid(
+                        n,
+                        "another owner pins an owner's new key",
+                    ));
                 }
                 *m = member.clone();
                 self.note_writer(member);
             }
+            LogBody::MakeOwner { user_id } => {
+                let m = self
+                    .members
+                    .get_mut(user_id)
+                    .ok_or(LogError::Invalid(n, "not a member"))?;
+                if m.role == Role::Owner {
+                    return Err(LogError::Invalid(n, "already an owner"));
+                }
+                // Owners sign: they need keys.
+                m.keys(n)?;
+                m.role = Role::Owner;
+                let m = m.clone();
+                self.note_writer(&m);
+            }
             LogBody::Remove { user_id } | LogBody::Leave { user_id } => {
-                if *user_id == self.owner {
-                    return Err(LogError::Invalid(n, "the owner can't leave"));
+                if !self.another_owner(n, user_id)? {
+                    return Err(LogError::Invalid(n, "the last owner can't leave"));
                 }
-                if self.members.remove(user_id).is_none() {
-                    return Err(LogError::Invalid(n, "not a member"));
-                }
+                self.members.remove(user_id);
             }
             LogBody::Rotate { epoch, key_commit } => {
                 check_commit(n, key_commit)?;
@@ -643,6 +688,27 @@ impl LogState {
 
     pub fn member(&self, user_id: &str) -> Option<&LogMember> {
         self.members.get(user_id)
+    }
+
+    /// The vault's owners: each signs changes and gives out keys.
+    pub fn owners(&self) -> impl Iterator<Item = &LogMember> {
+        self.members.values().filter(|m| m.role == Role::Owner)
+    }
+
+    pub fn is_owner(&self, user_id: &str) -> bool {
+        self.members
+            .get(user_id)
+            .is_some_and(|m| m.role == Role::Owner)
+    }
+
+    /// Whether member `user_id` may stop being an owner (leave, be removed,
+    /// be given another role): they aren't one, or another stays.
+    fn another_owner(&self, n: u64, user_id: &str) -> Result<bool, LogError> {
+        let m = self
+            .members
+            .get(user_id)
+            .ok_or(LogError::Invalid(n, "not a member"))?;
+        Ok(m.role != Role::Owner || self.owners().any(|o| o.user_id != user_id))
     }
 
     /// Who may have authored the vault's content.
@@ -1462,6 +1528,168 @@ mod tests {
     }
 
     #[test]
+    fn owners_are_equal_and_a_vault_keeps_one() {
+        let (alice, bob, carol, dave) = (
+            person("alice"),
+            person("bob"),
+            person("carol"),
+            person("dave"),
+        );
+        let anchor = alice.secret.public();
+        let (mut log, _) = created(&alice);
+        for p in [&bob, &carol] {
+            append(
+                &mut log,
+                &alice,
+                LogBody::Add {
+                    member: member(p, Role::Editor),
+                },
+            );
+        }
+        let check = |log: &[LogEntry], by: &Person, body: LogBody| {
+            let mut log = log.to_vec();
+            append(&mut log, by, body);
+            LogState::verify(V, &anchor, &log)
+        };
+        let owner = |id: &str| LogBody::MakeOwner { user_id: id.into() };
+        // Only an owner makes owners, of members with keys; owners aren't
+        // added or given the role any other way.
+        assert_eq!(check(&log, &bob, owner("bob")), Err(LogError::Signer(3)));
+        assert!(check(&log, &alice, owner("dave")).is_err(), "not a member");
+        assert!(check(&log, &alice, owner("alice")).is_err(), "already one");
+        assert!(
+            check(
+                &log,
+                &alice,
+                LogBody::Add {
+                    member: member(&dave, Role::Owner)
+                }
+            )
+            .is_err()
+        );
+        let mut pending = log.clone();
+        append(
+            &mut pending,
+            &alice,
+            LogBody::Add {
+                member: LogMember::pending("dave", Role::Editor),
+            },
+        );
+        assert!(check(&pending, &alice, owner("dave")).is_err(), "no keys");
+        append(&mut log, &alice, owner("bob"));
+        let s = LogState::verify(V, &anchor, &log).unwrap();
+        assert!(s.is_owner("bob") && s.is_owner("alice") && !s.is_owner("carol"));
+        assert_eq!(s.owners().count(), 2);
+
+        // Bob signs as an owner, and may remove the one who made him owner:
+        // owners are equal. The log still verifies from its creator.
+        append(&mut log, &bob, owner("carol"));
+        append(
+            &mut log,
+            &bob,
+            LogBody::Role {
+                user_id: "alice".into(),
+                role: Role::Editor,
+            },
+        );
+        append(
+            &mut log,
+            &carol,
+            LogBody::Remove {
+                user_id: "alice".into(),
+            },
+        );
+        let s = LogState::verify(V, &anchor, &log).unwrap();
+        assert_eq!(
+            s.owners().map(|m| m.user_id.as_str()).collect::<Vec<_>>(),
+            vec!["bob", "carol"]
+        );
+        assert_eq!(creator(&log), Some(("alice".to_string(), anchor.clone())));
+        // Alice, gone, signs nothing any more.
+        assert_eq!(
+            check(&log, &alice, owner("alice")),
+            Err(LogError::Signer(7))
+        );
+
+        // An owner leaves or is demoted only while another stays.
+        let mut last = log.clone();
+        append(
+            &mut last,
+            &bob,
+            LogBody::Leave {
+                user_id: "bob".into(),
+            },
+        );
+        LogState::verify(V, &anchor, &last).unwrap();
+        for (by, body) in [
+            (
+                &carol,
+                LogBody::Leave {
+                    user_id: "carol".into(),
+                },
+            ),
+            (
+                &carol,
+                LogBody::Remove {
+                    user_id: "carol".into(),
+                },
+            ),
+            (
+                &carol,
+                LogBody::Role {
+                    user_id: "carol".into(),
+                    role: Role::Viewer,
+                },
+            ),
+        ] {
+            assert!(check(&last, by, body).is_err(), "the last owner stays");
+        }
+
+        // An owner's new key is pinned by another owner, never by the owner.
+        let new_bob = person("bob");
+        let rekey = LogBody::Rekey {
+            member: member(&new_bob, Role::Owner),
+        };
+        assert!(check(&log, &bob, rekey.clone()).is_err());
+        let mut rekeyed = log.clone();
+        append(&mut rekeyed, &carol, rekey);
+        let s = LogState::verify(V, &anchor, &rekeyed).unwrap();
+        assert!(s.vouches_for("bob", Role::Owner, &new_bob.secret.public()));
+        // And the old key signs nothing then.
+        assert_eq!(
+            check(&rekeyed, &bob, owner("alice")),
+            Err(LogError::BadSignature(8))
+        );
+    }
+
+    #[test]
+    fn the_creator_is_named_with_the_key_the_log_pins() {
+        let alice = person("alice");
+        assert_eq!(creator(&[]), None);
+        let (log, _) = created(&alice);
+        assert_eq!(
+            creator(&log),
+            Some(("alice".to_string(), alice.secret.public()))
+        );
+        let checkpoint = LogEntry::sign(
+            &alice.secret,
+            "alice",
+            V,
+            None,
+            LogBody::Checkpoint {
+                members: vec![member(&alice, Role::Owner)],
+                epoch: 1,
+                key_commit: key_commitment(V, 1, &VaultKey::generate()),
+            },
+            1,
+        );
+        assert_eq!(
+            creator(&[checkpoint]),
+            Some(("alice".to_string(), alice.secret.public()))
+        );
+    }
+
+    #[test]
     fn people_without_keys_yet_get_them_pinned_later() {
         let (alice, bob) = (person("alice"), person("bob"));
         let (mut log, _) = created(&alice);
@@ -1747,9 +1975,24 @@ mod tests {
 
     #[test]
     fn entries_survive_json() {
-        let alice = person("alice");
-        let (log, _) = created(&alice);
+        let (alice, bob) = (person("alice"), person("bob"));
+        let (mut log, _) = created(&alice);
+        append(
+            &mut log,
+            &alice,
+            LogBody::Add {
+                member: member(&bob, Role::Editor),
+            },
+        );
+        append(
+            &mut log,
+            &alice,
+            LogBody::MakeOwner {
+                user_id: "bob".into(),
+            },
+        );
         let j = serde_json::to_string(&log).unwrap();
+        assert!(j.contains(r#""kind":"make_owner""#), "{j}");
         let back: Vec<LogEntry> = serde_json::from_str(&j).unwrap();
         assert_eq!(back, log);
         assert!(LogState::verify(V, &alice.secret.public(), &back).is_ok());

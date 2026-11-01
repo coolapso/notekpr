@@ -50,6 +50,11 @@ libc = "0.2"
 yrs = { version = "0.28", features = ["sync"] }
 similar = { version = "3", default-features = false }
 
+# Without its default features notify has no way to watch files on macOS
+# (and doesn't build there): FSEvents, macOS's own file events, as by default.
+[target.'cfg(target_os = "macos")'.dependencies]
+notify = { version = "8", default-features = false, features = ["macos_fsevent"] }
+
 [dev-dependencies]
 notekpr-server = { path = "../server" }
 # Tests play a compromised server by changing its database directly.

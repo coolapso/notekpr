@@ -1,9 +1,10 @@
 # syntax=docker/dockerfile:1.7
 # The machine the CLI's release files are built on (.goreleaser.yaml): Rust
 # with every target the CLI is built for, zig and cargo-zigbuild to compile
-# and link them all (for an old enough glibc) and GoReleaser. packaging/run.sh
-# builds it and runs commands in it with the checkout at /src, so a developer
-# and CI need only Docker (`task build:clients`, `task release:clients`).
+# and link them all (for an old enough glibc), GoReleaser, and rpmbuild for
+# COPR's source RPM. packaging/run.sh builds it and runs commands in it with
+# the checkout at /src, so a developer and CI need only Docker
+# (`task build:clients`, `task release:clients`).
 #
 # Upgrading a tool: change its version and checksums together (the
 # checksums come from the tool's own release page).
@@ -12,7 +13,7 @@ FROM rust:1.99-slim-trixie
 ARG TARGETARCH
 
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates curl xz-utils git openssh-client \
+ && apt-get install -y --no-install-recommends ca-certificates curl xz-utils git openssh-client rpm \
  && rm -rf /var/lib/apt/lists/*
 
 RUN rustup target add x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu

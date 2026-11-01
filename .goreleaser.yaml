@@ -4,7 +4,9 @@
 # the image packaging/Dockerfile builds (packaging/run.sh): `task
 # build:clients` makes everything into dist/clients without publishing;
 # `task release:clients` adds it to the release semrel made and publishes
-# the AUR package. The server is released as container images only.
+# the AUR package. COPR's source RPM, which GoReleaser has no pipe for, is
+# made after it (packaging/rpm/srpm.sh). The server is released as
+# container images only.
 version: 2
 
 project_name: notekpr-cli
@@ -48,6 +50,13 @@ archives:
         strip_parent: true
       - src: packaging/systemd/notekpr-sync@.service
         strip_parent: true
+
+# The release's own source, which COPR's source RPM is made from
+# (packaging/rpm/srpm.sh, after GoReleaser).
+source:
+  enabled: true
+  name_template: "{{ .ProjectName }}-{{ .Version }}"
+  prefix_template: "{{ .ProjectName }}-{{ .Version }}/"
 
 checksum:
   name_template: "{{ .ProjectName }}_{{ .Version }}_checksums.txt"

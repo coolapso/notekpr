@@ -1,0 +1,57 @@
+# The spec of the source RPM Fedora's COPR builds the CLI from:
+# packaging/rpm/srpm.sh fills in the version and packs it with GoReleaser's
+# source archive; `task test:srpm` builds it the way COPR does. It builds
+# with Fedora's own Rust; cargo fetches the crates Cargo.lock pins (and
+# checks their checksums), so COPR builds it with internet access
+# (`task release:copr` asks for it).
+
+# Release builds keep no debug info (Cargo.toml's release profile).
+%global debug_package %{nil}
+
+Name:           notekpr-cli
+# @RPM_VERSION@: a snapshot's version (0.8.0-3-gabc1234) with ^ for its
+# dashes, which RPM versions can't have; ^ sorts it after its release.
+Version:        @RPM_VERSION@
+Release:        1%{?dist}
+Summary:        Command-line client for notekpr, end-to-end encrypted Markdown notes
+License:        AGPL-3.0-or-later
+URL:            https://github.com/coolapso/notekpr
+Source0:        notekpr-cli-@VERSION@.tar.gz
+
+# @RUST_VERSION@: Cargo.toml's rust-version.
+BuildRequires:  rust >= @RUST_VERSION@
+BuildRequires:  cargo
+BuildRequires:  gcc
+BuildRequires:  systemd-rpm-macros
+
+%description
+The notekpr command-line client: end-to-end encrypted, local-first
+Markdown notes. Keeps an encrypted copy of your vaults, syncs them live
+and can keep them as a folder of Markdown files for any editor.
+
+%prep
+%autosetup -n notekpr-cli-@VERSION@
+
+%build
+export NOTEKPR_VERSION=@VERSION@
+cargo build --release --locked -p notekpr-cli
+mkdir -p completions
+target/release/notekpr completions bash > completions/notekpr.bash
+target/release/notekpr completions zsh > completions/_notekpr
+target/release/notekpr completions fish > completions/notekpr.fish
+
+%install
+install -Dm755 target/release/notekpr %{buildroot}%{_bindir}/notekpr
+install -Dm644 completions/notekpr.bash %{buildroot}%{_datadir}/bash-completion/completions/notekpr
+install -Dm644 completions/_notekpr %{buildroot}%{_datadir}/zsh/site-functions/_notekpr
+install -Dm644 completions/notekpr.fish %{buildroot}%{_datadir}/fish/vendor_completions.d/notekpr.fish
+install -Dm644 packaging/systemd/notekpr-sync@.service %{buildroot}%{_userunitdir}/notekpr-sync@.service
+
+%files
+%license LICENSE
+%doc README.md docs/cli.md
+%{_bindir}/notekpr
+%{_datadir}/bash-completion/completions/notekpr
+%{_datadir}/zsh/site-functions/_notekpr
+%{_datadir}/fish/vendor_completions.d/notekpr.fish
+%{_userunitdir}/notekpr-sync@.service

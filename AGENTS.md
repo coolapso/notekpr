@@ -121,7 +121,8 @@ scripts/        build-web.sh, build-load-ui.sh (wasm builds) · demo.py (task de
                 S3 file store against Garage in Docker)
 packaging/      the CLI's release builds (GoReleaser, .goreleaser.yaml): Dockerfile (the
                 image it runs in) · run.sh (a command in that image) · completions.sh ·
-                systemd/ (the sync user unit); Linux only for now: .tar.gz, .deb, .rpm, AUR
+                systemd/ (the sync user unit) · rpm/ (COPR's source RPM: the spec, srpm.sh);
+                Linux only for now: .tar.gz, .deb, .rpm, AUR, COPR
 fuzz/           fuzz targets, a separate workspace (fuzz/run.sh, task fuzz)
 vendor/yrs      yrs 0.28 with fixes for panics found by fuzzing, via [patch.crates-io];
                 the changes are in vendor/yrs/NOTEKPR.md — re-apply on upgrade

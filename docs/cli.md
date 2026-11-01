@@ -38,13 +38,16 @@ RHEL 8 and later). Other systems: build it from source.
 |---|---|
 | Arch | from the AUR: `notekpr-cli-bin` |
 | Debian, Ubuntu | the release's `.deb`: `sudo apt install ./notekpr-cli_<version>_amd64.deb` (`arm64` on ARM) |
-| Fedora, RHEL, openSUSE | the release's `.rpm`: `sudo dnf install ./notekpr-cli-<version>-1.x86_64.rpm` (`aarch64` on ARM; `zypper install` on openSUSE) |
+| Fedora | from COPR: `sudo dnf copr enable coolapso/notekpr`, then `sudo dnf install notekpr-cli` |
+| RHEL, openSUSE | the release's `.rpm`: `sudo dnf install ./notekpr-cli-<version>-1.x86_64.rpm` (`aarch64` on ARM; `zypper install` on openSUSE) |
 | Other Linux | the release's `notekpr-cli_<version>_linux_<arch>.tar.gz`: `notekpr`, the completions and the systemd unit |
 
 The packages install the completions for bash, zsh and fish and a systemd
 user unit to keep a profile in sync ([§4](#4-sync-and-the-markdown-mirror)).
-The `.deb` and `.rpm` don't update themselves (there is no package
-repository yet): install a newer release's the same way. Each release also
+COPR's package updates with the rest of Fedora (COPR builds it from source
+for each Fedora release). The release's `.deb` and `.rpm` don't update
+themselves (there is no package repository for them yet): install a newer
+release's the same way. Each release also
 lists the files' SHA-256 sums (`notekpr-cli_<version>_checksums.txt`).
 
 ### Shell completions

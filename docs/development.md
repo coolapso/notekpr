@@ -316,15 +316,19 @@ The server is released as images only; the CLI as files and packages,
 made by [GoReleaser](https://goreleaser.com) (the free one) from
 `.goreleaser.yaml`. GoReleaser runs in a build image
 (`packaging/Dockerfile`: Rust with the Linux targets, zig and cargo-zigbuild
-to build both architectures for an old enough glibc), so Docker is all a
-machine needs — no rustup, no cross compilers. `packaging/run.sh` runs a
-command in it, as your user, with the checkout at `/src`.
+to build both architectures for an old enough glibc, rpmbuild for COPR's
+source RPM), so Docker is all a machine needs — no rustup, no cross
+compilers. `packaging/run.sh` runs a command in it, as your user, with the
+checkout at `/src`.
 
 ```sh
 task build:clients      # everything into dist/clients, nothing published (a snapshot)
 task test:packages      # then: install the .deb in Debian and the .rpm in AlmaLinux 8, run them
-task ci:clients         # both, as CI runs them
+task test:srpm          # and: build the source RPM in Fedora, as COPR does, install it, run it
+task ci:clients         # all three, as CI runs them
 task release:clients    # publish for the release tag at HEAD (task release does it)
+task release:copr       # only the COPR build, again (release:clients does it)
+task copr:project       # once: create the COPR project
 ```
 
 A release adds to the GitHub Release semrel made (its notes stay):
@@ -333,13 +337,35 @@ A release adds to the GitHub Release semrel made (its notes stay):
 |---|---|
 | `notekpr-cli_<v>_linux_{amd64,arm64}.tar.gz` | `notekpr` (glibc 2.28 or newer), completions, the systemd user unit |
 | `notekpr-cli_<v>_{amd64,arm64}.deb`, `notekpr-cli-<v>-1.{x86_64,aarch64}.rpm` | the same as packages, installed from the file (no package repository yet) |
+| `notekpr-cli-<v>.tar.gz` | the source, which COPR's source RPM is made from |
 | `notekpr-cli_<v>_checksums.txt` | SHA-256 of all of them |
 
 and publishes the AUR package `notekpr-cli-bin`. It is pushed with the
 SSH key your own ssh uses for `aur.archlinux.org` (`AUR_KEY_FILE` to choose
 another), in CI (`$CI` set) with the `aur` secret in Infisical; the key's
 contents in `AUR_KEY` take precedence over both. The key must have no
-passphrase. If publishing fails halfway, fix it and run
+passphrase.
+
+Last, COPR builds the CLI for Fedora in `coolapso/notekpr`, and the release
+waits for its builds (Ctrl+C stops waiting, not the builds). GoReleaser has
+no pipe for COPR: `packaging/rpm/srpm.sh` makes a source RPM
+(`notekpr-cli-<v>-1.src.rpm` in `dist/clients`, from the spec
+`packaging/rpm/notekpr-cli.spec.in` and the release's source) and
+`copr-cli` uploads it. COPR builds it with each Fedora release's own Rust
+(at least `Cargo.toml`'s `rust-version`); cargo fetches the crates
+`Cargo.lock` pins, so the builds have internet access. `copr-cli` runs on
+the machine releasing (Arch: `copr-cli`; elsewhere `task tools:copr`
+installs it with pipx, as CI does) with its configuration from
+https://copr.fedorainfracloud.org/api/ (signed in with a Fedora account;
+the token in it lasts 180 days) saved as `~/.config/copr`, in CI with the
+`copr` secret in Infisical; `COPR_CONFIG` holding the configuration takes
+precedence over both. `task release` checks that copr-cli and its
+configuration are there before it releases anything.
+`task copr:project` creates the project, once: every Fedora release and
+rawhide, amd64 and arm64; COPR adds each new release when Fedora branches
+it.
+
+If publishing fails halfway, fix it and run
 `task release:clients` again on the tagged commit (the working tree clean):
 it builds again and replaces the files already on the release. Linux only
 for now. Snapshots are named like the images' versions

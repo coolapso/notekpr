@@ -29,6 +29,16 @@ vars:
   # At least v0.27.0: older ones ignore .semrel.yaml's rules for build and
   # refactor commits (they release only for feat, fix, perf and revert).
   SEMREL_VERSION: v0.28.2
+  # Fedora's COPR project the CLI is built in (`task release:copr`), and the
+  # copr-cli `task tools:copr` installs.
+  COPR_PROJECT: coolapso/notekpr
+  COPR_CLI_VERSION: "2.6"
+  # What an installed package of the CLI must do and hold (test:packages,
+  # test:srpm).
+  PACKAGE_CHECK: >-
+    notekpr --version && notekpr completions zsh > /dev/null
+    && test -f /usr/share/bash-completion/completions/notekpr
+    && test -f /usr/lib/systemd/user/notekpr-sync@.service
 
 tasks:
   default:
@@ -76,6 +86,7 @@ tasks:
           command -v cargo-deny >/dev/null && echo "✓ cargo-deny (task audit)" || echo "· for task audit and task ci: cargo-deny (Arch: cargo-deny; or cargo install cargo-deny --locked)"
           command -v docker >/dev/null && echo "✓ docker (container image, Docker dev stack)" || echo "· for the docker:* tasks, task load and task ci: docker + compose (Arch: docker docker-compose docker-buildx)"
           command -v semrel >/dev/null && command -v jq >/dev/null && echo "✓ semrel + jq (task release)" || echo "· for task release: semrel (task tools:release, needs Go) and jq (Arch: jq)"
+          command -v copr-cli >/dev/null && echo "✓ copr-cli (task release, Fedora's COPR)" || echo "· for task release: copr-cli (Arch: copr-cli; or task tools:copr, needs pipx)"
           [ "$ok" = 1 ]
 
   rust:
@@ -345,38 +356,68 @@ tasks:
       - task: docker:test:demo
 
   ci:clients:
-    desc: "The CLI's release files and packages, without publishing (build:clients), and its .deb and .rpm installed and run (test:packages)"
+    desc: "The CLI's release files and packages, without publishing (build:clients), its .deb and .rpm installed and run (test:packages), and its source RPM built in Fedora the way COPR does (test:srpm)"
     cmds:
       - task: build:clients
       - task: test:packages
+      - task: test:srpm
 
   # ------------------------------------------------------------------ CLI packages
   # GoReleaser (.goreleaser.yaml) in the CLI's build image (packaging/Dockerfile,
   # run by packaging/run.sh): Docker is all these need.
 
   build:clients:
-    desc: "Build the CLI's release files into dist/clients without publishing: Linux (amd64, arm64) as .tar.gz, .deb and .rpm, and AUR's PKGBUILD (in Docker)"
+    desc: "Build the CLI's release files into dist/clients without publishing: Linux (amd64, arm64) as .tar.gz, .deb and .rpm, AUR's PKGBUILD and COPR's source RPM (in Docker)"
     cmds:
       - packaging/run.sh goreleaser release --snapshot --clean
+      - packaging/run.sh packaging/rpm/srpm.sh dist/clients
 
   test:packages:
     desc: "Install the CLI's .deb in Debian and its .rpm in AlmaLinux 8 (glibc 2.28, the oldest the builds run on), for this machine's architecture, and run it — after build:clients"
-    vars:
-      # What an installed package must do and hold.
-      CHECK: >-
-        notekpr --version && notekpr completions zsh > /dev/null
-        && test -f /usr/share/bash-completion/completions/notekpr
-        && test -f /usr/lib/systemd/user/notekpr-sync@.service
     preconditions:
       - sh: ls dist/clients/*.deb dist/clients/*.rpm > /dev/null 2>&1
         msg: "No packages in dist/clients: task build:clients first"
     cmds:
       - >-
         docker run --rm -v "$PWD/dist/clients:/p:ro" debian:stable-slim
-        sh -c 'dpkg -i /p/notekpr-cli_*_$(dpkg --print-architecture).deb > /dev/null && {{.CHECK}}'
+        sh -c 'dpkg -i /p/notekpr-cli_*_$(dpkg --print-architecture).deb > /dev/null && {{.PACKAGE_CHECK}}'
       - >-
         docker run --rm -v "$PWD/dist/clients:/p:ro" almalinux:8
-        sh -c 'rpm -i /p/notekpr-cli-*.$(uname -m).rpm && {{.CHECK}}'
+        sh -c 'rpm -i /p/notekpr-cli-*.$(uname -m).rpm && {{.PACKAGE_CHECK}}'
+
+  test:srpm:
+    desc: "Build the CLI from dist/clients' source RPM in Fedora (FEDORA=latest), as COPR does, install it and run it — after build:clients (its source is the last commit, as GoReleaser's source archive is)"
+    vars:
+      FEDORA: '{{.FEDORA | default "latest"}}'
+    preconditions:
+      - sh: ls dist/clients/*.src.rpm > /dev/null 2>&1
+        msg: "No source RPM in dist/clients: task build:clients first"
+    cmds:
+      - >-
+        docker run --rm -v "$PWD/dist/clients:/srpm:ro" fedora:{{.FEDORA}}
+        sh -c 'dnf -y -q install rpm-build "dnf-command(builddep)" > /dev/null
+        && dnf -y -q builddep /srpm/*.src.rpm > /dev/null
+        && rpmbuild --rebuild --quiet /srpm/*.src.rpm
+        && dnf -y -q install ~/rpmbuild/RPMS/*/*.rpm > /dev/null
+        && {{.PACKAGE_CHECK}}'
+
+  tools:copr:
+    desc: "Install copr-cli {{.COPR_CLI_VERSION}}, which task release publishes to Fedora's COPR with, by pipx (or your distribution's copr-cli)"
+    cmds:
+      - pipx install "copr-cli=={{.COPR_CLI_VERSION}}"
+
+  copr:project:
+    desc: "Create the COPR project the CLI is built in ({{.COPR_PROJECT}}), once, with copr-cli's configuration in ~/.config/copr: every Fedora release and rawhide, amd64 and arm64, new releases as Fedora branches them, internet access during builds (cargo fetches the crates)"
+    preconditions:
+      - sh: command -v copr-cli
+        msg: "copr-cli is missing (Arch: sudo pacman -S copr-cli; or task tools:copr)"
+    cmds:
+      - >-
+        copr-cli create {{.COPR_PROJECT}}
+        $(copr-cli list-chroots | awk '$1 ~ /^fedora-([0-9]+|rawhide)-(x86_64|aarch64)$/ { printf " --chroot %s", $1 }')
+        --follow-fedora-branching on --enable-net on
+        --description "The notekpr command-line client: end-to-end encrypted, local-first Markdown notes. https://github.com/coolapso/notekpr"
+        --instructions "sudo dnf copr enable {{.COPR_PROJECT}} && sudo dnf install notekpr-cli"
 
   # ------------------------------------------------------------------ website
 
@@ -504,6 +545,10 @@ tasks:
         msg: "The release plugins are missing: task release:plugins"
       - sh: 'test -n "${SEMREL_PLUGIN_TOKEN:-${GITHUB_TOKEN:-}}" || gh auth status >/dev/null 2>&1'
         msg: Set SEMREL_PLUGIN_TOKEN or GITHUB_TOKEN, or sign in with gh auth login before releasing.
+      - sh: command -v copr-cli
+        msg: "copr-cli is missing, which publishes the CLI to Fedora's COPR (Arch: sudo pacman -S copr-cli; or task tools:copr)"
+      - sh: 'test -n "${COPR_CONFIG:-}${CI:-}" || test -f ~/.config/copr'
+        msg: "No configuration for copr-cli: save the one https://copr.fedorainfracloud.org/api/ gives you as ~/.config/copr"
     deps: [ci:check]
     cmds:
       - semrel config validate --env-file ""
@@ -548,7 +593,7 @@ tasks:
           FLAGS: ""
 
   release:clients:
-    desc: "Publish the CLI for the release tagged at HEAD (task release does, after the images; run it again if it failed there): its files and packages on the GitHub Release, and the AUR package"
+    desc: "Publish the CLI for the release tagged at HEAD (task release does, after the images; run it again if it failed there): its files and packages on the GitHub Release, the AUR package, then the COPR build (release:copr)"
     preconditions:
       - sh: git describe --exact-match --tags --match 'v[0-9]*' HEAD
         msg: "HEAD has no release tag: the CLI is published for a release (task release)"
@@ -586,6 +631,39 @@ tasks:
           export AUR_KEY
         fi
         packaging/run.sh goreleaser release --clean
+      - packaging/run.sh packaging/rpm/srpm.sh dist/clients
+      - task: release:copr
+
+  release:copr:
+    desc: "Have COPR ({{.COPR_PROJECT}}) build the CLI from dist/clients' source RPM and wait for it — release:clients does, after GoReleaser"
+    preconditions:
+      - sh: command -v copr-cli
+        msg: "copr-cli is missing (Arch: sudo pacman -S copr-cli; or task tools:copr)"
+      - sh: ls dist/clients/*.src.rpm > /dev/null 2>&1
+        msg: "No source RPM in dist/clients: task release:clients first"
+    cmds:
+      # copr-cli's configuration (its API token): COPR_CONFIG's contents if
+      # set; in CI the `copr` secret from Infisical; elsewhere your own,
+      # ~/.config/copr. Builds get internet access: cargo fetches the
+      # crates Cargo.lock pins. Ctrl+C stops waiting, not the builds.
+      - |
+        set -eu
+        if [ -z "${COPR_CONFIG:-}" ] && [ -n "${CI:-}" ]; then
+          COPR_CONFIG=$(infisical secrets get --plain \
+            --domain="https://eu.infisical.com" \
+            --projectId {{.CI_INFISICAL_PROJECT_ID}} \
+            --env ci copr)
+        fi
+        config=$HOME/.config/copr
+        if [ -n "${COPR_CONFIG:-}" ]; then
+          config=$(mktemp)
+          trap 'rm -f "$config"' EXIT
+          printf '%s\n' "$COPR_CONFIG" > "$config"
+        elif [ ! -f "$config" ]; then
+          echo "No configuration for copr-cli: save the one https://copr.fedorainfracloud.org/api/ gives you as ~/.config/copr" >&2
+          exit 1
+        fi
+        copr-cli --config "$config" build --enable-net on {{.COPR_PROJECT}} dist/clients/*.src.rpm
 
   release:prepare:
     internal: true

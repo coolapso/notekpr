@@ -68,5 +68,9 @@ jobs:
         with:
           version: 3.x
           repo-token: ${{ secrets.GITHUB_TOKEN }}
+      # Not used by task ci:clients: so this machine can also publish to
+      # Fedora's COPR (task release:copr) when needed.
+      - name: copr-cli
+        run: task tools:copr
       - name: task ci:clients
         run: task ci:clients

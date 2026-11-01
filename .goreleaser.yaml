@@ -1,0 +1,87 @@
+# yaml-language-server: $schema=https://goreleaser.com/static/schema.json
+# The CLI's release files and its AUR package (docs/development.md,
+# "Releases"), with the free GoReleaser. It runs in the image
+# packaging/Dockerfile builds (packaging/run.sh): `task build:clients` makes
+# everything into dist/clients without publishing; `task release:clients`
+# adds it to the release semrel made and publishes the AUR package. Linux
+# only for now. The server is released as container images only.
+version: 2
+
+project_name: notekpr-cli
+dist: dist/clients
+
+before:
+  hooks:
+    # The shell completion scripts the archives and packages ship.
+    - packaging/completions.sh target-release/completions
+
+# Snapshots are named like the images: the last release, the commits since
+# and the commit (0.8.0-3-gabc1234).
+snapshot:
+  version_template: '{{ trimprefix .Summary "v" }}'
+
+metadata:
+  mod_timestamp: "{{ .CommitTimestamp }}"
+
+builds:
+  - id: linux
+    builder: rust
+    binary: notekpr
+    flags: [--release, --locked, --package=notekpr-cli]
+    env: ["NOTEKPR_VERSION={{ .Version }}"]
+    mod_timestamp: "{{ .CommitTimestamp }}"
+    # glibc 2.28 and newer: Debian 10, Ubuntu 20.04, RHEL 8 and later.
+    targets:
+      - x86_64-unknown-linux-gnu.2.28
+      - aarch64-unknown-linux-gnu.2.28
+
+archives:
+  - id: linux
+    ids: [linux]
+    formats: [tar.gz]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - LICENSE
+      - README.md
+      - src: target-release/completions/*
+        dst: completions
+        strip_parent: true
+      - src: packaging/systemd/notekpr-sync@.service
+        strip_parent: true
+
+checksum:
+  name_template: "{{ .ProjectName }}_{{ .Version }}_checksums.txt"
+
+aurs:
+  - name: notekpr-cli-bin
+    ids: [linux]
+    homepage: https://github.com/coolapso/notekpr
+    description: Command-line client for notekpr, end-to-end encrypted Markdown notes
+    maintainers: ["coolapso <c4s@coolapso.sh>"]
+    license: AGPL-3.0-or-later
+    provides: [notekpr-cli]
+    conflicts: [notekpr-cli]
+    depends: [glibc]
+    private_key: '{{ envOrDefault "AUR_KEY" "" }}'
+    git_url: ssh://aur@aur.archlinux.org/notekpr-cli-bin.git
+    skip_upload: auto
+    commit_author:
+      name: goreleaserbot
+      email: bot@goreleaser.com
+    package: |-
+      install -Dm755 notekpr "$pkgdir/usr/bin/notekpr"
+      install -Dm644 LICENSE "$pkgdir/usr/share/licenses/notekpr-cli/LICENSE"
+      install -Dm644 completions/notekpr.bash "$pkgdir/usr/share/bash-completion/completions/notekpr"
+      install -Dm644 completions/_notekpr "$pkgdir/usr/share/zsh/site-functions/_notekpr"
+      install -Dm644 completions/notekpr.fish "$pkgdir/usr/share/fish/vendor_completions.d/notekpr.fish"
+      install -Dm644 notekpr-sync@.service "$pkgdir/usr/lib/systemd/user/notekpr-sync@.service"
+
+# semrel made the release with its notes; this only adds the files.
+release:
+  github:
+    owner: coolapso
+    name: notekpr
+  mode: keep-existing
+
+changelog:
+  disable: true

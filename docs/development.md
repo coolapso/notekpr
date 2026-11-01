@@ -305,8 +305,39 @@ task release            # the same, then the release
 `task release` tags the next version (`v0.2.0`), pushes the tag, creates
 the GitHub Release with the notes, then pushes both images for amd64 and
 arm64, `ghcr.io/coolapso/notekpr` and `ghcr.io/coolapso/notekpr-demo`,
-tagged `0.2.0` and `latest`. Without commits that make a release it does
-nothing. It doesn't push `main`: push it as usual.
+tagged `0.2.0` and `latest`, and publishes the CLI (below). Without commits
+that make a release it does nothing. It doesn't push `main`: push it as
+usual. The working tree must be clean, untracked files included: GoReleaser
+refuses to publish otherwise.
+
+### The CLI's packages
+
+The server is released as images only; the CLI as files and an AUR
+package, made by [GoReleaser](https://goreleaser.com) (the free one) from
+`.goreleaser.yaml`. GoReleaser runs in a build image
+(`packaging/Dockerfile`: Rust with the Linux targets, zig and cargo-zigbuild
+to build both architectures for an old enough glibc), so Docker is all a
+machine needs — no rustup, no cross compilers. `packaging/run.sh` runs a
+command in it, as your user, with the checkout at `/src`.
+
+```sh
+task build:clients      # everything into dist/clients, nothing published (a snapshot)
+task ci:clients         # the same, as CI runs it
+task release:clients    # publish for the release tag at HEAD (task release does it)
+```
+
+A release adds to the GitHub Release semrel made (its notes stay):
+
+| File | What |
+|---|---|
+| `notekpr-cli_<v>_linux_{amd64,arm64}.tar.gz` | `notekpr` (glibc 2.28 or newer), completions, the systemd user unit |
+| `notekpr-cli_<v>_checksums.txt` | SHA-256 of both |
+
+and publishes the AUR package `notekpr-cli-bin` (pushed with the SSH key
+`AUR_KEY`, or the `aur` secret in Infisical). If publishing fails halfway,
+fix it and run `task release:clients` again on the tagged commit: files
+already on the release are kept. Linux only for now. Snapshots are named
+like the images' versions (`0.2.0-3-gabc1234`).
 
 Between releases, `task docker:push` and `task docker:push:demo` push an
 image tagged `latest` and with the version `git describe` gives after
@@ -324,9 +355,9 @@ The version is also baked into what the image holds: the server
 (`--version`, `/info`, the start-up log, the admin page and
 `/admin/stats`), the CLI (`--version`, its requests) and the web app
 (Settings → Account, its requests). The Dockerfile hands its `VERSION`
-build argument to the builds as `NOTEKPR_VERSION`, which `crates/core`
-reads at compile time (`notekpr_core::VERSION`; Cargo rebuilds when it
-changes). Without it — `task dev`, `cargo build`, `task docker:build` —
+build argument to the builds as `NOTEKPR_VERSION` (GoReleaser sets it for
+the CLI's builds), which `crates/core` reads at compile time
+(`notekpr_core::VERSION`; Cargo rebuilds when it changes). Without it — `task dev`, `cargo build`, `task docker:build` —
 everything says `dev`. The crates' own versions in `Cargo.toml` aren't
 used for this and stay `0.1.0`.
 

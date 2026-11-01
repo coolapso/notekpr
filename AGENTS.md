@@ -118,6 +118,9 @@ scripts/        build-web.sh, build-load-ui.sh (wasm builds) · demo.py (task de
                 demo-files/ (what it can't make, e.g. a video) · logo.py (the logo
                 and icon in docs/assets, by hand) · test-s3.sh (task test:s3: the
                 S3 file store against Garage in Docker)
+packaging/      the CLI's release builds (GoReleaser, .goreleaser.yaml): Dockerfile (the
+                image it runs in) · run.sh (a command in that image) · completions.sh ·
+                systemd/ (the sync user unit); Linux and the AUR package for now
 fuzz/           fuzz targets, a separate workspace (fuzz/run.sh, task fuzz)
 vendor/yrs      yrs 0.28 with fixes for panics found by fuzzing, via [patch.crates-io];
                 the changes are in vendor/yrs/NOTEKPR.md — re-apply on upgrade
@@ -128,7 +131,8 @@ site/           project website: static HTML + CSS and a little hand-written JS
                 (fonts, scripts, analytics) — keep it that way; screenshots in img/
 deploy/         Kubernetes manifests, Dex (dev OIDC), examples/ (optional reverse
                 proxies: Caddy, Traefik — never required, TLS is the operator's choice)
-(root)          Dockerfile, docker-compose.yml, docker-compose.dev.yml, Taskfile.yml
+(root)          Dockerfile, docker-compose.yml, docker-compose.dev.yml, Taskfile.yml,
+                .goreleaser.yaml
 ```
 
 ## Commands
@@ -152,8 +156,9 @@ task test                        # all Rust tests
 task test:s3                     # attachments in S3-compatible storage (Garage in Docker)
 task test:e2e -- -k sharing      # browser tests (chromium + chromedriver + python3)
 task test:editor                 # the editor's DOM view in headless Chromium (wasm-bindgen-test)
-task ci                          # exactly what CI runs: ci:check (incl. audit) + ci:image
-task release                     # from dev: CI's checks, tag the next version (semrel), push the images
+task build:clients               # the CLI's release files and AUR package into dist/clients (Docker, nothing published)
+task ci                          # exactly what CI runs: ci:check (incl. audit) + ci:image + ci:clients
+task release                     # from main: CI's checks, tag the next version (semrel), push the images, publish the CLI
 ```
 
 Without go-task, see the plain commands in the [Taskfile](Taskfile.yml) or
@@ -287,6 +292,11 @@ Without go-task, see the plain commands in the [Taskfile](Taskfile.yml) or
   with `notekpr --profile NAME logout --forget --yes`.
 - Don't `pkill -f` broad patterns like `notekpr`: they can match your own
   shell's command line. Kill by PID.
+- The CLI's release builds (`task build:clients`) run GoReleaser in Docker
+  (`packaging/Dockerfile`; tools pinned there with their checksums). Its
+  Rust builder expects binaries in `target/<target>/release`, so don't set
+  `CARGO_TARGET_DIR` for it: `packaging/run.sh` mounts `target-release/target`
+  there instead. Packaging changes → `task ci:clients`.
 
 ## Git
 

@@ -1,0 +1,18 @@
+# Keeps one CLI profile's vaults in sync, and the Markdown folder it
+# remembers from `notekpr sync --dir` (docs/cli.md §4). The packages install
+# it as a systemd user unit; the part after @ is the profile:
+#
+#   systemctl --user enable --now notekpr-sync@default
+#
+# sync exits with an error only when it can't go on (a revoked session, a
+# mirror that stopped working); a few quick restarts, then it stays stopped.
+[Unit]
+Description=notekpr sync (profile %i)
+Documentation=https://github.com/coolapso/notekpr/blob/main/docs/cli.md#4-sync-and-the-markdown-mirror
+
+[Service]
+ExecStart=/usr/bin/notekpr --profile %i sync
+Restart=on-failure
+
+[Install]
+WantedBy=default.target

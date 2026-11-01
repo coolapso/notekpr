@@ -27,10 +27,27 @@ ciphertext.
 
 ## 1. Install / build
 
+### Packages
+
+From the release after 0.8.0 on, each release on
+[GitHub](https://github.com/coolapso/notekpr/releases) carries the CLI for
+Linux, amd64 and arm64 (glibc 2.28 or newer). Other systems: build it from
+source.
+
+| System | Install |
+|---|---|
+| Arch | from the AUR: `notekpr-cli-bin` |
+| Other Linux | the release's `notekpr-cli_<version>_linux_<arch>.tar.gz`: `notekpr`, the completions and the systemd unit |
+
+The AUR package installs the completions for bash, zsh and fish and a
+systemd user unit to keep a profile in sync ([§4](#4-sync-and-the-markdown-mirror)).
+Each release also lists the files' SHA-256 sums
+(`notekpr-cli_<version>_checksums.txt`).
+
 ### Shell completions
 
 `notekpr completions <shell>` prints the completion script for bash, zsh,
-fish, PowerShell or elvish:
+fish, PowerShell or elvish (the AUR package installs it already):
 
 ```sh
 notekpr completions bash > ~/.local/share/bash-completion/completions/notekpr
@@ -409,18 +426,19 @@ to a minute), and reacts to server events: rotated keys are fetched, vaults
 shared with you appear, revoked or deleted vaults become read-only local
 copies, and as an owner your client hands the vault key to members who joined
 before they had keys. Stop it with Ctrl-C or SIGTERM; it flushes and saves
-before exiting. To run it permanently, use a systemd user unit:
+before exiting. To run it permanently, use the systemd user unit the AUR
+package installs, `notekpr-sync@.service`; the part after `@` is the
+profile:
 
-```ini
-# ~/.config/systemd/user/notekpr-sync.service
-[Unit]
-Description=notekpr sync
-[Service]
-ExecStart=%h/.local/bin/notekpr sync
-Restart=on-failure
-[Install]
-WantedBy=default.target
+```sh
+systemctl --user enable --now notekpr-sync@default
+journalctl --user -u notekpr-sync@default -f     # what it does
 ```
+
+Without the package, copy the unit from the release's `.tar.gz` (or
+[`packaging/systemd/notekpr-sync@.service`](../packaging/systemd/notekpr-sync@.service))
+to `~/.config/systemd/user/` and point its `ExecStart` at your `notekpr`
+(e.g. `%h/.local/bin/notekpr`).
 
 (Plain `sync` also mirrors into a directory remembered from an earlier
 `sync --dir`; run `sync --no-dir` once for encrypted replicas only.) If the

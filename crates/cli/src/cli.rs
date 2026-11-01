@@ -3,7 +3,7 @@
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
-use clap::{Args, Parser, Subcommand, ValueEnum};
+use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
 use serde::{Deserialize, Serialize};
 
 #[derive(Parser, Clone, Debug, Serialize, Deserialize)]
@@ -251,6 +251,33 @@ pub enum Command {
     Agent(AgentCmd),
     /// Local plaintext HTTP API for agents and scripts.
     Gateway(GatewayArgs),
+    /// Print the shell completion script for bash, zsh, fish, PowerShell or
+    /// elvish (the packages install it already), e.g.
+    /// `notekpr completions bash > ~/.local/share/bash-completion/completions/notekpr`.
+    Completions { shell: CompletionShell },
+}
+
+/// A shell `notekpr completions` writes a completion script for.
+#[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CompletionShell {
+    Bash,
+    Zsh,
+    Fish,
+    Powershell,
+    Elvish,
+}
+
+/// Write the completion script for `shell` to `out`.
+pub fn write_completions(shell: CompletionShell, out: &mut dyn std::io::Write) {
+    use clap_complete::Shell;
+    let shell = match shell {
+        CompletionShell::Bash => Shell::Bash,
+        CompletionShell::Zsh => Shell::Zsh,
+        CompletionShell::Fish => Shell::Fish,
+        CompletionShell::Powershell => Shell::PowerShell,
+        CompletionShell::Elvish => Shell::Elvish,
+    };
+    clap_complete::generate(shell, &mut Cli::command(), "notekpr", out);
 }
 
 #[derive(Args, Clone, Debug, Serialize, Deserialize)]

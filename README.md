@@ -251,7 +251,8 @@ read anything.
   anything else ([how](docs/own-editor.md)).
 * The command line does everything: list, read, write, search, move, icons,
   trash, history, quick notes, sharing, archiving, key rotation, devices and
-  recovery keys, import and export — also while its sync daemon runs.
+  recovery keys, import and export — also while its sync daemon runs. Shell
+  completions for bash, zsh, fish, PowerShell and elvish.
 * Import folders of Markdown and zip files (an Obsidian vault, say) with their
   attachments; export a vault as plain `.md` files any time.
 * Moving to another server: export the vaults you choose and your quick

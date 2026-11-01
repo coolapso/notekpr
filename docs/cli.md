@@ -27,6 +27,22 @@ ciphertext.
 
 ## 1. Install / build
 
+### Shell completions
+
+`notekpr completions <shell>` prints the completion script for bash, zsh,
+fish, PowerShell or elvish:
+
+```sh
+notekpr completions bash > ~/.local/share/bash-completion/completions/notekpr
+notekpr completions zsh > ~/.zfunc/_notekpr      # a folder on your $fpath
+notekpr completions fish > ~/.config/fish/completions/notekpr.fish
+```
+
+PowerShell: add `notekpr completions powershell | Out-String | Invoke-Expression`
+to your `$PROFILE`.
+
+### From source
+
 Requires a Rust toolchain (1.94+). No Node.js or other tooling.
 
 ```sh

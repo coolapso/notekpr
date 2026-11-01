@@ -110,7 +110,8 @@ fn access(c: &Command) -> Access {
         | Command::Devices(_)
         | Command::Recovery(_)
         | Command::Shared(_)
-        | Command::Agent(_) => Access::Free,
+        | Command::Agent(_)
+        | Command::Completions { .. } => Access::Free,
         Command::Logout { forget, .. } => {
             if *forget {
                 Access::Write
@@ -281,7 +282,19 @@ fn confirm_or_flag(yes: bool, prompt: &str) -> Result<()> {
 }
 
 pub async fn run(cli: Cli) -> Result<()> {
+    // Needs no profile, nor a home directory (packages run it while building).
+    if let Command::Completions { shell } = cli.command {
+        print_completions(shell);
+        return Ok(());
+    }
     run_in(cli, Dirs::from_env()?).await
+}
+
+/// `notekpr completions`: the script, printed like any command's output.
+fn print_completions(shell: CompletionShell) {
+    let mut script = Vec::new();
+    write_completions(shell, &mut script);
+    ui::out_text(&String::from_utf8_lossy(&script));
 }
 
 /// [`run`] with explicit configuration and data roots (tests).
@@ -884,6 +897,10 @@ async fn execute(ctx: Ctx, command: Command) -> Result<()> {
         Command::Sync(a) => sync(&ctx, a).await,
         Command::Agent(c) => agent(&ctx, c).await,
         Command::Gateway(a) => gateway_cmd(&ctx, a).await,
+        Command::Completions { shell } => {
+            print_completions(shell);
+            Ok(())
+        }
     }
 }
 

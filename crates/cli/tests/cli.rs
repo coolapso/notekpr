@@ -27,6 +27,36 @@ fn says_which_version_it_is() {
     );
 }
 
+#[test]
+fn writes_shell_completions() {
+    use notekpr_cli::cli::{CompletionShell, write_completions};
+    for (shell, says) in [
+        (CompletionShell::Bash, "complete -F _notekpr"),
+        (CompletionShell::Zsh, "#compdef notekpr"),
+        (CompletionShell::Fish, "complete -c notekpr"),
+        (CompletionShell::Powershell, "Register-ArgumentCompleter"),
+        (
+            CompletionShell::Elvish,
+            "edit:completion:arg-completer[notekpr]",
+        ),
+    ] {
+        let mut out = Vec::new();
+        write_completions(shell, &mut out);
+        let script = String::from_utf8(out).unwrap();
+        assert!(script.contains(says), "{shell:?}: {says}");
+        // Subcommands and their options are in it.
+        assert!(script.contains("share-note"), "{shell:?}");
+        assert!(script.contains("--dir"), "{shell:?}");
+    }
+    let cli = Cli::try_parse_from(["notekpr", "completions", "zsh"]).unwrap();
+    assert!(matches!(
+        cli.command,
+        notekpr_cli::cli::Command::Completions {
+            shell: CompletionShell::Zsh
+        }
+    ));
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn plaintext_mirror_is_confirmed_per_directory() {
     let srv = start().await;

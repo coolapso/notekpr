@@ -55,8 +55,9 @@ a Mac). The [README](../README.md) has the short version.
 
 ## Drawings
 
-* A drawing editor with Excalidraw's hand-drawn look, written in Rust: the
-  same drawing looks the same as on excalidraw.com, wobbles and all.
+* A drawing editor with a hand-drawn look, written in Rust and compatible
+  with Excalidraw: a drawing looks the same on excalidraw.com, wobbles and
+  all.
   Rectangles, diamonds, ellipses, arrows and lines (dragged or point by
   point), the pen, texts, pictures (`9`, or pasted or dropped), sticky
   notes (`N`), frames (`F`), the eraser and the laser pointer (`K`);

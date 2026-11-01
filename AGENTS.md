@@ -191,8 +191,9 @@ Without go-task, see the plain commands in the [Taskfile](Taskfile.yml) or
   `docs/cli.md`; requirement coverage → `docs/acceptance.md`.
 - **Feature lists stay current.** A new user-facing feature, or a change to
   one (including its shortcuts), goes into the feature lists in the same
-  change: the Features section of `README.md` and `site/features.html` — and
-  `site/index.html` ("In the box") for headline features. Remove what no
+  change: `docs/features.md` (every feature) and `site/features.html` — and,
+  for headline features, `site/index.html` ("In the box") and the README's
+  Features, which stay short (a line or two per area). Remove what no
   longer exists.
 - **The demo shows every feature.** A new or changed user-facing feature
   gets demo data in `scripts/demo.py` in the same change, so that

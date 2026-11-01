@@ -15,12 +15,17 @@ cd "$(dirname "$0")/.."
 image=notekpr-clients-build
 docker build -q -t "$image" -f packaging/Dockerfile packaging > /dev/null
 
-mkdir -p target target-release/target target-release/cargo-registry target-release/home
+mkdir -p target target-release/target target-release/cargo-registry target-release/home/.ssh
+# The image has no user with your uid, and ssh (git's, publishing to the
+# AUR) refuses to run without one: give it one, at home in the container.
+printf 'root:x:0:0:root:/root:/bin/sh\n%s:x:%s:%s::/src/target-release/home:/bin/sh\n' \
+    "$(id -un)" "$(id -u)" "$(id -g)" > target-release/passwd
 tty=
 [ -t 0 ] && [ -t 1 ] && tty=-t
 exec docker run --rm -i $tty --init \
     --user "$(id -u):$(id -g)" \
     -e HOME=/src/target-release/home \
+    -v "$PWD/target-release/passwd:/etc/passwd:ro" \
     -e GITHUB_TOKEN -e AUR_KEY \
     -v "$PWD:/src" -w /src \
     -v "$PWD/target-release/target:/src/target" \

@@ -333,11 +333,15 @@ A release adds to the GitHub Release semrel made (its notes stay):
 | `notekpr-cli_<v>_linux_{amd64,arm64}.tar.gz` | `notekpr` (glibc 2.28 or newer), completions, the systemd user unit |
 | `notekpr-cli_<v>_checksums.txt` | SHA-256 of both |
 
-and publishes the AUR package `notekpr-cli-bin` (pushed with the SSH key
-`AUR_KEY`, or the `aur` secret in Infisical). If publishing fails halfway,
-fix it and run `task release:clients` again on the tagged commit: files
-already on the release are kept. Linux only for now. Snapshots are named
-like the images' versions (`0.2.0-3-gabc1234`).
+and publishes the AUR package `notekpr-cli-bin`. It is pushed with the
+SSH key your own ssh uses for `aur.archlinux.org` (`AUR_KEY_FILE` to choose
+another), in CI (`$CI` set) with the `aur` secret in Infisical; the key's
+contents in `AUR_KEY` take precedence over both. The key must have no
+passphrase. If publishing fails halfway, fix it and run
+`task release:clients` again on the tagged commit (the working tree clean):
+it builds again and replaces the files already on the release. Linux only
+for now. Snapshots are named like the images' versions
+(`0.2.0-3-gabc1234`).
 
 Between releases, `task docker:push` and `task docker:push:demo` push an
 image tagged `latest` and with the version `git describe` gives after

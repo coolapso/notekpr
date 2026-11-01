@@ -76,12 +76,15 @@ aurs:
       install -Dm644 completions/notekpr.fish "$pkgdir/usr/share/fish/vendor_completions.d/notekpr.fish"
       install -Dm644 notekpr-sync@.service "$pkgdir/usr/lib/systemd/user/notekpr-sync@.service"
 
-# semrel made the release with its notes; this only adds the files.
+# semrel made the release with its notes; this only adds the files. Run
+# again after a failure, it replaces those already there, so they match what
+# the AUR package is made from.
 release:
   github:
     owner: coolapso
     name: notekpr
   mode: keep-existing
+  replace_existing_artifacts: true
 
 changelog:
   disable: true

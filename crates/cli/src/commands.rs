@@ -41,17 +41,17 @@ pub struct Ctx {
 }
 
 impl Ctx {
-    fn store(&self) -> Result<ProfileStore> {
+    pub(crate) fn store(&self) -> Result<ProfileStore> {
         ProfileStore::new(&self.dirs, &self.profile)
     }
 
-    fn session(&self) -> Result<Arc<Session>> {
+    pub(crate) fn session(&self) -> Result<Arc<Session>> {
         Ok(Arc::new(Session::open(&self.dirs, &self.profile)?))
     }
 
     /// A hub for one-shot commands: catches up and pushes the given vaults
     /// (or, detached, only reads the local copies).
-    async fn hub(&self, vaults: &[&str]) -> Result<Arc<Hub>> {
+    pub(crate) async fn hub(&self, vaults: &[&str]) -> Result<Arc<Hub>> {
         self.open_hub(vaults, false).await
     }
 
@@ -1101,6 +1101,31 @@ fn print_transfer(verb: &str, r: &transfer::TransferReport) {
 // ---------------------------------------------------------------- login & status
 
 async fn login(ctx: &Ctx, a: LoginArgs) -> Result<()> {
+    sign_in(ctx, a).await?;
+    // Nothing to sync yet (the quick notes are no vault): how to start. The
+    // vault is theirs to name, so none is made here.
+    if let Ok(s) = ctx.session()
+        && let Ok(vaults) = s.api.vaults().await
+        && vaults.iter().all(|v| v.kind.is_section())
+    {
+        let p = if ctx.profile == crate::profile::DEFAULT_PROFILE {
+            String::new()
+        } else {
+            format!("--profile {} ", ctx.profile)
+        };
+        ui::status(&format!(
+            "No vaults yet: create one, then sync it with a folder of Markdown files, or import notes into it:\n  \
+             notekpr {p}vault create <name>\n  \
+             notekpr {p}sync --dir <folder>               each vault a folder in it, synced both ways\n  \
+             notekpr {p}import <name> <folder or .zip>"
+        ));
+    }
+    Ok(())
+}
+
+/// `login` without its hints: signs in, shows a new recovery key and says
+/// who is signed in.
+pub(crate) async fn sign_in(ctx: &Ctx, a: LoginArgs) -> Result<account::LoginOutcome> {
     let store = ctx.store()?;
     let server = match a
         .server
@@ -1157,25 +1182,7 @@ async fn login(ctx: &Ctx, a: LoginArgs) -> Result<()> {
         ctx.profile
     );
     crate::out!("Account key fingerprint: {}", out.fingerprint);
-    // Nothing to sync yet (the quick notes are no vault): how to start. The
-    // vault is theirs to name, so none is made here.
-    if let Ok(s) = ctx.session()
-        && let Ok(vaults) = s.api.vaults().await
-        && vaults.iter().all(|v| v.kind.is_section())
-    {
-        let p = if ctx.profile == crate::profile::DEFAULT_PROFILE {
-            String::new()
-        } else {
-            format!("--profile {} ", ctx.profile)
-        };
-        ui::status(&format!(
-            "No vaults yet: create one, then sync it with a folder of Markdown files, or import notes into it:\n  \
-             notekpr {p}vault create <name>\n  \
-             notekpr {p}sync --dir <folder>               each vault a folder in it, synced both ways\n  \
-             notekpr {p}import <name> <folder or .zip>"
-        ));
-    }
-    Ok(())
+    Ok(out)
 }
 
 async fn status(ctx: &Ctx) -> Result<()> {
@@ -2392,7 +2399,7 @@ async fn history(ctx: &Ctx, h: HistoryArgs) -> Result<()> {
 
 // ---------------------------------------------------------------- sync daemon
 
-fn plaintext_note(dir: &Path) -> String {
+pub(crate) fn plaintext_note(dir: &Path) -> String {
     format!(
         "Plaintext mirror: decrypted Markdown files are written to {}.\n\
          They are protected only by file permissions and your disk encryption — anyone (or any program)\n\
@@ -2534,99 +2541,10 @@ async fn sync(ctx: &Ctx, a: SyncArgs) -> Result<()> {
             p.sync.mirror_dir = Some(d.clone());
         })?;
     }
-    let session = ctx.session()?;
-    let hub = Hub::start(
-        session,
-        HubOptions {
-            vaults: a.vaults.clone(),
-            read_only: false,
-            offline_ok: true,
-            catch_up: true,
-            detached: false,
-            quick_notes: false,
-        },
-    )
-    .await?;
     if a.once {
-        if let Some(d) = &dir {
-            let mut m = Mirror::with_options(hub.clone(), d, mirror_opts).await?;
-            let mut r = m.reconcile_all(true).await?;
-            if r.held > 0
-                && ui::confirm(&format!(
-                    "{} mirrored file(s) disappeared at once (see above). Move the notes to the trash?",
-                    r.held
-                ))
-            {
-                m.set_options(MirrorOptions {
-                    allow_mass_delete: true,
-                    ..mirror_opts
-                });
-                r = m.reconcile_all(true).await?;
-            }
-            ui::status(&format!(
-                "mirror: {} edit(s) and {} new file(s) uploaded, {} moved, {} trashed, {} file(s) written, {} conflict copies",
-                r.ingested, r.created, r.renamed, r.trashed, r.written, r.conflicts
-            ));
-            if r.held > 0 {
-                ui::warn(&format!(
-                    "{} missing file(s) were NOT moved to the trash (held for safety)",
-                    r.held
-                ));
-            }
-        }
-        let mut pending = 0;
-        let mut read_only = false;
-        let mut full = Vec::new();
-        for id in hub.vault_ids() {
-            match hub.sync_vault(&id).await {
-                Ok(o) => {
-                    pending += o.remaining;
-                    read_only |= o.read_only;
-                    if o.vault_full
-                        && let Some(v) = hub.get(&id)
-                    {
-                        let g = v.lock().await;
-                        full.push(if g.is_quick_notes() {
-                            "your quick notes".to_string()
-                        } else {
-                            format!("'{}' [{id}]", g.name())
-                        });
-                    }
-                }
-                Err(e) => ui::warn(&format!("vault {id}: {e:#}")),
-            }
-        }
-        if read_only {
-            ui::warn(&format!(
-                "the server is read-only right now: {pending} change(s) stay queued and are uploaded when it accepts changes again"
-            ));
-        }
-        if !full.is_empty() {
-            ui::warn(&format!(
-                "full, so its changes stay queued until it has room (delete something in it for good, or ask your administrator to raise its limit, giving the id): {}",
-                full.join(", ")
-            ));
-        }
-        hub.snapshot_idle(Duration::ZERO, livesync::SESSION_MIN_UPDATES)
-            .await;
-        hub.save_all().await;
-        let n = hub.vault_ids().len();
-        if hub.is_online() {
-            crate::out!(
-                "synced {n} vault(s){}",
-                if pending > 0 {
-                    format!("; {pending} change(s) still queued")
-                } else {
-                    String::new()
-                }
-            );
-        } else {
-            crate::out!(
-                "offline: {n} local vault(s) up to date with your edits; {pending} change(s) queued for upload"
-            );
-        }
-        return Ok(());
+        return sync_once(ctx, &a.vaults, dir.as_deref(), mirror_opts).await;
     }
+    let hub = sync_hub(ctx, &a.vaults).await?;
 
     // While running, changing commands are handed to us (they can't open
     // the local copies we own).
@@ -2672,6 +2590,110 @@ async fn sync(ctx: &Ctx, a: SyncArgs) -> Result<()> {
     hub.save_all().await;
     ui::status("stopped");
     result
+}
+
+async fn sync_hub(ctx: &Ctx, vaults: &[String]) -> Result<Arc<Hub>> {
+    Hub::start(
+        ctx.session()?,
+        HubOptions {
+            vaults: vaults.to_vec(),
+            read_only: false,
+            offline_ok: true,
+            catch_up: true,
+            detached: false,
+            quick_notes: false,
+        },
+    )
+    .await
+}
+
+/// `sync --once`: catch up, take in what changed in the Markdown folder
+/// `dir` (if any) and write what changed elsewhere, push, report.
+pub(crate) async fn sync_once(
+    ctx: &Ctx,
+    vaults: &[String],
+    dir: Option<&Path>,
+    mirror_opts: MirrorOptions,
+) -> Result<()> {
+    let hub = sync_hub(ctx, vaults).await?;
+    if let Some(d) = dir {
+        let mut m = Mirror::with_options(hub.clone(), d, mirror_opts).await?;
+        let mut r = m.reconcile_all(true).await?;
+        if r.held > 0
+            && ui::confirm(&format!(
+                "{} mirrored file(s) disappeared at once (see above). Move the notes to the trash?",
+                r.held
+            ))
+        {
+            m.set_options(MirrorOptions {
+                allow_mass_delete: true,
+                ..mirror_opts
+            });
+            r = m.reconcile_all(true).await?;
+        }
+        ui::status(&format!(
+            "mirror: {} edit(s) and {} new file(s) uploaded, {} moved, {} trashed, {} file(s) written, {} conflict copies",
+            r.ingested, r.created, r.renamed, r.trashed, r.written, r.conflicts
+        ));
+        if r.held > 0 {
+            ui::warn(&format!(
+                "{} missing file(s) were NOT moved to the trash (held for safety)",
+                r.held
+            ));
+        }
+    }
+    let mut pending = 0;
+    let mut read_only = false;
+    let mut full = Vec::new();
+    for id in hub.vault_ids() {
+        match hub.sync_vault(&id).await {
+            Ok(o) => {
+                pending += o.remaining;
+                read_only |= o.read_only;
+                if o.vault_full
+                    && let Some(v) = hub.get(&id)
+                {
+                    let g = v.lock().await;
+                    full.push(if g.is_quick_notes() {
+                        "your quick notes".to_string()
+                    } else {
+                        format!("'{}' [{id}]", g.name())
+                    });
+                }
+            }
+            Err(e) => ui::warn(&format!("vault {id}: {e:#}")),
+        }
+    }
+    if read_only {
+        ui::warn(&format!(
+            "the server is read-only right now: {pending} change(s) stay queued and are uploaded when it accepts changes again"
+        ));
+    }
+    if !full.is_empty() {
+        ui::warn(&format!(
+            "full, so its changes stay queued until it has room (delete something in it for good, or ask your administrator to raise its limit, giving the id): {}",
+            full.join(", ")
+        ));
+    }
+    hub.snapshot_idle(Duration::ZERO, livesync::SESSION_MIN_UPDATES)
+        .await;
+    hub.save_all().await;
+    let n = hub.vault_ids().len();
+    if hub.is_online() {
+        crate::out!(
+            "synced {n} vault(s){}",
+            if pending > 0 {
+                format!("; {pending} change(s) still queued")
+            } else {
+                String::new()
+            }
+        );
+    } else {
+        crate::out!(
+            "offline: {n} local vault(s) up to date with your edits; {pending} change(s) queued for upload"
+        );
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------- agents

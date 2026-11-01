@@ -338,10 +338,22 @@ fn mirrored_entries(v: &Vault) -> BTreeMap<String, (String, notekpr_core::doc::E
 /// behind by a deleted or left vault is never imported into another one.
 const VAULT_MARKER: &str = ".notekpr-vault";
 
-fn vault_marker(dir: &Path) -> Option<String> {
+/// The vault a folder mirrors, by its marker.
+pub(crate) fn vault_marker(dir: &Path) -> Option<String> {
     std::fs::read_to_string(dir.join(VAULT_MARKER))
         .ok()
         .map(|s| s.trim().to_string())
+}
+
+/// Make `dir` the folder of the vault `vault_id`, files and all: the first
+/// sync into its parent adopts it and takes in what is in it (`setup`
+/// moving notes into a vault).
+pub fn mark_vault_folder(dir: &Path, vault_id: &str) -> std::io::Result<()> {
+    fsutil::write_atomic(
+        &dir.join(VAULT_MARKER),
+        format!("{vault_id}\n").as_bytes(),
+        true,
+    )
 }
 
 /// The vault folders below a mirror directory that mirror one of `vault_ids`
@@ -371,7 +383,7 @@ fn has_mirrorable_content(dir: &Path) -> bool {
 
 /// `p` made absolute, with its longest existing ancestor canonicalised (works
 /// for paths that do not exist).
-fn resolve_lenient(p: &Path) -> PathBuf {
+pub(crate) fn resolve_lenient(p: &Path) -> PathBuf {
     let abs = std::path::absolute(p).unwrap_or_else(|_| p.to_path_buf());
     let mut base = abs.as_path();
     let mut rest = Vec::new();
@@ -2047,11 +2059,7 @@ impl Mirror {
             fsutil::create_private_dir(&dir)?;
             fsutil::remove_stale_temp_files(&dir, 64, STALE_TEMP_AGE);
             if vault_marker(&dir).as_deref() != Some(vault_id)
-                && let Err(e) = fsutil::write_atomic(
-                    &dir.join(VAULT_MARKER),
-                    format!("{vault_id}\n").as_bytes(),
-                    true,
-                )
+                && let Err(e) = mark_vault_folder(&dir, vault_id)
             {
                 tracing::debug!("mirror: cannot write the vault marker: {e}");
             }

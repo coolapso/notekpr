@@ -253,6 +253,9 @@ read anything.
   trash, history, quick notes, sharing, archiving, key rotation, devices and
   recovery keys, import and export — also while its sync daemon runs. Shell
   completions for bash, zsh, fish, PowerShell and elvish.
+* `notekpr setup` sets a computer up in one go: signs in, takes the folder
+  for your Markdown files (an Obsidian vault already there comes along) and
+  keeps it in sync in the background.
 * Import folders of Markdown and zip files (an Obsidian vault, say) with their
   attachments; export a vault as plain `.md` files any time.
 * Moving to another server: export the vaults you choose and your quick

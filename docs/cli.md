@@ -75,6 +75,50 @@ to the server (`Notekpr-App: cli/<version>`, protocol.md).
 
 ## 2. Signing in
 
+### All of it at once: `notekpr setup`
+
+`notekpr setup` sets a computer up in one go and asks as it goes: the
+profile (its name matters only with several accounts), the server and
+signing in (as `login` does, below), the folder for your notes as Markdown
+files ([§4](#4-sync-and-the-markdown-mirror)), and whether to keep them in
+sync in the background. On Linux that is the systemd user service
+`notekpr-sync@<profile>`, enabled; when no package installed its unit,
+`setup` writes it to `~/.config/systemd/user`. An account without vaults
+gets one, *My notes*, as the web app makes for a new account. Run it again
+any time: what is set up already stays.
+
+If the folder you choose already holds notes (an Obsidian vault, say), it
+asks what to do with them:
+
+1. **Move them into a vault there.** Everything in the folder, hidden files
+   too (`.obsidian`, `.git`), moves as it is into a folder of its own,
+   `<folder>/<vault>/`: renamed, nothing copied or rewritten. From then on
+   it syncs. In Obsidian, open `<folder>/<vault>` as the vault; its settings
+   came along.
+2. **Copy them into a vault in another folder**, leaving the folder as it is.
+3. **Leave them alone** and choose another folder.
+
+The vault is one of yours by the name you give (the notes join what it
+has) or a new one. The first sync uploads the notes the way the Markdown
+folder takes in any new file, so they stay exactly as they were (Obsidian's
+`.excalidraw.md` drawings stay notes). A folder that a cloud service
+(Nextcloud, Dropbox, Syncthing, OneDrive, iCloud) syncs gets a warning: it
+would upload the decrypted notes. The top of the file system, your home
+folder and folders holding notekpr's own data are refused.
+
+Each answer has an option too, for scripts. Without a terminal nothing is
+asked, and notes already in the folder need `--move-in` or `--copy-from`:
+
+```sh
+notekpr setup --server https://notes.example.com --dir ~/Notes --move-in --vault "My notes" \
+              --plaintext-ok --service
+notekpr setup --dir ~/notekpr --copy-from ~/Obsidian/Work --vault Work --no-service
+notekpr setup --no-dir                  # only the encrypted copies, no Markdown folder
+```
+
+`--server`, `--dev-user`, `--device-name`, `--recovery-key-file` and
+`--insecure-http` are `login`'s.
+
 ### With your identity provider (normal use)
 
 ```sh
@@ -427,8 +471,8 @@ shared with you appear, revoked or deleted vaults become read-only local
 copies, and as an owner your client hands the vault key to members who joined
 before they had keys. Stop it with Ctrl-C or SIGTERM; it flushes and saves
 before exiting. To run it permanently, use the systemd user unit the AUR
-package installs, `notekpr-sync@.service`; the part after `@` is the
-profile:
+package installs, `notekpr-sync@.service` (`notekpr setup` enables it); the
+part after `@` is the profile:
 
 ```sh
 systemctl --user enable --now notekpr-sync@default

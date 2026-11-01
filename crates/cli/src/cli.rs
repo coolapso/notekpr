@@ -36,6 +36,10 @@ pub struct Cli {
 
 #[derive(Subcommand, Clone, Debug, Serialize, Deserialize)]
 pub enum Command {
+    /// Set this computer up in one go: sign in, a folder for your notes as
+    /// Markdown files (bringing in notes already there), syncing in the
+    /// background. Asks what its options don't say.
+    Setup(SetupArgs),
     /// Sign in and set up this device (OIDC device login, or --dev-user in development mode).
     Login(LoginArgs),
     /// End the session (with --forget: also remove this device and all local data).
@@ -403,6 +407,40 @@ pub struct LoginArgs {
     /// Allow plain http:// to a non-local server (insecure).
     #[arg(long)]
     pub insecure_http: bool,
+}
+
+#[derive(Args, Clone, Debug, Serialize, Deserialize)]
+pub struct SetupArgs {
+    #[command(flatten)]
+    pub login: LoginArgs,
+    /// The folder for your notes as Markdown files: each vault a folder in it.
+    #[arg(long, conflicts_with = "no_dir")]
+    pub dir: Option<PathBuf>,
+    /// No folder of Markdown files: only the encrypted copies.
+    #[arg(long)]
+    pub no_dir: bool,
+    /// Move the notes already in --dir, with everything else in it, into a
+    /// folder of their own there: the vault's (--vault).
+    #[arg(long, conflicts_with_all = ["copy_from", "no_dir"])]
+    pub move_in: bool,
+    /// Copy the notes in this folder, with everything else in it, into the
+    /// vault's folder (--vault) in --dir; the folder stays as it is.
+    #[arg(long, value_name = "FOLDER", requires = "dir")]
+    pub copy_from: Option<PathBuf>,
+    /// The vault for the notes brought in: one of yours by that name, or a
+    /// new one. Without any to bring in, a first vault to make. [default: My notes]
+    #[arg(long)]
+    pub vault: Option<String>,
+    /// Confirm that writing decrypted files to --dir is intended.
+    #[arg(long)]
+    pub plaintext_ok: bool,
+    /// Keep syncing in the background, from now on and after restarts (a
+    /// systemd user service).
+    #[arg(long, conflicts_with = "no_service")]
+    pub service: bool,
+    /// Don't set up syncing in the background.
+    #[arg(long)]
+    pub no_service: bool,
 }
 
 #[derive(Subcommand, Clone, Debug, Serialize, Deserialize)]

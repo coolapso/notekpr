@@ -104,7 +104,9 @@ enum Access {
 
 fn access(c: &Command) -> Access {
     match c {
-        Command::Login(_)
+        // It takes the profile it chooses itself, once signed in.
+        Command::Setup(_)
+        | Command::Login(_)
         | Command::ExportEncrypted { .. }
         | Command::Profiles
         | Command::Devices(_)
@@ -366,6 +368,7 @@ pub fn run_for_other(
 
 async fn execute(ctx: Ctx, command: Command) -> Result<()> {
     match command {
+        Command::Setup(a) => crate::setup::run(&ctx, a).await,
         Command::Login(a) => login(&ctx, a).await,
         Command::Logout {
             forget,
@@ -1117,7 +1120,8 @@ async fn login(ctx: &Ctx, a: LoginArgs) -> Result<()> {
             "No vaults yet: create one, then sync it with a folder of Markdown files, or import notes into it:\n  \
              notekpr {p}vault create <name>\n  \
              notekpr {p}sync --dir <folder>               each vault a folder in it, synced both ways\n  \
-             notekpr {p}import <name> <folder or .zip>"
+             notekpr {p}import <name> <folder or .zip>\n\
+             (or `notekpr {p}setup`, which asks)"
         ));
     }
     Ok(())

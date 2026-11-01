@@ -378,6 +378,7 @@ HOME = [
         - [ ] Sign in as **bob** in another tab and edit *Shopping list* in the *Family* vault together
         - [ ] Click a link to a note that doesn't exist yet: [[Greenhouse]]
         - [ ] Look in the trash: a shopping list is waiting to be restored, and under *Deleted for good* an old to-do list whose emptied trash can still be undone (*Undo* puts it back in the trash)
+        - [ ] On your own computer: `notekpr setup`, with this page's address as the server and **alice** as the user name (the demo approves the new device), signs the command line in and keeps your vaults as a folder of Markdown files, synced both ways — a folder with notes in it already (an Obsidian vault) can come along
 
         ## More to try
 

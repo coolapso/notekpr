@@ -30,8 +30,19 @@ the server accepts — the server never takes plaintext.
 
 ## Set it up
 
-1. Install the client and sign in (once per device, see
-   [cli.md §1–2](cli.md#1-install--build)):
+Install the client ([cli.md §1](cli.md#1-install--build)), then:
+
+```sh
+notekpr setup
+```
+
+It signs you in, asks for the folder (`~/Notes` unless you choose another)
+and keeps it in sync in the background. Notes in that folder already? See
+[Coming from Obsidian](#coming-from-obsidian).
+
+Or step by step, which is what `setup` does:
+
+1. Sign in, once per device ([cli.md §2](cli.md#2-signing-in)):
 
    ```sh
    notekpr login --server https://notes.example.com
@@ -47,30 +58,46 @@ the server accepts — the server never takes plaintext.
    Every vault you can access appears as a subfolder (`~/Notes/Family/…`).
    Use `--vault NAME` (repeatable) to mirror only some.
 
-3. Keep it running in the background with a systemd user service:
-
-   ```ini
-   # ~/.config/systemd/user/notekpr-sync.service
-   [Unit]
-   Description=notekpr sync (Markdown folder)
-   After=network-online.target
-
-   [Service]
-   ExecStart=%h/.local/bin/notekpr sync --dir %h/Notes --plaintext-ok
-   Restart=on-failure
-
-   [Install]
-   WantedBy=default.target
-   ```
+3. Keep it running in the background with the systemd user service the
+   packages install. It syncs the folder `sync --dir` remembered; the part
+   after `@` is the profile:
 
    ```sh
-   systemctl --user daemon-reload
-   systemctl --user enable --now notekpr-sync
-   journalctl --user -u notekpr-sync -f     # see what it does
+   systemctl --user enable --now notekpr-sync@default
+   journalctl --user -u notekpr-sync@default -f     # see what it does
    ```
+
+   Without a package, copy
+   [`packaging/systemd/notekpr-sync@.service`](../packaging/systemd/notekpr-sync@.service)
+   to `~/.config/systemd/user/`, point its `ExecStart` at your `notekpr`
+   and run `systemctl --user daemon-reload` first.
 
    It works offline too: edits are kept and uploaded when the connection is
    back.
+
+## Coming from Obsidian
+
+An Obsidian vault is a folder, and its folders are just folders. A notekpr
+vault is what you share and encrypt as one: each has its own key and its
+own members, with folders inside it as in Obsidian. So **one Obsidian vault
+is one notekpr vault**. `Daily/`, `Projects/` and the rest stay folders in
+it, and wiki links between them keep working (links work within a vault).
+
+The Markdown folder is a level above: it holds one folder per vault
+(`~/Notes/My notes/`, `~/Notes/Family/`) and your quick notes. What you open
+in Obsidian is a vault's folder.
+
+If your Obsidian vault is where you want your notes, `~/Notes` say, run
+`notekpr setup` and choose that folder. It offers to move everything in it,
+as it is, into `~/Notes/My notes/` (or the vault name you give), which then
+syncs. `.obsidian` moves along, so open `~/Notes/My notes` in Obsidian
+(**Open folder as vault**) and your settings, themes and plugins are there.
+Or let it copy your notes into another folder and keep the old one as it is.
+Details: [cli.md §2](cli.md#all-of-it-at-once-notekpr-setup).
+
+A part you later want to share on its own can become a vault of its own:
+`notekpr mv <vault> <folder> <to> --to-vault <other>` moves a folder into
+another vault.
 
 ## Obsidian
 

@@ -107,7 +107,8 @@ crates/web      Leptos CSR → wasm32. state/ (Core + Ui in mod.rs; session, vau
                 use on) · actions.rs (user operations; NoteHost = the editor's Host) ·
                 editor.rs (re-exports crates/editor) · views/ · render.rs (reading view)
 crates/cli      `notekpr` CLI: session.rs + livesync.rs (sync), mirror.rs
-                (Markdown files), gateway.rs, ops.rs, note_shares.rs
+                (Markdown files), gateway.rs, ops.rs, note_shares.rs, setup.rs
+                (`notekpr setup`: sign-in, the folder, existing notes moved in)
 crates/load     load test (`task load`): simulated people = real clients (the CLI's
                 library) against the server image with CPU/memory limits; crash,
                 check, report. load-events: what it streams; load-ui: its live

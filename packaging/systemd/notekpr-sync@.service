@@ -1,6 +1,7 @@
 # Keeps one CLI profile's vaults in sync, and the Markdown folder it
 # remembers from `notekpr sync --dir` (docs/cli.md §4). The packages install
-# it as a systemd user unit; the part after @ is the profile:
+# it as a systemd user unit (`notekpr setup` writes it to
+# ~/.config/systemd/user without them); the part after @ is the profile:
 #
 #   systemctl --user enable --now notekpr-sync@default
 #

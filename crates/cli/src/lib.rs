@@ -23,6 +23,7 @@ pub mod profile;
 pub mod recover;
 pub mod secrets;
 pub mod session;
+pub mod setup;
 pub mod store;
 pub mod transfer;
 pub mod ui;

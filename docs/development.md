@@ -312,8 +312,8 @@ refuses to publish otherwise.
 
 ### The CLI's packages
 
-The server is released as images only; the CLI as files and an AUR
-package, made by [GoReleaser](https://goreleaser.com) (the free one) from
+The server is released as images only; the CLI as files and packages,
+made by [GoReleaser](https://goreleaser.com) (the free one) from
 `.goreleaser.yaml`. GoReleaser runs in a build image
 (`packaging/Dockerfile`: Rust with the Linux targets, zig and cargo-zigbuild
 to build both architectures for an old enough glibc), so Docker is all a
@@ -322,7 +322,8 @@ command in it, as your user, with the checkout at `/src`.
 
 ```sh
 task build:clients      # everything into dist/clients, nothing published (a snapshot)
-task ci:clients         # the same, as CI runs it
+task test:packages      # then: install the .deb in Debian and the .rpm in AlmaLinux 8, run them
+task ci:clients         # both, as CI runs them
 task release:clients    # publish for the release tag at HEAD (task release does it)
 ```
 
@@ -331,7 +332,8 @@ A release adds to the GitHub Release semrel made (its notes stay):
 | File | What |
 |---|---|
 | `notekpr-cli_<v>_linux_{amd64,arm64}.tar.gz` | `notekpr` (glibc 2.28 or newer), completions, the systemd user unit |
-| `notekpr-cli_<v>_checksums.txt` | SHA-256 of both |
+| `notekpr-cli_<v>_{amd64,arm64}.deb`, `notekpr-cli-<v>-1.{x86_64,aarch64}.rpm` | the same as packages, installed from the file (no package repository yet) |
+| `notekpr-cli_<v>_checksums.txt` | SHA-256 of all of them |
 
 and publishes the AUR package `notekpr-cli-bin`. It is pushed with the
 SSH key your own ssh uses for `aur.archlinux.org` (`AUR_KEY_FILE` to choose

@@ -1,10 +1,10 @@
 # yaml-language-server: $schema=https://goreleaser.com/static/schema.json
-# The CLI's release files and its AUR package (docs/development.md,
-# "Releases"), with the free GoReleaser. It runs in the image
-# packaging/Dockerfile builds (packaging/run.sh): `task build:clients` makes
-# everything into dist/clients without publishing; `task release:clients`
-# adds it to the release semrel made and publishes the AUR package. Linux
-# only for now. The server is released as container images only.
+# The CLI's release files and packages (.deb, .rpm, the AUR's) for Linux
+# (docs/development.md, "Releases"), with the free GoReleaser. It runs in
+# the image packaging/Dockerfile builds (packaging/run.sh): `task
+# build:clients` makes everything into dist/clients without publishing;
+# `task release:clients` adds it to the release semrel made and publishes
+# the AUR package. The server is released as container images only.
 version: 2
 
 project_name: notekpr-cli
@@ -51,6 +51,52 @@ archives:
 
 checksum:
   name_template: "{{ .ProjectName }}_{{ .Version }}_checksums.txt"
+
+# Installed straight from the release (no package repository yet: they don't
+# update themselves). `task test:packages` installs them in Debian and in
+# AlmaLinux 8 (glibc 2.28, the oldest the builds run on) and runs them.
+nfpms:
+  - id: packages
+    ids: [linux]
+    package_name: notekpr-cli
+    file_name_template: "{{ .ConventionalFileName }}"
+    vendor: coolapso
+    homepage: https://github.com/coolapso/notekpr
+    maintainer: coolapso <c4s@coolapso.sh>
+    description: |-
+      The notekpr command-line client: end-to-end encrypted, local-first
+      Markdown notes. Keeps an encrypted copy of your vaults, syncs them live
+      and can keep them as a folder of Markdown files for any editor.
+    license: AGPL-3.0-or-later
+    section: utils
+    formats: [deb, rpm]
+    bindir: /usr/bin
+    # What the builds link against (builds.linux.targets).
+    overrides:
+      deb:
+        dependencies: ["libc6 (>= 2.28)"]
+      rpm:
+        dependencies: ["glibc >= 2.28"]
+    contents:
+      - src: target-release/completions/notekpr.bash
+        dst: /usr/share/bash-completion/completions/notekpr
+      - src: target-release/completions/notekpr.fish
+        dst: /usr/share/fish/vendor_completions.d/notekpr.fish
+      # Each family's own place for zsh completions.
+      - src: target-release/completions/_notekpr
+        dst: /usr/share/zsh/vendor-completions/_notekpr
+        packager: deb
+      - src: target-release/completions/_notekpr
+        dst: /usr/share/zsh/site-functions/_notekpr
+        packager: rpm
+      - src: packaging/systemd/notekpr-sync@.service
+        dst: /usr/lib/systemd/user/notekpr-sync@.service
+      - src: LICENSE
+        dst: /usr/share/doc/notekpr-cli/copyright
+        packager: deb
+      - src: LICENSE
+        dst: /usr/share/licenses/notekpr-cli/LICENSE
+        packager: rpm
 
 aurs:
   - name: notekpr-cli-bin

@@ -345,18 +345,38 @@ tasks:
       - task: docker:test:demo
 
   ci:clients:
-    desc: "The CLI's release files and AUR package, without publishing (build:clients)"
+    desc: "The CLI's release files and packages, without publishing (build:clients), and its .deb and .rpm installed and run (test:packages)"
     cmds:
       - task: build:clients
+      - task: test:packages
 
   # ------------------------------------------------------------------ CLI packages
   # GoReleaser (.goreleaser.yaml) in the CLI's build image (packaging/Dockerfile,
   # run by packaging/run.sh): Docker is all these need.
 
   build:clients:
-    desc: "Build the CLI's release files into dist/clients without publishing: Linux (amd64, arm64) and AUR's PKGBUILD (in Docker)"
+    desc: "Build the CLI's release files into dist/clients without publishing: Linux (amd64, arm64) as .tar.gz, .deb and .rpm, and AUR's PKGBUILD (in Docker)"
     cmds:
       - packaging/run.sh goreleaser release --snapshot --clean
+
+  test:packages:
+    desc: "Install the CLI's .deb in Debian and its .rpm in AlmaLinux 8 (glibc 2.28, the oldest the builds run on), for this machine's architecture, and run it — after build:clients"
+    vars:
+      # What an installed package must do and hold.
+      CHECK: >-
+        notekpr --version && notekpr completions zsh > /dev/null
+        && test -f /usr/share/bash-completion/completions/notekpr
+        && test -f /usr/lib/systemd/user/notekpr-sync@.service
+    preconditions:
+      - sh: ls dist/clients/*.deb dist/clients/*.rpm > /dev/null 2>&1
+        msg: "No packages in dist/clients: task build:clients first"
+    cmds:
+      - >-
+        docker run --rm -v "$PWD/dist/clients:/p:ro" debian:stable-slim
+        sh -c 'dpkg -i /p/notekpr-cli_*_$(dpkg --print-architecture).deb > /dev/null && {{.CHECK}}'
+      - >-
+        docker run --rm -v "$PWD/dist/clients:/p:ro" almalinux:8
+        sh -c 'rpm -i /p/notekpr-cli-*.$(uname -m).rpm && {{.CHECK}}'
 
   # ------------------------------------------------------------------ website
 
@@ -528,7 +548,7 @@ tasks:
           FLAGS: ""
 
   release:clients:
-    desc: "Publish the CLI for the release tagged at HEAD (task release does, after the images; run it again if it failed there): its files on the GitHub Release and the AUR package"
+    desc: "Publish the CLI for the release tagged at HEAD (task release does, after the images; run it again if it failed there): its files and packages on the GitHub Release, and the AUR package"
     preconditions:
       - sh: git describe --exact-match --tags --match 'v[0-9]*' HEAD
         msg: "HEAD has no release tag: the CLI is published for a release (task release)"

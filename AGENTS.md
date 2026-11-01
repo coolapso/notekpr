@@ -121,7 +121,7 @@ scripts/        build-web.sh, build-load-ui.sh (wasm builds) · demo.py (task de
                 S3 file store against Garage in Docker)
 packaging/      the CLI's release builds (GoReleaser, .goreleaser.yaml): Dockerfile (the
                 image it runs in) · run.sh (a command in that image) · completions.sh ·
-                systemd/ (the sync user unit); Linux and the AUR package for now
+                systemd/ (the sync user unit); Linux only for now: .tar.gz, .deb, .rpm, AUR
 fuzz/           fuzz targets, a separate workspace (fuzz/run.sh, task fuzz)
 vendor/yrs      yrs 0.28 with fixes for panics found by fuzzing, via [patch.crates-io];
                 the changes are in vendor/yrs/NOTEKPR.md — re-apply on upgrade
@@ -157,7 +157,7 @@ task test                        # all Rust tests
 task test:s3                     # attachments in S3-compatible storage (Garage in Docker)
 task test:e2e -- -k sharing      # browser tests (chromium + chromedriver + python3)
 task test:editor                 # the editor's DOM view in headless Chromium (wasm-bindgen-test)
-task build:clients               # the CLI's release files and AUR package into dist/clients (Docker, nothing published)
+task build:clients               # the CLI's release files and packages into dist/clients (Docker, nothing published)
 task ci                          # exactly what CI runs: ci:check (incl. audit) + ci:image + ci:clients
 task release                     # from main: CI's checks, tag the next version (semrel), push the images, publish the CLI
 ```

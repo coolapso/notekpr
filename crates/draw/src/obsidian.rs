@@ -205,6 +205,20 @@ mod tests {
     const EXAMPLE: &str = include_str!("../tests/fixtures/example.excalidraw");
 
     #[test]
+    fn pictures_shown_from_the_vault_are_named() {
+        let json = r#"{"type":"excalidraw","version":2,"files":{},"elements":[
+            {"id":"pic","type":"image","x":0,"y":0,"width":40,"height":40,"fileId":"cat1","status":"saved"}]}"#;
+        let md = format!(
+            "---\nexcalidraw-plugin: parsed\n---\n# Excalidraw Data\n## Text Elements\n\
+             ## Embedded Files\ncat1: [[cat.png]]\n\n%%\n## Drawing\n```json\n{json}\n```\n%%\n"
+        );
+        let d = read_drawing(&md, &mut Ids::new(1)).unwrap();
+        assert_eq!(d.embedded, vec![("cat1".into(), "[[cat.png]]".into())]);
+        assert_eq!(d.scene.elements.len(), 1);
+        assert_eq!(d.scene.elements[0].file_id(), Some("cat1"));
+    }
+
+    #[test]
     fn reads_the_plugins_files() {
         let d = read_drawing(STAND_IN, &mut Ids::new(1)).unwrap();
         assert_eq!(d.scene.elements.len(), 24);

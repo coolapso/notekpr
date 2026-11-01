@@ -95,6 +95,13 @@ syncs. `.obsidian` moves along, so open `~/Notes/My notes` in Obsidian
 Or let it copy your notes into another folder and keep the old one as it is.
 Details: [cli.md §2](cli.md#all-of-it-at-once-notekpr-setup).
 
+Drawings stay Obsidian's: its Excalidraw plugin's `.excalidraw.md` files
+(and Excalidraw's `.excalidraw`) sync as they are, and the web app shows
+them as drawings, view-only, when opened and where a note embeds them. To
+edit one in notekpr, with others at the same time, choose **Make it a
+drawing** there: it becomes a `.drawing` and the original goes to the
+trash, so Obsidian no longer has it.
+
 A part you later want to share on its own can become a vault of its own:
 `notekpr mv <vault> <folder> <to> --to-vault <other>` moves a folder into
 another vault.

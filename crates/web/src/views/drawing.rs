@@ -1,7 +1,8 @@
 //! A drawing's page. A document route (`/v/<vault>/<id>`) shows a note or
 //! a drawing: which one is only known once the vault's index is there, so
 //! [`Document`] picks the view then (the note view never opens an editor on
-//! anything but a note).
+//! anything but a note). Another app's drawing file shows as a drawing,
+//! view-only ([`OtherAppsDrawing`]).
 
 use std::cell::Cell;
 use std::rc::Rc;
@@ -24,19 +25,78 @@ use crate::state::{self, ui};
 /// A note or a drawing, by id.
 #[component]
 pub fn Document(vault: String, note: String) -> impl IntoView {
+    #[derive(Clone, Copy, PartialEq)]
+    enum Shown {
+        Note,
+        Drawing,
+        OtherApps,
+    }
     let ui = ui();
     let (v, n) = (vault.clone(), note.clone());
-    let drawing = Memo::new(move |_| {
+    let shown = Memo::new(move |_| {
         ui.tree_rev.get();
         ui.vaults.track();
-        state::step(|c| c.entry(&v, &n)).is_some_and(|e| e.kind == EntryKind::Drawing)
+        match state::step(|c| c.entry(&v, &n)) {
+            Some(e) if e.kind == EntryKind::Drawing => Shown::Drawing,
+            Some(e) if crate::drawings::is_other_apps_entry(&e) => Shown::OtherApps,
+            _ => Shown::Note,
+        }
     });
     move || {
         let (vault, note) = (vault.clone(), note.clone());
-        if drawing.get() {
-            view! { <DrawingView vault=vault id=note/> }.into_any()
-        } else {
-            view! { <super::note::NoteView vault=vault note=note/> }.into_any()
+        match shown.get() {
+            Shown::Drawing => view! { <DrawingView vault=vault id=note/> }.into_any(),
+            Shown::OtherApps => view! { <OtherAppsDrawing vault=vault id=note/> }.into_any(),
+            Shown::Note => view! { <super::note::NoteView vault=vault note=note/> }.into_any(),
+        }
+    }
+}
+
+/// Another app's drawing file (Obsidian's `.excalidraw.md`, Excalidraw's
+/// `.excalidraw`), shown as a drawing, view-only and as it is, once it turns
+/// out to be one; otherwise as what it is: a note, or a file to download.
+#[component]
+fn OtherAppsDrawing(vault: String, id: String) -> impl IntoView {
+    let ui = ui();
+    // Whether the file holds a drawing: set when known, and only when that
+    // changes (the page isn't made again for each change of the file).
+    let readable = RwSignal::new(None::<bool>);
+    let (v, i) = (vault.clone(), id.clone());
+    Effect::new(move |_| {
+        ui.content_rev.get();
+        let (v, i) = (v.clone(), i.clone());
+        leptos::task::spawn_local(async move {
+            let ok = crate::drawings::other_apps_scene(&v, &i).await.is_some();
+            if readable.try_get_untracked().is_some_and(|r| r != Some(ok)) {
+                readable.set(Some(ok));
+            }
+        });
+    });
+    move || {
+        let (vault, id) = (vault.clone(), id.clone());
+        match readable.get() {
+            None => view! { <div class="note-page"></div> }.into_any(),
+            Some(true) => view! { <DrawingView vault=vault id=id view_only=true/> }.into_any(),
+            Some(false) => {
+                let file = state::step(|c| c.entry(&vault, &id))
+                    .is_some_and(|e| e.kind == EntryKind::Attachment);
+                if !file {
+                    return view! { <super::note::NoteView vault=vault note=id/> }.into_any();
+                }
+                let name = state::step(|c| c.entry(&vault, &id))
+                    .map(|e| paths::file_name(&e.path).to_string())
+                    .unwrap_or_default();
+                view! {
+                    <div class="page">
+                        <header class="page-head"><h1 class="ellipsis">{name}</h1></header>
+                        <p class="muted empty">"This file doesn't hold a drawing notekpr can read."</p>
+                        <p class="empty"><button class="btn small" on:click=move |_| {
+                            let (v, i) = (vault.clone(), id.clone());
+                            leptos::task::spawn_local(async move { crate::actions::download_attachment(&v, &i).await });
+                        }><Icon name="download"/>" Download"</button></p>
+                    </div>
+                }.into_any()
+            }
         }
     }
 }
@@ -129,12 +189,16 @@ fn at(ev: &web_sys::PointerEvent) -> [f64; 2] {
     [ev.offset_x() as f64, ev.offset_y() as f64]
 }
 
+/// A drawing's page; `view_only`: another app's drawing file, shown as it
+/// is (never written).
 #[component]
-pub fn DrawingView(vault: String, id: String) -> impl IntoView {
+pub fn DrawingView(vault: String, id: String, #[prop(optional)] view_only: bool) -> impl IntoView {
     let ui = ui();
     let id_here = StoredValue::new(id.clone());
     let (v, i) = (vault.clone(), id.clone());
-    state::step(|c| c.ensure_note_loaded(&v, &i));
+    if !view_only {
+        state::step(|c| c.ensure_note_loaded(&v, &i));
+    }
     let (v, i) = (vault.clone(), id.clone());
     let path = Memo::new(move |_| {
         ui.tree_rev.get();
@@ -154,8 +218,25 @@ pub fn DrawingView(vault: String, id: String) -> impl IntoView {
             .collect::<String>()
     });
     let name_ref = NodeRef::<html::Input>::new();
-    let board = Board::new(&vault, &id);
+    let board = if view_only {
+        Board::view_only(&vault, &id)
+    } else {
+        Board::new(&vault, &id)
+    };
     let b = StoredValue::new_local(board.clone());
+    // Another app's file: read again when it changes (synced from its app).
+    if view_only {
+        let (v, i) = (vault.clone(), id.clone());
+        Effect::new(move |_| {
+            ui.content_rev.get();
+            let (v, i) = (v.clone(), i.clone());
+            leptos::task::spawn_local(async move {
+                if let Some(scene) = crate::drawings::other_apps_scene(&v, &i).await {
+                    b.try_with_value(|b| b.show(scene));
+                }
+            });
+        });
+    }
     let canvas_ref = NodeRef::<html::Canvas>::new();
     let root_ref = NodeRef::<html::Div>::new();
     Effect::new(move |_| {
@@ -185,7 +266,9 @@ pub fn DrawingView(vault: String, id: String) -> impl IntoView {
     on_cleanup(move || {
         b.try_with_value(|b| b.close());
         // Edited: a version of it is stored, as for notes.
-        state::step(|c| state::note_closed(c, &vc, &ic));
+        if !view_only {
+            state::step(|c| state::note_closed(c, &vc, &ic));
+        }
     });
     // The panels follow the editor.
     let rev = RwSignal::new(0u64);
@@ -641,6 +724,7 @@ pub fn DrawingView(vault: String, id: String) -> impl IntoView {
             let _ = r.focus();
         }
     };
+    let banner = view_only.then(|| other_apps_banner(&vault, &id, &path.get_untracked()));
     view! {
         <div class="note-page drawing-page" tabindex="0" node_ref=root_ref on:keydown=on_key on:keyup=on_key_up
             on:copy=on_copy on:cut=on_cut on:paste=on_paste on:drop=on_drop on:dragover=|ev: web_sys::DragEvent| ev.prevent_default()>
@@ -687,10 +771,12 @@ pub fn DrawingView(vault: String, id: String) -> impl IntoView {
                             .collect_view()
                     }}
                 </div>
-                <button class="icon-btn" class:on=move || library_open.get() title="Saved shapes" aria-label="Saved shapes" aria-pressed=move || library_open.get().to_string()
-                    on:click=move |_| library_open.update(|o| *o = !*o)><Icon name="shapes"/></button>
-                <button class="icon-btn" title="Version history" aria-label="Version history"
-                    on:click={ let (v, n) = (vault.clone(), id.clone()); move |_| ui.modal.set(Some(state::Modal::History(v.clone(), n.clone()))) }><Icon name="history"/></button>
+                <Show when=move || !view_only>
+                    <button class="icon-btn" class:on=move || library_open.get() title="Saved shapes" aria-label="Saved shapes" aria-pressed=move || library_open.get().to_string()
+                        on:click=move |_| library_open.update(|o| *o = !*o)><Icon name="shapes"/></button>
+                    <button class="icon-btn" title="Version history" aria-label="Version history"
+                        on:click={ let (v, n) = (vault.clone(), id.clone()); move |_| ui.modal.set(Some(state::Modal::History(v.clone(), n.clone()))) }><Icon name="history"/></button>
+                </Show>
                 <div class="tb-drop">
                     <button class="icon-btn" title="Export" aria-label="Export" aria-expanded=move || export_open.get().to_string()
                         on:click=move |ev| { ev.stop_propagation(); export_open.update(|o| *o = !*o); }><Icon name="download"/></button>
@@ -719,6 +805,7 @@ pub fn DrawingView(vault: String, id: String) -> impl IntoView {
                     </Show>
                 </div>
             </header>
+            {banner}
             <div class="drawing-stage">
                 <canvas class="drawing-canvas" node_ref=canvas_ref
                     on:pointerdown=on_down on:pointermove=on_move on:pointerup=on_up.clone() on:pointercancel=on_up
@@ -772,16 +859,38 @@ pub fn DrawingView(vault: String, id: String) -> impl IntoView {
                     <button class="zoom-value" title="Show all of the drawing — Shift+1" on:click=move |_| b.with_value(|b| b.fit())>{shown_zoom}</button>
                     <button title="Zoom in" aria-label="Zoom in" on:click=move |_| b.with_value(|b| b.zoom_by(1.1))>"+"</button>
                 </div>
-                <div class="drawing-history" role="group" aria-label="History">
-                    <button title="Undo — Ctrl+Z" aria-label="Undo" on:click=move |_| b.with_value(|b| b.undo(false))><Icon name="undo"/></button>
-                    <button title="Redo — Ctrl+Shift+Z" aria-label="Redo" on:click=move |_| b.with_value(|b| b.undo(true))><Icon name="redo"/></button>
-                </div>
+                <Show when=move || !view_only>
+                    <div class="drawing-history" role="group" aria-label="History">
+                        <button title="Undo — Ctrl+Z" aria-label="Undo" on:click=move |_| b.with_value(|b| b.undo(false))><Icon name="undo"/></button>
+                        <button title="Redo — Ctrl+Shift+Z" aria-label="Redo" on:click=move |_| b.with_value(|b| b.undo(true))><Icon name="redo"/></button>
+                    </div>
+                </Show>
                 <Show when=move || writable.get()>
                     <SnapToggles board=b rev=rev grid=grid/>
                 </Show>
             </div>
         </div>
     }
+}
+
+/// Above another app's drawing file: what it is, and making a drawing of it
+/// (where the vault may be changed).
+fn other_apps_banner(vault: &str, id: &str, path: &str) -> AnyView {
+    let app = crate::drawings::other_app(path).unwrap_or("Another app");
+    let (v, i) = (vault.to_string(), id.to_string());
+    let can = state::step(|c| c.can_write(vault) && !c.is_quick_notes(vault));
+    view! {
+        <div class="banner other-apps-banner"><Icon name="drawing"/>
+            <span>{format!("{app}'s drawing file, shown as it is (view-only), so {app} keeps working with it. To edit it here, make it a drawing of notekpr's.")}</span>
+            {can.then(|| view! {
+                <button class="btn small" on:click=move |_| {
+                    let (v, i) = (v.clone(), i.clone());
+                    leptos::task::spawn_local(async move { crate::actions::make_drawing_of(&v, &i).await });
+                }>"Make it a drawing"</button>
+            })}
+        </div>
+    }
+    .into_any()
 }
 
 /// The grid (the drawing's) and snapping to elements (one's own), on or off.
@@ -1291,26 +1400,32 @@ pub fn DrawingsPage(vault: String) -> impl IntoView {
                 let vault = vid.get_value();
                 view! {
                     <div class="drawing-cards">
-                        {items.into_iter().map(|(id, title, folder, _)| {
+                        {items.into_iter().map(|d| {
                             let picture = RwSignal::new(None::<String>);
-                            let (v, i) = (vault.clone(), id.clone());
+                            let (v, i) = (vault.clone(), d.id.clone());
                             Effect::new(move |_| {
                                 ui.content_rev.get();
                                 ui.ui_prefs.track();
                                 let (v, i) = (v.clone(), i.clone());
                                 leptos::task::spawn_local(async move {
-                                    state::step(|c| c.ensure_note_loaded(&v, &i));
                                     if let Some(u) = crate::drawings::load_preview(&v, &i).await {
                                         picture.set(Some(u));
                                     }
                                 });
                             });
-                            let (v, i) = (vault.clone(), id.clone());
+                            let (v, i) = (vault.clone(), d.id.clone());
+                            // Another app's file: whose, under its name (it isn't
+                            // one of the vault's drawings, which the count counts).
+                            let under = match (d.app, d.folder.is_empty()) {
+                                (Some(app), true) => format!("{app}'s file"),
+                                (Some(app), false) => format!("{app}'s file · {}", d.folder),
+                                (None, _) => d.folder,
+                            };
                             view! {
                                 <button class="drawing-card" on:click=move |_| state::navigate(state::Route::Note(v.clone(), i.clone()))>
                                     <span class="drawing-thumb">{move || picture.get().map(|src| view! { <img src=src alt=""/> })}</span>
-                                    <span class="drawing-name ellipsis">{title}</span>
-                                    {(!folder.is_empty()).then(|| view! { <span class="drawing-folder muted small ellipsis">{folder}</span> })}
+                                    <span class="drawing-name ellipsis">{d.title}</span>
+                                    {(!under.is_empty()).then(|| view! { <span class="drawing-folder muted small ellipsis">{under}</span> })}
                                 </button>
                             }
                         }).collect_view()}

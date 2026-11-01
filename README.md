@@ -143,8 +143,11 @@ read anything.
   Obsidian that show `![[Board.excalidraw]]` find the imported drawing.
 * Works with Excalidraw's files: copy and paste between notekpr and
   excalidraw.com or Obsidian; importing a folder or Obsidian vault turns
-  `.excalidraw` and Obsidian's `.excalidraw.md` drawings into drawings
-  (those already in a vault: "Make it a drawing" in the file tree), and
+  `.excalidraw` and Obsidian's `.excalidraw.md` drawings into drawings.
+  Those synced as they are from a Markdown folder (so Obsidian keeps
+  working with them) show as drawings, view-only, when opened and where a
+  note embeds them, pictures of the vault included; "Make it a drawing"
+  makes one notekpr's, to edit (asked first: the file goes to the trash); and
   files dropped on a drawing come in; export a drawing as a `.drawing`
   file, for Excalidraw (`.excalidraw`), for Obsidian (`.excalidraw.md`),
   SVG or PNG — the drawing kept inside, so they open again in notekpr and

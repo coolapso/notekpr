@@ -5,7 +5,7 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
 use std::rc::Rc;
 
-use notekpr_core::doc::EntryKind;
+use notekpr_core::doc::{Entry, EntryKind};
 use notekpr_core::markdown::{self, Link, LinkKind, NoteInfo};
 use notekpr_core::{paths, search};
 
@@ -98,30 +98,35 @@ pub fn resolve_target(vault: &str, target: &str, from_path: &str) -> Option<Stri
     markdown::resolve(&link, from_path, &c).map(str::to_string)
 }
 
-/// What an embed shows (`![[…]]`): a file or a drawing, by path or by file
-/// name (the shortest path wins).
+/// What an embed shows (`![[…]]`): a file or a drawing — another app's
+/// drawing file too, Obsidian's linked without its `.md` — by path or by
+/// file name (the shortest path wins).
 pub fn resolve_embed(vault: &str, target: &str) -> Option<String> {
     let entries = state::step(|c| c.live_entries(vault));
     let t = target.trim().trim_start_matches("./").to_lowercase();
-    let embeddable = |k: EntryKind| matches!(k, EntryKind::Attachment | EntryKind::Drawing);
-    let find = |t: &str, ok: &dyn Fn(EntryKind) -> bool| {
-        let exact = entries
-            .iter()
-            .find(|e| ok(e.kind) && e.path.to_lowercase() == t);
+    let embeddable = |e: &Entry| {
+        matches!(e.kind, EntryKind::Attachment | EntryKind::Drawing)
+            || crate::drawings::is_other_apps_entry(e)
+    };
+    let same = |path: &str, t: &str| {
+        let p = path.to_lowercase();
+        p == t || p.strip_suffix(".md") == Some(t)
+    };
+    let find = |t: &str, ok: &dyn Fn(&Entry) -> bool| {
+        let exact = entries.iter().find(|e| ok(e) && same(&e.path, t));
         let by_name = || {
             entries
                 .iter()
-                .filter(|e| {
-                    ok(e.kind) && paths::file_name(&e.path).to_lowercase() == paths::file_name(t)
-                })
+                .filter(|e| ok(e) && same(paths::file_name(&e.path), paths::file_name(t)))
                 .min_by_key(|e| e.path.len())
         };
         exact.or_else(by_name).map(|e| e.id.clone())
     };
-    // Notes from Obsidian embed `X.excalidraw`: imported, it is `X.drawing`.
+    // Notes from Obsidian embed `X.excalidraw`: made a drawing (imported,
+    // say), it is `X.drawing`.
     find(&t, &embeddable).or_else(|| {
         let ours = paths::drawing_path_for(&t).filter(|p| *p != t)?;
-        find(&ours, &|k| k == EntryKind::Drawing)
+        find(&ours, &|e| e.kind == EntryKind::Drawing)
     })
 }
 

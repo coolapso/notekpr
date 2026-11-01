@@ -103,8 +103,9 @@ asks what to do with them:
 
 The vault is one of yours by the name you give (the notes join what it
 has) or a new one. The first sync uploads the notes the way the Markdown
-folder takes in any new file, so they stay exactly as they were (Obsidian's
-`.excalidraw.md` drawings stay notes). A folder that a cloud service
+folder takes in any new file, so they stay exactly as they were: Obsidian's
+`.excalidraw.md` drawings stay notes, which the web app shows as drawings,
+view-only, until you make one a drawing of notekpr's. A folder that a cloud service
 (Nextcloud, Dropbox, Syncthing, OneDrive, iCloud) syncs gets a warning: it
 would upload the decrypted notes. The top of the file system, your home
 folder and folders holding notekpr's own data are refused.

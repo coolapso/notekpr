@@ -1285,7 +1285,7 @@ fn new_drawing_at(
 /// An Excalidraw or Obsidian drawing file of the vault (a file, or a note
 /// `X.excalidraw.md`) made a drawing beside it (`X.drawing`), its
 /// pictures files of the vault; the file goes to the trash and the
-/// drawing opens.
+/// drawing opens. Asked first: the other app loses the file.
 pub async fn make_drawing_of(vault: &str, id: &str) {
     let Some(e) = step(|c| c.entry(vault, id)) else {
         return;
@@ -1293,6 +1293,16 @@ pub async fn make_drawing_of(vault: &str, id: &str) {
     let Some(to) = paths::drawing_path_for(&e.path) else {
         return;
     };
+    let question = format!(
+        "Make “{}” a drawing of notekpr's, to edit it here (with others too)?\n\n\
+         The file {} goes to the trash, so apps using your Markdown folder (Obsidian, say) \
+         no longer have it there. The trash gives it back.",
+        paths::drawing_title(&to),
+        paths::file_name(&e.path)
+    );
+    if !util::confirm(&question) {
+        return;
+    }
     let text = match e.kind {
         EntryKind::Note => step(|c| c.replicas.get(vault).map(|r| r.note_text(id))),
         _ => attachment_bytes(vault, id)
@@ -1308,6 +1318,7 @@ pub async fn make_drawing_of(vault: &str, id: &str) {
         return;
     }
     let mut scene = d.scene;
+    crate::drawings::link_vault_pictures(vault, &mut scene, &d.embedded);
     let name = paths::drawing_title(&to).to_string();
     scene.files = adopt_pictures(vault, &name, scene.files, &mut HashMap::new()).await;
     let new = step(|c| {
@@ -2172,10 +2183,10 @@ pub fn is_drawing(vault: &str, id: &str) -> bool {
     step(|c| c.entry(vault, id)).is_some_and(|e| e.kind == EntryKind::Drawing)
 }
 
-/// What an embed shows, as a URL: an attachment, or a drawing's preview.
+/// What an embed shows, as a URL: an attachment, or the preview of a
+/// drawing (or of another app's drawing file).
 pub async fn load_embed(vault: &str, id: &str) -> Option<String> {
-    if is_drawing(vault, id) {
-        step(|c| c.ensure_note_loaded(vault, id));
+    if crate::drawings::shows_as_drawing(vault, id) {
         crate::drawings::load_preview(vault, id).await
     } else {
         load_attachment(vault, id).await
@@ -2224,11 +2235,16 @@ pub async fn load_attachment(vault: &str, id: &str) -> Option<String> {
 }
 
 /// Show an attachment in a new tab if the browser can display it safely
-/// (raster images, PDFs); download anything else.
+/// (raster images, PDFs); download anything else. Another app's drawing
+/// file opens as a drawing (view-only).
 pub async fn open_attachment(vault: &str, id: &str) {
     let name = state::step(|c| c.entry(vault, id))
         .map(|e| e.path)
         .unwrap_or_default();
+    if paths::is_other_apps_drawing(&name) {
+        navigate(Route::Note(vault.to_string(), id.to_string()));
+        return;
+    }
     if !util::opens_inline(&name) {
         download_attachment(vault, id).await;
         return;
@@ -3073,7 +3089,7 @@ impl Host for NoteHost {
             return None;
         }
         let id = knowledge::resolve_embed(&self.vault, target)?;
-        let cached = if is_drawing(&self.vault, &id) {
+        let cached = if crate::drawings::shows_as_drawing(&self.vault, &id) {
             crate::drawings::cached_preview(&self.vault, &id)
         } else {
             cached_attachment_url(&self.vault, &id)

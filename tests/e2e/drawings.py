@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Drawings in the browser, checked from the CLI: drawing with the tools,
 arrows attaching to shapes, a line's points edited, saved shapes, the
-Export menu, the vault's Drawings page, what reaches the server.
+Export menu, the vault's Drawings page, what reaches the server, other
+apps' drawing files (Obsidian's, Excalidraw's) shown as they are.
 
     python3 tests/e2e/drawings.py --server target/debug/notekpr-server \
         --cli target/debug/notekpr --web dist/web
@@ -601,6 +602,7 @@ def main():
         row = "Array.from(document.querySelectorAll('.tree-row')).find(r => r.textContent.trim() === arguments[0])"
         a.wait("return !!" + row, 20, "the file in the tree", "Old sketch.excalidraw")
         a.js(row + ".querySelector('.tree-more').click()", "Old sketch.excalidraw")
+        a.js("window.confirm = () => true")
         a.click_el(a.find_text(".menu button", "Make it a drawing", 5))
         a.find(CANVAS, 10)
         time.sleep(1.5)
@@ -646,6 +648,68 @@ def main():
                ".some(e => e.textContent === 'Untitled drawing (1 links)' || e.textContent === 'Untitled drawing (1 link)')",
                10, "the drawing in the graph")
         check(True, "the graph shows the drawing, linked with the note that shows it")
+
+        # Other apps' drawing files, synced as they are from a Markdown
+        # folder: Obsidian's (a note, with a picture of the vault) and
+        # Excalidraw's (a file) show as drawings, view-only, where a note
+        # embeds them and when opened. A drawing of notekpr's is made of one
+        # only when asked.
+        scene = json.dumps({"type": "excalidraw", "version": 2, "files": {}, "elements": [
+            {"id": "box", "type": "rectangle", "x": 0, "y": 0, "width": 120, "height": 80},
+            {"id": "pic", "type": "image", "x": 160, "y": 0, "width": 40, "height": 40, "fileId": "cat1", "status": "saved"}]})
+        obsidian = ("---\nexcalidraw-plugin: parsed\n---\n# Excalidraw Data\n## Text Elements\n"
+                    "## Embedded Files\ncat1: [[cat.png]]\n\n%%\n## Drawing\n```json\n" + scene + "\n```\n%%\n")
+        cat = os.path.join(home, "cat.png")
+        png_file(cat, 8, 8)
+        with open(cat, "rb") as f:
+            r = subprocess.run([os.path.abspath(args.cli), "-p", "bob", "write", "Art", "Sketches/cat.png", "--attachment"],
+                               input=f.read(), env=cenv, capture_output=True, timeout=60)
+        check(r.returncode == 0, "a picture for Obsidian's drawing")
+        check(cli("write", "Art", "Sketches/Plan.excalidraw.md", input=obsidian).returncode == 0, "Obsidian's drawing, a note")
+        check(cli("write", "Art", "Sketches/Wall.excalidraw", "--attachment", input=scene).returncode == 0,
+              "Excalidraw's drawing, a file")
+        check(cli("write", "Art", "Walls.md", input="![[Plan.excalidraw]]\n\n![[Wall.excalidraw]]\n").returncode == 0,
+              "a note showing both")
+        shown = "return Array.from(document.querySelectorAll('.ed img')).filter(i => i.complete && i.naturalWidth > 0).length"
+        a.click_el(a.find_text(".tree-item", "Walls", 20))
+        a.wait(shown + " == 2", 20, "both drawings' pictures in the note")
+        # The picture's colours in the preview (a gradient, blue 128; the
+        # rest is black on white). The page's rules don't let a script read
+        # the preview's file, so it is drawn and looked at.
+        coloured = a.js("""
+            const img = document.querySelector('.ed img'), c = document.createElement('canvas');
+            c.width = img.naturalWidth; c.height = img.naturalHeight;
+            const g = c.getContext('2d'); g.drawImage(img, 0, 0);
+            const d = g.getImageData(0, 0, c.width, c.height).data;
+            let n = 0;
+            for (let i = 0; i < d.length; i += 4)
+                if (d[i + 3] > 200 && Math.abs(d[i + 2] - 128) < 16 && Math.abs(d[i] - d[i + 1]) > 30) n++;
+            return n;""")
+        check(coloured > 0, f"Obsidian's drawing shows the picture of the vault it links to ({coloured} pixels)")
+        a.click_el(a.find_text(".tree-item", "Sketches", 10))
+        a.click_el(a.find_text(".tree-item", "Plan.excalidraw", 10))
+        a.find(".other-apps-banner", 10)
+        check("Obsidian's drawing file" in a.text(".other-apps-banner")
+              and a.js(f"return !!document.querySelector('{CANVAS}') && !document.querySelector('.drawing-tools')"),
+              "Obsidian's drawing opens as a drawing, view-only")
+        a.shot("drawings-other-apps")
+        a.js("window.confirm = m => { window.asked = m; return true; }")
+        a.click_el(a.find_text(".other-apps-banner button", "Make it a drawing", 5))
+        a.wait("return !document.querySelector('.other-apps-banner') && !!document.querySelector('.drawing-tools')", 15,
+               "the drawing made of it, opened")
+        check("goes to the trash" in (a.js("return window.asked") or ""), "asked first, saying the file goes to the trash")
+        time.sleep(1.5)
+        r = cli("cat", "Art", "Sketches/Plan.drawing")
+        made = json.loads(r.stdout) if r.returncode == 0 else {}
+        check(any(e["type"] == "rectangle" for e in made.get("elements", [])) and "cat1" in made.get("files", {}),
+              "made a drawing of it, its picture with it")
+        check("Plan.excalidraw.md" in cli("trash", "list", "Art").stdout, "Obsidian's file went to the trash")
+        a.click_el(a.find_text(".tree-item", "Walls", 10))
+        a.wait(shown + " == 2", 20, "the note's embed finds the drawing made of it")
+        a.click_el(a.find_text(".sb-link", "Drawings", 10))
+        a.wait("return Array.from(document.querySelectorAll('.drawings-page .drawing-folder'))"
+               ".some(e => e.textContent.startsWith(\"Excalidraw's file\"))", 10, "Excalidraw's file among the drawings")
+        check(a.text(".drawings-page .drawings-count") == "3 drawings", "the Drawings page shows it, uncounted")
         a.shot("drawings")
         check(not severe_logs(a), "no browser errors")
         print("ALL PASSED")

@@ -95,11 +95,14 @@ pub fn mods(shift: bool, alt: bool, ctrl: bool) -> Mods {
 impl Board {
     /// Whether the drawing can be changed here.
     pub fn writable(&self) -> bool {
-        step(|c| c.can_write(&self.vault))
+        !self.view_only && step(|c| c.can_write(&self.vault))
     }
 
     /// Starts undo tracking of the drawing (once).
     pub(super) fn enable_undo(&self) {
+        if self.view_only {
+            return;
+        }
         step(|c| {
             if let Some(d) = c
                 .replicas
@@ -169,6 +172,9 @@ impl Board {
 
     /// Writes what is shown but not yet written.
     pub fn write(&self) {
+        if self.view_only {
+            return;
+        }
         let els: Vec<Element> = self
             .unwritten
             .borrow_mut()
@@ -211,6 +217,9 @@ impl Board {
 
     /// Undoes (or redoes) the last own change.
     pub fn undo(self: &Rc<Self>, redo: bool) {
+        if self.view_only {
+            return;
+        }
         self.write();
         let (v, id) = (self.vault.clone(), self.id.clone());
         let done = step(|c| {
@@ -240,6 +249,12 @@ impl Board {
 
     /// The drawing read again, with what isn't written yet on top.
     pub(super) fn reread(&self) -> Rc<Scene> {
+        if self.view_only {
+            if let Some(s) = self.fixed.borrow().clone() {
+                *self.scene.borrow_mut() = s;
+            }
+            return self.scene();
+        }
         if let Some(mut s) = crate::drawings::scene(&self.vault, &self.id) {
             let pending: Vec<Element> = self.unwritten.borrow().values().cloned().collect();
             patch(&mut s, &pending);

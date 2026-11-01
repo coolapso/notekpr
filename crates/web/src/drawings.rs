@@ -6,12 +6,20 @@
 //! again when the drawing changes. An image can't load fonts, so the font
 //! files its texts need are put inside it, fetched once from the app's own
 //! `fonts/` (never from elsewhere).
+//!
+//! Other apps' drawing files in a vault (Obsidian's `X.excalidraw.md`, a
+//! note; Excalidraw's `X.excalidraw`, a file — synced as they are from a
+//! Markdown folder) are shown as drawings too, view-only: read here, never
+//! written, so those apps keep working with them. Making a drawing of one
+//! is the person's choice (`actions::make_drawing_of`).
 
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 
+use notekpr_core::doc::{Entry, EntryKind};
+use notekpr_core::paths;
 use notekpr_core::yrs::updates::encoder::Encode;
 use notekpr_draw::fonts::{self, FontFace};
 use notekpr_draw::scene::Scene;
@@ -42,6 +50,9 @@ thread_local! {
     /// (or the picture inside the drawing): `None` while loading or when
     /// it can't be.
     static IMAGES: RefCell<HashMap<String, Option<web_sys::HtmlImageElement>>> = RefCell::new(HashMap::new());
+    /// Other apps' drawing files read, by (vault, file): the version read
+    /// ([`shown_version`]) and its drawing (`None`: the file isn't one).
+    static OTHER_SCENES: RefCell<HashMap<(String, String), (u64, Option<Rc<Scene>>)>> = RefCell::new(HashMap::new());
 }
 
 /// How many drawings `vault` holds — those in the trash too, as the server
@@ -69,23 +80,141 @@ pub fn has_room_in(vault: &str) -> bool {
     false
 }
 
-/// The drawings in `vault`, wherever in it, newest first: (id, title,
-/// folder, modified).
-pub fn in_vault(vault: &str) -> Vec<(String, String, String, i64)> {
-    let mut out: Vec<(String, String, String, i64)> = step(|c| c.live_entries(vault))
+/// A drawing in [`in_vault`]'s list.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Listed {
+    pub id: String,
+    pub title: String,
+    pub folder: String,
+    pub modified: i64,
+    /// Another app's drawing file: that app.
+    pub app: Option<&'static str>,
+}
+
+/// The drawings in `vault`, wherever in it, newest first, other apps'
+/// drawing files among them.
+pub fn in_vault(vault: &str) -> Vec<Listed> {
+    let mut out: Vec<Listed> = step(|c| c.live_entries(vault))
         .into_iter()
-        .filter(|e| e.kind == notekpr_core::doc::EntryKind::Drawing)
+        .filter(|e| e.kind == EntryKind::Drawing || is_other_apps_entry(e))
         .map(|e| {
             let folder = e
                 .path
                 .rsplit_once('/')
                 .map(|(f, _)| f.to_string())
                 .unwrap_or_default();
-            (e.id.clone(), e.title().to_string(), folder, e.modified)
+            let app = other_app(&e.path);
+            let title = match paths::drawing_path_for(&e.path) {
+                Some(p) if app.is_some() => paths::drawing_title(&p).to_string(),
+                _ => e.title().to_string(),
+            };
+            Listed {
+                id: e.id.clone(),
+                title,
+                folder,
+                modified: e.modified,
+                app,
+            }
         })
         .collect();
-    out.sort_by_key(|e| std::cmp::Reverse(e.3));
+    out.sort_by_key(|e| std::cmp::Reverse(e.modified));
     out
+}
+
+/// The app a drawing file at `path` is another app's of: Obsidian (its
+/// Excalidraw plugin's `.excalidraw.md`) or Excalidraw (`.excalidraw`).
+pub fn other_app(path: &str) -> Option<&'static str> {
+    if !paths::is_other_apps_drawing(path) {
+        return None;
+    }
+    Some(if path.to_ascii_lowercase().ends_with(".md") {
+        "Obsidian"
+    } else {
+        "Excalidraw"
+    })
+}
+
+/// Another app's drawing file: a note or file named as one.
+pub fn is_other_apps_entry(e: &Entry) -> bool {
+    matches!(e.kind, EntryKind::Note | EntryKind::Attachment)
+        && paths::is_other_apps_drawing(&e.path)
+}
+
+/// Another app's drawing file of the vault, shown as a drawing as it is.
+pub fn is_other_apps(vault: &str, id: &str) -> bool {
+    step(|c| c.entry(vault, id)).is_some_and(|e| is_other_apps_entry(&e))
+}
+
+/// Shown as a drawing: a drawing of the vault, or another app's drawing file.
+pub fn shows_as_drawing(vault: &str, id: &str) -> bool {
+    step(|c| c.entry(vault, id))
+        .is_some_and(|e| e.kind == EntryKind::Drawing || is_other_apps_entry(&e))
+}
+
+/// The drawing another app's file holds, read once per version of it, with
+/// the pictures it shows from the vault; `None` if it isn't one, or can't
+/// be had (yet: a file is fetched).
+pub async fn other_apps_scene(vault: &str, id: &str) -> Option<Scene> {
+    let e = step(|c| c.entry(vault, id)).filter(is_other_apps_entry)?;
+    if e.kind == EntryKind::Note {
+        step(|c| c.ensure_note_loaded(vault, id));
+    }
+    let at = shown_version(vault, id, false)?;
+    let key = (vault.to_string(), id.to_string());
+    if let Some((v, scene)) = OTHER_SCENES.with(|m| m.borrow().get(&key).cloned())
+        && v == at
+    {
+        return scene.map(|s| (*s).clone());
+    }
+    let mut fresh = notekpr_draw::restore::Ids::new(js_sys::Date::now() as u64);
+    let read = if e.kind == EntryKind::Note {
+        let text = step(|c| c.replicas.get(vault).map(|r| r.note_text(id)))?;
+        notekpr_draw::file::read_drawing(&text, &mut fresh)
+    } else {
+        let bytes = crate::actions::attachment_bytes(vault, id).await?;
+        notekpr_draw::file::read_drawing_bytes(&bytes, &mut fresh)
+    };
+    let scene = read.ok().map(|d| {
+        let mut scene = d.scene;
+        link_vault_pictures(vault, &mut scene, &d.embedded);
+        Rc::new(scene)
+    });
+    OTHER_SCENES.with(|m| m.borrow_mut().insert(key, (at, scene.clone())));
+    scene.map(|s| (*s).clone())
+}
+
+/// The pictures an Obsidian drawing shows from the vault (`[[cat.png]]`
+/// in its "Embedded Files"): their `files` entries show those files of the
+/// vault. Links to the web and formulas are left out: nothing is fetched
+/// from elsewhere.
+pub fn link_vault_pictures(vault: &str, scene: &mut Scene, embedded: &[(String, String)]) {
+    for (file_id, link) in embedded {
+        let Some(target) = link
+            .trim()
+            .strip_prefix("[[")
+            .and_then(|l| l.strip_suffix("]]"))
+        else {
+            continue;
+        };
+        let target = target.split('|').next().unwrap_or(target);
+        let Some((att, path)) = crate::knowledge::resolve_embed(vault, target).and_then(|a| {
+            step(|c| c.entry(vault, &a))
+                .filter(|e| e.kind == EntryKind::Attachment)
+                .map(|e| (a, e.path))
+        }) else {
+            continue;
+        };
+        let created = scene
+            .files
+            .get(file_id)
+            .and_then(|f| f.get("created"))
+            .and_then(serde_json::Value::as_f64)
+            .unwrap_or(0.0);
+        scene.files.insert(
+            file_id.clone(),
+            notekpr_core::pictures::entry(file_id, util::mime_for(&path), &att, created),
+        );
+    }
 }
 
 /// Whether the app shows dark: chosen, or the system's when automatic.
@@ -238,9 +367,21 @@ fn version(vault: &str, id: &str, dark: bool) -> Option<u64> {
     })
 }
 
+/// Which version of an entry a picture of it shows: a drawing's or a
+/// note's (and the theme); a file never changes.
+fn shown_version(vault: &str, id: &str, dark: bool) -> Option<u64> {
+    if step(|c| c.entry(vault, id)).is_some_and(|e| e.kind == EntryKind::Attachment) {
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        id.hash(&mut h);
+        dark.hash(&mut h);
+        return Some(h.finish());
+    }
+    version(vault, id, dark)
+}
+
 /// The preview's URL if it shows the drawing as it is now.
 pub fn cached_preview(vault: &str, id: &str) -> Option<String> {
-    let v = version(vault, id, is_dark())?;
+    let v = shown_version(vault, id, is_dark())?;
     PREVIEWS.with(|p| {
         p.borrow()
             .get(&(vault.to_string(), id.to_string()))
@@ -338,15 +479,26 @@ pub async fn picture_url(vault: &str, scene: Scene) -> Option<String> {
     util::blob_url(image.as_bytes(), "image/svg+xml")
 }
 
-/// Makes the drawing's preview (when it changed since the last one): its
-/// URL, or `None` if the drawing isn't loaded.
+/// Makes the preview of a drawing, or of another app's drawing file (when
+/// it changed since the last one): its URL, or `None` if it isn't loaded
+/// (or the file isn't a drawing).
 pub async fn load_preview(vault: &str, id: &str) -> Option<String> {
     let dark = is_dark();
-    let v = version(vault, id, dark)?;
+    let e = step(|c| c.entry(vault, id))?;
+    // (A file isn't a note: nothing to load.)
+    if e.kind != EntryKind::Attachment {
+        step(|c| c.ensure_note_loaded(vault, id));
+    }
+    let v = shown_version(vault, id, dark)?;
     if let Some(url) = cached_preview(vault, id) {
         return Some(url);
     }
-    let scene = with_pictures(vault, scene(vault, id)?).await;
+    let scene = if is_other_apps_entry(&e) {
+        other_apps_scene(vault, id).await?
+    } else {
+        scene(vault, id)?
+    };
+    let scene = with_pictures(vault, scene).await;
     let font_faces = font_faces(&scene).await;
     let image = svg::export(
         &scene,

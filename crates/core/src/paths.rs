@@ -73,7 +73,8 @@ pub fn is_note(path: &str) -> bool {
 pub const DRAWING_EXT: &str = ".drawing";
 
 /// What other apps' drawing files end with: Obsidian's Excalidraw plugin's,
-/// Excalidraw's. Read on import; a vault holds them as `.drawing`.
+/// Excalidraw's. Read on import, where a vault takes them as `.drawing`;
+/// kept as they are in a Markdown folder (and shown as drawings).
 const OTHER_DRAWING_EXTS: [&str; 2] = [".excalidraw.md", ".excalidraw"];
 
 pub fn is_drawing(path: &str) -> bool {
@@ -88,6 +89,12 @@ pub fn normalize_drawing(input: &str) -> Result<String, PathError> {
     } else {
         normalize(&format!("{p}{DRAWING_EXT}"))
     }
+}
+
+/// Another app's drawing file, by its name: Obsidian's `X.excalidraw.md`
+/// (a note in a vault) or Excalidraw's `X.excalidraw` (a file).
+pub fn is_other_apps_drawing(path: &str) -> bool {
+    !is_drawing(path) && drawing_path_for(path).is_some()
 }
 
 /// The path a drawing file at `path` takes in a vault: a `.drawing` as it
@@ -216,6 +223,11 @@ mod tests {
         assert_eq!(drawing_path_for("B.md"), None);
         assert_eq!(drawing_path_for(".excalidraw"), None);
         assert_eq!(drawing_title("x/Board.drawing"), "Board");
+        assert!(is_other_apps_drawing("a/B.excalidraw"));
+        assert!(is_other_apps_drawing("B.Excalidraw.md"));
+        assert!(!is_other_apps_drawing("a/B.drawing"));
+        assert!(!is_other_apps_drawing("B.md"));
+        assert!(!is_other_apps_drawing(".excalidraw"));
     }
 
     #[test]

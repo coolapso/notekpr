@@ -199,6 +199,29 @@ def sketch_drawing():
                        "appState": {"gridModeEnabled": True, "gridSize": 20, "gridStep": 5}})
 
 
+def obsidian_drawing():
+    """A drawing as Obsidian's Excalidraw plugin saves it (`.excalidraw.md`),
+    as if synced from an Obsidian vault: notekpr shows it, view-only."""
+    def el(i, kind, x, y, w, h, **more):
+        e = {"id": f"ob{i}", "type": kind, "x": x, "y": y, "width": w, "height": h, "seed": 500 + i,
+             "index": f"a{i}", "strokeColor": "#2f9e44", "backgroundColor": "#b2f2bb",
+             "fillStyle": "hachure", "roughness": 1, "strokeWidth": 2}
+        e.update(more)
+        return e
+    elements = [
+        el(1, "rectangle", 0, 40, 120, 90),
+        el(2, "rectangle", 150, 40, 120, 90),
+        el(3, "text", 40, 0, 190, 25, text="Compost bins", originalText="Compost bins", fontSize=20,
+           fontFamily=5, textAlign="left", verticalAlign="top", lineHeight=1.25,
+           strokeColor="#1e1e1e", backgroundColor="transparent"),
+    ]
+    scene = json.dumps({"type": "excalidraw", "version": 2, "elements": elements, "files": {}})
+    return ("---\nexcalidraw-plugin: parsed\ntags: [excalidraw]\n---\n"
+            "==⚠  Switch to EXCALIDRAW VIEW in the MORE OPTIONS menu of this document. ⚠==\n\n"
+            "# Excalidraw Data\n## Text Elements\nCompost bins ^ob3\n\n%%\n## Drawing\n```json\n"
+            + scene + "\n```\n%%\n")
+
+
 def holiday_drawing():
     """A family plan drawn together: steps joined by elbow arrows, notes."""
     elements = []
@@ -373,6 +396,7 @@ HOME = [
         - [ ] Export a frame alone: in *Garden beds*, click the name of the frame *This year's layout*, then ⤓ → *PNG image of the frame* (or *SVG*, or a copy) — the picture is just the frame, the elbow arrow cut off at its edge
         - [ ] Also in *Garden beds*: `N` makes a sticky note, `F` a frame (drag it around beds to hold them), `9` puts in a picture (or paste one), `K` is the laser pointer — open *Holiday steps* in Family as alice and as bob (another window): you see each other's pointer, selection and laser. The compost heap links to [[Beds]] (the button by it; `Ctrl+K` sets a link); the 🕘 at the top shows the drawing's versions
         - [ ] Your saved shapes: open a drawing and click the button with the overlapping shapes at the top — a raised bed, a shrub and a path stone are there, named; click one or drag it onto the drawing. Shift-click (or Ctrl-click) picks several: a click or a drag on one of them puts them all in side by side, and the panel's head exports or removes just those (`Esc` lets them go); the pencil on a shape renames it. Select something and click **+** to save it — named after its text, if it has some; it's on your other devices too (`notekpr shapes ls`, `shapes rename`), kept in your Personal storage with your quick notes, and with `notekpr sync --dir` it's `Saved shapes.excalidrawlib` in the folder (edit it, and the change comes in shape by shape)
+        - [ ] A drawing from Obsidian: [[From Obsidian]] shows *Compost bins*, an Obsidian Excalidraw file synced as it is. It opens as a drawing, view-only, so Obsidian keeps working with it, and *Drawings* lists it (it doesn't count as one of Home's); **Make it a drawing** at its top makes it notekpr's, to edit (asked first: the file goes to the trash)
         - [ ] Each vault holds so many drawings (the billing script's limits): Home may hold 20 (*Drawings* says "2 of 20 drawings"), Family only 1 — open Family's *Drawings*: "Drawings are full (1 of 1)", and a new drawing there is refused
         - [ ] Open [[Garden plan]] and its history (the clock button at the top) to compare versions
         - [ ] Sign in as **bob** in another tab and edit *Shopping list* in the *Family* vault together
@@ -1512,6 +1536,17 @@ def seed(cli, url, data, server_bin):
         Click the drawing's line to see its link; open *Garden beds* to change it.
         """))
     cli.write(a, "Home", "Sketches/Shed ideas.drawing", sketch_drawing())
+    # From Obsidian, as it is: shown as a drawing, view-only, until made one.
+    cli.write(a, "Home", "Sketches/Compost bins.excalidraw.md", obsidian_drawing())
+    cli.write(a, "Home", "Sketches/From Obsidian.md", note("""
+        # From Obsidian
+
+        Drawn with Obsidian's Excalidraw plugin and synced as it is from a Markdown folder, so Obsidian keeps working with it:
+
+        ![[Compost bins.excalidraw]]
+
+        notekpr shows it as a drawing, view-only. To edit it here, open *Compost bins* and choose **Make it a drawing**.
+        """))
     # Her saved shapes, to drop into drawings (synced in her Personal storage).
     # The file goes next to the demo's data, not in /tmp: the demo image's
     # only writable place is its data directory.

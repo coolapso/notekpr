@@ -241,6 +241,8 @@ pub fn Tree(vault: String) -> impl IntoView {
                     };
                     let icon = match row.kind {
                         EntryKind::Folder => "folder",
+                        // Other apps' drawing files show as drawings.
+                        EntryKind::Note | EntryKind::Attachment if paths::is_other_apps_drawing(&row.name) => "drawing",
                         EntryKind::Note => "file",
                         EntryKind::Drawing => "drawing",
                         EntryKind::Attachment => match paths::media(&row.name) {

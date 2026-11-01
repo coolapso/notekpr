@@ -32,6 +32,11 @@ use crate::util;
 pub struct Board {
     pub vault: String,
     pub id: String,
+    /// Another app's drawing file, shown as it is ([`Board::view_only`]):
+    /// never written, whatever the vault allows.
+    view_only: bool,
+    /// Its drawing, as read from the file ([`Board::show`]).
+    fixed: RefCell<Option<Rc<Scene>>>,
     pub view: Cell<Viewport>,
     pixel_ratio: Cell<f64>,
     /// The drawing as last read (see [`Board::reload`]).
@@ -77,9 +82,22 @@ pub type Rt = Rc<Board>;
 
 impl Board {
     pub fn new(vault: &str, id: &str) -> Rt {
+        Board::make(vault, id, false)
+    }
+
+    /// Another app's drawing file (Obsidian's `.excalidraw.md`, Excalidraw's
+    /// `.excalidraw`), shown view-only: nothing is ever written to it, so it
+    /// stays the other app's. [`Board::show`] gives it what the file holds.
+    pub fn view_only(vault: &str, id: &str) -> Rt {
+        Board::make(vault, id, true)
+    }
+
+    fn make(vault: &str, id: &str, view_only: bool) -> Rt {
         Rc::new(Board {
             vault: vault.to_string(),
             id: id.to_string(),
+            view_only,
+            fixed: RefCell::new(None),
             view: Cell::new(Viewport::default()),
             pixel_ratio: Cell::new(1.0),
             scene: RefCell::new(Rc::new(Scene::default())),
@@ -167,6 +185,12 @@ impl Board {
         self.scene.borrow().clone()
     }
 
+    /// A view-only board's drawing (the file read again): shown.
+    pub fn show(self: &Rc<Self>, scene: Scene) {
+        *self.fixed.borrow_mut() = Some(Rc::new(scene));
+        self.reload();
+    }
+
     /// Reads the drawing again (it changed) and draws it.
     pub fn reload(self: &Rc<Self>) {
         self.reread();
@@ -183,7 +207,12 @@ impl Board {
         }
         // Loaded and empty: nothing to fit, and the view stays as it is
         // once drawing starts.
-        if drawings::scene(&self.vault, &self.id).is_none() {
+        let loaded = if self.view_only {
+            self.fixed.borrow().is_some()
+        } else {
+            drawings::scene(&self.vault, &self.id).is_some()
+        };
+        if !loaded {
             return;
         }
         self.fitted.set(true);

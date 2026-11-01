@@ -152,3 +152,6 @@ reload on change pick up remote edits cleanly.
   web app, or with `notekpr comments …`
   ([cli.md §3](cli.md#3-everyday-commands)).
 * **Phones and tablets:** there is no mobile client yet; use the web app.
+* **AI agents** (Claude Code, Codex, …) work in the folder like any editor.
+  [agents.md §9](agents.md#9-telling-an-agent-how-your-notes-work) has an
+  `AGENTS.md` and a skill you can give them, so they know its rules.

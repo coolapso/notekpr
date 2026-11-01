@@ -107,7 +107,8 @@ notekpr -p assistant sync --dir ~/agent-notes --plaintext-ok
 ```
 
 Edits on disk are picked up, merged and synced; changes from people appear in
-the files (see [cli.md §4](cli.md#4-sync-and-the-markdown-mirror)).
+the files (see [cli.md §4](cli.md#4-sync-and-the-markdown-mirror)). §9 has an
+`AGENTS.md` and a skill that tell an agent the folder's rules.
 
 **The gateway (local HTTP API)** — for programs and services that prefer HTTP
 and JSON, or need change events. Described next.
@@ -351,3 +352,43 @@ that speaks MCP over HTTP (Streamable HTTP transport) to remote AI clients:
   specification describes), read-only by default, rate limits, audit, and
   which tools to offer (the gateway's operations in `crates/cli/src/ops.rs`
   are a ready starting point).
+
+## 9. Telling an agent how your notes work
+
+An agent working in a Markdown folder needs nothing installed and no tools
+listed. It should still know the folder's few rules (what deleting a file
+does, which folders are vaults) and that the `notekpr` command does what
+files can't: comments, history, the trash, sharing. notekpr never writes
+such instructions into your notes. Here are two you can use as they are or
+change; where they go is up to you.
+
+* **`AGENTS.md`**, for the Markdown folder. Put it at the folder's top,
+  beside the vault folders, where it isn't synced. Most coding agents read
+  it when they work in that folder; Claude Code reads `CLAUDE.md` instead,
+  so add one containing the line `@AGENTS.md`. Inside a vault's folder it
+  would be a note like any other: synced, and seen by everyone the vault is
+  shared with.
+* **A skill**, for agents that load skills: the file `SKILL.md` in a folder
+  of its own (for Claude Code, `~/.claude/skills/notekpr/SKILL.md`). Only its
+  description stays in the agent's context; the rest is read when your notes
+  come up. It finds the folder by itself, so it works from anywhere.
+
+Both are written for an agent working as you, on your notes. An agent with
+its own identity (§2) works the same way in its own folder; add
+`--profile <its profile>` to the commands.
+
+Get them from this repository (`docs/agents.example.md`,
+`docs/skill.example.md`), or with curl:
+
+```sh
+base=https://raw.githubusercontent.com/coolapso/notekpr/main/docs
+# For the Markdown folder (yours may be elsewhere: `notekpr status` names it)
+curl -fsSL "$base/agents.example.md" -o ~/Notes/AGENTS.md
+echo '@AGENTS.md' > ~/Notes/CLAUDE.md            # for Claude Code
+# The skill, for Claude Code
+mkdir -p ~/.claude/skills/notekpr
+curl -fsSL "$base/skill.example.md" -o ~/.claude/skills/notekpr/SKILL.md
+```
+
+`main` is the newest; to match the notekpr you have, use its release
+instead (`notekpr --version`, then `…/notekpr/v0.10.0/docs`, say).

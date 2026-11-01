@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Browser user ↔ desktop CLI user with a live Markdown mirror.
+"""Browser user ↔ CLI user with a live Markdown mirror.
 
     python3 tests/e2e/cross_client.py --server target/debug/notekpr-server \
         --cli target/debug/notekpr --web dist/web

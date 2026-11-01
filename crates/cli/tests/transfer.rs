@@ -5,8 +5,8 @@ mod common;
 use std::collections::BTreeMap;
 
 use common::*;
-use notekpr_client::hub::Hub;
-use notekpr_client::{manage, ops, transfer};
+use notekpr_cli::hub::Hub;
+use notekpr_cli::{manage, ops, transfer};
 use notekpr_core::doc::EntryKind;
 
 async fn src_id(hub: &Hub) -> String {
@@ -288,7 +288,7 @@ async fn exports_carry_comments_that_imports_leave_out() {
         "Source",
         "Projects/Plan",
         &sent.id,
-        notekpr_client::vault::CommentAct::Reply("June".into()),
+        notekpr_cli::vault::CommentAct::Reply("June".into()),
     )
     .await
     .unwrap();
@@ -330,11 +330,7 @@ async fn run(srv: &TestServer, who: &str, args: &[&str]) -> anyhow::Result<()> {
     use clap::Parser;
     let mut argv = vec!["notekpr", "-q", "--profile", who];
     argv.extend_from_slice(args);
-    notekpr_client::commands::run_in(
-        notekpr_client::cli::Cli::try_parse_from(argv)?,
-        srv.dirs(who),
-    )
-    .await
+    notekpr_cli::commands::run_in(notekpr_cli::cli::Cli::try_parse_from(argv)?, srv.dirs(who)).await
 }
 
 /// Moving to another server: the vaults (but those left out) and the quick
@@ -504,7 +500,7 @@ async fn vaults_and_quick_notes_move_to_another_server() {
     run(&old, "alice", &["delete-account", "--yes"])
         .await
         .unwrap();
-    let store = notekpr_client::profile::ProfileStore::new(&old.dirs("alice"), "alice").unwrap();
+    let store = notekpr_cli::profile::ProfileStore::new(&old.dirs("alice"), "alice").unwrap();
     assert!(store.load().unwrap().is_none(), "the profile is gone");
     let again = login(&old, "alice").await;
     assert_ne!(again.user_id, old_id, "signing in again is a new account");
@@ -697,15 +693,15 @@ async fn drawings_are_listed_as_drawings() {
         .unwrap();
     let v = h.resolve("Art").await.unwrap();
     let list = v.lock().await.list("", true).unwrap();
-    let kinds: Vec<(String, notekpr_client::vault::ListKind)> =
+    let kinds: Vec<(String, notekpr_cli::vault::ListKind)> =
         list.into_iter().map(|l| (l.path, l.kind)).collect();
     assert_eq!(
         kinds,
         [
-            ("Plans".to_string(), notekpr_client::vault::ListKind::Folder),
+            ("Plans".to_string(), notekpr_cli::vault::ListKind::Folder),
             (
                 "Plans/Sketch.drawing".to_string(),
-                notekpr_client::vault::ListKind::Drawing
+                notekpr_cli::vault::ListKind::Drawing
             )
         ]
     );

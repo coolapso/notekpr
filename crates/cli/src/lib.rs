@@ -1,4 +1,4 @@
-//! notekpr desktop client library: profiles and local key storage, the
+//! The notekpr CLI's library: profiles and local key storage, the
 //! sync engine (REST catch-up + live WebSocket), the plaintext file mirror,
 //! and the local agent gateway (HTTP). The `notekpr`
 //! binary is a thin CLI over these modules; integration tests drive them

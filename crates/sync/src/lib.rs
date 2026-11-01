@@ -1,4 +1,4 @@
-//! The client sync engine shared by the browser (wasm) and desktop clients.
+//! The client sync engine shared by the browser (wasm) client and the CLI.
 //!
 //! Both clients speak the same protocol; this crate holds the decisions they
 //! must make the same way, so a fix lands once for both:

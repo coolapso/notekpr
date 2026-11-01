@@ -5,7 +5,7 @@
 mod common;
 
 use common::*;
-use notekpr_client::{manage, note_shares, ops};
+use notekpr_cli::{manage, note_shares, ops};
 use notekpr_core::doc::EntryKind;
 use notekpr_core::engine::{self, VaultMeta, VaultReplica};
 use notekpr_core::keys::{self, VaultKey};
@@ -321,7 +321,7 @@ async fn content_a_server_slips_in_is_refused() {
     let oid = vv.find_note("Plan").unwrap().1.id;
     let forged = {
         let n = vv.replica.notes.get(&oid).unwrap();
-        let fork = notekpr_client::vault::fork_note(&n.encode_state()).unwrap();
+        let fork = notekpr_cli::vault::fork_note(&n.encode_state()).unwrap();
         fork.set_text("forged\n").unwrap()
     };
     let payload = vv

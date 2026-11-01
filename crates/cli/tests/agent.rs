@@ -6,12 +6,12 @@ mod common;
 use std::sync::Arc;
 
 use common::*;
-use notekpr_client::account::{self, AgentSetupOptions};
-use notekpr_client::audit::AuditLog;
-use notekpr_client::gateway::{self, Gateway};
-use notekpr_client::hub::{Hub, HubOptions};
-use notekpr_client::session::Session;
-use notekpr_client::{manage, ops};
+use notekpr_cli::account::{self, AgentSetupOptions};
+use notekpr_cli::audit::AuditLog;
+use notekpr_cli::gateway::{self, Gateway};
+use notekpr_cli::hub::{Hub, HubOptions};
+use notekpr_cli::session::Session;
+use notekpr_cli::{manage, ops};
 use notekpr_core::engine::PinStatus;
 use notekpr_core::protocol::Role;
 use serde_json::Value;
@@ -62,7 +62,7 @@ async fn agent_gateway_is_scoped_audited_and_syncs() {
     // The owner creates the agent; its secret goes into a 0600 file.
     let created = manage::create_agent(&alice, "Assistant").await.unwrap();
     let secret_file = srv.path("assistant.secret");
-    notekpr_client::fsutil::create_private_file(
+    notekpr_cli::fsutil::create_private_file(
         &secret_file,
         created.credential.client_secret.as_bytes(),
     )
@@ -364,7 +364,7 @@ async fn agent_gateway_is_scoped_audited_and_syncs() {
         "Agent memory",
         "Index.md",
         &id[..8],
-        notekpr_client::vault::CommentAct::Reply("Done, @Assistant".into()),
+        notekpr_cli::vault::CommentAct::Reply("Done, @Assistant".into()),
     )
     .await
     .unwrap();

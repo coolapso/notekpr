@@ -57,7 +57,7 @@ ARG VERSION=dev
 RUN --mount=type=cache,id=notekpr-registry-$TARGETARCH,target=/usr/local/cargo/registry \
     --mount=type=cache,id=notekpr-target-$TARGETARCH,target=/src/target \
     target=$(cat /rust-target) \
- && NOTEKPR_VERSION="$VERSION" cargo build --release --locked --target "$target" -p notekpr-server -p notekpr-client \
+ && NOTEKPR_VERSION="$VERSION" cargo build --release --locked --target "$target" -p notekpr-server -p notekpr-cli \
  && mkdir -p /out/bin /out/data \
  && cp "target/$target/release/notekpr-server" "target/$target/release/notekpr" /out/bin/
 

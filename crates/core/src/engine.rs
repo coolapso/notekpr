@@ -1,5 +1,5 @@
-//! Platform-independent client logic shared by the browser app, the desktop
-//! client and the agent gateway. No I/O happens here: callers move the
+//! Platform-independent client logic shared by the browser app, the CLI and
+//! the agent gateway. No I/O happens here: callers move the
 //! request/response types over HTTP or WebSocket and feed results back in.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};

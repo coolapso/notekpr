@@ -1,6 +1,6 @@
 //! OAuth 2.0 endpoints for non-browser clients.
 //!
-//! * RFC 8628 device authorization grant: the desktop/CLI client shows a code,
+//! * RFC 8628 device authorization grant: the CLI shows a code,
 //!   the user approves it in the web app (where they signed in with OIDC).
 //! * RFC 6749 §4.4 client credentials grant: agent identities authenticate with
 //!   a revocable, per-agent client secret and receive short-lived tokens.

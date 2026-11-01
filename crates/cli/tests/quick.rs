@@ -6,11 +6,11 @@ mod common;
 
 use clap::Parser;
 use common::*;
-use notekpr_client::cli::Cli;
-use notekpr_client::commands;
-use notekpr_client::hub::Hub;
-use notekpr_client::ops;
-use notekpr_client::vault::Vault;
+use notekpr_cli::cli::Cli;
+use notekpr_cli::commands;
+use notekpr_cli::hub::Hub;
+use notekpr_cli::ops;
+use notekpr_cli::vault::Vault;
 use notekpr_core::engine::{self, VaultMeta, VaultReplica};
 use notekpr_core::protocol::{
     DEFAULT_QUICK_NOTES_PER_USER, InstanceSettingsUpdate, Limit, VaultInfo, VaultKind,

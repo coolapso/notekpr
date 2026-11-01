@@ -6,10 +6,10 @@ mod common;
 
 use clap::Parser;
 use common::*;
-use notekpr_client::account::{self, LoginOptions};
-use notekpr_client::cli::Cli;
-use notekpr_client::commands;
-use notekpr_client::ops;
+use notekpr_cli::account::{self, LoginOptions};
+use notekpr_cli::cli::Cli;
+use notekpr_cli::commands;
+use notekpr_cli::ops;
 use notekpr_core::protocol::{InstanceSettingsUpdate, Limit};
 use serde_json::json;
 
@@ -105,7 +105,7 @@ async fn a_library_is_imported_listed_and_exported() {
     // As the command lists them, on her other device too.
     for device in ["alice-a", "alice-b"] {
         let (r, out) =
-            notekpr_client::ui::capture(None, true, run(&srv, device, &["shapes", "ls", "--json"]))
+            notekpr_cli::ui::capture(None, true, run(&srv, device, &["shapes", "ls", "--json"]))
                 .await;
         r.unwrap();
         let listed: Vec<serde_json::Value> = serde_json::from_str(&out.stdout).unwrap();

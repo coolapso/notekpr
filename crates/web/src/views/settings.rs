@@ -1,5 +1,5 @@
 //! Settings: account, devices, sessions, recovery, agents, editor, admin.
-//! Also the page used to approve a desktop/CLI sign-in code.
+//! Also the page used to approve a CLI sign-in code.
 
 use leptos::prelude::Update;
 use leptos::prelude::*;
@@ -249,7 +249,7 @@ fn Devices() -> impl IntoView {
             }).collect_view()}
         </div>
         <OfflineSetting/>
-        <h3>"Add the desktop app"</h3>
+        <h3>"Add the command-line client"</h3>
         <p class="muted small">"Install the notekpr command-line client and run " <code>{format!("notekpr login --server {}", util::window().location().origin().unwrap_or_default())}</code>
             ". It will show a code to confirm here, then ask this device to approve it."</p>
     }
@@ -1265,7 +1265,7 @@ fn NumberInput(value: Signal<u64>, set: Callback<u64>) -> impl IntoView {
     }
 }
 
-/// Approve (or deny) a sign-in code shown by the desktop / CLI client.
+/// Approve (or deny) a sign-in code shown by the CLI.
 #[component]
 pub fn DeviceCodePage(code: Option<String>) -> impl IntoView {
     let code_in = RwSignal::new(code.unwrap_or_default());

@@ -8,11 +8,11 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow};
-use notekpr_client::account::{self, LoginOptions};
-use notekpr_client::hub::{Hub, HubEvent, HubOptions};
-use notekpr_client::profile::Dirs;
-use notekpr_client::session::Session;
-use notekpr_client::{livesync, manage, note_shares, ops};
+use notekpr_cli::account::{self, LoginOptions};
+use notekpr_cli::hub::{Hub, HubEvent, HubOptions};
+use notekpr_cli::profile::Dirs;
+use notekpr_cli::session::Session;
+use notekpr_cli::{livesync, manage, note_shares, ops};
 use notekpr_core::protocol::Role;
 use notekpr_load_events::Action;
 use tokio::sync::{broadcast, watch};

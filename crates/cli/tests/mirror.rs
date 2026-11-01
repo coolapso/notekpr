@@ -7,8 +7,8 @@ use std::path::Path;
 use std::time::Duration;
 
 use common::*;
-use notekpr_client::mirror::Mirror;
-use notekpr_client::{manage, note_shares, ops};
+use notekpr_cli::mirror::Mirror;
+use notekpr_cli::{manage, note_shares, ops};
 use notekpr_core::protocol::Role;
 use tokio::sync::watch;
 
@@ -275,9 +275,9 @@ async fn shared_mirror(
     srv: &TestServer,
     name: &str,
 ) -> (
-    std::sync::Arc<notekpr_client::hub::Hub>,
+    std::sync::Arc<notekpr_cli::hub::Hub>,
     String,
-    std::sync::Arc<notekpr_client::hub::Hub>,
+    std::sync::Arc<notekpr_cli::hub::Hub>,
     Mirror,
     std::path::PathBuf,
 ) {
@@ -432,20 +432,20 @@ async fn a_file_replaced_by_a_symlink_is_not_trashed() {
 }
 
 /// The quick notes' names, sorted.
-async fn names(h: &notekpr_client::hub::Hub) -> Vec<String> {
+async fn names(h: &notekpr_cli::hub::Hub) -> Vec<String> {
     let q = ops::list_quick_notes(h, 100).await.unwrap();
     let mut n: Vec<String> = q.notes.into_iter().map(|n| n.title).collect();
     n.sort();
     n
 }
 
-async fn note_count(h: &notekpr_client::hub::Hub, vid: &str) -> usize {
+async fn note_count(h: &notekpr_cli::hub::Hub, vid: &str) -> usize {
     h.get(vid).unwrap().lock().await.notes().len()
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_vanished_folder_or_mass_deletion_is_held_not_trashed() {
-    use notekpr_client::mirror::MirrorOptions;
+    use notekpr_cli::mirror::MirrorOptions;
     let srv = start().await;
     let alice = login(&srv, "alice").await;
     manage::create_vault(&alice, "Many").await.unwrap();
@@ -653,7 +653,7 @@ async fn leftover_files_are_not_imported_into_a_new_vault_with_the_same_name() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn case_insensitive_file_systems_keep_case_variants_apart() {
-    use notekpr_client::mirror::MirrorOptions;
+    use notekpr_cli::mirror::MirrorOptions;
     let srv = start().await;
     let alice = login(&srv, "alice").await;
     manage::create_vault(&alice, "Notes").await.unwrap();
@@ -731,7 +731,7 @@ async fn case_insensitive_file_systems_keep_case_variants_apart() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn server_limits_are_remembered_and_enforced_offline() {
-    use notekpr_client::profile::{ProfileStore, ServerLimits};
+    use notekpr_cli::profile::{ProfileStore, ServerLimits};
     let srv = start().await;
     let alice = login(&srv, "alice").await;
     manage::create_vault(&alice, "Files").await.unwrap();
@@ -788,7 +788,7 @@ async fn server_limits_are_remembered_and_enforced_offline() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_file_named_with_separate_accent_marks_is_the_same_note() {
-    use notekpr_client::mirror::MirrorOptions;
+    use notekpr_cli::mirror::MirrorOptions;
     let srv = start().await;
     let alice = login(&srv, "alice").await;
     manage::create_vault(&alice, "Notes").await.unwrap();
@@ -1244,7 +1244,7 @@ fn shapes_file(shapes: &[(&str, Option<&str>)]) -> String {
 }
 
 /// The saved shapes (id, name), newest first, of the library or of a file.
-async fn saved_shapes(h: &notekpr_client::hub::Hub) -> Vec<(String, Option<String>)> {
+async fn saved_shapes(h: &notekpr_cli::hub::Hub) -> Vec<(String, Option<String>)> {
     ops::library(h)
         .await
         .into_iter()

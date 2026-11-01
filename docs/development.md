@@ -8,7 +8,7 @@ crates/sync     client sync engine both clients use (outbox, refusals, snapshots
 crates/server   sync server (axum + SQLite)            → notekpr-server
 crates/editor   live-preview Markdown editor (model + DOM view), used by crates/web
 crates/web      browser client (Leptos → wasm32)       → dist/web
-crates/client   desktop/CLI client, mirror, gateway    → notekpr
+crates/cli      the CLI, Markdown mirror, gateway      → notekpr
 crates/load     load test runner (task load)           → notekpr-load
 crates/load-events  what the load runner streams to its live view
 crates/load-ui  the load test's live view (wasm32)     → dist/load
@@ -19,7 +19,7 @@ fuzz/           fuzz targets, a separate workspace (fuzz/run.sh, task fuzz)
 vendor/yrs      yrs 0.28 with fixes, via [patch.crates-io] (see its NOTEKPR.md)
 vendor/openidconnect  openidconnect 4.0.1 on newer curve crates (see its NOTEKPR.md)
 deploy/         Kubernetes, Dex (dev OIDC), examples/ (optional reverse proxies)
-docs/           architecture, protocol, security, operations, agents, desktop client;
+docs/           architecture, protocol, security, operations, agents, CLI;
                 assets/ (the logo and icon)
 ```
 
@@ -182,8 +182,8 @@ curl -H "Authorization: Bearer notekpr_a_dev-admin-token-for-this-machine-only" 
 The CLI supports multiple users via profiles:
 
 ```sh
-cargo run -p notekpr-client -- --profile alice login --server http://localhost:8080 --dev-user alice
-cargo run -p notekpr-client -- --profile bob   login --server http://localhost:8080 --dev-user bob
+cargo run -p notekpr-cli -- --profile alice login --server http://localhost:8080 --dev-user alice
+cargo run -p notekpr-cli -- --profile bob   login --server http://localhost:8080 --dev-user bob
 ```
 
 With Docker: `task docker:dev` (`docker compose -f docker-compose.dev.yml up
@@ -200,7 +200,7 @@ cargo test -p notekpr-server    # end-to-end API tests with real client-side cry
 cargo test -p notekpr-editor    # editor model: change sets, incremental blocks, commands, syntax
 cargo test -p notekpr-sync      # the shared sync engine: outbox, refusals, no-loss property test
 cargo test -p notekpr-web       # safe rendering, zip
-cargo test -p notekpr-client    # sync engine, mirror, gateway against an in-process server
+cargo test -p notekpr-cli       # sync engine, mirror, gateway against an in-process server
 cargo test -p notekpr-load -p notekpr-load-events   # the load test: world, outages, metrics, verdict
 tests/e2e/run.sh                     # headless browsers: every UI flow (TESTS in suite.py:
                                      # onboarding, collaboration, devices and recovery, offline,

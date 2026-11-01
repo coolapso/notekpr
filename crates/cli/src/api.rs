@@ -178,7 +178,7 @@ impl Api {
             reqwest::header::HeaderValue::from_str(&app()).map_err(|e| init(&e))?,
         );
         let http = reqwest::Client::builder()
-            .user_agent(format!("notekpr-client/{}", notekpr_core::VERSION))
+            .user_agent(format!("notekpr-cli/{}", notekpr_core::VERSION))
             .default_headers(headers)
             .connect_timeout(Duration::from_secs(10))
             .timeout(Duration::from_secs(120))

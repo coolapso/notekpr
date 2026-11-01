@@ -11,7 +11,7 @@ name = "notekpr-load"
 path = "src/main.rs"
 
 [dependencies]
-notekpr-client = { path = "../client" }
+notekpr-cli = { path = "../cli" }
 notekpr-core = { path = "../core" }
 notekpr-load-events = { path = "../load-events" }
 tokio = { version = "1", features = ["full"] }

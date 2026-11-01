@@ -12,7 +12,7 @@ alternatives were considered. The wire protocol is in
                  ┌────────────────────────── trusted clients ───────────────────────────┐
                  │                                                                      │
  Browser ──────▶ │  Web client (Rust → WebAssembly, Leptos)                             │
-                 │  Desktop client `notekpr` (Rust): sync daemon, Markdown mirror       │
+                 │  CLI `notekpr` (Rust): sync daemon, Markdown mirror                  │
  AI agents ────▶ │  same client: CLI commands, a Markdown folder, local HTTP gateway    │
                  │                                                                      │
                  │      all of them link notekpr-core: crypto · keys · CRDT ·            │
@@ -34,7 +34,7 @@ alternatives were considered. The wire protocol is in
 | `crates/server` | Headless sync server: OIDC relying party, sessions, OAuth device and client-credentials grants, users/devices/agents, vaults/members/key envelopes, the ordered encrypted log, snapshots, attachments, WebSocket fan-out, rate limiting, metrics, backup/restore. Works without the web client. |
 | `crates/editor` | The live-preview Markdown editor: a pure-Rust document model (text with a line index, change sets, transactions, incrementally updated decorations, commands) tested natively, and a `contenteditable` DOM view tested in a headless browser. |
 | `crates/web` | Browser client compiled to WebAssembly; served as static files by the server. Hosts the editor, all decryption in the browser. |
-| `crates/client` | Desktop/CLI client: login (device flow), enrollment, encrypted local replica, live sync daemon with plaintext Markdown mirror, export/import, agent gateway (local HTTP API). |
+| `crates/cli` | The CLI: login (device flow), enrollment, encrypted local replica, live sync daemon with plaintext Markdown mirror, export/import, agent gateway (local HTTP API). |
 | `crates/load` | The load test (`task load`): simulated people — real clients built on the CLI's library, with real keys — against the server image with CPU and memory limits; kills the server midway through each level, starts it again, and checks that nothing was lost ([load-test.md](load-test.md)). |
 | `crates/load-events` | The event types the load test streams to its live dashboard. |
 | `crates/load-ui` | The load test's live dashboard: Rust compiled to wasm32, drawing on a canvas (`scripts/build-load-ui.sh`). |
@@ -190,7 +190,7 @@ engine turns each refusal into the follow-up (hold, drop and keep a copy,
 reload keys and re-send).
 
 **Offline.** Unacknowledged updates are kept (browser: local storage, already
-encrypted; desktop: encrypted local store) and re-sent with the same ids after
+encrypted; CLI: encrypted local store) and re-sent with the same ids after
 reconnecting. CRDT merging makes the order irrelevant and guarantees
 convergence; concurrent edits to the same note interleave instead of
 overwriting.
@@ -249,7 +249,7 @@ period the server deletes the data and an admin's client drops the entry.
   the reverse. Wiki links (`[[Note]]`, `[[Folder/Note#Heading|alias]]`),
   embeds (`![[image.png]]`), `#tags` and YAML frontmatter tags follow
   Obsidian conventions, so an Obsidian vault can be imported and exported.
-* The desktop client can mirror a vault as ordinary files (explicit plaintext
+* The CLI can mirror a vault as ordinary files (explicit plaintext
   mode). Its reconciliation:
   - remote change, file untouched → write the new text atomically;
   - file changed on disk → find the base version the external editor most
@@ -343,7 +343,7 @@ period the server deletes the data and an admin's client drops the entry.
 
 * **Mobile apps**: the core crate already compiles for every Rust target; a
   mobile client would wrap the same engine (e.g. via UniFFI) with an internal
-  encrypted store, exactly like the desktop client minus the plaintext mirror.
+  encrypted store, exactly like the CLI minus the plaintext mirror.
   The web client is responsive and usable on phones today.
 * **Sharing single notes** (implemented): each note is its own CRDT and
   ciphertext with per-object AAD under its own *document key* (epochs with the
@@ -377,10 +377,10 @@ period the server deletes the data and an admin's client drops the entry.
 | M1 Core | crypto formats, key hierarchy, CRDT model, protocol | done (`cargo test -p notekpr-core`) |
 | M2 Server | auth (OIDC, dev, device flow, client credentials), vaults, sharing, log, snapshots, attachments, WebSocket, ops | done (`cargo test -p notekpr-server`) |
 | M3 Web client | onboarding, devices, recovery, editor, collaboration, sharing, history, search, import/export, settings, admin | done (browser e2e tests in `tests/e2e`) |
-| M4 Desktop client | login, enrollment, offline replica, live sync, Markdown mirror, export/import | done (`cargo test -p notekpr-client`) |
-| M5 Agents | agent identities, CLI and Markdown-folder access, gateway | done (`crates/client`); local MCP server removed, remote MCP connector considered for later |
+| M4 CLI | login, enrollment, offline replica, live sync, Markdown mirror, export/import | done (`cargo test -p notekpr-cli`) |
+| M5 Agents | agent identities, CLI and Markdown-folder access, gateway | done (`crates/cli`); local MCP server removed, remote MCP connector considered for later |
 | M6 Packaging | Docker image, compose, Kubernetes, backup/restore docs | done |
-| M7 Note sharing | share single notes outside a vault: document keys, per-note subscriptions, web + CLI | done (S `individual_note_sharing`, D `single_note_sharing_end_to_end`, E `test_note_sharing`) |
+| M7 Note sharing | share single notes outside a vault: document keys, per-note subscriptions, web + CLI | done (S `individual_note_sharing`, L `single_note_sharing_end_to_end`, E `test_note_sharing`) |
 | Next | native desktop GUI shell (Tauri around the web UI), mobile apps | planned |
 
 Acceptance criteria and how each is verified: [acceptance.md](acceptance.md).

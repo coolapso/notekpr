@@ -2,7 +2,7 @@
 //! into a note, and how colors other editors wrote are read.
 //!
 //! A color is HTML in the note, so that it syncs like any text, stays in the
-//! Markdown files of the desktop client and shows in other Markdown editors
+//! Markdown files of the CLI's mirror and shows in other Markdown editors
 //! (Obsidian, Typora, VS Code, Joplin, …). The toolbar writes
 //!
 //! * `<span style="color: #e44045">…</span>` for text, and

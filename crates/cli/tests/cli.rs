@@ -5,10 +5,10 @@ mod common;
 
 use clap::Parser;
 use common::*;
-use notekpr_client::cli::Cli;
-use notekpr_client::commands;
-use notekpr_client::profile::ProfileStore;
-use notekpr_client::ui;
+use notekpr_cli::cli::Cli;
+use notekpr_cli::commands;
+use notekpr_cli::profile::ProfileStore;
+use notekpr_cli::ui;
 
 /// Run a command line for the test client `who` (its own config/data dirs).
 async fn run(srv: &TestServer, who: &str, args: &[&str]) -> anyhow::Result<()> {
@@ -125,7 +125,7 @@ fn files(dir: &std::path::Path) -> std::collections::BTreeMap<std::path::PathBuf
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn commands_do_not_overwrite_a_running_daemons_local_copies() {
-    use notekpr_client::profile::ProfileLock;
+    use notekpr_cli::profile::ProfileLock;
     let srv = start().await;
     login(&srv, "alice").await;
     run(&srv, "alice", &["vault", "create", "Home"])
@@ -174,7 +174,7 @@ async fn commands_do_not_overwrite_a_running_daemons_local_copies() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn leaving_uploads_first_and_can_remove_the_mirror() {
-    use notekpr_client::manage;
+    use notekpr_cli::manage;
     use notekpr_core::protocol::Role;
     let srv = start().await;
     let alice = login(&srv, "alice").await;
@@ -244,9 +244,9 @@ async fn leaving_uploads_first_and_can_remove_the_mirror() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_read_only_gateway_runs_no_changing_commands() {
-    use notekpr_client::control;
-    use notekpr_client::hub::{Hub, HubOptions};
-    use notekpr_client::profile::ProfileLock;
+    use notekpr_cli::control;
+    use notekpr_cli::hub::{Hub, HubOptions};
+    use notekpr_cli::profile::ProfileLock;
     let srv = start().await;
     login(&srv, "alice").await;
     run(&srv, "alice", &["vault", "create", "Home"])
@@ -290,9 +290,9 @@ async fn a_read_only_gateway_runs_no_changing_commands() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_gateway_logs_the_commands_handed_to_it() {
-    use notekpr_client::audit::AuditLog;
-    use notekpr_client::control;
-    use notekpr_client::profile::ProfileLock;
+    use notekpr_cli::audit::AuditLog;
+    use notekpr_cli::control;
+    use notekpr_cli::profile::ProfileLock;
     let srv = start().await;
     login(&srv, "alice").await;
     run(&srv, "alice", &["vault", "create", "Home"])
@@ -361,8 +361,8 @@ async fn a_gateway_logs_the_commands_handed_to_it() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn changing_commands_are_handed_to_the_running_daemon() {
-    use notekpr_client::control;
-    use notekpr_client::profile::ProfileLock;
+    use notekpr_cli::control;
+    use notekpr_cli::profile::ProfileLock;
     let srv = start().await;
     login(&srv, "alice").await;
     run(&srv, "alice", &["vault", "create", "Home"])

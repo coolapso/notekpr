@@ -10,7 +10,7 @@
 //! **not** against a copy of the whole directory (a backup, a synced folder);
 //! moving the key to the OS keyring is planned. Nor does it protect
 //! against malware or anyone running as the same OS user. Full-disk encryption is the right
-//! defence for a lost laptop; see `docs/desktop-client.md`.
+//! defence for a lost laptop; see `docs/cli.md`.
 
 use std::path::{Path, PathBuf};
 

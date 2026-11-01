@@ -12,7 +12,8 @@ Read this first; it is short on purpose and links to the detailed docs.
 notekpr is a self-hosted, local-first, **end-to-end encrypted**
 Markdown notes platform with real-time collaboration, written entirely in
 Rust: a zero-knowledge sync server, a browser client compiled to WebAssembly,
-and a desktop/CLI client (sync daemon, Markdown mirror, agent gateway).
+and a command-line client, the CLI (sync daemon, Markdown mirror, agent
+gateway). A desktop app is planned; it is a separate client, not the CLI.
 The original requirements are in [spec.md](spec.md).
 
 | Doc | Read it when you… |
@@ -22,7 +23,7 @@ The original requirements are in [spec.md](spec.md).
 | [docs/security.md](docs/security.md) | touch keys, crypto, authorization, logging or anything a server could learn |
 | [docs/development.md](docs/development.md) | set up a machine, run things locally, run tests |
 | [docs/acceptance.md](docs/acceptance.md) | want to know which test proves which requirement |
-| [docs/desktop-client.md](docs/desktop-client.md), [docs/operations.md](docs/operations.md) | change the CLI or deployment/ops behaviour |
+| [docs/cli.md](docs/cli.md), [docs/operations.md](docs/operations.md) | change the CLI or deployment/ops behaviour |
 | [docs/load-test.md](docs/load-test.md) | run or change the load test and its live view |
 
 Known work, review findings and decisions are tracked in a TODO kept outside
@@ -105,7 +106,7 @@ crates/web      Leptos CSR → wasm32. state/ (Core + Ui in mod.rs; session, vau
                 (IndexedDB copy) · static/sw.js (service worker, only with offline
                 use on) · actions.rs (user operations; NoteHost = the editor's Host) ·
                 editor.rs (re-exports crates/editor) · views/ · render.rs (reading view)
-crates/client   `notekpr` CLI: session.rs + livesync.rs (sync), mirror.rs
+crates/cli      `notekpr` CLI: session.rs + livesync.rs (sync), mirror.rs
                 (Markdown files), gateway.rs, ops.rs, note_shares.rs
 crates/load     load test (`task load`): simulated people = real clients (the CLI's
                 library) against the server image with CPU/memory limits; crash,
@@ -171,7 +172,7 @@ Without go-task, see the plain commands in the [Taskfile](Taskfile.yml) or
     client-side crypto against an in-process server)
   - outbox, refusals, snapshots, membership-log rules → unit and property
     tests in `crates/sync` (`src/tests.rs`, `tests/properties.rs`)
-  - CLI, mirror, gateway → `crates/client/tests/`
+  - CLI, mirror, gateway → `crates/cli/tests/`
   - editor model, syntax, commands → unit and property tests in
     `crates/editor` (native); the editor's DOM behaviour (typing, IME,
     selection, native edits) → `crates/editor/tests/browser.rs`
@@ -180,7 +181,7 @@ Without go-task, see the plain commands in the [Taskfile](Taskfile.yml) or
   - load test → unit tests in `crates/load`, `crates/load-events`
 - Docs follow the code: API or wire change → `docs/protocol.md`; anything
   about keys, trust or metadata → `docs/security.md`; new CLI commands →
-  `docs/desktop-client.md`; requirement coverage → `docs/acceptance.md`.
+  `docs/cli.md`; requirement coverage → `docs/acceptance.md`.
 - **Feature lists stay current.** A new user-facing feature, or a change to
   one (including its shortcuts), goes into the feature lists in the same
   change: the Features section of `README.md` and `site/features.html` — and

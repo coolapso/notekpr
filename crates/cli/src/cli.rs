@@ -10,9 +10,9 @@ use serde::{Deserialize, Serialize};
 #[command(
     name = "notekpr",
     version = notekpr_core::VERSION,
-    about = "End-to-end encrypted, local-first Markdown notes: desktop sync, file mirror and agent gateway",
+    about = "End-to-end encrypted, local-first Markdown notes: sync, file mirror and agent gateway",
     after_help = "Use several profiles side by side, e.g. `--profile alice` and `--profile bob`.\n\
-                  Documentation: docs/desktop-client.md and docs/agents.md"
+                  Documentation: docs/cli.md and docs/agents.md"
 )]
 pub struct Cli {
     /// Profile to use (one signed-in identity on one server).

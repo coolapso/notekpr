@@ -107,7 +107,7 @@ notekpr -p assistant sync --dir ~/agent-notes --plaintext-ok
 ```
 
 Edits on disk are picked up, merged and synced; changes from people appear in
-the files (see [desktop-client.md §4](desktop-client.md#4-sync-and-the-markdown-mirror)).
+the files (see [cli.md §4](cli.md#4-sync-and-the-markdown-mirror)).
 
 **The gateway (local HTTP API)** — for programs and services that prefer HTTP
 and JSON, or need change events. Described next.
@@ -119,7 +119,7 @@ commands (`write`, `mv`, `rm`, …) are handed to it: it runs them on its own
 copies and passes back what they print, so they work as usual. A gateway
 started with `--read-only`
 refuses every command handed to it. Details:
-[desktop-client.md §3](desktop-client.md#3-everyday-commands).
+[cli.md §3](cli.md#3-everyday-commands).
 
 ## 4. The gateway (local HTTP API)
 
@@ -349,5 +349,5 @@ that speaks MCP over HTTP (Streamable HTTP transport) to remote AI clients:
   readable by the service").
 * Open questions: authentication of remote MCP clients (OAuth 2.1 as the MCP
   specification describes), read-only by default, rate limits, audit, and
-  which tools to offer (the gateway's operations in `crates/client/src/ops.rs`
+  which tools to offer (the gateway's operations in `crates/cli/src/ops.rs`
   are a ready starting point).

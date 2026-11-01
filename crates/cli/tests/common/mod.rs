@@ -8,11 +8,11 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use notekpr_client::account::{self, LoginOptions};
-use notekpr_client::hub::{Hub, HubOptions};
-use notekpr_client::livesync;
-use notekpr_client::profile::Dirs;
-use notekpr_client::session::Session;
+use notekpr_cli::account::{self, LoginOptions};
+use notekpr_cli::hub::{Hub, HubOptions};
+use notekpr_cli::livesync;
+use notekpr_cli::profile::Dirs;
+use notekpr_cli::session::Session;
 use tokio::sync::watch;
 
 pub struct TestServer {
@@ -29,9 +29,9 @@ pub async fn start() -> TestServer {
 
 /// [`start`] with a changed server configuration (e.g. smaller limits).
 pub async fn start_with(configure: impl FnOnce(&mut notekpr_server::config::Config)) -> TestServer {
-    notekpr_client::ui::set_quiet(std::env::var_os("TEST_LOG").is_none());
+    notekpr_cli::ui::set_quiet(std::env::var_os("TEST_LOG").is_none());
     // Never wait for a prompt, even when `cargo test` runs in a terminal.
-    notekpr_client::ui::set_non_interactive(true);
+    notekpr_cli::ui::set_non_interactive(true);
     let _ = tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_env("TEST_LOG"))
         .with_writer(std::io::stderr)

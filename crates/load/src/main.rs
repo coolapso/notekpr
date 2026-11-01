@@ -221,8 +221,8 @@ fn main() -> ExitCode {
         )
         .with_writer(std::io::stderr)
         .init();
-    notekpr_client::ui::set_silent(true);
-    notekpr_client::ui::set_non_interactive(true);
+    notekpr_cli::ui::set_silent(true);
+    notekpr_cli::ui::set_non_interactive(true);
     raise_open_files();
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()

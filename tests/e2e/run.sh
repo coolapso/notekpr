@@ -6,7 +6,7 @@
 # Requirements: chromium (or chrome) + a matching chromedriver on PATH, python3.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
-cargo build -p notekpr-server -p notekpr-client
+cargo build -p notekpr-server -p notekpr-cli
 # Its own copy of the web client: `task dev`, `task demo` or `task web:watch`
 # rebuild dist/web, which would pull the app from under a running test. The
 # wasm build has its own target directory, as in the Taskfile, so native and

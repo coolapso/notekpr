@@ -6,10 +6,10 @@ mod common;
 
 use clap::Parser;
 use common::*;
-use notekpr_client::cli::Cli;
-use notekpr_client::commands;
-use notekpr_client::hub::Hub;
-use notekpr_client::ops;
+use notekpr_cli::cli::Cli;
+use notekpr_cli::commands;
+use notekpr_cli::hub::Hub;
+use notekpr_cli::ops;
 use notekpr_core::doc::EntryKind;
 use notekpr_core::protocol::{InstanceSettingsUpdate, Limit};
 
@@ -248,10 +248,10 @@ async fn a_drawing_moves_only_to_a_vault_with_room() {
 async fn a_drawing_moves_with_its_pictures() {
     let srv = start().await;
     let alice = login(&srv, "alice").await;
-    notekpr_client::manage::create_vault(&alice, "Home")
+    notekpr_cli::manage::create_vault(&alice, "Home")
         .await
         .unwrap();
-    notekpr_client::manage::create_vault(&alice, "Work")
+    notekpr_cli::manage::create_vault(&alice, "Work")
         .await
         .unwrap();
     let h = hub(&alice).await;

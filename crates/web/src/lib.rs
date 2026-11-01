@@ -1,7 +1,7 @@
 //! notekpr browser client.
 //!
 //! Written in Rust and compiled to WebAssembly: the same core crate that the
-//! server and desktop client use does all cryptography and CRDT merging here,
+//! server and the CLI use does all cryptography and CRDT merging here,
 //! so plaintext and keys never leave the browser.
 
 pub mod actions;

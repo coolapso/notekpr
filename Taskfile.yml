@@ -98,10 +98,10 @@ tasks:
       - cargo build -p notekpr-server
 
   build:cli:
-    desc: Build the desktop/CLI client `notekpr` (debug)
+    desc: Build the CLI `notekpr` (debug)
     deps: [rust]
     cmds:
-      - cargo build -p notekpr-client
+      - cargo build -p notekpr-cli
 
   build:web:
     desc: Build the optimized web client into dist/web
@@ -126,7 +126,7 @@ tasks:
     desc: Release build of the server and CLI (target/release) plus the optimized web client
     deps: [rust]
     cmds:
-      - cargo build --release --locked -p notekpr-server -p notekpr-client
+      - cargo build --release --locked -p notekpr-server -p notekpr-cli
       - task: build:web
 
   # ------------------------------------------------------------------ run
@@ -185,13 +185,13 @@ tasks:
       NOTEKPR_CONFIG_DIR: "{{.ROOT_DIR}}/{{.DEMO_DIR}}/cli/config"
       NOTEKPR_DATA_DIR: "{{.ROOT_DIR}}/{{.DEMO_DIR}}/cli/data"
     cmds:
-      - cargo run -q -p notekpr-client -- {{.CLI_ARGS}}
+      - cargo run -q -p notekpr-cli -- {{.CLI_ARGS}}
 
   cli:
     desc: "Run the CLI, e.g. `task cli -- --profile alice status`"
     deps: [rust]
     cmds:
-      - cargo run -q -p notekpr-client -- {{.CLI_ARGS}}
+      - cargo run -q -p notekpr-cli -- {{.CLI_ARGS}}
 
   cli:login:
     desc: "Sign the CLI in to the dev server as a test user, e.g. `task cli:login DEV_USER=alice` (profile = user name)"
@@ -199,7 +199,7 @@ tasks:
     requires:
       vars: [DEV_USER]
     cmds:
-      - cargo run -q -p notekpr-client -- --profile {{.DEV_USER}} login --server {{.PUBLIC_URL}} --dev-user {{.DEV_USER}}
+      - cargo run -q -p notekpr-cli -- --profile {{.DEV_USER}} login --server {{.PUBLIC_URL}} --dev-user {{.DEV_USER}}
 
   backup:
     desc: "Write a timestamped backup of {{.DATA_DIR}} into {{.BACKUP_DIR}}/ (safe while the server runs; keeps the newest 10)"
@@ -231,7 +231,7 @@ tasks:
     desc: Sync engine, Markdown mirror and gateway against an in-process server
     deps: [rust]
     cmds:
-      - cargo test -p notekpr-client
+      - cargo test -p notekpr-cli
 
   test:web:
     desc: Safe rendering, zip (natively)
@@ -293,7 +293,7 @@ tasks:
     desc: Clippy on every crate (warnings are errors), including the web client for wasm32
     deps: [rust]
     cmds:
-      - cargo clippy --locked -p notekpr-core -p notekpr-draw -p notekpr-server -p notekpr-sync -p notekpr-client -p notekpr-editor -p notekpr-load-events -p notekpr-load -p notekpr-load-ui --all-targets -- -D warnings
+      - cargo clippy --locked -p notekpr-core -p notekpr-draw -p notekpr-server -p notekpr-sync -p notekpr-cli -p notekpr-editor -p notekpr-load-events -p notekpr-load -p notekpr-load-ui --all-targets -- -D warnings
       # The web client's tests run natively.
       - cargo clippy --locked -p notekpr-web --tests -- -D warnings -A clippy::type_complexity
       - CARGO_TARGET_DIR={{.WEB_TARGET_DIR}} cargo clippy --locked -p notekpr-web --target wasm32-unknown-unknown -- -D warnings -A clippy::type_complexity

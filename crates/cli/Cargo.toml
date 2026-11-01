@@ -1,13 +1,13 @@
 [package]
-name = "notekpr-client"
-description = "notekpr desktop sync client and agent gateway"
+name = "notekpr-cli"
+description = "The notekpr command-line client: sync, Markdown mirror and agent gateway"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 publish = false
 
 [lib]
-name = "notekpr_client"
+name = "notekpr_cli"
 path = "src/lib.rs"
 
 [[bin]]

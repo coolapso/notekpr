@@ -3,12 +3,12 @@
 mod common;
 
 use common::*;
-use notekpr_client::{manage, note_shares, ops};
+use notekpr_cli::{manage, note_shares, ops};
 use notekpr_core::crypto::sym_epoch;
 use notekpr_core::keys::{FIRST_DOC_EPOCH, is_doc_epoch};
 use notekpr_core::protocol::{ChangesResponse, Role, VaultKeysResponse};
 
-async fn changes(s: &notekpr_client::session::Session, vid: &str, oid: &str) -> ChangesResponse {
+async fn changes(s: &notekpr_cli::session::Session, vid: &str, oid: &str) -> ChangesResponse {
     s.api
         .get(&format!(
             "/vaults/{vid}/objects/{oid}/changes?since=0&snapshots=true"

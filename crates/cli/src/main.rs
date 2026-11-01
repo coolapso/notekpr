@@ -1,10 +1,10 @@
-//! `notekpr`: desktop/CLI client for notekpr.
+//! `notekpr`: the command-line client (CLI) for notekpr.
 
 use clap::Parser;
 use tracing_subscriber::EnvFilter;
 
 fn main() {
-    let cli = notekpr_client::cli::Cli::parse();
+    let cli = notekpr_cli::cli::Cli::parse();
     // Logs go to stderr (stdout carries command output).
     // The default level only shows warnings; NOTEKPR_LOG=debug for more.
     let filter = EnvFilter::try_from_env("NOTEKPR_LOG").unwrap_or_else(|_| EnvFilter::new("warn"));
@@ -23,7 +23,7 @@ fn main() {
             std::process::exit(1);
         }
     };
-    if let Err(e) = rt.block_on(notekpr_client::commands::run(cli)) {
+    if let Err(e) = rt.block_on(notekpr_cli::commands::run(cli)) {
         eprintln!("error: {e:#}");
         std::process::exit(1);
     }

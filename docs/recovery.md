@@ -15,12 +15,12 @@ a device that is still signed in) and an **encrypted export**.
 * **Recovery key** — shown once when you set up your account (11 groups of
   five letters and digits). It unlocks your account key, which unlocks the vault
   keys in the export.
-* **`notekpr recover`** — the desktop client command that puts the two
+* **`notekpr recover`** — the CLI command that puts the two
   together. It needs no server and no network.
 
 ## Keep an encrypted export (recommended)
 
-From a signed-in desktop client, now and then:
+From a signed-in CLI, now and then:
 
 ```sh
 notekpr export-encrypted --out ~/Backups/notekpr-$(date +%F).json

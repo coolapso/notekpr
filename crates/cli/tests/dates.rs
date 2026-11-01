@@ -4,7 +4,7 @@
 mod common;
 
 use common::*;
-use notekpr_client::{manage, note_shares, ops};
+use notekpr_cli::{manage, note_shares, ops};
 use notekpr_core::protocol::Role;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

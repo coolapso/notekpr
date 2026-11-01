@@ -3,7 +3,7 @@
 mod common;
 
 use common::*;
-use notekpr_client::{manage, ops, recover};
+use notekpr_cli::{manage, ops, recover};
 
 #[tokio::test]
 async fn an_encrypted_export_decrypts_into_plain_files() {
@@ -70,9 +70,9 @@ async fn an_encrypted_export_decrypts_into_plain_files() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_cli_saves_an_export_and_recovers_it_with_the_recovery_key() {
     use clap::Parser;
-    use notekpr_client::account::{self, LoginOptions};
-    use notekpr_client::cli::Cli;
-    use notekpr_client::commands;
+    use notekpr_cli::account::{self, LoginOptions};
+    use notekpr_cli::cli::Cli;
+    use notekpr_cli::commands;
 
     let srv = start().await;
     let dirs = srv.dirs("carol");
@@ -170,9 +170,9 @@ async fn the_cli_saves_an_export_and_recovers_it_with_the_recovery_key() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn without_the_server_a_device_exports_and_recovers_from_its_local_copies() {
     use clap::Parser;
-    use notekpr_client::account::{self, LoginOptions};
-    use notekpr_client::cli::Cli;
-    use notekpr_client::commands;
+    use notekpr_cli::account::{self, LoginOptions};
+    use notekpr_cli::cli::Cli;
+    use notekpr_cli::commands;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
 

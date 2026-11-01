@@ -3,7 +3,7 @@
 mod common;
 
 use common::*;
-use notekpr_client::{manage, ops};
+use notekpr_cli::{manage, ops};
 use notekpr_core::engine::PinStatus;
 use notekpr_core::protocol::Role;
 
@@ -125,7 +125,7 @@ async fn dead_url() -> String {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn offline_edits_reconcile_and_pending_queue_survives_restart() {
-    use notekpr_client::profile::ProfileStore;
+    use notekpr_cli::profile::ProfileStore;
     let srv = start().await;
     let alice = login(&srv, "alice").await;
     let bob = login(&srv, "bob").await;
@@ -215,9 +215,9 @@ async fn offline_edits_reconcile_and_pending_queue_survives_restart() {
 
     // Restart again and sync: the same client_update_ids are retried and the
     // server recognises them (same sequence numbers, head unchanged).
-    let bob_hub = notekpr_client::hub::Hub::start(
+    let bob_hub = notekpr_cli::hub::Hub::start(
         session.clone(),
-        notekpr_client::hub::HubOptions {
+        notekpr_cli::hub::HubOptions {
             offline_ok: true,
             ..Default::default()
         },
@@ -389,7 +389,7 @@ async fn live_uploads_resume_after_a_reconnect_with_a_read_only_vault() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_server_error_from_a_proxy_counts_as_offline() {
-    use notekpr_client::profile::ProfileStore;
+    use notekpr_cli::profile::ProfileStore;
     let srv = start().await;
     let alice = login(&srv, "alice").await;
     manage::create_vault(&alice, "Notes").await.unwrap();
@@ -804,8 +804,8 @@ async fn typing_into_a_note_whose_key_has_not_arrived_keeps_the_text() {
 async fn deleted_while_unsent(
     srv: &TestServer,
 ) -> (
-    std::sync::Arc<notekpr_client::hub::Hub>,
-    std::sync::Arc<notekpr_client::hub::Hub>,
+    std::sync::Arc<notekpr_cli::hub::Hub>,
+    std::sync::Arc<notekpr_cli::hub::Hub>,
     String,
 ) {
     let alice = login(srv, "alice").await;

@@ -1,6 +1,6 @@
 # Use your own editor (Obsidian, Neovim, VS Code, …)
 
-Your notes don't have to live in the notekpr app. The desktop client can
+Your notes don't have to live in the notekpr app. The CLI (`notekpr`) can
 keep your vaults as an ordinary folder of Markdown files, always up to date
 and in plain text on your machine, while the server only ever stores them
 encrypted. Edit them with whatever you like — Obsidian, Neovim, VS Code, grep
@@ -21,7 +21,7 @@ The `notekpr sync --dir` daemon watches the folder. When a file changes it
 computes what you changed, merges it into the note's CRDT (so concurrent edits
 by others are kept, not overwritten), encrypts it and uploads it. Changes from
 others are decrypted and written into the files within a fraction of a second.
-Details: [desktop-client.md §4–7](desktop-client.md#4-sync-and-the-markdown-mirror).
+Details: [cli.md §4–7](cli.md#4-sync-and-the-markdown-mirror).
 
 The daemon still keeps a small encrypted copy of each note's history in the
 profile's data directory (only a `.notekpr-vault` marker file sits in
@@ -31,7 +31,7 @@ the server accepts — the server never takes plaintext.
 ## Set it up
 
 1. Install the client and sign in (once per device, see
-   [desktop-client.md §1–2](desktop-client.md#1-install--build)):
+   [cli.md §1–2](cli.md#1-install--build)):
 
    ```sh
    notekpr login --server https://notes.example.com
@@ -100,28 +100,28 @@ reload on change pick up remote edits cleanly.
 * **Collaboration is live.** If someone edits the same note in the web app
   while you edit the file, both changes are merged. Conflicting renames,
   duplicates and deletes are handled as described in
-  [desktop-client.md §7](desktop-client.md#7-conflicts-duplicates-deletes-and-renames).
+  [cli.md §7](cli.md#7-conflicts-duplicates-deletes-and-renames).
 * **Moving, renaming or unmounting the folder** doesn't delete anything: when
   a vault folder (or most of its files) vanishes at once, the daemon warns and
   waits instead of trashing the notes, and it never re-creates a missing mirror
   folder by itself. See
-  [desktop-client.md §7](desktop-client.md#7-conflicts-duplicates-deletes-and-renames)
+  [cli.md §7](cli.md#7-conflicts-duplicates-deletes-and-renames)
   for confirming a deliberate mass deletion.
 * **Quick notes are the folder `Quick notes/`.** Drop a `.md` file there to
   capture a thought (while there's room: 20 unless your server says
   otherwise); move it into a vault's folder to keep it there. It is flat —
   files in folders inside it aren't synced — and deleting a file there
   deletes the quick note for good (they have no trash). See
-  [desktop-client.md §4](desktop-client.md#layout).
+  [cli.md §4](cli.md#layout).
 * **CLI commands while the daemon runs:** reading ones (`cat`, `ls`,
   `search`, …) work and show the daemon's copies; changing ones (`write`,
   `mv`, …) are handed to the daemon, which runs them on its copies (of the
   vaults it keeps) and updates the files. Details:
-  [desktop-client.md §3](desktop-client.md#3-everyday-commands).
+  [cli.md §3](cli.md#3-everyday-commands).
 * **Comments aren't in the files** (they would stop being plain Markdown).
   They stay on the text they are about while you edit it here — your
   changes are merged as small edits, not as a new file — and if you delete
   that text, the comment keeps a quote of it. Read and answer them in the
   web app, or with `notekpr comments …`
-  ([desktop-client.md §3](desktop-client.md#3-everyday-commands)).
+  ([cli.md §3](cli.md#3-everyday-commands)).
 * **Phones and tablets:** there is no mobile client yet; use the web app.

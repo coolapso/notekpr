@@ -3,7 +3,7 @@
 mod common;
 
 use common::*;
-use notekpr_client::{manage, note_shares, ops};
+use notekpr_cli::{manage, note_shares, ops};
 use notekpr_core::protocol::Role;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -123,7 +123,7 @@ async fn sharing_needs_an_exact_name_not_a_prefix() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_note_key_is_never_renewed_for_a_changed_account_key() {
-    use notekpr_client::profile::ProfileStore;
+    use notekpr_cli::profile::ProfileStore;
     let srv = start().await;
     let alice = login(&srv, "alice").await;
     let _bob = login(&srv, "bob").await;
@@ -168,7 +168,7 @@ async fn a_note_key_is_never_renewed_for_a_changed_account_key() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_vault_key_rotation_leaves_out_a_member_whose_key_changed() {
-    use notekpr_client::profile::ProfileStore;
+    use notekpr_cli::profile::ProfileStore;
     let srv = start().await;
     let alice = login(&srv, "alice").await;
     let _bob = login(&srv, "bob").await;
@@ -302,7 +302,7 @@ async fn notes_and_folders_keep_the_order_they_are_put_in() {
     }
     let v = ah.resolve("Home").await.unwrap();
     v.lock().await.create_folder("Books").unwrap();
-    let top = |v: notekpr_client::session::SharedVault| async move {
+    let top = |v: notekpr_cli::session::SharedVault| async move {
         let g = v.lock().await;
         g.list("", false)
             .unwrap()

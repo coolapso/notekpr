@@ -287,7 +287,7 @@ device's screen, like any app's notifications.
    off, can't edit notes; share recipients; refused snapshots; purge).
 3. engine and sync: comment objects in `VaultReplica`, author checks, outbox —
    unit and property tests in `crates/sync`.
-4. CLI and gateway — `crates/client/tests/`.
+4. CLI and gateway — `crates/cli/tests/`.
 5. web: panel and reading view first, then editor highlights — browser tests
    with an owner, an editor and a viewer.
 6. docs, feature lists, demo data.

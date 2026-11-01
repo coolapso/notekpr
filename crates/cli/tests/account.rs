@@ -6,8 +6,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use common::*;
-use notekpr_client::account::{self, LoginOptions};
-use notekpr_client::session::Session;
+use notekpr_cli::account::{self, LoginOptions};
+use notekpr_cli::session::Session;
 
 fn dev_login(srv_url: &str, user: &str) -> LoginOptions {
     LoginOptions {
@@ -70,7 +70,7 @@ async fn an_interrupted_first_device_setup_is_finished_by_the_next_login() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn login_keeps_the_account_secret_unless_the_device_was_really_removed() {
-    use notekpr_client::profile::ProfileStore;
+    use notekpr_cli::profile::ProfileStore;
     let srv = start().await;
     let a_dirs = srv.dirs("alice-a");
     let first = account::login(&a_dirs, "alice", dev_login(&srv.url, "alice"))
@@ -116,7 +116,7 @@ async fn login_keeps_the_account_secret_unless_the_device_was_really_removed() {
 
     // Really removed from another device: B enrolls again, and its old
     // secrets are moved aside, not deleted.
-    notekpr_client::manage::revoke_device(&a, &b.device_id)
+    notekpr_cli::manage::revoke_device(&a, &b.device_id)
         .await
         .unwrap();
     let again = account::login(&b_dirs, "alice", with_rk(&srv.url))

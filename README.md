@@ -17,7 +17,7 @@ read anything.
   merging (CRDTs), also after working offline.
 * **Plain Markdown** — wiki links, backlinks, tags, embeds, export to a
   folder of `.md` files at any time.
-* **Use your own editor** — the desktop client keeps your vaults as a plain
+* **Use your own editor** — the CLI keeps your vaults as a plain
   folder of Markdown files, synced live and both ways: edit with Obsidian,
   Neovim, VS Code or anything else while the server only stores ciphertext
   ([how](docs/own-editor.md)).
@@ -26,7 +26,7 @@ read anything.
 * **For AI agents too** — give an agent its own identity and keys, share only
   the vaults it needs; it works with notes through the CLI, a folder of
   Markdown files, or a local HTTP gateway.
-* **Rust everywhere** — the server, the desktop client and the browser client
+* **Rust everywhere** — the server, the CLI and the browser client
   (compiled to WebAssembly) share one core crate for all cryptography and
   syncing. No npm, no third-party JavaScript.
 
@@ -246,9 +246,9 @@ read anything.
 * The browser keeps an encrypted copy of your vaults: they open at once, and
   what you write offline syncs later. Optionally the app starts without the
   server too.
-* Desktop/CLI client with a local encrypted copy, live sync, and a two-way
-  folder of plain Markdown files for Obsidian, Neovim, VS Code or anything
-  else ([how](docs/own-editor.md)).
+* A command-line client (CLI) with a local encrypted copy, live sync, and a
+  two-way folder of plain Markdown files for Obsidian, Neovim, VS Code or
+  anything else ([how](docs/own-editor.md)).
 * The command line does everything: list, read, write, search, move, icons,
   trash, history, quick notes, sharing, archiving, key rotation, devices and
   recovery keys, import and export — also while its sync daemon runs.
@@ -419,7 +419,7 @@ provider setup, reverse proxies, Kubernetes, backups, upgrades and monitoring.
 | Client | |
 |---|---|
 | Browser | served by the server; works on desktop and phones |
-| Desktop / CLI (`notekpr`) | offline replica, live sync, optional Markdown mirror, export/import — [docs/desktop-client.md](docs/desktop-client.md) |
+| CLI (`notekpr`) | offline replica, live sync, optional Markdown mirror, export/import — [docs/cli.md](docs/cli.md) |
 | Agents | CLI, Markdown folder or local HTTP gateway — [docs/agents.md](docs/agents.md) |
 
 ## Documentation

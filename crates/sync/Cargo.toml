@@ -1,6 +1,6 @@
 [package]
 name = "notekpr-sync"
-description = "The client sync engine shared by the notekpr browser and desktop clients"
+description = "The client sync engine shared by the notekpr browser client and CLI"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use notekpr_client::hub::Hub;
+use notekpr_cli::hub::Hub;
 
 use crate::people::{Person, World};
 

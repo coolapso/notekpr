@@ -140,25 +140,14 @@ pub fn prompt_line(prompt: &str) -> Result<String> {
     Ok(s.trim().to_string())
 }
 
-/// The settings of a terminal, put back when this is dropped. A prompt that
-/// hides what is typed (`rpassword`) turns echo off until it returns; one
-/// still waiting on another thread when the program moves on (or exits)
-/// would leave the terminal without echo. (Unix; elsewhere this does
-/// nothing.)
+/// The settings of a terminal, put back when this is dropped: echo after
+/// [`HiddenLines`] turned it off. (Unix; elsewhere this does nothing.)
 pub struct TerminalSettings {
     #[cfg(unix)]
     saved: Option<(i32, libc::termios)>,
 }
 
 impl TerminalSettings {
-    /// Those of stdin, if it is a terminal.
-    pub fn of_stdin() -> TerminalSettings {
-        #[cfg(unix)]
-        return TerminalSettings::of_fd(libc::STDIN_FILENO);
-        #[cfg(not(unix))]
-        TerminalSettings {}
-    }
-
     #[cfg(unix)]
     fn of_fd(fd: i32) -> TerminalSettings {
         let mut t = std::mem::MaybeUninit::<libc::termios>::uninit();
@@ -177,6 +166,108 @@ impl Drop for TerminalSettings {
         if let Some((fd, t)) = &self.saved {
             // SAFETY: `t` came from tcgetattr on the same descriptor.
             unsafe { libc::tcsetattr(*fd, libc::TCSANOW, t) };
+        }
+    }
+}
+
+/// Lines typed at the terminal without echo, read on a thread of their own
+/// while the program waits for something else (a recovery key typed while
+/// another device is to approve this one). Dropping this stops the reading
+/// before it returns: a reader still waiting on the terminal would take the
+/// answer to whatever is asked next. So the thread never blocks in a read:
+/// it reads only what is there, a whole line (the terminal hands over
+/// nothing before Enter), and looks every 100 ms whether to stop. Unix
+/// only: elsewhere a read can't be called off.
+pub struct HiddenLines {
+    #[cfg(unix)]
+    stop: Arc<AtomicBool>,
+    #[cfg(unix)]
+    reader: Option<std::thread::JoinHandle<()>>,
+    /// Dropped after the reader stopped: echo back on.
+    #[cfg(unix)]
+    _terminal: TerminalSettings,
+}
+
+impl HiddenLines {
+    /// Each line typed (without its line end) goes to `each` until it
+    /// returns false or this is dropped. `None` if stdin is not a terminal,
+    /// or not on Unix.
+    pub fn start(each: impl FnMut(String) -> bool + Send + 'static) -> Option<HiddenLines> {
+        #[cfg(unix)]
+        return HiddenLines::on_fd(libc::STDIN_FILENO, each);
+        #[cfg(not(unix))]
+        {
+            drop(each);
+            None
+        }
+    }
+
+    #[cfg(unix)]
+    fn on_fd(fd: i32, mut each: impl FnMut(String) -> bool + Send + 'static) -> Option<Self> {
+        let terminal = TerminalSettings::of_fd(fd);
+        let mut t = terminal.saved?.1;
+        // Whole lines, edited and interrupted (Ctrl-C) as usual, not shown;
+        // the Enter is, so what follows starts on a line of its own.
+        t.c_lflag = (t.c_lflag | libc::ICANON | libc::ISIG | libc::ECHONL) & !libc::ECHO;
+        // SAFETY: settings read from the same descriptor.
+        if unsafe { libc::tcsetattr(fd, libc::TCSANOW, &t) } != 0 {
+            return None;
+        }
+        let stop = Arc::new(AtomicBool::new(false));
+        let stopped = stop.clone();
+        let reader = std::thread::spawn(move || {
+            let mut buf = zeroize::Zeroizing::new([0u8; 1024]);
+            let mut line = zeroize::Zeroizing::new(Vec::new());
+            while !stopped.load(Ordering::Relaxed) {
+                let mut p = libc::pollfd {
+                    fd,
+                    events: libc::POLLIN,
+                    revents: 0,
+                };
+                // SAFETY: one pollfd, ours.
+                match unsafe { libc::poll(&mut p, 1, 100) } {
+                    0 => continue,
+                    n if n < 0 => {
+                        if std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted
+                        {
+                            continue;
+                        }
+                        return;
+                    }
+                    _ => {}
+                }
+                // SAFETY: writes at most `buf.len()` bytes into `buf`.
+                let n = unsafe { libc::read(fd, buf.as_mut_ptr().cast(), buf.len()) };
+                if n <= 0 {
+                    // The end (Ctrl-D), or the terminal is gone.
+                    return;
+                }
+                line.extend_from_slice(&buf[..n as usize]);
+                while let Some(end) = line.iter().position(|&b| b == b'\n') {
+                    let text = String::from_utf8_lossy(&line[..end])
+                        .trim_end_matches('\r')
+                        .to_string();
+                    line.drain(..=end);
+                    if !each(text) {
+                        return;
+                    }
+                }
+            }
+        });
+        Some(HiddenLines {
+            stop,
+            reader: Some(reader),
+            _terminal: terminal,
+        })
+    }
+}
+
+#[cfg(unix)]
+impl Drop for HiddenLines {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        if let Some(r) = self.reader.take() {
+            let _ = r.join();
         }
     }
 }
@@ -263,12 +354,11 @@ pub fn fmt_size(bytes: u64) -> String {
 #[cfg(test)]
 mod tests {
     #[cfg(unix)]
-    use super::TerminalSettings;
+    use super::{HiddenLines, TerminalSettings};
 
-    /// A terminal whose echo a hidden prompt turned off gets it back.
+    /// A pseudo-terminal: (the keyboard's end, the program's).
     #[cfg(unix)]
-    #[test]
-    fn terminal_settings_are_put_back() {
+    fn pty() -> (i32, i32) {
         let (mut master, mut slave) = (0, 0);
         // SAFETY: openpty writes two descriptors; no name, settings or size.
         let rc = unsafe {
@@ -281,13 +371,27 @@ mod tests {
             )
         };
         assert_eq!(rc, 0, "openpty");
-        let get = |fd: i32| {
-            let mut t = std::mem::MaybeUninit::<libc::termios>::uninit();
-            // SAFETY: as in TerminalSettings::of_fd.
-            assert_eq!(unsafe { libc::tcgetattr(fd, t.as_mut_ptr()) }, 0);
-            unsafe { t.assume_init() }
-        };
-        let echo = |fd: i32| get(fd).c_lflag & libc::ECHO != 0;
+        (master, slave)
+    }
+
+    #[cfg(unix)]
+    fn get(fd: i32) -> libc::termios {
+        let mut t = std::mem::MaybeUninit::<libc::termios>::uninit();
+        // SAFETY: as in TerminalSettings::of_fd.
+        assert_eq!(unsafe { libc::tcgetattr(fd, t.as_mut_ptr()) }, 0);
+        unsafe { t.assume_init() }
+    }
+
+    #[cfg(unix)]
+    fn echo(fd: i32) -> bool {
+        get(fd).c_lflag & libc::ECHO != 0
+    }
+
+    /// A terminal whose echo a hidden prompt turned off gets it back.
+    #[cfg(unix)]
+    #[test]
+    fn terminal_settings_are_put_back() {
+        let (master, slave) = pty();
         assert!(echo(slave), "a new terminal echoes");
         {
             let _restore = TerminalSettings::of_fd(slave);
@@ -301,6 +405,56 @@ mod tests {
         assert!(echo(slave), "echo is back");
         // Not a terminal: nothing to save or put back.
         drop(TerminalSettings::of_fd(-1));
+        // SAFETY: both descriptors are ours.
+        unsafe {
+            libc::close(master);
+            libc::close(slave);
+        }
+    }
+
+    /// Lines typed while waiting go to the reader, unseen; once it is
+    /// dropped, the next line is there for the next question (a reader left
+    /// blocked on the terminal took it: `setup` waited for an answer given).
+    #[cfg(unix)]
+    #[test]
+    fn hidden_lines_stop_when_dropped() {
+        use std::time::Duration;
+        let (master, slave) = pty();
+        let typed = |s: &str| {
+            // SAFETY: writes `s` to our descriptor.
+            let n = unsafe { libc::write(master, s.as_ptr().cast(), s.len()) };
+            assert_eq!(n, s.len() as isize);
+        };
+        let (tx, rx) = std::sync::mpsc::channel();
+        let lines = HiddenLines::on_fd(slave, move |l| tx.send(l).is_ok()).expect("a terminal");
+        assert!(!echo(slave), "what is typed is not shown");
+        typed("AAAA-BBBB\n");
+        typed("\n");
+        typed("second\n");
+        let next = || rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert_eq!(next(), "AAAA-BBBB");
+        assert_eq!(next(), "");
+        assert_eq!(next(), "second");
+        drop(lines);
+        assert!(echo(slave), "echo is back");
+        typed("~/Notes\n");
+        // Disconnected at once; a reader still there would take the line.
+        let after = rx.recv_timeout(Duration::from_millis(500));
+        assert!(after.is_err(), "the reader is gone, got {after:?}");
+        let mut p = libc::pollfd {
+            fd: slave,
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        // SAFETY: one pollfd, ours.
+        let ready = unsafe { libc::poll(&mut p, 1, 2000) };
+        assert_eq!(ready, 1, "the line is there, not taken by the reader");
+        let mut buf = [0u8; 64];
+        // SAFETY: reads at most `buf.len()` bytes into `buf`.
+        let n = unsafe { libc::read(slave, buf.as_mut_ptr().cast(), buf.len()) };
+        assert_eq!(&buf[..n as usize], b"~/Notes\n");
+        // Not a terminal: nothing to read from.
+        assert!(HiddenLines::on_fd(-1, |_| true).is_none());
         // SAFETY: both descriptors are ours.
         unsafe {
             libc::close(master);

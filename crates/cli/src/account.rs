@@ -463,26 +463,17 @@ async fn wait_for_approval(
     interactive: bool,
     timeout: Option<Duration>,
 ) -> Result<(AccountSecret, bool)> {
-    // A plain thread (not a blocking task) so an unanswered prompt never keeps
-    // the runtime from shutting down.
+    // A recovery key typed meanwhile. The reading stops when this returns,
+    // however it ends: what is typed after is the next question's.
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
-    // The prompt below turns echo off until it returns, which it doesn't
-    // when another device approves first: put the terminal back on the way
-    // out, however this ends.
-    let _terminal = ui::TerminalSettings::of_stdin();
-    if interactive && ui::stdin_is_tty() {
-        ui::status(
-            "Waiting for approval… (or type your recovery key and press Enter to unlock this device yourself)",
-        );
-        std::thread::spawn(move || {
-            if let Ok(line) = rpassword::read_password() {
-                let _ = tx.send(line);
-            }
-        });
+    let typed = (interactive && ui::stdin_is_tty())
+        .then(|| ui::HiddenLines::start(move |line| tx.send(line).is_ok()))
+        .flatten();
+    ui::status(if typed.is_some() {
+        "Waiting for approval… (or type your recovery key and press Enter to unlock this device yourself)"
     } else {
-        drop(tx);
-        ui::status("Waiting for approval…");
-    }
+        "Waiting for approval…"
+    });
     let deadline = Instant::now() + timeout.unwrap_or(Duration::from_secs(30 * 60));
     let mut delay = Duration::from_secs(2);
     loop {

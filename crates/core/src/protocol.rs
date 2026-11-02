@@ -1790,7 +1790,9 @@ pub enum ClientMessage {
     },
     /// Start receiving a vault's updates. With `since`, the server first replays
     /// everything after that sequence number (including snapshots for compacted
-    /// ranges) and then sends `synced`. Without it, only live updates are sent.
+    /// ranges) and then sends `synced`. Without it, it sends `synced` at once
+    /// (the head) and then live updates only. Either way, live updates are
+    /// sent from `synced` on.
     /// With `object_id`, only events of that one note are delivered (used by
     /// people a single note is shared with).
     Subscribe {

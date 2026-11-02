@@ -2558,6 +2558,10 @@ async fn deleting_for_good_can_be_undone_for_a_while() {
         object_id: None,
     })
     .await;
+    // Subscribed: the purge below is heard (a busy server may take the
+    // delete before the subscription otherwise).
+    wb.until(|m| matches!(m, ServerMessage::Synced { .. }).then_some(()))
+        .await;
 
     for path in [object("n1"), object("n2"), attachment("a1")] {
         assert_eq!(

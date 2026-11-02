@@ -74,6 +74,41 @@ fn text(max: usize) -> impl Strategy<Value = String> {
         .prop_map(|v| v.into_iter().collect())
 }
 
+/// Few names, in different cases, so that paths share folders, file names
+/// and keys.
+const SEGMENTS: &[&str] = &["a", "A", "b", "Note", "note", "My Doc", "x.md", "."];
+
+fn segments(max: usize) -> impl Strategy<Value = String> {
+    prop::collection::vec(prop::sample::select(SEGMENTS), 1..max).prop_map(|v| v.join("/"))
+}
+
+/// A path in a vault: a note, a note written `.MD`, or a file.
+fn vault_path() -> impl Strategy<Value = String> {
+    (
+        segments(4),
+        prop::sample::select(&[".md", ".MD", "", ".png"][..]),
+    )
+        .prop_map(|(p, ext)| format!("{p}{ext}"))
+}
+
+/// What a link may say: nothing (`[[#Heading]]`), a name or a path,
+/// relative or from the top, with or without `.md`.
+fn link_target() -> impl Strategy<Value = String> {
+    (
+        prop::sample::select(&["", "../", "./", "/", "../../", " "][..]),
+        segments(3),
+        prop::sample::select(&[".md", "", ".MD", "/"][..]),
+        any::<bool>(),
+    )
+        .prop_map(|(pre, p, ext, empty)| {
+            if empty {
+                String::new()
+            } else {
+                format!("{pre}{p}{ext}")
+            }
+        })
+}
+
 /// 512 cases per property by default; `PROPTEST_CASES` overrides.
 fn cases() -> u32 {
     std::env::var("PROPTEST_CASES")
@@ -148,6 +183,35 @@ proptest! {
             let _ = paths::parent(&p);
         }
         let _ = paths::normalize_note(&t);
+    }
+
+    #[test]
+    fn the_resolver_resolves_like_resolve(
+        candidates in prop::collection::vec(vault_path(), 0..12),
+        targets in prop::collection::vec((link_target(), any::<bool>(), vault_path()), 1..8),
+    ) {
+        let candidates: Vec<(String, String)> = candidates
+            .into_iter()
+            .enumerate()
+            .map(|(i, p)| (i.to_string(), p))
+            .collect();
+        let resolver = markdown::Resolver::new(candidates.clone());
+        for (target, wiki, from) in targets {
+            let link = markdown::Link {
+                kind: if wiki { markdown::LinkKind::Wiki } else { markdown::LinkKind::Markdown },
+                target,
+                heading: None,
+                alias: None,
+                embed: false,
+                start: 0,
+                end: 0,
+            };
+            prop_assert_eq!(
+                resolver.resolve(&link, &from),
+                markdown::resolve(&link, &from, &candidates),
+                "{:?} from {}", link.target, from
+            );
+        }
     }
 
     #[test]

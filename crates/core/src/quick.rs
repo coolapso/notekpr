@@ -83,8 +83,9 @@ pub fn is_linked(path: &str, notes: &[(String, String)]) -> bool {
         .map(|(i, (p, _))| (i.to_string(), p.clone()))
         .collect();
     candidates.push((FILE.to_string(), path.to_string()));
+    let links = markdown::Resolver::new(candidates);
     notes.iter().any(|(from, text)| {
-        markdown::linked_ids(text, from, &candidates)
+        markdown::linked_ids(text, from, &links)
             .iter()
             .any(|id| id == FILE)
     })
@@ -104,15 +105,16 @@ pub fn unlinked_files(r: &VaultReplica, before: i64) -> Option<Vec<String>> {
         .into_iter()
         .filter(|e| e.is_live())
         .collect();
-    let candidates: Vec<(String, String)> = live
-        .iter()
-        .filter(|e| e.kind != EntryKind::Folder)
-        .map(|e| (e.id.clone(), e.path.clone()))
-        .collect();
+    let links = markdown::Resolver::new(
+        live.iter()
+            .filter(|e| e.kind != EntryKind::Folder)
+            .map(|e| (e.id.clone(), e.path.clone()))
+            .collect(),
+    );
     let mut linked = BTreeSet::new();
     for e in live.iter().filter(|e| e.kind == EntryKind::Note) {
         let note = r.notes.get(&e.id)?;
-        linked.extend(markdown::linked_ids(&note.text(), &e.path, &candidates));
+        linked.extend(markdown::linked_ids(&note.text(), &e.path, &links));
     }
     Some(
         live.into_iter()

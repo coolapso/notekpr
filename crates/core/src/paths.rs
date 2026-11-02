@@ -65,7 +65,8 @@ pub fn normalize_note(input: &str) -> Result<String, PathError> {
 }
 
 pub fn is_note(path: &str) -> bool {
-    path.to_ascii_lowercase().ends_with(".md")
+    let b = path.as_bytes();
+    b.len() >= 3 && b[b.len() - 3..].eq_ignore_ascii_case(b".md")
 }
 
 /// What a drawing's file name ends with: notekpr's own drawing files (the

@@ -2,6 +2,8 @@
 //! (wiki-style `[[...]]` and relative Markdown links), tags, headings and
 //! frontmatter. Runs on trusted clients only, since the server never sees plaintext.
 
+use std::collections::HashMap;
+
 use crate::paths;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -542,7 +544,8 @@ fn link_key(s: &str) -> String {
 /// Resolve a link from the note at `from_path` to one of `candidates`
 /// (`(id, path)` pairs). Wiki links resolve like Obsidian: exact path first,
 /// then by file name with the shortest path winning. Markdown links are
-/// resolved relative to the linking note's folder first.
+/// resolved relative to the linking note's folder first. For more than a
+/// link or two, a [`Resolver`] resolves the same way at a fraction of the cost.
 pub fn resolve<'a>(
     link: &Link,
     from_path: &str,
@@ -584,12 +587,96 @@ pub fn resolve<'a>(
     best.map(|(id, _)| id.as_str())
 }
 
-/// The entries (ids among `candidates`) the note at `from_path` links to or
-/// embeds, each once, in the order they first appear.
-pub fn linked_ids(text: &str, from_path: &str, candidates: &[(String, String)]) -> Vec<String> {
+/// [`resolve`] for many links against the same candidates. Each path's key,
+/// and every tail of it after a `/`, is worked out once, so a link costs a
+/// few lookups instead of a pass over every candidate (a vault's thousands
+/// of links times its thousands of notes, otherwise). Resolves exactly as
+/// [`resolve`] does.
+#[derive(Clone, Debug)]
+pub struct Resolver {
+    candidates: Vec<(String, String)>,
+    /// Path → the first candidate with it (`[[#Heading]]`).
+    paths: HashMap<String, usize>,
+    /// Key → the first candidate with it.
+    keys: HashMap<String, usize>,
+    /// What keys end with after a `/` → the candidate ending so with the
+    /// shortest path (then the smallest; then the first).
+    tails: HashMap<String, usize>,
+}
+
+impl Resolver {
+    pub fn new(candidates: Vec<(String, String)>) -> Resolver {
+        let mut paths = HashMap::with_capacity(candidates.len());
+        let mut keys = HashMap::with_capacity(candidates.len());
+        let mut tails: HashMap<String, usize> = HashMap::new();
+        for (i, (_, p)) in candidates.iter().enumerate() {
+            paths.entry(p.clone()).or_insert(i);
+            let k = link_key(p);
+            for (at, _) in k.match_indices('/') {
+                let tail = &k[at + 1..];
+                match tails.get_mut(tail) {
+                    Some(best) => {
+                        let b = &candidates[*best].1;
+                        if p.len() < b.len() || (p.len() == b.len() && p < b) {
+                            *best = i;
+                        }
+                    }
+                    None => {
+                        tails.insert(tail.to_string(), i);
+                    }
+                }
+            }
+            keys.entry(k).or_insert(i);
+        }
+        Resolver {
+            candidates,
+            paths,
+            keys,
+            tails,
+        }
+    }
+
+    /// The `(id, path)` pairs it resolves to.
+    pub fn candidates(&self) -> &[(String, String)] {
+        &self.candidates
+    }
+
+    pub fn resolve(&self, link: &Link, from_path: &str) -> Option<&str> {
+        self.find(link, from_path).map(|(id, _)| id.as_str())
+    }
+
+    /// The `(id, path)` a link resolves to.
+    pub fn find(&self, link: &Link, from_path: &str) -> Option<&(String, String)> {
+        let found = if link.target.is_empty() {
+            self.paths.get(from_path)
+        } else {
+            let relative = if link.kind == LinkKind::Markdown {
+                join_relative(paths::parent(from_path), &link.target)
+                    .and_then(|joined| self.keys.get(&link_key(&joined)))
+            } else {
+                None
+            };
+            relative.or_else(|| {
+                let key = link_key(&link.target);
+                self.keys.get(&key).or_else(|| self.tails.get(&key))
+            })
+        };
+        found.map(|&i| &self.candidates[i])
+    }
+
+    /// Whether a path, or the end of one after a `/`, has the key `key`
+    /// (lower case, without `.md`): a wiki link to it finds something.
+    pub fn knows(&self, key: &str) -> bool {
+        self.keys.contains_key(key) || self.tails.contains_key(key)
+    }
+}
+
+/// The entries (ids among the resolver's candidates) the note at
+/// `from_path` links to or embeds, each once, in the order they first appear.
+pub fn linked_ids(text: &str, from_path: &str, links: &Resolver) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     for l in analyze(text).links {
-        if let Some(id) = resolve(&l, from_path, candidates)
+        if let Some(id) = links.resolve(&l, from_path)
             && !out.iter().any(|o| o == id)
         {
             out.push(id.to_string());
@@ -697,11 +784,11 @@ mod tests {
 
     #[test]
     fn linked_ids_are_the_entries_a_note_points_at() {
-        let cands = vec![
+        let cands = Resolver::new(vec![
             ("p".to_string(), "photo.png".to_string()),
             ("d".to_string(), "Docs/report.pdf".to_string()),
             ("n".to_string(), "Other.md".to_string()),
-        ];
+        ]);
         let text =
             "![[photo.png]] see [[Other]] and [r](Docs/report.pdf), ![[photo.png]] [[gone.png]]";
         assert_eq!(
@@ -805,6 +892,13 @@ mod tests {
             ..wl("")
         };
         assert_eq!(resolve(&ml, "Folder/Other.md", &c), Some("d"));
+        let r = Resolver::new(c.clone());
+        assert_eq!(r.resolve(&wl("note"), "x.md"), Some("a"));
+        assert_eq!(r.resolve(&wl("Folder/Note"), "x.md"), Some("b"));
+        assert_eq!(r.resolve(&wl("Other"), "x.md"), Some("c"));
+        assert_eq!(r.resolve(&wl("Missing"), "x.md"), None);
+        assert_eq!(r.resolve(&ml, "Folder/Other.md"), Some("d"));
+        assert_eq!(r.resolve(&wl(""), "Folder/Other.md"), Some("c"));
     }
 
     #[test]

@@ -5,7 +5,7 @@
 //! for [`VaultStore`]) and path-level operations. Nothing here touches the
 //! network: local edits become pending CRDT updates that the sync layer pushes.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use anyhow::{Result, anyhow, bail};
 use notekpr_core::b64;
@@ -1262,7 +1262,7 @@ impl Vault {
 
     /// Notes linking to the entry `target_id`.
     pub fn backlinks(&self, target_id: &str) -> Vec<(String, Entry)> {
-        let cands = self.link_candidates();
+        let cands = markdown::Resolver::new(self.link_candidates());
         self.notes()
             .into_iter()
             .filter(|(p, e)| {
@@ -1270,7 +1270,7 @@ impl Vault {
                     && markdown::analyze(&self.note_text(&e.id))
                         .links
                         .iter()
-                        .any(|l| markdown::resolve(l, p, &cands) == Some(target_id))
+                        .any(|l| cands.resolve(l, p) == Some(target_id))
             })
             .collect()
     }
@@ -1816,7 +1816,7 @@ impl Vault {
         {
             bail!("'{new_path}' already exists");
         }
-        let before = self.link_candidates();
+        let before = markdown::Resolver::new(self.link_candidates());
         let u = self.replica.index.rename(&entry.id, &new_path, now_ms());
         self.record_index(u)?;
         if update_links && entry.kind == EntryKind::Note {
@@ -1830,7 +1830,7 @@ impl Vault {
     fn rewrite_links_to(
         &mut self,
         target_id: &str,
-        before: &[(String, String)],
+        before: &markdown::Resolver,
         new_path: &str,
     ) -> Result<usize> {
         let title = paths::title(new_path).to_string();
@@ -1845,19 +1845,20 @@ impl Vault {
         } else {
             title
         };
+        let before_paths: HashMap<&str, &str> = before
+            .candidates()
+            .iter()
+            .map(|(id, p)| (id.as_str(), p.as_str()))
+            .collect();
         let mut changed = 0;
         for (p, e) in self.notes() {
             if e.id == target_id {
                 continue;
             }
-            let from_path = before
-                .iter()
-                .find(|(id, _)| *id == e.id)
-                .map(|(_, p)| p.clone())
-                .unwrap_or(p);
+            let from_path = before_paths.get(e.id.as_str()).map_or(p, |p| p.to_string());
             let text = self.note_text(&e.id);
             let rewritten = markdown::rewrite_links(&text, &new_target, |l| {
-                markdown::resolve(l, &from_path, before) == Some(target_id)
+                before.resolve(l, &from_path) == Some(target_id)
             });
             if let Some(t) = rewritten
                 && self.set_note_text(&e.id, &t)?

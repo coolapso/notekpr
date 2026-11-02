@@ -1494,6 +1494,7 @@ fn update_links_after_rename(vault: &str, id: &str, old_path: &str, new_title: &
             c.1 = old_path.to_string();
         }
     }
+    let cands = markdown::Resolver::new(cands);
     let notes = knowledge::notes_with_text(vault);
     let mut changed = 0;
     for (nid, npath, text) in notes {
@@ -1502,9 +1503,8 @@ fn update_links_after_rename(vault: &str, id: &str, old_path: &str, new_title: &
         } else {
             npath
         };
-        let rewritten = markdown::rewrite_links(&text, new_title, |l| {
-            markdown::resolve(l, &path, &cands) == Some(id)
-        });
+        let rewritten =
+            markdown::rewrite_links(&text, new_title, |l| cands.resolve(l, &path) == Some(id));
         if let Some(new_text) = rewritten
             && step(|c| state::set_note_text(c, vault, &nid, &new_text)) > 0
         {
@@ -1833,11 +1833,12 @@ pub fn linked_attachments(c: &Core, vault: &str, id: &str) -> Vec<(String, Strin
         return vec![];
     };
     let live = c.live_entries(vault);
-    let cands: Vec<(String, String)> = live
-        .iter()
-        .filter(|e| e.kind != EntryKind::Folder)
-        .map(|e| (e.id.clone(), e.path.clone()))
-        .collect();
+    let cands = markdown::Resolver::new(
+        live.iter()
+            .filter(|e| e.kind != EntryKind::Folder)
+            .map(|e| (e.id.clone(), e.path.clone()))
+            .collect(),
+    );
     let Some(me) = live.iter().find(|e| e.id == id) else {
         return vec![];
     };

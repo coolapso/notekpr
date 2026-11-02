@@ -73,7 +73,7 @@ pub struct Plan {
     /// The drawings that go, by id.
     drawings: BTreeMap<String, Scene>,
     /// What the notes' links may point at in the vault moved from.
-    candidates: Vec<(String, String)>,
+    candidates: markdown::Resolver,
     /// The originals to trash once the other vault has every copy.
     pub trash: Vec<String>,
 }
@@ -181,11 +181,13 @@ pub fn plan(r: &VaultReplica, what: &What) -> Result<Plan, Unmovable> {
             .ok_or(Unmovable::Loading)?;
         Ok(doc.drawing().scene())
     };
-    let candidates: Vec<(String, String)> = entries
-        .iter()
-        .filter(|e| e.kind != EntryKind::Folder)
-        .map(|e| (e.id.clone(), e.path.clone()))
-        .collect();
+    let candidates = markdown::Resolver::new(
+        entries
+            .iter()
+            .filter(|e| e.kind != EntryKind::Folder)
+            .map(|e| (e.id.clone(), e.path.clone()))
+            .collect(),
+    );
     let moving: BTreeSet<String> = items.iter().map(|i| i.entry.id.clone()).collect();
     let links = |e: &Entry, text: &str| markdown::linked_ids(text, &e.path, &candidates);
     // The files elsewhere its notes link to come along…
@@ -384,19 +386,20 @@ impl Plan {
             .iter()
             .map(|(i, p)| (i.entry.id.clone(), p.clone()))
             .collect();
-        let there: Vec<(String, String)> = to
-            .index
-            .resolved_paths()
-            .into_iter()
-            .filter(|(_, e)| e.kind != EntryKind::Folder)
-            .map(|(p, e)| (e.id, p))
-            .chain(
-                placed
-                    .iter()
-                    .filter(|(i, _)| i.entry.kind != EntryKind::Folder)
-                    .map(|(i, p)| (i.entry.id.clone(), p.clone())),
-            )
-            .collect();
+        let there = markdown::Resolver::new(
+            to.index
+                .resolved_paths()
+                .into_iter()
+                .filter(|(_, e)| e.kind != EntryKind::Folder)
+                .map(|(p, e)| (e.id, p))
+                .chain(
+                    placed
+                        .iter()
+                        .filter(|(i, _)| i.entry.kind != EntryKind::Folder)
+                        .map(|(i, p)| (i.entry.id.clone(), p.clone())),
+                )
+                .collect(),
+        );
         let text_there = |i: &Item, at: &str| -> String {
             let Some(text) = self.texts.get(&i.entry.id) else {
                 return String::new();
@@ -404,14 +407,14 @@ impl Plan {
             // A wiki link to something that came along that would find
             // nothing or something else there: its name, else its path.
             markdown::rewrite_links_with(text, |l| {
-                let id = markdown::resolve(l, &i.entry.path, &self.candidates)?;
+                let id = self.candidates.resolve(l, &i.entry.path)?;
                 let target = new_path.get(id)?;
                 let finds = |t: &str| {
                     let l = markdown::Link {
                         target: t.to_string(),
                         ..l.clone()
                     };
-                    markdown::resolve(&l, at, &there) == Some(id)
+                    there.resolve(&l, at) == Some(id)
                 };
                 if finds(&l.target) {
                     return None;

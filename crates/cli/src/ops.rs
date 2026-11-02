@@ -1497,7 +1497,7 @@ pub async fn list_quick_notes(hub: &Hub, limit: usize) -> OpResult<QuickNotes> {
 /// The attachments the note `id` links to (`(id, path)`), and whether no
 /// other note of the vault does.
 fn linked_attachments(g: &Vault, id: &str) -> Vec<(String, String, bool)> {
-    let cands = g.link_candidates();
+    let cands = markdown::Resolver::new(g.link_candidates());
     let all = g.paths();
     let attachments: BTreeMap<&str, &str> = all
         .iter()

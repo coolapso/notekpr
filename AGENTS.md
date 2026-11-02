@@ -114,7 +114,8 @@ crates/load     load test (`task load`): simulated people = real clients (the CL
                 check, report. load-events: what it streams; load-ui: its live
                 dashboard (wasm32, canvas; scripts/build-load-ui.sh → dist/load)
 tests/e2e       browser tests: run.sh (entry point) → suite.py, cross_client.py, drawings.py;
-                perf.py (typing latency) · wd.py (stdlib WebDriver)
+                perf.py (typing latency), import_perf.py (a big import arriving) ·
+                wd.py (stdlib WebDriver)
 scripts/        build-web.sh, build-load-ui.sh (wasm builds) · demo.py (task demo),
                 demo-files/ (what it can't make, e.g. a video) · logo.py (the logo
                 and icon in docs/assets, by hand) · test-s3.sh (task test:s3: the

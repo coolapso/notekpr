@@ -262,6 +262,12 @@ Add `-- --nocapture` to see the typing-latency line of `typing_on_a_large_note`.
 For the latency in the real app (CRDT, sync, Leptos around the editor), run
 `python3 tests/e2e/perf.py --server target/debug/notekpr-server --web dist/web`:
 it types into a 5,000-line note and prints median/p95 per keystroke.
+How the page copes while a big import arrives from another device (a
+generated export of `--notes` linked notes and `--files` other files,
+written into a CLI mirror a few at a time, as a tool would):
+`python3 tests/e2e/import_perf.py --server target/release/notekpr-server --cli target/release/notekpr --web dist/web`.
+It prints how busy the page was per 10 s, its longest task and how long
+after the last file it settled.
 
 ## Supply-chain checks
 

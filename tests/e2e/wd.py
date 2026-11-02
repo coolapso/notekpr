@@ -9,11 +9,15 @@ KEYS = {"enter": "", "backspace": "", "tab": "", "escape": "", "ctrl
         "shift": "", "left": "", "right": "", "up": "", "down": "", "home": "", "end": ""}
 
 
+# Seconds to wait for an answer; measurements of a busy page raise it.
+TIMEOUT = 60
+
+
 def req(method, path, body=None):
     data = json.dumps(body).encode() if body is not None else None
     r = urllib.request.Request(_wd() + path, data=data, method=method, headers={"Content-Type": "application/json"})
     try:
-        with urllib.request.urlopen(r, timeout=60) as resp:
+        with urllib.request.urlopen(r, timeout=TIMEOUT) as resp:
             return json.loads(resp.read() or b"{}").get("value")
     except urllib.error.HTTPError as e:
         raise RuntimeError(f"{method} {path}: {e.read().decode()[:500]}")

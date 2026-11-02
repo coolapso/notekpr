@@ -1293,6 +1293,10 @@ fn Help() -> impl IntoView {
             "@today, @tomorrow, @yesterday (in a note)".into(),
             "That day's date (or pick one from the @ menu)",
         ),
+        (
+            "Enter, ↓ or Tab (in the title)".into(),
+            "Start writing the note",
+        ),
         (format!("{m}+E"), "Toggle reading view"),
         (format!("{m}+\\"), "Toggle side panel"),
         (format!("{m}+G"), "Graph of the vault"),

@@ -824,8 +824,11 @@ pub fn NoteView(vault: String, note: String) -> impl IntoView {
                                     prop:value=move || title_text.get()
                                     on:input=move |ev| title_text.set(event_target_value(&ev))
                                     on:blur=move |_| c1()
+                                    // Enter, ↓ or Tab: on to the text, as in Obsidian
+                                    // (Tab skips the toolbar, which is for the mouse).
                                     on:keydown=move |ev: web_sys::KeyboardEvent| {
-                                        if ev.key() == "Enter" || ev.key() == "ArrowDown" {
+                                        let tab = ev.key() == "Tab" && !ev.shift_key();
+                                        if ev.key() == "Enter" || ev.key() == "ArrowDown" || tab {
                                             ev.prevent_default();
                                             c2();
                                             if let Some(ed) = editor() { ed.focus(); }

@@ -1518,6 +1518,15 @@ def test_ui_basics(env):
         b.chord(KEYS["escape"])
         time.sleep(0.3)
         check(b.js("return !!document.activeElement.closest('.ed')"), "closing the dialog gives the focus back")
+        # Tab in the title goes on to the text, past the toolbar; Shift+Tab still goes back.
+        b.js("const t=document.querySelector('.note-title'); t.focus(); t.select();")
+        b.keys("Agenda" + KEYS["tab"])
+        time.sleep(0.3)
+        check(b.js("return !!document.activeElement.closest('.ed')") and b.js("return document.querySelector('.note-title').value") == "Agenda",
+              "Tab in the title moves on to the text")
+        b.js("document.querySelector('.note-title').focus()")
+        b.chord(KEYS["shift"], KEYS["tab"])
+        check(b.js("return document.activeElement.classList.contains('note-icon')"), "Shift+Tab in the title goes back to the icon")
         # [[Note#Heading]] opens the note at that heading.
         paste = "const ed=document.querySelector('.ed'); ed.focus(); const s=getSelection(); s.selectAllChildren(ed); s.collapseToEnd();" \
                 "const dt = new DataTransfer(); dt.setData('text/plain', arguments[0]); ed.dispatchEvent(new ClipboardEvent('paste', {clipboardData: dt, bubbles: true, cancelable: true}));"

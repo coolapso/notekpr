@@ -10,7 +10,7 @@ a Mac). The [README](../README.md) has the short version.
   view (`Ctrl+E`).
 * A formatting toolbar and keyboard shortcuts (`Ctrl+/` lists them; `⌘`
   instead of `Ctrl` on a Mac), optional Vim keys, light, dark or system
-  theme.
+  theme. Enter, `↓` or Tab in the title moves on to the text.
 * Notes as narrow or wide as you like: a slider in Settings sets the
   default (for this browser, or the same on all your devices), and a note's
   ⋯ menu gives it a width of its own, only for you.

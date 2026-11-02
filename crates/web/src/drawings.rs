@@ -161,9 +161,8 @@ fn is_plugin_note(c: &Core, vault: &str, id: &str) -> bool {
     let Some(d) = c.replicas.get(vault).and_then(|r| r.notes.get(id)) else {
         return false;
     };
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    d.state_vector().encode_v1().hash(&mut h);
-    let at = h.finish();
+    // Every change counts, a deletion too (a state vector misses those).
+    let at = d.revision();
     let key = (vault.to_string(), id.to_string());
     if let Some((v, yes)) = PLUGIN_NOTES.with(|m| m.borrow().get(&key).copied())
         && v == at

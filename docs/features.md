@@ -115,7 +115,8 @@ a Mac). The [README](../README.md) has the short version.
   Obsidian that show `![[Board.excalidraw]]` find the imported drawing.
 * Works with Excalidraw's files: copy and paste between notekpr and
   excalidraw.com or Obsidian; importing a folder or Obsidian vault turns
-  `.excalidraw` and Obsidian's `.excalidraw.md` drawings into drawings.
+  `.excalidraw` and Obsidian's drawings (`.excalidraw.md`, or any note the
+  plugin's front matter marks as one) into drawings.
   Those synced as they are from a Markdown folder (so Obsidian keeps
   working with them) show as drawings, view-only, when opened and where a
   note embeds them, pictures of the vault included; "Make it a drawing"

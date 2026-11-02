@@ -26,16 +26,24 @@ struct Row {
     /// A note shared individually with people outside the vault.
     shared: bool,
     icon: Option<String>,
+    /// Another app's drawing file, shown as a drawing.
+    other_apps: bool,
 }
 
 fn build_rows(vault: &str, expanded: &BTreeSet<String>) -> Vec<Row> {
-    let (entries, shared): (_, BTreeSet<String>) = state::step(|c| {
+    let (entries, shared, other_apps): (_, BTreeSet<String>, BTreeSet<String>) = state::step(|c| {
         let shared = c
             .replicas
             .get(vault)
             .map(|r| r.shared.clone())
             .unwrap_or_default();
-        (c.live_entries(vault), shared)
+        let entries = c.live_entries(vault);
+        let other_apps = entries
+            .iter()
+            .filter(|e| crate::drawings::is_other_apps_entry(c, vault, e))
+            .map(|e| e.id.clone())
+            .collect();
+        (entries, shared, other_apps)
     });
     let children = order::tree(&entries);
     let mut out = Vec::new();
@@ -43,6 +51,7 @@ fn build_rows(vault: &str, expanded: &BTreeSet<String>) -> Vec<Row> {
         children: &children,
         expanded,
         shared: &shared,
+        other_apps: &other_apps,
     };
     walk.rows("", 0, &mut out);
     out
@@ -53,6 +62,7 @@ struct Walk<'a> {
     children: &'a BTreeMap<String, Vec<order::Child>>,
     expanded: &'a BTreeSet<String>,
     shared: &'a BTreeSet<String>,
+    other_apps: &'a BTreeSet<String>,
 }
 
 impl Walk<'_> {
@@ -75,6 +85,7 @@ impl Walk<'_> {
                 has_children: folder && self.children.get(&c.path).is_some_and(|l| !l.is_empty()),
                 shared: !folder && e.is_some_and(|e| self.shared.contains(&e.id)),
                 icon: e.and_then(|e| e.icon.clone()),
+                other_apps: e.is_some_and(|e| self.other_apps.contains(&e.id)),
             });
             if expanded {
                 self.rows(&c.path, depth + 1, out);
@@ -172,6 +183,8 @@ pub fn Tree(vault: String) -> impl IntoView {
     let v_rows = vault.clone();
     let rows = Memo::new(move |_| {
         ui.tree_rev.get();
+        // A note's front matter can make it Obsidian's drawing.
+        ui.content_rev.track();
         build_rows(&v_rows, &expanded.get())
     });
     let can_write = {
@@ -242,7 +255,7 @@ pub fn Tree(vault: String) -> impl IntoView {
                     let icon = match row.kind {
                         EntryKind::Folder => "folder",
                         // Other apps' drawing files show as drawings.
-                        EntryKind::Note | EntryKind::Attachment if paths::is_other_apps_drawing(&row.name) => "drawing",
+                        _ if row.other_apps => "drawing",
                         EntryKind::Note => "file",
                         EntryKind::Drawing => "drawing",
                         EntryKind::Attachment => match paths::media(&row.name) {
@@ -439,7 +452,8 @@ fn RowMenu(
             // Excalidraw's and Obsidian's drawing files (synced before
             // notekpr had drawings) become drawings.
             {(writable && matches!(kind, EntryKind::Attachment | EntryKind::Note)
-                && notekpr_core::paths::drawing_path_for(&path).is_some()).then(|| {
+                && (notekpr_core::paths::drawing_path_for(&path).is_some()
+                    || row_id.as_ref().is_some_and(|id| crate::drawings::is_other_apps(&vault, id)))).then(|| {
                 let (v, id) = (vault.clone(), row_id.clone().unwrap_or_default());
                 view! { <button on:click=move |_| {
                     close();

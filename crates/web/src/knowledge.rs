@@ -102,30 +102,34 @@ pub fn resolve_target(vault: &str, target: &str, from_path: &str) -> Option<Stri
 /// drawing file too, Obsidian's linked without its `.md` — by path or by
 /// file name (the shortest path wins).
 pub fn resolve_embed(vault: &str, target: &str) -> Option<String> {
-    let entries = state::step(|c| c.live_entries(vault));
+    state::step(|c| resolve_embed_in(c, vault, target))
+}
+
+fn resolve_embed_in(c: &state::Core, vault: &str, target: &str) -> Option<String> {
+    let entries = c.live_entries(vault);
     let t = target.trim().trim_start_matches("./").to_lowercase();
     let embeddable = |e: &Entry| {
         matches!(e.kind, EntryKind::Attachment | EntryKind::Drawing)
-            || crate::drawings::is_other_apps_entry(e)
+            || crate::drawings::is_other_apps_entry(c, vault, e)
     };
     let same = |path: &str, t: &str| {
         let p = path.to_lowercase();
         p == t || p.strip_suffix(".md") == Some(t)
     };
     let find = |t: &str, ok: &dyn Fn(&Entry) -> bool| {
-        let exact = entries.iter().find(|e| ok(e) && same(&e.path, t));
+        let exact = entries.iter().find(|e| same(&e.path, t) && ok(e));
         let by_name = || {
             entries
                 .iter()
-                .filter(|e| ok(e) && same(paths::file_name(&e.path), paths::file_name(t)))
+                .filter(|e| same(paths::file_name(&e.path), paths::file_name(t)) && ok(e))
                 .min_by_key(|e| e.path.len())
         };
         exact.or_else(by_name).map(|e| e.id.clone())
     };
-    // Notes from Obsidian embed `X.excalidraw`: made a drawing (imported,
-    // say), it is `X.drawing`.
+    // Notes from Obsidian embed `X.excalidraw` (or `X`): made a drawing
+    // (imported, say), it is `X.drawing`.
     find(&t, &embeddable).or_else(|| {
-        let ours = paths::drawing_path_for(&t).filter(|p| *p != t)?;
+        let ours = paths::drawing_link_target(&t)?;
         find(&ours, &|e| e.kind == EntryKind::Drawing)
     })
 }

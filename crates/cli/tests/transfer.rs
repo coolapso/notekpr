@@ -575,15 +575,14 @@ async fn importing_other_apps_drawings_makes_drawings() {
     let alice = login(&srv, "alice").await;
     manage::create_vault(&alice, "Obsidian").await.unwrap();
     let h = hub(&alice).await;
-    // An Obsidian vault: the plugin's drawing, Excalidraw's file, and a note
-    // that only has the name.
+    // An Obsidian vault: the plugin's drawings (one renamed: only its front
+    // matter says what it is), Excalidraw's file, and a note that only has
+    // the name.
     let dir = srv.path("obsidian-vault");
     std::fs::create_dir_all(dir.join("Excalidraw")).unwrap();
-    std::fs::write(
-        dir.join("Excalidraw/Concept.excalidraw.md"),
-        include_str!("../../draw/tests/fixtures/obsidian.excalidraw.md"),
-    )
-    .unwrap();
+    let plugins = include_str!("../../draw/tests/fixtures/obsidian.excalidraw.md");
+    std::fs::write(dir.join("Excalidraw/Concept.excalidraw.md"), plugins).unwrap();
+    std::fs::write(dir.join("Excalidraw/Priorities.md"), plugins).unwrap();
     std::fs::write(
         dir.join("Board.excalidraw"),
         include_str!("../../draw/tests/fixtures/example.excalidraw"),
@@ -594,10 +593,15 @@ async fn importing_other_apps_drawings_makes_drawings() {
     let r = transfer::import(&h, &v, &dir, None, false, false)
         .await
         .unwrap();
-    assert_eq!((r.notes, r.drawings), (1, 2), "{:?}", r.skipped);
+    assert_eq!((r.notes, r.drawings), (1, 3), "{:?}", r.skipped);
     let paths = v.lock().await.paths();
     let kind = |p: &str| paths.get(p).map(|e| e.kind);
     assert_eq!(kind("Excalidraw/Concept.drawing"), Some(EntryKind::Drawing));
+    assert_eq!(
+        kind("Excalidraw/Priorities.drawing"),
+        Some(EntryKind::Drawing)
+    );
+    assert_eq!(kind("Excalidraw/Priorities.md"), None);
     assert_eq!(kind("Board.drawing"), Some(EntryKind::Drawing));
     assert_eq!(kind("Just a name.excalidraw.md"), Some(EntryKind::Note));
     assert_eq!(kind("Board.excalidraw"), None);

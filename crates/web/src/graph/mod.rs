@@ -78,7 +78,7 @@ impl Graph {
         for (i, n) in notes.iter().enumerate() {
             for l in &n.links {
                 let target = markdown::resolve(l, &n.path, entries).or_else(|| {
-                    let ours = paths::drawing_path_for(&l.target).filter(|t| *t != l.target)?;
+                    let ours = paths::drawing_link_target(&l.target)?;
                     let l = Link {
                         target: ours,
                         ..l.clone()

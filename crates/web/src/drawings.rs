@@ -7,11 +7,12 @@
 //! files its texts need are put inside it, fetched once from the app's own
 //! `fonts/` (never from elsewhere).
 //!
-//! Other apps' drawing files in a vault (Obsidian's `X.excalidraw.md`, a
-//! note; Excalidraw's `X.excalidraw`, a file — synced as they are from a
-//! Markdown folder) are shown as drawings too, view-only: read here, never
-//! written, so those apps keep working with them. Making a drawing of one
-//! is the person's choice (`actions::make_drawing_of`).
+//! Other apps' drawing files in a vault (Obsidian's, notes: its Excalidraw
+//! plugin's front matter says so, named `X.excalidraw.md` or not;
+//! Excalidraw's `X.excalidraw`, files — synced as they are from a Markdown
+//! folder) are shown as drawings too, view-only: read here, never written,
+//! so those apps keep working with them. Making a drawing of one is the
+//! person's choice (`actions::make_drawing_of`).
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -28,7 +29,7 @@ use notekpr_draw::svg::{self, SvgOptions};
 use leptos::prelude::*;
 
 use crate::api;
-use crate::state::{step, ui};
+use crate::state::{Core, step, ui};
 use crate::util;
 
 const FONTS_CSS: &str = "/fonts/drawing-fonts.css";
@@ -53,6 +54,9 @@ thread_local! {
     /// Other apps' drawing files read, by (vault, file): the version read
     /// ([`shown_version`]) and its drawing (`None`: the file isn't one).
     static OTHER_SCENES: RefCell<HashMap<(String, String), (u64, Option<Rc<Scene>>)>> = RefCell::new(HashMap::new());
+    /// Whether notes are the Obsidian Excalidraw plugin's, by (vault,
+    /// note): the version looked at and the answer.
+    static PLUGIN_NOTES: RefCell<HashMap<(String, String), (u64, bool)>> = RefCell::new(HashMap::new());
 }
 
 /// How many drawings `vault` holds — those in the trash too, as the server
@@ -94,68 +98,107 @@ pub struct Listed {
 /// The drawings in `vault`, wherever in it, newest first, other apps'
 /// drawing files among them.
 pub fn in_vault(vault: &str) -> Vec<Listed> {
-    let mut out: Vec<Listed> = step(|c| c.live_entries(vault))
-        .into_iter()
-        .filter(|e| e.kind == EntryKind::Drawing || is_other_apps_entry(e))
-        .map(|e| {
-            let folder = e
-                .path
-                .rsplit_once('/')
-                .map(|(f, _)| f.to_string())
-                .unwrap_or_default();
-            let app = other_app(&e.path);
-            let title = match paths::drawing_path_for(&e.path) {
-                Some(p) if app.is_some() => paths::drawing_title(&p).to_string(),
-                _ => e.title().to_string(),
-            };
-            Listed {
-                id: e.id.clone(),
-                title,
-                folder,
-                modified: e.modified,
-                app,
-            }
-        })
-        .collect();
+    let mut out: Vec<Listed> = step(|c| {
+        c.live_entries(vault)
+            .into_iter()
+            .filter_map(|e| match e.kind {
+                EntryKind::Drawing => Some((e, None)),
+                _ => is_other_apps_entry(c, vault, &e).then(|| {
+                    let app = other_app(&e);
+                    (e, Some(app))
+                }),
+            })
+            .collect::<Vec<_>>()
+    })
+    .into_iter()
+    .map(|(e, app)| {
+        let folder = e
+            .path
+            .rsplit_once('/')
+            .map(|(f, _)| f.to_string())
+            .unwrap_or_default();
+        let title = match paths::drawing_path_for(&e.path) {
+            Some(p) if app.is_some() => paths::drawing_title(&p).to_string(),
+            _ => e.title().to_string(),
+        };
+        Listed {
+            id: e.id.clone(),
+            title,
+            folder,
+            modified: e.modified,
+            app,
+        }
+    })
+    .collect();
     out.sort_by_key(|e| std::cmp::Reverse(e.modified));
     out
 }
 
-/// The app a drawing file at `path` is another app's of: Obsidian (its
-/// Excalidraw plugin's `.excalidraw.md`) or Excalidraw (`.excalidraw`).
-pub fn other_app(path: &str) -> Option<&'static str> {
-    if !paths::is_other_apps_drawing(path) {
-        return None;
-    }
-    Some(if path.to_ascii_lowercase().ends_with(".md") {
+/// The app another app's drawing file is of: Obsidian (a note, its
+/// Excalidraw plugin's) or Excalidraw (a file, `.excalidraw`).
+pub fn other_app(e: &Entry) -> &'static str {
+    if e.kind == EntryKind::Note {
         "Obsidian"
     } else {
         "Excalidraw"
-    })
+    }
 }
 
-/// Another app's drawing file: a note or file named as one.
-pub fn is_other_apps_entry(e: &Entry) -> bool {
-    matches!(e.kind, EntryKind::Note | EntryKind::Attachment)
-        && paths::is_other_apps_drawing(&e.path)
+/// Another app's drawing file: a file named as one, or a note named as one
+/// or whose front matter says it is one (what the Obsidian Excalidraw
+/// plugin goes by).
+pub fn is_other_apps_entry(c: &Core, vault: &str, e: &Entry) -> bool {
+    match e.kind {
+        EntryKind::Attachment => paths::is_other_apps_drawing(&e.path),
+        EntryKind::Note => paths::is_other_apps_drawing(&e.path) || is_plugin_note(c, vault, &e.id),
+        _ => false,
+    }
+}
+
+/// A note the Obsidian Excalidraw plugin made, by its front matter: looked
+/// at once per version of the note.
+fn is_plugin_note(c: &Core, vault: &str, id: &str) -> bool {
+    let Some(d) = c.replicas.get(vault).and_then(|r| r.notes.get(id)) else {
+        return false;
+    };
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    d.state_vector().encode_v1().hash(&mut h);
+    let at = h.finish();
+    let key = (vault.to_string(), id.to_string());
+    if let Some((v, yes)) = PLUGIN_NOTES.with(|m| m.borrow().get(&key).copied())
+        && v == at
+    {
+        return yes;
+    }
+    let yes = notekpr_draw::obsidian::has_plugin_front_matter(&d.text());
+    PLUGIN_NOTES.with(|m| m.borrow_mut().insert(key, (at, yes)));
+    yes
 }
 
 /// Another app's drawing file of the vault, shown as a drawing as it is.
 pub fn is_other_apps(vault: &str, id: &str) -> bool {
-    step(|c| c.entry(vault, id)).is_some_and(|e| is_other_apps_entry(&e))
+    step(|c| {
+        c.entry(vault, id)
+            .is_some_and(|e| is_other_apps_entry(c, vault, &e))
+    })
 }
 
 /// Shown as a drawing: a drawing of the vault, or another app's drawing file.
 pub fn shows_as_drawing(vault: &str, id: &str) -> bool {
-    step(|c| c.entry(vault, id))
-        .is_some_and(|e| e.kind == EntryKind::Drawing || is_other_apps_entry(&e))
+    step(|c| {
+        c.entry(vault, id)
+            .is_some_and(|e| e.kind == EntryKind::Drawing || is_other_apps_entry(c, vault, &e))
+    })
 }
 
 /// The drawing another app's file holds, read once per version of it, with
 /// the pictures it shows from the vault; `None` if it isn't one, or can't
 /// be had (yet: a file is fetched).
 pub async fn other_apps_scene(vault: &str, id: &str) -> Option<Scene> {
-    let e = step(|c| c.entry(vault, id)).filter(is_other_apps_entry)?;
+    let e = step(|c| {
+        c.entry(vault, id)
+            .filter(|e| is_other_apps_entry(c, vault, e))
+    })?;
     if e.kind == EntryKind::Note {
         step(|c| c.ensure_note_loaded(vault, id));
     }
@@ -493,7 +536,7 @@ pub async fn load_preview(vault: &str, id: &str) -> Option<String> {
     if let Some(url) = cached_preview(vault, id) {
         return Some(url);
     }
-    let scene = if is_other_apps_entry(&e) {
+    let scene = if step(|c| is_other_apps_entry(c, vault, &e)) {
         other_apps_scene(vault, id).await?
     } else {
         scene(vault, id)?

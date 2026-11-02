@@ -107,7 +107,8 @@ asks what to do with them:
 The vault is one of yours by the name you give (the notes join what it
 has) or a new one. The first sync uploads the notes the way the Markdown
 folder takes in any new file, so they stay exactly as they were: Obsidian's
-`.excalidraw.md` drawings stay notes, which the web app shows as drawings,
+drawings (`.excalidraw.md`, or renamed: the plugin's front matter says so)
+stay notes, which the web app shows as drawings,
 view-only, until you make one a drawing of notekpr's. A folder that a cloud service
 (Nextcloud, Dropbox, Syncthing, OneDrive, iCloud) syncs gets a warning: it
 would upload the decrypted notes. The top of the file system, your home
@@ -871,7 +872,8 @@ them, and existing attachments, alone — "the same path" ignoring case,
 exactly as `write` matches notes); drawing files become drawings at their
 `.drawing` path — ours, Excalidraw's `X.excalidraw` and Obsidian's
 `X.excalidraw.md` (a Markdown file by that name that isn't a drawing stays a
-note), and notes showing `![[X.excalidraw]]` show the imported drawing; other
+note), or any `X.md` whose front matter marks it as the plugin's drawing —
+and notes showing `![[X.excalidraw]]` (or `![[X]]`) show the imported drawing; other
 files become attachments, empty
 directories become folders. Hidden files and editor leftovers are skipped, as
 are empty attachment files and files over the server's attachment limit

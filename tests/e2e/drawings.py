@@ -711,6 +711,22 @@ def main():
                ".some(e => e.textContent.startsWith(\"Excalidraw's file\"))", 10, "Excalidraw's file among the drawings")
         check(a.text(".drawings-page .drawings-count") == "3 drawings", "the Drawings page shows it, uncounted")
         a.shot("drawings")
+
+        # Named as any note (renamed in Obsidian, say): the plugin's front
+        # matter alone makes it the plugin's drawing, as Obsidian goes by.
+        check(cli("write", "Art", "Sketches/Renamed.md", input=obsidian).returncode == 0,
+              "Obsidian's drawing under a note's name")
+        a.click_el(a.find_text(".tree-item", "Renamed", 20))
+        a.find(".other-apps-banner", 10)
+        check("Obsidian's drawing file" in a.text(".other-apps-banner")
+              and a.js(f"return !!document.querySelector('{CANVAS}') && !document.querySelector('.drawing-tools')"),
+              "a note with the plugin's front matter opens as its drawing, view-only")
+        a.click_el(a.find_text(".sb-link", "Drawings", 10))
+        a.wait("return Array.from(document.querySelectorAll('.drawings-page .drawing-card'))"
+               ".some(c => c.querySelector('.drawing-name').textContent === 'Renamed'"
+               " && c.querySelector('.drawing-folder').textContent === \"Obsidian's file · Sketches\")",
+               10, "Obsidian's renamed drawing among the drawings")
+        check(a.text(".drawings-page .drawings-count") == "3 drawings", "still uncounted")
         check(not severe_logs(a), "no browser errors")
         print("ALL PASSED")
     finally:

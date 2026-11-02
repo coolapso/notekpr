@@ -111,6 +111,36 @@ pub fn drawing_path_for(path: &str) -> Option<String> {
         .map(|ext| format!("{}{DRAWING_EXT}", &path[..path.len() - ext.len()]))
 }
 
+/// [`drawing_path_for`], and a note the Obsidian Excalidraw plugin made
+/// under another name than `X.excalidraw.md` — its front matter says so —
+/// as `X.drawing` too. `text`: what the file holds.
+pub fn drawing_path_of(path: &str, text: &str) -> Option<String> {
+    drawing_path_for(path).or_else(|| {
+        (is_note(path)
+            && file_name(path).len() > 3
+            && notekpr_draw::obsidian::has_plugin_front_matter(text))
+        .then(|| format!("{}{DRAWING_EXT}", &path[..path.len() - 3]))
+    })
+}
+
+/// What a link to another app's drawing file finds once that is a drawing
+/// of notekpr's (made one, or imported): `X.drawing` for `X.excalidraw`,
+/// `X.excalidraw.md`, and `X.md` or `X` (the plugin's notes under other
+/// names). `None` for a link to a drawing already.
+pub fn drawing_link_target(target: &str) -> Option<String> {
+    if is_drawing(target) {
+        return None;
+    }
+    drawing_path_for(target).or_else(|| {
+        let lower = target.to_ascii_lowercase();
+        let base = match lower.strip_suffix(".md") {
+            Some(b) => &target[..b.len()],
+            None => target,
+        };
+        (!file_name(base).is_empty()).then(|| format!("{base}{DRAWING_EXT}"))
+    })
+}
+
 /// A drawing's name: its file name without `.drawing`.
 pub fn drawing_title(path: &str) -> &str {
     let name = file_name(path);
@@ -228,6 +258,29 @@ mod tests {
         assert!(!is_other_apps_drawing("a/B.drawing"));
         assert!(!is_other_apps_drawing("B.md"));
         assert!(!is_other_apps_drawing(".excalidraw"));
+        // By what it holds: the plugin's notes under any name.
+        let plugin = "---\nexcalidraw-plugin: parsed\n---\n";
+        assert_eq!(
+            drawing_path_of("a/Plan.md", plugin).as_deref(),
+            Some("a/Plan.drawing")
+        );
+        assert_eq!(
+            drawing_path_of("a/Plan.excalidraw.md", "").as_deref(),
+            Some("a/Plan.drawing")
+        );
+        assert_eq!(drawing_path_of("a/Plan.md", "# Plan"), None);
+        assert_eq!(drawing_path_of("a/.md", plugin), None);
+        assert_eq!(drawing_path_of("a/plan.png", plugin), None);
+        for (link, to) in [
+            ("a/Plan.excalidraw", Some("a/Plan.drawing")),
+            ("Plan.excalidraw.md", Some("Plan.drawing")),
+            ("Plan.MD", Some("Plan.drawing")),
+            ("Plan", Some("Plan.drawing")),
+            ("Plan.drawing", None),
+            ("a/.md", None),
+        ] {
+            assert_eq!(drawing_link_target(link).as_deref(), to, "{link}");
+        }
     }
 
     #[test]

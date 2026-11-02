@@ -544,10 +544,12 @@ async fn import_collected(
     let (mut files, dirs) = collected;
     // Notes first: a file in the quick notes needs a note linking to it.
     // Drawings last: the pictures they show may be among the files.
-    files.sort_by_key(|(rel, _)| {
-        if paths::drawing_path_for(rel).is_some() {
+    files.sort_by_cached_key(|(rel, data)| {
+        let note = paths::is_note(rel);
+        let text = note.then(|| std::str::from_utf8(data).ok()).flatten();
+        if paths::drawing_path_of(rel, text.unwrap_or_default()).is_some() {
             2
-        } else if paths::is_note(rel) {
+        } else if note {
             0
         } else {
             1
@@ -682,15 +684,16 @@ async fn import_collected(
 }
 
 /// A drawing file that is a drawing becomes one, at its `.drawing` path:
-/// ours, Excalidraw's `.excalidraw` and Obsidian's `.excalidraw.md` (not in
-/// the quick notes, which hold notes). Anything else is a note or a file.
+/// ours, Excalidraw's `.excalidraw` and Obsidian's (`.excalidraw.md`, or a
+/// note whose front matter says it is one), not in the quick notes, which
+/// hold notes. Anything else is a note or a file.
 fn drawing_in(
     path: &str,
     data: &[u8],
     v: &crate::vault::Vault,
 ) -> Option<(String, notekpr_draw::scene::Scene)> {
-    let to = paths::drawing_path_for(path).filter(|_| !v.is_quick_notes())?;
     let text = std::str::from_utf8(data).ok()?;
+    let to = paths::drawing_path_of(path, text).filter(|_| !v.is_quick_notes())?;
     let mut ids = notekpr_draw::restore::Ids::new(notekpr_core::now_ms() as u64);
     notekpr_draw::file::read_drawing(text, &mut ids)
         .ok()

@@ -1283,14 +1283,17 @@ fn new_drawing_at(
 }
 
 /// An Excalidraw or Obsidian drawing file of the vault (a file, or a note
-/// `X.excalidraw.md`) made a drawing beside it (`X.drawing`), its
+/// `X.excalidraw.md` or `X.md`) made a drawing beside it (`X.drawing`), its
 /// pictures files of the vault; the file goes to the trash and the
 /// drawing opens. Asked first: the other app loses the file.
 pub async fn make_drawing_of(vault: &str, id: &str) {
     let Some(e) = step(|c| c.entry(vault, id)) else {
         return;
     };
-    let Some(to) = paths::drawing_path_for(&e.path) else {
+    let note = (e.kind == EntryKind::Note)
+        .then(|| step(|c| c.replicas.get(vault).map(|r| r.note_text(id))))
+        .flatten();
+    let Some(to) = paths::drawing_path_of(&e.path, note.as_deref().unwrap_or_default()) else {
         return;
     };
     let question = format!(
@@ -1304,7 +1307,7 @@ pub async fn make_drawing_of(vault: &str, id: &str) {
         return;
     }
     let text = match e.kind {
-        EntryKind::Note => step(|c| c.replicas.get(vault).map(|r| r.note_text(id))),
+        EntryKind::Note => note,
         _ => attachment_bytes(vault, id)
             .await
             .and_then(|b| String::from_utf8(b).ok()),
@@ -2828,7 +2831,13 @@ async fn import_files(vault: &str, mut files: Vec<(String, Vec<u8>)>, strip_top:
     let max = state::max_update_bytes();
     // Drawings last: the pictures they show may be among the files, made
     // once (by their bytes).
-    files.sort_by_key(|(p, _)| paths::drawing_path_for(p).is_some());
+    let drawing_path = |path: &str, data: &[u8]| {
+        let text = paths::is_note(path)
+            .then(|| std::str::from_utf8(data).ok())
+            .flatten();
+        paths::drawing_path_of(path, text.unwrap_or_default())
+    };
+    files.sort_by_cached_key(|(p, data)| drawing_path(p, data).is_some());
     let mut known: HashMap<Vec<u8>, String> = HashMap::new();
     for (i, (path, data)) in files.into_iter().enumerate() {
         // Send in pushes of bounded size as we go, and let the page breathe.
@@ -2840,7 +2849,7 @@ async fn import_files(vault: &str, mut files: Vec<(String, Vec<u8>)>, strip_top:
         if i % 20 == 19 {
             util::sleep(0).await;
         }
-        let drawing = paths::drawing_path_for(&path)
+        let drawing = drawing_path(&path, &data)
             .filter(|_| !quick)
             .and_then(|to| {
                 let text = std::str::from_utf8(&data).ok()?;

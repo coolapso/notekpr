@@ -21,6 +21,25 @@ pub fn is_obsidian_name(name: &str) -> bool {
     name.to_lowercase().ends_with(".excalidraw.md")
 }
 
+/// Whether a note is one of the plugin's drawings by its front matter, as
+/// the plugin tells (`isExcalidrawFile`): `excalidraw-plugin` set, whatever
+/// the note is called (`X.excalidraw.md` is only its default name).
+pub fn has_plugin_front_matter(md: &str) -> bool {
+    let mut lines = md.trim_start_matches('\u{feff}').lines();
+    if lines.next().map(str::trim_end) != Some("---") {
+        return false;
+    }
+    lines
+        .map(str::trim_end)
+        .take_while(|l| *l != "---" && *l != "...")
+        .filter_map(|l| l.split_once(':'))
+        .any(|(key, value)| {
+            let unquoted = |s: &str| s.trim().trim_matches(['"', '\'']).to_string();
+            unquoted(key) == "excalidraw-plugin"
+                && !matches!(unquoted(value).as_str(), "" | "false" | "null" | "~")
+        })
+}
+
 /// The `## Drawing` (or older `# Drawing`) heading's end.
 fn drawing_heading(md: &str) -> Option<usize> {
     ["\n## Drawing\n", "\n# Drawing\n"]
@@ -292,5 +311,24 @@ mod tests {
         assert!(read(broken, &mut Ids::new(1)).is_err());
         assert!(is_obsidian_name("Board.Excalidraw.md"));
         assert!(!is_obsidian_name("Board.excalidraw"));
+    }
+
+    #[test]
+    fn the_front_matter_tells_a_drawing() {
+        assert!(has_plugin_front_matter(STAND_IN));
+        assert!(has_plugin_front_matter(FRONT_MATTER));
+        assert!(has_plugin_front_matter(
+            "\u{feff}---\r\ntags: [x]\r\n\"excalidraw-plugin\": 'raw'\r\n---\r\n"
+        ));
+        for not in [
+            "just a note",
+            "# Title\n---\nexcalidraw-plugin: parsed\n---\n",
+            "---\ntags: [x]\n---\nexcalidraw-plugin: parsed\n",
+            "---\nexcalidraw-plugin: false\n---\n",
+            "---\nexcalidraw-plugin:\n---\n",
+            "---\nexcalidraw-plugin-x: parsed\n---\n",
+        ] {
+            assert!(!has_plugin_front_matter(not), "{not:?}");
+        }
     }
 }

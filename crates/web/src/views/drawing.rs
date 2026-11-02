@@ -36,11 +36,13 @@ pub fn Document(vault: String, note: String) -> impl IntoView {
     let shown = Memo::new(move |_| {
         ui.tree_rev.get();
         ui.vaults.track();
-        match state::step(|c| c.entry(&v, &n)) {
+        // A note's front matter can make it Obsidian's drawing.
+        ui.content_rev.track();
+        state::step(|c| match c.entry(&v, &n) {
             Some(e) if e.kind == EntryKind::Drawing => Shown::Drawing,
-            Some(e) if crate::drawings::is_other_apps_entry(&e) => Shown::OtherApps,
+            Some(e) if crate::drawings::is_other_apps_entry(c, &v, &e) => Shown::OtherApps,
             _ => Shown::Note,
-        }
+        })
     });
     move || {
         let (vault, note) = (vault.clone(), note.clone());
@@ -724,7 +726,7 @@ pub fn DrawingView(vault: String, id: String, #[prop(optional)] view_only: bool)
             let _ = r.focus();
         }
     };
-    let banner = view_only.then(|| other_apps_banner(&vault, &id, &path.get_untracked()));
+    let banner = view_only.then(|| other_apps_banner(&vault, &id));
     view! {
         <div class="note-page drawing-page" tabindex="0" node_ref=root_ref on:keydown=on_key on:keyup=on_key_up
             on:copy=on_copy on:cut=on_cut on:paste=on_paste on:drop=on_drop on:dragover=|ev: web_sys::DragEvent| ev.prevent_default()>
@@ -875,10 +877,14 @@ pub fn DrawingView(vault: String, id: String, #[prop(optional)] view_only: bool)
 
 /// Above another app's drawing file: what it is, and making a drawing of it
 /// (where the vault may be changed).
-fn other_apps_banner(vault: &str, id: &str, path: &str) -> AnyView {
-    let app = crate::drawings::other_app(path).unwrap_or("Another app");
+fn other_apps_banner(vault: &str, id: &str) -> AnyView {
+    let (app, can) = state::step(|c| {
+        let app = c
+            .entry(vault, id)
+            .map_or("Another app", |e| crate::drawings::other_app(&e));
+        (app, c.can_write(vault) && !c.is_quick_notes(vault))
+    });
     let (v, i) = (vault.to_string(), id.to_string());
-    let can = state::step(|c| c.can_write(vault) && !c.is_quick_notes(vault));
     view! {
         <div class="banner other-apps-banner"><Icon name="drawing"/>
             <span>{format!("{app}'s drawing file, shown as it is (view-only), so {app} keeps working with it. To edit it here, make it a drawing of notekpr's.")}</span>

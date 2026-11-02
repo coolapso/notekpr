@@ -14,7 +14,20 @@ use leptos::prelude::*;
 use crate::state::{self, step};
 
 thread_local! {
-    static ANALYSIS: RefCell<HashMap<(String, String), (u64, Rc<NoteInfo>)>> = RefCell::new(HashMap::new());
+    /// Per note: its analysis, and the text and revision it was made from.
+    static ANALYSIS: RefCell<HashMap<(String, String), Analysed>> = RefCell::new(HashMap::new());
+    /// Per vault: what its links resolve to, and the index revision that
+    /// was made from.
+    static RESOLVERS: RefCell<HashMap<String, (u64, Rc<markdown::Resolver>)>> =
+        RefCell::new(HashMap::new());
+}
+
+struct Analysed {
+    /// The note's revision (`NoteDoc::revision`); 0 when the text came from
+    /// elsewhere.
+    rev: u64,
+    hash: u64,
+    info: Rc<NoteInfo>,
 }
 
 fn hash(s: &str) -> u64 {
@@ -28,17 +41,95 @@ fn hash(s: &str) -> u64 {
 }
 
 pub fn analysis(vault: &str, note: &str, text: &str) -> Rc<NoteInfo> {
+    analysed(vault, note, 0, text)
+}
+
+/// The analysis of `text`, the note's text at revision `rev` (0: unknown).
+fn analysed(vault: &str, note: &str, rev: u64, text: &str) -> Rc<NoteInfo> {
     let key = (vault.to_string(), note.to_string());
     let h = hash(text);
     ANALYSIS.with(|a| {
-        if let Some((hh, info)) = a.borrow().get(&key)
-            && *hh == h
+        let mut a = a.borrow_mut();
+        if let Some(x) = a.get_mut(&key)
+            && x.hash == h
         {
-            return info.clone();
+            if rev != 0 {
+                x.rev = rev;
+            }
+            return x.info.clone();
         }
         let info = Rc::new(markdown::analyze(text));
-        a.borrow_mut().insert(key, (h, info.clone()));
+        a.insert(
+            key,
+            Analysed {
+                rev,
+                hash: h,
+                info: info.clone(),
+            },
+        );
         info
+    })
+}
+
+/// A note's analysis. Its text is read only if the note changed since it
+/// was last analysed: whole-vault passes (backlinks, the graph, tags) run
+/// on every change that arrives, and most notes haven't changed.
+fn analysis_of(c: &state::Core, vault: &str, note: &str) -> Rc<NoteInfo> {
+    let doc = c.replicas.get(vault).and_then(|r| r.notes.get(note));
+    let rev = doc.map_or(0, |d| d.revision());
+    if rev != 0 {
+        let key = (vault.to_string(), note.to_string());
+        let hit = ANALYSIS.with(|a| {
+            a.borrow()
+                .get(&key)
+                .filter(|x| x.rev == rev)
+                .map(|x| x.info.clone())
+        });
+        if let Some(info) = hit {
+            return info;
+        }
+    }
+    let text = doc.map(|d| d.text()).unwrap_or_default();
+    analysed(vault, note, rev, &text)
+}
+
+/// The vault's notes, `(id, path, analysis)`.
+fn analysed_notes(vault: &str) -> Vec<(String, String, Rc<NoteInfo>)> {
+    step(|c| {
+        c.live_entries(vault)
+            .into_iter()
+            .filter(|e| e.kind == EntryKind::Note)
+            .map(|e| {
+                let info = analysis_of(c, vault, &e.id);
+                (e.id, e.path, info)
+            })
+            .collect()
+    })
+}
+
+/// What links in the vault resolve to, made again when its index changed.
+fn resolver(vault: &str) -> Rc<markdown::Resolver> {
+    step(|c| {
+        let rev = c.replicas.get(vault).map(|r| r.index.revision());
+        let cached = RESOLVERS.with(|m| {
+            m.borrow()
+                .get(vault)
+                .filter(|(at, _)| Some(*at) == rev)
+                .map(|(_, r)| r.clone())
+        });
+        if let Some(r) = cached {
+            return r;
+        }
+        let r = Rc::new(markdown::Resolver::new(
+            c.live_entries(vault)
+                .into_iter()
+                .map(|e| (e.id, e.path))
+                .collect(),
+        ));
+        if let Some(rev) = rev {
+            RESOLVERS.with(|m| m.borrow_mut().insert(vault.to_string(), (rev, r.clone())));
+        }
+        r
     })
 }
 
@@ -76,13 +167,6 @@ fn searchable(vault: &str) -> Vec<(String, String, String)> {
     })
 }
 
-fn candidates(vault: &str) -> Vec<(String, String)> {
-    state::step(|c| c.live_entries(vault))
-        .into_iter()
-        .map(|e| (e.id, e.path))
-        .collect()
-}
-
 /// Resolve a wiki-link style target (note title or path) to an entry id.
 pub fn resolve_target(vault: &str, target: &str, from_path: &str) -> Option<String> {
     let link = Link {
@@ -94,8 +178,9 @@ pub fn resolve_target(vault: &str, target: &str, from_path: &str) -> Option<Stri
         start: 0,
         end: 0,
     };
-    let c = candidates(vault);
-    markdown::resolve(&link, from_path, &c).map(str::to_string)
+    resolver(vault)
+        .resolve(&link, from_path)
+        .map(str::to_string)
 }
 
 /// What an embed shows (`![[…]]`): a file or a drawing — another app's
@@ -134,19 +219,9 @@ fn resolve_embed_in(c: &state::Core, vault: &str, target: &str) -> Option<String
     })
 }
 
-/// Fast existence check used while rendering the editor (cached per tree revision).
-pub struct LinkIndex {
-    rev: u64,
-    vault: String,
-    keys: std::collections::HashSet<String>,
-}
-
-thread_local! {
-    static LINKS: RefCell<Option<LinkIndex>> = const { RefCell::new(None) };
-}
-
+/// Whether a wiki link to `target` finds something (while rendering the
+/// editor).
 pub fn link_exists(vault: &str, target: &str) -> bool {
-    let rev = state::ui().tree_rev.get_untracked();
     let key = {
         let t = target.trim().trim_start_matches("./").to_lowercase();
         let t = t.split('#').next().unwrap_or("").to_string();
@@ -156,87 +231,48 @@ pub fn link_exists(vault: &str, target: &str) -> bool {
             t
         }
     };
-    if key.is_empty() {
-        return true;
-    }
-    LINKS.with(|l| {
-        let stale = l
-            .borrow()
-            .as_ref()
-            .is_none_or(|x| x.rev != rev || x.vault != vault);
-        if stale {
-            let mut keys = std::collections::HashSet::new();
-            for (_, p) in candidates(vault) {
-                let lp = p.to_lowercase();
-                let lp = if paths::is_note(&lp) {
-                    lp[..lp.len() - 3].to_string()
-                } else {
-                    lp
-                };
-                let mut cur = lp.as_str();
-                keys.insert(cur.to_string());
-                while let Some(i) = cur.find('/') {
-                    cur = &cur[i + 1..];
-                    keys.insert(cur.to_string());
-                }
-            }
-            *l.borrow_mut() = Some(LinkIndex {
-                rev,
-                vault: vault.to_string(),
-                keys,
-            });
-        }
-        l.borrow().as_ref().is_some_and(|x| x.keys.contains(&key))
-    })
+    key.is_empty() || resolver(vault).knows(&key)
 }
 
 /// Forget everything derived from decrypted notes (on sign-out).
 pub fn clear_caches() {
     ANALYSIS.with(|a| a.borrow_mut().clear());
-    LINKS.with(|l| *l.borrow_mut() = None);
+    RESOLVERS.with(|r| r.borrow_mut().clear());
 }
 
 /// The vault's notes and drawings and the links between them, for the
 /// graph view.
 pub fn graph(vault: &str) -> crate::graph::Graph {
-    let (notes, entries) = step(|c| {
+    let links = resolver(vault);
+    let notes = step(|c| {
         let Some(r) = c.replicas.get(vault) else {
-            return (vec![], vec![]);
+            return vec![];
         };
-        let live = c.live_entries(vault);
-        let notes: Vec<_> = live
-            .iter()
+        c.live_entries(vault)
+            .into_iter()
             .filter(|e| matches!(e.kind, EntryKind::Note | EntryKind::Drawing))
             .map(|e| {
-                // A note's text; a drawing's links, as text (`[[…]]` each).
-                let links = (e.kind == EntryKind::Drawing).then(|| {
+                let drawing = e.kind == EntryKind::Drawing;
+                // A drawing's links, as text (`[[…]]` each).
+                let links = if drawing {
                     r.notes
                         .get(&e.id)
                         .map(|d| crate::graph::drawing_links(&d.drawing().scene()))
                         .unwrap_or_default()
-                });
-                let text = if links.is_some() {
-                    String::new()
                 } else {
-                    r.note_text(&e.id)
+                    analysis_of(c, vault, &e.id).links.clone()
                 };
-                (e.id.clone(), e.path.clone(), e.icon.clone(), text, links)
+                crate::graph::NoteLinks {
+                    drawing,
+                    links,
+                    id: e.id,
+                    path: e.path,
+                    icon: e.icon,
+                }
             })
-            .collect();
-        let entries = live.into_iter().map(|e| (e.id, e.path)).collect::<Vec<_>>();
-        (notes, entries)
+            .collect()
     });
-    let notes = notes
-        .into_iter()
-        .map(|(id, path, icon, text, links)| crate::graph::NoteLinks {
-            drawing: links.is_some(),
-            links: links.unwrap_or_else(|| analysis(vault, &id, &text).links.clone()),
-            id,
-            path,
-            icon,
-        })
-        .collect();
-    crate::graph::Graph::build(notes, &entries)
+    crate::graph::Graph::build(notes, &links)
 }
 
 pub struct Backlink {
@@ -246,34 +282,37 @@ pub struct Backlink {
 }
 
 pub fn backlinks(vault: &str, note: &str) -> Vec<Backlink> {
-    let notes = notes_with_text(vault);
-    let c = candidates(vault);
+    let links = resolver(vault);
     let mut out = Vec::new();
-    for (id, path, text) in &notes {
+    for (id, path, info) in analysed_notes(vault) {
         if id == note {
             continue;
         }
-        let info = analysis(vault, id, text);
-        for l in &info.links {
-            if markdown::resolve(l, path, &c) == Some(note) {
-                let line_start = text[..l.start].rfind('\n').map(|i| i + 1).unwrap_or(0);
-                let line_end = text[l.end..]
-                    .find('\n')
-                    .map(|i| l.end + i)
-                    .unwrap_or(text.len());
-                // As shown: without HTML tags (colors).
-                let snippet: String = markdown::shown_text(&text[line_start..line_end])
-                    .chars()
-                    .take(160)
-                    .collect();
-                out.push(Backlink {
-                    id: id.clone(),
-                    path: path.clone(),
-                    snippet,
-                });
-                break;
-            }
-        }
+        let Some(l) = info
+            .links
+            .iter()
+            .find(|l| links.resolve(l, &path) == Some(note))
+        else {
+            continue;
+        };
+        // The text only of the notes that link here, for the snippet.
+        let text = step(|c| c.replicas.get(vault).map(|r| r.note_text(&id))).unwrap_or_default();
+        let line_start = text
+            .get(..l.start)
+            .and_then(|t| t.rfind('\n'))
+            .map(|i| i + 1)
+            .unwrap_or(0);
+        let line_end = text
+            .get(l.end..)
+            .and_then(|t| t.find('\n'))
+            .map(|i| l.end + i)
+            .unwrap_or(text.len());
+        // As shown: without HTML tags (colors).
+        let snippet: String = markdown::shown_text(text.get(line_start..line_end).unwrap_or(""))
+            .chars()
+            .take(160)
+            .collect();
+        out.push(Backlink { id, path, snippet });
     }
     out.sort_by(|a, b| a.path.cmp(&b.path));
     out
@@ -282,11 +321,11 @@ pub fn backlinks(vault: &str, note: &str) -> Vec<Backlink> {
 /// Links in a note that point to nothing (broken-link detection).
 pub fn broken_links(vault: &str, note: &str, path: &str, text: &str) -> Vec<String> {
     let info = analysis(vault, note, text);
-    let c = candidates(vault);
+    let links = resolver(vault);
     let mut out: Vec<String> = info
         .links
         .iter()
-        .filter(|l| !l.target.is_empty() && markdown::resolve(l, path, &c).is_none())
+        .filter(|l| !l.target.is_empty() && links.resolve(l, path).is_none())
         .map(|l| l.target.clone())
         .collect();
     out.sort();
@@ -296,13 +335,13 @@ pub fn broken_links(vault: &str, note: &str, path: &str, text: &str) -> Vec<Stri
 
 pub fn outgoing(vault: &str, note: &str, path: &str, text: &str) -> Vec<(String, String)> {
     let info = analysis(vault, note, text);
-    let c = candidates(vault);
+    let links = resolver(vault);
     let mut out: Vec<(String, String)> = info
         .links
         .iter()
-        .filter_map(|l| markdown::resolve(l, path, &c))
-        .filter(|id| *id != note)
-        .filter_map(|id| c.iter().find(|(i, _)| i == id).cloned())
+        .filter_map(|l| links.find(l, path))
+        .filter(|(id, _)| id != note)
+        .cloned()
         .collect();
     out.sort();
     out.dedup();
@@ -311,8 +350,8 @@ pub fn outgoing(vault: &str, note: &str, path: &str, text: &str) -> Vec<(String,
 
 pub fn tags(vault: &str) -> Vec<(String, usize)> {
     let mut counts: BTreeMap<String, usize> = BTreeMap::new();
-    for (id, _, text) in notes_with_text(vault) {
-        for t in &analysis(vault, &id, &text).tags {
+    for (_, _, info) in analysed_notes(vault) {
+        for t in &info.tags {
             *counts.entry(t.clone()).or_default() += 1;
         }
     }

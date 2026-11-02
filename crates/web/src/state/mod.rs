@@ -574,6 +574,11 @@ pub struct Core {
     pub prefs_save: util::Debounce,
     pub presence_debounce: util::Debounce,
     pub content_debounce: util::Debounce,
+    /// Index changes that arrived: what shows the tree and links is worked
+    /// out again at most this often, not for each of an import's thousands.
+    pub index_changes: util::Throttle,
+    /// Per vault, [`Core::live_entries`] and the index revision they are of.
+    live: RefCell<HashMap<String, (u64, Rc<Vec<notekpr_core::doc::Entry>>)>>,
     pub cursor: Option<(usize, usize)>,
     /// On the drawing open here: our pointer and what we selected, for the
     /// others drawing along.
@@ -733,20 +738,31 @@ impl Core {
         }
     }
 
+    /// The vault's entries that aren't trashed, each at the path it shows
+    /// at. Worked out once per change of the index: the tree, links and
+    /// the graph all ask for them on every change that arrives.
     pub fn live_entries(&self, vault: &str) -> Vec<notekpr_core::doc::Entry> {
-        self.replicas
-            .get(vault)
-            .map(|r| {
-                r.index
-                    .resolved_paths()
-                    .into_iter()
-                    .map(|(p, mut e)| {
-                        e.path = p;
-                        e
-                    })
-                    .collect()
-            })
-            .unwrap_or_default()
+        let Some(r) = self.replicas.get(vault) else {
+            return vec![];
+        };
+        let rev = r.index.revision();
+        if let Some((_, entries)) = self.live.borrow().get(vault).filter(|(at, _)| *at == rev) {
+            return entries.as_ref().clone();
+        }
+        let entries: Rc<Vec<notekpr_core::doc::Entry>> = Rc::new(
+            r.index
+                .resolved_paths()
+                .into_iter()
+                .map(|(p, mut e)| {
+                    e.path = p;
+                    e
+                })
+                .collect(),
+        );
+        self.live
+            .borrow_mut()
+            .insert(vault.to_string(), (rev, entries.clone()));
+        entries.as_ref().clone()
     }
 
     pub fn notes_of(&self, vault: &str) -> Vec<(String, String)> {

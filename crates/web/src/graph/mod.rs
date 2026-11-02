@@ -68,7 +68,7 @@ impl Graph {
     /// missing notes and to the note itself are left out. A link to another
     /// app's drawing file (`X.excalidraw`) finds the drawing made of it
     /// (`X.drawing`), as embeds do.
-    pub fn build(notes: Vec<NoteLinks>, entries: &[(String, String)]) -> Graph {
+    pub fn build(notes: Vec<NoteLinks>, links: &markdown::Resolver) -> Graph {
         let index: HashMap<&str, usize> = notes
             .iter()
             .enumerate()
@@ -77,13 +77,13 @@ impl Graph {
         let mut edges = BTreeSet::new();
         for (i, n) in notes.iter().enumerate() {
             for l in &n.links {
-                let target = markdown::resolve(l, &n.path, entries).or_else(|| {
+                let target = links.resolve(l, &n.path).or_else(|| {
                     let ours = paths::drawing_link_target(&l.target)?;
                     let l = Link {
                         target: ours,
                         ..l.clone()
                     };
-                    markdown::resolve(&l, &n.path, entries)
+                    links.resolve(&l, &n.path)
                 });
                 if let Some(&j) = target.and_then(|t| index.get(t))
                     && j != i
@@ -213,7 +213,7 @@ mod tests {
         .iter()
         .map(|(i, p)| (i.to_string(), p.to_string()))
         .collect();
-        Graph::build(notes, &entries)
+        Graph::build(notes, &markdown::Resolver::new(entries))
     }
 
     #[test]
@@ -270,7 +270,7 @@ mod tests {
             .iter()
             .map(|n| (n.id.clone(), n.path.clone()))
             .collect();
-        let g = Graph::build(notes, &entries);
+        let g = Graph::build(notes, &markdown::Resolver::new(entries));
         // Plan–Beds (embedded one way, linked back the other: once),
         // Old–Shed (an Excalidraw file's name finds the drawing).
         assert_eq!(g.edges, vec![(0, 2), (1, 3)]);

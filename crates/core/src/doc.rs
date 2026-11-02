@@ -16,6 +16,7 @@
 //! [`INDEX_OBJECT_ID`]: crate::protocol::INDEX_OBJECT_ID
 
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use yrs::updates::decoder::Decode;
@@ -68,6 +69,37 @@ impl LocalUpdates {
                 yrs::merge_updates_v1(v.iter().map(|u| u.as_slice())).expect("merging own updates"),
             ),
         }
+    }
+}
+
+/// Revisions come from one counter for every document, so a document
+/// replaced by another (a snapshot loaded, say) never repeats one.
+static REVISIONS: AtomicU64 = AtomicU64::new(1);
+
+/// A number that changes with every change to a document, local or remote:
+/// what was worked out from it is stale when the number differs.
+#[derive(Clone)]
+struct Revision(Arc<AtomicU64>);
+
+impl Default for Revision {
+    fn default() -> Self {
+        Revision(Arc::new(AtomicU64::new(
+            REVISIONS.fetch_add(1, Ordering::Relaxed),
+        )))
+    }
+}
+
+impl Revision {
+    fn attach(&self, doc: &Doc) {
+        let n = self.0.clone();
+        doc.observe_update_v1("notekpr-revision", move |_, _| {
+            n.store(REVISIONS.fetch_add(1, Ordering::Relaxed), Ordering::Relaxed);
+        })
+        .expect("observer registration on a fresh doc");
+    }
+
+    fn get(&self) -> u64 {
+        self.0.load(Ordering::Relaxed)
     }
 }
 
@@ -124,6 +156,7 @@ pub struct NoteDoc {
     doc: Doc,
     text: TextRef,
     local: LocalUpdates,
+    revision: Revision,
     undo: Option<yrs::UndoManager>,
 }
 
@@ -139,10 +172,13 @@ impl NoteDoc {
         let text = doc.get_or_insert_text(NOTE_TEXT);
         let local = LocalUpdates::default();
         local.attach(&doc);
+        let revision = Revision::default();
+        revision.attach(&doc);
         NoteDoc {
             doc,
             text,
             local,
+            revision,
             undo: None,
         }
     }
@@ -158,6 +194,12 @@ impl NoteDoc {
 
     pub fn doc(&self) -> &Doc {
         &self.doc
+    }
+
+    /// Changes with every change to the note (its text, or a drawing's
+    /// scene), local or remote; never the same for two documents.
+    pub fn revision(&self) -> u64 {
+        self.revision.get()
     }
 
     /// Apply a remote update. Idempotent: re-applying a known update is a no-op.
@@ -453,6 +495,7 @@ pub struct IndexDoc {
     /// the item as JSON ([`crate::library`]).
     library: MapRef,
     local: LocalUpdates,
+    revision: Revision,
 }
 
 impl Default for IndexDoc {
@@ -483,11 +526,14 @@ impl IndexDoc {
         let library = doc.get_or_insert_map(INDEX_LIBRARY);
         let local = LocalUpdates::default();
         local.attach(&doc);
+        let revision = Revision::default();
+        revision.attach(&doc);
         IndexDoc {
             doc,
             files,
             library,
             local,
+            revision,
         }
     }
 
@@ -511,6 +557,13 @@ impl IndexDoc {
 
     pub fn take_local_update(&self) -> Option<Vec<u8>> {
         self.local.take()
+    }
+
+    /// Changes with every change to the index, local or remote; never the
+    /// same for two documents. What was worked out from its entries (paths,
+    /// link targets) is stale when it differs.
+    pub fn revision(&self) -> u64 {
+        self.revision.get()
     }
 
     fn read_entry<T: ReadTxn>(&self, txn: &T, id: &str, m: &MapRef) -> Option<Entry> {
@@ -927,6 +980,35 @@ impl IndexDoc {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn revisions_change_with_every_change_deletions_too() {
+        let n = NoteDoc::new();
+        let r0 = n.revision();
+        n.set_text("abc");
+        let r1 = n.revision();
+        assert_ne!(r0, r1);
+        n.set_text("ab");
+        assert_ne!(n.revision(), r1, "a deletion is a change");
+        let r2 = n.revision();
+        n.set_text("ab");
+        assert_eq!(n.revision(), r2, "nothing changed");
+        // Received changes count too; two documents never share one.
+        let m = NoteDoc::from_updates([n.encode_state().as_slice()]).unwrap();
+        assert_ne!(m.revision(), n.revision());
+        let rm = m.revision();
+        m.apply_update(&n.set_text("abd").unwrap()).unwrap();
+        assert_ne!(m.revision(), rm);
+
+        let i = IndexDoc::new();
+        i.create("a", "A.md", EntryKind::Note, 1);
+        let r = i.revision();
+        i.trash("a", 2);
+        assert_ne!(i.revision(), r);
+        let r = i.revision();
+        i.remove("a");
+        assert_ne!(i.revision(), r);
+    }
 
     #[test]
     fn crafted_updates_found_by_fuzzing_do_not_panic() {

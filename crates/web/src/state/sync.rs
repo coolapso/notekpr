@@ -1146,6 +1146,9 @@ pub(super) fn on_vault_event(vault_id: String, event: VaultEventKind) {
     }
 }
 
+/// How often index changes that arrive show (ms): the tree, links.
+const INDEX_CHANGES_MS: i32 = 200;
+
 /// React to newly applied content: refresh the tree, the open note, panels.
 /// An edge: it pushes the content into the open editor, so it runs after
 /// the step that applied it, never inside one.
@@ -1157,7 +1160,7 @@ pub fn after_apply(vault_id: &str, applied: engine::Applied) {
         leptos::task::spawn_local(fetch_restored(vault_id.to_string(), o.clone()));
     }
     let ui = ui();
-    let (content, open, library) = step(|c| {
+    let (content, index, open, library) = step(|c| {
         crate::cache::note_applied(c, vault_id, &applied);
         let open = c
             .editor
@@ -1172,19 +1175,33 @@ pub fn after_apply(vault_id: &str, applied: engine::Applied) {
                 (n.clone(), e.clone(), text, is_member(c, v))
             });
         let library = applied.index_changed && c.is_quick_notes(vault_id);
-        (c.content_debounce.clone(), open, library)
+        (
+            c.content_debounce.clone(),
+            c.index_changes.clone(),
+            open,
+            library,
+        )
     });
     if library {
         ui.library_rev.update(|n| *n += 1);
     }
     let current = ui.route.get_untracked();
-    if current.vault() == Some(vault_id) || current.shared().is_some_and(|(v, _)| v == vault_id) {
-        if applied.index_changed || !applied.purged.is_empty() {
+    let shown =
+        current.vault() == Some(vault_id) || current.shared().is_some_and(|(v, _)| v == vault_id);
+    let index_changed = applied.index_changed || !applied.purged.is_empty();
+    if shown && (index_changed || !applied.objects.is_empty()) {
+        content.run(250, move || ui.content_rev.update(|v| *v += 1));
+    }
+    // The tree, and the open note's links (their targets may have appeared
+    // or gone): worked out again once per interval while changes keep
+    // arriving — an import brings thousands, one by one.
+    if index_changed && (shown || open.is_some()) {
+        index.run(INDEX_CHANGES_MS, move || {
             ui.tree_rev.update(|v| *v += 1);
-        }
-        if !applied.objects.is_empty() || applied.index_changed || !applied.purged.is_empty() {
-            content.run(250, move || ui.content_rev.update(|v| *v += 1));
-        }
+            if let Some(ed) = step(|c| c.editor.as_ref().map(|(_, _, e)| e.clone())) {
+                ed.refresh();
+            }
+        });
     }
     let comments_changed = !applied.comments.is_empty();
     // Push remote content into the open editor.
@@ -1199,10 +1216,6 @@ pub fn after_apply(vault_id: &str, applied: engine::Applied) {
             } else {
                 Route::Home
             });
-        }
-        if applied.index_changed {
-            // Link targets may have appeared or disappeared.
-            ed.refresh();
         }
     }
     if comments_changed {

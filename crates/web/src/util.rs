@@ -65,6 +65,25 @@ impl Debounce {
     }
 }
 
+/// Runs work at most once per interval: the first call schedules it, the
+/// calls until it runs join that run. Unlike [`Debounce`], a steady stream of
+/// calls doesn't hold it back.
+#[derive(Clone, Default)]
+pub struct Throttle(Rc<std::cell::Cell<bool>>);
+
+impl Throttle {
+    pub fn run(&self, ms: i32, f: impl FnOnce() + 'static) {
+        if self.0.replace(true) {
+            return;
+        }
+        let scheduled = self.0.clone();
+        set_timeout(ms, move || {
+            scheduled.set(false);
+            f();
+        });
+    }
+}
+
 pub fn relative_time(ms: i64) -> String {
     let diff = (now_ms() - ms).max(0) / 1000;
     match diff {

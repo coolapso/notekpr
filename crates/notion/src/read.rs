@@ -128,7 +128,7 @@ impl Workspace {
     pub fn read(exports: Vec<Files>) -> Workspace {
         let mut ws = Workspace::default();
         let mut csvs = Vec::new();
-        let mut markdown = 0;
+        let mut markdown = Vec::new();
         for (export, files) in exports.into_iter().enumerate() {
             for (path, data) in files {
                 let path = clean_path(&path);
@@ -151,14 +151,17 @@ impl Workspace {
                 } else if lower.ends_with(".zip") {
                     ws.unreadable.push(Unreadable::Zip(path));
                 } else if lower.ends_with(".md") {
-                    markdown += 1;
+                    markdown.push(((export, path), data));
                 } else {
                     ws.files.insert((export, path), data);
                 }
             }
         }
-        if markdown > 0 && ws.pages.is_empty() {
-            ws.unreadable.push(Unreadable::Markdown(markdown));
+        // Notes in a Markdown export; files a page holds in an HTML one.
+        if !markdown.is_empty() && ws.pages.is_empty() {
+            ws.unreadable.push(Unreadable::Markdown(markdown.len()));
+        } else {
+            ws.files.extend(markdown);
         }
         csvs.sort_by(|a, b| (a.0, &a.1).cmp(&(b.0, &b.1)));
         for (export, path, data) in csvs {

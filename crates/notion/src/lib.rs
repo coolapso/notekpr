@@ -152,16 +152,16 @@ impl Export {
     /// Notion's exports, each as unzipped.
     pub fn read(exports: Vec<Files>) -> Result<Export, Error> {
         let ws = read::Workspace::read(exports);
+        // A Markdown export has its databases' CSVs too, but no pages.
+        let markdown = ws
+            .unreadable
+            .iter()
+            .any(|u| matches!(u, read::Unreadable::Markdown(_)));
+        if markdown {
+            return Err(Error::Markdown);
+        }
         if ws.pages.is_empty() && ws.databases.is_empty() {
-            let markdown = ws
-                .unreadable
-                .iter()
-                .any(|u| matches!(u, read::Unreadable::Markdown(_)));
-            return Err(if markdown {
-                Error::Markdown
-            } else {
-                Error::NotAnExport
-            });
+            return Err(Error::NotAnExport);
         }
         Ok(Export(ws))
     }

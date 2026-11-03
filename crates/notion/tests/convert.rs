@@ -641,6 +641,24 @@ fn the_same_export_gives_the_same_files() {
 fn what_isnt_an_export() {
     let e = convert(vec![vec![("a.md".into(), b"# A".to_vec())]], &opts());
     assert_eq!(e.err(), Some(notekpr_notion::Error::Markdown));
+    // A Markdown export of a database: its rows as notes, its CSVs.
+    let markdown: Files = vec![
+        (format!("Journal {}.md", id(JOURNAL)), b"# Journal".to_vec()),
+        (
+            format!("Journal {}.csv", id(JOURNAL)),
+            b"Name\nA\n".to_vec(),
+        ),
+        (
+            format!("Journal {}_all.csv", id(JOURNAL)),
+            b"Name\nA\n".to_vec(),
+        ),
+        (
+            format!("Journal/A {}.md", id(ENTRY)),
+            b"# A\n\nTags: Daily".to_vec(),
+        ),
+    ];
+    let e = convert(vec![markdown], &opts());
+    assert_eq!(e.err(), Some(notekpr_notion::Error::Markdown));
     let e = convert(vec![vec![("a.txt".into(), b"A".to_vec())]], &opts());
     assert_eq!(e.err(), Some(notekpr_notion::Error::NotAnExport));
 }

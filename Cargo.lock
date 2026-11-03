@@ -2916,6 +2916,7 @@ dependencies = [
  "notekpr-core",
  "notekpr-draw",
  "notekpr-editor",
+ "notekpr-notion",
  "notekpr-sync",
  "proptest",
  "pulldown-cmark",

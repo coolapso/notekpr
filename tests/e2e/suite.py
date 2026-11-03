@@ -677,6 +677,97 @@ def test_export_import(env):
         b.close()
 
 
+def notion_export():
+    """A database exported from Notion as HTML, laid out and written as
+    Notion does: its page, its CSV, a row with a database of its own."""
+    import io, zipfile
+    def uid(n):
+        h = f"{n:032x}"
+        return f"{h[:8]}-{h[8:12]}-{h[12:16]}-{h[16:20]}-{h[20:]}"
+    def page(n, icon, title, props, body):
+        icon_attr = f' data-notion-page-icon="{icon}"' if icon else ""
+        return (f'<html><head><meta charset="utf-8"/><style>p {{ x: 1 }}</style></head><body>'
+                f'<article id="{uid(n)}" class="page sans"{icon_attr}><header><h1 class="page-title">{title}</h1>'
+                f'<table class="properties"><tbody>{props}</tbody></table></header>'
+                f'<div class="page-body">{body}</div></article></body></html>')
+    def prop(kind, name, cell):
+        return f'<tr class="property-row property-row-{kind}"><th>{name}</th><td>{cell}</td></tr>'
+    def rows(columns, items):
+        head = "".join(f"<th>{c}</th>" for c in columns)
+        body = "".join(f'<tr id="{uid(n)}"><td class="cell-title"><a href="x.html" data-notion-page-id="{uid(n)}">{t}</a></td></tr>'
+                       for n, t in items)
+        return f'<table class="collection-content"><thead><tr>{head}</tr></thead><tbody>{body}</tbody></table>'
+    def status(name, color):
+        return prop("status", "Status", f'<span class="status-value select-value-color-{color}"><div class="status-dot"></div>{name}</span>')
+    entry = ('<h2>To do</h2>'
+             f'<div id="{uid(5)}" class="collection-content"><h4 class="collection-title">Today</h4>'
+             f'{rows(["Name"], [(6, "Write tests"), (7, "Buy milk")])}</div>'
+             f'<p>Planned in <a href="https://app.notion.com/p/Week-18-{9:032x}" data-notion-page-id="{uid(9)}">Week 18</a>.</p>')
+    files = {
+        f"Journal {1:032x}.html": page(1, "📓", "Journal", "", f'<div class="collection-content-wrapper">{rows(["Name"], [(2, "@May 2, 2023")])}</div>'),
+        f"Journal {1:032x}.csv": "﻿Name,Tags\n\"@May 2, 2023 \",Daily\n",
+        f"Journal/@May 2, 2023 {2:032x}.html": page(2, "🤖", '<time datetime="2023-05-02">@May 2, 2023</time> ',
+                                                      prop("multi_select", "Tags", '<span class="selected-value">Daily</span>'), entry),
+        f"Journal/@May 2, 2023/Today {5:032x}.csv": "Name,Status\nWrite tests,Done\nBuy milk,Not started\n",
+        f"Journal/@May 2, 2023/Today/Write tests {6:032x}.html": page(6, "", "Write tests", status("Done", "green"), ""),
+        f"Journal/@May 2, 2023/Today/Buy milk {7:032x}.html": page(7, "", "Buy milk", status("Not started", "default"), ""),
+    }
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        for name, text in files.items():
+            z.writestr(name, text)
+    return base64.b64encode(buf.getvalue()).decode()
+
+
+def test_notion_import(env):
+    """Importing from Notion: what an export holds is shown before it comes
+    in, into a folder of its own; the same export again brings nothing new."""
+    b = Browser()
+    items = "return Array.from(document.querySelectorAll('.notion-item')).map(l => l.textContent)"
+    try:
+        signup(b, uniq("nia"))
+        b.click(".vault-btn")
+        b.click_el(b.find_text(".vault-menu button", "New vault"))
+        b.type(".modal input", "Imports")
+        b.click(".modal button[type=submit]")
+        b.find_text(".page-head h1", "Imports", 15)
+        home = b.js("return location.pathname")
+        b.js(CHOOSE_FILE, "Export.zip", notion_export())
+        b.click_el(b.find_text(".qa", "Import notes"))
+        b.click(".notion-pick")
+        b.find(".notion-item", 15)
+        listed = b.js(items)
+        check(len(listed) == 1 and "Journal" in listed[0] and "1 row" in listed[0], "what the export holds is listed first, its rows counted")
+        check(b.js("return document.querySelector('.modal b').textContent") == "Notion/", "it goes into a folder of its own")
+        b.shot("notion-import")
+        b.click(".notion-import")
+        b.find_text(".toast", "from Notion into Notion", 30)
+        b.wait("return (document.querySelector('.note-title') || {}).value === 'Imported from Notion'", 15, "the report")
+        check("Week 18" in editor_text(b), "then the report opens, naming the page linked to but not exported")
+        b.click_el(b.find_text(".tree-item", "Notion", 15))
+        b.find_text(".tree-item", "Journal", 15)
+        check(b.js("return Array.from(document.querySelectorAll('.tree-row')).some(r => r.textContent.includes('📓') && r.textContent.includes('Journal'))"),
+              "the database is a folder, with its icon")
+        b.click_el(b.find_text(".tree-item", "Journal", 15))
+        b.click_el(b.find_text(".tree-item", "2023-05-02", 15))
+        b.wait("return (document.querySelector('.note-title') || {}).value === '2023-05-02'", 15, "the row")
+        text = editor_text(b)
+        check("Write tests" in text and "Buy milk" in text, "a row is a note named after its day, its tasks a checklist")
+        check("[[Week 18]]" in text, "with a link that waits for the page it names")
+
+        # The same export again: what came already isn't imported again.
+        b.js("history.pushState(null, '', arguments[0]); dispatchEvent(new PopStateEvent('popstate'));", home)
+        b.click_el(b.find_text(".qa", "Import notes", 15))
+        b.click(".notion-pick")
+        b.find(".notion-item", 15)
+        check("already here" in b.js(items)[0] and not b.js("return document.querySelector('.notion-item input').checked"),
+              "importing it again, what came already is unticked")
+        check(b.js("return document.querySelector('.notion-import').disabled"), "and there's nothing to import")
+        check(not severe_logs(b), "no browser errors")
+    finally:
+        b.close()
+
+
 def test_delete_account(env):
     """Deleting one's account: what goes is said first; signing in again
     starts a new, empty account."""
@@ -3091,7 +3182,7 @@ def test_device_code(env):
         a.close()
 
 
-TESTS = [test_onboarding, test_collab, test_devices_and_recovery, test_features, test_attachments, test_export_import, test_delete_account, test_move_to_vault, test_note_sharing, test_tables, test_code_blocks, test_html, test_callouts, test_colors, test_code_wrapping, test_editor_mouse, test_editor_safety, test_local_copy, test_ui_basics, test_offline_tabs, test_offline_start, test_mobile, test_quick_notes, test_vault_icons, test_entry_icons, test_tree_order, test_session_ended_while_away, test_outdated, test_comments, test_mentions, test_dates, test_graph, test_recovered_copy, test_note_width, test_admin, test_vault_storage, test_vault_admins, test_owners, test_undo_purge, test_device_code]
+TESTS = [test_onboarding, test_collab, test_devices_and_recovery, test_features, test_attachments, test_export_import, test_notion_import, test_delete_account, test_move_to_vault, test_note_sharing, test_tables, test_code_blocks, test_html, test_callouts, test_colors, test_code_wrapping, test_editor_mouse, test_editor_safety, test_local_copy, test_ui_basics, test_offline_tabs, test_offline_start, test_mobile, test_quick_notes, test_vault_icons, test_entry_icons, test_tree_order, test_session_ended_while_away, test_outdated, test_comments, test_mentions, test_dates, test_graph, test_recovered_copy, test_note_width, test_admin, test_vault_storage, test_vault_admins, test_owners, test_undo_purge, test_device_code]
 
 
 def main():

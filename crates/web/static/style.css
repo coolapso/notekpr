@@ -1082,6 +1082,9 @@ label.btn.disabled { opacity: .6; pointer-events: none; }
 .export-choice .check:has(input:disabled) { opacity: 0.55; cursor: default; }
 .export-choice .check .grow { min-width: 0; }
 .export-choice .check .pill { margin-left: 0; flex: none; }
+.notion-items { grid-template-columns: 1fr; max-height: 50vh; overflow-y: auto; }
+.notion-items .notion-icon { flex: none; }
+.notion-items .muted { flex: none; }
 
 /* Drawings: the page of one, and previews where notes embed them. */
 .drawing-page { height: 100%; }

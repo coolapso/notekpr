@@ -2769,11 +2769,11 @@ pub async fn import(vault: &str, files: Vec<(String, Vec<u8>)>) {
 
 /// What [`import_files`] brought in, of how many files.
 #[derive(Default)]
-struct Imported {
-    notes: usize,
-    drawings: usize,
-    files: usize,
-    total: usize,
+pub(crate) struct Imported {
+    pub notes: usize,
+    pub drawings: usize,
+    pub files: usize,
+    pub total: usize,
 }
 
 /// Bring files into a vault, keeping their folders (an export's empty ones,
@@ -2781,7 +2781,11 @@ struct Imported {
 /// many. Drawing files (ours, Excalidraw's, Obsidian's) become drawings.
 /// `strip_top`: files all in one folder (a folder upload, a zip of one) go
 /// to the top level.
-async fn import_files(vault: &str, mut files: Vec<(String, Vec<u8>)>, strip_top: bool) -> Imported {
+pub(crate) async fn import_files(
+    vault: &str,
+    mut files: Vec<(String, Vec<u8>)>,
+    strip_top: bool,
+) -> Imported {
     let hidden = |s: &str| s.starts_with('.') || s == "__MACOSX";
     files.retain(|(p, _)| {
         let (dirs, last) = p.rsplit_once('/').unwrap_or(("", p));

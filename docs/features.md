@@ -234,6 +234,15 @@ a Mac). The [README](../README.md) has the short version.
   keeps it in sync in the background.
 * Import folders of Markdown and zip files (an Obsidian vault, say) with their
   attachments; export a vault as plain `.md` files any time.
+* Import from Notion: export a page or database as HTML there (⋯ → Export,
+  with subpages) and bring its `.zip` in (*Import notes* → *Import from
+  Notion…*), one piece after another, each into a folder of its own
+  (`Notion`, `Notion 2`, …). What it holds is shown first, to choose from.
+  Pages become notes, those with subpages folders; databases folders of
+  notes, their properties in front matter, with a note holding a table of
+  the rows; tasks checklists; links between pages wiki links, also to pages
+  that come in a later piece. What came already isn't imported again, and
+  a note, *Imported from Notion*, lists what didn't come along.
 * Moving to another server: export the vaults you choose and your quick
   notes as one `.zip` (Settings → Account → Data), and import it there — the
   vaults come back with their folders, files and icons; the new server

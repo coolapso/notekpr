@@ -10,10 +10,10 @@ use notekpr_core::protocol::*;
 
 use crate::actions;
 use crate::state::{self, Modal, Route, step, ui};
-use crate::util;
 use crate::views::avatar;
 use crate::views::icons::Icon;
 use crate::{api, knowledge, render};
+use crate::{notion, util};
 
 #[component]
 pub(crate) fn Dialog(
@@ -1577,16 +1577,107 @@ fn ImportDialog(vault: String) -> impl IntoView {
         );
     };
     let run2 = run;
-    let (v1, v2) = (vault.clone(), vault.clone());
+    // From Notion: the exports read, what they hold, and what not to import.
+    let picked = StoredValue::new(None::<std::sync::Arc<notion::Picked>>);
+    let items = RwSignal::new(Vec::<notekpr_notion::Item>::new());
+    let into = RwSignal::new(String::new());
+    let skipped = RwSignal::new(std::collections::BTreeSet::<String>::new());
+    let pick_notion = move |v: String| {
+        actions::pick_files(false, ".zip", move |files| {
+            if files.is_empty() {
+                return;
+            }
+            busy.set(true);
+            leptos::task::spawn_local(async move {
+                match notion::read(&v, files).await {
+                    Ok(p) => {
+                        // What came in full already starts unticked.
+                        skipped.set(
+                            p.items
+                                .iter()
+                                .filter(|i| i.notes > 0 && i.already >= i.notes)
+                                .map(|i| i.id.clone())
+                                .collect(),
+                        );
+                        into.set(p.opts.into.clone());
+                        items.set(p.items.clone());
+                        picked.set_value(Some(std::sync::Arc::new(p)));
+                    }
+                    Err(e) => state::error(e),
+                }
+                busy.set(false);
+            });
+        });
+    };
+    let import_notion = move |v: String| {
+        let Some(p) = picked.get_value() else {
+            return;
+        };
+        busy.set(true);
+        leptos::task::spawn_local(async move {
+            notion::import(&v, &p, skipped.get_untracked()).await;
+            busy.set(false);
+            ui.modal.set(None);
+        });
+    };
+    let back = move |_| {
+        picked.set_value(None);
+        items.set(Vec::new());
+    };
+    let (v1, v2, v3, v4) = (vault.clone(), vault.clone(), vault.clone(), vault.clone());
     let _ = EntryKind::Note;
+    let item_row = move |i: notekpr_notion::Item| {
+        let (id, id2) = (i.id.clone(), i.id.clone());
+        let mut about = vec![match i.rows {
+            Some(n) => util::count(n, "row", "rows"),
+            None => util::count(i.notes, "note", "notes"),
+        }];
+        if i.already >= i.notes && i.notes > 0 {
+            about.push("already here".into());
+        } else if i.already > 0 {
+            about.push(format!("{} already here", i.already));
+        }
+        if i.linked {
+            about.push("shown in a linked view".into());
+        }
+        view! {
+            <label class="check notion-item">
+                <input type="checkbox" prop:checked=move || !skipped.with(|s| s.contains(&id))
+                    on:change=move |ev| {
+                        let on = event_target_checked(&ev);
+                        skipped.update(|s| { if on { s.remove(&id2); } else { s.insert(id2.clone()); } });
+                    }/>
+                <span class="notion-icon">{i.icon.clone().unwrap_or_else(|| "📄".into())}</span>
+                <span class="grow ellipsis">{i.title.clone()}</span>
+                <span class="muted small">{about.join(" · ")}</span>
+            </label>
+        }
+    };
+    let nothing = move || items.with(|all| all.iter().all(|i| skipped.with(|s| s.contains(&i.id))));
     view! {
         <Dialog title="Import notes">
-            <p>"Bring in Markdown notes from Obsidian, other apps or a previous export. Folder structure and attachments are kept. Files are encrypted on this device before upload."</p>
-            <div class="stack">
-                <button class="btn" disabled=move || busy.get() on:click=move |_| run(true, v1.clone())><Icon name="folder"/>" Import a folder…"</button>
-                <button class="btn" disabled=move || busy.get() on:click=move |_| run2(false, v2.clone())><Icon name="file"/>" Import files or a .zip…"</button>
-            </div>
-            <Show when=move || busy.get()><p class="muted"><span class="spinner inline"></span>" Importing…"</p></Show>
+            <Show when=move || items.with(Vec::is_empty) fallback=move || view! {
+                <p>"From Notion, into "<b>{move || format!("{}/", into.get())}</b>". Choose what to import:"</p>
+                <div class="export-choice notion-items">
+                    {move || items.get().into_iter().map(item_row).collect_view()}
+                </div>
+                <p class="muted small">"Pages become notes, databases folders of notes with a table of their rows, or checklists. Links between pages stay links. A note, “Imported from Notion”, lists what didn't come along."</p>
+                <div class="row">
+                    <button class="btn primary notion-import" disabled=move || busy.get() || nothing()
+                        on:click={ let v = v4.clone(); move |_| import_notion(v.clone()) }>"Import"</button>
+                    <button class="btn ghost" disabled=move || busy.get() on:click=back>"Back"</button>
+                </div>
+                <Show when=move || busy.get()><p class="muted"><span class="spinner inline"></span>" Importing…"</p></Show>
+            }>
+                <p>"Bring in Markdown notes from Obsidian, other apps or a previous export. Folder structure and attachments are kept. Files are encrypted on this device before upload."</p>
+                <div class="stack">
+                    <button class="btn" disabled=move || busy.get() on:click={ let v = v1.clone(); move |_| run(true, v.clone()) }><Icon name="folder"/>" Import a folder…"</button>
+                    <button class="btn" disabled=move || busy.get() on:click={ let v = v2.clone(); move |_| run2(false, v.clone()) }><Icon name="file"/>" Import files or a .zip…"</button>
+                    <button class="btn notion-pick" disabled=move || busy.get() on:click={ let v = v3.clone(); move |_| pick_notion(v.clone()) }><Icon name="upload"/>" Import from Notion…"</button>
+                </div>
+                <p class="muted small">"From Notion: export a page or database as HTML (⋯ → Export, with subpages and folders for them), then import its .zip here. Import more of them one after the other: what came already isn't imported again, and links find it."</p>
+                <Show when=move || busy.get()><p class="muted"><span class="spinner inline"></span>" Importing…"</p></Show>
+            </Show>
         </Dialog>
     }
 }

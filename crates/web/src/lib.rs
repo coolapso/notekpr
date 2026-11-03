@@ -12,6 +12,7 @@ pub mod drawings;
 pub mod editor;
 pub mod graph;
 pub mod knowledge;
+pub mod notion;
 pub mod quick;
 pub mod render;
 pub mod sizes;

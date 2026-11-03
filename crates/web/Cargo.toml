@@ -13,6 +13,7 @@ crate-type = ["cdylib", "rlib"]
 notekpr-core = { path = "../core" }
 notekpr-draw = { path = "../draw" }
 notekpr-editor = { path = "../editor" }
+notekpr-notion = { path = "../notion" }
 notekpr-sync = { path = "../sync" }
 leptos = { version = "0.8", features = ["csr"] }
 wasm-bindgen = "=0.2.128"

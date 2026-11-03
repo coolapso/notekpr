@@ -33,6 +33,7 @@ alternatives were considered. The wire protocol is in
 | `crates/sync` | The client sync engine both clients use (`notekpr-sync`): what to upload next (unsent updates merged per object, held back when too large, size-bounded pushes), what acknowledgements and refusals mean, rollback recovery, snapshot readiness, splitting large edits, and the client side of the membership log (`members.rs`: verifying it, signing the next entry, deciding whom to trust). *Sans-IO*: clients do the networking, storage and timers and feed it what happened, so it is identical on wasm and tokio and tested without a network. |
 | `crates/server` | Headless sync server: OIDC relying party, sessions, OAuth device and client-credentials grants, users/devices/agents, vaults/members/key envelopes, the ordered encrypted log, snapshots, attachments, WebSocket fan-out, rate limiting, metrics, backup/restore. Works without the web client. |
 | `crates/editor` | The live-preview Markdown editor: a pure-Rust document model (text with a line index, change sets, transactions, incrementally updated decorations, commands) tested natively, and a `contenteditable` DOM view tested in a headless browser. |
+| `crates/notion` | Notion's HTML exports as notes for the clients' imports (`notekpr-notion`): pages, databases (folders of notes with their properties in front matter, checklists, tables), links between pages, files, icons, and a report of what didn't come along. *Sans-IO*: the client unzips and imports what it returns, so the server never sees an export. |
 | `crates/web` | Browser client compiled to WebAssembly; served as static files by the server. Hosts the editor, all decryption in the browser. |
 | `crates/cli` | The CLI: login (device flow), enrollment, encrypted local replica, live sync daemon with plaintext Markdown mirror, export/import, agent gateway (local HTTP API). |
 | `crates/load` | The load test (`task load`): simulated people — real clients built on the CLI's library, with real keys — against the server image with CPU and memory limits; kills the server midway through each level, starts it again, and checks that nothing was lost ([load-test.md](load-test.md)). |
@@ -249,6 +250,10 @@ period the server deletes the data and an admin's client drops the entry.
   the reverse. Wiki links (`[[Note]]`, `[[Folder/Note#Heading|alias]]`),
   embeds (`![[image.png]]`), `#tags` and YAML frontmatter tags follow
   Obsidian conventions, so an Obsidian vault can be imported and exported.
+* Notion's HTML exports are converted in the client (`crates/notion`) and
+  then imported like Markdown. Each note keeps its page's Notion ID in
+  front matter (`notion:`), so exports imported one after another don't
+  bring a page twice, and links from one find what an earlier one brought.
 * The CLI can mirror a vault as ordinary files (explicit plaintext
   mode). Its reconciliation:
   - remote change, file untouched → write the new text atomically;

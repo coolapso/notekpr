@@ -19,16 +19,13 @@ enum Shape {
     /// A folder with a note per row and an index note with their table: a
     /// full-page database.
     Folder,
-    /// Tasks (it has a status or a checkbox): a checklist where it's shown,
-    /// or a note of its own for a full-page database whose rows say
-    /// nothing more. A row that does gets a note beside the page.
+    /// Tasks (it has a status or a checkbox): a checklist where it's
+    /// shown, each task's own text under it; or, for a full-page database
+    /// whose rows say nothing more, a note of its own.
     Checklist,
-    /// Inline, and no row says more than its properties: a table where
-    /// it's shown.
+    /// Inline, not tasks: a table where it's shown, each row that says
+    /// more after it, folded.
     Table,
-    /// Inline, rows that say more: a table where it's shown, and a folder
-    /// beside it with a note per row.
-    Notes,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -500,15 +497,14 @@ impl<'a> Writer<'a> {
                 .any(|p| p.kind == "status" || p.kind == "checkbox")
         });
         let content = rows.clone().any(Page::has_content);
+        // A database shown in a page is part of that page's note.
         let inline = db.host.is_some();
         if tasks && (inline || !content) {
             Shape::Checklist
-        } else if !inline {
-            Shape::Folder
-        } else if content {
-            Shape::Notes
-        } else {
+        } else if inline {
             Shape::Table
+        } else {
+            Shape::Folder
         }
     }
 
@@ -628,8 +624,8 @@ impl<'a> Writer<'a> {
         }
     }
 
-    /// What goes inside a page's folder: its subpages, and rows of the
-    /// databases it shows that get notes.
+    /// What goes inside a page's folder: its subpages, and those of the
+    /// rows of the databases it shows (the rows are part of its note).
     fn kids(&self, id: &str) -> Vec<Item> {
         let ws = self.ws;
         let mut kids: Vec<Item> = self
@@ -644,15 +640,8 @@ impl<'a> Writer<'a> {
             if db.host.as_deref() != Some(id) || self.opts.skip.contains(&db.id) {
                 continue;
             }
-            match self.shapes[&db.id] {
-                Shape::Notes => kids.push(Item::Database(db.id.clone())),
-                Shape::Checklist => kids.extend(
-                    db.rows
-                        .iter()
-                        .filter(|r| ws.pages.get(*r).is_some_and(Page::has_content))
-                        .map(|r| Item::Page(r.clone())),
-                ),
-                Shape::Folder | Shape::Table => {}
+            for r in &db.rows {
+                kids.extend(self.kids(r));
             }
         }
         kids
@@ -709,7 +698,8 @@ impl<'a> Writer<'a> {
         }
         let db = &ws.databases[id];
         let shape = self.shapes[id];
-        if shape == Shape::Table || (shape == Shape::Checklist && db.host.is_some()) {
+        if db.host.is_some() {
+            // Part of the note of the page showing it.
             return;
         }
         let name = self.unique_in(folder, &file_name(&db.title));
@@ -727,20 +717,17 @@ impl<'a> Writer<'a> {
                     self.shown_in.insert(r.clone(), id.to_string());
                 }
             }
-            Shape::Folder | Shape::Notes => {
+            Shape::Folder => {
                 let sub = paths::join(folder, &name);
-                let index = shape == Shape::Folder;
-                if index {
-                    self.taken
-                        .entry(sub.clone())
-                        .or_default()
-                        .insert(name.to_lowercase());
-                }
+                self.taken
+                    .entry(sub.clone())
+                    .or_default()
+                    .insert(name.to_lowercase());
                 self.placed.insert(
                     id.to_string(),
                     Placed {
                         what: What::Index,
-                        note: index.then(|| paths::join(&sub, &format!("{name}.md"))),
+                        note: Some(paths::join(&sub, &format!("{name}.md"))),
                         folder: Some(sub.clone()),
                     },
                 );
@@ -848,8 +835,11 @@ impl<'a> Writer<'a> {
                 }
                 dir = paths::parent(dir);
             };
-            let imported =
-                |id: &str| !self.opts.existing.contains_key(id) && self.placed.contains_key(id);
+            // A row shown in a page comes with that page.
+            let imported = |id: &str| {
+                let id = self.shown_in.get(id).map_or(id, String::as_str);
+                !self.opts.existing.contains_key(id) && self.placed.contains_key(id)
+            };
             if owner.as_deref().is_none_or(imported) {
                 self.place_file(k);
             }
@@ -1563,12 +1553,14 @@ impl<'a> Writer<'a> {
             if !title.is_empty() {
                 out.push(Block::text(format!("**{}**", escaped(&title))));
             }
-            let block = match self.shapes[&db.id] {
-                Shape::Checklist => self.checklist(db, cx),
-                Shape::Notes => Some(self.table(db, true, cx)),
-                Shape::Table | Shape::Folder => Some(self.table(db, false, cx)),
-            };
-            out.extend(block);
+            match self.shapes[&db.id] {
+                Shape::Checklist => out.extend(self.checklist(db, cx)),
+                Shape::Table | Shape::Folder => {
+                    let table = self.table(db, false, cx);
+                    out.push(table);
+                    self.folded_rows(db, cx, out);
+                }
+            }
             return;
         }
         let view = e
@@ -1675,6 +1667,31 @@ impl<'a> Writer<'a> {
 
     /// A database's rows as tasks: ticked when done, then what else the
     /// view shows (a status only when it's more than done or not).
+    /// What a row of a database shown in a page says beyond its
+    /// properties, written into that page's note.
+    fn row_body(&mut self, row: &Page, cx: &Cx) -> String {
+        if !row.has_content() {
+            return String::new();
+        }
+        let row_cx = self.page_cx(row, &cx.note);
+        self.sub_blocks(&row.body.children, &row_cx)
+    }
+
+    /// After a table shown in a page, each row that says more, folded.
+    fn folded_rows(&mut self, db: &Database, cx: &Cx, out: &mut Vec<Block>) {
+        let ws = self.ws;
+        for r in &db.rows {
+            let row = &ws.pages[r];
+            let body = self.row_body(row, cx);
+            if !body.is_empty() {
+                out.push(Block::text(format!(
+                    "<details>\n<summary>{}</summary>\n\n{body}\n\n</details>",
+                    html_escaped(&row.title)
+                )));
+            }
+        }
+    }
+
     fn checklist(&mut self, db: &Database, cx: &Cx) -> Option<Block> {
         let ws = self.ws;
         let columns = self.columns(db);
@@ -1706,6 +1723,11 @@ impl<'a> Writer<'a> {
                     item.push_str(" · ");
                     item.push_str(&v.replace('\n', " "));
                 }
+            }
+            let body = self.row_body(row, cx);
+            if !body.is_empty() {
+                item.push_str("\n\n");
+                item.push_str(&indent(&body, 2));
             }
             lines.push(item);
         }

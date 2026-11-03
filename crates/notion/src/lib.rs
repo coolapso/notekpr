@@ -12,8 +12,10 @@
 //! * A page is a note; one with subpages a folder, its own text in a note
 //!   inside it (`Trips/Trips.md`). A full-page database is a folder with a
 //!   note per row, the properties in front matter, and an index note with
-//!   a table of the rows. A database of tasks without more to say is a
-//!   checklist; an inline one without more to say is a table in its page.
+//!   a table of the rows; one of tasks without more to say, a checklist. A
+//!   database shown in a page is part of that page's note: a checklist of
+//!   its tasks, each task's own text under it, or a table, the rows that
+//!   say more folded after it.
 //! * Links between pages become wiki links; a link to a page that isn't in
 //!   this export becomes `[[Its name]]`, which finds it once it is
 //!   imported too.

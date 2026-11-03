@@ -98,6 +98,8 @@ const TRIPS: u32 = 10;
 const MEXICO: u32 = 11;
 const SCHEDULE: u32 = 12;
 const DAY_ONE: u32 = 13;
+const DAY_TWO: u32 = 16;
+const TICKETS: u32 = 17;
 const TASKS: u32 = 14;
 const OLD_TASK: u32 = 15;
 
@@ -315,17 +317,42 @@ fn trips() -> Files {
                      <h4 class=\"collection-title\">Schedule</h4>{}</div>",
                     link(ENTRY, "https://app.notion.com/p/x", "@May 2, 2023"),
                     uuid(SCHEDULE),
-                    table(&["Name", "When"], &[(DAY_ONE, "x.html", "Day 1")])
+                    table(
+                        &["Name", "When"],
+                        &[(DAY_ONE, "x.html", "Day 1"), (DAY_TWO, "x.html", "Day 2")]
+                    )
                 ),
             ),
         ),
         (
             format!("Trips/Mexico/Schedule {}.csv", id(SCHEDULE)),
-            "Name,When\nDay 1,Morning\n".into(),
+            "Name,When\nDay 1,Morning\nDay 2,Evening\n".into(),
         ),
         (
             format!("Trips/Mexico/Schedule/Day 1 {}.html", id(DAY_ONE)),
             page(DAY_ONE, "", "Day 1", &prop("text", "When", "Morning"), ""),
+        ),
+        // A row with more to say, and a page of its own inside it.
+        (
+            format!("Trips/Mexico/Schedule/Day 2 {}.html", id(DAY_TWO)),
+            page(
+                DAY_TWO,
+                "",
+                "Day 2",
+                &prop("text", "When", "Evening"),
+                &format!(
+                    "<p>Pyramids</p><figure class=\"link-to-page\">{}</figure>",
+                    link(
+                        TICKETS,
+                        &format!("Day%202/Tickets%20{}.html", id(TICKETS)),
+                        "Tickets"
+                    )
+                ),
+            ),
+        ),
+        (
+            format!("Trips/Mexico/Schedule/Day 2/Tickets {}.html", id(TICKETS)),
+            page(TICKETS, "🎫", "Tickets", "", "<p>Booked</p>"),
         ),
         (
             format!("Tasks {}.csv", id(TASKS)),
@@ -374,8 +401,7 @@ fn a_database_and_its_rows() {
         paths(&c),
         [
             "Notion/Imported from Notion.md",
-            "Notion/Journal/2023-05-02/2023-05-02.md",
-            "Notion/Journal/2023-05-02/Write tests.md",
+            "Notion/Journal/2023-05-02.md",
             "Notion/Journal/Journal.md",
             "Notion/Journal/Read x.y.md",
             "Notion/attachments/Café.txt",
@@ -387,7 +413,7 @@ fn a_database_and_its_rows() {
     assert!(index.contains("| Name | Tags | Created |\n|---|---|---|\n"));
     assert!(index.contains("| [[2023-05-02]] | Daily OPS, Work | @2023-05-01 20:52 |"));
     assert!(index.contains("| [[Read x.y]] |  |  |"), "{index}");
-    let entry = file(&c, "Notion/Journal/2023-05-02/2023-05-02.md");
+    let entry = file(&c, "Notion/Journal/2023-05-02.md");
     let expected_front = format!(
         "---\nCreated: 2023-05-01T20:52\nDate: 2023-05-02\ntags:\n  - Daily-OPS\n  - Work\n\
          week: 18\nWeek Planning:\n  - \"[[Week 18]]\"\nnotion: {}\n---\n## To do\n",
@@ -400,7 +426,7 @@ fn a_database_and_its_rows() {
     );
     assert_eq!(
         c.icons
-            .get("Notion/Journal/2023-05-02/2023-05-02.md")
+            .get("Notion/Journal/2023-05-02.md")
             .map(String::as_str),
         Some("🤖")
     );
@@ -419,22 +445,17 @@ fn a_database_and_its_rows() {
 #[test]
 fn a_database_of_tasks_is_a_checklist() {
     let c = convert(vec![journal()], &opts()).unwrap();
-    let entry = file(&c, "Notion/Journal/2023-05-02/2023-05-02.md");
+    let entry = file(&c, "Notion/Journal/2023-05-02.md");
+    // A database shown in a page is part of its note: each task's own
+    // text under it.
     assert!(
         entry.contains(
-            "**Today**\n\n- [x] [[Write tests]] · work\n- [ ] Buy milk · work\n\
-             - [ ] Call: Bob · In progress · work\n"
+            "**Today**\n\n- [x] Write tests · work\n\n  ```go\n  go test\n  ```\n\
+             - [ ] Buy milk · work\n- [ ] Call: Bob · In progress · work\n"
         ),
         "{entry}"
     );
-    let task = file(&c, "Notion/Journal/2023-05-02/Write tests.md");
-    assert_eq!(
-        task,
-        format!(
-            "---\nStatus: Done\ntag: work\nnotion: {}\n---\n```go\ngo test\n```\n",
-            id(WRITE_TESTS)
-        )
-    );
+    assert!(!paths(&c).iter().any(|p| p.contains("Write tests")));
     // A full-page database of tasks without more to say is one note.
     let c = convert(vec![trips()], &opts()).unwrap();
     assert_eq!(
@@ -446,7 +467,7 @@ fn a_database_of_tasks_is_a_checklist() {
 #[test]
 fn blocks() {
     let c = convert(vec![journal()], &opts()).unwrap();
-    let entry = file(&c, "Notion/Journal/2023-05-02/2023-05-02.md");
+    let entry = file(&c, "Notion/Journal/2023-05-02.md");
     for part in [
         "See [[Read x.y|the reading]] on @2023-05-03, **snake_case** and \\*stars\\*, [[Week 18]].",
         "<span style=\"color: #7c7c7c\">Gray <span style=\"background-color: #e5484d4d\">red</span></span>",
@@ -484,19 +505,29 @@ fn pages_folders_and_tables() {
         [
             "Notion/Imported from Notion.md",
             "Notion/Tasks.md",
-            "Notion/Trips/Mexico.md",
+            "Notion/Trips/Mexico/Mexico.md",
+            "Notion/Trips/Mexico/Tickets.md",
         ]
     );
     // Trips has nothing but its subpage: a folder, with its icon.
     assert_eq!(c.icons.get("Notion/Trips").map(String::as_str), Some("✈️"));
-    let mexico = file(&c, "Notion/Trips/Mexico.md");
+    // Its table's rows are part of its note, one that says more folded
+    // after it; that row's own page goes in Mexico's folder.
+    let mexico = file(&c, "Notion/Trips/Mexico/Mexico.md");
     assert_eq!(
         mexico,
         format!(
             "---\nnotion: {}\n---\nBack on [[2023-05-02]].\n\n**Schedule**\n\n\
-             | Name | When |\n|---|---|\n| Day 1 | Morning |\n",
+             | Name | When |\n|---|---|\n| Day 1 | Morning |\n| Day 2 | Evening |\n\n\
+             <details>\n<summary>Day 2</summary>\n\nPyramids\n\n[[Tickets]]\n\n</details>\n",
             id(MEXICO)
         )
+    );
+    assert_eq!(
+        c.icons
+            .get("Notion/Trips/Mexico/Tickets.md")
+            .map(String::as_str),
+        Some("🎫")
     );
     // The entry isn't in this export: its link waits for it.
     assert!(c.report.waiting.contains_key("2023-05-02"));
@@ -524,14 +555,14 @@ fn pieces_imported_one_after_the_other() {
     // The same piece again brings nothing new.
     let again = convert(vec![journal()], &next).unwrap();
     assert_eq!(paths(&again), ["Notion 2/Imported from Notion.md"]);
-    assert_eq!(again.report.already, 4);
+    assert_eq!(again.report.already, 3);
     // Another piece links to what came before.
     let later = convert(vec![trips()], &next).unwrap();
-    assert!(file(&later, "Notion 2/Trips/Mexico.md").contains("Back on [[2023-05-02]]."));
+    assert!(file(&later, "Notion 2/Trips/Mexico/Mexico.md").contains("Back on [[2023-05-02]]."));
     assert!(later.report.waiting.is_empty());
     // Both together resolve their links too.
     let both = convert(vec![journal(), trips()], &opts()).unwrap();
-    assert!(file(&both, "Notion/Trips/Mexico.md").contains("Back on [[2023-05-02]]."));
+    assert!(file(&both, "Notion/Trips/Mexico/Mexico.md").contains("Back on [[2023-05-02]]."));
 }
 
 #[test]
@@ -541,13 +572,13 @@ fn names_taken_elsewhere_in_the_vault_link_by_path() {
         ..opts()
     };
     let c = convert(vec![journal(), trips()], &o).unwrap();
-    let mexico = file(&c, "Notion/Trips/Mexico.md");
+    let mexico = file(&c, "Notion/Trips/Mexico/Mexico.md");
     // (A link to a day shows the day: no alias.)
     assert!(
-        mexico.contains("Back on [[Notion/Journal/2023-05-02/2023-05-02]]."),
+        mexico.contains("Back on [[Notion/Journal/2023-05-02]]."),
         "{mexico}"
     );
-    let entry = file(&c, "Notion/Journal/2023-05-02/2023-05-02.md");
+    let entry = file(&c, "Notion/Journal/2023-05-02.md");
     assert!(entry.contains("![[Notion/attachments/photo.png]]"));
 }
 
@@ -583,14 +614,14 @@ fn what_an_export_holds() {
         .into_iter()
         .map(|i| (i.title, i.notes, i.rows, i.already, i.linked))
         .collect();
-    // Journal: its index, the entry, the task with more to say, Read x.y.
-    // Trips: Mexico only (Trips is a folder, Day 1 a row of a table).
+    // Journal: its index, the entry, Read x.y (the tasks are in the entry).
+    // Trips: Mexico and Tickets (Trips is a folder, the days in Mexico).
     assert_eq!(
         items,
         [
-            ("Journal".to_string(), 4, Some(2), 1, false),
+            ("Journal".to_string(), 3, Some(2), 1, false),
             ("Tasks".to_string(), 1, Some(1), 0, true),
-            ("Trips".to_string(), 1, None, 0, false),
+            ("Trips".to_string(), 2, None, 0, false),
         ]
     );
     let items = export.items(&o);

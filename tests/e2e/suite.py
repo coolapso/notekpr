@@ -709,7 +709,7 @@ def notion_export():
         f"Journal/@May 2, 2023 {2:032x}.html": page(2, "🤖", '<time datetime="2023-05-02">@May 2, 2023</time> ',
                                                       prop("multi_select", "Tags", '<span class="selected-value">Daily</span>'), entry),
         f"Journal/@May 2, 2023/Today {5:032x}.csv": "Name,Status\nWrite tests,Done\nBuy milk,Not started\n",
-        f"Journal/@May 2, 2023/Today/Write tests {6:032x}.html": page(6, "", "Write tests", status("Done", "green"), ""),
+        f"Journal/@May 2, 2023/Today/Write tests {6:032x}.html": page(6, "", "Write tests", status("Done", "green"), "<p>Run them twice</p>"),
         f"Journal/@May 2, 2023/Today/Buy milk {7:032x}.html": page(7, "", "Buy milk", status("Not started", "default"), ""),
     }
     buf = io.BytesIO()
@@ -753,6 +753,7 @@ def test_notion_import(env):
         b.wait("return (document.querySelector('.note-title') || {}).value === '2023-05-02'", 15, "the row")
         text = editor_text(b)
         check("Write tests" in text and "Buy milk" in text, "a row is a note named after its day, its tasks a checklist")
+        check("Run them twice" in text, "a task's own text is in the day's note, under it")
         check("[[Week 18]]" in text, "with a link that waits for the page it names")
 
         # The same export again: what came already isn't imported again.

@@ -2846,6 +2846,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "notekpr-notion"
+version = "0.1.0"
+dependencies = [
+ "html5ever",
+ "notekpr-core",
+ "zip",
+]
+
+[[package]]
 name = "notekpr-server"
 version = "0.1.0"
 dependencies = [

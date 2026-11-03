@@ -8,6 +8,7 @@ crates/sync     client sync engine both clients use (outbox, refusals, snapshots
 crates/server   sync server (axum + SQLite)            → notekpr-server
 crates/editor   live-preview Markdown editor (model + DOM view), used by crates/web
 crates/web      browser client (Leptos → wasm32)       → dist/web
+crates/notion   Notion's HTML exports as notes, for both clients' imports
 crates/cli      the CLI, Markdown mirror, gateway      → notekpr
 crates/load     load test runner (task load)           → notekpr-load
 crates/load-events  what the load runner streams to its live view

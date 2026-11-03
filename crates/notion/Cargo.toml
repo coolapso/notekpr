@@ -1,0 +1,15 @@
+[package]
+name = "notekpr-notion"
+description = "Notion's HTML exports as Markdown notes, for notekpr's imports"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+notekpr-core = { path = "../core" }
+html5ever = "0.40"
+
+[dev-dependencies]
+# The example reads an export's .zip the way the CLI will.
+zip = { version = "9", default-features = false, features = ["deflate-flate2-zlib-rs"] }

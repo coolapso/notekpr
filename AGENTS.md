@@ -101,6 +101,10 @@ crates/editor   the live-preview Markdown editor. Pure model (native tests): tex
                 block options, syntax highlighting) · html.rs (HTML in notes:
                 the allow list, HTML blocks) · commands.rs · vim.rs.
                 DOM view: view/ (contenteditable, line patches, IME, native edits)
+crates/notion   Notion's HTML exports as notes (sans-IO, for both clients' imports):
+                dom.rs (the page as a tree) · read.rs (pages, databases, rows,
+                templates, where each sits) · write.rs (where each goes, then the
+                Markdown, links resolved) · text.rs (names, escaping, front matter)
 crates/web      Leptos CSR → wasm32. state/ (Core + Ui in mod.rs; session, vaults,
                 members, shares, sync, presence, prefs, nav, offline, comments) · cache.rs
                 (IndexedDB copy) · static/sw.js (service worker, only with offline

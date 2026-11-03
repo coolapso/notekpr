@@ -564,6 +564,38 @@ fn left_out() {
             .any(|p| p.contains("Read") || p.contains("Write tests"))
     );
     assert!(file(&c, "Notion/Journal/Journal.md").contains("| Read x.y |"));
+    // A link to a page left out waits for it, as for one not exported.
+    // (Without Today's tasks, the entry has nothing inside: a note.)
+    let entry = file(&c, "Notion/Journal/2023-05-02.md");
+    assert!(entry.contains("See [[Read x.y|the reading]] on"), "{entry}");
+    assert!(c.report.waiting.contains_key("Read x.y"));
+}
+
+#[test]
+fn what_an_export_holds() {
+    let export = notekpr_notion::Export::read(vec![journal(), trips()]).unwrap();
+    let o = Options {
+        existing: [(id(READING), "Notion/Journal/Read x.y.md".to_string())].into(),
+        ..opts()
+    };
+    let items: Vec<(String, usize, Option<usize>, usize, bool)> = export
+        .items(&o)
+        .into_iter()
+        .map(|i| (i.title, i.notes, i.rows, i.already, i.linked))
+        .collect();
+    // Journal: its index, the entry, the task with more to say, Read x.y.
+    // Trips: Mexico only (Trips is a folder, Day 1 a row of a table).
+    assert_eq!(
+        items,
+        [
+            ("Journal".to_string(), 4, Some(2), 1, false),
+            ("Tasks".to_string(), 1, Some(1), 0, true),
+            ("Trips".to_string(), 1, None, 0, false),
+        ]
+    );
+    let items = export.items(&o);
+    assert_eq!(items[0].icon.as_deref(), Some("📓"));
+    assert_eq!(items[0].id, id(JOURNAL));
 }
 
 #[test]

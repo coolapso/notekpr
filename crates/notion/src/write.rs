@@ -531,6 +531,16 @@ impl<'a> Writer<'a> {
         self.write()
     }
 
+    /// The pages and databases that get a note of their own.
+    pub fn notes(mut self) -> BTreeSet<String> {
+        self.layout();
+        self.placed
+            .into_iter()
+            .filter(|(_, p)| p.note.is_some())
+            .map(|(id, _)| id)
+            .collect()
+    }
+
     // ------------------------------------------------------------ layout
 
     fn layout(&mut self) {
@@ -1155,16 +1165,22 @@ impl<'a> Writer<'a> {
         if let Some(path) = self.note_of(id).or(shown) {
             return self.wiki(&path, text);
         }
-        if ws.pages.contains_key(id) || ws.databases.contains_key(id) {
-            // In the export, but without a note: a template, a page that
-            // is only a folder, one left out.
-            return escaped(text);
-        }
-        // Not in this export: the name it will have once it's imported.
-        let name = match text::english_date(text) {
+        let left_out = if let Some(p) = ws.pages.get(id) {
+            // A template, or a page that is only a folder, has nothing to
+            // link to.
+            if self.placed.contains_key(id) || ws.templates.contains_key(id) {
+                return escaped(text);
+            }
+            Some(file_name(&p.title_iso))
+        } else {
+            ws.databases.get(id).map(|d| file_name(&d.title))
+        };
+        // Left out of this import, or not in this export: the name it will
+        // have once it's imported.
+        let name = left_out.unwrap_or_else(|| match text::english_date(text) {
             Some(d) => d.to_string(),
             None => file_name(text),
-        };
+        });
         self.report
             .waiting
             .entry(name.clone())

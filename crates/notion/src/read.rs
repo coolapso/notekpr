@@ -322,6 +322,30 @@ impl Workspace {
         self.parents = parents;
     }
 
+    /// What a page is in at the top of the export: a page, or a database
+    /// without a page of its own. `None` for a template.
+    pub fn top_of(&self, page: &str) -> Option<String> {
+        if self.templates.contains_key(page) {
+            return None;
+        }
+        let mut at = page.to_string();
+        // Each step goes up a folder: no more steps than pages.
+        for _ in 0..=self.pages.len() {
+            match self.parents.get(&at) {
+                Some(Parent::Page(p)) => at = p.clone(),
+                Some(Parent::Database(d)) => {
+                    let db = &self.databases[d];
+                    match db.page.as_ref().or(db.host.as_ref()) {
+                        Some(p) => at = p.clone(),
+                        None => return Some(d.clone()),
+                    }
+                }
+                None => return Some(at),
+            }
+        }
+        None
+    }
+
     /// The database a page is the page of.
     pub fn database_of_page(&self, page: &str) -> Option<&Database> {
         self.databases

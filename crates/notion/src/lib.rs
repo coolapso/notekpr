@@ -117,23 +117,117 @@ impl fmt::Display for Error {
 
 impl std::error::Error for Error {}
 
-/// Notion's exports (each as unzipped) as notes and files to import.
+/// Notion's exports (each as unzipped) as notes and files to import:
+/// [`Export::read`], then [`Export::convert`].
 pub fn convert(exports: Vec<Files>, opts: &Options) -> Result<Converted, Error> {
-    let ws = read::Workspace::read(exports);
-    if ws.pages.is_empty() && ws.databases.is_empty() {
-        return Err(
-            if ws
+    Ok(Export::read(exports)?.convert(opts))
+}
+
+/// Exports as read, to show what they hold ([`Export::items`]) before
+/// converting them.
+pub struct Export(read::Workspace);
+
+/// What an export holds at its top: what people choose to import or not.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Item {
+    /// Its Notion ID, as [`Options::skip`] takes it.
+    pub id: String,
+    pub title: String,
+    pub icon: Option<String>,
+    /// How many notes it becomes (rows shown in a checklist or a table
+    /// don't get one).
+    pub notes: usize,
+    /// How many rows, when it's a database.
+    pub rows: Option<usize>,
+    /// How many of those the vault has already.
+    pub already: usize,
+    /// It came along because a page shows it in a linked view: it wasn't
+    /// exported itself.
+    pub linked: bool,
+}
+
+impl Export {
+    /// Notion's exports, each as unzipped.
+    pub fn read(exports: Vec<Files>) -> Result<Export, Error> {
+        let ws = read::Workspace::read(exports);
+        if ws.pages.is_empty() && ws.databases.is_empty() {
+            let markdown = ws
                 .unreadable
                 .iter()
-                .any(|u| matches!(u, read::Unreadable::Markdown(_)))
-            {
+                .any(|u| matches!(u, read::Unreadable::Markdown(_)));
+            return Err(if markdown {
                 Error::Markdown
             } else {
                 Error::NotAnExport
-            },
-        );
+            });
+        }
+        Ok(Export(ws))
     }
-    Ok(write::Writer::new(&ws, opts).run())
+
+    /// What it holds at its top, by title (whatever [`Options::skip`]
+    /// says).
+    pub fn items(&self, opts: &Options) -> Vec<Item> {
+        let ws = &self.0;
+        let mut items: BTreeMap<String, Item> = BTreeMap::new();
+        for p in ws.pages.values() {
+            if ws.parents.contains_key(&p.id) || ws.templates.contains_key(&p.id) {
+                continue;
+            }
+            let db = ws.database_of_page(&p.id);
+            items.insert(
+                p.id.clone(),
+                Item {
+                    id: p.id.clone(),
+                    title: db.map_or(&p.title, |d| &d.title).clone(),
+                    icon: p.icon.clone(),
+                    notes: 0,
+                    rows: db.map(|d| d.rows.len()),
+                    already: 0,
+                    linked: false,
+                },
+            );
+        }
+        for d in ws.databases.values() {
+            if d.page.is_none() && d.host.is_none() {
+                items.insert(
+                    d.id.clone(),
+                    Item {
+                        id: d.id.clone(),
+                        title: d.title.clone(),
+                        icon: None,
+                        notes: 0,
+                        rows: Some(d.rows.len()),
+                        already: 0,
+                        linked: true,
+                    },
+                );
+            }
+        }
+        let opts = Options {
+            skip: BTreeSet::new(),
+            ..opts.clone()
+        };
+        for id in write::Writer::new(ws, &opts).notes() {
+            // A database without a page of its own is at the top itself.
+            let top = if ws.pages.contains_key(&id) {
+                ws.top_of(&id)
+            } else {
+                Some(id.clone())
+            };
+            if let Some(item) = top.and_then(|t| items.get_mut(&t)) {
+                item.notes += 1;
+                item.already += usize::from(opts.existing.contains_key(&id));
+            }
+        }
+        let mut items: Vec<Item> = items.into_values().collect();
+        items.sort_by_cached_key(|i| (i.title.to_lowercase(), i.id.clone()));
+        items
+    }
+
+    /// The notes and files to import.
+    pub fn convert(&self, opts: &Options) -> Converted {
+        write::Writer::new(&self.0, opts).run()
+    }
 }
 
 /// The folder an import lands in: `Notion`, or `Notion 2`, `Notion 3`, …,

@@ -303,6 +303,9 @@ pub struct Ui {
     pub presence: RwSignal<Vec<PresenceView>>,
     pub toasts: RwSignal<Vec<Toast>>,
     pub modal: RwSignal<Option<Modal>>,
+    /// The question asked in the app's own dialog, over any modal
+    /// (`crate::ask`).
+    pub asking: RwSignal<Option<crate::ask::Question>>,
     pub pending_devices: RwSignal<Vec<DeviceInfo>>,
     pub sidebar: RwSignal<bool>,
     pub mode: RwSignal<ViewMode>,
@@ -363,6 +366,7 @@ pub fn init_ui() -> Ui {
         presence: RwSignal::new(vec![]),
         toasts: RwSignal::new(vec![]),
         modal: RwSignal::new(None),
+        asking: RwSignal::new(None),
         pending_devices: RwSignal::new(vec![]),
         sidebar: RwSignal::new(false),
         mode: RwSignal::new(mode),

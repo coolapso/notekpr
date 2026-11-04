@@ -6,6 +6,7 @@
 
 pub mod actions;
 pub mod api;
+pub mod ask;
 pub mod cache;
 pub mod drawing;
 pub mod drawings;

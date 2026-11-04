@@ -58,7 +58,7 @@ pub(crate) fn Dialog(
 }
 
 /// Keep Tab and Shift+Tab inside the dialog.
-fn trap_focus(root: &web_sys::HtmlElement, ev: &web_sys::KeyboardEvent) {
+pub(super) fn trap_focus(root: &web_sys::HtmlElement, ev: &web_sys::KeyboardEvent) {
     use wasm_bindgen::JsCast;
     let Ok(list) = root.query_selector_all(
         "button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex='-1'])",

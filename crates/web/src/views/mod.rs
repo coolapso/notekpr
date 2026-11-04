@@ -1,3 +1,4 @@
+pub mod ask;
 pub mod auth;
 pub mod comments;
 pub mod dialogs;
@@ -44,7 +45,10 @@ pub fn App() -> impl IntoView {
             let _ = classes.toggle_with_force("no-code-wrap", !prefs.code_wrap);
         }
     });
-    view! { {move || auth::phase_view(ui.phase.get())} }
+    view! {
+        {move || auth::phase_view(ui.phase.get())}
+        <ask::AskHost/>
+    }
 }
 
 #[component]
@@ -345,8 +349,12 @@ fn is_alt_letter(e: &web_sys::KeyboardEvent, letter: char) -> bool {
 fn install_shortcuts() {
     let cb = wasm_bindgen::closure::Closure::wrap(Box::new(move |e: web_sys::KeyboardEvent| {
         let ui = ui();
-        // Shortcuts the editor already handled (e.g. Ctrl+K = link) stay local.
-        if ui.phase.get_untracked() != state::Phase::Ready || e.default_prevented() {
+        // Shortcuts the editor already handled (e.g. Ctrl+K = link) stay local;
+        // a question asked (`crate::ask`) has the keys to itself.
+        if ui.phase.get_untracked() != state::Phase::Ready
+            || e.default_prevented()
+            || ui.asking.with_untracked(Option::is_some)
+        {
             return;
         }
         let m = e.ctrl_key() || e.meta_key();

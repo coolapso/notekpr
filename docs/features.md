@@ -9,8 +9,15 @@ a Mac). The [README](../README.md) has the short version.
   hides once the caret leaves the line; also a plain source mode and a reading
   view (`Ctrl+E`).
 * A formatting toolbar and keyboard shortcuts (`Ctrl+/` lists them; `⌘`
-  instead of `Ctrl` on a Mac), optional Vim keys, light, dark or system
-  theme. Enter, `↓` or Tab in the title moves on to the text.
+  instead of `Ctrl` on a Mac), light, dark or system theme. Enter, `↓` or
+  Tab in the title moves on to the text.
+* Optional Vim keys (Settings → Editor): normal, insert and visual modes
+  (`v`, and `V` for whole lines) with a block cursor outside insert mode;
+  the common motions and operators, counts (`3dd`, `12G`), `J` to join
+  lines, `>>` / `<<` to indent, `gj` / `gk` by lines as they wrap,
+  `Ctrl+D` / `Ctrl+U` by half a screen, and `Ctrl+O` / `Ctrl+I` back and
+  forth between jumps (`gg`, `G`, a heading picked in the outline) — past
+  the note's first, `Ctrl+O` goes back to the previous note.
 * Notes as narrow or wide as you like: a slider in Settings sets the
   default (for this browser, or the same on all your devices), and a note's
   ⋯ menu gives it a width of its own, only for you.

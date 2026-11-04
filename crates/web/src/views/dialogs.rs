@@ -1330,7 +1330,7 @@ fn Help() -> impl IntoView {
             <table class="keys">
                 {rows.into_iter().map(|(k, d)| view! { <tr><td><kbd>{k}</kbd></td><td>{d}</td></tr> }).collect_view()}
             </table>
-            <p class="muted small">"Vim keybindings can be enabled in Settings → Editor."</p>
+            <p class="muted small">"Vim keybindings can be enabled in Settings → Editor. In Vim's normal mode, Ctrl+O goes back to where the cursor was (then to the previous note) and Ctrl+I forward again; "{m}"+P still finds a note."</p>
         </Dialog>
     }
 }

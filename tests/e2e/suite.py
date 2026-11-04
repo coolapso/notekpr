@@ -1377,6 +1377,60 @@ def test_code_wrapping(env):
         b.close()
 
 
+def test_vim(env):
+    b = Browser(1100, 700)
+    try:
+        signup(b, uniq("vim"))
+        new_note(b, "Before", "the note before")
+        new_note(b, "Long", KEYS["enter"].join(f"line {i}" for i in range(60)))
+        b.js("history.pushState(null, '', '/settings/editor'); dispatchEvent(new PopStateEvent('popstate'));")
+        b.find(".vim-toggle", 10)
+        b.js("document.querySelector('.vim-toggle').scrollIntoView({block: 'center'})")
+        b.click_el(b.find(".vim-toggle", 10))
+        b.js("history.back()")
+        b.find(".ed.vim-normal", 10)
+        b.click_el(b.find(".ed > .ln:nth-child(3)", 5))
+        time.sleep(0.3)
+        b.wait("return !!document.querySelector('.vim-cursor')", 5, "a block cursor")
+        check(True, "normal mode shows a block cursor")
+        # Where the caret is, and where the toolbar covering the text ends.
+        where = """
+            const r = getSelection().getRangeAt(0).getBoundingClientRect();
+            const tb = document.querySelector('.toolbar-wrap').getBoundingClientRect();
+            return [r.top, r.bottom, tb.bottom, innerHeight, document.querySelector('.main').scrollTop];
+        """
+        b.keys("G")
+        time.sleep(0.4)
+        top, bottom, covered, vh, _ = b.js(where)
+        check(top >= covered and bottom <= vh, f"G: the last line shows ({top}, {bottom}, {covered}, {vh})")
+        # Going up line by line, the caret never hides under the toolbar.
+        hidden = []
+        for _ in range(40):
+            b.keys("k")
+            time.sleep(0.05)
+            top, _, covered, _, _ = b.js(where)
+            if top < covered:
+                hidden.append(round(covered - top))
+        check(not hidden, f"k: the caret stays below the toolbar ({hidden})")
+        b.keys("gg")
+        time.sleep(0.4)
+        check(b.js(where)[4] == 0, "gg: up to the top, where the title shows")
+        b.chord(KEYS["ctrl"], "d")
+        time.sleep(0.4)
+        check(b.js(where)[4] > 0, "Ctrl+D scrolls down")
+        # Ctrl+O: back through the jumps, then to the note before.
+        for _ in range(6):
+            if b.js("return document.querySelector('.note-title')?.value") == "Before":
+                break
+            b.chord(KEYS["ctrl"], "o")
+            time.sleep(0.4)
+        check(b.js("return document.querySelector('.note-title')?.value") == "Before", "Ctrl+O ends in the note before")
+        check(not b.js("return !!document.querySelector('.modal')"), "Ctrl+O in normal mode doesn't open the quick switcher")
+        check(not severe_logs(b), "no browser errors")
+    finally:
+        b.close()
+
+
 # Viewport coordinates of the start and end of `text` in the editor.
 TEXT_ENDS = """
 const w = document.createTreeWalker(document.querySelector('.ed'), NodeFilter.SHOW_TEXT);
@@ -3183,7 +3237,7 @@ def test_device_code(env):
         a.close()
 
 
-TESTS = [test_onboarding, test_collab, test_devices_and_recovery, test_features, test_attachments, test_export_import, test_notion_import, test_delete_account, test_move_to_vault, test_note_sharing, test_tables, test_code_blocks, test_html, test_callouts, test_colors, test_code_wrapping, test_editor_mouse, test_editor_safety, test_local_copy, test_ui_basics, test_offline_tabs, test_offline_start, test_mobile, test_quick_notes, test_vault_icons, test_entry_icons, test_tree_order, test_session_ended_while_away, test_outdated, test_comments, test_mentions, test_dates, test_graph, test_recovered_copy, test_note_width, test_admin, test_vault_storage, test_vault_admins, test_owners, test_undo_purge, test_device_code]
+TESTS = [test_onboarding, test_collab, test_devices_and_recovery, test_features, test_attachments, test_export_import, test_notion_import, test_delete_account, test_move_to_vault, test_note_sharing, test_tables, test_code_blocks, test_html, test_callouts, test_colors, test_code_wrapping, test_vim, test_editor_mouse, test_editor_safety, test_local_copy, test_ui_basics, test_offline_tabs, test_offline_start, test_mobile, test_quick_notes, test_vault_icons, test_entry_icons, test_tree_order, test_session_ended_while_away, test_outdated, test_comments, test_mentions, test_dates, test_graph, test_recovered_copy, test_note_width, test_admin, test_vault_storage, test_vault_admins, test_owners, test_undo_purge, test_device_code]
 
 
 def main():

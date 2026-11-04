@@ -175,7 +175,8 @@ fn setup_scrolling(text: &str) -> (Fixture, HtmlElement) {
     let scroller: HtmlElement = doc.create_element("div").unwrap().unchecked_into();
     let _ = scroller.set_attribute(
         "style",
-        "width: 700px; height: 300px; overflow: auto; font: 16px/1.5 sans-serif",
+        "position: fixed; top: 0; left: 0; z-index: 1; background: white; \
+         width: 700px; height: 300px; overflow: auto; font: 16px/1.5 sans-serif",
     );
     let title = doc.create_element("div").unwrap();
     let _ = title.set_attribute("style", "height: 120px");
@@ -921,6 +922,72 @@ async fn the_caret_stays_clear_of_what_covers_the_top() {
     frame().await;
     frame().await;
     assert_eq!(scroller.scroll_top(), 0, "the title shows");
+}
+
+#[wasm_bindgen_test]
+async fn vim_draws_a_block_and_moves_by_what_shows() {
+    let long = "word ".repeat(400);
+    let f = setup(&format!("{long}\nshort\nend"));
+    cursor_style(&f);
+    f.ed.set_vim(true);
+    caret_at(&f, 0);
+    frame().await;
+    frame().await;
+    let block = |f: &Fixture| f.container.query_selector(".vim-cursor").unwrap();
+    let b = block(&f).expect("normal mode: a block over the character");
+    assert!(b.get_bounding_client_rect().width() > 0.0);
+    key(&f, "i", false, false);
+    frame().await;
+    frame().await;
+    assert!(block(&f).is_none(), "insert mode: the browser's caret");
+    key(&f, "Escape", false, false);
+    // gj: the next line as it shows, still within the long line; j: the
+    // next line of text.
+    key(&f, "g", false, false);
+    key(&f, "j", false, false);
+    let h = f.ed.selection().1;
+    assert!(h > 0 && h < long.len(), "gj stays in the wrapped line: {h}");
+    key(&f, "g", false, false);
+    key(&f, "k", false, false);
+    assert_eq!(f.ed.selection().1, 0, "gk comes back");
+    key(&f, "j", false, false);
+    assert_eq!(f.ed.selection().1, long.len() + 1);
+    // V: the whole line; J joins.
+    key(&f, "V", false, true);
+    assert_eq!(f.ed.selection(), (long.len() + 1, long.len() + 6));
+    key(&f, "J", false, true);
+    assert_text(&f, &format!("{long}\nshort end"));
+}
+
+#[wasm_bindgen_test]
+async fn vim_half_pages_and_jumps() {
+    let text = (0..80)
+        .map(|i| format!("line {i}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let line_of = |at: usize| text[..at].matches('\n').count();
+    let (f, scroller) = setup_scrolling(&text);
+    f.ed.set_vim(true);
+    caret_at(&f, 0);
+    frame().await;
+    key(&f, "d", true, false);
+    let down = line_of(f.ed.selection().1);
+    assert!(scroller.scroll_top() > 100, "Ctrl+D scrolls half a box");
+    assert!(
+        (4..=8).contains(&down),
+        "and the cursor goes with it: line {down}"
+    );
+    key(&f, "u", true, false);
+    assert!(line_of(f.ed.selection().1) < down, "Ctrl+U comes back up");
+    // G jumps; Ctrl+O comes back, then goes to the previous note.
+    caret_at(&f, 0);
+    key(&f, "G", false, true);
+    assert_eq!(line_of(f.ed.selection().1), 79);
+    key(&f, "o", true, false);
+    assert_eq!(f.ed.selection().1, 0);
+    assert!(f.host.went.borrow().is_empty());
+    key(&f, "o", true, false);
+    assert_eq!(*f.host.went.borrow(), vec![true]);
 }
 
 #[wasm_bindgen_test]

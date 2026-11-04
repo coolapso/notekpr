@@ -462,6 +462,7 @@ impl Editor {
             });
             if changed {
                 ed.apply_mode_classes();
+                ed.request_frame(false, true);
             }
         });
     }
@@ -475,10 +476,15 @@ impl Editor {
         });
     }
 
-    /// Select `[anchor, head)` and scroll the caret into view.
+    /// Select `[anchor, head)` and scroll the caret into view. For vim,
+    /// a jump: Ctrl+O comes back.
     pub fn set_selection(&self, anchor: usize, head: usize) {
         self.op(move |ed| {
             let sel = ed.model(move |st| {
+                let from = st.selection().head;
+                if st.doc().line_of(from) != st.doc().line_of(st.doc().floor(head)) {
+                    st.vim_jumped(from);
+                }
                 st.set_selection(Selection::new(anchor, head));
                 st.selection()
             });
@@ -1461,8 +1467,9 @@ impl Editor {
         if self.mouse_down.get() {
             return;
         }
-        // Markers shown or hidden on these lines move the highlights.
-        if !self.model(|st| st.marks().is_empty()) {
+        // Markers shown or hidden on these lines move the highlights, and
+        // vim's cursor is drawn where the selection is.
+        if self.model(|st| !st.marks().is_empty() || st.vim.is_some()) {
             self.request_frame(false, true);
         }
         let lines = self.model(|st| active_lines(st));
@@ -1896,6 +1903,34 @@ impl Editor {
         }
     }
 
+    /// Vim's cursor outside insert mode: a block over the character under
+    /// it (the browser's caret is a line).
+    fn draw_vim_cursor(&self, base: &web_sys::DomRect) {
+        if !self.has_focus() {
+            return;
+        }
+        let Some(at) = self.model(|st| st.vim_cursor()) else {
+            return;
+        };
+        let Some(r) = self.pos_rect(at) else {
+            return;
+        };
+        let el: HtmlElement = document().create_element("div").unwrap().unchecked_into();
+        el.set_class_name("vim-cursor");
+        let style = el.style();
+        // At the end of a line: as wide as half the line is high.
+        let w = if r.width() > 0.0 {
+            r.width()
+        } else {
+            (r.height() / 2.0).round()
+        };
+        let _ = style.set_property("left", &format!("{}px", r.left() - base.left()));
+        let _ = style.set_property("top", &format!("{}px", r.top() - base.top()));
+        let _ = style.set_property("width", &format!("{w}px"));
+        let _ = style.set_property("height", &format!("{}px", r.height()));
+        let _ = self.overlay.append_child(&el);
+    }
+
     fn draw_cursors(&self) {
         let cursors = self.model(|st| {
             let d = st.doc();
@@ -1915,11 +1950,12 @@ impl Editor {
                 .collect::<Vec<_>>()
         });
         self.overlay.set_inner_html("");
+        let base = self.overlay.get_bounding_client_rect();
+        let doc = document();
+        self.draw_vim_cursor(&base);
         if cursors.is_empty() {
             return;
         }
-        let base = self.overlay.get_bounding_client_rect();
-        let doc = document();
         let mut drawn = Vec::with_capacity(cursors.len());
         for (name, color, line, text, off) in cursors {
             let Some(lv) = self.view.borrow().lines.get(line).map(|l| l.el.clone()) else {
@@ -2401,15 +2437,7 @@ impl Editor {
         self.apply_mode_classes();
         match action {
             vim::Action::Consumed => {}
-            vim::Action::Move(a, h) => {
-                let sel = self.model(move |st| {
-                    st.set_selection(Selection::new(a, h));
-                    st.selection()
-                });
-                self.place_dom_selection(sel, true);
-                self.sync_active();
-                self.host.selection_changed(sel.anchor, sel.head);
-            }
+            vim::Action::Move(a, h) => self.vim_show(a, h),
             vim::Action::Edit {
                 from,
                 to,
@@ -2427,13 +2455,132 @@ impl Editor {
             }
             vim::Action::Undo => self.undo(),
             vim::Action::Redo => self.redo(),
-            vim::Action::Yank(t) => {
+            vim::Action::Yank(t, caret) => {
                 if let Some(w) = web_sys::window() {
                     let _ = w.navigator().clipboard().write_text(&t);
                 }
+                self.vim_move_to(caret);
             }
+            vim::Action::HalfPage { down } => {
+                if let Some(to) = self.half_page(down) {
+                    self.vim_move_to(to);
+                }
+            }
+            vim::Action::DisplayLines { down, count } => {
+                if let Some(to) = self.display_lines(down, count) {
+                    self.vim_move_to(to);
+                }
+            }
+            vim::Action::History { back } => self.host.history(back),
         }
         true
+    }
+
+    /// Show vim's selection `[a, h)` (its cursor moved).
+    fn vim_show(&self, a: usize, h: usize) {
+        let sel = self.model(move |st| {
+            st.set_selection(Selection::new(a, h));
+            st.selection()
+        });
+        self.place_dom_selection(sel, true);
+        self.sync_active();
+        self.host.selection_changed(sel.anchor, sel.head);
+    }
+
+    /// Vim's cursor moved to `to`.
+    fn vim_move_to(&self, to: usize) {
+        if let Some((a, h)) = self.model(move |st| st.vim_moved(to)) {
+            self.vim_show(a, h);
+        }
+    }
+
+    /// Ctrl+D / Ctrl+U: scroll half of what shows of the text, and find
+    /// where vim's cursor goes with it (the same place on the screen,
+    /// unless the text can't scroll that far).
+    fn half_page(&self, down: bool) -> Option<usize> {
+        let from = self.model(|st| st.vim_cursor())?;
+        let c = self.pos_rect(from)?;
+        let scroller = self.scroller();
+        let (top, bottom) = self.visible_band(&scroller);
+        let half = ((bottom - top) / 2.0).round().max(1.0);
+        let step = if down { half } else { -half };
+        let y0 = scroller.scroll_top();
+        scroller.set_scroll_top(y0 + step as i32);
+        let scrolled = (scroller.scroll_top() - y0) as f64;
+        let root = self.root.get_bounding_client_rect();
+        let y = (c.top() + c.height() / 2.0 - scrolled + step).clamp(
+            top.max(root.top()) + 2.0,
+            (bottom.min(root.bottom()) - 2.0).max(top + 2.0),
+        );
+        let x = c.left().clamp(
+            root.left() + 1.0,
+            (root.right() - 1.0).max(root.left() + 1.0),
+        );
+        let (node, off) = dom::caret_from_point(x, y)?;
+        if !self.root.contains(Some(&node)) {
+            return None;
+        }
+        self.dom_to_offset(&node, off)
+    }
+
+    /// gj / gk: `count` lines down or up as they show, which only the
+    /// browser knows (it moves the DOM caret by lines as laid out).
+    fn display_lines(&self, down: bool, count: usize) -> Option<usize> {
+        let from = self.model(|st| st.vim_cursor())?;
+        self.place_dom_selection(Selection::new(from, from), false);
+        let sel = document().get_selection().ok()??;
+        let dir = if down { "forward" } else { "backward" };
+        for _ in 0..count.min(1000) {
+            sel.modify("move", dir, "line").ok()?;
+        }
+        self.read_selection().map(|(_, h)| h)
+    }
+
+    /// The box of the character at `pos`, or of the caret there (at the end
+    /// of a line), in viewport pixels.
+    fn pos_rect(&self, pos: usize) -> Option<web_sys::DomRect> {
+        let (line, text, off, end) = self.model(move |st| {
+            let d = st.doc();
+            let p = d.floor(pos);
+            let l = d.line_of(p);
+            let text = d.line(l).to_string();
+            let off = p - d.line_start(l);
+            let end = text[off..]
+                .chars()
+                .next()
+                .map(|c| off + c.len_utf8())
+                .unwrap_or(off);
+            (l, text, off, end)
+        });
+        let el = self.view.borrow().lines.get(line).map(|l| l.el.clone())?;
+        let doc = document();
+        let range = doc.create_range().ok()?;
+        let (sn, so) = dom::offset_to_dom(&el, &text, off);
+        let (en, eo) = dom::offset_to_dom(&el, &text, end);
+        range.set_start(&sn, so).ok()?;
+        range.set_end(&en, eo).ok()?;
+        if end > off {
+            // The character's own box (its first, if it wraps).
+            let rects = range.get_client_rects()?;
+            if let Some(r) = rects.get(0).filter(|r| r.height() > 0.0 && r.width() > 0.0) {
+                return Some(r);
+            }
+        }
+        range.collapse_with_to_start(true);
+        let r = range.get_bounding_client_rect();
+        if r.height() > 0.0 {
+            return Some(r);
+        }
+        // An empty line has no caret box: the line's start.
+        let l = el.get_bounding_client_rect();
+        let r = web_sys::DomRect::new_with_x_and_y_and_width_and_height(
+            l.left(),
+            l.top(),
+            0.0,
+            l.height().min(1.7 * 16.0),
+        )
+        .ok()?;
+        Some(r)
     }
 
     fn on_copy(&self, ev: &web_sys::ClipboardEvent, cut: bool) {

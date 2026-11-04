@@ -621,8 +621,11 @@ button.list-row:hover:not(:disabled) { background: var(--bg-2); }
 .ed .hw a { color: var(--link); text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
 .ed.live .ln.html:not(.active) { font-size: 0; line-height: 0; }
 .ed.live .ln.active .hw { display: none; }
-.ed.vim-normal { caret-color: var(--warn); }
+/* Vim outside insert mode: a block over the character under the cursor
+   (drawn by the editor) instead of the browser's line. */
+.ed.vim-normal { caret-color: transparent; }
 .ed-cursors { position: absolute; inset: 0; pointer-events: none; }
+.vim-cursor { position: absolute; background: color-mix(in srgb, var(--warn) 50%, transparent); border-radius: 2px; }
 .rc { position: absolute; width: 2px; background: var(--c); border-radius: 1px; }
 .rc span { position: absolute; bottom: 100%; left: -1px; background: var(--c); color: #fff; font-size: 11px; line-height: 1.5; padding: 0 5px; border-radius: 4px 4px 4px 0; white-space: nowrap; font-family: var(--sans); }
 /* The name goes under the cursor on the first line, and left of it at the

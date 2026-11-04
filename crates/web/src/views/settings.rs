@@ -477,7 +477,7 @@ fn EditorPrefs() -> impl IntoView {
     let ui = ui();
     view! {
         <label class="check">
-            <input type="checkbox" prop:checked=move || ui.ui_prefs.get().vim on:change=move |ev| { let on = event_target_checked(&ev); state::set_ui_prefs(|p| p.vim = on); }/>
+            <input type="checkbox" class="vim-toggle" prop:checked=move || ui.ui_prefs.get().vim on:change=move |ev| { let on = event_target_checked(&ev); state::set_ui_prefs(|p| p.vim = on); }/>
             " Vim keybindings (Esc for normal mode, i to insert)"
         </label>
         <label class="check">

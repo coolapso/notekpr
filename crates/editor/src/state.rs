@@ -405,6 +405,28 @@ impl EditorState {
         vim.as_mut()?.key(key, mods, doc.as_str(), sel)
     }
 
+    /// Where vim's cursor is (`None`: vim is off, or in insert mode).
+    pub fn vim_cursor(&self) -> Option<usize> {
+        let v = self.vim.as_ref().filter(|v| !v.insert)?;
+        Some(v.cursor(self.doc.as_str(), self.sel.pair()))
+    }
+
+    /// Vim's cursor moved to `to` (measured by the view): the selection to
+    /// show, anchor and head ([`crate::vim::Vim::moved`]).
+    pub fn vim_moved(&mut self, to: usize) -> Option<(usize, usize)> {
+        let EditorState { doc, vim, .. } = self;
+        Some(vim.as_mut()?.moved(doc.as_str(), to))
+    }
+
+    /// The cursor jumped from `from` (the application moved it): vim's
+    /// Ctrl+O comes back.
+    pub fn vim_jumped(&mut self, from: usize) {
+        let EditorState { doc, vim, .. } = self;
+        if let Some(v) = vim {
+            v.jumped(doc.as_str(), from);
+        }
+    }
+
     /// Track `at` across later changes.
     pub fn anchor(&mut self, at: usize) -> Anchor {
         let pos = Rc::new(Cell::new(self.doc.floor(at)));
@@ -475,6 +497,9 @@ impl EditorState {
                 }
                 None => false,
             });
+            if let Some(v) = &mut self.vim {
+                v.map(|p| changes.map_pos(p, Assoc::After));
+            }
         }
         self.set_selection(sel);
         Applied {

@@ -936,32 +936,46 @@ impl Board {
     /// note]]` of this vault — asked for; nothing takes it away.
     pub fn edit_link(self: &Rc<Self>) {
         let scene = self.scene();
-        let current = {
+        let (asked_for, current) = {
             let ed = self.editor.borrow();
             if ed.selection.is_empty() {
                 return;
             }
-            ed.selected(&scene)
+            let link = ed
+                .selected(&scene)
                 .first()
                 .and_then(|e| e.link())
                 .unwrap_or_default()
-                .to_string()
+                .to_string();
+            (ed.selection.clone(), link)
         };
-        let Ok(Some(answer)) = util::window()
-            .prompt_with_message_and_default("Link: a web address, or [[a note]]", &current)
-        else {
-            return;
-        };
-        let v = answer.trim();
-        self.set_property(
-            "link",
-            if v.is_empty() {
-                Value::Null
-            } else {
-                serde_json::json!(v)
-            },
-        );
-        self.schedule();
+        let me = self.clone();
+        leptos::task::spawn_local(async move {
+            let Some(answer) = crate::ask::input("Link")
+                .label("A web address, or [[a note]]")
+                .value(current)
+                .button("Save")
+                .await
+            else {
+                return;
+            };
+            // Not if the drawing closed meanwhile, or what was selected went
+            // (someone else deleted it).
+            let now = me.selection();
+            if me.closed.get() || now.is_empty() || now.iter().any(|id| !asked_for.contains(id)) {
+                return;
+            }
+            let v = answer.trim();
+            me.set_property(
+                "link",
+                if v.is_empty() {
+                    Value::Null
+                } else {
+                    serde_json::json!(v)
+                },
+            );
+            me.schedule();
+        });
     }
 
     /// Copies what shows the drawing in a note: `![[Name.drawing]]`.

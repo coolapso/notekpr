@@ -20,7 +20,7 @@ use crate::views::panels::RightPanel;
 use crate::views::width::{self, NoteWidthMenu};
 use crate::views::{SyncStatus, avatar};
 use crate::width::NoteWidth;
-use crate::{knowledge, render, util};
+use crate::{ask, knowledge, render, util};
 
 thread_local! {
     static FOCUS_TITLE: Cell<bool> = const { Cell::new(false) };
@@ -753,14 +753,12 @@ pub fn NoteView(vault: String, note: String) -> impl IntoView {
                                                 <button class="move-to-vault" on:click=move |_| ui.modal.set(Some(Modal::MoveToVault { vault: v5.clone(), what: What::Note(n5.clone()) }))><Icon name="file-plus"/>" Move to vault…"</button>
                                                 {if quick {
                                                     view! { <button class="danger" on:click=move |_| {
-                                                        if util::confirm("Delete this quick note for good? Quick notes have no trash.") {
-                                                            let n = n4.clone();
-                                                            leptos::task::spawn_local(async move {
-                                                                if crate::quick::delete(&n).await {
-                                                                    state::success("Deleted.");
-                                                                }
-                                                            });
-                                                        }
+                                                        let n = n4.clone();
+                                                        leptos::task::spawn_local(async move {
+                                                            if super::quick::ask_delete().await && crate::quick::delete(&n).await {
+                                                                state::success("Deleted.");
+                                                            }
+                                                        });
                                                     }><Icon name="trash"/>" Delete for good"</button> }.into_any()
                                                 } else {
                                                     view! { <button class="danger" on:click=move |_| { actions::trash(&v4, &n4); state::navigate(Route::Vault(v4.clone())); }><Icon name="trash"/>" Move to trash"</button> }.into_any()
@@ -1038,9 +1036,16 @@ pub fn SharedNoteView(vault: String, note: String) -> impl IntoView {
                                         util::download(&name, "text/markdown", text.as_bytes());
                                     }><Icon name="download"/>" Download as Markdown"</button>
                                     <button class="danger" on:click=move |_| {
-                                        if !util::confirm("Remove this note from your list? You'll lose access until it is shared with you again.") { return; }
                                         let (v, n) = (v2.clone(), n2.clone());
-                                        leptos::task::spawn_local(async move { actions::leave_shared_note(&v, &n).await });
+                                        leptos::task::spawn_local(async move {
+                                            let asked = ask::confirm("Remove this note from your list?")
+                                                .text("You'll lose access until it is shared with you again.")
+                                                .button("Remove from my list")
+                                                .danger();
+                                            if asked.await {
+                                                actions::leave_shared_note(&v, &n).await;
+                                            }
+                                        });
                                     }><Icon name="logout"/>" Remove from my list"</button>
                                     <NoteWidthMenu note=nwm.clone()/>
                                 </div>

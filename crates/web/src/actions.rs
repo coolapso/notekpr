@@ -19,7 +19,7 @@ use wasm_bindgen::JsCast;
 use crate::editor::syntax::Target;
 use crate::editor::{self, Host};
 use crate::state::{self, Core, Route, error, info, local_update, navigate, step, success};
-use crate::{api, knowledge, render, util, zipfile};
+use crate::{api, ask, knowledge, render, util, zipfile};
 
 fn now() -> i64 {
     util::now_ms()
@@ -1296,14 +1296,17 @@ pub async fn make_drawing_of(vault: &str, id: &str) {
     let Some(to) = paths::drawing_path_of(&e.path, note.as_deref().unwrap_or_default()) else {
         return;
     };
-    let question = format!(
-        "Make “{}” a drawing of notekpr's, to edit it here (with others too)?\n\n\
-         The file {} goes to the trash, so apps using your Markdown folder (Obsidian, say) \
+    let asked = ask::confirm(format!(
+        "Make “{}” a drawing of notekpr's, to edit it here (with others too)?",
+        paths::drawing_title(&to)
+    ))
+    .text(format!(
+        "The file {} goes to the trash, so apps using your Markdown folder (Obsidian, say) \
          no longer have it there. The trash gives it back.",
-        paths::drawing_title(&to),
         paths::file_name(&e.path)
-    );
-    if !util::confirm(&question) {
+    ))
+    .button("Make it a drawing");
+    if !asked.await {
         return;
     }
     let text = match e.kind {
@@ -2644,10 +2647,11 @@ pub async fn import_account(files: Vec<(String, Vec<u8>)>) {
         info("This export holds nothing to import.");
         return;
     }
-    if !util::confirm(&format!(
-        "Import {}? Vaults are created anew, without their history or comments.",
-        what.join(", ")
-    )) {
+    if !ask::confirm(format!("Import {}?", what.join(", ")))
+        .text("Vaults are created anew, without their history or comments.")
+        .button("Import")
+        .await
+    {
         return;
     }
     let (mut vaults, mut notes, mut drawings, mut atts) = (0, 0, 0, 0);

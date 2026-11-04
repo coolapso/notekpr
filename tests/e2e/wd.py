@@ -114,6 +114,23 @@ class Browser:
         self.shot("timeout")
         raise RuntimeError(f"timed out waiting for {msg}: {cond_js}")
 
+    def answer(self, yes=True, typed=None, timeout=10):
+        """Answer the question the app asks in its own dialog (`.ask`, never
+        the browser's box): type `typed` into its field first, if given, then
+        press its confirm button (`yes`) or Cancel. Returns what it asked
+        (its title and text)."""
+        self.find(".ask .ask-yes", timeout)
+        # (Once it has faded in: WebDriver sees nothing until then.)
+        self.wait("return getComputedStyle(document.querySelector('.ask-back')).opacity === '1'", timeout, "the question to show")
+        asked = self.js("return [...document.querySelectorAll('.ask h2, .ask-text p')].map(e => e.textContent).join(' ')")
+        if typed is not None:
+            eid = self.find(".ask .ask-input")
+            req("POST", self.p(f"/element/{eid}/clear"), {})
+            req("POST", self.p(f"/element/{eid}/value"), {"text": typed})
+        self.click(".ask .ask-yes" if yes else ".ask .ask-no")
+        self.wait("return !document.querySelector('.ask')", timeout, "the question to be answered")
+        return asked
+
     def shot(self, name):
         png = req("GET", self.p("/screenshot"))
         out = os.environ.get("NOTEKPR_E2E_OUT", "target/e2e")

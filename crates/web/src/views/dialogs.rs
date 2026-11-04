@@ -13,7 +13,7 @@ use crate::state::{self, Modal, Route, step, ui};
 use crate::views::avatar;
 use crate::views::icons::Icon;
 use crate::{api, knowledge, render};
-use crate::{notion, util};
+use crate::{ask, notion, util};
 
 #[component]
 pub(crate) fn Dialog(
@@ -464,23 +464,33 @@ fn Share(vault: String) -> impl IntoView {
                                 // People with keys can be owners; the last one stays.
                                 let can_own = m.user.kind != PrincipalKind::Agent && m.user.account_key.is_some();
                                 let was_owner = m.role == Role::Owner;
+                                let was = role_value(&m.role);
                                 let name = m.user.display_name.clone();
                                 view! {
                                     <select class="input small member-role" on:change=move |ev| {
-                                        let r = member_role(&event_target_value(&ev));
-                                        let ok = match (&r, was_owner, is_me) {
-                                            (Role::Owner, _, _) => util::confirm(&format!("Make {name} an owner? Owners are equal: they manage people, keys and settings, can remove other owners — you too — and can delete the vault.")),
-                                            (_, true, true) => util::confirm("Stop being an owner? You won't manage people or the vault's settings any more."),
-                                            _ => true,
+                                        let select: web_sys::HtmlSelectElement = event_target(&ev);
+                                        let r = member_role(&select.value());
+                                        let question = match (&r, was_owner, is_me) {
+                                            (Role::Owner, _, _) => Some(ask::confirm(format!("Make {name} an owner?"))
+                                                .text("Owners are equal: they manage people, keys and settings, can remove other owners — you too — and can delete the vault.")
+                                                .button("Make owner")),
+                                            (_, true, true) => Some(ask::confirm("Stop being an owner?")
+                                                .text("You won't manage people or the vault's settings any more.")
+                                                .button("Stop being an owner")
+                                                .danger()),
+                                            _ => None,
                                         };
                                         let (v, u) = (v.clone(), uid.clone());
                                         let reload = reload.clone();
-                                        if !ok {
-                                            // Shows what it was again.
+                                        leptos::task::spawn_local(async move {
+                                            if let Some(q) = question && !q.await {
+                                                // Shows what it was again.
+                                                select.set_value(was);
+                                                return;
+                                            }
+                                            actions::set_role(&v, &u, r).await;
                                             reload();
-                                            return;
-                                        }
-                                        leptos::task::spawn_local(async move { actions::set_role(&v, &u, r).await; reload(); });
+                                        });
                                     }>
                                         {(can_own || was_owner).then(|| view! {
                                             <option value="owner" title=OWNER_HINT selected=was_owner>"Owner"</option>
@@ -494,10 +504,18 @@ fn Share(vault: String) -> impl IntoView {
                                     </select>
                                     {(!is_me).then(|| view! {
                                         <button class="icon-btn remove-member" title="Remove access (rotates the vault key)" aria-label="Remove access (rotates the vault key)" on:click=move |_| {
-                                            if !util::confirm("Remove this person? They keep anything they already downloaded, but can't read anything new.") { return; }
                                             let (v, u) = (v2.clone(), uid2.clone());
                                             let reload = reload_b.clone();
-                                            leptos::task::spawn_local(async move { actions::remove_member(&v, &u).await; reload(); });
+                                            leptos::task::spawn_local(async move {
+                                                let asked = ask::confirm("Remove this person?")
+                                                    .text("They keep anything they already downloaded, but can't read anything new.")
+                                                    .button("Remove")
+                                                    .danger();
+                                                if asked.await {
+                                                    actions::remove_member(&v, &u).await;
+                                                    reload();
+                                                }
+                                            });
                                         }><Icon name="x"/></button>
                                     })}
                                 }
@@ -524,6 +542,17 @@ fn other_role(role: &Role) -> Option<impl IntoView + use<>> {
     Some(
         view! { <option value="" selected disabled title="A role from a newer version of notekpr: reload the page to see it">{name}</option> },
     )
+}
+
+/// A role's value in a role `<select>` (see [`member_role`]).
+fn role_value(role: &Role) -> &'static str {
+    match role {
+        Role::Owner => "owner",
+        Role::Admin => "admin",
+        Role::Editor => "editor",
+        Role::Viewer => "viewer",
+        Role::Other(_) => "",
+    }
 }
 
 /// A vault member's role as chosen in a role `<select>`.
@@ -713,9 +742,15 @@ fn ShareNote(vault: String, note: String) -> impl IntoView {
                                 {other_role(&sh.role)}
                             </select>
                             <button class="icon-btn" title="Stop sharing with this person (renews the note's key)" aria-label="Stop sharing with this person (renews the note's key)" on:click=move |_| {
-                                if !util::confirm("Stop sharing this note with this person? They keep anything they already downloaded, but can't read anything new.") { return; }
                                 let (v, n, u) = (v2.clone(), n2.clone(), uid2.clone());
                                 leptos::task::spawn_local(async move {
+                                    let asked = ask::confirm("Stop sharing this note with this person?")
+                                        .text("They keep anything they already downloaded, but can't read anything new.")
+                                        .button("Stop sharing")
+                                        .danger();
+                                    if !asked.await {
+                                        return;
+                                    }
                                     match actions::unshare_note(&v, &n, &u).await {
                                         Ok(()) => state::success("Stopped sharing and renewed the note's key."),
                                         Err(e) => err.set(Some(e)),
@@ -1070,12 +1105,20 @@ fn VaultSettings(vault: String) -> impl IntoView {
                     let vname = state::step(|c| c.vault_name(&v8));
                     view! {
                         <button class="btn danger delete-vault" on:click=move |_| {
-                            let typed = util::window().prompt_with_message(&format!("This permanently deletes “{vname}” for everyone. Type the vault name to confirm:")).ok().flatten();
-                            if typed.as_deref() == Some(vname.as_str()) {
-                                ui.modal.set(None);
-                                let v = v.clone();
-                                leptos::task::spawn_local(async move { actions::delete_vault(&v).await });
-                            }
+                            let (v, vname) = (v.clone(), vname.clone());
+                            leptos::task::spawn_local(async move {
+                                let typed = ask::input("Delete this vault?")
+                                    .text(format!("This permanently deletes “{vname}” for everyone."))
+                                    .label("Type the vault name to confirm")
+                                    .must_be(vname.clone())
+                                    .button("Delete vault")
+                                    .danger()
+                                    .await;
+                                if typed.as_deref() == Some(vname.as_str()) {
+                                    ui.modal.set(None);
+                                    actions::delete_vault(&v).await;
+                                }
+                            });
                         }><Icon name="trash"/>" Delete vault"</button>
                     }
                 })}
@@ -1084,11 +1127,17 @@ fn VaultSettings(vault: String) -> impl IntoView {
                     let v = v8.clone();
                     view! {
                         <button class="btn danger leave-vault" on:click=move |_| {
-                            if util::confirm("Leave this vault? You'll lose access until someone shares it again.") {
-                                ui.modal.set(None);
-                                let v = v.clone();
-                                leptos::task::spawn_local(async move { actions::leave_vault(&v).await });
-                            }
+                            let v = v.clone();
+                            leptos::task::spawn_local(async move {
+                                let asked = ask::confirm("Leave this vault?")
+                                    .text("You'll lose access until someone shares it again.")
+                                    .button("Leave vault")
+                                    .danger();
+                                if asked.await {
+                                    ui.modal.set(None);
+                                    actions::leave_vault(&v).await;
+                                }
+                            });
                         }><Icon name="logout"/>" Leave vault"</button>
                     }
                 })}

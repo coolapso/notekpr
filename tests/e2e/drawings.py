@@ -437,8 +437,8 @@ def main():
         a.click(".library-pending", 5)
         a.find_text(".toast", "Pictures", 5)
         check(True, "a picture isn't saved as a shape")
-        a.js("window.confirm = () => true")
         a.js(f"document.querySelector('{LIBRARY_ITEMS} .library-remove').click()")
+        a.answer()
         a.wait(f"return document.querySelectorAll('{LIBRARY_ITEMS}').length == 2", 10, "a shape removed")
         a.shot("drawings-library")
         time.sleep(1.5)
@@ -521,6 +521,11 @@ def main():
         a.wait("return document.querySelectorAll('.library-unit.picked').length == 2", 5, "both picked")
         a.shot("drawings-library-picked")
         a.click(".library-head button[aria-label='Remove the selected shapes']")
+        asked = a.answer(yes=False)
+        check("Remove 2 shapes" in asked and a.js(f"return document.querySelectorAll('{LIBRARY_ITEMS}').length") == 2 and picked() == 2,
+              "removing asks first; Cancel keeps them, still picked")
+        a.click(".library-head button[aria-label='Remove the selected shapes']")
+        a.answer()
         a.wait(f"return document.querySelectorAll('{LIBRARY_ITEMS}').length == 0", 10, "the picked shapes removed")
         for _ in range(20):
             listed = json.loads(amy("shapes", "ls", "--json").stdout or "[]")
@@ -562,9 +567,7 @@ def main():
         a.click(".drawing-props .color-grid .pick[title='#9c36b5']")
         a.js("document.querySelector('.drawing-page').focus()")
         a.chord(KEYS["ctrl"], "k")
-        time.sleep(0.3)
-        req("POST", a.p("/alert/text"), {"text": "https://example.org/plan"})
-        req("POST", a.p("/alert/accept"), {})
+        a.answer(typed="https://example.org/plan")
         time.sleep(0.5)
         boxes = [e for e in drawing() if e["type"] == "rectangle"]
         check(any(e["strokeColor"] == "#9c36b5" and e.get("link") == "https://example.org/plan" for e in boxes),
@@ -602,8 +605,8 @@ def main():
         row = "Array.from(document.querySelectorAll('.tree-row')).find(r => r.textContent.trim() === arguments[0])"
         a.wait("return !!" + row, 20, "the file in the tree", "Old sketch.excalidraw")
         a.js(row + ".querySelector('.tree-more').click()", "Old sketch.excalidraw")
-        a.js("window.confirm = () => true")
         a.click_el(a.find_text(".menu button", "Make it a drawing", 5))
+        a.answer()
         a.find(CANVAS, 10)
         time.sleep(1.5)
         r = cli("cat", "Art", "Old sketch.drawing")
@@ -693,11 +696,11 @@ def main():
               and a.js(f"return !!document.querySelector('{CANVAS}') && !document.querySelector('.drawing-tools')"),
               "Obsidian's drawing opens as a drawing, view-only")
         a.shot("drawings-other-apps")
-        a.js("window.confirm = m => { window.asked = m; return true; }")
         a.click_el(a.find_text(".other-apps-banner button", "Make it a drawing", 5))
+        asked = a.answer()
         a.wait("return !document.querySelector('.other-apps-banner') && !!document.querySelector('.drawing-tools')", 15,
                "the drawing made of it, opened")
-        check("goes to the trash" in (a.js("return window.asked") or ""), "asked first, saying the file goes to the trash")
+        check("goes to the trash" in asked, "asked first, saying the file goes to the trash")
         time.sleep(1.5)
         r = cli("cat", "Art", "Sketches/Plan.drawing")
         made = json.loads(r.stdout) if r.returncode == 0 else {}

@@ -23,7 +23,7 @@ use super::icons::Icon;
 use crate::drawing::Board;
 use crate::drawing::library;
 use crate::state::ui;
-use crate::util;
+use crate::{ask, util};
 
 /// Excalidraw's `onItemSelectToggle`: `id` is picked, or let go if it was.
 /// Picked with `range` (Shift) after another one, everything between the
@@ -162,10 +162,15 @@ pub fn LibraryPanel(
     let remove_picked = move |_| {
         let ids = picked.get_untracked();
         let what = util::count(ids.len(), "shape", "shapes");
-        if util::confirm(&format!("Remove {what} from your saved shapes?")) {
-            library::remove(&ids);
-            let_go();
-        }
+        leptos::task::spawn_local(async move {
+            let asked = ask::confirm(format!("Remove {what} from your saved shapes?"))
+                .button("Remove")
+                .danger();
+            if asked.await {
+                library::remove(&ids);
+                let_go();
+            }
+        });
     };
     let count = move || picked.with(Vec::len);
     view! {
@@ -279,9 +284,15 @@ fn LibraryUnit(
     };
     let remove = move |ev: web_sys::MouseEvent| {
         ev.stop_propagation();
-        if util::confirm("Remove this shape from your saved shapes?") {
-            library::remove(&[id.get_value()]);
-        }
+        let id = id.get_value();
+        leptos::task::spawn_local(async move {
+            let asked = ask::confirm("Remove this shape from your saved shapes?")
+                .button("Remove")
+                .danger();
+            if asked.await {
+                library::remove(&[id]);
+            }
+        });
     };
     // Renaming: the name becomes a field (Enter keeps it, Escape or
     // clicking elsewhere doesn't).

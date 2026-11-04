@@ -309,10 +309,6 @@ pub fn is_touch() -> bool {
         .is_some_and(|m| m.matches())
 }
 
-pub fn confirm(msg: &str) -> bool {
-    window().confirm_with_message(msg).unwrap_or(false)
-}
-
 pub fn log(msg: &str) {
     web_sys::console::log_1(&JsValue::from_str(msg));
 }

@@ -601,14 +601,9 @@ pub async fn forget_browser() {
         flush_now(c);
         c.pending_count()
     });
-    let warn = if unsent > 0 {
-        format!(
-            " {unsent} note{} with changes that are not synced yet will lose them.",
-            if unsent == 1 { "" } else { "s" }
-        )
-    } else {
-        String::new()
-    };
+    let mut text = vec![
+        "You will be signed out and this browser's key will be deleted, so opening your notes here again needs approval from another device or your recovery key.".to_string(),
+    ];
     // Without another device, the recovery key is the only way back in.
     let others = api::get::<Vec<DeviceInfo>>("/devices")
         .await
@@ -618,14 +613,21 @@ pub async fn forget_browser() {
                 .count()
         })
         .unwrap_or(1);
-    let last = if others == 0 {
-        " This is your only device: afterwards only your recovery key can open your notes. Without it they are lost for good."
-    } else {
-        ""
-    };
-    if !util::confirm(&format!(
-        "Forget this browser? You will be signed out and this browser's key will be deleted, so opening your notes here again needs approval from another device or your recovery key.{last}{warn}"
-    )) {
+    if others == 0 {
+        text.push("This is your only device: afterwards only your recovery key can open your notes. Without it they are lost for good.".into());
+    }
+    if unsent > 0 {
+        text.push(format!(
+            "{unsent} note{} with changes that are not synced yet will lose them.",
+            if unsent == 1 { "" } else { "s" }
+        ));
+    }
+    if !crate::ask::confirm("Forget this browser?")
+        .text(text.join("\n\n"))
+        .button("Forget this browser")
+        .danger()
+        .await
+    {
         return;
     }
     let (uid, device) = step(|c| (c.user_id.clone(), c.device_id.clone()));

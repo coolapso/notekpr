@@ -6,10 +6,10 @@ use leptos::prelude::*;
 use notekpr_core::protocol::*;
 
 use crate::state::{self, Modal, Route, step, ui};
-use crate::util;
 use crate::views::icons::Icon;
 use crate::views::width::WidthSlider;
 use crate::{actions, api, views::avatar};
+use crate::{ask, util};
 
 #[component]
 pub fn Settings(tab: String) -> impl IntoView {
@@ -219,30 +219,40 @@ fn Devices() -> impl IntoView {
                         {(d.status == DeviceStatus::Pending).then(|| view! {
                             <button class="btn small primary" on:click=move |_| ui.modal.set(Some(Modal::ApproveDevice(d2.clone())))>"Review"</button>
                         })}
-                        <button class="btn small" on:click=move |_| {
-                            let n = util::window().prompt_with_message_and_default("Device name", &name).ok().flatten();
-                            if let Some(n) = n {
-                                let id = id.clone();
-                                leptos::task::spawn_local(async move {
+                        <button class="btn small rename-device" on:click=move |_| {
+                            let (id, name) = (id.clone(), name.clone());
+                            leptos::task::spawn_local(async move {
+                                let typed = ask::input("Rename this device")
+                                    .label("Device name")
+                                    .value(name)
+                                    .required()
+                                    .button("Rename")
+                                    .await;
+                                if let Some(n) = typed {
                                     let _ = api::patch::<_, ()>(&format!("/devices/{id}"), &RenameRequest { name: n }).await;
                                     reload();
-                                });
-                            }
+                                }
+                            });
                         }>"Rename"</button>
                         {d.current.then(|| view! {
                             <button class="btn small danger" on:click=move |_| leptos::task::spawn_local(state::forget_browser())>"Forget this browser"</button>
                         })}
                         <button class="btn small danger" class:hidden=d.current on:click=move |_| {
-                            if util::confirm("Remove this device? It will be signed out and can't decrypt new data. If it was lost or stolen, also rotate the keys of your shared vaults.") {
-                                let id = id2.clone();
-                                leptos::task::spawn_local(async move {
-                                    match api::delete(&format!("/devices/{id}")).await {
-                                        Ok(()) => state::success("Device removed."),
-                                        Err(e) => state::error(e.message),
-                                    }
-                                    reload();
-                                });
-                            }
+                            let id = id2.clone();
+                            leptos::task::spawn_local(async move {
+                                let asked = ask::confirm("Remove this device?")
+                                    .text("It will be signed out and can't decrypt new data. If it was lost or stolen, also rotate the keys of your shared vaults.")
+                                    .button("Remove")
+                                    .danger();
+                                if !asked.await {
+                                    return;
+                                }
+                                match api::delete(&format!("/devices/{id}")).await {
+                                    Ok(()) => state::success("Device removed."),
+                                    Err(e) => state::error(e.message),
+                                }
+                                reload();
+                            });
                         }>"Remove"</button>
                     </div>
                 }
@@ -262,16 +272,18 @@ fn OfflineSetting() -> impl IntoView {
     let busy = RwSignal::new(false);
     let supported = state::offline_supported();
     let toggle = move |want: bool| {
-        if want
-            && !util::confirm(
-                "Keep what's needed to decrypt your notes in this browser? Anyone with a copy of this browser's data could then read your notes without the server, even after you remove this device. Only do this on your own computer with disk encryption.",
-            )
-        {
-            on.set(false);
-            return;
-        }
         busy.set(true);
         leptos::task::spawn_local(async move {
+            if want
+                && !ask::confirm("Keep what's needed to decrypt your notes in this browser?")
+                    .text("Anyone with a copy of this browser's data could then read your notes without the server, even after you remove this device. Only do this on your own computer with disk encryption.")
+                    .button("Turn on offline use")
+                    .await
+            {
+                on.set(false);
+                busy.set(false);
+                return;
+            }
             if want {
                 match state::enable_offline().await {
                     Ok(()) => state::success("This browser now works without the server."),
@@ -357,8 +369,13 @@ fn Security() -> impl IntoView {
             }
             None => view! {
                 <button class="btn" on:click=move |_| {
-                    if !util::confirm("Create a new recovery key? Your old recovery key will stop working.") { return; }
                     leptos::task::spawn_local(async move {
+                        let asked = ask::confirm("Create a new recovery key?")
+                            .text("Your old recovery key will stop working.")
+                            .button("Create a new key");
+                        if !asked.await {
+                            return;
+                        }
                         let req = step(|c| c.account.as_ref().map(|a| notekpr_core::engine::rotate_recovery(a, &c.user_id, util::now_ms().max(0) as u64)));
                         if let Some((rk, req)) = req {
                             match api::put::<_, ()>("/me/recovery", &req).await {
@@ -446,10 +463,17 @@ fn Agents() -> impl IntoView {
                                 });
                             }>"New secret"</button>
                             <button class="btn small danger" on:click=move |_| {
-                                if util::confirm("Delete this agent? It loses access to every vault immediately.") {
-                                    let id = id2.clone();
-                                    leptos::task::spawn_local(async move { let _ = api::delete(&format!("/agents/{id}")).await; reload(); });
-                                }
+                                let id = id2.clone();
+                                leptos::task::spawn_local(async move {
+                                    let asked = ask::confirm("Delete this agent?")
+                                        .text("It loses access to every vault immediately.")
+                                        .button("Delete agent")
+                                        .danger();
+                                    if asked.await {
+                                        let _ = api::delete(&format!("/agents/{id}")).await;
+                                        reload();
+                                    }
+                                });
                             }>"Delete"</button>
                         </div>
                         {a.credentials.iter().filter(|c| c.revoked_at.is_none()).map(|c| {
@@ -994,13 +1018,18 @@ fn AdminClients() -> impl IntoView {
                                 leptos::task::spawn_local(async move { shown(api::post_empty::<CreatedAdminToken>(&format!("/admin/clients/{id}/tokens")).await) });
                             }>"New token"</button>
                             <button class="btn small danger delete-client" on:click=move |_| {
-                                if util::confirm(&format!("Delete the admin client “{name}”? Its tokens stop working immediately.")) {
-                                    let id = id2.clone();
-                                    leptos::task::spawn_local(async move {
-                                        if let Err(e) = api::delete(&format!("/admin/clients/{id}")).await { state::error(e.message); }
-                                        reload();
-                                    });
-                                }
+                                let id = id2.clone();
+                                let asked = ask::confirm(format!("Delete the admin client “{name}”?"))
+                                    .text("Its tokens stop working immediately.")
+                                    .button("Delete client")
+                                    .danger();
+                                leptos::task::spawn_local(async move {
+                                    if !asked.await {
+                                        return;
+                                    }
+                                    if let Err(e) = api::delete(&format!("/admin/clients/{id}")).await { state::error(e.message); }
+                                    reload();
+                                });
                             }>"Delete"</button>
                         </div>
                         {c.tokens.iter().map(|t| {

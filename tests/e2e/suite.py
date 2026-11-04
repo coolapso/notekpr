@@ -313,8 +313,8 @@ def test_devices_and_recovery(env):
         check(True, "approved device decrypts existing notes")
         a.go(env.url + "settings/security")
         a.find_text(".settings-body button", "Create a new recovery key", 15)
-        a.js("window.confirm = () => true")
         a.click_el(a.find_text(".settings-body button", "Create a new recovery key"))
+        a.answer()
         a.find(".recovery-key", 10)
         rk = a.text(".recovery-key")
         b3.go(env.url)
@@ -333,8 +333,9 @@ def test_devices_and_recovery(env):
         # "Forget this browser" signs out, removes the device and deletes its key locally.
         b3.go(env.url + "settings/devices")
         forget = b3.find_text(".settings-body .list-row button", "Forget this browser", 15)
-        b3.js("window.confirm = () => true")
         b3.click_el(forget)
+        asked = b3.answer()
+        check("Forget this browser?" in asked and "recovery key" in asked, "forgetting the browser asks first, in the app's own dialog")
         b3.find(".dev-box input", 15)
         check(b3.js("return Object.keys(localStorage).filter(k => k.startsWith('notekpr.device.') || k.startsWith('notekpr.pending.') || k.startsWith('notekpr.newkeys.') || k.startsWith('notekpr.head.')).length") == 0,
               "forgetting the browser deletes its device key and sync data")
@@ -653,11 +654,11 @@ def test_export_import(env):
 
         # Another account — as on another server — imports it.
         signup(b, uniq("ivo"))
-        b.js("window.confirm = () => true")
         b.js(TO_ACCOUNT_SETTINGS)
         b.find(".import-account", 10)
         b.js(CHOOSE_FILE, name, data)
         b.click(".import-account")
+        b.answer(timeout=20)
         b.find_text(".toast", "Imported 1 vault", 30)
         b.wait("return Array.from(document.querySelectorAll('.export-choice .export-vault')).length === 2", 10, "the new vault listed")
         names = b.js(vaults)
@@ -1111,8 +1112,8 @@ def test_note_sharing(env):
         # Revoking removes access right away and renews the note's key.
         a.click(".note-head button[title^='Shared individually']")
         a.find(".people .person .icon-btn", 10)
-        a.js("window.confirm = () => true")
         a.click(".people .person .icon-btn")
+        a.answer()
         b.wait("return !location.pathname.startsWith('/s/')", 15, "pete loses access")
         check(b.js("return !Array.from(document.querySelectorAll('.card, .sb-link')).some(e => e.textContent.includes('Beach trip'))"),
               "revoking removes the note from the recipient's lists")
@@ -1679,8 +1680,8 @@ def test_local_copy(env):
         # Losing access deletes the copy.
         a.click(".sb-bottom button:nth-child(2)")
         a.find_text(".people .person", bn.capitalize(), 10)
-        a.js("window.confirm = () => true")
         a.click(".people .person .icon-btn[title^='Remove access']")
+        a.answer()
         b.wait("return !location.pathname.includes('%s')" % vault, 15, "dan is sent away from the vault")
         time.sleep(1)
         check(not any(vault in k for k in local_copy(b)["keys"]), "losing access deletes the local copy")
@@ -1823,8 +1824,12 @@ def test_offline_start(env):
         time.sleep(3)  # the local copy is written
         b.go(env.url + "settings/devices")
         b.find(".offline-toggle", 15)
-        b.js("window.confirm = () => true")
         b.click(".offline-toggle")
+        b.answer(yes=False)
+        b.wait("return !document.querySelector('.offline-toggle').checked && !document.querySelector('.offline-toggle').disabled", 5, "the toggle back off")
+        check(not any(k.startswith("notekpr.offline.") for k in b.js("return Object.keys(localStorage)")), "cancelling leaves offline use off")
+        b.click(".offline-toggle")
+        b.answer()
         b.wait("return !!navigator.serviceWorker.controller && Object.keys(localStorage).some(k => k.startsWith('notekpr.offline.data.'))", 20,
                "the offline setting to take effect")
         check(True, "offline use can be turned on")
@@ -1951,8 +1956,8 @@ def test_quick_notes(env):
         # Deleted for good: no trash.
         b.click(".sb-quick .sb-link")
         b.find(".qn-card", 10)
-        b.js("window.confirm = () => true")
         b.js("Array.from(document.querySelectorAll('.qn-card')).find(c => c.textContent.includes('Call the dentist')).querySelector('.qn-delete').click()")
+        b.answer()
         b.wait(cards + ".join('|') === 'Old thought'", 10, "deleted")
         check(True, "deleting a quick note takes it away for good")
         # Shortcut help and the settings toggle.
@@ -3143,8 +3148,8 @@ def test_vault_admins(env):
         log = api_get(b, f"/vaults/{vid}/log")
         last = log["entries"][-1]["body"]
         check(last["kind"] == "role" and last["role"] == "admin", "the owner signed sam's new role")
-        b.js("window.confirm = () => true")
         b.click_el(b.find_text(".list-row .btn", "Delete forever"))
+        b.answer()
         b.wait("return document.querySelector('.page-body').textContent.includes('The trash is empty.')", 10, "sam's trash is empty")
         a.click_el(a.find_text(".sb-link", "Trash"))
         a.wait("return document.querySelector('.page-body').textContent.includes('The trash is empty.')", 10, "rita's trash is empty")
@@ -3190,7 +3195,6 @@ def test_owners(env):
         a.find(".quick-actions", 20)
         time.sleep(1.5)
         check(not a.js("return !!document.querySelector('.owner-hint')"), "and stays hidden")
-        a.js("window.confirm = () => true")
 
         # Her account can't go before the vault is someone else's too, or
         # deleted.
@@ -3204,7 +3208,29 @@ def test_owners(env):
         # From there: make someone owner.
         a.click(".last-owner-vault .btn")
         a.find_text(".people .person", bn.capitalize(), 10)
+        # Asked in the app's own dialog, over the Share dialog: Escape keeps
+        # what it was, Cancel too, and the Share dialog stays.
+        role = ("return Array.from(document.querySelectorAll('.people .person')).find(r => r.textContent.includes(arguments[0]))"
+                ".querySelector('.member-role').value")
         a.js(SET_MEMBER_ROLE, bn.capitalize(), "owner")
+        a.find(".ask .ask-yes", 10)
+        check(a.js("return document.querySelector('.ask').getAttribute('role')") == "alertdialog"
+              and "an owner?" in a.js("return document.querySelector('.ask h2').textContent")
+              and a.js("return document.querySelector('.ask .ask-yes').textContent") == "Make owner"
+              and a.js("return document.activeElement === document.querySelector('.ask .ask-yes')"),
+              "making an owner asks in the app's own dialog, its button saying what it does")
+        a.wait("return getComputedStyle(document.querySelector('.ask-back')).opacity === '1'", 5, "the question to fade in")
+        a.shot("ask-make-owner")
+        a.chord(KEYS["escape"])
+        a.wait("return !document.querySelector('.ask')", 5, "the question to go")
+        check(a.js(role, bn.capitalize()) == "editor" and a.js("return !!document.querySelector('.modal .people')"),
+              "Escape keeps the role, and the Share dialog stays open")
+        a.js(SET_MEMBER_ROLE, bn.capitalize(), "owner")
+        a.answer(yes=False)
+        check(a.js(role, bn.capitalize()) == "editor" and a.js("return !!document.querySelector('.modal .people')"),
+              "so does Cancel")
+        a.js(SET_MEMBER_ROLE, bn.capitalize(), "owner")
+        a.answer()
         end = time.time() + 10
         while api_get(a, f"/vaults/{vid}/log")["entries"][-1]["body"]["kind"] != "make_owner" and time.time() < end:
             time.sleep(0.3)
@@ -3214,7 +3240,6 @@ def test_owners(env):
         # Owners are equal: Omar may leave or delete it, and so may Nora.
         b.go(env.url.rstrip("/") + path)
         b.wait("return document.querySelector('.ed') && document.querySelector('.ed').textContent.includes('milk')", 20, "omar opens the note")
-        b.js("window.confirm = () => true")
         b.click(".sb-label button[title='Vault settings']")
         b.find(".modal .leave-vault", 10)
         check(b.js("return !!document.querySelector('.modal .delete-vault')"), "a second owner may leave or delete the vault")
@@ -3232,9 +3257,9 @@ def test_owners(env):
         # its membership history starts with her.
         a.go(env.url.rstrip("/") + path)
         a.find(".sb-label button[title='Vault settings']", 20)
-        a.js("window.confirm = () => true")
         a.click(".sb-label button[title='Vault settings']")
         a.click(".modal .leave-vault")
+        a.answer()
         a.wait("return !Array.from(document.querySelectorAll('.sb-tree, .page-body')).some(e => e.textContent.includes('Groceries'))", 15, "nora left")
         b.js("location.reload()")
         b.wait("return document.querySelector('.ed') && document.querySelector('.ed').textContent.includes('milk')", 20, "omar's vault still opens")
@@ -3264,10 +3289,10 @@ def test_undo_purge(env):
         a.click_el(a.find_text(".menu button", "Move to trash"))
         time.sleep(0.6)
         a.click_el(a.find_text(".sb-link", "Trash"))
-        a.js("window.confirm = (m) => { window.asked = m; return true; }")
         a.click_el(a.find_text(".list-row .btn", "Delete forever"))
+        asked = a.answer()
         a.find_text(".trash-gone-list .list-row", "Keeper", 10)
-        check("undo it here for 30 days" in a.js("return window.asked"), "deleting for good says it can be undone, and for how long")
+        check("undo it here for 30 days" in asked, "deleting for good says it can be undone, and for how long")
         check("The trash is empty." in a.text(".page-body") and "kept until" in a.text(".trash-gone-list"),
               "gone from the trash, listed as deleted for good")
         check(not a.js("return Array.from(document.querySelectorAll('.sb-link')).some(e => e.textContent.includes('Keeper'))"),

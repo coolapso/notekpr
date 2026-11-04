@@ -6,6 +6,7 @@ use notekpr_core::protocol::{MemberInfo, PrincipalKind, PurgedItem, Role};
 
 use crate::actions;
 use crate::api;
+use crate::ask;
 use crate::state::{self, Modal, Route, step, ui};
 use crate::util;
 use crate::views::icons::Icon;
@@ -367,14 +368,16 @@ pub fn Trash(vault: String) -> impl IntoView {
                         let p1 = p1.clone();
                         view! {
                             <button class="btn danger small" on:click=move |_| {
-                                let ask = match &p1 {
-                                    Some(p) => format!("Delete everything in the trash for good? You can still undo it here for {p}."),
-                                    None => "Permanently delete everything in the trash? This cannot be undone.".into(),
+                                let question = match &p1 {
+                                    Some(p) => ask::confirm("Delete everything in the trash for good?").text(format!("You can still undo it here for {p}.")),
+                                    None => ask::confirm("Permanently delete everything in the trash?").text("This cannot be undone."),
                                 };
-                                if util::confirm(&ask) {
-                                    let v = ve.clone();
-                                    leptos::task::spawn_local(async move { actions::empty_trash(&v).await });
-                                }
+                                let v = ve.clone();
+                                leptos::task::spawn_local(async move {
+                                    if question.button("Empty trash").danger().await {
+                                        actions::empty_trash(&v).await;
+                                    }
+                                });
                             }><Icon name="trash"/>" Empty trash"</button>
                         }
                     }
@@ -410,14 +413,16 @@ pub fn Trash(vault: String) -> impl IntoView {
                                         })}
                                         {admin.then(|| view! {
                                             <button class="btn small danger" on:click=move |_| {
-                                                let ask = match &p2 {
-                                                    Some(p) => format!("Delete this for good? You can still undo it here for {p}."),
-                                                    None => "Delete this permanently? This cannot be undone.".into(),
+                                                let question = match &p2 {
+                                                    Some(p) => ask::confirm("Delete this for good?").text(format!("You can still undo it here for {p}.")),
+                                                    None => ask::confirm("Delete this permanently?").text("This cannot be undone."),
                                                 };
-                                                if util::confirm(&ask) {
-                                                    let (v, id) = (v2.clone(), id2.clone());
-                                                    leptos::task::spawn_local(async move { actions::purge(&v, &id).await; });
-                                                }
+                                                let (v, id) = (v2.clone(), id2.clone());
+                                                leptos::task::spawn_local(async move {
+                                                    if question.button("Delete forever").danger().await {
+                                                        actions::purge(&v, &id).await;
+                                                    }
+                                                });
                                             }>"Delete forever"</button>
                                         })}
                                     </div>

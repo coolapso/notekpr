@@ -9,6 +9,7 @@ use notekpr_core::moving::What;
 use notekpr_core::paths;
 use notekpr_core::protocol::{MIB, VaultInfo};
 
+use crate::ask;
 use crate::quick::{self, QuickNote};
 use crate::state::{self, Modal, Route, step, ui};
 use crate::util;
@@ -225,19 +226,25 @@ fn QuickCard(q: QuickNote) -> impl IntoView {
                     <Icon name="file-plus"/></button>
                 <button class="icon-btn tiny qn-delete" title="Delete for good" aria-label="Delete for good"
                     on:click=move |_| {
-                        if util::confirm("Delete this quick note for good? Quick notes have no trash.") {
-                            let id = id2.clone();
-                            leptos::task::spawn_local(async move {
-                                if quick::delete(&id).await {
-                                    state::success("Deleted.");
-                                }
-                            });
-                        }
+                        let id = id2.clone();
+                        leptos::task::spawn_local(async move {
+                            if ask_delete().await && quick::delete(&id).await {
+                                state::success("Deleted.");
+                            }
+                        });
                     }>
                     <Icon name="trash"/></button>
             </div>
         </div>
     }
+}
+
+/// Before deleting a quick note: it doesn't go to a trash.
+pub(crate) fn ask_delete() -> ask::Ask<bool> {
+    ask::confirm("Delete this quick note for good?")
+        .text("Quick notes have no trash.")
+        .button("Delete for good")
+        .danger()
 }
 
 /// Move a note, or a folder with everything in it, to another vault: which

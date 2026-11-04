@@ -6,7 +6,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use notekpr_core::doc::{Entry, EntryKind, Picture};
+use notekpr_core::doc::{Entry, EntryKind};
 use notekpr_core::moving::{self, Unmovable, What};
 use notekpr_core::protocol::{INDEX_OBJECT_ID, Limit, PurgedItem, Snapshot, SnapshotInfo};
 use notekpr_core::{markdown, paths, quick, search};
@@ -429,17 +429,6 @@ pub async fn set_icon(
     icon: Option<&str>,
 ) -> OpResult<(String, String)> {
     change_icon(hub, vref, path, |g| g.set_icon(path, icon)).await
-}
-
-/// Give a document or folder a picture as its icon. Returns the vault's and
-/// the entry's ids.
-pub async fn set_picture(
-    hub: &Hub,
-    vref: &str,
-    path: &str,
-    picture: &Picture,
-) -> OpResult<(String, String)> {
-    change_icon(hub, vref, path, |g| g.set_picture(path, picture)).await
 }
 
 async fn change_icon(

@@ -13,6 +13,7 @@ use notekpr_cli::hub::{Hub, HubOptions};
 use notekpr_cli::livesync;
 use notekpr_cli::profile::Dirs;
 use notekpr_cli::session::Session;
+use notekpr_core::doc::Picture;
 use tokio::sync::watch;
 
 pub struct TestServer {
@@ -92,6 +93,23 @@ pub async fn login_profile(srv: &TestServer, dirs_name: &str, user: &str) -> Arc
 
 pub async fn reopen(srv: &TestServer, dirs_name: &str, profile: &str) -> Arc<Session> {
     Arc::new(Session::open(&srv.dirs(dirs_name), profile).unwrap())
+}
+
+/// Give the note or folder at `path` a picture as its icon, as the web app
+/// does (the command line sets only emoji), and tell the people a note is
+/// shared with.
+pub async fn set_picture(hub: &Hub, vault: &str, path: &str, picture: &Picture) {
+    let v = hub.resolve(vault).await.unwrap();
+    let (vault_id, id) = {
+        let mut g = v.lock().await;
+        let id = g.set_picture(path, picture).unwrap();
+        g.save().unwrap();
+        (g.id().to_string(), id)
+    };
+    hub.local_changed(&vault_id, vec![], true).await;
+    notekpr_cli::note_shares::refresh_meta(&hub.session, &v, &id)
+        .await
+        .unwrap();
 }
 
 pub async fn hub(session: &Arc<Session>) -> Arc<Hub> {

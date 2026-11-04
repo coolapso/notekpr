@@ -126,18 +126,14 @@ pub enum Command {
         #[arg(long, value_name = "VAULT")]
         to_vault: Option<String>,
     },
-    /// Give a note or folder an icon (an emoji, replacing a picture), a
-    /// picture with --picture, or take either away with --remove.
+    /// Give a note or folder an icon (an emoji, replacing a picture given
+    /// in the web app), or take either away with --remove.
     Icon {
         vault: String,
         path: String,
-        #[arg(required_unless_present_any = ["remove", "picture"])]
+        #[arg(required_unless_present = "remove")]
         icon: Option<String>,
-        /// A small picture as the icon: a PNG, WebP or JPEG file of at most
-        /// 4 KiB, stored as it is (the web app makes one from any image).
-        #[arg(long, value_name = "FILE", conflicts_with = "icon")]
-        picture: Option<PathBuf>,
-        #[arg(long, conflicts_with_all = ["icon", "picture"])]
+        #[arg(long, conflicts_with = "icon")]
         remove: bool,
     },
     /// Put a document or folder just before or after another in its folder
@@ -645,18 +641,13 @@ pub enum VaultCmd {
         #[arg(long)]
         accept_new_key: bool,
     },
-    /// Give the vault an icon (an emoji, replacing a picture), a picture with
-    /// --picture, or take either away with --remove.
+    /// Give the vault an icon (an emoji, replacing a picture given in the
+    /// web app), or take either away with --remove.
     Icon {
         vault: String,
-        #[arg(required_unless_present_any = ["remove", "picture"])]
+        #[arg(required_unless_present = "remove")]
         icon: Option<String>,
-        /// A small picture, shown instead of the icon: a PNG, WebP or JPEG
-        /// file of at most 8 KiB, stored as it is (the web app makes one
-        /// from any image).
-        #[arg(long, value_name = "FILE", conflicts_with = "icon")]
-        picture: Option<PathBuf>,
-        #[arg(long, conflicts_with_all = ["icon", "picture"])]
+        #[arg(long, conflicts_with = "icon")]
         remove: bool,
     },
     /// Remove a member and rotate the vault key.

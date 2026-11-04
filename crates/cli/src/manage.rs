@@ -2,7 +2,6 @@
 //! key pinning), key rotation, devices, recovery keys and agent identities.
 
 use anyhow::{Result, anyhow, bail};
-use notekpr_core::doc::Picture;
 use notekpr_core::engine::{self, PinStatus, VaultMeta, VaultReplica};
 use notekpr_core::keys::RecoveryKey;
 use notekpr_core::memberlog::LogBody;
@@ -129,19 +128,6 @@ pub async fn set_vault_icon(
     change_meta(session, vault, |meta| {
         meta.set_icon(icon.unwrap_or(""))?;
         meta.picture = None;
-        Ok(())
-    })
-    .await
-}
-
-/// The vault's picture, shown instead of its icon.
-pub async fn set_vault_picture(
-    session: &Session,
-    vault: &SharedVault,
-    picture: Picture,
-) -> Result<()> {
-    change_meta(session, vault, |meta| {
-        meta.picture = Some(picture);
         Ok(())
     })
     .await

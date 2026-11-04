@@ -63,9 +63,7 @@ async fn a_folder_moves_to_another_vault_with_everything_in_it() {
         Picture::ENTRY,
     )
     .unwrap();
-    ops::set_picture(&h, "Home", "Projects/Roadmap.md", &pic)
-        .await
-        .unwrap();
+    set_picture(&h, "Home", "Projects/Roadmap.md", &pic).await;
     drop(h);
     run(&srv, "alice", &["mkdir", "Home", "Projects/Empty"])
         .await

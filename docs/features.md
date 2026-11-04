@@ -168,8 +168,8 @@ a Mac). The [README](../README.md) has the short version.
   is offered, by group, the recent ones first; search them by name or
   keyword (Enter takes the first found), or type or paste any emoji. An
   uploaded image becomes a small square picture, stored encrypted with what
-  it is the icon of; the pictures given lately are offered again. From the
-  command line too (a picture from a small file).
+  it is the icon of; the pictures given lately are offered again. Emoji
+  from the command line too (it lists pictures as `(picture)`).
 * Favorites and recently opened notes in the sidebar.
 * Quick switcher (`Ctrl+P`) that creates the note when nothing matches;
   full-text search (`Ctrl+Shift+F`) with `tag:` (or `#tag`), `folder:` (or

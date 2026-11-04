@@ -261,7 +261,7 @@ by its id.
 |---|---|
 | `vault list` / `vault create <name>` | list (with role, document count, how many drawings each holds of how many it may — see [Drawings](#drawings) —, what each takes on the server of its storage limit — `FULL` at it —, its id, and how many quick notes there are) / create |
 | `vault rename <v> <name>` / `vault archive <v> [--undo]` / `vault delete <v>` | owner only; delete asks you to type the name (`--yes` skips that; without a terminal it is required) |
-| `vault icon <v> <emoji>` / `vault icon <v> --picture <file>` / `vault icon <v> --remove` | owner only; the vault's icon (replaces its picture), or its picture, shown instead: a PNG, WebP or JPEG file of at most 8 KiB, stored as it is (the web app makes one from any image) |
+| `vault icon <v> <emoji>` / `vault icon <v> --remove` | owner only; the vault's icon (replaces a picture given in the web app) |
 | `vault viewers-comment <v> on\|off` | owner only; whether viewers (and people its notes are shared with read-only) may comment (on by default) |
 | `vault members <v>` | members, roles, key fingerprints and pin status |
 | `vault share <v> <user> --role owner\|admin\|editor\|viewer` | owner only; for an existing member it changes their role; owners are equal, admins (people only) also empty the trash; see [§8](#8-sharing-members-and-keys) |
@@ -279,7 +279,7 @@ by its id.
 | `comments reply\|edit\|delete\|resolve\|reopen <v> <note> <id> [text…]` | `id`: a comment's id or the start of it that only it has. Only its author edits a comment; its author or an owner of the vault deletes it (a comment takes its replies with it) |
 | `@Name` in a comment's text | mentions that member of the vault (any case; longer names win: `@Ann Lee` over `@Ann`). Only the vault's members can be mentioned: other `@words` stay text, with a warning. The output says whom it mentioned |
 | `mentions [--vault v] [--unread] [--mark-read] [--limit n]` | comments that mention you, newest first (`*`: not read on any device yet), with the note, who and when; `--mark-read` marks them read everywhere (the web app's inbox too), with everything before them |
-| `icon <v> <path> <emoji>` / `icon <v> <path> --picture <file>` / `icon <v> <path> --remove` | a note's, attachment's or folder's icon: an emoji, or a picture in its place — a small square PNG, WebP or JPEG file of at most 4 KiB, stored as it is (the web app makes one from any image); each replaces the other. `ls`, `vault list` and `shared list` show icons, a picture as `(picture)`, and people a note is shared with see its icon and new name |
+| `icon <v> <path> <emoji>` / `icon <v> <path> --remove` | a note's, attachment's or folder's icon, an emoji (it replaces a picture given in the web app). `ls`, `vault list` and `shared list` show icons, a picture as `(picture)`, and people a note is shared with see its icon and new name |
 | `trash list\|restore\|undo\|empty <v>` | restore by path or id; `empty` deletes for good (the vault's owner and admins; asks first; `--yes`), which `undo <v> <entry>` takes back while the server keeps it (`--purge-undo-days`, 30 by default): the entry goes back to the trash. `list` shows those too, for the owner and admins, with how long they are kept (`kept_until` with `--json`) |
 | `search <query> [--vault v] [--limit n]` | terms, `"phrases"`, `tag:x`, `folder:x`, `title:x`, `vault:x`; 20 results unless `--limit` |
 | `backlinks <v> <path>` | notes linking to a note |

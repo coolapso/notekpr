@@ -9,6 +9,7 @@ use notekpr_cli::cli::Cli;
 use notekpr_cli::commands;
 use notekpr_cli::profile::ProfileStore;
 use notekpr_cli::ui;
+use notekpr_core::doc::Picture;
 
 /// Run a command line for the test client `who` (its own config/data dirs).
 async fn run(srv: &TestServer, who: &str, args: &[&str]) -> anyhow::Result<()> {
@@ -502,13 +503,13 @@ async fn ls_lines_names_up_with_and_without_icons() {
 /// A 1×1 PNG.
 const TINY_PNG: &[u8] = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR\0\0\0\x01\0\0\0\x01\x08\x06\0\0\0\x1f\x15\xc4\x89\0\0\0\nIDATx\x9cc\0\x01\0\0\x05\0\x01\r\n-\xb4\0\0\0\0IEND\xaeB`\x82";
 
-/// Pictures as icons: set from a small file, listed as `(picture)` (the
+/// Pictures as icons (given in the web app): listed as `(picture)` (the
 /// names still lined up), seen by the people a note is shared with,
-/// replaced by an emoji; files too large or not pictures are refused.
+/// replaced by an emoji.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn pictures_as_icons_from_the_command_line() {
+async fn pictures_as_icons_on_the_command_line() {
     let srv = start().await;
-    login(&srv, "alice").await;
+    let alice = login(&srv, "alice").await;
     login(&srv, "bob").await;
     run(&srv, "alice", &["vault", "create", "Home"])
         .await
@@ -525,28 +526,6 @@ async fn pictures_as_icons_from_the_command_line() {
         .await;
         r.unwrap();
     }
-    let dir = tempfile::tempdir().unwrap();
-    let file = |name: &str, data: &[u8]| {
-        let p = dir.path().join(name);
-        std::fs::write(&p, data).unwrap();
-        p.to_string_lossy().into_owned()
-    };
-    let png = file("tomato.png", TINY_PNG);
-    let big = file("big.png", &[TINY_PNG, &[0; 4096]].concat());
-    let text = file("not.png", b"hello");
-    for bad in [&big, &text] {
-        let e = run(&srv, "alice", &["icon", "Home", "Garden", "--picture", bad])
-            .await
-            .unwrap_err();
-        assert!(format!("{e:#}").contains("at most 4 KiB"), "{e:#}");
-    }
-    run(
-        &srv,
-        "alice",
-        &["icon", "Home", "Garden", "--picture", &png],
-    )
-    .await
-    .unwrap();
     run(&srv, "alice", &["icon", "Home", "Plain.md", "✈️"])
         .await
         .unwrap();
@@ -564,13 +543,20 @@ async fn pictures_as_icons_from_the_command_line() {
     )
     .await
     .unwrap();
-    run(
+    let pic = Picture::new("image/png", TINY_PNG.to_vec(), Picture::ENTRY).unwrap();
+    let h = hub(&alice).await;
+    set_picture(&h, "Home", "Garden", &pic).await;
+    set_picture(&h, "Home", "Garden/Tomatoes.md", &pic).await;
+    drop(h);
+    // There's no option to set one here: pictures are made in the web app.
+    let e = run(
         &srv,
         "alice",
-        &["icon", "Home", "Garden/Tomatoes.md", "--picture", &png],
+        &["icon", "Home", "Garden", "--picture", "x.png"],
     )
     .await
-    .unwrap();
+    .unwrap_err();
+    assert!(format!("{e:#}").contains("--picture"), "{e:#}");
 
     let (r, out) = ui::capture(None, true, run(&srv, "alice", &["ls", "Home"])).await;
     r.unwrap();
@@ -609,20 +595,6 @@ async fn pictures_as_icons_from_the_command_line() {
         "{}",
         out.stdout
     );
-
-    // The vault's own picture.
-    run(&srv, "alice", &["vault", "icon", "Home", "--picture", &png])
-        .await
-        .unwrap();
-    let (r, out) = ui::capture(None, true, run(&srv, "alice", &["vault", "list"])).await;
-    r.unwrap();
-    assert!(out.stdout.contains("(picture) Home"), "{}", out.stdout);
-    run(&srv, "alice", &["vault", "icon", "Home", "🏡"])
-        .await
-        .unwrap();
-    let (r, out) = ui::capture(None, true, run(&srv, "alice", &["vault", "list"])).await;
-    r.unwrap();
-    assert!(out.stdout.contains("🏡 Home"), "{}", out.stdout);
 }
 
 /// `notekpr login` for the dev user `who`, with what it said.

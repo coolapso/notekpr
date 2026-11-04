@@ -526,20 +526,6 @@ impl Picture {
             && self.data.len() <= size.bytes
     }
 
-    /// The type of an image file by its first bytes, if it is one of
-    /// [`TYPES`](Self::TYPES).
-    pub fn sniff(data: &[u8]) -> Option<&'static str> {
-        if data.starts_with(b"\x89PNG\r\n\x1a\n") {
-            Some("image/png")
-        } else if data.starts_with(&[0xff, 0xd8, 0xff]) {
-            Some("image/jpeg")
-        } else if data.len() >= 12 && &data[..4] == b"RIFF" && &data[8..12] == b"WEBP" {
-            Some("image/webp")
-        } else {
-            None
-        }
-    }
-
     /// As a `data:` URL, to show it.
     pub fn data_url(&self) -> String {
         format!(
@@ -1397,11 +1383,6 @@ mod tests {
         assert_ne!(png.id(), picture(1).id());
         assert_eq!(png.id().len(), 16);
         assert!(png.data_url().starts_with("data:image/png;base64,AQEB"));
-        assert_eq!(Picture::sniff(b"\x89PNG\r\n\x1a\n...."), Some("image/png"));
-        assert_eq!(Picture::sniff(b"\xff\xd8\xff\xe0"), Some("image/jpeg"));
-        assert_eq!(Picture::sniff(b"RIFF\0\0\0\0WEBPVP8 "), Some("image/webp"));
-        assert_eq!(Picture::sniff(b"<svg"), None);
-        assert_eq!(Picture::sniff(b"GIF89a"), None);
     }
 
     #[test]

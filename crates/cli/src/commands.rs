@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
-use notekpr_core::doc::{Entry, EntryKind, Picture, PictureSize};
+use notekpr_core::doc::{Entry, EntryKind};
 use notekpr_core::engine::PinStatus;
 use notekpr_core::protocol::{DeviceStatus, Limit, MIB, PrincipalKind, Role};
 use serde::Serialize;
@@ -725,25 +725,16 @@ async fn execute(ctx: Ctx, command: Command) -> Result<()> {
             vault,
             path,
             icon,
-            picture,
             remove,
         } => {
             let hub = ctx.hub(&[&vault]).await?;
-            let picture = match &picture {
-                Some(file) => Some(picture_file(file, Picture::ENTRY)?),
-                None => None,
-            };
             let icon = if remove { None } else { icon };
-            let (_, id) = match &picture {
-                Some(p) => op(ops::set_picture(&hub, &vault, &path, p).await)?,
-                None => op(ops::set_icon(&hub, &vault, &path, icon.as_deref()).await)?,
-            };
+            let (_, id) = op(ops::set_icon(&hub, &vault, &path, icon.as_deref()).await)?;
             let v = hub.resolve(&vault).await?;
             note_shares::refresh_meta(&hub.session, &v, &id).await?;
-            match (picture, icon) {
-                (Some(_), _) => crate::out!("(picture) {path}"),
-                (None, Some(i)) => crate::out!("{i} {path}"),
-                (None, None) => crate::out!("removed the icon of {path}"),
+            match icon {
+                Some(i) => crate::out!("{i} {path}"),
+                None => crate::out!("removed the icon of {path}"),
             }
             Ok(())
         }
@@ -1476,20 +1467,10 @@ async fn vault(ctx: &Ctx, c: VaultCmd) -> Result<()> {
         VaultCmd::Icon {
             vault,
             icon,
-            picture,
             remove,
         } => {
-            let picture = match &picture {
-                Some(file) => Some(picture_file(file, Picture::VAULT)?),
-                None => None,
-            };
             let hub = ctx.hub(&[&vault]).await?;
             let v = hub.resolve(&vault).await?;
-            if let Some(p) = picture {
-                manage::set_vault_picture(&hub.session, &v, p).await?;
-                crate::out!("(picture) {vault}");
-                return Ok(());
-            }
             let icon = if remove { None } else { icon };
             manage::set_vault_icon(&hub.session, &v, icon.as_deref()).await?;
             match icon {
@@ -1692,22 +1673,6 @@ async fn vault(ctx: &Ctx, c: VaultCmd) -> Result<()> {
 }
 
 // ---------------------------------------------------------------- documents
-
-/// A picture as an icon, from a file as it is: this has no way to make one
-/// smaller, as the web app does.
-fn picture_file(file: &Path, size: PictureSize) -> Result<Picture> {
-    let data = std::fs::read(file).with_context(|| format!("reading {}", file.display()))?;
-    let mime = Picture::sniff(&data);
-    match mime.map(|m| Picture::new(m, data, size)) {
-        Some(Ok(p)) => Ok(p),
-        _ => bail!(
-            "{}: a picture as an icon must be a PNG, WebP or JPEG file of at most {} KiB \
-             (the web app makes one from any image)",
-            file.display(),
-            size.bytes / 1024
-        ),
-    }
-}
 
 async fn ls(ctx: &Ctx, vault: &str, folder: Option<&str>, recursive: bool) -> Result<()> {
     let hub = ctx.hub(&[vault]).await?;

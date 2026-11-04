@@ -37,7 +37,6 @@ import socket
 import struct
 import subprocess
 import sys
-import tempfile
 import textwrap
 import io
 import math
@@ -353,19 +352,6 @@ def sunset():
     return png(480, 270, pixel)
 
 
-def sunset_icon():
-    """The sunset again, as a 64 px picture for an icon."""
-
-    def pixel(x, y):
-        if (x - 32) ** 2 + (y - 36) ** 2 < 14**2 and y < 38:
-            return (255, 214, 102)
-        if y < 38:
-            return (240, 130, 90) if y > 18 else (220, 110, 110)
-        return (30, 80, 140) if (x // 8 + y // 4) % 5 else (60, 110, 170)
-
-    return png(64, 64, pixel)
-
-
 def scan(seed):
     """A scanned letter: lines of text on grainy paper (the grain keeps it
     from compressing, as a real scan; three of them take over 1 MiB)."""
@@ -436,7 +422,7 @@ HOME = [
         - [ ] Drop or paste a picture into a note — or a video or a recording: it plays where it is, as the sunset in [[Lisbon 2026]] and the blackbird in [[Pests]] do. It goes to `attachments/` in the note's folder (*Garden*'s are in *Garden/attachments*)
         - [ ] Open a file: *garden-layout.png* in *Garden/attachments* in the sidebar, or the link to it in [[Garden plan]]'s side panel. Its page shows it, and *Used in*: the *Garden beds* drawing, the [[Garden plan]] and a journal entry. Rename, move or download it from there
         - [ ] Move [[Pests]] to another folder (drag it onto *Reading*, or ⋯ → *Move to…*): the blackbird recording only it uses goes along, to `attachments/` there, and still plays. Move [[Garden plan]] and its layout stays put: the journal and the drawing use it too
-        - [ ] Give a note or folder an icon: *Set icon…* in its ⋯ menu in the sidebar (or the icon by a note's title) — every emoji, by group; search them (`tada`, `dog`), or paste any. Or a picture of your own (*Upload picture…*), as [[Lisbon 2026]] has. The ones you picked lately come first
+        - [ ] Give a note or folder an icon: *Set icon…* in its ⋯ menu in the sidebar (or the icon by a note's title) — every emoji, by group; search them (`tada`, `dog`), or paste any. Or a picture of your own (*Upload picture…*, any image file). The ones you picked lately come first
         - [ ] *Quick notes* in the sidebar: yours alone, in no vault — the same whichever vault you're in. Move one to a vault (*Move to vault…*: it takes its first line as the name) or delete it for good; there's room for 20
         - [ ] Move a note, or a folder with everything in it, to another vault: *Move to vault…* in its menu in the file tree (a note's also in its ⋯ menu at the top); the originals go to the trash
         - [ ] *Vault settings* (⚙ next to a vault, or in the corner of its card in *All vaults*): its icon or a picture, *Export as Markdown (.zip)*, *Import notes*, the *Activity log*
@@ -1443,14 +1429,6 @@ class Cli:
     def icon(self, profile, vault, path, icon):
         self.run(profile, "-q", "icon", vault, path, icon)
 
-    def picture(self, profile, vault, path, data):
-        """Give a note or folder a picture as its icon (a small PNG)."""
-        with tempfile.TemporaryDirectory() as tmp:
-            f = os.path.join(tmp, "icon.png")
-            with open(f, "wb") as out:
-                out.write(data)
-            self.run(profile, "-q", "icon", vault, path, "--picture", f)
-
 
 # What a demo's data directory holds; --fresh deletes only these.
 DEMO_FILES = ("demo.json", "server", "cli", "server.log", "recovery-keys.txt", "assistant.secret",
@@ -1550,8 +1528,6 @@ def seed(cli, url, data, server_bin):
     for folder, icon in [("Garden", "🌱"), ("Recipes", "🍳"), ("Travel", "✈️"),
                          ("Reading", "📚"), ("Journal", "📓"), ("Ideas", "💡")]:
         cli.icon(a, "Home", folder, icon)
-    # A picture as an icon, in place of its emoji.
-    cli.picture(a, "Home", "Travel/Lisbon 2026.md", sunset_icon())
     # A rename that rewrites the links pointing at it.
     cli.run(a, "-q", "mv", "--update-links", "Home", "Ideas/Rust.md", "Ideas/Learning Rust.md")
     # An order of her own: this note on top, the recipes' overview and plan first.

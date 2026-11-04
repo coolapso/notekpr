@@ -120,6 +120,9 @@ struct View {
     active_lines: Vec<Range<usize>>,
     /// Range of an internal drag (text dragged within the editor).
     drag: Option<(usize, usize)>,
+    /// The caret's line, focused or not: its index and element, which has
+    /// the `cur` class ([`Editor::sync_cur`]).
+    cur: Option<(usize, HtmlElement)>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -1464,6 +1467,7 @@ impl Editor {
     /// the editor has the focus, and the fences of a code block it is in.
     /// Not while the mouse button is down ([`Editor::mouse_released`]).
     fn sync_active(&self) {
+        self.sync_cur();
         if self.mouse_down.get() {
             return;
         }
@@ -1495,6 +1499,33 @@ impl Editor {
         }
         view.active = new;
         view.active_lines = want;
+    }
+
+    /// Give the caret's line the `cur` class and its number to the CSS
+    /// (`--ln-cur` on the editor), for relative line numbers: one class
+    /// and one property change as the caret moves, nothing re-rendered.
+    fn sync_cur(&self) {
+        let line = self.model(|st| st.doc().line_of(st.selection().head));
+        let mut view = self.view.borrow_mut();
+        let Some(el) = view.lines.get(line).map(|l| l.el.clone()) else {
+            return;
+        };
+        if let Some((i, old)) = &view.cur {
+            let same = old.is_same_node(Some(&el));
+            // (A line drawn again in place has its classes set anew.)
+            if same && *i == line && el.class_list().contains("cur") {
+                return;
+            }
+            if !same {
+                let _ = old.class_list().remove_1("cur");
+            }
+        }
+        let _ = el.class_list().add_1("cur");
+        let _ = self
+            .root
+            .style()
+            .set_property("--ln-cur", &(line + 1).to_string());
+        view.cur = Some((line, el));
     }
 
     /// The mouse button is up again: the lines of the selection show their

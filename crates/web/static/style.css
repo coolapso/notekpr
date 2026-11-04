@@ -165,6 +165,9 @@ textarea.input { resize: vertical; }
 .tag-agent { margin-left: 6px; padding: 0 6px; border-radius: 4px; background: var(--bg-3); color: var(--fg-2); font-size: 11px; }
 .avatar { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; border-radius: 50%; background: var(--c); color: #fff; font-size: 11px; font-weight: 700; flex: none; letter-spacing: 0.02em; }
 .check { display: flex; gap: 8px; align-items: center; margin: 10px 0; cursor: pointer; }
+/* An option of the one above it, which it needs on. */
+.check.sub-check { margin-left: 24px; }
+.check.disabled { opacity: 0.55; cursor: default; }
 .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 7px; overflow: hidden; flex: none; }
 .seg button { border: none; background: transparent; padding: 4px 9px; cursor: pointer; color: var(--muted); display: inline-flex; align-items: center; }
 .seg button.on { background: var(--bg-3); color: var(--fg); }
@@ -660,6 +663,24 @@ button.list-row:hover:not(:disabled) { background: var(--bg-2); }
   white-space: nowrap; pointer-events: none; user-select: none;
 }
 .line-numbers .ed.live .ln.fence:not(.active)::after, .line-numbers .ed.live .ln.html:not(.active)::after { content: none; }
+/* Relative: the caret's line (.cur; --ln-cur, its number, set by the
+   editor) keeps its own number; above it, a counter (up) counts down to
+   it, below it another (down) counts on from it. Code lines and a table's
+   hidden delimiter row count as above. */
+.relative-numbers .ed { counter-reset: ln up var(--ln-cur, 1); }
+.relative-numbers .ed .ln { counter-increment: ln up -1; }
+.relative-numbers .ed .ln.cur { counter-reset: down; counter-increment: ln; }
+.relative-numbers .ed .ln.cur ~ .ln { counter-increment: ln down; }
+.relative-numbers .ed.live .ln.code { counter-increment: code-line ln up -1; }
+.relative-numbers .ed.live .ln.code.cur { counter-increment: code-line ln; }
+.relative-numbers .ed.live .ln.cur ~ .ln.code { counter-increment: code-line ln down; }
+.relative-numbers .ed.live .ln.fence.fo.cur { counter-reset: code-line down; }
+.relative-numbers .ed.live .ln.table.tdl:not(.active) + .ln { counter-increment: ln 2 up -2; }
+.relative-numbers .ed.live .ln.table.tdl:not(.active) + .ln.cur { counter-increment: ln 2; }
+.relative-numbers .ed.live .ln.cur ~ .ln.table.tdl:not(.active) + .ln { counter-increment: ln 2 down 2; }
+.relative-numbers .ed .ln::after { content: counter(up); }
+.relative-numbers .ed .ln.cur::after { content: counter(ln); color: var(--fg); opacity: 1; }
+.relative-numbers .ed .ln.cur ~ .ln::after { content: counter(down); }
 .line-numbers .ed-wrap { margin-left: -40px; padding-left: 40px; }
 @media (max-width: 760px) { .line-numbers .ed-wrap { margin-left: -10px; padding-left: 32px; } }
 /* Vim outside insert mode: a block over the character under the cursor

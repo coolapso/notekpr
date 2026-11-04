@@ -428,6 +428,10 @@ pub struct UiPrefs {
     /// Markdown.
     #[serde(default)]
     pub line_numbers: bool,
+    /// Those numbers counted from the caret's line, as Vim's
+    /// `relativenumber` (the caret's line keeps its own).
+    #[serde(default)]
+    pub relative_numbers: bool,
     /// Line numbers in code blocks (a block's `ln=false` turns them off too).
     #[serde(default = "yes")]
     pub code_numbers: bool,
@@ -465,6 +469,7 @@ impl Default for UiPrefs {
             note_width: NoteWidth::NARROW,
             quick_notes: true,
             line_numbers: false,
+            relative_numbers: false,
             code_numbers: true,
             code_guides: true,
             code_wrap: true,

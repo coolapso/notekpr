@@ -1565,6 +1565,22 @@ def test_line_numbers(env):
         b.keys(" line")
         time.sleep(0.6)
         check(editor_text(b).endswith("last line"), f"typing is unaffected ({editor_text(b)!r})")
+        # Relative: counted from the caret's line, which keeps its own.
+        b.js("history.pushState(null, '', '/settings/editor'); dispatchEvent(new PopStateEvent('popstate'));")
+        b.find(".relative-numbers-toggle", 10)
+        b.js("document.querySelector('.relative-numbers-toggle').scrollIntoView({block: 'center'})")
+        b.click_el(b.find(".relative-numbers-toggle", 10))
+        b.wait("return document.documentElement.classList.contains('relative-numbers')", 5, "relative numbers on")
+        b.js("history.back()")
+        b.click_el(b.find(".ed > .ln:nth-child(4)", 10))
+        time.sleep(0.4)
+        shown = b.js("""const ed = document.querySelector('.ed');
+            return [ed.style.getPropertyValue('--ln-cur'),
+                    [...ed.children].map(l => getComputedStyle(l, '::after').content)];""")
+        check(shown[0] == "4", f"the editor says the caret is on line 4 ({shown[0]})")
+        check(shown[1][:5] == ["counter(up)"] * 3 + ["counter(ln)", "counter(down)"],
+              f"above the caret's line counted down to it, below it counted on ({shown[1][:5]})")
+        b.shot("relative-numbers")
         check(not severe_logs(b), "no browser errors")
     finally:
         b.close()

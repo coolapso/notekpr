@@ -12,7 +12,9 @@ a Mac). The [README](../README.md) has the short version.
   instead of `Ctrl` on a Mac), light, dark or system theme. Enter, `↓` or
   Tab in the title moves on to the text.
 * Line numbers beside the text, one for each line of the Markdown, if you
-  like (Settings → Editor; off by default).
+  like (Settings → Editor; off by default) — or relative ones, as Vim's
+  `relativenumber`: how far each line is from the caret's, which keeps its
+  own number (`5j` goes to the 5).
 * Optional Vim keys (Settings → Editor): normal, insert and visual modes
   (`v`, and `V` for whole lines) with a block cursor outside insert mode;
   the common motions and operators, counts (`3dd`, `12G`), `J` to join

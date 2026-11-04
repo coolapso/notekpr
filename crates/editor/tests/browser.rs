@@ -729,6 +729,32 @@ fn vim_keys() {
 }
 
 #[wasm_bindgen_test]
+fn the_carets_line_is_marked_for_relative_numbers() {
+    let f = setup("one\ntwo\nthree");
+    let cur = |f: &Fixture| -> (Vec<usize>, String) {
+        let marked = lines(f)
+            .iter()
+            .enumerate()
+            .filter(|(_, l)| l.class_list().contains("cur"))
+            .map(|(i, _)| i)
+            .collect();
+        let n = root(f).style().get_property_value("--ln-cur").unwrap();
+        (marked, n)
+    };
+    caret_at(&f, 5);
+    assert_eq!(cur(&f), (vec![1], "2".into()));
+    // Typing redraws the line: it stays marked.
+    type_str(&f, "x");
+    assert_eq!(cur(&f), (vec![1], "2".into()));
+    // A line added above: the same line, a number further.
+    caret_at(&f, 0);
+    type_str(&f, "\n");
+    assert_eq!(cur(&f), (vec![1], "2".into()));
+    caret_at(&f, "\none\ntwxo\nth".len());
+    assert_eq!(cur(&f), (vec![3], "4".into()));
+}
+
+#[wasm_bindgen_test]
 fn readonly_ignores_input() {
     let f = setup_with("read me", true);
     let ev = input(&f, "insertText", Some("x"));

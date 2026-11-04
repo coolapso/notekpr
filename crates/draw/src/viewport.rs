@@ -8,6 +8,8 @@ use crate::geom::Point;
 /// Excalidraw's zoom limits.
 pub const MIN_ZOOM: f64 = 0.1;
 pub const MAX_ZOOM: f64 = 30.0;
+/// The most a wheel event zooms, in pixels of the wheel (a tenth).
+const WHEEL_STEP: f64 = 10.0;
 /// How much one step of zooming changes it (`ZOOM_STEP`).
 pub const ZOOM_STEP: f64 = 0.1;
 
@@ -63,6 +65,15 @@ impl Viewport {
             scroll_y: self.scroll_y + dy / self.zoom,
             ..*self
         }
+    }
+
+    /// Zoomed by a wheel with Ctrl (or a touchpad's pinch, which comes as
+    /// one) that went `delta_y` pixels, keeping what is under `at`: a
+    /// mouse wheel's notch (some 100 pixels, or 3 lines) zooms by a tenth,
+    /// a pinch's many small steps as far as the fingers go.
+    pub fn wheel_zoomed(&self, delta_y: f64, at: Point) -> Self {
+        let step = (-delta_y).clamp(-WHEEL_STEP, WHEEL_STEP) * 0.01;
+        self.zoomed_at(self.zoom * step.exp(), at)
     }
 
     /// Zoomed to `zoom`, keeping what is under `at` (a point on screen)
@@ -123,6 +134,26 @@ mod tests {
             height: 600.0,
             ..Viewport::default()
         }
+    }
+
+    #[test]
+    fn a_wheel_zooms_by_a_tenth_a_notch() {
+        let (v, at) = (view(), [400.0, 300.0]);
+        // A notch: 100 pixels (Chromium), 120, 3 lines of 16 (Firefox).
+        for notch in [100.0, 120.0, 48.0] {
+            assert!((v.wheel_zoomed(-notch, at).zoom - 1.1052).abs() < 1e-3);
+            assert!((v.wheel_zoomed(notch, at).zoom - 0.9048).abs() < 1e-3);
+        }
+        // A pinch: many small steps, each as far as it went.
+        let mut p = v;
+        for _ in 0..20 {
+            p = p.wheel_zoomed(-2.0, at);
+        }
+        assert!((p.zoom - (0.4f64).exp()).abs() < 1e-9);
+        // What is under the pointer stays there.
+        let z = v.wheel_zoomed(-100.0, [100.0, 50.0]);
+        let (a, b) = (v.to_scene([100.0, 50.0]), z.to_scene([100.0, 50.0]));
+        assert!((a[0] - b[0]).abs() < 1e-9 && (a[1] - b[1]).abs() < 1e-9);
     }
 
     #[test]

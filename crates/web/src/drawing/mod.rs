@@ -356,8 +356,7 @@ impl Board {
             let v = me.view.get();
             let next = if ev.ctrl_key() || ev.meta_key() {
                 // Pinching on a touchpad comes as a wheel with Ctrl.
-                let at = [ev.offset_x() as f64, ev.offset_y() as f64];
-                v.zoomed_at(v.zoom * (-dy * 0.01).exp(), at)
+                v.wheel_zoomed(dy, [ev.offset_x() as f64, ev.offset_y() as f64])
             } else if ev.shift_key() && dx == 0.0 {
                 v.scrolled(-dy, 0.0)
             } else {

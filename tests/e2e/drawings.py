@@ -587,6 +587,18 @@ def main():
         after = a.text(".drawing-zoom .zoom-value")
         check(int(after.rstrip("%")) > int(before.rstrip("%")), f"two fingers pinching apart zoom in ({before} → {after})")
         check(sum(e["type"] == "rectangle" for e in drawing()) == 3, "pinching draws nothing")
+        # Ctrl+wheel: a notch zooms by a tenth, however the browser counts
+        # it (100 pixels in Chromium, 3 lines in Firefox).
+        for delta, mode in [(-100, 0), (-3, 1), (100, 0)]:
+            before = int(a.text(".drawing-zoom .zoom-value").rstrip("%"))
+            a.js("const c = document.querySelector(arguments[0]); const r = c.getBoundingClientRect();"
+                 "c.dispatchEvent(new WheelEvent('wheel', {deltaY: arguments[1], deltaMode: arguments[2], ctrlKey: true,"
+                 " clientX: r.left + r.width / 2, clientY: r.top + r.height / 2, bubbles: true, cancelable: true}))", CANVAS, delta, mode)
+            time.sleep(0.3)
+            after = int(a.text(".drawing-zoom .zoom-value").rstrip("%"))
+            ratio = after / before
+            check(0.85 < ratio < 0.95 if delta > 0 else 1.05 < ratio < 1.15,
+                  f"a Ctrl+wheel notch ({delta} in mode {mode}) zooms by a tenth ({before}% → {after}%)")
 
         # The Export menu opens inside the window, with our own file first.
         a.click(".drawing-page .note-head .tb-drop .icon-btn")

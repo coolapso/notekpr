@@ -25,7 +25,9 @@ a Mac). The [README](../README.md) has the short version.
   ⋯ menu gives it a width of its own, only for you.
 * Tables you build with Enter and Tab, with aligned columns; one wider than
   the screen scrolls sideways instead of squeezing its columns. Task lists
-  you can tick in the editor and the reading view.
+  you can tick in the editor and the reading view. Nested bullet lists show
+  their level — a dot, a ring, then a square — in the editor as in the
+  reading view.
 * Code blocks with syntax highlighting for some 35 languages, line numbers,
   indentation guides and a copy button. Options after the language: a file
   name (`` ```bash title=deploy.sh ``), highlighted lines (`hl=2,4-6`), no

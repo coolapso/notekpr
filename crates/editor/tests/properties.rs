@@ -60,6 +60,10 @@ const LINES: &[&str] = &[
     "- item",
     "- ",
     "  indented",
+    "  - nested",
+    "    - deeper",
+    "\t- tabbed",
+    "* * *",
     "1. one",
     "    ```",
     "<div>",
@@ -393,6 +397,9 @@ fn reference_classify(lines: &[&str]) -> Vec<Block> {
     let mut in_fm = lines.first().is_some_and(|l| l.trim_end() == "---");
     // After a list item with text: lines that start no block continue it.
     let mut lazy: Option<bool> = None;
+    // The columns the open list items are indented by, outermost first:
+    // kept over blank lines, closed by any other line that isn't an item.
+    let mut list: Vec<usize> = vec![];
     // The open block quotes, outermost first: a callout's look and number,
     // or nothing for a plain quote; whether the last line of them ended in
     // text that a line without markers continues.
@@ -499,6 +506,7 @@ fn reference_classify(lines: &[&str]) -> Vec<Block> {
             quotes.clear();
         }
         if let Some((f, info)) = fence_of(line) {
+            list.clear();
             let info = Rc::new(FenceInfo::parse(info));
             fence = Some((
                 f.to_string(),
@@ -538,10 +546,16 @@ fn reference_classify(lines: &[&str]) -> Vec<Block> {
             in_callouts[i] = quotes.iter().flatten().map(|c| c.1).collect();
             out.push(callout_line(&quotes, title, false));
         } else if let Some((indent, len, ordered)) = list_marker(line) {
+            let col = line[..indent]
+                .chars()
+                .fold(0, |c, ch| if ch == '\t' { c / 4 * 4 + 4 } else { c + 1 });
+            list.retain(|&c| c < col);
             out.push(Block::List {
                 ordered,
                 task: task_box(&line[indent + len..]),
+                depth: list.len().min(255) as u8,
             });
+            list.push(col);
             if !line[indent + len..].trim().is_empty() {
                 lazy = Some(false);
             }
@@ -580,6 +594,9 @@ fn reference_classify(lines: &[&str]) -> Vec<Block> {
             queued.extend((i + 1..end).map(|_| Block::PipeText));
         } else {
             out.push(Block::Paragraph);
+        }
+        if !matches!(out.last(), Some(Block::List { .. } | Block::Blank)) {
+            list.clear();
         }
     }
     // A callout's last line: the next one isn't in it.

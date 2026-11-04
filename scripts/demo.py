@@ -72,8 +72,8 @@ def continues(prev, line):
     """Whether `line` goes on with the paragraph, list item or quote `prev`."""
     if not prev.strip() or not line.strip():
         return False
-    if line.startswith("  "):  # an indented continuation
-        return True
+    if line.startswith("  "):  # an indented continuation, unless a nested item
+        return not re.match(r"\s+([-*+] |\d+\. )", line)
     if re.match(r"(> ?)+\[!", prev):  # a callout's first line: its title
         return False
     if prev.startswith("> ") and line.startswith("> "):
@@ -737,6 +737,8 @@ HOME = [
         Maybe autumn 2027. #travel #someday
 
         - [[Kyoto]] for the temples and the maple leaves
+          - Fushimi Inari, early
+            - before the tour buses arrive
         - [[Tokyo]] for everything else
         - A rail pass — check the [[Travel budget]]
         - Read something Japanese first (see [[Reading list]])

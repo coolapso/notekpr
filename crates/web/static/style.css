@@ -599,7 +599,16 @@ button.list-row:hover:not(:disabled) { background: var(--bg-2); }
 .code-copy.copied .i-ok { display: inline; }
 /* live preview widgets drawn with CSS only; the source text stays in the DOM */
 .ed.live .ln:not(.active) .bl { font-size: 0; }
-.ed.live .ln:not(.active) .bl::before { content: "•"; font-size: 16px; color: var(--muted); display: inline-block; width: 1.3em; text-align: center; }
+/* A bullet, drawn (fonts draw • ◦ ▪ at different sizes and heights) and
+   centred on the text's lower case letters. Nested ones as the reading
+   view (and browsers) draw them: a dot, a ring (lv1), then a square (lv2)
+   further in. */
+.ed.live .ln:not(.active) .bl::before {
+  content: ""; display: inline-block; font-size: 16px; width: 1.3em; height: 1em; vertical-align: -0.23em;
+  background: radial-gradient(circle, var(--fg-2) 2.8px, transparent 3.3px);
+}
+.ed.live .ln.lv1:not(.active) .bl::before { background: radial-gradient(circle, transparent 2.1px, var(--fg-2) 2.6px, var(--fg-2) 3.3px, transparent 3.8px); }
+.ed.live .ln.lv2:not(.active) .bl::before { background: linear-gradient(var(--fg-2), var(--fg-2)) center / 6px 6px no-repeat; }
 .ed.live .ln:not(.active) .hx { display: none; }
 .ed .tk { cursor: pointer; }
 .ed.live .ln:not(.active) .tk { font-size: 0; }

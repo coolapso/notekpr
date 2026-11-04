@@ -29,9 +29,12 @@ pub enum Block {
     Paragraph,
     Heading(u8),
     Quote,
+    /// A list item, and how deeply it nests in the items above it (0 at
+    /// the top): its bullet shows it.
     List {
         ordered: bool,
         task: Option<bool>,
+        depth: u8,
     },
     /// A code fence: the opening one (with the block's options) or the
     /// closing one.
@@ -148,6 +151,20 @@ impl Block {
             }
             return Cow::Owned(s);
         }
+        // Bullets by depth, as browsers draw nested lists (the reading
+        // view): •, ◦ (`lv1`), then ▪ (`lv2`) further in.
+        if let Block::List {
+            ordered: false,
+            task: None,
+            depth: depth @ 1..,
+        } = self
+        {
+            return Cow::Borrowed(if *depth == 1 {
+                "ln li lv1"
+            } else {
+                "ln li lv2"
+            });
+        }
         Cow::Borrowed(match self {
             Block::Blank => "ln blank",
             Block::Paragraph => "ln",
@@ -230,6 +247,24 @@ pub fn list_marker(line: &str) -> Option<(usize, usize, bool)> {
         return Some((indent, digits + 2, true));
     }
     None
+}
+
+/// How wide `indent` (spaces and tabs) shows: a tab goes to the next
+/// multiple of four columns.
+pub fn columns(indent: &str) -> usize {
+    indent
+        .chars()
+        .fold(0, |c, ch| if ch == '\t' { c / 4 * 4 + 4 } else { c + 1 })
+}
+
+/// An item indented by `col` columns under the open `items` (their
+/// columns, outermost first): it nests in those indented less, and closes
+/// the others. The items open after it, and its depth.
+pub fn nest(items: &[usize], col: usize) -> (Vec<usize>, u8) {
+    let mut open: Vec<usize> = items.iter().copied().take_while(|&c| c < col).collect();
+    let depth = open.len().min(u8::MAX as usize) as u8;
+    open.push(col);
+    (open, depth)
 }
 
 /// `Some(checked)` if the list item text starts with a task box.
@@ -398,9 +433,14 @@ pub enum LineState {
         align: Vec<Align>,
     },
     PipeText,
-    /// After a list item with text: lines that start no block of their own
-    /// continue it ([`Block::Lazy`]).
-    ListPara,
+    /// In a list, after an item or a blank line: the columns its open
+    /// items are indented by, the outermost first (an item nests in those
+    /// indented less), and whether the line above was an item's text, which
+    /// lines that start no block of their own continue ([`Block::Lazy`]).
+    List {
+        items: Vec<usize>,
+        para: bool,
+    },
     /// After a line of a block quote.
     Quote(Quotes),
     /// After a line of a paragraph, which some blocks can't interrupt.
@@ -544,15 +584,25 @@ pub fn step(state: &LineState, line: &str, next: Option<&str>) -> (Block, LineSt
             state.clone(),
         ),
         LineState::PipeText if is_table_line(line) => (Block::PipeText, LineState::PipeText),
-        LineState::ListPara if continues_lazily(line) => {
+        LineState::List { para: true, .. } if continues_lazily(line) => {
             (Block::Lazy { quote: false }, state.clone())
         }
+        // A blank line keeps the list open: an item after it nests as it
+        // would without.
+        LineState::List { items, .. } if line.trim().is_empty() => (
+            Block::Blank,
+            LineState::List {
+                items: items.clone(),
+                para: false,
+            },
+        ),
+        LineState::List { items, .. } => normal_line(line, next, false, items),
         LineState::Quote(q) => {
-            quote_step(q, line, next).unwrap_or_else(|| normal_line(line, next, false))
+            quote_step(q, line, next).unwrap_or_else(|| normal_line(line, next, false, &[]))
         }
         LineState::Html(kind) => html_line(*kind, line, next),
-        LineState::Para | LineState::PipeText => normal_line(line, next, true),
-        _ => normal_line(line, next, false),
+        LineState::Para | LineState::PipeText => normal_line(line, next, true, &[]),
+        _ => normal_line(line, next, false, &[]),
     }
 }
 
@@ -586,8 +636,9 @@ fn continues_lazily(line: &str) -> bool {
 }
 
 /// A line that no open block claims; `para`: it comes right after a line
-/// of a paragraph.
-fn normal_line(line: &str, next: Option<&str>, para: bool) -> (Block, LineState) {
+/// of a paragraph; `items`: the list items open above
+/// ([`LineState::List`]).
+fn normal_line(line: &str, next: Option<&str>, para: bool, items: &[usize]) -> (Block, LineState) {
     let normal = |b| (b, LineState::Normal);
     if let Some((fence, info)) = fence_of(line) {
         let info = Rc::new(FenceInfo::parse(info));
@@ -616,16 +667,14 @@ fn normal_line(line: &str, next: Option<&str>, para: bool) -> (Block, LineState)
     {
         quote
     } else if let Some((indent, len, ordered)) = list_marker(line) {
+        let (items, depth) = nest(items, columns(&line[..indent]));
         let block = Block::List {
             ordered,
             task: task_box(&line[indent + len..]),
+            depth,
         };
-        let state = if line[indent + len..].trim().is_empty() {
-            LineState::Normal
-        } else {
-            LineState::ListPara
-        };
-        (block, state)
+        let para = !line[indent + len..].trim().is_empty();
+        (block, LineState::List { items, para })
     } else if let Some(kind) =
         html::BlockKind::start(line).filter(|k| !para || k.interrupts_paragraph())
     {
@@ -1125,7 +1174,7 @@ pub fn style_line(line: &str, block: &Block, resolves: &dyn Fn(&str) -> bool) ->
             set(&mut s.flags, 0, end, MK | PROTECT);
             start = end;
         }
-        Block::List { ordered, task } => {
+        Block::List { ordered, task, .. } => {
             if let Some((indent, len, _)) = list_marker(line) {
                 let m = indent + len;
                 if *ordered {
@@ -1757,10 +1806,58 @@ mod tests {
     }
 
     #[test]
+    fn list_items_nest_by_indentation() {
+        let depths = |text: &str| -> Vec<Option<u8>> {
+            let lines: Vec<&str> = text.split('\n').collect();
+            classify(&lines)
+                .into_iter()
+                .map(|b| match b {
+                    Block::List { depth, .. } => Some(depth),
+                    _ => None,
+                })
+                .collect()
+        };
+        // Two spaces (the editor's Tab), four, tabs: one level each.
+        assert_eq!(
+            depths("- a\n  - b\n    - c\n      - d\n- e"),
+            [Some(0), Some(1), Some(2), Some(3), Some(0)]
+        );
+        assert_eq!(
+            depths("- a\n    - b\n        - c\n    - d"),
+            [Some(0), Some(1), Some(2), Some(1)]
+        );
+        assert_eq!(
+            depths("- a\n\t- b\n\t\t- c\n\t- d"),
+            [Some(0), Some(1), Some(2), Some(1)]
+        );
+        // Under a numbered item, text after a blank line, back out by one.
+        assert_eq!(
+            depths("1. a\n   - b\n\n   - c\n     - d\n   - e\n2. f"),
+            [Some(0), Some(1), None, Some(1), Some(2), Some(1), Some(0)]
+        );
+        // A line of text ends the list: what follows starts again.
+        assert_eq!(
+            depths("- a\n  - b\n\ntext\n  - c"),
+            [Some(0), Some(1), None, None, Some(0)]
+        );
+        // The line's class: •, ◦, then ▪ further in; tasks and numbers keep
+        // theirs.
+        let lines = ["- a", "  - b", "    - c", "      - d", "  - [ ] e"];
+        let classes: Vec<_> = classify(&lines).iter().map(|b| b.class()).collect();
+        assert_eq!(
+            classes,
+            ["ln li", "ln li lv1", "ln li lv2", "ln li lv2", "ln li task"]
+        );
+        assert_eq!(columns("\t \t"), 8);
+        assert_eq!(columns("  \t"), 4);
+    }
+
+    #[test]
     fn where_tags_can_go() {
         let task = Block::List {
             ordered: false,
             task: Some(false),
+            depth: 0,
         };
         let atoms = |s: Styled| {
             let mut a = s.atoms;
@@ -2014,21 +2111,24 @@ mod tests {
             k[2],
             Block::List {
                 ordered: false,
-                task: None
+                task: None,
+                depth: 0
             }
         );
         assert_eq!(
             k[3],
             Block::List {
                 ordered: false,
-                task: Some(true)
+                task: Some(true),
+                depth: 0
             }
         );
         assert_eq!(
             k[4],
             Block::List {
                 ordered: true,
-                task: None
+                task: None,
+                depth: 0
             }
         );
         assert!(matches!(k[5], Block::Fence { .. }));

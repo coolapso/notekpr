@@ -1570,6 +1570,38 @@ def test_line_numbers(env):
         b.close()
 
 
+def test_bullets(env):
+    b = Browser(1000, 800)
+    try:
+        signup(b, uniq("bul"))
+        new_note(b, "Nested", "")
+        b.js("""const dt = new DataTransfer();
+            dt.setData('text/plain', '- one\\n  - two\\n    - three\\n      - four\\n\\n  - after a blank line\\n- back out\\n\\ttabbed\\n- [ ] a task\\n1. numbered\\n   - under it');
+            document.querySelector('.ed').dispatchEvent(new ClipboardEvent('paste', {clipboardData: dt, bubbles: true, cancelable: true}));""")
+        time.sleep(0.4)
+        b.click_el(b.find(".note-title", 5))
+        time.sleep(0.4)
+        # Each bullet's look (what draws it); null where a line has none.
+        looks = b.js("""return [...document.querySelectorAll('.ed > .ln')].map(l => {
+            const bl = l.querySelector('.bl');
+            return bl ? getComputedStyle(bl, '::before').backgroundImage : null;
+        });""")
+        dot, ring, square = looks[:3]
+        check(len({dot, ring, square}) == 3 and looks[3] == square, "nested bullets: a dot, a ring, then a square further in")
+        check(looks[5:7] == [ring, dot], "a blank line keeps the list's levels")
+        check(looks[-1] == ring, "a bullet under a numbered item is one level in")
+        b.shot("bullets")
+        b.chord(KEYS["ctrl"], "e")
+        b.find(".reading ul", 10)
+        b.shot("bullets-reading")
+        kinds = b.js("return [...document.querySelectorAll('.reading ul ul li, .reading > ul > li')].map(l => getComputedStyle(l).listStyleType)")
+        check({"disc", "circle", "square"} <= set(kinds), f"the reading view's bullets take turns too ({kinds})")
+        b.chord(KEYS["ctrl"], "e")
+        check(not severe_logs(b), "no browser errors")
+    finally:
+        b.close()
+
+
 # Viewport coordinates of the start and end of `text` in the editor.
 TEXT_ENDS = """
 const w = document.createTreeWalker(document.querySelector('.ed'), NodeFilter.SHOW_TEXT);
@@ -3472,7 +3504,7 @@ def test_device_code(env):
         a.close()
 
 
-TESTS = [test_onboarding, test_collab, test_devices_and_recovery, test_features, test_attachments, test_attachments_beside_notes, test_export_import, test_notion_import, test_delete_account, test_move_to_vault, test_note_sharing, test_tables, test_code_blocks, test_html, test_callouts, test_colors, test_code_wrapping, test_vim, test_line_numbers, test_editor_mouse, test_editor_safety, test_local_copy, test_ui_basics, test_offline_tabs, test_offline_start, test_mobile, test_quick_notes, test_vault_cards, test_vault_icons, test_entry_icons, test_tree_order, test_session_ended_while_away, test_outdated, test_comments, test_mentions, test_dates, test_graph, test_recovered_copy, test_note_width, test_admin, test_vault_storage, test_vault_admins, test_owners, test_undo_purge, test_device_code]
+TESTS = [test_onboarding, test_collab, test_devices_and_recovery, test_features, test_attachments, test_attachments_beside_notes, test_export_import, test_notion_import, test_delete_account, test_move_to_vault, test_note_sharing, test_tables, test_code_blocks, test_html, test_callouts, test_colors, test_code_wrapping, test_vim, test_line_numbers, test_bullets, test_editor_mouse, test_editor_safety, test_local_copy, test_ui_basics, test_offline_tabs, test_offline_start, test_mobile, test_quick_notes, test_vault_cards, test_vault_icons, test_entry_icons, test_tree_order, test_session_ended_while_away, test_outdated, test_comments, test_mentions, test_dates, test_graph, test_recovered_copy, test_note_width, test_admin, test_vault_storage, test_vault_admins, test_owners, test_undo_purge, test_device_code]
 
 
 def main():

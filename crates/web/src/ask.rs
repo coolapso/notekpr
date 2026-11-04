@@ -123,7 +123,8 @@ impl<A> Ask<A> {
         self
     }
 
-    /// It deletes or takes something away.
+    /// It deletes or takes something away: the button shows it, and Cancel
+    /// has the focus (Enter cancels).
     pub fn danger(mut self) -> Self {
         self.q.danger = true;
         self

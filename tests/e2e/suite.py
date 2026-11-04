@@ -3318,6 +3318,15 @@ def test_vault_admins(env):
         last = log["entries"][-1]["body"]
         check(last["kind"] == "role" and last["role"] == "admin", "the owner signed sam's new role")
         b.click_el(b.find_text(".list-row .btn", "Delete forever"))
+        # It deletes: Cancel has the focus, so Enter cancels.
+        b.find(".ask .ask-no", 10)
+        b.wait("return getComputedStyle(document.querySelector('.ask-back')).opacity === '1'", 5, "the question to fade in")
+        check(b.js("return document.activeElement === document.querySelector('.ask .ask-no')"), "a question that deletes starts on Cancel")
+        b.chord(KEYS["enter"])
+        b.wait("return !document.querySelector('.ask')", 5, "the question to go")
+        check(b.js("return Array.from(document.querySelectorAll('.list-row .btn')).some(e => e.textContent === 'Delete forever')"),
+              "Enter there cancels: nothing is deleted")
+        b.click_el(b.find_text(".list-row .btn", "Delete forever"))
         b.answer()
         b.wait("return document.querySelector('.page-body').textContent.includes('The trash is empty.')", 10, "sam's trash is empty")
         a.click_el(a.find_text(".sb-link", "Trash"))

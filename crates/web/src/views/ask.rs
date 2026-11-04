@@ -1,6 +1,8 @@
 //! The app's own dialog for questions (`crate::ask`): a layer of its own
 //! over the modals and menus, so it can ask about something in an open
-//! dialog. Enter confirms; Escape, Cancel and a click outside don't.
+//! dialog. Enter confirms — except in a question that deletes or takes
+//! something away, where Cancel has the focus, so Enter cancels; Escape,
+//! Cancel and a click outside never confirm.
 
 use std::cell::RefCell;
 
@@ -82,13 +84,16 @@ fn Asking(q: Question) -> impl IntoView {
     let root = NodeRef::<html::Div>::new();
     let input = NodeRef::<html::Input>::new();
     let confirm = NodeRef::<html::Button>::new();
-    // The field takes the focus (its text selected, to type anew), else the
-    // confirm button: Enter confirms, Tab reaches Cancel.
+    let cancel = NodeRef::<html::Button>::new();
+    // The field takes the focus (its text selected, to type anew); else
+    // Cancel where the question deletes or takes something away (Enter
+    // cancels, Tab reaches the confirm button), the confirm button where it
+    // doesn't (Enter confirms).
     Effect::new(move |_| {
         if let Some(i) = input.get() {
             let _ = i.focus();
             i.select();
-        } else if let Some(b) = confirm.get() {
+        } else if let Some(b) = if danger { cancel.get() } else { confirm.get() } {
             let _ = b.focus();
         }
     });
@@ -135,7 +140,7 @@ fn Asking(q: Question) -> impl IntoView {
                         </label>
                     })}
                     <div class="ask-buttons">
-                        <button type="button" class="btn ask-no" on:click=move |_| no()>"Cancel"</button>
+                        <button type="button" class="btn ask-no" node_ref=cancel on:click=move |_| no()>"Cancel"</button>
                         <button type="submit" class=if danger { "btn danger strong ask-yes" } else { "btn primary ask-yes" }
                             node_ref=confirm disabled=move || !can()>{button}</button>
                     </div>

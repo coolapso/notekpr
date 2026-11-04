@@ -976,8 +976,12 @@ impl IndexDoc {
 
     /// Give an entry a picture as its icon. It takes the icon's place, so
     /// it replaces an icon, and setting or removing an icon replaces it —
-    /// also in apps from before pictures, which show none.
+    /// also in apps from before pictures, which show none. One larger than
+    /// [`Picture::ENTRY`] isn't stored.
     pub fn set_picture(&self, id: &str, picture: &Picture) -> Option<Vec<u8>> {
+        if !picture.fits(Picture::ENTRY) {
+            return None;
+        }
         self.mutate(|txn| {
             if let Some(m) = self.entry_map(txn, id) {
                 m.try_update(txn, "icon", picture.to_any());
@@ -1312,9 +1316,15 @@ mod tests {
         let e = b.get("n").unwrap();
         assert_eq!((e.icon, e.picture, e.modified), (None, Some(picture(1)), 5));
         assert_eq!(old_apps_icon(&b, "n"), None, "older apps show none");
-        // The same picture again is no change.
+        // The same picture again is no change, nor is one too large.
         assert_eq!(a.set_picture("n", &picture(1)), None);
         assert!(!u.is_empty());
+        let big = Picture {
+            mime: "image/png".into(),
+            data: vec![1; Picture::ENTRY.bytes + 1],
+        };
+        assert_eq!(a.set_picture("n", &big), None);
+        assert_eq!(a.get("n").unwrap().picture, Some(picture(1)));
         // An icon replaces it — also one set by an older app — and so does
         // removing the icon.
         let u = b.set_icon("n", Some("🌱")).unwrap();

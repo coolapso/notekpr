@@ -13,7 +13,7 @@ crates/cli      the CLI, Markdown mirror, gateway      → notekpr
 crates/load     load test runner (task load)           → notekpr-load
 crates/load-events  what the load runner streams to its live view
 crates/load-ui  the load test's live view (wasm32)     → dist/load
-scripts/        build-web.sh, build-load-ui.sh, demo.py (task demo), logo.py (the logo)
+scripts/        build-web.sh, build-load-ui.sh, demo.py (task demo), logo.py (the logo), emoji.py (the emoji table)
 site/           project website: static HTML + CSS and a little JS, no build step (task site)
 tests/e2e       browser end-to-end tests (Python stdlib + chromedriver)
 fuzz/           fuzz targets, a separate workspace (fuzz/run.sh, task fuzz)
@@ -441,6 +441,23 @@ The icon is the favicon, `crates/web/static/favicon.svg`. It has copies in
 `site/favicon.svg` and, drawn in the theme's colours, in the header of each
 page in `site/`. Change them together, then run `scripts/logo.py` for
 `icon.svg` and `icon.png`.
+
+## Emoji
+
+The emoji the web app offers as icons are a table,
+`crates/web/src/emoji/table.rs`, written by `scripts/emoji.py` (Python
+standard library) from Unicode's `emoji-test.txt` — every emoji in its
+group and order, without the skin-tone variants — and CLDR's English
+keywords to find them by. The versions it reads are at its top; so is the
+newest emoji version offered (`NEWEST`): newer emoji show as empty boxes on
+many systems for a year or two after they come out (any emoji can still be
+pasted into the picker). When Unicode releases a new version (each
+September, CLDR's release after it), raise them, run it and commit the
+table:
+
+```sh
+python3 scripts/emoji.py
+```
 
 ## Conventions
 

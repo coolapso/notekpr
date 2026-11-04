@@ -178,14 +178,6 @@ impl EntryIcon {
             (None, None) => None,
         }
     }
-
-    /// The emoji, unless it is a picture.
-    pub fn text(&self) -> Option<&str> {
-        match self {
-            EntryIcon::Text(t) => Some(t),
-            EntryIcon::Picture(_) => None,
-        }
-    }
 }
 
 /// A note shared with us individually, for the views.
@@ -528,6 +520,9 @@ pub struct Prefs {
     /// ([`recent_pictures`]).
     #[serde(default)]
     pub recent_pictures: Vec<String>,
+    /// The emojis picked as icons lately, the latest first.
+    #[serde(default)]
+    pub recent_icons: Vec<String>,
     /// Goes up with every save. Inside the encryption, so the server can't
     /// change it: an older copy it hands out (e.g. one without a pin) is
     /// noticed and not used [W-M10].

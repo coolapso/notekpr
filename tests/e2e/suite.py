@@ -2051,11 +2051,12 @@ def test_vault_icons(env):
         check(True, "an emoji from the list becomes the vault's icon")
         b.wait("const c = " + shared_card + "; return (c.querySelector('.vault-emoji') || {}).textContent === '🌱'", 15, "the member's card")
         check(True, "members see it right away")
-        # WebDriver can't type characters outside the BMP: set the box's value.
-        a.js("const i = document.querySelector('.icon-input'); i.value = '🦊'; i.dispatchEvent(new Event('input'))")
-        a.click(".icon-actions button[type=submit]")
-        a.wait("return " + btn_icon + " === '🦊'", 10, "the typed emoji")
-        check(True, "any emoji can be typed instead")
+        # WebDriver can't type characters outside the BMP: set the box's value,
+        # as pasting it does.
+        a.js("const i = document.querySelector('.emoji-search'); i.value = '🦊'; i.dispatchEvent(new Event('input'))")
+        a.click(".emoji-use")
+        a.wait("return " + btn_icon + " === '🦊'", 10, "the pasted emoji")
+        check(True, "any emoji can be pasted or typed into the search box instead")
         # A picture: made a small square from the image, shown instead of the emoji.
         text = os.path.join(env.data, "not-an-image.png")
         with open(text, "w") as f:
@@ -2127,11 +2128,12 @@ def test_entry_icons(env):
         a.js(row + "[0].querySelector('.tree-more').click()", "Travel")
         a.click_el(a.find_text(".tree-row .menu button", "Set icon", 5))
         a.find(".modal .icon-pick", 5)
-        # WebDriver can't type characters outside the BMP: set the box's value.
-        a.js("const i = document.querySelector('.modal .icon-input'); i.value = '🧳'; i.dispatchEvent(new Event('input'))")
-        a.click(".modal .icon-actions button[type=submit]")
+        # WebDriver can't type characters outside the BMP: set the box's
+        # value, as pasting it does.
+        a.js("const i = document.querySelector('.modal .emoji-search'); i.value = '🧳'; i.dispatchEvent(new Event('input'))")
+        a.click(".modal .emoji-use")
         a.wait("return !document.querySelector('.modal')", 5, "the dialog closes")
-        check(row_icon(a, "Travel") == "🧳", "a folder gets an icon, any emoji can be typed")
+        check(row_icon(a, "Travel") == "🧳", "a folder gets an icon, any emoji can be pasted")
         # A note made by following a link to one that doesn't exist yet: its
         # folder is only there because the note is in it.
         new_note(a, "Links", "[[Ideas/Spark]]")
@@ -2143,6 +2145,28 @@ def test_entry_icons(env):
         set_icon(a, "Ideas", "💡")
         check(row_icon(a, "Ideas") == "💡" and a.js("return " + row + ".length", "Ideas") == 1,
               "so does a folder that only held notes, without showing twice")
+        # Every emoji, by group, the recent ones first; found by name or
+        # keyword, Enter takes the first found.
+        a.js(row + "[0].querySelector('.tree-more').click()", "Ideas")
+        a.click_el(a.find_text(".tree-row .menu button", "Set icon", 5))
+        a.find(".modal .emoji-search", 5)
+        a.wait("return document.activeElement === document.querySelector('.modal .emoji-search')", 5, "the focus")
+        n = a.js("return document.querySelectorAll('.modal .emoji-scroll .emoji-btn').length")
+        check(n > 1800, f"every emoji is offered, by group ({n})")
+        recent = a.js("return Array.from(document.querySelectorAll('.modal .emoji-recent .emoji-btn')).map(b => b.dataset.e)")
+        check(recent == ["💡", "🧳", "🌱"], f"the recent ones first, the search box focused ({recent})")
+        a.shot("icon-picker")
+        a.click(".modal .emoji-group-btn[title='Flags']")
+        check(a.js("return document.querySelector('.modal .emoji-scroll').scrollTop") > 1000, "a group's button jumps to it")
+        a.click(".modal .emoji-search")
+        a.keys("tada")
+        a.wait("return (document.querySelector('.modal .emoji-scroll .emoji-btn') || {}).dataset?.e === '🎉'", 5, "found")
+        check(not a.js("return !!document.querySelector('.modal .emoji-recent')"), "found by a keyword")
+        a.keys(KEYS["backspace"] * 4 + "seedl")
+        a.wait("return (document.querySelector('.modal .emoji-scroll .emoji-btn') || {}).dataset?.e === '🌱'", 5, "found")
+        a.keys(KEYS["enter"])
+        a.wait("return !document.querySelector('.modal')", 5, "the dialog closes")
+        check(row_icon(a, "Ideas") == "🌱", "found by the start of its name; Enter takes it")
         # A picture: an uploaded image becomes a small square picture, shown
         # where the emoji was — by the title, in the tree, for members too.
         a.go(env.url.rstrip("/") + url)

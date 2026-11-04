@@ -212,6 +212,7 @@ pub(super) fn merge_prefs(theirs: &mut Prefs, mine: Prefs, unsaved: &Unsaved) {
         &theirs.recent_pictures,
         RECENT_PICTURES,
     );
+    theirs.recent_icons = latest_first(mine.recent_icons, &theirs.recent_icons, RECENT_ICONS);
     if unsaved.default_width {
         theirs.note_width = mine.note_width;
     }
@@ -225,6 +226,8 @@ pub(super) fn merge_prefs(theirs: &mut Prefs, mine: Prefs, unsaved: &Unsaved) {
 
 /// How many recent pictures are offered again.
 pub const RECENT_PICTURES: usize = 12;
+/// How many recent emojis.
+pub const RECENT_ICONS: usize = 24;
 
 /// `mine` (the latest) and then those of `theirs` not among them, at most
 /// `max`.
@@ -243,6 +246,15 @@ pub fn used_picture(c: &mut Core, p: &Picture) {
     let id = p.id();
     if c.prefs.recent_pictures.first() != Some(&id) {
         c.prefs.recent_pictures = latest_first(vec![id], &c.prefs.recent_pictures, RECENT_PICTURES);
+        save_prefs(c);
+    }
+}
+
+/// Remember `emoji` as the latest picked as an icon.
+pub fn used_icon(c: &mut Core, emoji: &str) {
+    if c.prefs.recent_icons.first().map(String::as_str) != Some(emoji) {
+        c.prefs.recent_icons =
+            latest_first(vec![emoji.to_string()], &c.prefs.recent_icons, RECENT_ICONS);
         save_prefs(c);
     }
 }
@@ -370,18 +382,21 @@ mod tests {
     }
 
     #[test]
-    fn recent_pictures_merge_the_latest_first() {
+    fn recent_icons_and_pictures_merge_the_latest_first() {
         let ids = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
         let mut theirs = Prefs {
             recent_pictures: ids(&["b", "x"]),
+            recent_icons: ids(&["🌱"]),
             ..Default::default()
         };
         let mine = Prefs {
             recent_pictures: ids(&["a", "b"]),
+            recent_icons: ids(&["🍅", "🌱"]),
             ..Default::default()
         };
         merge_prefs(&mut theirs, mine, &Unsaved::default());
         assert_eq!(theirs.recent_pictures, ids(&["a", "b", "x"]));
+        assert_eq!(theirs.recent_icons, ids(&["🍅", "🌱"]));
         let many: Vec<String> = (0..20).map(|i| i.to_string()).collect();
         let kept = latest_first(ids(&["new"]), &many, RECENT_PICTURES);
         assert_eq!((kept.len(), kept[0].as_str()), (RECENT_PICTURES, "new"));

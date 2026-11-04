@@ -11,6 +11,7 @@ pub mod cache;
 pub mod drawing;
 pub mod drawings;
 pub mod editor;
+pub mod emoji;
 pub mod graph;
 pub mod knowledge;
 pub mod notion;

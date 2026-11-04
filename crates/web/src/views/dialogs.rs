@@ -13,7 +13,7 @@ use crate::state::{self, Modal, Route, step, ui};
 use crate::views::avatar;
 use crate::views::icons::Icon;
 use crate::{api, knowledge, render};
-use crate::{ask, notion, util};
+use crate::{ask, emoji, notion, util};
 
 #[component]
 pub(crate) fn Dialog(
@@ -774,47 +774,159 @@ fn ShareNote(vault: String, note: String) -> impl IntoView {
     }
 }
 
-/// Emoji offered for icons (of vaults, notes and folders); any other can be
-/// typed.
-const EMOJI: [&str; 24] = [
-    "📓", "📚", "🏠", "💼", "🧪", "🎓", "💡", "🧠", "❤️", "⭐", "🔒", "🎨", "🎵", "🍳", "🌱", "✈️",
-    "🏃", "💰", "🛠️", "🎮", "📷", "🗂️", "🐾", "🌍",
-];
+/// An emoji standing for each group of the picker, to jump to it.
+const GROUP_ICONS: [&str; 9] = ["😀", "👋", "🐻", "🍔", "✈️", "⚽", "💡", "🔣", "🏁"];
 
-/// Pick an emoji, type any, or remove the icon: `on_pick` gets the emoji,
-/// or "" to remove it. `children` are more actions, next to Remove.
+/// Every emoji, by group, as buttons (made once: it is the same each time).
+fn all_emoji_html() -> &'static str {
+    static HTML: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    HTML.get_or_init(|| {
+        let mut out = String::new();
+        for (i, g) in emoji::groups().iter().enumerate() {
+            out.push_str(&format!(
+                "<div class=\"emoji-group-name\" data-group=\"{i}\">{}</div><div class=\"emoji-grid\">",
+                g.name.replace('&', "&amp;")
+            ));
+            out.push_str(&emoji::buttons_html(
+                g.emoji.iter().map(|e| (e.emoji, Some(e.name))),
+            ));
+            out.push_str("</div>");
+        }
+        out
+    })
+}
+
+/// What was typed into the search box, when it is to be used as the icon
+/// itself: an emoji pasted or typed there (anything but plain letters), or
+/// a few letters no emoji is called by.
+fn typed_icon(query: &str, found_any: bool) -> Option<String> {
+    let t = query.trim();
+    let own = !t.is_ascii() || !found_any;
+    notekpr_core::doc::clean_icon(t)
+        .ok()
+        .flatten()
+        .filter(|_| own)
+}
+
+/// Pick an icon: any emoji — searched for by name, by group, the recent
+/// ones first —, one typed or pasted, or none: `on_pick` gets the emoji, or
+/// "" to remove the icon. `children` (pictures) go above the emoji.
 #[component]
 fn EmojiPicker(
-    #[prop(into)] chosen: Signal<Option<String>>,
     #[prop(into)] removable: Signal<bool>,
     on_pick: Callback<String>,
+    /// The search box takes the focus.
+    #[prop(optional)]
+    autofocus: bool,
     #[prop(optional)] children: Option<Children>,
 ) -> impl IntoView {
-    let typed = RwSignal::new(String::new());
+    use wasm_bindgen::JsCast;
+    let ui = ui();
+    let query = RwSignal::new(String::new());
+    let pick = move |e: String| {
+        if !e.is_empty() {
+            step(|c| state::used_icon(c, &e));
+        }
+        on_pick.run(e);
+    };
+    let recent = Memo::new(move |_| {
+        ui.prefs_rev.track();
+        step(|c| c.prefs.recent_icons.clone())
+    });
+    let found = Memo::new(move |_| query.with(|q| emoji::search(q)));
+    let typed = Memo::new(move |_| {
+        let any = found.with(|f| !f.is_empty());
+        query.with(|q| typed_icon(q, any))
+    });
+    let searching = Memo::new(move |_| query.with(|q| !q.trim().is_empty()));
+    let scroll = NodeRef::<html::Div>::new();
+    // One handler for every emoji button inside.
+    let on_click = move |ev: leptos::ev::MouseEvent| {
+        let button = ev
+            .target()
+            .and_then(|t| t.dyn_into::<web_sys::Element>().ok())
+            .and_then(|el| el.closest("[data-e]").ok().flatten());
+        if let Some(e) = button.and_then(|b| b.get_attribute("data-e")) {
+            pick(e);
+        }
+    };
+    let jump = move |i: usize| {
+        let Some(s) = scroll.get() else { return };
+        let top = match s.query_selector(&format!("[data-group='{i}']")) {
+            Ok(Some(h)) if i > 0 => h
+                .dyn_into::<web_sys::HtmlElement>()
+                .map_or(0, |h| h.offset_top()),
+            _ => 0,
+        };
+        s.set_scroll_top(top);
+    };
+    let enter = move |ev: web_sys::KeyboardEvent| {
+        if ev.key() != "Enter" {
+            return;
+        }
+        ev.prevent_default();
+        let first = found.with_untracked(|f| f.first().map(|e| e.emoji.to_string()));
+        if let Some(e) = typed.get_untracked().or(first) {
+            pick(e);
+        }
+    };
+    let input = NodeRef::<html::Input>::new();
+    if autofocus {
+        Effect::new(move |_| {
+            if let Some(i) = input.get() {
+                focus_on_mount(i.into());
+            }
+        });
+    }
     view! {
-        <div class="grow">
-            <div class="emoji-grid" role="group" aria-label="Icon">
-                {EMOJI.iter().map(|&e| {
-                    let on = move || chosen.get().as_deref() == Some(e);
-                    view! { <button type="button" class="emoji-btn" class:on=on aria-label=e on:click=move |_| on_pick.run(e.to_string())>{e}</button> }
-                }).collect_view()}
-            </div>
-            <div class="icon-actions">
-                <form class="row" on:submit=move |ev| {
-                    ev.prevent_default();
-                    let t = typed.get_untracked();
-                    if !t.trim().is_empty() {
-                        typed.set(String::new());
-                        on_pick.run(t);
-                    }
-                }>
-                    <input class="input icon-input" placeholder="Type an emoji" prop:value=move || typed.get() on:input=move |ev| typed.set(event_target_value(&ev))/>
-                    <button class="btn" type="submit">"Use"</button>
-                </form>
-                {children.map(|c| c())}
+        <div class="grow emoji-picker">
+            <div class="row emoji-top">
+                <input class="input grow emoji-search" type="search" autocomplete="off" node_ref=input
+                    placeholder="Search, or type or paste any emoji" aria-label="Search for an emoji, or type or paste any"
+                    prop:value=move || query.get() on:input=move |ev| query.set(event_target_value(&ev)) on:keydown=enter/>
                 <Show when=move || removable.get()>
-                    <button class="btn icon-remove" on:click=move |_| on_pick.run(String::new())>"Remove"</button>
+                    <button type="button" class="btn icon-remove" on:click=move |_| on_pick.run(String::new())>"Remove"</button>
                 </Show>
+            </div>
+            {children.map(|c| c())}
+            <Show when=move || !searching.get()>
+                <div class="emoji-groups" role="group" aria-label="Groups">
+                    {emoji::groups().iter().zip(GROUP_ICONS).enumerate().map(|(i, (g, e))| view! {
+                        <button type="button" class="emoji-group-btn" title=g.name aria-label=g.name on:click=move |_| jump(i)>{e}</button>
+                    }).collect_view()}
+                </div>
+            </Show>
+            <div class="emoji-scroll" node_ref=scroll on:click=on_click>
+                {move || if searching.get() {
+                    let use_typed = typed.get().map(|t| {
+                        let t2 = t.clone();
+                        view! {
+                            <button type="button" class="btn emoji-use" on:click=move |_| pick(t2.clone())>
+                                "Use " <span class="emoji-use-icon">{t}</span>
+                            </button>
+                        }
+                    });
+                    let html = found.with(|f| emoji::buttons_html(f.iter().map(|e| (e.emoji, Some(e.name)))));
+                    let none = found.with(Vec::is_empty) && use_typed.is_none();
+                    view! {
+                        {use_typed}
+                        <div class="emoji-grid" inner_html=html></div>
+                        {none.then(|| view! { <p class="muted small emoji-none">"No emoji is called that. Paste or type one to use it."</p> })}
+                    }.into_any()
+                } else {
+                    let recent = recent.get();
+                    let recent = (!recent.is_empty()).then(|| {
+                        let html = emoji::buttons_html(recent.iter().map(|e| (e.as_str(), emoji::name_of(e))));
+                        view! {
+                            <div class="emoji-group-name">"Recent"</div>
+                            <div class="emoji-grid emoji-recent" inner_html=html></div>
+                        }
+                    });
+                    view! {
+                        {recent}
+                        <div inner_html=all_emoji_html()></div>
+                    }.into_any()
+                }}
             </div>
         </div>
     }
@@ -862,12 +974,6 @@ fn VaultIconPicker(vault: String) -> impl IntoView {
             busy.set(false);
         });
     };
-    let chosen = Signal::derive(move || {
-        current
-            .get()
-            .filter(|v| v.picture.is_none())
-            .and_then(|v| v.icon)
-    });
     let removable = Signal::derive(move || {
         current
             .get()
@@ -876,7 +982,7 @@ fn VaultIconPicker(vault: String) -> impl IntoView {
     view! {
         <div class="icon-pick">
             <div class="icon-now">{move || super::vault_icon(current.get().as_ref())}</div>
-            <EmojiPicker chosen=chosen removable=removable on_pick=Callback::new(set)>
+            <EmojiPicker removable=removable on_pick=Callback::new(set)>
                 <PictureChoice on_picture=Callback::new(recent) on_file=Callback::new(upload) busy=busy/>
             </EmojiPicker>
         </div>
@@ -944,7 +1050,9 @@ fn EntryIconDialog(vault: String, id: Option<String>, path: String, folder: bool
     });
     let pick = move |icon: String| {
         let (v, id, path) = target.get_value();
-        if actions::set_entry_icon(&v, id.as_deref(), &path, &icon) {
+        actions::set_entry_icon(&v, id.as_deref(), &path, &icon);
+        // Also when it is the same one again (an error says why it isn't).
+        if notekpr_core::doc::clean_icon(&icon).is_ok() {
             ui.modal.set(None);
         }
     };
@@ -972,8 +1080,7 @@ fn EntryIconDialog(vault: String, id: Option<String>, path: String, folder: bool
         <Dialog title=format!("Icon for “{name}”")>
             <div class="icon-pick">
                 <div class="icon-now">{move || super::entry_icon(current.get(), fallback)}</div>
-                <EmojiPicker chosen=Signal::derive(move || current.get().and_then(|i| i.text().map(str::to_string)))
-                    removable=Signal::derive(move || current.get().is_some()) on_pick=Callback::new(pick)>
+                <EmojiPicker removable=Signal::derive(move || current.get().is_some()) on_pick=Callback::new(pick) autofocus=true>
                     <PictureChoice on_picture=Callback::new(use_picture) on_file=Callback::new(upload) busy=busy/>
                 </EmojiPicker>
             </div>

@@ -971,12 +971,21 @@ table.keys td:first-child { white-space: nowrap; width: 1%; padding-right: 16px;
 .icon-now .vault-pic { width: 56px; height: 56px; border-radius: 12px; }
 .icon-now .vault-emoji, .icon-now .entry-icon { width: auto; font-size: 32px; }
 .icon-now .ic { width: 26px; height: 26px; }
+/* The icon picker: search, pictures, groups to jump to, every emoji. */
+.emoji-picker { min-width: 0; display: flex; flex-direction: column; gap: 8px; }
+.emoji-top { gap: 6px; }
+.emoji-search { min-width: 0; }
+.emoji-groups { display: flex; flex-wrap: wrap; gap: 2px; }
+.emoji-group-btn { width: 30px; height: 30px; padding: 0; border: none; border-radius: 6px; background: none; cursor: pointer; font-size: 17px; line-height: 1; opacity: .7; }
+.emoji-group-btn:hover, .emoji-group-btn:focus-visible { background: var(--bg-3); opacity: 1; }
+.emoji-scroll { position: relative; height: 260px; overflow-y: auto; overscroll-behavior: contain; }
+.emoji-group-name { position: sticky; top: 0; z-index: 1; padding: 4px 2px; background: var(--bg); color: var(--muted); font-size: 12px; font-weight: 600; }
 .emoji-grid { display: flex; flex-wrap: wrap; gap: 2px; margin-bottom: 8px; }
 .emoji-btn { width: 34px; height: 34px; border: 1px solid transparent; border-radius: 8px; background: none; cursor: pointer; font-size: 19px; line-height: 1; }
-.emoji-btn:hover { background: var(--bg-3); }
-.emoji-btn.on { border-color: var(--accent); background: var(--accent-bg); }
-.icon-actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
-.icon-input { width: 130px; }
+.emoji-btn:hover, .emoji-btn:focus-visible { background: var(--bg-3); }
+.emoji-use { margin: 2px 0 8px; gap: 6px; }
+.emoji-use-icon { font-size: 20px; line-height: 1; }
+.emoji-none { margin: 8px 2px; }
 label.btn { position: relative; }
 label.btn.disabled { opacity: .6; pointer-events: none; }
 .picture-input { position: absolute; width: 1px; height: 1px; opacity: 0; overflow: hidden; pointer-events: none; }

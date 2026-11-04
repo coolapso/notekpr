@@ -592,6 +592,80 @@ def test_attachments(env):
         b.close()
 
 
+def test_attachments_beside_notes(env):
+    """A note's files go to attachments/ in its folder; moved, it takes along
+    those only it uses (they still show), not those another note uses too."""
+    b = Browser()
+    row = "Array.from(document.querySelectorAll('.tree-row')).find(r => r.textContent.trim() === arguments[0])"
+    to_end = "const ed = document.querySelector('.ed'); ed.focus(); const s = getSelection(); s.selectAllChildren(ed); s.collapseToEnd();"
+    paste_pngs = to_end + """
+        const png = Uint8Array.from(atob('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg=='), c => c.charCodeAt(0));
+        const dt = new DataTransfer();
+        for (const name of arguments[0]) dt.items.add(new File([png], name, {type: 'image/png'}));
+        ed.dispatchEvent(new ClipboardEvent('paste', {clipboardData: dt, bubbles: true, cancelable: true}));
+    """
+    paste_text = to_end + """
+        const dt = new DataTransfer();
+        dt.setData('text/plain', arguments[0]);
+        ed.dispatchEvent(new ClipboardEvent('paste', {clipboardData: dt, bubbles: true, cancelable: true}));
+    """
+    def note_in(folder, title):
+        b.js(row + ".querySelector('.tree-more').click()", folder)
+        b.click_el(b.find_text(".tree-row .menu button", "New note here", 5))
+        b.wait("return document.activeElement === document.querySelector('.note-title')", 10, "a new note")
+        b.keys(title + KEYS["enter"])
+        b.wait("return document.querySelector('.note-title').value === arguments[0]", 10, "its title", title)
+        time.sleep(0.4)
+    def open_file(name):
+        b.click_el(b.find_text(".tree-item", name, 10))
+        b.wait("return document.querySelector('.attachment-page .note-title')?.value === arguments[0]", 10, "its page", name)
+        return b.js("return document.querySelector('.attachment-page .crumbs').textContent")
+    def expand(name, level):
+        b.wait("const r = " + row + "; return !!r && r.getAttribute('aria-level') === arguments[1]", 10, f"{name} at level {level}", name, str(level))
+        if b.js("return " + row + ".getAttribute('aria-expanded')", name) != "true":
+            b.js(row + ".querySelector('.tree-item').click()", name)
+    try:
+        signup(b, uniq("att"))
+        b.click(".sb-actions button[title='New folder']")
+        b.type(".modal input", "Trips")
+        b.click(".modal button[type=submit]")
+        b.wait("return !!" + row, 10, "the folder", "Trips")
+        note_in("Trips", "Lisbon")
+        b.js(paste_pngs, ["sunset.png", "map.png"])
+        b.wait("return document.querySelector('.ed').textContent.includes('![[map.png]]')", 15, "the pictures' links")
+        check(editor_text(b) == "![[sunset.png]]\n![[map.png]]", "both are linked, each on a line")
+        expand("attachments", 2)
+        check(open_file("sunset.png") == "My notes / Trips / attachments", "a file added to a note goes to attachments/ in the note's folder")
+        # Porto shows the map too.
+        note_in("Trips", "Porto")
+        b.js(paste_text, "The same map:\n![[map.png]]")
+        b.js("document.querySelector('.note-title').focus()")
+        b.wait("return !!document.querySelector('.ed .w img[src^=\"blob:\"]')", 15, "Porto shows the map")
+        check(open_file("map.png") == "My notes / Trips / attachments", "the map stays where it was")
+        b.find_text(".att-used .list-row", "Porto", 10)
+        check(b.js("return Array.from(document.querySelectorAll('.att-used .list-row .ua-title')).map(e => e.textContent)") == ["Lisbon", "Porto"],
+              "the file's page says which notes use it")
+        b.shot("attachment-page")
+        # Lisbon moves to the top: its own picture goes along, the map stays.
+        b.click_el(b.find_text(".att-used .list-row", "Lisbon", 10))
+        b.wait("return document.querySelector('.note-title')?.value === 'Lisbon' && !!document.querySelector('.ed')", 10, "Lisbon")
+        b.click(".note-head .tb-drop button[title='More']")
+        b.click_el(b.find_text(".note-head .menu button", "Move to…", 5))
+        b.click_el(b.find_text(".modal .list-row", "(vault root)", 5))
+        b.find_text(".toast", "with its attachment", 10)
+        check(True, "moved, it says its attachment went along")
+        check(editor_text(b).count("![[sunset.png]]") == 1 and "![[map.png]]" in editor_text(b), "its links are as they were")
+        b.js("document.querySelector('.note-title').focus()")
+        b.wait("return document.querySelectorAll('.ed .w img[src^=\"blob:\"]').length === 2", 15, "both pictures")
+        check(True, "the note still shows both pictures")
+        expand("attachments", 1)
+        check(open_file("sunset.png") == "My notes / attachments", "its own picture went along, to attachments/ beside it")
+        check(open_file("map.png") == "My notes / Trips / attachments", "the map Porto uses too stayed")
+        check(not severe_logs(b), "no browser errors")
+    finally:
+        b.close()
+
+
 # Keep what the page downloads (name and bytes, base64) in `__download`.
 CAPTURE_DOWNLOADS = """
 window.__downloads = []; window.__download = null;
@@ -3398,7 +3472,7 @@ def test_device_code(env):
         a.close()
 
 
-TESTS = [test_onboarding, test_collab, test_devices_and_recovery, test_features, test_attachments, test_export_import, test_notion_import, test_delete_account, test_move_to_vault, test_note_sharing, test_tables, test_code_blocks, test_html, test_callouts, test_colors, test_code_wrapping, test_vim, test_line_numbers, test_editor_mouse, test_editor_safety, test_local_copy, test_ui_basics, test_offline_tabs, test_offline_start, test_mobile, test_quick_notes, test_vault_cards, test_vault_icons, test_entry_icons, test_tree_order, test_session_ended_while_away, test_outdated, test_comments, test_mentions, test_dates, test_graph, test_recovered_copy, test_note_width, test_admin, test_vault_storage, test_vault_admins, test_owners, test_undo_purge, test_device_code]
+TESTS = [test_onboarding, test_collab, test_devices_and_recovery, test_features, test_attachments, test_attachments_beside_notes, test_export_import, test_notion_import, test_delete_account, test_move_to_vault, test_note_sharing, test_tables, test_code_blocks, test_html, test_callouts, test_colors, test_code_wrapping, test_vim, test_line_numbers, test_editor_mouse, test_editor_safety, test_local_copy, test_ui_basics, test_offline_tabs, test_offline_start, test_mobile, test_quick_notes, test_vault_cards, test_vault_icons, test_entry_icons, test_tree_order, test_session_ended_while_away, test_outdated, test_comments, test_mentions, test_dates, test_graph, test_recovered_copy, test_note_width, test_admin, test_vault_storage, test_vault_admins, test_owners, test_undo_purge, test_device_code]
 
 
 def main():

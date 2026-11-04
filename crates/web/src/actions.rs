@@ -1479,8 +1479,21 @@ pub fn rename_entry(vault: &str, id: &str, new_name: &str) -> Result<(), String>
     {
         return Err("Something with that name already exists here.".into());
     }
-    if e.kind == EntryKind::Folder {
-        step(|c| change_index(c, vault, |ix| ix.rename_folder(&e.path, &new_path, now())));
+    if matches!(e.kind, EntryKind::Folder | EntryKind::Attachment) {
+        // A folder takes along the files only its notes use; links keep
+        // finding a file renamed, and those in a folder renamed.
+        let m = match e.kind {
+            EntryKind::Folder => attachments::Move::Folder {
+                from: e.path.clone(),
+                to: new_path,
+            },
+            _ => attachments::Move::Entry {
+                id: id.to_string(),
+                to: new_path,
+            },
+        };
+        let (_, links) = step(|c| move_with_along(c, vault, &m));
+        links_updated(vault, links);
     } else {
         let old_title = e.title().to_string();
         let old_path = e.path.clone();
@@ -1503,6 +1516,55 @@ pub fn rename_entry(vault: &str, id: &str, new_name: &str) -> Result<(), String>
     }
     state::ui().tree_rev.update(|v| *v += 1);
     Ok(())
+}
+
+/// Move within the vault, with what goes along ([`attachments::along`]):
+/// the files only what moves uses, and the links rewritten to keep finding
+/// what they found. How many files went along, and in how many notes links
+/// changed.
+fn move_with_along(c: &mut Core, vault: &str, m: &attachments::Move) -> (usize, usize) {
+    let along = c
+        .replicas
+        .get(vault)
+        .map(|r| attachments::along(r, m, |_| true))
+        .unwrap_or_default();
+    match m {
+        attachments::Move::Entry { id, to } => {
+            change_index(c, vault, |ix| ix.rename(id, to, now()))
+        }
+        attachments::Move::Folder { from, to } => {
+            change_index(c, vault, |ix| ix.rename_folder(from, to, now()))
+        }
+    };
+    for (id, path) in &along.files {
+        change_index(c, vault, |ix| ix.rename(id, path, now()));
+    }
+    let links = along
+        .texts
+        .iter()
+        .filter(|(id, text)| state::set_note_text(c, vault, id, text) > 0)
+        .count();
+    (along.files.len(), links)
+}
+
+/// Say that links changed in `notes` notes, and show the open one's.
+fn links_updated(vault: &str, notes: usize) {
+    if notes > 0 {
+        info(format!(
+            "Updated links in {notes} note{}.",
+            if notes == 1 { "" } else { "s" }
+        ));
+        refresh_open_editor(vault);
+    }
+}
+
+/// What to say once something moved, with `files` attachments along.
+pub fn moved_message(files: usize) -> String {
+    match files {
+        0 => "Moved.".into(),
+        1 => "Moved, with its attachment.".into(),
+        n => format!("Moved, with its {n} attachments."),
+    }
 }
 
 fn update_links_after_rename(vault: &str, id: &str, old_path: &str, new_title: &str) {
@@ -1558,25 +1620,39 @@ fn refresh_open_editor(vault: &str) {
     }
 }
 
-pub fn move_entry(vault: &str, id: &str, folder: &str) -> Result<(), String> {
+/// Move an entry into `folder`, with the attachments only it uses: how many
+/// went along.
+pub fn move_entry(vault: &str, id: &str, folder: &str) -> Result<usize, String> {
     let e = state::step(|c| c.entry(vault, id)).ok_or("not found")?;
     let me = order::Child {
         path: e.path.clone(),
         entry: Some(e),
     };
-    if step(|c| move_into(c, vault, &me, folder))?.is_some() {
-        state::ui().tree_rev.update(|v| *v += 1);
-    }
-    Ok(())
+    let Some(moved) = step(|c| move_into(c, vault, &me, folder))? else {
+        return Ok(0);
+    };
+    state::ui().tree_rev.update(|v| *v += 1);
+    links_updated(vault, moved.links);
+    Ok(moved.files)
 }
 
-/// Move `me` into `folder`; its new path, `None` if it is already there.
+/// Where something moved, and what went with it.
+struct Moved {
+    path: String,
+    /// How many attachments went along.
+    files: usize,
+    /// In how many notes links changed.
+    links: usize,
+}
+
+/// Move `me` into `folder`, with the attachments only it uses; `None` if
+/// it is there already.
 fn move_into(
     c: &mut Core,
     vault: &str,
     me: &order::Child,
     folder: &str,
-) -> Result<Option<String>, String> {
+) -> Result<Option<Moved>, String> {
     if paths::parent(&me.path) == folder {
         return Ok(None);
     }
@@ -1584,11 +1660,22 @@ fn move_into(
         return Err("A folder can't be moved into itself.".into());
     }
     let target = unique_path(c, vault, &paths::join(folder, paths::file_name(&me.path)));
-    change_index(c, vault, |ix| match &me.entry {
-        Some(e) if e.kind != EntryKind::Folder => ix.rename(&e.id, &target, now()),
-        _ => ix.rename_folder(&me.path, &target, now()),
-    });
-    Ok(Some(target))
+    let m = match &me.entry {
+        Some(e) if e.kind != EntryKind::Folder => attachments::Move::Entry {
+            id: e.id.clone(),
+            to: target.clone(),
+        },
+        _ => attachments::Move::Folder {
+            from: me.path.clone(),
+            to: target.clone(),
+        },
+    };
+    let (files, links) = move_with_along(c, vault, &m);
+    Ok(Some(Moved {
+        path: target,
+        files,
+        links,
+    }))
 }
 
 /// Where an entry dragged in the file tree lands.
@@ -1630,14 +1717,14 @@ pub fn place_entry(vault: &str, path: &str, spot: &Spot) -> Result<(), String> {
     if kind.iter().position(|c| c.path == path) == Some(at) {
         return Ok(());
     }
-    step(|c| -> Result<(), String> {
+    let moved = step(|c| -> Result<Option<Moved>, String> {
         let moved = move_into(c, vault, me, folder)?;
         if anchor.is_none() {
-            return Ok(());
+            return Ok(moved);
         }
         let keys: Vec<Option<&str>> = others.iter().map(|c| c.order()).collect();
         let place = order::place(&keys, at);
-        let new_path = moved.as_deref().unwrap_or(path);
+        let new_path = moved.as_ref().map_or(path, |m| m.path.as_str());
         let my_id = me.entry.as_ref().map(|e| e.id.as_str());
         let mut writes = vec![(folder_entry(c, vault, new_path, my_id), place.key)];
         for (i, key) in place.others {
@@ -1648,9 +1735,15 @@ pub fn place_entry(vault: &str, path: &str, spot: &Spot) -> Result<(), String> {
         change_index(c, vault, |ix| {
             ix.set_order(writes.iter().map(|(id, k)| (id.as_str(), Some(k.as_str()))))
         });
-        Ok(())
+        Ok(moved)
     })?;
     state::ui().tree_rev.update(|v| *v += 1);
+    if let Some(m) = moved {
+        if m.files > 0 {
+            info(moved_message(m.files));
+        }
+        links_updated(vault, m.links);
+    }
     Ok(())
 }
 
@@ -1683,9 +1776,16 @@ pub fn sort_folder(vault: &str, folder: &str) {
 pub fn rename_implicit_folder(vault: &str, old: &str, new_name: &str) -> Result<(), String> {
     let new_path =
         paths::normalize(&paths::join(paths::parent(old), new_name)).map_err(|e| e.to_string())?;
-    if step(|c| change_index(c, vault, |ix| ix.rename_folder(old, &new_path, now()))) {
-        state::ui().tree_rev.update(|v| *v += 1);
+    if new_path == old {
+        return Ok(());
     }
+    let m = attachments::Move::Folder {
+        from: old.to_string(),
+        to: new_path,
+    };
+    let (_, links) = step(|c| move_with_along(c, vault, &m));
+    state::ui().tree_rev.update(|v| *v += 1);
+    links_updated(vault, links);
     Ok(())
 }
 

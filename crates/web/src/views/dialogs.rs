@@ -1625,7 +1625,7 @@ fn MoveDialog(vault: String, id: String) -> impl IntoView {
                     let is_current = f == current;
                     view! {
                         <button class="list-row" disabled=is_current on:click=move |_| {
-                            match actions::move_entry(&v, &i, &f2) { Ok(()) => { ui.modal.set(None); state::success("Moved."); } Err(e) => state::error(e) }
+                            match actions::move_entry(&v, &i, &f2) { Ok(files) => { ui.modal.set(None); state::success(actions::moved_message(files)); } Err(e) => state::error(e) }
                         }>
                             <Icon name="folder"/><span class="grow">{if f.is_empty() { "(vault root)".to_string() } else { f.clone() }}</span>
                             {is_current.then(|| view! { <span class="muted small">"current"</span> })}

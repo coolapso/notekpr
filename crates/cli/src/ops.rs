@@ -368,8 +368,13 @@ pub struct MoveOutcome {
     pub id: Option<String>,
     pub from: String,
     pub to: String,
+    /// Where the attachments that went along (those only what moved uses)
+    /// are now.
+    pub attachments: Vec<String>,
 }
 
+/// Move or rename a document or folder, with the attachments only it uses
+/// ([`notekpr_core::attachments::along`]).
 pub async fn move_document(
     hub: &Hub,
     vref: &str,
@@ -378,23 +383,25 @@ pub async fn move_document(
     update_links: bool,
 ) -> OpResult<MoveOutcome> {
     let v = vault(hub, vref).await?;
-    let (vault_id, id, new_path) = {
+    let (vault_id, id, (new_path, attachments)) = {
         let mut g = v.lock().await;
         check_write(hub, &g)?;
         let id = g.find(from).map(|(_, e)| e.id);
         if id.is_none() && !g.is_folder(from) {
             return Err(OpError::NotFound(format!("no document or folder '{from}'")));
         }
-        let new_path = g.move_path(from, to, update_links).map_err(|e| {
-            let msg = format!("{e:#}");
-            if msg.contains("already exists") {
-                OpError::Conflict(msg)
-            } else {
-                OpError::BadRequest(msg)
-            }
-        })?;
+        let moved = g
+            .move_with_attachments(from, to, update_links)
+            .map_err(|e| {
+                let msg = format!("{e:#}");
+                if msg.contains("already exists") {
+                    OpError::Conflict(msg)
+                } else {
+                    OpError::BadRequest(msg)
+                }
+            })?;
         g.save()?;
-        (g.id().to_string(), id, new_path)
+        (g.id().to_string(), id, moved)
     };
     hub.local_changed(&vault_id, vec![], true).await;
     // People a moved note is shared with see its new name (the move itself
@@ -409,6 +416,7 @@ pub async fn move_document(
         id,
         from: from.to_string(),
         to: new_path,
+        attachments,
     })
 }
 

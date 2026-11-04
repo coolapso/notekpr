@@ -154,7 +154,12 @@ a Mac). The [README](../README.md) has the short version.
 * Vaults, folders and a note tree with drag and drop: drop onto a folder to
   move something into it, or between two entries to put it there (a line
   shows where; folders stay above notes, and *Sort A–Z* undoes it). Everyone
-  in the vault sees the same order. A new note with `Ctrl+Alt+N`. *All vaults* shows each vault as a card, its settings a click away (⚙ in the corner). Each vault opens on a home page with its recently edited
+  in the vault sees the same order. A note or drawing moved — or a folder
+  moved or renamed — takes along the attachments only it uses, to
+  `attachments/` where it lands (files other notes use too stay put), and
+  links keep finding what they found. A new note with `Ctrl+Alt+N`. *All
+  vaults* shows each vault as a card, its settings a click away (⚙ in the
+  corner). Each vault opens on a home page with its recently edited
   notes and tags; its owner can archive it while it isn't needed, or delete
   it.
 * Icons: an emoji or a picture for each note, folder and vault. Every emoji

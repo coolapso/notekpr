@@ -711,7 +711,14 @@ async fn execute(ctx: Ctx, command: Command) -> Result<()> {
             let hub = ctx.hub(&[&vault]).await?;
             // Recipients of a shared note see its new name (ops does it).
             let out = op(ops::move_document(&hub, &vault, &from, &to, update_links).await)?;
+            if ctx.json {
+                ctx.print_json(&out);
+                return Ok(());
+            }
             crate::out!("moved to {}", out.to);
+            for f in &out.attachments {
+                crate::out!("  with {f}");
+            }
             Ok(())
         }
         Command::Icon {

@@ -1791,10 +1791,35 @@ impl Vault {
         })
     }
 
-    /// Move or rename a note, attachment or folder. A target ending in `/`
-    /// (or naming an existing folder) keeps the file name. Optionally rewrites
-    /// wiki links in other notes that pointed at a moved note.
+    /// Move or rename a note, drawing, attachment or folder. A target ending
+    /// in `/` (or naming an existing folder) keeps the file name. Optionally
+    /// rewrites wiki links in other notes that pointed at a moved note.
+    /// Returns its new path.
     pub fn move_path(&mut self, from: &str, to: &str, update_links: bool) -> Result<String> {
+        self.move_entry(from, to, update_links, false)
+            .map(|(path, _)| path)
+    }
+
+    /// [`move_path`](Self::move_path), taking along the attachments only
+    /// what moves uses ([`attachments::along`]); links to files keep
+    /// finding them. Returns the new path and those of the files that went
+    /// along.
+    pub fn move_with_attachments(
+        &mut self,
+        from: &str,
+        to: &str,
+        update_links: bool,
+    ) -> Result<(String, Vec<String>)> {
+        self.move_entry(from, to, update_links, true)
+    }
+
+    fn move_entry(
+        &mut self,
+        from: &str,
+        to: &str,
+        update_links: bool,
+        with_attachments: bool,
+    ) -> Result<(String, Vec<String>)> {
         self.require_writable()?;
         // In the quick notes, renaming only: the target names a note at the
         // top level (`dir/` would move it into a folder).
@@ -1802,7 +1827,22 @@ impl Vault {
             bail!("quick notes have no folders ('{to}')");
         }
         let into_folder = to.ends_with('/') || self.is_folder(to);
-        if self.find(from).is_none() && self.is_folder(from) {
+        let along = |v: &Self, m: attachments::Move| {
+            if !with_attachments {
+                return attachments::Along::default();
+            }
+            attachments::along(&v.replica, &m, |e| {
+                update_links || e.kind == EntryKind::Attachment
+            })
+        };
+        let found = self.find(from);
+        // A folder, with or without an entry of its own, moves with
+        // everything in it.
+        let folder = match &found {
+            None => self.is_folder(from),
+            Some((_, e)) => e.kind == EntryKind::Folder,
+        };
+        if folder {
             let old = paths::normalize(from)?;
             let new = if into_folder {
                 paths::join(&paths::normalize(to)?, paths::file_name(&old))
@@ -1812,13 +1852,19 @@ impl Vault {
             if new == old || paths::is_within(&new, &old) {
                 bail!("cannot move a folder into itself");
             }
+            let along = along(
+                self,
+                attachments::Move::Folder {
+                    from: old.clone(),
+                    to: new.clone(),
+                },
+            );
             let u = self.replica.index.rename_folder(&old, &new, now_ms());
             self.record_index(u)?;
-            return Ok(new);
+            let files = self.apply_along(along)?;
+            return Ok((new, files));
         }
-        let (old_path, entry) = self
-            .find(from)
-            .ok_or_else(|| anyhow!("no document or folder '{from}'"))?;
+        let (old_path, entry) = found.ok_or_else(|| anyhow!("no document or folder '{from}'"))?;
         let target = if into_folder {
             let base = if to.trim_matches('/').is_empty() {
                 String::new()
@@ -1834,7 +1880,7 @@ impl Vault {
             _ => paths::normalize(&target)?,
         };
         if new_path == old_path {
-            return Ok(new_path);
+            return Ok((new_path, vec![]));
         }
         if let Some(other) = self.paths().get(&new_path)
             && other.id != entry.id
@@ -1842,12 +1888,34 @@ impl Vault {
             bail!("'{new_path}' already exists");
         }
         let before = markdown::Resolver::new(self.link_candidates());
+        let along = along(
+            self,
+            attachments::Move::Entry {
+                id: entry.id.clone(),
+                to: new_path.clone(),
+            },
+        );
         let u = self.replica.index.rename(&entry.id, &new_path, now_ms());
         self.record_index(u)?;
+        let files = self.apply_along(along)?;
         if update_links && entry.kind == EntryKind::Note {
             self.rewrite_links_to(&entry.id, &before, &new_path)?;
         }
-        Ok(new_path)
+        Ok((new_path, files))
+    }
+
+    /// Move the files going along with a move, and rewrite the links that
+    /// keep finding what they found. Returns the files' new paths.
+    fn apply_along(&mut self, along: attachments::Along) -> Result<Vec<String>> {
+        let now = now_ms();
+        for (id, path) in &along.files {
+            let u = self.replica.index.rename(id, path, now);
+            self.record_index(u)?;
+        }
+        for (id, text) in &along.texts {
+            self.set_note_text(id, text)?;
+        }
+        Ok(along.files.into_iter().map(|(_, p)| p).collect())
     }
 
     /// Rewrite `[[links]]` that resolved to `target_id` (using the paths from

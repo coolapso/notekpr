@@ -1,3 +1,4 @@
+//! Moving within a vault (`mv`), with the attachments only what moves uses.
 //! Moving a folder to another vault (`mv --to-vault`): everything in it,
 //! and the files elsewhere its notes link to, then the originals to the
 //! trash; a drawing, replacing its original. Single notes: `quick.rs`.
@@ -312,4 +313,93 @@ async fn a_drawing_moves_with_its_pictures() {
         home.lock().await.find("attachments/Board.png").is_none(),
         "moved, not copied"
     );
+}
+
+/// Moving within a vault (`mv`): a note, or a folder moved or renamed,
+/// takes along the attachments only it uses, into `attachments/` where it
+/// lands; links keep finding them. The Markdown folder's moves (the
+/// person's editor moved a file) take nothing along.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_note_moves_with_the_attachments_only_it_uses() {
+    let srv = start().await;
+    let alice = login(&srv, "alice").await;
+    run(&srv, "alice", &["vault", "create", "Home"])
+        .await
+        .unwrap();
+    let h = hub(&alice).await;
+    for (p, t) in [
+        ("notekpr/TODO.md", "![[shot.png]] and ![[logo.png]]"),
+        ("Other.md", "![[logo.png]]"),
+        ("Projects/Plan.md", "![[plan.pdf]]"),
+        ("Projects/Sub/Deep.md", "[[plan.pdf]] ![[spec.pdf]]"),
+    ] {
+        ops::put_document(&h, "Home", p, t, None).await.unwrap();
+    }
+    for (p, data) in [
+        ("attachments/shot.png", &b"shot"[..]),
+        ("attachments/logo.png", b"logo"),
+        ("Archive/attachments/shot.png", b"another shot"),
+        ("attachments/plan.pdf", b"plan"),
+        // Put in a folder of documents by hand.
+        ("Docs/spec.pdf", b"spec"),
+    ] {
+        ops::put_attachment(&h, "Home", p, data, None)
+            .await
+            .unwrap();
+    }
+    // Its own goes along, under a free name there; the logo another note
+    // uses stays.
+    let out = ops::move_document(&h, "Home", "notekpr/TODO.md", "Archive/", false)
+        .await
+        .unwrap();
+    assert_eq!(out.to, "Archive/TODO.md");
+    assert_eq!(out.attachments, ["Archive/attachments/shot 2.png"]);
+    assert_eq!(
+        note(&h, "Home", "Archive/TODO.md").await.as_deref(),
+        Some("![[shot 2.png]] and ![[logo.png]]")
+    );
+    assert_eq!(
+        file(&h, "Home", "Archive/attachments/shot 2.png")
+            .await
+            .as_deref(),
+        Some(&b"shot"[..])
+    );
+    assert_eq!(
+        file(&h, "Home", "Archive/attachments/shot.png")
+            .await
+            .as_deref(),
+        Some(&b"another shot"[..])
+    );
+    assert!(file(&h, "Home", "attachments/logo.png").await.is_some());
+    // A folder (with an entry of its own) renamed: everything in it moves,
+    // and the files its notes alone use go to its attachments/.
+    run(&srv, "alice", &["mkdir", "Home", "Projects"])
+        .await
+        .unwrap();
+    drop(h);
+    run(&srv, "alice", &["mv", "Home", "Projects", "Work"])
+        .await
+        .unwrap();
+    let h = hub(&reopen(&srv, "alice", "alice").await).await;
+    assert!(note(&h, "Home", "Work/Sub/Deep.md").await.is_some());
+    assert!(note(&h, "Home", "Projects/Plan.md").await.is_none());
+    assert_eq!(
+        file(&h, "Home", "Work/attachments/plan.pdf")
+            .await
+            .as_deref(),
+        Some(&b"plan"[..])
+    );
+    // Only Deep uses the one filed by hand: it goes along too.
+    assert!(file(&h, "Home", "Docs/spec.pdf").await.is_none());
+    assert_eq!(
+        file(&h, "Home", "Work/Sub/attachments/spec.pdf")
+            .await
+            .as_deref(),
+        Some(&b"spec"[..])
+    );
+    // As the Markdown folder moves a note: nothing goes along.
+    let v = h.resolve("Home").await.unwrap();
+    let mut g = v.lock().await;
+    g.move_path("Work/Plan.md", "Plan.md", false).unwrap();
+    assert!(g.find("Work/attachments/plan.pdf").is_some());
 }

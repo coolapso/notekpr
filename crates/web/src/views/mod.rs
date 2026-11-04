@@ -1,4 +1,5 @@
 pub mod ask;
+pub mod attachment;
 pub mod auth;
 pub mod comments;
 pub mod dialogs;

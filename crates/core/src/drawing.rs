@@ -152,6 +152,14 @@ impl Drawing<'_> {
         self.doc.take_local_update()
     }
 
+    /// Its `files` entries (the pictures it shows), without the rest: what
+    /// [`scene`](Self::scene) has in `files`, for less.
+    pub fn files(&self) -> Props {
+        let (_, _, files) = self.roots();
+        let txn = self.doc.doc().transact();
+        props_of(&txn, &files)
+    }
+
     /// The whole drawing, elements in stacking order.
     pub fn scene(&self) -> Scene {
         let (elements, settings, files) = self.roots();

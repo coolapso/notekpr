@@ -39,6 +39,10 @@ a Mac). The [README](../README.md) has the short version.
   note's folder (`notes/Trip.md`'s to `notes/attachments/`), each under a
   name no other file of the vault has, so `![[photo.png]]` finds it here
   and in Obsidian.
+* Each file has its page: a picture, video or sound shown there (other
+  files download, PDFs open in a tab), *Used in* — the notes linking to it
+  or embedding it, the drawings showing it — and rename, move, download
+  and the trash. A file in the tree, or a link to one, opens it.
 * Callouts as GitHub and Obsidian write them: `> [!tip]`, `> [!warning] A
   title`, `> [!faq]-` for one that folds (`+` open). Types are
   case-insensitive — note, abstract, info, todo, tip, important, success,

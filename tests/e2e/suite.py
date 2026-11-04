@@ -487,8 +487,8 @@ def test_attachments(env):
         b.wait("return !!document.querySelector('.ed .w img[src^=\"blob:\"]')", 15, "image preview")
         check(True, "embedded image is decrypted and previewed inline")
         check("attachments" in b.js("return Array.from(document.querySelectorAll('.tree-item .name')).map(e=>e.textContent).join(' ')"), "attachment is filed under attachments/ in the tree")
-        # Opening attachments: raster images open in a new tab (noopener); anything that
-        # could run as a page of this origin (SVG, HTML) is downloaded instead.
+        # Anything that could run as a page of this origin (SVG, HTML) is
+        # never shown here nor opened in a tab: it is downloaded.
         catch_opening = """
             window.__opened = []; window.__downloads = [];
             window.open = (u, t, f) => { window.__opened.push([String(u), String(f)]); return null; };
@@ -502,16 +502,6 @@ def test_attachments(env):
             ed.dispatchEvent(new ClipboardEvent('paste', {clipboardData: dt, bubbles: true, cancelable: true}));
         """)
         b.wait("return document.querySelector('.ed').textContent.includes('[[pic.svg]]')", 15, "svg embed inserted")
-        time.sleep(0.5)
-        if "dot.png" not in b.js("return Array.from(document.querySelectorAll('.tree-item .name')).map(e=>e.textContent).join(' ')"):
-            b.click_el(b.find_text(".tree-item", "attachments", 10))
-        b.click_el(b.find_text(".tree-item", "dot.png", 10))
-        b.wait("return window.__opened.length == 1", 15, "png opened")
-        opened = b.js("return window.__opened")[0]
-        check(opened[0].startswith("blob:") and "noopener" in opened[1], "a raster image opens in a new tab without an opener")
-        b.click_el(b.find_text(".tree-item", "pic.svg", 10))
-        b.wait("return window.__downloads.includes('pic.svg')", 15, "svg downloaded")
-        check(b.js("return window.__opened.length") == 1, "an SVG attachment is downloaded, not opened as a page")
         # A video, pasted on a line of its own, is embedded and plays where it is.
         with open(os.path.join(HERE, "../../scripts/demo-files/lisbon-sunset.webm"), "rb") as f:
             clip = base64.b64encode(f.read()).decode()
@@ -537,9 +527,27 @@ def test_attachments(env):
         b.chord(KEYS["ctrl"], "b")
         time.sleep(0.3)
         check(editor_text(b) == before, "keys pressed in a player don't edit the note")
+        # A file opens on its own page, in the app: what it shows, and the
+        # notes using it.
+        time.sleep(0.5)
+        if "dot.png" not in b.js("return Array.from(document.querySelectorAll('.tree-item .name')).map(e=>e.textContent).join(' ')"):
+            b.click_el(b.find_text(".tree-item", "attachments", 10))
+        b.click_el(b.find_text(".tree-item", "dot.png", 10))
+        b.wait("const i = document.querySelector('.attachment-page .att-preview img[src^=\"blob:\"]'); return !!i && i.naturalWidth > 0", 15, "the picture's page")
+        check(b.js("return document.querySelector('.attachment-page .note-title').value") == "dot.png", "a picture opens on a page of its own, with its name")
+        check(b.find_text(".att-used .list-row", "Photos", 10) is not None, "its page lists the notes using it")
+        b.click_el(b.find_text(".tree-item", "pic.svg", 10))
+        b.wait("return !!document.querySelector('.attachment-page .att-card')", 15, "the SVG's page")
+        check(not b.js("return !!document.querySelector('.att-preview img')"), "an SVG isn't shown on its page")
+        b.click_el(b.find_text(".att-card button", "Download", 5))
+        b.wait("return window.__downloads.includes('pic.svg')", 15, "svg downloaded")
+        check(b.js("return window.__opened.length") == 0, "an SVG attachment is downloaded, never opened as a page")
         b.click_el(b.find_text(".tree-item", "sunset.webm", 10))
-        b.wait("return window.__opened.length == 2", 15, "video opened")
-        check(b.js("return window.__opened[1][0]").startswith("blob:"), "a video attachment opens in a new tab, to play")
+        b.wait("const v = document.querySelector('.attachment-page video.att-view[src^=\"blob:\"]'); return !!v && v.readyState >= 1 && v.controls", 15, "the video's page")
+        check(True, "a video plays on its page")
+        b.click_el(b.find_text(".att-used .list-row", "Photos", 10))
+        b.wait("return document.querySelector('.note-title') && document.querySelector('.note-title').value === 'Photos' && !!document.querySelector('.ed')", 15, "back to the note")
+        check(True, "Used in opens the note")
         b.click(".seg button[title^='Reading']")
         b.wait("return !!document.querySelector('.reading img.att[src^=\"blob:\"]')", 15, "reading view image")
         check(True, "reading view shows the decrypted image")

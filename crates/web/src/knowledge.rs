@@ -285,6 +285,7 @@ pub fn graph(vault: &str) -> crate::graph::Graph {
     crate::graph::Graph::build(notes, &links)
 }
 
+#[derive(Clone, Debug, PartialEq)]
 pub struct Backlink {
     pub id: String,
     pub path: String,
@@ -324,6 +325,37 @@ pub fn backlinks(vault: &str, note: &str) -> Vec<Backlink> {
             .collect();
         out.push(Backlink { id, path, snippet });
     }
+    out.sort_by(|a, b| a.path.cmp(&b.path));
+    out
+}
+
+/// What uses the file `id`: the notes linking to it or embedding it (with
+/// the line that does), and the drawings showing it (no line).
+pub fn used_in(vault: &str, id: &str) -> Vec<Backlink> {
+    let mut out = backlinks(vault, id);
+    let drawings: Vec<(String, String)> = step(|c| {
+        let Some(r) = c.replicas.get(vault) else {
+            return vec![];
+        };
+        c.live_entries(vault)
+            .into_iter()
+            .filter(|e| e.kind == EntryKind::Drawing)
+            .filter(|e| {
+                r.notes.get(&e.id).is_some_and(|d| {
+                    d.drawing()
+                        .files()
+                        .values()
+                        .any(|f| notekpr_core::pictures::attachment_of(f) == Some(id))
+                })
+            })
+            .map(|e| (e.id, e.path))
+            .collect()
+    });
+    out.extend(drawings.into_iter().map(|(id, path)| Backlink {
+        id,
+        path,
+        snippet: String::new(),
+    }));
     out.sort_by(|a, b| a.path.cmp(&b.path));
     out
 }

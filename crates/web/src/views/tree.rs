@@ -275,11 +275,8 @@ pub fn Tree(vault: String) -> impl IntoView {
                         move |_| {
                             match kind {
                                 EntryKind::Folder => expanded.update(|s| { if !s.remove(&path) { s.insert(path.clone()); } }),
-                                EntryKind::Note | EntryKind::Drawing => if let Some(id) = &id { state::navigate(Route::Note(vault.clone(), id.clone())); },
-                                EntryKind::Attachment => if let Some(id) = &id {
-                                    let (v, i) = (vault.clone(), id.clone());
-                                    leptos::task::spawn_local(async move { actions::open_attachment(&v, &i).await });
-                                },
+                                // A file opens its page: what it shows, the notes using it.
+                                EntryKind::Note | EntryKind::Drawing | EntryKind::Attachment => if let Some(id) = &id { state::navigate(Route::Note(vault.clone(), id.clone())); },
                             }
                         }
                     };

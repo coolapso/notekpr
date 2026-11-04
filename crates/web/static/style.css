@@ -1013,6 +1013,21 @@ img.entry-pic { width: 16px; height: 16px; border-radius: 3px; object-fit: cover
 .nc-title .entry-icon { width: auto; margin-right: 6px; font-size: 1em; }
 .card-icon .entry-icon { width: auto; font-size: 22px; }
 
+/* A file's page: what it shows, and the notes using it. */
+.attachment-page .note-title { font-size: 26px; }
+.att-meta { margin: 0 0 14px; }
+.att-preview { margin-bottom: 28px; }
+.att-preview .att-view { display: block; max-width: 100%; max-height: 70vh; border-radius: 8px; }
+.att-preview video.att-view { background: #000; }
+.att-preview .att-audio { display: block; width: min(100%, 480px); }
+.att-card { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; padding: 16px; border: 1px solid var(--border); border-radius: 12px; }
+.att-card > .ic { width: 28px; height: 28px; color: var(--muted); flex: none; }
+.att-card .grow { display: flex; flex-direction: column; gap: 2px; min-width: 10rem; }
+.att-used h2 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); margin: 0 0 6px; }
+.att-used .list-row .grow { display: flex; flex-direction: column; gap: 2px; }
+.att-used .list-row > .ic { flex: none; color: var(--muted); }
+.att-used .list-row > .muted { max-width: 40%; }
+
 /* Graph view: the vault's notes and links on a canvas. */
 .graph-page { height: 100%; }
 .graph-page .page-head { flex-wrap: wrap; }

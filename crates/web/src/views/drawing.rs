@@ -2,7 +2,8 @@
 //! a drawing: which one is only known once the vault's index is there, so
 //! [`Document`] picks the view then (the note view never opens an editor on
 //! anything but a note). Another app's drawing file shows as a drawing,
-//! view-only ([`OtherAppsDrawing`]).
+//! view-only ([`OtherAppsDrawing`]); any other file, as a file
+//! ([`super::attachment::AttachmentView`]).
 
 use std::cell::Cell;
 use std::rc::Rc;
@@ -30,6 +31,7 @@ pub fn Document(vault: String, note: String) -> impl IntoView {
         Note,
         Drawing,
         OtherApps,
+        File,
     }
     let ui = ui();
     let (v, n) = (vault.clone(), note.clone());
@@ -41,6 +43,7 @@ pub fn Document(vault: String, note: String) -> impl IntoView {
         state::step(|c| match c.entry(&v, &n) {
             Some(e) if e.kind == EntryKind::Drawing => Shown::Drawing,
             Some(e) if crate::drawings::is_other_apps_entry(c, &v, &e) => Shown::OtherApps,
+            Some(e) if e.kind == EntryKind::Attachment => Shown::File,
             _ => Shown::Note,
         })
     });
@@ -49,6 +52,9 @@ pub fn Document(vault: String, note: String) -> impl IntoView {
         match shown.get() {
             Shown::Drawing => view! { <DrawingView vault=vault id=note/> }.into_any(),
             Shown::OtherApps => view! { <OtherAppsDrawing vault=vault id=note/> }.into_any(),
+            Shown::File => {
+                view! { <super::attachment::AttachmentView vault=vault id=note/> }.into_any()
+            }
             Shown::Note => view! { <super::note::NoteView vault=vault note=note/> }.into_any(),
         }
     }
@@ -85,19 +91,7 @@ fn OtherAppsDrawing(vault: String, id: String) -> impl IntoView {
                 if !file {
                     return view! { <super::note::NoteView vault=vault note=id/> }.into_any();
                 }
-                let name = state::step(|c| c.entry(&vault, &id))
-                    .map(|e| paths::file_name(&e.path).to_string())
-                    .unwrap_or_default();
-                view! {
-                    <div class="page">
-                        <header class="page-head"><h1 class="ellipsis">{name}</h1></header>
-                        <p class="muted empty">"This file doesn't hold a drawing notekpr can read."</p>
-                        <p class="empty"><button class="btn small" on:click=move |_| {
-                            let (v, i) = (vault.clone(), id.clone());
-                            leptos::task::spawn_local(async move { crate::actions::download_attachment(&v, &i).await });
-                        }><Icon name="download"/>" Download"</button></p>
-                    </div>
-                }.into_any()
+                view! { <super::attachment::AttachmentView vault=vault id=id/> }.into_any()
             }
         }
     }

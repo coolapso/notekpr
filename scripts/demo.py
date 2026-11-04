@@ -434,6 +434,7 @@ HOME = [
         - [ ] From Notion: export a page or database as HTML there (⋯ → Export, with subpages), then *Import notes* → *Import from Notion…* with its `.zip`. It shows what the export holds first; databases become folders of notes with a table of their rows, tasks checklists, and *Imported from Notion* lists what didn't come along. Import the same `.zip` again: what came already is left out
         - [ ] Code blocks in *Snippets*: a file name and highlighted lines (`title=… hl=…` after the language), line numbers, indentation guides, a copy button, `wrap=false` for long lines; Settings → Editor turns the numbers, guides and wrapping off
         - [ ] Drop or paste a picture into a note — or a video or a recording: it plays where it is, as the sunset in [[Lisbon 2026]] and the blackbird in [[Pests]] do. It goes to `attachments/` in the note's folder (*Garden*'s are in *Garden/attachments*)
+        - [ ] Open a file: *garden-layout.png* in *Garden/attachments* in the sidebar, or the link to it in [[Garden plan]]'s side panel. Its page shows it, and *Used in*: the *Garden beds* drawing, the [[Garden plan]] and a journal entry. Rename, move or download it from there
         - [ ] Give a note or folder an icon: *Set icon…* in its ⋯ menu in the sidebar (or the icon by a note's title) — every emoji, by group; search them (`tada`, `dog`), or paste any. Or a picture of your own (*Upload picture…*), as [[Lisbon 2026]] has. The ones you picked lately come first
         - [ ] *Quick notes* in the sidebar: yours alone, in no vault — the same whichever vault you're in. Move one to a vault (*Move to vault…*: it takes its first line as the name) or delete it for good; there's room for 20
         - [ ] Move a note, or a folder with everything in it, to another vault: *Move to vault…* in its menu in the file tree (a note's also in its ⋯ menu at the top); the originals go to the trash
@@ -825,7 +826,11 @@ HOME = [
 
         Last [[Tomatoes]] of the season picked green — they'll ripen on the
         windowsill. Fed the [[Sourdough starter]] and baked twice. Started
-        planning next year's [[Garden plan]]. #journal
+        planning next year's [[Garden plan]] from this year's layout:
+
+        ![[garden-layout.png]]
+
+        #journal
         """)),
     ("Journal/2026-10-15.md", None, note("""
         # Wednesday 15 October

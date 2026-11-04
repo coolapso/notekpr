@@ -2156,10 +2156,7 @@ pub fn open_wiki(vault: &str, target: &str, from_path: &str) {
     }
     if let Some(id) = knowledge::resolve_target(vault, name, from_path) {
         match state::step(|c| c.entry(vault, &id)).map(|e| e.kind) {
-            Some(EntryKind::Attachment) => {
-                let (v, i) = (vault.to_string(), id.clone());
-                leptos::task::spawn_local(async move { open_attachment(&v, &i).await });
-            }
+            Some(EntryKind::Attachment) => open_attachment(vault, &id),
             _ => {
                 if state::current_route().note() != Some((vault, id.as_str())) {
                     navigate(Route::Note(vault.to_string(), id.clone()));
@@ -2263,17 +2260,20 @@ pub async fn load_attachment(vault: &str, id: &str) -> Option<String> {
     url
 }
 
+/// Open an attachment's page: what it shows, and the notes using it
+/// (another app's drawing file shows as a drawing, view-only).
+pub fn open_attachment(vault: &str, id: &str) {
+    if state::current_route().note() != Some((vault, id)) {
+        navigate(Route::Note(vault.to_string(), id.to_string()));
+    }
+}
+
 /// Show an attachment in a new tab if the browser can display it safely
-/// (raster images, PDFs); download anything else. Another app's drawing
-/// file opens as a drawing (view-only).
-pub async fn open_attachment(vault: &str, id: &str) {
+/// (raster images, PDFs, videos, audio); download anything else.
+pub async fn open_in_tab(vault: &str, id: &str) {
     let name = state::step(|c| c.entry(vault, id))
         .map(|e| e.path)
         .unwrap_or_default();
-    if paths::is_other_apps_drawing(&name) {
-        navigate(Route::Note(vault.to_string(), id.to_string()));
-        return;
-    }
     if !util::opens_inline(&name) {
         download_attachment(vault, id).await;
         return;

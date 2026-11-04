@@ -330,6 +330,133 @@ pub async fn load_image(file: &web_sys::Blob) -> Option<web_sys::HtmlImageElemen
     (decoded && img.natural_width() > 0 && img.natural_height() > 0).then_some(img)
 }
 
+/// An image file to make a picture from, `side` pixels across its shorter
+/// side or fewer: an SVG redrawn at that size ([`sized_svg`]), any other as
+/// it is (a small one isn't blown up).
+pub async fn load_picture_source(
+    file: &web_sys::File,
+    side: u32,
+) -> Option<web_sys::HtmlImageElement> {
+    let svg = file.type_() == "image/svg+xml" || file.name().to_ascii_lowercase().ends_with(".svg");
+    if svg
+        && let Some(sized) = read_file(file)
+            .await
+            .and_then(|b| String::from_utf8(b).ok())
+            .and_then(|t| sized_svg(&t, side))
+    {
+        let parts = js_sys::Array::of1(&js_sys::Uint8Array::from(sized.as_bytes()).buffer());
+        let opts = web_sys::BlobPropertyBag::new();
+        opts.set_type("image/svg+xml");
+        let blob =
+            web_sys::Blob::new_with_buffer_source_sequence_and_options(&parts, &opts).ok()?;
+        return load_image(&blob).await;
+    }
+    load_image(file).await
+}
+
+/// `svg` with its root element `side` pixels across its shorter side, in
+/// its own proportions (its `viewBox`, else its width and height), and a
+/// `viewBox` so that the drawing scales with it. SVG files size themselves
+/// loosely (24 pixels, `1em`, or not at all, which browsers draw small or
+/// not at all into a picture); being drawings, they can be any size. `None`
+/// if it has no `<svg>` element.
+pub fn sized_svg(svg: &str, side: u32) -> Option<String> {
+    // The root element's start tag: after the prolog, comments and doctype.
+    let mut start = 0;
+    loop {
+        start += svg[start..].find('<')?;
+        let rest = &svg[start..];
+        let skip = if rest.starts_with("<!--") {
+            rest.find("-->")? + 3
+        } else if rest.starts_with("<?") {
+            rest.find("?>")? + 2
+        } else if rest.starts_with("<!") {
+            rest.find('>')? + 1
+        } else {
+            break;
+        };
+        start += skip;
+    }
+    let is_svg = svg[start..]
+        .strip_prefix("<svg")
+        .and_then(|r| r.chars().next())
+        .is_some_and(|c| c.is_whitespace() || c == '>' || c == '/');
+    if !is_svg {
+        return None;
+    }
+    let mut quote = None;
+    let end = start
+        + svg[start..]
+            .char_indices()
+            .find_map(|(i, c)| match (quote, c) {
+                (None, '"' | '\'') => {
+                    quote = Some(c);
+                    None
+                }
+                (Some(q), c) if c == q => {
+                    quote = None;
+                    None
+                }
+                (None, '>') => Some(i),
+                _ => None,
+            })?;
+    let inner = svg[start + 4..end].trim_end();
+    let (inner, closed) = match inner.strip_suffix('/') {
+        Some(i) => (i, "/>"),
+        None => (inner, ">"),
+    };
+    // Its attributes, as written.
+    let mut attrs: Vec<(&str, &str)> = vec![];
+    let mut rest = inner;
+    loop {
+        rest = rest.trim_start();
+        let Some(eq) = rest.find('=') else { break };
+        let name = rest[..eq].trim();
+        let after = rest[eq + 1..].trim_start();
+        let q = after.chars().next()?;
+        if q != '"' && q != '\'' {
+            return None;
+        }
+        let close = after[1..].find(q)?;
+        attrs.push((name, &after[1..1 + close]));
+        rest = &after[close + 2..];
+    }
+    let get = |n: &str| attrs.iter().find(|(k, _)| *k == n).map(|(_, v)| *v);
+    let px = |v: &str| -> Option<f64> {
+        let v = v.trim();
+        let n: f64 = v.strip_suffix("px").unwrap_or(v).trim().parse().ok()?;
+        (n > 0.0).then_some(n)
+    };
+    let view_box = get("viewBox").and_then(|v| {
+        let n: Vec<f64> = v
+            .split(|c: char| c.is_whitespace() || c == ',')
+            .filter(|s| !s.is_empty())
+            .map(|s| s.parse().ok())
+            .collect::<Option<_>>()?;
+        (n.len() == 4 && n[2] > 0.0 && n[3] > 0.0).then(|| (n[2], n[3]))
+    });
+    let own = get("width").and_then(px).zip(get("height").and_then(px));
+    let (w, h) = view_box.or(own).unwrap_or((1.0, 1.0));
+    let scale = f64::from(side) / w.min(h);
+    let mut tag = String::from("<svg");
+    for (k, v) in &attrs {
+        if *k != "width" && *k != "height" {
+            tag.push_str(&format!(" {k}=\"{v}\""));
+        }
+    }
+    if view_box.is_none()
+        && let Some((w, h)) = own
+    {
+        tag.push_str(&format!(" viewBox=\"0 0 {w} {h}\""));
+    }
+    tag.push_str(&format!(
+        " width=\"{}\" height=\"{}\"{closed}",
+        (w * scale).round(),
+        (h * scale).round()
+    ));
+    Some(format!("{}{tag}{}", &svg[..start], &svg[end + 1..]))
+}
+
 /// The middle square of `img`, `side` pixels wide, encoded as `mime`
 /// (`quality` 0–1 for lossy types; `opaque` puts it on white, for types
 /// without transparency): `(type, bytes)`. Browsers that can't encode
@@ -375,6 +502,50 @@ pub fn encode_square(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn svgs_are_drawn_at_the_size_wanted() {
+        let at = |svg: &str| sized_svg(svg, 64).unwrap();
+        // Its own size, any unit or none: the viewBox's proportions.
+        assert_eq!(
+            at(
+                r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><path d="M1 1"/></svg>"#
+            ),
+            r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="64" height="64"><path d="M1 1"/></svg>"#
+        );
+        assert!(
+            at(r#"<svg width="1em" height="1em" viewBox="0 0 24 24"></svg>"#)
+                .contains(r#"width="64" height="64""#)
+        );
+        assert!(
+            at(r#"<svg viewBox="0,0,48,24"/>"#)
+                .ends_with(r#"viewBox="0,0,48,24" width="128" height="64"/>"#)
+        );
+        // Without a viewBox: one from its own size, so that it scales.
+        assert_eq!(
+            at(r#"<svg width="32px" height='16'><g/></svg>"#),
+            r#"<svg viewBox="0 0 32 16" width="128" height="64"><g/></svg>"#
+        );
+        // Neither: a square.
+        assert!(at("<svg><g/></svg>").starts_with(r#"<svg width="64" height="64">"#));
+        // After a prolog and a comment; a quoted ">" isn't the tag's end.
+        let s = at(
+            "<?xml version=\"1.0\"?>\n<!-- <svg> -->\n<svg data-x=\"a>b\" viewBox=\"0 0 10 10\">x</svg>",
+        );
+        assert!(
+            s.ends_with(
+                "<svg data-x=\"a>b\" viewBox=\"0 0 10 10\" width=\"64\" height=\"64\">x</svg>"
+            ),
+            "{s}"
+        );
+        assert_eq!(sized_svg("<svgx/>", 64), None);
+        assert_eq!(sized_svg("not an svg", 64), None);
+        assert_eq!(
+            sized_svg("<html><svg></svg></html>", 64),
+            None,
+            "not an SVG file"
+        );
+    }
 
     #[test]
     fn only_raster_images_pdfs_and_media_open_inline() {

@@ -200,7 +200,7 @@ pub async fn set_vault_picture_to(vault: &str, p: Picture) -> bool {
 /// The middle square of an image, at most `size` pixels, encoded again —
 /// WebP where the browser can — and smaller until it fits.
 pub async fn picture_from(file: &web_sys::File, size: PictureSize) -> Result<Picture, String> {
-    let img = util::load_image(file)
+    let img = util::load_picture_source(file, size.side)
         .await
         .ok_or("That file isn't an image this browser can open.")?;
     let largest = img.natural_width().min(img.natural_height()).min(size.side);

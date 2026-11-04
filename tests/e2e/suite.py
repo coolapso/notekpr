@@ -2336,6 +2336,22 @@ def test_entry_icons(env):
         check(row_icon(a, "Trip") is None and not row_pic(a, "Trip") and a.js("return !!document.querySelector('.note-title-row .note-icon.add')"),
               "the icon by the title opens the choice; Remove takes it away and the button to add one is back")
         b.wait("const r = " + row + "[0]; return !r.querySelector('.entry-icon')", 15, "removed for the member", "Trip")
+        # SVG files: drawn at the picture's full size, whatever size they
+        # give themselves (24 pixels, or only a viewBox, which browsers
+        # draw small) — the circle fills its picture as it fills the file.
+        for name, attrs in [("sized.svg", 'width="24" height="24" viewBox="0 0 24 24"'), ("loose.svg", 'viewBox="0 0 24 24"')]:
+            svg = os.path.join(env.data, name)
+            with open(svg, "w") as f:
+                f.write(f'<svg xmlns="http://www.w3.org/2000/svg" {attrs}><circle cx="12" cy="12" r="11" fill="red"/></svg>')
+            a.click(".note-title-row .note-icon")
+            a.find(".modal .icon-pick", 5)
+            a.type(".modal .picture-input", svg)
+            a.wait("return !document.querySelector('.modal')", 10, "the dialog closes")
+            a.wait("const i = " + by_title + "; return !!i && i.complete && i.naturalWidth > 0", 10, "the picture by the title")
+            w, filled = a.js("const i = " + by_title + "; const c = document.createElement('canvas'); c.width = c.height = i.naturalWidth;"
+                             "const x = c.getContext('2d'); x.drawImage(i, 0, 0); const d = x.getImageData(0, 0, c.width, c.height).data;"
+                             "let n = 0; for (let k = 3; k < d.length; k += 4) if (d[k] > 128) n++; return [i.naturalWidth, n / (c.width * c.height)]")
+            check(w == 64 and filled > 0.6, f"an SVG ({name}) becomes a 64 px picture its drawing fills ({w} px, {filled:.2f} filled)")
         check(not severe_logs(a, b), "no browser errors")
     finally:
         a.close()

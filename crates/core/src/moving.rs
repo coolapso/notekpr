@@ -16,7 +16,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use notekpr_draw::scene::Scene;
 
-use crate::doc::{Entry, EntryKind};
+use crate::doc::{Entry, EntryKind, Picture};
 use crate::engine::VaultReplica;
 use crate::markdown;
 use crate::paths::{self, PathError};
@@ -91,6 +91,8 @@ pub struct Copy {
     /// A drawing's content.
     pub drawing: Option<Scene>,
     pub icon: Option<String>,
+    /// Or its picture.
+    pub picture: Option<Picture>,
     /// Its place among its siblings, when they came along.
     pub order: Option<String>,
 }
@@ -446,6 +448,7 @@ impl Plan {
                 text: text_there(i, path),
                 drawing: self.drawings.get(&i.entry.id).cloned(),
                 icon: i.entry.icon.clone(),
+                picture: i.entry.picture.clone(),
                 // Among new siblings it has no place yet.
                 order: match i.place {
                     Place::Within(_) => i.entry.order.clone(),
@@ -658,7 +661,8 @@ mod tests {
             ("o", "Other.md", N, "![[photo.png]]"),
             ("q", "Projects/unlinked.png", A, ""),
         ]);
-        from.index.set_icon("n", Some("📌"));
+        let pin = Picture::new("image/png", vec![1, 2, 3], Picture::ENTRY).unwrap();
+        from.index.set_picture("n", &pin);
         let p = plan(&from, &What::Note("n".into())).unwrap();
         assert!(!p.is_folder());
         assert_eq!(
@@ -679,7 +683,7 @@ mod tests {
         );
         let n = &placed.copies[1];
         assert_eq!(n.text, "![[photo 2.png]] [[Other]]");
-        assert_eq!(n.icon.as_deref(), Some("📌"));
+        assert_eq!((n.icon.as_deref(), n.picture.as_ref()), (None, Some(&pin)));
         assert!(matches!(
             p.place(&to, "", "a/b"),
             Err(PathError::BadSegment(_))

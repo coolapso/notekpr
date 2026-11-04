@@ -369,14 +369,8 @@ pub fn publish_vaults(c: &Core) {
                     icon: meta.and_then(|m| m.icon.clone()),
                     picture: meta
                         .and_then(|m| m.picture.as_ref())
-                        .filter(|p| p.is_valid())
-                        .map(|p| {
-                            format!(
-                                "data:{};base64,{}",
-                                p.mime,
-                                notekpr_core::b64::encode(&p.data)
-                            )
-                        }),
+                        .filter(|p| p.fits(notekpr_core::doc::Picture::VAULT))
+                        .map(|p| p.data_url()),
                     role: i.role.clone(),
                     shared: i.member_count > 1,
                     owners: c.owner_count(&i.id),

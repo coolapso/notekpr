@@ -447,6 +447,10 @@ pub struct Entry {
     /// A note's or folder's icon, usually an emoji ([`clean_icon`]).
     #[serde(default)]
     pub icon: Option<String>,
+    /// Or a picture as its icon ([`Picture::ENTRY`]). It takes the icon's
+    /// place in the index, so an entry has one or the other.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub picture: Option<Picture>,
     /// Its place among its siblings when put there by hand
     /// ([`order`](crate::order)).
     #[serde(default)]
@@ -465,6 +469,121 @@ pub fn clean_icon(icon: &str) -> std::result::Result<Option<String>, String> {
         return Err("an icon is one emoji or a few characters".into());
     }
     Ok((!icon.is_empty()).then_some(icon))
+}
+
+/// A small picture as an icon, of a vault ([`Picture::VAULT`]) or of a note
+/// or folder ([`Picture::ENTRY`]): a raster image clients make from what was
+/// chosen — a square, encoded again, so it is never the original file.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Picture {
+    pub mime: String,
+    #[serde(with = "crate::b64")]
+    pub data: Vec<u8>,
+}
+
+/// How large a [`Picture`] may be.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PictureSize {
+    /// Its side in pixels: apps make it no larger.
+    pub side: u32,
+    /// Its encoded size, which everyone checks.
+    pub bytes: usize,
+}
+
+impl Picture {
+    /// A vault's, in its metadata (which the server keeps under 16 KiB).
+    pub const VAULT: PictureSize = PictureSize {
+        side: 128,
+        bytes: 8 * 1024,
+    };
+    /// A note's or folder's, in the vault's index with its entry: every
+    /// member's app holds the whole index, so these stay small.
+    pub const ENTRY: PictureSize = PictureSize {
+        side: 64,
+        bytes: 4 * 1024,
+    };
+    /// Raster types only.
+    pub const TYPES: [&'static str; 3] = ["image/webp", "image/png", "image/jpeg"];
+
+    pub fn new(mime: &str, data: Vec<u8>, size: PictureSize) -> std::result::Result<Self, String> {
+        let p = Picture {
+            mime: mime.to_string(),
+            data,
+        };
+        if !p.fits(size) {
+            return Err(format!(
+                "a picture must be a WebP, PNG or JPEG image of at most {} KiB",
+                size.bytes / 1024
+            ));
+        }
+        Ok(p)
+    }
+
+    /// Checked before showing one too: whoever set it chose what is stored.
+    pub fn fits(&self, size: PictureSize) -> bool {
+        Self::TYPES.contains(&self.mime.as_str())
+            && !self.data.is_empty()
+            && self.data.len() <= size.bytes
+    }
+
+    /// The type of an image file by its first bytes, if it is one of
+    /// [`TYPES`](Self::TYPES).
+    pub fn sniff(data: &[u8]) -> Option<&'static str> {
+        if data.starts_with(b"\x89PNG\r\n\x1a\n") {
+            Some("image/png")
+        } else if data.starts_with(&[0xff, 0xd8, 0xff]) {
+            Some("image/jpeg")
+        } else if data.len() >= 12 && &data[..4] == b"RIFF" && &data[8..12] == b"WEBP" {
+            Some("image/webp")
+        } else {
+            None
+        }
+    }
+
+    /// As a `data:` URL, to show it.
+    pub fn data_url(&self) -> String {
+        format!(
+            "data:{};base64,{}",
+            self.mime,
+            crate::b64::encode(&self.data)
+        )
+    }
+
+    /// A short name for it, the same on every device: the same picture
+    /// given to two entries has the same one.
+    pub fn id(&self) -> String {
+        use sha2::Digest;
+        let mut h = sha2::Sha256::new();
+        h.update(self.mime.as_bytes());
+        h.update([0]);
+        h.update(&self.data);
+        h.finalize()[..8]
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect()
+    }
+
+    /// As an entry's `icon` holds it: a map (an icon that is text is a
+    /// string).
+    fn to_any(&self) -> Any {
+        Any::Map(Arc::new(HashMap::from([
+            ("mime".to_string(), Any::from(self.mime.as_str())),
+            (
+                "data".to_string(),
+                Any::Buffer(Arc::from(self.data.as_slice())),
+            ),
+        ])))
+    }
+
+    /// One an entry's `icon` holds, if it is a valid one.
+    fn from_any(a: &Any) -> Option<Self> {
+        let Any::Map(m) = a else { return None };
+        let (Some(Any::String(mime)), Some(Any::Buffer(data))) = (m.get("mime"), m.get("data"))
+        else {
+            return None;
+        };
+        Picture::new(mime, data.to_vec(), Picture::ENTRY).ok()
+    }
 }
 
 impl Entry {
@@ -584,6 +703,10 @@ impl IndexDoc {
             mime: any_str(m.get(txn, "mime")),
             // Anyone who can write sets it: only a valid one is shown.
             icon: any_str(m.get(txn, "icon")).and_then(|i| clean_icon(&i).ok().flatten()),
+            picture: match m.get(txn, "icon") {
+                Some(Out::Any(a)) => Picture::from_any(&a),
+                _ => None,
+            },
             order: any_str(m.get(txn, "order")).filter(|k| order::valid_key(k)),
         })
     }
@@ -834,7 +957,8 @@ impl IndexDoc {
     }
 
     /// Set an entry's icon (cleaned with [`clean_icon`] first), or remove it
-    /// with `None`. Not a change of its content: `modified` stays.
+    /// with `None`; either replaces a picture. Not a change of its content:
+    /// `modified` stays.
     pub fn set_icon(&self, id: &str, icon: Option<&str>) -> Option<Vec<u8>> {
         self.mutate(|txn| {
             if let Some(m) = self.entry_map(txn, id) {
@@ -846,6 +970,17 @@ impl IndexDoc {
                         m.remove(txn, "icon");
                     }
                 }
+            }
+        })
+    }
+
+    /// Give an entry a picture as its icon. It takes the icon's place, so
+    /// it replaces an icon, and setting or removing an icon replaces it —
+    /// also in apps from before pictures, which show none.
+    pub fn set_picture(&self, id: &str, picture: &Picture) -> Option<Vec<u8>> {
+        self.mutate(|txn| {
+            if let Some(m) = self.entry_map(txn, id) {
+                m.try_update(txn, "icon", picture.to_any());
             }
         })
     }
@@ -1150,6 +1285,113 @@ mod tests {
         assert_eq!(clean_icon(" 📁\n").unwrap().as_deref(), Some("📁"));
         assert_eq!(clean_icon("  ").unwrap(), None);
         assert!(clean_icon(&"x".repeat(MAX_ICON_CHARS + 1)).is_err());
+    }
+
+    fn picture(byte: u8) -> Picture {
+        Picture::new("image/webp", vec![byte; 300], Picture::ENTRY).unwrap()
+    }
+
+    /// What an app from before pictures reads of an entry's icon.
+    fn old_apps_icon(d: &IndexDoc, id: &str) -> Option<String> {
+        let txn = d.doc.transact();
+        match d.files.get(&txn, id)? {
+            Out::YMap(m) => any_str(m.get(&txn, "icon")),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn entry_pictures() {
+        let a = IndexDoc::new();
+        let u = a.create("n", "Trip.md", EntryKind::Note, 5).unwrap();
+        let b = IndexDoc::from_updates([u.as_slice()]).unwrap();
+        a.set_icon("n", Some("🏖️"));
+        // A picture takes the icon's place, and syncs like it.
+        let u = a.set_picture("n", &picture(1)).unwrap();
+        b.apply_update(&a.encode_state()).unwrap();
+        let e = b.get("n").unwrap();
+        assert_eq!((e.icon, e.picture, e.modified), (None, Some(picture(1)), 5));
+        assert_eq!(old_apps_icon(&b, "n"), None, "older apps show none");
+        // The same picture again is no change.
+        assert_eq!(a.set_picture("n", &picture(1)), None);
+        assert!(!u.is_empty());
+        // An icon replaces it — also one set by an older app — and so does
+        // removing the icon.
+        let u = b.set_icon("n", Some("🌱")).unwrap();
+        a.apply_update(&u).unwrap();
+        let e = a.get("n").unwrap();
+        assert_eq!((e.icon.as_deref(), e.picture), (Some("🌱"), None));
+        a.set_picture("n", &picture(2));
+        let u = a.set_icon("n", None).unwrap();
+        b.apply_update(&a.encode_state()).unwrap();
+        assert!(!u.is_empty());
+        let e = b.get("n").unwrap();
+        assert_eq!((e.icon, e.picture), (None, None));
+
+        // Set at once on two devices: both end up with the same one.
+        a.set_icon("n", Some("🧭"));
+        b.set_picture("n", &picture(3));
+        let (sa, sb) = (a.encode_state(), b.encode_state());
+        a.apply_update(&sb).unwrap();
+        b.apply_update(&sa).unwrap();
+        let (ea, eb) = (a.get("n").unwrap(), b.get("n").unwrap());
+        assert_eq!((&ea.icon, &ea.picture), (&eb.icon, &eb.picture));
+        assert!(
+            ea.icon.is_some() != ea.picture.is_some(),
+            "one or the other"
+        );
+
+        // Snapshots keep them.
+        let c = IndexDoc::from_updates([a.encode_state().as_slice()]).unwrap();
+        assert_eq!(c.get("n").unwrap().picture, ea.picture);
+    }
+
+    #[test]
+    fn only_valid_pictures_show() {
+        let a = IndexDoc::new();
+        a.create("n", "Trip.md", EntryKind::Note, 5);
+        let set = |v: Any| {
+            a.mutate(|txn| {
+                let m = a.entry_map(txn, "n").unwrap();
+                m.try_update(txn, "icon", v);
+            });
+            a.get("n").unwrap()
+        };
+        let map = |mime: &str, data: Any| {
+            Any::Map(Arc::new(HashMap::from([
+                ("mime".to_string(), Any::from(mime)),
+                ("data".to_string(), data),
+            ])))
+        };
+        let bytes = |n: usize| Any::Buffer(Arc::from(vec![1u8; n].as_slice()));
+        let ok = set(map("image/png", bytes(Picture::ENTRY.bytes)));
+        assert_eq!(ok.picture.map(|p| p.data.len()), Some(Picture::ENTRY.bytes));
+        for bad in [
+            map("image/png", bytes(Picture::ENTRY.bytes + 1)),
+            map("image/svg+xml", bytes(10)),
+            map("image/png", bytes(0)),
+            map("image/png", Any::from("AQID")),
+            Any::from(12.0),
+        ] {
+            let e = set(bad);
+            assert_eq!((e.icon, e.picture), (None, None));
+        }
+    }
+
+    #[test]
+    fn pictures_are_told_apart_and_by_their_type() {
+        assert_eq!(picture(1).id(), picture(1).id());
+        assert_ne!(picture(1).id(), picture(2).id());
+        let mut png = picture(1);
+        png.mime = "image/png".into();
+        assert_ne!(png.id(), picture(1).id());
+        assert_eq!(png.id().len(), 16);
+        assert!(png.data_url().starts_with("data:image/png;base64,AQEB"));
+        assert_eq!(Picture::sniff(b"\x89PNG\r\n\x1a\n...."), Some("image/png"));
+        assert_eq!(Picture::sniff(b"\xff\xd8\xff\xe0"), Some("image/jpeg"));
+        assert_eq!(Picture::sniff(b"RIFF\0\0\0\0WEBPVP8 "), Some("image/webp"));
+        assert_eq!(Picture::sniff(b"<svg"), None);
+        assert_eq!(Picture::sniff(b"GIF89a"), None);
     }
 
     #[test]

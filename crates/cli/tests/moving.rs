@@ -10,7 +10,7 @@ use notekpr_cli::cli::Cli;
 use notekpr_cli::commands;
 use notekpr_cli::hub::Hub;
 use notekpr_cli::ops;
-use notekpr_core::doc::EntryKind;
+use notekpr_core::doc::{EntryKind, Picture};
 use notekpr_core::protocol::{InstanceSettingsUpdate, Limit};
 
 async fn run(srv: &TestServer, who: &str, args: &[&str]) -> anyhow::Result<()> {
@@ -56,6 +56,15 @@ async fn a_folder_moves_to_another_vault_with_everything_in_it() {
             .await
             .unwrap();
     }
+    let pic = Picture::new(
+        "image/webp",
+        b"RIFF\0\0\0\0WEBPVP8 ".to_vec(),
+        Picture::ENTRY,
+    )
+    .unwrap();
+    ops::set_picture(&h, "Home", "Projects/Roadmap.md", &pic)
+        .await
+        .unwrap();
     drop(h);
     run(&srv, "alice", &["mkdir", "Home", "Projects/Empty"])
         .await
@@ -117,6 +126,11 @@ async fn a_folder_moves_to_another_vault_with_everything_in_it() {
             g.paths()["Archive/Projects 2/Garden"].icon.as_deref(),
             Some("🌱"),
             "with their icons"
+        );
+        assert_eq!(
+            g.paths()["Archive/Projects 2/Roadmap.md"].picture,
+            Some(pic),
+            "and pictures"
         );
         assert!(g.find("Archive/Projects/Old.md").is_some());
     }

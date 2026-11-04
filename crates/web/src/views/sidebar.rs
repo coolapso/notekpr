@@ -246,7 +246,12 @@ fn Favorites() -> impl IntoView {
                 .iter()
                 .filter_map(|(v, n)| {
                     let e = c.entry(v, n)?;
-                    Some((v.clone(), n.clone(), e.title().to_string(), e.icon))
+                    Some((
+                        v.clone(),
+                        n.clone(),
+                        e.title().to_string(),
+                        state::EntryIcon::of(&e),
+                    ))
                 })
                 .collect::<Vec<_>>()
         })
@@ -278,7 +283,12 @@ fn Recent(vault: Memo<Option<String>>) -> impl IntoView {
                 .filter(|(v, _)| cur.as_ref().is_none_or(|x| x == v))
                 .filter_map(|(v, n)| {
                     let e = c.entry(v, n)?;
-                    Some((v.clone(), n.clone(), e.title().to_string(), e.icon))
+                    Some((
+                        v.clone(),
+                        n.clone(),
+                        e.title().to_string(),
+                        state::EntryIcon::of(&e),
+                    ))
                 })
                 .take(5)
                 .collect::<Vec<_>>()

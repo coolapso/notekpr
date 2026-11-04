@@ -390,6 +390,8 @@ pub struct SharedNoteView {
     pub info: SharedNote,
     pub title: String,
     pub icon: Option<String>,
+    /// Its icon is a picture.
+    pub picture: bool,
 }
 
 /// Notes shared with the signed-in user individually.
@@ -397,18 +399,20 @@ pub async fn shared_with_me(session: &Session) -> Result<Vec<SharedNoteView>> {
     let list: Vec<SharedNote> = session.api.get("/shares").await?;
     let mut out = Vec::with_capacity(list.len());
     for info in list {
-        let (title, icon) = match recipient_ring(session, &info).await {
-            Ok((ring, _)) => match info
+        let meta = match recipient_ring(session, &info).await {
+            Ok((ring, _)) => info
                 .encrypted_meta
                 .as_ref()
                 .and_then(|m| ObjectMeta::decrypt(&ring, &info.object_id, m).ok())
-            {
-                Some(m) => (m.title, m.icon),
-                None => ("(untitled)".into(), None),
-            },
-            Err(_) => ("(key not available yet)".into(), None),
+                .unwrap_or_else(|| ObjectMeta::titled("(untitled)")),
+            Err(_) => ObjectMeta::titled("(key not available yet)"),
         };
-        out.push(SharedNoteView { info, title, icon });
+        out.push(SharedNoteView {
+            info,
+            title: meta.title,
+            icon: meta.icon,
+            picture: meta.picture.is_some(),
+        });
     }
     Ok(out)
 }

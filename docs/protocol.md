@@ -51,8 +51,14 @@ probed.
 
 Each vault has exactly one **index object** (`object_id = "index"`), a CRDT map
 from entry id to `{path, kind, created, modified, trashed?, size?, mime?, icon?, order?}`
-(`icon`: a note's or folder's emoji, at most 16 characters; longer ones are
-not shown. `order`: its place among the entries of its folder when put there
+(`icon`: a note's or folder's emoji, a string of at most 16 characters
+(longer ones are not shown), or a picture in its place: a map `{mime, data}`
+with `mime` one of `image/webp`, `image/png`, `image/jpeg` and `data` the
+image as a binary (a yrs buffer) of at most 4 KiB, which apps make a square
+of at most 64 px; others are not shown. Being one value, an icon and a
+picture replace each other and merge like any other value: setting either at
+once on two devices leaves one. Apps from before pictures show none and
+replace it as they do an icon. `order`: its place among the entries of its folder when put there
 by hand, a string of base-62 digits `0-9A-Za-z` compared bytewise, not ending
 in `0`, at most 32 long; others are ignored. Folders come first, then entries
 with an `order` by it, then the rest A–Z; equal keys sort A–Z. Clients drop
@@ -108,7 +114,8 @@ Defined in `crates/core/src/crypto.rs` and `keys.rs`.
   is wrapped for vault members under the current vault key (purpose `DocKey`,
   context `vault_id, object_id, epoch`) and for recipients with HPKE (scope
   `vault_id/object_id`). The note's title and icon for recipients are
-  encrypted under it (purpose `ObjectMeta`: `{title, icon?}` JSON). The vault index and attachments stay under the vault
+  encrypted under it (purpose `ObjectMeta`: `{title, icon?, picture?}` JSON;
+  `picture`: `{mime, data}` with `data` base64, as in the index). The vault index and attachments stay under the vault
   key.
 
 ## 3. Authentication

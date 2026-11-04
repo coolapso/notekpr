@@ -12,6 +12,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
+use crate::doc::Picture;
 use crate::engine::VaultMeta;
 use crate::{paths, quick};
 
@@ -49,6 +50,10 @@ pub struct ExportedVault {
     /// Icons of its notes, files and folders, by path.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub icons: BTreeMap<String, String>,
+    /// Pictures as the icons of its notes, files and folders, by path
+    /// ([`Picture::ENTRY`]: imports leave out larger ones).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub pictures: BTreeMap<String, Picture>,
 }
 
 /// Folder names for vaults with these names, in order: the names, with what
@@ -213,6 +218,10 @@ mod tests {
                     folder: folder.to_string(),
                     meta: VaultMeta::named(name),
                     icons: BTreeMap::from([("Plan.md".to_string(), "📌".to_string())]),
+                    pictures: BTreeMap::from([(
+                        "Trips".to_string(),
+                        Picture::new("image/png", vec![1, 2], Picture::ENTRY).unwrap(),
+                    )]),
                 })
                 .collect(),
             quick_notes: quick.map(str::to_string),
@@ -272,6 +281,7 @@ mod tests {
         assert_eq!(u.vaults.len(), 2);
         assert_eq!(u.vaults[0].0.meta.name, "Family: ours");
         assert_eq!(u.vaults[0].0.icons["Plan.md"], "📌");
+        assert_eq!(u.vaults[0].0.pictures["Trips"].data, [1, 2]);
         let paths: Vec<&str> = u.vaults[0].1.iter().map(|(p, _)| p.as_str()).collect();
         assert_eq!(paths, ["Plan.md", "Trips/2026.md", "Empty/.keep"]);
         assert_eq!(u.vaults[1].1.len(), 1);

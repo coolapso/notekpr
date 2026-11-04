@@ -6,7 +6,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use notekpr_core::doc::{Entry, EntryKind};
+use notekpr_core::doc::{Entry, EntryKind, Picture};
 use notekpr_core::moving::{self, Unmovable, What};
 use notekpr_core::protocol::{INDEX_OBJECT_ID, Limit, PurgedItem, Snapshot, SnapshotInfo};
 use notekpr_core::{markdown, paths, quick, search};
@@ -61,6 +61,9 @@ pub struct DocInfo {
     /// Its icon (an emoji), if it has one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub icon: Option<String>,
+    /// Its icon is a picture.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub picture: bool,
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -133,6 +136,7 @@ fn info(vault_id: &str, path: &str, e: &Entry, tags: Vec<String>) -> DocInfo {
         size: e.size.unwrap_or(0),
         mime: e.mime.clone(),
         icon: e.icon.clone(),
+        picture: e.picture.is_some(),
     }
 }
 
@@ -416,6 +420,26 @@ pub async fn set_icon(
     path: &str,
     icon: Option<&str>,
 ) -> OpResult<(String, String)> {
+    change_icon(hub, vref, path, |g| g.set_icon(path, icon)).await
+}
+
+/// Give a document or folder a picture as its icon. Returns the vault's and
+/// the entry's ids.
+pub async fn set_picture(
+    hub: &Hub,
+    vref: &str,
+    path: &str,
+    picture: &Picture,
+) -> OpResult<(String, String)> {
+    change_icon(hub, vref, path, |g| g.set_picture(path, picture)).await
+}
+
+async fn change_icon(
+    hub: &Hub,
+    vref: &str,
+    path: &str,
+    change: impl FnOnce(&mut Vault) -> anyhow::Result<String>,
+) -> OpResult<(String, String)> {
     let v = vault(hub, vref).await?;
     let (vault_id, id) = {
         let mut g = v.lock().await;
@@ -423,7 +447,7 @@ pub async fn set_icon(
         if g.find(path).is_none() && !g.is_folder(path) {
             return Err(OpError::NotFound(format!("no document or folder '{path}'")));
         }
-        let id = g.set_icon(path, icon).map_err(bad)?;
+        let id = change(&mut g).map_err(bad)?;
         g.save()?;
         (g.id().to_string(), id)
     };
@@ -1758,8 +1782,13 @@ pub async fn move_to_vault(
                     g.create_drawing(&c.path, &scene).map_err(bad)?.id
                 }
             };
-            g.copy_looks(&id, c.icon.as_deref(), c.order.as_deref())
-                .map_err(bad)?;
+            g.copy_looks(
+                &id,
+                c.icon.as_deref(),
+                c.picture.as_ref(),
+                c.order.as_deref(),
+            )
+            .map_err(bad)?;
             ids.insert(c.from.clone(), (c.kind, id));
         }
         g.save()?;

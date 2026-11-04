@@ -4,7 +4,7 @@ use super::focus_on_mount;
 use leptos::html;
 use leptos::prelude::Update;
 use leptos::prelude::*;
-use notekpr_core::doc::EntryKind;
+use notekpr_core::doc::{EntryKind, Picture};
 use notekpr_core::engine::PinStatus;
 use notekpr_core::protocol::*;
 
@@ -211,7 +211,7 @@ fn QuickSwitch() -> impl IntoView {
                         }
                         r.into_iter().enumerate().map(|(i, (vid, id, path, vname))| {
                             let open = open2.clone();
-                            let icon = step(|c| c.entry(&vid, &id)).and_then(|e| e.icon);
+                            let icon = step(|c| c.entry(&vid, &id)).as_ref().and_then(state::EntryIcon::of);
                             view! {
                                 <button class="palette-item" class:sel=move || sel.get() == i on:mouseenter=move |_| sel.set(i) on:click=move |_| open(i)>
                                     {super::entry_icon(icon, "file")}
@@ -842,18 +842,23 @@ fn VaultIconPicker(vault: String) -> impl IntoView {
             busy.set(false);
         });
     };
-    let upload = move |ev: leptos::ev::Event| {
-        let input: web_sys::HtmlInputElement = event_target(&ev);
-        let file = input.files().and_then(|l| l.get(0));
-        // The same file can be chosen again.
-        input.set_value("");
-        let Some(file) = file else { return };
+    let upload = move |file: web_sys::File| {
         if busy.get_untracked() {
             return;
         }
         busy.set(true);
         leptos::task::spawn_local(async move {
             actions::set_vault_picture(&vid.get_value(), file).await;
+            busy.set(false);
+        });
+    };
+    let recent = move |p: Picture| {
+        if busy.get_untracked() {
+            return;
+        }
+        busy.set(true);
+        leptos::task::spawn_local(async move {
+            actions::set_vault_picture_to(&vid.get_value(), p).await;
             busy.set(false);
         });
     };
@@ -872,16 +877,55 @@ fn VaultIconPicker(vault: String) -> impl IntoView {
         <div class="icon-pick">
             <div class="icon-now">{move || super::vault_icon(current.get().as_ref())}</div>
             <EmojiPicker chosen=chosen removable=removable on_pick=Callback::new(set)>
-                <label class="btn" class:disabled=move || busy.get()>
-                    <Icon name="image"/>" Upload picture…"
-                    <input type="file" class="vault-picture-input" accept="image/*" on:change=upload/>
-                </label>
+                <PictureChoice on_picture=Callback::new(recent) on_file=Callback::new(upload) busy=busy/>
             </EmojiPicker>
         </div>
     }
 }
 
-/// A note's or folder's icon.
+/// Pictures as an icon: the ones given to notes and folders lately, and a
+/// new one from an image file.
+#[component]
+fn PictureChoice(
+    on_picture: Callback<Picture>,
+    on_file: Callback<web_sys::File>,
+    #[prop(into)] busy: Signal<bool>,
+) -> impl IntoView {
+    let ui = ui();
+    let recent = Memo::new(move |_| {
+        ui.prefs_rev.track();
+        ui.tree_rev.track();
+        step(|c| state::recent_pictures(c))
+    });
+    let upload = move |ev: leptos::ev::Event| {
+        let input: web_sys::HtmlInputElement = event_target(&ev);
+        let file = input.files().and_then(|l| l.get(0));
+        // The same file can be chosen again.
+        input.set_value("");
+        if let Some(file) = file {
+            on_file.run(file);
+        }
+    };
+    view! {
+        <div class="picture-choice" role="group" aria-label="Pictures">
+            {move || recent.get().into_iter().map(|p| {
+                let src = p.data_url();
+                view! {
+                    <button type="button" class="emoji-btn pic-btn" title="Use this picture" aria-label="A recent picture"
+                        disabled=move || busy.get() on:click=move |_| on_picture.run(p.clone())>
+                        <img src=src alt=""/>
+                    </button>
+                }
+            }).collect_view()}
+            <label class="btn" class:disabled=move || busy.get()>
+                <Icon name="image"/>" Upload picture…"
+                <input type="file" class="picture-input" accept="image/*" on:change=upload/>
+            </label>
+        </div>
+    }
+}
+
+/// A note's or folder's icon: an emoji, or a picture.
 #[component]
 fn EntryIconDialog(vault: String, id: Option<String>, path: String, folder: bool) -> impl IntoView {
     let ui = ui();
@@ -895,7 +939,8 @@ fn EntryIconDialog(vault: String, id: Option<String>, path: String, folder: bool
         ui.tree_rev.get();
         let (v, id, _) = target.get_value();
         id.and_then(|id| step(|c| c.entry(&v, &id)))
-            .and_then(|e| e.icon)
+            .as_ref()
+            .and_then(state::EntryIcon::of)
     });
     let pick = move |icon: String| {
         let (v, id, path) = target.get_value();
@@ -903,15 +948,34 @@ fn EntryIconDialog(vault: String, id: Option<String>, path: String, folder: bool
             ui.modal.set(None);
         }
     };
+    let busy = RwSignal::new(false);
+    let use_picture = move |p: Picture| {
+        let (v, id, path) = target.get_value();
+        actions::set_entry_picture(&v, id.as_deref(), &path, &p);
+        ui.modal.set(None);
+    };
+    let upload = move |file: web_sys::File| {
+        if busy.get_untracked() {
+            return;
+        }
+        busy.set(true);
+        leptos::task::spawn_local(async move {
+            match actions::picture_from(&file, Picture::ENTRY).await {
+                Ok(p) => use_picture(p),
+                Err(e) => state::error(e),
+            }
+            busy.set(false);
+        });
+    };
     let fallback = if folder { "folder" } else { "file" };
     view! {
         <Dialog title=format!("Icon for “{name}”")>
             <div class="icon-pick">
-                <div class="icon-now">{move || match current.get() {
-                    Some(i) => view! { <span class="entry-icon">{i}</span> }.into_any(),
-                    None => view! { <Icon name=fallback/> }.into_any(),
-                }}</div>
-                <EmojiPicker chosen=current removable=Signal::derive(move || current.get().is_some()) on_pick=Callback::new(pick)/>
+                <div class="icon-now">{move || super::entry_icon(current.get(), fallback)}</div>
+                <EmojiPicker chosen=Signal::derive(move || current.get().and_then(|i| i.text().map(str::to_string)))
+                    removable=Signal::derive(move || current.get().is_some()) on_pick=Callback::new(pick)>
+                    <PictureChoice on_picture=Callback::new(use_picture) on_file=Callback::new(upload) busy=busy/>
+                </EmojiPicker>
             </div>
         </Dialog>
     }

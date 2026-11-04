@@ -255,6 +255,7 @@ mod tests {
             size: None,
             mime: None,
             icon: None,
+            picture: None,
             order: order.map(Into::into),
         }
     }

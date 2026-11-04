@@ -3043,6 +3043,7 @@ mod tests {
             trashed: None,
             purged: None,
             icon: None,
+            picture: None,
             order: None,
         };
         (id.to_string(), (path.to_string(), e))
@@ -3206,6 +3207,7 @@ mod path_properties {
             size: None,
             mime: None,
             icon: None,
+            picture: None,
             order: None,
         };
         (id.to_string(), (path.to_string(), e))

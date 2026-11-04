@@ -2060,12 +2060,12 @@ def test_vault_icons(env):
         text = os.path.join(env.data, "not-an-image.png")
         with open(text, "w") as f:
             f.write("hello")
-        a.type(".vault-picture-input", text)
+        a.type(".picture-input", text)
         a.find_text(".toast.error", "isn't an image", 10)
         check(a.js("return " + btn_icon) == "🦊", "a file that isn't an image is refused with a message")
         pic = os.path.join(env.data, "wide.png")
         png_file(pic, 300, 200)
-        a.type(".vault-picture-input", pic)
+        a.type(".picture-input", pic)
         a.wait("const i = document.querySelector('.vault-btn img.vault-pic'); return !!i && i.complete && i.naturalWidth > 0", 15, "the picture")
         w, h, src = a.js("const i = document.querySelector('.vault-btn img.vault-pic'); return [i.naturalWidth, i.naturalHeight, i.src.slice(0, 11)]")
         check(w == h == 128 and src == "data:image/", f"an uploaded image becomes a 128 px square picture ({w}×{h})")
@@ -2088,6 +2088,8 @@ def test_entry_icons(env):
     row = "Array.from(document.querySelectorAll('.tree-row')).filter(r => r.textContent.trim().endsWith(arguments[0]))"
     def row_icon(br, name):
         return br.js("const r = " + row + "[0]; return r ? (r.querySelector('.entry-icon') || {}).textContent || null : 'missing'", name)
+    def row_pic(br, name):
+        return br.js("const i = " + row + "[0].querySelector('img.entry-pic'); return !!i && i.complete && i.naturalWidth > 0", name)
     def set_icon(br, name, emoji):
         br.js(row + "[0].querySelector('.tree-more').click()", name)
         br.click_el(br.find_text(".tree-row .menu button", "Set icon", 5))
@@ -2141,6 +2143,32 @@ def test_entry_icons(env):
         set_icon(a, "Ideas", "💡")
         check(row_icon(a, "Ideas") == "💡" and a.js("return " + row + ".length", "Ideas") == 1,
               "so does a folder that only held notes, without showing twice")
+        # A picture: an uploaded image becomes a small square picture, shown
+        # where the emoji was — by the title, in the tree, for members too.
+        a.go(env.url.rstrip("/") + url)
+        a.find(".note-title-row .note-icon", 15)
+        a.click(".note-title-row .note-icon")
+        a.find(".modal .icon-pick", 5)
+        check(not a.js("return !!document.querySelector('.modal .pic-btn')"), "no recent pictures to offer yet")
+        pic = os.path.join(env.data, "trip.png")
+        png_file(pic, 300, 200)
+        a.type(".modal .picture-input", pic)
+        a.wait("return !document.querySelector('.modal')", 10, "the dialog closes")
+        by_title = "document.querySelector('.note-title-row .note-icon img.entry-pic')"
+        a.wait("const i = " + by_title + "; return !!i && i.complete && i.naturalWidth > 0", 10, "the picture by the title")
+        w, h = a.js("const i = " + by_title + "; return [i.naturalWidth, i.naturalHeight]")
+        check(w == h == 64, f"an uploaded image becomes a 64 px square picture as the note's icon ({w}×{h})")
+        check(row_pic(a, "Trip") and row_icon(a, "Trip") is None, "it shows in the tree instead of the emoji")
+        b.wait("const r = " + row + "[0]; return !!r.querySelector('img.entry-pic')", 15, "the member's tree", "Trip")
+        check(True, "members see the picture too")
+        # The folder: the picture given lately is offered again.
+        a.js(row + "[0].querySelector('.tree-more').click()", "Travel")
+        a.click_el(a.find_text(".tree-row .menu button", "Set icon", 5))
+        a.find(".modal .pic-btn", 5)
+        a.click(".modal .pic-btn")
+        a.wait("return !document.querySelector('.modal')", 5, "the dialog closes")
+        a.wait("return !!" + row + "[0].querySelector('img.entry-pic')", 5, "the folder's picture", "Travel")
+        check(row_icon(a, "Travel") is None, "a recent picture is offered again, for a folder too")
         # Clicking the icon by the title changes it; Remove takes it away.
         a.go(env.url.rstrip("/") + url)
         a.find(".note-title-row .note-icon", 15)
@@ -2148,7 +2176,7 @@ def test_entry_icons(env):
         a.find(".modal .icon-pick", 5)
         a.click(".modal .icon-remove")
         a.wait("return !document.querySelector('.modal') && !document.querySelector('.note-title-row .note-icon:not(.add)')", 5, "removed")
-        check(row_icon(a, "Trip") is None and a.js("return !!document.querySelector('.note-title-row .note-icon.add')"),
+        check(row_icon(a, "Trip") is None and not row_pic(a, "Trip") and a.js("return !!document.querySelector('.note-title-row .note-icon.add')"),
               "the icon by the title opens the choice; Remove takes it away and the button to add one is back")
         b.wait("const r = " + row + "[0]; return !r.querySelector('.entry-icon')", 15, "removed for the member", "Trip")
         check(not severe_logs(a, b), "no browser errors")

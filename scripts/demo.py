@@ -37,6 +37,7 @@ import socket
 import struct
 import subprocess
 import sys
+import tempfile
 import textwrap
 import io
 import math
@@ -352,6 +353,19 @@ def sunset():
     return png(480, 270, pixel)
 
 
+def sunset_icon():
+    """The sunset again, as a 64 px picture for an icon."""
+
+    def pixel(x, y):
+        if (x - 32) ** 2 + (y - 36) ** 2 < 14**2 and y < 38:
+            return (255, 214, 102)
+        if y < 38:
+            return (240, 130, 90) if y > 18 else (220, 110, 110)
+        return (30, 80, 140) if (x // 8 + y // 4) % 5 else (60, 110, 170)
+
+    return png(64, 64, pixel)
+
+
 def scan(seed):
     """A scanned letter: lines of text on grainy paper (the grain keeps it
     from compressing, as a real scan; three of them take over 1 MiB)."""
@@ -420,7 +434,7 @@ HOME = [
         - [ ] From Notion: export a page or database as HTML there (⋯ → Export, with subpages), then *Import notes* → *Import from Notion…* with its `.zip`. It shows what the export holds first; databases become folders of notes with a table of their rows, tasks checklists, and *Imported from Notion* lists what didn't come along. Import the same `.zip` again: what came already is left out
         - [ ] Code blocks in *Snippets*: a file name and highlighted lines (`title=… hl=…` after the language), line numbers, indentation guides, a copy button, `wrap=false` for long lines; Settings → Editor turns the numbers, guides and wrapping off
         - [ ] Drop or paste a picture into a note — or a video or a recording: it plays where it is, as the sunset in [[Lisbon 2026]] and the blackbird in [[Pests]] do
-        - [ ] Give a note or folder an icon: *Set icon…* in its ⋯ menu in the sidebar
+        - [ ] Give a note or folder an icon: *Set icon…* in its ⋯ menu in the sidebar — an emoji, or a picture of your own (*Upload picture…*), as [[Lisbon 2026]] has; the pictures you gave lately are offered again
         - [ ] *Quick notes* in the sidebar: yours alone, in no vault — the same whichever vault you're in. Move one to a vault (*Move to vault…*: it takes its first line as the name) or delete it for good; there's room for 20
         - [ ] Move a note, or a folder with everything in it, to another vault: *Move to vault…* in its menu in the file tree (a note's also in its ⋯ menu at the top); the originals go to the trash
         - [ ] *Vault settings* (⚙ next to a vault, or in the corner of its card in *All vaults*): its icon or a picture, *Export as Markdown (.zip)*, *Import notes*, the *Activity log*
@@ -1421,6 +1435,14 @@ class Cli:
     def icon(self, profile, vault, path, icon):
         self.run(profile, "-q", "icon", vault, path, icon)
 
+    def picture(self, profile, vault, path, data):
+        """Give a note or folder a picture as its icon (a small PNG)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            f = os.path.join(tmp, "icon.png")
+            with open(f, "wb") as out:
+                out.write(data)
+            self.run(profile, "-q", "icon", vault, path, "--picture", f)
+
 
 # What a demo's data directory holds; --fresh deletes only these.
 DEMO_FILES = ("demo.json", "server", "cli", "server.log", "recovery-keys.txt", "assistant.secret",
@@ -1519,6 +1541,8 @@ def seed(cli, url, data, server_bin):
     for folder, icon in [("Garden", "🌱"), ("Recipes", "🍳"), ("Travel", "✈️"),
                          ("Reading", "📚"), ("Journal", "📓"), ("Ideas", "💡")]:
         cli.icon(a, "Home", folder, icon)
+    # A picture as an icon, in place of its emoji.
+    cli.picture(a, "Home", "Travel/Lisbon 2026.md", sunset_icon())
     # A rename that rewrites the links pointing at it.
     cli.run(a, "-q", "mv", "--update-links", "Home", "Ideas/Rust.md", "Ideas/Learning Rust.md")
     # An order of her own: this note on top, the recipes' overview and plan first.

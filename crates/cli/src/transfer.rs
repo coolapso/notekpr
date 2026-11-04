@@ -15,7 +15,7 @@ use std::path::Path;
 use anyhow::{Context, Result, anyhow, bail};
 use notekpr_core::account_export::{self, ExportedVault, MANIFEST, Manifest};
 use notekpr_core::comments;
-use notekpr_core::doc::EntryKind;
+use notekpr_core::doc::{EntryKind, Picture};
 use notekpr_core::{paths, quick};
 
 use crate::fsutil;
@@ -81,11 +81,12 @@ pub async fn export(
 }
 
 /// One vault as exported: its files and empty folders (paths in the vault)
-/// and its entries' icons by path.
+/// and its entries' icons and pictures by path.
 struct Exported {
     files: Vec<(String, Vec<u8>)>,
     folders: Vec<String>,
     icons: BTreeMap<String, String>,
+    pictures: BTreeMap<String, Picture>,
 }
 
 /// Everything of a vault an export takes (`zip`: into a `.zip`, which
@@ -97,6 +98,7 @@ async fn exported(
     report: &mut TransferReport,
 ) -> Result<Exported> {
     let mut icons = BTreeMap::new();
+    let mut pictures = BTreeMap::new();
     // The names of the people who commented (asked first: no lock held).
     let commenters: Vec<String> = {
         let v = vault.lock().await;
@@ -130,6 +132,9 @@ async fn exported(
             }
             if let Some(i) = &e.icon {
                 icons.insert(p.clone(), i.clone());
+            }
+            if let Some(pic) = &e.picture {
+                pictures.insert(p.clone(), pic.clone());
             }
             items.push(match e.kind {
                 EntryKind::Note => {
@@ -197,6 +202,7 @@ async fn exported(
         files,
         folders,
         icons,
+        pictures,
     })
 }
 
@@ -355,13 +361,14 @@ pub async fn export_account(
     };
     for ((meta, v), folder) in chosen.into_iter().zip(folders) {
         let e = exported(hub, &v, zip, &mut report.totals).await?;
-        let icons = e.icons.clone();
+        let (icons, pictures) = (e.icons.clone(), e.pictures.clone());
         add(&folder, e);
         report.vaults.push(meta.name.clone());
         manifest.vaults.push(ExportedVault {
             folder,
             meta,
             icons,
+            pictures,
         });
     }
     if quick_notes && let Some(q) = quick {
@@ -816,16 +823,25 @@ pub async fn import_account(hub: &Hub, src: &Path, dry_run: bool) -> Result<Opti
             crate::manage::set_vault_looks(&hub.session, &v, meta).await?;
         }
         import_collected(hub, &v, c, None, false, false, &mut report.totals).await?;
-        if !exported.icons.is_empty() {
+        if !exported.icons.is_empty() || !exported.pictures.is_empty() {
             {
                 let mut g = v.lock().await;
+                let mut failed = Vec::new();
                 for (path, icon) in &exported.icons {
                     if let Err(e) = g.set_icon(path, Some(icon)) {
-                        report
-                            .totals
-                            .skipped
-                            .push((format!("{name}/{path}"), format!("icon: {e:#}")));
+                        failed.push((path, e));
                     }
+                }
+                for (path, p) in &exported.pictures {
+                    if let Err(e) = g.set_picture(path, p) {
+                        failed.push((path, e));
+                    }
+                }
+                for (path, e) in failed {
+                    report
+                        .totals
+                        .skipped
+                        .push((format!("{name}/{path}"), format!("icon: {e:#}")));
                 }
                 g.save()?;
             }

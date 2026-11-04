@@ -499,6 +499,132 @@ async fn ls_lines_names_up_with_and_without_icons() {
     );
 }
 
+/// A 1×1 PNG.
+const TINY_PNG: &[u8] = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR\0\0\0\x01\0\0\0\x01\x08\x06\0\0\0\x1f\x15\xc4\x89\0\0\0\nIDATx\x9cc\0\x01\0\0\x05\0\x01\r\n-\xb4\0\0\0\0IEND\xaeB`\x82";
+
+/// Pictures as icons: set from a small file, listed as `(picture)` (the
+/// names still lined up), seen by the people a note is shared with,
+/// replaced by an emoji; files too large or not pictures are refused.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn pictures_as_icons_from_the_command_line() {
+    let srv = start().await;
+    login(&srv, "alice").await;
+    login(&srv, "bob").await;
+    run(&srv, "alice", &["vault", "create", "Home"])
+        .await
+        .unwrap();
+    run(&srv, "alice", &["mkdir", "Home", "Garden"])
+        .await
+        .unwrap();
+    for note in ["Garden/Tomatoes.md", "Plain.md"] {
+        let (r, _) = ui::capture(
+            Some(b"water daily\n".to_vec()),
+            true,
+            run(&srv, "alice", &["write", "Home", note]),
+        )
+        .await;
+        r.unwrap();
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let file = |name: &str, data: &[u8]| {
+        let p = dir.path().join(name);
+        std::fs::write(&p, data).unwrap();
+        p.to_string_lossy().into_owned()
+    };
+    let png = file("tomato.png", TINY_PNG);
+    let big = file("big.png", &[TINY_PNG, &[0; 4096]].concat());
+    let text = file("not.png", b"hello");
+    for bad in [&big, &text] {
+        let e = run(&srv, "alice", &["icon", "Home", "Garden", "--picture", bad])
+            .await
+            .unwrap_err();
+        assert!(format!("{e:#}").contains("at most 4 KiB"), "{e:#}");
+    }
+    run(
+        &srv,
+        "alice",
+        &["icon", "Home", "Garden", "--picture", &png],
+    )
+    .await
+    .unwrap();
+    run(&srv, "alice", &["icon", "Home", "Plain.md", "✈️"])
+        .await
+        .unwrap();
+    run(
+        &srv,
+        "alice",
+        &[
+            "share-note",
+            "Home",
+            "Garden/Tomatoes",
+            "bob",
+            "--role",
+            "viewer",
+        ],
+    )
+    .await
+    .unwrap();
+    run(
+        &srv,
+        "alice",
+        &["icon", "Home", "Garden/Tomatoes.md", "--picture", &png],
+    )
+    .await
+    .unwrap();
+
+    let (r, out) = ui::capture(None, true, run(&srv, "alice", &["ls", "Home"])).await;
+    r.unwrap();
+    let line = |name: &str| out.stdout.lines().find(|l| l.contains(name)).unwrap();
+    assert!(
+        line("Garden/").contains("(picture) Garden/"),
+        "{}",
+        out.stdout
+    );
+    let col = |name: &str| ui::display_width(&line(name)[..line(name).find(name).unwrap()]);
+    assert_eq!(col("Garden/"), col("Plain.md"), "{}", out.stdout);
+    let (r, out) = ui::capture(
+        None,
+        true,
+        run(&srv, "alice", &["--json", "ls", "Home", "Garden"]),
+    )
+    .await;
+    r.unwrap();
+    let j: serde_json::Value = serde_json::from_str(&out.stdout).unwrap();
+    assert_eq!(j[0]["picture"], true, "{j}");
+    assert!(j[0].get("icon").is_none(), "{j}");
+
+    // The person the note is shared with sees it too.
+    let (r, out) = ui::capture(None, true, run(&srv, "bob", &["shared", "list"])).await;
+    r.unwrap();
+    assert!(out.stdout.contains("(picture) Tomatoes"), "{}", out.stdout);
+
+    // An emoji replaces it.
+    run(&srv, "alice", &["icon", "Home", "Garden", "🌱"])
+        .await
+        .unwrap();
+    let (r, out) = ui::capture(None, true, run(&srv, "alice", &["ls", "Home"])).await;
+    r.unwrap();
+    assert!(
+        out.stdout.contains("🌱 Garden/") && !out.stdout.contains("(picture) Garden"),
+        "{}",
+        out.stdout
+    );
+
+    // The vault's own picture.
+    run(&srv, "alice", &["vault", "icon", "Home", "--picture", &png])
+        .await
+        .unwrap();
+    let (r, out) = ui::capture(None, true, run(&srv, "alice", &["vault", "list"])).await;
+    r.unwrap();
+    assert!(out.stdout.contains("(picture) Home"), "{}", out.stdout);
+    run(&srv, "alice", &["vault", "icon", "Home", "🏡"])
+        .await
+        .unwrap();
+    let (r, out) = ui::capture(None, true, run(&srv, "alice", &["vault", "list"])).await;
+    r.unwrap();
+    assert!(out.stdout.contains("🏡 Home"), "{}", out.stdout);
+}
+
 /// `notekpr login` for the dev user `who`, with what it said.
 async fn login_cmd(srv: &TestServer, who: &str) -> ui::Captured {
     let args = ["login", "--server", &srv.url, "--dev-user", who];

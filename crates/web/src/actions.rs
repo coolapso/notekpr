@@ -7,8 +7,8 @@ use std::rc::Rc;
 
 use leptos::prelude::Update;
 use leptos::prelude::*;
-use notekpr_core::doc::{EntryKind, IndexDoc, NoteDoc};
-use notekpr_core::engine::{self, ObjectMeta, PinStatus, VaultMeta, VaultPicture, VaultReplica};
+use notekpr_core::doc::{EntryKind, IndexDoc, NoteDoc, Picture, PictureSize};
+use notekpr_core::engine::{self, ObjectMeta, PinStatus, VaultMeta, VaultReplica};
 use notekpr_core::memberlog::{LogBody, LogEntry};
 use notekpr_core::moving::{self, Unmovable, What};
 use notekpr_core::protocol::*;
@@ -179,14 +179,8 @@ pub async fn set_vault_icon(vault: &str, icon: &str) -> bool {
 
 /// A picture for the vault, made from an image file.
 pub async fn set_vault_picture(vault: &str, file: web_sys::File) -> bool {
-    match vault_picture_from(&file).await {
-        Ok(p) => {
-            update_vault_meta(vault, |m| {
-                m.picture = Some(p);
-                Ok(())
-            })
-            .await
-        }
+    match picture_from(&file, Picture::VAULT).await {
+        Ok(p) => set_vault_picture_to(vault, p).await,
         Err(e) => {
             error(e);
             false
@@ -194,23 +188,33 @@ pub async fn set_vault_picture(vault: &str, file: web_sys::File) -> bool {
     }
 }
 
-/// The middle square of an image, at most [`VaultPicture::MAX_SIDE`] pixels,
-/// encoded again — WebP where the browser can — and smaller until it fits.
-async fn vault_picture_from(file: &web_sys::File) -> Result<VaultPicture, String> {
+/// A picture for the vault, one already made (a recent one).
+pub async fn set_vault_picture_to(vault: &str, p: Picture) -> bool {
+    update_vault_meta(vault, |m| {
+        m.picture = Some(p);
+        Ok(())
+    })
+    .await
+}
+
+/// The middle square of an image, at most `size` pixels, encoded again —
+/// WebP where the browser can — and smaller until it fits.
+pub async fn picture_from(file: &web_sys::File, size: PictureSize) -> Result<Picture, String> {
     let img = util::load_image(file)
         .await
         .ok_or("That file isn't an image this browser can open.")?;
-    let largest = img
-        .natural_width()
-        .min(img.natural_height())
-        .min(VaultPicture::MAX_SIDE);
+    let largest = img.natural_width().min(img.natural_height()).min(size.side);
     let mut sides = vec![largest];
-    sides.extend([96, 64, 48].into_iter().filter(|s| *s < largest));
+    sides.extend(
+        [size.side * 3 / 4, size.side / 2, size.side * 3 / 8]
+            .into_iter()
+            .filter(|s| *s < largest),
+    );
     // Keeping transparency first; JPEG (on white) only if nothing else fits.
     for (mime, opaque) in [("image/webp", false), ("image/jpeg", true)] {
         for &side in &sides {
             if let Some((ty, data)) = util::encode_square(&img, side, mime, 0.85, opaque)
-                && let Ok(p) = VaultPicture::new(&ty, data)
+                && let Ok(p) = Picture::new(&ty, data, size)
             {
                 return Ok(p);
             }
@@ -1384,12 +1388,28 @@ pub fn set_entry_icon(vault: &str, id: Option<&str>, path: &str, icon: &str) -> 
             return false;
         }
     };
+    if id.is_none() && icon.is_none() {
+        return false;
+    }
+    change_entry_icon(vault, id, path, |ix, id| ix.set_icon(id, icon.as_deref()))
+}
+
+/// Give a note or folder a picture as its icon (as [`set_entry_icon`]). It
+/// is offered again among the recent pictures.
+pub fn set_entry_picture(vault: &str, id: Option<&str>, path: &str, picture: &Picture) -> bool {
+    step(|c| state::used_picture(c, picture));
+    change_entry_icon(vault, id, path, |ix, id| ix.set_picture(id, picture))
+}
+
+fn change_entry_icon(
+    vault: &str,
+    id: Option<&str>,
+    path: &str,
+    change: impl FnOnce(&IndexDoc, &str) -> Option<Vec<u8>>,
+) -> bool {
     let (changed, shared) = step(|c| {
-        if id.is_none() && icon.is_none() {
-            return (false, None);
-        }
         let id = folder_entry(c, vault, path, id);
-        let changed = change_index(c, vault, |ix| ix.set_icon(&id, icon.as_deref()));
+        let changed = change_index(c, vault, |ix| change(ix, &id));
         (changed, state::is_shared_note(c, vault, &id).then_some(id))
     });
     // People the note is shared with see its icon too.
@@ -1965,6 +1985,9 @@ pub async fn move_to_vault(
             if let Some(icon) = &copy.icon {
                 change_index(c, to, |ix| ix.set_icon(&id, Some(icon)));
             }
+            if let Some(p) = &copy.picture {
+                change_index(c, to, |ix| ix.set_picture(&id, p));
+            }
             if let Some(key) = &copy.order {
                 change_index(c, to, |ix| {
                     ix.set_order([(id.as_str(), Some(key.as_str()))])
@@ -2446,18 +2469,28 @@ pub async fn export_vault(vault: &str) {
     success(format!("Exported {} items.", entries.len()));
 }
 
+/// The icons and pictures of a vault's notes, files and folders, by path.
+#[derive(Default)]
+struct Looks {
+    icons: BTreeMap<String, String>,
+    pictures: BTreeMap<String, Picture>,
+}
+
 /// A vault's files for an export, at their paths in the vault (comments as
 /// Markdown under `_comments/`), and the icons of its notes, files and
-/// folders by path.
-async fn vault_export(vault: &str) -> (Vec<zipfile::Entry>, BTreeMap<String, String>) {
+/// folders.
+async fn vault_export(vault: &str) -> (Vec<zipfile::Entry>, Looks) {
     let mut entries = Vec::new();
-    let mut icons = BTreeMap::new();
+    let mut looks = Looks::default();
     // Each note's comments go to `_comments/` (after the vault's own files,
     // which keep their paths); their authors by name.
     let mut commented = Vec::new();
     for e in state::step(|c| c.live_entries(vault)) {
         if let Some(i) = &e.icon {
-            icons.insert(e.path.clone(), i.clone());
+            looks.icons.insert(e.path.clone(), i.clone());
+        }
+        if let Some(p) = &e.picture {
+            looks.pictures.insert(e.path.clone(), p.clone());
         }
         match e.kind {
             EntryKind::Note => {
@@ -2522,7 +2555,7 @@ async fn vault_export(vault: &str) -> (Vec<zipfile::Entry>, BTreeMap<String, Str
             data: md.into_bytes(),
         });
     }
-    (entries, icons)
+    (entries, looks)
 }
 
 /// Export the vaults chosen, and the Personal storage (quick notes, saved
@@ -2552,14 +2585,15 @@ pub async fn export_account(vaults: Vec<String>, personal: bool) {
             .collect()
     };
     for (v, folder) in vaults.iter().zip(folders) {
-        let (entries, icons) = vault_export(v).await;
+        let (entries, looks) = vault_export(v).await;
         files.extend(within(&folder, entries));
         let meta = step(|c| c.replicas.get(v).map(|r| r.meta.clone()))
             .unwrap_or_else(|| VaultMeta::named(&folder));
         manifest.vaults.push(ExportedVault {
             folder,
             meta,
-            icons,
+            icons: looks.icons,
+            pictures: looks.pictures,
         });
     }
     let mut shapes = 0;
@@ -2689,14 +2723,23 @@ pub async fn import_account(files: Vec<(String, Vec<u8>)>) {
         notes += got.notes;
         drawings += got.drawings;
         atts += got.files;
-        for (path, icon) in &v.icons {
-            let entry = step(|c| {
+        let entry = |path: &str| {
+            step(|c| {
                 c.replicas
                     .get(&id)
                     .and_then(|r| r.index.find_by_path(path))
                     .map(|e| e.id)
-            });
-            set_entry_icon(&id, entry.as_deref(), path, icon);
+            })
+        };
+        for (path, icon) in &v.icons {
+            set_entry_icon(&id, entry(path).as_deref(), path, icon);
+        }
+        for (path, p) in &v.pictures {
+            if p.fits(Picture::ENTRY) {
+                change_entry_icon(&id, entry(path).as_deref(), path, |ix, e| {
+                    ix.set_picture(e, p)
+                });
+            }
         }
     }
     let mut quick_in = 0;

@@ -979,8 +979,19 @@ table.keys td:first-child { white-space: nowrap; width: 1%; padding-right: 16px;
 .icon-input { width: 130px; }
 label.btn { position: relative; }
 label.btn.disabled { opacity: .6; pointer-events: none; }
-.vault-picture-input { position: absolute; width: 1px; height: 1px; opacity: 0; overflow: hidden; pointer-events: none; }
+.picture-input { position: absolute; width: 1px; height: 1px; opacity: 0; overflow: hidden; pointer-events: none; }
+.picture-choice { display: flex; flex-wrap: wrap; gap: 2px; align-items: center; }
+.picture-choice label.btn { margin-left: 4px; }
+.pic-btn { padding: 4px; }
+.pic-btn img { width: 100%; height: 100%; border-radius: 4px; object-fit: cover; display: block; }
+.pic-btn:disabled { opacity: .6; cursor: default; }
 .entry-icon { display: inline-flex; justify-content: center; width: 16px; font-size: 14px; line-height: 1; flex: none; }
+/* A note's or folder's picture, where its emoji would be. */
+img.entry-pic { width: 16px; height: 16px; border-radius: 3px; object-fit: cover; flex: none; }
+.icon-now img.entry-pic { width: 56px; height: 56px; border-radius: 12px; }
+.note-icon img.entry-pic { width: 36px; height: 36px; border-radius: 8px; }
+.card-icon img.entry-pic { width: 36px; height: 36px; border-radius: 9px; }
+.nc-title img.entry-pic { width: 1em; height: 1em; margin-right: 6px; vertical-align: -0.125em; }
 .note-title-row { display: flex; align-items: center; gap: 8px; }
 .note-title-row .note-title { flex: 1; min-width: 0; }
 .note-icon { flex: none; width: 44px; height: 44px; display: flex; align-items: center; justify-content: center; font-size: 32px; line-height: 1; padding: 0; border: none; border-radius: 8px; background: none; cursor: pointer; }

@@ -444,11 +444,27 @@ fn install_shortcuts() {
     cb.forget();
 }
 
-/// A note's or folder's icon (its emoji), else the `fallback` icon.
-pub fn entry_icon(icon: Option<String>, fallback: &'static str) -> AnyView {
+/// A note's or folder's icon (its picture or emoji), else the `fallback`
+/// icon.
+pub fn entry_icon(icon: Option<state::EntryIcon>, fallback: &'static str) -> AnyView {
     match icon {
-        Some(i) => view! { <span class="entry-icon" aria-hidden="true">{i}</span> }.into_any(),
+        Some(state::EntryIcon::Text(i)) => {
+            view! { <span class="entry-icon" aria-hidden="true">{i}</span> }.into_any()
+        }
+        Some(state::EntryIcon::Picture(src)) => {
+            view! { <img class="entry-icon entry-pic" src=src alt=""/> }.into_any()
+        }
         None => view! { <Icon name=fallback/> }.into_any(),
+    }
+}
+
+/// An icon by a note's title: its emoji, or its picture.
+pub fn note_icon(icon: state::EntryIcon) -> AnyView {
+    match icon {
+        state::EntryIcon::Text(i) => i.into_any(),
+        state::EntryIcon::Picture(src) => {
+            view! { <img class="entry-pic" src=src alt=""/> }.into_any()
+        }
     }
 }
 

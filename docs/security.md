@@ -17,13 +17,13 @@
 
 | Asset | Protected by | Server can see |
 |---|---|---|
-| Note text, titles, file and folder names, icons and order, tags, links | XChaCha20-Poly1305 with per-vault keys, client-side | no |
+| Note text, titles, file and folder names, icons (emojis and pictures) and order, tags, links | XChaCha20-Poly1305 with per-vault keys, client-side | no; the update giving a note or folder a picture is a few KiB larger than one giving it an emoji |
 | Attachments (bytes, names, types) | same | size, uploader and upload time |
 | Vault names, descriptions, icons and pictures | same (`encrypted_meta`) | no; the size of `encrypted_meta` roughly shows whether a vault has a picture |
 | Revision history | encrypted snapshots | count, size, time, author |
 | Comments (text, quotes, what they are about, replies, whom they @mention) | encrypted with the note's key; each signed by its author | that a note has comments, and the number, sizes, times and authors of the records; each vault's *viewers can comment* setting. Not who is mentioned: people's own devices find their mentions |
 | Presence (which note, cursor; on a drawing the pointer, what is selected, the laser) | encrypted awareness messages | that a user is connected to a vault; on individually shared notes also which of them someone has open, and when (clients announce themselves on the note too, under its id); while someone moves their pointer on a drawing, that they do (messages come up to 20 a second) |
-| Favorites, recent notes, key pins, synced settings (note widths, which mentions were read) | account-key encryption | no |
+| Favorites, recent notes, key pins, synced settings (note widths, which mentions were read, the pictures last given as icons) | account-key encryption | no |
 | Quick notes (text, names, attachments) | a vault of their own, encrypted like any other | which vault holds someone's quick notes, how many notes are in it, and — from a new note in a vault at about the time one leaves the quick notes — roughly when one moved where |
 | Drawings (what they show, their names, their pictures) | encrypted like notes, in their vault | which objects are drawings — never what they show or what they're called —, so how many each vault holds (it counts them against the vault's limit) |
 | A person's saved shapes (kept to drop into drawings) | in their Personal storage's encrypted index (their quick notes' vault) | that it changed (the size and time of the index update), never what it holds |

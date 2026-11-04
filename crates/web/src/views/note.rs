@@ -386,7 +386,9 @@ pub fn NoteView(vault: String, note: String) -> impl IntoView {
     let (v, n6) = (vault.clone(), note.clone());
     let entry_icon = Memo::new(move |_| {
         ui.tree_rev.get();
-        state::step(|c| c.entry(&v, &n6)).and_then(|e| e.icon)
+        state::step(|c| c.entry(&v, &n6))
+            .as_ref()
+            .and_then(state::EntryIcon::of)
     });
     let (vi, ni) = (vault.clone(), note.clone());
     let open_icon = StoredValue::new(move || {
@@ -809,7 +811,7 @@ pub fn NoteView(vault: String, note: String) -> impl IntoView {
                                 {move || match entry_icon.get() {
                                     Some(i) => view! {
                                         <button class="note-icon" title="Change icon" aria-label="Change icon" disabled=move || !writable.get()
-                                            on:click=move |_| open_icon.with_value(|f| f())>{i}</button>
+                                            on:click=move |_| open_icon.with_value(|f| f())>{super::note_icon(i)}</button>
                                     }.into_any(),
                                     None if writable.get() => view! {
                                         <button class="note-icon add" title="Add an icon" aria-label="Add an icon"
@@ -1074,7 +1076,7 @@ pub fn SharedNoteView(vault: String, note: String) -> impl IntoView {
                         let on_reading_click = on_reading_click.clone();
                         view! {
                             <div class="note-title-row">
-                                {move || icon().map(|i| view! { <span class="note-icon" aria-hidden="true">{i}</span> })}
+                                {move || icon().map(|i| view! { <span class="note-icon" aria-hidden="true">{super::note_icon(i)}</span> })}
                                 <h1 class="note-title static" aria-label="Note title">{title}</h1>
                             </div>
                             {move || (!writable.get()).then(|| view! {

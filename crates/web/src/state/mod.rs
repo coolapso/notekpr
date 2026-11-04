@@ -26,7 +26,7 @@ use std::rc::Rc;
 use leptos::prelude::Update;
 use leptos::prelude::*;
 use notekpr_core::crypto::Purpose;
-use notekpr_core::doc::{EntryKind, NoteDoc};
+use notekpr_core::doc::{EntryKind, NoteDoc, Picture};
 use notekpr_core::engine::{self, ObjectMeta, Presence, VaultMeta, VaultReplica};
 use notekpr_core::keys::{AccountPublic, AccountSecret, DeviceKey, RecoveryKey};
 use notekpr_core::protocol::*;
@@ -157,13 +157,44 @@ impl Route {
     }
 }
 
+/// A note's or folder's icon, as shown: an emoji (or a few characters), or
+/// a picture as a `data:` URL.
+#[derive(Clone, Debug, PartialEq)]
+pub enum EntryIcon {
+    Text(String),
+    Picture(String),
+}
+
+impl EntryIcon {
+    pub fn of(e: &notekpr_core::doc::Entry) -> Option<Self> {
+        Self::from_parts(e.icon.as_deref(), e.picture.as_ref())
+    }
+
+    /// The picture if there is one, else the icon.
+    pub fn from_parts(icon: Option<&str>, picture: Option<&Picture>) -> Option<Self> {
+        match (picture, icon) {
+            (Some(p), _) => Some(EntryIcon::Picture(p.data_url())),
+            (None, Some(i)) => Some(EntryIcon::Text(i.to_string())),
+            (None, None) => None,
+        }
+    }
+
+    /// The emoji, unless it is a picture.
+    pub fn text(&self) -> Option<&str> {
+        match self {
+            EntryIcon::Text(t) => Some(t),
+            EntryIcon::Picture(_) => None,
+        }
+    }
+}
+
 /// A note shared with us individually, for the views.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SharedView {
     pub vault: String,
     pub note: String,
     pub title: String,
-    pub icon: Option<String>,
+    pub icon: Option<EntryIcon>,
     pub role: Role,
     pub owner: String,
     pub added_at: i64,
@@ -175,7 +206,8 @@ pub struct SharedView {
 pub struct ShareState {
     pub info: SharedNote,
     pub title: String,
-    pub icon: Option<String>,
+    /// Its icon or picture (from its metadata).
+    pub icon: Option<EntryIcon>,
     /// Highest sequence number of this note we have seen (for resubscribing).
     pub seq: i64,
     /// Its content can be shown (restored from this browser's copy, or synced).
@@ -491,6 +523,11 @@ pub struct Prefs {
     /// knowing that nobody could take them over if we lost our account.
     #[serde(default)]
     pub owner_hints_hidden: Vec<String>,
+    /// Pictures given to notes and folders lately, the latest first, by
+    /// their ids (`Picture::id`): offered again while an entry has one
+    /// ([`recent_pictures`]).
+    #[serde(default)]
+    pub recent_pictures: Vec<String>,
     /// Goes up with every save. Inside the encryption, so the server can't
     /// change it: an older copy it hands out (e.g. one without a pin) is
     /// noticed and not used [W-M10].

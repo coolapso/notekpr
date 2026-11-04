@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use anyhow::{Result, anyhow, bail};
 use notekpr_core::b64;
-use notekpr_core::doc::{self, Entry, EntryKind, NoteDoc};
+use notekpr_core::doc::{self, Entry, EntryKind, NoteDoc, Picture};
 use notekpr_core::engine::{Applied, Pending, VaultMeta, VaultReplica};
 use notekpr_core::keys::{AccountSecret, VaultKey, VaultKeyring};
 use notekpr_core::protocol::{
@@ -1747,23 +1747,45 @@ impl Vault {
         Ok(id)
     }
 
-    /// Set a note's, attachment's or folder's icon (an emoji), or remove it
-    /// with `None`. A folder that only exists as the parent of others gets an
-    /// entry for it. Returns the entry's id.
+    /// Set a note's, attachment's or folder's icon (an emoji, replacing a
+    /// picture), or remove it with `None`. A folder that only exists as the
+    /// parent of others gets an entry for it. Returns the entry's id.
     pub fn set_icon(&mut self, path: &str, icon: Option<&str>) -> Result<String> {
         self.require_writable()?;
         let icon = match icon {
             Some(i) => doc::clean_icon(i).map_err(|e| anyhow!(e))?,
             None => None,
         };
-        let id = match self.find(path) {
-            Some((_, e)) => e.id,
-            None if self.is_folder(path) => self.create_folder(path)?,
-            None => bail!("no document or folder '{path}'"),
-        };
+        let id = self.entry_for_icon(path)?;
         let u = self.replica.index.set_icon(&id, icon.as_deref());
         self.record_index(u)?;
         Ok(id)
+    }
+
+    /// Give a note, attachment or folder a picture as its icon (as
+    /// [`set_icon`](Self::set_icon)).
+    pub fn set_picture(&mut self, path: &str, picture: &Picture) -> Result<String> {
+        self.require_writable()?;
+        if !picture.fits(Picture::ENTRY) {
+            bail!(
+                "a picture as an icon is at most {} KiB",
+                Picture::ENTRY.bytes / 1024
+            );
+        }
+        let id = self.entry_for_icon(path)?;
+        let u = self.replica.index.set_picture(&id, picture);
+        self.record_index(u)?;
+        Ok(id)
+    }
+
+    /// The entry at `path` (a new one for a folder only there as the parent
+    /// of others).
+    fn entry_for_icon(&mut self, path: &str) -> Result<String> {
+        Ok(match self.find(path) {
+            Some((_, e)) => e.id,
+            None if self.is_folder(path) => self.create_folder(path)?,
+            None => bail!("no document or folder '{path}'"),
+        })
     }
 
     /// Move or rename a note, attachment or folder. A target ending in `/`
@@ -1912,12 +1934,22 @@ impl Vault {
         self.record_index(u)
     }
 
-    /// Give an entry an icon and a place among its siblings (`None`s leave
-    /// them): a copy from another vault takes the original's.
-    pub fn copy_looks(&mut self, id: &str, icon: Option<&str>, order: Option<&str>) -> Result<()> {
+    /// Give an entry an icon or picture and a place among its siblings
+    /// (`None`s leave them): a copy from another vault takes the original's.
+    pub fn copy_looks(
+        &mut self,
+        id: &str,
+        icon: Option<&str>,
+        picture: Option<&Picture>,
+        order: Option<&str>,
+    ) -> Result<()> {
         self.require_writable()?;
         if let Some(icon) = icon {
             let u = self.replica.index.set_icon(id, Some(icon));
+            self.record_index(u)?;
+        }
+        if let Some(p) = picture {
+            let u = self.replica.index.set_picture(id, p);
             self.record_index(u)?;
         }
         if let Some(key) = order {

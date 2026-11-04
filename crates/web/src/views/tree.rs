@@ -25,7 +25,7 @@ struct Row {
     has_children: bool,
     /// A note shared individually with people outside the vault.
     shared: bool,
-    icon: Option<String>,
+    icon: Option<state::EntryIcon>,
     /// Another app's drawing file, shown as a drawing.
     other_apps: bool,
 }
@@ -84,7 +84,7 @@ impl Walk<'_> {
                 expanded,
                 has_children: folder && self.children.get(&c.path).is_some_and(|l| !l.is_empty()),
                 shared: !folder && e.is_some_and(|e| self.shared.contains(&e.id)),
-                icon: e.and_then(|e| e.icon.clone()),
+                icon: e.and_then(state::EntryIcon::of),
                 other_apps: e.is_some_and(|e| self.other_apps.contains(&e.id)),
             });
             if expanded {

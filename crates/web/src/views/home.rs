@@ -279,7 +279,7 @@ pub fn note_card(
         .collect();
     view! {
         <button class="note-card" on:click=move |_| state::navigate(Route::Note(vault.clone(), id.clone()))>
-            <div class="nc-title">{e.icon.clone().map(|i| view! { <span class="entry-icon" aria-hidden="true">{i}</span> })}{e.title().to_string()}</div>
+            <div class="nc-title">{state::EntryIcon::of(&e).map(|i| super::entry_icon(Some(i), "file"))}{e.title().to_string()}</div>
             <div class="nc-snip">{snippet}</div>
             <div class="nc-meta">
                 {if folder.is_empty() { String::new() } else { format!("{folder} · ") }}

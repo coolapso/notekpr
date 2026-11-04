@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 use common::*;
 use notekpr_cli::hub::Hub;
 use notekpr_cli::{manage, ops, transfer};
-use notekpr_core::doc::EntryKind;
+use notekpr_core::doc::{EntryKind, Picture};
 
 async fn src_id(hub: &Hub) -> String {
     hub.resolve("Source")
@@ -333,6 +333,15 @@ async fn run(srv: &TestServer, who: &str, args: &[&str]) -> anyhow::Result<()> {
     notekpr_cli::commands::run_in(notekpr_cli::cli::Cli::try_parse_from(argv)?, srv.dirs(who)).await
 }
 
+fn picture() -> Picture {
+    Picture::new(
+        "image/png",
+        b"\x89PNG\r\n\x1a\n...".to_vec(),
+        Picture::ENTRY,
+    )
+    .unwrap()
+}
+
 /// Moving to another server: the vaults (but those left out) and the quick
 /// notes exported as one .zip, imported there by a new account — named as
 /// they were (a name taken gets a number), with folders, files and icons.
@@ -354,6 +363,7 @@ async fn vaults_and_quick_notes_move_to_another_server() {
         let mut g = v.lock().await;
         g.create_folder("Empty").unwrap();
         g.set_icon("Trips/2026.md", Some("✈️")).unwrap();
+        g.set_picture("Trips", &picture()).unwrap();
         g.save().unwrap();
     }
     let family = h.resolve("Family").await.unwrap();
@@ -438,6 +448,7 @@ async fn vaults_and_quick_notes_move_to_another_server() {
         assert!(g.is_folder("Empty"));
         let (_, e) = g.find("Trips/2026.md").unwrap();
         assert_eq!(e.icon.as_deref(), Some("✈️"));
+        assert_eq!(g.paths()["Trips"].picture, Some(picture()), "and pictures");
     }
     let (_, map) = moved.lock().await.find("assets/map.png").unwrap();
     assert_eq!(

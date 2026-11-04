@@ -10,6 +10,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
 
 use anyhow::{Result, anyhow, bail};
+use notekpr_core::doc::Picture;
 use notekpr_core::engine::Applied;
 use notekpr_core::protocol::{
     INDEX_OBJECT_ID, Limit, PrincipalKind, ReadOnly, Role, VaultInfo, VaultKind,
@@ -70,6 +71,9 @@ pub struct VaultSummary {
     /// Its icon (an emoji), if it has one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub icon: Option<String>,
+    /// It has a picture, shown instead of its icon.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub picture: bool,
     pub role: Role,
     pub archived: bool,
     /// `quick_notes` for the person's quick notes (absent for vaults).
@@ -835,6 +839,12 @@ pub fn summary(v: &Vault) -> VaultSummary {
         id: v.id().to_string(),
         name: v.name().to_string(),
         icon: v.replica.meta.icon.clone(),
+        picture: v
+            .replica
+            .meta
+            .picture
+            .as_ref()
+            .is_some_and(|p| p.fits(Picture::VAULT)),
         role: v.role(),
         archived: v.archived,
         kind: v.kind,

@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
-use notekpr_core::doc::{Entry, EntryKind};
+use notekpr_core::doc::{Entry, EntryKind, Picture, PictureSize};
 use notekpr_core::engine::PinStatus;
 use notekpr_core::protocol::{DeviceStatus, Limit, MIB, PrincipalKind, Role};
 use serde::Serialize;
@@ -588,7 +588,13 @@ async fn execute(ctx: Ctx, command: Command) -> Result<()> {
                 SharedCmd::List => {
                     let list = note_shares::shared_with_me(&s).await?;
                     if ctx.json {
-                        ctx.print_json(&list.iter().map(|n| json!({ "id": n.info.object_id, "vault_id": n.info.vault_id, "title": n.title, "icon": n.icon, "role": n.info.role, "owner": n.info.owner.display_name })).collect::<Vec<_>>());
+                        ctx.print_json(&list.iter().map(|n| {
+                            let mut j = json!({ "id": n.info.object_id, "vault_id": n.info.vault_id, "title": n.title, "icon": n.icon, "role": n.info.role, "owner": n.info.owner.display_name });
+                            if n.picture {
+                                j["picture"] = json!(true);
+                            }
+                            j
+                        }).collect::<Vec<_>>());
                     } else if list.is_empty() {
                         crate::out!("no notes are shared with you individually");
                     } else {
@@ -598,7 +604,7 @@ async fn execute(ctx: Ctx, command: Command) -> Result<()> {
                                 n.info.object_id,
                                 n.info.role.as_str(),
                                 n.info.owner.display_name,
-                                match &n.icon {
+                                match ui::icon_text(n.icon.as_deref(), n.picture) {
                                     Some(i) => format!("{i} {}", n.title),
                                     None => n.title,
                                 }
@@ -712,16 +718,25 @@ async fn execute(ctx: Ctx, command: Command) -> Result<()> {
             vault,
             path,
             icon,
+            picture,
             remove,
         } => {
             let hub = ctx.hub(&[&vault]).await?;
+            let picture = match &picture {
+                Some(file) => Some(picture_file(file, Picture::ENTRY)?),
+                None => None,
+            };
             let icon = if remove { None } else { icon };
-            let (_, id) = op(ops::set_icon(&hub, &vault, &path, icon.as_deref()).await)?;
+            let (_, id) = match &picture {
+                Some(p) => op(ops::set_picture(&hub, &vault, &path, p).await)?,
+                None => op(ops::set_icon(&hub, &vault, &path, icon.as_deref()).await)?,
+            };
             let v = hub.resolve(&vault).await?;
             note_shares::refresh_meta(&hub.session, &v, &id).await?;
-            match icon {
-                Some(i) => crate::out!("{i} {path}"),
-                None => crate::out!("removed the icon of {path}"),
+            match (picture, icon) {
+                (Some(_), _) => crate::out!("(picture) {path}"),
+                (None, Some(i)) => crate::out!("{i} {path}"),
+                (None, None) => crate::out!("removed the icon of {path}"),
             }
             Ok(())
         }
@@ -1400,7 +1415,7 @@ async fn vault(ctx: &Ctx, c: VaultCmd) -> Result<()> {
                 crate::out!("no vaults yet — create one with `notekpr vault create <name>`");
             }
             for s in list {
-                let name = match &s.icon {
+                let name = match ui::icon_text(s.icon.as_deref(), s.picture) {
                     Some(i) => format!("{i} {}", s.name),
                     None => s.name.clone(),
                 };
@@ -1454,10 +1469,20 @@ async fn vault(ctx: &Ctx, c: VaultCmd) -> Result<()> {
         VaultCmd::Icon {
             vault,
             icon,
+            picture,
             remove,
         } => {
+            let picture = match &picture {
+                Some(file) => Some(picture_file(file, Picture::VAULT)?),
+                None => None,
+            };
             let hub = ctx.hub(&[&vault]).await?;
             let v = hub.resolve(&vault).await?;
+            if let Some(p) = picture {
+                manage::set_vault_picture(&hub.session, &v, p).await?;
+                crate::out!("(picture) {vault}");
+                return Ok(());
+            }
             let icon = if remove { None } else { icon };
             manage::set_vault_icon(&hub.session, &v, icon.as_deref()).await?;
             match icon {
@@ -1661,6 +1686,22 @@ async fn vault(ctx: &Ctx, c: VaultCmd) -> Result<()> {
 
 // ---------------------------------------------------------------- documents
 
+/// A picture as an icon, from a file as it is: this has no way to make one
+/// smaller, as the web app does.
+fn picture_file(file: &Path, size: PictureSize) -> Result<Picture> {
+    let data = std::fs::read(file).with_context(|| format!("reading {}", file.display()))?;
+    let mime = Picture::sniff(&data);
+    match mime.map(|m| Picture::new(m, data, size)) {
+        Some(Ok(p)) => Ok(p),
+        _ => bail!(
+            "{}: a picture as an icon must be a PNG, WebP or JPEG file of at most {} KiB \
+             (the web app makes one from any image)",
+            file.display(),
+            size.bytes / 1024
+        ),
+    }
+}
+
 async fn ls(ctx: &Ctx, vault: &str, folder: Option<&str>, recursive: bool) -> Result<()> {
     let hub = ctx.hub(&[vault]).await?;
     let v = hub.resolve(vault).await?;
@@ -1681,12 +1722,15 @@ async fn ls(ctx: &Ctx, vault: &str, folder: Option<&str>, recursive: bool) -> Re
     }
     // Names line up: when some entries have an icon, the others get as much
     // room.
+    fn shown(e: &Entry) -> Option<&str> {
+        ui::icon_text(e.icon.as_deref(), e.picture.is_some())
+    }
     let icon_width = list
         .iter()
-        .filter_map(|l| l.entry.as_ref()?.icon.as_deref())
+        .filter_map(|l| shown(l.entry.as_ref()?))
         .map(ui::display_width)
         .max();
-    let icon = |e: Option<&Entry>| match (icon_width, e.and_then(|e| e.icon.as_deref())) {
+    let icon = |e: Option<&Entry>| match (icon_width, e.and_then(shown)) {
         (None, _) => String::new(),
         (Some(w), Some(i)) => format!("{i}{} ", " ".repeat(w - ui::display_width(i))),
         (Some(w), None) => " ".repeat(w + 1),

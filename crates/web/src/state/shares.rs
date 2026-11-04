@@ -88,7 +88,8 @@ pub(super) async fn load_share(info: SharedNote) {
                 });
             if let Some(s) = c.shares.get_mut(&key) {
                 if let Some(m) = meta {
-                    (s.title, s.icon) = (m.title, m.icon);
+                    s.icon = EntryIcon::from_parts(m.icon.as_deref(), m.picture.as_ref());
+                    s.title = m.title;
                 }
                 s.info = info;
             }
@@ -215,7 +216,8 @@ pub(super) async fn reload_share_keys_once(vault: &str, note: &str) {
             s.info.role = keys.role;
             s.info.key_epoch = keys.current_epoch;
             if let Some(m) = meta {
-                (s.title, s.icon) = (m.title, m.icon);
+                s.icon = EntryIcon::from_parts(m.icon.as_deref(), m.picture.as_ref());
+                s.title = m.title;
             }
         }
         // The replica's role only gates sending; each note's own role is checked by the server.

@@ -207,6 +207,11 @@ pub(super) fn merge_prefs(theirs: &mut Prefs, mine: Prefs, unsaved: &Unsaved) {
     }
     recent.truncate(30);
     theirs.recent = recent;
+    theirs.recent_pictures = latest_first(
+        mine.recent_pictures,
+        &theirs.recent_pictures,
+        RECENT_PICTURES,
+    );
     if unsaved.default_width {
         theirs.note_width = mine.note_width;
     }
@@ -216,6 +221,54 @@ pub(super) fn merge_prefs(theirs: &mut Prefs, mine: Prefs, unsaved: &Unsaved) {
     let ours = mine.note_widths.into_iter().filter(|(n, _)| changed(n));
     theirs.note_widths.splice(0..0, ours);
     theirs.note_widths.truncate(crate::width::MAX_OWN);
+}
+
+/// How many recent pictures are offered again.
+pub const RECENT_PICTURES: usize = 12;
+
+/// `mine` (the latest) and then those of `theirs` not among them, at most
+/// `max`.
+fn latest_first(mut mine: Vec<String>, theirs: &[String], max: usize) -> Vec<String> {
+    for t in theirs {
+        if !mine.contains(t) {
+            mine.push(t.clone());
+        }
+    }
+    mine.truncate(max);
+    mine
+}
+
+/// Remember `p` as the latest picture given to a note or folder.
+pub fn used_picture(c: &mut Core, p: &Picture) {
+    let id = p.id();
+    if c.prefs.recent_pictures.first() != Some(&id) {
+        c.prefs.recent_pictures = latest_first(vec![id], &c.prefs.recent_pictures, RECENT_PICTURES);
+        save_prefs(c);
+    }
+}
+
+/// The pictures given to notes and folders lately, the latest first: those
+/// an entry of a vault here still has.
+pub fn recent_pictures(c: &Core) -> Vec<Picture> {
+    let wanted = &c.prefs.recent_pictures;
+    if wanted.is_empty() {
+        return vec![];
+    }
+    let mut found: BTreeMap<String, Picture> = BTreeMap::new();
+    for r in c.replicas.values() {
+        for e in r.index.entries() {
+            if let Some(p) = e.picture {
+                let id = p.id();
+                if wanted.contains(&id) {
+                    found.entry(id).or_insert(p);
+                }
+            }
+        }
+        if found.len() == wanted.len() {
+            break;
+        }
+    }
+    wanted.iter().filter_map(|id| found.remove(id)).collect()
 }
 
 /// Stop suggesting another owner for `vault` (on every device).
@@ -314,5 +367,23 @@ mod tests {
         };
         merge_prefs(&mut theirs, mine, &unsaved);
         assert_eq!(theirs.note_width, None);
+    }
+
+    #[test]
+    fn recent_pictures_merge_the_latest_first() {
+        let ids = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let mut theirs = Prefs {
+            recent_pictures: ids(&["b", "x"]),
+            ..Default::default()
+        };
+        let mine = Prefs {
+            recent_pictures: ids(&["a", "b"]),
+            ..Default::default()
+        };
+        merge_prefs(&mut theirs, mine, &Unsaved::default());
+        assert_eq!(theirs.recent_pictures, ids(&["a", "b", "x"]));
+        let many: Vec<String> = (0..20).map(|i| i.to_string()).collect();
+        let kept = latest_first(ids(&["new"]), &many, RECENT_PICTURES);
+        assert_eq!((kept.len(), kept[0].as_str()), (RECENT_PICTURES, "new"));
     }
 }

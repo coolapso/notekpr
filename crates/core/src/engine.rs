@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::comments::{self, CommentError, CommentLog, Signed};
 use crate::crypto::{CryptoError, Purpose};
-use crate::doc::{DocError, IndexDoc, NoteDoc};
+use crate::doc::{DocError, IndexDoc, NoteDoc, Picture};
 use crate::keys::{
     self, AccountPublic, AccountSecret, DeviceKey, RecoveryKey, VaultKey, VaultKeyring,
     wrap_account_for_device, wrap_vault_key,
@@ -48,49 +48,10 @@ pub struct VaultMeta {
     /// ([`VaultMeta::set_icon`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub icon: Option<String>,
-    /// A small picture identifying the vault, shown instead of `icon`.
+    /// A small picture identifying the vault ([`Picture::VAULT`]), shown
+    /// instead of `icon`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub picture: Option<VaultPicture>,
-}
-
-/// A vault's picture: a small raster image. Clients make it from what was
-/// chosen: a square of at most [`VaultPicture::MAX_SIDE`] pixels, encoded
-/// again, so it is never the original file.
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
-pub struct VaultPicture {
-    pub mime: String,
-    #[serde(with = "crate::b64")]
-    pub data: Vec<u8>,
-}
-
-impl VaultPicture {
-    pub const MAX_SIDE: u32 = 128;
-    /// Encoded size limit: keeps the metadata well inside the server's
-    /// 16 KiB for it.
-    pub const MAX_BYTES: usize = 8 * 1024;
-    /// Raster types only.
-    pub const TYPES: [&'static str; 3] = ["image/webp", "image/png", "image/jpeg"];
-
-    pub fn new(mime: &str, data: Vec<u8>) -> Result<Self> {
-        let p = VaultPicture {
-            mime: mime.to_string(),
-            data,
-        };
-        if !p.is_valid() {
-            return Err(EngineError::Invalid(format!(
-                "a vault picture must be a WebP, PNG or JPEG image of at most {} KiB",
-                Self::MAX_BYTES / 1024
-            )));
-        }
-        Ok(p)
-    }
-
-    /// Checked before showing one too: the owner chose what is stored.
-    pub fn is_valid(&self) -> bool {
-        Self::TYPES.contains(&self.mime.as_str())
-            && !self.data.is_empty()
-            && self.data.len() <= Self::MAX_BYTES
-    }
+    pub picture: Option<Picture>,
 }
 
 impl VaultMeta {
@@ -497,6 +458,9 @@ pub struct ObjectMeta {
     /// The note's icon (see [`crate::doc::Entry::icon`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub icon: Option<String>,
+    /// Or its picture (see [`crate::doc::Entry::picture`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub picture: Option<Picture>,
 }
 
 impl ObjectMeta {
@@ -504,6 +468,7 @@ impl ObjectMeta {
         ObjectMeta {
             title: title.to_string(),
             icon: None,
+            picture: None,
         }
     }
 
@@ -512,6 +477,7 @@ impl ObjectMeta {
         ObjectMeta {
             title: e.title().to_string(),
             icon: e.icon.clone(),
+            picture: e.picture.clone(),
         }
     }
 
@@ -531,6 +497,7 @@ impl ObjectMeta {
         m.icon = m
             .icon
             .and_then(|i| crate::doc::clean_icon(&i).ok().flatten());
+        m.picture = m.picture.filter(|p| p.fits(Picture::ENTRY));
         Ok(m)
     }
 }
@@ -1792,12 +1759,35 @@ mod tests {
         let meta = ObjectMeta {
             title: "Trip".into(),
             icon: Some("🏖️".into()),
+            picture: None,
         };
         let (doc, req) = start_sharing(&ring, "n", &meta, &[], 0).unwrap();
         assert_eq!(
             ObjectMeta::decrypt(&doc, "n", &req.encrypted_meta).unwrap(),
             meta
         );
+        // So does a picture: the largest, with a long title, fits the
+        // server's limit for a note's metadata.
+        let size = Picture::ENTRY;
+        let pictured = ObjectMeta {
+            title: "t".repeat(255),
+            icon: None,
+            picture: Some(Picture::new("image/png", vec![7; size.bytes], size).unwrap()),
+        };
+        let ct = pictured.encrypt(&doc, "n").unwrap();
+        assert!(ct.len() <= 16 * 1024, "{} bytes", ct.len());
+        assert_eq!(ObjectMeta::decrypt(&doc, "n", &ct).unwrap(), pictured);
+        // One breaking the rules isn't shown.
+        let mut big = pictured.clone();
+        big.picture.as_mut().unwrap().data.push(0);
+        let ct = big.encrypt(&doc, "n").unwrap();
+        assert_eq!(ObjectMeta::decrypt(&doc, "n", &ct).unwrap().picture, None);
+        // What an entry shows, recipients see.
+        let ix = crate::doc::IndexDoc::new();
+        ix.create("n", "Trip.md", EntryKind::Note, 1);
+        ix.set_picture("n", pictured.picture.as_ref().unwrap());
+        let of = ObjectMeta::of(&ix.get("n").unwrap());
+        assert_eq!((of.icon, of.picture), (None, pictured.picture.clone()));
         // Metadata from before icons reads; an icon breaking the rules is dropped.
         let old = doc
             .encrypt(Purpose::ObjectMeta, "n", br#"{"title":"Trip"}"#)
@@ -1836,13 +1826,13 @@ mod tests {
         meta.set_icon(" ").unwrap();
         assert_eq!(meta.icon, None);
 
-        assert!(VaultPicture::new("image/svg+xml", vec![1]).is_err());
-        assert!(VaultPicture::new("image/png", vec![]).is_err());
-        assert!(VaultPicture::new("image/png", vec![0; VaultPicture::MAX_BYTES + 1]).is_err());
+        let size = Picture::VAULT;
+        assert!(Picture::new("image/svg+xml", vec![1], size).is_err());
+        assert!(Picture::new("image/png", vec![], size).is_err());
+        assert!(Picture::new("image/png", vec![0; size.bytes + 1], size).is_err());
         // The largest picture, a long name and an icon fit the server's limit.
         meta.set_icon("👨‍👩‍👧‍👦").unwrap();
-        meta.picture =
-            Some(VaultPicture::new("image/webp", vec![0xff; VaultPicture::MAX_BYTES]).unwrap());
+        meta.picture = Some(Picture::new("image/webp", vec![0xff; size.bytes], size).unwrap());
         let ct = meta.encrypt(&ring).unwrap();
         assert!(ct.len() <= 16 * 1024, "{} bytes", ct.len());
         assert_eq!(VaultMeta::decrypt(&ring, &ct).unwrap(), meta);

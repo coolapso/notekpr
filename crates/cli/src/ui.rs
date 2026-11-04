@@ -302,6 +302,12 @@ pub fn fmt_time(ms: i64) -> String {
         .unwrap_or_else(|| ms.to_string())
 }
 
+/// An icon as lists show it: its emoji, or for a picture (which a terminal
+/// can't show) `(picture)`.
+pub fn icon_text(icon: Option<&str>, picture: bool) -> Option<&str> {
+    if picture { Some("(picture)") } else { icon }
+}
+
 /// How many columns a terminal gives `s`: emoji and wide (East Asian)
 /// characters two, variation selectors, joiners and combining marks none —
 /// an emoji sequence joined with U+200D counts once. Enough for icons and

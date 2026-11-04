@@ -149,8 +149,10 @@ a Mac). The [README](../README.md) has the short version.
   in the vault sees the same order. A new note with `Ctrl+Alt+N`. *All vaults* shows each vault as a card, its settings a click away (⚙ in the corner). Each vault opens on a home page with its recently edited
   notes and tags; its owner can archive it while it isn't needed, or delete
   it.
-* Icons: an emoji for each note and folder, an emoji or a picture for each
-  vault (emojis also from the command line, pictures in the browser).
+* Icons: an emoji or a picture for each note, folder and vault. An uploaded
+  image becomes a small square picture, stored encrypted with what it is
+  the icon of; the pictures given lately are offered again. From the
+  command line too (a picture from a small file).
 * Favorites and recently opened notes in the sidebar.
 * Quick switcher (`Ctrl+P`) that creates the note when nothing matches;
   full-text search (`Ctrl+Shift+F`) with `tag:` (or `#tag`), `folder:` (or

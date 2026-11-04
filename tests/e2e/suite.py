@@ -1431,6 +1431,59 @@ def test_vim(env):
         b.close()
 
 
+def test_line_numbers(env):
+    b = Browser(1100, 800)
+    try:
+        signup(b, uniq("lnum"))
+        body = KEYS["enter"].join(["first", "## A heading", "", "a paragraph long enough to wrap " * 4, "last"])
+        new_note(b, "Numbered", body)
+        left = "return document.querySelector('.ed > .ln').getBoundingClientRect().left"
+        before = b.js(left)
+        b.js("history.pushState(null, '', '/settings/editor'); dispatchEvent(new PopStateEvent('popstate'));")
+        b.find(".line-numbers-toggle", 10)
+        b.js("document.querySelector('.line-numbers-toggle').scrollIntoView({block: 'center'})")
+        b.click_el(b.find(".line-numbers-toggle", 10))
+        b.wait("return document.documentElement.classList.contains('line-numbers')", 5, "line numbers on")
+        b.js("history.back()")
+        b.find(".ed .ln", 10)
+        time.sleep(0.4)
+        check(b.js("return getComputedStyle(document.querySelector('.ed > .ln'), '::after').content") == "counter(ln)", "each line gets its number")
+        check(abs(b.js(left) - before) < 1, "the text stays where it was: the numbers go in the margin")
+        # A table's hidden delimiter row and a code block's folded fences
+        # still count: the line after them has its own number.
+        b.click_el(b.find(".ed > .ln:last-child", 5))
+        b.chord(KEYS["ctrl"], KEYS["end"])
+        b.js("""const dt = new DataTransfer();
+            dt.setData('text/plain', '\\n| a | b |\\n| --- | --- |\\n| 1 | 2 |\\n\\n```py\\nx = 1\\n```\\nend');
+            document.querySelector('.ed').dispatchEvent(new ClipboardEvent('paste', {clipboardData: dt, bubbles: true, cancelable: true}));""")
+        time.sleep(0.4)
+        b.click_el(b.find(".ed > .ln:first-child", 5))
+        time.sleep(0.4)
+        b.shot("line-numbers")
+        n = b.js("""const lines = [...document.querySelectorAll('.ed > .ln')];
+            let n = 0;
+            for (const l of lines) {
+                const cs = getComputedStyle(l);
+                if (cs.display == 'none') continue;
+                const inc = cs.counterIncrement.match(/\\bln (\\d+)/);
+                n += inc ? +inc[1] : 0;
+            }
+            return [n, lines.length];""")
+        check(n[0] == n[1], f"every line of the Markdown counts once ({n})")
+        b.chord(KEYS["ctrl"], KEYS["end"])
+        b.keys(KEYS["enter"] + "last")
+        time.sleep(0.4)
+        # Typing goes on as before: the numbers aren't text.
+        b.click_el(b.find(".ed > .ln:last-child", 5))
+        b.chord(KEYS["ctrl"], KEYS["end"])
+        b.keys(" line")
+        time.sleep(0.6)
+        check(editor_text(b).endswith("last line"), f"typing is unaffected ({editor_text(b)!r})")
+        check(not severe_logs(b), "no browser errors")
+    finally:
+        b.close()
+
+
 # Viewport coordinates of the start and end of `text` in the editor.
 TEXT_ENDS = """
 const w = document.createTreeWalker(document.querySelector('.ed'), NodeFilter.SHOW_TEXT);
@@ -3237,7 +3290,7 @@ def test_device_code(env):
         a.close()
 
 
-TESTS = [test_onboarding, test_collab, test_devices_and_recovery, test_features, test_attachments, test_export_import, test_notion_import, test_delete_account, test_move_to_vault, test_note_sharing, test_tables, test_code_blocks, test_html, test_callouts, test_colors, test_code_wrapping, test_vim, test_editor_mouse, test_editor_safety, test_local_copy, test_ui_basics, test_offline_tabs, test_offline_start, test_mobile, test_quick_notes, test_vault_icons, test_entry_icons, test_tree_order, test_session_ended_while_away, test_outdated, test_comments, test_mentions, test_dates, test_graph, test_recovered_copy, test_note_width, test_admin, test_vault_storage, test_vault_admins, test_owners, test_undo_purge, test_device_code]
+TESTS = [test_onboarding, test_collab, test_devices_and_recovery, test_features, test_attachments, test_export_import, test_notion_import, test_delete_account, test_move_to_vault, test_note_sharing, test_tables, test_code_blocks, test_html, test_callouts, test_colors, test_code_wrapping, test_vim, test_line_numbers, test_editor_mouse, test_editor_safety, test_local_copy, test_ui_basics, test_offline_tabs, test_offline_start, test_mobile, test_quick_notes, test_vault_icons, test_entry_icons, test_tree_order, test_session_ended_while_away, test_outdated, test_comments, test_mentions, test_dates, test_graph, test_recovered_copy, test_note_width, test_admin, test_vault_storage, test_vault_admins, test_owners, test_undo_purge, test_device_code]
 
 
 def main():

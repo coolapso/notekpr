@@ -481,6 +481,10 @@ fn EditorPrefs() -> impl IntoView {
             " Vim keybindings (Esc for normal mode, i to insert)"
         </label>
         <label class="check">
+            <input type="checkbox" class="line-numbers-toggle" prop:checked=move || ui.ui_prefs.get().line_numbers on:change=move |ev| { let on = event_target_checked(&ev); state::set_ui_prefs(|p| p.line_numbers = on); }/>
+            " Line numbers"<span class="muted small">" — beside the text, one for each line of the Markdown"</span>
+        </label>
+        <label class="check">
             <input type="checkbox" class="code-numbers-toggle" prop:checked=move || ui.ui_prefs.get().code_numbers on:change=move |ev| { let on = event_target_checked(&ev); state::set_ui_prefs(|p| p.code_numbers = on); }/>
             " Line numbers in code blocks"<span class="muted small">" — ln=false after a block's language hides them for that block"</span>
         </label>

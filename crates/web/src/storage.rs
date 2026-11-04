@@ -424,6 +424,10 @@ pub struct UiPrefs {
     /// The "Quick notes" section of the sidebar.
     #[serde(default = "yes")]
     pub quick_notes: bool,
+    /// Line numbers beside the editor's text, one for each line of the
+    /// Markdown.
+    #[serde(default)]
+    pub line_numbers: bool,
     /// Line numbers in code blocks (a block's `ln=false` turns them off too).
     #[serde(default = "yes")]
     pub code_numbers: bool,
@@ -460,6 +464,7 @@ impl Default for UiPrefs {
             right_panel: true,
             note_width: NoteWidth::NARROW,
             quick_notes: true,
+            line_numbers: false,
             code_numbers: true,
             code_guides: true,
             code_wrap: true,

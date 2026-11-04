@@ -621,6 +621,26 @@ button.list-row:hover:not(:disabled) { background: var(--bg-2); }
 .ed .hw a { color: var(--link); text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
 .ed.live .ln.html:not(.active) { font-size: 0; line-height: 0; }
 .ed.live .ln.active .hw { display: none; }
+/* Line numbers (Settings → Editor): one for each line of the Markdown —
+   each is one .ln — counted with a CSS counter, so nothing is added to the
+   text. They sit in the margin, which the text's box takes in (it clips:
+   it scrolls sideways). A table's delimiter row, hidden, still counts;
+   lines folded away (a code block's fences, an HTML block's source) show
+   no number. --ln-h is a line's own height, for the number to sit level
+   with its first row. */
+@property --ln-h { syntax: '<length>'; inherits: true; initial-value: 0px; }
+.line-numbers .ed { counter-reset: ln; }
+.line-numbers .ed .ln { position: relative; counter-increment: ln; --ln-h: 1lh; }
+.line-numbers .ed.live .ln.code { counter-increment: code-line ln; }
+.line-numbers .ed.live .ln.table.tdl:not(.active) + .ln { counter-increment: ln 2; }
+.line-numbers .ed .ln::after {
+  content: counter(ln); position: absolute; top: 0; right: calc(100% + 10px); height: var(--ln-h);
+  font: 400 12px/var(--ln-h) var(--mono); color: var(--muted); opacity: 0.7; text-decoration: none;
+  white-space: nowrap; pointer-events: none; user-select: none;
+}
+.line-numbers .ed.live .ln.fence:not(.active)::after, .line-numbers .ed.live .ln.html:not(.active)::after { content: none; }
+.line-numbers .ed-wrap { margin-left: -40px; padding-left: 40px; }
+@media (max-width: 760px) { .line-numbers .ed-wrap { margin-left: -10px; padding-left: 32px; } }
 /* Vim outside insert mode: a block over the character under the cursor
    (drawn by the editor) instead of the browser's line. */
 .ed.vim-normal { caret-color: transparent; }

@@ -38,6 +38,7 @@ pub fn App() -> impl IntoView {
         if let Some(root) = util::document().document_element() {
             let _ = root.set_attribute("data-theme", &prefs.theme);
             let classes = root.class_list();
+            let _ = classes.toggle_with_force("line-numbers", prefs.line_numbers);
             let _ = classes.toggle_with_force("no-code-numbers", !prefs.code_numbers);
             let _ = classes.toggle_with_force("no-code-guides", !prefs.code_guides);
             let _ = classes.toggle_with_force("no-code-wrap", !prefs.code_wrap);

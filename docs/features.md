@@ -11,6 +11,8 @@ a Mac). The [README](../README.md) has the short version.
 * A formatting toolbar and keyboard shortcuts (`Ctrl+/` lists them; `⌘`
   instead of `Ctrl` on a Mac), light, dark or system theme. Enter, `↓` or
   Tab in the title moves on to the text.
+* Line numbers beside the text, one for each line of the Markdown, if you
+  like (Settings → Editor; off by default).
 * Optional Vim keys (Settings → Editor): normal, insert and visual modes
   (`v`, and `V` for whole lines) with a block cursor outside insert mode;
   the common motions and operators, counts (`3dd`, `12G`), `J` to join

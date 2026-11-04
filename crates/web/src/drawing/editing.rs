@@ -711,17 +711,24 @@ impl Board {
     fn adopt_files(self: &Rc<Self>, files: notekpr_draw::scene::Props) {
         let me = self.clone();
         leptos::task::spawn_local(async move {
-            let name = me.export_name();
+            let path = me.path();
             let mut known = HashMap::new();
-            let files = crate::actions::adopt_pictures(&me.vault, &name, files, &mut known).await;
+            let files = crate::actions::adopt_pictures(&me.vault, &path, files, &mut known).await;
             me.put_files(&files);
             me.schedule();
         });
     }
 
+    /// The drawing's path in its vault.
+    fn path(&self) -> String {
+        step(|c| c.entry(&self.vault, &self.id))
+            .map(|e| e.path)
+            .unwrap_or_else(|| "Drawing.drawing".into())
+    }
+
     /// Puts pictures (image files) in the drawing, centred at `at` (in the
     /// drawing; else the middle of the view), side by side; each becomes a
-    /// file of the vault (`attachments/`).
+    /// file of the vault (in `attachments/` beside the drawing).
     pub fn add_pictures(self: &Rc<Self>, files: Vec<web_sys::File>, at: Option<[f64; 2]>) {
         if !self.writable() {
             return;
@@ -753,9 +760,9 @@ impl Board {
                     crate::state::error(format!("{} can't be shown.", f.name()));
                     continue;
                 }
-                let path = format!("attachments/{}", f.name());
+                let folder = notekpr_core::attachments::folder_for(&me.path());
                 let Some((att, _)) =
-                    crate::actions::upload_attachment(&me.vault, &path, &bytes).await
+                    crate::actions::upload_new(&me.vault, &folder, &f.name(), &bytes).await
                 else {
                     continue;
                 };

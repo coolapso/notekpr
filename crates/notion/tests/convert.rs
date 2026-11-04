@@ -404,8 +404,8 @@ fn a_database_and_its_rows() {
             "Notion/Journal/2023-05-02.md",
             "Notion/Journal/Journal.md",
             "Notion/Journal/Read x.y.md",
-            "Notion/attachments/Café.txt",
-            "Notion/attachments/photo.png",
+            "Notion/Journal/attachments/Café.txt",
+            "Notion/Journal/attachments/photo.png",
         ]
     );
     let index = file(&c, "Notion/Journal/Journal.md");
@@ -579,7 +579,77 @@ fn names_taken_elsewhere_in_the_vault_link_by_path() {
         "{mexico}"
     );
     let entry = file(&c, "Notion/Journal/2023-05-02.md");
-    assert!(entry.contains("![[Notion/attachments/photo.png]]"));
+    assert!(entry.contains("![[Notion/Journal/attachments/photo.png]]"));
+}
+
+/// Each page's files go to `attachments/` beside its note, each under a
+/// name no other file of the import has: links by name find them.
+#[test]
+fn files_go_beside_the_notes_showing_them() {
+    let (outer, inner, other) = (9001, 9002, 9003);
+    let shows = |n: u32, title: &str, src: &str, more: &str| {
+        page(
+            n,
+            "",
+            title,
+            "",
+            &format!("<figure class=\"image\"><img src=\"{src}\"/></figure>{more}"),
+        )
+    };
+    let files: Files = vec![
+        (
+            format!("Garden {}.html", id(outer)),
+            shows(
+                outer,
+                "Garden",
+                "Garden/image.png",
+                &format!(
+                    "<figure class=\"link-to-page\">{}</figure>",
+                    link(inner, &format!("Garden/Beds%20{}.html", id(inner)), "Beds")
+                ),
+            ),
+        ),
+        (
+            format!("Garden/Beds {}.html", id(inner)),
+            shows(inner, "Beds", "Beds/image.png", ""),
+        ),
+        (
+            format!("Shed {}.html", id(other)),
+            shows(other, "Shed", "Shed/image.png", ""),
+        ),
+        ("Garden/image.png".into(), b"garden".to_vec()),
+        ("Garden/Beds/image.png".into(), b"beds".to_vec()),
+        ("Shed/image.png".into(), b"shed".to_vec()),
+    ];
+    let c = convert(vec![files], &opts()).unwrap();
+    let all = paths(&c);
+    let pictures: Vec<&str> = all
+        .iter()
+        .copied()
+        .filter(|p| p.ends_with(".png"))
+        .collect();
+    // Garden's note is in its folder, with Beds'.
+    assert_eq!(
+        pictures,
+        [
+            "Notion/Garden/attachments/image 2.png",
+            "Notion/Garden/attachments/image.png",
+            "Notion/attachments/image 3.png",
+        ],
+        "{all:#?}"
+    );
+    let shown = |note: &str| {
+        let t = file(&c, note);
+        let name = &t[t.find("![[").unwrap() + 3..t.find("]]").unwrap()];
+        let path = all
+            .iter()
+            .find(|p| p.ends_with(&format!("/{name}")))
+            .unwrap();
+        file(&c, path).to_string()
+    };
+    assert_eq!(shown("Notion/Garden/Garden.md"), "garden");
+    assert_eq!(shown("Notion/Garden/Beds.md"), "beds");
+    assert_eq!(shown("Notion/Shed.md"), "shed");
 }
 
 #[test]

@@ -433,7 +433,7 @@ HOME = [
         - [ ] Colors: select some text and pick a text or background color with the toolbar's **A** button. They are saved as HTML that Obsidian, Typora and VS Code show too ([[Tomatoes]]), and colors written there show here ([[Packing list]] has a highlight from Obsidian's Highlightr and a `<font color>`)
         - [ ] From Notion: export a page or database as HTML there (⋯ → Export, with subpages), then *Import notes* → *Import from Notion…* with its `.zip`. It shows what the export holds first; databases become folders of notes with a table of their rows, tasks checklists, and *Imported from Notion* lists what didn't come along. Import the same `.zip` again: what came already is left out
         - [ ] Code blocks in *Snippets*: a file name and highlighted lines (`title=… hl=…` after the language), line numbers, indentation guides, a copy button, `wrap=false` for long lines; Settings → Editor turns the numbers, guides and wrapping off
-        - [ ] Drop or paste a picture into a note — or a video or a recording: it plays where it is, as the sunset in [[Lisbon 2026]] and the blackbird in [[Pests]] do
+        - [ ] Drop or paste a picture into a note — or a video or a recording: it plays where it is, as the sunset in [[Lisbon 2026]] and the blackbird in [[Pests]] do. It goes to `attachments/` in the note's folder (*Garden*'s are in *Garden/attachments*)
         - [ ] Give a note or folder an icon: *Set icon…* in its ⋯ menu in the sidebar (or the icon by a note's title) — every emoji, by group; search them (`tada`, `dog`), or paste any. Or a picture of your own (*Upload picture…*), as [[Lisbon 2026]] has. The ones you picked lately come first
         - [ ] *Quick notes* in the sidebar: yours alone, in no vault — the same whichever vault you're in. Move one to a vault (*Move to vault…*: it takes its first line as the name) or delete it for good; there's room for 20
         - [ ] Move a note, or a folder with everything in it, to another vault: *Move to vault…* in its menu in the file tree (a note's also in its ⋯ menu at the top); the originals go to the trash
@@ -1534,10 +1534,11 @@ def seed(cli, url, data, server_bin):
         cli.write(a, "Home", path, text)
         if icon:
             cli.icon(a, "Home", path, icon)
-    cli.attach(a, "Home", "Garden/garden-layout.png", garden_layout())
-    cli.attach(a, "Home", "Travel/lisbon-sunset.png", sunset())
-    cli.attach(a, "Home", "Travel/lisbon-sunset.webm", (FILES / "lisbon-sunset.webm").read_bytes())
-    cli.attach(a, "Home", "Garden/blackbird.wav", blackbird())
+    # Each beside the notes using it, in its folder's attachments/.
+    cli.attach(a, "Home", "Garden/attachments/garden-layout.png", garden_layout())
+    cli.attach(a, "Home", "Travel/attachments/lisbon-sunset.png", sunset())
+    cli.attach(a, "Home", "Travel/attachments/lisbon-sunset.webm", (FILES / "lisbon-sunset.webm").read_bytes())
+    cli.attach(a, "Home", "Garden/attachments/blackbird.wav", blackbird())
     for folder, icon in [("Garden", "🌱"), ("Recipes", "🍳"), ("Travel", "✈️"),
                          ("Reading", "📚"), ("Journal", "📓"), ("Ideas", "💡")]:
         cli.icon(a, "Home", folder, icon)
@@ -1767,7 +1768,7 @@ def seed(cli, url, data, server_bin):
     cli.write(a, "Scans", "Letters.md", note("# Letters\n\nScanned, so the paper copies can go.\n\n" + "\n\n".join(
         f"## {who}\n\n![[{name}-letter.png]]" for name, who in letters)))
     for i, (name, _) in enumerate(letters):
-        cli.attach(a, "Scans", f"{name}-letter.png", scan(i + 1))
+        cli.attach(a, "Scans", f"attachments/{name}-letter.png", scan(i + 1))
 
     step("a billing script (an admin client): 100 MiB and 20 drawings per vault, 1 MiB for Scans "
          "(now full), 1 drawing for Family (full), 20 MiB of personal storage (alice: 50)")

@@ -111,6 +111,8 @@ pub struct Writer<'a> {
     vault_files: BTreeSet<String>,
     /// Where each file of the export goes.
     attachments: BTreeMap<(usize, String), String>,
+    /// The names those files have (lower case).
+    file_names: BTreeSet<String>,
     report: Report,
 }
 
@@ -476,6 +478,7 @@ impl<'a> Writer<'a> {
             stems: BTreeMap::new(),
             vault_files: BTreeSet::new(),
             attachments: BTreeMap::new(),
+            file_names: BTreeSet::new(),
             report: Report::default(),
         };
         for (child, parent) in &ws.parents {
@@ -544,7 +547,6 @@ impl<'a> Writer<'a> {
         let root = self.opts.into.clone();
         let taken = self.taken.entry(root.clone()).or_default();
         taken.insert(paths::title(REPORT).to_lowercase());
-        taken.insert(ATTACHMENTS.to_lowercase());
         let mut top = Vec::new();
         for p in ws.pages.values() {
             if !ws.parents.contains_key(&p.id) && !ws.templates.contains_key(&p.id) {
@@ -609,10 +611,13 @@ impl<'a> Writer<'a> {
         items
     }
 
-    /// `base`, or `base 2`, … whichever isn't taken in `folder` yet.
+    /// `base`, or `base 2`, … whichever isn't taken in `folder` yet (nor
+    /// the name of the folder its notes' files go in).
     fn unique_in(&mut self, folder: &str, base: &str) -> String {
         let taken = self.taken.entry(folder.to_string()).or_default();
-        let name = unique_name(base, |n| taken.contains(&n.to_lowercase()));
+        let name = unique_name(base, |n| {
+            taken.contains(&n.to_lowercase()) || n.eq_ignore_ascii_case(ATTACHMENTS)
+        });
         taken.insert(name.to_lowercase());
         name
     }
@@ -836,12 +841,23 @@ impl<'a> Writer<'a> {
                 dir = paths::parent(dir);
             };
             // A row shown in a page comes with that page.
+            let host = |id: &str| self.shown_in.get(id).map_or(id, String::as_str).to_string();
             let imported = |id: &str| {
-                let id = self.shown_in.get(id).map_or(id, String::as_str);
-                !self.opts.existing.contains_key(id) && self.placed.contains_key(id)
+                let id = host(id);
+                !self.opts.existing.contains_key(&id) && self.placed.contains_key(&id)
             };
             if owner.as_deref().is_none_or(imported) {
-                self.place_file(k);
+                // Beside the page's note (in its folder, if it has none).
+                let near = owner
+                    .and_then(|o| {
+                        let p = self.placed.get(&host(&o))?;
+                        match &p.note {
+                            Some(n) => Some(paths::parent(n).to_string()),
+                            None => p.folder.clone(),
+                        }
+                    })
+                    .unwrap_or_else(|| self.opts.into.clone());
+                self.place_file(k, &near);
             }
         }
         for (key, path) in &self.attachments {
@@ -1206,10 +1222,13 @@ impl<'a> Writer<'a> {
         self.ws
             .files
             .contains_key(&key)
-            .then(|| self.place_file(key))
+            .then(|| self.place_file(key, paths::parent(&cx.note)))
     }
 
-    fn place_file(&mut self, key: (usize, String)) -> String {
+    /// Where a file of the export goes: `attachments/` in the folder `near`
+    /// (that of the note showing or linking to it first), under a name no
+    /// other file of the import has, so that a link by name finds it.
+    fn place_file(&mut self, key: (usize, String), near: &str) -> String {
         if let Some(p) = self.attachments.get(&key) {
             return p.clone();
         }
@@ -1219,13 +1238,16 @@ impl<'a> Writer<'a> {
             _ => (name, ""),
         };
         let stem = file_name(stem);
-        let folder = paths::join(&self.opts.into, ATTACHMENTS);
+        let folder = paths::join(near, ATTACHMENTS);
         let taken = self.taken.entry(folder.clone()).or_default();
+        let names = &self.file_names;
         let stem = unique_name(&stem, |s| {
-            taken.contains(&format!("{s}{ext}").to_lowercase())
+            let n = format!("{s}{ext}").to_lowercase();
+            taken.contains(&n) || names.contains(&n)
         });
         let file = format!("{stem}{ext}");
         taken.insert(file.to_lowercase());
+        self.file_names.insert(file.to_lowercase());
         let path = paths::join(&folder, &file);
         self.attachments.insert(key, path.clone());
         path

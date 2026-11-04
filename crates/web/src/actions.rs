@@ -13,7 +13,7 @@ use notekpr_core::memberlog::{LogBody, LogEntry};
 use notekpr_core::moving::{self, Unmovable, What};
 use notekpr_core::protocol::*;
 use notekpr_core::textdiff::Edit;
-use notekpr_core::{markdown, order, paths};
+use notekpr_core::{attachments, markdown, order, paths};
 use wasm_bindgen::JsCast;
 
 use crate::editor::syntax::Target;
@@ -1329,8 +1329,7 @@ pub async fn make_drawing_of(vault: &str, id: &str) {
     }
     let mut scene = d.scene;
     crate::drawings::link_vault_pictures(vault, &mut scene, &d.embedded);
-    let name = paths::drawing_title(&to).to_string();
-    scene.files = adopt_pictures(vault, &name, scene.files, &mut HashMap::new()).await;
+    scene.files = adopt_pictures(vault, &to, scene.files, &mut HashMap::new()).await;
     let new = step(|c| {
         let new = new_drawing_at(c, vault, &to, &scene);
         change_index(c, vault, |ix| ix.trash(id, now()));
@@ -2305,14 +2304,51 @@ pub async fn download_attachment(vault: &str, id: &str) {
     }
 }
 
-/// Encrypt and upload files, add them to the index and return embed snippets.
-pub async fn upload_files(vault: &str, files: Vec<web_sys::File>, folder: &str) -> Vec<String> {
+/// Files added to the note `note`: encrypted and uploaded to `attachments/`
+/// beside it ([`attachments::folder_for`]), and the links to them —
+/// embedded where they show in a note — each the shortest that finds it.
+pub async fn attach_files(vault: &str, note: &str, files: Vec<web_sys::File>) -> Vec<String> {
+    let Some(at) = live_path(vault, note) else {
+        return vec![];
+    };
+    let uploaded = upload_files(vault, files, &attachments::folder_for(&at)).await;
+    // From where the note is now (it may have moved meanwhile).
+    let from = live_path(vault, note).unwrap_or(at);
+    uploaded
+        .into_iter()
+        .map(|(id, path)| {
+            let target = knowledge::link_target(vault, &id, &from)
+                .unwrap_or_else(|| paths::file_name(&path).to_string());
+            if util::shows_in_note(&path) {
+                format!("![[{target}]]")
+            } else {
+                format!("[[{target}]]")
+            }
+        })
+        .collect()
+}
+
+/// The path an entry of the vault shows at, if it is there (not trashed).
+fn live_path(vault: &str, id: &str) -> Option<String> {
+    step(|c| c.live_entries(vault))
+        .into_iter()
+        .find(|e| e.id == id)
+        .map(|e| e.path)
+}
+
+/// Encrypt and upload files into `folder`, each under a name no other file
+/// of the vault has ([`attachments::new_path`]): their ids and paths.
+pub async fn upload_files(
+    vault: &str,
+    files: Vec<web_sys::File>,
+    folder: &str,
+) -> Vec<(String, String)> {
     let max = state::ui()
         .server
         .get_untracked()
         .map(|s| s.max_attachment_bytes)
         .unwrap_or(25 << 20);
-    let mut embeds = Vec::new();
+    let mut uploaded = Vec::new();
     if step(|c| c.full.contains(vault)) {
         error(step(|c| {
             if c.is_quick_notes(vault) {
@@ -2324,7 +2360,7 @@ pub async fn upload_files(vault: &str, files: Vec<web_sys::File>, folder: &str) 
                 )
             }
         }));
-        return embeds;
+        return uploaded;
     }
     for f in files {
         let name = f.name();
@@ -2339,38 +2375,40 @@ pub async fn upload_files(vault: &str, files: Vec<web_sys::File>, folder: &str) 
         let Some(bytes) = util::read_file(&f).await else {
             continue;
         };
-        if let Some(path) = upload_bytes(vault, &paths::join(folder, &name), &bytes).await {
-            let fname = paths::file_name(&path).to_string();
-            embeds.push(if util::shows_in_note(&fname) {
-                format!("![[{fname}]]")
-            } else {
-                format!("[[{fname}]]")
-            });
+        if let Some(up) = upload_new(vault, folder, &name, &bytes).await {
+            uploaded.push(up);
         }
     }
-    embeds
+    uploaded
 }
 
-pub async fn upload_bytes(vault: &str, path: &str, bytes: &[u8]) -> Option<String> {
-    upload_file(vault, path, bytes).await.map(|(_, path)| path)
-}
-
-/// Uploads a file to `path` (or a free name beside it): its id and path.
-pub async fn upload_attachment(vault: &str, path: &str, bytes: &[u8]) -> Option<(String, String)> {
-    upload_file(vault, path, bytes).await
+/// Uploads a new file of the vault into `folder` under a name no other file
+/// has ([`attachments::new_path`]): its id and path.
+pub async fn upload_new(
+    vault: &str,
+    folder: &str,
+    name: &str,
+    bytes: &[u8],
+) -> Option<(String, String)> {
+    upload_as(vault, &paths::join(folder, name), bytes, true).await
 }
 
 /// Pictures a drawing's `files` hold inside (pasted, dropped, imported)
-/// become files of the vault (`attachments/`, named `name`) shown from
-/// there; those showing one of its files already stay. `known`: pictures
-/// uploaded before in the same go, by their bytes (not twice).
+/// become files of the vault (in `attachments/` beside the drawing at
+/// `drawing`, named after it) shown from there; those showing one of its
+/// files already stay. `known`: pictures uploaded before in the same go,
+/// by their bytes (not twice).
 pub async fn adopt_pictures(
     vault: &str,
-    name: &str,
+    drawing: &str,
     files: notekpr_draw::scene::Props,
     known: &mut HashMap<Vec<u8>, String>,
 ) -> notekpr_draw::scene::Props {
     use notekpr_core::pictures;
+    let (folder, name) = (
+        attachments::folder_for(drawing),
+        paths::drawing_title(drawing).to_string(),
+    );
     let mut out = notekpr_draw::scene::Props::new();
     for (file_id, f) in files {
         let created = f
@@ -2394,9 +2432,10 @@ pub async fn adopt_pictures(
         };
         let att = match known.get(&bytes) {
             Some(a) => Some(a.clone()),
-            None => upload_file(
+            None => upload_new(
                 vault,
-                &format!("attachments/{name}.{}", pictures::extension(&mime)),
+                &folder,
+                &format!("{name}.{}", pictures::extension(&mime)),
                 &bytes,
             )
             .await
@@ -2416,6 +2455,18 @@ pub async fn adopt_pictures(
 
 /// Upload a file to `path` (or a free name beside it): its id and path.
 async fn upload_file(vault: &str, path: &str, bytes: &[u8]) -> Option<(String, String)> {
+    upload_as(vault, path, bytes, false).await
+}
+
+/// Upload a file to `path`, or a free name beside it: one no other file of
+/// the vault has with `own_name` ([`attachments::new_path`]), else a free
+/// path. Its id and path.
+async fn upload_as(
+    vault: &str,
+    path: &str,
+    bytes: &[u8],
+    own_name: bool,
+) -> Option<(String, String)> {
     // Quick notes are flat.
     let path = if step(|c| c.is_quick_notes(vault)) {
         paths::file_name(path)
@@ -2430,7 +2481,16 @@ async fn upload_file(vault: &str, path: &str, bytes: &[u8]) -> Option<(String, S
     }
     let path = paths::normalize(path).ok()?;
     let path = step(|c| {
-        let path = unique_path(c, vault, &path);
+        let path = if own_name {
+            let live = c.live_entries(vault);
+            attachments::new_path(
+                paths::parent(&path),
+                paths::file_name(&path),
+                live.iter().map(|e| e.path.as_str()),
+            )
+        } else {
+            unique_path(c, vault, &path)
+        };
         let mime = util::mime_for(&path);
         let size = Some(bytes.len() as u64);
         change_index(c, vault, |ix| {
@@ -2910,8 +2970,7 @@ pub(crate) async fn import_files(
                 Some((paths::normalize(&to).ok()?, d.scene))
             });
         if let Some((to, mut scene)) = drawing {
-            let name = paths::drawing_title(&to).to_string();
-            scene.files = adopt_pictures(vault, &name, scene.files, &mut known).await;
+            scene.files = adopt_pictures(vault, &to, scene.files, &mut known).await;
             step(|c| new_drawing_at(c, vault, &to, &scene));
             got.drawings += 1;
         } else if paths::is_note(&path) {
@@ -3191,7 +3250,7 @@ impl Host for NoteHost {
         // is once the upload is done.
         let anchor = open_editor(&v, &n).map(|ed| ed.anchor(at));
         leptos::task::spawn_local(async move {
-            let embeds = upload_files(&v, files, "attachments").await;
+            let embeds = attach_files(&v, &n, files).await;
             insert_embeds_at(&v, &n, &embeds, anchor.as_ref());
         });
     }
@@ -3240,7 +3299,7 @@ fn insert_embeds_at(vault: &str, note: &str, embeds: &[String], at: Option<&edit
             None => ed.insert_text(&embeds.join("\n")),
         },
         None => info(format!(
-            "Uploaded {} to “attachments”. The note was closed meanwhile; add {} to link it.",
+            "Uploaded {}. The note was closed meanwhile; add {} to link it.",
             if embeds.len() == 1 {
                 "the file".to_string()
             } else {

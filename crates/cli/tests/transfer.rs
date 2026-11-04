@@ -643,7 +643,7 @@ async fn pictures_in_drawings_are_files_of_the_vault() {
     let (att, drawing) = {
         let g = v.lock().await;
         let (_, a) = g
-            .find("attachments/Board.png")
+            .find("Plans/attachments/Board.png")
             .expect("the picture, a file");
         assert_eq!(a.kind, EntryKind::Attachment);
         let (_, d) = g.find("Plans/Board").unwrap();
@@ -663,7 +663,12 @@ async fn pictures_in_drawings_are_files_of_the_vault() {
     ops::put_drawing(&h, "Art", "Plans/Board", &file)
         .await
         .unwrap();
-    assert!(v.lock().await.find("attachments/Board 2.png").is_none());
+    assert!(
+        v.lock()
+            .await
+            .find("Plans/attachments/Board 2.png")
+            .is_none()
+    );
     // Written out, it's inside.
     let out = ops::drawing_file(&h, &v, &drawing).await;
     let json: serde_json::Value = serde_json::from_str(&out).unwrap();
@@ -678,7 +683,9 @@ async fn pictures_in_drawings_are_files_of_the_vault() {
         .await
         .unwrap();
     let g = to.lock().await;
-    let (_, copy) = g.find("attachments/Board.png").expect("the picture there");
+    let (_, copy) = g
+        .find("Plans/attachments/Board.png")
+        .expect("the picture there");
     let (_, d) = g.find("Plans/Board").unwrap();
     assert_eq!(g.drawing(&d.id).files["f1"]["attachment"], copy.id.as_str());
     assert_ne!(copy.id, att);

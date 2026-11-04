@@ -40,7 +40,7 @@ pub type Files = Vec<(String, Vec<u8>)>;
 
 /// The report note, at the top of an import.
 pub const REPORT: &str = "Imported from Notion.md";
-/// The folder an import's files go in, at its top.
+/// The folder files go in, beside the note showing (or linking to) each.
 pub const ATTACHMENTS: &str = "attachments";
 /// The front matter key holding the Notion ID of the page a note came from.
 pub const ID_KEY: &str = "notion";

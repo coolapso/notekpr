@@ -164,7 +164,7 @@ fn Toolbar(vault: Option<String>) -> impl IntoView {
                     let Some(n) = step(|c| c.editor.as_ref().filter(|(ev, _, _)| *ev == v).map(|(_, n, _)| n.clone())) else { return };
                     actions::pick_files(false, "", move |files| {
                         leptos::task::spawn_local(async move {
-                            let embeds = actions::upload_files(&v, files, "attachments").await;
+                            let embeds = actions::attach_files(&v, &n, files).await;
                             actions::insert_embeds(&v, &n, &embeds);
                         });
                     });

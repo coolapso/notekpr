@@ -183,6 +183,16 @@ pub fn resolve_target(vault: &str, target: &str, from_path: &str) -> Option<Stri
         .map(str::to_string)
 }
 
+/// The shortest wiki link target that finds the entry `id` from the note
+/// at `from`: its name, else its path.
+pub fn link_target(vault: &str, id: &str, from: &str) -> Option<String> {
+    let links = resolver(vault);
+    let (_, path) = links.candidates().iter().find(|(i, _)| i == id)?;
+    Some(notekpr_core::attachments::link_target(
+        &links, id, path, from,
+    ))
+}
+
 /// What an embed shows (`![[…]]`): a file or a drawing — another app's
 /// drawing file too, Obsidian's linked without its `.md` — by path or by
 /// file name (the shortest path wins).

@@ -844,6 +844,9 @@ def test_move_to_vault(env):
         check(b.js("return document.querySelector('.crumbs').textContent") == "Archive / 2026" and editor_text(b) == "Beach:\n![[dot.png]]",
               "it is in the folder picked, with its text")
         b.wait("return !!document.querySelector('.ed .w img[src^=\"blob:\"]')", 15, "image preview")
+        # In attachments/ beside it there.
+        b.click_el(b.find_text(".tree-item", "attachments", 10))
+        b.find_text(".tree-item", "dot.png", 10)
         check("dot.png" in b.js("return Array.from(document.querySelectorAll('.tree-item .name')).map(e=>e.textContent).join(' ')"),
               "the picture it links to comes along and opens")
         # Attachments stay in their vault: only notes are offered the move.
@@ -879,7 +882,7 @@ def test_move_to_vault(env):
         b.find(".suggest .menu", 5)
         placed = b.js("const f = document.querySelector('.mtv-folder').getBoundingClientRect(), m = " + menu + ".getBoundingClientRect();"
                       "return Math.abs(m.left - f.left) < 1 && Math.abs(m.right - f.right) < 1 && m.top >= f.bottom && m.top - f.bottom < 8;")
-        check(placed and b.js("return Array.from(document.querySelectorAll('.suggest [role=option]')).map(o => o.textContent)") == ["2026"],
+        check(placed and b.js("return Array.from(document.querySelectorAll('.suggest [role=option]')).map(o => o.textContent)") == ["2026", "2026/attachments"],
               "the other vault's folders open in a list under the folder field")
         b.keys(KEYS["down"] + KEYS["enter"])
         check(b.js("return document.querySelector('.mtv-folder').value") == "2026" and b.js("return !" + menu),

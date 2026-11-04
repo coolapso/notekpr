@@ -142,11 +142,17 @@ pub fn Sidebar() -> impl IntoView {
                         <button class="icon-btn" title="New folder" aria-label="New folder" on:click=move |_| if let Some(v) = vault() {
                             ui.modal.set(Some(Modal::NewFolder { vault: v, parent: String::new() }));
                         }><Icon name="folder-plus"/></button>
+                        // Into attachments/ where a new note would go: the open note's folder.
                         <button class="icon-btn" title="Upload files" aria-label="Upload files" on:click=move |_| if let Some(v) = vault() {
+                            let folder = notekpr_core::paths::join(&current_folder(), notekpr_core::attachments::FOLDER);
                             actions::pick_files(false, "", move |files| {
                                 leptos::task::spawn_local(async move {
-                                    let n = actions::upload_files(&v, files, "attachments").await.len();
-                                    if n > 0 { state::success(format!("Uploaded {n} file(s).")); }
+                                    let n = actions::upload_files(&v, files, &folder).await.len();
+                                    match n {
+                                        0 => {}
+                                        1 => state::success(format!("Uploaded the file to {folder}.")),
+                                        n => state::success(format!("Uploaded {n} files to {folder}.")),
+                                    }
                                 });
                             });
                         }><Icon name="upload"/></button>

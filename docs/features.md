@@ -35,7 +35,10 @@ a Mac). The [README](../README.md) has the short version.
   pasting) after an opening `` ``` `` closes the block.
 * Images and other files: paste or drop them into a note — they are encrypted,
   uploaded and shown inline; videos and audio (`![[clip.mp4]]`) play there,
-  in the editor and the reading view.
+  in the editor and the reading view. They go to `attachments/` in the
+  note's folder (`notes/Trip.md`'s to `notes/attachments/`), each under a
+  name no other file of the vault has, so `![[photo.png]]` finds it here
+  and in Obsidian.
 * Callouts as GitHub and Obsidian write them: `> [!tip]`, `> [!warning] A
   title`, `> [!faq]-` for one that folds (`+` open). Types are
   case-insensitive — note, abstract, info, todo, tip, important, success,
@@ -97,8 +100,9 @@ a Mac). The [README](../README.md) has the short version.
 * The grid (`Ctrl+'`, part of the drawing) and snapping to other shapes'
   edges, centres and equal gaps (`Alt+S`, your own setting; `Ctrl` while
   dragging turns it off for that drag).
-* Pictures are files of the vault (`attachments/`), stored and synced once,
-  encrypted; drawing files written out hold them inside, as Excalidraw's do.
+* Pictures are files of the vault (in `attachments/` beside the drawing),
+  stored and synced once, encrypted; drawing files written out hold them
+  inside, as Excalidraw's do.
   Enter or a double click crops a picture.
 * Links on elements (`Ctrl+K`): a web address, or `[[a note]]` of the
   vault, opened from a button by the element.
@@ -254,7 +258,8 @@ a Mac). The [README](../README.md) has the short version.
   Pages become notes, those with subpages folders; databases folders of
   notes, their properties in front matter, with a note holding a table of
   the rows; tasks checklists; links between pages wiki links, also to pages
-  that come in a later piece. What came already isn't imported again, and
+  that come in a later piece; files in `attachments/` beside the notes
+  showing them. What came already isn't imported again, and
   a note, *Imported from Notion*, lists what didn't come along.
 * Moving to another server: export the vaults you choose and your quick
   notes as one `.zip` (Settings → Account → Data), and import it there — the

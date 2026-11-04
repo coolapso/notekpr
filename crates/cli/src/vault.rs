@@ -17,7 +17,9 @@ use notekpr_core::protocol::{
     Role, Snapshot, Update, VaultKind, comments_note, comments_object,
 };
 use notekpr_core::textdiff::{self, Edit};
-use notekpr_core::{comments, markdown, now_ms, order, paths, pictures, quick, random_id, search};
+use notekpr_core::{
+    attachments, comments, markdown, now_ms, order, paths, pictures, quick, random_id, search,
+};
 use notekpr_sync::members::MemberLog;
 use notekpr_sync::{Limits, Outbox, Plan, Reaction};
 
@@ -1483,7 +1485,7 @@ impl Vault {
     }
 
     /// The pictures a drawing file holds inside become files of the vault
-    /// (in `attachments/`, named after the drawing) that the drawing shows
+    /// (in `attachments/` beside it, named after it) that the drawing shows
     /// (`pictures`); those it shows from the vault already stay, and so do
     /// those `current` (the drawing before) showed from it. A picture the
     /// vault has a file of already (the same bytes: an export brought both
@@ -1548,9 +1550,10 @@ impl Vault {
                 );
                 continue;
             }
-            let path = paths::unique(
-                &format!("attachments/{title}.{}", pictures::extension(&mime)),
-                |p| taken.contains(&p.to_lowercase()),
+            let path = attachments::new_path(
+                &attachments::folder_for(drawing_path),
+                &format!("{title}.{}", pictures::extension(&mime)),
+                taken.iter().map(String::as_str),
             );
             taken.insert(path.to_lowercase());
             let r = self.add_attachment(&path, &bytes, Some(&mime))?;

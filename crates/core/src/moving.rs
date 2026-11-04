@@ -4,7 +4,8 @@
 //! Each vault has its own keys, so a move copies: the note or drawing, or
 //! the folder's notes, drawings, folders and files, the files and drawings
 //! elsewhere its notes link to, and the pictures its drawings show (the
-//! copies show the copies: [`relinked`]).
+//! copies show the copies: [`relinked`]); files from elsewhere land in
+//! `attachments/` beside what moved, as the files added to it there would.
 //! Once the other vault has every copy, the originals go to the trash
 //! (deleted for good from the quick notes), except files a note staying
 //! behind still links to. History, comments and note shares stay with the
@@ -16,6 +17,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use notekpr_draw::scene::Scene;
 
+use crate::attachments;
 use crate::doc::{Entry, EntryKind, Picture};
 use crate::engine::VaultReplica;
 use crate::markdown;
@@ -318,8 +320,9 @@ impl Plan {
     /// Where everything goes in `to`: into its folder `folder` (`""`: the
     /// top level), named `name`, under a free name if that is taken (any
     /// case). Inside a folder moved, everything keeps its path; a file
-    /// from elsewhere goes beside the note moved, or at the top level of
-    /// the folder moved. Wiki links between what moved are rewritten where
+    /// from elsewhere goes to `attachments/` beside the note moved (beside
+    /// it, if it was beside it), or at the top level of the folder moved; a
+    /// drawing from elsewhere beside the note, or at that top level. Wiki links between what moved are rewritten where
     /// they wouldn't find the copy there (Markdown links stay as written).
     pub fn place(&self, to: &VaultReplica, folder: &str, name: &str) -> Result<Placed, PathError> {
         let name = name.trim();
@@ -376,8 +379,16 @@ impl Plan {
             .iter()
             .filter(|i| matches!(i.place, Place::Beside))
         {
+            // A file beside the note moved stays beside it; the others go
+            // to `attachments/` (as the files added to it do).
+            let beside = paths::parent(&i.entry.path) == paths::parent(&self.root);
+            let dir = if i.entry.kind == EntryKind::Attachment && !(beside && !self.is_folder()) {
+                paths::join(&base, attachments::FOLDER)
+            } else {
+                base.clone()
+            };
             let name = paths::file_name(&i.entry.path);
-            let path = paths::unique(&paths::join(&base, name), |p| {
+            let path = paths::unique(&paths::join(&dir, name), |p| {
                 taken.contains(&p.to_lowercase())
             });
             taken.insert(path.to_lowercase());
@@ -533,9 +544,9 @@ mod tests {
                 ("e", "Archive/Projects/Empty"),
                 ("g", "Archive/Projects/Garden"),
                 ("p", "Archive/Projects/Garden/photo.png"),
-                ("logo", "Archive/Projects/logo.png"),
+                ("logo", "Archive/Projects/attachments/logo.png"),
+                ("plan", "Archive/Projects/attachments/plan.pdf"),
                 ("x", "Archive/Projects/notes.txt"),
-                ("plan", "Archive/Projects/plan.pdf"),
                 ("n1", "Archive/Projects/Garden/Beds.md"),
                 ("n2", "Archive/Projects/Roadmap.md"),
             ]
@@ -592,8 +603,8 @@ mod tests {
         assert_eq!(
             paths_of(&placed),
             [
-                ("pa", "beds.png"),
-                ("pb", "shed.png"),
+                ("pa", "attachments/beds.png"),
+                ("pb", "attachments/shed.png"),
                 ("d1", "Garden.drawing")
             ]
         );
@@ -614,22 +625,23 @@ mod tests {
             ),
             ("d", "Trip/Day two.md", N, "[[Day one]]"),
             ("b", "Trip/beach.png", A, ""),
-            ("m2", "Trip/map.png", A, ""),
+            ("m2", "Trip/attachments/map.png", A, ""),
             ("m", "attachments/map.png", A, ""),
             ("o", "Old.md", N, ""),
         ]);
         let p = plan(&from, &What::Folder("Trip".into())).unwrap();
         // A folder of that name, in any case: the copy is "Trip 2". The map
-        // from elsewhere takes the next free name beside the one inside.
+        // from elsewhere takes the next free name beside the one inside, in
+        // its attachments/.
         let to = vault(&[("x", "trip/old.md", N, ""), ("y", "Day one.md", N, "")]);
         let placed = p.place(&to, "", "Trip").unwrap();
         assert_eq!(placed.path, "Trip 2");
         assert_eq!(
             paths_of(&placed),
             [
+                ("m", "Trip 2/attachments/map 2.png"),
+                ("m2", "Trip 2/attachments/map.png"),
                 ("b", "Trip 2/beach.png"),
-                ("m", "Trip 2/map 2.png"),
-                ("m2", "Trip 2/map.png"),
                 ("n", "Trip 2/Day one.md"),
                 ("d", "Trip 2/Day two.md"),
             ]

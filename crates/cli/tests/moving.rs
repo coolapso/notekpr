@@ -110,11 +110,12 @@ async fn a_folder_moves_to_another_vault_with_everything_in_it() {
             .as_deref(),
         Some("[[Beds]] and ![[logo.png]]")
     );
-    // The files in it keep their places; those from elsewhere go to its top.
+    // The files in it keep their places; those from elsewhere go to its
+    // attachments/.
     for (p, data) in [
         ("Archive/Projects 2/Garden/photo.png", &b"photo"[..]),
-        ("Archive/Projects 2/plan.pdf", b"plan"),
-        ("Archive/Projects 2/logo.png", b"logo"),
+        ("Archive/Projects 2/attachments/plan.pdf", b"plan"),
+        ("Archive/Projects 2/attachments/logo.png", b"logo"),
     ] {
         assert_eq!(file(&h, "Work", p).await.as_deref(), Some(data), "{p}");
     }
@@ -293,13 +294,17 @@ async fn a_drawing_moves_with_its_pictures() {
     let work = h.resolve("Work").await.unwrap();
     let (pic, scene) = {
         let g = work.lock().await;
-        let (_, pic) = g.find("Board.png").expect("the picture came along");
+        let (_, pic) = g
+            .find("attachments/Board.png")
+            .expect("the picture came along");
         let (_, d) = g.find("Board.drawing").expect("the copy");
         (pic.id, g.drawing(&d.id))
     };
     assert_eq!(scene.files["f1"]["attachment"], pic.as_str());
     assert_eq!(
-        file(&h, "Work", "Board.png").await.unwrap_or_else(Vec::new),
+        file(&h, "Work", "attachments/Board.png")
+            .await
+            .unwrap_or_else(Vec::new),
         b"pixels"
     );
     let home = h.resolve("Home").await.unwrap();

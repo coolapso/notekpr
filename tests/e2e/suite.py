@@ -2007,6 +2007,26 @@ def png_file(path, w, h):
                 + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
 
 
+def test_vault_cards(env):
+    b = Browser()
+    try:
+        signup(b, uniq("card"))
+        b.click(".vault-btn")
+        b.click_el(b.find_text(".vault-menu button", "All vaults", 10))
+        card = b.find(".card-wrap", 10)
+        b.click_el(b.find(".card-wrap .card-cog", 5))
+        b.find_text(".modal", "Vault settings", 5)
+        check(b.js("return document.querySelector('.modal input')?.value") == "My notes", "the cog opens that vault's settings")
+        b.chord(KEYS["escape"])
+        b.wait("return !document.querySelector('.modal')", 5, "the dialog closes")
+        b.click_el(b.find(".card-wrap .card", 5))
+        b.wait("return location.pathname.startsWith('/v/')", 10, "the vault opens")
+        check(True, "the rest of the card still opens the vault")
+        check(not severe_logs(b), "no browser errors")
+    finally:
+        b.close()
+
+
 def test_vault_icons(env):
     a, b = Browser(), Browser()
     btn_icon = "(document.querySelector('.vault-btn .vault-emoji') || {}).textContent"
@@ -3290,7 +3310,7 @@ def test_device_code(env):
         a.close()
 
 
-TESTS = [test_onboarding, test_collab, test_devices_and_recovery, test_features, test_attachments, test_export_import, test_notion_import, test_delete_account, test_move_to_vault, test_note_sharing, test_tables, test_code_blocks, test_html, test_callouts, test_colors, test_code_wrapping, test_vim, test_line_numbers, test_editor_mouse, test_editor_safety, test_local_copy, test_ui_basics, test_offline_tabs, test_offline_start, test_mobile, test_quick_notes, test_vault_icons, test_entry_icons, test_tree_order, test_session_ended_while_away, test_outdated, test_comments, test_mentions, test_dates, test_graph, test_recovered_copy, test_note_width, test_admin, test_vault_storage, test_vault_admins, test_owners, test_undo_purge, test_device_code]
+TESTS = [test_onboarding, test_collab, test_devices_and_recovery, test_features, test_attachments, test_export_import, test_notion_import, test_delete_account, test_move_to_vault, test_note_sharing, test_tables, test_code_blocks, test_html, test_callouts, test_colors, test_code_wrapping, test_vim, test_line_numbers, test_editor_mouse, test_editor_safety, test_local_copy, test_ui_basics, test_offline_tabs, test_offline_start, test_mobile, test_quick_notes, test_vault_cards, test_vault_icons, test_entry_icons, test_tree_order, test_session_ended_while_away, test_outdated, test_comments, test_mentions, test_dates, test_graph, test_recovered_copy, test_note_width, test_admin, test_vault_storage, test_vault_admins, test_owners, test_undo_purge, test_device_code]
 
 
 def main():

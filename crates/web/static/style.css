@@ -312,6 +312,14 @@ textarea.input { resize: vertical; }
 .card:hover { border-color: var(--accent); transform: translateY(-1px); }
 .card.archived { opacity: 0.6; }
 .card.add { border-style: dashed; color: var(--muted); }
+/* A vault's card with its settings button (⚙) in the corner. */
+.card-wrap { position: relative; display: flex; }
+.card-wrap > .card { flex: 1; }
+.card-wrap:hover > .card { border-color: var(--accent); }
+.card-cog { position: absolute; top: 10px; right: 10px; color: var(--muted); opacity: 0; transition: opacity 0.12s; }
+.card-cog:hover { color: var(--fg); }
+.card-wrap:hover .card-cog, .card-cog:focus-visible { opacity: 1; }
+@media (hover: none) { .card-cog { opacity: 1; } }
 .card-icon { width: 36px; height: 36px; border-radius: 9px; display: flex; align-items: center; justify-content: center; background: var(--accent-bg); color: var(--accent); }
 .card-title { font-weight: 600; font-size: 16px; }
 .card-meta { display: flex; align-items: center; gap: 4px; font-size: 13px; color: var(--fg-2); }

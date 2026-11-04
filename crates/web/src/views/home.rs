@@ -50,13 +50,20 @@ pub fn Home() -> impl IntoView {
                             let id = id.clone();
                             move || { ui.tree_rev.get(); state::step(|c| c.notes_of(&id)).len() }
                         };
+                        let vid = StoredValue::new(id.clone());
+                        // The settings button sits on the card, beside it in
+                        // the page: a button can't hold another.
                         view! {
-                            <button class="card" class:archived=v.archived on:click=move |_| state::navigate(Route::Vault(id.clone()))>
-                                <div class="card-icon">{super::vault_icon(Some(&v))}</div>
-                                <div class="card-title">{v.name.clone()}</div>
-                                <div class="card-meta"><Icon name=icon/>" "{label}</div>
-                                <div class="card-meta muted">{move || if v.loaded { util::count(count(), "note", "notes") } else { v.error.clone().unwrap_or_else(|| "Loading…".into()) }}</div>
-                            </button>
+                            <div class="card-wrap">
+                                <button class="card" class:archived=v.archived on:click=move |_| state::navigate(Route::Vault(vid.get_value()))>
+                                    <div class="card-icon">{super::vault_icon(Some(&v))}</div>
+                                    <div class="card-title">{v.name.clone()}</div>
+                                    <div class="card-meta"><Icon name=icon/>" "{label}</div>
+                                    <div class="card-meta muted">{move || if v.loaded { util::count(count(), "note", "notes") } else { v.error.clone().unwrap_or_else(|| "Loading…".into()) }}</div>
+                                </button>
+                                <button class="icon-btn card-cog" title="Vault settings" aria-label=format!("Settings of {}", v.name)
+                                    on:click=move |_| ui.modal.set(Some(Modal::VaultSettings(vid.get_value())))><Icon name="settings"/></button>
+                            </div>
                         }
                     }).collect_view()}
                     <button class="card add" on:click=move |_| ui.modal.set(Some(Modal::NewVault))>

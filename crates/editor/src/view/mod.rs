@@ -87,6 +87,16 @@ pub trait Host {
     /// Files pasted or dropped at offset `at` (see [`Editor::anchor`] to keep
     /// track of that position while they upload).
     fn insert_files(&self, files: Vec<web_sys::File>, at: usize);
+    /// How far down the window the text is covered (by a sticky header or
+    /// toolbar, in viewport pixels): the caret is kept below it.
+    fn covered_top(&self) -> f64 {
+        0.0
+    }
+    /// Vim's Ctrl+O or Ctrl+I past the note's own jumps: the previous
+    /// (`back`) or next place in the application's history.
+    fn history(&self, back: bool) {
+        let _ = back;
+    }
 }
 
 struct LineView {
@@ -139,6 +149,10 @@ const DEFER_ACTIVE: u8 = 2;
 /// The height of a remote cursor's name (`.rc span`: 11px text, line
 /// height 1.5).
 const NAME_HEIGHT: f64 = 17.0;
+
+/// Room kept above and below the caret when scrolling to it (pixels).
+const ABOVE_CARET: f64 = 8.0;
+const BELOW_CARET: f64 = 24.0;
 
 /// Target, event, capture phase, callback.
 type Listener = (
@@ -1492,14 +1506,21 @@ impl Editor {
             self.sync_active();
             return;
         };
-        let changed = self.model(move |st| {
+        let (changed, all) = self.model(move |st| {
             let c = st.selection().pair() != (a, h);
             st.set_selection(Selection::new(a, h));
-            c
+            (c, a.min(h) == 0 && a.max(h) == st.doc().len())
         });
         self.sync_active();
         if changed {
-            self.follow_caret_sideways();
+            // Selecting all doesn't go to the end.
+            if self.mouse_down.get() || all {
+                self.follow_caret_sideways();
+            } else {
+                // Moved by keys (the browser's own moves): the browser
+                // scrolls, but not clear of what covers the top.
+                self.request_frame(true, false);
+            }
             self.update_menu();
             self.host.selection_changed(a, h);
         }
@@ -1670,27 +1691,93 @@ impl Editor {
         }
     }
 
+    /// Scroll up or down so that the caret shows below what covers the top
+    /// ([`Host::covered_top`]); on the first line, up to the very top, so
+    /// that what is above the text (a note's title) shows too. Then
+    /// sideways ([`Editor::follow_caret_sideways`]).
     fn scroll_caret_into_view(&self) {
         let line = self.model(|st| st.doc().line_of(st.selection().head));
         let Some(el) = self.view.borrow().lines.get(line).map(|l| l.el.clone()) else {
             return;
         };
-        let r = el.get_bounding_client_rect();
+        let scroller = self.scroller();
+        let (top, bottom) = self.visible_band(&scroller);
+        // The caret's own box: a long paragraph can be taller than the window.
+        let r = self
+            .caret_rect()
+            .unwrap_or_else(|| el.get_bounding_client_rect());
+        let y = scroller.scroll_top() as f64;
+        if line == 0 && y > 0.0 && r.bottom() + y <= bottom - BELOW_CARET {
+            scroller.set_scroll_top(0);
+        } else if r.top() < top + ABOVE_CARET {
+            scroller.set_scroll_top((y + r.top() - top - ABOVE_CARET).round() as i32);
+        } else if r.bottom() > bottom - BELOW_CARET {
+            let down = (r.bottom() - (bottom - BELOW_CARET)).min(r.top() - top - ABOVE_CARET);
+            scroller.set_scroll_top((y + down).round() as i32);
+        }
+        self.follow_caret_sideways();
+    }
+
+    /// The element the text scrolls in, up and down: the nearest ancestor
+    /// that scrolls, or the page.
+    fn scroller(&self) -> Element {
+        let doc = document();
+        let page = doc
+            .scrolling_element()
+            .or_else(|| doc.document_element())
+            .expect("a document has an element");
+        let Some(w) = web_sys::window() else {
+            return page;
+        };
+        let mut el = self.wrap.parent_element();
+        while let Some(e) = el {
+            if e.is_same_node(Some(&page)) {
+                break;
+            }
+            if let Ok(Some(cs)) = w.get_computed_style(&e)
+                && matches!(
+                    cs.get_property_value("overflow-y").as_deref(),
+                    Ok("auto" | "scroll")
+                )
+            {
+                return e;
+            }
+            el = e.parent_element();
+        }
+        page
+    }
+
+    /// Where text shows in `scroller`, top and bottom (viewport pixels):
+    /// its box within the window, below what covers it.
+    fn visible_band(&self, scroller: &Element) -> (f64, f64) {
         let vh = web_sys::window()
             .and_then(|w| w.inner_height().ok())
             .and_then(|v| v.as_f64())
             .unwrap_or(800.0);
-        if r.bottom() > vh - 24.0 || r.top() < 56.0 {
-            // Up or down only: a table's row is as wide as the table, and
-            // bringing all of it into view would undo the text's sideways
-            // scroll, which follows the caret below.
-            let x = self.wrap.scroll_left();
-            let opts = web_sys::ScrollIntoViewOptions::new();
-            opts.set_block(web_sys::ScrollLogicalPosition::Nearest);
-            el.scroll_into_view_with_scroll_into_view_options(&opts);
-            self.wrap.set_scroll_left(x);
+        let page = document()
+            .scrolling_element()
+            .is_some_and(|p| p.is_same_node(Some(scroller)));
+        let (top, bottom) = if page {
+            (0.0, vh)
+        } else {
+            let r = scroller.get_bounding_client_rect();
+            (r.top().max(0.0), r.bottom().min(vh))
+        };
+        (top.max(self.host.covered_top()), bottom)
+    }
+
+    /// The DOM caret's box (the focus end of the selection), if it has one.
+    fn caret_rect(&self) -> Option<web_sys::DomRect> {
+        let sel = document().get_selection().ok()??;
+        let node = sel.focus_node()?;
+        if !self.root.contains(Some(&node)) {
+            return None;
         }
-        self.follow_caret_sideways();
+        let range = document().create_range().ok()?;
+        range.set_start(&node, sel.focus_offset()).ok()?;
+        range.collapse_with_to_start(true);
+        let r = range.get_bounding_client_rect();
+        (r.height() > 0.0).then_some(r)
     }
 
     /// Scroll sideways so that the caret shows: a long line of code that

@@ -3148,6 +3148,22 @@ impl Host for NoteHost {
             insert_embeds_at(&v, &n, &embeds, anchor.as_ref());
         });
     }
+
+    fn covered_top(&self) -> f64 {
+        // The note's header and its toolbar stick to the top of the page.
+        let doc = util::document();
+        [".note-page .note-head", ".note-page .toolbar-wrap"]
+            .into_iter()
+            .filter_map(|s| doc.query_selector(s).ok().flatten())
+            .map(|e| e.get_bounding_client_rect().bottom())
+            .fold(0.0, f64::max)
+    }
+
+    fn history(&self, back: bool) {
+        if let Ok(h) = util::window().history() {
+            let _ = if back { h.back() } else { h.forward() };
+        }
+    }
 }
 
 fn open_editor(vault: &str, note: &str) -> Option<Rc<editor::Editor>> {

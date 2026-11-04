@@ -35,6 +35,10 @@ struct MockHost {
     boundaries: Cell<usize>,
     files_at: RefCell<Vec<usize>>,
     opened: RefCell<Vec<Target>>,
+    /// What [`Host::covered_top`] says.
+    covered: Cell<f64>,
+    /// Each [`Host::history`] call: `true` for back.
+    went: RefCell<Vec<bool>>,
 }
 
 impl MockHost {
@@ -103,6 +107,12 @@ impl Host for MockHost {
     fn insert_files(&self, _files: Vec<web_sys::File>, at: usize) {
         self.files_at.borrow_mut().push(at);
     }
+    fn covered_top(&self) -> f64 {
+        self.covered.get()
+    }
+    fn history(&self, back: bool) {
+        self.went.borrow_mut().push(back);
+    }
 }
 
 fn document() -> web_sys::Document {
@@ -156,6 +166,49 @@ fn setup_with(text: &str, readonly: bool) -> Fixture {
         host,
         container,
     }
+}
+
+/// An editor below a 120px title in a 300px box that scrolls (as a note's
+/// page does): the fixture and that box.
+fn setup_scrolling(text: &str) -> (Fixture, HtmlElement) {
+    let doc = document();
+    let scroller: HtmlElement = doc.create_element("div").unwrap().unchecked_into();
+    let _ = scroller.set_attribute(
+        "style",
+        "width: 700px; height: 300px; overflow: auto; font: 16px/1.5 sans-serif",
+    );
+    let title = doc.create_element("div").unwrap();
+    let _ = title.set_attribute("style", "height: 120px");
+    let inner = doc.create_element("div").unwrap();
+    scroller.append_child(&title).unwrap();
+    scroller.append_child(&inner).unwrap();
+    doc.body().unwrap().append_child(&scroller).unwrap();
+    let host = MockHost::new(text);
+    let ed = Editor::new(
+        &inner,
+        text.to_string(),
+        host.clone(),
+        Mode::Live,
+        false,
+        false,
+    );
+    ed.focus();
+    let f = Fixture {
+        ed,
+        host,
+        container: scroller.clone().unchecked_into(),
+    };
+    (f, scroller)
+}
+
+/// The DOM caret's box.
+fn caret_box() -> web_sys::DomRect {
+    let sel = document().get_selection().unwrap().unwrap();
+    let r = document().create_range().unwrap();
+    r.set_start(&sel.focus_node().unwrap(), sel.focus_offset())
+        .unwrap();
+    r.collapse_with_to_start(true);
+    r.get_bounding_client_rect()
 }
 
 fn root(f: &Fixture) -> HtmlElement {
@@ -827,6 +880,47 @@ fn drops_land_where_they_are_dropped() {
     type_str(&f, ">> ");
     f.ed.insert_at(&anchor, "![[a.txt]]");
     assert_text(&f, ">> hello![[a.txt]] world\nsecXYond line");
+}
+
+#[wasm_bindgen_test]
+async fn the_caret_stays_clear_of_what_covers_the_top() {
+    let text = (0..80)
+        .map(|i| format!("line {i}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let at_line = |n: usize| text.find(&format!("line {n}\n")).unwrap();
+    let (f, scroller) = setup_scrolling(&text);
+    let band = scroller.get_bounding_client_rect();
+    caret_at(&f, at_line(60));
+    frame().await;
+    frame().await;
+    let c = caret_box();
+    assert!(scroller.scroll_top() > 0, "scrolled down to the caret");
+    assert!(
+        c.top() >= band.top() && c.bottom() <= band.bottom(),
+        "the caret shows"
+    );
+    // A sticky toolbar covers the top 100px of the box: the caret goes below it.
+    let covered = band.top() + 100.0;
+    f.host.covered.set(covered);
+    let top_line = (0..80)
+        .find(|&n| {
+            caret_at(&f, at_line(n));
+            caret_box().bottom() > band.top()
+        })
+        .unwrap();
+    caret_at(&f, at_line(top_line + 1));
+    frame().await;
+    frame().await;
+    assert!(
+        caret_box().top() >= covered,
+        "the caret is below what covers the top"
+    );
+    // The first line: up to the top, where the title shows.
+    caret_at(&f, 0);
+    frame().await;
+    frame().await;
+    assert_eq!(scroller.scroll_top(), 0, "the title shows");
 }
 
 #[wasm_bindgen_test]

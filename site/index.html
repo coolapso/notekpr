@@ -23,7 +23,7 @@
       <a href="security.html">Security</a>
       <a class="opt" href="self-host.html">Self-host</a>
       <a class="opt" href="https://github.com/coolapso/notekpr">GitHub</a>
-      <a class="btn primary" href="#pricing">Start free</a>
+      <a class="btn primary" href="https://demo.notekpr.md">Try the demo</a>
     </nav>
   </div>
 </header>
@@ -32,11 +32,11 @@
   <!-- ============================================================ hero -->
   <section class="hero">
     <div class="wrap hero-head">
-      <a class="pill reveal" href="#pricing"><b>Soon</b> Hosted plans, starting free · self-host it today <span aria-hidden="true">→</span></a>
+      <a class="pill reveal" href="#pricing"><b>Soon</b> Hosted plans, every feature from €0 · self-host it today <span aria-hidden="true">→</span></a>
       <h1 class="reveal">Write anything. <br>The server only sees&nbsp;<span class="noise" id="noise"><span class="w">noise</span><svg class="scribble draw-in" viewBox="0 0 120 14" preserveAspectRatio="none" aria-hidden="true"><path d="M3 9 C 22 3, 38 13, 58 7 S 96 3, 117 9" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round"/></svg></span>.</h1>
       <p class="lede reveal">Markdown notes, drawings and live collaboration, end-to-end encrypted. Your devices hold the keys, so the server, ours or yours, stores ciphertext and nothing else.</p>
       <div class="btns center reveal">
-        <a class="btn primary big" href="#pricing">Start free <span class="arrow" aria-hidden="true">→</span></a>
+        <a class="btn primary big" href="https://demo.notekpr.md">Try the demo <span class="arrow" aria-hidden="true">→</span></a>
         <a class="btn big" href="self-host.html">Host it yourself</a>
       </div>
       <ul class="trust reveal"><li>Open source, AGPL</li><li>Plain Markdown files</li><li>Works offline</li><li>No trackers, no ads</li></ul>
@@ -303,55 +303,75 @@
   </section>
 
   <!-- ============================================================ pricing -->
-  <!-- A mock: the plans, limits and add-ons are a draft, not decided yet. -->
+  <!-- The plans as planned (2026-11-06). None is open yet: every button says so. -->
   <section class="section" id="pricing">
     <div class="wrap">
       <div class="section-head center reveal">
         <p class="kicker"><span>##</span> Pricing</p>
-        <h2>Your server or ours.</h2>
-        <p class="lede">Use notekpr on our servers or run it on your own: the same app, the same encryption, and nobody but you can read your notes. Start free and add only what you need.</p>
+        <h2>Every feature, on every plan.</h2>
+        <p class="lede">Nothing is held back to sell you an upgrade: the free plan has the whole app, end-to-end encrypted, like every other. Plans differ only in how much room you get, and in where notekpr runs: on our servers, on a server of your own, or on yours.</p>
+      </div>
+
+      <div class="plans-head reveal">
+        <h3>On our servers</h3>
+        <p>Sign up and start writing; we keep it running, up to date and backed up. Each vault has its own room, and your personal storage holds your quick notes.</p>
       </div>
       <div class="plans">
         <article class="plan reveal">
           <div class="name">Free</div>
-          <div class="for">For your own notes, and trying it out</div>
-          <div class="price">€0</div>
-          <ul><li><b>3</b> vaults</li><li><b>1 GB</b> of storage</li><li><b>10</b> drawings per vault</li><li>Every feature, end-to-end encrypted</li><li>Share with anyone</li></ul>
+          <div class="for">For your own notes, and for trying it out</div>
+          <div class="cost"><div class="price">€0</div><div class="per">Every feature included</div></div>
+          <ul><li><b>1</b> vault, <b>512 MB</b></li><li><b>512 MB</b> personal storage</li><li><b>1</b> drawing</li><li><b>20</b> quick notes</li><li>Files up to <b>25 MB</b></li><li><b>1 GB</b> in all</li></ul>
+          <a class="btn" aria-disabled="true">Coming soon</a>
+        </article>
+        <article class="plan reveal">
+          <div class="name">Plus</div>
+          <div class="for">For people who write every day</div>
+          <div class="cost"><div class="price">€5 <small>/ month</small></div><div class="per">or €50 a year: two months free</div></div>
+          <ul><li><b>3</b> vaults, <b>1 GB</b> each</li><li><b>1 GB</b> personal storage</li><li><b>20</b> drawings</li><li><b>Unlimited</b> quick notes</li><li>Files up to <b>50 MB</b></li><li><b>4 GB</b> in all</li></ul>
           <a class="btn" aria-disabled="true">Coming soon</a>
         </article>
         <article class="plan hot reveal">
           <span class="ribbon">For households</span>
           <div class="name">Family</div>
           <div class="for">Everyone at home, one plan</div>
-          <div class="price soon">Price soon</div>
-          <ul><li>Up to <b>6</b> people</li><li><b>10</b> vaults each</li><li><b>20 GB</b> of storage, shared as you like</li><li><b>50</b> drawings per vault</li><li>Family vaults you own together</li></ul>
+          <div class="cost"><div class="price">€15 <small>/ month</small></div><div class="per">or €150 a year: two months free</div></div>
+          <ul><li>Up to <b>6</b> people</li><li><b>3</b> vaults each, <b>1 GB</b> each</li><li><b>1 GB</b> personal storage each</li><li><b>20</b> drawings each</li><li><b>Unlimited</b> quick notes</li><li>Files up to <b>50 MB</b></li><li>Up to <b>24 GB</b> in all</li></ul>
           <a class="btn primary" aria-disabled="true">Coming soon</a>
-        </article>
-        <article class="plan reveal">
-          <div class="name">Unlimited</div>
-          <div class="for">For people who never stop writing</div>
-          <div class="price soon">Price soon</div>
-          <ul><li><b>Unlimited</b> vaults</li><li><b>Unlimited</b> drawings</li><li><b>100 GB</b> of storage</li><li>AI agents with their own keys</li><li>Everything in Family</li></ul>
-          <a class="btn" aria-disabled="true">Coming soon</a>
-        </article>
-        <article class="plan reveal">
-          <div class="name">Personalized</div>
-          <div class="for">For teams, schools and companies</div>
-          <div class="price soon">Let's talk</div>
-          <ul><li>Limits set for you</li><li>Your own instance</li><li>Moving in is an export and an import</li><li>Help to get started</li></ul>
-          <a class="btn" aria-disabled="true">Coming soon</a>
         </article>
       </div>
       <div class="addons reveal">
-        <div class="copy"><b>Add just what you need</b><p>Any plan, Free included, can grow one piece at a time: buy one more vault, more room or more drawings, without changing plans.</p></div>
-        <ul><li><b>+1 vault</b><span>price soon</span></li><li><b>+10 GB</b><span>of storage</span></li><li><b>+25 drawings</b><span>for a vault</span></li></ul>
+        <div class="copy"><b>Add just what you need</b><p>Need more of one thing? Add a yearly pack to Free, Plus or Family, without changing plans.</p></div>
+        <ul class="chips"><li>+ vaults</li><li>+ personal storage</li><li>+ room for a vault</li><li>+ drawings</li><li>+ quick notes</li><li>larger files</li></ul>
       </div>
+
+      <div class="plans-head reveal">
+        <h3>A server of your own</h3>
+        <p>For teams, schools and companies: notekpr just for you, with nobody else on it, your own address and your own sign-in.</p>
+      </div>
+      <div class="plans two">
+        <article class="plan reveal">
+          <div class="name">Custom</div>
+          <div class="for">Your own server, on ours</div>
+          <div class="cost"><div class="price soon">Sized to you</div><div class="per">Pick the people and the room; the price follows</div></div>
+          <ul><li><b>1 to 500</b> people</li><li><b>Unlimited</b> vaults, drawings and quick notes</li><li>One pool of storage everyone shares, as big as you need</li><li>Your own domain</li><li>Your own sign-in (SSO)</li><li>We run it, update it and back it up</li></ul>
+          <a class="btn" aria-disabled="true">Coming soon</a>
+        </article>
+        <article class="plan reveal">
+          <div class="name">Managed</div>
+          <div class="for">Your own server, on yours</div>
+          <div class="cost"><div class="price soon">Let's talk</div><div class="per">A quote for your setup</div></div>
+          <ul><li>On your servers or your cloud</li><li>We set it up, update it and back it up</li><li>As many people as you need</li><li>Limits and storage you decide</li><li>Your own domain</li><li>Your own sign-in (SSO)</li></ul>
+          <a class="btn" aria-disabled="true">Coming soon</a>
+        </article>
+      </div>
+
       <div class="selfhost reveal">
         <div class="big">€0</div>
-        <p><b>Rather run it yourself?</b> Every feature, no limits but your hardware: one Rust binary and a SQLite file, open source under the AGPL.</p>
+        <p><b>Rather run it yourself?</b> Every feature, no limits but the ones you set: one Rust binary and a SQLite file, open source under the AGPL.</p>
         <a class="btn" href="self-host.html">Self-hosting guide <span class="arrow" aria-hidden="true">→</span></a>
       </div>
-      <p class="fine">Hosted plans aren't open yet: these plans, limits and prices are a draft and will change before launch.</p>
+      <p class="fine">Hosted plans aren't open yet, and details may still change before they are. Until then, <a href="https://demo.notekpr.md">try the demo</a>. Prices exclude VAT.</p>
     </div>
   </section>
 
@@ -364,12 +384,14 @@
       </div>
       <div class="faq reveal">
         <details open><summary>Can you read my notes?</summary><p>No. Note text, titles, file and folder names, attachments and vault names are encrypted on your devices with keys the server never gets, on our servers and on yours alike. The server does learn some metadata, such as sizes, timing and who shares with whom; the <a href="security.html">security page</a> lists exactly what.</p></details>
+        <details><summary>Is anything kept for paying plans?</summary><p>No. Every plan, Free included, has every feature: the editor, drawings, sharing and editing together, comments, history, offline use, the command line and AI agents. Paying gets you more room, or a server of your own. Hosting it yourself, the only limits are the ones you set.</p></details>
+        <details><summary>Can I try it first?</summary><p>Yes: <a href="https://demo.notekpr.md">the demo</a> has people, shared vaults and notes in it already. Sign in as alice or bob, or any name, then open a second tab as someone else and edit together. Anyone can sign in as anyone there, and it starts over every hour, so keep nothing of yours in it.</p></details>
         <details><summary>What if I lose my phone and my laptop?</summary><p>Your recovery key, shown once when you set up, unlocks your account on a new device. Otherwise, new devices are approved from one you already use.</p></details>
         <details><summary>Can I take my notes and leave?</summary><p>Any time. Export a vault as Markdown, keep a synced folder of files on your disk, or export everything as one <code>.zip</code> and import it on another server: ours to yours, or back.</p></details>
         <details><summary>Is it really open source?</summary><p>Yes, all of it, the server, the web app and the command-line client, under the AGPL. Read it, run it, check it.</p></details>
         <details><summary>Does it work with Obsidian?</summary><p>Yes. The command-line client keeps your vaults as a folder of Markdown that Obsidian opens as a vault, synced both ways. Importing an Obsidian vault brings its attachments and turns its Excalidraw drawings into drawings.</p></details>
         <details><summary>Does it work offline?</summary><p>Yes. The browser keeps an encrypted copy of your vaults, and what you write offline syncs and merges when you are back.</p></details>
-        <details><summary>Is it ready?</summary><p>It's young, and it works: it is tested end to end, and known issues are tracked in the open. Keep backups of what matters, as with any new tool.</p></details>
+        <details><summary>Is it ready?</summary><p>It's young, and it works: it is tested end to end, and known issues are tracked in the open. Hosted plans open soon; today you can try the demo or host it yourself. Keep backups of what matters, as with any new tool.</p></details>
       </div>
     </div>
   </section>
@@ -382,7 +404,7 @@
         <h2>Your notes. Your keys.</h2>
         <p>On your server or ours.</p>
         <div class="btns center">
-          <a class="btn big" href="#pricing">Start free <span class="arrow" aria-hidden="true">→</span></a>
+          <a class="btn big" href="https://demo.notekpr.md">Try the demo <span class="arrow" aria-hidden="true">→</span></a>
           <a class="btn big ghost" href="self-host.html">Host it yourself</a>
         </div>
       </div>

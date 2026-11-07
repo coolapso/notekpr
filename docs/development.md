@@ -13,14 +13,15 @@ crates/cli      the CLI, Markdown mirror, gateway      → notekpr
 crates/load     load test runner (task load)           → notekpr-load
 crates/load-events  what the load runner streams to its live view
 crates/load-ui  the load test's live view (wasm32)     → dist/load
-scripts/        build-web.sh, build-load-ui.sh, demo.py (task demo), logo.py (the logo), emoji.py (the emoji table)
+scripts/        build-web.sh, build-load-ui.sh, demo.py (task demo), logo.py (the logo), emoji.py (the emoji table),
+                check-docs.py + docs-theme.sh (the docs site)
 tests/e2e       browser end-to-end tests (Python stdlib + chromedriver)
 fuzz/           fuzz targets, a separate workspace (fuzz/run.sh, task fuzz)
 vendor/yrs      yrs 0.28 with fixes, via [patch.crates-io] (see its NOTEKPR.md)
 vendor/openidconnect  openidconnect 4.0.1 on newer curve crates (see its NOTEKPR.md)
 deploy/         Kubernetes, Dex (dev OIDC), examples/ (optional reverse proxies)
 docs/           architecture, protocol, security, operations, agents, CLI;
-                assets/ (the logo and icon)
+                assets/ (the logo and icon); site/ (the docs as a website, Hugo → dist/docs)
 ```
 
 ## Development dependencies
@@ -38,6 +39,7 @@ get it.
 | Chromium + chromedriver, Python 3 | browser tests (`task test:e2e`) | `chromium` (includes chromedriver), `python` | matching Chrome/Chromium + chromedriver |
 | cargo-deny | supply-chain checks (`task audit`) | `cargo-deny` | `cargo install cargo-deny --locked` |
 | Docker + Compose | container image, Docker dev stack, local Dex for OIDC, the load test (`task load`), the S3 file store's test (`task test:s3`, with Garage) | `docker`, `docker-compose`, `docker-buildx` | Docker docs |
+| Hugo ≥ 0.168 (the standard edition is enough) | the docs site (`task docs`, `task docs:check`, `task ci`) | `hugo` | a single binary from Hugo's GitHub releases |
 
 The `wasm-bindgen` CLI must match the `wasm-bindgen` crate pinned
 (`=0.2.128`) in `crates/web/Cargo.toml`, `crates/editor/Cargo.toml` and
@@ -64,6 +66,7 @@ task dev                      # dev server on http://localhost:8080 (no OIDC), d
 task dev:adminless            # the same, admin-less: no administrators among the people, only admin clients
 task demo                     # a demo with users, vaults and shared notes on http://localhost:8099
 task load                     # load test with a live view on http://localhost:8098 (needs Docker)
+task docs                     # the docs as a website on http://localhost:8091, updated as you edit them
 task web:watch                # in a 2nd terminal: rebuild the web client on change, then reload the browser
 task cli:login DEV_USER=bob   # sign the CLI in as a test user (profile "bob")
 task cli -- --profile bob ls Family   # run any CLI command
@@ -438,8 +441,42 @@ it by hand when the logo or the icon changes, and commit what it writes.
 
 The icon is the favicon, `crates/web/static/favicon.svg`. The website (the
 notekpr-cloud repository) has a copy in `site/favicon.svg` and, drawn in the
-theme's colours, in the header of each page. Change them together, then run
+theme's colours, in the header of each page. The docs site uses the favicon
+as it is and draws the icon in its theme's colours from
+`docs/site/assets/icon.svg`. Change them together, then run
 `scripts/logo.py` for `icon.svg` and `icon.png`.
+
+## The docs site
+
+The docs in `docs/` are also a website, for docs.notekpr.md (not published
+yet): [Hugo](https://gohugo.io) with the
+[Dockleaf](https://github.com/coolapso/hugo-theme-dockleaf) theme, in its
+`notekpr` look. The docs stay where they are and as GitHub shows them;
+`docs/site` only presents them:
+
+| File | What |
+|---|---|
+| `data/docs.yaml` | the sections and their pages, in order: the doc each page shows, its name in the sidebar, a line about it |
+| `content/_content.gotmpl` | a page for each doc listed; the doc's `# ` heading is its title |
+| `content/_index.md` | the home page |
+| `layouts/_markup/render-link.html` | links between docs (`cli.md#…`) go to their pages, links into the repository (`../deploy/`) to GitHub |
+| `hugo.toml` | the site: its menus, footer, and where the docs and the favicon come from |
+| `themes/dockleaf/` | a copy of Dockleaf (see its `NOTEKPR.md`) |
+
+```sh
+task docs                                  # preview on http://localhost:8091, updated as you edit docs/*.md
+task docs:check                            # build it and check every link and #anchor (task ci does)
+task docs:build                            # the site as it is published, in dist/docs
+task docs:theme DOCKLEAF=~/Dev/dockleaf    # copy a newer Dockleaf in (REF=… for a tag or commit)
+```
+
+Write the docs for GitHub, as before: relative links to other docs and into
+the repository, and no HTML (the site leaves it out, and `task docs:check`
+says where). A new doc goes into `data/docs.yaml`: the site doesn't build
+while a doc is missing from it, except the examples to copy
+(`*.example.md`), which stay on GitHub. The look belongs to Dockleaf:
+change it there, check both its themes (`task test` there), then copy it
+in.
 
 ## Emoji
 

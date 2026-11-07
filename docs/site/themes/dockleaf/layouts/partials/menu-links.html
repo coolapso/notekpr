@@ -1,0 +1,3 @@
+{{- range site.Menus.main -}}
+<a href="{{ .URL | relURL }}"{{ if .Params.button }} class="button primary"{{ end }}{{ if $.IsMenuCurrent "main" . }} aria-current="page"{{ else if $.HasMenuCurrent "main" . }} aria-current="true"{{ end }}>{{ .Name }}</a>
+{{- end -}}

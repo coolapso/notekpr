@@ -14,6 +14,8 @@ vars:
   # development server on this machine only; another one with
   # `task dev DEV_ADMIN_TOKEN=notekpr_a_…`.
   DEV_ADMIN_TOKEN: notekpr_a_dev-admin-token-for-this-machine-only
+  # `task docs`: the docs site's preview.
+  DOCS_PORT: "8091"
   # `task demo`: its own server, database and CLI profiles, next to `task dev`.
   DEMO_LISTEN: 127.0.0.1:8099
   DEMO_DIR: data/demo
@@ -87,6 +89,7 @@ tasks:
           command -v docker >/dev/null && echo "✓ docker (container image, Docker dev stack)" || echo "· for the docker:* tasks, task load and task ci: docker + compose (Arch: docker docker-compose docker-buildx)"
           command -v semrel >/dev/null && command -v jq >/dev/null && echo "✓ semrel + jq (task release)" || echo "· for task release: semrel (task tools:release, needs Go) and jq (Arch: jq)"
           command -v copr-cli >/dev/null && echo "✓ copr-cli (task release, Fedora's COPR)" || echo "· for task release: copr-cli (Arch: copr-cli; or task tools:copr, needs pipx)"
+          command -v hugo >/dev/null && echo "✓ hugo (task docs)" || echo "· for the docs site (task docs, task docs:check, task ci): hugo 0.168 or newer (Arch: hugo)"
           [ "$ok" = 1 ]
 
   rust:
@@ -95,6 +98,30 @@ tasks:
     preconditions:
       - sh: cargo --version > /dev/null 2>&1
         msg: "cargo doesn't work. Run `task setup` to see what's missing (with rustup but no toolchain: reinstall your distribution's Rust, on Arch `sudo pacman -S rust`, or run `rustup default stable`)."
+
+  # ------------------------------------------------------------------ docs site
+
+  docs:
+    desc: "Preview the docs site (docs.notekpr.md: docs/*.md with Hugo, docs/site) on http://localhost:{{.DOCS_PORT}}, updated as the docs change (another port: DOCS_PORT=…)"
+    cmds:
+      - hugo server --source docs/site --bind 127.0.0.1 --port {{.DOCS_PORT}} --baseURL http://localhost:{{.DOCS_PORT}}/
+
+  docs:build:
+    desc: Build the docs site into dist/docs, as it is published
+    cmds:
+      - hugo --source docs/site --destination "{{.ROOT_DIR}}/dist/docs" --cleanDestinationDir --minify
+
+  docs:check:
+    desc: "Build the docs site and check it: every doc is on it, every link and #anchor goes somewhere"
+    cmds:
+      - python3 scripts/check-docs.py
+
+  docs:theme:
+    desc: "Copy the Dockleaf theme into docs/site/themes/dockleaf from a checkout: task docs:theme DOCKLEAF=~/Dev/dockleaf (REF=a tag or commit; default the checkout's)"
+    requires:
+      vars: [DOCKLEAF]
+    cmds:
+      - scripts/docs-theme.sh "{{.DOCKLEAF}}" "{{.REF | default "HEAD"}}"
 
   # ------------------------------------------------------------------ build
 
@@ -336,7 +363,7 @@ tasks:
   # passes: one machine's disk (14 GB guaranteed on GitHub's runners) doesn't
   # hold the test builds and the image or release builds.
   ci:check:
-    desc: "Format check, lint, every test, the wasm build, the editor's and the browser tests, the supply-chain check"
+    desc: "Format check, lint, every test, the wasm build, the editor's and the browser tests, the supply-chain check, the docs site's links"
     cmds:
       - task: fmt:check
       - task: lint
@@ -346,6 +373,7 @@ tasks:
       - task: test:editor
       - task: test:e2e
       - task: audit
+      - task: docs:check
 
   ci:image:
     desc: "The container images: the server's and the public demo's"

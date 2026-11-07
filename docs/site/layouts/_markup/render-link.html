@@ -1,0 +1,23 @@
+{{- /* The docs link to each other and to the repository as GitHub sees them: "cli.md#4-sync", "../deploy/".
+       A doc on the site links to its page, another doc and the rest of the repository to GitHub. */ -}}
+{{- $href := .Destination -}}
+{{- $url := urls.Parse .Destination -}}
+{{- if and (not $url.Scheme) $url.Path -}}
+  {{- $repo := site.Params.repo -}}
+  {{- $fragment := "" }}{{ with $url.Fragment }}{{ $fragment = printf "#%s" . }}{{ end -}}
+  {{- if strings.HasPrefix $url.Path "../" -}}
+    {{- $path := strings.TrimPrefix "../" $url.Path -}}
+    {{- $href = printf "%s/%s/main/%s%s" $repo (cond (strings.HasSuffix $path "/") "tree" "blob") $path $fragment -}}
+  {{- else if and (strings.HasSuffix $url.Path ".md") (not (strings.Contains $url.Path "/")) -}}
+    {{- $pages := where site.RegularPages "Params.doc" (strings.TrimSuffix ".md" $url.Path) -}}
+    {{- if $pages -}}
+      {{- $href = printf "%s%s" (index $pages 0).RelPermalink $fragment -}}
+    {{- else -}}
+      {{- $href = printf "%s/blob/main/docs/%s%s" $repo $url.Path $fragment -}}
+    {{- end -}}
+  {{- else -}}
+    {{- errorf "docs/%s.md links to %q: link to a doc (name.md) or to the repository (../path)" .Page.Params.doc .Destination -}}
+  {{- end -}}
+{{- end -}}
+<a href="{{ $href }}"{{ with .Title }} title="{{ . }}"{{ end }}>{{ .Text }}</a>
+{{- /**/ -}}

@@ -1,0 +1,2 @@
+<a href="{{ partial "content-url.html" .Destination }}"{{ with .Title }} title="{{ . }}"{{ end }}>{{ .Text | safeHTML }}</a>
+{{- /* no newline after the link: it would show as a space before what follows */ -}}

@@ -15,3 +15,7 @@ __pycache__/
 # semrel: downloaded plugins (pinned in .semrel.lock) and its local stats
 /.semrel/*/
 /.semrel-analytics.jsonl
+# Hugo's own files in the docs site (task docs:build writes the site to dist/docs)
+/docs/site/.hugo_build.lock
+/docs/site/resources/
+/docs/site/public/

@@ -1,0 +1,45 @@
+{{- /* Every page but the home page: the sections of data/docs.yaml, each with its docs (docs/*.md,
+       mounted at assets/docs), as they are. A doc's "# " heading is its title, the rest its text.
+       Every doc is on the site but the examples to copy (*.example.md), which GitHub shows. */ -}}
+{{- $repo := site.Params.repo -}}
+{{- $listed := slice -}}
+{{- range hugo.Data.docs }}{{ range .pages }}{{ $listed = $listed | append .file }}{{ end }}{{ end -}}
+{{- range resources.Match "docs/*.md" -}}
+  {{- $file := path.BaseName .Name -}}
+  {{- if not (or (in $listed $file) (strings.HasSuffix $file ".example")) -}}
+    {{- warnf "docs/%s.md isn't on the docs site: add it to docs/site/data/docs.yaml" $file -}}
+  {{- end -}}
+{{- end -}}
+{{- range $i, $section := hugo.Data.docs -}}
+  {{- $cards := slice -}}
+  {{- range $j, $doc := $section.pages -}}
+    {{- $source := resources.Get (printf "docs/%s.md" $doc.file) -}}
+    {{- if not $source }}{{ errorf "data/docs.yaml lists docs/%s.md, which doesn't exist" $doc.file }}{{ end -}}
+    {{- $heading := findRESubmatch `\A# (.+)\n` $source.Content 1 -}}
+    {{- if not $heading }}{{ errorf "docs/%s.md doesn't start with a \"# \" heading" $doc.file }}{{ end -}}
+    {{- $title := index $heading 0 1 -}}
+    {{- $nav := $doc.nav | default $title -}}
+    {{- $path := printf "%s/%s" $section.section ($doc.slug | default $doc.file) -}}
+    {{- $.AddPage (dict
+      "path" $path
+      "title" $title
+      "weight" (add $j 1)
+      "description" $doc.description
+      "content" (dict "mediaType" "text/markdown" "value" (strings.TrimPrefix (index $heading 0 0) $source.Content))
+      "params" (dict
+        "navTitle" $nav
+        "eyebrow" $section.title
+        "doc" $doc.file
+        "editURL" (printf "%s/edit/main/docs/%s.md" $repo $doc.file))
+    ) -}}
+    {{- $cards = $cards | append (dict "title" $nav "url" (printf "%s/" $path) "description" $doc.description) -}}
+  {{- end -}}
+  {{- $.AddPage (dict
+    "kind" "section"
+    "path" $section.section
+    "title" $section.title
+    "weight" (mul (add $i 1) 10)
+    "description" $section.description
+    "params" (dict "cards" $cards)
+  ) -}}
+{{- end -}}

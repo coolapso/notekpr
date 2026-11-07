@@ -1,0 +1,23 @@
+{{- /* Footer menu entries with children become columns, next to params.about; the others go in the bottom row. */ -}}
+{{- $columns := slice -}}
+{{- $links := slice -}}
+{{- range site.Menus.footer }}{{ if .HasChildren }}{{ $columns = $columns | append . }}{{ else }}{{ $links = $links | append . }}{{ end }}{{ end -}}
+<footer class="site-footer">
+  {{- if or site.Params.about $columns }}
+  <div class="footer-grid">
+    {{ with site.Params.about }}<div class="footer-about">
+      {{ partial "brand.html" $ }}
+      <p>{{ . | markdownify }}</p>
+      {{ with site.Params.footerNote }}<p class="footer-note">{{ . }}</p>{{ end }}
+    </div>{{ end }}
+    {{ range $columns }}<nav class="footer-column" aria-label="{{ .Name }}"><p>{{ .Name }}</p><ul>{{ range .Children }}<li><a href="{{ .URL | relURL }}">{{ .Name }}</a></li>{{ end }}</ul></nav>{{ end }}
+  </div>
+  <div class="footer-base">
+    {{ with site.Params.footer }}<p>{{ . | markdownify }}</p>{{ end }}
+    {{ with $links }}<nav aria-label="{{ i18n "footer" }}">{{ range . }}<a href="{{ .URL | relURL }}">{{ with .Params.image }}<img src="{{ . | relURL }}" alt="" width="22" height="22">{{ end }}{{ .Name }}</a>{{ end }}</nav>{{ end }}
+  </div>
+  {{- else }}
+  {{ with site.Params.footer }}<p>{{ . | markdownify }}</p>{{ end }}
+  {{ with site.Menus.footer }}<nav aria-label="{{ i18n "footer" }}">{{ range . }}<a href="{{ .URL | relURL }}">{{ .Name }}</a>{{ end }}</nav>{{ end }}
+  {{- end }}
+</footer>

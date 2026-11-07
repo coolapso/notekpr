@@ -1,0 +1,2 @@
+<img src="{{ partial "content-url.html" .Destination }}" alt="{{ .PlainText }}"{{ with .Title }} title="{{ . }}"{{ end }} loading="lazy">
+{{- /* no newline after the image: it would show as a space before what follows */ -}}

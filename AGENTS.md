@@ -126,7 +126,10 @@ scripts/        build-web.sh, build-load-ui.sh (wasm builds) · emoji.py (the em
                 table, from Unicode's data) · demo.py (task demo),
                 demo-files/ (what it can't make, e.g. a video) · logo.py (the logo
                 and icon in docs/assets, by hand) · test-s3.sh (task test:s3: the
-                S3 file store against Garage in Docker)
+                S3 file store against Garage in Docker) · check-docs.py,
+                docs-theme.sh (the docs site)
+docs/site       the docs as a website (docs.notekpr.md): Hugo with the Dockleaf theme,
+                copied into themes/dockleaf; data/docs.yaml lists its pages
 packaging/      the CLI's release builds (GoReleaser, .goreleaser.yaml): Dockerfile (the
                 image it runs in) · run.sh (a command in that image) · completions.sh ·
                 systemd/ (the sync user unit) · rpm/ (COPR's source RPM: the spec, srpm.sh);
@@ -164,6 +167,7 @@ task test:s3                     # attachments in S3-compatible storage (Garage 
 task test:e2e -- -k sharing      # browser tests (chromium + chromedriver + python3)
 task test:editor                 # the editor's DOM view in headless Chromium (wasm-bindgen-test)
 task build:clients               # the CLI's release files and packages into dist/clients (Docker, nothing published)
+task docs / task docs:check      # the docs as a website (:8091); build it and check its links (hugo)
 task ci                          # exactly what CI runs: ci:check (incl. audit) + ci:image + ci:clients
 task release                     # from main: CI's checks, tag the next version (semrel), push the images, publish the CLI
 ```
@@ -193,7 +197,9 @@ Without go-task, see the plain commands in the [Taskfile](Taskfile.yml) or
   - load test → unit tests in `crates/load`, `crates/load-events`
 - Docs follow the code: API or wire change → `docs/protocol.md`; anything
   about keys, trust or metadata → `docs/security.md`; new CLI commands →
-  `docs/cli.md`; requirement coverage → `docs/acceptance.md`.
+  `docs/cli.md`; requirement coverage → `docs/acceptance.md`. The docs are
+  also the docs site: a new doc goes into `docs/site/data/docs.yaml`, and
+  `task docs:check` passes (docs/development.md, "The docs site").
 - **Feature lists stay current.** A new user-facing feature, or a change to
   one (including its shortcuts), goes into the feature lists in the same
   change: `docs/features.md` (every feature) and, for headline features,

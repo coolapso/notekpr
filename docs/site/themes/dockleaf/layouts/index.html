@@ -1,0 +1,11 @@
+{{ define "main" }}
+  <section class="docs-home">
+    {{ with .Params.banner }}<img class="brand-banner" src="{{ . | relURL }}" alt="{{ $.Params.bannerAlt | default "" }}"{{ with $.Params.bannerWidth }} width="{{ . }}"{{ end }}{{ with $.Params.bannerHeight }} height="{{ . }}"{{ end }}>{{ end }}
+    <p class="eyebrow">{{ .Params.eyebrow | default (i18n "documentation") }}</p>
+    <h1>{{ .Params.heading | default .Title }}</h1>
+    {{ with .Description }}<p class="lead">{{ . }}</p>{{ end }}
+    {{ with .Params.actions }}<p class="hero-actions">{{ range . }}<a class="button {{ if .primary }}primary{{ else }}secondary{{ end }}" href="{{ strings.TrimPrefix "/" .url | relURL }}">{{ .title }}</a>{{ end }}</p>{{ end }}
+  </section>
+  {{ partial "cards.html" . }}
+  <article class="doc home-doc">{{ .Content }}</article>
+{{ end }}

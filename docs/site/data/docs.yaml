@@ -1,0 +1,79 @@
+# The site's sections, in sidebar order, and the docs each shows (docs/<file>.md), in order.
+# A page is its doc exactly as GitHub shows it; its title is the doc's "# " heading.
+#   section/title/description: the section's address (/<section>/), name and one line about it
+#   file: the doc; nav: its name in the sidebar and on cards; slug: its address in the section
+#   (default: file); description: one line, under the title and in search engines
+# A doc that isn't listed here isn't on the site: links to it go to GitHub.
+
+- section: use
+  title: Use it
+  description: What notekpr does, and who can do what in a vault.
+  pages:
+    - file: features
+      nav: Features
+      description: Writing, drawings, finding things, working together, privacy, offline use and running a server, with every shortcut.
+    - file: roles
+      nav: Who can do what
+      description: The four roles in a vault (owner, admin, editor, viewer) and what each may do.
+
+- section: tools
+  title: Your own tools
+  description: Your notes outside the app, in your editor, in a terminal, and for AI agents.
+  pages:
+    - file: own-editor
+      nav: Your own editor
+      description: An end-to-end encrypted sync server for your Obsidian vault, or for Neovim, VS Code and any other editor.
+    - file: cli
+      nav: The command line
+      description: Sign in, sync, keep a Markdown folder, share, export and import, from a terminal.
+    - file: agents
+      nav: AI agents
+      description: An agent gets its own identity and keys, and sees only the vaults you share with it, as a viewer or an editor.
+
+- section: self-host
+  title: Self-host
+  description: Your own notekpr server, on your machine or your cluster.
+  pages:
+    - file: operations
+      nav: Running a server
+      description: Docker Compose or Kubernetes, sign-in, TLS, the first administrator, backups, upgrades and monitoring.
+
+- section: security
+  title: Security
+  description: How notekpr keeps your notes yours.
+  pages:
+    - file: security
+      nav: Security model
+      slug: model
+      description: What is encrypted and how, what the server still learns, and what an attacker can and can't do.
+    - file: recovery
+      nav: Getting your notes out
+      description: An encrypted export and your recovery key are all you need to turn your notes back into Markdown files.
+
+- section: internals
+  title: Under the hood
+  description: How notekpr is built, for the curious, for reviewers and for anyone writing a client.
+  pages:
+    - file: architecture
+      nav: Architecture
+      description: The components, the data model, keys and sync, and why each choice was made.
+    - file: protocol
+      nav: Sync protocol and API
+      description: The HTTP API, the WebSocket messages and the encrypted formats, as the server and every client speak them.
+    - file: comments
+      nav: Comments
+      description: How comments on notes work, from the threads to the keys, and what the server learns.
+
+- section: contributing
+  title: Contributing
+  description: Working on notekpr itself.
+  pages:
+    - file: development
+      nav: Development
+      description: Setting up a machine, running notekpr locally with several people, the tests and releases.
+    - file: load-test
+      nav: Load test
+      description: How the load test works, what it measures, its options, and running it against a server elsewhere.
+    - file: acceptance
+      nav: Acceptance criteria
+      description: Each of the release's requirements, and the test that proves it.

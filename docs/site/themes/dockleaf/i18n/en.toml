@@ -1,0 +1,56 @@
+[skip]
+other = "Skip to content"
+
+[toggle]
+other = "Toggle navigation"
+
+[menu]
+other = "Menu"
+
+[primary]
+other = "Primary"
+
+[navigation]
+other = "Documentation navigation"
+
+[search]
+other = "Search docs..."
+
+[searchError]
+other = "Search is unavailable. Please try again."
+
+[searchEmpty]
+other = "No matching pages."
+
+[searchLoading]
+other = "Searching..."
+
+[footer]
+other = "Footer"
+
+[toc]
+other = "On This Page"
+
+[documentation]
+other = "Documentation"
+
+[editPage]
+other = "Edit this page"
+
+[anchor]
+other = "Link to this section"
+
+[copy]
+other = "Copy"
+
+[copied]
+other = "Copied"
+
+[notFound]
+other = "Page not found"
+
+[notFoundLead]
+other = "This page doesn't exist, or it has moved. Search the documentation or start again from the home page."
+
+[notFoundHome]
+other = "Go to the home page"

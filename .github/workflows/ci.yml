@@ -35,6 +35,12 @@ jobs:
           # The runner image ships Chrome and a matching chromedriver too.
           [ -n "${CHROMEWEBDRIVER:-}" ] && echo "$CHROMEWEBDRIVER" >> "$GITHUB_PATH"
           echo "NOTEKPR_CHROME=$(command -v chromium || command -v chromium-browser || command -v google-chrome)" >> "$GITHUB_ENV"
+      - name: Hugo, for the docs site (docs/site)
+        run: |
+          v=0.168.0
+          curl -fsSL -o "$RUNNER_TEMP/hugo.tar.gz" "https://github.com/gohugoio/hugo/releases/download/v$v/hugo_${v}_linux-amd64.tar.gz"
+          echo "fada83ad56bb27ed4cb7dd81590303bdac16140f944ac4e66fc248117e2d5594  $RUNNER_TEMP/hugo.tar.gz" | sha256sum -c
+          sudo tar -xzf "$RUNNER_TEMP/hugo.tar.gz" -C /usr/local/bin hugo
       - name: The toolchain
         run: task setup
       - name: task ci:check

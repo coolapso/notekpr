@@ -1,0 +1,4 @@
+<a class="brand" href="{{ site.Home.RelPermalink }}">
+  {{ with site.Params.logo }}{{ with resources.Get . }}{{ if eq .MediaType.SubType "svg" }}<span class="brand-mark" aria-hidden="true">{{ .Content | safeHTML }}</span>{{ else }}<img src="{{ .RelPermalink }}" alt="" width="36" height="36">{{ end }}{{ else }}<img src="{{ . | relURL }}" alt="" width="36" height="36">{{ end }}{{ end }}
+  <span>{{ site.Params.brand | default site.Title }}</span>{{ with site.Params.brandTag }}<span class="brand-tag">{{ . }}</span>{{ end }}
+</a>

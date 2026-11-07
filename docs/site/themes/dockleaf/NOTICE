@@ -1,0 +1,10 @@
+Dockleaf is extracted from the Searchbase documentation layouts, CSS, and JavaScript.
+Source: https://github.com/coolapso/searchbase (docs/)
+Copyright (c) 2026 Carlos Colaço.
+Distributed under the MIT License; see LICENSE.
+Searchbase names and artwork are not included in the theme.
+
+The notekpr theme (assets/dockleaf/themes/notekpr/) follows the palette and type of
+notekpr's website (https://github.com/coolapso/notekpr); notekpr's logo is not included.
+It includes Excalifont (Excalifont-Latin.woff2) by Ján Filípek / DizajnDesign, based on
+Virgil, under the SIL Open Font License 1.1; see OFL.txt next to it.

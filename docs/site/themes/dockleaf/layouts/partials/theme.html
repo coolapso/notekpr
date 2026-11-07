@@ -1,0 +1,14 @@
+{{- /* The site's look: params.theme names a theme in assets/dockleaf/themes/<name>/ (style.css, layered over
+       main.css, and the files it uses, all published with it). searchbase, the default, is main.css alone. */ -}}
+{{- $name := site.Params.theme | default "searchbase" -}}
+{{- $css := false -}}
+{{- if ne $name "searchbase" -}}
+  {{- $css = resources.Get (printf "dockleaf/themes/%s/style.css" $name) -}}
+  {{- if not $css -}}
+    {{- $known := slice "searchbase" -}}
+    {{- range resources.Match "dockleaf/themes/*/style.css" }}{{ $known = $known | append (path.Base (path.Dir .Name)) }}{{ end -}}
+    {{- errorf "Dockleaf has no theme %q (params.theme): use one of %s" $name (delimit $known ", ") -}}
+  {{- end -}}
+  {{- range resources.Match (printf "dockleaf/themes/%s/*" $name) }}{{ .Publish }}{{ end -}}
+{{- end -}}
+{{- return dict "name" $name "css" $css -}}

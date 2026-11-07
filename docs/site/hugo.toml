@@ -1,0 +1,157 @@
+# docs.notekpr.md: the documentation in docs/*.md, as a website (Hugo with the Dockleaf theme,
+# vendored in themes/dockleaf). Its sections and pages are listed in data/docs.yaml.
+# task docs (preview), task docs:build, task docs:check; docs/development.md, "The docs site".
+baseURL = 'https://docs.notekpr.md/'
+locale = 'en'
+title = 'notekpr docs'
+theme = 'dockleaf'
+enableRobotsTXT = true
+disableKinds = ['taxonomy', 'term', 'rss']
+
+[module.hugoVersion]
+  min = '0.168.0'
+
+# The docs themselves live one folder up, where GitHub shows them too: content/_content.gotmpl
+# reads them from assets/docs. The favicon is the web app's.
+[[module.mounts]]
+  source = 'content'
+  target = 'content'
+[[module.mounts]]
+  source = 'assets'
+  target = 'assets'
+[[module.mounts]]
+  source = '..'
+  target = 'assets/docs'
+  files = ['*.md']
+[[module.mounts]]
+  source = 'static'
+  target = 'static'
+[[module.mounts]]
+  source = '../../crates/web/static'
+  target = 'static'
+  files = ['favicon.svg']
+
+[outputs]
+  home = ['HTML', 'JSON']
+
+[markup.tableOfContents]
+  startLevel = 2
+  endLevel = 3
+
+# Classes, coloured by the theme in light and dark; no line numbers, as on GitHub.
+[markup.highlight]
+  noClasses = false
+  lineNos = false
+
+# The docs are written for GitHub: keep quotes, dashes and "--flags" as they are.
+[markup.goldmark.extensions.typographer]
+  disable = true
+
+[params]
+  theme = 'notekpr'
+  brand = 'notekpr'
+  brandTag = 'docs'
+  description = 'How to use notekpr, run your own server, work with your notes from the command line or your own editor, and how its end-to-end encryption works.'
+  logo = 'icon.svg'
+  favicon = 'favicon.svg'
+  copyCode = true
+  repo = 'https://github.com/coolapso/notekpr'
+  about = 'Markdown notes, drawings and collaboration, end-to-end encrypted. On your server or ours.'
+  footerNote = 'made with care, and Rust'
+  footer = 'notekpr · AGPL-3.0-or-later · no trackers, no third-party requests'
+
+[[menus.main]]
+  name = 'Use it'
+  pageRef = '/use'
+  weight = 1
+[[menus.main]]
+  name = 'Your tools'
+  pageRef = '/tools'
+  weight = 2
+[[menus.main]]
+  name = 'Self-host'
+  pageRef = '/self-host'
+  weight = 3
+[[menus.main]]
+  name = 'Security'
+  pageRef = '/security'
+  weight = 4
+[[menus.main]]
+  name = 'GitHub'
+  url = 'https://github.com/coolapso/notekpr'
+  weight = 5
+[[menus.main]]
+  name = 'Try the demo'
+  url = 'https://demo.notekpr.md'
+  weight = 6
+  [menus.main.params]
+    button = true
+
+[[menus.footer]]
+  name = 'Docs'
+  identifier = 'docs'
+  weight = 1
+[[menus.footer]]
+  name = 'Using notekpr'
+  pageRef = '/use'
+  parent = 'docs'
+  weight = 1
+[[menus.footer]]
+  name = 'Your own tools'
+  pageRef = '/tools'
+  parent = 'docs'
+  weight = 2
+[[menus.footer]]
+  name = 'Self-hosting'
+  pageRef = '/self-host'
+  parent = 'docs'
+  weight = 3
+[[menus.footer]]
+  name = 'Contributing'
+  pageRef = '/contributing'
+  parent = 'docs'
+  weight = 4
+[[menus.footer]]
+  name = 'notekpr'
+  identifier = 'product'
+  weight = 2
+[[menus.footer]]
+  name = 'Website'
+  url = 'https://notekpr.md'
+  parent = 'product'
+  weight = 1
+[[menus.footer]]
+  name = 'Pricing'
+  url = 'https://notekpr.md/#pricing'
+  parent = 'product'
+  weight = 2
+[[menus.footer]]
+  name = 'Demo'
+  url = 'https://demo.notekpr.md'
+  parent = 'product'
+  weight = 3
+[[menus.footer]]
+  name = 'Project'
+  identifier = 'project'
+  weight = 3
+[[menus.footer]]
+  name = 'Source code'
+  url = 'https://github.com/coolapso/notekpr'
+  parent = 'project'
+  weight = 1
+[[menus.footer]]
+  name = 'Releases'
+  url = 'https://github.com/coolapso/notekpr/releases'
+  parent = 'project'
+  weight = 2
+[[menus.footer]]
+  name = 'Sponsor'
+  url = 'https://github.com/sponsors/coolapso'
+  parent = 'project'
+  weight = 3
+[[menus.footer]]
+  name = 'coolapso.sh'
+  url = 'https://coolapso.sh'
+  weight = 4
+  [menus.footer.params]
+    image = 'coolapso.svg'

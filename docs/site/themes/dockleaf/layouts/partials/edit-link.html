@@ -1,0 +1,4 @@
+{{- /* A page's editURL, or the site's editURL followed by the page's path under content/. */ -}}
+{{- $url := .Params.editURL -}}
+{{- if and (not $url) site.Params.editURL .File }}{{ $url = printf "%s%s" site.Params.editURL .File.Path }}{{ end -}}
+{{- with $url }}<p class="edit-link"><a href="{{ . }}">{{ i18n "editPage" }}</a></p>{{ end -}}

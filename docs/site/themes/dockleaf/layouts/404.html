@@ -1,0 +1,10 @@
+{{ define "main" }}
+  <article class="doc">
+    <header class="doc-header">
+      <p class="eyebrow">404</p>
+      <h1>{{ i18n "notFound" }}</h1>
+      <p class="lead">{{ i18n "notFoundLead" }}</p>
+    </header>
+    <p><a href="{{ site.Home.RelPermalink }}">{{ i18n "notFoundHome" }}</a></p>
+  </article>
+{{ end }}

@@ -140,6 +140,8 @@ provider setup, reverse proxies, Kubernetes, backups, upgrades and monitoring.
 
 ## Documentation
 
+Also as a website, with search: [docs.notekpr.md](https://docs.notekpr.md).
+
 * [Every feature](docs/features.md)
 * [Who can do what in a vault (owners, admins, editors, viewers)](docs/roles.md)
 * [Use your own editor (Obsidian, Neovim, …)](docs/own-editor.md)

@@ -449,8 +449,8 @@ as it is and draws the icon in its theme's colours from
 
 ## The docs site
 
-The docs in `docs/` are also a website, for docs.notekpr.md (not published
-yet): [Hugo](https://gohugo.io) with the
+The docs in `docs/` are also a website, [docs.notekpr.md](https://docs.notekpr.md)
+(live since 2026-11-07): [Hugo](https://gohugo.io) with the
 [Dockleaf](https://github.com/coolapso/hugo-theme-dockleaf) theme, in its
 `notekpr` look. The docs stay where they are and as GitHub shows them;
 `docs/site` only presents them:
@@ -479,6 +479,11 @@ while a doc is missing from it, except the examples to copy
 (`*.example.md`), which stay on GitHub. The look belongs to Dockleaf:
 change it there, check both its themes (`task test` there), then copy it
 in.
+
+The website, notekpr.md (the private notekpr-cloud repository), links to
+the docs site's pages and headings (`/self-host/operations/#examples`). A
+doc that moves (its section or slug in `data/docs.yaml`) or a heading that
+is renamed changes those links too, in the same go.
 
 `task docs:deploy` publishes the site with [wrangler](https://developers.cloudflare.com/workers/wrangler/),
 Cloudflare's command line (Arch: `wrangler`), signed in once with `wrangler

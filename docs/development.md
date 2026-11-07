@@ -39,7 +39,7 @@ get it.
 | Chromium + chromedriver, Python 3 | browser tests (`task test:e2e`) | `chromium` (includes chromedriver), `python` | matching Chrome/Chromium + chromedriver |
 | cargo-deny | supply-chain checks (`task audit`) | `cargo-deny` | `cargo install cargo-deny --locked` |
 | Docker + Compose | container image, Docker dev stack, local Dex for OIDC, the load test (`task load`), the S3 file store's test (`task test:s3`, with Garage) | `docker`, `docker-compose`, `docker-buildx` | Docker docs |
-| Hugo ≥ 0.168 (the standard edition is enough) | the docs site (`task docs`, `task docs:check`, `task ci`) | `hugo` | a single binary from Hugo's GitHub releases |
+| Hugo ≥ 0.168 (the standard edition is enough) | the docs site (`task docs:serve`, `task docs:check`, `task ci`) | `hugo` | a single binary from Hugo's GitHub releases |
 
 The `wasm-bindgen` CLI must match the `wasm-bindgen` crate pinned
 (`=0.2.128`) in `crates/web/Cargo.toml`, `crates/editor/Cargo.toml` and
@@ -50,7 +50,8 @@ upgrade, upgrade all of them together with the CLI. A `cargo install` puts
 it in `~/.cargo/bin`, which then has to come before `/usr/bin` in `PATH`.
 
 **Not needed:** rustup (distribution Rust packages work), Node.js, npm or any
-JavaScript tooling. The few static files of the web client
+JavaScript tooling (only publishing the docs site runs one, Cloudflare's
+wrangler: [The docs site](#the-docs-site)). The few static files of the web client
 (`crates/web/static`: `index.html`, a small `boot.js` loader, `style.css`,
 the `sw.js` service worker, an icon and a web app manifest) are
 hand-written. The server needs no external database: it embeds SQLite.
@@ -66,7 +67,7 @@ task dev                      # dev server on http://localhost:8080 (no OIDC), d
 task dev:adminless            # the same, admin-less: no administrators among the people, only admin clients
 task demo                     # a demo with users, vaults and shared notes on http://localhost:8099
 task load                     # load test with a live view on http://localhost:8098 (needs Docker)
-task docs                     # the docs as a website on http://localhost:8091, updated as you edit them
+task docs:serve               # the docs as a website on http://localhost:8091, updated as you edit them
 task web:watch                # in a 2nd terminal: rebuild the web client on change, then reload the browser
 task cli:login DEV_USER=bob   # sign the CLI in as a test user (profile "bob")
 task cli -- --profile bob ls Family   # run any CLI command
@@ -464,10 +465,11 @@ yet): [Hugo](https://gohugo.io) with the
 | `themes/dockleaf/` | a copy of Dockleaf (see its `NOTEKPR.md`) |
 
 ```sh
-task docs                                  # preview on http://localhost:8091, updated as you edit docs/*.md
+task docs:serve                            # preview on http://localhost:8091, updated as you edit docs/*.md
 task docs:check                            # build it and check every link and #anchor (task ci does)
 task docs:build                            # the site as it is published, in dist/docs
 task docs:theme DOCKLEAF=~/Dev/dockleaf    # copy a newer Dockleaf in (REF=… for a tag or commit)
+task docs:deploy                           # check it, build it and publish it on Cloudflare Pages
 ```
 
 Write the docs for GitHub, as before: relative links to other docs and into
@@ -477,6 +479,13 @@ while a doc is missing from it, except the examples to copy
 (`*.example.md`), which stay on GitHub. The look belongs to Dockleaf:
 change it there, check both its themes (`task test` there), then copy it
 in.
+
+`task docs:deploy` publishes the site with [wrangler](https://developers.cloudflare.com/workers/wrangler/),
+Cloudflare's command line (Arch: `wrangler`), signed in once with `wrangler
+login` (or with `CLOUDFLARE_API_TOKEN` in the environment), to the Pages
+project `notekpr-docs`. From `main` it is the site itself; from another
+branch, a preview at its own address. The first deploy creates the project
+and asks for its production branch: `main`.
 
 ## Emoji
 

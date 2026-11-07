@@ -167,7 +167,8 @@ task test:s3                     # attachments in S3-compatible storage (Garage 
 task test:e2e -- -k sharing      # browser tests (chromium + chromedriver + python3)
 task test:editor                 # the editor's DOM view in headless Chromium (wasm-bindgen-test)
 task build:clients               # the CLI's release files and packages into dist/clients (Docker, nothing published)
-task docs / task docs:check      # the docs as a website (:8091); build it and check its links (hugo)
+task docs:serve / task docs:check   # the docs as a website (:8091); build it and check its links (hugo)
+task docs:deploy                 # check, build and publish the docs site (Cloudflare Pages, wrangler)
 task ci                          # exactly what CI runs: ci:check (incl. audit) + ci:image + ci:clients
 task release                     # from main: CI's checks, tag the next version (semrel), push the images, publish the CLI
 ```

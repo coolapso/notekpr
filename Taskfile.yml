@@ -14,8 +14,10 @@ vars:
   # development server on this machine only; another one with
   # `task dev DEV_ADMIN_TOKEN=notekpr_a_…`.
   DEV_ADMIN_TOKEN: notekpr_a_dev-admin-token-for-this-machine-only
-  # `task docs`: the docs site's preview.
+  # `task docs:serve`: the docs site's preview; `task docs:deploy`: its
+  # Cloudflare Pages project.
   DOCS_PORT: "8091"
+  DOCS_PROJECT: notekpr-docs
   # `task demo`: its own server, database and CLI profiles, next to `task dev`.
   DEMO_LISTEN: 127.0.0.1:8099
   DEMO_DIR: data/demo
@@ -89,7 +91,8 @@ tasks:
           command -v docker >/dev/null && echo "✓ docker (container image, Docker dev stack)" || echo "· for the docker:* tasks, task load and task ci: docker + compose (Arch: docker docker-compose docker-buildx)"
           command -v semrel >/dev/null && command -v jq >/dev/null && echo "✓ semrel + jq (task release)" || echo "· for task release: semrel (task tools:release, needs Go) and jq (Arch: jq)"
           command -v copr-cli >/dev/null && echo "✓ copr-cli (task release, Fedora's COPR)" || echo "· for task release: copr-cli (Arch: copr-cli; or task tools:copr, needs pipx)"
-          command -v hugo >/dev/null && echo "✓ hugo (task docs)" || echo "· for the docs site (task docs, task docs:check, task ci): hugo 0.168 or newer (Arch: hugo)"
+          command -v hugo >/dev/null && echo "✓ hugo (task docs:serve)" || echo "· for the docs site (task docs:serve, task docs:check, task ci): hugo 0.168 or newer (Arch: hugo)"
+          command -v wrangler >/dev/null && echo "✓ wrangler (task docs:deploy)" || echo "· to publish the docs site (task docs:deploy): wrangler, signed in with wrangler login (Arch: wrangler)"
           [ "$ok" = 1 ]
 
   rust:
@@ -101,7 +104,7 @@ tasks:
 
   # ------------------------------------------------------------------ docs site
 
-  docs:
+  docs:serve:
     desc: "Preview the docs site (docs.notekpr.md: docs/*.md with Hugo, docs/site) on http://localhost:{{.DOCS_PORT}}, updated as the docs change (another port: DOCS_PORT=…)"
     cmds:
       - hugo server --source docs/site --bind 127.0.0.1 --port {{.DOCS_PORT}} --baseURL http://localhost:{{.DOCS_PORT}}/
@@ -122,6 +125,18 @@ tasks:
       vars: [DOCKLEAF]
     cmds:
       - scripts/docs-theme.sh "{{.DOCKLEAF}}" "{{.REF | default "HEAD"}}"
+
+  docs:deploy:
+    desc: "Check the docs site, build it and publish it on Cloudflare Pages (project {{.DOCS_PROJECT}}, docs.notekpr.md) with wrangler: from main the site itself, from another branch a preview"
+    preconditions:
+      - sh: command -v wrangler >/dev/null
+        msg: "The docs site is published with wrangler (Arch: wrangler), signed in once with `wrangler login` (or CLOUDFLARE_API_TOKEN in the environment)."
+    # wrangler keeps its cache in .wrangler/ where it runs
+    dir: docs/site
+    cmds:
+      - task: docs:check
+      - task: docs:build
+      - wrangler pages deploy "{{.ROOT_DIR}}/dist/docs" --project-name={{.DOCS_PROJECT}}
 
   # ------------------------------------------------------------------ build
 

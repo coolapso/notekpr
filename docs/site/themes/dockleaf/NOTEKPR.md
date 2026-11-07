@@ -12,4 +12,4 @@ task docs:theme DOCKLEAF=~/Dev/dockleaf REF=v1.2.0  # or a release
 ```
 
 To try changes to a Dockleaf checkout before copying them, point Hugo at the folder
-that holds it: `HUGO_THEMESDIR=~/Dev task docs` (the checkout must be named `dockleaf`).
+that holds it: `HUGO_THEMESDIR=~/Dev task docs:serve` (the checkout must be named `dockleaf`).

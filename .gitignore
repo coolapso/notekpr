@@ -19,3 +19,4 @@ __pycache__/
 /docs/site/.hugo_build.lock
 /docs/site/resources/
 /docs/site/public/
+/docs/site/.wrangler/

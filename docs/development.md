@@ -14,7 +14,6 @@ crates/load     load test runner (task load)           → notekpr-load
 crates/load-events  what the load runner streams to its live view
 crates/load-ui  the load test's live view (wasm32)     → dist/load
 scripts/        build-web.sh, build-load-ui.sh, demo.py (task demo), logo.py (the logo), emoji.py (the emoji table)
-site/           project website: static HTML + CSS and a little JS, no build step (task site)
 tests/e2e       browser end-to-end tests (Python stdlib + chromedriver)
 fuzz/           fuzz targets, a separate workspace (fuzz/run.sh, task fuzz)
 vendor/yrs      yrs 0.28 with fixes, via [patch.crates-io] (see its NOTEKPR.md)
@@ -437,10 +436,10 @@ It needs fontTools (`python-fonttools`, or `pip install fonttools`),
 was made with 6.2). None of it is part of the build, `task setup` or CI: run
 it by hand when the logo or the icon changes, and commit what it writes.
 
-The icon is the favicon, `crates/web/static/favicon.svg`. It has copies in
-`site/favicon.svg` and, drawn in the theme's colours, in the header of each
-page in `site/`. Change them together, then run `scripts/logo.py` for
-`icon.svg` and `icon.png`.
+The icon is the favicon, `crates/web/static/favicon.svg`. The website (the
+notekpr-cloud repository) has a copy in `site/favicon.svg` and, drawn in the
+theme's colours, in the header of each page. Change them together, then run
+`scripts/logo.py` for `icon.svg` and `icon.png`.
 
 ## Emoji
 

@@ -48,7 +48,7 @@ X_HEIGHT = 24.0  # the lower-case letters
 TRACKING = -1.5  # after each letter: Fira Code is monospaced, a little tighter reads as one word
 RING = 27.0  # the diamond ring: pointed shapes look smaller, so it's taller than the letters
 
-# Text and accent colours of the app and the website (site/style.css),
+# Text and accent colours of the app and the website (crates/web/static/style.css),
 # light theme and dark theme.
 LOGOS = (
     ("logo", "#2a2a28", "#5b5bd6"),

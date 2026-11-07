@@ -136,9 +136,6 @@ vendor/yrs      yrs 0.28 with fixes for panics found by fuzzing, via [patch.crat
                 the changes are in vendor/yrs/NOTEKPR.md — re-apply on upgrade
 vendor/openidconnect  openidconnect 4.0.1 on p256/p384 0.14 (a crypto-bigint advisory),
                 via [patch.crates-io]; drop it once upstream moves (its NOTEKPR.md)
-site/           project website: static HTML + CSS and a little hand-written JS
-                (site.js, optional), no build step, no third-party requests
-                (fonts, scripts, analytics) — keep it that way; screenshots in img/
 deploy/         Kubernetes manifests, Dex (dev OIDC), examples/ (optional reverse
                 proxies: Caddy, Traefik — never required, TLS is the operator's choice)
 (root)          Dockerfile, docker-compose.yml, docker-compose.dev.yml, Taskfile.yml,
@@ -199,10 +196,12 @@ Without go-task, see the plain commands in the [Taskfile](Taskfile.yml) or
   `docs/cli.md`; requirement coverage → `docs/acceptance.md`.
 - **Feature lists stay current.** A new user-facing feature, or a change to
   one (including its shortcuts), goes into the feature lists in the same
-  change: `docs/features.md` (every feature) and `site/features.html` — and,
-  for headline features, `site/index.html` ("In the box") and the README's
-  Features, which stay short (a line or two per area). Remove what no
-  longer exists.
+  change: `docs/features.md` (every feature) and, for headline features,
+  the README's Features, which stay short (a line or two per area). Remove
+  what no longer exists. The website follows them: it lives in the private
+  [notekpr-cloud](https://github.com/coolapsotech/notekpr-cloud) repository
+  (`site/features.html`, and "In the box" on `site/index.html`) — update it
+  there too, as its AGENTS.md says.
 - **The demo shows every feature.** A new or changed user-facing feature
   gets demo data in `scripts/demo.py` in the same change, so that
   `task demo:reset && task demo` lets anyone see it working end to end. The

@@ -209,9 +209,9 @@ The preview commands assume this checkout is named `dockleaf`; the second shows 
 example in another theme (`task serve THEME=notekpr` does the same). Validation uses a
 temporary theme installation and does not depend on the checkout directory name.
 It verifies theme metadata and preview images, builds the example in every theme at
-both domain root and a subdirectory, checks that an unknown theme stops the build, links,
-assets, search index, nested navigation, and customization, and checks JavaScript
-syntax when Node.js is installed. Python 3 and Hugo are required; Node.js is optional.
+both domain root and a subdirectory, checks links, assets, search index, nested
+navigation, and customization, checks that an unknown theme stops the build, and
+checks JavaScript syntax when Node.js is installed. Python 3 and Hugo are required; Node.js is optional.
 No packages need installing.
 
 ## License and origin

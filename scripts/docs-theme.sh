@@ -7,10 +7,11 @@ src=${1:?usage: scripts/docs-theme.sh DOCKLEAF_CHECKOUT [REF]}
 ref=${2:-HEAD}
 dest=docs/site/themes/dockleaf
 commit=$(git -C "$src" rev-parse --short --verify "$ref^{commit}")
-notes=$(sed "s/^Copied from commit \`[0-9a-f]*\`/Copied from commit \`$commit\`/" "$dest/NOTEKPR.md")
+version=$(git -C "$src" describe --tags --always "$commit")
+notes=$(sed "s|^Copied from .* by \`scripts/|Copied from \`$version\` (commit \`$commit\`) by \`scripts/|" "$dest/NOTEKPR.md")
 rm -rf "$dest"
 mkdir -p "$dest"
 git -C "$src" archive "$commit" layouts static assets i18n hugo.toml theme.toml LICENSE NOTICE README.md |
   tar -x -C "$dest"
 printf '%s\n' "$notes" > "$dest/NOTEKPR.md"
-echo "Dockleaf $(git -C "$src" describe --tags --always "$commit") is in $dest"
+echo "Dockleaf $version is in $dest"

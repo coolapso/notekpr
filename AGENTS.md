@@ -200,8 +200,9 @@ Without go-task, see the plain commands in the [Taskfile](Taskfile.yml) or
   the README's Features, which stay short (a line or two per area). Remove
   what no longer exists. The website follows them: it lives in the private
   [notekpr-cloud](https://github.com/coolapsotech/notekpr-cloud) repository
-  (`site/features.html`, and "In the box" on `site/index.html`) — update it
-  there too, as its AGENTS.md says.
+  (`site/features.html`, "In the box" on `site/index.html`, and what
+  `site/compare.html` says notekpr lacks) — update it there too, as its
+  AGENTS.md says.
 - **The demo shows every feature.** A new or changed user-facing feature
   gets demo data in `scripts/demo.py` in the same change, so that
   `task demo:reset && task demo` lets anyone see it working end to end. The

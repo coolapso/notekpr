@@ -236,7 +236,11 @@ textarea.input { resize: vertical; }
 /* ---------------------------------------------------------- shell */
 .app { display: grid; grid-template-columns: 268px 1fr; height: 100dvh; }
 .sidebar { background: var(--sb-bg); border-right: 1px solid var(--border); display: flex; flex-direction: column; min-height: 0; position: relative; }
-.main { min-width: 0; min-height: 0; overflow: auto; position: relative; display: flex; flex-direction: column; }
+/* The banners, then the page, which scrolls below them: they stay in view.
+   Their height is --banners-h (views::watch_banners). */
+.main-col { min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+.banners { flex: none; }
+.main { flex: 1; min-width: 0; min-height: 0; overflow: auto; position: relative; display: flex; flex-direction: column; }
 .scrim { display: none; }
 .mobile-only { display: none !important; }
 .devstrip { position: fixed; z-index: 100; right: 10px; bottom: 10px; padding: 2px 8px; border-radius: 6px; background: var(--warn); color: #111; font-size: 11px; font-weight: 800; letter-spacing: 0.06em; opacity: 0.85; pointer-events: auto; }
@@ -437,7 +441,7 @@ button.list-row:hover:not(:disabled) { background: var(--bg-2); }
 .h1s { font-size: 20px; font-weight: 700; }
 .h2s { font-size: 17px; font-weight: 700; }
 .h3s { font-size: 15px; font-weight: 700; }
-.panel { width: 290px; flex: none; border-left: 1px solid var(--border); padding: 14px 14px 40px; overflow: auto; position: sticky; top: 52px; height: calc(100dvh - 52px); }
+.panel { width: 290px; flex: none; border-left: 1px solid var(--border); padding: 14px 14px 40px; overflow: auto; position: sticky; top: 52px; height: calc(100dvh - 52px - var(--banners-h, 0px)); }
 .panel section { margin-bottom: 18px; }
 .panel h3 { display: flex; align-items: center; gap: 6px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); margin: 0 0 6px; }
 .panel h3 .ic { width: 14px; height: 14px; }
@@ -952,7 +956,7 @@ table.keys td:first-child { white-space: nowrap; width: 1%; padding-right: 16px;
 @media (max-width: 1100px) {
   .panel { display: none; }
   .note-body.with-panel { --aside: 0px; }
-  .note-body.overlay .panel { display: block; position: fixed; right: 0; top: 52px; bottom: 0; height: auto; z-index: 30; background: var(--bg); box-shadow: var(--shadow); }
+  .note-body.overlay .panel { display: block; position: fixed; right: 0; top: calc(52px + var(--banners-h, 0px)); bottom: 0; height: auto; z-index: 30; background: var(--bg); box-shadow: var(--shadow); }
 }
 @media (max-width: 760px) {
   body { font-size: 16px; }

@@ -59,30 +59,82 @@ pub fn App() -> impl IntoView {
 #[component]
 pub fn Shell() -> impl IntoView {
     let ui = ui();
+    let banners = NodeRef::<leptos::html::Div>::new();
+    watch_banners(banners);
     view! {
         <div class="app" class:drawer=move || ui.sidebar.get()>
             <sidebar::Sidebar/>
             <div class="scrim" on:click=move |_| ui.sidebar.set(false)></div>
-            <main class="main">
-                <Banners/>
-                {move || match ui.route.get() {
-                    Route::Home => view! { <home::Home/> }.into_any(),
-                    // The quick notes' vault is shown as the quick notes.
-                    Route::Vault(v) | Route::Trash(v) if state::step(|c| c.is_quick_notes(&v)) => view! { <quick::QuickPage/> }.into_any(),
-                    Route::Vault(v) => view! { <home::VaultHome vault=v/> }.into_any(),
-                    Route::Note(v, n) => view! { <drawing::Document vault=v note=n/> }.into_any(),
-                    Route::Trash(v) => view! { <home::Trash vault=v/> }.into_any(),
-                    Route::Settings(tab) => view! { <settings::Settings tab=tab/> }.into_any(),
-                    Route::Device(code) => view! { <settings::DeviceCodePage code=code/> }.into_any(),
-                    Route::Shared(v, n) => view! { <note::SharedNoteView vault=v note=n/> }.into_any(),
-                    Route::Quick => view! { <quick::QuickPage/> }.into_any(),
-                    Route::Drawings(v) => view! { <drawing::DrawingsPage vault=v/> }.into_any(),
-                    Route::Graph(v) => view! { <graph::GraphPage vault=v/> }.into_any(),
-                }}
-            </main>
+            <div class="main-col">
+                // Above the page, not in it: they stay in view however far it
+                // scrolls.
+                <div class="banners" node_ref=banners><Banners/></div>
+                <main class="main">
+                    {move || match ui.route.get() {
+                        Route::Home => view! { <home::Home/> }.into_any(),
+                        // The quick notes' vault is shown as the quick notes.
+                        Route::Vault(v) | Route::Trash(v) if state::step(|c| c.is_quick_notes(&v)) => view! { <quick::QuickPage/> }.into_any(),
+                        Route::Vault(v) => view! { <home::VaultHome vault=v/> }.into_any(),
+                        Route::Note(v, n) => view! { <drawing::Document vault=v note=n/> }.into_any(),
+                        Route::Trash(v) => view! { <home::Trash vault=v/> }.into_any(),
+                        Route::Settings(tab) => view! { <settings::Settings tab=tab/> }.into_any(),
+                        Route::Device(code) => view! { <settings::DeviceCodePage code=code/> }.into_any(),
+                        Route::Shared(v, n) => view! { <note::SharedNoteView vault=v note=n/> }.into_any(),
+                        Route::Quick => view! { <quick::QuickPage/> }.into_any(),
+                        Route::Drawings(v) => view! { <drawing::DrawingsPage vault=v/> }.into_any(),
+                        Route::Graph(v) => view! { <graph::GraphPage vault=v/> }.into_any(),
+                    }}
+                </main>
+            </div>
             <dialogs::ModalHost/>
         </div>
         <Toasts/>
+    }
+}
+
+/// How tall the banners are, as `--banners-h` on the page: what is sized to
+/// the window below them (the side panel) leaves them room.
+fn watch_banners(banners: NodeRef<leptos::html::Div>) {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    use wasm_bindgen::closure::Closure;
+    type Observer = (web_sys::ResizeObserver, Closure<dyn FnMut(js_sys::Array)>);
+    let observer: Rc<RefCell<Option<Observer>>> = Rc::default();
+    let mount = observer.clone();
+    Effect::new(move |_| {
+        let Some(el) = banners.get() else {
+            return;
+        };
+        if mount.borrow().is_some() {
+            return;
+        }
+        let target = el.clone();
+        let on_resize = Closure::wrap(Box::new(move |_: js_sys::Array| {
+            let h = target.get_bounding_client_rect().height();
+            set_root_var("--banners-h", &format!("{h}px"));
+        }) as Box<dyn FnMut(js_sys::Array)>);
+        if let Ok(o) = web_sys::ResizeObserver::new(on_resize.as_ref().unchecked_ref()) {
+            o.observe(&el);
+            *mount.borrow_mut() = Some((o, on_resize));
+        }
+    });
+    let kept = StoredValue::new_local(observer);
+    on_cleanup(move || {
+        kept.try_with_value(|o| {
+            if let Some((o, _)) = o.borrow_mut().take() {
+                o.disconnect();
+            }
+        });
+        set_root_var("--banners-h", "0px");
+    });
+}
+
+fn set_root_var(name: &str, value: &str) {
+    if let Some(root) = util::document()
+        .document_element()
+        .and_then(|e| e.dyn_into::<web_sys::HtmlElement>().ok())
+    {
+        let _ = root.style().set_property(name, value);
     }
 }
 

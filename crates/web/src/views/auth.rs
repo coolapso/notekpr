@@ -182,7 +182,7 @@ pub fn Enroll(pending: Option<(String, String)>, error: Option<String>) -> impl 
             {error.map(|e| view! { <div class="alert error">{e}</div> })}
             {match pending {
                 Some((_, code)) => view! {
-                    <p>"Open notekpr on a device that is already set up. It will ask you to approve this browser. Check that it shows this code:"</p>
+                    <p>"Open notekpr on a device that is already set up: a bar at the top of the page asks you to approve this browser (it is also in Settings → Devices). Check that it shows this code:"</p>
                     <div class="verify-code">{code}</div>
                     <p class="muted small"><span class="spinner inline"></span>" Waiting for approval…"</p>
                 }.into_any(),

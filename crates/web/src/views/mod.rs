@@ -141,6 +141,17 @@ fn set_root_var(name: &str, value: &str) {
 #[component]
 fn Banners() -> impl IntoView {
     let ui = ui();
+    // A device waits for an answer, maybe in a tab out of sight: its tab's
+    // title counts them too.
+    Effect::new(move |_| {
+        let n = ui.pending_devices.with(Vec::len);
+        util::document().set_title(&if n > 0 {
+            format!("({n}) notekpr")
+        } else {
+            "notekpr".into()
+        });
+    });
+    on_cleanup(|| util::document().set_title("notekpr"));
     view! {
         {move || {
             let devs = ui.pending_devices.get();
@@ -148,10 +159,13 @@ fn Banners() -> impl IntoView {
                 let d = devs[0].clone();
                 let n = devs.len();
                 view! {
-                    <div class="banner">
+                    <div class="banner device-banner" role="alert">
                         <Icon name="device"/>
-                        <span>{if n == 1 { format!("“{}” is asking to access your notes.", d.name) } else { format!("{n} devices are waiting for approval.") }}</span>
-                        <button class="btn small primary" on:click=move |_| ui.modal.set(Some(Modal::ApproveDevice(d.clone())))>"Review"</button>
+                        <span>
+                            <b>{if n == 1 { "A device is waiting for your approval. ".to_string() } else { format!("{n} devices are waiting for your approval. ") }}</b>
+                            {if n == 1 { format!("“{}” is asking to access your notes.", d.name) } else { "Review them one at a time.".into() }}
+                        </span>
+                        <button class="btn small" on:click=move |_| ui.modal.set(Some(Modal::ApproveDevice(d.clone())))>"Review"</button>
                     </div>
                 }
             })

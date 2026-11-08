@@ -239,7 +239,8 @@ a Mac). The [README](../README.md) has the short version.
 * Key fingerprints to check who you share with, and a loud warning when
   someone's key changes.
 * New devices are approved from one you already use (with a verification
-  code) or unlocked with your recovery key; any browser can be forgotten.
+  code: a bar at the top of every page, and the tab's title, show one
+  waiting) or unlocked with your recovery key; any browser can be forgotten.
   Approving the command line's sign-in shows when, and from which address,
   it was asked for.
   See where you're signed in and sign out remotely, and make a new recovery

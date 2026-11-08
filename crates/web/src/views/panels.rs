@@ -2,10 +2,20 @@
 
 use leptos::prelude::*;
 
-use crate::knowledge;
 use crate::state::{self, Modal, Route, step, ui};
 use crate::views::comments::{CommentsList, open_count};
 use crate::views::icons::Icon;
+use crate::{knowledge, util};
+
+/// On a phone the side panel covers the note: something chosen in it
+/// closes it, so that what was chosen shows. (Going to another page closes
+/// it too, `views::Shell`.)
+pub fn close_over_note() {
+    let ui = ui();
+    if ui.panel_overlay.get_untracked() && util::is_phone() {
+        ui.panel_overlay.set(false);
+    }
+}
 
 #[component]
 pub fn RightPanel(vault: String, note: String) -> impl IntoView {
@@ -125,17 +135,26 @@ pub fn RightPanel(vault: String, note: String) -> impl IntoView {
             <Show when=move || !outline.get().is_empty()>
                 <section>
                     <h3><Icon name="list"/>" Outline"</h3>
-                    {move || outline.get().into_iter().map(|(lvl, text, off)| {
-                        view! {
-                            <button class="panel-item outline" style=format!("padding-left:{}px", 6 + (lvl as usize - 1) * 12)
-                                on:click=move |_| {
-                                    if let Some(ed) = step(|c| c.editor.as_ref().map(|(_, _, e)| e.clone())) {
-                                        ed.focus();
-                                        ed.set_selection(off, off);
-                                    }
-                                }>{text}</button>
-                        }
-                    }).collect_view()}
+                    {
+                        let text = text.clone();
+                        move || outline.get().into_iter().map(|(lvl, title, off)| {
+                            let text = text.clone();
+                            view! {
+                                <button class="panel-item outline" style=format!("padding-left:{}px", 6 + (lvl as usize - 1) * 12)
+                                    on:click=move |_| {
+                                        close_over_note();
+                                        // On a touch screen focusing the editor would open the
+                                        // keyboard: only scroll there.
+                                        if util::is_touch() {
+                                            crate::actions::scroll_to_offset(&text(), off);
+                                        } else if let Some(ed) = step(|c| c.editor.as_ref().map(|(_, _, e)| e.clone())) {
+                                            ed.focus();
+                                            ed.set_selection(off, off);
+                                        }
+                                    }>{title}</button>
+                            }
+                        }).collect_view()
+                    }
                 </section>
             </Show>
             <Show when=move || !tags.get().is_empty()>
@@ -144,7 +163,7 @@ pub fn RightPanel(vault: String, note: String) -> impl IntoView {
                     <div class="tags">
                         {move || tags.get().into_iter().map(|t| {
                             let q = format!("tag:{t}");
-                            view! { <button class="chip" on:click=move |_| ui.modal.set(Some(Modal::Search(q.clone())))>{format!("#{t}")}</button> }
+                            view! { <button class="chip" on:click=move |_| { close_over_note(); ui.modal.set(Some(Modal::Search(q.clone()))) }>{format!("#{t}")}</button> }
                         }).collect_view()}
                     </div>
                 </section>

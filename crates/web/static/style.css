@@ -241,6 +241,10 @@ textarea.input { resize: vertical; }
 .main-col { min-width: 0; min-height: 0; display: flex; flex-direction: column; }
 .banners { flex: none; }
 .main { flex: 1; min-width: 0; min-height: 0; overflow: auto; position: relative; display: flex; flex-direction: column; }
+/* What follows the menu button in a page's header: part of the header's
+   row; on a phone it scrolls sideways on its own when it doesn't fit, so
+   that the page never does (see the responsive part). */
+.head-row { display: contents; }
 .scrim { display: none; }
 .mobile-only { display: none !important; }
 .devstrip { position: fixed; z-index: 100; right: 10px; bottom: 10px; padding: 2px 8px; border-radius: 6px; background: var(--warn); color: #111; font-size: 11px; font-weight: 800; letter-spacing: 0.06em; opacity: 0.85; pointer-events: auto; }
@@ -447,6 +451,7 @@ button.list-row:hover:not(:disabled) { background: var(--bg-2); }
 .h2s { font-size: 17px; font-weight: 700; }
 .h3s { font-size: 15px; font-weight: 700; }
 .panel { width: 290px; flex: none; border-left: 1px solid var(--border); padding: 14px 14px 40px; overflow: auto; position: sticky; top: 52px; height: calc(100dvh - 52px - var(--banners-h, 0px)); }
+.panel-scrim { display: none; }
 .panel section { margin-bottom: 18px; }
 .panel h3 { display: flex; align-items: center; gap: 6px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); margin: 0 0 6px; }
 .panel h3 .ic { width: 14px; height: 14px; }
@@ -977,6 +982,16 @@ table.keys td:first-child { white-space: nowrap; width: 1%; padding-right: 16px;
   .settings { grid-template-columns: 1fr; }
   .settings-nav { flex-direction: row; overflow: auto; }
   .note-head { padding: 6px 8px; gap: 2px; }
+  .head-row { display: flex; align-items: center; gap: inherit; flex: 1; min-width: 0; overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: none; padding-block: 4px; margin-block: -4px; }
+  .head-row::-webkit-scrollbar { display: none; }
+  .head-row > :not(.grow) { flex-shrink: 0; }
+  /* The row scrolls, which would cut its menus off: they open below the
+     whole header instead (as the toolbar's do). */
+  .head-row .tb-drop { position: static; }
+  .head-row .tb-drop .menu { top: calc(100% + 4px); left: 8px; }
+  .head-row .tb-drop .menu.right { left: auto; right: 8px; }
+  /* Synced needs no word; anything else keeps its own. */
+  .head-row .sync:has(.ok) .lbl { display: none; }
   .crumbs { display: none; }
   .toolbar-wrap { top: 48px; }
   .toolbar { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; border-radius: inherit; }
@@ -989,6 +1004,7 @@ table.keys td:first-child { white-space: nowrap; width: 1%; padding-right: 16px;
   .h-list { border-right: none; max-height: 30vh; }
   .modal-back { padding-top: 5vh; }
   .note-body.overlay .panel { width: 86vw; }
+  .note-body.overlay .panel-scrim { display: block; position: fixed; inset: calc(52px + var(--banners-h, 0px)) 0 0 0; z-index: 29; background: rgba(0, 0, 0, 0.3); }
   .tree-more { opacity: 1; }
   .ed { font-size: 17px; }
   /* A table column is as wide as its text up to 12em, where longer text

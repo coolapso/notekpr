@@ -3356,13 +3356,7 @@ impl Host for NoteHost {
     }
 
     fn covered_top(&self) -> f64 {
-        // The note's header and its toolbar stick to the top of the page.
-        let doc = util::document();
-        [".note-page .note-head", ".note-page .toolbar-wrap"]
-            .into_iter()
-            .filter_map(|s| doc.query_selector(s).ok().flatten())
-            .map(|e| e.get_bounding_client_rect().bottom())
-            .fold(0.0, f64::max)
+        covered_top()
     }
 
     fn history(&self, back: bool) {
@@ -3370,6 +3364,34 @@ impl Host for NoteHost {
             let _ = if back { h.back() } else { h.forward() };
         }
     }
+}
+
+/// Where the open note's text starts to show: below its header and toolbar,
+/// which stick to the top of the page.
+fn covered_top() -> f64 {
+    let doc = util::document();
+    [".note-page .note-head", ".note-page .toolbar-wrap"]
+        .into_iter()
+        .filter_map(|s| doc.query_selector(s).ok().flatten())
+        .map(|e| e.get_bounding_client_rect().bottom())
+        .fold(0.0, f64::max)
+}
+
+/// Scroll the open note's editor to its line at `offset`, at the top of
+/// what shows, without focusing it: on a phone that would open the keyboard.
+pub fn scroll_to_offset(text: &str, offset: usize) {
+    let line = text.get(..offset).map_or(0, |t| t.matches('\n').count());
+    let doc = util::document();
+    let el = doc
+        .query_selector_all(".note-page .ed > .ln")
+        .ok()
+        .and_then(|lines| lines.item(line as u32))
+        .and_then(|n| n.dyn_into::<web_sys::Element>().ok());
+    let (Some(el), Some(main)) = (el, doc.query_selector(".main").ok().flatten()) else {
+        return;
+    };
+    let by = el.get_bounding_client_rect().top() - covered_top() - 8.0;
+    main.set_scroll_top(main.scroll_top() + by.round() as i32);
 }
 
 fn open_editor(vault: &str, note: &str) -> Option<Rc<editor::Editor>> {

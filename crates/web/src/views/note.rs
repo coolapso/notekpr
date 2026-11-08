@@ -681,6 +681,7 @@ pub fn NoteView(vault: String, note: String) -> impl IntoView {
         <div class="note-page">
             <header class="note-head">
                 <button class="icon-btn mobile-only" title="Menu" aria-label="Menu" on:click=move |_| ui.sidebar.set(true)><Icon name="menu"/></button>
+                <div class="head-row">
                 <div class="crumbs ellipsis">{breadcrumb}</div>
                 <div class="presence">
                     {move || others_here().into_iter().map(|p| avatar(&p.name, &p.user_id)).collect_view()}
@@ -774,6 +775,7 @@ pub fn NoteView(vault: String, note: String) -> impl IntoView {
                         }
                     </Show>
                 </div>
+                </div>
             </header>
             <div class="note-body" class:with-panel=move || ui.ui_prefs.get().right_panel class:overlay=move || ui.panel_overlay.get()>
                 <div class="note-main" class:wider=move || shown_width.get() != NoteWidth::NARROW style=move || shown_width.get().style()>
@@ -850,6 +852,8 @@ pub fn NoteView(vault: String, note: String) -> impl IntoView {
                         }.into_any()
                     }}
                 </div>
+                // On a phone the panel covers the note: a tap beside it closes it.
+                <div class="panel-scrim" on:click=move |_| ui.panel_overlay.set(false)></div>
                 <Show when=move || ui.ui_prefs.get().right_panel || ui.panel_overlay.get()>
                     <RightPanel vault=vrp.clone() note=nrp.clone()/>
                 </Show>
@@ -1005,6 +1009,7 @@ pub fn SharedNoteView(vault: String, note: String) -> impl IntoView {
         <div class="note-page shared-note">
             <header class="note-head">
                 <button class="icon-btn mobile-only" title="Menu" aria-label="Menu" on:click=move |_| ui.sidebar.set(true)><Icon name="menu"/></button>
+                <div class="head-row">
                 <div class="crumbs ellipsis">{move || info.get().map(|s| format!("Shared with you by {}", s.owner)).unwrap_or_default()}</div>
                 <div class="presence">
                     {move || others_here().into_iter().map(|p| avatar(&p.name, &p.user_id)).collect_view()}
@@ -1054,6 +1059,7 @@ pub fn SharedNoteView(vault: String, note: String) -> impl IntoView {
                             }
                         }
                     </Show>
+                </div>
                 </div>
             </header>
             <div class="note-body">

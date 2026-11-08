@@ -152,6 +152,7 @@ pub fn AttachmentView(vault: String, id: String) -> impl IntoView {
         <div class="note-page attachment-page">
             <header class="note-head">
                 <button class="icon-btn mobile-only" title="Menu" aria-label="Menu" on:click=move |_| ui.sidebar.set(true)><Icon name="menu"/></button>
+                <div class="head-row">
                 <div class="crumbs ellipsis">{breadcrumb}</div>
                 <span class="mobile-only"><SyncStatus/></span>
                 <button class="icon-btn" title="Download" aria-label="Download" on:click=move |_| download.with_value(|d| d())><Icon name="download"/></button>
@@ -193,6 +194,7 @@ pub fn AttachmentView(vault: String, id: String) -> impl IntoView {
                             }
                         }
                     </Show>
+                </div>
                 </div>
             </header>
             <div class="note-body">

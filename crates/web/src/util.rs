@@ -309,6 +309,16 @@ pub fn is_touch() -> bool {
         .is_some_and(|m| m.matches())
 }
 
+/// A phone-sized window: the layout of `@media (max-width: 760px)` in
+/// style.css (the sidebar and the side panel cover the page).
+pub fn is_phone() -> bool {
+    window()
+        .match_media("(max-width: 760px)")
+        .ok()
+        .flatten()
+        .is_some_and(|m| m.matches())
+}
+
 pub fn log(msg: &str) {
     web_sys::console::log_1(&JsValue::from_str(msg));
 }

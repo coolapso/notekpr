@@ -61,6 +61,13 @@ pub fn Shell() -> impl IntoView {
     let ui = ui();
     let banners = NodeRef::<leptos::html::Div>::new();
     watch_banners(banners);
+    // On a phone the side panel covers the note: another page closes it.
+    Effect::new(move |seen: Option<()>| {
+        ui.route.track();
+        if seen.is_some() {
+            panels::close_over_note();
+        }
+    });
     view! {
         <div class="app" class:drawer=move || ui.sidebar.get()>
             <sidebar::Sidebar/>
@@ -505,6 +512,8 @@ fn install_shortcuts() {
                     ui.modal.set(None);
                 } else if ui.sidebar.get_untracked() {
                     ui.sidebar.set(false);
+                } else {
+                    panels::close_over_note();
                 }
             }
             _ => {}

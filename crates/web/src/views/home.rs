@@ -18,8 +18,10 @@ fn PageHead(title: String) -> impl IntoView {
     view! {
         <header class="page-head">
             <button class="icon-btn mobile-only" title="Menu" aria-label="Menu" on:click=move |_| ui.sidebar.set(true)><Icon name="menu"/></button>
+            <div class="head-row">
             <h1 class="grow ellipsis">{title}</h1>
             <span class="mobile-only"><SyncStatus/></span>
+            </div>
         </header>
     }
 }
@@ -133,8 +135,10 @@ pub fn VaultHome(vault: String) -> impl IntoView {
         <div class="page">
             <header class="page-head">
                 <button class="icon-btn mobile-only" title="Menu" aria-label="Menu" on:click=move |_| ui.sidebar.set(true)><Icon name="menu"/></button>
+                <div class="head-row">
                 <h1 class="grow ellipsis">{move || title.get()}</h1>
                 <button class="btn ghost small" on:click=move |_| ui.modal.set(Some(Modal::VaultSettings(vid.get_value())))><Icon name="settings"/>" Vault settings"</button>
+                </div>
             </header>
             <div class="page-body">
                 {move || {
@@ -361,6 +365,7 @@ pub fn Trash(vault: String) -> impl IntoView {
         <div class="page">
             <header class="page-head">
                 <button class="icon-btn mobile-only" title="Menu" aria-label="Menu" on:click=move |_| ui.sidebar.set(true)><Icon name="menu"/></button>
+                <div class="head-row">
                 <h1 class="grow">"Trash"</h1>
                 <Show when=move || admin() && !items2().is_empty()>
                     {
@@ -382,6 +387,7 @@ pub fn Trash(vault: String) -> impl IntoView {
                         }
                     }
                 </Show>
+                </div>
             </header>
             <div class="page-body">
                 <p class="muted small">"Deleted notes stay here until the trash is emptied. Older versions of notes are also kept in each note's history."</p>

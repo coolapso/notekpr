@@ -468,6 +468,29 @@ def test_mobile(env):
                    "const e = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2); return !!e && b.contains(e);")
         check(hit, "the toolbar's menus show whole on a phone")
         m.chord(KEYS["escape"])
+        # The header doesn't make the page scroll sideways: its row scrolls on its own.
+        sizes = m.js("""const m = document.querySelector('.main'), r = document.querySelector('.note-head .head-row');
+            return [m.scrollWidth <= m.clientWidth, getComputedStyle(r).overflowX];""")
+        check(sizes == [True, "auto"], f"the page doesn't scroll sideways, the header's row would ({sizes})")
+        m.click(".note-head .icon-btn[title=More]")
+        hit = m.js("const b = [...document.querySelectorAll('.note-head .menu button')].pop();"
+                   "if (!b) return false; const r = b.getBoundingClientRect();"
+                   "const e = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2); return !!e && b.contains(e);")
+        check(hit, "the header's menus show whole on a phone")
+        m.chord(KEYS["escape"])
+        # The side panel covers the note: what is chosen in it, or a tap beside it, closes it.
+        panel = ".note-head .icon-btn[title^='Side panel']"
+        m.click(panel)
+        m.find(".note-body.overlay .panel-item.outline", 10)
+        m.js("[...document.querySelectorAll('.panel-item.outline')].pop().click()")
+        m.wait("return !document.querySelector('.note-body.overlay') && document.querySelector('.main').scrollTop > 300", 5,
+               "the panel closes and the note scrolls")
+        check(True, "a heading chosen in the side panel closes it and shows the heading")
+        m.click(panel)
+        m.find(".note-body.overlay .panel", 10)
+        m.js("document.elementFromPoint(20, 400).click()")
+        m.wait("return !document.querySelector('.note-body.overlay')", 5, "the panel closes")
+        check(True, "a tap beside the side panel closes it")
         m.click(".note-head .mobile-only")
         time.sleep(0.4)
         check(m.js("return document.querySelector('.app').classList.contains('drawer')"), "sidebar opens as a drawer")

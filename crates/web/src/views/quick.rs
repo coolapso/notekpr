@@ -118,8 +118,10 @@ pub fn QuickPage() -> impl IntoView {
         <div class="page quick-page">
             <header class="page-head">
                 <button class="icon-btn mobile-only" title="Menu" aria-label="Menu" on:click=move |_| ui.sidebar.set(true)><Icon name="menu"/></button>
+                <div class="head-row">
                 <h1 class="grow ellipsis">"Quick notes"</h1>
                 <span class="mobile-only"><SyncStatus/></span>
+                </div>
             </header>
             <div class="page-body">
                 {move || (data.get().0.is_none() && ui.conn.get() != crate::ws::ConnState::Open).then(|| view! {

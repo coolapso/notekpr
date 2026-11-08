@@ -726,6 +726,7 @@ pub fn DrawingView(vault: String, id: String, #[prop(optional)] view_only: bool)
             on:copy=on_copy on:cut=on_cut on:paste=on_paste on:drop=on_drop on:dragover=|ev: web_sys::DragEvent| ev.prevent_default()>
             <header class="note-head">
                 <button class="icon-btn mobile-only" title="Menu" aria-label="Menu" on:click=move |_| ui.sidebar.set(true)><Icon name="menu"/></button>
+                <div class="head-row">
                 <div class="crumbs ellipsis">
                     <input class="drawing-name-field" node_ref=name_ref aria-label="Drawing name" title="Rename the drawing"
                         readonly=move || !writable.get()
@@ -799,6 +800,7 @@ pub fn DrawingView(vault: String, id: String, #[prop(optional)] view_only: bool)
                             }><Icon name="link"/>" Copy link for notes"</button>
                         </div>
                     </Show>
+                </div>
                 </div>
             </header>
             {banner}
@@ -1375,6 +1377,7 @@ pub fn DrawingsPage(vault: String) -> impl IntoView {
         <div class="page drawings-page">
             <header class="page-head">
                 <button class="icon-btn mobile-only" title="Menu" aria-label="Menu" on:click=move |_| ui.sidebar.set(true)><Icon name="menu"/></button>
+                <div class="head-row">
                 <h1>"Drawings"</h1>
                 <span class="muted ellipsis grow">{move || {
                     ui.vaults.track();
@@ -1389,6 +1392,7 @@ pub fn DrawingsPage(vault: String) -> impl IntoView {
                 <Show when=writable>
                     <button class="btn primary small" on:click=move |_| crate::actions::new_drawing(&vid.get_value(), "")><Icon name="plus"/>" New drawing"</button>
                 </Show>
+                </div>
             </header>
             {move || {
                 let items = list.get();

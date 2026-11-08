@@ -646,6 +646,7 @@ pub fn GraphPage(vault: String) -> impl IntoView {
         <div class="page graph-page">
             <header class="page-head">
                 <button class="icon-btn mobile-only" title="Menu" aria-label="Menu" on:click=move |_| ui.sidebar.set(true)><Icon name="menu"/></button>
+                <div class="head-row">
                 <h1 class="grow ellipsis">"Graph"<span class="muted">{move || format!(" · {}", name.get())}</span></h1>
                 <input class="input graph-filter" type="search" placeholder="Filter notes" aria-label="Filter notes"
                     prop:value=move || query.get() on:input=move |ev| query.set(event_target_value(&ev))/>
@@ -653,6 +654,7 @@ pub fn GraphPage(vault: String) -> impl IntoView {
                     <input type="checkbox" prop:checked=move || orphans.get() on:change=move |ev| orphans.set(event_target_checked(&ev))/>
                     " Unlinked notes"
                 </label>
+                </div>
             </header>
             <div class="graph-body">
                 <GraphCanvas vault=vault query=query orphans=orphans/>

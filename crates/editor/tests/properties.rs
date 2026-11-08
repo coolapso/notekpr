@@ -611,6 +611,117 @@ fn reference_classify(lines: &[&str]) -> Vec<Block> {
     out
 }
 
+/// A color on `x..y` of `t` changes only tags, never what a line shows or
+/// how its lines are read, and gives the selected text that can have colors
+/// the color asked for (or none).
+fn check_colors(
+    t: &str,
+    x: usize,
+    y: usize,
+    kind: Kind,
+    color: Option<Color>,
+) -> Result<(), TestCaseError> {
+    use commands::Command::*;
+    let mut st = EditorState::new(t.to_string());
+    st.set_selection(Selection::new(x, y));
+    let cmd = match kind {
+        Kind::Text => TextColor(color),
+        Kind::Background => Background(color),
+    };
+    let before: Vec<(String, Block)> = (0..st.doc().line_count())
+        .map(|i| (st.doc().line(i).to_string(), st.block(i).clone()))
+        .collect();
+    let Some(tr) = commands::command(&st, cmd) else {
+        return Ok(());
+    };
+    let changes = tr.changes.clone();
+    // A caret on a blank line gets an empty pair to type into: the lines are
+    // read as if a letter were typed there. The line may join a block above
+    // it (e.g. an HTML block, which only a blank line ends) or take lines
+    // below into its own.
+    let as_typed = (x == y && before[st.doc().line_of(x)].1 == Block::Blank).then(|| {
+        let li = st.doc().line_of(x);
+        let mut lines: Vec<String> = before.iter().map(|(l, _)| l.clone()).collect();
+        lines[li].insert(x - st.doc().line_start(li), 'x');
+        let lines: Vec<&str> = lines.iter().map(String::as_str).collect();
+        (li, syntax::classify(&lines))
+    });
+    st.apply(tr);
+    prop_assert_eq!(st.doc().line_count(), before.len());
+    for (i, (line, block)) in before.iter().enumerate() {
+        match &as_typed {
+            // In an HTML block the pair shows as the source it is, as
+            // anything typed into one does.
+            Some((li, _)) if i == *li && matches!(st.block(i), Block::Html { .. }) => continue,
+            Some((li, _)) if i == *li => {}
+            Some((_, typed)) => {
+                prop_assert_eq!(
+                    st.block(i),
+                    &typed[i],
+                    "{:?} → {:?}",
+                    line,
+                    st.doc().line(i)
+                );
+            }
+            None => {
+                prop_assert_eq!(st.block(i), block, "{:?} → {:?}", line, st.doc().line(i));
+            }
+        }
+        prop_assert_eq!(
+            shown(st.doc().line(i), st.block(i)),
+            shown(line, block),
+            "{:?} → {:?}",
+            line,
+            st.doc().line(i)
+        );
+    }
+    let old = Text::new(
+        before
+            .iter()
+            .map(|(l, _)| l.as_str())
+            .collect::<Vec<_>>()
+            .join("\n"),
+    );
+    for (i, (line, block)) in before.iter().enumerate() {
+        let s = syntax::style_line(line, block, &|_| true);
+        let Some(from) = s.inline_from else { continue };
+        let ls = old.line_start(i);
+        let mut tag = vec![false; line.len()];
+        for e in &s.elements {
+            tag[e.open.0..e.open.1].fill(true);
+            tag[e.close.0..e.close.1].fill(true);
+        }
+        // (A caret colors the text or word around it.)
+        // (Lines where tags would join what they kept apart stay as
+        // they were.)
+        let unchanged = st.doc().line(i) == line.as_str();
+        for (p, ch) in line.char_indices().filter(|_| x < y && !unchanged) {
+            let at = ls + p;
+            // Not colored: pipes, unpaired tags and a line break (`\` at the end).
+            let skip = s.flags[p] & (syntax::PIPE | syntax::HTML) != 0 || &line[p..] == "\\";
+            if at < x || at >= y || p < from || tag[p] || ch.is_whitespace() || skip {
+                continue;
+            }
+            let to = changes.map_pos(at, Assoc::After);
+            let li = st.doc().line_of(to);
+            let now = syntax::style_line(st.doc().line(li), st.block(li), &|_| true);
+            let got = syntax::colors(now.flags[to - st.doc().line_start(li)]).get(kind);
+            prop_assert_eq!(got, color, "{:?} at {} in {:?}", ch, p, st.doc().line(li));
+        }
+    }
+    Ok(())
+}
+
+/// Found by `colors_change_only_tags_and_color_the_selection` with 20,000
+/// cases: a color on the blank line after an HTML block makes that line part
+/// of the block, as typing there would.
+#[test]
+fn a_color_after_an_html_block_joins_it_as_typing_would() {
+    for kind in [Kind::Text, Kind::Background] {
+        check_colors("</mark>\n", 8, 8, kind, Some(Color::Gray)).unwrap();
+    }
+}
+
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(cases()))]
 
@@ -805,62 +916,8 @@ proptest! {
         kind in prop::sample::select(&[Kind::Text, Kind::Background][..]),
         color in prop::option::of(prop::sample::select(&Color::ALL[..])),
     ) {
-        use commands::Command::*;
         let (x, y) = edit_on(&t, a, b);
-        let mut st = EditorState::new(t);
-        st.set_selection(Selection::new(x, y));
-        let cmd = match kind {
-            Kind::Text => TextColor(color),
-            Kind::Background => Background(color),
-        };
-        let before: Vec<(String, Block)> = (0..st.doc().line_count())
-            .map(|i| (st.doc().line(i).to_string(), st.block(i).clone()))
-            .collect();
-        let Some(tr) = commands::command(&st, cmd) else {
-            return Ok(());
-        };
-        let changes = tr.changes.clone();
-        // A caret on a blank line gets an empty pair to type into: text, as
-        // if typed.
-        let typed_in = (x == y && before[st.doc().line_of(x)].1 == Block::Blank).then(|| st.doc().line_of(x));
-        st.apply(tr);
-        prop_assert_eq!(st.doc().line_count(), before.len());
-        for (i, (line, block)) in before.iter().enumerate() {
-            if typed_in.is_some() {
-                prop_assert!(i == typed_in.unwrap() || st.block(i) == block || i > typed_in.unwrap());
-            } else {
-                prop_assert_eq!(st.block(i), block, "{:?} → {:?}", line, st.doc().line(i));
-            }
-            prop_assert_eq!(shown(st.doc().line(i), st.block(i)), shown(line, block), "{:?} → {:?}", line, st.doc().line(i));
-        }
-        let old = Text::new(before.iter().map(|(l, _)| l.as_str()).collect::<Vec<_>>().join("\n"));
-        for (i, (line, block)) in before.iter().enumerate() {
-            let s = syntax::style_line(line, block, &|_| true);
-            let Some(from) = s.inline_from else { continue };
-            let ls = old.line_start(i);
-            let mut tag = vec![false; line.len()];
-            for e in &s.elements {
-                tag[e.open.0..e.open.1].fill(true);
-                tag[e.close.0..e.close.1].fill(true);
-            }
-            // (A caret colors the text or word around it.)
-            // (Lines where tags would join what they kept apart stay as
-            // they were.)
-            let unchanged = st.doc().line(i) == line.as_str();
-            for (p, ch) in line.char_indices().filter(|_| x < y && !unchanged) {
-                let at = ls + p;
-                // Not colored: pipes, unpaired tags and a line break (`\` at the end).
-                let skip = s.flags[p] & (syntax::PIPE | syntax::HTML) != 0 || &line[p..] == "\\";
-                if at < x || at >= y || p < from || tag[p] || ch.is_whitespace() || skip {
-                    continue;
-                }
-                let to = changes.map_pos(at, Assoc::After);
-                let li = st.doc().line_of(to);
-                let now = syntax::style_line(st.doc().line(li), st.block(li), &|_| true);
-                let got = syntax::colors(now.flags[to - st.doc().line_start(li)]).get(kind);
-                prop_assert_eq!(got, color, "{:?} at {} in {:?}", ch, p, st.doc().line(li));
-            }
-        }
+        check_colors(&t, x, y, kind, color)?;
     }
 
     /// Whatever goes in, a browser reads only allowed tags with allowed

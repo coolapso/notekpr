@@ -21,6 +21,7 @@ tests/e2e       browser end-to-end tests (Python stdlib + chromedriver)
 fuzz/           fuzz targets, a separate workspace (fuzz/run.sh, task fuzz)
 vendor/yrs      yrs 0.28 with fixes, via [patch.crates-io] (see its NOTEKPR.md)
 vendor/openidconnect  openidconnect 4.0.1 on newer curve crates (see its NOTEKPR.md)
+vendor/sqlx-sqlite  sqlx-sqlite 0.9.0 on a newer bundled SQLite (see its NOTEKPR.md)
 deploy/         Kubernetes, Dex (dev OIDC), examples/ (optional reverse proxies)
 docs/           architecture, protocol, security, operations, agents, CLI;
                 assets/ (the logo and icon); site/ (the docs as a website, Hugo → dist/docs)

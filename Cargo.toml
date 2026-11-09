@@ -40,7 +40,10 @@ strip = true
 debug-assertions = false
 
 # yrs with fixes for panics on crafted updates (see vendor/yrs/NOTEKPR.md);
-# openidconnect on newer curve crates (see vendor/openidconnect/NOTEKPR.md).
+# openidconnect on newer curve crates (see vendor/openidconnect/NOTEKPR.md);
+# sqlx-sqlite taking a libsqlite3-sys with a fixed SQLite (see
+# vendor/sqlx-sqlite/NOTEKPR.md).
 [patch.crates-io]
 yrs = { path = "vendor/yrs" }
 openidconnect = { path = "vendor/openidconnect" }
+sqlx-sqlite = { path = "vendor/sqlx-sqlite" }

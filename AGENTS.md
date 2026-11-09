@@ -149,6 +149,8 @@ vendor/yrs      yrs 0.28 with fixes for panics found by fuzzing, via [patch.crat
                 the changes are in vendor/yrs/NOTEKPR.md — re-apply on upgrade
 vendor/openidconnect  openidconnect 4.0.1 on p256/p384 0.14 (a crypto-bigint advisory),
                 via [patch.crates-io]; drop it once upstream moves (its NOTEKPR.md)
+vendor/sqlx-sqlite  sqlx-sqlite 0.9.0 allowed libsqlite3-sys 0.39 (a SQLite advisory),
+                via [patch.crates-io]; drop it once sqlx moves (its NOTEKPR.md)
 deploy/         Kubernetes manifests, Dex (dev OIDC), examples/ (optional reverse
                 proxies: Caddy, Traefik — never required, TLS is the operator's choice)
 (root)          Dockerfile, docker-compose.yml, docker-compose.dev.yml, Taskfile.yml,

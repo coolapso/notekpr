@@ -595,6 +595,13 @@ app (2.3 MB), merman isn't part of it:
   (`cargo test --manifest-path crates/diagram/Cargo.toml`) feed it hostile
   diagrams. The app's Content-Security-Policy runs no inline script and
   loads no outside image, whatever an SVG holds.
+* Obsidian's links to notes (`class A internal-link`) are Mermaid classes:
+  merman puts `internal-link` on the box's `<g class="node …">`, and a
+  click on such a box opens the note its label (`.nodeLabel`) names —
+  `diagram_note_link` in `crates/editor/src/view/dom.rs`, which the
+  editor and the reading views call. Inside a diagram, the views follow
+  nothing else but its `<a href>`. A test in `crates/diagram` checks merman
+  still writes boxes that way.
 * In the editor, a diagram is a code block whose closing fence shows the
   drawing (`Preview::Diagram`, from `Host::diagram`); the reading view asks
   `render::Ctx::diagram`.

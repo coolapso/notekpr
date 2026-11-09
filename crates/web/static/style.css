@@ -720,6 +720,9 @@ mtr > mtd:last-child { padding-right: 0; }
 .ed.live .ln.fence.fc.mmd.active { padding-bottom: 8px; }
 .ed.live .ln.fence.fc.mmd.active .w.dg { margin-top: 6px; border-radius: 6px; background: var(--bg); }
 :is(.ed .w.dg, .reading .diagram) svg { max-width: 100%; height: auto; }
+/* Boxes linked to notes (`class A internal-link`, as in Obsidian). */
+:is(.ed .w.dg, .reading .diagram) .node.internal-link { cursor: pointer; }
+:is(.ed .w.dg, .reading .diagram) .node.internal-link .nodeLabel { text-decoration: underline; text-underline-offset: 2px; }
 .reading .diagram { margin: 0.8em 0; overflow-x: auto; overflow-y: hidden; text-align: center; contain: paint; }
 :is(.ed, .reading) :is(.dgload, .dgerr) { font-family: var(--sans); font-size: 14px; color: var(--muted); text-align: left; padding: 4px 0; }
 :is(.ed, .reading) .dgerr { color: var(--fg-red); white-space: pre-wrap; }

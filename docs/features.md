@@ -53,8 +53,12 @@ a Mac). The [README](../README.md) has the short version.
   timelines, git graphs and every other kind Mermaid draws. The block shows
   as its diagram, in the light or the dark theme; with the caret in it, its
   code, the diagram updating under it as you type. Links in a diagram
-  (`click A href "https://…"`) open in a new tab. What draws diagrams
-  loads the first time you open a note with one.
+  (`click A href "https://…"`) open in a new tab, and boxes link to notes
+  the way Obsidian links them: `class A internal-link` (or
+  `A:::internal-link`) makes box A open the note its text names, as
+  `[[…]]` would (made if there's none yet). As in Obsidian, those links
+  aren't backlinks. What draws diagrams loads the first time you open a
+  note with one.
 * Images and other files: paste or drop them into a note — they are encrypted,
   uploaded and shown inline; videos and audio (`![[clip.mp4]]`) play there,
   in the editor and the reading view. They go to `attachments/` in the

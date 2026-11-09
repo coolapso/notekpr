@@ -37,7 +37,7 @@
 
 mod dom;
 
-pub use dom::{date_label, date_text, today};
+pub use dom::{date_label, date_text, diagram_note_link, today};
 
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeSet, VecDeque};
@@ -2747,17 +2747,17 @@ impl Editor {
             if ev.button() != 0 {
                 return;
             }
-            // A diagram's links are `<a href>` (to web and mail addresses
-            // only: crates/diagram), an HTML preview's `data-href`.
+            // An HTML preview's links are `data-href`; a diagram's are
+            // `<a href>` (to web and mail addresses only: crates/diagram)
+            // and boxes linked to notes (`internal-link`, as in Obsidian).
+            let diagram = preview.class_list().contains("dg");
             let href = target
-                .closest("[data-href], .dg a[href]")
+                .closest(if diagram { "a[href]" } else { "[data-href]" })
                 .ok()
                 .flatten()
                 .filter(|a| preview.contains(Some(a)))
-                .and_then(|a| {
-                    a.get_attribute("data-href")
-                        .or_else(|| a.get_attribute("href"))
-                });
+                .and_then(|a| a.get_attribute(if diagram { "href" } else { "data-href" }));
+            let new_tab = ev.ctrl_key() || ev.meta_key();
             if let Some(href) = href {
                 let href = href.trim();
                 let target = if notekpr_core::markdown::is_internal_target(href) {
@@ -2765,7 +2765,9 @@ impl Editor {
                 } else {
                     Target::Url(href.to_string())
                 };
-                self.host.open_link(&target, ev.ctrl_key() || ev.meta_key());
+                self.host.open_link(&target, new_tab);
+            } else if let Some(note) = diagram.then(|| dom::diagram_note_link(&target)).flatten() {
+                self.host.open_link(&Target::Wiki(note), new_tab);
             } else if !line_active
                 && let Some(tr) = self.model(move |st| {
                     let b = st.preview_block(idx)?;

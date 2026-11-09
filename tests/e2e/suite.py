@@ -3052,7 +3052,7 @@ def test_diagrams(env):
         signup(b, uniq("dgm"))
         new_note(b, "Diagrams", "")
         check(not b.js(loaded), "what draws diagrams isn't loaded with the app")
-        body = ("Intro\n\n```mermaid\nflowchart LR\n  A[Start] --> B{Shared?}\n  click B href \"https://example.org/\"\n```\n\n"
+        body = ("Intro\n\n```mermaid\nflowchart LR\n  A[Start] --> B{Shared?}\n  click B href \"https://example.org/\"\n  A --> L[Linked note]\n  class L internal-link\n```\n\n"
                 "```mermaid\nflowchart LR\n  A -->\n```\n\n"
                 "```mermaid\nflowchart LR\n  X[\"<div class='cover' style='position:fixed;inset:0;background:red'>fake</div>\"] --> Y\n```\n\nend")
         b.js(paste, body)
@@ -3098,6 +3098,20 @@ def test_diagrams(env):
         check(b.js(arrows), "its arrows point at its own markers, not the editor's hidden copy")
         check(b.js("return !!document.querySelector('.reading .codeblock + .dgerr, .reading .dgerr')"), "and the code of one that can't be drawn, saying why")
         b.shot("diagrams-reading")
+        # A box linked to a note, as in Obsidian (`class A internal-link`):
+        # it opens the note its label names, made if there's none yet.
+        title = "return document.querySelector('.note-title')?.value"
+        check(b.js("return getComputedStyle(document.querySelector('.reading .diagram .node.internal-link')).cursor") == "pointer",
+              "a box linked to a note shows it's a link")
+        b.click(".reading .diagram .node.internal-link")
+        b.wait(title + " === 'Linked note'", 10, "the note it names")
+        b.js("history.back()")
+        b.wait(title + " === 'Diagrams'", 10, "back")
+        b.click(".seg button[title='Live preview']")
+        b.find(".ed .w.dg svg .node.internal-link", 30)
+        b.chord(KEYS["ctrl"], KEYS["end"])
+        b.click(".ed .w.dg svg .node.internal-link")
+        b.wait(title + " === 'Linked note'", 10, "the editor's diagram opens it too")
         check(not severe_logs(b), "no browser errors")
     finally:
         b.close()

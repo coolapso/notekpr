@@ -379,6 +379,46 @@ mod tests {
         assert!(svg.contains("data-id=\"A\""), "{svg}");
     }
 
+    /// Obsidian's links to notes (`class A internal-link`): the node keeps
+    /// the class, and its label the note's name (what the app opens).
+    #[test]
+    fn internal_links_keep_their_class() {
+        for (src, node) in [
+            (
+                "graph TD\n  Biology --> Chemistry\n  class Biology,Chemistry internal-link;",
+                "Biology",
+            ),
+            (
+                "flowchart LR\n  A[\"Soil &amp; water\"]:::internal-link --> B",
+                "Soil &amp; water",
+            ),
+            (
+                "stateDiagram-v2\n  Draft --> Done\n  class Draft internal-link",
+                "Draft",
+            ),
+        ] {
+            let svg = draw(src).unwrap();
+            let at = svg
+                .find("internal-link")
+                .unwrap_or_else(|| panic!("{src}: {svg}"));
+            let tag_start = svg[..at].rfind('<').unwrap();
+            assert!(
+                svg[tag_start..].starts_with("<g class=\"node "),
+                "{src}: {svg}"
+            );
+            let rest = &svg[at..];
+            let label = rest.find("class=\"nodeLabel").unwrap();
+            assert!(
+                rest[label..]
+                    .split("</span>")
+                    .next()
+                    .unwrap()
+                    .contains(node),
+                "{src}: {svg}"
+            );
+        }
+    }
+
     /// Every rule of a diagram's style sheet is about that diagram (its
     /// `#id`), whatever its styles say. (What they do inside it, the page
     /// contains: `contain: paint` in style.css.)

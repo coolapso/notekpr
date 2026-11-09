@@ -422,7 +422,7 @@ HOME = [
         - [ ] Colors: select some text and pick a text or background color with the toolbar's **A** button. They are saved as HTML that Obsidian, Typora and VS Code show too ([[Tomatoes]]), and colors written there show here ([[Packing list]] has a highlight from Obsidian's Highlightr and a `<font color>`)
         - [ ] From Notion: export a page or database as HTML there (⋯ → Export, with subpages), then *Import notes* → *Import from Notion…* with its `.zip`. It shows what the export holds first; databases become folders of notes with a table of their rows, tasks checklists, and *Imported from Notion* lists what didn't come along. Import the same `.zip` again: what came already is left out
         - [ ] Math and chemistry: [[Soil chemistry]] has formulas in its lines (`$…$`), formulas of their own (`$$…$$`) and chemical equations (`\\ce{…}`). Click one to see its LaTeX; a formula of its own keeps showing under it as you edit it. Write `$x^2$` anywhere
-        - [ ] Diagrams: [[Homelab]] has a flowchart and a sequence diagram, *Website relaunch* in *Work* a Gantt chart — Mermaid in a ```` ```mermaid ```` block, as in Obsidian and GitHub. Click one to edit its code, the diagram updating under it; switch to the dark theme and they follow
+        - [ ] Diagrams: [[Homelab]] has a flowchart and a sequence diagram, *Website relaunch* in *Work* a Gantt chart — Mermaid in a ```` ```mermaid ```` block, as in Obsidian and GitHub. Click one to edit its code, the diagram updating under it; switch to the dark theme and they follow. The flowchart's *Home automation* box opens that note: `class HA internal-link` links a box to the note it names, as in Obsidian
         - [ ] Code blocks in *Snippets*: a file name and highlighted lines (`title=… hl=…` after the language), line numbers, indentation guides, a copy button, `wrap=false` for long lines; Settings → Editor turns the numbers, guides and wrapping off
         - [ ] Drop or paste a picture into a note — or a video or a recording: it plays where it is, as the sunset in [[Lisbon 2026]] and the blackbird in [[Pests]] do. It goes to `attachments/` in the note's folder (*Garden*'s are in *Garden/attachments*)
         - [ ] Open a file: *garden-layout.png* in *Garden/attachments* in the sidebar, or the link to it in [[Garden plan]]'s side panel. Its page shows it, and *Used in*: the *Garden beds* drawing, the [[Garden plan]] and a journal entry. Rename, move or download it from there
@@ -945,6 +945,7 @@ HOME = [
             PC --> Notes[(Notes server)]
             Notes -->|nightly| Backup[(Backup disk)]
             HA -.->|lights, heating| House{{House}}
+            class HA internal-link
         ```
 
         And a backup, night by night:

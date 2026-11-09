@@ -264,6 +264,24 @@ pub fn fill_widget(line: &Element, r: &Rendered) {
     }
 }
 
+/// The note a click on `target` opens, if it is a box of a drawn diagram
+/// (the editor's `.dg`, the reading view's `.diagram`) linked to one the
+/// way Obsidian links them: given the class `internal-link`
+/// (`class A internal-link`, `A:::internal-link`), it opens the note its
+/// label names, as `[[label]]` would.
+pub fn diagram_note_link(target: &Element) -> Option<String> {
+    let node = target.closest(".node.internal-link").ok().flatten()?;
+    node.closest(".dg, .diagram").ok().flatten()?;
+    let label = node
+        .query_selector(".nodeLabel")
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| node.clone());
+    let text = label.text_content()?;
+    let name = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    (!name.is_empty()).then_some(name)
+}
+
 pub fn class_with(class: &str, active: bool) -> String {
     if active {
         format!("{class} active")

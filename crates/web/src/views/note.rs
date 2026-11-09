@@ -583,6 +583,18 @@ pub fn NoteView(vault: String, note: String) -> impl IntoView {
         else {
             return;
         };
+        // In a diagram, only its own links: `<a href>` (the browser's) and
+        // boxes linked to notes the way Obsidian does.
+        if t.closest(".diagram").ok().flatten().is_some() {
+            if let Some(name) = crate::editor::diagram_note_link(&t) {
+                ev.prevent_default();
+                let from = state::step(|c| c.entry(&vr, &nr))
+                    .map(|e| e.path)
+                    .unwrap_or_default();
+                actions::open_wiki(&vr, &name, &from);
+            }
+            return;
+        }
         if let Some(a) = t.closest("[data-note]").ok().flatten() {
             ev.prevent_default();
             if let Some(id) = a.get_attribute("data-note") {
@@ -972,13 +984,22 @@ pub fn SharedNoteView(vault: String, note: String) -> impl IntoView {
         else {
             return;
         };
+        let not_shared = "Only this note is shared with you, not the notes it links to.";
+        // In a diagram, only its own links (as in a vault's reading view).
+        if t.closest(".diagram").ok().flatten().is_some() {
+            if crate::editor::diagram_note_link(&t).is_some() {
+                ev.prevent_default();
+                state::info(not_shared);
+            }
+            return;
+        }
         if t.closest("[data-note], [data-create], [data-tag]")
             .ok()
             .flatten()
             .is_some()
         {
             ev.prevent_default();
-            state::info("Only this note is shared with you, not the notes it links to.");
+            state::info(not_shared);
         } else if t.class_list().contains("task") {
             ev.prevent_default();
             if writable.get_untracked()

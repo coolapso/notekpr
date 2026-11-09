@@ -113,6 +113,23 @@ impl Host for MockHost {
     fn history(&self, back: bool) {
         self.went.borrow_mut().push(back);
     }
+    fn diagram(&self, _code: &str) -> Option<notekpr_editor::Drawing> {
+        // What crates/diagram draws, in short: a box linked to a note
+        // (Obsidian's `internal-link`), a plain one, a web link.
+        Some(notekpr_editor::Drawing::Svg(
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"300\" height=\"40\">\
+             <g class=\"node default internal-link\"><rect width=\"90\" height=\"30\"/>\
+             <g class=\"label\"><foreignObject width=\"90\" height=\"30\">\
+             <div xmlns=\"http://www.w3.org/1999/xhtml\"><span class=\"nodeLabel\">\
+             <p>Exists <b>here</b></p></span></div></foreignObject></g></g>\
+             <g class=\"node default\" transform=\"translate(100,0)\"><rect width=\"90\" height=\"30\"/>\
+             <g class=\"label\"><foreignObject width=\"90\" height=\"30\">\
+             <div xmlns=\"http://www.w3.org/1999/xhtml\"><span class=\"nodeLabel\">\
+             <p data-href=\"Sneaky\">Plain</p></span></div></foreignObject></g></g>\
+             <a href=\"https://e.example/\" target=\"_blank\"><text x=\"200\" y=\"20\">web</text></a></svg>"
+                .into(),
+        ))
+    }
 }
 
 fn document() -> web_sys::Document {
@@ -783,6 +800,46 @@ fn task_boxes_and_links() {
     let ev = web_sys::MouseEvent::new_with_mouse_event_init_dict("mousedown", &init).unwrap();
     link.dispatch_event(&ev).unwrap();
     assert_eq!(*f.host.opened.borrow(), vec![Target::Wiki("Exists".into())]);
+}
+
+/// A diagram's boxes linked to notes (`class A internal-link`, as in
+/// Obsidian) open the note their label names; its web links open; a click
+/// anywhere else goes into its code (an HTML preview's `data-href` means
+/// nothing in a diagram).
+#[wasm_bindgen_test]
+fn diagram_links() {
+    let text = "Intro\n\n```mermaid\nflowchart LR\n  A[Exists here] --> B[Plain]\n  class A internal-link\n```\n\nend";
+    let f = setup(text);
+    caret_at(&f, text.len());
+    let dg = lines(&f)[6]
+        .query_selector(".w.dg[data-w]")
+        .unwrap()
+        .unwrap();
+    let init = web_sys::MouseEventInit::new();
+    init.set_bubbles(true);
+    init.set_cancelable(true);
+    let click = |selector: &str| {
+        let el = dg.query_selector(selector).unwrap().unwrap();
+        let ev = web_sys::MouseEvent::new_with_mouse_event_init_dict("mousedown", &init).unwrap();
+        el.dispatch_event(&ev).unwrap();
+        assert!(ev.default_prevented(), "{selector}");
+    };
+    click(".internal-link .nodeLabel b");
+    assert_eq!(
+        *f.host.opened.borrow(),
+        vec![Target::Wiki("Exists here".into())]
+    );
+    click("a text");
+    assert_eq!(
+        f.host.opened.borrow().last(),
+        Some(&Target::Url("https://e.example/".into()))
+    );
+    assert_eq!(f.ed.selection(), (text.len(), text.len()));
+    click("[data-href]");
+    assert_eq!(f.host.opened.borrow().len(), 2, "no link");
+    let code = text.find("flowchart").unwrap();
+    assert_eq!(f.ed.selection(), (code, code), "the start of its code");
+    assert_text(&f, text);
 }
 
 /// A code block's header is a widget: the text stays the source, its copy

@@ -134,7 +134,7 @@ tasks:
       - scripts/docs-theme.sh "{{.DOCKLEAF}}" "{{.REF | default "HEAD"}}"
 
   docs:deploy:
-    desc: "Check the docs site, build it and publish it on Cloudflare Pages (project {{.DOCS_PROJECT}}, docs.notekpr.md) with wrangler: from main the site itself, from another branch a preview"
+    desc: "Check the docs site, build it and publish it on Cloudflare Pages (project {{.DOCS_PROJECT}}, docs.notekpr.md) with wrangler: from main the site itself, from another branch a preview (task release does, last; run it again if it failed there)"
     preconditions:
       - sh: command -v wrangler >/dev/null
         msg: "The docs site is published with wrangler (Arch: wrangler), signed in once with `wrangler login` (or CLOUDFLARE_API_TOKEN in the environment)."
@@ -599,6 +599,12 @@ tasks:
         msg: "copr-cli is missing, which publishes the CLI to Fedora's COPR (Arch: sudo pacman -S copr-cli; or task tools:copr)"
       - sh: 'test -n "${COPR_CONFIG:-}${CI:-}" || test -f ~/.config/copr'
         msg: "No configuration for copr-cli: save the one https://copr.fedorainfracloud.org/api/ gives you as ~/.config/copr"
+      # The docs site goes out last (docs:deploy): wrangler is checked now,
+      # so that a release doesn't stop there with everything else published.
+      - sh: command -v wrangler >/dev/null
+        msg: "wrangler is missing, which publishes the docs site (Arch: wrangler)"
+      - sh: 'test -n "${CLOUDFLARE_API_TOKEN:-}" || wrangler whoami 2>/dev/null | grep -q "You are logged in"'
+        msg: "wrangler isn't signed in, so the docs site couldn't be published: wrangler login (or CLOUDFLARE_API_TOKEN in the environment)"
     deps: [ci:check]
     cmds:
       - semrel config validate --env-file ""
@@ -630,12 +636,14 @@ tasks:
           task docker:push VERSION="$version"
           task docker:push:demo VERSION="$version"
           task release:clients
+          # Last, once the release is out: the docs site.
+          task docs:deploy
         else
-          echo 'No release published; skipping image and CLI publishing.'
+          echo 'No release published; skipping the images, the CLI and the docs site.'
         fi
 
   release:
-    desc: "Release from main: CI's checks, then tag the next version, create the GitHub Release, push both images and publish the CLI with it (VERSION=x.y.z to choose the version; the first one: task release VERSION=0.1.0)"
+    desc: "Release from main: CI's checks, then tag the next version, create the GitHub Release, push both images, publish the CLI with it and, last, the docs site (VERSION=x.y.z to choose the version; the first one: task release VERSION=0.1.0)"
     deps: [release:check, release:prepare]
     cmds:
       - task: release:run

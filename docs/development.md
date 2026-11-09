@@ -318,8 +318,11 @@ task release            # the same, then the release
 `task release` tags the next version (`v0.2.0`), pushes the tag, creates
 the GitHub Release with the notes, then pushes both images for amd64 and
 arm64, `ghcr.io/coolapso/notekpr` and `ghcr.io/coolapso/notekpr-demo`,
-tagged `0.2.0` and `latest`, and publishes the CLI (below). Without commits
-that make a release it does nothing. It doesn't push `main`: push it as
+tagged `0.2.0` and `latest`, and publishes the CLI (below). Last, once all
+that is out, it publishes the docs site (`task docs:deploy`, see "The docs
+site"); it checks that wrangler is there and signed in before it releases
+anything, and if publishing the site fails, `task docs:deploy` again is
+all it takes. Without commits that make a release it does nothing. It doesn't push `main`: push it as
 usual. The working tree must be clean, untracked files included: GoReleaser
 refuses to publish otherwise.
 
@@ -495,7 +498,9 @@ Cloudflare's command line (Arch: `wrangler`), signed in once with `wrangler
 login` (or with `CLOUDFLARE_API_TOKEN` in the environment), to the Pages
 project `notekpr-docs`. From `main` it is the site itself; from another
 branch, a preview at its own address. The first deploy creates the project
-and asks for its production branch: `main`.
+and asks for its production branch: `main`. Every release publishes it, as
+its last step (`task release`); between releases, `task docs:deploy` from
+`main` publishes the docs as they are.
 
 ## Feature lists and the website
 

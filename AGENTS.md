@@ -184,7 +184,7 @@ task docs:serve / task docs:check   # the docs as a website (:8091); build it an
 task docs:deploy                 # check, build and publish the docs site (Cloudflare Pages, wrangler)
 task docs:shots                  # the user guide's screenshots, from a demo of their own (chromium)
 task ci                          # exactly what CI runs: ci:check (incl. audit) + ci:image + ci:clients
-task release                     # from main: CI's checks, tag the next version (semrel), push the images, publish the CLI
+task release                     # from main: CI's checks, tag the next version (semrel), push the images, publish the CLI, last the docs site
 ```
 
 Without go-task, see the plain commands in the [Taskfile](Taskfile.yml) or

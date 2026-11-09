@@ -37,7 +37,8 @@ is in the docs.
 
 * **[Writing](docs/features.md#writing)** — a live-preview Markdown editor
   with a toolbar, tables, task lists, code blocks, callouts, colors,
-  images, video and audio, LaTeX math and chemistry; optional Vim keys.
+  images, video and audio, LaTeX math and chemistry, Mermaid diagrams;
+  optional Vim keys.
 * **[Drawings](docs/features.md#drawings)** — a whiteboard among your
   notes, drawn together live and shown in any note; compatible with
   Excalidraw: copy and paste, its files and Obsidian's.
@@ -59,7 +60,7 @@ is in the docs.
 
 ## Try it (development mode, no identity provider needed)
 
-You need Rust ≥ 1.94 with the `wasm32-unknown-unknown` target and the
+You need Rust ≥ 1.95 with the `wasm32-unknown-unknown` target and the
 `wasm-bindgen` CLI 0.2.128. On Arch: `pacman -S rust rust-wasm wasm-bindgen go-task`.
 See [development dependencies](docs/development.md#development-dependencies)
 for everything else (browser tests, Docker, …). No Node.js or npm.

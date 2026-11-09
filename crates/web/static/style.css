@@ -704,6 +704,26 @@ mtr > mtd:last-child { padding-right: 0; }
 .ed.live .ln.math:not(.active) { font-size: 0; line-height: 0; }
 .ed .w.mb { font-family: var(--sans); font-size: 16px; line-height: 1.7; color: var(--fg); padding: 4px 0; overflow-x: auto; overflow-y: hidden; cursor: text; }
 .ed.live .ln.math.active .w.mb { margin-top: 4px; border-top: 1px dashed var(--border); }
+/* Diagrams (```mermaid blocks): away from the selection the block folds to
+   its drawing, on its closing fence (its lines stay, at no height, so the
+   caret can still go in); with the selection in it, its code shows and the
+   drawing stays under it. */
+.ed.live .ln.fence.mmd:not(.active), .ed.live .ln.code.mmd:not(.active) {
+  font-size: 0; line-height: 0; min-height: 0; padding: 0; margin: 0; background: none; box-shadow: none; border-radius: 0;
+}
+.ed.live .ln.fence.fo.head.mmd:not(.active) { min-height: 0; }
+.ed.live .ln.code.mmd:not(.active)::before { content: none; }
+.ed.live .ln.mmd:not(.active) > .w:not(.dg), .ed.live .ln.mmd:not(.active) .igs { display: none; }
+/* A diagram's styles are its own (crates/diagram); `contain: paint` keeps
+   whatever they do inside its box (`position: fixed` can't cover the app). */
+.ed .w.dg { font-family: var(--sans); font-size: 16px; line-height: 1.5; color: var(--fg); padding: 8px 0; overflow-x: auto; overflow-y: hidden; text-align: center; cursor: text; contain: paint; }
+.ed.live .ln.fence.fc.mmd.active { padding-bottom: 8px; }
+.ed.live .ln.fence.fc.mmd.active .w.dg { margin-top: 6px; border-radius: 6px; background: var(--bg); }
+:is(.ed .w.dg, .reading .diagram) svg { max-width: 100%; height: auto; }
+.reading .diagram { margin: 0.8em 0; overflow-x: auto; overflow-y: hidden; text-align: center; contain: paint; }
+:is(.ed, .reading) :is(.dgload, .dgerr) { font-family: var(--sans); font-size: 14px; color: var(--muted); text-align: left; padding: 4px 0; }
+:is(.ed, .reading) .dgerr { color: var(--fg-red); white-space: pre-wrap; }
+.line-numbers .ed.live .ln.mmd:not(.active)::after { content: none; }
 .merr { font-family: var(--mono); font-size: 0.88em; color: var(--fg-red); text-decoration: underline wavy; text-decoration-color: var(--fg-red); text-underline-offset: 3px; cursor: help; }
 .reading .mathblock { display: block; overflow-x: auto; overflow-y: hidden; margin: 0.6em 0; }
 /* Line numbers (Settings → Editor): one for each line of the Markdown —

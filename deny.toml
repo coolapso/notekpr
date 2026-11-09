@@ -32,6 +32,14 @@ allow = [
     "CDLA-Permissive-2.0",
     "BSL-1.0",
 ]
+# MPL-2.0 is compatible too (it names the GPL family as secondary licenses),
+# but file by file: allowed only for these, which merman (crates/diagram, the
+# diagram module) parses CSS with. Unmodified, from crates.io.
+exceptions = [
+    { name = "cssparser", allow = ["MPL-2.0"] },
+    { name = "cssparser-macros", allow = ["MPL-2.0"] },
+    { name = "dtoa-short", allow = ["MPL-2.0"] },
+]
 
 [bans]
 multiple-versions = "allow"

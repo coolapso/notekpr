@@ -8,6 +8,7 @@ crates/sync     client sync engine both clients use (outbox, refusals, snapshots
 crates/server   sync server (axum + SQLite)            → notekpr-server
 crates/editor   live-preview Markdown editor (model + DOM view), used by crates/web
 crates/mhchem   mhchem's \ce{…} and \pu{…} as TeX (a port of mhchemParser, Apache-2.0)
+crates/diagram  Mermaid diagrams as SVG (merman), a wasm module the app loads when needed
 crates/web      browser client (Leptos → wasm32)       → dist/web
 crates/notion   Notion's HTML exports as notes, for both clients' imports
 crates/cli      the CLI, Markdown mirror, gateway      → notekpr
@@ -32,7 +33,7 @@ get it.
 
 | Tool | Needed for | Arch package | Elsewhere |
 |---|---|---|---|
-| Rust ≥ 1.94 (`rustc`, `cargo`, `clippy`) | everything | `rust` | distro package or rustup |
+| Rust ≥ 1.95 (`rustc`, `cargo`, `clippy`) | everything (1.94 without the diagram module) | `rust` | distro package or rustup |
 | `wasm32-unknown-unknown` target | the browser client | `rust-wasm` | `rustup target add wasm32-unknown-unknown` |
 | `wasm-bindgen` CLI **0.2.128** exactly | the browser client | `wasm-bindgen` (if it is 0.2.128) | `cargo install wasm-bindgen-cli --version 0.2.128 --locked` |
 | go-task | the `task …` shortcuts (optional) | `go-task` | taskfile.dev |
@@ -507,11 +508,12 @@ hosted service it sells. Its feature pages follow these lists —
 `site/compare.html` says notekpr lacks — so a new feature goes there too,
 as that repository's AGENTS.md says (a separate commit there).
 
-## Math and chemistry
+## Math, chemistry and diagrams
 
-Notes show LaTeX math and chemistry, in the editor and the reading view,
-as Obsidian, Joplin and GitHub write them. None of it uses JavaScript; the
-choices below were made on 2026-11-09, with what was measured then.
+Notes show LaTeX math, chemistry and Mermaid diagrams, in the editor and
+the reading view, as Obsidian and GitHub write them. None of it uses
+JavaScript; the choices below were made on 2026-11-09, with what was
+measured then.
 
 ### Math
 
@@ -541,6 +543,79 @@ is written for MathJax; `for_math_core` in `math.rs` turns what math-core
 can't draw (`\smash`, `\llap`, `\raise`, the dashed bonds, the long
 equilibrium arrows) into the closest it can. To upgrade mhchem, port the
 upstream diff and its new test cases.
+
+### Diagrams (Mermaid)
+
+A ```` ```mermaid ```` block is drawn by
+[merman](https://github.com/Latias94/merman), a Rust implementation of
+Mermaid (MIT or Apache-2.0), pinned exactly: it is an alpha.
+
+| Measured on 2026-11-09 | merman 0.10.0-alpha.2 (chosen) | mermaid-rs-renderer 0.3.1 |
+|---|---|---|
+| Looks | Mermaid's own (follows Mermaid 12, checked against it); Zed uses it | its own, close to Mermaid's |
+| Size in the browser, compressed | 3.8 MB (every diagram type, Cytoscape layout) | 0.6 MB |
+| Text | measured by a callback: the browser's canvas, in the app's font | fontdb, which has no fonts in a browser |
+| Untrusted diagrams | Mermaid's strict security level, sanitized labels, bounded work and output (its resource policy) | nothing documented |
+| Upgrades | its API changes from alpha to alpha | an early 0.x |
+
+mermaid.js itself is JavaScript, so it was never an option; mermaid-svg,
+ferrigura and flowmaid were too new or GPL. Being bigger than the whole
+app (2.3 MB), merman isn't part of it:
+
+* `crates/diagram` is a WebAssembly module of its own,
+  `pkg/notekpr_diagram*`, built by `scripts/build-web.sh` with the app —
+  always optimized (`DIAGRAM_PROFILE`, `wasm-release` by default):
+  unoptimized it is far bigger and slow, and cargo keeps the build.
+* It is a cargo workspace of its own too, with its own `Cargo.lock` (its
+  Rust is 1.95, merman's). merman turns on serde_json's `preserve_order`
+  and `float_roundtrip`; in the root workspace, every `--workspace` build
+  (`task test`) would build the rest of notekpr with them, and its tests
+  would check a JSON the shipped binaries don't write (a drawing's export
+  test caught it). The Taskfile's `fmt`, `lint`, `test` and `audit` reach
+  it with `--manifest-path`. Three of merman's dependencies (cssparser,
+  cssparser-macros, dtoa-short) are MPL-2.0, allowed for them alone in
+  `deny.toml`.
+* The app loads it the first time a note shows a diagram:
+  `notekprDiagrams` in `crates/web/static/boot.js` imports it,
+  `crates/web/src/diagrams.rs` keeps it and the last 64 drawings, and shows
+  the note again once it has loaded (`content_rev`). Until then a diagram
+  says it is being drawn. A browser that never sees a diagram never
+  downloads it; offline use keeps it once used (`sw.js`).
+* Between the two is one function, `render(code, dark, font, id)`: the
+  SVG, or a thrown string saying why not. Keep it stable — a tab still
+  running an older app loads the new module after the server is upgraded.
+* It has its own memory and stack: if it crashes (a panic, a stack
+  overflow), the app gets an exception rather than dying with it, and
+  loads a fresh copy (three times at most).
+* `render` sets Mermaid's `strict` security level and its `secure` list,
+  so no `%%{init: …}%%` can loosen it, measures text with a canvas, and
+  turns links into new-tab links to web and mail addresses only. Its tests
+  (`cargo test -p notekpr-diagram`) feed it hostile diagrams. The app's
+  Content-Security-Policy runs no inline script and loads no outside
+  image, whatever an SVG holds.
+* In the editor, a diagram is a code block whose closing fence shows the
+  drawing (`Preview::Diagram`, from `Host::diagram`); the reading view asks
+  `render::Ctx::diagram`.
+
+The default layouts are Dagre's and Cytoscape's (MIT); ELK, merman's other
+one, is EPL-2.0 and left out, as is math in labels. merman's code derives
+from Mermaid, Dagre, Cytoscape, d3, DOMPurify and others (MIT, ISC,
+Apache-2.0): its [THIRD_PARTY_NOTICES.md](https://github.com/Latias94/merman/blob/main/THIRD_PARTY_NOTICES.md),
+scope `rust-render-base` plus `cytoscape`, lists them.
+
+**Upgrading merman.** Read its changelog and upgrade guide, raise the exact
+version in `crates/diagram/Cargo.toml`, then: `cargo test -p
+notekpr-diagram`, `task test:e2e -- -k diagram`, the size (`ls -la
+dist/web/pkg` after `task build:web`), and the demo's *Diagrams* note in
+both themes.
+
+**Replacing it**, if it causes trouble: only `crates/diagram` knows merman.
+Another renderer goes behind the same `render` (keep its tests, the hostile
+ones above all). mermaid-rs-renderer is the obvious one: `render_with_options`
+with a theme for dark mode; its text measurement in the browser needs
+checking first. A renderer small enough to be part of the app could drop
+the separate module: call it from `diagrams.rs` directly and remove the
+loader in `boot.js`, the `sw.js` entry and the step in `build-web.sh`.
 
 ## Emoji
 

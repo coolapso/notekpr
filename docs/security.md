@@ -391,7 +391,14 @@ reported, never applied partially. Duplicate deliveries are no-ops.
   editor's lines. Math is MathML written by math-core from the LaTeX, escaped
   by construction (text is text, colors are checked, no links); a formula
   nested deep enough to overflow the stack is refused before it is
-  converted. A strict Content-Security-Policy (`script-src 'self'
+  converted. A Mermaid diagram is SVG from merman (`crates/diagram`) at
+  Mermaid's strict security level, which no diagram can loosen: labels are
+  sanitized (no scripts, event handlers or frames), its style sheet only
+  styles that diagram (tested), links go only to web and mail addresses, in
+  a new tab, and its box contains whatever its styles do (`contain: paint`:
+  a `position: fixed` label can't cover the app). It runs in a WebAssembly
+  module of its own with bounded work, so a diagram that crashes it doesn't
+  take the app down. A strict Content-Security-Policy (`script-src 'self'
   'wasm-unsafe-eval'`, no inline scripts or event handlers, `frame-src
   'none'`, `frame-ancestors 'none'`, `object-src 'none'`) is a second layer.
   External images are not loaded (also prevents tracking pixels), and there

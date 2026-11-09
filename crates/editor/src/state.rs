@@ -25,6 +25,8 @@ pub enum Preview {
     Html(String),
     /// The formula of a block of display math.
     Math(String),
+    /// A diagram's code ([`crate::diagram`]).
+    Diagram(String),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -363,14 +365,29 @@ impl EditorState {
         Some(a..b + 1)
     }
 
+    /// The lines of the diagram `line` is in: a code block in Mermaid's
+    /// language, from fence to fence (once it closes).
+    pub fn diagram_block(&self, line: usize) -> Option<Range<usize>> {
+        let (open, close) = self.code_block(line)?;
+        let close = close?;
+        match self.block(open) {
+            Block::Fence { info, .. } if crate::diagram::is_diagram(&info.lang) => {
+                Some(open..close + 1)
+            }
+            _ => None,
+        }
+    }
+
     /// The lines of the block whose last line shows a preview of it, if
-    /// `line` is in one: an HTML block, a block of display math.
+    /// `line` is in one: an HTML block, a block of display math, a diagram.
     pub fn preview_block(&self, line: usize) -> Option<Range<usize>> {
-        self.html_block(line).or_else(|| self.math_block(line))
+        self.html_block(line)
+            .or_else(|| self.math_block(line))
+            .or_else(|| self.diagram_block(line))
     }
 
     /// What `line` shows of the block it ends: an HTML block's preview, a
-    /// block of display math's formula (once it closes).
+    /// block of display math's formula (once it closes), a diagram.
     pub fn preview(&self, line: usize) -> Option<Preview> {
         match self.block(line) {
             Block::Html { last: true, .. } => self.html_source(line).map(Preview::Html),
@@ -378,6 +395,10 @@ impl EditorState {
                 let lines = self.math_block(line)?;
                 let text: Vec<&str> = lines.map(|i| self.doc.line(i)).collect();
                 crate::math::block_formula(&text).map(Preview::Math)
+            }
+            Block::Fence { open: false, .. } => {
+                let b = self.diagram_block(line)?;
+                Some(Preview::Diagram(self.code_text(b.start)))
             }
             _ => None,
         }

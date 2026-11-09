@@ -1,0 +1,40 @@
+# A workspace of its own, built by scripts/build-web.sh: merman turns on
+# serde_json features (preserve_order, float_roundtrip) that would change the
+# rest of notekpr's JSON wherever cargo builds them together (`cargo test
+# --workspace`), and it brings its own versions. docs/development.md,
+# "Diagrams (Mermaid)".
+[workspace]
+
+[package]
+name = "notekpr-diagram"
+description = "Mermaid diagrams as SVG for the notekpr web client (merman, in a WebAssembly module of its own that the app loads on first use)"
+version = "0.1.0"
+edition = "2024"
+license = "AGPL-3.0-or-later"
+repository = "https://github.com/coolapso/notekpr"
+# merman's.
+rust-version = "1.95"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+# merman is an alpha: an exact version, upgraded on purpose
+# (docs/development.md, "Diagrams"). Every Mermaid diagram type; Cytoscape
+# lays out architecture diagrams. Not ELK (EPL-2.0) or math in labels.
+[dependencies]
+merman = { version = "=0.10.0-alpha.2", default-features = false, features = ["svg", "all-diagrams", "layout-cytoscape"] }
+serde_json = "1"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "=0.2.128"
+web-sys = { version = "0.3", features = ["Window", "Document", "Element", "HtmlCanvasElement", "CanvasRenderingContext2d", "TextMetrics"] }
+
+# As notekpr's (the root Cargo.toml): small, fast WebAssembly.
+[profile.wasm-release]
+inherits = "release"
+opt-level = "z"
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true

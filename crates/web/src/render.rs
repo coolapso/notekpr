@@ -11,7 +11,9 @@
 //! * Every attribute we emit is escaped.
 //!
 //! Math (`$…$`, `$$…$$`, chemistry in `\ce{…}`) is MathML from
-//! [`crate::editor::math`], escaped by construction.
+//! [`crate::editor::math`], escaped by construction. Diagrams (```` ```mermaid ````
+//! blocks) are what [`Ctx::diagram`] draws: SVG from `crates/diagram`
+//! (sanitized there; the CSP runs no script in it either).
 //!
 //! Callouts (`> [!tip] Title`, [`crate::editor::callout`]) are block quotes
 //! rendered as a box with an icon and the title, a `details` element when
@@ -31,6 +33,7 @@ use notekpr_core::dates::{self, Date};
 use notekpr_core::paths::{self, Media};
 
 use crate::editor::code::{self, Carry, FenceInfo, Indent};
+use crate::editor::diagram::{self, Drawing};
 use crate::editor::{callout, html, math, syntax};
 
 pub struct Ctx<'a> {
@@ -44,6 +47,14 @@ pub struct Ctx<'a> {
     pub offsets: bool,
     /// How a date (`@2026-10-23`) reads: Today, Tomorrow, … or the date.
     pub date_label: &'a dyn Fn(Date) -> String,
+    /// A diagram (a ```` ```mermaid ```` block's code) as drawn now; `None`
+    /// shows its code.
+    pub diagram: &'a dyn Fn(&str) -> Option<Drawing>,
+}
+
+/// No diagrams: their code shows (the default [`Ctx::diagram`]).
+fn no_diagrams(_: &str) -> Option<Drawing> {
+    None
 }
 
 /// A date as written (the default [`Ctx::date_label`]).
@@ -63,6 +74,7 @@ impl<'a> Ctx<'a> {
             comments: &[],
             offsets: false,
             date_label: &iso_label,
+            diagram: &no_diagrams,
         }
     }
 
@@ -524,7 +536,25 @@ pub fn to_html(src: &str, ctx: &Ctx) -> String {
                 Event::Text(t) => buf.push_str(&t),
                 Event::End(TagEnd::CodeBlock) => {
                     let (info, buf) = code.take().unwrap();
-                    let html = code_block(buf.trim_end_matches('\n'), &info);
+                    let code = buf.trim_end_matches('\n');
+                    let drawn = diagram::is_diagram(&info.lang)
+                        .then(|| (ctx.diagram)(code))
+                        .flatten();
+                    let html = match drawn {
+                        // Its code, and why it isn't drawn.
+                        Some(d @ Drawing::Failed(_)) => {
+                            let mut h = code_block(code, &info);
+                            diagram::html(&d, &mut h);
+                            h
+                        }
+                        Some(d) => {
+                            let mut h = String::from("<div class=\"diagram\">");
+                            diagram::html(&d, &mut h);
+                            h.push_str("</div>");
+                            h
+                        }
+                        None => code_block(code, &info),
+                    };
                     out_events.push(Event::Html(CowStr::from(html)));
                 }
                 _ => {}
@@ -884,6 +914,43 @@ mod tests {
         // Not in code.
         let h = render("`$x$`\n\n```\n$y$\n```");
         assert!(!h.contains("<math"), "{h}");
+    }
+
+    #[test]
+    fn diagrams_are_what_the_context_draws() {
+        let note = |_: &str| None;
+        let src = "```mermaid\nflowchart LR\n  A --> B\n```";
+        let drawn = |what: Option<Drawing>| {
+            let draw = move |code: &str| {
+                assert_eq!(code, "flowchart LR\n  A --> B");
+                what.clone()
+            };
+            to_html(
+                src,
+                &Ctx {
+                    diagram: &draw,
+                    ..Ctx::new(&note, &note)
+                },
+            )
+        };
+        let h = drawn(Some(Drawing::Svg("<svg id=\"d\"></svg>".into())));
+        assert!(
+            h.contains("<div class=\"diagram\"><svg id=\"d\"></svg></div>"),
+            "{h}"
+        );
+        assert!(!h.contains("<pre"), "{h}");
+        // One that can't be drawn: its code, and why.
+        let h = drawn(Some(Drawing::Failed("a <reason>".into())));
+        assert!(h.contains("<pre") && h.contains("A --&gt; B"), "{h}");
+        assert!(
+            h.contains("class=\"dgerr\"") && h.contains("a &lt;reason&gt;"),
+            "{h}"
+        );
+        assert!(drawn(Some(Drawing::Loading)).contains("class=\"dgload\""));
+        // Where nothing draws diagrams, the code; other code isn't drawn.
+        assert!(drawn(None).contains("<pre"));
+        let h = to_html("```rust\nfn x() {}\n```", &Ctx::new(&note, &note));
+        assert!(!h.contains("diagram"), "{h}");
     }
 
     #[test]

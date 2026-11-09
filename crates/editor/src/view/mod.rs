@@ -54,6 +54,7 @@ use web_sys::{
 
 use crate::change::{Assoc, ChangeSet};
 use crate::commands::{self, Command};
+use crate::diagram::Drawing;
 use crate::state::{
     Anchor, Applied, EditorState, Mark, Mode, Origin, RemoteCursor, Report, Selection, Transaction,
     merge_native,
@@ -83,6 +84,13 @@ pub trait Host {
     /// Blob URL for an embedded image (or video, audio), if already loaded
     /// (the host loads it otherwise and calls [`Editor::refresh`]).
     fn image_url(&self, target: &str) -> Option<String>;
+    /// A diagram (the code of a ```` ```mermaid ```` block) as the host can
+    /// draw it now; `None` if it doesn't draw diagrams. While what draws
+    /// them loads, [`Drawing::Loading`] (the host calls
+    /// [`Editor::refresh`] once it can).
+    fn diagram(&self, _code: &str) -> Option<Drawing> {
+        None
+    }
     fn selection_changed(&self, anchor: usize, head: usize);
     /// Files pasted or dropped at offset `at` (see [`Editor::anchor`] to keep
     /// track of that position while they upload).
@@ -638,8 +646,9 @@ impl Editor {
         let host = &self.host;
         let links = |t: &str| host.link_exists(t);
         let images = |t: &str| host.image_url(t);
+        let diagrams = |code: &str| host.diagram(code);
         jobs.into_iter()
-            .map(|j| dom::render_line(j, &links, &images))
+            .map(|j| dom::render_line(j, &links, &images, &diagrams))
             .collect()
     }
 
@@ -2144,7 +2153,7 @@ impl Editor {
             let in_preview = e
                 .target()
                 .and_then(|t| t.dyn_into::<Element>().ok())
-                .and_then(|t| t.closest(".hw, .mb").ok().flatten())
+                .and_then(|t| t.closest(".hw, .mb, .dg").ok().flatten())
                 .is_some();
             if in_preview {
                 e.prevent_default();
@@ -2730,20 +2739,25 @@ impl Editor {
             .and_then(|l| l.dyn_ref::<Element>())
             .is_some_and(|l| l.class_list().contains("active"));
         let readonly = self.model(|st| st.readonly);
-        // The preview of an HTML block or a formula (which stands in for its
-        // source away from the caret): a link opens, anywhere else puts the
-        // caret in the block, which shows its source.
-        if let Some(preview) = target.closest(".hw, .mb").ok().flatten() {
+        // The preview of an HTML block, a formula or a diagram (which stands
+        // in for its source away from the caret): a link opens, anywhere
+        // else puts the caret in the block, which shows its source.
+        if let Some(preview) = target.closest(".hw, .mb, .dg").ok().flatten() {
             ev.prevent_default();
             if ev.button() != 0 {
                 return;
             }
+            // A diagram's links are `<a href>` (to web and mail addresses
+            // only: crates/diagram), an HTML preview's `data-href`.
             let href = target
-                .closest("[data-href]")
+                .closest("[data-href], .dg a[href]")
                 .ok()
                 .flatten()
                 .filter(|a| preview.contains(Some(a)))
-                .and_then(|a| a.get_attribute("data-href"));
+                .and_then(|a| {
+                    a.get_attribute("data-href")
+                        .or_else(|| a.get_attribute("href"))
+                });
             if let Some(href) = href {
                 let href = href.trim();
                 let target = if notekpr_core::markdown::is_internal_target(href) {
@@ -2756,8 +2770,10 @@ impl Editor {
                 && let Some(tr) = self.model(move |st| {
                     let b = st.preview_block(idx)?;
                     let doc = st.doc();
-                    // A formula's caret goes where it starts (after `$$`).
+                    // A formula's caret goes where it starts (after `$$`),
+                    // a diagram's to the start of its code.
                     let at = match st.block(b.start) {
+                        Block::Fence { .. } => doc.line_start(b.start + 1),
                         Block::Math { .. } if b.len() > 2 => doc.line_start(b.start + 1),
                         Block::Math { .. } => doc.line_start(b.start) + doc.line(b.start).len(),
                         _ => doc.line_start(b.start),

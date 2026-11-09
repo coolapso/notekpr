@@ -33,8 +33,15 @@ self.addEventListener("fetch", (event) => {
   const navigate = req.mode === "navigate";
   // Every page of the app is the same index.html.
   const key = navigate ? "/" : url.pathname;
-  // The drawings' fonts: kept once a drawing has used them.
-  if (!navigate && !SHELL.includes(key) && !key.startsWith("/fonts/")) return;
+  // The drawings' fonts and the diagram module: kept once used.
+  if (
+    !navigate &&
+    !SHELL.includes(key) &&
+    !key.startsWith("/fonts/") &&
+    !key.startsWith("/pkg/notekpr_diagram")
+  ) {
+    return;
+  }
   event.respondWith(
     fetch(req)
       .then((res) => {

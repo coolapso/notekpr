@@ -47,6 +47,14 @@ a Mac). The [README](../README.md) has the short version.
   have it: `$\ce{2H2 + O2 -> 2H2O}$`, ions (`\ce{SO4^2-}`), isotopes
   (`\ce{^{14}C}`), states, precipitates and gases, bonds, equilibria with
   conditions (`\ce{A <=>[\Delta] B}`); units with `\pu{123 kJ/mol}`.
+* Diagrams from text with Mermaid, in a ```` ```mermaid ```` code block as
+  Obsidian and GitHub write it: flowcharts, sequence, class, state and
+  entity–relationship diagrams, Gantt charts, pie charts, mind maps,
+  timelines, git graphs and every other kind Mermaid draws. The block shows
+  as its diagram, in the light or the dark theme; with the caret in it, its
+  code, the diagram updating under it as you type. Links in a diagram
+  (`click A href "https://…"`) open in a new tab. What draws diagrams
+  loads the first time you open a note with one.
 * Images and other files: paste or drop them into a note — they are encrypted,
   uploaded and shown inline; videos and audio (`![[clip.mp4]]`) play there,
   in the editor and the reading view. They go to `attachments/` in the

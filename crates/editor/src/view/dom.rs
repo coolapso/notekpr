@@ -13,6 +13,7 @@ use web_sys::{Document, Element, HtmlElement, Node};
 
 use crate::callout;
 use crate::code;
+use crate::diagram::{self, Drawing};
 use crate::html;
 use crate::math;
 use crate::state::Preview;
@@ -95,12 +96,14 @@ pub struct Rendered {
 /// line (as its title), the indentation guides of a line of code (no text),
 /// each date's label (after the date, inline: Today, Tomorrow, … or the
 /// date), each formula's rendering (after it, inline),
-/// the rendered preview of an HTML block or a block of display math on its
-/// last line (an empty element here, filled by [`fill_widget`]).
+/// the rendered preview of an HTML block, a block of display math or a
+/// diagram on its last line (an empty element here, filled by
+/// [`fill_widget`]).
 pub fn render_line(
     job: LineJob,
     link_exists: &dyn Fn(&str) -> bool,
     image_url: &dyn Fn(&str) -> Option<String>,
+    drawing: &dyn Fn(&str) -> Option<Drawing>,
 ) -> Rendered {
     let styled = syntax::style_line(&job.text, &job.block, link_exists);
     let mut html = syntax::line_html_with(&job.text, &styled, &date_label);
@@ -136,13 +139,19 @@ pub fn render_line(
         html.push_str("</span>");
     }
     // An HTML block's preview hides while the selection is in the block
-    // (`hw`); a formula's stays under its source as it is edited (`mb`).
+    // (`hw`); a formula's (`mb`) and a diagram's (`dg`) stay under their
+    // source as it is edited.
     let (widget, class) = match &job.preview {
         Some(Preview::Html(src)) => (Some(html_preview(src, image_url)), "w hw"),
         Some(Preview::Math(tex)) => {
             let mut w = String::new();
             math::html(tex, true, &mut w);
             (Some(w), "w mb")
+        }
+        Some(Preview::Diagram(code)) => {
+            let mut w = String::new();
+            diagram::html(&drawing(code).unwrap_or(Drawing::Loading), &mut w);
+            (Some(w), "w dg")
         }
         None => (None, ""),
     };

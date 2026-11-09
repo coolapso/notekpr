@@ -459,7 +459,8 @@ pub fn NoteView(vault: String, note: String) -> impl IntoView {
 
     mode_effects();
     comment_effects(vault.clone(), note.clone());
-    // Embedded drawings: their previews follow changes and the theme.
+    // Embedded drawings and diagrams: their previews follow changes (a
+    // diagram: what draws them loaded) and the theme.
     Effect::new(move |prev: Option<()>| {
         ui.content_rev.get();
         ui.ui_prefs.track();
@@ -505,6 +506,8 @@ pub fn NoteView(vault: String, note: String) -> impl IntoView {
         ui.content_rev.get();
         ui.tree_rev.get();
         ui.comments_rev.get();
+        // Diagrams are drawn in the theme's colors.
+        ui.ui_prefs.track();
         let open = open.get();
         let (text, from, highlights, offsets) = step(|c| {
             (
@@ -527,6 +530,9 @@ pub fn NoteView(vault: String, note: String) -> impl IntoView {
                 comments: &highlights,
                 offsets,
                 date_label: &crate::editor::date_label,
+                diagram: &|c: &str| {
+                    Some(crate::diagrams::drawing(c, crate::diagrams::View::Reading))
+                },
                 ..render::Ctx::new(&note, &att)
             },
         )
@@ -931,6 +937,8 @@ pub fn SharedNoteView(vault: String, note: String) -> impl IntoView {
         }
         ui.content_rev.get();
         ui.comments_rev.get();
+        // Diagrams are drawn in the theme's colors.
+        ui.ui_prefs.track();
         let open = open.get();
         let (text, highlights, offsets) = step(|c| {
             (
@@ -949,6 +957,9 @@ pub fn SharedNoteView(vault: String, note: String) -> impl IntoView {
                 comments: &highlights,
                 offsets,
                 date_label: &crate::editor::date_label,
+                diagram: &|c: &str| {
+                    Some(crate::diagrams::drawing(c, crate::diagrams::View::Reading))
+                },
                 ..render::Ctx::new(&none, &none)
             },
         )

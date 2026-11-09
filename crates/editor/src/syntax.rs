@@ -143,7 +143,20 @@ impl Block {
                 Some(false) => c.push_str(" nowrap"),
                 None => {}
             }
+            if crate::diagram::is_diagram(&info.lang) {
+                c.push_str(" mmd");
+            }
             return Cow::Owned(c);
+        }
+        // A diagram's fences (its lines fold to the drawing).
+        if let Block::Fence { info, open } = self
+            && crate::diagram::is_diagram(&info.lang)
+        {
+            return Cow::Borrowed(match (open, info.has_head()) {
+                (false, _) => "ln fence fc mmd",
+                (true, true) => "ln fence fo head mmd",
+                (true, false) => "ln fence fo mmd",
+            });
         }
         if let Block::Callout(c) = self {
             let mut s = String::from("ln quote callout ");

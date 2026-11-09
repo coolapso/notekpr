@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Build the browser client with the Rust toolchain only (no npm):
 #   cargo (wasm32-unknown-unknown) + wasm-bindgen CLI (version must match the crate).
-# Output: dist/web (serve with `notekpr-server --web-dir dist/web`).
+# Output: dist/web (serve with `notekpr-server --web-dir dist/web`): the app
+# (pkg/notekpr_web*) and the diagram module it loads when needed
+# (pkg/notekpr_diagram*).
 # NOTEKPR_VERSION, if set, is the version the app says it is (the Dockerfile
 # sets it for releases); `dev` otherwise.
 set -euo pipefail
@@ -19,8 +21,18 @@ if [ "$want" != "$have" ]; then
   exit 1
 fi
 
+# The diagram module (crates/diagram: merman, Mermaid in Rust) is a
+# WebAssembly module of its own, which the app loads when a note first shows
+# a diagram, and a cargo workspace of its own (docs/development.md, "Diagrams
+# (Mermaid)"). It is always optimized (DIAGRAM_PROFILE): unoptimized it is
+# several times bigger and slow, and it rarely changes, so cargo keeps the
+# build.
+DIAGRAM_PROFILE="${DIAGRAM_PROFILE:-wasm-release}"
 cargo build -p notekpr-web --target wasm32-unknown-unknown --profile "$PROFILE"
+cargo build --manifest-path crates/diagram/Cargo.toml --target-dir "$TARGET_DIR" --lib \
+  --target wasm32-unknown-unknown --profile "$DIAGRAM_PROFILE"
 dir="$PROFILE"; [ "$PROFILE" = "dev" ] && dir=debug
+ddir="$DIAGRAM_PROFILE"; [ "$DIAGRAM_PROFILE" = "dev" ] && ddir=debug
 rm -rf "$OUT"
 mkdir -p "$OUT/pkg"
 # Function names make an unoptimized build ~7x bigger and take the browser
@@ -30,8 +42,12 @@ names=(--remove-name-section)
 [ "${WASM_NAMES:-}" = 1 ] && names=()
 wasm-bindgen --target web --no-typescript "${names[@]}" --out-dir "$OUT/pkg" \
   "$TARGET_DIR/wasm32-unknown-unknown/$dir/notekpr_web.wasm"
+wasm-bindgen --target web --no-typescript --remove-name-section --out-dir "$OUT/pkg" \
+  "$TARGET_DIR/wasm32-unknown-unknown/$ddir/notekpr_diagram.wasm"
 if command -v wasm-opt >/dev/null 2>&1 && [ "$PROFILE" != "dev" ]; then
-  wasm-opt -Oz --enable-bulk-memory --enable-nontrapping-float-to-int -o "$OUT/pkg/notekpr_web_bg.wasm" "$OUT/pkg/notekpr_web_bg.wasm"
+  for m in notekpr_web notekpr_diagram; do
+    wasm-opt -Oz --enable-bulk-memory --enable-nontrapping-float-to-int -o "$OUT/pkg/${m}_bg.wasm" "$OUT/pkg/${m}_bg.wasm"
+  done
 fi
 cp -r crates/web/static/* "$OUT/"
 ls -la "$OUT/pkg"

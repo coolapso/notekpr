@@ -267,6 +267,8 @@ tasks:
     deps: [rust]
     cmds:
       - cargo test --locked --workspace
+      # The diagram module, a workspace of its own (crates/diagram/Cargo.toml says why).
+      - cargo test --locked --manifest-path crates/diagram/Cargo.toml --target-dir target
 
   test:core:
     desc: Crypto, key hierarchy, CRDT model, protocol
@@ -335,12 +337,14 @@ tasks:
     deps: [rust]
     cmds:
       - cargo fmt --all
+      - cargo fmt --manifest-path crates/diagram/Cargo.toml
 
   fmt:check:
     desc: Fail if any Rust code is not formatted
     deps: [rust]
     cmds:
       - cargo fmt --all -- --check
+      - cargo fmt --manifest-path crates/diagram/Cargo.toml -- --check
 
   lint:
     desc: Clippy on every crate (warnings are errors), including the web client for wasm32
@@ -352,6 +356,10 @@ tasks:
       - CARGO_TARGET_DIR={{.WEB_TARGET_DIR}} cargo clippy --locked -p notekpr-web --target wasm32-unknown-unknown -- -D warnings -A clippy::type_complexity
       - CARGO_TARGET_DIR={{.WEB_TARGET_DIR}} cargo clippy --locked -p notekpr-editor --target wasm32-unknown-unknown --all-targets -- -D warnings
       - CARGO_TARGET_DIR={{.WEB_TARGET_DIR}} cargo clippy --locked -p notekpr-load-ui --target wasm32-unknown-unknown -- -D warnings
+      # The diagram module the web client loads: a workspace of its own (its
+      # browser half is wasm32 only).
+      - cargo clippy --locked --manifest-path crates/diagram/Cargo.toml --target-dir target --all-targets -- -D warnings
+      - cargo clippy --locked --manifest-path crates/diagram/Cargo.toml --target-dir {{.WEB_TARGET_DIR}} --target wasm32-unknown-unknown -- -D warnings
 
   check:wasm:
     desc: Make sure the core crate still builds for the browser
@@ -366,6 +374,7 @@ tasks:
         msg: "cargo-deny is not installed: cargo install cargo-deny --locked"
     cmds:
       - cargo deny check
+      - cargo deny --manifest-path crates/diagram/Cargo.toml --config deny.toml check
 
   ci:
     desc: "Exactly what CI runs (it installs the tooling, then this): ci:check, ci:image and ci:clients"

@@ -3304,6 +3304,13 @@ impl Host for NoteHost {
         }
     }
 
+    fn diagram(&self, code: &str) -> Option<crate::editor::Drawing> {
+        Some(crate::diagrams::drawing(
+            code,
+            crate::diagrams::View::Editor,
+        ))
+    }
+
     fn image_url(&self, target: &str) -> Option<String> {
         if self.shared {
             return None;

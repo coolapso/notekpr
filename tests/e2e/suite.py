@@ -3043,6 +3043,66 @@ def test_math(env):
         b.close()
 
 
+def test_diagrams(env):
+    b = Browser()
+    paste = "const dt = new DataTransfer(); dt.setData('text/plain', arguments[0]); document.querySelector('.ed').dispatchEvent(new ClipboardEvent('paste', {clipboardData: dt, bubbles: true, cancelable: true}));"
+    loaded = "return performance.getEntriesByType('resource').some(e => e.name.includes('notekpr_diagram_bg.wasm'))"
+    folded = """return Array.from(document.querySelectorAll('.ed .ln.code.mmd')).every(l => l.getBoundingClientRect().height === 0)"""
+    try:
+        signup(b, uniq("dgm"))
+        new_note(b, "Diagrams", "")
+        check(not b.js(loaded), "what draws diagrams isn't loaded with the app")
+        body = ("Intro\n\n```mermaid\nflowchart LR\n  A[Start] --> B{Shared?}\n  click B href \"https://example.org/\"\n```\n\n"
+                "```mermaid\nflowchart LR\n  A -->\n```\n\n"
+                "```mermaid\nflowchart LR\n  X[\"<div class='cover' style='position:fixed;inset:0;background:red'>fake</div>\"] --> Y\n```\n\nend")
+        b.js(paste, body)
+        b.chord(KEYS["ctrl"], KEYS["end"])
+        b.find(".ed .w.dg svg", 30)
+        check(b.js(loaded), "it loads when a note shows a diagram")
+        check(editor_text(b) == body, "the editor keeps a diagram as its code")
+        check("Start" in b.js("return document.querySelector('.ed .w.dg svg').textContent"), "the diagram is drawn")
+        check(b.js(folded), "its code folds away")
+        check(b.js("return !!document.querySelector('.ed .w.dg svg a[href=\"https://example.org/\"][target=_blank]')"), "its links open in a new tab")
+        check(b.js("return !!document.querySelector('.ed .w.dg .dgerr')"), "one that can't be drawn says why")
+        covers = """const c = document.querySelector('.ed .w.dg .cover'); if (!c) return 'gone';
+            const r = c.getBoundingClientRect(), box = c.closest('.w.dg').getBoundingClientRect();
+            const shown = (x, y) => document.elementFromPoint(x, y)?.closest('.cover') === c;
+            return shown(5, 5) || shown(innerWidth - 5, innerHeight - 5) ? 'covers' : 'inside'"""
+        check(b.js(covers) != "covers", "a diagram can't draw over the app")
+        b.shot("diagrams-editing")
+        # A click on it: its code, the diagram still under it, following edits.
+        b.click(".ed .w.dg svg .node")
+        time.sleep(0.4)
+        check(b.js("return document.querySelectorAll('.ed .ln.mmd.active').length") >= 5, "a click on a diagram shows its code")
+        check(not b.js(folded), "the code shows")
+        check(b.js("return getComputedStyle(document.querySelector('.ed .ln.mmd.active .w.dg')).display") != "none", "the diagram stays under it")
+        # At the end of the line `A[Start] --> B{Shared?}`, a line more.
+        b.js("""const w = document.createTreeWalker(document.querySelector('.ed'), NodeFilter.SHOW_TEXT);
+            let n, last; while ((n = w.nextNode())) if (n.data.includes('Shared?}')) last = n;
+            getSelection().collapse(last, last.data.length);""")
+        time.sleep(0.2)
+        b.keys(KEYS["enter"] + "B --> C[Done]")
+        time.sleep(0.6)
+        check("C[Done]" in editor_text(b), "typing goes into its code")
+        check("Done" in b.js("return document.querySelector('.ed .w.dg').textContent"), "and the diagram follows")
+        b.chord(KEYS["ctrl"], KEYS["end"])
+        time.sleep(0.4)
+        check(b.js(folded), "away from it, folded again")
+        # The reading view.
+        b.click(".seg button[title^='Reading']")
+        b.find(".reading .diagram svg", 10)
+        check("Done" in b.js("return document.querySelector('.reading .diagram svg').textContent"), "the reading view shows the diagram")
+        arrows = """const svg = document.querySelector('.reading .diagram svg');
+            const path = svg.querySelector('[marker-end]'); const id = path.getAttribute('marker-end').slice(5, -1);
+            return svg.contains(document.getElementById(id))"""
+        check(b.js(arrows), "its arrows point at its own markers, not the editor's hidden copy")
+        check(b.js("return !!document.querySelector('.reading .codeblock + .dgerr, .reading .dgerr')"), "and the code of one that can't be drawn, saying why")
+        b.shot("diagrams-reading")
+        check(not severe_logs(b), "no browser errors")
+    finally:
+        b.close()
+
+
 def test_colors(env):
     b, m = Browser(), Browser(390, 844)
     red, yellow = '<span style="color: #e44045">', '<span style="background-color: #ffd0004d">'
@@ -3637,7 +3697,7 @@ def test_device_code(env):
         a.close()
 
 
-TESTS = [test_onboarding, test_collab, test_devices_and_recovery, test_features, test_attachments, test_attachments_beside_notes, test_export_import, test_notion_import, test_delete_account, test_move_to_vault, test_note_sharing, test_tables, test_code_blocks, test_html, test_callouts, test_math, test_colors, test_code_wrapping, test_vim, test_line_numbers, test_bullets, test_editor_mouse, test_editor_safety, test_local_copy, test_ui_basics, test_offline_tabs, test_offline_start, test_mobile, test_quick_notes, test_vault_cards, test_vault_icons, test_entry_icons, test_tree_order, test_session_ended_while_away, test_outdated, test_comments, test_mentions, test_dates, test_graph, test_recovered_copy, test_note_width, test_admin, test_vault_storage, test_vault_admins, test_owners, test_undo_purge, test_device_code]
+TESTS = [test_onboarding, test_collab, test_devices_and_recovery, test_features, test_attachments, test_attachments_beside_notes, test_export_import, test_notion_import, test_delete_account, test_move_to_vault, test_note_sharing, test_tables, test_code_blocks, test_html, test_callouts, test_math, test_diagrams, test_colors, test_code_wrapping, test_vim, test_line_numbers, test_bullets, test_editor_mouse, test_editor_safety, test_local_copy, test_ui_basics, test_offline_tabs, test_offline_start, test_mobile, test_quick_notes, test_vault_cards, test_vault_icons, test_entry_icons, test_tree_order, test_session_ended_while_away, test_outdated, test_comments, test_mentions, test_dates, test_graph, test_recovered_copy, test_note_width, test_admin, test_vault_storage, test_vault_admins, test_owners, test_undo_purge, test_device_code]
 
 
 def main():

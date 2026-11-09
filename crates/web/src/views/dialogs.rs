@@ -1422,7 +1422,8 @@ fn History(vault: String, note: String) -> impl IntoView {
                             let vv = vv.clone();
                             let note = move |t: &str| knowledge::resolve_target(&vv, t, "");
                             let none = |_: &str| None;
-                            let html = render::to_html(&text, &render::Ctx { date_label: &crate::editor::date_label, ..render::Ctx::new(&note, &none) });
+                            let drawn = |c: &str| Some(crate::diagrams::drawing(c, crate::diagrams::View::History));
+                            let html = render::to_html(&text, &render::Ctx { date_label: &crate::editor::date_label, diagram: &drawn, ..render::Ctx::new(&note, &none) });
                             let (v, n, t) = (vr.clone(), nr.clone(), text.clone());
                             view! {
                                 <div class="h-actions">

@@ -33,7 +33,9 @@ read anything.
 ## Features
 
 The short version; [every feature](docs/features.md), with its shortcuts,
-is in the docs.
+is in the docs. New to it? [Getting started](docs/getting-started.md),
+[writing notes](docs/writing.md) and [drawings](docs/drawings.md) show
+how to use the app.
 
 * **[Writing](docs/features.md#writing)** — a live-preview Markdown editor
   with a toolbar, tables, task lists, code blocks, callouts, colors,

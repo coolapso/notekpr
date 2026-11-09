@@ -7,8 +7,17 @@
 
 - section: use
   title: Use it
-  description: What notekpr does, and who can do what in a vault.
+  description: How to use notekpr, everything it does, and who can do what in a vault.
   pages:
+    - file: getting-started
+      nav: Getting started
+      description: Your first sign-in, finding your way around the app, organizing and finding notes, sharing, and your other devices.
+    - file: writing
+      nav: Writing notes
+      description: Headings, lists, links, pictures, tables, callouts, code, math, chemistry and diagrams, with what to type for each.
+    - file: drawings
+      nav: Drawings
+      description: The whiteboard among your notes, its tools and shortcuts, drawing together, and Excalidraw.
     - file: features
       nav: Features
       description: Writing, drawings, finding things, working together, privacy, offline use and running a server, with every shortcut.

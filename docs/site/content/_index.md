@@ -4,16 +4,18 @@ heading: Notes only you can read, and how they work
 description: Markdown notes, drawings and live collaboration, end-to-end encrypted. Here is how to use notekpr, run your own server, work with your notes from your own tools, and what the encryption does.
 eyebrow: Documentation
 actions:
+  - title: Get started
+    url: use/getting-started/
+    primary: true
   - title: Every feature
     url: use/features/
-    primary: true
   - title: Run your own server
     url: self-host/operations/
 cards:
   - title: Use it
     icon: ✏️
     url: use/
-    description: Everything notekpr does, with its shortcuts, and who can do what in a shared vault.
+    description: How to use the app, from your first note to diagrams and drawings, everything it does, and who can do what in a shared vault.
   - title: Your own tools
     icon: 🧰
     url: tools/

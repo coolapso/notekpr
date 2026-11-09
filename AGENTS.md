@@ -220,6 +220,11 @@ Without go-task, see the plain commands in the [Taskfile](Taskfile.yml) or
   (`site/features.html`, "In the box" on `site/index.html`, and what
   `site/compare.html` says notekpr lacks) — update it there too, as its
   AGENTS.md says.
+- **The user guide stays true.** `docs/getting-started.md`,
+  `docs/writing.md` and `docs/drawings.md` explain the app in plain words
+  to people who only use it. A change to what they describe (a button's
+  name or place, a shortcut, what to type) updates them in the same
+  change; a new feature someone would look for there gets a few lines.
 - **The demo shows every feature.** A new or changed user-facing feature
   gets demo data in `scripts/demo.py` in the same change, so that
   `task demo:reset && task demo` lets anyone see it working end to end. The

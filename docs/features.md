@@ -1,7 +1,9 @@
 # Features
 
 Everything notekpr does, area by area, with its shortcuts (`Ctrl` is `⌘` on
-a Mac). The [README](../README.md) has the short version.
+a Mac). The [README](../README.md) has the short version. To learn the app
+step by step, start with [Getting started](getting-started.md), [Writing
+notes](writing.md) and [Drawings](drawings.md).
 
 ## Writing
 

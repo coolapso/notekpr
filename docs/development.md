@@ -501,6 +501,15 @@ them, with their shortcuts) and, for the headline ones, in the README's
 Features. A change that adds or changes a feature updates them in the same
 go, and removes what no longer exists.
 
+The user guide shows people who only use the app how to use it, in plain
+words: [getting-started.md](getting-started.md) (finding your way, vaults,
+sharing, devices), [writing.md](writing.md) (what to type for each kind of
+formatting, math, diagrams) and [drawings.md](drawings.md). It doesn't
+list everything — that's features.md — but what it says must stay true: a
+change to something it describes (a button's name or place, a shortcut,
+what to type) updates it in the same go, and a new feature someone would
+look for there gets a few lines.
+
 The website, notekpr.md, is no longer in this repository: since 2026-11-07
 it lives in the private notekpr-cloud repository (`site/`), next to the
 hosted service it sells. Its feature pages follow these lists —

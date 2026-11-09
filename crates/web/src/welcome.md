@@ -49,4 +49,7 @@ Tick things off as you try them, and delete this note whenever you like.
 - [ ] *Settings → AI agents*: give an assistant access to only the vaults you choose
 - [ ] Take everything with you: *Settings → Account → Data* exports your vaults as Markdown (`.zip`)
 
+New here? The guide shows how it all works, from your first note to
+diagrams and drawings: [Getting started](https://docs.notekpr.md/use/getting-started/).
+
 On a Mac, press `⌘` where it says `Ctrl`.

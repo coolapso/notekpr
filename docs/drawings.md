@@ -16,6 +16,19 @@ drawing?](writing.md#diagram-or-drawing) compares the two.
 
 On a Mac, press `⌘` where this page says `Ctrl`.
 
+![A drawing open in the app, its controls numbered as below](assets/guide/dr-app.webp)
+
+1. **The tools**: shapes, arrows, the pen, text, pictures and more
+   ([below](#the-tools)).
+2. **The drawing's name**: click it to rename the drawing.
+3. **Saved shapes**: shapes you keep, to use in any drawing.
+4. **Version history**: earlier versions, to restore or download.
+5. **Download** (⤓): as a picture or a file for Excalidraw or Obsidian,
+   or copy it; also copies the line that shows it in a note.
+6. **Zoom** out and in; the percentage shows how far.
+7. **Undo and redo**.
+8. **The grid** and **snapping** to other shapes.
+
 ## Starting one
 
 * The drawing button next to **New note** in the sidebar starts one in the
@@ -25,7 +38,9 @@ On a Mac, press `⌘` where this page says `Ctrl`.
   move and rename like notes.
 * To show a drawing inside a note, write `![[Garden beds.drawing]]`
   (the ⤓ menu at the top of a drawing copies it for you). The note shows
-  the drawing, kept up to date as it changes.
+  the drawing, kept up to date as it changes:
+
+  ![A note showing the drawing Garden beds](assets/guide/dr-in-note.webp)
 
 ## The tools
 
@@ -46,8 +61,8 @@ The toolbar at the top, each with its key:
 | Frame | `F` | a frame that holds what's in it |
 | Laser pointer | `K` | pointing at things for others to see; it fades |
 
-After drawing a shape, the tool goes back to *Selection*. `Q` keeps the
-tool, to draw several in a row.
+After drawing a shape, the tool goes back to *Selection*. `Q` (or the lock
+at the start of the toolbar) keeps the tool, to draw several in a row.
 
 ## Changing what you drew
 
@@ -56,6 +71,8 @@ tool, to draw several in a row.
 * **The panel** beside a selection changes its colors and fill (hachure,
   cross-hatch, solid), the stroke's width and style, how sloppy the hand
   looks, round or sharp edges, the font and size of text, and opacity.
+
+  ![The box Herbs selected, its panel of colors, fill, stroke, sloppiness, edges, opacity and layers on the left](assets/guide/dr-selected.webp)
 * **Text in a shape**: double-click the shape (or select it and press
   Enter) and type. The text wraps, and the shape grows to hold it.
   Double-click an arrow or line to give it a label.

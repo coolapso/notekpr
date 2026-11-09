@@ -22,13 +22,23 @@ The three buttons at the top right of a note:
 In live preview, a link opens with a click when the cursor isn't on its
 line, or with `Ctrl`+click while you're editing it.
 
+![The same note in live preview and as Markdown source](assets/guide/wr-preview-source.webp)
+
 ## The toolbar
 
-From left to right: undo and redo; **Heading** (a menu: *Heading 1–3* and
-*Normal text*); **bold**, *italic* and ~~strikethrough~~; text and
-background **colors**; bulleted, numbered and checklist lists; quote;
-**callout**; code and code block; link; table; divider; and the paperclip
-to attach a picture or file. Hover over a button to see its shortcut.
+![The toolbar, its buttons numbered 1 to 18](assets/guide/wr-toolbar.webp)
+
+* **1–2**: undo, redo
+* **3**: headings (a menu: *Heading 1–3*, *Normal text*)
+* **4–6**: **bold**, *italic*, ~~strikethrough~~
+* **7**: text and background colors
+* **8–10**: bulleted list, numbered list, checklist
+* **11–12**: quote, callout (a menu of their types)
+* **13–14**: code, code block
+* **15–17**: link, table, divider
+* **18**: attach a picture or file
+
+Hover over a button to see its shortcut.
 
 ## Quick reference
 
@@ -89,6 +99,25 @@ too.
 * `- [ ] ` makes a checklist item. Tick it with a click, or `Ctrl+Enter`
   on its line; it becomes `- [x]`.
 
+This:
+
+```
+- Groceries
+  - Tomatoes
+    - Cherry ones, if they have them
+  - Bread
+
+1. Preheat the oven
+2. Knead the dough
+
+- [x] Book the flights
+- [ ] Pack the bags
+```
+
+shows as:
+
+![Bulleted lists three levels deep, a numbered list and a checklist](assets/guide/wr-lists.webp)
+
 ## Links
 
 **To a web page**: paste the address; it becomes a link by itself. To show
@@ -110,6 +139,21 @@ it.
 
 `Ctrl+K` with nothing selected starts a note link (`[[ ]]`).
 
+This:
+
+```
+The timetable is on https://example.org/trams, the tours on
+[the tram company's site](https://example.org).
+
+Plans are in [[Trip plan]], the day trip in [[Trip plan#Day 2|our day trip]].
+
+Still to write: [[Restaurants to try]].
+```
+
+shows as (the last link, to a note not written yet, underlined with dots):
+
+![Web links, links to notes, and a link to a note that doesn't exist yet](assets/guide/wr-links.webp)
+
 ## Pictures, video, sound and files
 
 Drop a file into a note, paste it, or use the paperclip in the toolbar.
@@ -118,6 +162,8 @@ It's encrypted and uploaded, then:
 * pictures show where you dropped them;
 * videos and recordings play there;
 * other files (a PDF, a spreadsheet) show as a link to the file.
+
+![A note showing a picture: its name above it, the picture below](assets/guide/wr-picture.webp)
 
 In the text, a file is `![[photo.jpg]]`: the `!` means "show it here";
 without it, `[[photo.jpg]]` is just a link. Files go into a folder called
@@ -147,6 +193,10 @@ Columns line up by themselves. In the text a table looks like this:
 | 2   | Sintra  |
 ```
 
+and shows like this:
+
+![The table, with its header row](assets/guide/wr-table.webp)
+
 A table wider than the page scrolls sideways.
 
 ## Quotes and callouts
@@ -158,7 +208,15 @@ makes one, or type it:
 ```
 > [!tip] Water in the morning
 > The soil holds it better before the heat.
+
+> [!warning] Frost on Thursday
+> Cover the seedlings.
+
+> [!faq]- Can basil go outside?
+> Only once the nights stay above 10 °C.
 ```
+
+![Three callouts: a tip, a warning and a question, each with its color and icon](assets/guide/wr-callouts.webp)
 
 The word in brackets is the type: `note`, `info`, `tip`, `success`,
 `question`, `warning`, `danger`, `bug`, `example`, `quote` and more, each
@@ -181,7 +239,18 @@ print("hello")
 The code is colored for its language (some 35 of them), with line numbers
 and a copy button. After the language you can add a file name
 (`title=deploy.sh`), highlight lines (`hl=2,4-6`), or turn off the line
-numbers (`ln=false`) and wrapping (`wrap=false`).
+numbers (`ln=false`) and wrapping (`wrap=false`). This:
+
+````
+```python title=hello.py hl=2
+name = "notekpr"
+print(f"hello, {name}")
+```
+````
+
+shows as:
+
+![A code block titled hello.py, its second line highlighted](assets/guide/wr-code.webp)
 
 ## Math
 
@@ -191,10 +260,14 @@ for math. Put a formula between dollar signs inside a sentence:
 dollar signs, on its own lines:
 
 ```
+Einstein's $E = mc^2$, in a sentence. On its own:
+
 $$
 \frac{-b \pm \sqrt{b^2 - 4ac}}{2a}
 $$
 ```
+
+![A formula in a sentence, and one on its own, centered](assets/guide/wr-math.webp)
 
 A few things to start with:
 
@@ -229,6 +302,8 @@ Inside a formula, `\ce{…}` writes chemistry the easy way:
 | `$\ce{A <=> B}$` | an equilibrium |
 | `$\pu{123 kJ/mol}$` | a value with its units |
 
+![Water, a reaction, an ion, an isotope, an equilibrium and units, typeset](assets/guide/wr-chemistry.webp)
+
 It's the notation (mhchem's) that Obsidian and Joplin use too.
 
 ## Diagrams
@@ -251,6 +326,8 @@ flowchart LR
 ````
 
 This draws a flowchart from left to right (`LR`; `TD` goes top down):
+
+![The flowchart: Idea, Draft, a diamond asking Good?, and Publish](assets/guide/wr-diagram.webp)
 
 * each name is a box; `Review{Good?}` gives the box *Review* the text
   "Good?" and a diamond shape (`[text]` is a rectangle, `(text)` rounded,
@@ -279,6 +356,8 @@ pie title Where the time went
 ```
 ````
 
+![The sequence diagram and the pie chart](assets/guide/wr-more-diagrams.webp)
+
 And Gantt charts (plans on a timeline), mind maps, timelines, class,
 state and entity–relationship diagrams, and more:
 [Mermaid's documentation](https://mermaid.js.org/intro/) shows every kind,
@@ -288,6 +367,8 @@ with examples to copy.
 under it, redrawn as you type. Click elsewhere and only the diagram shows
 again. It follows the light or dark theme. If the text has a mistake, a
 red line says what's wrong instead of the diagram.
+
+![A diagram being edited: its text above, the diagram under it](assets/guide/wr-diagram-editing.webp)
 
 **Links in a diagram**:
 
@@ -324,7 +405,9 @@ you want to sketch freely, make a drawing.
 Type `@today`, `@tomorrow` or `@yesterday` (or pick a day from the menu
 that `@` opens), and the note gets that day's date, such as `@2026-10-23`.
 It shows as *Today*, *Tomorrow* or *Yesterday* while it is one, and as
-the date after that.
+the date after that:
+
+![Dates showing as Today, Tomorrow, Yesterday and a weekday with its date](assets/guide/wr-dates.webp)
 
 ## Tags
 

@@ -492,6 +492,20 @@ project `notekpr-docs`. From `main` it is the site itself; from another
 branch, a preview at its own address. The first deploy creates the project
 and asks for its production branch: `main`.
 
+## Feature lists and the website
+
+Every user-facing feature is listed in [features.md](features.md) (all of
+them, with their shortcuts) and, for the headline ones, in the README's
+Features. A change that adds or changes a feature updates them in the same
+go, and removes what no longer exists.
+
+The website, notekpr.md, is no longer in this repository: since 2026-11-07
+it lives in the private notekpr-cloud repository (`site/`), next to the
+hosted service it sells. Its feature pages follow these lists —
+`site/features.html`, "In the box" on `site/index.html`, and what
+`site/compare.html` says notekpr lacks — so a new feature goes there too,
+as that repository's AGENTS.md says (a separate commit there).
+
 ## Emoji
 
 The emoji the web app offers as icons are a table,

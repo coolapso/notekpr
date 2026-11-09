@@ -99,6 +99,16 @@ EXAMPLES = {
         | 1   | Lisbon  |
         | 2   | Sintra  |
         """,
+    "HTML table": """
+        <table>
+        <tr><th rowspan="2">Day</th><th colspan="2" align="center">Meals</th></tr>
+        <tr><th>Lunch</th><th>Dinner</th></tr>
+        <tr><td>Friday</td><td>At the market</td><td>In Alfama</td></tr>
+        <tr><td>Saturday</td><td colspan="2" align="center">A picnic in Sintra</td></tr>
+        <tr><td>Sunday</td><td rowspan="2">On the train</td><td>In Belém</td></tr>
+        <tr><td>Monday</td><td>At home</td></tr>
+        </table>
+        """,
     "Callouts": """
         > [!tip] Water in the morning
         > The soil holds it better before the heat.
@@ -259,7 +269,12 @@ const shown = lines.slice(0, last + 1).filter(l => l.getBoundingClientRect().hei
 const rs = shown.map(l => l.getBoundingClientRect());
 const t = Math.min(...rs.map(r => r.top)) - pad, b = Math.max(...rs.map(r => r.bottom)) + pad;
 const range = document.createRange();
-const right = Math.max(...shown.map(l => { range.selectNodeContents(l); return range.getBoundingClientRect().right; }));
+// An HTML block's box is as wide as the column, and so is a table's (it scrolls sideways): what
+// they hold is measured instead.
+const right = Math.max(...shown.map(l => {
+  const html = [...l.querySelectorAll('.hw > :not(table), .hw > table :is(th, td)')];
+  if (html.length) return Math.max(...html.map(e => e.getBoundingClientRect().right));
+  range.selectNodeContents(l); return range.getBoundingClientRect().right; }));
 const w = Math.min(ed.width, Math.max(320, right - ed.left)) + 2 * pad;
 return {x: ed.left - pad, y: t, w, h: b - t};
 """
@@ -552,6 +567,7 @@ def writing(s):
     s.example("wr-lists", "Lists")
     s.example("wr-links", "Links")
     s.example("wr-table", "Table")
+    s.example("wr-html-table", "HTML table", wait=".ed .hw table")
     s.example("wr-callouts", "Callouts")
     s.example("wr-code", "Code")
     s.example("wr-math", "Math", wait=".ed .mw")

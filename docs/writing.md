@@ -197,7 +197,38 @@ and shows like this:
 
 ![The table, with its header row](assets/guide/wr-table.webp)
 
-A table wider than the page scrolls sideways.
+A table wider than the page scrolls sideways. Colons in the line under the
+header align a column: `:---:` centers it, `---:` puts it on the right.
+
+### Merged cells
+
+A Markdown table can't merge cells. For that, write the table in HTML:
+`<table>` around it, `<tr>` for each row, `<th>` for a header cell and
+`<td>` for the others. In a cell, `colspan="2"` makes it two columns wide,
+`rowspan="2"` two rows tall, and `align="center"` (or `right`) places its
+text. This:
+
+```
+<table>
+<tr><th rowspan="2">Day</th><th colspan="2" align="center">Meals</th></tr>
+<tr><th>Lunch</th><th>Dinner</th></tr>
+<tr><td>Friday</td><td>At the market</td><td>In Alfama</td></tr>
+<tr><td>Saturday</td><td colspan="2" align="center">A picnic in Sintra</td></tr>
+<tr><td>Sunday</td><td rowspan="2">On the train</td><td>In Belém</td></tr>
+<tr><td>Monday</td><td>At home</td></tr>
+</table>
+```
+
+shows as:
+
+![An HTML table: Meals over two columns, a picnic across both, a train lunch two days long](assets/guide/wr-html-table.webp)
+
+* Keep the table together: an empty line inside it ends it.
+* Inside it, format in HTML too (`<b>bold</b>`, `<i>italic</i>`,
+  `<a href="https://example.org">a link</a>`): Markdown marks aren't read
+  there.
+* Click the table to change its HTML; once the cursor leaves it, it shows
+  as a table again.
 
 ## Quotes and callouts
 
@@ -424,7 +455,8 @@ A few HTML tags work in notes, for things Markdown has no marks for:
   section that folds open;
 * `<kbd>Ctrl</kbd>` for keys, `H<sub>2</sub>O` and `x<sup>2</sup>`;
 * `<div align="center">…</div>` to center something;
-* `<img src="photo.jpg" width="300">` for a picture's size.
+* `<img src="photo.jpg" width="300">` for a picture's size;
+* `<table>` for a table with merged cells ([how](#merged-cells)).
 
 Only formatting is kept: no scripts, styles, frames or forms.
 

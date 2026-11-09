@@ -26,6 +26,10 @@ disableKinds = ['taxonomy', 'term', 'rss']
 [[module.mounts]]
   source = 'static'
   target = 'static'
+# The docs' pictures (docs/assets: the guide's screenshots), at /assets/ (render-image.html).
+[[module.mounts]]
+  source = '../assets'
+  target = 'static/assets'
 [[module.mounts]]
   source = '../../crates/web/static'
   target = 'static'

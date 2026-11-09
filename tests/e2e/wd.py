@@ -24,12 +24,14 @@ def req(method, path, body=None):
 
 
 class Browser:
-    def __init__(self, width=1400, height=900):
+    def __init__(self, width=1400, height=900, scale=None):
+        """`scale`: device pixels per CSS pixel (2 for sharp screenshots)."""
+        extra = [f"--force-device-scale-factor={scale}"] if scale else []
         caps = {"capabilities": {"alwaysMatch": {
             "browserName": "chrome",
             "goog:chromeOptions": {"binary": os.environ.get("NOTEKPR_CHROME") or "/usr/bin/chromium",
                                    "args": ["--headless=new", "--no-sandbox", f"--window-size={width},{height}",
-                                            "--disable-gpu", "--lang=en-US"]},
+                                            "--disable-gpu", "--lang=en-US", *extra]},
             "goog:loggingPrefs": {"browser": "ALL"}}}}
         v = req("POST", "/session", caps)
         self.sid = v["sessionId"]

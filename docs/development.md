@@ -463,6 +463,7 @@ The docs in `docs/` are also a website, [docs.notekpr.md](https://docs.notekpr.m
 | `content/_content.gotmpl` | a page for each doc listed; the doc's `# ` heading is its title |
 | `content/_index.md` | the home page |
 | `layouts/_markup/render-link.html` | links between docs (`cli.md#…`) go to their pages, links into the repository (`../deploy/`) to GitHub |
+| `layouts/_markup/render-image.html` | pictures from `docs/assets` (`assets/guide/…`), which the site serves at `/assets/` |
 | `hugo.toml` | the site: its menus, footer, and where the docs and the favicon come from |
 | `themes/dockleaf/` | a copy of Dockleaf (see its `NOTEKPR.md`) |
 
@@ -471,6 +472,7 @@ task docs:serve                            # preview on http://localhost:8091, u
 task docs:check                            # build it and check every link and #anchor (task ci does)
 task docs:build                            # the site as it is published, in dist/docs
 task docs:theme DOCKLEAF=~/Dev/dockleaf    # copy a newer Dockleaf in (REF=… for a tag or commit)
+task docs:shots                            # take the user guide's screenshots again (below)
 task docs:deploy                           # check it, build it and publish it on Cloudflare Pages
 ```
 
@@ -509,6 +511,19 @@ list everything — that's features.md — but what it says must stay true: a
 change to something it describes (a button's name or place, a shortcut,
 what to type) updates it in the same go, and a new feature someone would
 look for there gets a few lines.
+
+Its pictures (`docs/assets/guide/*.webp`) come from
+`scripts/guide-shots.py`: `task docs:shots` seeds a demo of its own in a
+temporary folder, adds the examples the guide shows (a vault *Guide*,
+through the CLI: the script's `EXAMPLES`), and takes each picture in
+headless Chromium as alice — a part of the app, cropped, some with
+numbered markers the guide explains. Chromium also crops and encodes them
+(WebP, twice their CSS size), so it needs only Python's standard library,
+chromium and chromedriver. When the app changes what a picture shows (a
+button, a menu, the demo's notes), take them again (`-- --only gs-app,…`
+for some; `-- --data DIR` keeps the demo, for faster runs), look at every
+one that changed, and keep the guide's numbered lists in step with the
+markers. An example in the guide and in `EXAMPLES` say the same.
 
 The website, notekpr.md, is no longer in this repository: since 2026-11-07
 it lives in the private notekpr-cloud repository (`site/`), next to the

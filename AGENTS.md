@@ -131,7 +131,8 @@ crates/load     load test (`task load`): simulated people = real clients (the CL
 tests/e2e       browser tests: run.sh (entry point) → suite.py, cross_client.py, drawings.py;
                 perf.py (typing latency), import_perf.py (a big import arriving) ·
                 wd.py (stdlib WebDriver)
-scripts/        build-web.sh, build-load-ui.sh (wasm builds) · emoji.py (the emoji
+scripts/        build-web.sh, build-load-ui.sh (wasm builds) · guide-shots.py (the user
+                guide's screenshots: task docs:shots) · emoji.py (the emoji
                 table, from Unicode's data) · demo.py (task demo),
                 demo-files/ (what it can't make, e.g. a video) · logo.py (the logo
                 and icon in docs/assets, by hand) · test-s3.sh (task test:s3: the
@@ -179,6 +180,7 @@ task test:editor                 # the editor's DOM view in headless Chromium (w
 task build:clients               # the CLI's release files and packages into dist/clients (Docker, nothing published)
 task docs:serve / task docs:check   # the docs as a website (:8091); build it and check its links (hugo)
 task docs:deploy                 # check, build and publish the docs site (Cloudflare Pages, wrangler)
+task docs:shots                  # the user guide's screenshots, from a demo of their own (chromium)
 task ci                          # exactly what CI runs: ci:check (incl. audit) + ci:image + ci:clients
 task release                     # from main: CI's checks, tag the next version (semrel), push the images, publish the CLI
 ```
@@ -224,7 +226,9 @@ Without go-task, see the plain commands in the [Taskfile](Taskfile.yml) or
   `docs/writing.md` and `docs/drawings.md` explain the app in plain words
   to people who only use it. A change to what they describe (a button's
   name or place, a shortcut, what to type) updates them in the same
-  change; a new feature someone would look for there gets a few lines.
+  change, and their screenshots when they show it (`task docs:shots`,
+  then look at them); a new feature someone would look for there gets a
+  few lines.
 - **The demo shows every feature.** A new or changed user-facing feature
   gets demo data in `scripts/demo.py` in the same change, so that
   `task demo:reset && task demo` lets anyone see it working end to end. The

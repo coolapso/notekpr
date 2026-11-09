@@ -1,0 +1,11 @@
+{{- /* The docs show pictures from docs/assets as GitHub sees them ("assets/guide/app.webp"); the site
+       serves that folder at /assets/ (hugo.toml). Any other picture is a mistake: the docs load nothing
+       from elsewhere. */ -}}
+{{- $src := .Destination -}}
+{{- if strings.HasPrefix $src "assets/" -}}
+  {{- $src = $src | relURL -}}
+{{- else -}}
+  {{- errorf "docs/%s.md shows %q: show a picture from docs/assets (assets/…)" .Page.Params.doc .Destination -}}
+{{- end -}}
+<img src="{{ $src }}" alt="{{ .PlainText }}"{{ with .Title }} title="{{ . }}"{{ end }} loading="lazy">
+{{- /* no newline after the image: it would show as a space before what follows */ -}}

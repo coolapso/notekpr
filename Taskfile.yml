@@ -119,6 +119,13 @@ tasks:
     cmds:
       - python3 scripts/check-docs.py
 
+  docs:shots:
+    desc: "Take the user guide's screenshots again (docs/assets/guide) from a demo of their own (chromium + chromedriver); one or some: task docs:shots -- --only gs-app,wr-math"
+    deps: [build:server, build:cli]
+    cmds:
+      - CARGO_TARGET_DIR="{{.WEB_TARGET_DIR}}" PROFILE=dev OUT=target/guide-web ./scripts/build-web.sh > /dev/null
+      - python3 -u scripts/guide-shots.py --web target/guide-web {{.CLI_ARGS}}
+
   docs:theme:
     desc: "Copy the Dockleaf theme into docs/site/themes/dockleaf from a checkout: task docs:theme DOCKLEAF=~/Dev/dockleaf (REF=a tag or commit; default the checkout's)"
     requires:

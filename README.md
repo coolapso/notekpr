@@ -37,7 +37,7 @@ is in the docs.
 
 * **[Writing](docs/features.md#writing)** — a live-preview Markdown editor
   with a toolbar, tables, task lists, code blocks, callouts, colors,
-  images, video and audio; optional Vim keys.
+  images, video and audio, LaTeX math and chemistry; optional Vim keys.
 * **[Drawings](docs/features.md#drawings)** — a whiteboard among your
   notes, drawn together live and shown in any note; compatible with
   Excalidraw: copy and paste, its files and Obsidian's.

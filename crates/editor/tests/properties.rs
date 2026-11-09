@@ -21,12 +21,17 @@ use std::rc::Rc;
 const ALPHABET: &[char] = &[
     'a', 'b', 'Z', '1', ' ', ' ', '\n', '\n', '\t', '#', '#', '*', '_', '`', '`', '~', '=', '[',
     ']', '(', ')', '!', '|', '|', '\\', '/', ':', '.', '-', '-', '>', '%', '<', '&', '"', '\'',
-    'x', 'é', '€', '増', '😀', '\u{a0}', '\u{301}',
+    'x', 'é', '€', '増', '😀', '\u{a0}', '\u{301}', '$', '$', '{', '}',
 ];
 
 /// Lines that matter for block classification across lines.
 const LINES: &[&str] = &[
     "```",
+    "$$",
+    "$$ x",
+    "x $$",
+    "  $$",
+    "$$x$$",
     "```rust",
     "```c title=a.c hl=2,4-5",
     "```python ln=false hl:1",
@@ -439,6 +444,30 @@ fn reference_classify(lines: &[&str]) -> Vec<Block> {
         Some(next) if kind.ends_at_blank() => next.trim().is_empty(),
         Some(_) => kind.ends_on(lines[i]),
     };
+    // `$$` not escaped by a backslash, from byte `from` of `line`.
+    let has_dollars = |line: &str, from: usize| {
+        let b = line.as_bytes();
+        let mut j = 0;
+        while j + 1 < b.len() {
+            if b[j] == b'\\' && b[j + 1].is_ascii_punctuation() {
+                j += 2;
+                continue;
+            }
+            if j >= from && b[j] == b'$' && b[j + 1] == b'$' {
+                return true;
+            }
+            j += 1;
+        }
+        false
+    };
+    // A block of display math: `$$` starting a line (three spaces at most)
+    // that doesn't close on it.
+    let opens_math = |line: &str| {
+        let t = line.trim_start_matches(' ');
+        line.len() - t.len() <= 3 && t.starts_with("$$") && !has_dollars(t, 2)
+    };
+    // The open block of display math, and whether it is in a list.
+    let mut math: Option<bool> = None;
     let mut queued: std::collections::VecDeque<Block> = Default::default();
     for (i, line) in lines.iter().enumerate() {
         if let Some(b) = queued.pop_front() {
@@ -488,6 +517,41 @@ fn reference_classify(lines: &[&str]) -> Vec<Block> {
             if last {
                 html = None;
             }
+            continue;
+        }
+        if let Some(in_list) = math {
+            if line.trim().is_empty() {
+                // Never closed: the blank line ends it.
+                out.push(Block::Blank);
+                math = None;
+                lazy = None;
+                continue;
+            }
+            if continues(line) {
+                let close = has_dollars(line, 0);
+                out.push(Block::Math { open: false, close });
+                if close {
+                    math = None;
+                    if in_list {
+                        lazy = Some(false);
+                    }
+                }
+                continue;
+            }
+            // A block of its own ends the paragraph, and the math in it
+            // that never closed: the line is read as after that paragraph.
+            math = None;
+            if in_list {
+                lazy = Some(false);
+            }
+        }
+        if !list.is_empty() && opens_math(line) {
+            out.push(Block::Math {
+                open: true,
+                close: false,
+            });
+            math = Some(true);
+            lazy = None;
             continue;
         }
         if let Some(quote) = lazy {
@@ -561,13 +625,22 @@ fn reference_classify(lines: &[&str]) -> Vec<Block> {
             }
         } else if let Some(kind) = BlockKind::start(line).filter(|k| {
             k.interrupts_paragraph()
-                || !matches!(out.last(), Some(Block::Paragraph | Block::PipeText))
+                || !matches!(
+                    out.last(),
+                    Some(Block::Paragraph | Block::PipeText | Block::Math { .. })
+                )
         }) {
             let last = html_last(kind, i);
             out.push(Block::Html { kind, last });
             if !last {
                 html = Some(kind);
             }
+        } else if opens_math(line) {
+            out.push(Block::Math {
+                open: true,
+                close: false,
+            });
+            math = Some(false);
         } else if let Some(align) = table_start(i) {
             let end = (i + 2..lines.len())
                 .find(|&j| !continues_table(lines[j]))
@@ -650,9 +723,13 @@ fn check_colors(
     prop_assert_eq!(st.doc().line_count(), before.len());
     for (i, (line, block)) in before.iter().enumerate() {
         match &as_typed {
-            // In an HTML block the pair shows as the source it is, as
-            // anything typed into one does.
-            Some((li, _)) if i == *li && matches!(st.block(i), Block::Html { .. }) => continue,
+            // In an HTML block or a block of display math the pair shows as
+            // the source it is, as anything typed into one does.
+            Some((li, _))
+                if i == *li && matches!(st.block(i), Block::Html { .. } | Block::Math { .. }) =>
+            {
+                continue;
+            }
             Some((li, _)) if i == *li => {}
             Some((_, typed)) => {
                 prop_assert_eq!(

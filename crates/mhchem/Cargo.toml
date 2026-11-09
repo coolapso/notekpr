@@ -1,0 +1,13 @@
+[package]
+name = "notekpr-mhchem"
+description = "mhchem's \\ce{…} chemical equations and \\pu{…} physical units as plain TeX: a Rust port of mhchemParser"
+version.workspace = true
+edition.workspace = true
+# A port of mhchemParser, which is Apache-2.0 (LICENSE.txt), not the workspace's AGPL.
+license = "Apache-2.0"
+publish = false
+
+[dependencies]
+
+[dev-dependencies]
+proptest = { version = "1", default-features = false, features = ["std"] }

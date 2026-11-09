@@ -15,6 +15,7 @@ Tick things off as you try them, and delete this note whenever you like.
 - [ ] Add #tags anywhere, and find them again with `Ctrl+Shift+F`: `tag:tags`
 - [ ] Type `@today` for today's date
 - [ ] Drop or paste a picture, a recording or any file into a note
+- [ ] Write math in LaTeX, `$e^{i\pi} + 1 = 0$`, and chemistry with `$\ce{2H2 + O2 -> 2H2O}$`
 
 ## Capture and draw
 

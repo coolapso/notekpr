@@ -19,5 +19,15 @@ serves them itself: drawings never load anything from elsewhere.
 Not shipped: Xiaolai (Excalidraw's handwriting for Chinese and Japanese,
 13 MB); such text falls back to the system's fonts.
 
+## The math font
+
+Math (LaTeX in notes) is typeset by the browser as MathML, in Noto Sans
+Math (Google, SIL Open Font License 1.1), `NotoSansMath/`. It is the copy
+math-core ships (`playground/fonts/NotoSansMath-Regular-centered-diacritics-primes.woff2`
+at its tag v0.9.0, from [math-core-fonts](https://github.com/tmke8/math-core-fonts)):
+the same glyphs, with primes and three accents placed so that Chromium and
+Safari draw them right. `style.css` declares it; a browser downloads it the
+first time a note shows math.
+
 The SIL Open Font License 1.1 is in `OFL.txt`; Comic Shanns' MIT license in
 `ComicShanns/LICENSE.txt`.

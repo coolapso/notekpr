@@ -10,6 +10,9 @@
 //!   blocks them anyway) and are shown as links instead.
 //! * Every attribute we emit is escaped.
 //!
+//! Math (`$…$`, `$$…$$`, chemistry in `\ce{…}`) is MathML from
+//! [`crate::editor::math`], escaped by construction.
+//!
 //! Callouts (`> [!tip] Title`, [`crate::editor::callout`]) are block quotes
 //! rendered as a box with an icon and the title, a `details` element when
 //! they fold.
@@ -28,7 +31,7 @@ use notekpr_core::dates::{self, Date};
 use notekpr_core::paths::{self, Media};
 
 use crate::editor::code::{self, Carry, FenceInfo, Indent};
-use crate::editor::{callout, html, syntax};
+use crate::editor::{callout, html, math, syntax};
 
 pub struct Ctx<'a> {
     /// Resolve a link target (wiki or relative Markdown) to a note id.
@@ -448,6 +451,7 @@ pub fn to_html(src: &str, ctx: &Ctx) -> String {
     opts.insert(Options::ENABLE_FOOTNOTES);
     opts.insert(Options::ENABLE_WIKILINKS);
     opts.insert(Options::ENABLE_YAML_STYLE_METADATA_BLOCKS);
+    opts.insert(Options::ENABLE_MATH);
     let line_of = |off: usize| {
         src[..off.min(src.len())]
             .bytes()
@@ -732,6 +736,18 @@ pub fn to_html(src: &str, ctx: &Ctx) -> String {
                     esc_at(&t, place, ctx)
                 ))));
             }
+            // Math: MathML, as the editor shows it (crate::editor::math).
+            Event::InlineMath(tex) => {
+                let mut h = String::new();
+                math::html(&tex, false, &mut h);
+                out_events.push(Event::Html(CowStr::from(h)));
+            }
+            Event::DisplayMath(tex) => {
+                let mut h = String::from("<span class=\"mathblock\">");
+                math::html(&tex, true, &mut h);
+                h.push_str("</span>");
+                out_events.push(Event::Html(CowStr::from(h)));
+            }
             e => out_events.push(e),
         }
     }
@@ -843,6 +859,31 @@ mod tests {
         assert!(!h.contains("iframe"), "{h}");
         let h = render("<div style=\"position:fixed\" class=\"wl\" data-note=\"id1\" id=x>a</div>");
         assert!(h.contains("<div>a</div>"), "{h}");
+    }
+
+    #[test]
+    fn math_and_chemistry() {
+        let h = render("Euler: $e^{i\\pi} + 1 = 0$, costs $5 and $10.");
+        assert_eq!(h.matches("<math").count(), 1, "{h}");
+        assert!(h.contains("costs $5 and $10."), "{h}");
+        let h = render("$$\n\\frac{a}{b}\n$$\n\n\\$x$ is a dollar");
+        assert!(
+            h.contains("<span class=\"mathblock\"><math display=\"block\">"),
+            "{h}"
+        );
+        assert!(
+            h.contains("<mfrac>") && h.contains("$x$ is a dollar"),
+            "{h}"
+        );
+        let h = render("Water: $\\ce{H2O}$");
+        assert!(h.contains("<math") && !h.contains("\\ce"), "{h}");
+        // Text in a formula is text; one that can't be shown says why.
+        let h = render("$\\text{<img src=x onerror=alert(1)>}$ $\\frac{1}$");
+        assert!(!h.contains("<img"), "{h}");
+        assert!(h.contains("<span class=\"merr\" title=\""), "{h}");
+        // Not in code.
+        let h = render("`$x$`\n\n```\n$y$\n```");
+        assert!(!h.contains("<math"), "{h}");
     }
 
     #[test]

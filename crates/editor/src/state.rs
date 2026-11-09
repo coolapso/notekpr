@@ -17,6 +17,16 @@ use crate::syntax::{self, Block};
 use crate::text::{LineSplice, Text};
 use crate::vim::Vim;
 
+/// What the last line of a block shows in place of the block's source
+/// (live preview): its content, rendered by the view.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Preview {
+    /// An HTML block's source.
+    Html(String),
+    /// The formula of a block of display math.
+    Math(String),
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Mode {
     Live,
@@ -329,6 +339,50 @@ impl EditorState {
         )
     }
 
+    /// The lines of the block of display math `line` is in: from its
+    /// opening `$$` to its closing one (or its last line, if it doesn't
+    /// close).
+    pub fn math_block(&self, line: usize) -> Option<Range<usize>> {
+        if !matches!(self.block(line), Block::Math { .. }) {
+            return None;
+        }
+        let mut a = line;
+        while a > 0 && !matches!(self.block(a), Block::Math { open: true, .. }) {
+            if !matches!(self.block(a - 1), Block::Math { close: false, .. }) {
+                break;
+            }
+            a -= 1;
+        }
+        let mut b = line;
+        while !matches!(self.block(b), Block::Math { close: true, .. })
+            && b + 1 < self.doc.line_count()
+            && matches!(self.block(b + 1), Block::Math { open: false, .. })
+        {
+            b += 1;
+        }
+        Some(a..b + 1)
+    }
+
+    /// The lines of the block whose last line shows a preview of it, if
+    /// `line` is in one: an HTML block, a block of display math.
+    pub fn preview_block(&self, line: usize) -> Option<Range<usize>> {
+        self.html_block(line).or_else(|| self.math_block(line))
+    }
+
+    /// What `line` shows of the block it ends: an HTML block's preview, a
+    /// block of display math's formula (once it closes).
+    pub fn preview(&self, line: usize) -> Option<Preview> {
+        match self.block(line) {
+            Block::Html { last: true, .. } => self.html_source(line).map(Preview::Html),
+            Block::Math { close: true, .. } => {
+                let lines = self.math_block(line)?;
+                let text: Vec<&str> = lines.map(|i| self.doc.line(i)).collect();
+                crate::math::block_formula(&text).map(Preview::Math)
+            }
+            _ => None,
+        }
+    }
+
     /// The code of the block whose opening fence is on `line`.
     pub fn code_text(&self, line: usize) -> String {
         let Some((open, close)) = self.code_block(line) else {
@@ -460,14 +514,14 @@ impl EditorState {
         let sel = selection.unwrap_or_else(|| self.sel.map(&changes, Assoc::After));
         let splices = self.doc.apply(&changes);
         let mut redraw = self.deco.update(&self.doc, &splices);
-        // The last line of an HTML block shows the whole block's preview:
-        // redraw it when a line of the block changed, or a line above it
-        // (which may have left the block).
+        // The last line of an HTML block or a block of display math shows
+        // the whole block's preview: redraw it when a line of the block
+        // changed, or a line above it (which may have left the block).
         let mut lasts: Vec<Range<usize>> = vec![];
         for r in &redraw {
             let mut i = r.start;
             while i <= r.end && i < self.doc.line_count() {
-                match self.html_block(i) {
+                match self.preview_block(i) {
                     Some(b) => {
                         lasts.push(b.end - 1..b.end);
                         i = b.end;

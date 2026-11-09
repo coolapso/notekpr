@@ -7,6 +7,7 @@ crates/core     shared crypto, keys, CRDT model, protocol, engine, markdown, sea
 crates/sync     client sync engine both clients use (outbox, refusals, snapshots, membership log)
 crates/server   sync server (axum + SQLite)            → notekpr-server
 crates/editor   live-preview Markdown editor (model + DOM view), used by crates/web
+crates/mhchem   mhchem's \ce{…} and \pu{…} as TeX (a port of mhchemParser, Apache-2.0)
 crates/web      browser client (Leptos → wasm32)       → dist/web
 crates/notion   Notion's HTML exports as notes, for both clients' imports
 crates/cli      the CLI, Markdown mirror, gateway      → notekpr
@@ -505,6 +506,41 @@ hosted service it sells. Its feature pages follow these lists —
 `site/features.html`, "In the box" on `site/index.html`, and what
 `site/compare.html` says notekpr lacks — so a new feature goes there too,
 as that repository's AGENTS.md says (a separate commit there).
+
+## Math and chemistry
+
+Notes show LaTeX math and chemistry, in the editor and the reading view,
+as Obsidian, Joplin and GitHub write them. None of it uses JavaScript; the
+choices below were made on 2026-11-09, with what was measured then.
+
+### Math
+
+`$…$` and `$$…$$` (and `$$` blocks over several lines) are found by
+`crates/editor/src/math.rs`, by the rules pulldown-cmark (the reading view's
+parser) follows, so the two views agree on what is math (`$5 and $10` is
+not). [math-core](https://github.com/tmke8/math-core) (MIT, ≈80 KB of the
+app, compressed) turns the LaTeX into MathML Core, which browsers lay out
+themselves. Two things of math-core's come with it: its `mathmlfixes.css`
+(in `style.css`, which its MathML expects) and the copy of Noto Sans Math
+it patches for Chromium and Safari (`static/fonts/NotoSansMath`, 290 KB,
+downloaded the first time math shows): the same look on every system,
+sans-serif like the app. Upgrading math-core, compare both with its new
+tag. Chromium doesn't stretch an arrow under a long label
+(`\xrightarrow{…}`, mhchem's `->[…]`) yet; Firefox and Safari do. Its
+output is escaped by construction (`\text{<b>}` is text), but it recurses:
+a formula nested past `MAX_DEPTH` is refused before it gets there, because
+a stack overflow in WebAssembly ends the app (math-core overflows the
+browser's 1 MiB stack at about 380 levels of `\frac{…}`). pulldown-latex
+was the other candidate: the same output, but it mis-escapes `\ ` and says
+it isn't ready for production.
+
+Chemistry (`\ce{2H2 + O2 -> 2H2O}`, units with `\pu{…}`) is mhchem's
+notation. `crates/mhchem` is a port of [mhchemParser](https://github.com/mhchem/mhchemParser)
+4.2.2 (Apache-2.0, like the crate; its tests are the upstream ones). Its TeX
+is written for MathJax; `for_math_core` in `math.rs` turns what math-core
+can't draw (`\smash`, `\llap`, `\raise`, the dashed bonds, the long
+equilibrium arrows) into the closest it can. To upgrade mhchem, port the
+upstream diff and its new test cases.
 
 ## Emoji
 

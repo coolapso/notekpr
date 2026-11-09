@@ -10,8 +10,9 @@
 //!   [`decorations`] (Markdown blocks per line, updated incrementally),
 //!   [`syntax`] (inline styling and HTML per line), [`code`] (code block
 //!   options and syntax highlighting), [`color`] (text and background
-//!   colors), [`callout`] (callout types and first lines), [`commands`]
-//!   (lists, tables, tasks, formatting) and [`vim`].
+//!   colors), [`callout`] (callout types and first lines), [`math`] (LaTeX
+//!   and chemistry as MathML), [`commands`] (lists, tables, tasks,
+//!   formatting) and [`vim`].
 //! * **The DOM view** — [`view::Editor`], a `contenteditable` element whose
 //!   text is always exactly the Markdown source, one `div.ln` per line. A
 //!   transaction re-renders only the lines it touched.
@@ -29,6 +30,7 @@ pub mod color;
 pub mod commands;
 pub mod decorations;
 pub mod html;
+pub mod math;
 pub mod state;
 pub mod syntax;
 pub mod text;

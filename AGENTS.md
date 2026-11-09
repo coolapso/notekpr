@@ -99,8 +99,12 @@ crates/editor   the live-preview Markdown editor. Pure model (native tests): tex
                 map) · state.rs (EditorState, Transaction) · decorations.rs
                 (incremental block classification) · syntax.rs · code.rs (code
                 block options, syntax highlighting) · html.rs (HTML in notes:
-                the allow list, HTML blocks) · commands.rs · vim.rs.
+                the allow list, HTML blocks) · math.rs (`$…$`, `$$…$$` as
+                MathML: math-core; chemistry via crates/mhchem) · commands.rs
+                · vim.rs.
                 DOM view: view/ (contenteditable, line patches, IME, native edits)
+crates/mhchem   mhchem's \ce{…} and \pu{…} as TeX: a port of mhchemParser (Apache-2.0,
+                like the crate), its upstream tests
 crates/notion   Notion's HTML exports as notes (sans-IO, for both clients' imports):
                 dom.rs (the page as a tree) · read.rs (pages, databases, rows,
                 templates, where each sits) · write.rs (where each goes, then the

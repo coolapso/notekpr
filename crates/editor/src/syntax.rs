@@ -22,6 +22,7 @@ use crate::callout::{self, Kind};
 use crate::code::{self, Carry, FenceInfo, Indent};
 use crate::color::{Color, Colors};
 use crate::html;
+use crate::math;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Block {
@@ -76,6 +77,13 @@ pub enum Block {
     Html {
         kind: html::BlockKind,
         last: bool,
+    },
+    /// A line of a block of display math ([`math`]): `open` on the line
+    /// with the opening `$$`, `close` on the one with the closing `$$`,
+    /// which shows the formula.
+    Math {
+        open: bool,
+        close: bool,
     },
 }
 
@@ -202,6 +210,9 @@ impl Block {
             Block::FrontmatterFence => "ln fm fmf",
             Block::Frontmatter => "ln fm",
             Block::Html { .. } => "ln html",
+            Block::Math { close: true, .. } => "ln math mc",
+            Block::Math { open: true, .. } => "ln math mo",
+            Block::Math { .. } => "ln math",
             Block::Callout(_) => "ln quote callout",
         })
     }
@@ -447,6 +458,9 @@ pub enum LineState {
     Para,
     /// Inside an HTML block.
     Html(html::BlockKind),
+    /// Inside a block of display math, and the state to go on with after
+    /// it (the paragraph or list it is part of).
+    Math(Box<LineState>),
 }
 
 /// The block quotes open after a line of one: how deeply they nest, the
@@ -584,6 +598,18 @@ pub fn step(state: &LineState, line: &str, next: Option<&str>) -> (Block, LineSt
             state.clone(),
         ),
         LineState::PipeText if is_table_line(line) => (Block::PipeText, LineState::PipeText),
+        LineState::Math(after) => math_line(after, line, next),
+        // Display math in a list item (a paragraph of it).
+        LineState::List { items, .. } if math::opens_block(line) => (
+            Block::Math {
+                open: true,
+                close: false,
+            },
+            LineState::Math(Box::new(LineState::List {
+                items: items.clone(),
+                para: true,
+            })),
+        ),
         LineState::List { para: true, .. } if continues_lazily(line) => {
             (Block::Lazy { quote: false }, state.clone())
         }
@@ -619,6 +645,34 @@ fn html_line(kind: html::BlockKind, line: &str, next: Option<&str>) -> (Block, L
         LineState::Html(kind)
     };
     (Block::Html { kind, last }, state)
+}
+
+/// A line inside a block of display math: it closes the block if it has
+/// the closing `$$`. The math is part of a paragraph: what ends that ends a
+/// block that never closed — a blank line, or a line that starts a block
+/// of its own (a heading, a list item, …), which is read as if the block
+/// weren't there.
+fn math_line(after: &LineState, line: &str, next: Option<&str>) -> (Block, LineState) {
+    if line.trim().is_empty() {
+        let state = match after {
+            LineState::List { items, .. } => LineState::List {
+                items: items.clone(),
+                para: false,
+            },
+            _ => LineState::Normal,
+        };
+        return (Block::Blank, state);
+    }
+    if !continues_lazily(line) {
+        return step(after, line, next);
+    }
+    let close = math::closing(line).is_some();
+    let state = if close {
+        after.clone()
+    } else {
+        LineState::Math(Box::new(after.clone()))
+    };
+    (Block::Math { open: false, close }, state)
 }
 
 /// Whether `line`, after a list item or quote with text, continues it: it is
@@ -679,6 +733,14 @@ fn normal_line(line: &str, next: Option<&str>, para: bool, items: &[usize]) -> (
         html::BlockKind::start(line).filter(|k| !para || k.interrupts_paragraph())
     {
         html_line(kind, line, next)
+    } else if math::opens_block(line) {
+        (
+            Block::Math {
+                open: true,
+                close: false,
+            },
+            LineState::Math(Box::new(LineState::Para)),
+        )
     } else if let Some(align) = table_start(line, next) {
         // A table: this header, its delimiter row, and the rows that follow.
         (
@@ -950,6 +1012,8 @@ const BG_SHIFT: u32 = 40;
 /// A date (`@2026-10-23`): its source is hidden away from the caret, next to
 /// a widget saying Today, Tomorrow, … or the date.
 pub const DATE: Flags = 1 << 44;
+/// The formula of inline math (its `$`s are [`MK`]).
+pub const MATH: Flags = 1 << 45;
 
 /// The colors in `flags`.
 pub fn colors(flags: Flags) -> Colors {
@@ -1015,6 +1079,7 @@ pub fn classes(flags: Flags) -> String {
         (SUB, "sub"),
         (SUP, "sup"),
         (DATE, "dt"),
+        (MATH, "mth"),
     ] {
         if flags & bit != 0 {
             c.push(name);
@@ -1074,6 +1139,8 @@ pub struct Styled {
     pub atoms: Vec<(usize, usize)>,
     /// Dates (`@2026-10-23`): their bytes in the line and the day.
     pub dates: Vec<(usize, usize, notekpr_core::dates::Date)>,
+    /// Formulas (`$x$`, `$$x$$`), in order.
+    pub maths: Vec<math::Span>,
 }
 
 fn set(flags: &mut [Flags], a: usize, b: usize, f: Flags) {
@@ -1142,6 +1209,16 @@ pub fn style_line(line: &str, block: &Block, resolves: &dyn Fn(&str) -> bool) ->
         }
         Block::Hr => {
             set(&mut s.flags, 0, n, MK);
+            return s;
+        }
+        // A line of display math: its `$$` are syntax, the rest is TeX.
+        Block::Math { open, close } => {
+            if *open && let Some(at) = line.find("$$") {
+                set(&mut s.flags, at, at + 2, MK);
+            }
+            if *close && let Some(at) = math::closing(line) {
+                set(&mut s.flags, at, at + 2, MK);
+            }
             return s;
         }
         _ => {}
@@ -1274,9 +1351,25 @@ fn inline(line: &str, from: usize, s: &mut Styled, resolves: &dyn Fn(&str) -> bo
         }
         i += run.max(1);
     }
-    // Code spans.
+    // Code spans and math, whichever opens first.
     let mut i = from;
     while i < n {
+        if b[i] == b'$'
+            && s.flags[i] & PROTECT == 0
+            && let Some(m) = math::span_at(b, i)
+        {
+            let d = m.delim();
+            set(&mut s.flags, m.open, m.open + d, MK | PROTECT);
+            // TeX, not Markdown: its backslashes aren't escapes.
+            for f in &mut s.flags[m.content()] {
+                *f = (*f & !MK) | MATH | PROTECT;
+            }
+            set(&mut s.flags, m.close, m.end(), MK | PROTECT);
+            s.atoms.push((m.open, m.end()));
+            s.maths.push(m);
+            i = m.end();
+            continue;
+        }
         if b[i] == b'`' && s.flags[i] & PROTECT == 0 {
             let run = b[i..].iter().take_while(|c| **c == b'`').count();
             let mut j = i + run;
@@ -1635,14 +1728,23 @@ pub fn escape(s: &str, out: &mut String) {
 
 /// Render a styled line to inner HTML. The text content of the result equals `line`.
 pub fn line_html(line: &str, st: &Styled) -> String {
-    line_html_with(line, st, &|d| d.to_string())
+    line_html_inner(line, st, None)
 }
 
-/// [`line_html`], each date followed by its widget saying `label(day)`.
+/// [`line_html`] with widgets (`data-w`, not text): each date followed by
+/// its label, `label(day)`, and each formula by its rendering.
 pub fn line_html_with(
     line: &str,
     st: &Styled,
     label: &dyn Fn(notekpr_core::dates::Date) -> String,
+) -> String {
+    line_html_inner(line, st, Some(label))
+}
+
+fn line_html_inner(
+    line: &str,
+    st: &Styled,
+    label: Option<&dyn Fn(notekpr_core::dates::Date) -> String>,
 ) -> String {
     if line.is_empty() {
         return "<br>".to_string();
@@ -1679,7 +1781,12 @@ pub fn line_html_with(
         let f = st.flags[i];
         let l = link_at(i);
         let mut j = i + line[i..].chars().next().map(char::len_utf8).unwrap_or(1);
-        while j < line.len() && st.flags[j] == f && link_at(j) == l && cell_at(j).is_none() {
+        while j < line.len()
+            && st.flags[j] == f
+            && link_at(j) == l
+            && cell_at(j).is_none()
+            && !st.maths.iter().any(|m| m.end() == j)
+        {
             j += line[j..].chars().next().map(char::len_utf8).unwrap_or(1);
         }
         let text = &line[i..j];
@@ -1698,11 +1805,24 @@ pub fn line_html_with(
             escape(text, &mut out);
             out.push_str("</span>");
         }
-        if let Some((_, _, day)) = st.dates.iter().find(|d| d.1 == j) {
+        if let Some(label) = label
+            && let Some((_, _, day)) = st.dates.iter().find(|d| d.1 == j)
+        {
             out.push_str("<span class=\"w dw\" contenteditable=\"false\" data-w=\"1\" title=\"");
             out.push_str(&day.to_string());
             out.push_str("\">");
             escape(&label(*day), &mut out);
+            out.push_str("</span>");
+        }
+        if label.is_some()
+            && let Some(m) = st.maths.iter().find(|m| m.end() == j)
+        {
+            out.push_str(if m.display {
+                "<span class=\"w mw md\" contenteditable=\"false\" data-w=\"1\">"
+            } else {
+                "<span class=\"w mw\" contenteditable=\"false\" data-w=\"1\">"
+            });
+            math::html(&line[m.content()], m.display, &mut out);
             out.push_str("</span>");
         }
         i = j;
@@ -1939,6 +2059,77 @@ mod tests {
         let s = style_line("<b>**x**</b>", &h(K::Block, true), &|_| true);
         assert!(s.flags[3..8].iter().all(|f| *f == 0));
         assert!(s.flags.iter().all(|f| f & PROTECT == 0));
+    }
+
+    #[test]
+    fn display_math_blocks() {
+        let m = |open, close| Block::Math { open, close };
+        let k = classify(&["$$", "x^2", "$$", "after", "", "$$ a", "b $$", "$$y$$"]);
+        assert_eq!(
+            k,
+            [
+                m(true, false),
+                m(false, false),
+                m(false, true),
+                Block::Paragraph,
+                Block::Blank,
+                m(true, false),
+                m(false, true),
+                Block::Paragraph,
+            ]
+        );
+        // One that never closes ends where its paragraph does: at a blank
+        // line, or a line starting a block.
+        let k = classify(&["$$", "x", "", "# h"]);
+        assert_eq!(
+            k,
+            [
+                m(true, false),
+                m(false, false),
+                Block::Blank,
+                Block::Heading(1)
+            ]
+        );
+        let k = classify(&["$$", "+ 1", "$$"]);
+        assert_eq!(k[0], m(true, false));
+        assert!(matches!(k[1], Block::List { .. }), "{:?}", k[1]);
+        assert_eq!(k[2], m(true, false));
+        // In a list item, and the list goes on after it.
+        let k = classify(&["- a", "  $$", "  x", "  $$", "  - b"]);
+        assert_eq!(k[1..4], [m(true, false), m(false, false), m(false, true)]);
+        assert!(matches!(k[4], Block::List { depth: 1, .. }), "{:?}", k[4]);
+        // In code it's code.
+        let k = classify(&["```", "$$", "```"]);
+        assert!(matches!(k[1], Block::Code { .. }));
+        // Its `$$` are syntax; TeX isn't Markdown.
+        let s = style_line("x **y** $$", &m(false, true), &|_| true);
+        assert_eq!(s.flags[8], MK);
+        assert!(s.flags[..8].iter().all(|f| *f == 0));
+    }
+
+    #[test]
+    fn inline_math() {
+        let line = r"a $\frac{1}{2}$ b `$c$` $5 and $$d$$";
+        let s = flags_of(line);
+        let at = |t: &str| line.find(t).unwrap();
+        assert_eq!(s.flags[at("$\\frac")], MK);
+        assert_eq!(s.flags[at("\\frac")], MATH);
+        assert_eq!(s.flags[at("c$")], CODE);
+        assert_eq!(s.flags[at("5")], 0);
+        assert_eq!(s.flags[at("d$")], MATH);
+        let spans: Vec<_> = s
+            .maths
+            .iter()
+            .map(|m| (&line[m.content()], m.display))
+            .collect();
+        assert_eq!(spans, [(r"\frac{1}{2}", false), ("d", true)]);
+        assert!(s.atoms.contains(&(at("$\\frac"), at(" b"))));
+        // Each formula is followed by its rendering (a widget, not text).
+        let html = line_html_with("$x$$y$", &flags_of("$x$$y$"), &|d| d.to_string());
+        assert_eq!(html.matches("<span class=\"w mw\"").count(), 2, "{html}");
+        assert!(html.contains("<math>"), "{html}");
+        // Without widgets: only the text.
+        assert!(!line_html("$x$", &flags_of("$x$")).contains("<math"));
     }
 
     #[test]

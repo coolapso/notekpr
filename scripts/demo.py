@@ -55,12 +55,15 @@ AGENT_PROFILE = "assistant"
 
 def note(text):
     """Dedented, and with each paragraph on one line, as editors write them
-    (wrapped here only to keep this file readable)."""
-    out, code = [], False
+    (wrapped here only to keep this file readable). Code blocks and blocks
+    of display math (`$$` lines) stay as they are."""
+    out, code, math = [], False, False
     for line in textwrap.dedent(text).lstrip("\n").splitlines():
         if line.startswith("```"):
             code = not code
-        elif not code and out and continues(out[-1], line):
+        elif not code and line.strip() == "$$":
+            math = not math
+        elif not code and not math and out and continues(out[-1], line):
             out[-1] += " " + line.strip().removeprefix("> ")
             continue
         out.append(line)
@@ -77,7 +80,7 @@ def continues(prev, line):
         return False
     if prev.startswith("> ") and line.startswith("> "):
         return True
-    starts_block = re.compile(r"([-*+] |\d+\. |\||#|>|```|---|\[\^|<)")
+    starts_block = re.compile(r"([-*+] |\d+\. |\||#|>|```|---|\[\^|<|\$\$)")
     return not starts_block.match(prev) and not starts_block.match(line)
 
 
@@ -418,6 +421,7 @@ HOME = [
         - [ ] Callouts, written as GitHub and Obsidian write them (`> [!tip]`, `> [!warning] A title`): a tip and a warning in [[Sourdough bread]], one that folds in [[Japan ideas]] (`[!faq]-`), GitHub's `[!CAUTION]` in *Deploy script* in *Work*, one inside another in *Emergency contacts* in *Family*. The toolbar's callout button starts one, or gives the one the caret is in another type
         - [ ] Colors: select some text and pick a text or background color with the toolbar's **A** button. They are saved as HTML that Obsidian, Typora and VS Code show too ([[Tomatoes]]), and colors written there show here ([[Packing list]] has a highlight from Obsidian's Highlightr and a `<font color>`)
         - [ ] From Notion: export a page or database as HTML there (⋯ → Export, with subpages), then *Import notes* → *Import from Notion…* with its `.zip`. It shows what the export holds first; databases become folders of notes with a table of their rows, tasks checklists, and *Imported from Notion* lists what didn't come along. Import the same `.zip` again: what came already is left out
+        - [ ] Math and chemistry: [[Soil chemistry]] has formulas in its lines (`$…$`), formulas of their own (`$$…$$`) and chemical equations (`\\ce{…}`). Click one to see its LaTeX; a formula of its own keeps showing under it as you edit it. Write `$x^2$` anywhere
         - [ ] Code blocks in *Snippets*: a file name and highlighted lines (`title=… hl=…` after the language), line numbers, indentation guides, a copy button, `wrap=false` for long lines; Settings → Editor turns the numbers, guides and wrapping off
         - [ ] Drop or paste a picture into a note — or a video or a recording: it plays where it is, as the sunset in [[Lisbon 2026]] and the blackbird in [[Pests]] do. It goes to `attachments/` in the note's folder (*Garden*'s are in *Garden/attachments*)
         - [ ] Open a file: *garden-layout.png* in *Garden/attachments* in the sidebar, or the link to it in [[Garden plan]]'s side panel. Its page shows it, and *Used in*: the *Garden beds* drawing, the [[Garden plan]] and a journal entry. Rename, move or download it from there
@@ -501,6 +505,58 @@ HOME = [
         > "The land is the real teacher." — from [[Braiding Sweetgrass]]
 
         The finished compost goes on the beds in spring (see [[Garden plan]]).
+        """)),
+    ("Garden/Soil chemistry.md", "🧪", note(r"""
+        # Soil chemistry
+
+        Why the beds want what they want, from the soil test in the
+        [[Garden plan]]. Formulas are LaTeX (`$…$`, `$$…$$`), chemistry is
+        mhchem's `\ce{…}`, as in Obsidian and Joplin: click one to see it.
+        #garden
+
+        ## Acidity
+
+        The test said pH 5.8, a bit sour for [[Tomatoes]] (they like 6.2 to
+        6.8). The pH is $\mathrm{pH} = -\log_{10}[\ce{H+}]$, so 5.8 is about
+        $10^{0.6} \approx 4$ times as acidic as 6.4.
+
+        Garden lime neutralizes it, giving off carbon dioxide:
+        $\ce{CaCO3 + 2H+ -> Ca^2+ + H2O + CO2 ^}$
+
+        How much: for a bed of $A$ square metres, raising the pH by
+        $\Delta\mathrm{pH}$ takes about
+
+        $$
+        m_{\text{lime}} \approx 250\,\tfrac{\text{g}}{\text{m}^2} \times A \times \frac{\Delta\mathrm{pH}}{0.5}
+        $$
+
+        so bed 1 ($A = 3.2$) needs $\approx 480\,\text{g}$ for $+0.3$.
+
+        ## Nitrogen
+
+        In the [[Composting]] bins, bacteria turn ammonium into nitrate, which
+        the roots take up:
+
+        $$\ce{NH4+ + 2O2 ->[\text{nitrifying bacteria}] NO3- + H2O + 2H+}$$
+
+        Ammonia and ammonium balance each other with the pH:
+        $\ce{NH3 + H2O <=> NH4+ + OH-}$. Fresh grass clippings smell of
+        ammonia when the heap is too wet.
+
+        ## Leaves
+
+        Photosynthesis, what the beds are for:
+
+        $$
+        \ce{6CO2 + 6H2O ->[\text{light}][\text{chlorophyll}] C6H12O6 + 6O2}
+        $$
+
+        Nitrogen fertilizer comes from the Haber process:
+        $\ce{N2 + 3H2 <=>[\pu{450 °C}][\pu{200 atm}] 2NH3}$, about
+        $\pu{-92 kJ/mol}$.
+
+        Bought tomatoes cost $3 a kilo; ours cost $0. (Dollars before a
+        number stay prices.)
         """)),
     ("Garden/Watering schedule.md", None, note("""
         # Watering schedule

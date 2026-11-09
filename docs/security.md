@@ -388,7 +388,10 @@ reported, never applied partially. Duplicate deliveries are no-ops.
   (`crates/editor/src/color.rs`), so no CSS from a note reaches the page.
   Links and images in HTML follow the Markdown rules. The editor's preview of
   an HTML block is parsed into its own element, so no stray tag reaches the
-  editor's lines. A strict Content-Security-Policy (`script-src 'self'
+  editor's lines. Math is MathML written by math-core from the LaTeX, escaped
+  by construction (text is text, colors are checked, no links); a formula
+  nested deep enough to overflow the stack is refused before it is
+  converted. A strict Content-Security-Policy (`script-src 'self'
   'wasm-unsafe-eval'`, no inline scripts or event handlers, `frame-src
   'none'`, `frame-ancestors 'none'`, `object-src 'none'`) is a second layer.
   External images are not loaded (also prevents tracking pixels), and there

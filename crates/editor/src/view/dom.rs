@@ -14,6 +14,8 @@ use web_sys::{Document, Element, HtmlElement, Node};
 use crate::callout;
 use crate::code;
 use crate::html;
+use crate::math;
+use crate::state::Preview;
 use crate::syntax::{self, Block};
 use crate::text::{byte_to_utf16, utf16_to_byte};
 
@@ -67,9 +69,10 @@ pub struct LineJob {
     pub idx: usize,
     pub text: String,
     pub block: Block,
-    /// On the last line of an HTML block: the block's source, for its
-    /// preview ([`crate::state::EditorState::html_source`]).
-    pub html: Option<String>,
+    /// On the last line of a block shown as a preview (an HTML block, a
+    /// block of display math): what it shows
+    /// ([`crate::state::EditorState::preview`]).
+    pub preview: Option<Preview>,
 }
 
 pub struct Rendered {
@@ -80,7 +83,7 @@ pub struct Rendered {
     /// The rendering depends on the host (link targets, image URLs), so
     /// `refresh` must look at it again.
     pub dynamic: bool,
-    /// The content of the line's HTML preview widget ([`fill_widget`]).
+    /// The content of the line's preview widget ([`fill_widget`]).
     pub widget: Option<String>,
 }
 
@@ -91,9 +94,9 @@ pub struct Rendered {
 /// a callout without a title on its first
 /// line (as its title), the indentation guides of a line of code (no text),
 /// each date's label (after the date, inline: Today, Tomorrow, … or the
-/// date),
-/// the rendered preview of an HTML block on its last line (an empty element
-/// here, filled by [`fill_widget`]).
+/// date), each formula's rendering (after it, inline),
+/// the rendered preview of an HTML block or a block of display math on its
+/// last line (an empty element here, filled by [`fill_widget`]).
 pub fn render_line(
     job: LineJob,
     link_exists: &dyn Fn(&str) -> bool,
@@ -132,13 +135,22 @@ pub fn render_line(
         html.push_str(&code::head_html(info, false));
         html.push_str("</span>");
     }
-    let widget = job
-        .html
-        .as_deref()
-        .map(|src| html_preview(src, image_url))
-        .filter(|w| !w.trim().is_empty());
+    // An HTML block's preview hides while the selection is in the block
+    // (`hw`); a formula's stays under its source as it is edited (`mb`).
+    let (widget, class) = match &job.preview {
+        Some(Preview::Html(src)) => (Some(html_preview(src, image_url)), "w hw"),
+        Some(Preview::Math(tex)) => {
+            let mut w = String::new();
+            math::html(tex, true, &mut w);
+            (Some(w), "w mb")
+        }
+        None => (None, ""),
+    };
+    let widget = widget.filter(|w| !w.trim().is_empty());
     if widget.is_some() {
-        html.push_str("<span class=\"w hw\" contenteditable=\"false\" data-w=\"1\"></span>");
+        html.push_str("<span class=\"");
+        html.push_str(class);
+        html.push_str("\" contenteditable=\"false\" data-w=\"1\" data-fill=\"1\"></span>");
     }
     let class = job.block.class();
     let mut h = std::collections::hash_map::DefaultHasher::new();
@@ -232,12 +244,12 @@ fn html_preview(src: &str, image_url: &dyn Fn(&str) -> Option<String>) -> String
     )
 }
 
-/// Put a line's HTML preview into its widget. The preview is parsed on its
-/// own, with the widget as its context, so no tag in it (a stray `</span>`,
-/// say) can reach the line or the lines after it.
+/// Put a line's preview into its widget. The preview is parsed on its own,
+/// with the widget as its context, so no tag in it (a stray `</span>`, say)
+/// can reach the line or the lines after it.
 pub fn fill_widget(line: &Element, r: &Rendered) {
     if let Some(w) = &r.widget
-        && let Ok(Some(el)) = line.query_selector(":scope > .hw")
+        && let Ok(Some(el)) = line.query_selector(":scope > [data-fill]")
     {
         el.set_inner_html(w);
     }

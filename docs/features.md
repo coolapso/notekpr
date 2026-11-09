@@ -37,6 +37,16 @@ a Mac). The [README](../README.md) has the short version.
   that don't wrap but scroll sideways (`wrap=false`) — they stay plain
   Markdown. A new block from the toolbar or `` Ctrl+Shift+` ``; Enter (or
   pasting) after an opening `` ``` `` closes the block.
+* Math in LaTeX, as Obsidian, Joplin and GitHub write it: `$e^{i\pi}+1=0$`
+  in a line, `$$…$$` on lines of its own for a formula set apart. It shows
+  typeset once the caret leaves the line (a block of math keeps its
+  formula under the source while you edit it), and in the reading view;
+  one that can't be typeset shows its source in red, saying why. A dollar
+  sign before a number stays a price (`$5 and $10`); `\$` is always one.
+* Chemistry in formulas, with mhchem's notation as Joplin and Obsidian
+  have it: `$\ce{2H2 + O2 -> 2H2O}$`, ions (`\ce{SO4^2-}`), isotopes
+  (`\ce{^{14}C}`), states, precipitates and gases, bonds, equilibria with
+  conditions (`\ce{A <=>[\Delta] B}`); units with `\pu{123 kJ/mol}`.
 * Images and other files: paste or drop them into a note — they are encrypted,
   uploaded and shown inline; videos and audio (`![[clip.mp4]]`) play there,
   in the editor and the reading view. They go to `attachments/` in the

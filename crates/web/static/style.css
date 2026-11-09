@@ -659,6 +659,53 @@ button.list-row:hover:not(:disabled) { background: var(--bg-2); }
 .ed .hw a { color: var(--link); text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
 .ed.live .ln.html:not(.active) { font-size: 0; line-height: 0; }
 .ed.live .ln.active .hw { display: none; }
+/* Math (LaTeX, shown as MathML). Inline formulas (`$…$`) show rendered
+   away from the caret's line, as dates do; on it, their source. A block of
+   display math (`$$` lines) folds to its formula, on its last line; with
+   the selection in it, its source shows and the formula stays under it. */
+@font-face { font-family: "notekpr math"; src: url(/fonts/NotoSansMath/NotoSansMath-Regular.woff2) format("woff2"); font-display: swap; }
+math { font-family: "notekpr math", math; }
+/* `\text{…}` in the app's font, as LaTeX writes it in the document's. */
+mtext { font-family: var(--sans); }
+mtext code { font-family: var(--mono); }
+mtext span.math-core-serif-font { font-family: serif; }
+mtext span.math-core-sans-serif-font { font-family: var(--sans); }
+/* math-core's mathmlfixes.css (v0.9.0, MIT), which its MathML expects:
+   MathML Core's cell padding, <menclose> for Chromium (\cancel, \sout,
+   \boxed), the accent gap of Chromium and Safari. Unknown commands red. */
+merror.math-core-unknown-cmd { border: unset; background-color: unset; color: var(--fg-red); }
+mtd { padding: 0.5ex 0.4em; }
+mtr > mtd:first-child { padding-left: 0; }
+mtr > mtd:last-child { padding-right: 0; }
+@supports (not (-webkit-backdrop-filter: blur(1px))) and (not (-moz-appearance: none)) {
+  menclose { position: relative; padding: 0.5ex 0; }
+  menclose[notation~="box" i] { border: 0.04em solid; padding: 0.3rem; }
+  menclose[notation~="actuarial" i] { padding: 0.03889rem 0.03889rem 0 0.03889rem; border-width: 0.08em 0.08em 0em 0em; border-style: solid; margin-right: 0.03889rem; }
+  menclose[notation~="phasorangle" i] { border-bottom: 0.067em solid; padding: 0.2em 0.2em 0.1em 0.6em; }
+  mrow.menclose-phasorangle {
+    display: inline-block; position: absolute; left: 0.5px; bottom: -0.04em; height: 100%; aspect-ratio: 0.5; background-color: currentcolor;
+    clip-path: polygon(0.05em 100%, 0 calc(100% - 0.05em), calc(100% - 0.05em) 0, 100% 0.05em);
+  }
+  mrow.menclose-updiagonalstrike, mrow.menclose-downdiagonalstrike {
+    display: inline-block; position: absolute; left: 0.5px; bottom: 0; width: 100%; height: 100%; background-color: currentcolor;
+  }
+  mrow.menclose-updiagonalstrike { clip-path: polygon(0.05em 100%, 0 calc(100% - 0.05em), calc(100% - 0.05em) 0, 100% 0.05em); }
+  mrow.menclose-downdiagonalstrike { clip-path: polygon(0em 0.05em, 0.05em 0em, 100% calc(100% - 0.05em), calc(100% - 0.05em) 100%); }
+}
+@supports (not (-moz-appearance: none)) {
+  mover[accent="true" i] > mo:nth-child(2) { margin-bottom: 0.15ex; }
+}
+.ed .mth { font-family: var(--mono); font-size: 0.88em; color: var(--fg-2); }
+.ed .w.mw { display: none; }
+.ed.live .ln:not(.active) .mth { display: none; }
+.ed.live .ln:not(.active) .w.mw { display: inline; }
+.ed.live .ln:not(.active) .w.mw.md { display: block; overflow-x: auto; overflow-y: hidden; }
+.ed .ln.math { font-family: var(--mono); font-size: 14px; color: var(--fg-2); }
+.ed.live .ln.math:not(.active) { font-size: 0; line-height: 0; }
+.ed .w.mb { font-family: var(--sans); font-size: 16px; line-height: 1.7; color: var(--fg); padding: 4px 0; overflow-x: auto; overflow-y: hidden; cursor: text; }
+.ed.live .ln.math.active .w.mb { margin-top: 4px; border-top: 1px dashed var(--border); }
+.merr { font-family: var(--mono); font-size: 0.88em; color: var(--fg-red); text-decoration: underline wavy; text-decoration-color: var(--fg-red); text-underline-offset: 3px; cursor: help; }
+.reading .mathblock { display: block; overflow-x: auto; overflow-y: hidden; margin: 0.6em 0; }
 /* Line numbers (Settings → Editor): one for each line of the Markdown —
    each is one .ln — counted with a CSS counter, so nothing is added to the
    text. They sit in the margin, which the text's box takes in (it clips:
@@ -676,7 +723,8 @@ button.list-row:hover:not(:disabled) { background: var(--bg-2); }
   font: 400 12px/var(--ln-h) var(--mono); color: var(--muted); opacity: 0.7; text-decoration: none;
   white-space: nowrap; pointer-events: none; user-select: none;
 }
-.line-numbers .ed.live .ln.fence:not(.active)::after, .line-numbers .ed.live .ln.html:not(.active)::after { content: none; }
+.line-numbers .ed.live .ln.fence:not(.active)::after, .line-numbers .ed.live .ln.html:not(.active)::after,
+.line-numbers .ed.live .ln.math:not(.active)::after { content: none; }
 /* Relative: the caret's line (.cur; --ln-cur, its number, set by the
    editor) keeps its own number; above it, a counter (up) counts down to
    it, below it another (down) counts on from it. Code lines and a table's

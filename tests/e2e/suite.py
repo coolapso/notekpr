@@ -2981,6 +2981,68 @@ def test_callouts(env):
         b.close()
 
 
+def test_math(env):
+    b = Browser()
+    paste = "const dt = new DataTransfer(); dt.setData('text/plain', arguments[0]); document.querySelector('.ed').dispatchEvent(new ClipboardEvent('paste', {clipboardData: dt, bubbles: true, cancelable: true}));"
+    # Whether the text (not the widgets) of the lines matching a selector takes no room.
+    folded = """return Array.from(document.querySelectorAll(arguments[0])).every(l =>
+        Array.from(l.childNodes).filter(n => !(n.dataset && 'w' in n.dataset)).every(n => {
+            const r = document.createRange(); r.selectNodeContents(n); return r.getBoundingClientRect().height === 0; }))"""
+    try:
+        signup(b, uniq("mth"))
+        new_note(b, "Math", "")
+        body = ("Euler: $e^{i\\pi} + 1 = 0$, prices $5 and $10.\n\n\\$x$ is money.\n\n"
+                "$$\n\\frac{a}{b} = \\sqrt{x^2}\n$$\n\n"
+                "Water: $\\ce{2H2 + O2 -> 2H2O}$ and $\\frac{1}$\n\nend")
+        b.js(paste, body)
+        time.sleep(0.6)
+        check(editor_text(b) == body, "the editor keeps math as its LaTeX")
+        b.chord(KEYS["ctrl"], KEYS["end"])
+        time.sleep(0.4)
+        # Inline: typeset away from the caret's line, one per formula.
+        first = ".ed .ln:first-child"
+        check(b.js("return document.querySelectorAll(arguments[0] + ' .w.mw math').length", first) == 1, "a formula in a line is typeset, the prices aren't")
+        check(b.js("return getComputedStyle(document.querySelector(arguments[0] + ' .w.mw')).display", first) == "inline", "away from the caret")
+        check(b.js("return Array.from(document.querySelectorAll(arguments[0] + ' .mth')).every(m => getComputedStyle(m).display === 'none')", first), "its LaTeX hidden")
+        # A block of display math folds to its formula.
+        check(b.js("return !!document.querySelector('.ed .ln.math.mc .w.mb math[display=block] mfrac')"), "a block of math shows its formula on its last line")
+        check(b.js(folded, ".ed .ln.math"), "its source folds away")
+        # Chemistry, and a formula that can't be typeset.
+        water = b.js("return Array.from(document.querySelectorAll('.ed .ln')).find(l => l.textContent.startsWith('Water'))"
+                     ".querySelectorAll('.w.mw').length")
+        check(water == 2, "chemistry and a broken formula each get a widget")
+        check(b.js("return !!document.querySelector('.ed .w.mw math') && !document.querySelector('.ed .w.mw').textContent.includes('\\\\ce')"), "chemistry is typeset")
+        check(b.js("return document.querySelector('.ed .w.mw .merr').textContent") == "$\\frac{1}$", "a broken formula shows its source")
+        check(bool(b.js("return document.querySelector('.ed .w.mw .merr').title")), "saying why")
+        b.shot("math-editing")
+        # A click on a block's formula: its source, the formula still under it.
+        b.click(".ed .w.mb math")
+        time.sleep(0.4)
+        check(b.js("return document.querySelectorAll('.ed .ln.math.active').length") == 3, "a click on a formula shows its source")
+        check(not b.js(folded, ".ed .ln.math"), "the source shows")
+        check(b.js("return getComputedStyle(document.querySelector('.ed .ln.math.active .w.mb')).display") != "none", "and the formula stays under it")
+        b.keys(KEYS["end"] + " + 1")
+        time.sleep(0.4)
+        check("\\sqrt{x^2} + 1\n$$" in editor_text(b), "typing goes into the formula")
+        check(b.js("return document.querySelector('.ed .w.mb math').textContent.includes('1')"), "which is typeset again as it changes")
+        b.chord(KEYS["ctrl"], KEYS["end"])
+        time.sleep(0.4)
+        check(b.js(folded, ".ed .ln.math"), "away from it, folded again")
+        # The reading view.
+        b.click(".seg button[title^='Reading']")
+        b.find(".reading math", 10)
+        maths = b.js("return Array.from(document.querySelectorAll('.reading math')).map(m => m.textContent)")
+        check(len(maths) == 3, f"the reading view typesets the same formulas ({maths})")
+        check(b.js("return !!document.querySelector('.reading .mathblock math[display=block]')"), "a block as a block")
+        text = b.js("return document.querySelector('.reading').textContent")
+        check("prices $5 and $10." in text and "$x$ is money." in text, "prices and escaped dollars stay text")
+        check(b.js("return !!document.querySelector('.reading .merr')"), "a broken formula shows as one")
+        b.shot("math-reading")
+        check(not severe_logs(b), "no browser errors")
+    finally:
+        b.close()
+
+
 def test_colors(env):
     b, m = Browser(), Browser(390, 844)
     red, yellow = '<span style="color: #e44045">', '<span style="background-color: #ffd0004d">'
@@ -3575,7 +3637,7 @@ def test_device_code(env):
         a.close()
 
 
-TESTS = [test_onboarding, test_collab, test_devices_and_recovery, test_features, test_attachments, test_attachments_beside_notes, test_export_import, test_notion_import, test_delete_account, test_move_to_vault, test_note_sharing, test_tables, test_code_blocks, test_html, test_callouts, test_colors, test_code_wrapping, test_vim, test_line_numbers, test_bullets, test_editor_mouse, test_editor_safety, test_local_copy, test_ui_basics, test_offline_tabs, test_offline_start, test_mobile, test_quick_notes, test_vault_cards, test_vault_icons, test_entry_icons, test_tree_order, test_session_ended_while_away, test_outdated, test_comments, test_mentions, test_dates, test_graph, test_recovered_copy, test_note_width, test_admin, test_vault_storage, test_vault_admins, test_owners, test_undo_purge, test_device_code]
+TESTS = [test_onboarding, test_collab, test_devices_and_recovery, test_features, test_attachments, test_attachments_beside_notes, test_export_import, test_notion_import, test_delete_account, test_move_to_vault, test_note_sharing, test_tables, test_code_blocks, test_html, test_callouts, test_math, test_colors, test_code_wrapping, test_vim, test_line_numbers, test_bullets, test_editor_mouse, test_editor_safety, test_local_copy, test_ui_basics, test_offline_tabs, test_offline_start, test_mobile, test_quick_notes, test_vault_cards, test_vault_icons, test_entry_icons, test_tree_order, test_session_ended_while_away, test_outdated, test_comments, test_mentions, test_dates, test_graph, test_recovered_copy, test_note_width, test_admin, test_vault_storage, test_vault_admins, test_owners, test_undo_purge, test_device_code]
 
 
 def main():

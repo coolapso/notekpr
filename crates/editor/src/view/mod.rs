@@ -58,7 +58,7 @@ use crate::state::{
     Anchor, Applied, EditorState, Mark, Mode, Origin, RemoteCursor, Report, Selection, Transaction,
     merge_native,
 };
-use crate::syntax::{self, Target};
+use crate::syntax::{self, Block, Target};
 use crate::text::{LineSplice, utf16_to_byte};
 use crate::vim;
 use dom::{LineJob, Rendered, document};
@@ -651,7 +651,7 @@ impl Editor {
                     idx: i,
                     text: st.doc().line(i).to_string(),
                     block: st.block(i).clone(),
-                    html: st.html_source(i),
+                    preview: st.preview(i),
                 })
                 .collect::<Vec<_>>()
         });
@@ -902,7 +902,7 @@ impl Editor {
                     idx: i,
                     text: st.doc().line(i).to_string(),
                     block: st.block(i).clone(),
-                    html: st.html_source(i),
+                    preview: st.preview(i),
                 })
                 .collect::<Vec<_>>();
             let s = st.selection();
@@ -990,7 +990,7 @@ impl Editor {
                     idx: i,
                     text: doc.line(i).to_string(),
                     block: st.block(i).clone(),
-                    html: st.html_source(i),
+                    preview: st.preview(i),
                 })
                 .collect();
             Some(Out {
@@ -2137,14 +2137,14 @@ impl Editor {
         Editor::listen(this, &root, "mousedown", |ed, e| {
             ed.run_now(|ed| ed.on_mousedown(e.unchecked_ref()));
         });
-        // A click in an HTML block's preview was handled on mousedown; its
-        // own default (a `summary` opening its `details`) would only change
-        // a preview that is about to hide.
+        // A click in a block's preview was handled on mousedown; its own
+        // default (a `summary` opening its `details`) would only change a
+        // preview that is about to hide.
         Editor::listen(this, &root, "click", |_ed, e| {
             let in_preview = e
                 .target()
                 .and_then(|t| t.dyn_into::<Element>().ok())
-                .and_then(|t| t.closest(".hw").ok().flatten())
+                .and_then(|t| t.closest(".hw, .mb").ok().flatten())
                 .is_some();
             if in_preview {
                 e.prevent_default();
@@ -2730,10 +2730,10 @@ impl Editor {
             .and_then(|l| l.dyn_ref::<Element>())
             .is_some_and(|l| l.class_list().contains("active"));
         let readonly = self.model(|st| st.readonly);
-        // The preview of an HTML block (which stands in for its source away
-        // from the caret): a link opens, anywhere else puts the caret at the
-        // start of the block, which shows its source.
-        if let Some(preview) = target.closest(".hw").ok().flatten() {
+        // The preview of an HTML block or a formula (which stands in for its
+        // source away from the caret): a link opens, anywhere else puts the
+        // caret in the block, which shows its source.
+        if let Some(preview) = target.closest(".hw, .mb").ok().flatten() {
             ev.prevent_default();
             if ev.button() != 0 {
                 return;
@@ -2752,10 +2752,19 @@ impl Editor {
                     Target::Url(href.to_string())
                 };
                 self.host.open_link(&target, ev.ctrl_key() || ev.meta_key());
-            } else if let Some(tr) = self.model(move |st| {
-                let at = st.doc().line_start(st.html_block(idx)?.start);
-                Some(Transaction::select(st.doc().len(), Selection::new(at, at)))
-            }) {
+            } else if !line_active
+                && let Some(tr) = self.model(move |st| {
+                    let b = st.preview_block(idx)?;
+                    let doc = st.doc();
+                    // A formula's caret goes where it starts (after `$$`).
+                    let at = match st.block(b.start) {
+                        Block::Math { .. } if b.len() > 2 => doc.line_start(b.start + 1),
+                        Block::Math { .. } => doc.line_start(b.start) + doc.line(b.start).len(),
+                        _ => doc.line_start(b.start),
+                    };
+                    Some(Transaction::select(doc.len(), Selection::new(at, at)))
+                })
+            {
                 let _ = self.root.focus();
                 self.dispatch(tr);
             }
@@ -2861,8 +2870,9 @@ fn active_lines(st: &EditorState) -> Vec<Range<usize>> {
             out.extend(close.map(|c| c..c + 1));
         }
         // An HTML block shows its source, without the preview, while the
-        // selection is in it.
-        out.extend(st.html_block(line));
+        // selection is in it; a block of display math its source, the
+        // formula still under it.
+        out.extend(st.preview_block(line));
     }
     crate::decorations::merge_ranges(out)
 }

@@ -11,6 +11,9 @@
 //!
 //! * Mermaid's strict security level, which no diagram can change: labels
 //!   are sanitized, `click` runs nothing.
+//! * Labels keep no `id`, `name` or `data-*` attributes ([`SANITIZER`]):
+//!   the app finds its own elements by those (a note link's `data-note`,
+//!   a task's `data-task`), and a diagram must not pass for one.
 //! * merman's interactive resource policy bounds the work and output.
 //! * Links (`click A href "…"`) open web and mail addresses in a new tab;
 //!   any other link is dropped ([`links`]).
@@ -41,7 +44,8 @@ pub struct Options<'a> {
     pub id: &'a str,
 }
 
-/// Settings no diagram can change with `%%{init: …}%%` (Mermaid's own list).
+/// Settings no diagram can change with `%%{init: …}%%`: Mermaid's own
+/// list, and the sanitizer's settings.
 const SECURE: &[&str] = &[
     "secure",
     "securityLevel",
@@ -49,7 +53,15 @@ const SECURE: &[&str] = &[
     "maxTextSize",
     "suppressErrorRendering",
     "maxEdges",
+    "dompurifyConfig",
 ];
+
+/// How labels are sanitized (Mermaid's `dompurifyConfig`, DOMPurify's
+/// names): as by default, but without the attributes the app finds its own
+/// elements by. Setting it at all lets `<style>` through, unless forbidden
+/// here as Mermaid does when it isn't set.
+const SANITIZER: &str =
+    r#"{"ALLOW_DATA_ATTR": false, "FORBID_ATTR": ["id", "name"], "FORBID_TAGS": ["style"]}"#;
 
 /// `src` (a diagram in Mermaid's language) as SVG, its text measured with
 /// `width(text, style)` in CSS pixels; or why it can't be drawn.
@@ -63,6 +75,8 @@ pub fn render(
         "fontFamily": opts.font,
         "securityLevel": "strict",
         "secure": SECURE,
+        "dompurifyConfig": serde_json::from_str::<serde_json::Value>(SANITIZER)
+            .map_err(|e| e.to_string())?,
     }));
     let renderer =
         Renderer::new().with_presentation_engine(MermaidEngine::new().with_site_config(site));
@@ -330,6 +344,39 @@ mod tests {
                 "{level}: {svg}"
             );
         }
+    }
+
+    /// Nothing in a label passes for one of the app's own elements: no ids
+    /// (`getElementById`) or names, and no `data-*` attributes (a note
+    /// link's `data-note`, a task's `data-task`, a comment's
+    /// `data-thread`), whatever the diagram asks for.
+    #[test]
+    fn labels_are_not_the_apps_elements() {
+        let label = "A[\"<span id='app' name='x' data-note='n1' data-task='3' \
+                     class='task' data-thread='t'>a</span><a data-create='Evil'>b</a>\"] --> B";
+        for init in [
+            "",
+            "%%{init: {\"dompurifyConfig\": {\"ALLOW_DATA_ATTR\": true, \"FORBID_ATTR\": [], \
+             \"ADD_TAGS\": [\"style\", \"iframe\"]}}}%%\n",
+            "%%{init: {\"flowchart\": {\"htmlLabels\": false}}}%%\n",
+        ] {
+            let svg = draw(&format!("{init}flowchart LR\n  {label}")).unwrap();
+            assert!(svg.contains(">a</span>"), "{init}{svg}");
+            for bad in [
+                "id=\"app\"",
+                "name=",
+                "data-note",
+                "data-task",
+                "data-thread",
+                "data-create",
+                "<iframe",
+            ] {
+                assert!(!svg.contains(bad), "{bad} in {init}{svg}");
+            }
+        }
+        // merman's own attributes stay.
+        let svg = draw("flowchart LR\n  A --> B").unwrap();
+        assert!(svg.contains("data-id=\"A\""), "{svg}");
     }
 
     /// Every rule of a diagram's style sheet is about that diagram (its

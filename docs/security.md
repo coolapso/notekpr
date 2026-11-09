@@ -393,7 +393,9 @@ reported, never applied partially. Duplicate deliveries are no-ops.
   nested deep enough to overflow the stack is refused before it is
   converted. A Mermaid diagram is SVG from merman (`crates/diagram`) at
   Mermaid's strict security level, which no diagram can loosen: labels are
-  sanitized (no scripts, event handlers or frames), its style sheet only
+  sanitized (no scripts, event handlers or frames, and no ids or `data-*`
+  attributes, so nothing in a diagram passes for the app's own note links,
+  tasks or comments), its style sheet only
   styles that diagram (tested), links go only to web and mail addresses, in
   a new tab, and its box contains whatever its styles do (`contain: paint`:
   a `position: fixed` label can't cover the app). It runs in a WebAssembly

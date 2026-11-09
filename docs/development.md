@@ -588,11 +588,13 @@ app (2.3 MB), merman isn't part of it:
   overflow), the app gets an exception rather than dying with it, and
   loads a fresh copy (three times at most).
 * `render` sets Mermaid's `strict` security level and its `secure` list,
-  so no `%%{init: …}%%` can loosen it, measures text with a canvas, and
-  turns links into new-tab links to web and mail addresses only. Its tests
-  (`cargo test -p notekpr-diagram`) feed it hostile diagrams. The app's
-  Content-Security-Policy runs no inline script and loads no outside
-  image, whatever an SVG holds.
+  so no `%%{init: …}%%` can loosen it; takes ids and `data-*` attributes
+  out of labels (`SANITIZER`: the app finds its own elements by them,
+  `data-note`, `data-task`, …); measures text with a canvas; and turns
+  links into new-tab links to web and mail addresses only. Its tests
+  (`cargo test --manifest-path crates/diagram/Cargo.toml`) feed it hostile
+  diagrams. The app's Content-Security-Policy runs no inline script and
+  loads no outside image, whatever an SVG holds.
 * In the editor, a diagram is a code block whose closing fence shows the
   drawing (`Preview::Diagram`, from `Host::diagram`); the reading view asks
   `render::Ctx::diagram`.
@@ -604,8 +606,8 @@ Apache-2.0): its [THIRD_PARTY_NOTICES.md](https://github.com/Latias94/merman/blo
 scope `rust-render-base` plus `cytoscape`, lists them.
 
 **Upgrading merman.** Read its changelog and upgrade guide, raise the exact
-version in `crates/diagram/Cargo.toml`, then: `cargo test -p
-notekpr-diagram`, `task test:e2e -- -k diagram`, the size (`ls -la
+version in `crates/diagram/Cargo.toml`, then: `cargo test
+--manifest-path crates/diagram/Cargo.toml`, `task test:e2e -- -k diagram`, the size (`ls -la
 dist/web/pkg` after `task build:web`), and the demo's *Diagrams* note in
 both themes.
 

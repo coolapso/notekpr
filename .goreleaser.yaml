@@ -70,9 +70,7 @@ nfpms:
     package_name: notekpr-cli
     file_name_template: "{{ .ConventionalFileName }}"
     vendor: coolapso
-    
     homepage: https://notekpr.md
-
     maintainer: coolapso <c4s@coolapso.sh>
     description: |-
       The notekpr command-line client: end-to-end encrypted, local-first
@@ -112,9 +110,7 @@ nfpms:
 aurs:
   - name: notekpr-cli-bin
     ids: [linux]
-    
     homepage: https://notekpr.md
-
     description: Command-line client for notekpr, end-to-end encrypted Markdown notes
     maintainers: ["coolapso <c4s@coolapso.sh>"]
     license: AGPL-3.0-or-later

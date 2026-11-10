@@ -23,8 +23,15 @@ metadata:
   namespace: notekpr-demo
 spec:
   replicas: 1
+  # An update starts the new demo while the old one still serves, and stops
+  # the old one only once the new one is ready: one that never gets ready
+  # leaves the old one serving. Fine side by side, as neither keeps anything
+  # on a volume.
   strategy:
-    type: Recreate
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
   selector:
     matchLabels:
       app: notekpr-demo
@@ -76,12 +83,19 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /data
+            - name: tmp
+              mountPath: /tmp
       volumes:
         # Kept across container restarts; the demo deletes its data itself
         # (--fresh) when it starts again.
         - name: data
           emptyDir:
             sizeLimit: 2Gi
+        # Temporary files (SQLite's, exports): the root file system is
+        # read-only (operations.md, "A writable temporary directory").
+        - name: tmp
+          emptyDir:
+            sizeLimit: 1Gi
 ---
 apiVersion: v1
 kind: Service

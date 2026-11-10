@@ -106,7 +106,8 @@ becomes the administrator (§5).
 ### Kubernetes
 
 Edit and apply [`deploy/kubernetes/notekpr.yaml`](../deploy/kubernetes/notekpr.yaml)
-(single replica, `Recreate` strategy, a `ReadWriteOnce` volume) and optionally
+(single replica, `Recreate` strategy, a `ReadWriteOnce` volume, an
+`emptyDir` at `/tmp` for [temporary files](#a-writable-temporary-directory)) and optionally
 [`backup-cronjob.yaml`](../deploy/kubernetes/backup-cronjob.yaml). Both use
 `ghcr.io/coolapso/notekpr:latest`: pin a version in both to choose when you
 upgrade (§7). Put your ingress in front of the `notekpr` Service, with TLS
@@ -207,6 +208,16 @@ env file) counts as not set.
 | `--log-format` / `NOTEKPR_LOG_FORMAT` | `pretty` | `json` for structured logs (container image: `json`); level via `NOTEKPR_LOG` (e.g. `info,sqlx=warn`) |
 
 The server refuses to start without a login method (OIDC or dev mode).
+
+### A writable temporary directory
+
+The server needs one: SQLite writes temporary files there when a change or
+a query outgrows what it keeps in memory, and `export-user` writes its file
+there. It is `TMPDIR` if set, otherwise `/tmp`. Without one, saving fails
+now and then with `disk I/O error` in the log. A container with a read-only
+root file system needs one mounted: the Kubernetes manifests mount an
+`emptyDir` at `/tmp`; with Docker, `--tmpfs /tmp` (in Compose, `tmpfs:
+[/tmp]` next to `read_only: true`).
 
 ### Where attachments are kept
 
@@ -827,9 +838,11 @@ the corner of every page (the server's `--demo-resets-at`, which only works
 in development mode).
 
 On Kubernetes: [`deploy/kubernetes/demo.yaml`](../deploy/kubernetes/demo.yaml)
-(its own namespace; the data on an `emptyDir`, the only place the demo
-writes to — the root file system can stay read-only; ready once the data is
-seeded, so the ingress waits during the reset). Set `--public-url` to
+(its own namespace; the data on an `emptyDir` and temporary files on
+another at `/tmp`, the only places the demo writes to — the root file
+system can stay read-only; ready once the data is seeded, so the ingress
+waits during the reset; an update starts the new demo and stops the old one
+only once the new one is ready). Set `--public-url` to
 your host name and route to the `notekpr-demo` Service with TLS as for
 the real server (§4). Elsewhere, any restart policy works the same, e.g.
 `docker run --restart always -p 127.0.0.1:8096:8080 ghcr.io/coolapso/notekpr-demo --public-url https://demo.example.com`

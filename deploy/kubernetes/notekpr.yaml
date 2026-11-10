@@ -116,10 +116,17 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /data
+            - name: tmp
+              mountPath: /tmp
       volumes:
         - name: data
           persistentVolumeClaim:
             claimName: notekpr-data
+        # Temporary files (SQLite's, exports): the root file system is
+        # read-only (operations.md, "A writable temporary directory").
+        - name: tmp
+          emptyDir:
+            sizeLimit: 1Gi
 ---
 apiVersion: v1
 kind: Service

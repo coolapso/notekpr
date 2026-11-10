@@ -294,6 +294,13 @@ async fn serve(config: Config) -> anyhow::Result<()> {
         Some(n) => tracing::info!(open_files = n, "open-files limit"),
         None => {}
     }
+    let tmp = std::env::temp_dir();
+    if let Err(e) = notekpr_server::process::temp_dir_writable(&tmp) {
+        bail!(
+            "refusing to start: the temporary directory {} isn't writable ({e}). SQLite needs one (without it, saving fails now and then with \"disk I/O error\"), and so does export-user: set TMPDIR to a writable directory, or mount one at /tmp (docs/operations.md, \"A writable temporary directory\")",
+            tmp.display()
+        );
+    }
     if !config.public_url.starts_with("https://") && !is_local_url(&config.public_url) {
         tracing::warn!(public_url = %config.public_url, "public URL is not HTTPS; terminate TLS at a reverse proxy");
     }

@@ -213,8 +213,9 @@ The server refuses to start without a login method (OIDC or dev mode).
 
 The server needs one: SQLite writes temporary files there when a change or
 a query outgrows what it keeps in memory, and `export-user` writes its file
-there. It is `TMPDIR` if set, otherwise `/tmp`. Without one, saving fails
-now and then with `disk I/O error` in the log. A container with a read-only
+there. It is `TMPDIR` if set, otherwise `/tmp`. The server refuses to
+start without one, which would otherwise make saving fail now and then
+(`disk I/O error` in the log). A container with a read-only
 root file system needs one mounted: the Kubernetes manifests mount an
 `emptyDir` at `/tmp`; with Docker, `--tmpfs /tmp` (in Compose, `tmpfs:
 [/tmp]` next to `read_only: true`).

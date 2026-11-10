@@ -39,6 +39,17 @@ pub fn raise_open_files_limit() -> Option<u64> {
     None
 }
 
+/// Whether a file can be written in `dir`, the temporary directory (the
+/// server's is [`std::env::temp_dir`]: `TMPDIR`, otherwise `/tmp`). SQLite
+/// writes temporary files there when a change or a query outgrows memory,
+/// and without one saving fails now and then; `export-user` writes its file
+/// there. Leaves nothing behind.
+pub fn temp_dir_writable(dir: &std::path::Path) -> std::io::Result<()> {
+    let probe = dir.join(format!(".notekpr-{}", crate::db::new_id()));
+    drop(std::fs::File::create_new(&probe)?);
+    std::fs::remove_file(&probe)
+}
+
 /// Set `process_cpu_seconds_total` and `process_resident_memory_bytes`.
 pub fn record() {
     #[cfg(target_os = "linux")]
@@ -92,6 +103,14 @@ mod tests {
         assert_eq!(cpu_seconds("garbage"), None);
         let status = "Name:\tnotekpr\nVmPeak:\t  90000 kB\nVmRSS:\t   41000 kB\nThreads:\t9\n";
         assert_eq!(resident_bytes(status), Some(41_000 * 1024));
+    }
+
+    #[test]
+    fn a_temporary_directory_has_to_take_a_file() {
+        let dir = tempfile::tempdir().unwrap();
+        temp_dir_writable(dir.path()).unwrap();
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
+        assert!(temp_dir_writable(&dir.path().join("missing")).is_err());
     }
 
     #[cfg(unix)]

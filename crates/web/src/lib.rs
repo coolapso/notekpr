@@ -14,6 +14,7 @@ pub mod drawings;
 pub mod editor;
 pub mod emoji;
 pub mod graph;
+pub mod homescreen;
 pub mod knowledge;
 pub mod notion;
 pub mod quick;

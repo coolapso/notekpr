@@ -190,6 +190,12 @@ notekpr works in your phone's browser, and you can add it to the home
 screen: it then opens from its own icon, in a window of its own without
 the browser's bars, like any other app.
 
+The sign-in screen offers it: tap **Add to home screen**, and sign in from
+the new icon afterwards. On Android that opens the browser's own dialog:
+tap **Install** and it's done. On an iPhone or iPad no web page can add
+itself, so notekpr shows the steps below. **Not now** puts the offer away
+in that browser. Already signed in, or put it away? The steps:
+
 **iPhone and iPad**
 
 1. Open your notekpr address in Safari. Other browsers have the same under

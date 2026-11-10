@@ -236,6 +236,11 @@ textarea.input { resize: vertical; }
 .dev-box form { display: flex; gap: 8px; }
 .dev-box form .input { flex: 1; }
 .dev-quick { display: flex; gap: 6px; }
+/* A phone's sign-in screen: add notekpr to the home screen first (homescreen.rs). */
+.home-offer { border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border)); background: var(--accent-bg); border-radius: 12px; padding: 14px; display: flex; flex-direction: column; gap: 8px; }
+.home-offer-title { display: flex; gap: 6px; align-items: center; font-weight: 600; color: var(--accent); }
+.home-offer .steps { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 6px; color: var(--fg-2); }
+.home-offer .steps .ic { width: 16px; height: 16px; vertical-align: -3px; }
 .recovery-key { font-family: var(--mono); font-size: 16px; line-height: 1.7; padding: 14px; border-radius: 10px; background: var(--bg-2); border: 1px solid var(--border-strong); word-spacing: 6px; text-align: center; user-select: all; overflow-wrap: anywhere; }
 .verify-code { font-family: var(--mono); font-size: 26px; font-weight: 700; letter-spacing: 0.08em; text-align: center; padding: 14px; border-radius: 10px; background: var(--accent-bg); color: var(--accent); }
 .divider { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 12px; }

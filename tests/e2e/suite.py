@@ -522,6 +522,111 @@ def test_mobile(env):
         m.close()
 
 
+ANDROID_UA = ("Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) "
+              "Chrome/156.0.0.0 Mobile Safari/537.36")
+IPHONE_UA = ("Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 "
+             "(KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1")
+# An iPad's Safari says it is a Mac.
+MAC_SAFARI_UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 "
+                 "(KHTML, like Gecko) Version/18.0 Safari/605.1.15")
+
+# Stands in for the browser's dialog (it can't be answered here): the
+# event boot.js keeps, answering `outcome`.
+FAKE_DIALOG = """const outcome = arguments[0]; window.__dialogs = 0;
+    window.notekprHomeScreen = { prompt() { window.__dialogs++; return Promise.resolve({ outcome }); } };"""
+
+
+def test_home_screen(env):
+    """A phone's sign-in screen offers to add notekpr to the home screen:
+    one tap opens Android's dialog, an iPhone or iPad gets the steps. Not on
+    a computer, nor in notekpr opened from the home screen."""
+    offer = "return !!document.querySelector('.home-offer')"
+
+    def sign_in_page(b):
+        b.go(env.url)
+        b.find(".auth-card h1", 20)
+        time.sleep(0.3)
+
+    b = Browser(390, 844)
+    try:
+        sign_in_page(b)
+        check(not b.js(offer), "a computer isn't offered it")
+        # Chromium says notekpr can go on the home screen, without a service
+        # worker; boot.js keeps that for the offer.
+        b.wait("return !!window.notekprHomeScreen && window.notekprHomeScreen.type === 'beforeinstallprompt'", 20,
+               "the browser's event")
+        check(True, "boot.js keeps the browser's beforeinstallprompt")
+
+        cdp(b, "Emulation.setUserAgentOverride", {"userAgent": ANDROID_UA})
+        sign_in_page(b)
+        b.find(".home-offer", 10)
+        check("Add it first, then sign in there" in b.text(".home-offer"), "Android: offered on the sign-in screen")
+        b.shot("home-screen-android")
+        add = lambda: b.click_el(b.find_text(".home-offer button", "Add to home screen"))
+        b.wait("return !!window.notekprHomeScreen", 20, "the browser's event")
+        b.js(FAKE_DIALOG, "dismissed")
+        add()
+        b.wait("return window.__dialogs === 1", 5, "the dialog")
+        time.sleep(0.3)
+        check(b.js(offer) and not b.js("return !!document.querySelector('.home-offer .steps')"),
+              "one tap opens the browser's dialog; said no to, the offer stays")
+        add()
+        b.find(".home-offer .steps", 5)
+        check("Add to Home screen" in b.text(".home-offer .steps") and b.js("return window.__dialogs") == 1,
+              "a dialog opens once: then the steps for the browser's menu")
+        b.click_el(b.find_text(".home-offer button", "Done"))
+        b.wait("return !document.querySelector('.home-offer')", 5, "the offer goes")
+        sign_in_page(b)
+        check(not b.js(offer), "put away, it stays away in this browser")
+
+        b.js("localStorage.removeItem('notekpr.homescreen')")
+        sign_in_page(b)
+        b.wait("return !!window.notekprHomeScreen", 20, "the browser's event")
+        b.js(FAKE_DIALOG, "accepted")
+        add()
+        b.find_text(".home-offer", "Added", 5)
+        check(True, "added from the dialog: it says so")
+        sign_in_page(b)
+        check(not b.js(offer), "once added, it isn't offered again")
+
+        b.js("localStorage.removeItem('notekpr.homescreen')")
+        cdp(b, "Emulation.setUserAgentOverride", {"userAgent": IPHONE_UA})
+        # Opened from the home screen: Chromium can't pretend display-mode:
+        # standalone, but an iPhone's Safari also says so itself.
+        flag = cdp(b, "Page.addScriptToEvaluateOnNewDocument",
+                   {"source": "Object.defineProperty(navigator, 'standalone', { value: true })"})
+        sign_in_page(b)
+        check(not b.js(offer), "not offered in notekpr opened from the home screen")
+        cdp(b, "Page.removeScriptToEvaluateOnNewDocument", {"identifier": flag["identifier"]})
+
+        sign_in_page(b)
+        b.find(".home-offer", 10)
+        b.js("window.notekprHomeScreen = null")  # Safari has no dialog for it
+        add()
+        b.find(".home-offer .steps", 5)
+        steps = b.text(".home-offer .steps")
+        check("Add to Home Screen" in steps and "Open as Web App" in steps
+              and b.js("return !!document.querySelector('.home-offer .steps svg')"),
+              "iPhone: the steps, with Safari's Share icon")
+        b.shot("home-screen-iphone")
+        b.click_el(b.find_text(".home-offer button", "Done"))
+        b.js("localStorage.removeItem('notekpr.homescreen')")
+
+        cdp(b, "Emulation.setUserAgentOverride", {"userAgent": MAC_SAFARI_UA})
+        sign_in_page(b)
+        check(not b.js(offer), "a Mac isn't offered it")
+        cdp(b, "Emulation.setTouchEmulationEnabled", {"enabled": True, "maxTouchPoints": 5})
+        sign_in_page(b)
+        b.find(".home-offer", 10)
+        b.click_el(b.find_text(".home-offer button", "Not now"))
+        b.wait("return !document.querySelector('.home-offer')", 5, "the offer goes")
+        sign_in_page(b)
+        check(not b.js(offer), "an iPad (Safari says it is a Mac, with a touch screen) is offered it; Not now puts it away")
+        check(not severe_logs(b), "no browser errors")
+    finally:
+        b.close()
+
+
 def test_attachments(env):
     b = Browser()
     try:
@@ -3734,7 +3839,7 @@ def test_device_code(env):
         a.close()
 
 
-TESTS = [test_onboarding, test_collab, test_devices_and_recovery, test_features, test_attachments, test_attachments_beside_notes, test_export_import, test_notion_import, test_delete_account, test_move_to_vault, test_note_sharing, test_tables, test_code_blocks, test_html, test_callouts, test_math, test_diagrams, test_colors, test_code_wrapping, test_vim, test_line_numbers, test_bullets, test_editor_mouse, test_editor_safety, test_local_copy, test_ui_basics, test_offline_tabs, test_offline_start, test_mobile, test_quick_notes, test_vault_cards, test_vault_icons, test_entry_icons, test_tree_order, test_session_ended_while_away, test_outdated, test_comments, test_mentions, test_dates, test_graph, test_recovered_copy, test_note_width, test_admin, test_vault_storage, test_vault_admins, test_owners, test_undo_purge, test_device_code]
+TESTS = [test_onboarding, test_collab, test_devices_and_recovery, test_features, test_attachments, test_attachments_beside_notes, test_export_import, test_notion_import, test_delete_account, test_move_to_vault, test_note_sharing, test_tables, test_code_blocks, test_html, test_callouts, test_math, test_diagrams, test_colors, test_code_wrapping, test_vim, test_line_numbers, test_bullets, test_editor_mouse, test_editor_safety, test_local_copy, test_ui_basics, test_offline_tabs, test_offline_start, test_mobile, test_home_screen, test_quick_notes, test_vault_cards, test_vault_icons, test_entry_icons, test_tree_order, test_session_ended_while_away, test_outdated, test_comments, test_mentions, test_dates, test_graph, test_recovered_copy, test_note_width, test_admin, test_vault_storage, test_vault_admins, test_owners, test_undo_purge, test_device_code]
 
 
 def main():

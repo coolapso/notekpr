@@ -205,6 +205,11 @@ fn paths(name: &str) -> &'static str {
         "magnet" => {
             r#"<path d="M5 3.5h4.5V12a2.5 2.5 0 0 0 5 0V3.5H19V12a7 7 0 0 1-14 0z"/><path d="M5 8h4.5M14.5 8H19"/>"#
         }
+        "phone" => r#"<rect x="6" y="2.5" width="12" height="19" rx="2.5"/><path d="M11 18.5h2"/>"#,
+        // An iPhone's Share: a box with an arrow out of it.
+        "share-up" => {
+            r#"<path d="M8.5 9H7a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-8a2 2 0 0 0-2-2h-1.5M12 3v11M8.5 6.5 12 3l3.5 3.5"/>"#
+        }
         "smile" => {
             r#"<circle cx="12" cy="12" r="9"/><path d="M8.5 14.5a4.5 4.5 0 0 0 7 0M9 9.5h.01M15 9.5h.01"/>"#
         }

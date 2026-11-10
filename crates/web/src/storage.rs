@@ -489,6 +489,16 @@ pub fn set_ui_prefs(p: &UiPrefs) {
     set(local(), "notekpr.ui", &serde_json::to_string(p).unwrap());
 }
 
+/// The sign-in screen's offer to add notekpr to the home screen
+/// ([`crate::homescreen`]) was put away in this browser: "Not now", or done.
+pub fn home_screen_offer_hidden() -> bool {
+    get(local(), "notekpr.homescreen").is_some()
+}
+
+pub fn hide_home_screen_offer() {
+    set(local(), "notekpr.homescreen", "hidden");
+}
+
 pub fn last_location(user_id: &str) -> Option<String> {
     get(local(), &format!("notekpr.last.{user_id}"))
 }

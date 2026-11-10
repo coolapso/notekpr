@@ -278,7 +278,8 @@ notes](writing.md) and [Drawings](drawings.md).
   what you write offline syncs later. Optionally the app starts without the
   server too.
 * On a phone (iPhone or Android), add it to the home screen: it opens from
-  its own icon, in a window of its own
+  its own icon, in a window of its own. The sign-in screen offers it: one
+  tap on Android, the steps on an iPhone
   ([how](getting-started.md#on-your-phone)).
 * A command-line client (CLI) with a local encrypted copy, live sync, and a
   two-way folder of plain Markdown files for Obsidian, Neovim, VS Code or

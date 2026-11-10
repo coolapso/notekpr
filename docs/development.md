@@ -460,6 +460,12 @@ from the favicon, in `crates/web/static/`: `icon-192.png` and `icon-512.png`
 as the favicon is, and `apple-touch-icon.png` (iPhones) and
 `icon-maskable.png` (Android) filling the whole square, since phones cut
 their own shape out of it. Its name there is the manifest's `short_name`.
+A phone's sign-in screen offers to add it (`crates/web/src/homescreen.rs`):
+Android's browsers announce that it can be added with a
+`beforeinstallprompt` event, which `boot.js` keeps (it may come before the
+app has loaded) and the offer's button turns into the browser's own
+dialog. No service worker is needed for that (Chromium 156). iPhones have
+no such event: the offer shows the steps.
 
 ## The docs site
 

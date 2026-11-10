@@ -4,8 +4,8 @@ use super::focus_on_mount;
 use leptos::prelude::*;
 
 use crate::state::{self, Phase, ui};
-use crate::util;
 use crate::views::icons::Icon;
+use crate::{homescreen, storage, util};
 
 #[component]
 fn Card(children: Children) -> impl IntoView {
@@ -81,6 +81,7 @@ pub fn Login(error: Option<String>) -> impl IntoView {
         <Card>
             <h1>"Sign in"</h1>
             {error.map(|e| view! { <div class="alert error">{e}</div> })}
+            {homescreen::offer().map(|phone| view! { <HomeScreenOffer phone/> })}
             {oidc.then(|| view! {
                 <button class="btn primary big" on:click=start_sso>{format!("Continue with {sso_name}")}</button>
             })}
@@ -111,6 +112,89 @@ pub fn Login(error: Option<String>) -> impl IntoView {
                 </div>
             })}
         </Card>
+    }
+}
+
+/// What the offer to add notekpr to the home screen shows.
+#[derive(Clone, Copy, PartialEq)]
+enum Offer {
+    Asking,
+    /// No dialog from the browser: how to do it by hand.
+    Steps,
+    Added,
+    Hidden,
+}
+
+/// On a phone's sign-in screen: add notekpr to the home screen first, then
+/// sign in from its icon ([`homescreen`]). One tap on Android, the steps on
+/// an iPhone.
+#[component]
+fn HomeScreenOffer(phone: homescreen::Phone) -> impl IntoView {
+    let shown = RwSignal::new(Offer::Asking);
+    let hide = move |_| {
+        storage::hide_home_screen_offer();
+        shown.set(Offer::Hidden);
+    };
+    let add = move |_| match homescreen::open_dialog() {
+        Some(choice) => leptos::task::spawn_local(async move {
+            match choice.await {
+                homescreen::Choice::Added => {
+                    storage::hide_home_screen_offer();
+                    shown.set(Offer::Added);
+                }
+                homescreen::Choice::NotAdded => {}
+                homescreen::Choice::Failed => shown.set(Offer::Steps),
+            }
+        }),
+        None => shown.set(Offer::Steps),
+    };
+    let steps = move || {
+        match phone {
+        homescreen::Phone::Apple => view! {
+            <ol class="steps">
+                <li>"Tap "<b>"Share"</b>" "<Icon name="share-up"/>". In Safari it may be under "<b>"⋯"</b>" first."</li>
+                <li>"Tap "<b>"Add to Home Screen"</b>". Not there? "<b>"Edit Actions"</b>" at the end of the list adds it."</li>
+                <li>"Keep "<b>"Open as Web App"</b>" on, and tap "<b>"Add"</b>"."</li>
+                <li>"Open notekpr from its new icon, and sign in there."</li>
+            </ol>
+        }
+        .into_any(),
+        homescreen::Phone::Android => view! {
+            <ol class="steps">
+                <li>"Open the browser's menu: "<b>"⋮"</b>"."</li>
+                <li>"Tap "<b>"Add to Home screen"</b>", then "<b>"Install"</b>". Some browsers say "<b>"Install app"</b>" in the menu."</li>
+                <li>"Open notekpr from its new icon, and sign in there."</li>
+            </ol>
+        }
+        .into_any(),
+    }
+    };
+    view! {
+        <Show when=move || shown.get() != Offer::Hidden>
+            <div class="home-offer">
+                <div class="home-offer-title"><Icon name="phone"/>" Add notekpr to your home screen"</div>
+                {move || match shown.get() {
+                    Offer::Asking => view! {
+                        <p>"It opens from its own icon, like any other app. Add it first, then sign in there."</p>
+                        <div class="row">
+                            <button class="btn primary small" on:click=add>"Add to home screen"</button>
+                            <button class="btn ghost small" on:click=hide>"Not now"</button>
+                        </div>
+                    }
+                    .into_any(),
+                    Offer::Steps => view! {
+                        {steps()}
+                        <div class="row"><button class="btn ghost small" on:click=hide>"Done"</button></div>
+                    }
+                    .into_any(),
+                    Offer::Added => view! {
+                        <p>"Added. Open notekpr from its icon on your home screen, and sign in there."</p>
+                    }
+                    .into_any(),
+                    Offer::Hidden => ().into_any(),
+                }}
+            </div>
+        </Show>
     }
 }
 

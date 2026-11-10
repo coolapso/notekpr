@@ -598,6 +598,48 @@ fn arrows_attach_and_follow() {
     assert!(loose.start_binding().is_none() && loose.end_binding().is_none());
 }
 
+#[test]
+fn an_emptied_text_goes_and_its_arrows_let_go() {
+    let (mut ed, mut scene, mut rng) = (Editor::default(), Scene::default(), Seq(0));
+    let measure = |_: &str, line: &str| line.len() as f64 * 10.0;
+    ed.set_tool(Tool::Text);
+    let o = ed.pointer_down(&scene, [200.0, 0.0], None, Mods::default(), 1.0, &mut rng);
+    let text = o.edit_text.clone().unwrap();
+    apply(&mut scene, &o);
+    let o = ed.finish_text(&scene, "hello", &measure, &mut rng);
+    apply(&mut scene, &o);
+    let t = scene.element(&text).unwrap();
+    let middle = [t.x() + t.width() / 2.0, t.y() + t.height() / 2.0];
+    ed.set_tool(Tool::Arrow);
+    drag(
+        &mut ed,
+        &mut scene,
+        [0.0, middle[1]],
+        middle,
+        Mods::default(),
+        &mut rng,
+    );
+    let arrow = scene
+        .visible()
+        .find(|e| e.kind() == ElementType::Arrow)
+        .unwrap()
+        .id()
+        .to_string();
+    let bound = scene.element(&arrow).unwrap().end_binding().unwrap();
+    assert_eq!(bound.element_id, text);
+    // Opened again and emptied.
+    ed.set_tool(Tool::Selection);
+    ed.selection.clear();
+    let o = ed.double_click(&scene, middle, Mods::default(), 1.0, &mut rng);
+    apply(&mut scene, &o);
+    assert_eq!(ed.editing_text.as_deref(), Some(text.as_str()));
+    let o = ed.finish_text(&scene, "", &measure, &mut rng);
+    apply(&mut scene, &o);
+    assert!(scene.element(&text).unwrap().is_deleted());
+    let arrow = scene.element(&arrow).unwrap();
+    assert!(!arrow.is_deleted() && arrow.end_binding().is_none());
+}
+
 /// [`Seq`] with a clock that can be moved on.
 struct Timed(Seq, f64);
 

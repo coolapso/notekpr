@@ -5,3 +5,4 @@
 # It is recommended to check this file in to source control so that
 # everyone who runs the test benefits from these saved cases.
 cc a21fa2d42e0b048d9cc57abeeab2a0a5f2b3640524df4681b01adb5730b80286 # shrinks to ops = [Tool(10), Click([47, 0], 0), Tool(4), Drag([0, 32, 0, 37], 0), Tool(8), Drag([0, 48, 16, 39], 0)]
+cc b12b3c88b7a18b8cb169c1f4b45c8954e310e52dde835591c970c1f34535dc09 # shrinks to ops = [DoubleClick([-278, -243], false), Tool(4), Drag([0, 0, -263, -216], 0), Duplicate, Text("")]

@@ -1717,7 +1717,8 @@ impl Editor {
             out.done = true;
             return out;
         }
-        if text.trim().is_empty() {
+        let gone = text.trim().is_empty();
+        if gone {
             e.set("isDeleted", json!(true));
             self.selection.retain(|s| *s != id);
         } else {
@@ -1742,8 +1743,15 @@ impl Editor {
             e.set("width", num(w));
             e.set("height", num(h));
         }
-        bump(&mut e, rng);
-        out.changed.push(e);
+        let mut changed = vec![e];
+        if gone {
+            // Arrows attached to the text let go of it.
+            binding::update_arrows(scene, &mut changed);
+        }
+        for mut e in changed {
+            bump(&mut e, rng);
+            out.changed.push(e);
+        }
         out.done = true;
         if !self.tool_locked && self.tool == Tool::Text {
             self.tool = Tool::Selection;

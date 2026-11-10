@@ -941,10 +941,12 @@ pub struct VaultReplica {
     pub comments: HashMap<String, CommentLog>,
     /// Received items waiting for a key we don't have yet.
     pub deferred: Vec<Deferred>,
-    /// Updates that could not even be deferred (queue full), by sequence
-    /// number. `seq` never moves past the first of them, so the next catch-up
-    /// fetches them again instead of skipping them for good.
-    pub dropped: BTreeMap<i64, String>,
+    /// Updates that could not even be deferred (queue full): sequence number
+    /// and object. `seq` never moves past the first of them, so the next
+    /// catch-up fetches them again instead of skipping them for good. (With
+    /// the object: notes shared with us count in positions of their own,
+    /// so two of a vault can have the same number.)
+    pub dropped: BTreeSet<(i64, String)>,
     /// Who may author content here, from the vault's verified membership
     /// log (`None`: not checked, e.g. no log, or a recipient's replica).
     /// Set it with [`VaultReplica::set_authors`].
@@ -977,7 +979,7 @@ impl VaultReplica {
             member: true,
             comments: HashMap::new(),
             deferred: Vec::new(),
-            dropped: BTreeMap::new(),
+            dropped: BTreeSet::new(),
             authors: None,
             unverified: Vec::new(),
         }
@@ -1094,10 +1096,13 @@ impl VaultReplica {
     /// ([`VaultReplica::restoring`]).
     fn advance(&mut self, seq: i64) {
         self.seq = self.seq.max(seq);
-        let first = [self.dropped.keys().next(), self.restoring.keys().next()]
-            .into_iter()
-            .flatten()
-            .min();
+        let first = [
+            self.dropped.first().map(|(seq, _)| seq),
+            self.restoring.keys().next(),
+        ]
+        .into_iter()
+        .flatten()
+        .min();
         if let Some(&first) = first {
             self.seq = self.seq.min(first - 1);
         }
@@ -1116,7 +1121,7 @@ impl VaultReplica {
     /// Whether some content of this object is still waiting for a key; its
     /// local state then lacks changes that `seq` already counts.
     fn object_incomplete(&self, object_id: &str) -> bool {
-        self.dropped.values().any(|o| o == object_id)
+        self.dropped.iter().any(|(_, o)| o == object_id)
             || self.restoring.values().any(|o| o == object_id)
             || self.deferred.iter().any(|d| match d {
                 Deferred::Update(u) => u.object_id == object_id,
@@ -1180,10 +1185,10 @@ impl VaultReplica {
             if !recheck && e.may_be_outdated() && self.unverified.len() < MAX_DEFERRED {
                 // Until the log is reloaded: the cursor stops before it.
                 self.unverified.push(Deferred::Update(u.clone()));
-                self.dropped.insert(u.seq, u.object_id.clone());
+                self.dropped.insert((u.seq, u.object_id.clone()));
             } else {
                 // Refused for good (unsigned, or checked against a fresh log).
-                self.dropped.remove(&u.seq);
+                self.dropped.remove(&(u.seq, u.object_id.clone()));
             }
             self.advance(u.seq);
             return Err(e.into());
@@ -1192,13 +1197,13 @@ impl VaultReplica {
             Ok(p) => p,
             Err(e) => {
                 if missing_key(&e) && !self.defer(Deferred::Update(u.clone())) {
-                    self.dropped.insert(u.seq, u.object_id.clone());
+                    self.dropped.insert((u.seq, u.object_id.clone()));
                 }
                 self.advance(u.seq);
                 return Err(e);
             }
         };
-        self.dropped.remove(&u.seq);
+        self.dropped.remove(&(u.seq, u.object_id.clone()));
         self.advance(u.seq);
         let epoch = crate::crypto::sym_epoch(&u.payload).unwrap_or(0);
         let a = self.apply_plain(&u.object_id, &plain, u.seq, epoch)?;
@@ -1267,7 +1272,7 @@ impl VaultReplica {
         self.since_snapshot.remove(object_id);
         self.pending.retain(|p| p.object_id != object_id);
         self.purged.insert(object_id.to_string());
-        self.dropped.retain(|_, o| o != object_id);
+        self.dropped.retain(|(_, o)| o != object_id);
         self.restoring.retain(|_, o| o != object_id);
         self.advance(seq);
         let mut a = Applied::default();
@@ -2502,6 +2507,24 @@ mod tests {
         assert!(b.apply_update(&up(first_dropped)).is_err());
         assert!(b.apply_update(&up(first_dropped + 1)).is_err());
         // seq stays before the dropped update, also when the server says it's synced.
+        b.synced(first_dropped + 10);
+        assert_eq!(b.seq, first_dropped - 1);
+        // Another note can have the same number (notes shared with us count
+        // in their own positions): applying it doesn't forget the dropped one.
+        let (other, _) = start_sharing(&ring, "m", &ObjectMeta::titled("M"), &[], 0).unwrap();
+        a.doc_keys.insert("m".into(), other.clone());
+        b.doc_keys.insert("m".into(), other);
+        let m = a.notes.entry("m".into()).or_default();
+        let u = m.set_text("y").unwrap();
+        let p = a.local_change("m", u).unwrap();
+        b.apply_update(&Update {
+            object_id: "m".into(),
+            seq: first_dropped,
+            payload: p.payload,
+            ..up(first_dropped)
+        })
+        .unwrap();
+        assert!(b.dropped.contains(&(first_dropped, "n".into())));
         b.synced(first_dropped + 10);
         assert_eq!(b.seq, first_dropped - 1);
     }

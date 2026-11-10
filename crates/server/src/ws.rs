@@ -19,8 +19,8 @@ use axum::extract::ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade};
 use axum::response::Response;
 use futures::{SinkExt, StreamExt};
 use notekpr_core::protocol::{
-    CLOSE_RESTARTING, ClientMessage, ObjectEventKind, PushResult, ServerMessage, UserEventKind,
-    VaultEventKind, comments_note,
+    CLOSE_RESTARTING, ClientMessage, ObjectEventKind, PushResult, ServerMessage, Snapshot, Update,
+    UserEventKind, VaultEventKind, comments_note,
 };
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
@@ -475,6 +475,20 @@ async fn forward(
         let out = out.clone();
         async move { out.send(Out::Msg(m)).await.is_ok() }
     };
+    // Someone the note is shared with (not a member) is told positions in
+    // the note, never the vault's sequence numbers (`sync.rs`, *Positions*).
+    // Where they count from stays put while they have it: sharing starts
+    // afresh only once it is shared with nobody.
+    let positions = match (&object, doc_only) {
+        (Some(o), true) => match sync::note_positions(&state.db, &vault_id, o).await {
+            Ok(p) => Some(p),
+            Err(e) => {
+                send(error_msg(&e, Some(&vault_id))).await;
+                return;
+            }
+        },
+        _ => None,
+    };
     let start = match since {
         Some(s) => {
             catch_up(
@@ -487,7 +501,10 @@ async fn forward(
             )
             .await
         }
-        None => sync::head_seq(&state.db, &vault_id).await,
+        None => match positions {
+            Some(p) => Ok(p.shown_head()),
+            None => sync::head_seq(&state.db, &vault_id).await,
+        },
     };
     let mut last = match start {
         Ok(h) => h,
@@ -568,7 +585,15 @@ async fn forward(
                 _ => continue,
             }
         }
-        if let Some(seq) = ev.seq() {
+        let seq = match (positions, &*ev) {
+            (None, ev) => ev.seq(),
+            (Some(p), VaultEvent::Update { pos, .. }) => Some(p.shown(*pos)),
+            // A note deleted for good (or brought back) is shared with
+            // nobody: they hear `access_revoked` instead.
+            (Some(_), VaultEvent::Purged { .. } | VaultEvent::Restored { .. }) => continue,
+            (Some(_), _) => None,
+        };
+        if let Some(seq) = seq {
             if seq <= last {
                 continue;
             }
@@ -580,36 +605,56 @@ async fn forward(
                 update,
                 client_update_id,
                 origin_conn,
+                ..
             } => {
+                let seq = seq.unwrap_or(update.seq);
                 if *origin_conn == conn_id {
                     ServerMessage::Ack {
                         vault_id: v,
                         results: vec![PushResult {
                             client_update_id: client_update_id.clone(),
-                            seq: update.seq,
+                            seq,
                         }],
                         rejected: vec![],
                     }
                 } else {
                     ServerMessage::Update {
                         vault_id: v,
-                        update: update.clone(),
+                        update: Update {
+                            seq,
+                            ..update.clone()
+                        },
                     }
                 }
             }
-            VaultEvent::Snapshot { snapshot } => ServerMessage::Snapshot {
+            VaultEvent::Snapshot {
+                snapshot,
+                covers_pos,
+            } => ServerMessage::Snapshot {
                 vault_id: v,
-                snapshot: snapshot.clone(),
+                snapshot: match positions {
+                    // As in a catch-up (`sync::shown_snapshot`).
+                    Some(p) => Snapshot {
+                        covers_seq: p.shown(*covers_pos),
+                        signature: None,
+                        ..snapshot.clone()
+                    },
+                    None => snapshot.clone(),
+                },
             },
             VaultEvent::SnapshotCreated {
                 object_id,
                 snapshot_id,
                 covers_seq,
+                covers_pos,
             } => ServerMessage::SnapshotCreated {
                 vault_id: v,
                 object_id: object_id.clone(),
                 snapshot_id: snapshot_id.clone(),
-                covers_seq: *covers_seq,
+                covers_seq: match positions {
+                    Some(p) => p.shown(*covers_pos),
+                    None => *covers_seq,
+                },
             },
             VaultEvent::Purged { object_id, seq } => ServerMessage::Purged {
                 vault_id: v,

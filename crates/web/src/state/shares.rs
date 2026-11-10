@@ -234,13 +234,24 @@ pub(super) async fn reload_share_keys_once(vault: &str, note: &str) {
             .replicas
             .entry(vault.to_string())
             .or_insert_with(|| VaultReplica::for_shared_notes(vault));
+        let mut restarted = false;
         let applied = if r.member {
             engine::Applied::default()
         } else {
+            // Sharing started afresh (a key with no link to the one we had:
+            // it was shared with nobody in between). Its positions count
+            // from there now, so where we were means nothing any more.
+            restarted = r
+                .doc_keys
+                .get(note)
+                .is_some_and(|old| old.epochs().next() != ring.epochs().next());
             r.doc_keys.insert(note.to_string(), ring);
             r.role = role;
             r.retry_deferred().0
         };
+        if restarted {
+            catch_up_afresh(c, vault, note);
+        }
         publish_shares(c);
         Some(applied)
     });
@@ -355,12 +366,28 @@ pub(super) fn subscribe_share(c: &Core, vault: &str, note: &str) {
     }
 }
 
+/// Fetch a note shared with us again from the start: where we were counts
+/// in other positions than the server's now. Merging what we have with it
+/// changes nothing.
+fn catch_up_afresh(c: &mut Core, vault: &str, note: &str) {
+    if let Some(s) = c.shares.get_mut(&(vault.to_string(), note.to_string())) {
+        s.seq = 0;
+        subscribe_share(c, vault, note);
+    }
+}
+
 /// A shared note's catch-up is complete (an edge).
 pub(super) fn on_share_synced(vault: &str, note: &str, head: i64) {
     let (first, applied) = step(|c| {
         let Some(s) = c.shares.get_mut(&(vault.to_string(), note.to_string())) else {
             return (false, engine::Applied::default());
         };
+        // The note doesn't go as far as we thought: a server taken back to
+        // a backup, say. Fetch it again rather than wait there.
+        if head < s.seq {
+            catch_up_afresh(c, vault, note);
+            return (false, engine::Applied::default());
+        }
         s.seq = s.seq.max(head);
         let first = !s.synced;
         s.loaded = true;

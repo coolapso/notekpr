@@ -283,6 +283,28 @@ clients reload keys and see it registered). Recipients use
 `POST /vaults/{v}/updates` / snapshots for that note only. Reads by recipients
 return **only payloads under a document epoch at or after `share_from`**.
 
+**Positions.** Recipients never see the vault's sequence numbers, which
+would tell them how much happens in the rest of the vault. The server
+numbers each note's updates and its comments' (`c_<note>`) together, one by
+one, and tells recipients **positions in the note counted from where sharing
+last started**: everything they get that holds a sequence number holds a
+position instead — an update's `seq`, `head_seq` and `next_since` of
+`/changes` and of `synced`, `since` (theirs), a snapshot's `covers_seq` (how
+far in the note it covers: `0` for the snapshot sharing started with), push
+results and `ack`s, `snapshot_created`. They don't get `purged` or
+`restored` (the note deleted for good is shared with nobody: they get
+`access_revoked`), nor the signatures of snapshots (they sign the vault's
+number, which could be found by trying them all). Sharing that starts afresh
+(a new key without a chain link, once the note is shared with nobody) counts
+from `0` again: an app that kept a position for the note from before starts
+over (it sees the key change, or a `head_seq` below its position). A
+snapshot a recipient stores names `covers_seq: 0` (signed so; anything else
+is `400`): it covers none of the vault's log, as they can't name it — so it
+never stands in for updates in a catch-up, and everyone receives it, as a
+revision or carrying an update too large to push (§6). Members see all of
+this in sequence numbers, as always. (Older servers told recipients the
+vault's numbers: apps start each note shared with them afresh once.)
+
 Once a note has a document key, the server accepts its updates and snapshots
 only under the **current** document epoch; anything else (an older client
 still using the vault key, or a key that was just rotated) is refused as
@@ -468,7 +490,7 @@ vault's events in strictly increasing order without gaps.**
 | `GET /vaults/{v}/changes?since=S&limit=N&snapshots=true` | `ChangesResponse {updates, snapshots, purged, restored?, head_seq, has_more, next_since}`. `purged` / `restored`: `{object_id, seq}` of objects deleted for good, and of those whose deletion was undone (below), in `(S, page end]`; apply them in `seq` order. For any object whose latest snapshot covers part of `(S, head]`, the snapshot is returned **instead of** the updates it covers. Request further pages with `since=next_since&snapshots=false`. Every page also holds the snapshots *carrying* changes (below) stored while the head was within it, so each catch-up passes them once. |
 | `GET /vaults/{v}/objects/{o}` | `ObjectState`: latest snapshot + updates after it |
 | `POST /vaults/{v}/objects/{o}/snapshots {snapshot_id, covers_seq, payload, signature?, carries?}` | editor/owner (`409` unsigned where signatures are required, `400` for a bad signature). `404` if the object doesn't exist yet or was purged (a snapshot never creates an object), `409` for a `snapshot_id` already used, `413` over `max_snapshot_bytes`. Store a compaction (`payload` = encrypted full state). Updates covered by the *previous* snapshot are pruned — one generation is always kept so a bad snapshot is recoverable. One snapshot per person and note per `--snapshot-cooldown-secs` (default 30 s; `429` otherwise); none in a full vault (`507 vault_full`). `carries: true`: the state holds changes the log doesn't have — an update too large to push (`too_large`), which a client sends this way instead; the server sends the snapshot to everyone subscribed (`snapshot`) and with catch-ups (above), and its retention keeps the newest such snapshot of each note. |
-| `GET /vaults/{v}/objects/{o}/snapshots[/{id}]` | revision history (newest first); default retention 100 per object, never fewer than 2 |
+| `GET /vaults/{v}/objects/{o}/snapshots[/{id}]` | revision history, newest first (when stored); default retention 100 per object (the 100 covering the most), never fewer than 2 |
 | `DELETE /vaults/{v}/objects/{o}` | owner and admins (editors get `403`: they move things to the trash, in the index): delete for good (emptying the trash), with its comments. Not allowed for `index`. It is gone for everyone at once (`purged`: nothing of it is served, pushes to it are refused as `purged`, the people it was shared with lose it), but the server keeps its data for `--purge-undo-days` (default 30), so it can be undone; repeating the call meanwhile changes nothing (`204`). After that the data is deleted, and the call answers `404`. |
 | `POST /vaults/{v}/objects/{o}/restore` | owner and admins: undo deleting it for good while the server keeps it (`404` otherwise; `507 vault_full` in a full vault, as it counts again; `403 limit_reached` for a drawing while its vault holds as many as it may, §5.5). It is back for everyone with its history and comments, though shared with nobody: subscribers get `restored`, catch-ups list it in `restored`. Clients that dropped it fetch its changes again from the start (`GET …/objects/{o}/changes?since=0`, every page) and don't move their `vault_seq` past the undo before they have (§6, client rules). While it was kept, its document key moved on with every rotation of the vault key (§5.1), so no key a removed member knew comes back with it. |
 | `GET /vaults/{v}/purged` | owner and admins: what was deleted for good and can still be undone, newest first: `[{id, attachment, purged_at, kept_until}]` (ids only; clients name them from the entries they keep in the index, marked `purged`, until the server let go of the data). |
@@ -618,7 +640,8 @@ and closes the connection.
 **Single-note subscriptions** (`object_id` set) are for recipients of an
 individually shared note: they deliver only that note's updates, snapshots,
 awareness and `object_event`s (catch-up limited to document-key payloads, as
-in §5.1). Awareness sent with a non-empty `object_id` reaches that note's
+in §5.1), in positions of the note rather than sequence numbers (§5.1,
+*Positions*). Awareness sent with a non-empty `object_id` reaches that note's
 subscribers too, so members working on a shared note announce themselves there
 as well (encrypted under the document key); clients that already know a
 connection vault-wide ignore its note-level messages. When a connection closes,

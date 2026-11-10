@@ -66,20 +66,26 @@ use tokio::sync::{broadcast, mpsc};
 /// connected person in the load test, for no gain).
 const VAULT_CHANNEL_CAPACITY: usize = 256;
 
+/// `pos` / `covers_pos`: the same in the note's own positions, which people
+/// a single note is shared with are told instead of the vault's sequence
+/// numbers (`sync.rs`, *Positions*).
 #[derive(Debug, Clone)]
 pub enum VaultEvent {
     Update {
         update: Update,
         client_update_id: String,
         origin_conn: u64,
+        pos: i64,
     },
     Snapshot {
         snapshot: Snapshot,
+        covers_pos: i64,
     },
     SnapshotCreated {
         object_id: String,
         snapshot_id: String,
         covers_seq: i64,
+        covers_pos: i64,
     },
     Purged {
         object_id: String,
@@ -113,7 +119,7 @@ impl VaultEvent {
     pub fn object_id(&self) -> Option<&str> {
         match self {
             VaultEvent::Update { update, .. } => Some(&update.object_id),
-            VaultEvent::Snapshot { snapshot } => Some(&snapshot.object_id),
+            VaultEvent::Snapshot { snapshot, .. } => Some(&snapshot.object_id),
             VaultEvent::SnapshotCreated { object_id, .. }
             | VaultEvent::Purged { object_id, .. }
             | VaultEvent::Restored { object_id, .. }

@@ -663,7 +663,7 @@ mod tests {
         let a = along(&r, &note("todo", "Archive/TODO.md"), all);
         assert_eq!(files(&a), [("shot", "Archive/attachments/shot.png")]);
         // Some of it waits for a key: it might show the file.
-        r.dropped.insert(7, "sk".into());
+        r.dropped.insert((7, "sk".into()));
         let a = along(&r, &note("todo", "Archive/TODO.md"), all);
         assert!(a.files.is_empty());
         r.dropped.clear();
@@ -671,7 +671,7 @@ mod tests {
         let a = along(&r, &note("todo", "Archive/TODO.md"), all);
         assert_eq!(files(&a), [("shot", "Archive/attachments/shot.png")]);
         // A note too.
-        r.dropped.insert(8, "todo".into());
+        r.dropped.insert((8, "todo".into()));
         assert!(
             along(&r, &note("todo", "Gone/TODO.md"), all)
                 .files

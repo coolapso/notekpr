@@ -410,4 +410,82 @@ mod migration_tests {
             .unwrap();
         assert_eq!(check, "ok");
     }
+
+    /// The log a database holds when it takes the positions migration is
+    /// numbered per note (comments with their note), and a shared note's
+    /// people count from where sharing started.
+    #[tokio::test]
+    async fn the_positions_migration_numbers_each_notes_log() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("old.db");
+        let db = connect(&path).await.unwrap();
+        MIGRATOR.run_to(4, &db).await.unwrap();
+        // Payloads: a version byte, then the key epoch (big-endian): the
+        // vault key 1, the note's own key before sharing (0x80000001), the
+        // one sharing started with (0x80000002).
+        for q in [
+            "INSERT INTO users (id, kind, display_name, created_at) VALUES ('alice', 'human', 'Alice', 1)",
+            "INSERT INTO vaults (id, owner_id, encrypted_meta, key_epoch, head_seq, created_at, updated_at)
+             VALUES ('v', 'alice', x'01', 1, 8, 1, 1)",
+            "INSERT INTO objects (vault_id, id, created_by, created_at, updated_at, key_epoch, share_from)
+             VALUES ('v', 'index', 'alice', 1, 1, NULL, NULL),
+                    ('v', 'n', 'alice', 1, 1, 2147483650, x'80000002'),
+                    ('v', 'c_n', 'alice', 1, 1, NULL, NULL),
+                    ('v', 'other', 'alice', 1, 1, NULL, NULL)",
+            "INSERT INTO updates (vault_id, seq, object_id, client_update_id, author_id, payload, created_at)
+             VALUES ('v', 1, 'index', 'u1', 'alice', x'0100000001', 1),
+                    ('v', 2, 'n', 'u2', 'alice', x'0180000001', 2),
+                    ('v', 3, 'other', 'u3', 'alice', x'0100000001', 3),
+                    ('v', 4, 'c_n', 'u4', 'alice', x'0180000001', 4),
+                    ('v', 5, 'n', 'u5', 'alice', x'0180000002', 5),
+                    ('v', 6, 'other', 'u6', 'alice', x'0100000001', 6),
+                    ('v', 7, 'c_n', 'u7', 'alice', x'0180000002', 7),
+                    ('v', 8, 'n', 'u8', 'alice', x'0180000002', 8)",
+            "INSERT INTO snapshots (id, vault_id, object_id, covers_seq, author_id, payload, size, created_at, carries, created_head)
+             VALUES ('s1', 'v', 'n', 4, 'alice', x'0180000002', 5, 4, 0, 4),
+                    ('s2', 'v', 'n', 7, 'alice', x'0180000002', 5, 7, 1, 7)",
+        ] {
+            run(&db, q).await.unwrap();
+        }
+        migrate(&db, &path).await.unwrap();
+
+        let pos: Vec<(i64, i64)> = sqlx::query_as("SELECT seq, pos FROM updates ORDER BY seq")
+            .fetch_all(&db)
+            .await
+            .unwrap();
+        assert_eq!(
+            pos,
+            [
+                (1, 1),
+                (2, 1),
+                (3, 1),
+                (4, 2),
+                (5, 3),
+                (6, 2),
+                (7, 4),
+                (8, 5)
+            ]
+        );
+        let notes: Vec<(String, i64, i64)> =
+            sqlx::query_as("SELECT id, pos_head, pos_base FROM objects ORDER BY id")
+                .fetch_all(&db)
+                .await
+                .unwrap();
+        assert_eq!(
+            notes,
+            [
+                ("c_n".to_string(), 0, 0),
+                ("index".to_string(), 1, 0),
+                // Two before sharing: its people count 3 as 1.
+                ("n".to_string(), 5, 2),
+                ("other".to_string(), 2, 0),
+            ]
+        );
+        let snaps: Vec<(String, i64, i64)> =
+            sqlx::query_as("SELECT id, covers_pos, created_pos FROM snapshots ORDER BY id")
+                .fetch_all(&db)
+                .await
+                .unwrap();
+        assert_eq!(snaps, [("s1".to_string(), 2, 2), ("s2".to_string(), 4, 4)]);
+    }
 }

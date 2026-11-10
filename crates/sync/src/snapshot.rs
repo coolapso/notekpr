@@ -6,13 +6,23 @@ use notekpr_core::protocol::{CreateSnapshotRequest, INDEX_OBJECT_ID, ObjectKeyUp
 
 use crate::outbox::{Limits, Outbox};
 
+/// What a snapshot of ours says it covers of the vault's log: everything up
+/// to our cursor for a vault member, once caught up (`seq` ≥ 1). Someone a
+/// single note is shared with doesn't know the vault's sequence numbers
+/// (protocol §5.1): what they store covers none of the log (`0`), once that
+/// note has caught up (`note_synced`).
+fn covers(r: &VaultReplica, note_synced: bool) -> Option<i64> {
+    match r.member {
+        true => (r.seq >= 1).then_some(r.seq),
+        false => note_synced.then_some(0),
+    }
+}
+
 /// A snapshot of `object_id` to upload now, if one may be stored: the
-/// replica can write and has caught up (`seq` ≥ 1), no local change of the
-/// object is unconfirmed (queued or held), it isn't deleted for good, it
-/// exists here, and none of its content waits for a key (checked by
-/// `VaultReplica::snapshot_request`). `covers_seq` replaces the replica's
-/// cursor for recipients of a single shared note, whose own sequence number
-/// is the note's.
+/// replica can write and has caught up ([`covers`]: `note_synced` says so
+/// for a note shared with us), no local change of the object is unconfirmed
+/// (queued or held), it isn't deleted for good, it exists here, and none of
+/// its content waits for a key (checked by `VaultReplica::snapshot_request`).
 ///
 /// Callers must have applied every update of the object up to the cursor —
 /// after a REST push that means catching up first (protocol §6).
@@ -20,14 +30,14 @@ pub fn snapshot_now(
     r: &VaultReplica,
     outbox: &Outbox,
     object_id: &str,
-    covers_seq: Option<i64>,
+    note_synced: bool,
 ) -> Option<CreateSnapshotRequest> {
     let unconfirmed = outbox.unconfirmed(r, object_id);
     let exists = object_id == INDEX_OBJECT_ID || r.notes.contains_key(object_id);
-    let seq = covers_seq.unwrap_or(r.seq);
-    if !r.can_write() || unconfirmed || r.purged.contains(object_id) || !exists || seq < 1 {
+    if !r.can_write() || unconfirmed || r.purged.contains(object_id) || !exists {
         return None;
     }
+    let seq = covers(r, note_synced)?;
     let mut req = r.snapshot_request(object_id).ok()?;
     req.covers_seq = seq;
     Some(req)
@@ -48,12 +58,13 @@ pub struct Carrier {
 /// it. `None` when nothing is held, it can't be written now (read-only,
 /// deleted, content waiting for a key) or even the whole state is larger than
 /// the server's snapshot limit. Callers must have applied every update of the
-/// object up to the cursor, as for any snapshot (protocol §6).
+/// object up to the cursor, as for any snapshot (protocol §6); `note_synced`
+/// as for [`snapshot_now`].
 pub fn carrier_now(
     r: &VaultReplica,
     outbox: &Outbox,
     object_id: &str,
-    covers_seq: Option<i64>,
+    note_synced: bool,
     limits: &Limits,
 ) -> Option<Carrier> {
     let held: Vec<String> = outbox
@@ -63,10 +74,10 @@ pub fn carrier_now(
         .map(|p| p.client_update_id.clone())
         .collect();
     let exists = object_id == INDEX_OBJECT_ID || r.notes.contains_key(object_id);
-    let seq = covers_seq.unwrap_or(r.seq);
-    if held.is_empty() || !r.can_write() || r.purged.contains(object_id) || !exists || seq < 1 {
+    if held.is_empty() || !r.can_write() || r.purged.contains(object_id) || !exists {
         return None;
     }
+    let seq = covers(r, note_synced)?;
     let mut request = r.snapshot_request(object_id).ok()?;
     if request.payload.len() > limits.max_snapshot_bytes {
         return None;
@@ -96,9 +107,9 @@ pub fn snapshot_action(
     r: &VaultReplica,
     outbox: &Outbox,
     object_id: &str,
-    covers_seq: Option<i64>,
+    note_synced: bool,
 ) -> Option<SnapshotAction> {
-    let req = snapshot_now(r, outbox, object_id, covers_seq)?;
+    let req = snapshot_now(r, outbox, object_id, note_synced)?;
     if !outbox.note_keys
         || !r.member
         || object_id == INDEX_OBJECT_ID

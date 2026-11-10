@@ -1820,6 +1820,337 @@ async fn removed_members_lose_per_note_subscriptions() {
     assert!(update.is_err(), "a removed member still received an update");
 }
 
+/// People a single note is shared with count in that note's own positions,
+/// from where sharing started: nothing they are told says how much happens
+/// elsewhere in the vault, or happened to the note before.
+#[tokio::test]
+async fn note_recipients_never_see_the_vaults_sequence_numbers() {
+    let srv = start().await;
+    let mut alice = new_user(&srv.base, "alice").await;
+    let carol = new_user(&srv.base, "carol").await;
+    let v = alice.create_vault("Busy").await;
+    let (other, n) = (NoteDoc::new(), NoteDoc::new());
+    let busy = |alice: &User, i: usize| {
+        let u = other.set_text(&format!("draft {i}")).unwrap();
+        alice.encrypt_update(&v, "other", &u)
+    };
+    for i in 0..15 {
+        alice.push(&v, vec![busy(&alice, i)]).await.unwrap();
+    }
+    // The note's own history from before it is shared.
+    for i in 0..5 {
+        let u = n.set_text(&format!("before {i}")).unwrap();
+        alice
+            .push(&v, vec![alice.encrypt_update(&v, "n", &u)])
+            .await
+            .unwrap();
+    }
+    let ring = share_note(&alice, &v, "n", &carol).await;
+    for i in 15..40 {
+        alice.push(&v, vec![busy(&alice, i)]).await.unwrap();
+    }
+    let changes = |since: i64| {
+        let carol = &carol;
+        let v = &v;
+        async move {
+            carol
+                .api
+                .get::<ChangesResponse>(&format!("/vaults/{v}/objects/n/changes?since={since}"))
+                .await
+        }
+    };
+    // Nothing since sharing: the snapshot it started with, at 0.
+    let ch = changes(0).await;
+    assert_eq!((ch.head_seq, ch.next_since), (0, 0));
+    assert!(ch.updates.is_empty());
+    assert_eq!(ch.snapshots.len(), 1);
+    assert_eq!(ch.snapshots[0].covers_seq, 0);
+
+    // The note's updates and its comments' count together, one by one.
+    let doc_update = |text: &str| {
+        let u = NoteDoc::new().set_text(text).unwrap();
+        PushUpdate {
+            object_id: "n".into(),
+            client_update_id: random_id(),
+            payload: ring.encrypt(Purpose::Update, "n", &u).unwrap(),
+            signature: None,
+            kind: Default::default(),
+        }
+    };
+    alice.push(&v, vec![doc_update("one")]).await.unwrap();
+    alice.push(&v, vec![busy(&alice, 40)]).await.unwrap();
+    alice
+        .push(&v, vec![comment_update(&alice, &v, "n", &ring, "nice")])
+        .await
+        .unwrap();
+    let ch = changes(0).await;
+    let seqs: Vec<(String, i64)> = ch
+        .updates
+        .iter()
+        .map(|u| (u.object_id.clone(), u.seq))
+        .collect();
+    assert_eq!(
+        seqs,
+        [("n".to_string(), 1), (comments_object("n"), 2)],
+        "positions, not the vault's numbers"
+    );
+    assert_eq!((ch.head_seq, ch.next_since), (2, 2));
+    let ch = changes(1).await;
+    assert_eq!(ch.updates.len(), 1);
+    assert!(ch.snapshots.is_empty(), "nothing it covers is missing");
+    // Members still get the vault's numbers.
+    let member: ChangesResponse = alice.api.get(&format!("/vaults/{v}/changes?since=0")).await;
+    assert!(member.head_seq > 40);
+
+    // Carol's own pushes are answered in positions too, retries as well.
+    let mine = doc_update("two");
+    let resp = carol.push(&v, vec![mine.clone()]).await.unwrap();
+    assert_eq!((resp.results[0].seq, resp.head_seq), (3, 3));
+    let again = carol.push(&v, vec![mine]).await.unwrap();
+    assert_eq!(again.results[0].seq, 3);
+    let state: ObjectState = carol.api.get(&format!("/vaults/{v}/objects/n")).await;
+    assert_eq!(state.head_seq, 3);
+    assert_eq!(state.snapshot.as_ref().unwrap().covers_seq, 0);
+    assert_eq!(
+        state.updates.iter().map(|u| u.seq).collect::<Vec<_>>(),
+        [1, 3]
+    );
+    // An empty push says nothing about the vault to anyone who isn't a member.
+    assert_eq!(carol.push(&v, vec![]).await.unwrap().head_seq, 0);
+
+    // A snapshot of a member covers the vault's log; Carol is told how far
+    // in the note, without its signature (it signs the vault's number).
+    let ch: ChangesResponse = alice.api.get(&format!("/vaults/{v}/changes?since=0")).await;
+    let payload = ring
+        .encrypt(Purpose::Snapshot, "n", &NoteDoc::new().encode_state())
+        .unwrap();
+    let signed = CreateSnapshotRequest {
+        snapshot_id: random_id(),
+        covers_seq: ch.head_seq,
+        signature: Some(notekpr_core::memberlog::sign_snapshot(
+            &alice.account,
+            &v,
+            "n",
+            ch.head_seq,
+            &payload,
+        )),
+        payload,
+        carries: false,
+    };
+    let _: SnapshotInfo = alice
+        .api
+        .post(&format!("/vaults/{v}/objects/n/snapshots"), &signed)
+        .await;
+    let ch = changes(0).await;
+    assert_eq!(ch.snapshots.len(), 1);
+    assert_eq!(ch.snapshots[0].id, signed.snapshot_id);
+    assert_eq!(ch.snapshots[0].covers_seq, 3);
+    assert!(ch.snapshots[0].signature.is_none());
+    // It holds the note's updates; comments have no snapshots.
+    let seqs: Vec<i64> = ch.updates.iter().map(|u| u.seq).collect();
+    assert_eq!(seqs, [2]);
+    let ch = changes(2).await;
+    assert_eq!(ch.snapshots.len(), 1, "it has the update after 2");
+    let ch = changes(3).await;
+    assert!(ch.snapshots.is_empty() && ch.updates.is_empty());
+    let mine: Snapshot = carol
+        .api
+        .get(&format!(
+            "/vaults/{v}/objects/n/snapshots/{}",
+            signed.snapshot_id
+        ))
+        .await;
+    assert_eq!((mine.covers_seq, mine.signature), (3, None));
+    let listed: Vec<SnapshotInfo> = carol
+        .api
+        .get(&format!("/vaults/{v}/objects/n/snapshots"))
+        .await;
+    assert_eq!(listed[0].covers_seq, 3);
+    let listed: Vec<SnapshotInfo> = alice
+        .api
+        .get(&format!("/vaults/{v}/objects/n/snapshots"))
+        .await;
+    assert_eq!(listed[0].covers_seq, signed.covers_seq);
+
+    // Carol can't name the vault's numbers: what she stores covers none of
+    // the log, and is listed with the others, newest first.
+    let mut hers = CreateSnapshotRequest {
+        snapshot_id: random_id(),
+        covers_seq: 3,
+        payload: ring
+            .encrypt(Purpose::Snapshot, "n", &NoteDoc::new().encode_state())
+            .unwrap(),
+        signature: None,
+        carries: false,
+    };
+    let path = format!("/vaults/{v}/objects/n/snapshots");
+    assert_eq!(
+        carol.api.status(Method::POST, &path, Some(&hers)).await,
+        400
+    );
+    hers.covers_seq = 0;
+    let info: SnapshotInfo = carol.api.post(&path, &hers).await;
+    assert_eq!(info.covers_seq, 0);
+    let listed: Vec<SnapshotInfo> = alice.api.get(&path).await;
+    assert_eq!(listed[0].id, hers.snapshot_id);
+    assert_eq!(listed[0].covers_seq, 0);
+    let ch = changes(0).await;
+    assert_eq!(
+        ch.snapshots[0].id, signed.snapshot_id,
+        "not hers: it covers nothing"
+    );
+
+    // Live: the same positions, and nothing of the rest of the vault.
+    let mut wc = Ws::connect(&srv.ws, carol.api.token.as_ref().unwrap()).await;
+    wc.send(&ClientMessage::Subscribe {
+        vault_id: v.clone(),
+        since: Some(3),
+        object_id: Some("n".into()),
+    })
+    .await;
+    let head = wc
+        .until(|m| match m {
+            ServerMessage::Synced { head_seq, .. } => Some(*head_seq),
+            _ => None,
+        })
+        .await;
+    assert_eq!(head, 3);
+    alice.push(&v, vec![busy(&alice, 41)]).await.unwrap();
+    alice.push(&v, vec![doc_update("three")]).await.unwrap();
+    let seq = wc
+        .until(|m| match m {
+            ServerMessage::Update { update, .. } => Some(update.seq),
+            _ => None,
+        })
+        .await;
+    assert_eq!(seq, 4);
+    wc.send(&ClientMessage::Push {
+        vault_id: v.clone(),
+        updates: vec![doc_update("four")],
+    })
+    .await;
+    let acked = wc
+        .until(|m| match m {
+            ServerMessage::Ack { results, .. } => Some(results[0].seq),
+            _ => None,
+        })
+        .await;
+    assert_eq!(acked, 5);
+    // A subscription without `since` starts at the note's position too.
+    let mut wc2 = Ws::connect(&srv.ws, carol.api.token.as_ref().unwrap()).await;
+    wc2.send(&ClientMessage::Subscribe {
+        vault_id: v.clone(),
+        since: None,
+        object_id: Some("n".into()),
+    })
+    .await;
+    let head = wc2
+        .until(|m| match m {
+            ServerMessage::Synced { head_seq, .. } => Some(*head_seq),
+            _ => None,
+        })
+        .await;
+    assert_eq!(head, 5);
+
+    // Deleted for good: she loses it, without hearing the vault's number.
+    let st = alice
+        .api
+        .status::<()>(Method::DELETE, &format!("/vaults/{v}/objects/n"), None)
+        .await;
+    assert_eq!(st, 204);
+    wc.until(|m| match m {
+        ServerMessage::Purged { .. } => panic!("told the vault's number: {m:?}"),
+        ServerMessage::ObjectEvent {
+            event: ObjectEventKind::AccessRevoked,
+            ..
+        } => Some(()),
+        _ => None,
+    })
+    .await;
+}
+
+/// Sharing that starts afresh (a new key, once shared with nobody) counts
+/// from there: what came between isn't told either.
+#[tokio::test]
+async fn note_positions_count_from_where_sharing_last_started() {
+    use notekpr_core::engine;
+    let srv = start().await;
+    let mut alice = new_user(&srv.base, "alice").await;
+    let carol = new_user(&srv.base, "carol").await;
+    let v = alice.create_vault("Again").await;
+    let ring = share_note(&alice, &v, "n", &carol).await;
+    let n = NoteDoc::new();
+    for i in 0..3 {
+        let u = n.set_text(&format!("shared {i}")).unwrap();
+        let _ = alice
+            .push(
+                &v,
+                vec![PushUpdate {
+                    object_id: "n".into(),
+                    client_update_id: random_id(),
+                    payload: ring.encrypt(Purpose::Update, "n", &u).unwrap(),
+                    signature: None,
+                    kind: Default::default(),
+                }],
+            )
+            .await
+            .unwrap();
+    }
+    let ch: ChangesResponse = carol
+        .api
+        .get(&format!("/vaults/{v}/objects/n/changes?since=0"))
+        .await;
+    assert_eq!(ch.head_seq, 3);
+
+    // Carol removes it from her list; it is shared with nobody, and then
+    // starts again with a fresh key.
+    assert_eq!(
+        carol
+            .api
+            .status::<()>(
+                Method::DELETE,
+                &format!("/vaults/{v}/objects/n/shares/{}", carol.id),
+                None
+            )
+            .await,
+        204
+    );
+    let head: ChangesResponse = alice.api.get(&format!("/vaults/{v}/changes?since=0")).await;
+    let (fresh, start) = engine::start_sharing_keyed(
+        alice.ring(&v),
+        &ring,
+        "n",
+        &engine::ObjectMeta::titled("Again"),
+        &n.encode_state(),
+        head.head_seq,
+    )
+    .unwrap();
+    let _: () = alice
+        .api
+        .put(&format!("/vaults/{v}/objects/n/key"), &start)
+        .await;
+    let public: PublicUser = alice.api.get(&format!("/users/{}", carol.id)).await;
+    let _: ObjectShareInfo = alice
+        .api
+        .post(
+            &format!("/vaults/{v}/objects/n/shares"),
+            &AddObjectShareRequest {
+                user_id: carol.id.clone(),
+                role: Role::Viewer,
+                envelope: engine::object_share_envelope(&fresh, "n", &public).unwrap(),
+                log_entry: None,
+            },
+        )
+        .await;
+    let ch: ChangesResponse = carol
+        .api
+        .get(&format!("/vaults/{v}/objects/n/changes?since=0"))
+        .await;
+    assert_eq!(ch.head_seq, 0, "the three from before aren't counted");
+    assert_eq!(ch.snapshots.len(), 1);
+    assert_eq!(ch.snapshots[0].covers_seq, 0);
+}
+
 #[tokio::test]
 async fn writes_with_a_replaced_vault_key_are_refused() {
     let srv = start().await;

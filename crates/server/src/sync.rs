@@ -4,6 +4,15 @@
 //! The server cannot read any payload. It only enforces who may append, keeps
 //! the log ordered (one sequence counter per vault), makes retries idempotent
 //! (`client_update_id`), and prunes updates that are covered by snapshots.
+//!
+//! **Positions.** People a single note is shared with never see the vault's
+//! sequence numbers: those would tell them how much happens in the rest of
+//! the vault. Each note numbers its own updates and its comments' (`pos`,
+//! the last one given in `objects.pos_head` of the note), and they are told
+//! positions counted from where sharing started (`objects.pos_base`): an
+//! update's `seq` is its position, a snapshot's `covers_seq` how far it
+//! covers, `head_seq` the note's last position. Vault members get sequence
+//! numbers as always.
 
 use std::collections::HashMap;
 
@@ -65,15 +74,78 @@ pub async fn head_seq(db: &Db, vault_id: &str) -> AppResult<i64> {
         .ok_or(AppError::NotFound)
 }
 
-// `doc_only` queries keep only payloads encrypted with the key sharing
-// started with or a later one: the envelope epoch (header bytes 2..5,
-// big-endian) is at least the note's `share_from`. People a single note is
-// shared with get only those, never the note's history from before it was
-// shared (under the vault key, or the note's earlier private keys).
+/// Where a note's own numbering stands (module docs, *Positions*): where
+/// sharing last started and the last position given. A note's comments
+/// count with the note.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct NotePositions {
+    pub base: i64,
+    pub head: i64,
+}
 
-/// Everything after `since`, optionally restricted to one object (for people
-/// a single note is shared with). Snapshots (only when `include_snapshots`,
-/// i.e. on the first page) replace the updates they cover.
+impl NotePositions {
+    /// A position as the people the note is shared with are told it.
+    pub fn shown(self, pos: i64) -> i64 {
+        (pos - self.base).max(0)
+    }
+
+    /// Their last position.
+    pub fn shown_head(self) -> i64 {
+        self.shown(self.head)
+    }
+
+    /// A position they name (`since`, a snapshot's `covers_seq`), as stored.
+    pub fn stored(self, shown: i64) -> i64 {
+        self.base.saturating_add(shown.max(0))
+    }
+}
+
+pub async fn note_positions(
+    db: impl sqlx::SqliteExecutor<'_>,
+    vault_id: &str,
+    object_id: &str,
+) -> AppResult<NotePositions> {
+    let note = comments_note(object_id).unwrap_or(object_id);
+    let row: Option<(i64, i64)> =
+        sqlx::query_as("SELECT pos_base, pos_head FROM objects WHERE vault_id = ? AND id = ?")
+            .bind(vault_id)
+            .bind(note)
+            .fetch_optional(db)
+            .await?;
+    let (base, head) = row.ok_or(AppError::NotFound)?;
+    Ok(NotePositions { base, head })
+}
+
+/// Give the next position in an object's note (the note itself for its
+/// comments), as an update of it is stored. Inside the storing transaction.
+async fn next_position(
+    db: impl sqlx::SqliteExecutor<'_>,
+    vault_id: &str,
+    object_id: &str,
+) -> AppResult<i64> {
+    let note = comments_note(object_id).unwrap_or(object_id);
+    Ok(sqlx::query_scalar(
+        "UPDATE objects SET pos_head = pos_head + 1 WHERE vault_id = ? AND id = ? RETURNING pos_head",
+    )
+    .bind(vault_id)
+    .bind(note)
+    .fetch_optional(db)
+    .await?
+    // Comments need their note (`access::comment_access`); without it
+    // nobody it could be shared with is told this one.
+    .unwrap_or(0))
+}
+
+// Queries for people a single note is shared with keep only payloads
+// encrypted with the key sharing started with or a later one: the envelope
+// epoch (header bytes 2..5, big-endian) is at least the note's `share_from`.
+// They get only those, never the note's history from before it was shared
+// (under the vault key, or the note's earlier private keys).
+
+/// Everything after `since`, optionally restricted to one object. Snapshots
+/// (only when `include_snapshots`, i.e. on the first page) replace the
+/// updates they cover. `doc_only`: for someone the note `object` is shared
+/// with, who isn't a member ([`note_changes_since`]).
 pub async fn changes_since(
     db: &Db,
     vault_id: &str,
@@ -83,7 +155,10 @@ pub async fn changes_since(
     include_snapshots: bool,
     doc_only: bool,
 ) -> AppResult<ChangesResponse> {
-    let limit = limit.clamp(1, MAX_PAGE);
+    if doc_only {
+        let note = object.ok_or_else(|| bad("which note?"))?;
+        return note_changes_since(db, vault_id, note, since, limit, include_snapshots).await;
+    }
     let head = head_seq(db, vault_id).await?;
     let mut snapshots = Vec::new();
     let mut covered: HashMap<String, i64> = HashMap::new();
@@ -93,17 +168,13 @@ pub async fn changes_since(
              FROM snapshots s
              JOIN objects o ON o.vault_id = s.vault_id AND o.id = s.object_id AND o.purged_at IS NULL
              WHERE s.vault_id = ? AND s.covers_seq > ? AND (? IS NULL OR s.object_id = ?)
-               AND (? = 0 OR substr(s.payload, 2, 4) >= (SELECT ob.share_from FROM objects ob WHERE ob.vault_id = s.vault_id AND ob.id = s.object_id))
                AND s.id = (SELECT s2.id FROM snapshots s2 WHERE s2.vault_id = s.vault_id AND s2.object_id = s.object_id
-                             AND (? = 0 OR substr(s2.payload, 2, 4) >= (SELECT ob.share_from FROM objects ob WHERE ob.vault_id = s2.vault_id AND ob.id = s2.object_id))
                            ORDER BY s2.covers_seq DESC, s2.created_at DESC LIMIT 1)",
         )
         .bind(vault_id)
         .bind(since)
         .bind(object)
         .bind(object)
-        .bind(doc_only)
-        .bind(doc_only)
         .fetch_all(db)
         .await?;
         for r in &rows {
@@ -112,19 +183,15 @@ pub async fn changes_since(
             snapshots.push(s);
         }
     }
-    // One note's changes include its comments, which count as shared from
-    // when the note is (`doc_only`).
+    // One note's changes include its comments.
     let comments = object
         .filter(|o| comments_note(o).is_none())
         .map(comments_object);
-    let keyed = object.map(|o| comments_note(o).unwrap_or(o));
     // Objects deleted for good keep their updates while that can be undone;
     // they aren't served.
     let rows = sqlx::query(
         "SELECT object_id, seq, author_id, payload, created_at, signature FROM updates
          WHERE vault_id = ? AND seq > ? AND (? IS NULL OR object_id = ? OR object_id = ?)
-           AND (? = 0 OR substr(payload, 2, 4) >= (SELECT ob.share_from FROM objects ob
-                WHERE ob.vault_id = updates.vault_id AND ob.id = COALESCE(?, updates.object_id)))
            AND NOT EXISTS (SELECT 1 FROM objects gone WHERE gone.vault_id = updates.vault_id
                 AND gone.id = updates.object_id AND gone.purged_at IS NOT NULL)
          ORDER BY seq LIMIT ?",
@@ -134,8 +201,6 @@ pub async fn changes_since(
     .bind(object)
     .bind(object)
     .bind(&comments)
-    .bind(doc_only)
-    .bind(keyed)
     .bind(limit + 1)
     .fetch_all(db)
     .await?;
@@ -168,7 +233,6 @@ pub async fn changes_since(
          JOIN objects o ON o.vault_id = s.vault_id AND o.id = s.object_id AND o.purged_at IS NULL
          WHERE s.vault_id = ? AND s.carries = 1 AND s.created_head >= ? AND s.created_head <= ?
            AND (? IS NULL OR s.object_id = ?)
-           AND (? = 0 OR substr(s.payload, 2, 4) >= o.share_from)
          ORDER BY s.created_head",
     )
     .bind(vault_id)
@@ -176,7 +240,6 @@ pub async fn changes_since(
     .bind(upper)
     .bind(object)
     .bind(object)
-    .bind(doc_only)
     .fetch_all(db)
     .await?;
     for r in &carried {
@@ -224,13 +287,142 @@ pub async fn changes_since(
     })
 }
 
+/// A snapshot row (with `covers_pos`) as someone the note is shared with
+/// is told it: in positions, and without its signature, which signs the
+/// vault's sequence number (they could find it by trying them all). Their
+/// apps don't check the signatures of what members store (they don't have
+/// the vault's membership log).
+fn shown_snapshot(r: &sqlx::sqlite::SqliteRow, p: NotePositions) -> Snapshot {
+    Snapshot {
+        covers_seq: p.shown(r.get("covers_pos")),
+        signature: None,
+        ..row_snapshot(r)
+    }
+}
+
+/// One note's part of the log for someone it is shared with who isn't a
+/// member: its updates and its comments' from where sharing started, after
+/// position `since`, all numbered in positions (module docs).
+async fn note_changes_since(
+    db: &Db,
+    vault_id: &str,
+    object: &str,
+    since: i64,
+    limit: i64,
+    include_snapshots: bool,
+) -> AppResult<ChangesResponse> {
+    let limit = limit.clamp(1, MAX_PAGE);
+    let note = comments_note(object).unwrap_or(object);
+    let comments = comments_object(note);
+    let p = note_positions(db, vault_id, note).await?;
+    let since = since.max(0);
+    let from = p.stored(since);
+    let mut snapshots = Vec::new();
+    let mut covered = None;
+    if include_snapshots {
+        // The newest one they may read. From the start, always: it holds
+        // everything from before sharing started, which no update gives.
+        let row = sqlx::query(
+            "SELECT s.id, s.object_id, s.covers_seq, s.covers_pos, s.author_id, s.payload, s.created_at, s.signature
+             FROM snapshots s
+             JOIN objects o ON o.vault_id = s.vault_id AND o.id = s.object_id AND o.purged_at IS NULL
+             WHERE s.vault_id = ? AND s.object_id = ? AND substr(s.payload, 2, 4) >= o.share_from
+             ORDER BY s.covers_seq DESC, s.created_at DESC LIMIT 1",
+        )
+        .bind(vault_id)
+        .bind(note)
+        .fetch_optional(db)
+        .await?;
+        if let Some(r) = row.filter(|r| since == 0 || r.get::<i64, _>("covers_pos") > from) {
+            covered = Some(r.get::<i64, _>("covers_seq"));
+            snapshots.push(shown_snapshot(&r, p));
+        }
+    }
+    let rows = sqlx::query(
+        "SELECT object_id, seq, pos, author_id, payload, created_at, signature FROM updates
+         WHERE vault_id = ? AND (object_id = ? OR object_id = ?) AND pos > ?
+           AND substr(payload, 2, 4) >= (SELECT ob.share_from FROM objects ob
+                WHERE ob.vault_id = updates.vault_id AND ob.id = ?)
+           AND NOT EXISTS (SELECT 1 FROM objects gone WHERE gone.vault_id = updates.vault_id
+                AND gone.id = updates.object_id AND gone.purged_at IS NOT NULL)
+         ORDER BY pos LIMIT ?",
+    )
+    .bind(vault_id)
+    .bind(note)
+    .bind(&comments)
+    .bind(from)
+    .bind(note)
+    .bind(limit + 1)
+    .fetch_all(db)
+    .await?;
+    let mut has_more = rows.len() as i64 > limit;
+    let mut last = from;
+    let mut updates = Vec::with_capacity(rows.len());
+    let mut bytes = 0usize;
+    for r in rows.iter().take(limit as usize) {
+        let u = row_update(r);
+        if !updates.is_empty() && bytes + u.payload.len() > PAGE_BYTES {
+            has_more = true;
+            break;
+        }
+        let pos: i64 = r.get("pos");
+        last = pos;
+        // The snapshot covers the note's updates up to its sequence number.
+        if u.object_id == note && covered.is_some_and(|c| u.seq <= c) {
+            continue;
+        }
+        bytes += u.payload.len();
+        updates.push(Update {
+            seq: p.shown(pos),
+            ..u
+        });
+    }
+    let upper = if has_more { last } else { p.head };
+    let carried = sqlx::query(
+        "SELECT s.id, s.object_id, s.covers_seq, s.covers_pos, s.author_id, s.payload, s.created_at, s.signature
+         FROM snapshots s
+         JOIN objects o ON o.vault_id = s.vault_id AND o.id = s.object_id AND o.purged_at IS NULL
+         WHERE s.vault_id = ? AND s.object_id = ? AND s.carries = 1
+           AND s.created_pos >= ? AND s.created_pos <= ?
+           AND substr(s.payload, 2, 4) >= o.share_from
+         ORDER BY s.created_pos",
+    )
+    .bind(vault_id)
+    .bind(note)
+    .bind(from)
+    .bind(upper)
+    .fetch_all(db)
+    .await?;
+    for r in &carried {
+        let s = shown_snapshot(r, p);
+        if !snapshots.iter().any(|x: &Snapshot| x.id == s.id) {
+            snapshots.push(s);
+        }
+    }
+    // A note deleted for good, or brought back, is shared with nobody: no
+    // `purged` or `restored` for them.
+    Ok(ChangesResponse {
+        updates,
+        snapshots,
+        purged: vec![],
+        restored: vec![],
+        head_seq: p.shown_head(),
+        has_more,
+        next_since: p.shown(upper),
+    })
+}
+
 /// Current state of one object: latest snapshot plus the updates after it.
+/// `doc_only`: for someone the note is shared with, in positions.
 pub async fn object_state(
     db: &Db,
     vault_id: &str,
     object_id: &str,
     doc_only: bool,
 ) -> AppResult<ObjectState> {
+    if doc_only {
+        return note_state(db, vault_id, object_id).await;
+    }
     let head = head_seq(db, vault_id).await?;
     let purged: Option<Option<i64>> =
         sqlx::query_scalar("SELECT purged_at FROM objects WHERE vault_id = ? AND id = ?")
@@ -252,23 +444,21 @@ pub async fn object_state(
     }
     let snapshot = sqlx::query(
         "SELECT id, object_id, covers_seq, author_id, payload, created_at, signature FROM snapshots
-         WHERE vault_id = ? AND object_id = ? AND (? = 0 OR substr(payload, 2, 4) >= (SELECT ob.share_from FROM objects ob WHERE ob.vault_id = snapshots.vault_id AND ob.id = snapshots.object_id)) ORDER BY covers_seq DESC, created_at DESC LIMIT 1",
+         WHERE vault_id = ? AND object_id = ? ORDER BY covers_seq DESC, created_at DESC LIMIT 1",
     )
     .bind(vault_id)
     .bind(object_id)
-    .bind(doc_only)
     .fetch_optional(db)
     .await?
     .map(|r| row_snapshot(&r));
     let after = snapshot.as_ref().map(|s| s.covers_seq).unwrap_or(0);
     let updates = sqlx::query(
         "SELECT object_id, seq, author_id, payload, created_at, signature FROM updates
-         WHERE vault_id = ? AND object_id = ? AND seq > ? AND (? = 0 OR substr(payload, 2, 4) >= (SELECT ob.share_from FROM objects ob WHERE ob.vault_id = updates.vault_id AND ob.id = updates.object_id)) ORDER BY seq",
+         WHERE vault_id = ? AND object_id = ? AND seq > ? ORDER BY seq",
     )
     .bind(vault_id)
     .bind(object_id)
     .bind(after)
-    .bind(doc_only)
     .fetch_all(db)
     .await?
     .iter()
@@ -279,6 +469,53 @@ pub async fn object_state(
         snapshot,
         updates,
         head_seq: head,
+    })
+}
+
+/// [`object_state`] for someone the note is shared with: only what they may
+/// read, in positions.
+async fn note_state(db: &Db, vault_id: &str, object_id: &str) -> AppResult<ObjectState> {
+    not_purged(db, vault_id, object_id).await?;
+    let p = note_positions(db, vault_id, object_id).await?;
+    let note = comments_note(object_id).unwrap_or(object_id);
+    let snapshot = sqlx::query(
+        "SELECT s.id, s.object_id, s.covers_seq, s.covers_pos, s.author_id, s.payload, s.created_at, s.signature
+         FROM snapshots s JOIN objects o ON o.vault_id = s.vault_id AND o.id = s.object_id
+         WHERE s.vault_id = ? AND s.object_id = ? AND substr(s.payload, 2, 4) >= o.share_from
+         ORDER BY s.covers_seq DESC, s.created_at DESC LIMIT 1",
+    )
+    .bind(vault_id)
+    .bind(object_id)
+    .fetch_optional(db)
+    .await?;
+    let after = snapshot
+        .as_ref()
+        .map(|r| r.get("covers_seq"))
+        .unwrap_or(0i64);
+    let updates = sqlx::query(
+        "SELECT object_id, seq, pos, author_id, payload, created_at, signature FROM updates
+         WHERE vault_id = ? AND object_id = ? AND seq > ?
+           AND substr(payload, 2, 4) >= (SELECT ob.share_from FROM objects ob
+                WHERE ob.vault_id = updates.vault_id AND ob.id = ?)
+         ORDER BY seq",
+    )
+    .bind(vault_id)
+    .bind(object_id)
+    .bind(after)
+    .bind(note)
+    .fetch_all(db)
+    .await?
+    .iter()
+    .map(|r| Update {
+        seq: p.shown(r.get("pos")),
+        ..row_update(r)
+    })
+    .collect();
+    Ok(ObjectState {
+        object_id: object_id.to_string(),
+        snapshot: snapshot.map(|r| shown_snapshot(&r, p)),
+        updates,
+        head_seq: p.shown_head(),
     })
 }
 
@@ -409,11 +646,17 @@ pub async fn push(
     origin_conn: u64,
 ) -> AppResult<PushOutcome> {
     if updates.is_empty() {
+        // Nothing to store: the head for members, nothing else for anyone
+        // (not even whether the vault exists).
+        let member = access::member_role_opt(&state.db, vault_id, &who.user_id).await?;
         return Ok(PushOutcome {
             results: vec![],
             duplicates: vec![],
             rejected: vec![],
-            head_seq: head_seq(&state.db, vault_id).await?,
+            head_seq: match member {
+                Some(_) => head_seq(&state.db, vault_id).await?,
+                None => 0,
+            },
         });
     }
     if updates.len() > MAX_BATCH {
@@ -476,21 +719,39 @@ pub async fn push(
     let mut room = state.instance.new_objects(&mut tx, vault_id).await?;
     let mut results = Vec::with_capacity(updates.len());
     let mut duplicates = Vec::new();
-    let mut fresh: Vec<(Update, String)> = Vec::new();
+    let mut fresh: Vec<(Update, String, i64)> = Vec::new();
     // Checked before the first new update: retries of stored ones are fine.
     let mut room_checked = false;
+    // Someone a note is shared with (not a member) is answered in that
+    // note's positions (module docs); the notes they wrote to, for the head.
+    let shown = |p: NotePositions, seq: i64, pos: i64| {
+        if member.is_some() { seq } else { p.shown(pos) }
+    };
+    let mut notes: HashMap<String, NotePositions> = HashMap::new();
     for u in updates {
-        let existing: Option<i64> = sqlx::query_scalar(
-            "SELECT seq FROM updates WHERE vault_id = ? AND client_update_id = ?",
+        let note = comments_note(&u.object_id)
+            .unwrap_or(&u.object_id)
+            .to_string();
+        let p = match (&member, notes.get(&note)) {
+            (Some(_), _) => NotePositions { base: 0, head: 0 },
+            (None, Some(p)) => *p,
+            (None, None) => {
+                let p = note_positions(&mut *tx, vault_id, &note).await?;
+                notes.insert(note.clone(), p);
+                p
+            }
+        };
+        let existing: Option<(i64, i64)> = sqlx::query_as(
+            "SELECT seq, pos FROM updates WHERE vault_id = ? AND client_update_id = ?",
         )
         .bind(vault_id)
         .bind(&u.client_update_id)
         .fetch_optional(&mut *tx)
         .await?;
-        if let Some(seq) = existing {
+        if let Some((seq, pos)) = existing {
             let r = PushResult {
                 client_update_id: u.client_update_id,
-                seq,
+                seq: shown(p, seq, pos),
             };
             duplicates.push(r.clone());
             results.push(r);
@@ -588,9 +849,13 @@ pub async fn push(
                 .bind(vault_id)
                 .fetch_one(&mut *tx)
                 .await?;
+        let pos = next_position(&mut *tx, vault_id, &u.object_id).await?;
+        if let Some(p) = notes.get_mut(&note) {
+            p.head = pos;
+        }
         sqlx::query(
-            "INSERT INTO updates (vault_id, seq, object_id, client_update_id, author_id, device_id, payload, created_at, signature)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO updates (vault_id, seq, object_id, client_update_id, author_id, device_id, payload, created_at, signature, pos)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(vault_id)
         .bind(seq)
@@ -601,11 +866,12 @@ pub async fn push(
         .bind(&u.payload)
         .bind(now)
         .bind(&u.signature)
+        .bind(pos)
         .execute(&mut *tx)
         .await?;
         results.push(PushResult {
             client_update_id: u.client_update_id.clone(),
-            seq,
+            seq: shown(p, seq, pos),
         });
         fresh.push((
             Update {
@@ -617,22 +883,29 @@ pub async fn push(
                 signature: u.signature,
             },
             u.client_update_id,
+            pos,
         ));
     }
-    let head: i64 = sqlx::query_scalar("SELECT head_seq FROM vaults WHERE id = ?")
-        .bind(vault_id)
-        .fetch_one(&mut *tx)
-        .await?;
+    let head: i64 = match member {
+        Some(_) => {
+            sqlx::query_scalar("SELECT head_seq FROM vaults WHERE id = ?")
+                .bind(vault_id)
+                .fetch_one(&mut *tx)
+                .await?
+        }
+        None => notes.values().map(|p| p.shown_head()).max().unwrap_or(0),
+    };
     tx.commit().await?;
     metrics::counter!("notekpr_updates_total").increment(fresh.len() as u64);
     let stored = !fresh.is_empty();
-    for (update, client_update_id) in fresh {
+    for (update, client_update_id, pos) in fresh {
         state.hub.publish(
             vault_id,
             VaultEvent::Update {
                 update,
                 client_update_id,
                 origin_conn,
+                pos,
             },
         );
     }
@@ -681,10 +954,18 @@ pub async fn create_snapshot(
     }
     let _w = state.write_lock.lock().await;
     let member = access::member_role_opt(&state.db, vault_id, &who.user_id).await?;
+    let is_member = member.is_some();
     write_access(&state.db, member, vault_id, object_id, &who.user_id).await?;
-    let head = head_seq(&state.db, vault_id).await?;
-    if covers_seq < 1 || covers_seq > head {
-        return Err(bad("covers_seq out of range"));
+    if is_member {
+        let head = head_seq(&state.db, vault_id).await?;
+        if covers_seq < 1 || covers_seq > head {
+            return Err(bad("covers_seq out of range"));
+        }
+    } else if covers_seq != 0 {
+        // They don't know the vault's sequence numbers (module docs): what
+        // they store covers none of its log, so it never stands in for
+        // updates in a catch-up.
+        return Err(bad("covers_seq is 0 for someone the note is shared with"));
     }
     let obj: Option<(Option<i64>, Option<i64>)> =
         sqlx::query_as("SELECT purged_at, key_epoch FROM objects WHERE vault_id = ? AND id = ?")
@@ -717,7 +998,7 @@ pub async fn create_snapshot(
     }
     let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
     state.instance.require_room(&mut *tx, vault_id).await?;
-    insert_snapshot(
+    let covers_pos = insert_snapshot(
         &mut tx,
         &state.config,
         &who.user_id,
@@ -746,6 +1027,7 @@ pub async fn create_snapshot(
                     created_at: now,
                     signature: signature.clone(),
                 },
+                covers_pos,
             },
         );
     }
@@ -755,6 +1037,7 @@ pub async fn create_snapshot(
             object_id: object_id.to_string(),
             snapshot_id: snapshot_id.to_string(),
             covers_seq,
+            covers_pos,
         },
     );
     storage_changed(state, vault_id, false).await;
@@ -771,7 +1054,8 @@ pub async fn create_snapshot(
 /// Insert a snapshot, prune the update generation covered by the previous
 /// snapshot, and apply revision retention (the newest carrying snapshot is
 /// kept too: it holds what the log doesn't). Runs inside the caller's
-/// transaction.
+/// transaction. Returns how far it covers in the note's positions (module
+/// docs).
 #[allow(clippy::too_many_arguments)]
 pub async fn insert_snapshot(
     tx: &mut sqlx::Transaction<'static, sqlx::Sqlite>,
@@ -785,7 +1069,7 @@ pub async fn insert_snapshot(
     signature: Option<&[u8]>,
     now: i64,
     carries: bool,
-) -> AppResult<()> {
+) -> AppResult<i64> {
     let signer = repo::users::account_key(&mut **tx, author_id)
         .await?
         .and_then(|k| k.verify().ok());
@@ -813,9 +1097,29 @@ pub async fn insert_snapshot(
         .bind(vault_id)
         .fetch_one(&mut **tx)
         .await?;
+    // The last position of the note's updates (and comments) it covers. Its
+    // pruned updates are covered by an earlier snapshot, which knows theirs.
+    let covers_pos: i64 = sqlx::query_scalar(
+        "SELECT COALESCE(MAX(p), 0) FROM (
+            SELECT MAX(pos) AS p FROM updates
+             WHERE vault_id = ? AND (object_id = ? OR object_id = ?) AND seq <= ?
+            UNION ALL
+            SELECT MAX(covers_pos) FROM snapshots
+             WHERE vault_id = ? AND object_id = ? AND covers_seq <= ?)",
+    )
+    .bind(vault_id)
+    .bind(object_id)
+    .bind(comments_object(object_id))
+    .bind(covers_seq)
+    .bind(vault_id)
+    .bind(object_id)
+    .bind(covers_seq)
+    .fetch_one(&mut **tx)
+    .await?;
+    let created_pos = note_positions(&mut **tx, vault_id, object_id).await?.head;
     let r = sqlx::query(
-        "INSERT INTO snapshots (id, vault_id, object_id, covers_seq, author_id, payload, size, created_at, signature, carries, created_head)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO snapshots (id, vault_id, object_id, covers_seq, author_id, payload, size, created_at, signature, carries, created_head, covers_pos, created_pos)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(snapshot_id)
     .bind(vault_id)
@@ -828,6 +1132,8 @@ pub async fn insert_snapshot(
     .bind(signature)
     .bind(carries)
     .bind(head)
+    .bind(covers_pos)
+    .bind(created_pos)
     .execute(&mut **tx)
     .await;
     if let Err(sqlx::Error::Database(e)) = &r
@@ -864,7 +1170,7 @@ pub async fn insert_snapshot(
     .bind(object_id)
     .execute(&mut **tx)
     .await?;
-    Ok(())
+    Ok(covers_pos)
 }
 
 /// `NotFound` for an object deleted for good (its data may still be kept,
@@ -889,9 +1195,16 @@ pub async fn list_snapshots(
     doc_only: bool,
 ) -> AppResult<Vec<SnapshotInfo>> {
     not_purged(db, vault_id, object_id).await?;
+    // For someone the note is shared with: those they may read, in positions.
+    let p = match doc_only {
+        true => note_positions(db, vault_id, object_id).await?,
+        false => NotePositions { base: 0, head: 0 },
+    };
+    // Newest first. (Retention keeps the newest by `covers_seq`; what
+    // people a note is shared with store covers none of the log.)
     Ok(sqlx::query(
-        "SELECT id, object_id, covers_seq, author_id, created_at, size FROM snapshots
-         WHERE vault_id = ? AND object_id = ? AND (? = 0 OR substr(payload, 2, 4) >= (SELECT ob.share_from FROM objects ob WHERE ob.vault_id = snapshots.vault_id AND ob.id = snapshots.object_id)) ORDER BY covers_seq DESC, created_at DESC",
+        "SELECT id, object_id, covers_seq, covers_pos, author_id, created_at, size FROM snapshots
+         WHERE vault_id = ? AND object_id = ? AND (? = 0 OR substr(payload, 2, 4) >= (SELECT ob.share_from FROM objects ob WHERE ob.vault_id = snapshots.vault_id AND ob.id = snapshots.object_id)) ORDER BY created_at DESC, covers_seq DESC",
     )
     .bind(vault_id)
     .bind(object_id)
@@ -902,7 +1215,10 @@ pub async fn list_snapshots(
     .map(|r| SnapshotInfo {
         id: r.get("id"),
         object_id: r.get("object_id"),
-        covers_seq: r.get("covers_seq"),
+        covers_seq: match doc_only {
+            true => p.shown(r.get("covers_pos")),
+            false => r.get("covers_seq"),
+        },
         author_id: r.get("author_id"),
         created_at: r.get("created_at"),
         size: r.get("size"),
@@ -918,8 +1234,8 @@ pub async fn get_snapshot(
     doc_only: bool,
 ) -> AppResult<Snapshot> {
     not_purged(db, vault_id, object_id).await?;
-    sqlx::query(
-        "SELECT id, object_id, covers_seq, author_id, payload, created_at, signature FROM snapshots
+    let row = sqlx::query(
+        "SELECT id, object_id, covers_seq, covers_pos, author_id, payload, created_at, signature FROM snapshots
          WHERE vault_id = ? AND object_id = ? AND id = ? AND (? = 0 OR substr(payload, 2, 4) >= (SELECT ob.share_from FROM objects ob WHERE ob.vault_id = snapshots.vault_id AND ob.id = snapshots.object_id))",
     )
     .bind(vault_id)
@@ -928,8 +1244,11 @@ pub async fn get_snapshot(
     .bind(doc_only)
     .fetch_optional(db)
     .await?
-    .map(|r| row_snapshot(&r))
-    .ok_or(AppError::NotFound)
+    .ok_or(AppError::NotFound)?;
+    Ok(match doc_only {
+        true => shown_snapshot(&row, note_positions(db, vault_id, object_id).await?),
+        false => row_snapshot(&row),
+    })
 }
 
 /// Delete an object for good (e.g. emptying the trash): the vault's owner

@@ -177,6 +177,10 @@ per-vault sequence counter. Pushes carry a random `client_update_id`; the
 server de-duplicates retries, so the at-least-once delivery used by clients is
 effectively exactly-once. Writes and their WebSocket broadcast happen under a
 single lock, so subscribers receive every vault's log gaplessly and in order.
+People a single note is shared with see only that note's part of the log,
+numbered in positions of its own from where sharing started, never the
+vault's sequence numbers: those would tell them how much happens in the rest
+of the vault (protocol §5.1).
 
 **Live.** Clients keep one WebSocket, subscribe to every vault with the last
 sequence they applied, receive a catch-up (`changes` pages) and then live

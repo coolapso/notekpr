@@ -451,19 +451,23 @@ pub async fn share_from(
 
 /// Sharing starts at `epoch`: recipients get content encrypted with it or a
 /// later key (stored as the ciphertext header's 4 big-endian epoch bytes, so
-/// queries compare `substr(payload, 2, 4)` with it).
+/// queries compare `substr(payload, 2, 4)` with it). They count the note's
+/// positions from here (`pos_base`, `sync.rs`), so they don't learn how much
+/// it changed before.
 pub async fn set_share_from(
     db: impl SqliteExecutor<'_>,
     vault_id: &str,
     object_id: &str,
     epoch: u32,
 ) -> AppResult<()> {
-    sqlx::query("UPDATE objects SET share_from = ? WHERE vault_id = ? AND id = ?")
-        .bind(epoch.to_be_bytes().to_vec())
-        .bind(vault_id)
-        .bind(object_id)
-        .execute(db)
-        .await?;
+    sqlx::query(
+        "UPDATE objects SET share_from = ?, pos_base = pos_head WHERE vault_id = ? AND id = ?",
+    )
+    .bind(epoch.to_be_bytes().to_vec())
+    .bind(vault_id)
+    .bind(object_id)
+    .execute(db)
+    .await?;
     Ok(())
 }
 

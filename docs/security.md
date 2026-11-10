@@ -326,7 +326,14 @@ primitives. Formats:
   also hands out only content from that epoch on (`share_from`). Nor do they
   get the vault index (paths, other titles), other notes, attachments, the
   member list or the vault key. They learn the owner's identity and see the presence of people
-  working on that note. Of its comments they get those written since it was
+  working on that note. Nor do they see the vault's sequence numbers, which
+  would tell them how much happens in the rest of the vault: they count in
+  the note's own positions (its updates and comments, one by one), from
+  where sharing last started, so they don't learn how much the note changed
+  before either (protocol.md §5.1, *Positions*). What they do learn is what
+  they read: when the note and its comments change, and the user ids of
+  whoever wrote them or stored its revisions (members' apps store those of
+  every note now and then). Of its comments they get those written since it was
   shared, and earlier ones only if the sharer chose to include them (then
   everyone the note is shared with gets them). They cannot share it further or change its key. When
   the owner removes one, the note's new key comes in the same request; as

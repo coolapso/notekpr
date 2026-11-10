@@ -125,8 +125,8 @@ fn a_held_update_reaches_everyone_in_a_carrying_snapshot() {
     o.plan(&mut r, &limits);
     assert_eq!(o.carry_candidates(), vec!["big".to_string()]);
     // An ordinary snapshot waits for it; a carrying one takes it along.
-    assert!(snapshot_now(&r, &o, "big", None).is_none());
-    let c = carrier_now(&r, &o, "big", None, &limits).unwrap();
+    assert!(snapshot_now(&r, &o, "big", false).is_none());
+    let c = carrier_now(&r, &o, "big", false, &limits).unwrap();
     assert!(c.request.carries);
     assert_eq!((c.request.covers_seq, c.held.len()), (3, 1));
     let mut other = VaultReplica::new("v1", Role::Editor, r.keyring.clone(), VaultMeta::default());
@@ -147,12 +147,12 @@ fn a_held_update_reaches_everyone_in_a_carrying_snapshot() {
         max_snapshot_bytes: 1_000,
         ..limits
     };
-    assert!(carrier_now(&r, &o, "big", None, &small).is_none());
+    assert!(carrier_now(&r, &o, "big", false, &small).is_none());
     // Once stored, the held update is done.
     o.carried(&c.held);
     assert_eq!((o.held_count(), o.unsent(&r)), (0, 0));
     assert!(o.carry_candidates().is_empty());
-    assert!(carrier_now(&r, &o, "big", None, &limits).is_none());
+    assert!(carrier_now(&r, &o, "big", false, &limits).is_none());
 }
 
 #[test]
@@ -361,17 +361,41 @@ fn snapshots_wait_for_confirmation_and_catch_up() {
     edit(&mut r, "n1", "x");
     r.seq = 3;
     assert!(
-        snapshot_now(&r, &o, "n1", None).is_none(),
+        snapshot_now(&r, &o, "n1", false).is_none(),
         "unconfirmed change"
     );
     let plan = o.plan(&mut r, &Limits::default());
     ack_all(&mut o, &mut r, &plan, 4);
-    let s = snapshot_now(&r, &o, "n1", None).unwrap();
+    let s = snapshot_now(&r, &o, "n1", false).unwrap();
     assert_eq!(s.covers_seq, 4);
-    assert_eq!(snapshot_now(&r, &o, "n1", Some(9)).unwrap().covers_seq, 9);
-    assert!(snapshot_now(&r, &o, "missing", None).is_none());
+    assert!(snapshot_now(&r, &o, "missing", false).is_none());
     r.seq = 0;
-    assert!(snapshot_now(&r, &o, "n1", None).is_none(), "not caught up");
+    assert!(snapshot_now(&r, &o, "n1", false).is_none(), "not caught up");
+}
+
+/// Someone a single note is shared with doesn't know the vault's sequence
+/// numbers: what they store covers none of the log, once the note has
+/// caught up — a revision as well as a snapshot carrying a held update.
+#[test]
+fn snapshots_of_a_note_shared_with_us_cover_none_of_the_log() {
+    let mut r = VaultReplica::for_shared_notes("v1");
+    r.role = Role::Editor;
+    let mut ring = VaultKeyring::new("v1");
+    ring.insert(notekpr_core::keys::FIRST_DOC_EPOCH, VaultKey::generate());
+    r.doc_keys.insert("n".into(), ring);
+    r.seq = 7;
+    let mut o = Outbox::default();
+    edit(&mut r, "n", "hello");
+    let plan = o.plan(&mut r, &Limits::default());
+    ack_all(&mut o, &mut r, &plan, 3);
+    assert!(snapshot_now(&r, &o, "n", false).is_none(), "not caught up");
+    assert_eq!(snapshot_now(&r, &o, "n", true).unwrap().covers_seq, 0);
+    let limits = Limits::new(10_000);
+    edit(&mut r, "n", &"y".repeat(50_000));
+    o.plan(&mut r, &limits);
+    assert!(carrier_now(&r, &o, "n", false, &limits).is_none());
+    let c = carrier_now(&r, &o, "n", true, &limits).unwrap();
+    assert_eq!((c.request.covers_seq, c.request.carries), (0, true));
 }
 
 #[test]
@@ -392,7 +416,7 @@ fn a_new_note_waits_for_its_key_then_goes_out_under_it() {
         .map(|u| u.object_id.clone())
         .collect();
     assert_eq!(objects, vec!["n2".to_string()], "n1 waits for its key");
-    assert!(snapshot_now(&r, &o, "n1", Some(5)).is_none());
+    assert!(snapshot_now(&r, &o, "n1", false).is_none());
     o.key_registered("n1");
     let plan = o.plan(&mut r, &Limits::default());
     assert!(plan.register.is_empty());
@@ -475,7 +499,7 @@ fn servers_without_note_keys_get_none() {
     let plan = o.plan(&mut r, &Limits::default());
     ack_all(&mut o, &mut r, &plan, 1);
     assert!(matches!(
-        snapshot_action(&r, &o, "old", None),
+        snapshot_action(&r, &o, "old", false),
         Some(SnapshotAction::Snapshot(_))
     ));
 }
@@ -497,13 +521,13 @@ fn an_older_note_gets_its_own_key_at_its_next_snapshot() {
     edit(&mut r, "old", "under the vault key");
     let plan = o.plan(&mut r, &Limits::default());
     ack_all(&mut o, &mut r, &plan, 1);
-    match snapshot_action(&r, &o, "old", None).unwrap() {
+    match snapshot_action(&r, &o, "old", false).unwrap() {
         SnapshotAction::AdoptKey { update, .. } => {
             assert!(update.private && update.snapshot.is_some());
         }
         SnapshotAction::Snapshot(_) => panic!("should move to its own key"),
     }
-    match snapshot_action(&r, &o, INDEX_OBJECT_ID, None) {
+    match snapshot_action(&r, &o, INDEX_OBJECT_ID, false) {
         Some(SnapshotAction::Snapshot(_)) => {}
         _ => panic!("the index stays under the vault key"),
     }

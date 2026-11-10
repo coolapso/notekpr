@@ -998,7 +998,7 @@ impl Session {
         for oid in candidates {
             let carrier = {
                 let v = vault.lock().await;
-                notekpr_sync::carrier_now(&v.replica, &v.outbox, &oid, None, &v.limits())
+                notekpr_sync::carrier_now(&v.replica, &v.outbox, &oid, false, &v.limits())
             };
             let Some(mut c) = carrier else { continue };
             members::sign_snapshot(&self.account, &id, &oid, &mut c.request);
@@ -1052,7 +1052,7 @@ impl Session {
         }
         let action = {
             let v = vault.lock().await;
-            match notekpr_sync::snapshot_action(&v.replica, &v.outbox, oid, None) {
+            match notekpr_sync::snapshot_action(&v.replica, &v.outbox, oid, false) {
                 Some(SnapshotAction::Snapshot(mut req)) => {
                     members::sign_snapshot(&self.account, id, oid, &mut req);
                     SnapshotAction::Snapshot(req)

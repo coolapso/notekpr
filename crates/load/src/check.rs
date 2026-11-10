@@ -221,8 +221,8 @@ async fn explain(
         let dropped = g
             .replica
             .dropped
-            .values()
-            .filter(|o| o.as_str() == note)
+            .iter()
+            .filter(|(_, o)| o.as_str() == note)
             .count();
         let writer = if who.contains(id) { " (writer)" } else { "" };
         eprintln!(

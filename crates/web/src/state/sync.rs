@@ -809,14 +809,10 @@ fn carry(c: &mut Core, vault_id: &str) {
         }
         let carrier = (|| {
             let r = c.replicas.get(vault_id)?;
-            // Our sequence number only means something for a shared note itself.
-            let covers = if r.member {
-                None
-            } else {
-                Some(c.shares.get(&key).filter(|s| s.synced)?.seq)
-            };
+            // A note shared with us: once it has caught up.
+            let note_synced = c.shares.get(&key).is_some_and(|s| s.synced);
             let o = c.outboxes.get(vault_id)?;
-            let mut carrier = notekpr_sync::carrier_now(r, o, &object_id, covers, &limits())?;
+            let mut carrier = notekpr_sync::carrier_now(r, o, &object_id, note_synced, &limits())?;
             notekpr_sync::members::sign_snapshot(
                 c.account.as_ref()?,
                 vault_id,
@@ -1515,21 +1511,18 @@ fn snapshot_action(c: &Core, vault_id: &str, object_id: &str) -> Option<Snapshot
         return None;
     }
     let r = c.replicas.get(vault_id)?;
-    // Our sequence number only means something for a shared note itself.
-    let covers = if r.member {
-        None
-    } else {
+    // A note shared with us: once it has caught up, if we may write it.
+    if !r.member {
         let s = c.shares.get(&key)?;
         if !s.synced || !s.info.role.can_write() {
             return None;
         }
-        Some(s.seq)
-    };
+    }
     let empty = notekpr_sync::Outbox::default();
     let o = c.outboxes.get(vault_id).unwrap_or(&empty);
     let account = c.account.as_ref()?;
     Some(
-        match notekpr_sync::snapshot_action(r, o, object_id, covers)? {
+        match notekpr_sync::snapshot_action(r, o, object_id, !r.member)? {
             SnapshotAction::Snapshot(mut req) => {
                 notekpr_sync::members::sign_snapshot(account, vault_id, object_id, &mut req);
                 SnapshotAction::Snapshot(req)

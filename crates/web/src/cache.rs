@@ -52,6 +52,9 @@ const DB_VERSION: u32 = 1;
 const STORE: &str = "cache";
 /// Bump to discard copies written in an older layout.
 const FORMAT: u32 = 2;
+/// The same for copies of notes shared with us. 3: they count in the note's
+/// own positions (protocol §5.1), no longer the vault's sequence numbers.
+const SHARE_FORMAT: u32 = 3;
 /// Object id the meta record is encrypted under (not a valid note id).
 const META_OBJECT: &str = "~cache";
 const SEP: char = '\u{1}';
@@ -64,7 +67,7 @@ const SHARES: &str = "~shares";
 #[derive(Serialize, Deserialize)]
 struct ShareCopy {
     format: u32,
-    /// The state contains every change of the note up to this sequence number.
+    /// The state contains every change of the note up to this position.
     seq: i64,
     #[serde(with = "notekpr_core::b64")]
     state: Vec<u8>,
@@ -396,7 +399,7 @@ async fn save_now() {
                         .flatten()
                         .and_then(|n| {
                             let copy = ShareCopy {
-                                format: FORMAT,
+                                format: SHARE_FORMAT,
                                 seq: s.seq,
                                 state: n.encode_state(),
                                 comments: r.comments_state(&o),
@@ -784,7 +787,7 @@ pub async fn restore_share(user: &str, vault: &str, note: &str) -> Option<i64> {
         let r = c.replicas.get_mut(vault).filter(|r| !r.member)?;
         let plain = r.decrypt_object(Purpose::LocalCache, note, &sealed).ok()?;
         let copy: ShareCopy = serde_json::from_slice(&plain).ok()?;
-        if copy.format != FORMAT {
+        if copy.format != SHARE_FORMAT {
             return None;
         }
         r.notes

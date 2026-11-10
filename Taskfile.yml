@@ -505,10 +505,12 @@ tasks:
   docker:test:demo:
     desc: "Seed the demo in notekpr-demo:latest the way Kubernetes runs it (deploy/kubernetes/demo.yaml), then stop"
     cmds:
-      # As the manifest: not root, no capabilities, nothing writable but /data.
+      # As the manifest: not root, no capabilities, nothing writable but /data
+      # and /tmp (the server refuses to start without a writable /tmp).
       - >-
         docker run --rm --read-only --user 65532:65532 --cap-drop ALL
         --security-opt no-new-privileges --tmpfs /data:size=1g,uid=65532,gid=65532
+        --tmpfs /tmp:size=1g,uid=65532,gid=65532
         notekpr-demo:latest --seed-only
 
   docker:push:

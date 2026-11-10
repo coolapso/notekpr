@@ -15,10 +15,10 @@
 //! crash in between — is deleted by [`Blobs::delete_due`] after a while.
 //! Deleting a row records its file in the same transaction (a trigger, so
 //! deleted vaults and accounts too), deleted from the store after
-//! `--keep-deleted-files-days`, so a recent backup of the database still
-//! finds its files. The store is never listed: the server deletes only
-//! files it recorded, so a bucket can hold several servers' files under
-//! prefixes.
+//! `keep_deleted_files_days` (an instance setting), so a recent backup of
+//! the database still finds its files. The store is never listed: the
+//! server deletes only files it recorded, so a bucket can hold several
+//! servers' files under prefixes.
 //!
 //! Attachments still in the database when the server runs with a file store
 //! move there by themselves ([`Blobs::move_out`]).
@@ -46,7 +46,6 @@ const DELETE_BATCH: i64 = 200;
 pub struct Blobs {
     db: Db,
     files: Option<Files>,
-    keep_deleted_ms: i64,
 }
 
 struct Files {
@@ -107,11 +106,7 @@ impl Blobs {
                 })
             }
         };
-        let blobs = Blobs {
-            db,
-            files,
-            keep_deleted_ms: config.keep_deleted_files_ms(),
-        };
+        let blobs = Blobs { db, files };
         blobs.check().await?;
         Ok(blobs)
     }
@@ -305,9 +300,9 @@ impl Blobs {
     }
 
     /// Delete from the file store what is due: uploads never claimed, and
-    /// files the database let go of longer ago than the grace period.
-    /// Returns how many.
-    pub async fn delete_due(&self, now: i64) -> AppResult<u64> {
+    /// files the database let go of longer than `keep_deleted_ms` ago
+    /// (`keep_deleted_files_days`). Returns how many.
+    pub async fn delete_due(&self, now: i64, keep_deleted_ms: i64) -> AppResult<u64> {
         let Some(files) = &self.files else {
             return Ok(0);
         };
@@ -316,7 +311,7 @@ impl Blobs {
             let due = attachments::due_deletions(
                 &self.db,
                 now - UNCLAIMED_MS,
-                now - self.keep_deleted_ms,
+                now - keep_deleted_ms,
                 DELETE_BATCH,
             )
             .await?;

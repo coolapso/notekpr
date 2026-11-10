@@ -114,14 +114,6 @@ pub enum TokenAuth {
     ClientSecretPost,
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
-pub enum UserDirectory {
-    /// Other users can be found by display-name prefix or exact e-mail.
-    Search,
-    /// Other users can only be found by their exact e-mail address.
-    ExactEmail,
-}
-
 /// Where attachments are kept ([`Config::file_store`]).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum FileStore {
@@ -130,6 +122,9 @@ pub enum FileStore {
     S3 { bucket: String, prefix: String },
 }
 
+// Only what the server needs to start. What can change while it runs is an
+// instance setting (`instance.rs`, [`NOW_SETTINGS`]), set by administrators,
+// never here.
 #[derive(Args, Debug, Clone)]
 pub struct Config {
     /// Address to listen on.
@@ -264,90 +259,6 @@ pub struct Config {
     #[arg(long, env = "NOTEKPR_ADMINLESS", default_value_t = false, action = clap::ArgAction::Set, global = true)]
     pub adminless: bool,
 
-    #[arg(
-        long,
-        env = "NOTEKPR_USER_DIRECTORY",
-        value_enum,
-        default_value = "search",
-        global = true
-    )]
-    pub user_directory: UserDirectory,
-
-    #[arg(
-        long,
-        env = "NOTEKPR_SESSION_TTL_DAYS",
-        default_value_t = 30,
-        global = true
-    )]
-    pub session_ttl_days: i64,
-
-    #[arg(
-        long,
-        env = "NOTEKPR_DEVICE_SESSION_TTL_DAYS",
-        default_value_t = 180,
-        global = true
-    )]
-    pub device_session_ttl_days: i64,
-
-    #[arg(
-        long,
-        env = "NOTEKPR_AGENT_TOKEN_TTL_SECS",
-        default_value_t = 3600,
-        global = true
-    )]
-    pub agent_token_ttl_secs: i64,
-
-    #[arg(
-        long,
-        env = "NOTEKPR_MAX_ATTACHMENT_MB",
-        default_value_t = 25,
-        global = true
-    )]
-    pub max_attachment_mb: u64,
-
-    #[arg(
-        long,
-        env = "NOTEKPR_MAX_UPDATE_KB",
-        default_value_t = 2048,
-        global = true
-    )]
-    pub max_update_kb: u64,
-
-    /// Largest snapshot (a note's full state). Default: 16 × the update
-    /// limit, at least 32 MiB; never below the update limit.
-    #[arg(long, env = "NOTEKPR_MAX_SNAPSHOT_KB", global = true)]
-    pub max_snapshot_kb: Option<u64>,
-
-    /// Snapshots kept per document for revision history.
-    #[arg(
-        long,
-        env = "NOTEKPR_SNAPSHOT_RETENTION",
-        default_value_t = 100,
-        global = true
-    )]
-    pub snapshot_retention: i64,
-
-    /// Minimum seconds between two snapshots of the same note by the same
-    /// person (keeps history from being flooded).
-    #[arg(
-        long,
-        env = "NOTEKPR_SNAPSHOT_COOLDOWN_SECS",
-        default_value_t = 30,
-        global = true
-    )]
-    pub snapshot_cooldown_secs: i64,
-
-    /// Days during which deleting something for good (emptying the trash)
-    /// can be undone by the vault's owner and admins: the server keeps it
-    /// that long, then deletes it. 0: deleted at once.
-    #[arg(
-        long,
-        env = "NOTEKPR_PURGE_UNDO_DAYS",
-        default_value_t = 30,
-        global = true
-    )]
-    pub purge_undo_days: u32,
-
     /// Where attachments are kept: a directory (default: `files` in the
     /// data directory), `s3://bucket/prefix` (S3 or anything compatible;
     /// credentials, region and endpoint from the usual `AWS_*` variables),
@@ -355,17 +266,6 @@ pub struct Config {
     /// kept elsewhere before move there by themselves.
     #[arg(long, env = "NOTEKPR_FILE_STORE", global = true)]
     pub file_store: Option<String>,
-
-    /// Days a file stays in the file store after the database let go of it
-    /// (deleted for good and no longer undoable, or its vault deleted), so
-    /// that restoring a database backup that recent finds its files.
-    #[arg(
-        long,
-        env = "NOTEKPR_KEEP_DELETED_FILES_DAYS",
-        default_value_t = 14,
-        global = true
-    )]
-    pub keep_deleted_files_days: u32,
 
     /// Trust X-Forwarded-For / X-Real-IP (only behind a reverse proxy you control).
     #[arg(
@@ -375,24 +275,6 @@ pub struct Config {
         global = true
     )]
     pub trust_proxy: bool,
-
-    /// Requests per second allowed per client IP on the API.
-    #[arg(
-        long,
-        env = "NOTEKPR_RATE_LIMIT_RPS",
-        default_value_t = 50,
-        global = true
-    )]
-    pub rate_limit_rps: u32,
-
-    /// Requests per minute allowed per client IP on login endpoints.
-    #[arg(
-        long,
-        env = "NOTEKPR_AUTH_RATE_LIMIT_PER_MIN",
-        default_value_t = 30,
-        global = true
-    )]
-    pub auth_rate_limit_per_min: u32,
 
     /// Expose Prometheus metrics at /metrics.
     #[arg(long, env = "NOTEKPR_METRICS", default_value_t = true, action = clap::ArgAction::Set, global = true)]
@@ -430,27 +312,6 @@ impl Config {
         self.data_dir.join("notekpr.db")
     }
 
-    pub fn max_attachment_bytes(&self) -> u64 {
-        self.max_attachment_mb * 1024 * 1024
-    }
-
-    pub fn max_update_bytes(&self) -> u64 {
-        self.max_update_kb * 1024
-    }
-
-    /// Snapshots can be larger than single updates (full document state).
-    pub fn max_snapshot_bytes(&self) -> u64 {
-        match self.max_snapshot_kb {
-            Some(kb) => (kb * 1024).max(self.max_update_bytes()),
-            None => (self.max_update_bytes() * 16).max(32 * 1024 * 1024),
-        }
-    }
-
-    /// How long something deleted for good is kept, in milliseconds.
-    pub fn purge_undo_ms(&self) -> i64 {
-        self.purge_undo_days as i64 * 24 * 3600 * 1000
-    }
-
     /// Where attachments are kept (`--file-store`).
     pub fn file_store(&self) -> FileStore {
         match self.file_store.as_deref().map(str::trim) {
@@ -467,12 +328,6 @@ impl Config {
                 None => FileStore::Directory(PathBuf::from(s)),
             },
         }
-    }
-
-    /// How long a file stays in the store after the database let go of it,
-    /// in milliseconds.
-    pub fn keep_deleted_files_ms(&self) -> i64 {
-        self.keep_deleted_files_days as i64 * 24 * 3600 * 1000
     }
 
     pub fn is_admin_identity(&self, issuer: &str, subject: &str) -> bool {
@@ -522,16 +377,61 @@ impl Config {
         ]);
         let mut c = cli.config;
         c.normalize();
-        c.rate_limit_rps = 10_000;
-        c.snapshot_cooldown_secs = 0;
-        c.auth_rate_limit_per_min = 10_000;
         c
     }
+}
+
+/// What used to be flags and is an instance setting now (`instance.rs`):
+/// the variable and the setting. Nothing reads these variables: the server
+/// says so when one is set, rather than ignoring it silently.
+pub const NOW_SETTINGS: &[(&str, &str)] = &[
+    ("NOTEKPR_MAX_ATTACHMENT_MB", "max_attachment_mb"),
+    ("NOTEKPR_MAX_UPDATE_KB", "max_update_kb"),
+    ("NOTEKPR_MAX_SNAPSHOT_KB", "max_snapshot_kb"),
+    ("NOTEKPR_SNAPSHOT_RETENTION", "snapshot_retention"),
+    ("NOTEKPR_SNAPSHOT_COOLDOWN_SECS", "snapshot_cooldown_secs"),
+    ("NOTEKPR_PURGE_UNDO_DAYS", "purge_undo_days"),
+    ("NOTEKPR_KEEP_DELETED_FILES_DAYS", "keep_deleted_files_days"),
+    ("NOTEKPR_RATE_LIMIT_RPS", "rate_limit_rps"),
+    ("NOTEKPR_AUTH_RATE_LIMIT_PER_MIN", "auth_rate_limit_per_min"),
+    ("NOTEKPR_USER_DIRECTORY", "user_directory"),
+    ("NOTEKPR_SESSION_TTL_DAYS", "session_ttl_days"),
+    ("NOTEKPR_DEVICE_SESSION_TTL_DAYS", "device_session_ttl_days"),
+    ("NOTEKPR_AGENT_TOKEN_TTL_SECS", "agent_token_ttl_secs"),
+];
+
+/// The variables of [`NOW_SETTINGS`] set (not empty) in `env`, with their
+/// settings.
+pub fn set_but_now_settings(
+    env: impl Fn(&str) -> Option<String>,
+) -> Vec<(&'static str, &'static str)> {
+    NOW_SETTINGS
+        .iter()
+        .copied()
+        .filter(|(var, _)| env(var).is_some_and(|v| !v.trim().is_empty()))
+        .collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn names_the_variables_that_became_settings() {
+        let env = |v: &str| match v {
+            "NOTEKPR_MAX_ATTACHMENT_MB" => Some("100".to_string()),
+            "NOTEKPR_RATE_LIMIT_RPS" => Some(String::new()),
+            "NOTEKPR_PUBLIC_URL" => Some("https://notes.example.com".to_string()),
+            _ => None,
+        };
+        assert_eq!(
+            set_but_now_settings(env),
+            [("NOTEKPR_MAX_ATTACHMENT_MB", "max_attachment_mb")]
+        );
+        // They are settings, no longer flags.
+        let flag = Cli::try_parse_from(["notekpr-server", "--max-attachment-mb", "100"]);
+        assert!(flag.is_err());
+    }
 
     #[test]
     fn says_which_version_it_is() {

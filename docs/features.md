@@ -332,9 +332,9 @@ notes](writing.md) and [Drawings](drawings.md).
   they keep working and are back about a second after it is.
 * Backups, upgrades, Prometheus metrics, and an admin page for accounts
   (make admins, disable accounts), server statistics and the server's
-  version — never content;
-  size limits for changes, snapshots and attachments.
-* Instance settings that change without a restart: limits on accounts,
+  version — never content.
+* Instance settings that change without a restart (flags only for what the
+  server needs to start): limits on accounts,
   agents and vaults, vaults, agents and quick notes per person (with each
   person's own allowance), drawings per vault (with a vault's own), a
   read-only mode the apps ride out — edits are kept and sent
@@ -343,7 +343,10 @@ notes](writing.md) and [Drawings](drawings.md).
   the size is raised: the room a family or a team shares on its own
   server), and the
   oldest app version it accepts: older apps are told to update and keep
-  their unsent edits.
+  their unsent edits. Also the sizes of attachments, changes and snapshots,
+  how many versions each note keeps and how often, how long deleting for
+  good can be undone, rate limits, how long sign-ins last, and whether
+  people are found by name or only by exact e-mail address.
 * Storage per vault: a size each vault may take, by default and for one
   vault. A full vault takes no new content — its members' edits wait in
   their apps and go out once it has room — while every other vault goes

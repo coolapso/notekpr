@@ -198,7 +198,7 @@ async fn setup(
     cfg.oidc_issuer = Some(issuer);
     cfg.oidc_client_id = Some(CLIENT_ID.into());
     cfg.oidc_client_secret = Some(CLIENT_SECRET.into());
-    let (app, state) = notekpr_server::build(cfg, None).await.unwrap();
+    let (app, state) = notekpr_server::build_for_tests(cfg).await.unwrap();
     tokio::spawn(async move {
         axum::serve(
             listener,
@@ -322,7 +322,7 @@ async fn dev_accounts_never_take_the_first_admin_role() {
     let dir = s._dir.path().to_path_buf();
     let mut cfg = notekpr_server::config::Config::for_tests(dir.clone());
     cfg.public_url = s.base.clone();
-    let (dev_app, _) = notekpr_server::build(cfg, None).await.unwrap();
+    let (dev_app, _) = notekpr_server::build_for_tests(cfg).await.unwrap();
     let dev_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let dev_base = format!("http://{}", dev_listener.local_addr().unwrap());
     tokio::spawn(async move {
@@ -352,7 +352,7 @@ async fn dev_accounts_never_take_the_first_admin_role() {
     cfg.dev_mode = false;
     cfg.oidc_issuer = Some(s.idp.0.issuer.clone());
     cfg.oidc_client_id = Some(CLIENT_ID.into());
-    let (app, _) = notekpr_server::build(cfg, None).await.unwrap();
+    let (app, _) = notekpr_server::build_for_tests(cfg).await.unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
     tokio::spawn(async move {

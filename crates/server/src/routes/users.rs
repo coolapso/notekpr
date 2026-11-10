@@ -2,11 +2,10 @@
 
 use axum::Json;
 use axum::extract::{Path, Query, State};
-use notekpr_core::protocol::{PublicAccountKey, PublicUser};
+use notekpr_core::protocol::{PublicAccountKey, PublicUser, UserDirectory};
 use serde::Deserialize;
 
 use crate::auth::Principal;
-use crate::config::UserDirectory;
 use crate::db::Db;
 use crate::error::{AppError, AppResult};
 use crate::repo;
@@ -45,9 +44,9 @@ pub async fn search(
             .replace('%', "\\%")
             .replace('_', "\\_")
     );
-    let ids = match state.config.user_directory {
+    let ids = match state.instance.settings().user_directory {
         UserDirectory::Search => repo::users::search(&state.db, &who.user_id, &term, &like).await?,
-        UserDirectory::ExactEmail => {
+        UserDirectory::ExactEmail | UserDirectory::Other => {
             repo::users::search_exact_email(&state.db, &who.user_id, &term, &like).await?
         }
     };
@@ -76,7 +75,7 @@ pub async fn get_user(
     let searchable = target.kind == "human"
         && !target.disabled
         && who.is_human()
-        && state.config.user_directory == UserDirectory::Search;
+        && state.instance.settings().user_directory == UserDirectory::Search;
     let allowed = id == who.user_id || shares_vault || shares_note || own_agent || searchable;
     if !allowed {
         return Err(AppError::NotFound);

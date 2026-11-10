@@ -1612,7 +1612,7 @@ fn warn_too_large(vault_name: &str, n: usize, max: usize) {
     ui::warn(&format!(
         "vault '{vault_name}': {n} change(s) are larger than the server accepts ({max} bytes per change); they \
          go out with a copy of the whole note instead. If even that is too large, they stay on this device — \
-         ask the administrator to raise NOTEKPR_MAX_UPDATE_KB. Other changes keep syncing"
+         ask the administrator to raise the update size limit. Other changes keep syncing"
     ));
 }
 

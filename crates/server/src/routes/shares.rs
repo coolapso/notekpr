@@ -310,14 +310,14 @@ pub(crate) async fn apply_key_change(
     }
     if let Some(snap) = &req.snapshot {
         if !db::valid_id(&snap.snapshot_id)
-            || snap.payload.len() as u64 > state.config.max_snapshot_bytes()
+            || snap.payload.len() as u64 > state.instance.settings().max_snapshot_bytes()
             || epoch_of(&snap.payload)? != req.epoch
         {
             return Err(bad("invalid snapshot"));
         }
         sync::insert_snapshot(
             tx,
-            &state.config,
+            state.instance.settings().snapshot_retention,
             &who.user_id,
             v,
             o,

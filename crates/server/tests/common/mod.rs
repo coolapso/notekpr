@@ -20,6 +20,24 @@ pub struct TestServer {
     pub state: notekpr_server::state::AppState,
 }
 
+impl TestServer {
+    /// Change instance settings, as an administrator does while it runs.
+    pub async fn set(&self, change: InstanceSettingsUpdate) {
+        self.state
+            .instance
+            .update(&self.state.db, &change)
+            .await
+            .unwrap();
+    }
+}
+
+/// Delete from the file store what is due at `now`, as the server does
+/// every few minutes.
+pub async fn delete_due(state: &notekpr_server::state::AppState, now: i64) -> u64 {
+    let keep = state.instance.settings().keep_deleted_files_ms();
+    state.blobs.delete_due(now, keep).await.unwrap()
+}
+
 pub async fn start() -> TestServer {
     start_with(|_| {}).await
 }
@@ -28,7 +46,7 @@ pub async fn start_with(f: impl FnOnce(&mut notekpr_server::config::Config)) -> 
     let dir = tempfile::tempdir().unwrap();
     let mut cfg = notekpr_server::config::Config::for_tests(dir.path().to_path_buf());
     f(&mut cfg);
-    let (app, state) = notekpr_server::build(cfg, None).await.unwrap();
+    let (app, state) = notekpr_server::build_for_tests(cfg).await.unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move {

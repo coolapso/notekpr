@@ -1242,8 +1242,8 @@ async fn stats_loop(
         if m.is_some_and(|m| m.rate_limited_ps > 0.0) && !told_rate_limited {
             told_rate_limited = true;
             let why = "the server turns requests away (rate limits): every simulated person \
-                       comes from this machine — raise NOTEKPR_RATE_LIMIT_RPS and \
-                       NOTEKPR_AUTH_RATE_LIMIT_PER_MIN on it";
+                       comes from this machine — raise its rate limits in Administration \
+                       (rate_limit_rps, auth_rate_limit_per_min)";
             eprintln!("warning: {why}");
             world.bus.feed(Action::Revision, format!("⚠ {why}"));
         }

@@ -280,7 +280,7 @@ by its id.
 | `@Name` in a comment's text | mentions that member of the vault (any case; longer names win: `@Ann Lee` over `@Ann`). Only the vault's members can be mentioned: other `@words` stay text, with a warning. The output says whom it mentioned |
 | `mentions [--vault v] [--unread] [--mark-read] [--limit n]` | comments that mention you, newest first (`*`: not read on any device yet), with the note, who and when; `--mark-read` marks them read everywhere (the web app's inbox too), with everything before them |
 | `icon <v> <path> <emoji>` / `icon <v> <path> --remove` | a note's, attachment's or folder's icon, an emoji (it replaces a picture given in the web app). `ls`, `vault list` and `shared list` show icons, a picture as `(picture)`, and people a note is shared with see its icon and new name |
-| `trash list\|restore\|undo\|empty <v>` | restore by path or id; `empty` deletes for good (the vault's owner and admins; asks first; `--yes`), which `undo <v> <entry>` takes back while the server keeps it (`--purge-undo-days`, 30 by default): the entry goes back to the trash. `list` shows those too, for the owner and admins, with how long they are kept (`kept_until` with `--json`) |
+| `trash list\|restore\|undo\|empty <v>` | restore by path or id; `empty` deletes for good (the vault's owner and admins; asks first; `--yes`), which `undo <v> <entry>` takes back while the server keeps it (`purge_undo_days`, 30 days by default): the entry goes back to the trash. `list` shows those too, for the owner and admins, with how long they are kept (`kept_until` with `--json`) |
 | `search <query> [--vault v] [--limit n]` | terms, `"phrases"`, `tag:x`, `folder:x`, `title:x`, `vault:x`; 20 results unless `--limit` |
 | `backlinks <v> <path>` | notes linking to a note |
 | `history <v> <path>`, `history show\|restore <v> <path> <rev>` | encrypted revisions stored on the server |
@@ -986,7 +986,8 @@ lost-or-stolen-laptop case. Session tokens in the profile grant server access
   limit (`/info`, remembered for offline use). A change that cannot be split
   is kept on this device (still visible locally, counted as "TOO LARGE" in
   `status`) and set aside, so everything else keeps uploading; it goes out by
-  itself once the administrator raises `NOTEKPR_MAX_UPDATE_KB`.
+  itself once the administrator raises the update size limit (Settings →
+  Administration → Instance, `max_update_kb`).
 * **Environment overlap** — the server also reads `NOTEKPR_DATA_DIR`; do
   not export it in a shell that also starts a server, or use separate shells.
 * **More detail** — `NOTEKPR_LOG=debug notekpr sync` logs to stderr.

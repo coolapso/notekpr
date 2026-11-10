@@ -952,7 +952,9 @@ fn AdminClients() -> impl IntoView {
     };
     let scope_text = |s: AdminScope| match s {
         AdminScope::Read => "read: accounts, statistics, settings, admin clients",
-        AdminScope::Settings => "settings: limits and read-only mode",
+        AdminScope::Settings => {
+            "settings: instance settings — limits, sizes, read-only mode and more"
+        }
         AdminScope::Accounts => "accounts: disable, enable, limits per person and per vault",
         AdminScope::Admins => "admins: give and take the admin role",
         AdminScope::Clients => {
@@ -1095,7 +1097,7 @@ fn storage_usage(bytes: u64, a: Allowance, default: Option<Limit>) -> String {
     }
 }
 
-/// The instance settings (limits, read-only mode).
+/// The instance settings (limits, read-only mode, sizes, lifetimes, …).
 #[component]
 fn InstanceSettingsPanel(
     defaults: RwSignal<Option<InstanceSettings>>,
@@ -1128,9 +1130,13 @@ fn InstanceSettingsPanel(
         drawings_per_vault,
     ) = fields;
     let oldest_app = RwSignal::new(String::new());
+    // The server's sizes, history, deleting, rate limits, sign-ins: edited
+    // here, saved together.
+    let server = RwSignal::new(InstanceSettings::default());
     let show = move |a: AdminSettings| {
         let s = &a.settings;
         oldest_app.set(s.oldest_app_version.clone());
+        server.set(s.clone());
         users.set(s.max_users);
         agents.set(s.max_agents);
         vaults.set(s.max_vaults);
@@ -1156,6 +1162,11 @@ fn InstanceSettingsPanel(
                     show(a);
                     state::success("Instance settings saved.");
                     on_saved.run(());
+                    // This app follows new sizes at once (others when they
+                    // next ask the server).
+                    if let Ok(i) = api::get::<ServerInfo>("/info").await {
+                        ui().server.set(Some(i));
+                    }
                 }
                 Err(e) => state::error(e.message),
             }
@@ -1229,8 +1240,76 @@ fn InstanceSettingsPanel(
                     let build = status.get().map(|s| s.build_oldest_app_version).unwrap_or_default();
                     format!("Apps older than this (the command line now, desktop and phone apps later) are told to update instead of syncing, and keep their unsent edits; browsers get the current version with a reload. Empty: what this server's version needs ({build}).")
                 }}</p>
+                <h4>"Server"</h4>
+                <div class="limits server-settings">
+                    <SettingField label="Attachment size (MiB)" server=server get=|s| s.max_attachment_mb set=|s, n| s.max_attachment_mb = n class="max-attachment-mb"/>
+                    <SettingField label="Update size (KiB)" server=server get=|s| s.max_update_kb set=|s, n| s.max_update_kb = n class="max-update-kb"/>
+                    <SettingField label="Snapshot size (KiB; 0: automatic)" server=server get=|s| s.max_snapshot_kb set=|s, n| s.max_snapshot_kb = n class="max-snapshot-kb"/>
+                    <SettingField label="Versions kept per note" server=server get=|s| s.snapshot_retention set=|s, n| s.snapshot_retention = n class="snapshot-retention"/>
+                    <SettingField label="Seconds between versions" server=server get=|s| s.snapshot_cooldown_secs set=|s, n| s.snapshot_cooldown_secs = n class="snapshot-cooldown-secs"/>
+                    <SettingField label="Days to undo deleting for good" server=server get=|s| s.purge_undo_days set=|s, n| s.purge_undo_days = n class="purge-undo-days"/>
+                    <SettingField label="Days files stay after that" server=server get=|s| s.keep_deleted_files_days set=|s, n| s.keep_deleted_files_days = n class="keep-deleted-files-days"/>
+                    <SettingField label="Requests per second" server=server get=|s| s.rate_limit_rps set=|s, n| s.rate_limit_rps = n class="rate-limit-rps"/>
+                    <SettingField label="Sign-ins per minute" server=server get=|s| s.auth_rate_limit_per_min set=|s, n| s.auth_rate_limit_per_min = n class="auth-rate-limit-per-min"/>
+                    <SettingField label="Browser sign-ins last (days)" server=server get=|s| s.session_ttl_days set=|s, n| s.session_ttl_days = n class="session-ttl-days"/>
+                    <SettingField label="CLI sign-ins last (days)" server=server get=|s| s.device_session_ttl_days set=|s, n| s.device_session_ttl_days = n class="device-session-ttl-days"/>
+                    <SettingField label="Agents' tokens last (seconds)" server=server get=|s| s.agent_token_ttl_secs set=|s, n| s.agent_token_ttl_secs = n class="agent-token-ttl-secs"/>
+                    <label class="limit-field user-directory">
+                        <span class="limit-label">"Finding people"</span>
+                        <select class="input small" on:change=move |ev| {
+                            let d = match event_target_value(&ev).as_str() {
+                                "exact_email" => UserDirectory::ExactEmail,
+                                _ => UserDirectory::Search,
+                            };
+                            server.update(|s| s.user_directory = d);
+                        }>
+                            <option value="search" selected=move || server.with(|s| s.user_directory == UserDirectory::Search)>"By name or e-mail"</option>
+                            <option value="exact_email" selected=move || server.with(|s| s.user_directory == UserDirectory::ExactEmail)>"By exact e-mail only"</option>
+                        </select>
+                    </label>
+                </div>
+                <div class="row">
+                    <button class="btn primary save-server-settings" on:click=move |_| {
+                        let s = server.get_untracked();
+                        save(InstanceSettingsUpdate {
+                            max_attachment_mb: Some(s.max_attachment_mb),
+                            max_update_kb: Some(s.max_update_kb),
+                            max_snapshot_kb: Some(s.max_snapshot_kb),
+                            snapshot_retention: Some(s.snapshot_retention),
+                            snapshot_cooldown_secs: Some(s.snapshot_cooldown_secs),
+                            purge_undo_days: Some(s.purge_undo_days),
+                            keep_deleted_files_days: Some(s.keep_deleted_files_days),
+                            rate_limit_rps: Some(s.rate_limit_rps),
+                            auth_rate_limit_per_min: Some(s.auth_rate_limit_per_min),
+                            user_directory: Some(s.user_directory),
+                            session_ttl_days: Some(s.session_ttl_days),
+                            device_session_ttl_days: Some(s.device_session_ttl_days),
+                            agent_token_ttl_secs: Some(s.agent_token_ttl_secs),
+                            ..Default::default()
+                        })
+                    }>"Save server settings"</button>
+                </div>
+                <p class="muted small">"These take effect at once, without a restart. Sizes: the largest attachment, the largest encrypted change (the apps split bigger edits to fit) and the largest snapshot — a note's whole state, which also carries a change too big for one update (automatic: 16 × the update size, at least 32 MiB). Versions: how many each note's history keeps, and how often one person adds one. Something deleted for good can be undone for so many days (0: gone at once; a shorter time applies to what was deleted already, too), and its files stay in the file store that many days longer, so that a database backup restored finds them: keep them at least as long as your backups. Rate limits count per address: raise them when many people share one (an office). A new length of sign-ins applies from the next sign-in. Finding people to share with: by the start of their name or their exact e-mail address, or only by their exact e-mail address; people who already share a vault or note always find each other."</p>
             </div>
         })}
+    }
+}
+
+/// A whole number among the server settings (`server`) being edited.
+#[component]
+fn SettingField(
+    label: &'static str,
+    server: RwSignal<InstanceSettings>,
+    get: fn(&InstanceSettings) -> u32,
+    set: fn(&mut InstanceSettings, u32),
+    class: &'static str,
+) -> impl IntoView {
+    view! {
+        <label class=format!("limit-field {class}")>
+            <span class="limit-label">{label}</span>
+            <NumberInput value=Signal::derive(move || u64::from(server.with_untracked(get)))
+                set=Callback::new(move |n: u64| server.update(|s| set(s, u32::try_from(n).unwrap_or(u32::MAX))))/>
+        </label>
     }
 }
 

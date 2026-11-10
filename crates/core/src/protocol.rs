@@ -1429,10 +1429,33 @@ fn default_quick_notes_per_user() -> Limit {
     Limit::Max(DEFAULT_QUICK_NOTES_PER_USER)
 }
 
+/// How people find others to share with (`GET /users/search`).
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum UserDirectory {
+    /// By the start of their display name, or their exact e-mail address.
+    #[default]
+    Search,
+    /// Only by their exact e-mail address.
+    #[serde(alias = "exact-email")]
+    ExactEmail,
+    /// A way from a newer release (stored settings after going back to an
+    /// older one): as narrow as [`UserDirectory::ExactEmail`]. Never set.
+    #[serde(other)]
+    Other,
+}
+
+const DAY_MS: i64 = 24 * 3600 * 1000;
+
+/// The smallest update limit (KiB) the apps can split edits into.
+pub const MIN_MAX_UPDATE_KB: u32 = 8;
+
 /// Settings an instance's administrators change while it runs
 /// (`GET`/`PATCH /admin/settings`). Limits never take anything away: below
-/// them nothing changes, at them nothing more can be created.
+/// them nothing changes, at them nothing more can be created. Fields a
+/// stored document lacks take their defaults.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(default)]
 pub struct InstanceSettings {
     /// Accounts of people that aren't disabled (agents don't count).
     #[serde(default)]
@@ -1485,6 +1508,42 @@ pub struct InstanceSettings {
     /// ([`ERROR_UPDATE_REQUIRED`]).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub oldest_app_version: String,
+    /// The largest attachment (MiB).
+    pub max_attachment_mb: u32,
+    /// The largest encrypted update (KiB): the apps split edits to fit, and
+    /// re-read it when the server refuses one as too large. At least
+    /// [`MIN_MAX_UPDATE_KB`].
+    pub max_update_kb: u32,
+    /// The largest snapshot (KiB): a note's full state, also how a change
+    /// too large for one update still reaches others. `0`: 16 × the update
+    /// limit, at least 32 MiB; never below the update limit.
+    pub max_snapshot_kb: u32,
+    /// Revisions (snapshots) kept per note; at least 2.
+    pub snapshot_retention: u32,
+    /// Seconds between two snapshots of the same note by the same person
+    /// (keeps the history from being flooded).
+    pub snapshot_cooldown_secs: u32,
+    /// Days during which deleting something for good can be undone by the
+    /// vault's owner and admins: the server keeps it that long, then
+    /// deletes it. `0`: deleted at once. Lowering it shortens the time for
+    /// what was deleted already, too.
+    pub purge_undo_days: u32,
+    /// Days a file stays in the file store after the database let go of it
+    /// (deleted for good and no longer undoable, or its vault deleted), so
+    /// that restoring a database backup that recent finds its files.
+    pub keep_deleted_files_days: u32,
+    /// API requests per second per client address (bursts of 4 ×).
+    pub rate_limit_rps: u32,
+    /// Sign-in and token requests per minute per client address.
+    pub auth_rate_limit_per_min: u32,
+    /// How people find others to share with.
+    pub user_directory: UserDirectory,
+    /// Days a browser session lasts (from when it starts).
+    pub session_ttl_days: u32,
+    /// Days a session of the CLI (and other apps signing in by code) lasts.
+    pub device_session_ttl_days: u32,
+    /// Seconds an agent's access token lasts.
+    pub agent_token_ttl_secs: u32,
 }
 
 impl Default for InstanceSettings {
@@ -1502,6 +1561,19 @@ impl Default for InstanceSettings {
             storage_per_vault_mb: Limit::Unlimited,
             quick_notes_storage_mb: Limit::Unlimited,
             oldest_app_version: String::new(),
+            max_attachment_mb: 25,
+            max_update_kb: 2048,
+            max_snapshot_kb: 0,
+            snapshot_retention: 100,
+            snapshot_cooldown_secs: 30,
+            purge_undo_days: 30,
+            keep_deleted_files_days: 14,
+            rate_limit_rps: 50,
+            auth_rate_limit_per_min: 30,
+            user_directory: UserDirectory::Search,
+            session_ttl_days: 30,
+            device_session_ttl_days: 180,
+            agent_token_ttl_secs: 3600,
         }
     }
 }
@@ -1534,6 +1606,32 @@ pub struct InstanceSettingsUpdate {
     /// `""`: only what the server's build accepts.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub oldest_app_version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_attachment_mb: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_update_kb: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_snapshot_kb: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snapshot_retention: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snapshot_cooldown_secs: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub purge_undo_days: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub keep_deleted_files_days: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rate_limit_rps: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auth_rate_limit_per_min: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_directory: Option<UserDirectory>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_ttl_days: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device_session_ttl_days: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_token_ttl_secs: Option<u32>,
 }
 
 impl InstanceSettings {
@@ -1560,7 +1658,36 @@ impl InstanceSettings {
             storage_per_vault_mb,
             quick_notes_storage_mb,
             oldest_app_version,
+            max_attachment_mb,
+            max_update_kb,
+            max_snapshot_kb,
+            snapshot_retention,
+            snapshot_cooldown_secs,
+            purge_undo_days,
+            keep_deleted_files_days,
+            rate_limit_rps,
+            auth_rate_limit_per_min,
+            user_directory,
+            session_ttl_days,
+            device_session_ttl_days,
+            agent_token_ttl_secs,
         } = u.clone();
+        self.max_attachment_mb = max_attachment_mb.unwrap_or(self.max_attachment_mb);
+        self.max_update_kb = max_update_kb.unwrap_or(self.max_update_kb);
+        self.max_snapshot_kb = max_snapshot_kb.unwrap_or(self.max_snapshot_kb);
+        self.snapshot_retention = snapshot_retention.unwrap_or(self.snapshot_retention);
+        self.snapshot_cooldown_secs = snapshot_cooldown_secs.unwrap_or(self.snapshot_cooldown_secs);
+        self.purge_undo_days = purge_undo_days.unwrap_or(self.purge_undo_days);
+        self.keep_deleted_files_days =
+            keep_deleted_files_days.unwrap_or(self.keep_deleted_files_days);
+        self.rate_limit_rps = rate_limit_rps.unwrap_or(self.rate_limit_rps);
+        self.auth_rate_limit_per_min =
+            auth_rate_limit_per_min.unwrap_or(self.auth_rate_limit_per_min);
+        self.user_directory = user_directory.unwrap_or(self.user_directory);
+        self.session_ttl_days = session_ttl_days.unwrap_or(self.session_ttl_days);
+        self.device_session_ttl_days =
+            device_session_ttl_days.unwrap_or(self.device_session_ttl_days);
+        self.agent_token_ttl_secs = agent_token_ttl_secs.unwrap_or(self.agent_token_ttl_secs);
         self.max_users = max_users.unwrap_or(self.max_users);
         self.max_agents = max_agents.unwrap_or(self.max_agents);
         self.max_vaults = max_vaults.unwrap_or(self.max_vaults);
@@ -1575,6 +1702,71 @@ impl InstanceSettings {
         if let Some(v) = oldest_app_version {
             self.oldest_app_version = v.trim().to_string();
         }
+    }
+
+    /// Why the server can't work with these settings, if it can't: the
+    /// values that would stop it or its apps from working.
+    pub fn check(&self) -> Result<(), String> {
+        let at_least = [
+            ("max_attachment_mb", self.max_attachment_mb, 1),
+            ("max_update_kb", self.max_update_kb, MIN_MAX_UPDATE_KB),
+            ("snapshot_retention", self.snapshot_retention, 2),
+            ("rate_limit_rps", self.rate_limit_rps, 1),
+            ("auth_rate_limit_per_min", self.auth_rate_limit_per_min, 1),
+            ("session_ttl_days", self.session_ttl_days, 1),
+            ("device_session_ttl_days", self.device_session_ttl_days, 1),
+            ("agent_token_ttl_secs", self.agent_token_ttl_secs, 60),
+        ];
+        if let Some((name, _, min)) = at_least.iter().find(|(_, v, min)| v < min) {
+            return Err(format!("{name} is at least {min}"));
+        }
+        if self.user_directory == UserDirectory::Other {
+            return Err("user_directory is \"search\" or \"exact_email\"".into());
+        }
+        Ok(())
+    }
+
+    pub fn max_attachment_bytes(&self) -> u64 {
+        u64::from(self.max_attachment_mb) * MIB
+    }
+
+    pub fn max_update_bytes(&self) -> u64 {
+        u64::from(self.max_update_kb) * 1024
+    }
+
+    /// The largest snapshot: [`Self::max_snapshot_kb`], or by default 16 ×
+    /// the update limit and at least 32 MiB; never below the update limit.
+    pub fn max_snapshot_bytes(&self) -> u64 {
+        match self.max_snapshot_kb {
+            0 => (self.max_update_bytes() * 16).max(32 * MIB),
+            kb => (u64::from(kb) * 1024).max(self.max_update_bytes()),
+        }
+    }
+
+    pub fn snapshot_cooldown_ms(&self) -> i64 {
+        i64::from(self.snapshot_cooldown_secs) * 1000
+    }
+
+    /// How long something deleted for good is kept.
+    pub fn purge_undo_ms(&self) -> i64 {
+        i64::from(self.purge_undo_days) * DAY_MS
+    }
+
+    /// How long a file stays in the store after the database let go of it.
+    pub fn keep_deleted_files_ms(&self) -> i64 {
+        i64::from(self.keep_deleted_files_days) * DAY_MS
+    }
+
+    pub fn session_ttl_ms(&self) -> i64 {
+        i64::from(self.session_ttl_days) * DAY_MS
+    }
+
+    pub fn device_session_ttl_ms(&self) -> i64 {
+        i64::from(self.device_session_ttl_days) * DAY_MS
+    }
+
+    pub fn agent_token_ttl_ms(&self) -> i64 {
+        i64::from(self.agent_token_ttl_secs) * 1000
     }
 }
 
@@ -1637,7 +1829,7 @@ pub const ERROR_UPDATE_REQUIRED: &str = "update_required";
 pub enum AdminScope {
     /// Accounts, usage statistics, the instance settings, admin clients.
     Read,
-    /// Change the instance settings (limits, read-only mode).
+    /// Change the instance settings (limits, sizes, read-only mode, …).
     Settings,
     /// Disable and enable accounts, set their allowances and vaults'
     /// storage limits.
@@ -2206,6 +2398,62 @@ mod tests {
         s.apply(&serde_json::from_str(r#"{"quick_notes_per_user": "unlimited"}"#).unwrap());
         assert_eq!(s.quick_notes_per_user, Limit::Unlimited);
         assert_eq!(s.vaults_per_user, Limit::Max(1));
+    }
+
+    #[test]
+    fn sizes_and_lifetimes_are_settings_too() {
+        // Settings stored before they were: what the flags' defaults were.
+        let s: InstanceSettings = serde_json::from_str(r#"{"max_vaults": 10}"#).unwrap();
+        assert_eq!(s.max_attachment_bytes(), 25 * MIB);
+        assert_eq!(s.max_update_bytes(), 2048 * 1024);
+        assert_eq!(s.max_snapshot_bytes(), 32 * MIB);
+        assert_eq!(s.purge_undo_ms(), 30 * DAY_MS);
+        assert_eq!(s.user_directory, UserDirectory::Search);
+        assert_eq!(s.check(), Ok(()));
+
+        let mut s = s;
+        s.apply(
+            &serde_json::from_str(
+                r#"{"max_update_kb": 4096, "user_directory": "exact_email", "purge_undo_days": 0}"#,
+            )
+            .unwrap(),
+        );
+        assert_eq!(s.max_snapshot_bytes(), 64 * MIB);
+        assert_eq!(s.user_directory, UserDirectory::ExactEmail);
+        assert_eq!(s.purge_undo_ms(), 0);
+        assert_eq!(s.max_attachment_mb, 25);
+        // Never below the update limit.
+        s.apply(&serde_json::from_str(r#"{"max_snapshot_kb": 100}"#).unwrap());
+        assert_eq!(s.max_snapshot_bytes(), s.max_update_bytes());
+        // The flag's spelling.
+        let u: InstanceSettingsUpdate =
+            serde_json::from_str(r#"{"user_directory": "exact-email"}"#).unwrap();
+        assert_eq!(u.user_directory, Some(UserDirectory::ExactEmail));
+        // A newer release's way still reads (the server starts), but isn't
+        // set.
+        let s: InstanceSettings =
+            serde_json::from_str(r#"{"user_directory": "by_invitation"}"#).unwrap();
+        assert_eq!(s.user_directory, UserDirectory::Other);
+        assert!(s.check().is_err());
+
+        for bad in [
+            r#"{"max_update_kb": 4}"#,
+            r#"{"max_attachment_mb": 0}"#,
+            r#"{"snapshot_retention": 1}"#,
+            r#"{"rate_limit_rps": 0}"#,
+            r#"{"session_ttl_days": 0}"#,
+            r#"{"agent_token_ttl_secs": 10}"#,
+        ] {
+            let mut s = InstanceSettings::default();
+            s.apply(&serde_json::from_str(bad).unwrap());
+            assert!(s.check().is_err(), "{bad}");
+        }
+        let mut s = InstanceSettings::default();
+        s.apply(
+            &serde_json::from_str(r#"{"snapshot_cooldown_secs": 0, "keep_deleted_files_days": 0}"#)
+                .unwrap(),
+        );
+        assert_eq!(s.check(), Ok(()));
     }
 
     #[test]

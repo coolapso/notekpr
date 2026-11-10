@@ -114,7 +114,14 @@ async fn an_admin_client_manages_the_instance_but_never_reaches_a_vault() {
         .json()
         .await
         .unwrap();
-    assert_eq!(s.settings, InstanceSettings::default());
+    // The defaults, but the tests' rates and cooldown (`build_for_tests`).
+    let tests = InstanceSettings {
+        rate_limit_rps: 10_000,
+        auth_rate_limit_per_min: 10_000,
+        snapshot_cooldown_secs: 0,
+        ..Default::default()
+    };
+    assert_eq!(s.settings, tests);
     assert_eq!(s.read_only, None);
     assert!(s.storage_bytes > 0);
     let users: Vec<AdminUser> = operator(&srv, Method::GET, "/admin/users")
@@ -1735,4 +1742,103 @@ async fn administrators_set_how_many_drawings_a_vault_may_hold() {
     let r = operator(&srv, Method::PATCH, &format!("/admin/vaults/{q}"))
         .json(&serde_json::json!({ "drawing_allowance": 1 }));
     assert_eq!(status(r).await, 404);
+}
+
+/// Sizes, rate limits, sign-ins and how people are found are instance
+/// settings too: changed while the server runs, they take effect at once.
+#[tokio::test]
+async fn sizes_rates_and_sign_ins_change_without_a_restart() {
+    let srv = start_with_operator().await;
+    let mut alice = new_user(&srv.base, "alice").await;
+    let bob = new_user(&srv.base, "bob").await;
+    let v = alice.create_vault("Home").await;
+
+    // Attachments of 1 MiB at most: the apps read it, the server refuses
+    // more (the request's body too, before reading it all).
+    settings(&srv, serde_json::json!({"max_attachment_mb": 1})).await;
+    let info: ServerInfo = alice.api.get("/info").await;
+    assert_eq!(info.max_attachment_bytes, MIB);
+    assert_eq!(put_attachment(&alice, &v, "a1", 1_500_000).await, 413);
+    settings(&srv, serde_json::json!({"max_attachment_mb": 2})).await;
+    assert_eq!(put_attachment(&alice, &v, "a1", 1_500_000).await, 201);
+    // Above what it was when the server started (25 MiB) too. (Bytes as
+    // they come: encrypting this much takes a while in a test build.)
+    settings(&srv, serde_json::json!({"max_attachment_mb": 30})).await;
+    let big = alice
+        .api
+        .raw()
+        .put(format!("{}/vaults/{v}/attachments/a2", srv.base))
+        .bearer_auth(alice.api.token.clone().unwrap())
+        .body(vec![7; 26 * MIB as usize])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(big.status(), 201);
+
+    // Others are found by their exact e-mail address only (dev accounts
+    // have none).
+    let found = |q: &'static str| {
+        let api = alice.api.clone();
+        async move {
+            api.get::<Vec<PublicUser>>(&format!("/users/search?q={q}"))
+                .await
+        }
+    };
+    assert_eq!(found("bo").await.len(), 1);
+    settings(&srv, serde_json::json!({"user_directory": "exact_email"})).await;
+    assert!(found("bo").await.is_empty());
+    let profile = format!("/users/{}", bob.id);
+    assert_eq!(
+        alice.api.status::<()>(Method::GET, &profile, None).await,
+        404
+    );
+
+    // What would stop the server or its apps is refused, and nothing of
+    // that change is kept.
+    let r = operator(&srv, Method::PATCH, "/admin/settings")
+        .json(&serde_json::json!({"rate_limit_rps": 5, "max_update_kb": 4}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(error_code(r).await.0, 400);
+    let s: AdminSettings = operator(&srv, Method::GET, "/admin/settings")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(
+        (s.settings.max_update_kb, s.settings.rate_limit_rps),
+        (2048, 10_000)
+    );
+
+    // A new length of sign-ins applies from the next one; two sign-ins a
+    // minute, counted afresh.
+    settings(
+        &srv,
+        serde_json::json!({"session_ttl_days": 1, "auth_rate_limit_per_min": 2}),
+    )
+    .await;
+    let now = notekpr_server::db::now();
+    let (_, s) = dev_login(&srv.base, "carol").await;
+    let day = 24 * 3600 * 1000;
+    assert!((now + day..now + day + 60_000).contains(&s.expires_at));
+    let sign_in = || async {
+        reqwest::Client::new()
+            .post(format!("{}/auth/dev-login", srv.base))
+            .json(&DevLoginRequest {
+                username: "carol".into(),
+                display_name: None,
+            })
+            .send()
+            .await
+            .unwrap()
+            .status()
+            .as_u16()
+    };
+    assert_eq!(sign_in().await, 200);
+    assert_eq!(sign_in().await, 429);
+    settings(&srv, serde_json::json!({"auth_rate_limit_per_min": 100})).await;
+    assert_eq!(sign_in().await, 200);
 }

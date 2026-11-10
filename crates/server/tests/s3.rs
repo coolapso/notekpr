@@ -6,6 +6,7 @@ mod common;
 
 use common::*;
 use futures::TryStreamExt;
+use notekpr_core::protocol::InstanceSettingsUpdate;
 use object_store::aws::AmazonS3Builder;
 use object_store::path::Path;
 use object_store::{ObjectStore, ObjectStoreExt};
@@ -31,9 +32,10 @@ async fn attachments_live_in_s3_compatible_storage() {
         .build()
         .unwrap();
     // Two servers share the bucket, each under a prefix of its own.
-    let a = start_with(|c| {
-        c.file_store = Some(format!("s3://{bucket}/a"));
-        c.purge_undo_days = 0;
+    let a = start_with(|c| c.file_store = Some(format!("s3://{bucket}/a"))).await;
+    a.set(InstanceSettingsUpdate {
+        purge_undo_days: Some(0),
+        ..Default::default()
     })
     .await;
     let b = start_with(|c| c.file_store = Some(format!("s3://{bucket}/b/"))).await;
@@ -57,8 +59,8 @@ async fn attachments_live_in_s3_compatible_storage() {
     let a1 = format!("/vaults/{v}/attachments/a1");
     assert_eq!(alice.api.status::<()>(Method::DELETE, &a1, None).await, 204);
     let later = notekpr_server::db::now() + 15 * DAY;
-    assert_eq!(a.state.blobs.delete_due(later).await.unwrap(), 1);
-    assert_eq!(b.state.blobs.delete_due(later).await.unwrap(), 0);
+    assert_eq!(delete_due(&a.state, later).await, 1);
+    assert_eq!(delete_due(&b.state, later).await, 0);
     assert_eq!(count(&bucket_store, "a").await, 1);
     assert_eq!(count(&bucket_store, "b").await, 1);
     assert_eq!(download(&alice, &v, "a2").await.0, b"two");

@@ -17,11 +17,11 @@ use crate::hub::Control;
 use crate::repo;
 use crate::state::AppState;
 
-const DAY_MS: i64 = 24 * 3600 * 1000;
 const LOGIN_CODE_TTL_MS: i64 = 120_000;
 const OIDC_STATE_TTL_MS: i64 = 600_000;
 
 pub async fn info(State(state): State<AppState>) -> Json<ServerInfo> {
+    let settings = state.instance.settings();
     Json(ServerInfo {
         name: "notekpr".into(),
         version: notekpr_core::VERSION.into(),
@@ -31,12 +31,12 @@ pub async fn info(State(state): State<AppState>) -> Json<ServerInfo> {
             .oidc
             .as_ref()
             .map(|_| state.config.oidc_display_name.clone()),
-        max_attachment_bytes: state.config.max_attachment_bytes(),
-        max_update_bytes: state.config.max_update_bytes(),
+        max_attachment_bytes: settings.max_attachment_bytes(),
+        max_update_bytes: settings.max_update_bytes(),
         note_keys: true,
-        max_snapshot_bytes: state.config.max_snapshot_bytes(),
+        max_snapshot_bytes: settings.max_snapshot_bytes(),
         read_only: state.instance.read_only(),
-        purge_undo_days: state.config.purge_undo_days,
+        purge_undo_days: settings.purge_undo_days,
         demo_resets_at: state
             .config
             .demo_resets_at
@@ -217,7 +217,7 @@ async fn session_response(
         user_id,
         kind,
         client,
-        state.config.session_ttl_days * DAY_MS,
+        state.instance.settings().session_ttl_ms(),
     )
     .await?;
     Ok(SessionResponse {

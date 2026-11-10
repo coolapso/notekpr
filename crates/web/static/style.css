@@ -1038,6 +1038,7 @@ table.keys td:first-child { white-space: nowrap; width: 1%; padding-right: 16px;
 .settings-nav button.active { background: var(--accent-bg); color: var(--accent); }
 .settings-body { min-width: 0; }
 .settings-body h3 { margin: 22px 0 8px; font-size: 15px; }
+.settings-body h4 { margin: 18px 0 6px; font-size: 13px; }
 .stats { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 10px; margin: 12px 0; }
 .vault-search { margin: 8px 0; }
 .vaults-of { display: flex; align-items: center; gap: 8px; margin: 4px 0; }

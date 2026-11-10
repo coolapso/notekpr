@@ -1,11 +1,15 @@
-//! Instance settings that change while the server runs (limits, read-only
-//! mode), and whether the server accepts changes.
+//! Instance settings that change while the server runs (limits, sizes,
+//! rate limits, lifetimes, read-only mode), and whether the server accepts
+//! changes.
 //!
 //! The settings live in the database (`repo::settings`) and here in memory;
-//! a change takes effect at once. Administrators change them through
-//! `routes::admin`: people with the admin role (none on an `--adminless`
-//! instance) and admin clients with the `settings` scope
-//! (`admin_clients.rs`).
+//! a change takes effect at once: whatever uses one reads it when it does
+//! (`Instance::settings`), and the rate limiters are rebuilt
+//! ([`Instance::limiters`]). Nothing sets them from the environment or a
+//! file: administrators change them through `routes::admin`, people with
+//! the admin role (none on an `--adminless` instance) and admin clients
+//! with the `settings` scope (`admin_clients.rs`). What only takes effect
+//! at a restart stays in `config.rs`.
 //!
 //! Read-only mode is the administrators' switch
 //! (`InstanceSettings::read_only`). While it is on, the routes that change
@@ -51,6 +55,7 @@ use tokio::sync::watch;
 use crate::apps::OLDEST_APP_VERSION;
 use crate::db::{self, Db};
 use crate::error::{AppError, AppResult};
+use crate::ratelimit::Limiters;
 use crate::repo;
 
 /// What a write may still add to a vault, counted once for the whole write
@@ -84,12 +89,14 @@ pub struct Instance {
     settings: RwLock<InstanceSettings>,
     storage_full: AtomicBool,
     mode: watch::Sender<Option<ReadOnly>>,
+    limiters: Limiters,
 }
 
 impl Instance {
     pub async fn load(db: &Db) -> anyhow::Result<Instance> {
         let settings = repo::settings::load(db).await?;
         let instance = Instance {
+            limiters: Limiters::new(&settings),
             settings: RwLock::new(settings),
             storage_full: AtomicBool::new(false),
             mode: watch::Sender::new(None),
@@ -101,6 +108,11 @@ impl Instance {
 
     pub fn settings(&self) -> InstanceSettings {
         self.settings.read().unwrap().clone()
+    }
+
+    /// Requests per client address, at the settings' rates.
+    pub fn limiters(&self) -> &Limiters {
+        &self.limiters
     }
 
     /// The oldest version of the apps the server accepts: its build's, or
@@ -143,8 +155,10 @@ impl Instance {
         }
         let mut next = self.settings();
         next.apply(change);
+        next.check().map_err(AppError::BadRequest)?;
         repo::settings::save(db, &next, db::now()).await?;
         *self.settings.write().unwrap() = next.clone();
+        self.limiters.follow(&next);
         self.update_mode();
         self.refresh_storage(db).await?;
         Ok(next)

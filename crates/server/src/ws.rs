@@ -49,7 +49,11 @@ enum Out {
 }
 
 pub async fn handler(State(state): State<AppState>, ws: WebSocketUpgrade) -> Response {
-    let max = (state.config.max_update_bytes() as usize) * 2 + 1024 * 1024;
+    // Pushes check the update limit; this only bounds a frame. A
+    // connection keeps the limit it started with: after the update limit
+    // was raised, a client sending larger frames is cut off, connects
+    // again and gets the new one.
+    let max = (state.instance.settings().max_update_bytes() as usize) * 2 + 1024 * 1024;
     ws.max_message_size(max)
         .max_frame_size(max)
         .on_upgrade(move |socket| connection(socket, state))

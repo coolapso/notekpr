@@ -1152,7 +1152,7 @@ async fn backup_and_restore_roundtrip() {
     let data = dir.path().join("live");
     let mut cfg = notekpr_server::config::Config::for_tests(data.clone());
     cfg.dev_mode = true;
-    let (app, state) = notekpr_server::build(cfg, None).await.unwrap();
+    let (app, state) = notekpr_server::build_for_tests(cfg).await.unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move {
@@ -1220,7 +1220,7 @@ async fn backup_and_restore_roundtrip() {
     );
     let mut cfg2 = cfg2;
     cfg2.file_store = Some(data.join("files").display().to_string());
-    let (app2, _s2) = notekpr_server::build(cfg2, None).await.unwrap();
+    let (app2, _s2) = notekpr_server::build_for_tests(cfg2).await.unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr2 = listener.local_addr().unwrap();
     tokio::spawn(async move {
@@ -2289,7 +2289,12 @@ async fn large_catch_ups_are_split_into_pages() {
 
 #[tokio::test]
 async fn snapshots_of_one_note_by_one_person_have_a_cooldown() {
-    let srv = start_with(|c| c.snapshot_cooldown_secs = 30).await;
+    let srv = start().await;
+    srv.set(InstanceSettingsUpdate {
+        snapshot_cooldown_secs: Some(30),
+        ..Default::default()
+    })
+    .await;
     let mut alice = new_user(&srv.base, "alice").await;
     let v = alice.create_vault("V").await;
     let note = NoteDoc::new();
@@ -2845,7 +2850,7 @@ async fn only_the_owner_and_admins_delete_for_good() {
 }
 
 /// Deleting for good can be undone for a while: gone for everyone at once,
-/// kept by the server for `--purge-undo-days`, back with everything (but
+/// kept by the server for `purge_undo_days`, back with everything (but
 /// its shares) when the owner or an admin undoes it, erased after.
 #[tokio::test]
 async fn deleting_for_good_can_be_undone_for_a_while() {
@@ -3110,10 +3115,15 @@ async fn deleting_for_good_can_be_undone_for_a_while() {
     );
 }
 
-/// With `--purge-undo-days 0`, deleting for good is what it says, at once.
+/// With `purge_undo_days` 0, deleting for good is what it says, at once.
 #[tokio::test]
 async fn without_an_undo_period_deleting_for_good_is_immediate() {
-    let srv = start_with(|c| c.purge_undo_days = 0).await;
+    let srv = start().await;
+    srv.set(InstanceSettingsUpdate {
+        purge_undo_days: Some(0),
+        ..Default::default()
+    })
+    .await;
     let mut alice = new_user(&srv.base, "alice").await;
     let v = alice.create_vault("Home").await;
     let u = NoteDoc::new().set_text("gone").unwrap();
@@ -4189,7 +4199,12 @@ async fn members_reload_one_notes_keys() {
 
 #[tokio::test]
 async fn a_snapshot_carrying_changes_the_log_lacks_reaches_everyone() {
-    let srv = start_with(|c| c.snapshot_retention = 2).await;
+    let srv = start().await;
+    srv.set(InstanceSettingsUpdate {
+        snapshot_retention: Some(2),
+        ..Default::default()
+    })
+    .await;
     let mut alice = new_user(&srv.base, "alice").await;
     let mut bob = new_user(&srv.base, "bob").await;
     let v = alice.create_vault("Plans").await;

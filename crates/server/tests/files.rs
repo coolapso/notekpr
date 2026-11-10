@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 
 use axum::body::Bytes;
 use common::*;
+use notekpr_core::protocol::InstanceSettingsUpdate;
 use notekpr_server::config::Config;
 use notekpr_server::error::AppError;
 use notekpr_server::state::AppState;
@@ -39,7 +40,7 @@ async fn row(state: &AppState, id: &str) -> Option<(Option<String>, i64)> {
 async fn serve(data: &Path, f: impl FnOnce(&mut Config)) -> anyhow::Result<(String, AppState)> {
     let mut cfg = Config::for_tests(data.to_path_buf());
     f(&mut cfg);
-    let (app, state) = notekpr_server::build(cfg, None).await?;
+    let (app, state) = notekpr_server::build_for_tests(cfg).await?;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move {
@@ -99,7 +100,12 @@ async fn attachments_are_files_in_the_store_and_rows_in_the_database() {
 
 #[tokio::test]
 async fn files_are_deleted_a_while_after_their_rows() {
-    let srv = start_with(|c| c.purge_undo_days = 0).await;
+    let srv = start().await;
+    srv.set(InstanceSettingsUpdate {
+        purge_undo_days: Some(0),
+        ..Default::default()
+    })
+    .await;
     let files = srv.dir.path().join("files");
     let mut alice = new_user(&srv.base, "alice").await;
     let v = alice.create_vault("Home").await;
@@ -123,22 +129,17 @@ async fn files_are_deleted_a_while_after_their_rows() {
         assert_eq!(alice.api.status::<()>(Method::DELETE, &p, None).await, 204);
     }
     assert!(row(&srv.state, "a1").await.is_none() && row(&srv.state, "a3").await.is_none());
-    let blobs = &srv.state.blobs;
     let now = notekpr_server::db::now();
-    assert_eq!(blobs.delete_due(now + DAY).await.unwrap(), 0);
+    assert_eq!(delete_due(&srv.state, now + DAY).await, 0);
     assert!(
         a1.exists() && a3.exists(),
         "kept for a backup of the database"
     );
-    assert_eq!(blobs.delete_due(now + 15 * DAY).await.unwrap(), 2);
+    assert_eq!(delete_due(&srv.state, now + 15 * DAY).await, 2);
     assert!(!a1.exists() && !a3.exists());
     assert_eq!(files_in(&files).len(), 1);
     assert_eq!(download(&alice, &v, "a2").await.0, b"a2");
-    assert_eq!(
-        blobs.delete_due(now + 15 * DAY).await.unwrap(),
-        0,
-        "done once"
-    );
+    assert_eq!(delete_due(&srv.state, now + 15 * DAY).await, 0, "done once");
 }
 
 #[tokio::test]
@@ -157,11 +158,11 @@ async fn uploads_never_claimed_are_deleted() {
     assert_eq!(files_in(&files).len(), 1);
     let now = notekpr_server::db::now();
     assert_eq!(
-        blobs.delete_due(now).await.unwrap(),
+        delete_due(&srv.state, now).await,
         0,
         "it may still be claimed"
     );
-    assert_eq!(blobs.delete_due(now + 2 * 3600 * 1000).await.unwrap(), 1);
+    assert_eq!(delete_due(&srv.state, now + 2 * 3600 * 1000).await, 1);
     assert!(files_in(&files).is_empty());
     // Too late to claim it now.
     assert!(matches!(

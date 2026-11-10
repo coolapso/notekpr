@@ -1438,7 +1438,8 @@ pub fn maybe_compact(c: &mut Core, vault_id: &str) {
     }
 }
 
-/// The server's default snapshot cooldown (`--snapshot-cooldown-secs`).
+/// The server's default snapshot cooldown (`snapshot_cooldown_secs`; a
+/// longer one only makes a snapshot wait for the next try).
 const SNAPSHOT_COOLDOWN_MS: i64 = 30_000;
 
 /// Store a snapshot of a note (in the background).

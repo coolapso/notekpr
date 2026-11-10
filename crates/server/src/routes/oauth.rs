@@ -194,7 +194,7 @@ async fn device_token(state: &AppState, f: TokenForm) -> AppResult<Response> {
         ("approved", Some(user_id)) => {
             let client_name = grant.client_name;
             repo::sessions::consume_device_grant(&state.db, &hash).await?;
-            let ttl = state.config.device_session_ttl_days * DAY_MS;
+            let ttl = state.instance.settings().device_session_ttl_ms();
             let s =
                 auth::create_session(&state.db, &user_id, "cli", Some(&client_name), ttl).await?;
             db::audit(
@@ -246,12 +246,13 @@ async fn client_credentials(
     }
     let agent_id = row.agent_id;
     repo::agents::touch_credential(&state.db, client_id, db::now()).await?;
-    let ttl_ms = state.config.agent_token_ttl_secs * 1000;
+    let ttl_secs = state.instance.settings().agent_token_ttl_secs;
+    let ttl_ms = i64::from(ttl_secs) * 1000;
     let s = auth::create_session(&state.db, &agent_id, "agent", Some(client_id), ttl_ms).await?;
     Ok(Json(TokenResponse {
         access_token: s.token,
         token_type: "Bearer".into(),
-        expires_in: state.config.agent_token_ttl_secs as u64,
+        expires_in: u64::from(ttl_secs),
         scope: None,
     })
     .into_response())

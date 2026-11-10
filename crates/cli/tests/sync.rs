@@ -5,7 +5,7 @@ mod common;
 use common::*;
 use notekpr_cli::{manage, ops};
 use notekpr_core::engine::PinStatus;
-use notekpr_core::protocol::Role;
+use notekpr_core::protocol::{InstanceSettingsUpdate, Role};
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn shared_vault_reaches_running_sync_live() {
@@ -450,9 +450,11 @@ async fn a_server_error_from_a_proxy_counts_as_offline() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn oversized_changes_are_split_or_set_aside_and_never_block_the_rest() {
     use notekpr_core::doc::NoteDoc;
-    let srv = start_with(|c| {
-        c.max_update_kb = 64;
-        c.max_snapshot_kb = Some(128);
+    let srv = start().await;
+    srv.set(InstanceSettingsUpdate {
+        max_update_kb: Some(64),
+        max_snapshot_kb: Some(128),
+        ..Default::default()
     })
     .await;
     let alice = login(&srv, "alice").await;
@@ -525,7 +527,12 @@ async fn oversized_changes_are_split_or_set_aside_and_never_block_the_rest() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_change_too_large_for_one_update_reaches_others_in_a_snapshot() {
     use notekpr_core::doc::NoteDoc;
-    let srv = start_with(|c| c.max_update_kb = 8).await;
+    let srv = start().await;
+    srv.set(InstanceSettingsUpdate {
+        max_update_kb: Some(8),
+        ..Default::default()
+    })
+    .await;
     let alice = login(&srv, "alice").await;
     let bob = login(&srv, "bob").await;
     manage::create_vault(&alice, "Big").await.unwrap();

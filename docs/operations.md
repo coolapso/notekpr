@@ -167,7 +167,11 @@ Put a TLS reverse proxy in front (§4).
 
 Every flag below can be set as an environment variable (the subcommands' own
 flags, such as `backup --out`, can't). An empty value (`FOO=` in a compose or
-env file) counts as not set.
+env file) counts as not set. They are what the server needs to start; what
+can change while it runs — limits, sizes, rate limits, how long sign-ins
+last, how people find each other — is an [instance
+setting](#instance-settings-limits-sizes-and-read-only-mode), changed in the
+web app or over the admin API without a restart.
 
 | Flag / variable | Default | Meaning |
 |---|---|---|
@@ -188,26 +192,26 @@ env file) counts as not set.
 | `--admin` / `NOTEKPR_ADMINS` | empty | comma-separated `issuer\|subject` (or `dev:<name>`) administrators |
 | `--first-user-admin <true\|false>` / `NOTEKPR_FIRST_USER_ADMIN` | `true` | first person to sign in becomes administrator |
 | `--adminless <true\|false>` / `NOTEKPR_ADMINLESS` | `false` | no administrators among the people: nobody signing in administers anything (the admin role, `--admin` and `--first-user-admin` do nothing; the web app has no Administration); only admin clients do (§5) |
-| `--user-directory` / `NOTEKPR_USER_DIRECTORY` | `search` | `search` (name prefix or exact e-mail) or `exact-email` |
-| `--session-ttl-days` / `NOTEKPR_SESSION_TTL_DAYS` | `30` | browser session lifetime |
-| `--device-session-ttl-days` / `NOTEKPR_DEVICE_SESSION_TTL_DAYS` | `180` | CLI/desktop session lifetime |
-| `--agent-token-ttl-secs` / `NOTEKPR_AGENT_TOKEN_TTL_SECS` | `3600` | agent access token lifetime |
-| `--max-attachment-mb` / `NOTEKPR_MAX_ATTACHMENT_MB` | `25` | maximum attachment size |
-| `--max-update-kb` / `NOTEKPR_MAX_UPDATE_KB` | `2048` | maximum size of one encrypted update |
-| `--max-snapshot-kb` / `NOTEKPR_MAX_SNAPSHOT_KB` | 16 × the update limit, at least 32 MiB | maximum size of one snapshot (a note's full state; also how a change too large for one update still reaches others) |
-| `--snapshot-retention` / `NOTEKPR_SNAPSHOT_RETENTION` | `100` | revisions kept per document (never fewer than 2) |
-| `--snapshot-cooldown-secs` / `NOTEKPR_SNAPSHOT_COOLDOWN_SECS` | `30` | minimum time between two snapshots of one note by one person |
-| `--purge-undo-days` / `NOTEKPR_PURGE_UNDO_DAYS` | `30` | how long something deleted for good (emptying the trash) is kept so the vault's owner and admins can undo it; then it is deleted. `0`: deleted at once. It takes room meanwhile |
 | `--file-store` / `NOTEKPR_FILE_STORE` | `<data dir>/files` | where attachments are kept: a directory, `s3://bucket/prefix` (S3 or anything compatible), or `database` (inside `notekpr.db`, so a backup is one file); see [Where attachments are kept](#where-attachments-are-kept) |
-| `--keep-deleted-files-days` / `NOTEKPR_KEEP_DELETED_FILES_DAYS` | `14` | how long the file store keeps a file after the database let go of it (deleted for good and no longer undoable, or its vault deleted), so that restoring a database backup that recent finds its files: at least as long as you keep backups |
 | `--trust-proxy` / `NOTEKPR_TRUST_PROXY` | `false` | use `X-Forwarded-For` (or, without a usable one, `X-Real-IP`) for rate limiting (only behind your proxy, §4) |
-| `--rate-limit-rps` / `NOTEKPR_RATE_LIMIT_RPS` | `50` | API requests per second per IP (burst ×4) |
-| `--auth-rate-limit-per-min` / `NOTEKPR_AUTH_RATE_LIMIT_PER_MIN` | `30` | login/token requests per minute per IP |
 | `--metrics <true\|false>` / `NOTEKPR_METRICS` | `true` | expose Prometheus metrics at `/metrics`; `--metrics false` turns them off (`/metrics` then answers `404`) |
 | `--metrics-token` / `NOTEKPR_METRICS_TOKEN` | unset | require `Authorization: Bearer <token>` for `/metrics` |
 | `--log-format` / `NOTEKPR_LOG_FORMAT` | `pretty` | `json` for structured logs (container image: `json`); level via `NOTEKPR_LOG` (e.g. `info,sqlx=warn`) |
 
 The server refuses to start without a login method (OIDC or dev mode).
+
+**Flags that became instance settings.** `NOTEKPR_MAX_ATTACHMENT_MB`,
+`NOTEKPR_MAX_UPDATE_KB`, `NOTEKPR_MAX_SNAPSHOT_KB`,
+`NOTEKPR_SNAPSHOT_RETENTION`, `NOTEKPR_SNAPSHOT_COOLDOWN_SECS`,
+`NOTEKPR_PURGE_UNDO_DAYS`, `NOTEKPR_KEEP_DELETED_FILES_DAYS`,
+`NOTEKPR_RATE_LIMIT_RPS`, `NOTEKPR_AUTH_RATE_LIMIT_PER_MIN`,
+`NOTEKPR_USER_DIRECTORY`, `NOTEKPR_SESSION_TTL_DAYS`,
+`NOTEKPR_DEVICE_SESSION_TTL_DAYS` and `NOTEKPR_AGENT_TOKEN_TTL_SECS` are no
+longer read (nor their flags): each is the instance setting of the same name
+in lower case (`max_attachment_mb`, …), with the same default. If you set one,
+set the setting instead (§5) and remove the variable; the server warns at
+start while one is still set. Nothing copies them over: settings are never
+taken from the environment or a file.
 
 ### A writable temporary directory
 
@@ -271,8 +275,8 @@ one), and with `--file-store database` while attachments are in a file
 store — it says which, rather than serving notes whose files seem lost.
 
 **Deleting.** Files of attachments deleted for good (once the undo period,
-`--purge-undo-days`, is over) or of deleted vaults and accounts are deleted
-from the store `--keep-deleted-files-days` later. An upload that never
+`purge_undo_days`, is over) or of deleted vaults and accounts are deleted
+from the store `keep_deleted_files_days` later (instance settings, §5). An upload that never
 became an attachment (refused, a retry, or a crash halfway) is deleted
 after an hour.
 
@@ -353,9 +357,10 @@ it:
 * **WebSockets** at `/api/v1/ws`, open for a long time: allow idle timeouts
   well above 30 s (the browser pings every 20 s, the CLI and the server every
   30 s).
-* **Request bodies** of at least the larger of `--max-attachment-mb` and 4/3 ×
-  the snapshot limit (`--max-snapshot-kb`; snapshots travel base64-encoded):
-  about 43 MiB with the defaults.
+* **Request bodies** of at least the larger of the attachment size
+  (`max_attachment_mb`) and 4/3 × the snapshot size (`max_snapshot_kb`;
+  snapshots travel base64-encoded): about 43 MiB with the defaults. They are
+  instance settings (§5): raise the proxy's limit before raising them.
 * **The client's address**: set `--trust-proxy` (the Compose file and the
   Kubernetes manifest do). The server then takes it from the **last** entry
   of `X-Forwarded-For` (the one your proxy added) for rate limiting, or from
@@ -471,12 +476,15 @@ Administration.
 Don't reuse a development-mode data directory for real use: start with an
 empty one.
 
-### Instance settings: limits and read-only mode
+### Instance settings: limits, sizes and read-only mode
 
-Some settings change while the server runs, without a restart: Settings →
-Administration → Instance in the web app, or the admin API (`GET`/`PATCH
-/api/v1/admin/settings`, [protocol.md §9](protocol.md#9-administration)).
-They are kept in the database, so they survive restarts and backups.
+Everything an administrator tunes changes while the server runs, without a
+restart: Settings → Administration → Instance in the web app, or the admin
+API (`GET`/`PATCH /api/v1/admin/settings`, [protocol.md
+§9](protocol.md#9-administration)). They are kept in the database, so they
+survive restarts and backups, and never come from the environment or a file:
+a declarative setup declares an admin client (`admin-client ensure`, below)
+and sets them through it.
 
 * **Limits**: accounts (people who aren't disabled), agents and vaults on
   the server; vaults, agents and quick notes per person, by default and for
@@ -528,6 +536,45 @@ They are kept in the database, so they survive restarts and backups.
   version on by itself (shown next to the field); this only raises it. Empty:
   only that.
 
+Under *Server*, the rest (API names and defaults in parentheses):
+
+* **Sizes**: the largest attachment (`max_attachment_mb`, 25 MiB), the
+  largest encrypted update (`max_update_kb`, 2048 KiB, at least 8 — the apps
+  split bigger edits to fit) and the largest snapshot (`max_snapshot_kb`; `0`,
+  the default: 16 × the update size, at least 32 MiB; never below the update
+  size) — a note's whole state, which also carries a change too big for one
+  update. The apps learn a new size when they next ask, at the latest when
+  the server refuses something as too large. Your reverse proxy must let
+  requests that large through (§4).
+* **Version history**: how many versions each note keeps
+  (`snapshot_retention`, 100, at least 2; a lower number trims a note's
+  history at its next version) and the seconds between two versions of a
+  note by one person (`snapshot_cooldown_secs`, 30).
+* **Deleting for good**: the days during which emptying the trash can be
+  undone by the vault's owner and admins (`purge_undo_days`, 30; `0`:
+  deleted at once). What is deleted takes room meanwhile; a shorter period
+  applies to what was deleted already, too. The file store then keeps the
+  files that many more days (`keep_deleted_files_days`, 14), so restoring a
+  database backup that recent finds them: at least as long as you keep
+  backups.
+* **Rate limits**, per client address: API requests per second
+  (`rate_limit_rps`, 50, bursts of 4 ×) and sign-in and token requests per
+  minute (`auth_rate_limit_per_min`, 30). Behind a proxy, the address is the
+  proxy's unless `--trust-proxy` is set (§4); raise them when many people
+  share one address, such as an office. A change starts every address
+  afresh.
+* **Sign-ins**: how long a browser's lasts (`session_ttl_days`, 30), the
+  CLI's (`device_session_ttl_days`, 180) and an agent's access token
+  (`agent_token_ttl_secs`, 3600, at least 60). A new length applies from the
+  next sign-in.
+* **Finding people** to share with (`user_directory`): by the start of their
+  name or their exact e-mail address (`search`, the default), or only by
+  their exact e-mail address (`exact_email`). People who share a vault or a
+  note always find each other.
+
+Values that would stop the server or the apps from working (a size or rate
+of 0, fewer than 2 versions) are refused, and nothing of that change is kept.
+
 ### Admin clients: scripts and services
 
 Scripts and services that administer the server — a billing system setting
@@ -541,7 +588,7 @@ key.
 | Scope | Allows |
 |---|---|
 | `read` | accounts, statistics, the instance settings, admin clients (every client has it) |
-| `settings` | change limits and read-only mode |
+| `settings` | change the instance settings (limits, sizes, rate limits, read-only mode, …) |
 | `accounts` | disable and enable accounts, set their allowances and vaults' storage limits |
 | `admins` | give and take the admin role |
 | `clients` | create, change and delete admin clients and their tokens — never with a scope it doesn't have itself |
@@ -646,8 +693,9 @@ after the database: files are never changed once written, so a copy of the
 folder (restic, rsync, a volume snapshot) taken after a database backup has
 every file that backup names. For S3, turn on the bucket's versioning or
 your provider's replication. Deleted files stay in the store for
-`--keep-deleted-files-days` (14), so a database backup that recent finds its
-files even without a copy; keep it at least as long as you keep backups.
+`keep_deleted_files_days` (an instance setting, §5; 14 by default), so a
+database backup that recent finds its files even without a copy; keep it
+at least as long as you keep backups.
 
 `--out` needs an existing directory and a file name that doesn't exist yet.
 `--out-dir` names files `notekpr-YYYYMMDD-HHMMSS.db` (UTC); `--keep`
@@ -852,8 +900,8 @@ behind your proxy. `--lifetime 30m` (after the image's own) resets more often.
 What to know before sharing the link:
 
 * **Anyone who opens it can sign in as anyone** — alice, bob, … or any new
-  name — read and change everything, and upload files (up to
-  `--max-attachment-mb` each) until the next reset. Put it on its own host
+  name — read and change everything, and upload files (up to the
+  attachment size, 25 MiB by default, each) until the next reset. Put it on its own host
   name, never next to real data, and don't use it for anything you'd mind
   others seeing. Share the link with whom you like; gate it at your proxy
   (e.g. basic auth) if it should be fewer.

@@ -199,7 +199,12 @@ async fn two_devices_adding_at_once_keep_both() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_item_too_large_to_sync_is_left_out() {
     // Updates of at most 8 KB: one local change carries at most 4 KB.
-    let srv = start_with(|c| c.max_update_kb = 8).await;
+    let srv = start().await;
+    srv.set(InstanceSettingsUpdate {
+        max_update_kb: Some(8),
+        ..Default::default()
+    })
+    .await;
     two_devices(&srv).await;
     let file = srv.path("big.excalidrawlib");
     std::fs::write(

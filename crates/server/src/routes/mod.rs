@@ -19,6 +19,7 @@ use axum::http::{HeaderMap, HeaderName, HeaderValue, StatusCode, header};
 use axum::middleware::{Next, from_fn, from_fn_with_state};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, patch, post, put};
+use notekpr_core::protocol::InstanceSettings;
 use tower_http::compression::CompressionLayer;
 use tower_http::services::{ServeDir, ServeFile};
 use tower_http::set_header::SetResponseHeaderLayer;
@@ -36,12 +37,45 @@ async fn api_not_found() -> AppError {
     AppError::NotFound
 }
 
+/// What a request body carries that its size limit follows: the instance
+/// settings at the time of the request, as they change while the server
+/// runs ([`body_limit`]).
+#[derive(Clone, Copy)]
+enum Carries {
+    /// Updates (`max_update_kb` each, base64), several to a push.
+    Updates,
+    /// A snapshot (`max_snapshot_kb`, base64).
+    Snapshot,
+    /// An attachment's bytes (`max_attachment_mb`).
+    Attachment,
+}
+
+impl Carries {
+    fn max_body(self, s: &InstanceSettings) -> usize {
+        // Base64 in JSON, with room for the rest of the request.
+        let b64 = |n: u64| (n as usize) * 4 / 3 + 64 * 1024;
+        match self {
+            Carries::Updates => b64(s.max_update_bytes()).max(16 * 1024 * 1024),
+            Carries::Snapshot => b64(s.max_snapshot_bytes()),
+            Carries::Attachment => s.max_attachment_bytes() as usize + 64 * 1024,
+        }
+    }
+}
+
+/// Bound the request body by today's settings (the handlers check the
+/// sizes inside it too).
+async fn body_limit(
+    State((state, carries)): State<(AppState, Carries)>,
+    mut req: Request,
+    next: Next,
+) -> Response {
+    DefaultBodyLimit::max(carries.max_body(&state.instance.settings())).apply(&mut req);
+    next.run(req).await
+}
+
 pub fn router(state: AppState) -> Router {
     let cfg = &state.config;
-    let b64 = |n: u64| (n as usize) * 4 / 3 + 64 * 1024;
-    let push_limit = DefaultBodyLimit::max(b64(cfg.max_update_bytes()).max(16 * 1024 * 1024));
-    let snapshot_limit = DefaultBodyLimit::max(b64(cfg.max_snapshot_bytes()));
-    let attachment_limit = DefaultBodyLimit::max(cfg.max_attachment_bytes() as usize + 64 * 1024);
+    let limit = |carries| from_fn_with_state((state.clone(), carries), body_limit);
 
     let login = Router::new()
         .route("/auth/oidc/start", get(auth::oidc_start))
@@ -104,7 +138,10 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/vaults/{v}/audit", get(vaults::audit))
         .route("/vaults/{v}/changes", get(sync::changes))
-        .route("/vaults/{v}/updates", post(sync::push).layer(push_limit))
+        .route(
+            "/vaults/{v}/updates",
+            post(sync::push).layer(limit(Carries::Updates)),
+        )
         .route(
             "/vaults/{v}/objects/{o}",
             get(sync::object).delete(sync::purge),
@@ -113,7 +150,7 @@ pub fn router(state: AppState) -> Router {
             "/vaults/{v}/objects/{o}/snapshots",
             get(sync::list_snapshots)
                 .post(sync::create_snapshot)
-                .layer(snapshot_limit),
+                .layer(limit(Carries::Snapshot)),
         )
         .route(
             "/vaults/{v}/objects/{o}/snapshots/{id}",
@@ -129,7 +166,7 @@ pub fn router(state: AppState) -> Router {
         )
         .route(
             "/vaults/{v}/objects/{o}/key",
-            put(shares::set_key).layer(DefaultBodyLimit::max(b64(cfg.max_snapshot_bytes()))),
+            put(shares::set_key).layer(limit(Carries::Snapshot)),
         )
         .route("/vaults/{v}/objects/{o}/meta", put(shares::set_meta))
         .route(
@@ -144,7 +181,7 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/vaults/{v}/attachments/{id}",
             put(attachments::put)
-                .layer(attachment_limit)
+                .layer(limit(Carries::Attachment))
                 .get(attachments::get)
                 .delete(attachments::delete),
         )

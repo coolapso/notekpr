@@ -243,6 +243,11 @@ async fn serve(config: Config) -> anyhow::Result<()> {
     if config.demo_resets_at.is_some() && !config.dev_mode {
         bail!("--demo-resets-at is for demos: it needs --dev-mode");
     }
+    for (var, setting) in notekpr_server::config::set_but_now_settings(|v| std::env::var(v).ok()) {
+        tracing::warn!(
+            "{var} is no longer read: {setting} is an instance setting now, changed while the server runs in Settings → Administration or over the admin API (PATCH /api/v1/admin/settings); remove the variable"
+        );
+    }
     if config.adminless {
         tracing::info!(
             "admin-less: nobody signing in administers this instance; admin clients do (notekpr-server admin-client)"

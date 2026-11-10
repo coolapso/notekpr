@@ -50,6 +50,21 @@ pub async fn build(
     Ok((routes::router(state.clone()), state))
 }
 
+/// [`build`] for tests, whose clients go faster than people: rate limits
+/// they don't reach and no snapshot cooldown, set as an administrator
+/// would. A test changes them further with `state.instance.update`.
+pub async fn build_for_tests(config: Config) -> anyhow::Result<(axum::Router, AppState)> {
+    let (app, state) = build(config, None).await?;
+    let change = notekpr_core::protocol::InstanceSettingsUpdate {
+        rate_limit_rps: Some(10_000),
+        auth_rate_limit_per_min: Some(10_000),
+        snapshot_cooldown_secs: Some(0),
+        ..Default::default()
+    };
+    state.instance.update(&state.db, &change).await?;
+    Ok((app, state))
+}
+
 /// Sessions of accounts created in development mode stop working once the
 /// server runs without it (e.g. a dev database reused for real use).
 async fn end_dev_sessions(state: &AppState) -> anyhow::Result<()> {
@@ -86,7 +101,7 @@ fn spawn_maintenance(state: AppState) {
         let mut tick = tokio::time::interval(Duration::from_secs(300));
         loop {
             tick.tick().await;
-            state.limiters.cleanup();
+            state.instance.limiters().cleanup();
             let now = db::now();
             let month = 30 * 24 * 3600 * 1000;
             let db = &state.db;
@@ -105,7 +120,8 @@ fn spawn_maintenance(state: AppState) {
             if let Err(e) = state.blobs.move_out().await {
                 tracing::warn!(error = %e, "could not move attachments to the file store");
             }
-            match state.blobs.delete_due(db::now()).await {
+            let keep = state.instance.settings().keep_deleted_files_ms();
+            match state.blobs.delete_due(db::now(), keep).await {
                 Ok(0) => {}
                 Ok(n) => tracing::info!(n, "deleted files from the file store"),
                 Err(e) => tracing::warn!(error = %e, "could not delete files from the file store"),

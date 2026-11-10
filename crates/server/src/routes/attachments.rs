@@ -26,7 +26,7 @@ pub async fn put(
     if body.is_empty() {
         return Err(bad("empty attachment"));
     }
-    if body.len() as u64 > state.config.max_attachment_bytes() + 1024 {
+    if body.len() as u64 > state.instance.settings().max_attachment_bytes() + 1024 {
         return Err(AppError::TooLarge);
     }
     access::require_writer(&state.db, &v, &who.user_id).await?;
@@ -99,7 +99,7 @@ pub async fn delete(
     let _w = state.write_lock.lock().await;
     access::require_admin(&state.db, &v, &who.user_id).await?;
     let was_full = state.instance.vault_full(&state.db, &v).await?;
-    if state.config.purge_undo_days == 0 {
+    if state.instance.settings().purge_undo_days == 0 {
         state.blobs.delete(&v, &id).await?;
     } else {
         state.blobs.purge(&v, &id, db::now()).await?;
@@ -120,7 +120,7 @@ pub async fn restore(
     access::require_admin(&state.db, &v, &who.user_id).await?;
     // It counts again.
     state.instance.require_room(&state.db, &v).await?;
-    let since = db::now() - state.config.purge_undo_ms();
+    let since = db::now() - state.instance.settings().purge_undo_ms();
     state.blobs.restore(&v, &id, since).await?;
     storage_changed(&state, &v, false).await;
     Ok(StatusCode::NO_CONTENT)

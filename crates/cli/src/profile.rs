@@ -163,7 +163,7 @@ pub struct ServerLimits {
 }
 
 impl Default for ServerLimits {
-    /// The server's defaults (`--max-attachment-mb 25`, `--max-update-kb 2048`).
+    /// The server's defaults (`max_attachment_mb` 25, `max_update_kb` 2048).
     fn default() -> Self {
         ServerLimits {
             max_attachment_bytes: 25 * 1024 * 1024,

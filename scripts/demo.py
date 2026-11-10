@@ -441,7 +441,7 @@ HOME = [
         - [ ] Settings → Devices: the CLI and this browser; *Keep this browser usable offline*
         - [ ] A new device: sign in as **alice** in a private window and choose *Approve from another device*. Here a bar at the top of the page says it is waiting, however far you scroll, and this tab's title counts it — until the demo approves it a moment later (started with `--no-approve`, it waits for your *Review*)
         - [ ] Sign the command line in with a code: `task demo:cli -- --profile mine login --server http://localhost:8099` prints a link; opening it here shows when, and from which address, the code was asked for
-        - [ ] Settings → Administration: you run this server in the demo. *Instance* sets limits (accounts, vaults, agents, and per person; *Limits* next to someone gives them their own) and read-only mode: switch it on with **bob** signed in in another tab, edit there, and his edits wait in his browser until you switch it off. *Oldest app version* tells apps older than it to update (they keep their unsent edits) — development builds like this demo's never are. *Admin clients* has the *billing* script that gave every vault 100 MiB and everyone's quick notes 20 MiB — yours 50 (*Limits* next to you; *Quick notes* shows how much of it they take)
+        - [ ] Settings → Administration: you run this server in the demo. *Instance* sets limits (accounts, vaults, agents, and per person; *Limits* next to someone gives them their own) and read-only mode: switch it on with **bob** signed in in another tab, edit there, and his edits wait in his browser until you switch it off. *Oldest app version* tells apps older than it to update (they keep their unsent edits) — development builds like this demo's never are. *Server* has what used to need a restart, in force at once: *Seconds between versions* is 0 here (the demo writes faster than anyone types); set *Attachment size* to 1 and attach a larger file (refused), or *Finding people* to *By exact e-mail only* and look for bob in *Share vault* (demo people have no e-mail: nobody). *Admin clients* has the *billing* script that gave every vault 100 MiB and everyone's quick notes 20 MiB — yours 50 (*Limits* next to you; *Quick notes* shows how much of it they take)
         - [ ] Your *Scans* vault is full: the billing script gave it only 1 MiB, and three scanned letters take more. The banner says so; edit a note there and the edit waits in your browser. *Vault settings* shows how much of its room it uses and its id (*Copy*). As the administrator, paste the id into *Find* under Settings → Administration → *Vaults* (every vault by size, with its owner — never its name) and give it more with *Limit*; or delete a letter for good from its trash. Either way the waiting edit goes out
         - [ ] Settings → AI agents: the *Home assistant* agent, which writes in *Assistant*
         - [ ] Your notes as plain Markdown files, synced both ways: `task demo:cli -- --profile alice sync --dir /tmp/alice-notes`
@@ -1597,6 +1597,16 @@ def admin_api(url, token, path, body=None):
 
 def seed(cli, url, data, server_bin):
     keys = {}
+    step("no snapshot cooldown (an admin client, made for this and deleted after)")
+    # The script edits faster than anyone types: without this, a note gets
+    # one revision per 30 s however often it changes.
+    admin_client = [str(server_bin), "--data-dir", str(data / "server"), "admin-client"]
+    token = subprocess.run(
+        [*admin_client, "create", "--name", "demo-setup", "--scopes", "settings"],
+        check=True, capture_output=True, text=True).stdout.strip()
+    admin_api(url, token, "/admin/settings", {"snapshot_cooldown_secs": 0})
+    subprocess.run([*admin_client, "delete", "--name", "demo-setup"], check=True, capture_output=True)
+
     step("signing in alice, bob, carol, dave and eve (each gets account keys)")
     for user in USERS:
         _, err = cli.run(
@@ -1955,10 +1965,7 @@ def main():
              "--data-dir", str(data / "server"), "--listen", listen,
              "--public-url", public_url, "--log-format", "pretty",
              # alice sees the administration page.
-             "--admin", "dev:alice",
-             # The script edits faster than anyone types: without this, a note
-             # gets one revision per 30 s however often it changes.
-             "--snapshot-cooldown-secs", "0", *extra],
+             "--admin", "dev:alice", *extra],
             stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
         )
 

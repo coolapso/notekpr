@@ -184,15 +184,18 @@ and take it down afterwards. For example, on the test machine:
 ```sh
 docker run -d --name notekpr-loadtest -p 8080:8080 -v /data \
   -e NOTEKPR_DEV_MODE=true -e NOTEKPR_DEV_MODE_ANYWHERE=true \
-  -e NOTEKPR_RATE_LIMIT_RPS=1000000 -e NOTEKPR_AUTH_RATE_LIMIT_PER_MIN=1000000 \
+  -e NOTEKPR_ADMINS=dev:load-admin \
   -e NOTEKPR_PUBLIC_URL=https://notes-test.example.com \
   --cpus 1 --memory 512m notekpr:latest
 ```
 
 (behind your HTTPS proxy, or `http://` and a port for a quick try). The
 rate limits must be raised because every simulated person comes from the
-load machine; if they aren't, the run says so as soon as the server turns
-requests away.
+load machine: the run signs in as `load-admin` (an administrator there,
+thanks to `NOTEKPR_ADMINS`) and raises them itself, as it does on the
+server it starts. Without that it warns, and you raise them in
+Administration (`rate_limit_rps`, `auth_rate_limit_per_min`); if they
+stay low, the run says so as soon as the server turns requests away.
 
 * **Outages** need a way to kill and start it: `--kill-command "ssh
   test-box docker kill notekpr-loadtest" --start-command "ssh test-box

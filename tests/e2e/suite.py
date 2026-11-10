@@ -3441,6 +3441,25 @@ def test_admin(env):
             time.sleep(0.2)
         check(True, "administrators raise the oldest app version the server accepts")
 
+        # The server's settings, in force at once (no restart).
+        def server_settings(size, directory):
+            a.js(number, ".max-attachment-mb .limit-num", str(size))
+            a.js(choose, ".user-directory select", directory)
+            a.click(".save-server-settings")
+            deadline = time.time() + 10
+            while (lambda s: (s["max_attachment_mb"], s["user_directory"]))(
+                    api_get(a, "/admin/settings")["settings"]) != (size, directory):
+                if time.time() > deadline:
+                    raise AssertionError("the server settings weren't saved")
+                time.sleep(0.2)
+
+        server_settings(1, "exact_email")
+        check(api_get(a, "/info")["max_attachment_bytes"] == 1 << 20,
+              "administrators change the server's sizes and how people are found, and apps learn them at once")
+        a.js("document.querySelector('.server-settings').scrollIntoView({block: 'center'})")
+        a.shot("admin-server")
+        server_settings(25, "search")
+
         # An admin client for a billing system: its own token and scopes.
         token_call = """window.__api = undefined;
             fetch('/api/v1' + arguments[1], {method: arguments[2], body: arguments[3] ? JSON.stringify(arguments[3]) : undefined,

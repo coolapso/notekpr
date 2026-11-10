@@ -97,9 +97,9 @@ the vault's settings. People a single note is shared with learn only
 whether the note's vault is full: their edits wait while it is.
 
 Deleting something for good (emptying the trash) takes it away from everyone
-at once, but the server keeps its ciphertext for `--purge-undo-days`
-(default 30; 0 deletes at once), so that the vault's owner and admins can
-undo it; then it is deleted. Database backups keep it for as long as they
+at once, but the server keeps its ciphertext for `purge_undo_days` (an
+instance setting, default 30; 0 deletes at once), so that the vault's
+owner and admins can undo it; then it is deleted. Database backups keep it for as long as they
 are kept.
 
 **Attachments in a file store** (a folder, or S3-compatible storage run by
@@ -110,8 +110,8 @@ written and read, and how many a vault has — what the server's operator
 knows anyway — never names, types or content. Files are served through the
 server only (no links to the bucket), so the store never sees who reads
 them. Its credentials come from the server's environment and are never
-logged. A file stays in the store for `--keep-deleted-files-days` (default
-14) after the database let go of it, so restoring a recent backup finds it,
+logged. A file stays in the store for `keep_deleted_files_days` (an
+instance setting, default 14) after the database let go of it, so restoring a recent backup finds it,
 and for as long as the store's own backups or versions keep it.
 
 Deleting one's account (Settings → Account, `notekpr delete-account`)

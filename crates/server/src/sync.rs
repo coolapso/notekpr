@@ -662,7 +662,7 @@ pub async fn push(
     if updates.len() > MAX_BATCH {
         return Err(bad(format!("at most {MAX_BATCH} updates per request")));
     }
-    let max = state.config.max_update_bytes() as usize;
+    let max = state.instance.settings().max_update_bytes() as usize;
     for u in &updates {
         validate_object_id(&u.object_id)?;
         if u.client_update_id.is_empty() || u.client_update_id.len() > 64 {
@@ -949,7 +949,8 @@ pub async fn create_snapshot(
     if payload.is_empty() {
         return Err(bad("empty payload"));
     }
-    if payload.len() as u64 > state.config.max_snapshot_bytes() {
+    let settings = state.instance.settings();
+    if payload.len() as u64 > settings.max_snapshot_bytes() {
         return Err(AppError::TooLarge);
     }
     let _w = state.write_lock.lock().await;
@@ -993,14 +994,14 @@ pub async fn create_snapshot(
     .fetch_one(&state.db)
     .await?;
     let now = db::now();
-    if last.is_some_and(|t| now - t < state.config.snapshot_cooldown_secs * 1000) {
+    if last.is_some_and(|t| now - t < settings.snapshot_cooldown_ms()) {
         return Err(AppError::RateLimited);
     }
     let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
     state.instance.require_room(&mut *tx, vault_id).await?;
     let covers_pos = insert_snapshot(
         &mut tx,
-        &state.config,
+        settings.snapshot_retention,
         &who.user_id,
         vault_id,
         object_id,
@@ -1059,7 +1060,7 @@ pub async fn create_snapshot(
 #[allow(clippy::too_many_arguments)]
 pub async fn insert_snapshot(
     tx: &mut sqlx::Transaction<'static, sqlx::Sqlite>,
-    config: &crate::config::Config,
+    retention: u32,
     author_id: &str,
     vault_id: &str,
     object_id: &str,
@@ -1165,7 +1166,7 @@ pub async fn insert_snapshot(
     .bind(object_id)
     .bind(vault_id)
     .bind(object_id)
-    .bind(config.snapshot_retention.max(2))
+    .bind(retention.max(2))
     .bind(vault_id)
     .bind(object_id)
     .execute(&mut **tx)
@@ -1256,7 +1257,7 @@ pub async fn get_snapshot(
 /// things to the trash). It is gone for everyone at once — its content and
 /// comments aren't served, writes to it are refused, the people it was
 /// shared with lose it (for good: an undo doesn't share it again) — but the
-/// server keeps its data for `--purge-undo-days`, during which [`restore`]
+/// server keeps its data for `purge_undo_days`, during which [`restore`]
 /// undoes it; [`erase_expired`] deletes it after. Meanwhile its document key
 /// still moves on with every rotation of the vault's key, so an undo never
 /// brings back a key a removed member knew. Repeated while it can be undone,
@@ -1324,6 +1325,7 @@ pub async fn purge(
     }
     // Its comments go with it (clients drop them with the note).
     let comments = comments_object(object_id);
+    let undo_days = state.instance.settings().purge_undo_days;
     for o in [object_id, comments.as_str()] {
         sqlx::query(
             "UPDATE objects SET purged_at = ?, purged_seq = ?, restored_seq = NULL WHERE vault_id = ? AND id = ?",
@@ -1334,7 +1336,7 @@ pub async fn purge(
         .bind(o)
         .execute(&mut *tx)
         .await?;
-        if state.config.purge_undo_days == 0 {
+        if undo_days == 0 {
             erase(&mut tx, vault_id, o, now).await?;
         }
     }
@@ -1396,7 +1398,11 @@ pub async fn restore(
     .fetch_optional(&mut *tx)
     .await?;
     let rotation_pending = match row {
-        Some((Some(at), None, pending)) if at >= now - state.config.purge_undo_ms() => pending,
+        Some((Some(at), None, pending))
+            if at >= now - state.instance.settings().purge_undo_ms() =>
+        {
+            pending
+        }
         _ => return Err(AppError::NotFound),
     };
     // It counts again: in its vault's size, and a drawing among its
@@ -1493,7 +1499,7 @@ pub async fn server_storage_changed(state: &AppState) -> AppResult<()> {
 /// What of a vault was deleted for good and can still be undone (notes and
 /// attachments), newest first.
 pub async fn purged_items(state: &AppState, vault_id: &str) -> AppResult<Vec<PurgedItem>> {
-    let keep = state.config.purge_undo_ms();
+    let keep = state.instance.settings().purge_undo_ms();
     let since = db::now() - keep;
     let notes: Vec<(String, i64)> = sqlx::query_as(
         "SELECT id, purged_at FROM objects
@@ -1561,7 +1567,7 @@ const ERASE_BATCH: i64 = 200;
 /// period: objects (in batches) and attachments. Returns how many.
 pub async fn erase_expired(state: &AppState) -> AppResult<u64> {
     let now = db::now();
-    let before = now - state.config.purge_undo_ms();
+    let before = now - state.instance.settings().purge_undo_ms();
     let mut n = 0;
     loop {
         let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;

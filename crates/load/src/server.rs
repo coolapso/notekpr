@@ -9,22 +9,26 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
+use notekpr_core::protocol::{DevLoginRequest, InstanceSettingsUpdate, SessionResponse};
+use reqwest::header::CONTENT_TYPE;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
 
+/// Who the load test signs in as to set the server's rate limits
+/// ([`Server::lift_rate_limits`]): no simulated person. A server elsewhere
+/// (`--server`) makes it an administrator with `NOTEKPR_ADMINS=dev:load-admin`.
+const ADMIN: &str = "load-admin";
+
 /// Flags for a server that thousands of people reach from one address.
 fn load_flags(public_url: &str) -> Vec<String> {
+    let admin = format!("dev:{ADMIN}");
     [
         "serve",
         "--dev-mode",
         "--public-url",
         public_url,
-        // Everyone comes from this machine: per-address limits would
-        // throttle the whole crowd as if it were one person.
-        "--rate-limit-rps",
-        "1000000",
-        "--auth-rate-limit-per-min",
-        "1000000",
+        "--admin",
+        &admin,
         "--log-format",
         "json",
     ]
@@ -185,14 +189,57 @@ impl Server {
             }
             Kind::Native { .. } => self.spawn_native()?,
             Kind::Remote { .. } => {
-                return self
-                    .wait_healthy(Duration::from_secs(20))
+                self.wait_healthy(Duration::from_secs(20))
                     .await
-                    .with_context(|| format!("reaching {}", self.url));
+                    .with_context(|| format!("reaching {}", self.url))?;
+                // Theirs to set otherwise (the run says so if it's needed).
+                if let Err(e) = self.lift_rate_limits().await {
+                    eprintln!(
+                        "warning: couldn't raise the server's rate limits ({e:#}): start it with \
+                         NOTEKPR_ADMINS=dev:{ADMIN}, or raise them in Administration"
+                    );
+                }
+                return Ok(());
             }
         }
         self.wait_healthy(Duration::from_secs(60)).await?;
+        self.lift_rate_limits()
+            .await
+            .context("lifting the server's rate limits")?;
         self.start_sampler();
+        Ok(())
+    }
+
+    /// Everyone comes from this machine: per-address rate limits would
+    /// throttle the whole crowd as if it were one person. Raise them as an
+    /// administrator does (the server keeps them across restarts).
+    async fn lift_rate_limits(&self) -> Result<()> {
+        let http = reqwest::Client::new();
+        let api = format!("{}/api/v1", self.url);
+        let login = DevLoginRequest {
+            username: ADMIN.into(),
+            display_name: None,
+        };
+        let r = http
+            .post(format!("{api}/auth/dev-login"))
+            .header(CONTENT_TYPE, "application/json")
+            .body(serde_json::to_vec(&login)?)
+            .send()
+            .await?
+            .error_for_status()?;
+        let session: SessionResponse = serde_json::from_slice(&r.bytes().await?)?;
+        let change = InstanceSettingsUpdate {
+            rate_limit_rps: Some(1_000_000),
+            auth_rate_limit_per_min: Some(1_000_000),
+            ..Default::default()
+        };
+        http.patch(format!("{api}/admin/settings"))
+            .bearer_auth(&session.token)
+            .header(CONTENT_TYPE, "application/json")
+            .body(serde_json::to_vec(&change)?)
+            .send()
+            .await?
+            .error_for_status()?;
         Ok(())
     }
 

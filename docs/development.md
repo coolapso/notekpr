@@ -433,7 +433,8 @@ The README shows the logo for GitHub's theme with a `<picture>` element.
 The logo is "notekpr" in [Fira Code](https://github.com/tonsky/FiraCode)
 SemiBold, with the icon's diamond ring as the "o"; the letters are stored as
 outlines, so it looks the same without the font. `scripts/logo.py` draws it —
-its sizes, spacing and colours are at its top — and writes all six files:
+its sizes, spacing and colours are at its top — and writes all six files,
+and the web app's icons for home screens (below):
 
 ```sh
 python3 scripts/logo.py path/to/FiraCode-SemiBold.ttf
@@ -451,7 +452,14 @@ notekpr-cloud repository) has a copy in `site/favicon.svg` and, drawn in the
 theme's colours, in the header of each page. The docs site uses the favicon
 as it is and draws the icon in its theme's colours from
 `docs/site/assets/icon.svg`. Change them together, then run
-`scripts/logo.py` for `icon.svg` and `icon.png`.
+`scripts/logo.py` for `icon.svg`, `icon.png` and the web app's icons.
+
+The web app can be added to a phone's home screen, as an app of its own
+(`crates/web/static/manifest.webmanifest`). Its icons there are PNGs made
+from the favicon, in `crates/web/static/`: `icon-192.png` and `icon-512.png`
+as the favicon is, and `apple-touch-icon.png` (iPhones) and
+`icon-maskable.png` (Android) filling the whole square, since phones cut
+their own shape out of it. Its name there is the manifest's `short_name`.
 
 ## The docs site
 

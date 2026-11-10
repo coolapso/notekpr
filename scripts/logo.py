@@ -10,6 +10,9 @@ writes, all with transparent backgrounds:
     docs/assets/logo-dark.svg, logo-dark.png  the same for dark backgrounds
     docs/assets/icon.svg, icon.png            the icon alone
 
+and the web app's icons for home screens, in crates/web/static/ (see
+APP_ICONS).
+
 The logo is "notekpr" in Fira Code SemiBold with the icon's diamond ring as
 the "o". The letters are stored as outlines, so it looks the same where the
 font isn't installed. Fira Code is free (SIL Open Font License 1.1):
@@ -41,7 +44,8 @@ except ImportError:
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ASSETS = os.path.join(ROOT, "docs", "assets")
-FAVICON = os.path.join(ROOT, "crates", "web", "static", "favicon.svg")
+STATIC = os.path.join(ROOT, "crates", "web", "static")
+FAVICON = os.path.join(STATIC, "favicon.svg")
 
 # Sizes in the icon's units (its viewBox is 64 x 64).
 X_HEIGHT = 24.0  # the lower-case letters
@@ -56,6 +60,19 @@ LOGOS = (
 )
 LOGO_PNG_WIDTH = 1600
 ICON_PNG_WIDTH = 512
+
+# The web app's icons for home screens (its manifest.webmanifest and
+# index.html): file, size, and whether the colour fills the whole square.
+# iPhones (apple-touch-icon) and Android ("maskable") cut their own shape out
+# of a full square, and an iPhone turns transparent corners black; the others
+# keep the favicon's rounded corners. The diamond stays inside the middle 80%
+# that a maskable icon may lose nothing of.
+APP_ICONS = (
+    ("apple-touch-icon.png", 180, True),
+    ("icon-192.png", 192, False),
+    ("icon-512.png", 512, False),
+    ("icon-maskable.png", 512, True),
+)
 
 
 def num(v):
@@ -113,6 +130,22 @@ def png(svg, width):
     return out
 
 
+def app_icons():
+    """The web app's PNG icons (APP_ICONS), from the favicon."""
+    with open(FAVICON) as f:
+        rounded = f.read()
+    square = rounded.replace(' rx="14"', "", 1)
+    if square == rounded:
+        sys.exit('logo.py: the favicon has no rx="14" to square its corners: change APP_ICONS\' drawing')
+    written = []
+    for name, size, full in APP_ICONS:
+        out = os.path.join(STATIC, name)
+        svg = (square if full else rounded).encode()
+        subprocess.run(["rsvg-convert", "-w", str(size), "-h", str(size), "-o", out], input=svg, check=True)
+        written.append(out)
+    return written
+
+
 def main():
     parser = argparse.ArgumentParser(description="Draw the notekpr logo and icon into docs/assets/.")
     parser.add_argument("font", help="Fira Code SemiBold (FiraCode-SemiBold.ttf)")
@@ -137,6 +170,7 @@ def main():
     icon = os.path.join(ASSETS, "icon.svg")
     shutil.copyfile(FAVICON, icon)
     written += [icon, png(icon, ICON_PNG_WIDTH)]
+    written += app_icons()
     for path in written:
         print(os.path.relpath(path, ROOT))
 

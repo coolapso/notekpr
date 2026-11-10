@@ -45,6 +45,7 @@ features = [
   "IdbTransactionMode", "IdbKeyRange", "DomStringList", "DomException",
   "ServiceWorkerContainer", "ServiceWorkerRegistration", "CacheStorage",
   "Notification", "NotificationOptions", "NotificationPermission",
+  "VisualViewport",
 ]
 
 [dev-dependencies]

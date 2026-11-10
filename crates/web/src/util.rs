@@ -319,6 +319,16 @@ pub fn is_phone() -> bool {
         .is_some_and(|m| m.matches())
 }
 
+/// Set a CSS variable on the page's root element (`:root` in style.css).
+pub fn set_root_var(name: &str, value: &str) {
+    if let Some(root) = document()
+        .document_element()
+        .and_then(|e| e.dyn_into::<web_sys::HtmlElement>().ok())
+    {
+        let _ = root.style().set_property(name, value);
+    }
+}
+
 pub fn log(msg: &str) {
     web_sys::console::log_1(&JsValue::from_str(msg));
 }

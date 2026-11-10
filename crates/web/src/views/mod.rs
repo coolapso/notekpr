@@ -35,6 +35,7 @@ pub fn App() -> impl IntoView {
     install_code_copy();
     comments::install_reading_selection();
     install_day_change();
+    crate::viewport::install();
     Effect::new(move |_| {
         let prefs = ui.ui_prefs.get();
         if let Some(root) = util::document().document_element() {
@@ -118,7 +119,7 @@ fn watch_banners(banners: NodeRef<leptos::html::Div>) {
         let target = el.clone();
         let on_resize = Closure::wrap(Box::new(move |_: js_sys::Array| {
             let h = target.get_bounding_client_rect().height();
-            set_root_var("--banners-h", &format!("{h}px"));
+            util::set_root_var("--banners-h", &format!("{h}px"));
         }) as Box<dyn FnMut(js_sys::Array)>);
         if let Ok(o) = web_sys::ResizeObserver::new(on_resize.as_ref().unchecked_ref()) {
             o.observe(&el);
@@ -132,17 +133,8 @@ fn watch_banners(banners: NodeRef<leptos::html::Div>) {
                 o.disconnect();
             }
         });
-        set_root_var("--banners-h", "0px");
+        util::set_root_var("--banners-h", "0px");
     });
-}
-
-fn set_root_var(name: &str, value: &str) {
-    if let Some(root) = util::document()
-        .document_element()
-        .and_then(|e| e.dyn_into::<web_sys::HtmlElement>().ok())
-    {
-        let _ = root.style().set_property(name, value);
-    }
 }
 
 #[component]

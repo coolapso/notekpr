@@ -491,6 +491,29 @@ def test_mobile(env):
         m.js("document.elementFromPoint(20, 400).click()")
         m.wait("return !document.querySelector('.note-body.overlay')", 5, "the panel closes")
         check(True, "a tap beside the side panel closes it")
+        # The page is what shows of the window (an iPhone's keyboard covers
+        # the page instead of making it shorter, and slides it up).
+        app_box = """const a = document.querySelector('.app').getBoundingClientRect();
+            return [Math.round(a.top), Math.round(a.height), document.documentElement.clientHeight,
+                    getComputedStyle(document.documentElement).getPropertyValue('--visible-h').trim()];"""
+        fit = m.js(app_box)
+        check(fit[0] == 0 and fit[1] == fit[2] and fit[3] == f"{fit[2]}.0px", f"the app is what shows of the window ({fit})")
+        # The window's own scroll (the keyboard's, on an iPhone) is undone.
+        slid = m.js("""const tall = document.createElement('div'); tall.id = 'tall'; tall.style.height = '3000px';
+            document.body.append(tall); window.scrollTo(0, 400); return window.scrollY;""")
+        m.wait("return window.scrollY == 0 && document.querySelector('.app').getBoundingClientRect().top == 0", 5,
+               "the window's scroll is undone")
+        m.js("document.getElementById('tall').remove()")
+        check(slid == 400, f"a scrolled window comes back, header and all (it was at {slid})")
+        # Pinch-zoomed in, what shows is a part of the page: the page keeps its size.
+        cdp(m, "Emulation.setPageScaleFactor", {"pageScaleFactor": 2})
+        try:
+            m.wait("return visualViewport.scale == 2", 5, "zoomed in")
+            time.sleep(0.3)
+            zoomed = m.js(app_box)
+        finally:
+            cdp(m, "Emulation.setPageScaleFactor", {"pageScaleFactor": 1})
+        check(zoomed[:3] == fit[:3], f"zoomed in, the app keeps its size ({zoomed}, {fit})")
         m.click(".note-head .mobile-only")
         time.sleep(0.4)
         check(m.js("return document.querySelector('.app').classList.contains('drawer')"), "sidebar opens as a drawer")

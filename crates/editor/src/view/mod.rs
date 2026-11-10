@@ -504,6 +504,12 @@ impl Editor {
         });
     }
 
+    /// Scroll the caret back into view: what shows of the window got
+    /// smaller (an on-screen keyboard opened over the text).
+    pub fn reveal_caret(&self) {
+        self.op(|ed| ed.request_frame(true, false));
+    }
+
     /// Render the lines whose look depends on the host again (link targets
     /// or images changed).
     pub fn refresh(&self) {

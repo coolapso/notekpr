@@ -26,10 +26,29 @@ pub async fn connect(path: &Path) -> anyhow::Result<Db> {
     let pool = SqlitePoolOptions::new()
         .max_connections(8)
         .min_connections(1)
+        // Pinged before it's handed out, which also runs a rollback still
+        // queued from a transaction dropped on an error: only then does
+        // `ended_transaction_left_open` see where it stands.
+        .test_before_acquire(true)
+        .before_acquire(|conn, _| Box::pin(async move { Ok(!ended_transaction_left_open(conn)) }))
         .connect_with(opts)
         .await
         .with_context(|| format!("opening database {}", path.display()))?;
     Ok(pool)
+}
+
+/// On some errors (an I/O error, a full disk) SQLite ends the transaction
+/// itself. sqlx still counts it open, and its rollback then fails, so it
+/// keeps counting: every later `BEGIN` on that connection would fail ("at
+/// non-zero transaction depth"), until the server restarted. Such a
+/// connection is closed instead of used again (the pool opens another).
+fn ended_transaction_left_open(conn: &sqlx::SqliteConnection) -> bool {
+    use sqlx::Connection;
+    let open = conn.is_in_transaction();
+    if open {
+        tracing::warn!("closing a database connection left inside a transaction that had ended");
+    }
+    open
 }
 
 /// Run migrations, taking an automatic backup first if an existing database
@@ -196,6 +215,34 @@ mod user_code_tests {
             counts.values().all(|n| (600..1000).contains(n)),
             "{counts:?}"
         );
+    }
+}
+
+#[cfg(test)]
+mod pool_tests {
+    use super::*;
+
+    /// A transaction SQLite ended itself (here behind sqlx's back, as an
+    /// I/O error mid-transaction does) doesn't leave its connection refusing
+    /// every later transaction.
+    #[tokio::test]
+    async fn a_transaction_sqlite_ended_leaves_no_connection_stuck() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = connect(&dir.path().join("t.db")).await.unwrap();
+        {
+            let mut tx = db.begin_with("BEGIN IMMEDIATE").await.unwrap();
+            sqlx::query("ROLLBACK").execute(&mut *tx).await.unwrap();
+            // Dropped: sqlx's own rollback fails, there being none to end.
+        }
+        // Back in the pool, the only connection there.
+        while db.num_idle() < db.size() as usize {
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(db.size(), 1);
+        for _ in 0..3 {
+            let tx = db.begin_with("BEGIN IMMEDIATE").await.unwrap();
+            tx.commit().await.unwrap();
+        }
     }
 }
 

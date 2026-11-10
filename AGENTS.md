@@ -39,8 +39,9 @@ GitHub project; its README says what the columns, fields and labels mean.
 Check it before starting something, and keep it current:
 
 - Starting an issue: move it to *In progress*.
-- Finishing it: the commit says `Closes #N` in its message (a footer line),
-  so the push closes the issue and the project moves it to *Done*.
+- Finishing it: the commit ends with a `Closes: #N` trailer (git's
+  `Key: value` form, which GitHub reads too), so the push closes the issue
+  and the project moves it to *Done*.
 - Work you find: a new issue on the project, in *Backlog*, with its Kind's
   label: `gh issue create --project "notekpr roadmap" --label …`. Only the
   maintainer opens issues (everyone else starts a discussion), so do it when
@@ -269,7 +270,7 @@ Without go-task, see the plain commands in the [Taskfile](Taskfile.yml) or
   the command when it fits the CLI (the way icons were added), otherwise add a
   line to the "Things to try" list in alice's *Start here* note (e.g.
   browser-only settings). Then run the demo and click through what changed.
-- Its issue on the roadmap closes with the commit (`Closes #N`); a step of a
+- Its issue on the roadmap closes with the commit (`Closes: #N`); a step of a
   bigger issue is ticked in it, not deleted.
 
 ## Things that are easy to get wrong

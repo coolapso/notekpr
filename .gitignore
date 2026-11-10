@@ -6,7 +6,7 @@
 *.db-wal
 *.db-shm
 .env
-# Per-machine notes for agents (where the TODO is), see AGENTS.md
+# Per-machine notes for agents (where the decisions and the TODO are), see AGENTS.md
 /AGENTS.local.md
 __pycache__/
 .task/

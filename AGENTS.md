@@ -26,12 +26,23 @@ The original requirements are in [spec.md](spec.md).
 | [docs/cli.md](docs/cli.md), [docs/operations.md](docs/operations.md) | change the CLI or deployment/ops behaviour |
 | [docs/load-test.md](docs/load-test.md) | run or change the load test and its live view |
 
-Known work, review findings and decisions are tracked in a TODO kept outside
-the repository, in the maintainer's own notes. Its path is in
-`AGENTS.local.md` (git-ignored, one per machine) as `TODO: <path>`. If that
-file or the line is missing, ask the person you work for where the TODO is
-and write it there. Check the TODO before starting something, and keep it
-current.
+Known work and review findings are tracked in the
+[notekpr roadmap](https://github.com/users/coolapso/projects/5), a GitHub
+project (private for now); its README says what the columns and fields
+mean. Check it before starting something, and keep it current: a card goes
+to *In progress* when you start it and to *Done* when it is in `main`, with
+the commit in its text; work you find goes in as a new card in *Backlog*.
+Only the maintainer moves cards to *Ready* or sets their priority. With
+`gh` (it needs the `project` scope: `gh auth refresh -h github.com -s
+project`): `gh project item-list 5 --owner coolapso`, `item-create`,
+`item-edit` (ids from `field-list`).
+
+Settled decisions, and the hosted offering's work, are kept outside the
+repository, in the maintainer's own notes. Their paths are in
+`AGENTS.local.md` (git-ignored, one per machine) as `Decisions: <path>` and
+`TODO: <path>`. If that file or a line is missing, ask the person you work
+for and write it there. Read the decisions before proposing something they
+may already settle, and add new ones there.
 
 ## Hard rules
 
@@ -238,7 +249,8 @@ Without go-task, see the plain commands in the [Taskfile](Taskfile.yml) or
   the command when it fits the CLI (the way icons were added), otherwise add a
   line to the "Things to try" list in alice's *Start here* note (e.g.
   browser-only settings). Then run the demo and click through what changed.
-- Finished work leaves the TODO (it holds only what is still to be done).
+- Its card in the roadmap moves to *Done*, with the commit in its text
+  (finished steps of a bigger card are ticked, not deleted).
 
 ## Things that are easy to get wrong
 

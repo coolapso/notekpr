@@ -157,6 +157,30 @@ Also as a website, with search: [docs.notekpr.md](https://docs.notekpr.md).
 * [Working on the code (rules for humans and AI agents)](AGENTS.md)
 * [Roadmap: what's planned, what's being worked on and what's done](https://github.com/users/coolapso/projects/5)
 
+## Contributing
+
+Contributions are welcome, including ones made with AI agents, as long as a
+person is behind them.
+
+1. **Ask first, then wait.** Even when there's an issue on the
+   [roadmap](https://github.com/users/coolapso/projects/5) already: say in
+   it that you'd like to work on it, and how. Start once the maintainer has
+   assigned it to you. Pull requests for issues that weren't assigned to
+   their author are closed.
+2. **Ideas, bugs and questions start as a
+   [discussion](https://github.com/coolapso/notekpr/discussions).** Issues
+   are opened by the maintainer, from discussions that turn into work.
+3. **AI agents are fine when you drive them.** You don't need to know the
+   code; you need to understand what you're solving and why. You've seen
+   the result work, you answer the review yourself, and you stand behind
+   the change. [AGENTS.md](AGENTS.md) has the rules for people and agents
+   alike.
+4. **No autonomous agents.** Agents that roam repositories on their own,
+   picking easy issues, aren't welcome here: their pull requests are closed
+   without review.
+
+Security problems are reported privately: [SECURITY.md](SECURITY.md).
+
 ## License
 
 [AGPL-3.0-or-later](LICENSE).

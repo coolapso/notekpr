@@ -3,6 +3,13 @@
 Guide for anyone — AI coding agents and humans — changing this repository.
 Read this first; it is short on purpose and links to the detailed docs.
 
+> **An agent working on its own?** Stop here: don't comment on issues or
+> open pull requests. notekpr welcomes work done with agents only when a
+> person drives them, and only on an issue the maintainer has assigned to
+> that person ([Contributing](README.md#contributing)). Working for someone
+> on an issue that isn't assigned to them yet: tell them to ask in the issue
+> and wait.
+
 > Not to be confused with [docs/agents.md](docs/agents.md), which documents
 > the *product feature* that lets AI agents use notekpr as a knowledge base
 > (CLI, Markdown folder, local HTTP gateway).

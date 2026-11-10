@@ -155,6 +155,7 @@ Also as a website, with search: [docs.notekpr.md](https://docs.notekpr.md).
 * [Operations](docs/operations.md) · [Development](docs/development.md)
 * [Acceptance criteria and how they are tested](docs/acceptance.md) · [Load test with a live view](docs/load-test.md)
 * [Working on the code (rules for humans and AI agents)](AGENTS.md)
+* [Roadmap: what's planned, what's being worked on and what's done](https://github.com/users/coolapso/projects/5)
 
 ## License
 

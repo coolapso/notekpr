@@ -27,9 +27,8 @@ The original requirements are in [spec.md](spec.md).
 | [docs/load-test.md](docs/load-test.md) | run or change the load test and its live view |
 
 Known work and review findings are tracked in the
-[notekpr roadmap](https://github.com/users/coolapso/projects/5), a GitHub
-project (private for now); its README says what the columns and fields
-mean. Check it before starting something, and keep it current: a card goes
+[notekpr roadmap](https://github.com/users/coolapso/projects/5), a public
+GitHub project; its README says what the columns and fields mean. Check it before starting something, and keep it current: a card goes
 to *In progress* when you start it and to *Done* when it is in `main`, with
 the commit in its text; work you find goes in as a new card in *Backlog*.
 Only the maintainer moves cards to *Ready* or sets their priority. With

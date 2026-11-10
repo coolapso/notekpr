@@ -277,6 +277,9 @@ notes](writing.md) and [Drawings](drawings.md).
 * The browser keeps an encrypted copy of your vaults: they open at once, and
   what you write offline syncs later. Optionally the app starts without the
   server too.
+* On a phone (iPhone or Android), add it to the home screen: it opens from
+  its own icon, in a window of its own
+  ([how](getting-started.md#on-your-phone)).
 * A command-line client (CLI) with a local encrypted copy, live sync, and a
   two-way folder of plain Markdown files for Obsidian, Neovim, VS Code or
   anything else ([how](own-editor.md)).

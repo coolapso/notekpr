@@ -184,6 +184,38 @@ download it. More in [Writing notes](writing.md#pictures-video-sound-and-files).
   computer keeps your notes in a folder of plain Markdown files, for
   Obsidian, VS Code or any editor ([how](own-editor.md)).
 
+## On your phone
+
+notekpr works in your phone's browser, and you can add it to the home
+screen: it then opens from its own icon, in a window of its own without
+the browser's bars, like any other app.
+
+**iPhone and iPad**
+
+1. Open your notekpr address in Safari. Other browsers have the same under
+   *Share*.
+2. Tap **Share**. In Safari it may be under **⋯** first.
+3. Scroll down the list and tap **Add to Home Screen**. Not there? *Edit
+   Actions* at the end of the list adds it.
+4. Keep **Open as Web App** on, and tap **Add**.
+5. Open notekpr from its new icon and sign in. On an iPhone the app keeps
+   its own copy of your notes, apart from the browser's, so notekpr counts
+   it as a new device: approve it from another device, or with your
+   recovery key ([above](#your-other-devices)).
+
+**Android**
+
+1. Open your notekpr address in Chrome.
+2. Tap **⋮**, then **Add to Home screen**, then **Install**. (Some versions
+   say **Install app** in the menu.)
+3. Open notekpr from its new icon.
+
+Other browsers have it in their menu too: in Vivaldi, *Add Page To* →
+*Home screen* → *Install*.
+
+To have it start even with no connection at all, turn on *Settings →
+Devices → Use without the server* in the app.
+
 ## Bringing notes in, taking them out
 
 * **Import**: a vault's *Import notes* takes a folder or `.zip` of

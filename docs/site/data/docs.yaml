@@ -11,7 +11,7 @@
   pages:
     - file: getting-started
       nav: Getting started
-      description: Your first sign-in, finding your way around the app, organizing and finding notes, sharing, and your other devices.
+      description: Your first sign-in, finding your way around the app, organizing and finding notes, sharing, your other devices, and notekpr on your phone.
     - file: writing
       nav: Writing notes
       description: Headings, lists, links, pictures, tables, callouts, code, math, chemistry and diagrams, with what to type for each.

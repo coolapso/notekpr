@@ -15,7 +15,7 @@ Version:        @RPM_VERSION@
 Release:        1%{?dist}
 Summary:        Command-line client for notekpr, end-to-end encrypted Markdown notes
 License:        AGPL-3.0-or-later
-URL:            https://github.com/coolapso/notekpr
+URL:            https://notekpr.md
 Source0:        notekpr-cli-@VERSION@.tar.gz
 
 # @RUST_VERSION@: Cargo.toml's rust-version.

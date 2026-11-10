@@ -150,7 +150,7 @@ Also as a website, with search: [docs.notekpr.md](https://docs.notekpr.md).
 * [Use your own editor (Obsidian, Neovim, …)](docs/own-editor.md)
 * [Getting your notes out, whatever happens (encrypted export, offline recovery)](docs/recovery.md)
 * [Architecture and technology decisions](docs/architecture.md)
-* [Security model and threat analysis](docs/security.md)
+* [Security model and threat analysis](docs/security.md) · [Reporting a vulnerability](SECURITY.md)
 * [Sync protocol and HTTP API](docs/protocol.md)
 * [Operations](docs/operations.md) · [Development](docs/development.md)
 * [Acceptance criteria and how they are tested](docs/acceptance.md) · [Load test with a live view](docs/load-test.md)

@@ -38,6 +38,12 @@ Check it before starting something, and keep it current:
   label: `gh issue create --project "notekpr roadmap" --label …`. Only the
   maintainer opens issues (everyone else starts a discussion), so do it when
   you work for the maintainer; otherwise say what you found.
+- A vulnerability (a way around what docs/security.md promises) is never an
+  issue, a commit message or anything else public before its fix is
+  released: it goes in a draft security advisory (the Security tab, or `gh
+  api repos/coolapso/notekpr/security-advisories`), or to the person you
+  work for. SECURITY.md says what counts. Hardening that nobody can exploit
+  yet may be an issue.
 - Only the maintainer moves issues to *Ready* or sets their priority.
 
 With `gh` (the project commands need the `project` scope: `gh auth refresh

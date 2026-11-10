@@ -1,5 +1,8 @@
 # Security model and threat analysis
 
+Found a way around what this page promises? Please report it privately, not
+in an issue or a discussion: [SECURITY.md](../SECURITY.md).
+
 ## Goals
 
 1. Only members of a vault can read its content — not the server operator,

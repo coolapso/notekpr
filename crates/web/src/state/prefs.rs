@@ -96,11 +96,15 @@ pub(super) fn apply_prefs(c: &mut Core, blob: &PrefsBlob) {
     if let Some(p) = choice.prefs {
         c.prefs = p;
     }
+    // This browser's copy is what it uses: the server's with whom this
+    // browser trusts kept in it ([`keep_trust`]), never the server's as
+    // sent, which may trust someone else (a key accepted on another device
+    // is asked about here again).
     if choice.from_server
-        && !choice.lacked_trust
-        && let Some(ct) = &blob.ciphertext
+        && let Some(acct) = c.account.as_ref()
+        && let Ok(pt) = serde_json::to_vec(&c.prefs)
     {
-        storage::set_prefs_copy(&uid, ct);
+        storage::set_prefs_copy(&uid, &acct.seal_private(&uid, &pt));
     }
     if choice.rolled_back {
         util::warn("the server sent settings older than this browser's; keeping these");

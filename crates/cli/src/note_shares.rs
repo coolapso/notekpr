@@ -330,16 +330,16 @@ async fn note_rotation(
     note_id: &str,
     removing: Option<&str>,
 ) -> Result<NoteRotation> {
-    // Never to a key that changed since it was pinned: such people are left
-    // out of the new key until verified (`share-note --accept-new-key`).
-    let (users, changed) = session.split_changed_keys(
-        note_shares(session, id, note_id)
-            .await?
-            .into_iter()
-            .map(|s| s.user)
-            .filter(|u| Some(u.id.as_str()) != removing)
-            .collect(),
-    );
+    // Only to whom the log as it is now has the note shared with, and
+    // never to a key that changed since it was pinned: anyone else is left
+    // out of the new key (`share-note --accept-new-key` once verified).
+    session.reload_member_log(vault).await?;
+    let shares = note_shares(session, id, note_id)
+        .await?
+        .into_iter()
+        .filter(|s| Some(s.user.id.as_str()) != removing)
+        .collect();
+    let (users, changed) = session.note_recipients(&vault.lock().await.log, note_id, shares);
     let (next, req) = {
         let v = vault.lock().await;
         let ring = v
@@ -362,8 +362,9 @@ async fn note_rotation(
     if !changed.is_empty() {
         let names: Vec<&str> = changed.iter().map(|u| u.display_name.as_str()).collect();
         ui::warn(&format!(
-            "the note's new key went to everyone except {}: their account key changed. Verify their \
-             fingerprint with them, then share the note with them again with --accept-new-key",
+            "the note's new key went to everyone except {}: their account key changed (or the vault's \
+             membership log doesn't have the note shared with them). Verify their fingerprint with them, \
+             then share the note with them again with --accept-new-key",
             names.join(", ")
         ));
     }

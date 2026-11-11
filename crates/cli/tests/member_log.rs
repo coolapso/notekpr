@@ -250,6 +250,63 @@ async fn a_new_device_knows_the_vault_had_a_log() {
     assert_eq!(logged, 0, "nothing was signed");
 }
 
+/// The server shares a note with Eve on its own: renewing the note's key,
+/// or the vault's (which renews every note's), gives her nothing. Only the
+/// people the log has the note shared with get it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_note_recipient_the_owner_never_added_gets_no_key() {
+    let srv = start().await;
+    let alice = login(&srv, "alice").await;
+    let bob = login(&srv, "bob").await;
+    let eve = login(&srv, "eve").await;
+    manage::create_vault(&alice, "Family").await.unwrap();
+    let ah = hub(&alice).await;
+    let v = ah.resolve("Family").await.unwrap();
+    let vid = v.lock().await.id().to_string();
+    ops::put_document(&ah, "Family", "Plan.md", "secret\n", None)
+        .await
+        .unwrap();
+    ah.sync_vault(&vid).await.unwrap();
+    note_shares::share_note(&alice, &v, "Plan", "bob", Role::Viewer, false)
+        .await
+        .unwrap();
+    let oid = v.lock().await.find_note("Plan").unwrap().1.id;
+    sql(
+        &srv,
+        "INSERT INTO object_shares (vault_id, object_id, user_id, role, added_at) VALUES (?, ?, ?, 'viewer', 0)",
+        &[&vid, &oid, &eve.user_id],
+    )
+    .await;
+    let keys_of = |user: String| {
+        let (db, vid, oid) = (srv.state.db.clone(), vid.clone(), oid.clone());
+        async move {
+            let n: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM object_keys WHERE vault_id = ? AND object_id = ? AND user_id = ?",
+            )
+            .bind(&vid)
+            .bind(&oid)
+            .bind(&user)
+            .fetch_one(&db)
+            .await
+            .unwrap();
+            n
+        }
+    };
+    let bob_id = bob.user_id.clone();
+    let before = keys_of(bob_id.clone()).await;
+
+    // A new note key (as after someone left it): Bob's, never Eve's.
+    note_shares::rotate_note_key(&alice, &v, &vid, &oid)
+        .await
+        .unwrap();
+    assert_eq!(keys_of(bob_id.clone()).await, before + 1);
+    assert_eq!(keys_of(eve.user_id.clone()).await, 0);
+    // A new vault key renews the note's too.
+    alice.rotate_keys(&v).await.unwrap();
+    assert_eq!(keys_of(bob_id).await, before + 2);
+    assert_eq!(keys_of(eve.user_id.clone()).await, 0);
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_rolled_back_membership_log_is_noticed() {
     let srv = start().await;

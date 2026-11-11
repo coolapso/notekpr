@@ -501,7 +501,7 @@ impl Session {
                 Err(e) => return Err(e.into()),
             };
             let grants =
-                members::missing_grant_signatures(&self.account, &id, &oid, &ring, &shares);
+                members::missing_grant_signatures(&self.account, &v.log, &id, &oid, &ring, &shares);
             if !grants.is_empty() {
                 self.api
                     .put::<_, ()>(
@@ -1332,6 +1332,28 @@ impl Session {
         })
     }
 
+    /// Who gets a note's new key, of the people the server lists for it:
+    /// those the log has it shared with (that role, that key) whose key
+    /// still matches its pin. The others are left out on purpose: a key
+    /// that changed, or someone the log doesn't have it shared with.
+    pub fn note_recipients(
+        &self,
+        log: &MemberLog,
+        note_id: &str,
+        shares: Vec<ObjectShareInfo>,
+    ) -> (Vec<PublicUser>, Vec<PublicUser>) {
+        let (ok, out): (Vec<ObjectShareInfo>, Vec<ObjectShareInfo>) =
+            shares.into_iter().partition(|s| {
+                s.user.account_key.is_some()
+                    && matches!(self.verify_user(&s.user), Ok(Some(vu)) if vu.pin != PinStatus::Changed)
+                    && log.vouches_for_share(note_id, s)
+            });
+        (
+            ok.into_iter().map(|s| s.user).collect(),
+            out.into_iter().map(|s| s.user).collect(),
+        )
+    }
+
     /// Move the vault to a new key epoch for the current members, and every
     /// note's key with it (removed members knew those too). Members and
     /// recipients whose key no longer matches its pin (or the vault's log)
@@ -1490,8 +1512,10 @@ impl Session {
                     return Err(anyhow!(e).context("listing a shared note's recipients"));
                 }
             };
-            let (users, changed) =
-                self.split_changed_keys(shares.into_iter().map(|s| s.user).collect());
+            let (users, changed) = {
+                let v = vault.lock().await;
+                self.note_recipients(&v.log, oid, shares)
+            };
             not_given.extend(changed.iter().map(|u| u.display_name.clone()));
             recipients_out.insert(
                 oid.clone(),

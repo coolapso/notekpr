@@ -167,7 +167,8 @@ primitives. Formats:
   remove the others included, so it is a role for people one trusts with the
   vault; the server can't make anyone an owner, only owners can. Owners'
   clients give vault keys only
-  to members the verified log lists with that role and key, members see
+  to members the verified log lists with that role and key, and a note's
+  keys only to people the log has it shared with, members see
   anyone the log doesn't list flagged in the member list, and rotation stops
   with a security warning if the server lists an unknown member with keys.
   A role from a newer release that an older app doesn't know is kept as

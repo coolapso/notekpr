@@ -373,7 +373,9 @@ An owner's removal carries two entries, signed one after the other: the
 * as an owner, act (give or rotate keys, start the log, require signatures)
   only on the log as fetched and verified just now; wrap vault keys only for
   members the log lists with that role and key, and pin a pending member's
-  keys (`rekey`) before granting them;
+  keys (`rekey`) before granting them; wrap a note's keys only for people
+  the log has it shared with (`share`, that role and key), leaving out
+  (`without`) anyone else the server lists;
 * as the owner of a vault without a log, sign a `checkpoint` when they open it;
   as an owner of a log without `require_signed`, sign a `share` for every
   note already shared (keys checked against pins), then `require_signed` with

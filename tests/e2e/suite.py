@@ -9,7 +9,7 @@ independent headless Chromium profiles as different users.
 
 Screenshots are written to $NOTEKPR_E2E_OUT (default target/e2e).
 """
-import argparse, base64, json, os, shutil, socket, subprocess, sys, tempfile, time, traceback
+import argparse, base64, json, os, shutil, socket, sqlite3, subprocess, sys, tempfile, time, traceback
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -2709,6 +2709,54 @@ def test_membership_log_withheld(env):
         b.close()
 
 
+def server_db(env, sql, *args):
+    """Run SQL on the test server's database, as a compromised server would
+    change it (rows of a SELECT are returned)."""
+    db = sqlite3.connect(os.path.join(env.data, "notekpr.db"), timeout=10)
+    try:
+        rows = db.execute(sql, args).fetchall()
+        db.commit()
+        return rows
+    finally:
+        db.close()
+
+
+def test_note_recipient_never_added(env):
+    """The server shares a note with someone on its own and asks the owner's
+    app to renew the note's key: the new key goes only to whom the vault's
+    membership log has the note shared with, never to them."""
+    a, e = Browser(), Browser()
+    try:
+        signup(a, uniq("nora"))
+        eve = uniq("eve")
+        signup(e, eve)
+        eve_id = api_get(e, "/me")["user"]["id"]
+        new_note(a, "Plan", "only for the owner")
+        a.wait("return Object.keys(localStorage).filter(k => k.startsWith('notekpr.pending.') || k.startsWith('notekpr.newkeys.')).length === 0",
+               15, "the note and its key are sent")
+        path = a.js("return location.pathname")
+        vid, nid = path.split("/")[2], path.split("/")[3]
+        server_db(env, "INSERT INTO object_shares (vault_id, object_id, user_id, role, added_at) VALUES (?, ?, ?, 'viewer', 0)",
+                  vid, nid, eve_id)
+        server_db(env, "UPDATE objects SET rotation_pending = 1 WHERE vault_id = ? AND id = ?", vid, nid)
+        epoch = server_db(env, "SELECT key_epoch FROM objects WHERE vault_id = ? AND id = ?", vid, nid)[0][0]
+        # The owner's app renews pending keys when it loads the vault.
+        a.js("location.reload()")
+        for _ in range(100):
+            now = server_db(env, "SELECT key_epoch, rotation_pending FROM objects WHERE vault_id = ? AND id = ?", vid, nid)[0]
+            if now[0] != epoch and now[1] == 0:
+                break
+            time.sleep(0.2)
+        check(now[0] != epoch and now[1] == 0, "the owner's app renews the note's key when asked to")
+        given = server_db(env, "SELECT COUNT(*) FROM object_keys WHERE vault_id = ? AND object_id = ? AND user_id = ?",
+                          vid, nid, eve_id)[0][0]
+        check(given == 0, "the person the server added gets no key: the log doesn't have the note shared with them")
+        check(not severe_logs(a, e), "no browser errors")
+    finally:
+        a.close()
+        e.close()
+
+
 # Select `text` (its first occurrence) in the open note's editor, or in
 # the element given second (e.g. the reading view).
 SELECT_TEXT = """
@@ -3917,7 +3965,7 @@ def test_device_code(env):
         a.close()
 
 
-TESTS = [test_onboarding, test_collab, test_devices_and_recovery, test_features, test_attachments, test_attachments_beside_notes, test_export_import, test_notion_import, test_delete_account, test_move_to_vault, test_note_sharing, test_tables, test_code_blocks, test_html, test_callouts, test_math, test_diagrams, test_colors, test_code_wrapping, test_vim, test_line_numbers, test_bullets, test_editor_mouse, test_editor_safety, test_local_copy, test_ui_basics, test_offline_tabs, test_offline_start, test_mobile, test_home_screen, test_quick_notes, test_vault_cards, test_vault_icons, test_entry_icons, test_tree_order, test_session_ended_while_away, test_outdated, test_membership_log_withheld, test_comments, test_mentions, test_dates, test_graph, test_recovered_copy, test_note_width, test_admin, test_vault_storage, test_vault_admins, test_owners, test_undo_purge, test_device_code]
+TESTS = [test_onboarding, test_collab, test_devices_and_recovery, test_features, test_attachments, test_attachments_beside_notes, test_export_import, test_notion_import, test_delete_account, test_move_to_vault, test_note_sharing, test_tables, test_code_blocks, test_html, test_callouts, test_math, test_diagrams, test_colors, test_code_wrapping, test_vim, test_line_numbers, test_bullets, test_editor_mouse, test_editor_safety, test_local_copy, test_ui_basics, test_offline_tabs, test_offline_start, test_mobile, test_home_screen, test_quick_notes, test_vault_cards, test_vault_icons, test_entry_icons, test_tree_order, test_session_ended_while_away, test_outdated, test_membership_log_withheld, test_note_recipient_never_added, test_comments, test_mentions, test_dates, test_graph, test_recovered_copy, test_note_width, test_admin, test_vault_storage, test_vault_admins, test_owners, test_undo_purge, test_device_code]
 
 
 def main():

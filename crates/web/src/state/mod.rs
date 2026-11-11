@@ -680,7 +680,7 @@ mod vaults;
 pub use comments::*;
 pub use members::{
     fresh_log, log_entry, log_entry_after, member_log, pin_member_key, reload_log, sign_vault,
-    vouched,
+    vouched, vouched_share,
 };
 pub use mentions::*;
 pub use nav::*;

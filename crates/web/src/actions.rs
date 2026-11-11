@@ -609,19 +609,18 @@ async fn prepare_rotation(vault: &str, removing: Option<&str>) -> Result<Rotatio
     let mut recipients: HashMap<String, Vec<PublicUser>> = HashMap::new();
     let mut recipients_out: HashMap<String, Vec<String>> = HashMap::new();
     for n in keyed.iter().filter(|n| shared.contains(*n)) {
-        let users: Vec<PublicUser> =
+        let shares: Vec<ObjectShareInfo> =
             match api::get::<Vec<ObjectShareInfo>>(&format!("/vaults/{vault}/objects/{n}/shares"))
                 .await
             {
-                Ok(s) => s.into_iter().map(|s| s.user).collect(),
+                Ok(s) => s,
                 Err(e) if e.status == 404 => vec![],
                 Err(e) => return Err(e.message),
             };
-        // Never wrap a new key to a key that changed since it was
-        // pinned: such people are left out of the note's new key.
-        let (users, changed): (Vec<PublicUser>, Vec<PublicUser>) = users
-            .into_iter()
-            .partition(|u| u.account_key.is_none() || check_trust(u).is_ok());
+        // Only to whom the log has the note shared with (that role, that
+        // key), and never to a key that changed since it was pinned: anyone
+        // else is left out of the note's new key.
+        let (users, changed) = note_recipients(vault, n, shares);
         not_given.extend(changed.iter().map(|u| u.display_name.clone()));
         recipients_out.insert(n.clone(), changed.into_iter().map(|u| u.id).collect());
         recipients.insert(n.clone(), users);
@@ -798,10 +797,17 @@ pub async fn grant_missing_keys(vault: &str) {
             continue;
         };
         for s in shares {
+            // Only to whom the log has it shared with, in the role it has
+            // them in (their key may have changed and been verified since).
+            let Some(role) =
+                step(|c| state::member_log(c, vault).share_role(&note, &s.user.id, &s.role))
+            else {
+                continue;
+            };
             if !s.has_current_key
                 && s.user.account_key.is_some()
                 && check_trust(&s.user).is_ok()
-                && let Err(e) = share_note(vault, &note, &s.user, s.role, false).await
+                && let Err(e) = share_note(vault, &note, &s.user, role, false).await
             {
                 util::warn(&format!("could not give a note's key again: {e}"));
             }
@@ -1114,14 +1120,16 @@ async fn note_rotation(
     note: &str,
     removing: Option<&str>,
 ) -> Result<NoteRotation, String> {
+    // Only to whom the log as it is now has the note shared with.
+    state::fresh_log(vault).await?;
     let shares: Vec<ObjectShareInfo> = api::get(&format!("/vaults/{vault}/objects/{note}/shares"))
         .await
         .map_err(|e| e.message)?;
-    let (users, changed): (Vec<PublicUser>, Vec<PublicUser>) = shares
+    let shares = shares
         .into_iter()
-        .map(|s| s.user)
-        .filter(|u| Some(u.id.as_str()) != removing)
-        .partition(|u| u.account_key.is_none() || check_trust(u).is_ok());
+        .filter(|s| Some(s.user.id.as_str()) != removing)
+        .collect();
+    let (users, changed) = note_recipients(vault, note, shares);
     let made = step(|c| {
         let r = c.replicas.get(vault)?;
         let ring = r.doc_keys.get(note)?;
@@ -1143,7 +1151,7 @@ async fn note_rotation(
     req.without = changed.iter().map(|u| u.id.clone()).collect();
     if !changed.is_empty() {
         info(format!(
-            "The note's new key went to everyone except {}: their encryption key changed. Compare fingerprints with them, then share the note with them again.",
+            "The note's new key went to everyone except {}: their encryption key changed (or the vault's history doesn't show the note shared with them). Compare fingerprints with them, then share the note with them again.",
             changed
                 .iter()
                 .map(|u| u.display_name.as_str())
@@ -1156,6 +1164,27 @@ async fn note_rotation(
         req,
         shared: !users.is_empty() || !changed.is_empty(),
     })
+}
+
+/// Who gets a note's new key, of the people the server lists for it: those
+/// the log has it shared with (that role, that key) whose key we still
+/// trust. The others, left out on purpose: a key that changed since it was
+/// pinned, or someone the log doesn't have it shared with.
+fn note_recipients(
+    vault: &str,
+    note: &str,
+    shares: Vec<ObjectShareInfo>,
+) -> (Vec<PublicUser>, Vec<PublicUser>) {
+    let (ok, out): (Vec<ObjectShareInfo>, Vec<ObjectShareInfo>) =
+        shares.into_iter().partition(|s| {
+            s.user.account_key.is_some()
+                && check_trust(&s.user).is_ok()
+                && step(|c| state::vouched_share(c, vault, note, s))
+        });
+    (
+        ok.into_iter().map(|s| s.user).collect(),
+        out.into_iter().map(|s| s.user).collect(),
+    )
 }
 
 /// Shared notes carry their title and icon encrypted for their recipients.

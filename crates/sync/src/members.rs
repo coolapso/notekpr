@@ -251,6 +251,31 @@ impl MemberLog {
         })
     }
 
+    /// Whether the server's recipient of a note is who the log says: the
+    /// note shared with them in this role, with this key. Only they get its
+    /// keys. Without a log, everyone is taken as listed (vaults from before
+    /// the log).
+    pub fn vouches_for_share(&self, object_id: &str, s: &ObjectShareInfo) -> bool {
+        if self.state.is_none() {
+            return true;
+        }
+        let Some(Ok(key)) = s.user.account_key.as_ref().map(|k| k.verify()) else {
+            return false;
+        };
+        self.has_share(object_id, &s.user.id, &s.role, &key)
+    }
+
+    /// The role the log has `object_id` shared with `user_id` in (`None`:
+    /// not shared with them; without a log, `listed`, the server's word).
+    pub fn share_role(&self, object_id: &str, user_id: &str, listed: &Role) -> Option<Role> {
+        let Some(s) = &self.state else {
+            return Some(listed.clone());
+        };
+        s.shares
+            .get(&(object_id.to_string(), user_id.to_string()))
+            .map(|m| m.role.clone())
+    }
+
     /// Check every vault key we hold against the owner's commitments.
     /// Epochs from before a checkpoint have none and pass.
     pub fn check_keyring(&self, ring: &VaultKeyring) -> Result<(), KeyCheckError> {
@@ -356,9 +381,11 @@ pub fn sign_grants(
 }
 
 /// Owner: grant signatures for the people a note is shared with whose
-/// current key carries none yet (shared before grants were signed).
+/// current key carries none yet (shared before grants were signed), as far
+/// as `log` has it shared with them.
 pub fn missing_grant_signatures(
     owner: &AccountSecret,
+    log: &MemberLog,
     vault_id: &str,
     object_id: &str,
     ring: &VaultKeyring,
@@ -370,6 +397,7 @@ pub fn missing_grant_signatures(
     shares
         .iter()
         .filter(|s| s.has_current_key && !s.key_signed)
+        .filter(|s| log.vouches_for_share(object_id, s))
         .map(|s| GrantSignature {
             user_id: s.user.id.clone(),
             epoch,
@@ -582,6 +610,49 @@ mod tests {
         assert!(MemberLog::verify("v", &anchor, older, Some((seq, &hash))).is_err());
         assert!(MemberLog::verify("v", &anchor, vec![], Some((seq, &hash))).is_err());
         assert!(MemberLog::verify("v", &anchor, log.entries.clone(), Some((seq, &hash))).is_ok());
+    }
+
+    /// A note's keys go only to whom the log has it shared with, in that role
+    /// and with that key: never to someone the server lists on its own.
+    #[test]
+    fn only_logged_recipients_get_a_notes_keys() {
+        let (alice, bob, eve) = (p("alice"), p("bob"), p("eve"));
+        let anchor = alice.secret.public();
+        let share_of = |who: &P, role: Role| ObjectShareInfo {
+            user: info(who, role.clone(), true).user,
+            role,
+            added_at: 0,
+            added_by: None,
+            has_current_key: false,
+            key_signed: false,
+        };
+        // Before the log, the server's word (vaults from before it).
+        assert!(MemberLog::default().vouches_for_share("n", &share_of(&eve, Role::Viewer)));
+
+        let (mut log, _) = vault(&alice);
+        push(
+            &mut log,
+            &alice,
+            share("n", "bob", Role::Viewer, &bob.secret.public()),
+            &anchor,
+        );
+        assert!(log.vouches_for_share("n", &share_of(&bob, Role::Viewer)));
+        // Not as an editor, not another note, not Eve.
+        assert!(!log.vouches_for_share("n", &share_of(&bob, Role::Editor)));
+        assert!(!log.vouches_for_share("m", &share_of(&bob, Role::Viewer)));
+        assert!(!log.vouches_for_share("n", &share_of(&eve, Role::Viewer)));
+        // Nor Bob with a key the log never pinned for him.
+        let swapped = P {
+            id: "bob".into(),
+            secret: AccountSecret::generate(),
+        };
+        assert!(!log.vouches_for_share("n", &share_of(&swapped, Role::Viewer)));
+        // Given again: in the role the log has, whatever the server says.
+        assert_eq!(
+            log.share_role("n", "bob", &Role::Editor),
+            Some(Role::Viewer)
+        );
+        assert_eq!(log.share_role("n", "eve", &Role::Viewer), None);
     }
 
     /// A device that never saw the vault knows where its log stood from the

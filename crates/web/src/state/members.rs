@@ -284,6 +284,7 @@ pub(super) async fn sign_missing_grants(vault_id: String) {
             let ring = c.replicas.get(&vault_id)?.doc_keys.get(&note)?;
             Some(rules::missing_grant_signatures(
                 c.account.as_ref()?,
+                c.member_logs.get(&vault_id)?,
                 &vault_id,
                 &note,
                 ring,
@@ -398,6 +399,15 @@ pub fn vouched(c: &Core, vault_id: &str, m: &MemberInfo) -> bool {
     c.member_logs
         .get(vault_id)
         .is_some_and(|l| l.vouches_for(m))
+}
+
+/// Whether the log has the note shared with the server's recipient `s`, in
+/// that role and with that key: only they get its keys. Without a verified
+/// log, nobody is.
+pub fn vouched_share(c: &Core, vault_id: &str, note: &str, s: &ObjectShareInfo) -> bool {
+    c.member_logs
+        .get(vault_id)
+        .is_some_and(|l| l.vouches_for_share(note, s))
 }
 
 /// Owner: start the log of a vault from before it, with a checkpoint of the

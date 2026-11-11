@@ -180,40 +180,31 @@ pub(super) async fn reload_share_keys_once(vault: &str, note: &str) {
         }
     };
     // Who signed giving us its newest key: an owner of the vault, as the
-    // server's owner proof shows from where the vault's history starts; or,
-    // without one, the owner we know (or another, looked up).
-    let known = step(|c| {
-        let owner = c.shares.get(&key)?.info.owner.clone();
-        let signer = engine::grant_signer(&keys, &c.user_id)
-            .map(str::to_string)
-            .unwrap_or_else(|| owner.id.clone());
-        let root = c.prefs.share_roots.get(vault).cloned();
-        let checked = notekpr_sync::members::check_grant_signer(
-            vault,
-            root.as_deref(),
-            &signer,
-            &keys.signer_proof,
-        );
-        Some((owner, signer, checked))
+    // server's owner proof shows from where the vault's history starts.
+    let proven = step(|c| {
+        let owner = &c.shares.get(&key)?.info.owner;
+        let signer = engine::grant_signer(&keys, &c.user_id).unwrap_or(&owner.id);
+        let root = c.prefs.share_roots.get(vault).map(String::as_str);
+        Some(
+            notekpr_core::memberlog::check_owner_proof(vault, root, &keys.signer_proof, signer)
+                .map(|proven| (signer.to_string(), proven)),
+        )
     });
-    let signer = match known {
+    let proven = match proven {
         None => return,
-        Some((_, _, Err(e))) => Err(format!(
+        Some(Ok(p)) => Ok(p),
+        Some(Err(notekpr_core::memberlog::OwnerProofError::Missing)) => Err(
+            "The server didn't show that whoever gave you its key owns its vault. It opens once an owner of the vault next uses notekpr; if it doesn't, tell the person who shared it.".to_string(),
+        ),
+        Some(Err(e)) => Err(format!(
             "Security warning: this note's key was given by someone its vault's history doesn't show as an owner ({e}). The server may be trying to read what you write here, so the note isn't opened. Tell the person who shared it and your administrator."
         )),
-        Some((_, signer, Ok(Some(proven)))) => Ok(Signer::Proven(signer, proven)),
-        Some((owner, signer, Ok(None))) if signer == owner.id => Ok(Signer::Listed(owner)),
-        Some((_, signer, Ok(None))) => api::get::<PublicUser>(&format!("/users/{signer}"))
-            .await
-            .map(Signer::Listed)
-            .map_err(|e| e.message),
     };
     let applied = step(|c| {
         // Only a key an owner signed giving us.
-        let ring = match signer.and_then(|s| match s {
-            Signer::Proven(id, proven) => proven_keyring(c, vault, note, &id, &proven, &keys),
-            Signer::Listed(u) => share_keyring(c, vault, note, &u, &keys),
-        }) {
+        let ring = match proven
+            .and_then(|(signer, proven)| proven_keyring(c, vault, note, &signer, &proven, &keys))
+        {
             Ok(r) => r,
             Err(e) => {
                 if let Some(s) = c.shares.get_mut(&key) {
@@ -276,18 +267,6 @@ pub(super) async fn reload_share_keys_once(vault: &str, note: &str) {
     }
 }
 
-/// The keyring of a note shared with us, if `signer` — an owner of its
-/// vault, their key as pinned — signed giving us its newest key; `Err` says
-/// why not.
-/// Who signed giving us a note's key ([`reload_share_keys_once`]).
-enum Signer {
-    /// An owner, as the server's owner proof showed (their id, and what the
-    /// proof pins).
-    Proven(String, notekpr_core::memberlog::ProvenOwner),
-    /// As the server lists them (no proof: older servers), pinned on first use.
-    Listed(PublicUser),
-}
-
 /// The note's keys, given by `signer`, whom `proven` showed an owner of the
 /// vault: verified with the key the proof pins for them. The vault's root is
 /// pinned the first time.
@@ -329,37 +308,6 @@ fn proven_keyring(
     }
     let account = c.account.as_ref().ok_or("no account keys on this device")?;
     engine::object_keyring_for_recipient(account, &c.user_id, vault, keys, Some(&proven.key))
-        .map_err(|e| e.to_string())
-}
-
-fn share_keyring(
-    c: &mut Core,
-    vault: &str,
-    note: &str,
-    signer: &PublicUser,
-    keys: &ObjectKeysResponse,
-) -> Result<notekpr_core::keys::VaultKeyring, String> {
-    if !c
-        .shares
-        .contains_key(&(vault.to_string(), note.to_string()))
-    {
-        return Err("the note is no longer shared with you".into());
-    }
-    let Some(key) = signer.account_key.as_ref().and_then(|k| k.verify().ok()) else {
-        return Err("the note's owner has no valid encryption key".into());
-    };
-    match engine::check_pin(&mut c.prefs.pins, &signer.id, &key.fingerprint()) {
-        engine::PinStatus::Changed => {
-            return Err(format!(
-                "Security warning: the encryption key of {}, who shared this note, changed since you last saw it. Compare fingerprints with them.",
-                signer.display_name
-            ));
-        }
-        engine::PinStatus::New => save_prefs(c),
-        engine::PinStatus::Match => {}
-    }
-    let account = c.account.as_ref().ok_or("no account keys on this device")?;
-    engine::object_keyring_for_recipient(account, &c.user_id, vault, keys, Some(&key))
         .map_err(|e| e.to_string())
 }
 

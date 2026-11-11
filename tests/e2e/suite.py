@@ -2761,6 +2761,41 @@ def test_note_recipient_never_added(env):
         e.close()
 
 
+def test_note_key_without_owner_proof(env):
+    """Someone a note is shared with takes its key only when the server
+    shows that whoever gave it owns the vault: shown nothing, even for a key
+    from the owner, the note isn't opened."""
+    a, b = Browser(), Browser()
+    try:
+        bn = uniq("pia")
+        signup(a, uniq("ola"))
+        signup(b, bn)
+        b_id = api_get(b, "/me")["user"]["id"]
+        new_note(a, "Trip", "Pack sunscreen")
+        path = a.js("return location.pathname")
+        vid, nid = path.split("/")[2], path.split("/")[3]
+        a.click(".note-head button[title='Share this note']")
+        a.type(".share-add input", bn)
+        a.find(".found .person", 10)
+        a.click(".found .person .btn.primary")
+        a.find_text(".people .person", bn.capitalize(), 15)
+        a.chord(KEYS["escape"])
+        b.click_el(b.find_text(".sb-link", "Trip", 20))
+        b.wait("return document.querySelector('.ed') && document.querySelector('.ed').textContent.includes('Pack sunscreen')",
+               20, "the recipient reads the note")
+        # The server no longer says who signed giving them its key, so it
+        # has no owner to show.
+        server_db(env, "UPDATE object_keys SET signed_by = NULL WHERE vault_id = ? AND object_id = ? AND user_id = ?",
+                  vid, nid, b_id)
+        b.js("location.reload()")
+        b.find_text(".empty", "didn't show that whoever gave you its key owns", 20)
+        check(not b.js("return !!document.querySelector('.ed')"), "without an owner proof the note isn't opened")
+        check(not severe_logs(a, b), "no browser errors")
+    finally:
+        a.close()
+        b.close()
+
+
 # Select `text` (its first occurrence) in the open note's editor, or in
 # the element given second (e.g. the reading view).
 SELECT_TEXT = """
@@ -3969,7 +4004,7 @@ def test_device_code(env):
         a.close()
 
 
-TESTS = [test_onboarding, test_collab, test_devices_and_recovery, test_features, test_attachments, test_attachments_beside_notes, test_export_import, test_notion_import, test_delete_account, test_move_to_vault, test_note_sharing, test_tables, test_code_blocks, test_html, test_callouts, test_math, test_diagrams, test_colors, test_code_wrapping, test_vim, test_line_numbers, test_bullets, test_editor_mouse, test_editor_safety, test_local_copy, test_ui_basics, test_offline_tabs, test_offline_start, test_mobile, test_home_screen, test_quick_notes, test_vault_cards, test_vault_icons, test_entry_icons, test_tree_order, test_session_ended_while_away, test_outdated, test_membership_log_withheld, test_note_recipient_never_added, test_comments, test_mentions, test_dates, test_graph, test_recovered_copy, test_note_width, test_admin, test_vault_storage, test_vault_admins, test_owners, test_undo_purge, test_device_code]
+TESTS = [test_onboarding, test_collab, test_devices_and_recovery, test_features, test_attachments, test_attachments_beside_notes, test_export_import, test_notion_import, test_delete_account, test_move_to_vault, test_note_sharing, test_tables, test_code_blocks, test_html, test_callouts, test_math, test_diagrams, test_colors, test_code_wrapping, test_vim, test_line_numbers, test_bullets, test_editor_mouse, test_editor_safety, test_local_copy, test_ui_basics, test_offline_tabs, test_offline_start, test_mobile, test_home_screen, test_quick_notes, test_vault_cards, test_vault_icons, test_entry_icons, test_tree_order, test_session_ended_while_away, test_outdated, test_membership_log_withheld, test_note_recipient_never_added, test_note_key_without_owner_proof, test_comments, test_mentions, test_dates, test_graph, test_recovered_copy, test_note_width, test_admin, test_vault_storage, test_vault_admins, test_owners, test_undo_purge, test_device_code]
 
 
 def main():

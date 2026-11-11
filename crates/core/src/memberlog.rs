@@ -470,6 +470,10 @@ pub struct ProvenOwner {
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum OwnerProofError {
+    /// No proof at all: a key whose signer the server can't show an owner
+    /// (or the vault has no log yet) never counts.
+    #[error("the server showed no proof that whoever gave this key owns the vault")]
+    Missing,
     #[error("this vault's history starts with someone else than before")]
     Root,
     #[error("{0} is not shown to be one of this vault's owners")]
@@ -491,9 +495,7 @@ pub fn check_owner_proof(
     proof: &[LogEntry],
     user: &str,
 ) -> Result<ProvenOwner, OwnerProofError> {
-    let first = proof
-        .first()
-        .ok_or_else(|| OwnerProofError::NotOwner(user.to_string()))?;
+    let first = proof.first().ok_or(OwnerProofError::Missing)?;
     if first.seq != 0 {
         return Err(LogError::Sequence(first.seq).into());
     }
@@ -1997,8 +1999,15 @@ mod tests {
         assert_eq!(check_owner_proof(V, None, &proof, "carol").unwrap(), ok);
         // The root needs none.
         assert_eq!(owner_proof(&log, "alice").len(), 1);
-        // Not an owner: no proof; one meant for someone else shows nothing.
+        // Not an owner: no proof, which never counts, not even for the
+        // root; one meant for someone else shows nothing.
         assert!(owner_proof(&log, "dave").is_empty());
+        for root in [None, Some("alice")] {
+            assert_eq!(
+                check_owner_proof(V, root, &[], "alice"),
+                Err(OwnerProofError::Missing)
+            );
+        }
         assert_eq!(
             check_owner_proof(V, Some("alice"), &proof, "dave"),
             Err(OwnerProofError::NotOwner("dave".into()))

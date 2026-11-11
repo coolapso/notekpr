@@ -381,8 +381,9 @@ pub fn sign_grants(
 }
 
 /// Owner: grant signatures for the people a note is shared with whose
-/// current key carries none yet (shared before grants were signed), as far
-/// as `log` has it shared with them.
+/// current key carries none yet (shared before grants were signed), or one
+/// by someone `log` no longer has as an owner (their apps take a key only
+/// from an owner), as far as `log` has it shared with them.
 pub fn missing_grant_signatures(
     owner: &AccountSecret,
     log: &MemberLog,
@@ -396,7 +397,13 @@ pub fn missing_grant_signatures(
     };
     shares
         .iter()
-        .filter(|s| s.has_current_key && !s.key_signed)
+        .filter(|s| {
+            let by_former_owner = match (&log.state, &s.signed_by) {
+                (Some(st), Some(by)) => !st.is_owner(by),
+                _ => false,
+            };
+            s.has_current_key && (!s.key_signed || by_former_owner)
+        })
         .filter(|s| log.vouches_for_share(object_id, s))
         .map(|s| GrantSignature {
             user_id: s.user.id.clone(),
@@ -406,30 +413,6 @@ pub fn missing_grant_signatures(
             ),
         })
         .collect()
-}
-
-/// Whether a single note's key was given by an owner of its vault, as far
-/// as the person it is shared with can tell without seeing the vault's log:
-/// `proof` (the server's `owner_proof`) must show `signer` an owner,
-/// starting where the vault's history starts (`root`, pinned per vault;
-/// `None`: first use). `Ok(Some(..))`: shown so: pin its `root`, and verify
-/// the grant with its `key`, not the server's. `Ok(None)`: no proof, and the
-/// signer is the pinned root or nothing is pinned yet (older servers): the
-/// signer's key as the server gives it, pinned on first use. `Err`: not
-/// shown to be an owner.
-pub fn check_grant_signer(
-    vault_id: &str,
-    root: Option<&str>,
-    signer: &str,
-    proof: &[LogEntry],
-) -> Result<Option<memberlog::ProvenOwner>, memberlog::OwnerProofError> {
-    if !proof.is_empty() {
-        return memberlog::check_owner_proof(vault_id, root, proof, signer).map(Some);
-    }
-    match root {
-        Some(r) if r != signer => Err(memberlog::OwnerProofError::NotOwner(signer.to_string())),
-        _ => Ok(None),
-    }
 }
 
 /// The entry for sharing a note with someone (their key pinned).
@@ -636,27 +619,6 @@ mod tests {
         assert!(MemberLog::verify("v", &anchor, log.entries.clone(), Some((seq, &hash))).is_ok());
     }
 
-    /// Without an owner proof, a note's key counts only from the vault's
-    /// pinned root, or from anyone before one is pinned (older servers);
-    /// with one, the proof decides.
-    #[test]
-    fn a_grant_signer_without_proof_must_be_the_pinned_root() {
-        assert_eq!(check_grant_signer("v", None, "eve", &[]), Ok(None));
-        assert_eq!(
-            check_grant_signer("v", Some("alice"), "alice", &[]),
-            Ok(None)
-        );
-        assert!(check_grant_signer("v", Some("alice"), "eve", &[]).is_err());
-
-        let alice = p("alice");
-        let (log, _) = vault(&alice);
-        let proven = check_grant_signer("v", Some("alice"), "alice", &log.entries)
-            .unwrap()
-            .unwrap();
-        assert_eq!(proven.key, alice.secret.public());
-        assert!(check_grant_signer("v", Some("bob"), "alice", &log.entries).is_err());
-    }
-
     /// A note's keys go only to whom the log has it shared with, in that role
     /// and with that key: never to someone the server lists on its own.
     #[test]
@@ -670,6 +632,7 @@ mod tests {
             added_by: None,
             has_current_key: false,
             key_signed: false,
+            signed_by: None,
         };
         // Before the log, the server's word (vaults from before it).
         assert!(MemberLog::default().vouches_for_share("n", &share_of(&eve, Role::Viewer)));
@@ -698,6 +661,58 @@ mod tests {
             Some(Role::Viewer)
         );
         assert_eq!(log.share_role("n", "eve", &Role::Viewer), None);
+    }
+
+    /// The people a note is shared with take its key only from an owner:
+    /// one signed by someone who no longer is gets signed again, as does one
+    /// never signed; one an owner signed doesn't.
+    #[test]
+    fn a_key_signed_by_a_former_owner_is_signed_again() {
+        let (alice, bob, carol) = (p("alice"), p("bob"), p("carol"));
+        let anchor = alice.secret.public();
+        let (mut log, _) = vault(&alice);
+        for body in [
+            LogBody::Add {
+                member: log_member("bob", Role::Editor, Some(&bob.secret.public())),
+            },
+            LogBody::MakeOwner {
+                user_id: "bob".into(),
+            },
+            share("n", "carol", Role::Viewer, &carol.secret.public()),
+        ] {
+            push(&mut log, &alice, body, &anchor);
+        }
+        let mut ring = VaultKeyring::new("v");
+        ring.insert(0x8000_0001, VaultKey::generate());
+        let carols = |signed_by: Option<&str>| ObjectShareInfo {
+            user: info(&carol, Role::Viewer, true).user,
+            role: Role::Viewer,
+            added_at: 0,
+            added_by: None,
+            has_current_key: true,
+            key_signed: signed_by.is_some(),
+            signed_by: signed_by.map(str::to_string),
+        };
+        let missing = |log: &MemberLog, signed_by| {
+            missing_grant_signatures(&alice.secret, log, "v", "n", &ring, &[carols(signed_by)])
+        };
+        assert!(missing(&log, Some("bob")).is_empty());
+        assert!(missing(&log, Some("alice")).is_empty());
+        assert_eq!(missing(&log, None).len(), 1);
+
+        push(
+            &mut log,
+            &alice,
+            LogBody::Role {
+                user_id: "bob".into(),
+                role: Role::Editor,
+            },
+            &anchor,
+        );
+        let again = missing(&log, Some("bob"));
+        assert_eq!(again.len(), 1);
+        assert_eq!(again[0].user_id, "carol");
+        assert!(missing(&log, Some("alice")).is_empty());
     }
 
     /// A device that never saw the vault knows where its log stood from the

@@ -531,7 +531,7 @@ pub struct Prefs {
     /// For vaults whose notes are shared with us: who started the vault's
     /// membership log (its first entry's signer), as first shown. Keys of
     /// those notes are taken only from owners the server shows we can trace
-    /// back to them (`check_grant_signer`).
+    /// back to them (`memberlog::check_owner_proof`).
     #[serde(default)]
     pub share_roots: BTreeMap<String, String>,
     /// Goes up with every save. Inside the encryption, so the server can't

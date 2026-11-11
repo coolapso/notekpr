@@ -779,6 +779,9 @@ pub struct ObjectShareInfo {
     /// Their key for the current epoch carries the owner's grant signature.
     #[serde(default)]
     pub key_signed: bool,
+    /// ...signed by this owner (older servers leave it out).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signed_by: Option<String>,
 }
 
 /// A note someone shared with the caller individually.

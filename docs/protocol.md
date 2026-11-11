@@ -247,9 +247,9 @@ member list, vault key, or the note's history from before it was shared.
 |---|---|
 | `PUT /vaults/{v}/objects/{o}/key` `ObjectKeyUpdate {epoch, vault_envelope, chain_link?, envelopes, encrypted_meta, snapshot?, private?, without?, kind?}` | See the three kinds below. `vault_envelope` must be wrapped under the vault's *current* epoch (else `412 stale_key`). A `snapshot` must be under the new key and its `covers_seq` must cover every stored update of the note (else `412 stale_key`). When the key is the first thing stored of an object, `kind` says what it is (`note`, the default, or `drawing`, §5.5); it is ignored otherwise. |
 | `GET /vaults/{v}/objects/{o}/keys` | member or recipient: `ObjectKeysResponse {object_id, role, current_epoch, envelopes (own), chain, encrypted_meta, member_envelopes?, shared?, signer_proof?}`. Recipients: the chain only from `share_from` on; their envelopes carry the owner's grant `signature` (below), and `signer_proof` the membership log entries showing that whoever signed their newest one (`signed_by`) is an owner: from the log's first entry, the entries that made each one on the way an owner and pinned their key (§5.2). Members: the note's key at every epoch wrapped under the vault key (`member_envelopes`), every chain link, and whether it is `shared` — so after a note's `key_rotated` / `shared` event they reload that note's keys alone, not the vault's |
-| `PUT /vaults/{v}/objects/{o}/keys/signatures {grants: [{user_id, epoch, signature}]}` | owner: grant signatures for keys given before grants were signed |
+| `PUT /vaults/{v}/objects/{o}/keys/signatures {grants: [{user_id, epoch, signature}]}` | owner: grant signatures for keys given before grants were signed, or signed by someone no longer an owner |
 | `PUT /vaults/{v}/objects/{o}/meta {encrypted_meta}` | writer: the title recipients see, under the current document key (else `412 stale_key`) |
-| `GET /vaults/{v}/objects/{o}/shares` | member: `ObjectShareInfo {user, role, added_at, added_by, has_current_key, key_signed}` |
+| `GET /vaults/{v}/objects/{o}/shares` | member: `ObjectShareInfo {user, role, added_at, added_by, has_current_key, key_signed, signed_by?}` (`signed_by`: who signed their current key's grant; older servers leave it out) |
 | `POST /vaults/{v}/objects/{o}/shares {user_id, role, envelope, log_entry?}` | owner; never in quick notes (`400`, §5.3); `role` is `editor` or `viewer`; the envelope wraps the current document key to the person (else `412 stale_key`). Vault members are refused (`409`), and so is a note whose sharing has not started (`409`: give it a fresh key first). Someone it is shared with already is refused too (`409`), unless they lack the current key (left out of a rotation, `without`): then they get it, with this role. |
 | `PATCH /vaults/{v}/objects/{o}/shares/{u} {role, log_entry?}` | owner |
 | `DELETE …/shares/{u}` `RemoveShareRequest {log_entry?, rotation?}` | owner, with `rotation`: the note's new key for the people it stays shared with (an `ObjectKeyUpdate` rotation, below), stored in the same transaction — without it `400`, and nothing changes if it is refused. The person removed gets `access_revoked`, never the note's `key_rotated`. Recipients may remove the note from their list (no `rotation`, `400` otherwise; the body is optional); its key is then to be renewed (§5.4) |
@@ -271,11 +271,11 @@ with (`envelopes` of a share, a rotation or a vault rotation) carries
 being BLAKE3 (context `notekpr v1 note key commitment`) over
 `statement("note-key", [vault_id, object_id, epoch:u32be, key])`. Recipients
 use only their newest envelope, and only if the signature verifies with the
-pinned key of the owner who signed it — `signed_by` on the envelope (older
-servers leave it out: the vault's owner then); older keys follow from the
-chain. So a server can't hand them a key of its own. Owners' clients sign the
-grants of keys given before this when they open the vault (`key_signed` says
-which).
+key that `signer_proof` shows for the owner who signed it — `signed_by` on
+the envelope; older keys follow from the chain. So a server can't hand them
+a key of its own. Owners' clients sign again, when they open the vault, the
+grants of keys given before this (`key_signed` says which) and those signed
+by someone their log no longer has as an owner (`signed_by`).
 
 A repeated private first key for a note that has one is refused (`409`;
 clients reload keys and see it registered). Recipients use
@@ -381,8 +381,8 @@ An owner's removal carries two entries, signed one after the other: the
   first entry, signed by whoever the client pinned for that vault the first
   time, every entry signed by someone the proof already made an owner, with
   the key it pinned for them; the grant is verified with that key. Without
-  a proof, only from that pinned signer (older servers: from the owner
-  listed, as before);
+  a proof (a signer who is no owner, a vault without a log, an older
+  server), from no one;
 * as the owner of a vault without a log, sign a `checkpoint` when they open it;
   as an owner of a log without `require_signed`, sign a `share` for every
   note already shared (keys checked against pins), then `require_signed` with

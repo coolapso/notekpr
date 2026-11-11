@@ -216,7 +216,7 @@ pub struct Profile {
     /// For vaults whose notes are shared with us: who started the vault's
     /// membership log, as first shown (vault id -> user id). Keys of those
     /// notes are taken only from owners the server shows we can trace back
-    /// to them (`notekpr_sync::members::check_grant_signer`).
+    /// to them (`notekpr_core::memberlog::check_owner_proof`).
     #[serde(default)]
     pub share_roots: BTreeMap<String, String>,
 }

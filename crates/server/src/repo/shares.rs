@@ -278,6 +278,8 @@ pub struct Recipient {
     pub has_current_key: bool,
     /// ...with the owner's grant signature.
     pub key_signed: bool,
+    /// ...by this owner.
+    pub signed_by: Option<String>,
 }
 
 /// The people a note is shared with, in the order they were added.
@@ -292,9 +294,12 @@ pub async fn recipients(
                 EXISTS(SELECT 1 FROM object_keys k WHERE k.vault_id = s.vault_id AND k.object_id = s.object_id
                        AND k.user_id = s.user_id AND k.epoch = ?) AS has_key,
                 EXISTS(SELECT 1 FROM object_keys k WHERE k.vault_id = s.vault_id AND k.object_id = s.object_id
-                       AND k.user_id = s.user_id AND k.epoch = ? AND k.signature IS NOT NULL) AS key_signed
+                       AND k.user_id = s.user_id AND k.epoch = ? AND k.signature IS NOT NULL) AS key_signed,
+                (SELECT k.signed_by FROM object_keys k WHERE k.vault_id = s.vault_id AND k.object_id = s.object_id
+                       AND k.user_id = s.user_id AND k.epoch = ? AND k.signature IS NOT NULL) AS signed_by
          FROM object_shares s WHERE s.vault_id = ? AND s.object_id = ? ORDER BY s.added_at",
     )
+    .bind(current_epoch)
     .bind(current_epoch)
     .bind(current_epoch)
     .bind(vault_id)
@@ -310,6 +315,7 @@ pub async fn recipients(
             added_by: r.get("added_by"),
             has_current_key: r.get("has_key"),
             key_signed: r.get("key_signed"),
+            signed_by: r.get("signed_by"),
         })
         .collect())
 }

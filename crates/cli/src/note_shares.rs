@@ -15,7 +15,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use notekpr_core::comments::{self, Person};
 use notekpr_core::engine::{self, ObjectMeta, PinStatus, VaultReplica};
 use notekpr_core::keys::{AccountPublic, VaultKeyring};
-use notekpr_core::memberlog::LogBody;
+use notekpr_core::memberlog::{self, LogBody, OwnerProofError};
 use notekpr_core::protocol::*;
 use notekpr_sync::members;
 
@@ -420,8 +420,7 @@ pub async fn shared_with_me(session: &Session) -> Result<Vec<SharedNoteView>> {
 
 /// The keys of a note shared with us, confirmed by an owner of its vault:
 /// one the server's owner proof shows, from where the vault's history
-/// starts (pinned here the first time). Without a proof (older servers),
-/// the owner the server names, their key pinned on first use.
+/// starts (pinned here the first time). Without a proof, none.
 async fn recipient_ring(
     session: &Session,
     info: &SharedNote,
@@ -432,8 +431,7 @@ async fn recipient_ring(
         .get(&format!("/vaults/{vault_id}/objects/{note_id}/keys"))
         .await?;
     // Who signed giving us its newest key: an owner of the vault, as the
-    // server's owner proof shows from where the vault's history starts; or,
-    // without one, the vault's owner we know (or another, looked up).
+    // server's owner proof shows from where the vault's history starts.
     let signer_id = engine::grant_signer(&keys, &session.user_id)
         .map(str::to_string)
         .unwrap_or_else(|| info.owner.id.clone());
@@ -441,14 +439,19 @@ async fn recipient_ring(
         .profiles
         .update(|p| p.share_roots.get(vault_id).cloned())?;
     let checked =
-        members::check_grant_signer(vault_id, root.as_deref(), &signer_id, &keys.signer_proof);
+        memberlog::check_owner_proof(vault_id, root.as_deref(), &keys.signer_proof, &signer_id);
     let signer_key = match checked {
+        Err(OwnerProofError::Missing) => bail!(
+            "this note can't be used yet: the server didn't show that whoever gave you its key owns its \
+             vault. It can be once an owner of the vault next uses notekpr (or, with a server older than \
+             this app, once the server is updated); if not, tell the person who shared it"
+        ),
         Err(e) => bail!(
             "SECURITY: this note's key was given by someone its vault's history doesn't show as an owner \
              ({e}). The server may be trying to read what you write; the note is not used. Tell the \
              person who shared it and your administrator"
         ),
-        Ok(Some(proven)) => {
+        Ok(proven) => {
             for (who, key) in [(&proven.root, &proven.root_key), (&signer_id, &proven.key)] {
                 let fingerprint = key.fingerprint();
                 let pin = session
@@ -467,25 +470,6 @@ async fn recipient_ring(
                     .or_insert_with(|| proven.root.clone());
             })?;
             proven.key
-        }
-        Ok(None) => {
-            let signer = if signer_id == info.owner.id {
-                info.owner.clone()
-            } else {
-                session.api.user(&signer_id).await?
-            };
-            let verified = session
-                .verify_user(&signer)?
-                .ok_or_else(|| anyhow!("the note's owner has no encryption key"))?;
-            if verified.pin == PinStatus::Changed {
-                bail!(
-                    "SECURITY: the account key of {}, who shared this note, changed since it was pinned (now {}); \
-                     verify it with them before using the note",
-                    signer.display_name,
-                    verified.fingerprint
-                );
-            }
-            signer.account_key.as_ref().expect("verified").verify()?
         }
     };
     Ok((

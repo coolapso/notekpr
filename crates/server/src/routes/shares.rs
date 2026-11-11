@@ -501,6 +501,7 @@ pub async fn list(
             added_by: r.added_by,
             has_current_key: r.has_current_key,
             key_signed: r.key_signed,
+            signed_by: r.signed_by,
         });
     }
     Ok(Json(out))
@@ -624,6 +625,7 @@ pub async fn add(
         added_by: Some(who.user_id.clone()),
         has_current_key: true,
         key_signed: false,
+        signed_by: None,
     };
     Ok((StatusCode::CREATED, Json(info)))
 }

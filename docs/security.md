@@ -198,8 +198,10 @@ primitives. Formats:
   see the vault's log, so the server shows them, with signed entries of it,
   that whoever signed the key is an owner, traced back to the log's first
   entry; they pin who signed that the first time (trust on first use, like
-  every key). Which owner signed is then no longer the server's word,
-  though it could still show one removed since (residual risks, 7).
+  every key). Without that proof, no key counts (an owner's app signs again
+  a key given by someone no longer an owner). Which owner signed is then no
+  longer the server's word, though it could still show one removed since
+  (residual risks, 7).
 * **Rolls back or rewrites the membership log?** Clients remember the last
   entry they verified; a log that no longer contains it is a security error.
   The person's synced settings carry it to their other apps, new ones too,

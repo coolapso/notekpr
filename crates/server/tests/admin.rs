@@ -88,6 +88,7 @@ async fn try_create_vault(u: &User) -> u16 {
             signed_by: None,
         },
         log_entry: None,
+        signed_from_start: None,
         kind: Default::default(),
     };
     u.api.status(Method::POST, "/vaults", Some(&req)).await
@@ -705,6 +706,7 @@ async fn limits_stop_new_accounts_vaults_and_agents() {
                     signed_by: None,
                 },
                 log_entry: None,
+                signed_from_start: None,
                 kind: Default::default(),
             }),
         )

@@ -3915,6 +3915,53 @@ async fn an_existing_vault_starts_its_log_with_a_checkpoint() {
 }
 
 #[tokio::test]
+async fn a_new_vault_requires_signed_changes_from_its_start() {
+    use notekpr_core::memberlog::{LogBody, LogEntry};
+    let srv = start().await;
+    let mut alice = new_user(&srv.base, "alice").await;
+    let meta = VaultMeta::named("Signed");
+    // Only a requirement from 0 may come with the creation: else nothing
+    // is made.
+    let (mut req, _) =
+        notekpr_core::engine::new_vault(&alice.account, &alice.id, &meta, 1).unwrap();
+    req.signed_from_start = Some(LogEntry::sign(
+        &alice.account,
+        &alice.id,
+        &req.id,
+        req.log_entry.as_ref(),
+        LogBody::RequireSigned { from_seq: 5 },
+        1,
+    ));
+    let st = alice.api.status(Method::POST, "/vaults", Some(&req)).await;
+    assert_eq!(st, 400);
+    assert_eq!(
+        alice
+            .api
+            .status::<()>(Method::GET, &format!("/vaults/{}", req.id), None)
+            .await,
+        404
+    );
+
+    // As the apps make it: the requirement is stored with it, before any
+    // content.
+    let (req, ring) = notekpr_core::engine::new_vault(&alice.account, &alice.id, &meta, 1).unwrap();
+    let v = req.id.clone();
+    let _: VaultInfo = alice.api.post("/vaults", &req).await;
+    alice.keyrings.insert(v.clone(), ring);
+    let log: MemberLogResponse = alice.api.get(&format!("/vaults/{v}/log")).await;
+    assert_eq!(log.entries.len(), 2);
+    assert_eq!(log.entries[1].body, LogBody::RequireSigned { from_seq: 0 });
+    let u = alice.encrypt_update(&v, "n1", &NoteDoc::new().set_text("first").unwrap());
+    let r = alice.push(&v, vec![u]).await.unwrap();
+    let codes: Vec<&str> = r.rejected.iter().map(|x| x.code.as_str()).collect();
+    assert_eq!(
+        codes,
+        vec![REJECT_UNSIGNED],
+        "not even its first change unsigned"
+    );
+}
+
+#[tokio::test]
 async fn signed_content_is_required_once_the_log_says_so() {
     use notekpr_core::memberlog::{self, LogBody};
     let srv = start().await;

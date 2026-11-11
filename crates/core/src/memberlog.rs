@@ -151,6 +151,8 @@ pub enum LogBody {
     },
     /// From the log's sequence number `from_seq` on (updates with a higher
     /// one, snapshots covering more), content must be signed by its author.
+    /// `0`: all of it, whatever position the server gives it (a vault signed
+    /// from its start, where no content can be from before).
     RequireSigned {
         from_seq: i64,
     },
@@ -996,7 +998,8 @@ impl Authors {
         keys
     }
 
-    /// Check an update the server says `author` wrote, at log sequence `seq`.
+    /// Check an update the server says `author` wrote, at log sequence `seq`
+    /// (the server's word: it only matters below a cut-off other than 0).
     pub fn check_update(
         &self,
         object_id: &str,
@@ -1005,7 +1008,7 @@ impl Authors {
         payload: &[u8],
         signature: Option<&[u8]>,
     ) -> Result<(), AuthorError> {
-        let required = self.signed_from.is_some_and(|f| seq > f);
+        let required = self.signed_from.is_some_and(|f| f == 0 || seq > f);
         self.check(object_id, author, required, signature, |k, sig| {
             verify_update(k, &self.vault_id, object_id, payload, sig)
         })
@@ -1020,7 +1023,7 @@ impl Authors {
         payload: &[u8],
         signature: Option<&[u8]>,
     ) -> Result<(), AuthorError> {
-        let required = self.signed_from.is_some_and(|f| covers_seq > f);
+        let required = self.signed_from.is_some_and(|f| f == 0 || covers_seq > f);
         self.check(object_id, author, required, signature, |k, sig| {
             verify_snapshot(k, &self.vault_id, object_id, covers_seq, payload, sig)
         })
@@ -1754,6 +1757,57 @@ mod tests {
             s.check_key(2, &k3),
             Ok(false),
             "older epochs have no commitment"
+        );
+    }
+
+    /// A vault signed from its start (cut-off 0): no position the server
+    /// gives content makes it exempt, so a viewer's unsigned writing
+    /// passed off as old, at 0 or anywhere, is refused. With a later
+    /// cut-off, what is below it stays exempt (vaults from before
+    /// signatures).
+    #[test]
+    fn a_vault_signed_from_its_start_exempts_nothing() {
+        let (alice, vic) = (person("alice"), person("vic"));
+        let anchor = alice.secret.public();
+        let (mut log, _) = created(&alice);
+        append(
+            &mut log,
+            &alice,
+            LogBody::Add {
+                member: member(&vic, Role::Viewer),
+            },
+        );
+        let mut from_start = log.clone();
+        append(
+            &mut from_start,
+            &alice,
+            LogBody::RequireSigned { from_seq: 0 },
+        );
+        let a = LogState::verify(V, &anchor, &from_start).unwrap().authors();
+        for seq in [0, 1, 5] {
+            assert_eq!(
+                a.check_update("n1", seq, "alice", b"by vic", None),
+                Err(AuthorError::Unsigned),
+                "position {seq}"
+            );
+            assert_eq!(
+                a.check_snapshot("n1", seq, "alice", b"by vic", None),
+                Err(AuthorError::Unsigned),
+                "covering {seq}"
+            );
+        }
+        let sig = sign_update(&alice.secret, V, "n1", b"real");
+        assert_eq!(
+            a.check_update("n1", 1, "alice", b"real", Some(&sig)),
+            Ok(())
+        );
+
+        append(&mut log, &alice, LogBody::RequireSigned { from_seq: 5 });
+        let later = LogState::verify(V, &anchor, &log).unwrap().authors();
+        assert_eq!(later.check_update("n1", 5, "alice", b"old", None), Ok(()));
+        assert_eq!(
+            later.check_update("n1", 6, "alice", b"new", None),
+            Err(AuthorError::Unsigned)
         );
     }
 

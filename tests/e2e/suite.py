@@ -2683,6 +2683,10 @@ def test_membership_log_withheld(env):
         signup(b, uniq("lena"))
         new_note(b, "Checked", "keys the log vouches for")
         b.wait(pending + " === 0", 20, "the note is synced")
+        vid = b.js("return location.pathname").split("/")[2]
+        log = api_get(b, f"/vaults/{vid}/log")["entries"]
+        check(log[0]["body"]["kind"] == "create" and log[1]["body"] == {"kind": "require_signed", "from_seq": 0},
+              "a new vault requires signed changes from its start (no position is exempt)")
         b.js("localStorage.setItem('test.failLogs', '1'); location.href = location.origin + '/'")
         b.wait("return Array.from(document.querySelectorAll('.card')).some(c => c.textContent.includes(\"can't be checked right now\"))",
                30, "the vault's card says why it is locked")

@@ -25,6 +25,7 @@ use crate::routes::me::notify_user;
 use crate::routes::member_log::{self, Expect};
 use crate::routes::users::{account_key, public_user};
 use crate::state::AppState;
+use notekpr_core::memberlog::LogBody;
 
 const MAX_META_BYTES: usize = 16 * 1024;
 const MAX_ENVELOPE_BYTES: usize = 1024;
@@ -175,6 +176,16 @@ pub async fn create(
             now,
         )
         .await?;
+        // Signed changes only, from the vault's start (no position exempt).
+        if let Some(e) = &req.signed_from_start {
+            if e.body != (LogBody::RequireSigned { from_seq: 0 }) || req.log_entry.is_none() {
+                return Err(bad(
+                    "the entry after `create` may only require signed changes from 0",
+                ));
+            }
+            member_log::check_and_append(&mut tx, &req.id, &who, Some(e), Expect::Standalone, now)
+                .await?;
+        }
         tx.commit().await?;
     }
     db::audit(

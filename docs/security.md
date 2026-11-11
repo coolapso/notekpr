@@ -238,7 +238,9 @@ primitives. Formats:
   by its author, and clients accept content only if the vault's log lists
   that author with that key as someone who could write it. Content by an
   author a client's copy of the log doesn't know yet waits until the log is
-  reloaded; it is never applied unchecked.
+  reloaded; it is never applied unchecked. (In vaults made before
+  signatures were required from a vault's start, see
+  [residual risks](#residual-risks-and-planned-hardening), 2.)
 * **Learns metadata** (see above). Mitigation: minimal metadata by design.
 
 ### Stolen credentials
@@ -486,8 +488,13 @@ reported, never applied partially. Duplicate deliveries are no-ops.
 2. Content authenticity with a colluding server: membership and content are
    signed (protocol §5.2), but someone who *could* write once (an editor
    since demoted or removed) still holds a valid signing key and could, with
-   the server's help, add backdated content under an old key epoch. Content
-   from before a vault required signatures is accepted unsigned. Recipients
+   the server's help, add backdated content under an old key epoch. In a
+   vault made before signatures were required from a vault's start, content
+   the server places before the point where its owner required them is
+   accepted unsigned; as positions are the server's word, someone holding
+   the key (a viewer) could, with its help, pass off unsigned writing as
+   such. Vaults made since require signatures from their start: no content
+   is exempt. Recipients
    of single notes don't see the vault's log, so their clients don't check
    authors (their note keys are signed by an owner, so the keys themselves
    can't be swapped).

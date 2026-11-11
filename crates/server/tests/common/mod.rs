@@ -248,6 +248,7 @@ impl User {
                         signed_by: None,
                     },
                     log_entry: None,
+                    signed_from_start: None,
                     kind: Default::default(),
                 },
             )
@@ -256,22 +257,27 @@ impl User {
         id
     }
 
-    /// A vault whose membership log starts with its creation (R3).
+    /// A vault whose membership log starts with its creation (R3), and no
+    /// more (as apps made them before `signed_from_start`): tests sign the
+    /// entries that follow themselves.
     pub async fn create_signed_vault(&mut self, name: &str) -> String {
         let meta = notekpr_core::engine::VaultMeta::named(name);
-        let (req, ring) =
+        let (mut req, ring) =
             notekpr_core::engine::new_vault(&self.account, &self.id, &meta, 1).unwrap();
+        req.signed_from_start = None;
         let _: VaultInfo = self.api.post("/vaults", &req).await;
         self.keyrings.insert(req.id.clone(), ring);
         req.id
     }
 
-    /// This person's quick notes (a vault of that kind), as the apps make it.
+    /// This person's quick notes (a vault of that kind), as the apps made it
+    /// before `signed_from_start` (tests push unsigned content to it).
     pub async fn create_quick_notes(&mut self) -> Result<VaultInfo, (u16, String)> {
         let meta = notekpr_core::engine::VaultMeta::named(notekpr_core::quick::NAME);
         let (mut req, ring) =
             notekpr_core::engine::new_vault(&self.account, &self.id, &meta, 1).unwrap();
         req.kind = VaultKind::QuickNotes;
+        req.signed_from_start = None;
         let info: VaultInfo = self
             .api
             .call(reqwest::Method::POST, "/vaults", Some(&req))

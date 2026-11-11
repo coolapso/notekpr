@@ -250,6 +250,28 @@ async fn a_new_device_knows_the_vault_had_a_log() {
     assert_eq!(logged, 0, "nothing was signed");
 }
 
+/// A new vault requires signed changes from its start: the entry after
+/// `create` sets the cut-off at 0, so no position the server gives content
+/// makes it exempt. Quick notes too.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_new_vault_is_signed_from_its_start() {
+    let srv = start().await;
+    let alice = login(&srv, "alice").await;
+    manage::create_vault(&alice, "Family").await.unwrap();
+    manage::create_quick_notes(&alice).await.unwrap().unwrap();
+    let ah = hub(&alice).await;
+    for v in ah.vaults() {
+        let g = v.lock().await;
+        let entries = &g.log.entries;
+        assert!(
+            matches!(entries[0].body, LogBody::Create { .. }),
+            "{entries:?}"
+        );
+        assert_eq!(entries[1].body, LogBody::RequireSigned { from_seq: 0 });
+        assert_eq!(g.log.state.as_ref().unwrap().signed_from, Some(0));
+    }
+}
+
 /// The server shares a note with Eve on its own: renewing the note's key,
 /// or the vault's (which renews every note's), gives her nothing. Only the
 /// people the log has the note shared with get it.
@@ -350,6 +372,7 @@ async fn an_older_vault_gets_a_signed_checkpoint() {
     let (mut req, ring) =
         engine::new_vault(alice.account(), &alice.user_id, &VaultMeta::named("Old"), 1).unwrap();
     req.log_entry = None;
+    req.signed_from_start = None;
     let info: VaultInfo = alice.api.post("/vaults", &req).await.unwrap();
     let vid = info.id.clone();
     let bob_user = alice.api.user(&bob.user_id).await.unwrap();

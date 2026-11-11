@@ -622,6 +622,12 @@ pub struct CreateVaultRequest {
     /// The membership log's first entry (`Create`), signed by the owner.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub log_entry: Option<LogEntry>,
+    /// The entry after it: `RequireSigned` from 0, every change signed by its
+    /// author from the vault's start (no position exempt). Stored with the
+    /// vault; servers from before it ignore it, and the owner's app then
+    /// requires signatures once it opens the vault.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signed_from_start: Option<LogEntry>,
     /// `quick_notes`: the account's quick-notes vault (at most one).
     #[serde(default, skip_serializing_if = "VaultKind::is_regular")]
     pub kind: VaultKind,

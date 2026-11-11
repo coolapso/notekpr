@@ -209,7 +209,7 @@ refuses roles it doesn't know (`400`).
 | Endpoint | Role |
 |---|---|
 | `GET /vaults` | caller's vaults with role, `encrypted_meta`, `key_epoch`, `head_seq`, `viewers_comment` (§6.1), `kind` (`regular` or `quick_notes`, §5.3; absent on older servers; apps don't show a vault of a kind they don't know, §11), `note_limit` (quick notes: how many notes they may hold; `"unlimited"` for every other vault), `drawing_limit` (how many drawings it may hold: its own `drawing_allowance`, else `drawings_per_vault`, §5.5; `"unlimited"` by default and from older servers), `storage_bytes` (what its encrypted content takes, §9) and `storage_limit_mb` (its storage limit: its own, else `storage_per_vault_mb`; for quick notes the owner's `quick_notes_storage_allowance`, else `quick_notes_storage_mb`; `"unlimited"` by default). `GET /vaults/{v}` answers the same for one vault (the apps show its id and size in its settings: people ask an administrator for more room by the id). For the owner also the keys to renew (§5.4): `rotation_pending` (the vault key) and `notes_rotation_pending` (note ids); absent when there are none |
-| `POST /vaults {id, encrypted_meta, key_envelope, log_entry?, kind?}` | human; the client picks the id and wraps epoch 1 to itself; `log_entry` starts the membership log (§5.2); `kind: "quick_notes"` makes the caller's quick notes (§5.3; `409` if they have them); a kind the server doesn't know is refused (`400`) |
+| `POST /vaults {id, encrypted_meta, key_envelope, log_entry?, signed_from_start?, kind?}` | human; the client picks the id and wraps epoch 1 to itself; `log_entry` starts the membership log (§5.2), and `signed_from_start`, the entry after it, can only be `require_signed` from 0 (`400` otherwise): stored with the vault, so every change to it is signed from its start; `kind: "quick_notes"` makes the caller's quick notes (§5.3; `409` if they have them); a kind the server doesn't know is refused (`400`) |
 | `GET/PATCH/DELETE /vaults/{v}` | read: member; update (`encrypted_meta`, `archived`, `viewers_comment`): owner (never quick notes: `400`); delete: owner |
 | `GET /vaults/{v}/keys` | member: own envelopes for every epoch granted + full key chain; the notes' document keys (`objects`, `object_chain`), which notes are shared individually (`shared`; absent on servers from before notes had their own keys) and for those where sharing started (`share_from`: note → first shared epoch) |
 | `GET /vaults/{v}/members` | member: `MemberInfo {user (with account key), role, has_current_key}` |
@@ -379,9 +379,12 @@ An owner's removal carries two entries, signed one after the other: the
 * as the owner of a vault without a log, sign a `checkpoint` when they open it;
   as an owner of a log without `require_signed`, sign a `share` for every
   note already shared (keys checked against pins), then `require_signed` with
-  the vault's current head. New vaults get it right after `create`;
+  the vault's current head. New vaults get `require_signed` from 0 with
+  their creation (`signed_from_start`), before anything is written to them;
 * sign every update and snapshot (§6), and check what they receive: content
-  after `from_seq` must be signed, and a signature must verify with a key the
+  after `from_seq` must be signed — all of it when `from_seq` is 0, whatever
+  position the server gives it (no content is at 0) — and a signature must
+  verify with a key the
   log ever pinned for the author while they could write the vault (or, for a
   single note, while it was shared with them as an editor). Content by an
   author the client's copy of the log doesn't know is kept aside (the sync

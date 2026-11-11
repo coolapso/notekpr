@@ -289,6 +289,15 @@ pub fn new_vault(
         },
         now,
     );
+    // Signed changes only, from its start.
+    let signed_from_start = memberlog::LogEntry::sign(
+        account,
+        user_id,
+        &id,
+        Some(&log_entry),
+        memberlog::LogBody::RequireSigned { from_seq: 0 },
+        now,
+    );
     let req = CreateVaultRequest {
         id: id.clone(),
         encrypted_meta: meta.encrypt(&ring)?,
@@ -300,6 +309,7 @@ pub fn new_vault(
             signed_by: None,
         },
         log_entry: Some(log_entry),
+        signed_from_start: Some(signed_from_start),
         kind: Default::default(),
     };
     Ok((req, ring))

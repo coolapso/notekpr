@@ -674,7 +674,8 @@ mod vaults;
 
 pub use comments::*;
 pub use members::{
-    log_entry, log_entry_after, member_log, pin_member_key, reload_log, sign_vault, vouched,
+    fresh_log, log_entry, log_entry_after, member_log, pin_member_key, reload_log, sign_vault,
+    vouched,
 };
 pub use mentions::*;
 pub use nav::*;

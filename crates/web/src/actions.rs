@@ -559,9 +559,10 @@ struct Rotation {
 /// The vault's new key and every note's, for the members but `removing`
 /// (with the removal's log entry, signed before the new key's).
 async fn prepare_rotation(vault: &str, removing: Option<&str>) -> Result<Rotation, String> {
-    // The rotation must cover exactly the notes the server has keys for.
+    // The rotation must cover exactly the notes the server has keys for,
+    // and goes only to whom the log as it is now vouches for.
     state::reload_vault_keys(vault.to_string()).await;
-    state::reload_log(vault).await;
+    state::fresh_log(vault).await?;
     let members: Vec<MemberInfo> = api::get::<Vec<MemberInfo>>(&format!("/vaults/{vault}/members"))
         .await
         .map_err(|e| e.message)?
@@ -724,6 +725,11 @@ async fn rotated(vault: &str, r: Rotation) {
 
 /// Owner: give keys to members who were added before they had any.
 pub async fn grant_missing_keys(vault: &str) {
+    // Only to whom the log as it is now vouches for.
+    if let Err(e) = state::fresh_log(vault).await {
+        util::warn(&format!("not giving keys: {e}"));
+        return;
+    }
     let Ok(members) = api::get::<Vec<MemberInfo>>(&format!("/vaults/{vault}/members")).await else {
         return;
     };

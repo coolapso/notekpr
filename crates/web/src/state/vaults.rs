@@ -20,6 +20,7 @@ pub async fn refresh_vaults() {
         offline::note(c, |b| {
             b.vaults = infos.clone();
             b.keys.retain(|k, _| ids.contains(k));
+            b.logs.retain(|k, _| ids.contains(k));
         });
         let removed: Vec<String> = c
             .replicas
@@ -114,17 +115,11 @@ pub(super) async fn load_vault_with(info: VaultInfo, force: bool, keys: Option<V
         } else {
             None
         };
-        let keys: VaultKeysResponse = match keys {
-            Some(k) => k,
+        // Kept for offline use only once checked (below).
+        let (keys, fetched): (VaultKeysResponse, bool) = match keys {
+            Some(k) => (k, false),
             None => match api::get::<VaultKeysResponse>(&format!("/vaults/{id}/keys")).await {
-                Ok(k) => {
-                    step(|c| {
-                        offline::note(c, |b| {
-                            b.keys.insert(id.clone(), k.clone());
-                        })
-                    });
-                    k
-                }
+                Ok(k) => (k, true),
                 Err(e) => {
                     step(|c| c.vault_errors.insert(id.clone(), e.message.clone()));
                     return;
@@ -138,21 +133,51 @@ pub(super) async fn load_vault_with(info: VaultInfo, force: bool, keys: Option<V
         });
         match ring {
             Some(Ok(ring)) => {
-                // The owner's signed membership log, and our keys against it.
-                match super::members::load_log(&id, &ring).await {
-                    Ok(Some(log)) => {
+                // Nothing uses these keys before they check out against the
+                // owner's signed membership log.
+                use super::members::Unchecked;
+                let fresh = match super::members::check_keys(&id, &ring).await {
+                    Ok(checked) => {
                         step(|c| {
-                            c.member_logs.insert(id.clone(), log);
+                            offline::note(c, |b| {
+                                if fetched {
+                                    b.keys.insert(id.clone(), keys.clone());
+                                }
+                                b.logs.insert(id.clone(), checked.log.entries.clone());
+                            });
+                            c.member_logs.insert(id.clone(), checked.log);
                             publish_vaults(c);
                         });
+                        checked.fresh
                     }
-                    Ok(None) => {}
-                    Err(msg) => {
-                        step(|c| c.vault_errors.insert(id.clone(), msg.clone()));
+                    // Can't be checked now: an open vault keeps the keys it
+                    // has; one not open yet waits, as when its keys can't be
+                    // fetched.
+                    Err(Unchecked::Unavailable(msg)) => {
+                        step(|c| {
+                            if c.replicas.get(&id).is_none_or(|r| !r.member) {
+                                c.vault_errors.insert(id.clone(), msg);
+                                // Listed, locked, with the reason.
+                                c.vault_infos.entry(id.clone()).or_insert(info);
+                                publish_vaults(c);
+                            } else {
+                                util::warn(
+                                    "vault keys not reloaded: its membership log can't be had now",
+                                );
+                            }
+                        });
+                        return;
+                    }
+                    Err(Unchecked::Refused(msg)) => {
+                        step(|c| {
+                            c.vault_errors.insert(id.clone(), msg.clone());
+                            c.vault_infos.entry(id.clone()).or_insert(info);
+                            publish_vaults(c);
+                        });
                         error(msg);
                         return;
                     }
-                }
+                };
                 let meta = VaultMeta::decrypt(&ring, &info.encrypted_meta)
                     .unwrap_or_else(|_| VaultMeta::named("(unreadable)"));
                 let docs = engine::object_keyrings(&ring, &keys);
@@ -246,11 +271,11 @@ pub(super) async fn load_vault_with(info: VaultInfo, force: bool, keys: Option<V
                             resend_pending(c, &id);
                         }
                         // Owners start the log of a vault from before it, and
-                        // require signed changes.
-                        let unsigned = c
-                            .member_logs
-                            .get(&id)
-                            .is_none_or(|l| !l.has_log() || l.needs_signatures());
+                        // require signed changes (on the log as it is now).
+                        let unsigned = fresh
+                            && c.member_logs
+                                .get(&id)
+                                .is_some_and(|l| !l.has_log() || l.needs_signatures());
                         (
                             is_new,
                             applied,
@@ -260,7 +285,8 @@ pub(super) async fn load_vault_with(info: VaultInfo, force: bool, keys: Option<V
                             c.offline_start,
                         )
                     });
-                if info.role == Role::Owner && !offline_start {
+                // Owners act only on the log as it is now.
+                if info.role == Role::Owner && !offline_start && fresh {
                     if unsigned {
                         leptos::task::spawn_local(super::members::sign_vault(id.clone()));
                     }

@@ -121,9 +121,9 @@ pub async fn share_note(
     }
     session.reload_member_log(vault).await?;
     // Our keys as the server has them now: also where sharing started.
-    let keys = session.keys(&id).await?;
     {
         let mut v = vault.lock().await;
+        let keys = session.verified_keys(&mut v).await?;
         v.set_keys(keys);
         v.replica.shared.insert(note_id.clone());
         v.mark_state_dirty();

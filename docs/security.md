@@ -190,7 +190,9 @@ primitives. Formats:
 * **Hands a member a vault key it made itself** (so it could read what they
   write next)? The owner commits to every epoch's key in the log; clients
   check each key they receive against the commitment and refuse a vault
-  whose key doesn't match or was never announced. People a single note is
+  whose key doesn't match or was never announced. No key is used before
+  that check: when the server won't give the log, the copy verified last
+  checks the keys, or the vault waits. People a single note is
   shared with use only a note key an owner signed giving them (checked
   against that owner's pinned key; which owner signed it is the server's
   word, as who owns the vault always was for them, and pinned on first use
@@ -354,7 +356,7 @@ sessions and envelope), rotate keys of shared vaults, rotate the recovery key.
 | Client | At rest |
 |---|---|
 | Browser | Device secret in `localStorage`, unsent updates (already encrypted with vault or note keys) and new notes' keys not registered yet (wrapped under the vault key) in `localStorage`, and a local copy of each vault in IndexedDB, encrypted with the vault's (or shared note's) keys like the server's copy. No plaintext notes are persisted; content is decrypted into memory. The local copy is deleted when access to a vault ends and by "Forget this browser". Protection of the browser profile relies on the OS account and full-disk encryption. |
-| Browser, "Keep this browser usable offline" (opt-in) | Additionally the session token, this device's wrapped account key, the vault list with the wrapped vault keys and the encrypted preferences (`localStorage`), and a service worker with a copy of the app's own files. With the device secret next to them, a copy of the browser profile can then be decrypted **without the server — and removing the device no longer cuts it off**. Off by default; the setting explains this. Turning it off, "Forget this browser", a dead session or a device the server reports as removed delete the stored data. |
+| Browser, "Keep this browser usable offline" (opt-in) | Additionally the session token, this device's wrapped account key, the vault list with the wrapped vault keys (only those that checked out against the vault's membership log, and that log as verified) and the encrypted preferences (`localStorage`), and a service worker with a copy of the app's own files. With the device secret next to them, a copy of the browser profile can then be decrypted **without the server — and removing the device no longer cuts it off**. Off by default; the setting explains this. Turning it off, "Forget this browser", a dead session or a device the server reports as removed delete the stored data. |
 | CLI, default | Encrypted local replica (vault-key encrypted CRDT state, sealed with a local key file `0600`). The key file sits in the same profile directory, so this protects against other OS users and stray copies of single files, but not against a copy of the whole directory (a backup, a synced folder) or malware running as the same user; use full-disk encryption. Moving the key to the OS keyring is planned. |
 | CLI, plaintext mirror (explicit opt-in) | Ordinary Markdown files readable by any program running as the user — the point of the mode. It must be enabled explicitly and the CLI explains the implications. |
 | Agent gateway host | Holds the agent's keys and plaintext of the vaults shared with the agent. Treat it like any server with secrets; the gateway listens on localhost by default and requires a bearer token. |

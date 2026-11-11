@@ -2650,6 +2650,49 @@ def test_outdated(env):
         b.close()
 
 
+# Answers the app's requests for vaults' membership logs with 503 while
+# localStorage has `test.failLogs` (installed before the app starts): a
+# server that won't give them.
+FAILING_LOGS = """
+const f = window.fetch;
+window.fetch = (r, o) => {
+  const url = new URL(String(r.url || r), location.href);
+  const get = !(r instanceof Request) || r.method === 'GET';
+  if (get && /\\/vaults\\/[^/]+\\/log$/.test(url.pathname) && localStorage.getItem('test.failLogs') === '1') {
+    return Promise.resolve(new Response('', {status: 503}));
+  }
+  return f(r, o);
+};
+"""
+
+
+def test_membership_log_unavailable(env):
+    """Vault keys are used only once they check out against the vault's
+    membership log: when the server won't give the log, a vault the page
+    hasn't opened yet waits, locked, instead of opening with whatever keys
+    the server handed out."""
+    b = Browser()
+    pending = "return Object.keys(localStorage).filter(k => k.startsWith('notekpr.pending.') && localStorage.getItem(k) !== '[]').length"
+    try:
+        cdp(b, "Page.addScriptToEvaluateOnNewDocument", {"source": FAILING_LOGS})
+        signup(b, uniq("lena"))
+        new_note(b, "Checked", "keys the log vouches for")
+        b.wait(pending + " === 0", 20, "the note is synced")
+        b.js("localStorage.setItem('test.failLogs', '1'); location.href = location.origin + '/'")
+        b.wait("return Array.from(document.querySelectorAll('.card')).some(c => c.textContent.includes(\"can't be checked right now\"))",
+               30, "the vault's card says why it is locked")
+        card = b.js("return Array.from(document.querySelectorAll('.card')).find(c => c.textContent.includes(\"can't be checked\")).textContent")
+        check("Locked vault" in card, "without its log, the vault isn't opened (its name stays unread)")
+        check(not b.js("return Array.from(document.querySelectorAll('.tree-item')).some(e => e.textContent.includes('Checked'))"),
+              "nor are its notes shown")
+        b.js("localStorage.removeItem('test.failLogs'); location.reload()")
+        b.find_text(".tree-item", "Checked", 30)
+        check(True, "with its log back, the vault opens")
+        check(not severe_logs(b), "no browser errors")
+    finally:
+        b.close()
+
+
 # Select `text` (its first occurrence) in the open note's editor, or in
 # the element given second (e.g. the reading view).
 SELECT_TEXT = """
@@ -3858,7 +3901,7 @@ def test_device_code(env):
         a.close()
 
 
-TESTS = [test_onboarding, test_collab, test_devices_and_recovery, test_features, test_attachments, test_attachments_beside_notes, test_export_import, test_notion_import, test_delete_account, test_move_to_vault, test_note_sharing, test_tables, test_code_blocks, test_html, test_callouts, test_math, test_diagrams, test_colors, test_code_wrapping, test_vim, test_line_numbers, test_bullets, test_editor_mouse, test_editor_safety, test_local_copy, test_ui_basics, test_offline_tabs, test_offline_start, test_mobile, test_home_screen, test_quick_notes, test_vault_cards, test_vault_icons, test_entry_icons, test_tree_order, test_session_ended_while_away, test_outdated, test_comments, test_mentions, test_dates, test_graph, test_recovered_copy, test_note_width, test_admin, test_vault_storage, test_vault_admins, test_owners, test_undo_purge, test_device_code]
+TESTS = [test_onboarding, test_collab, test_devices_and_recovery, test_features, test_attachments, test_attachments_beside_notes, test_export_import, test_notion_import, test_delete_account, test_move_to_vault, test_note_sharing, test_tables, test_code_blocks, test_html, test_callouts, test_math, test_diagrams, test_colors, test_code_wrapping, test_vim, test_line_numbers, test_bullets, test_editor_mouse, test_editor_safety, test_local_copy, test_ui_basics, test_offline_tabs, test_offline_start, test_mobile, test_home_screen, test_quick_notes, test_vault_cards, test_vault_icons, test_entry_icons, test_tree_order, test_session_ended_while_away, test_outdated, test_membership_log_unavailable, test_comments, test_mentions, test_dates, test_graph, test_recovered_copy, test_note_width, test_admin, test_vault_storage, test_vault_admins, test_owners, test_undo_purge, test_device_code]
 
 
 def main():

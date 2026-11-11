@@ -107,6 +107,66 @@ async fn a_vault_key_the_owner_never_made_is_refused() {
     );
 }
 
+/// The same key handed to a vault that is open already (`notekpr sync`
+/// fetches keys again on a key event or on content under an unknown key):
+/// it is never put in place, so nothing is written under it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_open_vault_never_takes_a_key_the_owner_never_made() {
+    let srv = start().await;
+    let alice = login(&srv, "alice").await;
+    let bob = login(&srv, "bob").await;
+    manage::create_vault(&alice, "Family").await.unwrap();
+    let ah = hub(&alice).await;
+    let v = ah.resolve("Family").await.unwrap();
+    let vid = v.lock().await.id().to_string();
+    manage::share(&alice, &v, "bob", Role::Editor, false)
+        .await
+        .unwrap();
+    let bh = hub(&bob).await;
+    let bv = bh.resolve("Family").await.unwrap();
+    assert_eq!(bv.lock().await.replica.keyring.current_epoch(), Some(1));
+
+    let fake = VaultKey::generate();
+    let env = keys::wrap_vault_key(
+        &fake,
+        &vid,
+        2,
+        &bob.user_id,
+        &bob.account().public().enc_public,
+    )
+    .unwrap();
+    sqlx::query("INSERT INTO vault_keys (vault_id, epoch, user_id, envelope, created_at) VALUES (?, 2, ?, ?, 0)")
+        .bind(&vid)
+        .bind(&bob.user_id)
+        .bind(env)
+        .execute(&srv.state.db)
+        .await
+        .unwrap();
+    sql(
+        &srv,
+        "UPDATE vaults SET key_epoch = 2 WHERE id = ?",
+        &[&vid],
+    )
+    .await;
+
+    // A key event.
+    let Err(err) = bob.refresh_keys(&bv).await else {
+        panic!("took the key")
+    };
+    assert!(
+        format!("{err:#}").contains("never announced by the owner"),
+        "{err:#}"
+    );
+    assert_eq!(bv.lock().await.replica.keyring.current_epoch(), Some(1));
+    // The vault list says the vault moved on.
+    let info = bob.api.vault(&vid).await.unwrap();
+    assert!(bob.apply_info(&mut *bv.lock().await, &info).await.is_err());
+    assert_eq!(bv.lock().await.replica.keyring.current_epoch(), Some(1));
+    // Nor was it kept on disk.
+    let stored = bob.load_local(&vid).unwrap().unwrap();
+    assert_eq!(stored.replica.keyring.current_epoch(), Some(1));
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_rolled_back_membership_log_is_noticed() {
     let srv = start().await;

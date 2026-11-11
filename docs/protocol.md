@@ -362,9 +362,15 @@ An owner's removal carries two entries, signed one after the other: the
 * verify the whole log, and that it still contains the head they verified
   before (no rollback, no rewritten history);
 * check every vault key they hold against its epoch's commitment (epochs from
-  before a checkpoint have none) and don't use a key that fails;
-* as an owner, wrap vault keys only for members the log lists with that role
-  and key, and pin a pending member's keys (`rekey`) before granting them;
+  before a checkpoint have none) and don't use a key that fails, nor one not
+  checked yet: keys are checked before anything uses them, against the log
+  fetched then or, when the server won't give it, the copy verified last
+  (a browser kept usable offline stores it with the keys). Without either,
+  the vault waits;
+* as an owner, act (give or rotate keys, start the log, require signatures)
+  only on the log as fetched and verified just now; wrap vault keys only for
+  members the log lists with that role and key, and pin a pending member's
+  keys (`rekey`) before granting them;
 * as the owner of a vault without a log, sign a `checkpoint` when they open it;
   as an owner of a log without `require_signed`, sign a `share` for every
   note already shared (keys checked against pins), then `require_signed` with

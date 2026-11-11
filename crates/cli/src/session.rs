@@ -202,13 +202,10 @@ impl Session {
 
     // ------------------------------------------------------------ keys
 
-    /// Fetch and unwrap this principal's keys for a vault.
-    pub async fn keyring(&self, vault_id: &str) -> Result<VaultKeyring> {
-        Ok(self.keys(vault_id).await?.ring)
-    }
-
-    /// Vault keyring plus the document keyrings of its notes.
-    pub async fn keys(&self, vault_id: &str) -> Result<Keys> {
+    /// Vault keyring plus the document keyrings of its notes, as the server
+    /// gives them: not to be used before they check out against the
+    /// vault's membership log ([`Session::verified_keys`]).
+    async fn unchecked_keys(&self, vault_id: &str) -> Result<Keys> {
         let r = self.api.vault_keys(vault_id).await?;
         let ring = engine::keyring_from_response(&self.account, &self.user_id, vault_id, &r)?;
         let docs = engine::object_keyrings(&ring, &r);
@@ -221,14 +218,24 @@ impl Session {
         })
     }
 
+    /// The vault's keys, checked against its membership log (fetched and
+    /// verified now, which `v` keeps) before anything uses them: a key the
+    /// owner never committed to is refused.
+    pub async fn verified_keys(&self, v: &mut Vault) -> Result<Keys> {
+        let keys = self.unchecked_keys(v.id()).await?;
+        self.verify_member_log(v, &keys.ring).await?;
+        Ok(keys)
+    }
+
     /// Open a vault the server listed: the local replica if there is one
-    /// (refreshing keys, role and metadata), otherwise a fresh replica.
+    /// (refreshing keys, role and metadata), otherwise a fresh replica (kept
+    /// on disk only once its keys checked out).
     pub async fn open_vault(&self, info: &VaultInfo) -> Result<Vault> {
         let store = self.vault_store(&info.id)?;
         let mut v = match Vault::load(store.clone())? {
             Some(v) => v,
             None => {
-                let keys = self.keys(&info.id).await?;
+                let keys = self.unchecked_keys(&info.id).await?;
                 let meta =
                     VaultMeta::decrypt(&keys.ring, &info.encrypted_meta).unwrap_or_else(|e| {
                         tracing::warn!("cannot decrypt vault metadata: {e}");
@@ -238,8 +245,10 @@ impl Session {
                     VaultReplica::new(&info.id, info.role.clone(), keys.ring.clone(), meta);
                 let mut v = Vault::new(store, replica, &info.owner_id, info.archived);
                 v.set_keys(keys);
+                // Checks the keys (`load_member_log`) before the first save.
+                self.apply_info(&mut v, info).await?;
                 v.save()?;
-                v
+                return Ok(v);
             }
         };
         self.apply_info(&mut v, info).await?;
@@ -252,7 +261,7 @@ impl Session {
         // (Copies from before notes had their own keys learn whether the
         // server keeps them.)
         if v.replica.keyring.current_epoch().unwrap_or(0) < info.key_epoch || !v.outbox.note_keys {
-            let keys = self.keys(&info.id).await?;
+            let keys = self.verified_keys(v).await?;
             v.set_keys(keys);
         }
         v.replica.role = info.role.clone();
@@ -323,7 +332,8 @@ impl Session {
     /// vault that has none (a checkpoint of the current members).
     pub async fn load_member_log(&self, v: &mut Vault) -> Result<Applied> {
         let id = v.id().to_string();
-        self.verify_member_log(v).await?;
+        let ring = v.replica.keyring.clone();
+        self.verify_member_log(v, &ring).await?;
         if v.role() == Role::Owner && v.read_only.is_none() {
             if !v.log.has_log()
                 && let Err(e) = self.start_member_log(v).await
@@ -344,8 +354,9 @@ impl Session {
         Ok(v.set_authors(authors))
     }
 
-    /// Fetch the vault's log, verify it, and check our vault keys against it.
-    async fn verify_member_log(&self, v: &mut Vault) -> Result<()> {
+    /// Fetch the vault's log, verify it, and check `ring` (the vault keys
+    /// we hold, or are about to) against it.
+    async fn verify_member_log(&self, v: &mut Vault, ring: &VaultKeyring) -> Result<()> {
         let id = v.id().to_string();
         for attempt in 0..2 {
             let entries = self
@@ -376,7 +387,7 @@ impl Session {
                     v.name()
                 ),
             })?;
-            match log.check_keyring(&v.replica.keyring) {
+            match log.check_keyring(ring) {
                 Ok(()) => {
                     v.log_seen = log.head();
                     v.log = log;
@@ -411,7 +422,8 @@ impl Session {
         self.api
             .post::<_, ()>(&format!("/vaults/{id}/log"), &AppendLogRequest { entry })
             .await?;
-        self.verify_member_log(v).await
+        let ring = v.replica.keyring.clone();
+        self.verify_member_log(v, &ring).await
     }
 
     /// Owner: sign the keys of shared notes given before grants were signed,
@@ -579,9 +591,8 @@ impl Session {
     }
 
     pub async fn refresh_keys(&self, vault: &SharedVault) -> Result<()> {
-        let id = vault.lock().await.id().to_string();
-        let keys = self.keys(&id).await?;
         let mut v = vault.lock().await;
+        let keys = self.verified_keys(&mut v).await?;
         v.set_keys(keys);
         v.save()
     }

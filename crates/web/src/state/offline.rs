@@ -29,8 +29,14 @@ pub(super) struct Bundle {
     #[serde(with = "notekpr_core::b64")]
     pub(super) envelope: Vec<u8>,
     pub(super) vaults: Vec<VaultInfo>,
+    /// Only keys that checked out against the vault's verified membership
+    /// log, which is kept with them (`logs`): a start without the server
+    /// checks them against it again, and content against who may write.
     pub(super) keys: BTreeMap<String, VaultKeysResponse>,
     pub(super) prefs: Option<PrefsBlob>,
+    /// Each vault's membership log as last verified (its entries).
+    #[serde(default)]
+    pub(super) logs: BTreeMap<String, Vec<notekpr_core::memberlog::LogEntry>>,
 }
 
 const WORKER: &str = "/sw.js";
@@ -57,6 +63,17 @@ pub(super) fn note(c: &Core, f: impl FnOnce(&mut Bundle)) {
     let mut b = load(uid).unwrap_or_default();
     f(&mut b);
     save(uid, &b);
+}
+
+/// The vault's membership log kept for offline use, if the setting is on.
+pub(super) fn stored_log(
+    c: &Core,
+    vault_id: &str,
+) -> Option<Vec<notekpr_core::memberlog::LogEntry>> {
+    if !enabled(c) {
+        return None;
+    }
+    load(&c.user_id)?.logs.remove(vault_id)
 }
 
 fn load(uid: &str) -> Option<Bundle> {
@@ -106,9 +123,22 @@ pub async fn enable() -> Result<(), String> {
         }
     }))
     .await;
+    // Only keys that check out against the vault's verified log (vaults not
+    // loaded yet are kept once they are).
     let mut keys = BTreeMap::new();
+    let mut logs = BTreeMap::new();
     for (id, k) in fetched {
-        keys.insert(id, k.map_err(|e| e.message)?);
+        let k = k.map_err(|e| e.message)?;
+        let log = step(|c| {
+            let ring = engine::keyring_from_response(c.account.as_ref()?, &uid, &id, &k).ok()?;
+            let log = c.member_logs.get(&id)?;
+            log.check_keyring(&ring).ok()?;
+            Some(log.entries.clone())
+        });
+        if let Some(log) = log {
+            logs.insert(id.clone(), log);
+            keys.insert(id, k);
+        }
     }
     let prefs = api::get::<PrefsBlob>("/me/prefs").await.ok();
     let b = Bundle {
@@ -120,6 +150,7 @@ pub async fn enable() -> Result<(), String> {
         vaults,
         keys,
         prefs,
+        logs,
     };
     storage::set_offline_enabled(&uid, true);
     save(&uid, &b);

@@ -4065,7 +4065,7 @@ def main():
     ap.add_argument("-k", default="")
     args = ap.parse_args()
     env = Env(args.server, args.web)
-    failed = 0
+    failed = []
     try:
         for t in TESTS:
             if args.k and args.k not in t.__name__:
@@ -4073,14 +4073,16 @@ def main():
             print(f"• {t.__name__}")
             try:
                 t(env)
-            except Exception:
-                failed += 1
-                traceback.print_exc()
+            except Exception as e:
+                failed.append(f"{t.__name__}: {type(e).__name__}: {e}")
+                traceback.print_exc(file=sys.stdout)
                 if env.server is None:
                     env.start_server()
     finally:
         env.close()
-    print("FAILED" if failed else "ALL PASSED", f"({failed} failing)")
+    print("FAILED" if failed else "ALL PASSED", f"({len(failed)} failing)")
+    for f in failed:
+        print(f"  ✗ {f}")
     sys.exit(1 if failed else 0)
 
 

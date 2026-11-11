@@ -5,6 +5,9 @@
 # `drawings`).
 # Requirements: chromium (or chrome) + a matching chromedriver on PATH, python3.
 set -euo pipefail
+# Print as it goes, also into a pipe (`task release` runs it in one): a
+# failure's traceback then lands next to its test, not somewhere earlier.
+export PYTHONUNBUFFERED=1
 cd "$(dirname "$0")/../.."
 cargo build -p notekpr-server -p notekpr-cli
 # Its own copy of the web client: `task dev`, `task demo` or `task web:watch`

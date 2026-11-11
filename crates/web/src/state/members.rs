@@ -142,6 +142,10 @@ pub(super) async fn load_log(
             Err(e) if e.status == 0 || e.status >= 500 => return Ok(None),
             Err(e) => return Err(e.message),
         };
+        // Signed out meanwhile: nothing to remember for that account.
+        if step(|c| c.user_id != uid) {
+            return Ok(None);
+        }
         // Without entries there's nothing the key checks.
         let anchor = match creator_key(&entries)? {
             Some(k) => k,

@@ -136,7 +136,13 @@ pub(super) async fn load_vault_with(info: VaultInfo, force: bool, keys: Option<V
                 // Nothing uses these keys before they check out against the
                 // owner's signed membership log.
                 use super::members::Unchecked;
-                let fresh = match super::members::check_keys(&id, &ring).await {
+                let checked = super::members::check_keys(&id, &ring).await;
+                // Signed out meanwhile (or another account): the load is
+                // over, and leaves nothing behind.
+                if step(|c| c.user_id != uid) {
+                    return;
+                }
+                let fresh = match checked {
                     Ok(checked) => {
                         step(|c| {
                             offline::note(c, |b| {

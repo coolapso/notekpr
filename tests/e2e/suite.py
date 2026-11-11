@@ -3435,6 +3435,10 @@ def test_diagrams(env):
         b.click(".seg button[title='Live preview']")
         b.find(".ed .w.dg svg .node.internal-link", 30)
         b.chord(KEYS["ctrl"], KEYS["end"])
+        # Chromium scrolls to the end smoothly: a click while it moves misses
+        # the box. Click once it stands still (in two looks in a row).
+        b.wait("""const t = document.querySelector('.ed .w.dg svg .node.internal-link').getBoundingClientRect().top;
+            const still = window.lastTop === t; window.lastTop = t; return still""", 10, "the scrolling to stop")
         b.click(".ed .w.dg svg .node.internal-link")
         b.wait(title + " === 'Linked note'", 10, "the editor's diagram opens it too")
         check(not severe_logs(b), "no browser errors")

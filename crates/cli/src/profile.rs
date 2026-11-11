@@ -213,6 +213,12 @@ pub struct Profile {
     /// Trust-on-first-use account key fingerprints: user id -> fingerprint.
     #[serde(default)]
     pub pins: BTreeMap<String, String>,
+    /// For vaults whose notes are shared with us: who started the vault's
+    /// membership log, as first shown (vault id -> user id). Keys of those
+    /// notes are taken only from owners the server shows we can trace back
+    /// to them (`notekpr_sync::members::check_grant_signer`).
+    #[serde(default)]
+    pub share_roots: BTreeMap<String, String>,
 }
 
 impl Profile {
@@ -233,6 +239,7 @@ impl Profile {
             gateway: GatewaySettings::default(),
             server_limits: None,
             pins: BTreeMap::new(),
+            share_roots: BTreeMap::new(),
         }
     }
 }

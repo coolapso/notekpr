@@ -685,6 +685,7 @@ mod tests {
                     encrypted_meta: Some(req.encrypted_meta.clone()),
                     member_envelopes: vec![],
                     shared: None,
+                    signer_proof: vec![],
                 },
                 changes: ChangesResponse {
                     updates: vec![carried],

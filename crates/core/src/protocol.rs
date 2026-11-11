@@ -701,6 +701,12 @@ pub struct ObjectKeysResponse {
     /// Vault members: whether the note is shared with someone individually.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shared: Option<bool>,
+    /// People the note is shared with: the membership log entries showing
+    /// that whoever signed their newest key (`signed_by`) is an owner, from
+    /// the log's first entry (`memberlog::owner_proof`). Empty for members,
+    /// when the signer is no owner, and from older servers.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub signer_proof: Vec<LogEntry>,
 }
 
 /// A note's document key: its first key, a fresh key to start sharing it,

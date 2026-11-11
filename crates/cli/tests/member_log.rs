@@ -583,6 +583,104 @@ async fn content_a_server_slips_in_is_refused() {
     );
 }
 
+/// The server hands Rita a new key for a note shared with her, signed by
+/// an account of its own (Eve): she doesn't see the vault's log, but the
+/// server can't show Eve an owner from where the vault's history starts, so
+/// the key isn't used. The vault's real other owner (Bob) renewing it is
+/// taken: the server shows how Alice made him one.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_note_key_counts_only_from_an_owner_the_log_shows() {
+    use notekpr_core::memberlog;
+    let srv = start().await;
+    let alice = login(&srv, "alice").await;
+    let bob = login(&srv, "bob").await;
+    let rita = login(&srv, "rita").await;
+    let eve = login(&srv, "eve").await;
+    manage::create_vault(&alice, "Family").await.unwrap();
+    let ah = hub(&alice).await;
+    let v = ah.resolve("Family").await.unwrap();
+    let vid = v.lock().await.id().to_string();
+    manage::share(&alice, &v, "bob", Role::Owner, false)
+        .await
+        .unwrap();
+    ops::put_document(&ah, "Family", "Trip.md", "coast\n", None)
+        .await
+        .unwrap();
+    ah.sync_vault(&vid).await.unwrap();
+    note_shares::share_note(&alice, &v, "Trip", "rita", Role::Editor, false)
+        .await
+        .unwrap();
+    let (_, text) = note_shares::read_shared(&rita, "Trip").await.unwrap();
+    assert_eq!(text, "coast\n");
+    let oid = v.lock().await.find_note("Trip").unwrap().1.id;
+
+    // Bob, an owner too, renews the note's key: Rita takes it.
+    let bh = hub(&bob).await;
+    let bv = bh.resolve("Family").await.unwrap();
+    note_shares::rotate_note_key(&bob, &bv, &vid, &oid)
+        .await
+        .unwrap();
+    let keys: ObjectKeysResponse = rita
+        .api
+        .get(&format!("/vaults/{vid}/objects/{oid}/keys"))
+        .await
+        .unwrap();
+    assert!(
+        !keys.signer_proof.is_empty(),
+        "the server shows Bob an owner"
+    );
+    note_shares::write_shared(&rita, &oid, "coast and hills\n", true)
+        .await
+        .unwrap();
+
+    // The server makes up a newer key for Rita, signed by Eve, so that it
+    // could read what she writes.
+    let epoch: i64 =
+        sqlx::query_scalar("SELECT key_epoch FROM objects WHERE vault_id = ? AND id = ?")
+            .bind(&vid)
+            .bind(&oid)
+            .fetch_one(&srv.state.db)
+            .await
+            .unwrap();
+    let next = (epoch + 1) as u32;
+    let fake = VaultKey::generate();
+    let env = keys::wrap_vault_key(
+        &fake,
+        &keys::object_scope(&vid, &oid),
+        next,
+        &rita.user_id,
+        &rita.account().public().enc_public,
+    )
+    .unwrap();
+    let grant = memberlog::sign_note_grant(eve.account(), &vid, &oid, &rita.user_id, next, &fake);
+    sqlx::query("INSERT INTO object_keys (vault_id, object_id, epoch, user_id, envelope, created_at, signature, signed_by) VALUES (?, ?, ?, ?, ?, 0, ?, ?)")
+        .bind(&vid)
+        .bind(&oid)
+        .bind(epoch + 1)
+        .bind(&rita.user_id)
+        .bind(env)
+        .bind(grant)
+        .bind(&eve.user_id)
+        .execute(&srv.state.db)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE objects SET key_epoch = ? WHERE vault_id = ? AND id = ?")
+        .bind(epoch + 1)
+        .bind(&vid)
+        .bind(&oid)
+        .execute(&srv.state.db)
+        .await
+        .unwrap();
+    let err = note_shares::write_shared(&rita, &oid, "secret plans\n", true)
+        .await
+        .err()
+        .expect("refused");
+    assert!(
+        format!("{err:#}").contains("doesn't show as an owner"),
+        "{err:#}"
+    );
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_note_key_the_owner_never_gave_is_refused() {
     let srv = start().await;

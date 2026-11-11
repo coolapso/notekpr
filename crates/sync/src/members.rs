@@ -408,6 +408,30 @@ pub fn missing_grant_signatures(
         .collect()
 }
 
+/// Whether a single note's key was given by an owner of its vault, as far
+/// as the person it is shared with can tell without seeing the vault's log:
+/// `proof` (the server's `owner_proof`) must show `signer` an owner,
+/// starting where the vault's history starts (`root`, pinned per vault;
+/// `None`: first use). `Ok(Some(..))`: shown so: pin its `root`, and verify
+/// the grant with its `key`, not the server's. `Ok(None)`: no proof, and the
+/// signer is the pinned root or nothing is pinned yet (older servers): the
+/// signer's key as the server gives it, pinned on first use. `Err`: not
+/// shown to be an owner.
+pub fn check_grant_signer(
+    vault_id: &str,
+    root: Option<&str>,
+    signer: &str,
+    proof: &[LogEntry],
+) -> Result<Option<memberlog::ProvenOwner>, memberlog::OwnerProofError> {
+    if !proof.is_empty() {
+        return memberlog::check_owner_proof(vault_id, root, proof, signer).map(Some);
+    }
+    match root {
+        Some(r) if r != signer => Err(memberlog::OwnerProofError::NotOwner(signer.to_string())),
+        _ => Ok(None),
+    }
+}
+
 /// The entry for sharing a note with someone (their key pinned).
 pub fn share(object_id: &str, user_id: &str, role: Role, key: &AccountPublic) -> LogBody {
     LogBody::Share {
@@ -610,6 +634,27 @@ mod tests {
         assert!(MemberLog::verify("v", &anchor, older, Some((seq, &hash))).is_err());
         assert!(MemberLog::verify("v", &anchor, vec![], Some((seq, &hash))).is_err());
         assert!(MemberLog::verify("v", &anchor, log.entries.clone(), Some((seq, &hash))).is_ok());
+    }
+
+    /// Without an owner proof, a note's key counts only from the vault's
+    /// pinned root, or from anyone before one is pinned (older servers);
+    /// with one, the proof decides.
+    #[test]
+    fn a_grant_signer_without_proof_must_be_the_pinned_root() {
+        assert_eq!(check_grant_signer("v", None, "eve", &[]), Ok(None));
+        assert_eq!(
+            check_grant_signer("v", Some("alice"), "alice", &[]),
+            Ok(None)
+        );
+        assert!(check_grant_signer("v", Some("alice"), "eve", &[]).is_err());
+
+        let alice = p("alice");
+        let (log, _) = vault(&alice);
+        let proven = check_grant_signer("v", Some("alice"), "alice", &log.entries)
+            .unwrap()
+            .unwrap();
+        assert_eq!(proven.key, alice.secret.public());
+        assert!(check_grant_signer("v", Some("bob"), "alice", &log.entries).is_err());
     }
 
     /// A note's keys go only to whom the log has it shared with, in that role

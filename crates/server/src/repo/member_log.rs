@@ -41,6 +41,19 @@ pub async fn append(
     Ok(())
 }
 
+/// Every entry, in order, as this release reads them (kinds it doesn't
+/// know as `Unknown`).
+pub async fn entries(db: impl SqliteExecutor<'_>, vault_id: &str) -> AppResult<Vec<LogEntry>> {
+    let rows: Vec<String> =
+        sqlx::query_scalar("SELECT entry FROM member_log WHERE vault_id = ? ORDER BY seq")
+            .bind(vault_id)
+            .fetch_all(db)
+            .await?;
+    rows.iter()
+        .map(|j| serde_json::from_str(j).map_err(|e| AppError::Internal(e.into())))
+        .collect()
+}
+
 /// Entries with `seq >= since`, in order, as they were stored: also kinds
 /// this release doesn't know (after going back to it from a newer one),
 /// which apps that know them can verify.

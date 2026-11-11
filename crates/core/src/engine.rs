@@ -2090,6 +2090,7 @@ mod tests {
             encrypted_meta: Some(req.encrypted_meta.clone()),
             member_envelopes: vec![],
             shared: None,
+            signer_proof: vec![],
         };
         let bring = object_keyring_for_recipient(&bob, "bob", &vreq.id, &resp, None).unwrap();
         assert_eq!(
@@ -2194,6 +2195,7 @@ mod tests {
             encrypted_meta: None,
             member_envelopes: vec![],
             shared: None,
+            signer_proof: vec![],
         };
         let cring = object_keyring_for_recipient(&carol, "carol", &vreq.id, &resp, None).unwrap();
         assert_eq!(cring.epochs().count(), 2);
@@ -2303,6 +2305,7 @@ mod tests {
             encrypted_meta: Some(req.encrypted_meta.clone()),
             member_envelopes: vec![],
             shared: None,
+            signer_proof: vec![],
         };
         let cring = object_keyring_for_recipient(&carol, "carol", &v, &resp, None).unwrap();
         let mut c = VaultReplica::for_shared_notes(&v);

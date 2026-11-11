@@ -233,6 +233,7 @@ pub async fn document_keys(
         encrypted_meta: meta,
         member_envelopes,
         shared,
+        signer_proof: vec![],
     })
 }
 

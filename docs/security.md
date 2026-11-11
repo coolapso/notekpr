@@ -194,10 +194,12 @@ primitives. Formats:
   whose key doesn't match or was never announced. No key is used before
   that check: when the server won't give the log, the copy verified last
   checks the keys, or the vault waits. People a single note is
-  shared with use only a note key an owner signed giving them (checked
-  against that owner's pinned key; which owner signed it is the server's
-  word, as who owns the vault always was for them, and pinned on first use
-  like every key).
+  shared with use only a note key an owner signed giving them. They don't
+  see the vault's log, so the server shows them, with signed entries of it,
+  that whoever signed the key is an owner, traced back to the log's first
+  entry; they pin who signed that the first time (trust on first use, like
+  every key). Which owner signed is then no longer the server's word,
+  though it could still show one removed since (residual risks, 7).
 * **Rolls back or rewrites the membership log?** Clients remember the last
   entry they verified; a log that no longer contains it is a security error.
   The person's synced settings carry it to their other apps, new ones too,
@@ -337,7 +339,9 @@ primitives. Formats:
   cannot decrypt the note's history from before it was shared; the server
   also hands out only content from that epoch on (`share_from`). Nor do they
   get the vault index (paths, other titles), other notes, attachments, the
-  member list or the vault key. They learn the owner's identity and see the presence of people
+  member list or the vault key. They learn the owner's identity (and, when
+  another owner renews the note's key, who started the vault and the owners
+  between them and that one: the entries showing they are owners) and see the presence of people
   working on that note. Nor do they see the vault's sequence numbers, which
   would tell them how much happens in the rest of the vault: they count in
   the note's own positions (its updates and comments, one by one), from
@@ -505,3 +509,8 @@ reported, never applied partially. Duplicate deliveries are no-ops.
 6. Someone who leaves on their own still knows the key until the owners'
    apps renew it (above): content written in between is readable to them
    with the server's help.
+7. People a single note is shared with can't tell that an owner was
+   removed since (the server can leave that entry out of what it shows
+   them): with the server's help, someone removed as an owner could still
+   give them a note key they know, and read what they write next. Their
+   first contact with a vault is trust on first use.

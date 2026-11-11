@@ -246,7 +246,7 @@ member list, vault key, or the note's history from before it was shared.
 | Endpoint | Role |
 |---|---|
 | `PUT /vaults/{v}/objects/{o}/key` `ObjectKeyUpdate {epoch, vault_envelope, chain_link?, envelopes, encrypted_meta, snapshot?, private?, without?, kind?}` | See the three kinds below. `vault_envelope` must be wrapped under the vault's *current* epoch (else `412 stale_key`). A `snapshot` must be under the new key and its `covers_seq` must cover every stored update of the note (else `412 stale_key`). When the key is the first thing stored of an object, `kind` says what it is (`note`, the default, or `drawing`, §5.5); it is ignored otherwise. |
-| `GET /vaults/{v}/objects/{o}/keys` | member or recipient: `ObjectKeysResponse {object_id, role, current_epoch, envelopes (own), chain, encrypted_meta, member_envelopes?, shared?}`. Recipients: the chain only from `share_from` on; their envelopes carry the owner's grant `signature` (below). Members: the note's key at every epoch wrapped under the vault key (`member_envelopes`), every chain link, and whether it is `shared` — so after a note's `key_rotated` / `shared` event they reload that note's keys alone, not the vault's |
+| `GET /vaults/{v}/objects/{o}/keys` | member or recipient: `ObjectKeysResponse {object_id, role, current_epoch, envelopes (own), chain, encrypted_meta, member_envelopes?, shared?, signer_proof?}`. Recipients: the chain only from `share_from` on; their envelopes carry the owner's grant `signature` (below), and `signer_proof` the membership log entries showing that whoever signed their newest one (`signed_by`) is an owner: from the log's first entry, the entries that made each one on the way an owner and pinned their key (§5.2). Members: the note's key at every epoch wrapped under the vault key (`member_envelopes`), every chain link, and whether it is `shared` — so after a note's `key_rotated` / `shared` event they reload that note's keys alone, not the vault's |
 | `PUT /vaults/{v}/objects/{o}/keys/signatures {grants: [{user_id, epoch, signature}]}` | owner: grant signatures for keys given before grants were signed |
 | `PUT /vaults/{v}/objects/{o}/meta {encrypted_meta}` | writer: the title recipients see, under the current document key (else `412 stale_key`) |
 | `GET /vaults/{v}/objects/{o}/shares` | member: `ObjectShareInfo {user, role, added_at, added_by, has_current_key, key_signed}` |
@@ -376,6 +376,13 @@ An owner's removal carries two entries, signed one after the other: the
   keys (`rekey`) before granting them; wrap a note's keys only for people
   the log has it shared with (`share`, that role and key), leaving out
   (`without`) anyone else the server lists;
+* as someone a single note is shared with (who doesn't see the log), take
+  a note key only from an owner `signer_proof` shows: starting at the log's
+  first entry, signed by whoever the client pinned for that vault the first
+  time, every entry signed by someone the proof already made an owner, with
+  the key it pinned for them; the grant is verified with that key. Without
+  a proof, only from that pinned signer (older servers: from the owner
+  listed, as before);
 * as the owner of a vault without a log, sign a `checkpoint` when they open it;
   as an owner of a log without `require_signed`, sign a `share` for every
   note already shared (keys checked against pins), then `require_signed` with

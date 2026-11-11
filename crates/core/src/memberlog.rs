@@ -20,7 +20,7 @@
 //! The signed bytes are a length-prefixed encoding (`crypto::statement`), not
 //! JSON, so they never depend on a serializer.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
@@ -384,6 +384,189 @@ pub fn creator(entries: &[LogEntry]) -> Option<(String, AccountPublic)> {
         _ => return None,
     };
     Some((first.signer.clone(), pinned.public().ok()??))
+}
+
+/// The log entries that prove `user` an owner of the vault now, from the
+/// log's first entry: the entry that made them an owner, the one that
+/// pinned the key they have, and the same for whoever signed those (as
+/// they were then), down to the first entry. In log order; empty if they
+/// aren't an owner. The server hands them to the people a single note is
+/// shared with, who don't see the log, so that an owner's signature on the
+/// note's key can be told from anyone's ([`check_owner_proof`]). They learn
+/// only the owners on the way.
+pub fn owner_proof(entries: &[LogEntry], user: &str) -> Vec<LogEntry> {
+    let Some(first) = entries.first() else {
+        return vec![];
+    };
+    // For each person, as the log goes: the entry that made them an owner
+    // (while they are one) and the one that pinned their key; and for each
+    // entry, those of its signer when they signed it.
+    let mut made: BTreeMap<String, usize> = BTreeMap::new();
+    let mut keyed: BTreeMap<String, usize> = BTreeMap::new();
+    let mut needs: Vec<Vec<usize>> = vec![vec![]; entries.len()];
+    match &first.body {
+        LogBody::Create { owner, .. } => {
+            made.insert(owner.user_id.clone(), 0);
+            keyed.insert(owner.user_id.clone(), 0);
+        }
+        LogBody::Checkpoint { members, .. } => {
+            for m in members {
+                keyed.insert(m.user_id.clone(), 0);
+                if m.role == Role::Owner {
+                    made.insert(m.user_id.clone(), 0);
+                }
+            }
+        }
+        _ => return vec![],
+    }
+    for (i, e) in entries.iter().enumerate().skip(1) {
+        needs[i] = [made.get(&e.signer), keyed.get(&e.signer)]
+            .into_iter()
+            .flatten()
+            .copied()
+            .collect();
+        match &e.body {
+            LogBody::Add { member } | LogBody::Rekey { member } => {
+                keyed.insert(member.user_id.clone(), i);
+            }
+            LogBody::MakeOwner { user_id } => {
+                // Owners are made from members with keys: theirs then too.
+                needs[i].extend(keyed.get(user_id));
+                made.insert(user_id.clone(), i);
+            }
+            LogBody::Role { user_id, .. }
+            | LogBody::Remove { user_id }
+            | LogBody::Leave { user_id } => {
+                made.remove(user_id);
+            }
+            _ => {}
+        }
+    }
+    let (Some(&m), Some(&k)) = (made.get(user), keyed.get(user)) else {
+        return vec![];
+    };
+    let mut proof = BTreeSet::new();
+    let mut todo = vec![m, k];
+    while let Some(i) = todo.pop() {
+        if proof.insert(i) {
+            todo.extend(&needs[i]);
+        }
+    }
+    proof.insert(0);
+    proof.into_iter().map(|i| entries[i].clone()).collect()
+}
+
+/// What an owner proof showed ([`check_owner_proof`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProvenOwner {
+    /// Who signed the log's first entry, and the key it pins for them: the
+    /// vault's root, to pin.
+    pub root: String,
+    pub root_key: AccountPublic,
+    /// The key the proof pins for the owner (to verify their signatures
+    /// with, rather than the one the server hands out).
+    pub key: AccountPublic,
+}
+
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+pub enum OwnerProofError {
+    #[error("this vault's history starts with someone else than before")]
+    Root,
+    #[error("{0} is not shown to be one of this vault's owners")]
+    NotOwner(String),
+    #[error(transparent)]
+    Log(#[from] LogError),
+}
+
+/// Check that `proof` ([`owner_proof`]) shows `user` an owner of the vault:
+/// its first entry is the vault's, signed by `root` (pinned; `None`: not
+/// yet, whoever signed it is the root, trusted on first use), and every
+/// later entry is signed by someone it has shown an owner, with the key it
+/// pinned for them. An entry left out can't make anyone an owner, so the
+/// server can only show owners the log really made (though it can leave out
+/// that one was removed since).
+pub fn check_owner_proof(
+    vault_id: &str,
+    root: Option<&str>,
+    proof: &[LogEntry],
+    user: &str,
+) -> Result<ProvenOwner, OwnerProofError> {
+    let first = proof
+        .first()
+        .ok_or_else(|| OwnerProofError::NotOwner(user.to_string()))?;
+    if first.seq != 0 {
+        return Err(LogError::Sequence(first.seq).into());
+    }
+    if first.prev != [0u8; 32] {
+        return Err(LogError::Fork(0).into());
+    }
+    let (root_id, root_key) = creator(std::slice::from_ref(first)).ok_or(LogError::Invalid(
+        0,
+        "a log starts with create or checkpoint",
+    ))?;
+    if root.is_some_and(|r| r != root_id) {
+        return Err(OwnerProofError::Root);
+    }
+    first.verify_signature(vault_id, &root_key)?;
+    let mut keys: BTreeMap<String, AccountPublic> = BTreeMap::new();
+    let mut owners: BTreeSet<String> = BTreeSet::new();
+    match &first.body {
+        LogBody::Create { owner, .. } => {
+            if owner.user_id != first.signer || owner.role != Role::Owner {
+                return Err(LogError::Invalid(0, "the creator must be the owner").into());
+            }
+            keys.insert(root_id.clone(), root_key.clone());
+            owners.insert(root_id.clone());
+        }
+        LogBody::Checkpoint { members, .. } => {
+            for m in members {
+                if let Some(k) = m.public()? {
+                    keys.insert(m.user_id.clone(), k);
+                    if m.role == Role::Owner {
+                        owners.insert(m.user_id.clone());
+                    }
+                }
+            }
+        }
+        _ => return Err(LogError::Invalid(0, "a log starts with create or checkpoint").into()),
+    }
+    let mut last = 0;
+    for e in &proof[1..] {
+        if e.seq <= last {
+            return Err(LogError::Sequence(e.seq).into());
+        }
+        last = e.seq;
+        let key = owners
+            .contains(&e.signer)
+            .then(|| keys.get(&e.signer))
+            .flatten()
+            .ok_or(LogError::Signer(e.seq))?;
+        e.verify_signature(vault_id, key)?;
+        match &e.body {
+            LogBody::Add { member } | LogBody::Rekey { member } => {
+                if let Some(k) = member.public()? {
+                    keys.insert(member.user_id.clone(), k);
+                }
+            }
+            LogBody::MakeOwner { user_id } if keys.contains_key(user_id) => {
+                owners.insert(user_id.clone());
+            }
+            LogBody::Role { user_id, .. }
+            | LogBody::Remove { user_id }
+            | LogBody::Leave { user_id } => {
+                owners.remove(user_id);
+            }
+            _ => {}
+        }
+    }
+    match (owners.contains(user), keys.get(user)) {
+        (true, Some(k)) => Ok(ProvenOwner {
+            root: root_id,
+            root_key,
+            key: k.clone(),
+        }),
+        _ => Err(OwnerProofError::NotOwner(user.to_string())),
+    }
 }
 
 /// What a verified log says.
@@ -1758,6 +1941,129 @@ mod tests {
             Ok(false),
             "older epochs have no commitment"
         );
+    }
+
+    /// People a note is shared with don't see the log: an owner proof shows
+    /// them that whoever signed the note's key is an owner, from the log's
+    /// first entry, entry by entry. Nothing the server leaves out or makes
+    /// up passes, once they know where the vault's history starts.
+    #[test]
+    fn an_owner_proof_shows_who_owns_the_vault() {
+        let (alice, bob, carol, dave, eve) = (
+            person("alice"),
+            person("bob"),
+            person("carol"),
+            person("dave"),
+            person("eve"),
+        );
+        let (mut log, _) = created(&alice);
+        let add = |log: &mut Vec<LogEntry>, by: &Person, who: &Person| {
+            append(
+                log,
+                by,
+                LogBody::Add {
+                    member: member(who, Role::Editor),
+                },
+            )
+        };
+        let make_owner = |log: &mut Vec<LogEntry>, by: &Person, who: &Person| {
+            append(
+                log,
+                by,
+                LogBody::MakeOwner {
+                    user_id: who.id.clone(),
+                },
+            )
+        };
+        add(&mut log, &alice, &bob);
+        add(&mut log, &alice, &dave);
+        make_owner(&mut log, &alice, &bob);
+        append(&mut log, &alice, LogBody::RequireSigned { from_seq: 0 });
+        add(&mut log, &bob, &carol);
+        make_owner(&mut log, &bob, &carol);
+        LogState::verify(V, &alice.secret.public(), &log).unwrap();
+
+        // Carol, made an owner by Bob, made one by Alice: just those entries.
+        let proof = owner_proof(&log, "carol");
+        let seqs: Vec<u64> = proof.iter().map(|e| e.seq).collect();
+        assert_eq!(seqs, vec![0, 1, 3, 5, 6]);
+        let ok = check_owner_proof(V, Some("alice"), &proof, "carol").unwrap();
+        assert_eq!(ok.key, carol.secret.public());
+        assert_eq!(
+            (ok.root.as_str(), &ok.root_key),
+            ("alice", &alice.secret.public())
+        );
+        // The first time, whoever started the log is taken as its root.
+        assert_eq!(check_owner_proof(V, None, &proof, "carol").unwrap(), ok);
+        // The root needs none.
+        assert_eq!(owner_proof(&log, "alice").len(), 1);
+        // Not an owner: no proof; one meant for someone else shows nothing.
+        assert!(owner_proof(&log, "dave").is_empty());
+        assert_eq!(
+            check_owner_proof(V, Some("alice"), &proof, "dave"),
+            Err(OwnerProofError::NotOwner("dave".into()))
+        );
+
+        // An entry left out: Carol isn't shown an owner.
+        let gap: Vec<LogEntry> = proof.iter().filter(|e| e.seq != 6).cloned().collect();
+        assert_eq!(
+            check_owner_proof(V, Some("alice"), &gap, "carol"),
+            Err(OwnerProofError::NotOwner("carol".into()))
+        );
+        // Or the one that made Bob an owner: his entries don't count.
+        let gap: Vec<LogEntry> = proof.iter().filter(|e| e.seq != 3).cloned().collect();
+        assert_eq!(
+            check_owner_proof(V, Some("alice"), &gap, "carol"),
+            Err(OwnerProofError::Log(LogError::Signer(5)))
+        );
+        // A changed entry: Eve's key in place of Carol's.
+        let mut forged = proof.clone();
+        forged[3].body = LogBody::Add {
+            member: LogMember::new("carol", Role::Editor, &eve.secret.public()),
+        };
+        assert_eq!(
+            check_owner_proof(V, Some("alice"), &forged, "carol"),
+            Err(OwnerProofError::Log(LogError::BadSignature(5)))
+        );
+        // Out of order.
+        let mut shuffled = proof.clone();
+        shuffled.swap(3, 4);
+        assert!(check_owner_proof(V, Some("alice"), &shuffled, "carol").is_err());
+
+        // A history the server made up, starting with an account of its own.
+        let (mut fake, _) = created(&eve);
+        add(&mut fake, &eve, &carol);
+        make_owner(&mut fake, &eve, &carol);
+        let made_up = owner_proof(&fake, "carol");
+        assert_eq!(
+            check_owner_proof(V, Some("alice"), &made_up, "carol"),
+            Err(OwnerProofError::Root)
+        );
+
+        // A new key, pinned by another owner: the proof has it.
+        let carol2 = Person {
+            id: "carol".into(),
+            secret: AccountSecret::generate(),
+        };
+        append(
+            &mut log,
+            &bob,
+            LogBody::Rekey {
+                member: member(&carol2, Role::Owner),
+            },
+        );
+        let ok = check_owner_proof(V, Some("alice"), &owner_proof(&log, "carol"), "carol").unwrap();
+        assert_eq!(ok.key, carol2.secret.public());
+        // Demoted: no longer shown an owner.
+        append(
+            &mut log,
+            &alice,
+            LogBody::Role {
+                user_id: "carol".into(),
+                role: Role::Editor,
+            },
+        );
+        assert!(owner_proof(&log, "carol").is_empty());
     }
 
     /// A vault signed from its start (cut-off 0): no position the server

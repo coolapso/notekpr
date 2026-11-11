@@ -120,9 +120,17 @@ pub async fn object_keys(
     Path((v, o)): Path<(String, String)>,
 ) -> AppResult<Json<ObjectKeysResponse>> {
     let (role, member) = access::object_access(&state.db, &v, &o, &who.user_id).await?;
-    Ok(Json(
-        repo::keys::document_keys(&state.db, &v, &o, &who.user_id, role, member).await?,
-    ))
+    let mut keys = repo::keys::document_keys(&state.db, &v, &o, &who.user_id, role, member).await?;
+    // People the note is shared with don't see the vault's log: the entries
+    // showing that whoever signed their newest key is an owner.
+    if !member
+        && let Some(signer) =
+            notekpr_core::engine::grant_signer(&keys, &who.user_id).map(str::to_string)
+    {
+        let entries = repo::member_log::entries(&state.db, &v).await?;
+        keys.signer_proof = notekpr_core::memberlog::owner_proof(&entries, &signer);
+    }
+    Ok(Json(keys))
 }
 
 /// What a key change does (see `ObjectKeyUpdate`).

@@ -7,10 +7,10 @@
 
 use std::collections::BTreeMap;
 
-use anyhow::{Context, Result, bail};
+use anyhow::Result;
 use notekpr_core::comments::{self, Found, MentionsRead, Person};
 use notekpr_core::doc::EntryKind;
-use notekpr_core::protocol::{PrefsBlob, PutPrefsRequest};
+use notekpr_core::protocol::PrefsBlob;
 use serde::Serialize;
 
 use crate::hub::Hub;
@@ -168,21 +168,9 @@ pub async fn mark_read(session: &Session, items: &[MentionItem]) -> Result<()> {
     if by_vault.is_empty() {
         return Ok(());
     }
-    for _ in 0..3 {
-        let blob: PrefsBlob = session
-            .api
-            .get("/me/prefs")
-            .await
-            .context("reading your settings")?;
-        // The web app's preferences, with every field it keeps: only the
-        // read state changes.
-        let mut prefs: serde_json::Map<String, serde_json::Value> = match &blob.ciphertext {
-            Some(ct) => {
-                let pt = session.account().open_private(&session.user_id, ct)?;
-                serde_json::from_slice(&pt).context("your settings can't be read")?
-            }
-            None => serde_json::Map::new(),
-        };
+    // The web app's preferences, with every field it keeps: only the read
+    // state changes.
+    crate::prefs::update(session, |prefs| {
         let mut state: MentionsRead =
             serde_json::from_value(serde_json::Value::Object(prefs.clone())).unwrap_or_default();
         let mut changed = false;
@@ -190,30 +178,13 @@ pub async fn mark_read(session: &Session, items: &[MentionItem]) -> Result<()> {
             changed |= state.mark_all(v, ms);
         }
         if !changed {
-            return Ok(());
+            return false;
         }
-        let serde_json::Value::Object(fields) = serde_json::to_value(&state)? else {
-            bail!("unexpected settings");
+        let Ok(serde_json::Value::Object(fields)) = serde_json::to_value(&state) else {
+            return false;
         };
         prefs.extend(fields);
-        // Goes up with every save, inside the encryption (the web app keeps
-        // the newest copy it has seen).
-        let counter = prefs
-            .get("counter")
-            .and_then(serde_json::Value::as_u64)
-            .unwrap_or(0);
-        prefs.insert("counter".into(), (counter + 1).into());
-        let pt = serde_json::to_vec(&prefs)?;
-        let req = PutPrefsRequest {
-            ciphertext: session.account().seal_private(&session.user_id, &pt),
-            expected_version: blob.version,
-        };
-        match session.api.put::<_, PrefsBlob>("/me/prefs", &req).await {
-            Ok(_) => return Ok(()),
-            // Saved meanwhile on another device: read it again.
-            Err(e) if e.status() == Some(409) => continue,
-            Err(e) => return Err(anyhow::anyhow!(e).context("saving your settings")),
-        }
-    }
-    bail!("your settings keep changing on another device; try again")
+        true
+    })
+    .await
 }

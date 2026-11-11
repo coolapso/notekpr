@@ -38,6 +38,17 @@ fn creator_key(entries: &[LogEntry]) -> Result<Option<AccountPublic>, String> {
     })
 }
 
+/// Remember where a verified log stands: in this browser, and for our
+/// other apps in the synced preferences.
+pub(crate) fn note_head(uid: &str, vault_id: &str, head: Option<(u64, Vec<u8>)>) {
+    storage::set_log_seen(uid, vault_id, head.clone());
+    step(|c| {
+        if rules::note_head(&mut c.prefs.log_heads, vault_id, head) {
+            save_prefs(c);
+        }
+    });
+}
+
 /// What a vault's keys were checked against ([`check_keys`]).
 pub(super) struct Checked {
     pub log: MemberLog,
@@ -145,9 +156,13 @@ pub(super) async fn load_log(
             seen.as_ref().map(|(s, h)| (*s, h.as_slice())),
         )
         .map_err(log_refused)?;
+        // Where our other apps saw it last, for a browser that never did.
+        if let Some(head) = step(|c| c.prefs.log_heads.get(vault_id).cloned()) {
+            log.check_head(&head).map_err(log_refused)?;
+        }
         match log.check_keyring(ring) {
             Ok(()) => {
-                storage::set_log_seen(&uid, vault_id, log.head());
+                note_head(&uid, vault_id, log.head());
                 return Ok(Some(log));
             }
             // A rotation between reading the keys and the log.

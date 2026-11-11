@@ -39,6 +39,9 @@ pub struct Session {
     limits: std::sync::Mutex<(ServerLimits, bool)>,
     /// Vaults whose pending keys are being renewed (one at a time each).
     renewing: std::sync::Mutex<std::collections::BTreeSet<String>>,
+    /// Where the person's apps last saw each vault's membership log (the
+    /// synced preferences), read once per session.
+    synced_heads: std::sync::Mutex<Option<notekpr_sync::members::LogHeads>>,
 }
 
 /// What happened during a push.
@@ -123,6 +126,7 @@ impl Session {
             info: OnceCell::new(),
             limits: std::sync::Mutex::new(limits),
             renewing: Default::default(),
+            synced_heads: Default::default(),
         })
     }
 
@@ -358,6 +362,8 @@ impl Session {
     /// we hold, or are about to) against it.
     async fn verify_member_log(&self, v: &mut Vault, ring: &VaultKeyring) -> Result<()> {
         let id = v.id().to_string();
+        // Where our other apps saw it last, for a device that never did.
+        let synced = self.synced_head(&id).await;
         for attempt in 0..2 {
             let entries = self
                 .api
@@ -387,11 +393,22 @@ impl Session {
                     v.name()
                 ),
             })?;
+            if let Some(head) = &synced {
+                log.check_head(head).map_err(|e| {
+                    anyhow!(
+                        "SECURITY: the membership history of vault '{}' does not check out ({e}): it no \
+                         longer has what your apps saw before. The server may have been tampered with; nothing \
+                         was changed. Tell the vault's owner and your administrator",
+                        v.name()
+                    )
+                })?;
+            }
             match log.check_keyring(ring) {
                 Ok(()) => {
                     v.log_seen = log.head();
                     v.log = log;
                     v.mark_state_dirty();
+                    self.save_synced_head(&id, v.log_seen.clone()).await;
                     break;
                 }
                 // A rotation between our reads of the keys and the log.
@@ -404,6 +421,46 @@ impl Session {
             }
         }
         Ok(())
+    }
+
+    /// Where the person's apps last saw the vault's log (`None`: nowhere, or
+    /// the preferences can't be read now).
+    async fn synced_head(&self, vault_id: &str) -> Option<notekpr_sync::members::LogHead> {
+        let cached = self.synced_heads.lock().unwrap().clone();
+        let heads = match cached {
+            Some(h) => h,
+            None => {
+                let h = crate::prefs::log_heads(self).await.ok()?;
+                *self.synced_heads.lock().unwrap() = Some(h.clone());
+                h
+            }
+        };
+        heads.get(vault_id).cloned()
+    }
+
+    /// Save where a verified log stands for the person's other apps, if they
+    /// don't know a further head (a failure only means they know less).
+    async fn save_synced_head(&self, vault_id: &str, head: Option<(u64, Vec<u8>)>) {
+        let Some(head) = head else { return };
+        let known = self
+            .synced_heads
+            .lock()
+            .unwrap()
+            .as_ref()
+            .and_then(|h| h.get(vault_id).map(|h| h.seq));
+        if known.is_some_and(|seq| seq >= head.0) {
+            return;
+        }
+        match crate::prefs::save_log_head(self, vault_id, head.clone()).await {
+            Ok(()) => {
+                if let Some(h) = self.synced_heads.lock().unwrap().as_mut() {
+                    notekpr_sync::members::note_head(h, vault_id, Some(head));
+                }
+            }
+            Err(e) => {
+                tracing::warn!(vault = %vault_id, "could not save where its membership log stands: {e:#}")
+            }
+        }
     }
 
     /// Owner: sign `body` into the vault's log (`POST /vaults/{v}/log`).

@@ -523,6 +523,11 @@ pub struct Prefs {
     /// The emojis picked as icons lately, the latest first.
     #[serde(default)]
     pub recent_icons: Vec<String>,
+    /// Where each vault's membership log stood when last verified, by any
+    /// of our apps: a new browser refuses a log that no longer contains it,
+    /// or the vault shown without one.
+    #[serde(default)]
+    pub log_heads: notekpr_sync::members::LogHeads,
     /// Goes up with every save. Inside the encryption, so the server can't
     /// change it: an older copy it hands out (e.g. one without a pin) is
     /// noticed and not used [W-M10].

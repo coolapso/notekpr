@@ -191,6 +191,7 @@ pub(super) fn merge_prefs(theirs: &mut Prefs, mine: Prefs, unsaved: &Unsaved) {
     for (u, fp) in mine.pins {
         theirs.pins.entry(u).or_insert(fp);
     }
+    notekpr_sync::members::merge_heads(&mut theirs.log_heads, &mine.log_heads);
     // Read here or there: read.
     theirs.mentions.merge(&mine.mentions);
     for v in mine.owner_hints_hidden {

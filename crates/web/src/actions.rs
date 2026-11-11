@@ -82,6 +82,9 @@ pub async fn create_vault_of(name: &str, kind: VaultKind) -> Result<Option<Strin
         });
         if let Some(log) = log {
             crate::storage::set_log_seen(&c.user_id, &id, log.head());
+            if notekpr_sync::members::note_head(&mut c.prefs.log_heads, &id, log.head()) {
+                state::save_prefs(c);
+            }
             c.member_logs.insert(id.clone(), log);
         }
         let r = VaultReplica::new(&id, Role::Owner, ring, VaultMeta::named(&name));

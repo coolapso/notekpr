@@ -5,12 +5,49 @@
 mod common;
 
 use common::*;
+use notekpr_cli::account::{self, LoginOptions};
 use notekpr_cli::{manage, note_shares, ops};
 use notekpr_core::doc::EntryKind;
 use notekpr_core::engine::{self, VaultMeta, VaultReplica};
 use notekpr_core::keys::{self, VaultKey};
 use notekpr_core::memberlog::LogBody;
 use notekpr_core::protocol::*;
+
+/// Sign `user` in for the first time; returns their recovery key too.
+async fn first_device(
+    srv: &TestServer,
+    user: &str,
+) -> (std::sync::Arc<notekpr_cli::session::Session>, String) {
+    let out = account::login(&srv.dirs(user), user, dev_login(srv, user))
+        .await
+        .unwrap();
+    (reopen(srv, user, user).await, out.recovery_key.unwrap())
+}
+
+/// Another device of `user` (in `dirs`), unlocked with their recovery key.
+async fn second_device(
+    srv: &TestServer,
+    dirs: &str,
+    user: &str,
+    recovery_key: String,
+) -> std::sync::Arc<notekpr_cli::session::Session> {
+    let opts = LoginOptions {
+        recovery_key: Some(recovery_key),
+        approval_timeout: Some(std::time::Duration::from_secs(1)),
+        ..dev_login(srv, user)
+    };
+    account::login(&srv.dirs(dirs), user, opts).await.unwrap();
+    reopen(srv, dirs, user).await
+}
+
+fn dev_login(srv: &TestServer, user: &str) -> LoginOptions {
+    LoginOptions {
+        server: srv.url.clone(),
+        dev_user: Some(user.to_string()),
+        device_name: Some(format!("{user}'s test device")),
+        ..Default::default()
+    }
+}
 
 async fn sql(srv: &TestServer, q: &'static str, binds: &[&str]) {
     let mut query = sqlx::query(q);
@@ -165,6 +202,52 @@ async fn an_open_vault_never_takes_a_key_the_owner_never_made() {
     // Nor was it kept on disk.
     let stored = bob.load_local(&vid).unwrap().unwrap();
     assert_eq!(stored.replica.keyring.current_epoch(), Some(1));
+}
+
+/// A device that never opened the vault is shown it without its log (as
+/// a vault from before logs): it knows better from where the person's other
+/// apps saw the log (the synced preferences), so it refuses it, and the
+/// owner's new device signs no new history over it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_new_device_knows_the_vault_had_a_log() {
+    let srv = start().await;
+    let (alice, alice_rk) = first_device(&srv, "alice").await;
+    let (bob, bob_rk) = first_device(&srv, "bob").await;
+    manage::create_vault(&alice, "Family").await.unwrap();
+    let ah = hub(&alice).await;
+    let v = ah.resolve("Family").await.unwrap();
+    let vid = v.lock().await.id().to_string();
+    manage::share(&alice, &v, "bob", Role::Editor, false)
+        .await
+        .unwrap();
+    // Bob's app opens it: where its log stands is now in his preferences.
+    let info = bob.api.vault(&vid).await.unwrap();
+    bob.open_vault(&info).await.unwrap();
+    let heads = notekpr_cli::prefs::log_heads(&bob).await.unwrap();
+    assert!(heads.contains_key(&vid), "{heads:?}");
+
+    // The server hides the log.
+    sql(&srv, "DELETE FROM member_log WHERE vault_id = ?", &[&vid]).await;
+    // Bob's new device.
+    let bob2 = second_device(&srv, "bob-2", "bob", bob_rk).await;
+    let info = bob2.api.vault(&vid).await.unwrap();
+    let Err(err) = bob2.open_vault(&info).await else {
+        panic!("opened without its log")
+    };
+    assert!(
+        format!("{err:#}").contains("no longer has what your apps saw"),
+        "{err:#}"
+    );
+    // Alice's new device: no checkpoint over what the server lists.
+    let alice2 = second_device(&srv, "alice-2", "alice", alice_rk).await;
+    let info = alice2.api.vault(&vid).await.unwrap();
+    assert!(alice2.open_vault(&info).await.is_err());
+    let logged: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM member_log WHERE vault_id = ?")
+        .bind(&vid)
+        .fetch_one(&srv.state.db)
+        .await
+        .unwrap();
+    assert_eq!(logged, 0, "nothing was signed");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

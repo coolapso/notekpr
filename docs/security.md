@@ -26,7 +26,7 @@ in an issue or a discussion: [SECURITY.md](../SECURITY.md).
 | Revision history | encrypted snapshots | count, size, time, author |
 | Comments (text, quotes, what they are about, replies, whom they @mention) | encrypted with the note's key; each signed by its author | that a note has comments, and the number, sizes, times and authors of the records; each vault's *viewers can comment* setting. Not who is mentioned: people's own devices find their mentions |
 | Presence (which note, cursor; on a drawing the pointer, what is selected, the laser) | encrypted awareness messages | that a user is connected to a vault; on individually shared notes also which of them someone has open, and when (clients announce themselves on the note too, under its id); while someone moves their pointer on a drawing, that they do (messages come up to 20 a second) |
-| Favorites, recent notes, key pins, synced settings (note widths, which mentions were read, the emojis and pictures last picked as icons) | account-key encryption | no |
+| Favorites, recent notes, key pins, where each vault's membership log stood when last verified, synced settings (note widths, which mentions were read, the emojis and pictures last picked as icons) | account-key encryption | no |
 | Quick notes (text, names, attachments) | a vault of their own, encrypted like any other | which vault holds someone's quick notes, how many notes are in it, and — from a new note in a vault at about the time one leaves the quick notes — roughly when one moved where |
 | Drawings (what they show, their names, their pictures) | encrypted like notes, in their vault | which objects are drawings — never what they show or what they're called —, so how many each vault holds (it counts them against the vault's limit) |
 | A person's saved shapes (kept to drop into drawings) | in their Personal storage's encrypted index (their quick notes' vault) | that it changed (the size and time of the index update), never what it holds |
@@ -199,8 +199,12 @@ primitives. Formats:
   like every key).
 * **Rolls back or rewrites the membership log?** Clients remember the last
   entry they verified; a log that no longer contains it is a security error.
-  Vaults from before the log are trusted as their owner's client saw them
-  when it signed the first checkpoint.
+  The person's synced settings carry it to their other apps, new ones too,
+  so a new device can't be shown a vault as one from before the log
+  either (unless the server also hands it settings older than that log,
+  which a device that never saw newer ones can't tell). Vaults from before
+  the log are trusted as their owner's client saw them when it signed the
+  first checkpoint.
 * **Enrolls a rogue device?** Requires an account signature over the device key,
   which only a holder of the account secret can produce, and the user compares
   a verification code shown on both devices.

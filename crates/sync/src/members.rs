@@ -18,6 +18,43 @@ use notekpr_core::protocol::{
     CreateSnapshotRequest, GrantSignature, KeyEnvelope, MemberInfo, ObjectKeyUpdate,
     ObjectShareInfo, PushUpdate, Role,
 };
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+/// Where a vault's membership log stood when it was last verified: its
+/// last entry. Kept in the person's synced, encrypted preferences
+/// (`log_heads`, by vault id) as well as on each device, so that every app
+/// of theirs, a new one too, refuses a log that no longer contains it, or
+/// the vault shown without a log, as the app that saw it would.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct LogHead {
+    pub seq: u64,
+    #[serde(with = "notekpr_core::b64")]
+    pub hash: Vec<u8>,
+}
+
+/// Vault id → where its log stood ([`LogHead`]).
+pub type LogHeads = BTreeMap<String, LogHead>;
+
+/// Note where a verified log stands (`MemberLog::head`), unless a further
+/// head is known already. Returns whether `heads` changed.
+pub fn note_head(heads: &mut LogHeads, vault_id: &str, head: Option<(u64, Vec<u8>)>) -> bool {
+    let Some((seq, hash)) = head else {
+        return false;
+    };
+    if heads.get(vault_id).is_some_and(|h| h.seq >= seq) {
+        return false;
+    }
+    heads.insert(vault_id.to_string(), LogHead { seq, hash });
+    true
+}
+
+/// Join heads saved on another device: the further one of each vault.
+pub fn merge_heads(theirs: &mut LogHeads, mine: &LogHeads) {
+    for (v, h) in mine {
+        note_head(theirs, v, Some((h.seq, h.hash.clone())));
+    }
+}
 
 /// A vault's verified membership log (or the lack of one: vaults from
 /// before the log until their owner signs a checkpoint).
@@ -60,6 +97,21 @@ impl MemberLog {
 
     pub fn has_log(&self) -> bool {
         self.state.is_some()
+    }
+
+    /// Check that the log still contains `head`, where it stood when verified
+    /// before (on another device: the synced [`LogHead`]). A log without
+    /// it, or no log at all, was rolled back or swapped.
+    pub fn check_head(&self, head: &LogHead) -> Result<(), LogError> {
+        let ok = self
+            .entries
+            .get(head.seq as usize)
+            .is_some_and(|e| e.seq == head.seq && e.hash().as_slice() == head.hash);
+        if ok {
+            Ok(())
+        } else {
+            Err(LogError::Fork(head.seq))
+        }
     }
 
     /// `(seq, hash)` of the last verified entry, to remember.
@@ -530,6 +582,63 @@ mod tests {
         assert!(MemberLog::verify("v", &anchor, older, Some((seq, &hash))).is_err());
         assert!(MemberLog::verify("v", &anchor, vec![], Some((seq, &hash))).is_err());
         assert!(MemberLog::verify("v", &anchor, log.entries.clone(), Some((seq, &hash))).is_ok());
+    }
+
+    /// A device that never saw the vault knows where its log stood from the
+    /// synced heads: shown an older log, or none at all (a vault "from
+    /// before the log"), it refuses it.
+    #[test]
+    fn a_synced_head_holds_on_a_new_device() {
+        let (alice, bob) = (p("alice"), p("bob"));
+        let anchor = alice.secret.public();
+        let (mut log, _) = vault(&alice);
+        let mut heads = LogHeads::new();
+        assert!(note_head(&mut heads, "v", log.head()));
+        push(
+            &mut log,
+            &alice,
+            LogBody::Add {
+                member: log_member("bob", Role::Editor, Some(&bob.secret.public())),
+            },
+            &anchor,
+        );
+        assert!(note_head(&mut heads, "v", log.head()));
+        // An older head never replaces a further one.
+        let first = log.entries[0].hash().to_vec();
+        assert!(!note_head(&mut heads, "v", Some((0, first.clone()))));
+        let head = heads["v"].clone();
+        assert_eq!(head.seq, 1);
+
+        let fresh = |entries| MemberLog::verify("v", &anchor, entries, None).unwrap();
+        assert_eq!(fresh(log.entries.clone()).check_head(&head), Ok(()));
+        assert_eq!(
+            fresh(log.entries[..1].to_vec()).check_head(&head),
+            Err(LogError::Fork(1))
+        );
+        assert_eq!(fresh(vec![]).check_head(&head), Err(LogError::Fork(1)));
+        // Another history with the same length doesn't pass either.
+        let (other, _) = vault(&alice);
+        let mut other = other;
+        push(
+            &mut other,
+            &alice,
+            LogBody::Add {
+                member: log_member("eve", Role::Editor, Some(&p("eve").secret.public())),
+            },
+            &anchor,
+        );
+        assert_eq!(
+            fresh(other.entries).check_head(&head),
+            Err(LogError::Fork(1))
+        );
+
+        // Saved on two devices: the further head of each vault stays.
+        let mut theirs = LogHeads::new();
+        note_head(&mut theirs, "v", Some((0, first)));
+        note_head(&mut theirs, "w", Some((3, vec![7; 32])));
+        merge_heads(&mut theirs, &heads);
+        assert_eq!(theirs["v"], head);
+        assert_eq!(theirs["w"].seq, 3);
     }
 
     #[test]

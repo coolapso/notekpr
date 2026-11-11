@@ -360,7 +360,10 @@ An owner's removal carries two entries, signed one after the other: the
 `rotate` (in its `rotation`). Clients:
 
 * verify the whole log, and that it still contains the head they verified
-  before (no rollback, no rewritten history);
+  before (no rollback, no rewritten history): on this device, or on any of
+  the person's apps, which keep each vault's head in the synced preferences
+  (`log_heads`: vault id → `{seq, hash}`), so an empty log for a vault one
+  of them saw with entries is refused too;
 * check every vault key they hold against its epoch's commitment (epochs from
   before a checkpoint have none) and don't use a key that fails, nor one not
   checked yet: keys are checked before anything uses them, against the log

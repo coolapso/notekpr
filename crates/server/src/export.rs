@@ -3,7 +3,10 @@
 //! `notekpr recover` (see `notekpr_core::recover`). The server
 //! assembles stored bytes only; it can't read any of it. Beside them: the
 //! names of the people in it (members, owners, authors), so a recovery can
-//! say who wrote each comment.
+//! say who wrote each comment; and what a recovery checks the content
+//! against, as the apps do: each vault's membership log, the owner proof
+//! of each shared note's key, and the person's encrypted preferences (whom
+//! their apps trust).
 
 use std::collections::BTreeSet;
 
@@ -101,6 +104,7 @@ pub async fn user_export(
             keys: repo::keys::vault_keys(db, &vault_id, user_id).await?,
             changes,
             attachments,
+            member_log: repo::member_log::entries(db, &vault_id).await?,
             vault_id,
             owner_id,
         });
@@ -112,9 +116,16 @@ pub async fn user_export(
         let owner_id = owner_of(db, &vault_id).await?;
         people.extend(owner_id.clone());
         people.extend(authors(&changes));
+        let mut keys =
+            repo::keys::document_keys(db, &vault_id, &object_id, user_id, role, false).await?;
+        // As `GET …/keys` gives it (`routes::shares::object_keys`).
+        if let Some(signer) = notekpr_core::engine::grant_signer(&keys, user_id).map(str::to_string)
+        {
+            let entries = repo::member_log::entries(db, &vault_id).await?;
+            keys.signer_proof = notekpr_core::memberlog::owner_proof(&entries, &signer);
+        }
         shared_notes.push(ExportedSharedNote {
-            keys: repo::keys::document_keys(db, &vault_id, &object_id, user_id, role, false)
-                .await?,
+            keys,
             changes,
             vault_id,
             owner_id,
@@ -137,5 +148,6 @@ pub async fn user_export(
         vaults: vaults_out,
         shared_notes,
         users,
+        prefs: repo::users::prefs(db, user_id).await?.map(|(ct, _)| ct),
     })
 }

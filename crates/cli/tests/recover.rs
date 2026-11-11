@@ -3,7 +3,7 @@
 mod common;
 
 use common::*;
-use notekpr_cli::{manage, ops, recover};
+use notekpr_cli::{manage, note_shares, ops, recover};
 
 #[tokio::test]
 async fn an_encrypted_export_decrypts_into_plain_files() {
@@ -286,5 +286,173 @@ async fn without_the_server_a_device_exports_and_recovers_from_its_local_copies(
     assert_eq!(
         read(local.join("Home/Plans/Trip.md")),
         b"Pack sunscreen and hats\n"
+    );
+}
+
+/// What an export holds is the server's word, so a recovery checks it as
+/// the apps do. A vault key its owner never made, and what it opens, are
+/// left out; without the vault's membership history, or with a shared
+/// note's key from someone who isn't an owner, the content is recovered,
+/// but in a folder marked unchecked.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_recovery_checks_what_the_apps_check() {
+    use notekpr_core::crypto::Purpose;
+    use notekpr_core::doc::{EntryKind, IndexDoc, NoteDoc};
+    use notekpr_core::keys::{self, VaultKey, VaultKeyring};
+    use notekpr_core::memberlog;
+    use notekpr_core::protocol::*;
+    use notekpr_core::recover::{RecoveredVault, SHARED_DIR, UNCHECKED, decrypt_export};
+    let srv = start().await;
+    let alice = login(&srv, "alice").await;
+    let bob = login(&srv, "bob").await;
+    let eve = login(&srv, "eve").await;
+    manage::create_vault(&alice, "Family").await.unwrap();
+    let h = hub(&alice).await;
+    ops::put_document(&h, "Family", "Trip.md", "Pack sunscreen\n", None)
+        .await
+        .unwrap();
+    for id in h.vault_ids() {
+        h.push(&id).await.unwrap();
+    }
+    let v = h.resolve("Family").await.unwrap();
+    let vid = v.lock().await.id().to_string();
+    note_shares::share_note(&alice, &v, "Trip", "bob", Role::Viewer, false)
+        .await
+        .unwrap();
+    let family = |got: Vec<RecoveredVault>| got.into_iter().find(|v| v.vault_id == vid).unwrap();
+    let has = |v: &RecoveredVault, path: &str| v.files.iter().any(|f| f.path == path);
+
+    // As it is: checked, nothing to say.
+    let export = recover::download_export(&alice).await.unwrap();
+    let fam = family(decrypt_export(alice.account(), &export));
+    assert_eq!(fam.name, "Family");
+    assert!(fam.problems.is_empty(), "{:?}", fam.problems);
+    assert!(has(&fam, "Trip.md"));
+
+    // The server slips in a vault key of its own, made for Alice, and a
+    // note under it.
+    let mut forged = export.clone();
+    let fv = forged
+        .vaults
+        .iter_mut()
+        .find(|v| v.vault_id == vid)
+        .unwrap();
+    let epoch = fv.keys.current_epoch + 1;
+    let fake = VaultKey::generate();
+    fv.keys.envelopes.push(KeyEnvelope {
+        user_id: alice.user_id.clone(),
+        epoch,
+        envelope: keys::wrap_vault_key(
+            &fake,
+            &vid,
+            epoch,
+            &alice.user_id,
+            &alice.account().public().enc_public,
+        )
+        .unwrap(),
+        signature: None,
+        signed_by: None,
+    });
+    fv.keys.current_epoch = epoch;
+    let mut ring = VaultKeyring::new(&vid);
+    ring.insert(epoch, fake);
+    let head = fv.changes.head_seq;
+    let slipped = [
+        (
+            INDEX_OBJECT_ID,
+            IndexDoc::new()
+                .create("n9", "Important.md", EntryKind::Note, 1)
+                .unwrap(),
+        ),
+        ("n9", NoteDoc::new().set_text("Wire the money").unwrap()),
+    ];
+    for (i, (object_id, update)) in slipped.into_iter().enumerate() {
+        fv.changes.updates.push(Update {
+            object_id: object_id.into(),
+            seq: head + 1 + i as i64,
+            author_id: alice.user_id.clone(),
+            payload: ring.encrypt(Purpose::Update, object_id, &update).unwrap(),
+            created_at: 0,
+            signature: None,
+        });
+    }
+    let fam = family(decrypt_export(alice.account(), &forged));
+    assert!(
+        !has(&fam, "Important.md"),
+        "{:?}",
+        fam.files.iter().map(|f| &f.path).collect::<Vec<_>>()
+    );
+    assert!(has(&fam, "Trip.md"));
+    assert_eq!(fam.name, "Family");
+    assert!(
+        fam.problems
+            .iter()
+            .any(|p| p.contains("its owner never made")),
+        "{:?}",
+        fam.problems
+    );
+
+    // Or leaves the vault's membership history out: recovered, but marked.
+    let mut stripped = export.clone();
+    for v in &mut stripped.vaults {
+        v.member_log.clear();
+    }
+    let fam = family(decrypt_export(alice.account(), &stripped));
+    assert_eq!(fam.name, format!("Family{UNCHECKED}"));
+    assert!(
+        fam.problems
+            .iter()
+            .any(|p| p.contains("which your apps have seen")),
+        "{:?}",
+        fam.problems
+    );
+    assert!(has(&fam, "Trip.md"));
+
+    // Bob's export has the note shared with him, its key proven an owner's.
+    let export = recover::download_export(&bob).await.unwrap();
+    let shared = |got: Vec<RecoveredVault>| {
+        got.into_iter()
+            .find(|v| v.name.starts_with(SHARED_DIR))
+            .unwrap()
+    };
+    let got = shared(decrypt_export(bob.account(), &export));
+    assert_eq!(got.name, SHARED_DIR, "{:?}", got.problems);
+    assert!(has(&got, "Trip.md"));
+    // A newer key for him, signed by Eve: the server can't show her an
+    // owner.
+    let mut forged = export.clone();
+    let n = &mut forged.shared_notes[0];
+    let oid = n.keys.object_id.clone();
+    let next = n.keys.envelopes.iter().map(|e| e.epoch).max().unwrap() + 1;
+    let fake = VaultKey::generate();
+    n.keys.envelopes.push(KeyEnvelope {
+        user_id: bob.user_id.clone(),
+        epoch: next,
+        envelope: keys::wrap_vault_key(
+            &fake,
+            &keys::object_scope(&vid, &oid),
+            next,
+            &bob.user_id,
+            &bob.account().public().enc_public,
+        )
+        .unwrap(),
+        signature: Some(memberlog::sign_note_grant(
+            eve.account(),
+            &vid,
+            &oid,
+            &bob.user_id,
+            next,
+            &fake,
+        )),
+        signed_by: Some(eve.user_id.clone()),
+    });
+    n.keys.current_epoch = next;
+    n.keys.signer_proof.clear();
+    let got = shared(decrypt_export(bob.account(), &forged));
+    assert_eq!(got.name, format!("{SHARED_DIR}{UNCHECKED}"));
+    assert!(
+        got.problems.iter().any(|p| p.contains("owns its vault")),
+        "{:?}",
+        got.problems
     );
 }

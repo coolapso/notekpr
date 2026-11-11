@@ -10,6 +10,7 @@ use anyhow::{Context, Result, bail};
 use notekpr_core::keys::AccountSecret;
 use notekpr_core::protocol::EncryptedExport;
 use notekpr_core::recover::{self, RecoveredVault};
+use notekpr_sync::members;
 
 use crate::fsutil;
 use crate::session::Session;
@@ -54,7 +55,28 @@ pub fn recover_with_device(
     if export.user_id != session.user_id {
         bail!("this export belongs to another account");
     }
-    recover_to(export, &session.account, out)
+    // Checked against whom this device trusts too, not only the export's
+    // preferences (an older copy the server may have put in).
+    let mut known = recover::Known::of_export(&session.account, export);
+    let (pins, roots, synced) = session.profiles.update(|p| {
+        (
+            p.pins.clone(),
+            p.share_roots.clone(),
+            p.synced_trust.clone(),
+        )
+    })?;
+    for mine in [&pins, &synced.pins] {
+        members::keep_known(&mut known.pins, mine);
+    }
+    for mine in [&roots, &synced.share_roots] {
+        members::keep_known(&mut known.share_roots, mine);
+    }
+    members::keep_heads(&mut known.log_heads, &synced.log_heads);
+    check_empty(out)?;
+    write_recovered(
+        &recover::decrypt_export_with(&session.account, export, &known),
+        out,
+    )
 }
 
 /// Decrypt `export` with `account` and write every vault into its own folder

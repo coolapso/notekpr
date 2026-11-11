@@ -399,7 +399,16 @@ reported, never applied partially. Duplicate deliveries are no-ops.
   names of the people in it, which the server knows anyway, so recovered
   comments say who wrote them), everything a
   person could read decrypts offline into Markdown files with
-  `notekpr recover`, without the server ([recovery.md](recovery.md)).
+  `notekpr recover`, without the server ([recovery.md](recovery.md)). The
+  export is the server's word, so it carries each vault's membership log,
+  each shared note's owner proof and the person's encrypted preferences
+  (whom their apps trust), and the recovery checks it as the apps do: keys
+  against the owner's commitments, content against who could write it, a
+  shared note's key against the proof (and against the device's own pins
+  when recovering with one). What fails is left out and listed; a vault or
+  shared note that can't be checked at all (no log in the export, or one
+  that doesn't match what the person's apps saw) is recovered into a folder
+  marked "(unchecked)", with the reason.
 
 ### Web application threats
 

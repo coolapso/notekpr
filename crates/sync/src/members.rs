@@ -18,23 +18,9 @@ use notekpr_core::protocol::{
     CreateSnapshotRequest, GrantSignature, KeyEnvelope, MemberInfo, ObjectKeyUpdate,
     ObjectShareInfo, PushUpdate, Role,
 };
-use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-/// Where a vault's membership log stood when it was last verified: its
-/// last entry. Kept in the person's synced, encrypted preferences
-/// (`log_heads`, by vault id) as well as on each device, so that every app
-/// of theirs, a new one too, refuses a log that no longer contains it, or
-/// the vault shown without a log, as the app that saw it would.
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
-pub struct LogHead {
-    pub seq: u64,
-    #[serde(with = "notekpr_core::b64")]
-    pub hash: Vec<u8>,
-}
-
-/// Vault id → where its log stood ([`LogHead`]).
-pub type LogHeads = BTreeMap<String, LogHead>;
+pub use notekpr_core::memberlog::{LogHead, LogHeads};
 
 /// Note where a verified log stands (`MemberLog::head`), unless a further
 /// head is known already. Returns whether `heads` changed.
@@ -147,11 +133,7 @@ impl MemberLog {
     /// before (on another device: the synced [`LogHead`]). A log without
     /// it, or no log at all, was rolled back or swapped.
     pub fn check_head(&self, head: &LogHead) -> Result<(), LogError> {
-        let ok = self
-            .entries
-            .get(head.seq as usize)
-            .is_some_and(|e| e.seq == head.seq && e.hash().as_slice() == head.hash);
-        if ok {
+        if head.is_in(&self.entries) {
             Ok(())
         } else {
             Err(LogError::Fork(head.seq))

@@ -140,7 +140,10 @@ async fn people_can_recover_their_notes_offline() {
     let got = recover::decrypt_export(&account, &export);
     assert_eq!(got.len(), 1);
     let fam = &got[0];
-    assert!(fam.problems.is_empty(), "{:?}", fam.problems);
+    // A vault from before the membership log: recovered, but said to be
+    // unchecked (`a_recovery_checks_what_the_apps_check` for one with a log).
+    assert!(fam.name.ends_with(recover::UNCHECKED), "{}", fam.name);
+    assert_eq!(fam.problems.len(), 1, "{:?}", fam.problems);
     assert_eq!(file(fam, "Plans/Trip.md"), Some(&b"Pack sunscreen"[..]));
     assert_eq!(
         file(fam, "Later.md"),
@@ -190,7 +193,11 @@ async fn people_can_recover_their_notes_offline() {
     );
     let got = recover::decrypt_export(&carol.account, &export);
     assert_eq!(got.len(), 1);
-    assert_eq!(got[0].name, recover::SHARED_DIR);
+    // (Its vault has no membership log to prove who gave its key.)
+    assert_eq!(
+        got[0].name,
+        format!("{}{}", recover::SHARED_DIR, recover::UNCHECKED)
+    );
     assert_eq!(got[0].files.len(), 1);
     assert_eq!(file(&got[0], "Trip.md"), Some(&b"Pack sunscreen"[..]));
 

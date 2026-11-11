@@ -98,6 +98,18 @@ private document. Anything that couldn't be decrypted (for example content
 written under a key you never received) is listed at the end; everything else
 is still recovered.
 
+The export comes from a server, so the tool checks it the way the apps do:
+each vault's keys against the ones its owner made, and each change against
+who could write it (from the vault's membership history, which the export
+carries), and a shared note's key against proof that an owner gave it. What
+fails isn't written, and is listed at the end. A vault, or a note shared with
+you, that can't be checked at all is still recovered, but into a folder
+marked **(unchecked)**, say `Family (unchecked)/`, with the reason listed: its
+history isn't in the export (exports from servers before this check, or
+vaults from before the membership history existed), or it doesn't match what
+your apps saw. Treat what's in such a folder with care: it may not be what
+its people wrote.
+
 ## Without any notekpr software
 
 The formats are standard and documented, so an independent tool can do the

@@ -456,6 +456,30 @@ pub fn owner_proof(entries: &[LogEntry], user: &str) -> Vec<LogEntry> {
     proof.into_iter().map(|i| entries[i].clone()).collect()
 }
 
+/// Where a vault's membership log stood when it was last verified: its
+/// last entry. Kept in the person's synced, encrypted preferences
+/// (`log_heads`, by vault id) as well as on each device, so that every app
+/// of theirs, a new one too, refuses a log that no longer contains it, or
+/// the vault shown without a log, as the app that saw it would.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct LogHead {
+    pub seq: u64,
+    #[serde(with = "b64")]
+    pub hash: Vec<u8>,
+}
+
+/// Vault id → where its log stood ([`LogHead`]).
+pub type LogHeads = BTreeMap<String, LogHead>;
+
+impl LogHead {
+    /// Whether `entries` (a whole log) still contain this head.
+    pub fn is_in(&self, entries: &[LogEntry]) -> bool {
+        entries
+            .get(self.seq as usize)
+            .is_some_and(|e| e.seq == self.seq && e.hash().as_slice() == self.hash)
+    }
+}
+
 /// What an owner proof showed ([`check_owner_proof`]).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProvenOwner {

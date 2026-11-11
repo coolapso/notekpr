@@ -2159,6 +2159,12 @@ pub struct EncryptedExport {
     /// something in it), to say who wrote each comment.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub users: Vec<ExportedUser>,
+    /// The person's encrypted preferences (`GET /me/prefs`): whom their
+    /// apps trust (pins, vault roots, where each vault's log stood), for a
+    /// recovery to check the vaults' logs against. Absent from older
+    /// servers' exports.
+    #[serde(default, with = "b64::opt", skip_serializing_if = "Option::is_none")]
+    pub prefs: Option<Vec<u8>>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -2174,8 +2180,15 @@ pub struct ExportedVault {
     /// The vault's owner (who may delete anyone's comments).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub owner_id: Option<String>,
+    /// The vault's membership log, so a recovery checks what the apps do:
+    /// its keys against the owner's commitments, and who wrote what. Empty
+    /// for vaults without one, and from older servers.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub member_log: Vec<crate::memberlog::LogEntry>,
 }
 
+/// A note shared with the person: its keys carry the owner proof for
+/// whoever signed giving them its newest one (`signer_proof`).
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct ExportedSharedNote {
     pub vault_id: String,

@@ -9,15 +9,60 @@
 //!
 //! A note's comments become a Markdown file of their own under
 //! [`comments::EXPORT_DIR`] (`_comments/<the note's path>`).
+//!
+//! What an export holds is the server's word, so it is checked as the apps
+//! check it ([`Known`]): each vault's keys against its owner's commitments
+//! in its membership log, its content against who could write it, a shared
+//! note's key against an owner proof. What fails is left out and said; a
+//! vault or shared note that can't be checked at all (no log in the export,
+//! one that doesn't check out, an older server's export) is still
+//! recovered, in a folder marked [`UNCHECKED`], with the reason.
 
 use std::collections::{BTreeMap, BTreeSet};
+
+use serde::Deserialize;
 
 use crate::comments::{self, Trust};
 use crate::doc::EntryKind;
 use crate::engine::{self, ObjectMeta, VaultMeta, VaultReplica};
-use crate::keys::{AccountSecret, RecoveryKey};
+use crate::keys::{AccountPublic, AccountSecret, RecoveryKey, VaultKeyring};
+use crate::memberlog::{self, LogHeads, LogState, OwnerProofError};
 use crate::paths;
 use crate::protocol::{EncryptedExport, ExportedSharedNote, ExportedVault, Role};
+
+/// Added to the folder of a vault (or of shared notes) whose content
+/// couldn't be checked: it may not be what its people wrote.
+pub const UNCHECKED: &str = " (unchecked)";
+
+/// Whom the person's apps trust, to check an export against: from the
+/// preferences in it ([`Known::of_export`]), and a device's own when
+/// recovering with one. Without any, every vault is a first contact, as
+/// for a new app (but our own vaults: those start with our key).
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct Known {
+    /// User id → account key fingerprint.
+    #[serde(default)]
+    pub pins: BTreeMap<String, String>,
+    /// Vault id → who started its log (vaults of notes shared with us).
+    #[serde(default)]
+    pub share_roots: BTreeMap<String, String>,
+    /// Where each vault's log stood when our apps last verified it.
+    #[serde(default)]
+    pub log_heads: LogHeads,
+}
+
+impl Known {
+    /// What the preferences in `export` say (nothing if it has none, or
+    /// they can't be read).
+    pub fn of_export(account: &AccountSecret, export: &EncryptedExport) -> Known {
+        export
+            .prefs
+            .as_deref()
+            .and_then(|ct| account.open_private(&export.user_id, ct).ok())
+            .and_then(|pt| serde_json::from_slice(&pt).ok())
+            .unwrap_or_default()
+    }
+}
 
 /// Where trashed notes and files go inside a recovered vault.
 pub const TRASH_DIR: &str = "_trash";
@@ -98,9 +143,20 @@ pub fn unlock_with_recovery_key(
     Ok(rk.unwrap_account(envelope, &export.user_id)?)
 }
 
-/// Decrypt everything in the export. Vaults that can't be opened at all are
-/// returned with a problem and no files, so one bad vault never hides the rest.
+/// Decrypt everything in the export, checked against what its own
+/// preferences say our apps trust ([`decrypt_export_with`]).
 pub fn decrypt_export(account: &AccountSecret, export: &EncryptedExport) -> Vec<RecoveredVault> {
+    decrypt_export_with(account, export, &Known::of_export(account, export))
+}
+
+/// Decrypt everything in the export, checked against `known`. Vaults that
+/// can't be opened at all are returned with a problem and no files, so one
+/// bad vault never hides the rest.
+pub fn decrypt_export_with(
+    account: &AccountSecret,
+    export: &EncryptedExport,
+    known: &Known,
+) -> Vec<RecoveredVault> {
     let names: BTreeMap<String, String> = export
         .users
         .iter()
@@ -114,23 +170,34 @@ pub fn decrypt_export(account: &AccountSecret, export: &EncryptedExport) -> Vec<
                 names: Some(&names),
                 owner: v.owner_id.as_deref(),
             };
-            decrypt_vault(account, &export.user_id, v, people)
+            decrypt_vault(account, &export.user_id, v, people, known)
         })
         .collect();
     if !export.shared_notes.is_empty() {
-        let mut shared = RecoveredVault {
+        let folder = |name: String| RecoveredVault {
             vault_id: String::new(),
-            name: SHARED_DIR.to_string(),
+            name,
             ..Default::default()
         };
-        let mut taken = BTreeSet::new();
+        // Those whose key was checked, and those whose key couldn't be.
+        let mut checked = folder(SHARED_DIR.to_string());
+        let mut unchecked = folder(format!("{SHARED_DIR}{UNCHECKED}"));
+        let mut taken_checked = BTreeSet::new();
+        let mut taken_unchecked = BTreeSet::new();
         for n in &export.shared_notes {
             let people = People {
                 names: Some(&names),
                 owner: n.owner_id.as_deref(),
             };
-            match decrypt_shared_note(account, &export.user_id, n, people) {
-                Ok((title, text, comments)) => {
+            match decrypt_shared_note(account, &export.user_id, n, people, known) {
+                Ok((title, text, comments, why)) => {
+                    let (shared, taken) = match why {
+                        None => (&mut checked, &mut taken_checked),
+                        Some(why) => {
+                            unchecked.problems.push(format!("“{title}”: {why}"));
+                            (&mut unchecked, &mut taken_unchecked)
+                        }
+                    };
                     let safe = safe_name(&title);
                     let path = paths::unique(&format!("{safe}.md"), |p| taken.contains(p));
                     taken.insert(path.clone());
@@ -148,14 +215,81 @@ pub fn decrypt_export(account: &AccountSecret, export: &EncryptedExport) -> Vec<
                         data: text.into_bytes(),
                     });
                 }
-                Err(e) => shared
+                Err(e) => checked
                     .problems
                     .push(format!("shared note {}: {e}", n.keys.object_id)),
             }
         }
-        out.push(shared);
+        for shared in [checked, unchecked] {
+            if !shared.files.is_empty() || !shared.problems.is_empty() {
+                out.push(shared);
+            }
+        }
     }
     out
+}
+
+/// A vault's membership log as the apps would take it: starting with our
+/// key (our vault) or the one our apps pinned for whoever started it (or
+/// anyone's, the first time, as the apps do), verified, and still holding
+/// where our apps saw it last. `Err`: why the vault's content can't be
+/// checked.
+fn checked_log(
+    account: &AccountSecret,
+    user_id: &str,
+    v: &ExportedVault,
+    known: &Known,
+) -> Result<LogState, String> {
+    if v.member_log.is_empty() {
+        return Err(if known.log_heads.contains_key(&v.vault_id) {
+            "the export leaves out its membership history, which your apps have seen, so what it \
+             holds may have been changed"
+                .into()
+        } else {
+            "the export has no membership history for it, so who wrote what can't be checked".into()
+        });
+    }
+    let (creator, key) = memberlog::creator(&v.member_log)
+        .ok_or("its membership history doesn't start as a vault's does")?;
+    let expected = if creator == user_id {
+        Some(account.public().fingerprint())
+    } else {
+        known.pins.get(&creator).cloned()
+    };
+    if expected.is_some_and(|fp| fp != key.fingerprint()) {
+        return Err(
+            "its membership history starts with a key your apps never had for whoever made the vault"
+                .into(),
+        );
+    }
+    let state = LogState::verify(&v.vault_id, &key, &v.member_log)
+        .map_err(|e| format!("its membership history doesn't check out ({e})"))?;
+    if known
+        .log_heads
+        .get(&v.vault_id)
+        .is_some_and(|h| !h.is_in(&v.member_log))
+    {
+        return Err(
+            "its membership history is older than, or not the one, your apps saw last".into(),
+        );
+    }
+    Ok(state)
+}
+
+/// `ring` without the keys `state` doesn't have its owner make, and how
+/// many were left out.
+fn owners_keys(ring: &VaultKeyring, state: &LogState) -> (VaultKeyring, usize) {
+    let mut kept = VaultKeyring::new(ring.vault_id());
+    let mut left_out = 0;
+    for epoch in ring.epochs() {
+        let Some(key) = ring.get(epoch) else { continue };
+        if state.check_key(epoch, key).is_ok() {
+            kept.insert(epoch, key.clone());
+        } else {
+            left_out += 1;
+        }
+    }
+    (kept, left_out)
 }
 
 fn decrypt_vault(
@@ -163,19 +297,43 @@ fn decrypt_vault(
     user_id: &str,
     v: &ExportedVault,
     people: People,
+    known: &Known,
 ) -> RecoveredVault {
     let mut rv = RecoveredVault {
         vault_id: v.vault_id.clone(),
         name: v.vault_id.clone(),
         ..Default::default()
     };
-    let ring = match engine::keyring_from_response(account, user_id, &v.vault_id, &v.keys) {
+    let mut ring = match engine::keyring_from_response(account, user_id, &v.vault_id, &v.keys) {
         Ok(r) => r,
         Err(e) => {
             rv.problems.push(format!("no usable vault key: {e}"));
             return rv;
         }
     };
+    // Checked as the apps do: only keys its owner made, only content by
+    // someone who could write it.
+    let log = checked_log(account, user_id, v, known);
+    let authors = match &log {
+        Ok(state) => {
+            let (kept, left_out) = owners_keys(&ring, state);
+            if left_out > 0 {
+                rv.problems.push(format!(
+                    "{left_out} vault key(s) its owner never made were left out"
+                ));
+            }
+            ring = kept;
+            Some(state.authors())
+        }
+        Err(why) => {
+            rv.problems.push(format!("can't be checked: {why}"));
+            None
+        }
+    };
+    if ring.current().is_none() {
+        rv.problems.push("no usable vault key".into());
+        return rv;
+    }
     match VaultMeta::decrypt(&ring, &v.encrypted_meta) {
         Ok(m) => rv.name = m.name,
         Err(e) => rv.problems.push(format!("vault name unreadable: {e}")),
@@ -187,8 +345,19 @@ fn decrypt_vault(
         VaultMeta::default(),
     );
     replica.doc_keys = engine::object_keyrings(&ring, &v.keys);
-    let (_, errors) = replica.apply_changes(&v.changes);
-    if !errors.is_empty() {
+    replica.authors = authors.clone();
+    let (_, mut errors) = replica.apply_changes(&v.changes);
+    if authors.is_some() {
+        // What waited for a newer log than the export's is refused now.
+        errors.extend(replica.set_authors(authors).1);
+        if !errors.is_empty() {
+            rv.problems.push(format!(
+                "{} changes were left out: they couldn't be read, or weren't signed by someone \
+                 who could write them",
+                errors.len()
+            ));
+        }
+    } else if !errors.is_empty() {
         rv.problems.push(format!(
             "{} encrypted changes could not be read (missing or damaged keys)",
             errors.len()
@@ -202,6 +371,9 @@ fn decrypt_vault(
             .ok_or_else(|| "not in the export".to_string())
     });
     rv.problems.extend(files.problems);
+    if log.is_err() {
+        rv.name.push_str(UNCHECKED);
+    }
     RecoveredVault {
         files: files.files,
         folders: files.folders,
@@ -346,13 +518,63 @@ pub fn vault_files(
 
 /// A note shared with the person: its title, its text and its comments
 /// (as a Markdown file, if it has any).
+/// The owner whose grant counts for a note shared with us, as the apps take
+/// it: one the export's owner proof shows, from the vault's first entry
+/// (signed by the root our apps pinned, if any), their keys as our apps
+/// pinned them. `Err`: why the note's key can't be checked.
+fn proven_signer(
+    user_id: &str,
+    n: &ExportedSharedNote,
+    known: &Known,
+) -> Result<AccountPublic, String> {
+    let signer = engine::grant_signer(&n.keys, user_id)
+        .map(str::to_string)
+        .or_else(|| n.owner_id.clone())
+        .unwrap_or_default();
+    let root = known.share_roots.get(&n.vault_id).map(String::as_str);
+    let proven = memberlog::check_owner_proof(&n.vault_id, root, &n.keys.signer_proof, &signer)
+        .map_err(|e| match e {
+            OwnerProofError::Missing => {
+                "the export doesn't show that whoever gave you its key owns its vault".to_string()
+            }
+            e => format!(
+                "its key was given by someone its vault's history doesn't show as an owner ({e})"
+            ),
+        })?;
+    let pinned_else = [(&proven.root, &proven.root_key), (&signer, &proven.key)]
+        .into_iter()
+        .any(|(who, key)| {
+            known
+                .pins
+                .get(who)
+                .is_some_and(|fp| *fp != key.fingerprint())
+        });
+    if pinned_else {
+        return Err("its vault's owners have keys other than the ones your apps know".into());
+    }
+    Ok(proven.key)
+}
+
+/// A note shared with us: title, text, comments, and why its key couldn't
+/// be checked (`None`: it was, as the apps check it).
 fn decrypt_shared_note(
     account: &AccountSecret,
     user_id: &str,
     n: &ExportedSharedNote,
     people: People,
-) -> crate::engine::Result<(String, String, Option<String>)> {
-    let ring = engine::object_keyring_for_recipient(account, user_id, &n.vault_id, &n.keys, None)?;
+    known: &Known,
+) -> crate::engine::Result<(String, String, Option<String>, Option<String>)> {
+    let keyring = |owner: Option<&AccountPublic>| {
+        engine::object_keyring_for_recipient(account, user_id, &n.vault_id, &n.keys, owner)
+    };
+    let checked = proven_signer(user_id, n, known).and_then(|key| {
+        keyring(Some(&key))
+            .map_err(|_| "its key isn't one the owner signed giving it to you".to_string())
+    });
+    let (ring, why) = match checked {
+        Ok(ring) => (ring, None),
+        Err(why) => (keyring(None)?, Some(why)),
+    };
     let oid = &n.keys.object_id;
     let title = n
         .keys
@@ -367,7 +589,7 @@ fn decrypt_shared_note(
     replica.doc_keys.insert(oid.clone(), ring);
     replica.apply_changes(&n.changes);
     let comments = comments_file(&replica, oid, &title, people);
-    Ok((title, replica.note_text(oid), comments))
+    Ok((title, replica.note_text(oid), comments, why))
 }
 
 /// A title usable as one file name: no separators or characters that are
@@ -609,19 +831,22 @@ mod tests {
                     data: attachment,
                 }],
                 owner_id: Some("alice".into()),
+                member_log: vec![],
             }],
             shared_notes: vec![],
             users: vec![ExportedUser {
                 id: "alice".into(),
                 display_name: "Alice".into(),
             }],
+            prefs: None,
         };
 
         let account = unlock_with_recovery_key(&export, &rk.to_display()).unwrap();
         let got = decrypt_export(&account, &export);
         assert_eq!(got.len(), 1);
         let v = &got[0];
-        assert_eq!(v.name, "Family");
+        // (Made by hand without a membership log: nothing to check it by.)
+        assert_eq!(v.name, format!("Family{UNCHECKED}"));
         let file = |p: &str| v.files.iter().find(|f| f.path == p).map(|f| f.data.clone());
         assert_eq!(
             file("Plans/Trip.md").as_deref(),
@@ -707,9 +932,10 @@ mod tests {
                 owner_id: Some("alice".into()),
             }],
             users: vec![],
+            prefs: None,
         };
         let got = decrypt_export(&bob, &bob_export);
-        assert_eq!(got[0].name, SHARED_DIR);
+        assert_eq!(got[0].name, format!("{SHARED_DIR}{UNCHECKED}"));
         let paths: Vec<&str> = got[0].files.iter().map(|f| f.path.as_str()).collect();
         assert_eq!(paths, ["_comments/Trip.md", "Trip.md"]);
         assert_eq!(got[0].files[1].data, b"Pack sunscreen");

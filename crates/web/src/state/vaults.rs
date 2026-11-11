@@ -294,7 +294,7 @@ pub(super) async fn load_vault_with(info: VaultInfo, force: bool, keys: Option<V
                 // Owners act only on the log as it is now.
                 if info.role == Role::Owner && !offline_start && fresh {
                     if unsigned {
-                        leptos::task::spawn_local(super::members::sign_vault(id.clone()));
+                        leptos::task::spawn_local(super::members::sign_vault(id.clone(), false));
                     }
                     if is_new {
                         leptos::task::spawn_local(super::members::sign_missing_grants(id.clone()));

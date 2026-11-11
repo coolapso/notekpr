@@ -265,11 +265,9 @@ async fn append(vault_id: &str, body: LogBody) -> Result<(), String> {
     Ok(())
 }
 
-/// Owner: make sure the vault's log has started and requires every change
-/// to be signed by its author (signing in the people single notes are
-/// already shared with first, so their edits keep counting).
-/// Owner: sign the keys of shared notes given before grants were signed,
-/// so the people they are shared with can use them.
+/// Owner: sign the keys of shared notes given before grants were signed, or
+/// by someone no longer an owner, so the people they are shared with can
+/// use them.
 pub(super) async fn sign_missing_grants(vault_id: String) {
     let shared = step(|c| {
         c.replicas
@@ -306,19 +304,26 @@ pub(super) async fn sign_missing_grants(vault_id: String) {
     }
 }
 
-pub async fn sign_vault(vault_id: String) {
+/// Owner: make sure the vault's log has started and requires every change
+/// to be signed by its author (signing in the people single notes are
+/// already shared with first, so their edits keep counting). A vault
+/// `made_now` requires it from its start: the server stores that with it
+/// (`signed_from_start`), and if it didn't (an older server, or one leaving
+/// it out), never from a later point the server names, which would exempt
+/// whatever it places before.
+pub async fn sign_vault(vault_id: String, made_now: bool) {
     if !step(|c| member_log(c, &vault_id).has_log()) {
         start_log(vault_id.clone()).await;
     }
     if !step(|c| member_log(c, &vault_id).needs_signatures()) {
         return;
     }
-    if let Err(e) = require_signatures(&vault_id).await {
+    if let Err(e) = require_signatures(&vault_id, made_now).await {
         util::warn(&format!("could not require signed changes: {e}"));
     }
 }
 
-async fn require_signatures(vault_id: &str) -> Result<(), String> {
+async fn require_signatures(vault_id: &str, made_now: bool) -> Result<(), String> {
     let shared = step(|c| {
         c.replicas
             .get(vault_id)
@@ -355,11 +360,15 @@ async fn require_signatures(vault_id: &str) -> Result<(), String> {
         }
     }
     step(|c| save_prefs(c));
-    let head = api::get::<VaultInfo>(&format!("/vaults/{vault_id}"))
-        .await
-        .map_err(|e| e.message)?
-        .head_seq;
-    append(vault_id, LogBody::RequireSigned { from_seq: head }).await
+    let from_seq = if made_now {
+        0
+    } else {
+        api::get::<VaultInfo>(&format!("/vaults/{vault_id}"))
+            .await
+            .map_err(|e| e.message)?
+            .head_seq
+    };
+    append(vault_id, LogBody::RequireSigned { from_seq }).await
 }
 
 /// Sign `body` as the vault's next log entry (`None`: no log yet).

@@ -103,10 +103,10 @@ pub async fn create_vault_of(name: &str, kind: VaultKind) -> Result<Option<Strin
         );
     });
     // Every change to the new vault is signed by its author from the start:
-    // the server stored that with it (`signed_from_start`); older servers
-    // didn't, and then the owner requires it now.
+    // the server stored that with it (`signed_from_start`); if it didn't, we
+    // require it now, from its start too.
     state::reload_log(&id).await;
-    state::sign_vault(id.clone()).await;
+    state::sign_vault(id.clone(), true).await;
     step(|c| state::publish_vaults(c));
     Ok(Some(id))
 }

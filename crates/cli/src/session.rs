@@ -552,6 +552,24 @@ impl Session {
             .await
     }
 
+    /// A vault we just made: every change to it signed by its author from
+    /// its start. The server stores that with it (`signed_from_start`); if
+    /// it didn't (an older server, or one leaving it out), we sign it now:
+    /// never a later cut-off, which would exempt whatever the server places
+    /// before it.
+    pub async fn sign_new_vault(&self, v: &mut Vault) -> Result<()> {
+        let ring = v.replica.keyring.clone();
+        self.verify_member_log(v, &ring).await?;
+        if !v.log.has_log() {
+            self.start_member_log(v).await?;
+        }
+        if v.log.needs_signatures() {
+            self.append_log(v, LogBody::RequireSigned { from_seq: 0 })
+                .await?;
+        }
+        Ok(())
+    }
+
     /// Owner: sign a checkpoint of the members as they are now (their keys
     /// checked against our pins) to start the vault's membership log.
     async fn start_member_log(&self, v: &mut Vault) -> Result<()> {

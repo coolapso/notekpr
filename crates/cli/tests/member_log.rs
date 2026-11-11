@@ -259,7 +259,22 @@ async fn a_new_vault_is_signed_from_its_start() {
     let alice = login(&srv, "alice").await;
     manage::create_vault(&alice, "Family").await.unwrap();
     manage::create_quick_notes(&alice).await.unwrap().unwrap();
+    // A server that doesn't store the requirement with the vault (or an
+    // older one), and then says the vault has got further than it has: the
+    // app requires signatures from the start itself, never from there.
+    let meta = VaultMeta::named("Trips");
+    let (mut req, ring) = engine::new_vault(alice.account(), &alice.user_id, &meta, 1).unwrap();
+    req.signed_from_start = None;
+    let trips = manage::create_vault_with(&alice, &req, ring, meta)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE vaults SET head_seq = 7 WHERE id = ?")
+        .bind(trips.id())
+        .execute(&srv.state.db)
+        .await
+        .unwrap();
     let ah = hub(&alice).await;
+    assert_eq!(ah.vaults().len(), 3);
     for v in ah.vaults() {
         let g = v.lock().await;
         let entries = &g.log.entries;

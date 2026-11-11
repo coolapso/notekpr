@@ -3,7 +3,7 @@
 
 use anyhow::{Result, anyhow, bail};
 use notekpr_core::engine::{self, PinStatus, VaultMeta, VaultReplica};
-use notekpr_core::keys::RecoveryKey;
+use notekpr_core::keys::{RecoveryKey, VaultKeyring};
 use notekpr_core::memberlog::LogBody;
 use notekpr_core::protocol::*;
 use notekpr_sync::members;
@@ -32,7 +32,18 @@ pub async fn create_vault(session: &Session, name: &str) -> Result<Vault> {
         &meta,
         notekpr_core::now_ms(),
     )?;
-    let info: VaultInfo = session.api.post("/vaults", &req).await?;
+    create_vault_with(session, &req, ring, meta).await
+}
+
+/// Make the vault `req` asks for (`engine::new_vault`; its keys `ring`) and
+/// require every change to it to be signed from its start.
+pub async fn create_vault_with(
+    session: &Session,
+    req: &CreateVaultRequest,
+    ring: VaultKeyring,
+    meta: VaultMeta,
+) -> Result<Vault> {
+    let info: VaultInfo = session.api.post("/vaults", req).await?;
     let replica = VaultReplica::new(&info.id, info.role, ring, meta);
     let mut v = Vault::new(
         session.vault_store(&info.id)?,
@@ -43,6 +54,7 @@ pub async fn create_vault(session: &Session, name: &str) -> Result<Vault> {
     v.storage_bytes = info.storage_bytes;
     v.storage_limit_mb = info.storage_limit_mb;
     v.set_limits(&session.limits());
+    session.sign_new_vault(&mut v).await?;
     v.save()?;
     Ok(v)
 }
@@ -80,6 +92,7 @@ pub async fn create_quick_notes(session: &Session) -> Result<Option<Vault>> {
     v.storage_limit_mb = info.storage_limit_mb;
     v.outbox.note_keys = true;
     v.set_limits(&session.limits());
+    session.sign_new_vault(&mut v).await?;
     v.save()?;
     Ok(Some(v))
 }

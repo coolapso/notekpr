@@ -388,6 +388,8 @@ An owner's removal carries two entries, signed one after the other: the
   note already shared (keys checked against pins), then `require_signed` with
   the vault's current head. New vaults get `require_signed` from 0 with
   their creation (`signed_from_start`), before anything is written to them;
+  if the server didn't store it, the app that made the vault signs it right
+  after, from 0 too, never from a head the server names;
 * sign every update and snapshot (§6), and check what they receive: content
   after `from_seq` must be signed — all of it when `from_seq` is 0, whatever
   position the server gives it (no content is at 0) — and a signature must

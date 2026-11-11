@@ -2725,6 +2725,57 @@ def server_db(env, sql, *args):
         db.close()
 
 
+# As a server that doesn't store a new vault's requirement for signed
+# changes from its start (or an older one), then says the vault has got
+# further than it has.
+UNSIGNED_START = """
+const f = window.fetch;
+let stripped = 0;
+window.fetch = async (r, o) => {
+  if (r instanceof Request && r.method === 'POST' && new URL(r.url).pathname === '/api/v1/vaults') {
+    const body = JSON.parse(await r.clone().text());
+    if (body.signed_from_start) {
+      delete body.signed_from_start;
+      stripped = Date.now();
+      r = new Request(r, {body: JSON.stringify(body)});
+    }
+  }
+  const res = await f(r, o);
+  const url = new URL(String(r.url || r), location.href);
+  const get = !(r instanceof Request) || r.method === 'GET';
+  if (get && res.ok && Date.now() - stripped < 10000 && /^\/api\/v1\/vaults\/[^/]+$/.test(url.pathname)) {
+    const info = await res.json();
+    info.head_seq = 7;
+    return new Response(JSON.stringify(info), {status: res.status, headers: res.headers});
+  }
+  return res;
+};
+"""
+
+
+def test_new_vault_signed_from_its_start(env):
+    """A new vault requires signed changes from its start even when the
+    server doesn't store that with it: the app requires it itself, from the
+    start, not from where the server says the vault has got to."""
+    b = Browser()
+    try:
+        cdp(b, "Page.addScriptToEvaluateOnNewDocument", {"source": UNSIGNED_START})
+        signup(b, uniq("ines"))
+        me = api_get(b, "/me")["user"]["id"]
+        b.wait("return !!document.querySelector('.tree-item, .ed')", 20, "the first vault is open")
+        cut_offs = []
+        for _ in range(50):
+            cut_offs = server_db(env, "SELECT signed_from FROM vaults WHERE owner_id = ?", me)
+            if cut_offs and all(c[0] is not None for c in cut_offs):
+                break
+            time.sleep(0.2)
+        check(cut_offs and all(c[0] == 0 for c in cut_offs),
+              f"every new vault requires signed changes from its start ({cut_offs})")
+        check(not severe_logs(b), "no browser errors")
+    finally:
+        b.close()
+
+
 def test_note_recipient_never_added(env):
     """The server shares a note with someone on its own and asks the owner's
     app to renew the note's key: the new key goes only to whom the vault's
@@ -4004,7 +4055,7 @@ def test_device_code(env):
         a.close()
 
 
-TESTS = [test_onboarding, test_collab, test_devices_and_recovery, test_features, test_attachments, test_attachments_beside_notes, test_export_import, test_notion_import, test_delete_account, test_move_to_vault, test_note_sharing, test_tables, test_code_blocks, test_html, test_callouts, test_math, test_diagrams, test_colors, test_code_wrapping, test_vim, test_line_numbers, test_bullets, test_editor_mouse, test_editor_safety, test_local_copy, test_ui_basics, test_offline_tabs, test_offline_start, test_mobile, test_home_screen, test_quick_notes, test_vault_cards, test_vault_icons, test_entry_icons, test_tree_order, test_session_ended_while_away, test_outdated, test_membership_log_withheld, test_note_recipient_never_added, test_note_key_without_owner_proof, test_comments, test_mentions, test_dates, test_graph, test_recovered_copy, test_note_width, test_admin, test_vault_storage, test_vault_admins, test_owners, test_undo_purge, test_device_code]
+TESTS = [test_onboarding, test_collab, test_devices_and_recovery, test_features, test_attachments, test_attachments_beside_notes, test_export_import, test_notion_import, test_delete_account, test_move_to_vault, test_note_sharing, test_tables, test_code_blocks, test_html, test_callouts, test_math, test_diagrams, test_colors, test_code_wrapping, test_vim, test_line_numbers, test_bullets, test_editor_mouse, test_editor_safety, test_local_copy, test_ui_basics, test_offline_tabs, test_offline_start, test_mobile, test_home_screen, test_quick_notes, test_vault_cards, test_vault_icons, test_entry_icons, test_tree_order, test_session_ended_while_away, test_outdated, test_membership_log_withheld, test_new_vault_signed_from_its_start, test_note_recipient_never_added, test_note_key_without_owner_proof, test_comments, test_mentions, test_dates, test_graph, test_recovered_copy, test_note_width, test_admin, test_vault_storage, test_vault_admins, test_owners, test_undo_purge, test_device_code]
 
 
 def main():

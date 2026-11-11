@@ -87,7 +87,7 @@ Breaking one of these is a bug, even if everything compiles and tests pass.
 6. **Don't leak existence.** Vaults or notes the caller can't access return
    `404`, never `403`. People a single note is shared with get only that
    note's content under its own key — never the vault index, other notes,
-   attachments, members (beyond the owners an owner proof names,
+   attachments, members (beyond what an owner proof shows,
    docs/security.md), or the note's history from before it was shared.
 7. **Keep development mode working** (`--dev-mode`: sign in as any user name,
    one session per browser tab, CLI `--profile` + `--dev-user`). It is how

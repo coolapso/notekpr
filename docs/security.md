@@ -339,10 +339,13 @@ primitives. Formats:
   cannot decrypt the note's history from before it was shared; the server
   also hands out only content from that epoch on (`share_from`). Nor do they
   get the vault index (paths, other titles), other notes, attachments, the
-  member list or the vault key. They learn the owner's identity (and, when
-  another owner renews the note's key, who started the vault and the owners
-  between them and that one: the entries showing they are owners) and see the presence of people
-  working on that note. Nor do they see the vault's sequence numbers, which
+  member list (but for what follows) or the vault key. They learn who owns
+  the vault: the log entries showing that whoever signed their note's key
+  is an owner, from the log's first entry, which names who made the vault.
+  In a vault older than the log, that first entry is the checkpoint its
+  owner signed when the log started: it lists everyone who was a member
+  then, and is shown whole, as it is signed whole. They see the presence
+  of people working on that note. Nor do they see the vault's sequence numbers, which
   would tell them how much happens in the rest of the vault: they count in
   the note's own positions (its updates and comments, one by one), from
   where sharing last started, so they don't learn how much the note changed
@@ -509,8 +512,7 @@ reported, never applied partially. Duplicate deliveries are no-ops.
 6. Someone who leaves on their own still knows the key until the owners'
    apps renew it (above): content written in between is readable to them
    with the server's help.
-7. People a single note is shared with can't tell that an owner was
-   removed since (the server can leave that entry out of what it shows
-   them): with the server's help, someone removed as an owner could still
-   give them a note key they know, and read what they write next. Their
-   first contact with a vault is trust on first use.
+7. People a single note is shared with see only the part of the vault's
+   log that shows who its owners are, so with the server's help an owner
+   removed since could still give them a note key. Who made the vault is
+   trusted the first time.

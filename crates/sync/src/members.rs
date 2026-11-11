@@ -56,6 +56,50 @@ pub fn merge_heads(theirs: &mut LogHeads, mine: &LogHeads) {
     }
 }
 
+/// Keep what this device trusts when a synced copy of the person's
+/// settings comes in (`theirs`): pins (user → key fingerprint) or vault
+/// roots (vault → who started its log). The server can't make up a copy,
+/// but it can hand out an older one, and once one of our apps saves that
+/// again its counter is the newest. So a synced copy never drops what we
+/// have, nor changes it (ours is kept: a key accepted as changed elsewhere
+/// is asked about again here). `true`: the copy lacked some (save it again).
+pub fn keep_known(theirs: &mut BTreeMap<String, String>, mine: &BTreeMap<String, String>) -> bool {
+    let mut lacked = false;
+    for (k, v) in mine {
+        match theirs.get(k) {
+            Some(t) if t == v => {}
+            Some(_) => {
+                theirs.insert(k.clone(), v.clone());
+            }
+            None => {
+                theirs.insert(k.clone(), v.clone());
+                lacked = true;
+            }
+        }
+    }
+    lacked
+}
+
+/// [`keep_known`] for log heads: a synced copy never takes one back, and at
+/// the same position, ours stays (another one there is a fork the vault's
+/// check then refuses). `true`: the copy lacked some.
+pub fn keep_heads(theirs: &mut LogHeads, mine: &LogHeads) -> bool {
+    let mut lacked = false;
+    for (v, h) in mine {
+        match theirs.get(v) {
+            Some(t) if t.seq > h.seq || t == h => {}
+            Some(t) if t.seq == h.seq => {
+                theirs.insert(v.clone(), h.clone());
+            }
+            _ => {
+                theirs.insert(v.clone(), h.clone());
+                lacked = true;
+            }
+        }
+    }
+    lacked
+}
+
 /// A vault's verified membership log (or the lack of one: vaults from
 /// before the log until their owner signs a checkpoint).
 #[derive(Clone, Debug, Default)]
@@ -713,6 +757,54 @@ mod tests {
         assert_eq!(again.len(), 1);
         assert_eq!(again[0].user_id, "carol");
         assert!(missing(&log, Some("alice")).is_empty());
+    }
+
+    /// A synced copy of the settings, even one saved as the newest, never
+    /// makes a device forget or change whom it trusts, nor take a log head
+    /// back.
+    #[test]
+    fn a_synced_copy_never_drops_what_this_device_trusts() {
+        let map = |kv: &[(&str, &str)]| -> BTreeMap<String, String> {
+            kv.iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect()
+        };
+        let mine = map(&[("bob", "fp-bob"), ("carol", "fp-carol")]);
+        let mut theirs = map(&[("carol", "fp-other"), ("dave", "fp-dave")]);
+        assert!(keep_known(&mut theirs, &mine));
+        assert_eq!(
+            theirs,
+            map(&[
+                ("bob", "fp-bob"),
+                ("carol", "fp-carol"),
+                ("dave", "fp-dave")
+            ])
+        );
+        // Only a different one: ours is kept, but nothing lacked (nothing
+        // to save again).
+        let mut theirs = map(&[("bob", "fp-bob"), ("carol", "fp-other")]);
+        assert!(!keep_known(&mut theirs, &mine));
+        assert_eq!(theirs, mine);
+
+        let head = |seq, h: u8| LogHead {
+            seq,
+            hash: vec![h; 32],
+        };
+        let mine: LogHeads = [("v".to_string(), head(4, 1)), ("w".to_string(), head(2, 1))].into();
+        let mut theirs: LogHeads = [
+            ("v".to_string(), head(3, 9)),
+            ("w".to_string(), head(2, 9)),
+            ("x".to_string(), head(1, 1)),
+        ]
+        .into();
+        assert!(keep_heads(&mut theirs, &mine));
+        assert_eq!(theirs["v"], head(4, 1), "never taken back");
+        assert_eq!(theirs["w"], head(2, 1), "at the same position, ours");
+        assert_eq!(theirs["x"], head(1, 1));
+        let mut further: LogHeads = [("v".to_string(), head(5, 2))].into();
+        keep_heads(&mut further, &mine);
+        assert_eq!(further["v"], head(5, 2), "a further one stays");
+        assert_eq!(further["w"], head(2, 1));
     }
 
     /// A device that never saw the vault knows where its log stood from the

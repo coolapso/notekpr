@@ -231,7 +231,11 @@ primitives. Formats:
   pinned, so a substituted key would be trusted on "first" use)? Preferences
   carry a counter inside their encryption, and each browser keeps its own
   sealed copy; an older copy from the server is not used (a browser that
-  never saw the newer one can't tell).
+  never saw the newer one can't tell). Nor is one of our apps saved again,
+  newer by then, a way to make another forget: whatever copy comes in, an
+  app keeps the pins, vault roots and log heads it has (a key accepted as
+  changed on one device is asked about again on the others), and the CLI,
+  which saves settings too, never saves one without those it has seen.
 * **Withholds updates or rolls back state?** Clients track the highest sequence
   ever seen and warn on regression, then re-push their state (CRDT merge
   restores lost content). A server can still delay or drop *future* deliveries

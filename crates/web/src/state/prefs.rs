@@ -97,12 +97,17 @@ pub(super) fn apply_prefs(c: &mut Core, blob: &PrefsBlob) {
         c.prefs = p;
     }
     if choice.from_server
+        && !choice.lacked_trust
         && let Some(ct) = &blob.ciphertext
     {
         storage::set_prefs_copy(&uid, ct);
     }
     if choice.rolled_back {
         util::warn("the server sent settings older than this browser's; keeping these");
+        save_prefs(c);
+    }
+    if choice.lacked_trust {
+        util::warn("the server sent settings without keys this browser had seen; keeping them");
         save_prefs(c);
     }
     ui().prefs_rev.update(|v| *v += 1);
@@ -115,29 +120,51 @@ pub(super) struct PrefsChoice {
     pub from_server: bool,
     /// The server's copy is older than this browser's: it was not used.
     pub rolled_back: bool,
+    /// The server's copy was used, but lacked whom this browser trusts,
+    /// which was kept: save it again.
+    pub lacked_trust: bool,
 }
 
 /// The newer copy wins (by the counter inside the encryption): the server
-/// can't hand out an older one, say without a pin, in place of what this
-/// browser saw [W-M10].
+/// can't hand out an older one in place of what this browser saw [W-M10].
+/// But an older copy one of our apps saved again is newer by then: so the
+/// pins, vault roots and log heads this browser has are kept whatever copy
+/// wins ([`keep_trust`]).
 pub(super) fn choose_prefs(server: Option<Prefs>, mine: Option<Prefs>) -> PrefsChoice {
     match (server, mine) {
         (Some(s), Some(m)) if s.counter < m.counter => PrefsChoice {
             prefs: Some(m),
             from_server: false,
             rolled_back: true,
+            lacked_trust: false,
         },
-        (Some(s), _) => PrefsChoice {
-            prefs: Some(s),
-            from_server: true,
-            rolled_back: false,
-        },
+        (Some(mut s), m) => {
+            let lacked_trust = m.is_some_and(|m| keep_trust(&mut s, &m));
+            PrefsChoice {
+                prefs: Some(s),
+                from_server: true,
+                rolled_back: false,
+                lacked_trust,
+            }
+        }
         (None, m) => PrefsChoice {
             prefs: m,
             from_server: false,
             rolled_back: false,
+            lacked_trust: false,
         },
     }
+}
+
+/// Keep in `theirs` whom `mine` trusts: pins, vault roots and log heads are
+/// never dropped, changed or taken back by another copy
+/// (`notekpr_sync::members::keep_known`). `true`: `theirs` lacked some.
+pub(super) fn keep_trust(theirs: &mut Prefs, mine: &Prefs) -> bool {
+    use notekpr_sync::members::{keep_heads, keep_known};
+    let pins = keep_known(&mut theirs.pins, &mine.pins);
+    let roots = keep_known(&mut theirs.share_roots, &mine.share_roots);
+    let heads = keep_heads(&mut theirs.log_heads, &mine.log_heads);
+    pins || roots || heads
 }
 
 /// Save the preferences soon (changes come in bursts).
@@ -183,17 +210,12 @@ pub fn save_prefs(c: &Core) {
 /// Merge our preferences into `theirs`, saved meanwhile on another device:
 /// lists are joined, and what was changed here and not saved yet wins.
 pub(super) fn merge_prefs(theirs: &mut Prefs, mine: Prefs, unsaved: &Unsaved) {
+    // Whom we trust: ours, the latest, never dropped or changed.
+    keep_trust(theirs, &mine);
     for f in mine.favorites {
         if !theirs.favorites.contains(&f) {
             theirs.favorites.push(f);
         }
-    }
-    for (u, fp) in mine.pins {
-        theirs.pins.entry(u).or_insert(fp);
-    }
-    notekpr_sync::members::merge_heads(&mut theirs.log_heads, &mine.log_heads);
-    for (v, root) in mine.share_roots {
-        theirs.share_roots.entry(v).or_insert(root);
     }
     // Read here or there: read.
     theirs.mentions.merge(&mine.mentions);
@@ -333,6 +355,37 @@ mod tests {
         // Nothing on the server (yet): keep ours.
         let c = choose_prefs(None, Some(prefs(2, Some("AAAA"))));
         assert!(!c.from_server && !c.rolled_back && c.prefs.is_some());
+    }
+
+    /// An older copy one of our apps saved again (so with a newer counter)
+    /// is used, but never makes this browser forget or change whom it
+    /// trusts: pins, vault roots, log heads.
+    #[test]
+    fn a_newer_copy_keeps_whom_this_browser_trusts() {
+        let mut mine = prefs(5, Some("AAAA"));
+        mine.share_roots.insert("v".into(), "alice".into());
+        mine.log_heads.insert(
+            "v".into(),
+            notekpr_sync::members::LogHead {
+                seq: 4,
+                hash: vec![1; 32],
+            },
+        );
+        let mut laundered = prefs(6, None);
+        laundered.favorites.push(("v".into(), "n".into()));
+        let c = choose_prefs(Some(laundered), Some(mine.clone()));
+        assert!(c.from_server && c.lacked_trust);
+        let p = c.prefs.unwrap();
+        assert_eq!(p.pins["bob"], "AAAA");
+        assert_eq!(p.share_roots["v"], "alice");
+        assert_eq!(p.log_heads["v"].seq, 4);
+        assert_eq!(p.favorites.len(), 1, "the rest is the newer copy's");
+        // A different key for Bob: ours stays.
+        let c = choose_prefs(Some(prefs(7, Some("BBBB"))), Some(prefs(5, Some("AAAA"))));
+        assert_eq!(c.prefs.unwrap().pins["bob"], "AAAA");
+        // Nothing lacking: nothing to save again.
+        let c = choose_prefs(Some(prefs(7, Some("AAAA"))), Some(prefs(5, Some("AAAA"))));
+        assert!(!c.lacked_trust);
     }
 
     #[test]

@@ -219,6 +219,25 @@ pub struct Profile {
     /// to them (`notekpr_core::memberlog::check_owner_proof`).
     #[serde(default)]
     pub share_roots: BTreeMap<String, String>,
+    /// What the person's synced settings held, as far as this app has seen
+    /// them: whom their apps trust and the newest counter. The server can't
+    /// make up a copy, but it can hand out an older one: this app never
+    /// saves one again without these (`crate::prefs`).
+    #[serde(default)]
+    pub synced_trust: SyncedTrust,
+}
+
+/// See [`Profile::synced_trust`]: the synced settings' fields of that name.
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+pub struct SyncedTrust {
+    #[serde(default)]
+    pub counter: u64,
+    #[serde(default)]
+    pub pins: BTreeMap<String, String>,
+    #[serde(default)]
+    pub share_roots: BTreeMap<String, String>,
+    #[serde(default)]
+    pub log_heads: notekpr_sync::members::LogHeads,
 }
 
 impl Profile {
@@ -240,6 +259,7 @@ impl Profile {
             server_limits: None,
             pins: BTreeMap::new(),
             share_roots: BTreeMap::new(),
+            synced_trust: SyncedTrust::default(),
         }
     }
 }

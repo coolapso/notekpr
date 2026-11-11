@@ -6,7 +6,7 @@ mod common;
 
 use common::*;
 use notekpr_cli::account::{self, LoginOptions};
-use notekpr_cli::{manage, note_shares, ops};
+use notekpr_cli::{manage, note_shares, ops, prefs};
 use notekpr_core::doc::EntryKind;
 use notekpr_core::engine::{self, VaultMeta, VaultReplica};
 use notekpr_core::keys::{self, VaultKey};
@@ -828,4 +828,56 @@ async fn a_note_key_the_owner_never_gave_is_refused() {
         format!("{err:#}").contains("didn't show that whoever gave you its key owns"),
         "{err:#}"
     );
+}
+
+/// The server hands the CLI an older copy of the person's settings, from
+/// before the web app pinned Bob's key: what the CLI saves again still has
+/// the pin, counted newer than any copy before, so the web app (which takes
+/// the newest) never forgets it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_older_settings_copy_is_never_saved_again_without_whom_we_trust() {
+    use serde_json::{Map, Value, json};
+    let srv = start().await;
+    let alice = login(&srv, "alice").await;
+    let pin = |who: &'static str, fp: &'static str| {
+        move |p: &mut Map<String, Value>| {
+            let mut pins = p.get("pins").cloned().unwrap_or_else(|| json!({}));
+            pins[who] = fp.into();
+            p.insert("pins".into(), pins);
+            true
+        }
+    };
+    let stored = || async {
+        let ct: Vec<u8> = sqlx::query_scalar("SELECT ciphertext FROM user_prefs WHERE user_id = ?")
+            .bind(&alice.user_id)
+            .fetch_one(&srv.state.db)
+            .await
+            .unwrap();
+        ct
+    };
+    let open = |ct: &[u8]| -> Value {
+        serde_json::from_slice(&alice.account().open_private(&alice.user_id, ct).unwrap()).unwrap()
+    };
+    // As the web app would: Carol's key pinned, later Bob's.
+    prefs::update(&alice, pin("carol", "fp-carol"))
+        .await
+        .unwrap();
+    let older = stored().await;
+    prefs::update(&alice, pin("bob", "fp-bob")).await.unwrap();
+    let newest = open(&stored().await)["counter"].as_u64().unwrap();
+
+    sqlx::query("UPDATE user_prefs SET ciphertext = ? WHERE user_id = ?")
+        .bind(&older)
+        .bind(&alice.user_id)
+        .execute(&srv.state.db)
+        .await
+        .unwrap();
+    prefs::save_log_head(&alice, "v", (3, vec![7; 32]))
+        .await
+        .unwrap();
+    let saved = open(&stored().await);
+    assert_eq!(saved["pins"]["bob"], "fp-bob", "{saved}");
+    assert_eq!(saved["pins"]["carol"], "fp-carol");
+    assert!(saved["counter"].as_u64().unwrap() > newest, "{saved}");
+    assert_eq!(saved["log_heads"]["v"]["seq"], 3);
 }

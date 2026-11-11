@@ -56,7 +56,9 @@ pub fn recover_with_device(
         bail!("this export belongs to another account");
     }
     // Checked against whom this device trusts too, not only the export's
-    // preferences (an older copy the server may have put in).
+    // preferences (an older copy the server may have put in). Each later
+    // one wins over the earlier: the synced settings as this device last
+    // saw them, then this device's own pins, as in the apps.
     let mut known = recover::Known::of_export(&session.account, export);
     let (pins, roots, synced) = session.profiles.update(|p| {
         (
@@ -65,10 +67,10 @@ pub fn recover_with_device(
             p.synced_trust.clone(),
         )
     })?;
-    for mine in [&pins, &synced.pins] {
+    for mine in [&synced.pins, &pins] {
         members::keep_known(&mut known.pins, mine);
     }
-    for mine in [&roots, &synced.share_roots] {
+    for mine in [&synced.share_roots, &roots] {
         members::keep_known(&mut known.share_roots, mine);
     }
     members::keep_heads(&mut known.log_heads, &synced.log_heads);

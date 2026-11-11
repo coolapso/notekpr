@@ -944,9 +944,10 @@ impl LogState {
     /// Check a vault key against the log: `Ok(true)` if its epoch's
     /// commitment matches, `Ok(false)` if the log has no commitment for that
     /// epoch (from before a checkpoint), an error if it doesn't match or the
-    /// epoch is newer than the log (a key the owner never announced).
+    /// epoch is newer than the log or 0 (a key the owner never announced:
+    /// epochs start at 1).
     pub fn check_key(&self, epoch: u32, key: &VaultKey) -> Result<bool, KeyCheckError> {
-        if epoch > self.epoch {
+        if epoch == 0 || epoch > self.epoch {
             return Err(KeyCheckError::Unannounced(epoch));
         }
         match self.key_commits.get(&epoch) {
@@ -1364,6 +1365,8 @@ mod tests {
         assert_eq!(s.check_key(2, &k2), Ok(true));
         assert_eq!(s.check_key(2, &k1), Err(KeyCheckError::Mismatch(2)));
         assert_eq!(s.check_key(3, &k2), Err(KeyCheckError::Unannounced(3)));
+        // Epochs start at 1: a key "from before" the first one is the server's.
+        assert_eq!(s.check_key(0, &k1), Err(KeyCheckError::Unannounced(0)));
         assert_eq!(s.head_seq, 6);
     }
 

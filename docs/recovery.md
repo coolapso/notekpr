@@ -107,8 +107,9 @@ you, that can't be checked at all is still recovered, but into a folder
 marked **(unchecked)**, say `Family (unchecked)/`, with the reason listed: its
 history isn't in the export (exports from servers before this check, or
 vaults from before the membership history existed), or it doesn't match what
-your apps saw. Treat what's in such a folder with care: it may not be what
-its people wrote.
+your apps saw (recovering with a device's keys, what that device trusts comes
+first, as in the app). Treat what's in such a folder with care: it may not be
+what its people wrote.
 
 ## Without any notekpr software
 

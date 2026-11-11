@@ -298,6 +298,7 @@ async fn without_the_server_a_device_exports_and_recovers_from_its_local_copies(
 async fn a_recovery_checks_what_the_apps_check() {
     use notekpr_core::crypto::Purpose;
     use notekpr_core::doc::{EntryKind, IndexDoc, NoteDoc};
+    use notekpr_core::engine::VaultMeta;
     use notekpr_core::keys::{self, VaultKey, VaultKeyring};
     use notekpr_core::memberlog;
     use notekpr_core::protocol::*;
@@ -392,6 +393,41 @@ async fn a_recovery_checks_what_the_apps_check() {
         fam.problems
     );
 
+    // Or a key "from before" the first epoch, and the vault's name under it.
+    let mut forged = export.clone();
+    let fv = forged
+        .vaults
+        .iter_mut()
+        .find(|v| v.vault_id == vid)
+        .unwrap();
+    let fake = VaultKey::generate();
+    fv.keys.envelopes.push(KeyEnvelope {
+        user_id: alice.user_id.clone(),
+        epoch: 0,
+        envelope: keys::wrap_vault_key(
+            &fake,
+            &vid,
+            0,
+            &alice.user_id,
+            &alice.account().public().enc_public,
+        )
+        .unwrap(),
+        signature: None,
+        signed_by: None,
+    });
+    let mut ring = VaultKeyring::new(&vid);
+    ring.insert(0, fake);
+    fv.encrypted_meta = VaultMeta::named("Pay here").encrypt(&ring).unwrap();
+    let fam = family(decrypt_export(alice.account(), &forged));
+    assert_ne!(fam.name, "Pay here");
+    assert!(
+        fam.problems
+            .iter()
+            .any(|p| p.contains("its owner never made")),
+        "{:?}",
+        fam.problems
+    );
+
     // Or leaves the vault's membership history out: recovered, but marked.
     let mut stripped = export.clone();
     for v in &mut stripped.vaults {
@@ -454,5 +490,29 @@ async fn a_recovery_checks_what_the_apps_check() {
         got.problems.iter().any(|p| p.contains("owns its vault")),
         "{:?}",
         got.problems
+    );
+
+    // With this device's keys: it pinned Alice's key, while the settings
+    // it last synced name another (one taken on another device). This
+    // device's pin counts, as in the apps: the genuine note is checked.
+    let alice_key = alice.account().public().fingerprint();
+    let eve_key = eve.account().public().fingerprint();
+    bob.profiles
+        .update(|p| {
+            p.pins.insert(alice.user_id.clone(), alice_key.clone());
+            p.synced_trust
+                .pins
+                .insert(alice.user_id.clone(), eve_key.clone());
+        })
+        .unwrap();
+    let out = srv.path("bob-recovered");
+    recover::recover_with_device(&bob, &export, &out).unwrap();
+    assert!(
+        out.join(SHARED_DIR).join("Trip.md").exists(),
+        "{:?}",
+        std::fs::read_dir(&out)
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect::<Vec<_>>()
     );
 }

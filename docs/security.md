@@ -191,7 +191,8 @@ primitives. Formats:
 * **Hands a member a vault key it made itself** (so it could read what they
   write next)? The owner commits to every epoch's key in the log; clients
   check each key they receive against the commitment and refuse a vault
-  whose key doesn't match or was never announced. No key is used before
+  whose key doesn't match or was never announced (epochs start at 1, so a
+  key "from before" the first is never one). No key is used before
   that check: when the server won't give the log, the copy verified last
   checks the keys, or the vault waits. People a single note is
   shared with use only a note key an owner signed giving them. They don't

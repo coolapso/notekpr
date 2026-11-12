@@ -186,6 +186,8 @@ vendor/sqlx-sqlite  sqlx-sqlite 0.9.0 allowed libsqlite3-sys 0.39 (a SQLite advi
                 via [patch.crates-io]; drop it once sqlx moves (its NOTEKPR.md)
 deploy/         Kubernetes manifests, Dex (dev OIDC), examples/ (optional reverse
                 proxies: Caddy, Traefik — never required, TLS is the operator's choice)
+.agents/skills  skills for agents working on notekpr (any harness that reads them;
+                .claude/skills links here for Claude Code)
 (root)          Dockerfile, docker-compose.yml, docker-compose.dev.yml, Taskfile.yml,
                 .goreleaser.yaml
 ```
@@ -273,6 +275,11 @@ Without go-task, see the plain commands in the [Taskfile](Taskfile.yml) or
   browser-only settings). Then run the demo and click through what changed.
 - Its issue on the roadmap closes with the commit (`Closes: #N`); a step of a
   bigger issue is ticked in it, not deleted.
+- **Reviews.** Before a change is merged, the maintainer has it reviewed by
+  an agent of another model family, and anything touching keys, trust or
+  what the server learns by a cryptography review too. You don't need to;
+  if you have the means, you're welcome to. Working for the maintainer,
+  follow [.agents/skills/independent-review](.agents/skills/independent-review/SKILL.md).
 
 ## Things that are easy to get wrong
 
